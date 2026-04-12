@@ -35,6 +35,11 @@ if TYPE_CHECKING:
 logger = structlog.get_logger()
 
 
+def _dev_print(msg: str) -> None:
+    """Print a visible status line to stdout (dev mode only)."""
+    print(f"\033[1;36m[DEV] {msg}\033[0m", flush=True)
+
+
 class Application:
     """Top-level application orchestrator.
 
@@ -187,14 +192,17 @@ class Application:
 
     async def _enter_connecting(self) -> None:
         """Connect to the Realtime API."""
+        _dev_print("Connecting…")
         try:
             await self.session.connect()
             self.audio_router.conversation_mode = True
             await self.state_machine.trigger("connected")
+            _dev_print("Connected!  Hold SPACE to talk, release to send")
         except Exception:
             await logger.aexception("connection_failed")
             self.audio_router.conversation_mode = False
             await self.state_machine.trigger("failed")
+            _dev_print("Connection failed — press Enter to retry")
 
     async def _enter_playing(self) -> None:
         """Switch to playback mode — disconnect session, enable wake word."""
@@ -216,6 +224,9 @@ class Application:
 
     async def _on_audio_delta(self, audio: bytes) -> None:
         """Receive audio from the Realtime API and queue for speaker."""
+        if not self.audio_router.suppress_wakeword:
+            # First chunk — model just started speaking
+            _dev_print("🔊  Assistant speaking…  (hold Space to interrupt)")
         self.audio_router.suppress_wakeword = True
         with contextlib.suppress(asyncio.QueueFull):
             self.speaker_queue.put_nowait(audio)
@@ -247,14 +258,17 @@ class Application:
     async def _on_ptt_start(self) -> None:
         """Space held — open mic to session. Cancel any ongoing response."""
         if self.state_machine.state != AppState.CONVERSING:
+            _dev_print("Not in conversation — press Enter first")
             return
         if self.session.is_model_speaking:
             await self.session.cancel_response()
         self.audio_router.ptt_active = True
+        _dev_print("🎙  Listening… (release Space to send)")
 
     async def _on_ptt_stop(self) -> None:
         """Space released — close mic and ask model to respond."""
         if self.state_machine.state != AppState.CONVERSING:
             return
         self.audio_router.ptt_active = False
+        _dev_print("⏳  Sent — waiting for response…")
         await self.session.commit_and_respond()
