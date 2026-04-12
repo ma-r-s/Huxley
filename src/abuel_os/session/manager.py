@@ -114,8 +114,8 @@ class SessionManager:
                     "input_audio_format": "pcm16",
                     "output_audio_format": "pcm16",
                     "input_audio_transcription": {"model": "whisper-1"},
-                    # PTT mode — we commit manually on Space release
-                    "turn_detection": {"type": "none"},
+                    # PTT mode — disable server VAD, we commit manually on Space release
+                    "turn_detection": None,
                 }
             },
         )
