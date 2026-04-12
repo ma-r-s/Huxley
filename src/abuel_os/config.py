@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     # --- Logging ---
     log_level: str = "INFO"
     log_json: bool = False
+    log_file: Path | None = None  # If set, also write JSON logs to this path
 
     # --- Dev mode ---
     dev_mode: bool = False  # Keyboard Enter triggers wake word; no hardware needed

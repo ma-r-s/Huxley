@@ -96,8 +96,14 @@ class AudioRouter:
                 frame_16k = downsample_24k_to_16k(frame_24k)
                 await self._wakeword.process_frame(frame_16k)
 
-            # Feed session when in conversation mode
-            if self._conversation_mode and self._session.is_connected:
+            # Feed session when in conversation mode, but NOT while the model is
+            # speaking — its output would be picked up by the mic and fed back,
+            # causing the server VAD to think the user interrupted.
+            if (
+                self._conversation_mode
+                and self._session.is_connected
+                and not self._session.is_model_speaking
+            ):
                 await self._session.send_audio(frame_24k)
 
     def stop(self) -> None:

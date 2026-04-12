@@ -84,7 +84,16 @@ class Application:
 
     async def run(self) -> None:
         """Initialize subsystems and run the main loop."""
-        setup_logging(level=self.config.log_level, json_output=self.config.log_json)
+        from pathlib import Path
+
+        log_file = self.config.log_file
+        if log_file is None and self.config.dev_mode:
+            log_file = Path("logs/abuel_os.log")
+        setup_logging(
+            level=self.config.log_level,
+            json_output=self.config.log_json,
+            log_file=log_file,
+        )
         await logger.ainfo("abuel_os_starting")
 
         # Initialize storage
