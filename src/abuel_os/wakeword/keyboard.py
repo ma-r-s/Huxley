@@ -1,16 +1,25 @@
-"""Dev-mode keyboard wake word trigger.
+"""Dev-mode keyboard controller.
 
-Pressing Enter in the terminal simulates a wake word detection. This lets
-the full conversation flow be tested on macOS without a microphone or the
-openWakeWord model installed.
+Replaces hardware wake word + PTT button when running on a Mac.
 
-Drop-in replacement for WakeWordDetector — same interface, zero hardware deps.
+  Enter         → wake word (start session from IDLE/PLAYING)
+  Space (hold)  → push-to-talk: mic open while held, commit on release
+  Ctrl+C / q    → quit
+
+Runs stdin in raw mode so individual keystrokes are read immediately.
+Restores terminal on exit.
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
+import select
+import signal
 import sys
+import termios
+import time
+import tty
 from typing import TYPE_CHECKING
 
 import structlog
@@ -20,22 +29,35 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
+_SPACE = b" "
+_ENTER = b"\r"
+_CTRL_C = b"\x03"
+_Q = b"q"
+_PTT_RELEASE_TIMEOUT = 0.15  # seconds after last Space until PTT considered released
 
-class KeyboardWakeWord:
-    """Simulates wake word detection via keyboard (Enter key).
 
-    Starts a background task that blocks on stdin.readline() in a thread
-    executor. Each Enter press fires the on_detected callback (unless
-    detection is suppressed via the enabled flag).
+class DevKeyboard:
+    """Unified dev keyboard controller for wake word + PTT.
+
+    Implements WakeWordDetectorProtocol (on_detected, enabled, setup,
+    process_frame) so it drops into app.py where a WakeWordDetector lives.
+    PTT callbacks (on_ptt_start, on_ptt_stop) are wired additionally by app.py.
     """
 
     def __init__(
         self,
         on_detected: Callable[[], Awaitable[None]] | None = None,
+        on_ptt_start: Callable[[], Awaitable[None]] | None = None,
+        on_ptt_stop: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self.on_detected = on_detected
+        self.on_ptt_start = on_ptt_start
+        self.on_ptt_stop = on_ptt_stop
         self._enabled = True
         self._task: asyncio.Task[None] | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    # --- WakeWordDetectorProtocol ---
 
     @property
     def enabled(self) -> bool:
@@ -46,37 +68,74 @@ class KeyboardWakeWord:
         self._enabled = value
 
     async def setup(self) -> None:
-        """Print dev hint and start the stdin listener."""
-        await logger.awarning(
-            "dev_mode_keyboard_wakeword",
-            msg="Press Enter to simulate wake word (dev mode)",
-        )
+        self._loop = asyncio.get_running_loop()
         print(
-            "\n\033[1;32m[DEV] Press ENTER to start talking  |  Ctrl+C to quit\033[0m\n",
+            "\n\033[1;32m[DEV] Enter = wake  |  Hold Space = talk  |  q = quit\033[0m\n",
             flush=True,
         )
-        self._task = asyncio.create_task(self._listen(), name="keyboard_wakeword")
+        self._task = asyncio.create_task(self._run(), name="dev_keyboard")
 
     async def process_frame(self, pcm_16k: bytes) -> None:
-        """No-op — keyboard trigger doesn't process audio."""
+        """No-op — keyboard doesn't process audio."""
 
-    async def _listen(self) -> None:
-        """Block on stdin in a thread executor; fire callback on each line."""
+    # --- Internal ---
+
+    async def _run(self) -> None:
         loop = asyncio.get_running_loop()
-        while True:
-            try:
-                line = await loop.run_in_executor(None, sys.stdin.readline)
-            except Exception:
-                break
+        await loop.run_in_executor(None, self._blocking_loop)
 
-            if not line:
-                # EOF — stdin closed
-                break
+    def _blocking_loop(self) -> None:
+        """Raw-mode stdin poll loop. Runs in a thread executor."""
+        assert self._loop is not None
+        old_settings = termios.tcgetattr(sys.stdin.fileno())
+        tty.setraw(sys.stdin.fileno())
 
-            if not self._enabled:
-                await logger.adebug("keyboard_wakeword_suppressed")
-                continue
+        ptt_active = False
+        last_space_t = 0.0
 
-            await logger.ainfo("keyboard_wake_word_triggered")
-            if self.on_detected:
-                await self.on_detected()
+        try:
+            while True:
+                readable, _, _ = select.select([sys.stdin], [], [], 0.05)
+
+                if readable:
+                    ch = sys.stdin.buffer.read(1)
+
+                    if ch in (_CTRL_C, _Q):
+                        os.kill(os.getpid(), signal.SIGINT)
+                        break
+
+                    if ch == _ENTER and not ptt_active:
+                        asyncio.run_coroutine_threadsafe(self._fire_wake_word(), self._loop)
+
+                    if ch == _SPACE:
+                        last_space_t = time.monotonic()
+                        if not ptt_active:
+                            ptt_active = True
+                            asyncio.run_coroutine_threadsafe(self._fire_ptt_start(), self._loop)
+
+                # Detect Space release: no Space received within timeout
+                if ptt_active and (time.monotonic() - last_space_t) > _PTT_RELEASE_TIMEOUT:
+                    ptt_active = False
+                    asyncio.run_coroutine_threadsafe(self._fire_ptt_stop(), self._loop)
+
+        finally:
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
+
+    async def _fire_wake_word(self) -> None:
+        if self.on_detected and self._enabled:
+            await logger.ainfo("keyboard_wake_word")
+            await self.on_detected()
+
+    async def _fire_ptt_start(self) -> None:
+        await logger.ainfo("ptt_start")
+        if self.on_ptt_start:
+            await self.on_ptt_start()
+
+    async def _fire_ptt_stop(self) -> None:
+        await logger.ainfo("ptt_stop")
+        if self.on_ptt_stop:
+            await self.on_ptt_stop()
+
+
+# Keep old name as alias so any leftover imports don't break
+KeyboardWakeWord = DevKeyboard

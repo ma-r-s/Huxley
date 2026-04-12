@@ -114,10 +114,8 @@ class SessionManager:
                     "input_audio_format": "pcm16",
                     "output_audio_format": "pcm16",
                     "input_audio_transcription": {"model": "whisper-1"},
-                    "turn_detection": {
-                        "type": "server_vad",
-                        "silence_duration_ms": 800,
-                    },
+                    # PTT mode — we commit manually on Space release
+                    "turn_detection": {"type": "none"},
                 }
             },
         )
@@ -150,6 +148,22 @@ class SessionManager:
         self._transcript_lines.clear()
         self._is_model_speaking = False
         await logger.ainfo("session_disconnected")
+
+    async def commit_and_respond(self) -> None:
+        """Commit the audio buffer and ask the model to respond (PTT release)."""
+        if not self._ws:
+            return
+        await self._send(ClientEventType.INPUT_AUDIO_BUFFER_COMMIT, {})
+        await self._send(ClientEventType.RESPONSE_CREATE, {})
+        self._reset_timeout()
+
+    async def cancel_response(self) -> None:
+        """Cancel any in-progress model response (e.g. user interrupts via PTT)."""
+        if not self._ws:
+            return
+        await self._send(ClientEventType.RESPONSE_CANCEL, {})
+        await self._send(ClientEventType.INPUT_AUDIO_BUFFER_CLEAR, {})
+        self._is_model_speaking = False
 
     async def send_audio(self, pcm_data: bytes) -> None:
         """Send a PCM16 audio frame to the Realtime API."""

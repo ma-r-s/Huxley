@@ -7,6 +7,8 @@ system-level operations.
 from __future__ import annotations
 
 import json
+import platform
+import subprocess
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -60,6 +62,7 @@ class SystemSkill:
         match tool_name:
             case "set_volume":
                 level = max(0, min(100, args.get("level", 50)))
+                await _set_system_volume(level)
                 await self._mpv.set_volume(level)
                 return ToolResult(output=json.dumps({"volume": level, "ok": True}))
             case "get_current_time":
@@ -84,3 +87,20 @@ class SystemSkill:
 
     async def teardown(self) -> None:
         pass
+
+
+async def _set_system_volume(level: int) -> None:
+    """Set OS output volume (0-100). Best-effort — logs on failure."""
+    loop = __import__("asyncio").get_running_loop()
+    try:
+        if platform.system() == "Darwin":
+            cmd = ["osascript", "-e", f"set volume output volume {level}"]
+        else:
+            # Linux / Raspberry Pi (ALSA/PulseAudio)
+            cmd = ["amixer", "-D", "pulse", "sset", "Master", f"{level}%"]
+        await loop.run_in_executor(
+            None,
+            lambda: subprocess.run(cmd, check=True, capture_output=True),  # noqa: ASYNC221
+        )
+    except Exception:
+        logger.warning("system_volume_failed", level=level)

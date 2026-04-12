@@ -63,6 +63,7 @@ class AudioRouter:
         self._session = session_manager
         self._conversation_mode = False
         self._suppress_wakeword = False
+        self._ptt_active = False
         self._running = False
 
     @property
@@ -82,6 +83,14 @@ class AudioRouter:
     def suppress_wakeword(self, value: bool) -> None:
         self._suppress_wakeword = value
 
+    @property
+    def ptt_active(self) -> bool:
+        return self._ptt_active
+
+    @ptt_active.setter
+    def ptt_active(self, value: bool) -> None:
+        self._ptt_active = value
+
     async def run(self) -> None:
         """Main routing loop. Reads from mic queue and distributes frames."""
         self._running = True
@@ -96,11 +105,11 @@ class AudioRouter:
                 frame_16k = downsample_24k_to_16k(frame_24k)
                 await self._wakeword.process_frame(frame_16k)
 
-            # Feed session when in conversation mode, but NOT while the model is
-            # speaking — its output would be picked up by the mic and fed back,
-            # causing the server VAD to think the user interrupted.
+            # Feed session only when PTT is held AND model isn't speaking.
+            # The model-speaking gate prevents mic echo from being sent back.
             if (
                 self._conversation_mode
+                and self._ptt_active
                 and self._session.is_connected
                 and not self._session.is_model_speaking
             ):

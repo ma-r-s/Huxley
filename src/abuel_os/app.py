@@ -53,9 +53,13 @@ class Application:
 
         self.wakeword: WakeWordDetectorProtocol
         if config.dev_mode:
-            from abuel_os.wakeword.keyboard import KeyboardWakeWord
+            from abuel_os.wakeword.keyboard import DevKeyboard
 
-            self.wakeword = KeyboardWakeWord(on_detected=self._on_wake_word)
+            self.wakeword = DevKeyboard(
+                on_detected=self._on_wake_word,
+                on_ptt_start=self._on_ptt_start,
+                on_ptt_stop=self._on_ptt_stop,
+            )
         else:
             self.wakeword = WakeWordDetector(
                 model_path=config.wakeword_model_path,
@@ -237,3 +241,20 @@ class Application:
             if current == AppState.PLAYING:
                 await self.mpv.pause()
             await self.state_machine.trigger("wake_word")
+
+    # --- PTT callbacks ---
+
+    async def _on_ptt_start(self) -> None:
+        """Space held — open mic to session. Cancel any ongoing response."""
+        if self.state_machine.state != AppState.CONVERSING:
+            return
+        if self.session.is_model_speaking:
+            await self.session.cancel_response()
+        self.audio_router.ptt_active = True
+
+    async def _on_ptt_stop(self) -> None:
+        """Space released — close mic and ask model to respond."""
+        if self.state_machine.state != AppState.CONVERSING:
+            return
+        self.audio_router.ptt_active = False
+        await self.session.commit_and_respond()
