@@ -15,7 +15,9 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from abuel_os.audio.mic import MicCapture
 from abuel_os.audio.router import AudioRouter
+from abuel_os.audio.speaker import SpeakerOutput
 from abuel_os.logging import setup_logging
 from abuel_os.media.mpv import MpvClient
 from abuel_os.session.manager import SessionManager
@@ -75,6 +77,8 @@ class Application:
             wakeword_detector=self.wakeword,
             session_manager=self.session,
         )
+        self.mic_capture = MicCapture(config=config, queue=self.mic_queue)
+        self.speaker = SpeakerOutput(config=config, queue=self.speaker_queue)
 
         self._shutdown_event = asyncio.Event()
 
@@ -119,15 +123,20 @@ class Application:
             tools=self.skill_registry.tool_names,
         )
 
-        # Run audio router (blocks until shutdown)
+        # Start audio I/O tasks
         router_task = asyncio.create_task(self.audio_router.run())
+        mic_task = asyncio.create_task(self.mic_capture.run())
+        speaker_task = asyncio.create_task(self.speaker.run())
 
         # Wait for shutdown signal
         await self._shutdown_event.wait()
 
-        # Graceful shutdown
+        # Stop loops and cancel tasks
         self.audio_router.stop()
-        router_task.cancel()
+        self.mic_capture.stop()
+        self.speaker.stop()
+        for task in (router_task, mic_task, speaker_task):
+            task.cancel()
         await self._shutdown()
 
     def _signal_shutdown(self) -> None:

@@ -20,7 +20,8 @@ logger = structlog.get_logger()
 class SpeakerOutput:
     """Plays PCM16 audio through the system speaker via PyAudio.
 
-    Reads from an asyncio.Queue. Runs the blocking PyAudio write in a thread.
+    Call `asyncio.create_task(speaker.run())` to start. Reads frames from
+    the provided asyncio.Queue and writes them to PyAudio in a thread executor.
     """
 
     def __init__(self, config: Settings, queue: asyncio.Queue[bytes]) -> None:
@@ -28,23 +29,20 @@ class SpeakerOutput:
         self._queue = queue
         self._running = False
 
-    async def start(self) -> None:
-        """Start the speaker output in a background thread."""
-        self._running = True
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._playback_loop)
-
     def stop(self) -> None:
         self._running = False
 
-    def _playback_loop(self) -> None:
-        """Blocking loop — runs in a thread."""
+    async def run(self) -> None:
+        """Async playback loop — blocking PyAudio write runs in thread executor."""
         try:
             import pyaudio
         except ImportError:
-            logger.warning("pyaudio_not_available", msg="Running without speaker output")
+            await logger.awarning(
+                "pyaudio_not_available", msg="Speaker output disabled — install pyaudio"
+            )
             return
 
+        self._running = True
         pa = pyaudio.PyAudio()
         stream = pa.open(
             format=pyaudio.paInt16,
@@ -52,17 +50,15 @@ class SpeakerOutput:
             rate=self._config.audio_sample_rate,
             output=True,
         )
+        loop = asyncio.get_running_loop()
 
         try:
             while self._running:
                 try:
-                    # Use a timeout so we can check self._running periodically
-                    data = asyncio.get_event_loop().run_until_complete(
-                        asyncio.wait_for(self._queue.get(), timeout=0.5)
-                    )
-                    stream.write(data)
-                except (TimeoutError, RuntimeError):
+                    data = await asyncio.wait_for(self._queue.get(), timeout=0.5)
+                except TimeoutError:
                     continue
+                await loop.run_in_executor(None, stream.write, data)
         finally:
             stream.stop_stream()
             stream.close()
