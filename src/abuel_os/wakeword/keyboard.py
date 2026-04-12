@@ -51,6 +51,10 @@ class KeyboardWakeWord:
             "dev_mode_keyboard_wakeword",
             msg="Press Enter to simulate wake word (dev mode)",
         )
+        print(
+            "\n\033[1;32m[DEV] Press ENTER to start talking  |  Ctrl+C to quit\033[0m\n",
+            flush=True,
+        )
         self._task = asyncio.create_task(self._listen(), name="keyboard_wakeword")
 
     async def process_frame(self, pcm_16k: bytes) -> None:
