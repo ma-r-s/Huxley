@@ -1,0 +1,30 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Tools
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime
+*.db
+*.db-shm
+*.db-wal
+
+# Data / models (large files, user-provided)
+data/
+models/
+
+# macOS
+.DS_Store
