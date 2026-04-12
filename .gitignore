@@ -21,6 +21,7 @@ htmlcov/
 *.db
 *.db-shm
 *.db-wal
+logs/
 
 # Data / models (large files, user-provided)
 data/
