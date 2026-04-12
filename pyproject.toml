@@ -11,8 +11,8 @@ dependencies = [
     "structlog>=24.4",
 ]
 
-# Hardware deps (openwakeword, pyaudio) are installed separately on the Pi
-# with Python 3.11. They can't resolve on 3.13 due to tflite-runtime.
+# openwakeword is installed separately on the Pi (tflite-runtime has no 3.13 wheels).
+# pyaudio is in dev deps — install portaudio first: brew install portaudio
 
 [project.scripts]
 abuel-os = "abuel_os.__main__:main"
@@ -23,6 +23,7 @@ dev = [
     "pytest-asyncio>=0.24",
     "pytest-cov>=6.0",
     "mypy>=1.13",
+    "pyaudio>=0.2.14",  # brew install portaudio  first
 ]
 
 [build-system]
