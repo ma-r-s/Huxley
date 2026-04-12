@@ -84,13 +84,19 @@ class SessionManager:
         model = self._config.openai_model
         url = f"{REALTIME_API_URL}?model={model}"
 
-        self._ws = await websockets.connect(
-            url,
-            additional_headers={
-                "Authorization": f"Bearer {self._config.openai_api_key}",
-                "OpenAI-Beta": "realtime=v1",
-            },
-        )
+        try:
+            self._ws = await websockets.connect(
+                url,
+                additional_headers={
+                    "Authorization": f"Bearer {self._config.openai_api_key}",
+                    "OpenAI-Beta": "realtime=v1",
+                },
+            )
+        except websockets.InvalidStatus as exc:
+            if exc.response.status_code == 401:
+                msg = "Invalid OpenAI API key — check ABUEL_OPENAI_API_KEY"
+                raise RuntimeError(msg) from exc
+            raise
 
         # Configure session
         summary = await self._storage.get_latest_summary()
@@ -160,7 +166,20 @@ class SessionManager:
         if not self._ws:
             return
         msg = {"type": event_type.value, **payload}
-        await self._ws.send(json.dumps(msg))
+        try:
+            await self._ws.send(json.dumps(msg))
+        except websockets.ConnectionClosed as exc:
+            reason = str(exc)
+            if "does not exist or you do not have access" in reason:
+                await logger.aerror(
+                    "realtime_api_access_denied",
+                    model=self._config.openai_model,
+                    hint=(
+                        "The Realtime API requires Tier 1 access (≥$5 lifetime spend). "
+                        "Add credits at platform.openai.com/settings/billing"
+                    ),
+                )
+            raise
 
     async def _receive_loop(self) -> None:
         """Process incoming WebSocket messages."""
@@ -189,6 +208,15 @@ class SessionManager:
                         error_type=parsed.type,
                         code=parsed.code,
                     )
+                    if parsed.code == "model_not_found":
+                        await logger.aerror(
+                            "realtime_api_access_hint",
+                            hint=(
+                                "The Realtime API requires Tier 1 access (≥$5 lifetime spend). "
+                                "Add a payment method and purchase credits at "
+                                "platform.openai.com/settings/billing"
+                            ),
+                        )
 
                 if event_type == ServerEventType.RESPONSE_AUDIO_DONE.value:
                     self._is_model_speaking = False

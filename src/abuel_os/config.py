@@ -23,7 +23,7 @@ class Settings(BaseSettings):
 
     # --- OpenAI Realtime API ---
     openai_api_key: str = ""
-    openai_model: str = "gpt-4o-realtime-preview"
+    openai_model: str = "gpt-4o-mini-realtime-preview"
     openai_voice: str = "coral"
 
     # --- Audio ---

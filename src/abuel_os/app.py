@@ -102,11 +102,11 @@ class Application:
         self.state_machine.on_enter(AppState.PLAYING, self._enter_playing)
         self.state_machine.on_exit(AppState.PLAYING, self._exit_playing)
 
-        # Setup wake word
-        await self.wakeword.setup()
-
-        # Start mpv in idle mode
+        # Start mpv before arming wake word (wake word fires immediately in dev mode)
         await self.mpv.start()
+
+        # Setup wake word last — in dev mode this starts the keyboard listener
+        await self.wakeword.setup()
 
         # Setup signal handlers for graceful shutdown
         loop = asyncio.get_running_loop()

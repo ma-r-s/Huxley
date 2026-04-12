@@ -42,6 +42,12 @@ class MpvClient:
 
     async def start(self) -> None:
         """Launch mpv in idle mode and connect to its IPC socket."""
+        from pathlib import Path
+
+        # Remove stale socket from a previous crashed run
+        with contextlib.suppress(FileNotFoundError):
+            Path(self._socket_path).unlink()
+
         self._process = await asyncio.create_subprocess_exec(
             "mpv",
             "--idle",
