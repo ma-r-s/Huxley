@@ -79,6 +79,7 @@ class Application:
             on_audio_delta=self._on_audio_delta,
             on_tool_action=self._on_tool_action,
             on_session_end=self._on_session_end,
+            on_model_done=self._on_model_done,
         )
 
         self.audio_router = AudioRouter(
@@ -269,6 +270,17 @@ class Application:
         """Space released — close mic and ask model to respond."""
         if self.state_machine.state != AppState.CONVERSING:
             return
+        frames = self.audio_router.ptt_frames_sent
         self.audio_router.ptt_active = False
+        if frames < 3:
+            # No real audio captured — a tap or accidental press, don't commit
+            _dev_print("Too short — hold Space while speaking")
+            await self.session.cancel_response()
+            return
         _dev_print("⏳  Sent — waiting for response…")
         await self.session.commit_and_respond()
+
+    async def _on_model_done(self) -> None:
+        """Model finished speaking — reset state and prompt user."""
+        self.audio_router.suppress_wakeword = False
+        _dev_print("✅  Done — hold Space to reply")

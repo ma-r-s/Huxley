@@ -58,6 +58,7 @@ class SessionManager:
         on_audio_delta: Callable[[bytes], Awaitable[None]],
         on_tool_action: Callable[[str], Awaitable[None]],
         on_session_end: Callable[[], Awaitable[None]],
+        on_model_done: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._config = config
         self._skills = skill_registry
@@ -65,6 +66,7 @@ class SessionManager:
         self._on_audio_delta = on_audio_delta
         self._on_tool_action = on_tool_action
         self._on_session_end = on_session_end
+        self._on_model_done = on_model_done
         self._ws: ClientConnection | None = None
         self._receive_task: asyncio.Task[None] | None = None
         self._timeout_task: asyncio.Task[None] | None = None
@@ -234,6 +236,8 @@ class SessionManager:
 
                 if event_type == ServerEventType.RESPONSE_AUDIO_DONE.value:
                     self._is_model_speaking = False
+                    if self._on_model_done:
+                        await self._on_model_done()
 
         except websockets.ConnectionClosed:
             await logger.ainfo("session_connection_closed")

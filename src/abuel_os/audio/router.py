@@ -64,6 +64,7 @@ class AudioRouter:
         self._conversation_mode = False
         self._suppress_wakeword = False
         self._ptt_active = False
+        self._ptt_frames_sent = 0
         self._running = False
 
     @property
@@ -89,7 +90,13 @@ class AudioRouter:
 
     @ptt_active.setter
     def ptt_active(self, value: bool) -> None:
+        if value:
+            self._ptt_frames_sent = 0  # reset counter on each new PTT press
         self._ptt_active = value
+
+    @property
+    def ptt_frames_sent(self) -> int:
+        return self._ptt_frames_sent
 
     async def run(self) -> None:
         """Main routing loop. Reads from mic queue and distributes frames."""
@@ -114,6 +121,7 @@ class AudioRouter:
                 and not self._session.is_model_speaking
             ):
                 await self._session.send_audio(frame_24k)
+                self._ptt_frames_sent += 1
 
     def stop(self) -> None:
         self._running = False
