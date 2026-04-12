@@ -33,7 +33,8 @@ _SPACE = b" "
 _ENTER = b"\r"
 _CTRL_C = b"\x03"
 _Q = b"q"
-_PTT_RELEASE_TIMEOUT = 0.15  # seconds after last Space until PTT considered released
+_PTT_RELEASE_TIMEOUT = 0.35  # seconds after last Space until PTT considered released
+# Must be > macOS initial key-repeat delay (~225ms) so held key doesn't flicker
 
 
 class DevKeyboard:
