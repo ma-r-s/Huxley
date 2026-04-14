@@ -11,7 +11,7 @@ from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
 
 class AppState(Enum):
@@ -57,12 +57,17 @@ class ToolResult:
     """Result of a skill handling a tool call.
 
     `output` is JSON-serialized and sent back to the Realtime API as the
-    function call output. `action` tells the orchestrator what side effect
-    to trigger (e.g., disconnect session and start media playback).
+    function call output. `audio_factory`, if present, is a callable the
+    `TurnCoordinator` invokes after the model's final speech to produce
+    a media stream (e.g. an audiobook). `action` is the legacy enum path
+    still used by session_manager + app.py during migration steps 1-3;
+    it is removed in step 4 when audiobooks skill switches to
+    `audio_factory`. See `docs/turns.md` for the full design.
     """
 
     output: str
     action: ToolAction = ToolAction.NONE
+    audio_factory: Callable[[], AsyncIterator[bytes]] | None = None
 
 
 class InvalidTransitionError(Exception):
