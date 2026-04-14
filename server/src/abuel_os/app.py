@@ -115,6 +115,12 @@ class Application:
         )
 
         self._shutdown_event = asyncio.Event()
+        # Flipped True in `_shutdown()` before disconnecting the session, so
+        # `_on_session_end`'s auto-reconnect policy knows to stand down.
+        self._shutting_down = False
+        # Held reference to the auto-reconnect background task so it isn't
+        # garbage-collected mid-flight (RUF006). See `_on_session_end`.
+        self._reconnect_task: asyncio.Task[None] | None = None
 
     async def run(self) -> None:
         """Initialize subsystems and run the main loop."""
@@ -154,6 +160,14 @@ class Application:
 
         server_task = asyncio.create_task(self.server.run())
 
+        # Auto-connect to OpenAI at startup so the first press is instant — no
+        # lost audio from "the first half of what I said while holding the
+        # button." Idle sessions cost zero tokens (see turns.md §7), so there's
+        # no reason to stay disconnected until the user presses. If the connect
+        # fails, `_enter_connecting` catches it and drops back to IDLE; the
+        # user can retry manually.
+        await self.state_machine.trigger("wake_word")
+
         await self._shutdown_event.wait()
 
         server_task.cancel()
@@ -164,7 +178,19 @@ class Application:
 
     async def _shutdown(self) -> None:
         """Tear down all subsystems in reverse order."""
+        import contextlib
+
         await logger.ainfo("abuel_os_shutting_down")
+        # Must flip BEFORE disconnecting so `_on_session_end` sees it and
+        # doesn't kick off an auto-reconnect during teardown.
+        self._shutting_down = True
+
+        # Any in-flight reconnect task must be cancelled — it'd try to open a
+        # new session while we're tearing the current one down.
+        if self._reconnect_task is not None and not self._reconnect_task.done():
+            self._reconnect_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._reconnect_task
 
         if self.session.is_connected:
             await self.session.disconnect(save_summary=True)
@@ -194,10 +220,43 @@ class Application:
     # --- Session callbacks ---
 
     async def _on_session_end(self) -> None:
-        """OpenAI session receive loop exited — clean up + notify coordinator."""
+        """OpenAI session receive loop exited — clean up + schedule reconnect.
+
+        The receive loop exits on: explicit `disconnect()` (normal shutdown or
+        55-min `_timeout_loop`), a dropped WebSocket, or an unhandled error in
+        the loop. In all non-shutdown cases we auto-reconnect so the user
+        never experiences the "CONNECTING" phase between turns — first press
+        of every gesture is instant.
+
+        The reconnect is scheduled as a background task rather than invoked
+        inline because `_on_session_end` runs from inside
+        `session.disconnect()`'s finally chain — firing `connect()` synchronously
+        would overwrite `self._ws` before `disconnect()` finishes cleaning it up.
+        """
         await self.coordinator.on_session_disconnected()
         if self.state_machine.state == AppState.CONVERSING:
             await self.state_machine.trigger("disconnect")
+
+        if self._shutting_down:
+            return
+        if self.state_machine.state != AppState.IDLE:
+            return
+        self._reconnect_task = asyncio.create_task(self._auto_reconnect())
+
+    async def _auto_reconnect(self) -> None:
+        """Trigger a fresh wake_word → CONNECTING → CONVERSING transition.
+
+        Runs in its own task so the previous `disconnect()` can fully unwind
+        first. If the reconnect fails, `_enter_connecting` catches it and
+        trips `failed`, dropping back to IDLE — the user retries with a
+        manual press. No retry loop here: a broken OpenAI endpoint would
+        otherwise spam reconnects.
+        """
+        await logger.ainfo("session_auto_reconnect")
+        try:
+            await self.state_machine.trigger("wake_word")
+        except Exception:
+            await logger.aexception("auto_reconnect_failed")
 
     async def _on_transcript(self, role: str, text: str) -> None:
         await self.server.send_transcript(role, text)
@@ -216,7 +275,9 @@ class Application:
 
     async def _on_ptt_start(self) -> None:
         if self.state_machine.state != AppState.CONVERSING:
-            await self.server.send_status("No hay sesión activa — presiona Iniciar primero")
+            # Rare race — client only sends ptt_start from CONVERSING.
+            # If we land here it's usually the auto-reconnect window.
+            await self.server.send_status("Conectando — espera un segundo")
             return
         await self.coordinator.on_ptt_start()
 
