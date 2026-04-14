@@ -1,7 +1,9 @@
-"""Finite state machine for the application lifecycle.
+"""Finite state machine for the application session lifecycle.
 
-4 states, ~8 transitions. Hand-rolled because the state space is small
-and a library dependency isn't justified.
+3 states, 5 transitions. Hand-rolled because the state space is tiny.
+Media playback is NOT a session state — it's tracked by
+`TurnCoordinator.current_media_task`, independent of this machine.
+See `docs/turns.md` for the rationale.
 """
 
 from collections.abc import Awaitable, Callable
@@ -18,11 +20,8 @@ _TRANSITIONS: dict[tuple[AppState, str], AppState] = {
     (AppState.IDLE, "wake_word"): AppState.CONNECTING,
     (AppState.CONNECTING, "connected"): AppState.CONVERSING,
     (AppState.CONNECTING, "failed"): AppState.IDLE,
-    (AppState.CONVERSING, "start_playback"): AppState.PLAYING,
     (AppState.CONVERSING, "timeout"): AppState.IDLE,
     (AppState.CONVERSING, "disconnect"): AppState.IDLE,
-    (AppState.PLAYING, "wake_word"): AppState.CONNECTING,
-    (AppState.PLAYING, "playback_finished"): AppState.IDLE,
 }
 
 

@@ -20,7 +20,6 @@ class AppState(Enum):
     IDLE = auto()
     CONNECTING = auto()
     CONVERSING = auto()
-    PLAYING = auto()
 
 
 @dataclass(frozen=True, slots=True)

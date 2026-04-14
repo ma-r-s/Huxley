@@ -60,17 +60,15 @@ stateDiagram-v2
     IDLE --> CONNECTING: wake_word
     CONNECTING --> CONVERSING: connected
     CONNECTING --> IDLE: failed
-    CONVERSING --> PLAYING: start_playback
     CONVERSING --> IDLE: timeout
     CONVERSING --> IDLE: disconnect
-    PLAYING --> CONNECTING: wake_word
-    PLAYING --> IDLE: playback_finished
 ```
 
-- **IDLE** — no OpenAI session, no playback. Resting state.
+- **IDLE** — no OpenAI session. Resting state.
 - **CONNECTING** — opening the WebSocket to OpenAI, sending `session.update` with tool schemas.
-- **CONVERSING** — session open, PTT works, tool calls dispatch.
-- **PLAYING** — `AudiobookPlayer` is streaming PCM through `server.send_audio` to the client; the OpenAI session is **disconnected** to save API cost. Pressing the button re-enters CONNECTING (and `_exit_playing` stops the player + saves position first).
+- **CONVERSING** — session open, PTT works, tool calls dispatch, audiobook playback is happening (or not) — media is orthogonal to session state.
+
+Media playback is **not** a session state. It's tracked by `TurnCoordinator.current_media_task`, which outlives turns: a book started in turn N keeps playing until turn N+M interrupts it. The OpenAI session stays open during book playback (idle sessions cost zero tokens), and pressing PTT mid-book goes through the turn coordinator's interrupt method rather than a state transition. See [`turns.md`](./turns.md#7-session-vs-turn-lifetime--playing-state-removed) and [decision 2026-04-13 — Turn-based coordinator for voice tool calls](./decisions.md#2026-04-13--turn-based-coordinator-for-voice-tool-calls).
 
 The transition table lives in [`server/src/abuel_os/state/machine.py`](../server/src/abuel_os/state/machine.py) — that file is the authoritative source. Any change to the table must update this diagram in the same commit.
 
@@ -82,76 +80,89 @@ sequenceDiagram
     actor Grandpa
     participant Client as Browser / ESP32
     participant Server as AudioServer
+    participant Coord as TurnCoordinator
     participant Sess as SessionManager
     participant OpenAI
 
     Grandpa->>Client: holds button
     Client->>Server: { type: "ptt_start" }
-    Note over Server: _ptt_active = true
+    Server->>Coord: on_ptt_start()
+    Note over Coord: new Turn(LISTENING)
     loop while button held
         Client->>Server: { type: "audio", data: PCM16 }
-        Server->>Sess: send_audio(pcm)
+        Server->>Coord: on_user_audio_frame(pcm)
+        Coord->>Sess: send_audio(pcm)
         Sess->>OpenAI: input_audio_buffer.append
     end
     Grandpa->>Client: releases button
     Client->>Server: { type: "ptt_stop" }
-    Server->>Sess: commit_and_respond()
+    Server->>Coord: on_ptt_stop()
+    Coord->>Sess: commit_and_respond()
     Sess->>OpenAI: buffer.commit + response.create
     OpenAI-->>Sess: response.audio.delta (streaming)
-    Sess-->>Server: on_audio_delta(pcm)
+    Sess-->>Coord: on_audio_delta(pcm)
+    Coord->>Server: send_model_speaking(true)<br/>send_audio(pcm)
     Server-->>Client: { type: "audio", data: PCM16 }
-    Client-->>Grandpa: plays audio
     OpenAI-->>Sess: response.audio.done
-    Sess-->>Server: on_model_done()
-    Server-->>Client: { type: "model_speaking", value: false }
+    Sess-->>Coord: on_audio_done()
+    Coord->>Server: send_model_speaking(false)
+    OpenAI-->>Sess: response.done
+    Sess-->>Coord: on_response_done()
+    Note over Coord: terminal — no factory, turn ends
 ```
 
-## Sequence — a tool call that triggers playback
+## Sequence — a tool call that starts an audiobook
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant OpenAI
     participant Sess as SessionManager
-    participant Reg as SkillRegistry
+    participant Coord as TurnCoordinator
     participant Skill as AudiobooksSkill
     participant Player as AudiobookPlayer
     participant Ffmpeg as ffmpeg
     participant DB as Storage
-    participant App as Application
-    participant SM as StateMachine
     participant WS as AudioServer
 
+    Note over OpenAI: model pre-narrates ack<br/>"Ahí le pongo el libro, don"
+    OpenAI-->>Sess: response.audio.delta (ack chunks)
+    Sess-->>Coord: on_audio_delta(...)
+    Coord->>WS: send_audio(...)
     OpenAI-->>Sess: response.function_call<br/>play_audiobook({book_id})
-    Sess->>Reg: dispatch("play_audiobook", args)
-    Reg->>Skill: handle("play_audiobook", args)
+    Sess-->>Coord: on_function_call(call_id, name, args)
+    Coord->>Skill: dispatch("play_audiobook", args)
     Skill->>DB: get_audiobook_position(book_id)
-    Skill->>Player: load(path, start_position)
+    Skill->>Player: probe(path)
+    Skill->>DB: set_setting(LAST_BOOK_SETTING)
+    Skill-->>Coord: ToolResult(output, audio_factory=closure)
+    Note over Coord: factory latched onto pending_factories
+    Coord->>Sess: send_function_output(call_id, output)
+    Sess->>OpenAI: conversation.item.create
+    OpenAI-->>Sess: response.audio.done
+    Sess-->>Coord: on_audio_done()
+    OpenAI-->>Sess: response.done
+    Sess-->>Coord: on_response_done()
+    Note over Coord: terminal barrier — invoke factory
+    Coord->>Skill: factory() → generator
+    Skill->>Player: stream(path, start_position)
     Player->>Ffmpeg: spawn with -re -ss <pos> -f s16le -
-    Skill-->>Reg: ToolResult(output, action=START_PLAYBACK)
-    Reg-->>Sess: ToolResult
-    Sess->>OpenAI: conversation.item.create (function_call_output)
-    Sess->>Sess: emit dev_event (tool_call)
-    Sess->>App: on_tool_action("start_playback")
-    App->>SM: trigger("start_playback")
-    SM->>App: observer → send_state("PLAYING")
-    SM->>App: _enter_playing()
-    App->>Sess: disconnect (save API cost while playing)
-    Note over Sess: is_connected=false → skip response.create
     loop realtime PCM streaming
         Ffmpeg-->>Player: PCM16 chunk (100 ms)
-        Player-->>App: on_chunk(pcm)
-        App->>WS: send_audio(pcm)
-        WS-->>OpenAI: (disconnected — nothing sent)
+        Player-->>Skill: yield chunk
+        Skill-->>Coord: yield chunk
+        Coord->>WS: send_audio(pcm)
         WS->>WS: → client over WebSocket
     end
+    Note over Skill: generator finally block<br/>saves terminal position on cancel/EOF
 ```
 
 **Key insights**:
 
-1. **A skill never touches the state machine or the session directly.** It returns a `ToolResult` with an `action` field. The Application observes the action and drives the state machine. Skills stay decoupled from session lifecycle.
-2. **Side effects run BEFORE `response.create`.** `SessionManager` dispatches the tool, sends `function_call_output`, emits the `dev_event`, then runs the side effect (state transition). For terminal actions like `start_playback` the side effect disconnects the OpenAI session, so the subsequent `response.create` is skipped (guarded by `is_connected`). Without this ordering the server would ask a closed socket for a follow-up response.
-3. **Audiobook audio rides the same `server.send_audio` channel** as model audio. The client's `AudioPlayback` handles both sources identically — zero conditional logic.
+1. **A skill never touches the coordinator, state machine, or the session directly.** It returns a `ToolResult` with an optional `audio_factory` closure. The coordinator invokes the factory at the turn's terminal barrier, after the model finishes speaking.
+2. **Speech before factories, always.** The coordinator forwards the model's audio deltas first, then invokes pending factories on `response.done`. The book never jumps in without an ack — structurally impossible, not "fixed with a flag."
+3. **Same audio pipe for everything.** Model speech and book PCM both travel through `server.send_audio`. The client's `AudioPlayback` doesn't branch on source.
+4. **Atomic interrupts.** A new `ptt_start` during a live turn runs `coordinator.interrupt()`: drop flag → clear pending factories → audio_clear → cancel media task → cancel OpenAI response → mark turn interrupted. The running media task's `finally` block persists the terminal position, so rewind/forward/interrupt are all transaction-safe without eager storage writes.
 
 ## Dependency flow (no cycles)
 
@@ -160,6 +171,7 @@ flowchart TD
     App[app.py]
     Server[server/server.py]
     Session[session/manager.py]
+    Coord[turn/coordinator.py]
     Skills[skills/*]
     Registry[skills/__init__.py<br/>SkillRegistry]
     State[state/machine.py]
@@ -169,6 +181,7 @@ flowchart TD
 
     App --> Server
     App --> Session
+    App --> Coord
     App --> Registry
     App --> State
     App --> Player
@@ -182,22 +195,24 @@ flowchart TD
     Skills --> Types
     Registry --> Types
     Server --> Types
+    Coord --> Types
 ```
 
 Dependencies flow **downward**. `types.py` is the universal leaf — everyone imports from it, it imports from nothing. `app.py` is the root — nothing imports from it, it wires everything.
 
 ## Where to look in code
 
-| Concern                     | File                                            |
-| --------------------------- | ----------------------------------------------- |
-| Orchestrator / all wiring   | `server/src/abuel_os/app.py`                    |
-| WebSocket audio server      | `server/src/abuel_os/server/server.py`          |
-| State machine + transitions | `server/src/abuel_os/state/machine.py`          |
-| OpenAI session lifecycle    | `server/src/abuel_os/session/manager.py`        |
-| OpenAI event schemas        | `server/src/abuel_os/session/protocol.py`       |
-| Skill registry + dispatch   | `server/src/abuel_os/skills/__init__.py`        |
-| Skill protocol (structural) | `server/src/abuel_os/types.py`                  |
-| Audiobooks skill            | `server/src/abuel_os/skills/audiobooks.py`      |
-| Audiobook streaming player  | `server/src/abuel_os/media/audiobook_player.py` |
-| SQLite wrapper              | `server/src/abuel_os/storage/db.py`             |
-| Config (env + defaults)     | `server/src/abuel_os/config.py`                 |
+| Concern                           | File                                            |
+| --------------------------------- | ----------------------------------------------- |
+| Orchestrator / all wiring         | `server/src/abuel_os/app.py`                    |
+| WebSocket audio server            | `server/src/abuel_os/server/server.py`          |
+| State machine + transitions       | `server/src/abuel_os/state/machine.py`          |
+| Turn coordinator + factory fire   | `server/src/abuel_os/turn/coordinator.py`       |
+| OpenAI session lifecycle          | `server/src/abuel_os/session/manager.py`        |
+| OpenAI event schemas              | `server/src/abuel_os/session/protocol.py`       |
+| Skill registry + dispatch         | `server/src/abuel_os/skills/__init__.py`        |
+| Skill protocol + ToolResult       | `server/src/abuel_os/types.py`                  |
+| Audiobooks skill                  | `server/src/abuel_os/skills/audiobooks.py`      |
+| Audiobook ffmpeg stream generator | `server/src/abuel_os/media/audiobook_player.py` |
+| SQLite wrapper                    | `server/src/abuel_os/storage/db.py`             |
+| Config (env + defaults)           | `server/src/abuel_os/config.py`                 |

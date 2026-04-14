@@ -30,13 +30,6 @@ class TestStateMachine:
         await sm.trigger("failed")
         assert sm.state is AppState.IDLE
 
-    async def test_start_playback_transitions_to_playing(self) -> None:
-        sm = StateMachine()
-        await sm.trigger("wake_word")
-        await sm.trigger("connected")
-        await sm.trigger("start_playback")
-        assert sm.state is AppState.PLAYING
-
     async def test_timeout_returns_to_idle(self) -> None:
         sm = StateMachine()
         await sm.trigger("wake_word")
@@ -51,22 +44,6 @@ class TestStateMachine:
         await sm.trigger("disconnect")
         assert sm.state is AppState.IDLE
 
-    async def test_wake_word_during_playback_transitions_to_connecting(self) -> None:
-        sm = StateMachine()
-        await sm.trigger("wake_word")
-        await sm.trigger("connected")
-        await sm.trigger("start_playback")
-        await sm.trigger("wake_word")
-        assert sm.state is AppState.CONNECTING
-
-    async def test_playback_finished_returns_to_idle(self) -> None:
-        sm = StateMachine()
-        await sm.trigger("wake_word")
-        await sm.trigger("connected")
-        await sm.trigger("start_playback")
-        await sm.trigger("playback_finished")
-        assert sm.state is AppState.IDLE
-
     async def test_invalid_transition_raises(self) -> None:
         sm = StateMachine()
         with pytest.raises(InvalidTransitionError, match="No transition from IDLE"):
@@ -77,7 +54,7 @@ class TestStateMachine:
         await sm.trigger("wake_word")
         await sm.trigger("connected")
         with pytest.raises(InvalidTransitionError):
-            await sm.trigger("playback_finished")
+            await sm.trigger("start_playback")
 
     def test_valid_triggers_from_idle(self) -> None:
         sm = StateMachine()
@@ -88,9 +65,7 @@ class TestStateMachine:
         await sm.trigger("wake_word")
         await sm.trigger("connected")
         triggers = sm.valid_triggers()
-        assert "start_playback" in triggers
-        assert "timeout" in triggers
-        assert "disconnect" in triggers
+        assert set(triggers) == {"timeout", "disconnect"}
 
     async def test_on_enter_callback_fires(self) -> None:
         sm = StateMachine()

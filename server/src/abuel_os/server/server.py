@@ -12,7 +12,7 @@ Protocol — client → server
 
 Protocol — server → client
     {"type": "audio",          "data": "<base64 PCM16 24 kHz>"}
-    {"type": "state",          "value": "IDLE"|"CONNECTING"|"CONVERSING"|"PLAYING"}
+    {"type": "state",          "value": "IDLE"|"CONNECTING"|"CONVERSING"}
     {"type": "status",         "message": "..."}
     {"type": "transcript",     "role": "user"|"assistant", "text": "..."}
     {"type": "model_speaking", "value": bool}
