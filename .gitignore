@@ -1,19 +1,19 @@
 # Secrets
-.env
+server/.env
 
 # Python
 __pycache__/
 *.py[cod]
 *.pyo
-.venv/
+server/.venv/
 *.egg-info/
 dist/
 build/
 
-# Tools
-.mypy_cache/
-.ruff_cache/
-.pytest_cache/
+# Python tooling
+server/.mypy_cache/
+server/.ruff_cache/
+server/.pytest_cache/
 .coverage
 htmlcov/
 
@@ -21,11 +21,16 @@ htmlcov/
 *.db
 *.db-shm
 *.db-wal
-logs/
+server/logs/
 
-# Data / models (large files, user-provided)
-data/
-models/
+# Server-local data / models (large, user-provided)
+server/data/
+server/models/
 
 # macOS
 .DS_Store
+
+# Web
+web/node_modules/
+web/.svelte-kit/
+web/build/
