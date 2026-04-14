@@ -11,13 +11,13 @@
 
   // ONE button. Press-and-hold = talk. No other buttons exist. This matches
   // the production hardware (walky-talky with a single big button). Every
-  // interaction — start a session, interrupt playback, push-to-talk,
-  // interrupt the assistant mid-sentence — is the same physical gesture.
+  // interaction — start a session, push-to-talk, interrupt the assistant
+  // mid-sentence, interrupt a book mid-stream — is the same physical gesture.
   //
-  // Pending start: if the button is pressed from IDLE or PLAYING, we first
-  // send wake_word and wait for the state to reach CONVERSING, then activate
-  // the mic and play a ready tone. Grandpa just holds the button and talks
-  // once he hears the beep — same mental model as a real walky-talky.
+  // Pending start: if the button is pressed from IDLE, we first send wake_word
+  // and wait for the state to reach CONVERSING, then activate the mic and play
+  // a ready tone. Once in CONVERSING, the press is immediate — book interrupts
+  // and mid-speech interrupts both go through the turn coordinator.
   let pttHeld = $state(false)
   let pttPendingStart = $state(false)
   let micError = $state<string | null>(null)
@@ -32,6 +32,10 @@
   onMount(() => {
     ws.setOnAudio((data) => playback.play(data))
     ws.setOnAudioClear(() => playback.stop())
+    ws.setOnThinkingTone(
+      () => playback.playThinkingTone(),
+      () => playback.stopThinkingTone(),
+    )
     mic.onFrame = (data) => ws.sendAudio(data)
     ws.connect()
   })
@@ -71,14 +75,14 @@
 
     switch (ws.appState) {
       case 'CONVERSING':
-        // Session is already up; go live now.
+        // Session is already up. Go live immediately — the turn coordinator
+        // handles interrupts (mid-speech model audio OR a streaming book) on
+        // the server side, no special-casing needed here.
         activatePtt()
         break
       case 'IDLE':
-      case 'PLAYING':
-        // Start (or interrupt-and-restart) a session. wake_word handles the
-        // PLAYING case server-side — stops the audiobook, saves position,
-        // clears the client queue, transitions to CONNECTING.
+        // Start a session. wake_word transitions IDLE → CONNECTING; the
+        // pending-start effect activates PTT once CONVERSING is reached.
         pttPendingStart = true
         pttHeld = true           // visual "pressed" feedback while connecting
         ws.wakeWord()
@@ -113,7 +117,6 @@
     IDLE:       { label: 'Inactivo',     color: 'bg-zinc-600 text-zinc-200' },
     CONNECTING: { label: 'Conectando…',  color: 'bg-yellow-500 text-yellow-950' },
     CONVERSING: { label: 'Conversando',  color: 'bg-green-500 text-green-950' },
-    PLAYING:    { label: 'Reproduciendo',color: 'bg-blue-500 text-blue-950' },
   }
   const meta = $derived(stateMeta[ws.appState])
 
@@ -231,8 +234,8 @@
                 {#if ev.kind === 'tool_call' && typeof ev.payload.name === 'string'}
                   <span class="font-mono text-zinc-200">{ev.payload.name}</span>
                 {/if}
-                {#if ev.kind === 'tool_call' && typeof ev.payload.action === 'string' && ev.payload.action !== 'none'}
-                  <span class="px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-300 text-[10px]">{ev.payload.action}</span>
+                {#if ev.kind === 'tool_call' && ev.payload.has_audio_factory === true}
+                  <span class="px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-300 text-[10px]">audio</span>
                 {/if}
               </summary>
               <pre class="mt-2 p-2 bg-zinc-950 rounded text-[11px] text-zinc-400 overflow-x-auto whitespace-pre-wrap break-words">{JSON.stringify(ev.payload, null, 2)}</pre>

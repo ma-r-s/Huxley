@@ -58,12 +58,42 @@ Tools return a `ToolResult`:
 ```python
 ToolResult(
     output=json.dumps({"results": [...], "message": "Encontré 3 libros"}),
-    action=ToolAction.NONE,  # or START_PLAYBACK, etc.
 )
 ```
 
 - **`output`** is JSON text sent back to the LLM as the function-call output. The LLM narrates it to the user.
-- **`action`** is a side-effect signal to the orchestrator. Use it for state transitions that must happen outside the tool (e.g., disconnecting the session to start playback). Skills **never** touch the state machine or the session directly.
+- **`audio_factory`** (optional) is a callable that returns an async iterator of PCM16 chunks. The `TurnCoordinator` invokes it after the model finishes speaking, so any tool-produced audio (an audiobook stream, music, news clip) plays cleanly _after_ the model's verbal acknowledgement. Skills with no audio side effect leave it `None`. See [`turns.md`](../turns.md) for the full design.
+
+### Info tools vs side-effect tools
+
+| Kind            | `audio_factory` | Examples                                     | Coordinator behavior                                                                                                                                          |
+| --------------- | --------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Info**        | `None`          | `search_audiobooks`, `get_current_time`      | Coordinator requests a follow-up response so the model can narrate the result. Multi-round chained turn.                                                      |
+| **Side-effect** | not `None`      | `play_audiobook`, `audiobook_control` (seek) | Coordinator latches the factory onto `pending_factories`. After the model's terminal `response.done`, the factory fires and streams PCM through `send_audio`. |
+
+The model is told (via the tool description) to **pre-narrate** the side effect — e.g. _"Ahí le pongo el libro, don."_ — _before_ calling the tool. The coordinator guarantees the narration plays before the factory does.
+
+### The factory closure pattern
+
+For tools that compute a parameter at dispatch time (e.g. a rewound position), capture the value in a closure rather than persisting it eagerly:
+
+```python
+def _build_factory(self, book_id: str, path: str, start_position: float):
+    async def stream():
+        bytes_read = 0
+        try:
+            async for chunk in self._player.stream(path, start_position=start_position):
+                bytes_read += len(chunk)
+                yield chunk
+        finally:
+            elapsed = bytes_read / BYTES_PER_SECOND
+            await self._storage.save_audiobook_position(
+                book_id, start_position + elapsed,
+            )
+    return stream
+```
+
+Why: if the turn is interrupted before the coordinator invokes the factory, the closure is never executed and storage stays at the last actually-played position. The skill never writes the new position eagerly during dispatch. This gives interrupt-atomicity without a transaction model.
 
 ## The "nunca decir no" contract — skill author rules
 
@@ -99,8 +129,8 @@ Internal exceptions (file not found, socket error, timeout) must be caught and t
 
 ```python
 try:
-    await self._mpv.loadfile(path)
-except MpvError:
+    await self._player.probe(path)
+except PlayerError:
     return ToolResult(output=json.dumps({
         "playing": False,
         "message": "No pude abrir ese libro. Déjeme intentar otra vez o escoger otro.",
@@ -140,7 +170,7 @@ class AudiobooksSkill:
 
 ```python
 # server/src/abuel_os/app.py
-audiobooks = AudiobooksSkill(library_path=..., mpv=..., storage=...)
+audiobooks = AudiobooksSkill(library_path=..., player=..., storage=...)
 self.skill_registry.register(audiobooks)
 ```
 
@@ -148,9 +178,11 @@ The registry calls `setup()` on startup and `teardown()` on shutdown. Use them f
 
 ## Testing
 
-Skills must have unit tests. Mock the infrastructure (`MpvClient`, `Storage`), assert on `ToolResult.output` and `ToolResult.action`. Example: [`server/tests/unit/test_audiobooks_skill.py`](../../server/tests/unit/test_audiobooks_skill.py).
+Skills must have unit tests. Mock the infrastructure (`AudiobookPlayer`, `Storage`), assert on `ToolResult.output` and — for side-effect tools — invoke `result.audio_factory()` and verify the underlying stream call. Example: [`server/tests/unit/test_audiobooks_skill.py`](../../server/tests/unit/test_audiobooks_skill.py).
 
-Integration tests that hit real `mpv` or real OpenAI live in `server/tests/integration/` and are marked `@pytest.mark.integration`. They are skipped by default. Run them explicitly with `uv run pytest -m integration`.
+For coordinator ↔ skill contract coverage (factory latching, mid-chain interrupts, follow-up rounds), see [`test_coordinator_skill_integration.py`](../../server/tests/unit/test_coordinator_skill_integration.py) — wires a real `TurnCoordinator` to a real skill with a mocked player.
+
+Integration tests that hit real ffmpeg or real OpenAI live in `server/tests/integration/` and are marked `@pytest.mark.integration`. They are skipped by default. Run them explicitly with `uv run pytest -m integration`.
 
 ## File layout for a new skill
 

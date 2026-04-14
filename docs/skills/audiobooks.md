@@ -82,45 +82,42 @@ Configured via `audiobook_library_path` in [`server/src/abuel_os/config.py`](../
 
 ## Current state
 
-The skill exists in [`server/src/abuel_os/skills/audiobooks.py`](../../server/src/abuel_os/skills/audiobooks.py). Backed by [`AudiobookPlayer`](../../server/src/abuel_os/media/audiobook_player.py), which spawns `ffmpeg` to decode to 24 kHz mono PCM16 and streams chunks through the same `AudioServer.send_audio` channel as OpenAI model audio. Honest audit of what works today:
+The skill exists in [`server/src/abuel_os/skills/audiobooks.py`](../../server/src/abuel_os/skills/audiobooks.py). Backed by [`AudiobookPlayer`](../../server/src/abuel_os/media/audiobook_player.py), a stateless ffmpeg wrapper exposing `probe()` + `stream(path, start_position)`. The skill returns playback as a `ToolResult.audio_factory` closure that the [`TurnCoordinator`](../turns.md) invokes after the model finishes speaking — book audio is forwarded through the same `server.send_audio` channel as OpenAI model audio. Honest audit:
 
-| Capability                                                                              | Status                                                                  |
-| --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Library scan (filename-based)                                                           | ✅                                                                      |
-| Fuzzy search (`difflib.SequenceMatcher`) over title + author                            | ✅                                                                      |
-| `search_audiobooks` tool                                                                | ✅                                                                      |
-| `play_audiobook` tool with optional `from_beginning`                                    | ✅                                                                      |
-| Resume on play via `Storage.get_audiobook_position`                                     | ✅                                                                      |
-| `audiobook_control`: pause / resume / rewind / forward / stop                           | ✅ (seconds-based, not chapters)                                        |
-| **Audio streams through WebSocket** (not local speakers)                                | ✅ (via `AudiobookPlayer` → `server.send_audio`)                        |
-| **Position save on pause / seek / stop**                                                | ✅ `AudiobooksSkill.save_current_position`                              |
-| **Position save on exit_playing (interrupt via wake_word)**                             | ✅                                                                      |
-| **Position save on shutdown**                                                           | ✅                                                                      |
-| **Absolute seek + rewind/forward with clamping**                                        | ✅                                                                      |
-| **`audio_clear` message on seek** (drops client's stale queue)                          | ✅                                                                      |
-| **PlayerError wrapped in Spanish "déjeme intentarlo otra vez"**                         | ✅                                                                      |
-| **Catalog injected into session prompt** (LLM knows the library without calling search) | ✅ via `prompt_context()` → `SkillRegistry.get_prompt_context()`        |
-| **Empty-query `search_audiobooks` returns the full catalog**                            | ✅ (_"¿qué libros tienes?"_ never dead-ends)                            |
-| Periodic position save while playing (every 10 s)                                       | ❌ not implemented                                                      |
-| M4B embedded metadata parsing (read title/author/desc from tags)                        | ❌ uses filename only (ffprobe has it, not wired into catalog)          |
-| Chapter navigation (`seek_chapter`)                                                     | ❌ only `seek_time`                                                     |
-| `resume_last()` — _"sigue con el libro"_ without naming it                              | ❌                                                                      |
-| `list_in_progress()` — books with a saved position                                      | ❌                                                                      |
-| `describe_current()` — what's playing right now                                         | ❌                                                                      |
-| Nunca-decir-no wiring on every return path                                              | ⚠️ play errors wired; `search`/`control` still have some bare `{error}` |
+| Capability                                                                              | Status                                                                                                            |
+| --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Library scan (filename-based)                                                           | ✅                                                                                                                |
+| Fuzzy search (`difflib.SequenceMatcher`) over title + author                            | ✅                                                                                                                |
+| `search_audiobooks` tool                                                                | ✅                                                                                                                |
+| `play_audiobook` tool with optional `from_beginning`                                    | ✅ (returns `audio_factory`; coordinator fires it after the model's pre-narration)                                |
+| Resume on play via `Storage.get_audiobook_position`                                     | ✅                                                                                                                |
+| `audiobook_control`: pause / resume / rewind / forward / stop                           | ✅ (seconds-based, not chapters)                                                                                  |
+| `resume_last` tool — _"sigue con el libro"_ without naming it                           | ✅ via `LAST_BOOK_SETTING` in storage                                                                             |
+| **Audio streams through WebSocket** (not local speakers)                                | ✅ (factory yields PCM → coordinator → `server.send_audio`)                                                       |
+| **Closure-captured atomicity for rewind/forward/resume**                                | ✅ new position lives in factory closure; storage only updated when factory actually runs (interrupt-safe)        |
+| **Position save on factory cancel + natural EOF**                                       | ✅ generator `finally` block computes `start + bytes_read / BYTES_PER_SECOND` and writes via `Storage`            |
+| **PlayerError on `probe()` wrapped in Spanish "déjeme intentarlo otra vez"**            | ✅                                                                                                                |
+| **Catalog injected into session prompt** (LLM knows the library without calling search) | ✅ via `prompt_context()` → `SkillRegistry.get_prompt_context()`                                                  |
+| **Empty-query `search_audiobooks` returns the full catalog**                            | ✅ (_"¿qué libros tienes?"_ never dead-ends)                                                                      |
+| Periodic position save while playing (every 10 s)                                       | ❌ not implemented (no longer needed in practice — finally-block save covers cancel/EOF, only matters on SIGKILL) |
+| M4B embedded metadata parsing (read title/author/desc from tags)                        | ❌ uses filename only (ffprobe has it, not wired into catalog)                                                    |
+| Chapter navigation (`seek_chapter`)                                                     | ❌ only `seek_time`                                                                                               |
+| `list_in_progress()` — books with a saved position                                      | ❌                                                                                                                |
+| `describe_current()` — what's playing right now                                         | ❌                                                                                                                |
+| Nunca-decir-no wiring on every return path                                              | ⚠️ play errors wired; `search`/`control` still have some bare `{error}`                                           |
 
 ## Designed v1 spec
 
 ### Tools (all descriptions in Spanish for the LLM)
 
-| Tool                | Parameters                                                                                                                              | Returns                                                                                         |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `search_audiobooks` | `query: string`                                                                                                                         | Top 5 fuzzy matches: `id, title, author, description, last_position`                            |
-| `list_in_progress`  | —                                                                                                                                       | Books with saved position > 0, ordered by most recently played                                  |
-| `resume_last`       | —                                                                                                                                       | Starts the most-recently-played book at its saved position, or returns _"no hay nada a medias"_ |
-| `play_audiobook`    | `book_id: string`, `from_beginning?: bool`                                                                                              | Starts playback; returns title, author, chapter, position. Action: `START_PLAYBACK`             |
-| `describe_current`  | —                                                                                                                                       | What's playing: title, author, chapter name + number, position, duration, remaining             |
-| `audiobook_control` | `action: pause \| resume \| stop \| seek_time \| seek_chapter`, `seconds?: number`, `chapter_delta?: number`, `chapter_number?: number` | Ok + new position/chapter                                                                       |
+| Tool                | Parameters                                                                                                                              | Returns                                                                                                              |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `search_audiobooks` | `query: string`                                                                                                                         | Top 5 fuzzy matches: `id, title, author, description, last_position`                                                 |
+| `list_in_progress`  | —                                                                                                                                       | Books with saved position > 0, ordered by most recently played                                                       |
+| `resume_last`       | —                                                                                                                                       | Starts the most-recently-played book at its saved position, or returns _"no hay nada a medias"_                      |
+| `play_audiobook`    | `book_id: string`, `from_beginning?: bool`                                                                                              | Returns title, author, chapter, position + an `audio_factory` the coordinator fires after the model's pre-narration. |
+| `describe_current`  | —                                                                                                                                       | What's playing: title, author, chapter name + number, position, duration, remaining                                  |
+| `audiobook_control` | `action: pause \| resume \| stop \| seek_time \| seek_chapter`, `seconds?: number`, `chapter_delta?: number`, `chapter_number?: number` | Ok + new position/chapter                                                                                            |
 
 ### Natural-language vocabulary — what grandpa says → what the LLM calls
 
@@ -149,17 +146,27 @@ When grandpa says _"sigue con el libro"_ / _"el de anoche"_ / similar:
 
 ### Position persistence
 
-As of the `AudiobookPlayer` refactor, position save happens on every control action that changes playback state plus on shutdown. Remaining gap: periodic save while playing.
+After the v3 turn-coordinator refactor, position persistence is owned by the playback factory itself, not by the skill's control actions. The factory closure tracks `bytes_read` and writes the terminal position in its `finally` block:
 
-- **On pause** → save ✅
-- **On seek** (rewind / forward) → save ✅
-- **On stop** → save ✅
-- **On shutdown / teardown / exit_playing** → save ✅
-- **Periodically while playing** (every 10 s) → ❌ gap for v1
+```python
+async def stream():
+    bytes_read = 0
+    try:
+        async for chunk in player.stream(path, start_position=start_position):
+            bytes_read += len(chunk)
+            yield chunk
+    finally:
+        elapsed = bytes_read / BYTES_PER_SECOND
+        await storage.save_audiobook_position(book_id, start_position + elapsed)
+```
 
-`AudiobookPlayer.position` is computed from `start_position + (bytes_read / BYTES_PER_SECOND)`, so it reflects what has actually been decoded + streamed, not just what has been played on the client (client-side lag is ~100–200 ms).
+- **On user interrupt** (PTT pressed mid-book) → coordinator cancels media task → `finally` runs → position saved ✅
+- **On natural EOF** (book reaches its end) → generator exits → `finally` runs → position saved ✅
+- **On rewind / forward** — the new position lives only in the **factory closure**, never written to storage during dispatch. If the turn is interrupted before the factory runs, storage stays at the old position (interrupt-atomicity for free).
+- **On server shutdown** — `_shutdown` calls `coordinator.interrupt()` which cancels the media task → `finally` runs.
+- **Periodically while playing** (every 10 s) — ❌ not implemented; only matters under SIGKILL where `finally` blocks don't run.
 
-Still to add: persist **`last_book_id`** in the `settings` table so a future `resume_last` tool can find it without scanning all books.
+`last_book_id` persists via `LAST_BOOK_SETTING` in the `settings` table — written by `_play` during dispatch and read by `_control` and `resume_last`.
 
 ### Nunca-decir-no wiring
 
@@ -170,7 +177,7 @@ Every tool return path must include a `message` field written for the LLM narrat
 | Search with zero results                            | `{ results: [], available_count: N, message: "No encontré nada con esas palabras, don. ¿Quiere que le diga qué tengo?" }` |
 | Search with results                                 | `{ results: [...], message: "Encontré estos libros…" }`                                                                   |
 | Play: book not found                                | `{ playing: false, closest: {...}, message: "No tengo ese exacto. Lo más parecido es 'X'. ¿Pongo ese?" }`                 |
-| Play: mpv error                                     | `{ playing: false, message: "Algo pasó con el reproductor. Déjeme intentarlo otra vez." }`                                |
+| Play: probe / decode error                          | `{ playing: false, message: "Algo pasó con el reproductor. Déjeme intentarlo otra vez." }`                                |
 | Resume last: nothing pending                        | `{ resumed: false, message: "No tiene ningún libro a medias. ¿Busco algo?" }`                                             |
 | Resume last: ambiguous (N candidates)               | `{ resumed: false, candidates: [...], message: "Tiene varios a medias. ¿Sigue con 'X' o con 'Y'?" }`                      |
 | Describe current: nothing playing                   | `{ playing: false, message: "No hay nada sonando ahora. ¿Quiere que ponga algo?" }`                                       |
@@ -179,7 +186,7 @@ Every tool return path must include a `message` field written for the LLM narrat
 ### Edge cases
 
 - **Library empty** — `search_audiobooks` returns `{ results: [], message: "La biblioteca está vacía. Hay que pedirle a Mario que agregue libros." }`
-- **Corrupt file / mpv load fails** — wrap in Rule 3 of the [nunca-decir-no contract](./README.md#rule-3--errors-wrapped-in-plain-spanish).
+- **Corrupt file / probe fails** — wrap in Rule 3 of the [nunca-decir-no contract](./README.md#rule-3--errors-wrapped-in-plain-spanish).
 - **Saved position > book duration** (book truncated or replaced) — clamp to 0, log a warning, don't fail the tool call.
 - **Book renamed on disk** — `book_id` is the relative path, so a rename invalidates the id. Resume won't find it. Acceptable for v0; fix in v2 with a content-hash id if it bites.
 - **Very long search query** — truncate to 100 chars before fuzzy matching.

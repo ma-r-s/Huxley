@@ -1,4 +1,4 @@
-export type AppState = "IDLE" | "CONNECTING" | "CONVERSING" | "PLAYING";
+export type AppState = "IDLE" | "CONNECTING" | "CONVERSING";
 
 export interface StatusEntry {
   id: number;
@@ -33,6 +33,10 @@ function nextId() {
   return _id++;
 }
 
+// 400ms is the threshold for a blind user to start hearing dead air as
+// "the device is broken". Anything past that, fill with the thinking tone.
+const SILENCE_TIMEOUT_MS = 400;
+
 export function createWsStore() {
   let socket = $state<WebSocket | null>(null);
   let connected = $state(false);
@@ -45,6 +49,36 @@ export function createWsStore() {
   // Callbacks set by the page after construction.
   let _onAudio: ((data: string) => void) | null = null;
   let _onAudioClear: (() => void) | null = null;
+  let _onThinkingToneStart: (() => void) | null = null;
+  let _onThinkingToneStop: (() => void) | null = null;
+
+  // Silence-detection timer for the thinking-tone gap-filler. Started on
+  // ptt_stop send and on `model_speaking: false` receive (inter-round gap).
+  // Cancelled by audio arriving, model_speaking:true, audio_clear, ptt_start,
+  // wake_word, or socket close. Grandpa is blind — silence ≥ 400 ms is
+  // indistinguishable from a broken device.
+  let silenceTimer: ReturnType<typeof setTimeout> | null = null;
+  let thinkingToneActive = false;
+
+  function startSilenceTimer() {
+    if (silenceTimer !== null) clearTimeout(silenceTimer);
+    silenceTimer = setTimeout(() => {
+      silenceTimer = null;
+      thinkingToneActive = true;
+      _onThinkingToneStart?.();
+    }, SILENCE_TIMEOUT_MS);
+  }
+
+  function cancelSilenceTimer() {
+    if (silenceTimer !== null) {
+      clearTimeout(silenceTimer);
+      silenceTimer = null;
+    }
+    if (thinkingToneActive) {
+      thinkingToneActive = false;
+      _onThinkingToneStop?.();
+    }
+  }
 
   function nowTs(): string {
     return new Date().toLocaleTimeString("en", { hour12: false });
@@ -76,6 +110,7 @@ export function createWsStore() {
     ws.onclose = () => {
       connected = false;
       socket = null;
+      cancelSilenceTimer();
       pushStatus("Disconnected — retrying in 2s…");
       setTimeout(connect, 2000);
     };
@@ -85,9 +120,12 @@ export function createWsStore() {
         const msg = JSON.parse(ev.data as string) as ServerMessage;
         switch (msg.type) {
           case "audio":
+            // Real audio arrived — silence is over.
+            cancelSilenceTimer();
             _onAudio?.(msg.data);
             break;
           case "audio_clear":
+            cancelSilenceTimer();
             _onAudioClear?.();
             break;
           case "state":
@@ -104,6 +142,15 @@ export function createWsStore() {
             break;
           case "model_speaking":
             modelSpeaking = msg.value;
+            if (msg.value) {
+              // Model is about to emit audio — kill any pending tone.
+              cancelSilenceTimer();
+            } else {
+              // Inter-round gap (or terminal). Start the silence timer; if
+              // the next round's first audio delta arrives in < 400 ms it
+              // will cancel before firing.
+              startSilenceTimer();
+            }
             break;
           case "dev_event":
             pushDevEvent(msg.kind, msg.payload);
@@ -150,9 +197,23 @@ export function createWsStore() {
     setOnAudioClear: (fn: () => void) => {
       _onAudioClear = fn;
     },
+    setOnThinkingTone: (start: () => void, stop: () => void) => {
+      _onThinkingToneStart = start;
+      _onThinkingToneStop = stop;
+    },
     sendAudio: (data: string) => send({ type: "audio", data }),
-    wakeWord: () => send({ type: "wake_word" }),
-    pttStart: () => send({ type: "ptt_start" }),
-    pttStop: () => send({ type: "ptt_stop" }),
+    wakeWord: () => {
+      cancelSilenceTimer();
+      send({ type: "wake_word" });
+    },
+    pttStart: () => {
+      cancelSilenceTimer();
+      send({ type: "ptt_start" });
+    },
+    pttStop: () => {
+      send({ type: "ptt_stop" });
+      // Initial gap: commit → OpenAI → first audio delta. Could be > 400 ms.
+      startSilenceTimer();
+    },
   };
 }

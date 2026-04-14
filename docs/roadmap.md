@@ -19,11 +19,12 @@ The scaffolding: server + browser dev client + the audiobooks skill (partial).
 | Python WebSocket audio server                    | ✅ built                                                                                      |
 | OpenAI Realtime API relay                        | ✅ built                                                                                      |
 | Skill registry + protocol                        | ✅ built                                                                                      |
-| State machine                                    | ✅ built                                                                                      |
-| mpv IPC client                                   | ✅ built                                                                                      |
+| State machine                                    | ✅ built (3 states; media is owned by the turn coordinator, not the session)                  |
+| Turn coordinator (audio sequencing + interrupts) | ✅ built — see [`turns.md`](./turns.md)                                                       |
+| ffmpeg-based audiobook streamer                  | ✅ built (`AudiobookPlayer.stream()` async generator)                                         |
 | SQLite storage                                   | ✅ built                                                                                      |
 | Audiobooks skill (search + play + basic control) | 🟡 partial — see [`skills/audiobooks.md#current-state`](./skills/audiobooks.md#current-state) |
-| Browser dev client (SvelteKit)                   | 🟡 control plane done, audio streaming in progress                                            |
+| Browser dev client (SvelteKit)                   | ✅ end-to-end audio path; one-button UX; thinking-tone gap filler                             |
 
 ## v1 — the MVP (Mario's bar)
 

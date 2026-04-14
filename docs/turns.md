@@ -1,6 +1,6 @@
 # Turn-based Audio Coordination
 
-> **Status**: design spec **v3**, not yet implemented. v1 was under-specified (first critic round caught it), v2 over-engineered the audio layer with a named-channel abstraction that had no v1 consumer (self-review caught it after two critic rounds). v3 cuts the channels. Same root-cause fix, same primitives for what actually matters, ~40% less ceremony. See [ADR — 2026-04-13 — Turn-based coordinator for voice tool calls](./decisions.md#2026-04-13--turn-based-coordinator-for-voice-tool-calls), updated in lockstep with this revision.
+> **Status**: **implemented** — landed across 6 staged commits on 2026-04-14 (steps 1–6). Spec history: v1 was under-specified (first critic round caught it); v2 over-engineered the audio layer with a named-channel abstraction that had no v1 consumer (self-review caught it after two critic rounds); v3 cuts the channels and ships. Same root-cause fix, ~40% less ceremony than v2. See [ADR — 2026-04-13 — Turn-based coordinator for voice tool calls](./decisions.md#2026-04-13--turn-based-coordinator-for-voice-tool-calls), and the source: [`server/src/abuel_os/turn/coordinator.py`](../server/src/abuel_os/turn/coordinator.py).
 
 ## Purpose
 
