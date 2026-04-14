@@ -401,6 +401,42 @@ class TestInterrupt:
         await coordinator.interrupt()
         mocks["send_audio_clear"].assert_awaited()
 
+    async def test_interrupt_on_idle_coordinator_is_safe(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        """`_shutdown()` calls `coordinator.interrupt()` unconditionally.
+
+        If there's no active turn AND no running media task, the call must
+        not raise — it still flushes client audio (cheap), sets the drop
+        flag, and optionally tells OpenAI to cancel (if connected).
+        """
+        # Fresh coordinator: no turn, no media task, flag unset.
+        assert coordinator.current_turn is None
+        assert coordinator.current_media_task is None
+        assert coordinator.response_cancelled is False
+
+        await coordinator.interrupt()
+
+        assert coordinator.response_cancelled is True
+        assert coordinator.current_turn is None
+        assert coordinator.current_media_task is None
+        # audio_clear is fired regardless — client cleanup is cheap.
+        mocks["send_audio_clear"].assert_awaited()
+        # oai_cancel IS awaited (connected mock returns True) — harmless if
+        # OpenAI has no in-flight response.
+        mocks["oai_cancel"].assert_awaited()
+
+    async def test_interrupt_on_idle_disconnected_skips_oai_cancel(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        """When the session is disconnected, interrupt must not call oai_cancel."""
+        mocks["oai_is_connected"].return_value = False
+
+        await coordinator.interrupt()
+
+        mocks["oai_cancel"].assert_not_awaited()
+        mocks["send_audio_clear"].assert_awaited()
+
     async def test_interrupt_cancels_openai_response(
         self, coordinator: TurnCoordinator, mocks: dict[str, Any]
     ) -> None:

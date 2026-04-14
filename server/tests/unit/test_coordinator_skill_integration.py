@@ -1,0 +1,325 @@
+"""Integration-in-the-small: real TurnCoordinator + real AudiobooksSkill.
+
+These tests wire a real `TurnCoordinator` to a real `SkillRegistry`
+containing a real `AudiobooksSkill`. Only the OpenAI session and the
+`AudiobookPlayer.stream()` subprocess are mocked — everything else runs
+its production code path. Catches bugs in the coordinator ↔ skill
+contract that the per-side unit tests can miss:
+
+- factory closure actually reaches the coordinator's pending_factories
+- factory fires at the terminal barrier and streams via send_audio
+- mid-chain interrupts drop the accumulated factory
+- rewind/forward produce new factories, prior media task is cancelled
+- pause/stop return None-factories and trigger follow-up round
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from abuel_os.skills import SkillRegistry
+from abuel_os.skills.audiobooks import AudiobooksSkill
+from abuel_os.turn.coordinator import TurnCoordinator, TurnState
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
+
+    from abuel_os.storage.db import Storage
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+
+
+@pytest.fixture
+def library_path(tmp_path: Path) -> Path:
+    lib = tmp_path / "audiobooks"
+    garcia = lib / "Gabriel García Márquez"
+    garcia.mkdir(parents=True)
+    (garcia / "Cien años de soledad.mp3").write_bytes(b"fake")
+    return lib
+
+
+def _make_player_with_tracker() -> tuple[MagicMock, list[str]]:
+    """Build a player mock that yields a few chunks per stream() call.
+
+    Returns the mock and a list that grows with the tag of each chunk
+    consumed — tests can assert the chunk source.
+    """
+    consumed: list[str] = []
+    player = MagicMock()
+
+    def stream_impl(path: Any, start_position: float = 0.0) -> AsyncIterator[bytes]:
+        async def gen() -> AsyncIterator[bytes]:
+            tag = f"{path}@{start_position}"
+            for _ in range(3):
+                consumed.append(tag)
+                yield b"chunk"
+
+        return gen()
+
+    player.stream = MagicMock(side_effect=stream_impl)
+
+    async def probe_ok(_path: Any) -> dict[str, Any]:
+        return {"format": {"duration": "1000.0"}}
+
+    player.probe = probe_ok
+    return player, consumed
+
+
+async def _build_wired_coordinator(
+    library_path: Path,
+    storage: Storage,
+) -> tuple[TurnCoordinator, SkillRegistry, AudiobooksSkill, MagicMock, list[str], dict[str, Any]]:
+    """Wire a real TurnCoordinator to a real SkillRegistry + real AudiobooksSkill.
+
+    Returns the pieces a test might want to drive or assert on:
+    - coordinator: the unit under integration
+    - registry: holds the real skill
+    - skill: exposes _catalog for picking a book
+    - player: MagicMock — inspect stream.call_args
+    - consumed: list of chunk tags the factory actually streamed
+    - mocks: the callback AsyncMocks (send_audio, oai_commit, etc.)
+    """
+    player, consumed = _make_player_with_tracker()
+    skill = AudiobooksSkill(library_path=library_path, player=player, storage=storage)
+    await skill.setup()
+
+    registry = SkillRegistry()
+    registry.register(skill)
+
+    mocks = {
+        "send_audio": AsyncMock(),
+        "send_audio_clear": AsyncMock(),
+        "send_status": AsyncMock(),
+        "send_model_speaking": AsyncMock(),
+        "send_user_audio_to_session": AsyncMock(),
+        "send_dev_event": AsyncMock(),
+        "oai_send_function_output": AsyncMock(),
+        "oai_commit": AsyncMock(),
+        "oai_cancel": AsyncMock(),
+        "oai_request_response": AsyncMock(),
+        "oai_is_connected": MagicMock(return_value=True),
+    }
+
+    coordinator = TurnCoordinator(
+        **mocks,
+        dispatch_tool=registry.dispatch,
+    )
+
+    return coordinator, registry, skill, player, consumed, mocks
+
+
+async def _commit_turn(coordinator: TurnCoordinator, frames: int = 10) -> None:
+    """Start a turn and commit it (same helper as test_turn_coordinator)."""
+    await coordinator.on_ptt_start()
+    assert coordinator.current_turn is not None
+    coordinator.current_turn.user_audio_frames = frames
+    await coordinator.on_ptt_stop()
+
+
+async def _settle(task: Any) -> None:
+    """Let a background media task drain, cancelling if it takes too long."""
+    import asyncio
+
+    if task is None:
+        return
+    for _ in range(20):
+        if task.done():
+            break
+        await asyncio.sleep(0.001)
+    if not task.done():
+        task.cancel()
+        import contextlib
+
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
+# ---------------------------------------------------------------------------
+
+
+class TestPlayAudiobookEndToEnd:
+    """Full flow: ptt → pre-narration → function_call → barrier → factory."""
+
+    async def test_play_tool_latches_and_fires_factory(
+        self, library_path: Path, storage: Storage
+    ) -> None:
+        coord, _reg, skill, player, consumed, mocks = await _build_wired_coordinator(
+            library_path, storage
+        )
+        book = skill._catalog[0]
+
+        await _commit_turn(coord)
+        # Model pre-narrates "Ahí le pongo el libro"
+        await coord.on_audio_delta(b"pre-narration")
+        # Model calls play_audiobook
+        await coord.on_function_call("call_1", "play_audiobook", {"book_id": book["id"]})
+
+        # Factory was latched — skill ran real code path.
+        assert coord.current_turn is not None
+        assert len(coord.current_turn.pending_factories) == 1
+        assert coord.current_turn.needs_follow_up is False
+
+        # Output was sent back to OpenAI.
+        mocks["oai_send_function_output"].assert_awaited_once()
+        call_id, output = mocks["oai_send_function_output"].await_args.args
+        assert call_id == "call_1"
+        assert '"playing": true' in output
+
+        # Dev event fired with the right shape.
+        mocks["send_dev_event"].assert_awaited_once()
+        kind, payload = mocks["send_dev_event"].await_args.args
+        assert kind == "tool_call"
+        assert payload["name"] == "play_audiobook"
+        assert payload["has_audio_factory"] is True
+
+        # Audio round done, then response done → factory fires.
+        await coord.on_audio_done()
+        await coord.on_response_done()
+
+        # Turn ended, media task spawned.
+        assert coord.current_turn is None
+        assert coord.current_media_task is not None
+
+        await _settle(coord.current_media_task)
+
+        # Player.stream was called with the right path + position.
+        player.stream.assert_called_once()
+        _call_args, call_kwargs = player.stream.call_args
+        assert call_kwargs["start_position"] == 0.0
+        # The chunks reached send_audio via the coordinator.
+        assert mocks["send_audio"].await_count >= 1
+        # All consumed chunks tagged with the book's path + 0.0 start.
+        assert all(book["path"] in tag for tag in consumed)
+
+    async def test_play_factory_drains_to_send_audio(
+        self, library_path: Path, storage: Storage
+    ) -> None:
+        """Each chunk the factory yields must land on send_audio exactly once."""
+        coord, _reg, skill, _player, _consumed, mocks = await _build_wired_coordinator(
+            library_path, storage
+        )
+        book = skill._catalog[0]
+
+        await _commit_turn(coord)
+        await coord.on_function_call("c1", "play_audiobook", {"book_id": book["id"]})
+        await coord.on_response_done()  # no follow-up, terminal barrier
+        await _settle(coord.current_media_task)
+
+        # Player mock yields 3 chunks per stream.
+        assert mocks["send_audio"].await_count == 3
+
+
+class TestMidChainInterruptDropsFactories:
+    """If the user interrupts mid-chain, accumulated factories must be dropped."""
+
+    async def test_interrupt_after_latch_drops_factory(
+        self, library_path: Path, storage: Storage
+    ) -> None:
+        coord, _reg, skill, player, consumed, _mocks = await _build_wired_coordinator(
+            library_path, storage
+        )
+        book = skill._catalog[0]
+
+        await _commit_turn(coord)
+        await coord.on_function_call("c1", "play_audiobook", {"book_id": book["id"]})
+        assert coord.current_turn is not None
+        assert len(coord.current_turn.pending_factories) == 1
+
+        # User interrupts before response.done fires.
+        await coord.interrupt()
+
+        # Factory was dropped — no stream invoked, no chunks consumed.
+        player.stream.assert_not_called()
+        assert consumed == []
+        assert coord.current_turn is None
+        assert coord.current_media_task is None
+
+
+class TestRewindReplacesPriorMediaTask:
+    """A rewind factory cancels the previous media task and streams fresh."""
+
+    async def test_rewind_during_playback_cancels_and_starts_new(
+        self, library_path: Path, storage: Storage
+    ) -> None:
+        import asyncio
+
+        coord, _reg, skill, player, _consumed, _mocks = await _build_wired_coordinator(
+            library_path, storage
+        )
+        book = skill._catalog[0]
+
+        # Turn 1: play from start
+        await _commit_turn(coord)
+        await coord.on_function_call("c1", "play_audiobook", {"book_id": book["id"]})
+        await coord.on_response_done()
+        first_task = coord.current_media_task
+        assert first_task is not None
+
+        # Let task 1 actually start consuming (real user: book plays for a
+        # while before they interrupt). A couple of ticks is enough for the
+        # mock generator to call player.stream() at least once.
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert player.stream.call_count >= 1
+
+        # Turn 2: user interrupts with PTT, says rewind
+        await coord.on_ptt_start()
+        assert first_task.done()  # interrupt cancelled the old task
+
+        coord.current_turn.user_audio_frames = 10  # type: ignore[union-attr]
+        await coord.on_ptt_stop()
+        await coord.on_function_call("c2", "audiobook_control", {"action": "rewind", "seconds": 5})
+        await coord.on_response_done()
+
+        # A NEW media task was spawned for the rewind factory.
+        assert coord.current_media_task is not None
+        assert coord.current_media_task is not first_task
+        await _settle(coord.current_media_task)
+
+        # Player.stream was called twice — once for play, once for rewind.
+        assert player.stream.call_count == 2
+        # Second call used a different start_position (rewound from the
+        # position task 1 had already persisted in its finally block).
+        second_call = player.stream.call_args_list[-1]
+        assert "start_position" in second_call.kwargs
+
+
+class TestPauseRequestsFollowUp:
+    """`audiobook_control` with action=pause returns None-factory → follow-up round."""
+
+    async def test_pause_action_triggers_follow_up_response(
+        self, library_path: Path, storage: Storage
+    ) -> None:
+        coord, _reg, skill, player, _consumed, mocks = await _build_wired_coordinator(
+            library_path, storage
+        )
+        book = skill._catalog[0]
+        # Prime LAST_BOOK_SETTING so a later rewind/resume could find something;
+        # pause itself doesn't need it, but this mirrors real flow.
+        await storage.set_setting("last_audiobook_id", book["id"])
+
+        await _commit_turn(coord)
+        await coord.on_audio_delta(b"listo, pauso")
+        await coord.on_function_call("c1", "audiobook_control", {"action": "pause"})
+
+        # Skill returned None-factory → needs_follow_up set
+        assert coord.current_turn is not None
+        assert coord.current_turn.needs_follow_up is True
+        assert coord.current_turn.pending_factories == []
+
+        await coord.on_audio_done()
+        await coord.on_response_done()
+
+        # Follow-up response requested
+        mocks["oai_request_response"].assert_awaited_once()
+        assert coord.current_turn is not None
+        assert coord.current_turn.state == TurnState.AWAITING_NEXT_RESPONSE
+
+        # No player.stream was invoked — pause doesn't play anything.
+        player.stream.assert_not_called()
