@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from abuel_os.skills import SkillNotFoundError, SkillRegistry
-from abuel_os.types import ToolAction, ToolDefinition, ToolResult
+from abuel_os.types import ToolDefinition, ToolResult
 from tests.conftest import FakeSkill
 
 
@@ -70,16 +72,20 @@ class TestDispatch:
         with pytest.raises(SkillNotFoundError, match="no_such_tool"):
             await registry.dispatch("no_such_tool", {})
 
-    async def test_dispatch_preserves_action(self) -> None:
+    async def test_dispatch_preserves_audio_factory(self) -> None:
+        async def stub_stream() -> Any:
+            if False:
+                yield b""
+
         registry = SkillRegistry()
         skill = FakeSkill(
             name="player",
             tools=[ToolDefinition(name="play", description="Play")],
-            result=ToolResult(output="{}", action=ToolAction.START_PLAYBACK),
+            result=ToolResult(output="{}", audio_factory=stub_stream),
         )
         registry.register(skill)
         result = await registry.dispatch("play", {})
-        assert result.action is ToolAction.START_PLAYBACK
+        assert result.audio_factory is stub_stream
 
 
 class TestLifecycle:

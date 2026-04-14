@@ -62,17 +62,13 @@ class Application:
             on_audio_frame=self._on_audio_frame,
         )
 
-        # Legacy audiobook player — still instantiated so `AudiobooksSkill`
-        # has something to call. Its chunk/finished/audio_clear callbacks are
-        # orphaned in step 3; step 4 rewires the skill to return an
-        # `audio_factory` closure and deletes these callbacks + the player's
-        # mutable state in one go.
+        # Stateless ffmpeg wrapper — used by AudiobooksSkill to build factory
+        # closures. The player has no callbacks or mutable state; each
+        # `stream()` call is an independent subprocess, cancelled cleanly by
+        # the coordinator's `interrupt()` when a new turn starts.
         self.audiobook_player = AudiobookPlayer(
             ffmpeg_path=config.ffmpeg_path,
             ffprobe_path=config.ffprobe_path,
-            on_chunk=self._on_audiobook_chunk,
-            on_finished=self._on_audiobook_finished,
-            on_audio_clear=self._on_audio_clear,
         )
 
         self.audiobooks_skill = AudiobooksSkill(
@@ -173,8 +169,8 @@ class Application:
         if self.session.is_connected:
             await self.session.disconnect(save_summary=True)
 
+        await self.coordinator.interrupt()
         await self.skill_registry.teardown_all()
-        await self.audiobook_player.stop()
         await self.storage.close()
 
         await logger.ainfo("abuel_os_stopped")
@@ -205,17 +201,6 @@ class Application:
 
     async def _on_transcript(self, role: str, text: str) -> None:
         await self.server.send_transcript(role, text)
-
-    # --- Audiobook player callbacks (legacy, orphaned in step 3) ---
-
-    async def _on_audiobook_chunk(self, pcm: bytes) -> None:
-        await self.server.send_audio(pcm)
-
-    async def _on_audiobook_finished(self) -> None:
-        pass
-
-    async def _on_audio_clear(self) -> None:
-        await self.server.send_audio_clear()
 
     # --- Client callbacks ---
 

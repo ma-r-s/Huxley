@@ -8,7 +8,7 @@ import pytest
 
 from abuel_os.config import Settings
 from abuel_os.storage.db import Storage
-from abuel_os.types import ToolAction, ToolDefinition, ToolResult
+from abuel_os.types import ToolDefinition, ToolResult
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -89,6 +89,10 @@ def fake_skill() -> FakeSkill:
 
 @pytest.fixture
 def playback_skill() -> FakeSkill:
+    async def noop_stream() -> Any:
+        if False:
+            yield b""
+
     return FakeSkill(
         name="audiobooks",
         tools=[
@@ -101,5 +105,5 @@ def playback_skill() -> FakeSkill:
                 },
             ),
         ],
-        result=ToolResult(output='{"playing": true}', action=ToolAction.START_PLAYBACK),
+        result=ToolResult(output='{"playing": true}', audio_factory=noop_stream),
     )

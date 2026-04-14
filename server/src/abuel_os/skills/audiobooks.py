@@ -1,10 +1,15 @@
 """Audiobook search and playback skill.
 
 Provides tools for searching a local audiobook library and controlling
-playback via the `AudiobookPlayer` (ffmpeg subprocess that streams PCM16
-over the same WebSocket channel as the OpenAI model audio). The LLM handles
-the conversational discovery flow — this skill just does file search and
-media control.
+playback. Playback is modelled as a `ToolResult.audio_factory` — a
+closure the `TurnCoordinator` invokes at the turn's terminal barrier,
+after the model has finished speaking. The factory wraps
+`AudiobookPlayer.stream()` and persists the final playback position in
+its `finally` block, so rewind/forward/interrupt all get correct
+atomicity without the skill touching storage during dispatch.
+
+See `docs/turns.md` for the turn model and `docs/skills/audiobooks.md`
+for the skill's behavioral contract.
 """
 
 from __future__ import annotations
@@ -15,10 +20,11 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from abuel_os.media.audiobook_player import PlayerError
-from abuel_os.types import ToolAction, ToolDefinition, ToolResult
+from abuel_os.media.audiobook_player import BYTES_PER_SECOND, PlayerError
+from abuel_os.types import ToolDefinition, ToolResult
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Callable
     from pathlib import Path
 
     from abuel_os.media.audiobook_player import AudiobookPlayer
@@ -61,7 +67,6 @@ class AudiobooksSkill:
         self._player = player
         self._storage = storage
         self._catalog: list[dict[str, str]] = []
-        self._current_book_id: str | None = None
 
     @property
     def name(self) -> str:
@@ -170,7 +175,7 @@ class AudiobooksSkill:
             case "audiobook_control":
                 return await self._control(
                     args["action"],
-                    seconds=args.get("seconds", 30),
+                    seconds=args.get("seconds", 10),
                 )
             case _:
                 return ToolResult(output=json.dumps({"error": f"Unknown tool: {tool_name}"}))
@@ -185,22 +190,7 @@ class AudiobooksSkill:
         )
 
     async def teardown(self) -> None:
-        """Persist current position and stop the player."""
-        await self.save_current_position()
-        await self._player.stop()
-
-    async def save_current_position(self) -> None:
-        """Persist the current book's position to storage, if any book is loaded."""
-        if self._current_book_id is None:
-            return
-        position = self._player.position
-        if position > 0:
-            await self._storage.save_audiobook_position(self._current_book_id, position)
-            await logger.ainfo(
-                "audiobook_position_saved",
-                book_id=self._current_book_id,
-                position=position,
-            )
+        """No teardown state — the running factory saves its own position on cancel."""
 
     def prompt_context(self) -> str:
         """Text injected into the session prompt so the LLM knows what's available.
@@ -276,7 +266,6 @@ class AudiobooksSkill:
 
         query_stripped = query.strip()
         if len(query_stripped) < 2:
-            # Empty/very-short query → list the whole catalog (capped).
             results = self._catalog[:20]
             return ToolResult(
                 output=json.dumps(
@@ -344,7 +333,6 @@ class AudiobooksSkill:
         exact first, then fuzzy across id / title / author / author+title,
         with a high confidence threshold (0.5) so we don't guess wildly.
         """
-        # Exact ID match first — fastest, zero-ambiguity path.
         exact = next((b for b in self._catalog if b["id"] == reference), None)
         if exact is not None:
             return exact
@@ -352,7 +340,6 @@ class AudiobooksSkill:
         if not self._catalog:
             return None
 
-        # Fuzzy fallback across every relevant string the user might have passed.
         best_score = 0.0
         best_book: dict[str, str] | None = None
         for candidate in self._catalog:
@@ -370,20 +357,48 @@ class AudiobooksSkill:
             return best_book
         return None
 
-    async def _play(self, book_id: str, *, from_beginning: bool = False) -> ToolResult:
-        """Load an audiobook in paused state and return START_PLAYBACK.
+    def _build_factory(
+        self,
+        book_id: str,
+        path: str,
+        start_position: float,
+    ) -> Callable[[], AsyncIterator[bytes]]:
+        """Build a playback factory for the coordinator's terminal barrier.
 
-        The player is pre-loaded but NOT streaming yet (paused=True). The
-        state machine transition to PLAYING is deferred by `SessionManager`
-        until after the model has narrated the verbal acknowledgement (the
-        `message` field in this return). `Application._enter_playing` resumes
-        the player, so book audio begins streaming only after the ack is
-        fully spoken. This prevents the book from "jumping straight in"
-        without warning.
+        The returned callable, when invoked, spawns ffmpeg via
+        `AudiobookPlayer.stream()` and yields PCM chunks. Its `finally`
+        block saves the terminal position to storage — if the factory is
+        never invoked (mid-chain interrupt), no save happens and storage
+        reflects the last _actually played_ position.
+        """
+        player = self._player
+        storage = self._storage
+
+        async def stream() -> AsyncIterator[bytes]:
+            bytes_read = 0
+            try:
+                async for chunk in player.stream(path, start_position=start_position):
+                    bytes_read += len(chunk)
+                    yield chunk
+            finally:
+                elapsed = bytes_read / BYTES_PER_SECOND
+                final_pos = start_position + elapsed
+                try:
+                    await storage.save_audiobook_position(book_id, final_pos)
+                except Exception:
+                    await logger.aexception("audiobook_position_save_failed")
+
+        return stream
+
+    async def _play(self, book_id: str, *, from_beginning: bool = False) -> ToolResult:
+        """Resolve a book, build its factory, stamp last_audiobook_id.
+
+        Does NOT invoke the factory — the coordinator does that at the turn's
+        terminal barrier, after the model has finished speaking. The model
+        pre-narrates the ack per the tool description.
         """
         book = self._resolve_book(book_id)
         if not book:
-            # Not a dead-end: the LLM can fall back to search + offer alternative.
             return ToolResult(
                 output=json.dumps(
                     {
@@ -404,10 +419,13 @@ class AudiobooksSkill:
         if not from_beginning:
             start_position = await self._storage.get_audiobook_position(resolved_id)
 
+        # Cheap probe up front: fail early if the file is unreadable so the
+        # model can surface a friendly message instead of the turn hanging
+        # on a silently-broken factory.
         try:
-            await self._player.load(book["path"], start_position=start_position, paused=True)
+            await self._player.probe(book["path"])
         except PlayerError as exc:
-            await logger.aerror("audiobook_load_failed", book_id=resolved_id, error=str(exc))
+            await logger.aerror("audiobook_probe_failed", book_id=resolved_id, error=str(exc))
             return ToolResult(
                 output=json.dumps(
                     {
@@ -417,13 +435,14 @@ class AudiobooksSkill:
                 )
             )
 
-        self._current_book_id = resolved_id
         await self._storage.set_setting(LAST_BOOK_SETTING, resolved_id)
         await logger.ainfo(
-            "audiobook_playing",
+            "audiobook_factory_built",
             book_id=resolved_id,
             start_position=start_position,
         )
+
+        factory = self._build_factory(resolved_id, book["path"], start_position)
 
         return ToolResult(
             output=json.dumps(
@@ -432,14 +451,10 @@ class AudiobooksSkill:
                     "title": book["title"],
                     "author": book["author"],
                     "position": start_position,
-                    # Short factual description, no instructions. The model
-                    # narrates its own ack BEFORE calling the tool (per the
-                    # tool description); this field is kept for the
-                    # nunca-decir-no convention and for dev observability.
                     "message": f'Cargado: "{book["title"]}" por {book["author"]}.',
                 }
             ),
-            action=ToolAction.START_PLAYBACK,
+            audio_factory=factory,
         )
 
     async def _resume_last(self) -> ToolResult:
@@ -454,45 +469,32 @@ class AudiobooksSkill:
                     }
                 )
             )
-        # Delegate to _play, which handles load + persistence + action tagging.
-        # `from_beginning=False` so the saved position is honored.
         return await self._play(last_id, from_beginning=False)
-
-    async def _current_or_last_book_id(self) -> str | None:
-        """Return the in-memory current book id, falling back to the stored
-        `last_audiobook_id` setting. Used by control actions that fire from
-        CONVERSING state (where the player has been stopped by `_exit_playing`
-        and `_current_book_id` may or may not still be set).
-        """
-        if self._current_book_id is not None:
-            return self._current_book_id
-        return await self._storage.get_setting(LAST_BOOK_SETTING)
 
     async def _control(self, action: str, seconds: float = 10) -> ToolResult:
         """Control current playback.
 
-        Rewind, forward, and resume all funnel through `_play` so they share
-        the pause-then-resume-on-state-transition flow — otherwise ffmpeg
-        would start streaming the new position while the model is still
-        narrating its verbal ack, and the two audios would fight.
+        Rewind/forward/resume all funnel through `_play` so they share the
+        probe + factory construction path. The new position is captured in
+        the factory closure — not written to storage here. If the turn is
+        interrupted before the factory runs, storage stays put.
 
-        Pause and stop don't resume playback, so they're plain no-side-effect
-        acknowledgements.
+        Pause/stop are info-only acknowledgements: they return
+        `audio_factory=None`, so the coordinator requests a follow-up
+        response where the model narrates the confirmation. Actual stopping
+        happens via the interrupt that fired when the user pressed PTT —
+        the prior media task is already cancelled by then, and its finally
+        block has saved the current position.
         """
         match action:
             case "pause":
-                # The player was already stopped by `_exit_playing` when the
-                # user pressed PTT. Just save and acknowledge.
-                await self.save_current_position()
                 return ToolResult(output=json.dumps({"paused": True, "message": "Pausado."}))
 
             case "stop":
-                await self.save_current_position()
-                await self._player.stop()
                 return ToolResult(output=json.dumps({"stopped": True, "message": "Detenido."}))
 
             case "resume":
-                book_id = await self._current_or_last_book_id()
+                book_id = await self._storage.get_setting(LAST_BOOK_SETTING)
                 if book_id is None:
                     return ToolResult(
                         output=json.dumps(
@@ -505,7 +507,7 @@ class AudiobooksSkill:
                 return await self._play(book_id, from_beginning=False)
 
             case "rewind" | "forward":
-                book_id = await self._current_or_last_book_id()
+                book_id = await self._storage.get_setting(LAST_BOOK_SETTING)
                 if book_id is None:
                     return ToolResult(
                         output=json.dumps(
@@ -518,10 +520,36 @@ class AudiobooksSkill:
                 saved = await self._storage.get_audiobook_position(book_id)
                 delta = abs(seconds)
                 new_pos = max(0.0, saved - delta) if action == "rewind" else saved + delta
-                # Persist the new position BEFORE delegating to `_play`, which
-                # reads it back via `get_audiobook_position`.
-                await self._storage.save_audiobook_position(book_id, new_pos)
-                return await self._play(book_id, from_beginning=False)
+                book = self._resolve_book(book_id)
+                if book is None:
+                    return ToolResult(
+                        output=json.dumps(
+                            {
+                                "ok": False,
+                                "message": "No encuentro ese libro, don.",
+                            }
+                        )
+                    )
+                # NOTE: position is NOT saved here. The factory captures
+                # new_pos in its closure and updates storage only when it
+                # actually starts streaming (via the finally-block save).
+                factory = self._build_factory(book_id, book["path"], new_pos)
+                return ToolResult(
+                    output=json.dumps(
+                        {
+                            "playing": True,
+                            "title": book["title"],
+                            "author": book["author"],
+                            "position": new_pos,
+                            "message": (
+                                f"Retrocediendo a {int(new_pos)}s"
+                                if action == "rewind"
+                                else f"Adelantando a {int(new_pos)}s"
+                            ),
+                        }
+                    ),
+                    audio_factory=factory,
+                )
 
             case _:
                 return ToolResult(

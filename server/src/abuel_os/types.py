@@ -45,13 +45,6 @@ class ToolDefinition:
         }
 
 
-class ToolAction(Enum):
-    """Side effects a skill can request after handling a tool call."""
-
-    NONE = "none"
-    START_PLAYBACK = "start_playback"
-
-
 @dataclass(frozen=True, slots=True)
 class ToolResult:
     """Result of a skill handling a tool call.
@@ -59,14 +52,11 @@ class ToolResult:
     `output` is JSON-serialized and sent back to the Realtime API as the
     function call output. `audio_factory`, if present, is a callable the
     `TurnCoordinator` invokes after the model's final speech to produce
-    a media stream (e.g. an audiobook). `action` is the legacy enum path
-    still used by session_manager + app.py during migration steps 1-3;
-    it is removed in step 4 when audiobooks skill switches to
-    `audio_factory`. See `docs/turns.md` for the full design.
+    a media stream (e.g. an audiobook). See `docs/turns.md` for the full
+    design.
     """
 
     output: str
-    action: ToolAction = ToolAction.NONE
     audio_factory: Callable[[], AsyncIterator[bytes]] | None = None
 
 
