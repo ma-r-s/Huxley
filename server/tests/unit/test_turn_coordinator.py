@@ -40,6 +40,18 @@ def _factory(*chunks: bytes) -> Callable[[], AsyncIterator[bytes]]:
     return lambda: _stream(*chunks)
 
 
+async def _commit_turn(coordinator: TurnCoordinator, frames: int = 10) -> None:
+    """Helper: start a turn, stuff `frames` into user_audio_frames, and commit.
+
+    Mirrors the production flow where `on_user_audio_frame` increments the
+    counter — we set it directly here to keep tests concise.
+    """
+    await coordinator.on_ptt_start()
+    assert coordinator.current_turn is not None
+    coordinator.current_turn.user_audio_frames = frames
+    await coordinator.on_ptt_stop()
+
+
 @pytest.fixture
 def mocks() -> dict[str, Any]:
     """Dictionary of mock callbacks for building a coordinator under test."""
@@ -47,6 +59,7 @@ def mocks() -> dict[str, Any]:
         "send_audio": AsyncMock(),
         "send_audio_clear": AsyncMock(),
         "send_status": AsyncMock(),
+        "send_model_speaking": AsyncMock(),
         "send_user_audio_to_session": AsyncMock(),
         "send_dev_event": AsyncMock(),
         "oai_send_function_output": AsyncMock(),
@@ -83,8 +96,7 @@ class TestTurnLifecycle:
     async def test_ptt_stop_with_enough_frames_commits(
         self, coordinator: TurnCoordinator, mocks: dict[str, Any]
     ) -> None:
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
 
         assert coordinator.current_turn is not None
         assert coordinator.current_turn.state == TurnState.COMMITTING
@@ -94,8 +106,7 @@ class TestTurnLifecycle:
     async def test_ptt_stop_too_short_aborts_without_commit(
         self, coordinator: TurnCoordinator, mocks: dict[str, Any]
     ) -> None:
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=1)
+        await _commit_turn(coordinator, frames=1)
 
         assert coordinator.current_turn is None
         mocks["oai_cancel"].assert_awaited_once()
@@ -103,8 +114,7 @@ class TestTurnLifecycle:
 
     async def test_simple_response_returns_to_idle(self, coordinator: TurnCoordinator) -> None:
         """Minimal happy path: no tool calls, just audio + response.done."""
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         await coordinator.on_audio_delta(b"model speech chunk")
         await coordinator.on_response_done()
 
@@ -131,8 +141,7 @@ class TestAudioForwarding:
     async def test_mic_audio_not_forwarded_after_commit(
         self, coordinator: TurnCoordinator, mocks: dict[str, Any]
     ) -> None:
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         # State is now COMMITTING, not LISTENING
         await coordinator.on_user_audio_frame(b"mic chunk")
         mocks["send_user_audio_to_session"].assert_not_awaited()
@@ -140,8 +149,7 @@ class TestAudioForwarding:
     async def test_model_audio_forwarded_to_client(
         self, coordinator: TurnCoordinator, mocks: dict[str, Any]
     ) -> None:
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         await coordinator.on_audio_delta(b"model chunk")
 
         mocks["send_audio"].assert_awaited_once_with(b"model chunk")
@@ -149,8 +157,7 @@ class TestAudioForwarding:
     async def test_audio_delta_transitions_from_committing_to_in_response(
         self, coordinator: TurnCoordinator
     ) -> None:
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         assert coordinator.current_turn is not None
         assert coordinator.current_turn.state == TurnState.COMMITTING
 
@@ -160,8 +167,7 @@ class TestAudioForwarding:
     async def test_audio_delta_dropped_when_response_cancelled(
         self, coordinator: TurnCoordinator, mocks: dict[str, Any]
     ) -> None:
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         coordinator.response_cancelled = True
 
         await coordinator.on_audio_delta(b"stale chunk")
@@ -179,8 +185,7 @@ class TestToolDispatch:
             output='{"ok": true}', audio_factory=factory
         )
 
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         await coordinator.on_function_call("call_1", "play_audiobook", {"book_id": "X"})
 
         assert coordinator.current_turn is not None
@@ -192,8 +197,7 @@ class TestToolDispatch:
     ) -> None:
         mocks["dispatch_tool"].return_value = ToolResult(output='{"time": "3pm"}')
 
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         await coordinator.on_function_call("call_1", "get_current_time", {})
 
         assert coordinator.current_turn is not None
@@ -205,8 +209,7 @@ class TestToolDispatch:
     ) -> None:
         mocks["dispatch_tool"].return_value = ToolResult(output='{"result": "ok"}')
 
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         await coordinator.on_function_call("call_abc", "some_tool", {"arg": "value"})
 
         mocks["oai_send_function_output"].assert_awaited_once_with("call_abc", '{"result": "ok"}')
@@ -217,8 +220,7 @@ class TestToolDispatch:
         factory = _factory(b"x")
         mocks["dispatch_tool"].return_value = ToolResult(output="{}", audio_factory=factory)
 
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         await coordinator.on_function_call("call_1", "play_audiobook", {"book_id": "X"})
 
         mocks["send_dev_event"].assert_awaited_once()
@@ -236,8 +238,7 @@ class TestChainedResponses:
     ) -> None:
         mocks["dispatch_tool"].return_value = ToolResult(output='{"time": "3pm"}')
 
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         await coordinator.on_function_call("c1", "get_current_time", {})
         await coordinator.on_response_done()
 
@@ -252,8 +253,7 @@ class TestChainedResponses:
     ) -> None:
         mocks["dispatch_tool"].return_value = ToolResult(output='{"time": "3pm"}')
 
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         await coordinator.on_function_call("c1", "get_current_time", {})
         await coordinator.on_response_done()
         # Round 2 starts — model narrates the time
@@ -268,8 +268,7 @@ class TestChainedResponses:
         """Full chained flow: info tool → round 2 narration → IDLE."""
         mocks["dispatch_tool"].return_value = ToolResult(output='{"time": "3pm"}')
 
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         # Round 1: silent + tool call
         await coordinator.on_function_call("c1", "get_current_time", {})
         await coordinator.on_response_done()  # → AWAITING_NEXT_RESPONSE
@@ -296,8 +295,7 @@ class TestChainedResponses:
 
         mocks["dispatch_tool"].side_effect = dispatch
 
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         # Round 1: both tools dispatched
         await coordinator.on_function_call("c1", "play_audiobook", {})
         await coordinator.on_function_call("c2", "get_current_time", {})
@@ -323,8 +321,7 @@ class TestChainedResponses:
         factory = _factory(b"book")
         mocks["dispatch_tool"].return_value = ToolResult(output="{}", audio_factory=factory)
 
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         await coordinator.on_function_call("c1", "play_audiobook", {})
         await coordinator.on_response_done()  # terminal — factory fires
 
@@ -355,8 +352,7 @@ class TestFactorySupersede:
 
         mocks["dispatch_tool"].side_effect = dispatch
 
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         await coordinator.on_function_call("c1", "first", {})
         await coordinator.on_function_call("c2", "second", {})
         await coordinator.on_response_done()
@@ -374,8 +370,7 @@ class TestInterrupt:
     async def test_interrupt_sets_response_cancelled_flag(
         self, coordinator: TurnCoordinator
     ) -> None:
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         await coordinator.interrupt()
 
         assert coordinator.response_cancelled is True
@@ -386,8 +381,7 @@ class TestInterrupt:
         factory = _factory(b"x")
         mocks["dispatch_tool"].return_value = ToolResult(output="{}", audio_factory=factory)
 
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         await coordinator.on_function_call("c1", "play", {})
         assert coordinator.current_turn is not None
         assert len(coordinator.current_turn.pending_factories) == 1
@@ -410,8 +404,7 @@ class TestInterrupt:
     async def test_interrupt_cancels_openai_response(
         self, coordinator: TurnCoordinator, mocks: dict[str, Any]
     ) -> None:
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         await coordinator.interrupt()
         mocks["oai_cancel"].assert_awaited()
 
@@ -428,8 +421,7 @@ class TestInterrupt:
 
         mocks["dispatch_tool"].return_value = ToolResult(output="{}", audio_factory=forever_stream)
 
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         await coordinator.on_function_call("c1", "play", {})
         await coordinator.on_response_done()  # spawns the media task
 
@@ -445,8 +437,7 @@ class TestInterrupt:
     async def test_new_ptt_start_mid_turn_interrupts_and_restarts(
         self, coordinator: TurnCoordinator, mocks: dict[str, Any]
     ) -> None:
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         first_turn = coordinator.current_turn
         assert first_turn is not None
 
@@ -476,8 +467,7 @@ class TestInterrupt:
 
         mocks["oai_cancel"].side_effect = capture_flag
 
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         await coordinator.interrupt()
 
         assert flag_when_cancel_called == [True]
@@ -488,8 +478,7 @@ class TestResponseCancelledFlag:
 
     async def test_flag_is_reset_on_commit(self, coordinator: TurnCoordinator) -> None:
         coordinator.response_cancelled = True
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         assert coordinator.response_cancelled is False
 
     async def test_flag_is_reset_before_follow_up_response(
@@ -497,8 +486,7 @@ class TestResponseCancelledFlag:
     ) -> None:
         mocks["dispatch_tool"].return_value = ToolResult(output='{"time": "3pm"}')
 
-        await coordinator.on_ptt_start()
-        await coordinator.on_ptt_stop(frames_sent=10)
+        await _commit_turn(coordinator)
         await coordinator.on_function_call("c1", "get_current_time", {})
 
         # Pretend an interrupt would set the flag; then a follow-up comes in
@@ -535,6 +523,90 @@ async def _settle_background_task(task: Any) -> None:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
+
+
+class TestModelSpeaking:
+    """`send_model_speaking` and `on_audio_done` tracking.
+
+    These fire the `model_speaking` protocol message to the client so its
+    thinking-tone silence timer knows when the model is actually emitting
+    audio vs. silent.
+    """
+
+    async def test_first_audio_delta_fires_model_speaking_true(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        await _commit_turn(coordinator)
+        await coordinator.on_audio_delta(b"first chunk")
+        mocks["send_model_speaking"].assert_awaited_once_with(True)
+
+    async def test_subsequent_audio_deltas_do_not_refire(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        await _commit_turn(coordinator)
+        await coordinator.on_audio_delta(b"a")
+        await coordinator.on_audio_delta(b"b")
+        await coordinator.on_audio_delta(b"c")
+        assert mocks["send_model_speaking"].await_count == 1
+
+    async def test_on_audio_done_fires_model_speaking_false(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        await _commit_turn(coordinator)
+        await coordinator.on_audio_delta(b"a")
+        await coordinator.on_audio_done()
+
+        # One true, one false
+        assert mocks["send_model_speaking"].await_args_list[-1].args == (False,)
+
+    async def test_on_audio_done_is_idempotent_when_not_speaking(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        """If audio_done fires without any prior delta, no model_speaking event."""
+        await _commit_turn(coordinator)
+        await coordinator.on_audio_done()
+        mocks["send_model_speaking"].assert_not_awaited()
+
+    async def test_chained_response_cycles_model_speaking(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        """Round 1 audio → audio_done → round 2 audio should fire true, false, true."""
+        mocks["dispatch_tool"].return_value = ToolResult(output='{"time": "3pm"}')
+
+        await _commit_turn(coordinator)
+        # Round 1 — model starts speaking, calls tool, audio done, response done
+        await coordinator.on_audio_delta(b"a")
+        await coordinator.on_function_call("c1", "get_current_time", {})
+        await coordinator.on_audio_done()
+        await coordinator.on_response_done()
+        # Round 2 — narration resumes
+        await coordinator.on_audio_delta(b"son las tres")
+
+        states = [c.args[0] for c in mocks["send_model_speaking"].await_args_list]
+        assert states == [True, False, True]
+
+    async def test_on_audio_done_dropped_when_cancelled(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        await _commit_turn(coordinator)
+        await coordinator.on_audio_delta(b"a")
+        coordinator.response_cancelled = True
+
+        await coordinator.on_audio_done()
+        # The false-event wasn't fired because the flag is set — interrupt()
+        # owns the final cleanup.
+        assert mocks["send_model_speaking"].await_args_list[-1].args == (True,)
+
+    async def test_interrupt_clears_speaking_state(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        await _commit_turn(coordinator)
+        await coordinator.on_audio_delta(b"a")
+        await coordinator.interrupt()
+
+        # true was fired on the delta, then false on the interrupt cleanup.
+        states = [c.args[0] for c in mocks["send_model_speaking"].await_args_list]
+        assert states == [True, False]
 
 
 class TestTurnDataclass:

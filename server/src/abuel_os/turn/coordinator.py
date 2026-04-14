@@ -82,6 +82,7 @@ class TurnCoordinator:
         send_audio: Callable[[bytes], Awaitable[None]],
         send_audio_clear: Callable[[], Awaitable[None]],
         send_status: Callable[[str], Awaitable[None]],
+        send_model_speaking: Callable[[bool], Awaitable[None]],
         send_user_audio_to_session: Callable[[bytes], Awaitable[None]],
         send_dev_event: Callable[[str, dict[str, Any]], Awaitable[None]],
         oai_send_function_output: Callable[[str, str], Awaitable[None]],
@@ -94,6 +95,7 @@ class TurnCoordinator:
         self._send_audio = send_audio
         self._send_audio_clear = send_audio_clear
         self._send_status = send_status
+        self._send_model_speaking = send_model_speaking
         self._send_user_audio_to_session = send_user_audio_to_session
         self._send_dev_event = send_dev_event
         self._oai_send_function_output = oai_send_function_output
@@ -108,23 +110,35 @@ class TurnCoordinator:
         self.current_turn: Turn | None = None
         self.current_media_task: asyncio.Task[None] | None = None
         self.response_cancelled: bool = False
+        # Tracks whether we've fired `model_speaking: true` for the current
+        # audio round. Flipped true on first delta, false on `on_audio_done`
+        # or interrupt. Used by the client-side thinking-tone silence timer.
+        self._model_speaking: bool = False
 
     # --- PTT lifecycle (from client) ---
 
     async def on_ptt_start(self) -> None:
         """User pressed PTT. Start a new turn or interrupt + restart."""
-        # If there's an active turn, flush it atomically before starting a new one.
-        if self.current_turn is not None and self.current_turn.state != TurnState.IDLE:
+        # Interrupt if either a live turn OR an orphan media task (a book from
+        # a prior turn still streaming) is in play. Without the media-task
+        # check, pressing PTT mid-book wouldn't cancel the stream.
+        active_turn = self.current_turn is not None and self.current_turn.state != TurnState.IDLE
+        active_media = self.current_media_task is not None and not self.current_media_task.done()
+        if active_turn or active_media:
             await self.interrupt()
         self.current_turn = Turn(state=TurnState.LISTENING)
+        await self._send_status("Escuchando… (suelta para enviar)")
         await logger.ainfo("turn_started", turn_id=str(self.current_turn.id))
 
-    async def on_ptt_stop(self, frames_sent: int) -> None:
-        """User released PTT. Commit audio if enough frames were sent."""
+    async def on_ptt_stop(self) -> None:
+        """User released PTT. Commit audio if enough frames were sent.
+
+        Frame count comes from `user_audio_frames` on the active turn, which
+        `on_user_audio_frame` increments as frames flow through.
+        """
         if self.current_turn is None:
             return
-        self.current_turn.user_audio_frames = frames_sent
-        if frames_sent < 3:
+        if self.current_turn.user_audio_frames < 3:
             # Accidental tap — no commit, silent abort of the turn.
             await self._send_status("Muy corto — mantén el botón mientras hablas")
             if self._oai_is_connected():
@@ -149,11 +163,31 @@ class TurnCoordinator:
     # --- OpenAI response events (from session/manager.py receive loop) ---
 
     async def on_audio_delta(self, pcm: bytes) -> None:
-        """Model audio chunk — forward to client unless the response is cancelled."""
+        """Model audio chunk — forward to client unless the response is cancelled.
+
+        On the first delta of an audio round, fire `model_speaking: true` +
+        the "Respondiendo…" status so the client can stop its thinking tone.
+        """
         if self.response_cancelled:
             return
         self._enter_in_response_if_idle_between_rounds()
+        if not self._model_speaking:
+            self._model_speaking = True
+            await self._send_model_speaking(True)
+            await self._send_status("Respondiendo…")
         await self._send_audio(pcm)
+
+    async def on_audio_done(self) -> None:
+        """OpenAI finished emitting audio for the current response.
+
+        Fires `model_speaking: false` so the client starts its thinking-tone
+        silence timer — covers both terminal audio-done (before factories
+        fire) and inter-round audio-done (chained responses).
+        """
+        if self.response_cancelled or not self._model_speaking:
+            return
+        self._model_speaking = False
+        await self._send_model_speaking(False)
 
     async def on_function_call(self, call_id: str, name: str, args: dict[str, Any]) -> None:
         """Model called a tool — dispatch, send output back, latch the result.
@@ -205,6 +239,9 @@ class TurnCoordinator:
     async def on_session_disconnected(self) -> None:
         """OpenAI session dropped — abort any live turn without cancelling OpenAI
         (the session is already gone)."""
+        if self._model_speaking:
+            self._model_speaking = False
+            await self._send_model_speaking(False)
         if self.current_turn is None:
             return
         self.current_turn.pending_factories.clear()
@@ -224,8 +261,12 @@ class TurnCoordinator:
         # 2. Drop pending factories — interrupted turn never fires anything.
         if self.current_turn is not None:
             self.current_turn.pending_factories.clear()
-        # 3. Flush client-side audio queue.
+        # 3. Flush client-side audio queue + clear any model-speaking state
+        # (no more audio coming, so the client's thinking-tone timer can run).
         await self._send_audio_clear()
+        if self._model_speaking:
+            self._model_speaking = False
+            await self._send_model_speaking(False)
         # 4. Cancel any long-running media task (audiobook from a prior turn).
         await self._stop_current_media_task()
         # 5. Tell OpenAI to cancel the in-flight response.

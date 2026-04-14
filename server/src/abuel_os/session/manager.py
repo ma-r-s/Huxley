@@ -1,7 +1,10 @@
 """WebSocket session manager for the OpenAI Realtime API.
 
-Handles connection lifecycle, audio streaming, tool call dispatch,
-and conversation context persistence.
+Thin transport — owns the WebSocket connection lifecycle, builds the
+initial `session.update`, and shuttles events between OpenAI and the
+`TurnCoordinator`. All tool dispatch, audio sequencing, and interrupt
+handling live on the coordinator. The session manager just forwards
+typed events to callbacks.
 """
 
 from __future__ import annotations
@@ -40,14 +43,20 @@ REALTIME_API_URL = "wss://api.openai.com/v1/realtime"
 
 
 class SessionManager:
-    """Manages the WebSocket connection to OpenAI Realtime API.
+    """Owns the WebSocket to OpenAI Realtime API; forwards events to callbacks.
 
     Responsibilities:
-    - Connect/disconnect lifecycle
-    - Stream audio to/from the API
-    - Dispatch tool calls to the SkillRegistry
-    - Notify the orchestrator of side effects (playback, timeout)
+    - Connect/disconnect lifecycle (including the session.update config)
+    - Send client events: audio append, commit, response.create, response.cancel,
+      conversation.item.create (function output)
+    - Receive loop: parse server events and fire the matching callback
     - Persist conversation transcripts for reconnection context
+
+    Non-responsibilities (owned by `TurnCoordinator`):
+    - Tool dispatch
+    - Audio sequencing, factory invocation, interrupt ordering
+    - The `response_cancelled` drop flag
+    - Tracking "is the model currently speaking"
     """
 
     def __init__(
@@ -56,41 +65,29 @@ class SessionManager:
         skill_registry: SkillRegistry,
         storage: Storage,
         on_audio_delta: Callable[[bytes], Awaitable[None]],
-        on_tool_action: Callable[[str], Awaitable[None]],
+        on_function_call: Callable[[str, str, dict[str, Any]], Awaitable[None]],
+        on_response_done: Callable[[], Awaitable[None]],
+        on_audio_done: Callable[[], Awaitable[None]],
         on_session_end: Callable[[], Awaitable[None]],
-        on_model_done: Callable[[], Awaitable[None]] | None = None,
         on_transcript: Callable[[str, str], Awaitable[None]] | None = None,
-        on_dev_event: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         self._config = config
         self._skills = skill_registry
         self._storage = storage
         self._on_audio_delta = on_audio_delta
-        self._on_tool_action = on_tool_action
+        self._on_function_call = on_function_call
+        self._on_response_done = on_response_done
+        self._on_audio_done = on_audio_done
         self._on_session_end = on_session_end
-        self._on_model_done = on_model_done
         self._on_transcript = on_transcript
-        self._on_dev_event = on_dev_event
         self._ws: ClientConnection | None = None
         self._receive_task: asyncio.Task[None] | None = None
         self._timeout_task: asyncio.Task[None] | None = None
-        self._pending_action_task: asyncio.Task[None] | None = None
         self._transcript_lines: list[str] = []
-        self._is_model_speaking = False
-        # Set True after cancel_response — discards stale audio deltas that
-        # OpenAI may emit before it processes the cancel.
-        self._response_cancelled = False
-        # Side effect (e.g. start_playback) deferred until AFTER the model's
-        # verbal acknowledgement finishes. See _handle_function_call.
-        self._pending_tool_action: str | None = None
 
     @property
     def is_connected(self) -> bool:
         return self._ws is not None
-
-    @property
-    def is_model_speaking(self) -> bool:
-        return self._is_model_speaking
 
     async def connect(self) -> None:
         """Open WebSocket and configure the session."""
@@ -111,7 +108,7 @@ class SessionManager:
                 raise RuntimeError(msg) from exc
             raise
 
-        # Configure session. Build instructions from three layers:
+        # Build instructions from three layers:
         #   1. the static system prompt (persona + nunca-decir-no contract)
         #   2. skill-contributed context (e.g. audiobook catalog) so the LLM
         #      has baseline awareness of available resources without needing
@@ -175,32 +172,31 @@ class SessionManager:
             self._ws = None
 
         self._transcript_lines.clear()
-        self._is_model_speaking = False
         await logger.ainfo("session_disconnected")
 
     async def commit_and_respond(self) -> None:
-        """Commit the audio buffer and ask the model to respond (PTT release)."""
+        """Commit the audio buffer and request a response (PTT release)."""
         if not self._ws:
             return
-        self._response_cancelled = False
         await self._send(ClientEventType.INPUT_AUDIO_BUFFER_COMMIT, {})
         await self._send(ClientEventType.RESPONSE_CREATE, {})
         self._reset_timeout()
 
-    async def cancel_response(self) -> None:
-        """Cancel any in-progress model response (e.g. user interrupts via PTT).
+    async def request_response(self) -> None:
+        """Ask the model to generate another response (chained follow-up)."""
+        if not self._ws:
+            return
+        await self._send(ClientEventType.RESPONSE_CREATE, {})
 
-        Sets `_response_cancelled` so the receive loop discards any audio
-        deltas that arrive in the brief window before OpenAI actually
-        processes the cancel. Also clears `_pending_tool_action` so any
-        deferred side effect (e.g. start_playback queued behind the ack)
-        is cancelled too — the user changed their mind mid-ack.
+    async def cancel_response(self) -> None:
+        """Cancel any in-progress model response.
+
+        The coordinator owns the `response_cancelled` drop flag — this method
+        only sends the API-level cancel + input-buffer clear. See
+        `TurnCoordinator.interrupt()` for the full 6-step sequence.
         """
         if not self._ws:
             return
-        self._response_cancelled = True
-        self._is_model_speaking = False
-        self._pending_tool_action = None
         await self._send(ClientEventType.RESPONSE_CANCEL, {})
         await self._send(ClientEventType.INPUT_AUDIO_BUFFER_CLEAR, {})
 
@@ -214,6 +210,21 @@ class SessionManager:
             {"audio": encoded},
         )
         self._reset_timeout()
+
+    async def send_function_output(self, call_id: str, output: str) -> None:
+        """Post a tool call's output back to OpenAI as a conversation item."""
+        if not self._ws:
+            return
+        await self._send(
+            ClientEventType.CONVERSATION_ITEM_CREATE,
+            {
+                "item": {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": output,
+                }
+            },
+        )
 
     async def _send(self, event_type: ClientEventType, payload: dict[str, Any]) -> None:
         if not self._ws:
@@ -235,7 +246,7 @@ class SessionManager:
             raise
 
     async def _receive_loop(self) -> None:
-        """Process incoming WebSocket messages."""
+        """Parse WebSocket messages and forward to the coordinator callbacks."""
         assert self._ws is not None
         try:
             async for raw_msg in self._ws:
@@ -243,15 +254,16 @@ class SessionManager:
                 event_type = data.get("type", "")
                 parsed = parse_server_event(data)
 
-                # Drop stale audio deltas that arrived after a cancel — the
-                # user interrupted, they don't want to hear the tail.
-                if isinstance(parsed, AudioDeltaEvent) and not self._response_cancelled:
-                    self._is_model_speaking = True
+                if isinstance(parsed, AudioDeltaEvent):
                     audio_bytes = base64.b64decode(parsed.delta)
                     await self._on_audio_delta(audio_bytes)
 
                 elif isinstance(parsed, FunctionCallEvent):
-                    await self._handle_function_call(parsed)
+                    try:
+                        args = json.loads(parsed.arguments)
+                    except json.JSONDecodeError:
+                        args = {}
+                    await self._on_function_call(parsed.call_id, parsed.name, args)
 
                 elif isinstance(parsed, TranscriptEvent):
                     self._transcript_lines.append(parsed.transcript)
@@ -275,31 +287,11 @@ class SessionManager:
                             ),
                         )
 
-                # response.audio.done → the model finished speaking. Drive
-                # the UI "model speaking" indicator off this event.
-                if (
-                    event_type == ServerEventType.RESPONSE_AUDIO_DONE.value
-                    and not self._response_cancelled
-                ):
-                    self._is_model_speaking = False
-                    if self._on_model_done:
-                        await self._on_model_done()
+                if event_type == ServerEventType.RESPONSE_AUDIO_DONE.value:
+                    await self._on_audio_done()
 
-                # response.done → the FULL response is complete (audio +
-                # function calls). Fire any deferred side effect from the
-                # most recent tool call. Detached via create_task so the
-                # side effect (which may disconnect this very session)
-                # doesn't try to cancel the task that's currently running it.
-                if (
-                    event_type == "response.done"
-                    and not self._response_cancelled
-                    and self._pending_tool_action is not None
-                ):
-                    action = self._pending_tool_action
-                    self._pending_tool_action = None
-                    self._pending_action_task = asyncio.create_task(
-                        self._fire_pending_action(action)
-                    )
+                if event_type == ServerEventType.RESPONSE_DONE.value:
+                    await self._on_response_done()
 
         except websockets.ConnectionClosed:
             await logger.ainfo("session_connection_closed")
@@ -309,80 +301,6 @@ class SessionManager:
             await logger.aexception("session_receive_error")
         finally:
             await self._on_session_end()
-
-    async def _handle_function_call(self, event: FunctionCallEvent) -> None:
-        """Dispatch a tool call and wire the response + deferred side effect.
-
-        Order of operations:
-        1. Dispatch skill → get ToolResult (e.g. audiobook pre-loaded paused)
-        2. Send function_call_output to OpenAI
-        3. Emit dev_event (observability)
-        4. Stash any side effect as `_pending_tool_action` — do NOT fire yet
-        5. Request a response — the model narrates `result.output.message`
-           as a verbal acknowledgement
-        6. When the ack finishes (`response.audio.done`), `_receive_loop`
-           fires the pending action as a detached task so the state
-           transition + session disconnect + player resume run cleanly
-
-        This is why the book doesn't jump in without warning: the
-        `start_playback` transition is held until the ack is fully spoken.
-        """
-        await logger.ainfo("function_call_received", name=event.name)
-
-        try:
-            args = json.loads(event.arguments)
-        except json.JSONDecodeError:
-            args = {}
-
-        result = await self._skills.dispatch(event.name, args)
-
-        # 2. Send function output back to the API
-        await self._send(
-            ClientEventType.CONVERSATION_ITEM_CREATE,
-            {
-                "item": {
-                    "type": "function_call_output",
-                    "call_id": event.call_id,
-                    "output": result.output,
-                }
-            },
-        )
-
-        # 3. Emit dev event (observability) — see docs/protocol.md (dev_event)
-        if self._on_dev_event is not None:
-            await self._on_dev_event(
-                "tool_call",
-                {
-                    "name": event.name,
-                    "args": args,
-                    "output": result.output,
-                    "action": result.action.value,
-                },
-            )
-
-        # 4. Queue the side effect (don't fire it yet).
-        # For terminal actions (start_playback), the model has ALREADY
-        # narrated its ack BEFORE calling the tool — that's what the tool
-        # description tells it to do. A response.create here would generate
-        # a redundant second ack. The pending action fires on `response.done`
-        # instead, which lets the current response finish cleanly.
-        if result.action.value != "none":
-            self._pending_tool_action = result.action.value
-        else:
-            # Non-terminal tool call (e.g. search). Ask the model to continue
-            # so it can narrate the tool output.
-            self._response_cancelled = False
-            await self._send(ClientEventType.RESPONSE_CREATE, {})
-
-    async def _fire_pending_action(self, action: str) -> None:
-        """Run a deferred side effect in a detached task.
-
-        Wrapped in this helper (rather than calling `self._on_tool_action`
-        directly inside `create_task`) so mypy sees a concrete `Coroutine`,
-        and so we have one reference to store on `self._pending_action_task`
-        to prevent garbage collection (RUF006).
-        """
-        await self._on_tool_action(action)
 
     def _reset_timeout(self) -> None:
         """Reset the silence/max-session timeout."""
