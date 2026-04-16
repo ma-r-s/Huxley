@@ -105,50 +105,65 @@ class TurnCoordinator:
         self._oai_is_connected = oai_is_connected
         self._dispatch_tool = dispatch_tool
 
-        # Cross-turn state: current_media_task outlives turns so a book
-        # started in turn N keeps playing until turn N+M interrupts it.
         self.current_turn: Turn | None = None
         self.current_media_task: asyncio.Task[None] | None = None
         self.response_cancelled: bool = False
-        # Tracks whether we've fired `model_speaking: true` for the current
-        # audio round. Flipped true on first delta, false on `on_audio_done`
-        # or interrupt. Used by the client-side thinking-tone silence timer.
         self._model_speaking: bool = False
+        # Bound logger — rebound with turn= in on_ptt_start, reset on turn end.
+        self._log: structlog.stdlib.BoundLogger = logger
+
+    def _tid(self) -> str | None:
+        """Short turn ID for explicit passing (factory tasks, etc.)."""
+        return str(self.current_turn.id)[:8] if self.current_turn else None
+
+    def _bind_turn(self) -> None:
+        """Bind the current turn's short ID to the logger."""
+        if self.current_turn is not None:
+            self._log = logger.bind(turn=str(self.current_turn.id)[:8])
+        else:
+            self._log = logger
 
     # --- PTT lifecycle (from client) ---
 
     async def on_ptt_start(self) -> None:
         """User pressed PTT. Start a new turn or interrupt + restart."""
-        # Interrupt if either a live turn OR an orphan media task (a book from
-        # a prior turn still streaming) is in play. Without the media-task
-        # check, pressing PTT mid-book wouldn't cancel the stream.
         active_turn = self.current_turn is not None and self.current_turn.state != TurnState.IDLE
         active_media = self.current_media_task is not None and not self.current_media_task.done()
+        prev_state = self.current_turn.state.value if self.current_turn else None
+
         if active_turn or active_media:
             await self.interrupt()
+
         self.current_turn = Turn(state=TurnState.LISTENING)
+        self._bind_turn()
         await self._send_status("Escuchando… (suelta para enviar)")
-        await logger.ainfo("turn_started", turn_id=str(self.current_turn.id))
+        await self._log.ainfo(
+            "coord.ptt_start",
+            had_turn=active_turn,
+            prev_state=prev_state,
+            had_media=active_media,
+            will_interrupt=active_turn or active_media,
+        )
 
     async def on_ptt_stop(self) -> None:
-        """User released PTT. Commit audio if enough frames were sent.
-
-        Frame count comes from `user_audio_frames` on the active turn, which
-        `on_user_audio_frame` increments as frames flow through.
-        """
+        """User released PTT. Commit audio if enough frames were sent."""
         if self.current_turn is None:
             return
+        frames = self.current_turn.user_audio_frames
         # AudioWorklet frames are 128 samples = 5.33 ms at 24 kHz.
-        # OpenAI requires ≥ 100 ms in the input buffer before commit.
+        # OpenAI requires >= 100 ms in the input buffer before commit.
         # 19 frames x 5.33 ms = 101 ms -- just above the floor.
-        if self.current_turn.user_audio_frames < 19:
+        if frames < 19:
+            await self._log.ainfo("coord.ptt_stop", frames=frames, committed=False)
             await self._send_status("Muy corto — mantén el botón mientras hablas")
             if self._oai_is_connected():
                 await self._oai_cancel()
             self.current_turn = None
+            self._bind_turn()
             return
         self.current_turn.state = TurnState.COMMITTING
-        self.response_cancelled = False  # reset for the upcoming response
+        self.response_cancelled = False
+        await self._log.ainfo("coord.ptt_stop", frames=frames, committed=True)
         await self._send_status("Enviado — esperando respuesta…")
         await self._oai_commit()
 
@@ -161,57 +176,51 @@ class TurnCoordinator:
         ):
             await self._send_user_audio_to_session(pcm)
             self.current_turn.user_audio_frames += 1
+            await self._log.adebug("coord.mic_fwd", bytes=len(pcm))
+        elif self.current_turn is not None:
+            await self._log.adebug(
+                "coord.mic_dropped",
+                reason=self.current_turn.state.value,
+            )
 
     async def on_commit_failed(self) -> None:
-        """OpenAI rejected the input buffer commit (too little audio).
-
-        Abort the turn so it doesn't sit in COMMITTING forever waiting for
-        a response.done that will never come.
-        """
+        """OpenAI rejected the input buffer commit (too little audio)."""
         if self.current_turn is None:
             return
-        await logger.ainfo("turn_commit_rejected", turn_id=str(self.current_turn.id))
+        await self._log.ainfo("coord.commit_failed")
         await self._send_status("Muy corto — mantén el botón mientras hablas")
         self.current_turn = None
+        self._bind_turn()
 
     # --- OpenAI response events (from session/manager.py receive loop) ---
 
     async def on_audio_delta(self, pcm: bytes) -> None:
-        """Model audio chunk — forward to client unless the response is cancelled.
-
-        On the first delta of an audio round, fire `model_speaking: true` +
-        the "Respondiendo…" status so the client can stop its thinking tone.
-        """
+        """Model audio chunk — forward to client unless the response is cancelled."""
         if self.response_cancelled:
+            await self._log.adebug("coord.audio_dropped")
             return
         self._enter_in_response_if_idle_between_rounds()
         if not self._model_speaking:
             self._model_speaking = True
             await self._send_model_speaking(True)
             await self._send_status("Respondiendo…")
+            await self._log.ainfo(
+                "coord.audio_start",
+                state=self.current_turn.state.value if self.current_turn else None,
+            )
         await self._send_audio(pcm)
+        await self._log.adebug("coord.audio_fwd", bytes=len(pcm))
 
     async def on_audio_done(self) -> None:
-        """OpenAI finished emitting audio for the current response.
-
-        Fires `model_speaking: false` so the client starts its thinking-tone
-        silence timer — covers both terminal audio-done (before factories
-        fire) and inter-round audio-done (chained responses).
-        """
+        """OpenAI finished emitting audio for the current response."""
         if self.response_cancelled or not self._model_speaking:
             return
         self._model_speaking = False
         await self._send_model_speaking(False)
+        await self._log.ainfo("coord.audio_done")
 
     async def on_function_call(self, call_id: str, name: str, args: dict[str, Any]) -> None:
-        """Model called a tool — dispatch, send output back, latch the result.
-
-        - Tools with `audio_factory != None` (side-effect tools): the model
-          pre-narrated already; factory latches onto `pending_factories` and
-          will fire at the terminal barrier.
-        - Tools with `audio_factory == None` (info tools): the model needs
-          a follow-up response to narrate the output. Sets `needs_follow_up`.
-        """
+        """Model called a tool — dispatch, send output back, latch the result."""
         if self.response_cancelled or self.current_turn is None:
             return
         self._enter_in_response_if_idle_between_rounds()
@@ -219,13 +228,21 @@ class TurnCoordinator:
         result = await self._dispatch_tool(name, args)
         await self._oai_send_function_output(call_id, result.output)
 
+        has_factory = result.audio_factory is not None
+        await self._log.ainfo(
+            "coord.tool_dispatch",
+            state=self.current_turn.state.value,
+            name=name,
+            has_factory=has_factory,
+        )
+
         await self._send_dev_event(
             "tool_call",
             {
                 "name": name,
                 "args": args,
                 "output": result.output,
-                "has_audio_factory": result.audio_factory is not None,
+                "has_audio_factory": has_factory,
             },
         )
 
@@ -239,28 +256,47 @@ class TurnCoordinator:
         if self.response_cancelled or self.current_turn is None:
             return
 
-        if self.current_turn.needs_follow_up:
-            # Info tool was called this round — ask the model to narrate it.
+        follow_up = self.current_turn.needs_follow_up
+        factories = len(self.current_turn.pending_factories)
+        await self._log.ainfo(
+            "coord.response_done",
+            state=self.current_turn.state.value,
+            follow_up=follow_up,
+            factories=factories,
+        )
+
+        if follow_up:
             self.current_turn.needs_follow_up = False
             self.current_turn.state = TurnState.AWAITING_NEXT_RESPONSE
             if self._oai_is_connected():
                 self.response_cancelled = False
                 await self._oai_request_response()
         else:
-            # Terminal: apply pending factories (if any) then end the turn.
             await self._apply_factories()
 
     async def on_session_disconnected(self) -> None:
-        """OpenAI session dropped — abort any live turn without cancelling OpenAI
-        (the session is already gone)."""
+        """OpenAI session dropped — abort any live turn without cancelling OpenAI."""
+        had_media = self.current_media_task is not None and not self.current_media_task.done()
+        was_speaking = self._model_speaking
+        tid = self._tid()
+
         if self._model_speaking:
             self._model_speaking = False
             await self._send_model_speaking(False)
+
+        await logger.ainfo(
+            "coord.session_disconnected",
+            turn=tid,
+            had_media=had_media,
+            was_speaking=was_speaking,
+        )
+
         if self.current_turn is None:
             return
         self.current_turn.pending_factories.clear()
         self.current_turn.state = TurnState.INTERRUPTED
         self.current_turn = None
+        self._bind_turn()
         await self._stop_current_media_task()
         await self._send_audio_clear()
 
@@ -270,47 +306,49 @@ class TurnCoordinator:
         """Raise the interrupt barrier. Atomic 6-step sequence — see
         `docs/turns.md#3-interrupt`. Order matters.
         """
-        # 1. Drop flag FIRST — stale deltas from OpenAI get dropped at receive.
-        self.response_cancelled = True
-        # 2. Drop pending factories — interrupted turn never fires anything.
-        if self.current_turn is not None:
-            self.current_turn.pending_factories.clear()
-        # 3. Flush client-side audio queue + clear any model-speaking state
-        # (no more audio coming, so the client's thinking-tone timer can run).
-        await self._send_audio_clear()
-        if self._model_speaking:
-            self._model_speaking = False
-            await self._send_model_speaking(False)
-        # 4. Cancel any long-running media task (audiobook from a prior turn).
-        await self._stop_current_media_task()
-        # 5. Cancel the in-flight response — but only if one could exist.
-        # When interrupting a book (current_turn is None, only media task
-        # was active) or a LISTENING turn (audio not committed yet), there's
-        # no OpenAI response to cancel.
+        prev_state = self.current_turn.state.value if self.current_turn else None
+        has_media = self.current_media_task is not None and not self.current_media_task.done()
         has_response = self.current_turn is not None and self.current_turn.state in (
             TurnState.COMMITTING,
             TurnState.IN_RESPONSE,
             TurnState.AWAITING_NEXT_RESPONSE,
         )
-        if has_response and self._oai_is_connected():
+        will_cancel = has_response and self._oai_is_connected()
+        pending = len(self.current_turn.pending_factories) if self.current_turn else 0
+
+        await self._log.ainfo(
+            "coord.interrupt",
+            prev_state=prev_state,
+            has_media=has_media,
+            will_cancel=will_cancel,
+            pending_factories=pending,
+        )
+
+        # 1. Drop flag FIRST
+        self.response_cancelled = True
+        # 2. Drop pending factories
+        if self.current_turn is not None:
+            self.current_turn.pending_factories.clear()
+        # 3. Flush client-side audio queue + clear model-speaking state
+        await self._send_audio_clear()
+        if self._model_speaking:
+            self._model_speaking = False
+            await self._send_model_speaking(False)
+        # 4. Cancel any long-running media task
+        await self._stop_current_media_task()
+        # 5. Cancel the in-flight response (only if one could exist)
+        if will_cancel:
             await self._oai_cancel()
-        # 6. Mark current turn as interrupted + clear the reference.
+        # 6. Mark current turn as interrupted + clear the reference
         if self.current_turn is not None:
             self.current_turn.state = TurnState.INTERRUPTED
         self.current_turn = None
-        await logger.ainfo("turn_interrupted")
+        self._bind_turn()
 
     # --- Internal ---
 
     def _enter_in_response_if_idle_between_rounds(self) -> None:
-        """Transition to IN_RESPONSE from the waiting states.
-
-        The coordinator is in COMMITTING when it just sent the audio-buffer
-        commit and is awaiting the first event. It's in AWAITING_NEXT_RESPONSE
-        when it requested a follow-up response mid-chain. Both transition to
-        IN_RESPONSE on the first event of the new response (audio delta or
-        function call).
-        """
+        """Transition to IN_RESPONSE from the waiting states."""
         if self.current_turn is None:
             return
         if self.current_turn.state in (
@@ -320,50 +358,44 @@ class TurnCoordinator:
             self.current_turn.state = TurnState.IN_RESPONSE
 
     async def _apply_factories(self) -> None:
-        """Invoke the pending factories at the terminal barrier.
-
-        v1 rule: only the LAST factory in the list runs. Earlier factories
-        in the same turn are superseded — if the model called rewind + play
-        in one turn, only the play factory takes effect. This keeps
-        semantics predictable. Logged when superseding happens.
-        """
+        """Invoke the pending factories at the terminal barrier."""
         if self.current_turn is None:
             return
 
         factories = self.current_turn.pending_factories
+        turn_id = self._tid()
         self.current_turn.state = TurnState.APPLYING_FACTORIES
 
         if len(factories) > 1:
-            await logger.ainfo(
-                "superseding_factories",
+            await self._log.ainfo(
+                "coord.factories_superseded",
                 dropped=len(factories) - 1,
-                note="only the last factory in a turn runs; earlier ones are superseded",
             )
 
         if factories:
-            # Kill any long-running prior stream before starting the new one.
             await self._stop_current_media_task()
             factory = factories[-1]
-            self.current_media_task = asyncio.create_task(self._consume_factory(factory))
+            self.current_media_task = asyncio.create_task(self._consume_factory(factory, turn_id))
+            await self._log.ainfo("coord.factory_started")
 
-        # Turn ends when factories are *spawned*, not when they complete.
+        await self._log.ainfo("coord.turn_ended")
         self.current_turn = None
+        self._bind_turn()
         await self._send_status("Listo — mantén el botón para responder")
 
-    async def _consume_factory(self, factory: Callable[[], AsyncIterator[bytes]]) -> None:
-        """Pull chunks from a factory and forward them to send_audio.
-
-        Runs as a background task owned by `current_media_task`. Honors
-        cancellation cleanly — the async iterator must release any
-        subprocess / file / network resources on `task.cancel()`.
-        """
+    async def _consume_factory(
+        self, factory: Callable[[], AsyncIterator[bytes]], turn_id: str | None
+    ) -> None:
+        """Pull chunks from a factory and forward them to send_audio."""
         try:
             async for chunk in factory():
                 await self._send_audio(chunk)
+            await logger.ainfo("coord.factory_ended", turn=turn_id, error=False)
         except asyncio.CancelledError:
+            await logger.ainfo("coord.factory_ended", turn=turn_id, cancelled=True)
             raise
         except Exception:
-            await logger.aexception("factory_consume_error")
+            await logger.aexception("coord.factory_ended", turn=turn_id, error=True)
 
     async def _stop_current_media_task(self) -> None:
         """Cancel the running media task if any. Waits for cleanup."""

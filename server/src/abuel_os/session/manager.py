@@ -180,6 +180,7 @@ class SessionManager:
         """Commit the audio buffer and request a response (PTT release)."""
         if not self._ws:
             return
+        await logger.ainfo("session.tx.commit")
         await self._send(ClientEventType.INPUT_AUDIO_BUFFER_COMMIT, {})
         await self._send(ClientEventType.RESPONSE_CREATE, {})
         self._reset_timeout()
@@ -188,6 +189,7 @@ class SessionManager:
         """Ask the model to generate another response (chained follow-up)."""
         if not self._ws:
             return
+        await logger.ainfo("session.tx.response_create")
         await self._send(ClientEventType.RESPONSE_CREATE, {})
 
     async def cancel_response(self) -> None:
@@ -199,6 +201,7 @@ class SessionManager:
         """
         if not self._ws:
             return
+        await logger.ainfo("session.tx.cancel")
         await self._send(ClientEventType.RESPONSE_CANCEL, {})
         await self._send(ClientEventType.INPUT_AUDIO_BUFFER_CLEAR, {})
 
@@ -217,6 +220,7 @@ class SessionManager:
         """Post a tool call's output back to OpenAI as a conversation item."""
         if not self._ws:
             return
+        await logger.ainfo("session.tx.function_output", call_id=call_id)
         await self._send(
             ClientEventType.CONVERSATION_ITEM_CREATE,
             {
@@ -265,6 +269,11 @@ class SessionManager:
                         args = json.loads(parsed.arguments)
                     except json.JSONDecodeError:
                         args = {}
+                    await logger.ainfo(
+                        "session.rx.function_call",
+                        name=parsed.name,
+                        call_id=parsed.call_id,
+                    )
                     await self._on_function_call(parsed.call_id, parsed.name, args)
 
                 elif isinstance(parsed, TranscriptEvent):
@@ -274,27 +283,28 @@ class SessionManager:
 
                 elif isinstance(parsed, ErrorEvent):
                     if parsed.code == "response_cancel_not_active":
-                        await logger.ainfo("realtime_api_cancel_noop")
+                        await logger.ainfo("session.rx.error", code=parsed.code)
                     elif parsed.code == "input_audio_buffer_commit_empty":
                         await logger.ainfo(
-                            "realtime_api_commit_rejected",
+                            "session.rx.error",
+                            code=parsed.code,
                             message=parsed.message,
                         )
                         await self._on_commit_failed()
                     else:
                         await logger.aerror(
-                            "realtime_api_error",
+                            "session.rx.error",
+                            code=parsed.code,
                             message=parsed.message,
                             error_type=parsed.type,
-                            code=parsed.code,
                         )
                         if parsed.code == "model_not_found":
                             await logger.aerror(
-                                "realtime_api_access_hint",
+                                "session.rx.error",
                                 hint=(
                                     "The Realtime API requires Tier 1 access "
-                                    "(≥$5 lifetime spend). Add a payment method "
-                                    "and purchase credits at "
+                                    "(>=5 USD lifetime spend). Add a payment "
+                                    "method and purchase credits at "
                                     "platform.openai.com/settings/billing"
                                 ),
                             )

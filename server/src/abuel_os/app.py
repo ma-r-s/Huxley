@@ -221,26 +221,20 @@ class Application:
     # --- Session callbacks ---
 
     async def _on_session_end(self) -> None:
-        """OpenAI session receive loop exited — clean up + schedule reconnect.
-
-        The receive loop exits on: explicit `disconnect()` (normal shutdown or
-        55-min `_timeout_loop`), a dropped WebSocket, or an unhandled error in
-        the loop. In all non-shutdown cases we auto-reconnect so the user
-        never experiences the "CONNECTING" phase between turns — first press
-        of every gesture is instant.
-
-        The reconnect is scheduled as a background task rather than invoked
-        inline because `_on_session_end` runs from inside
-        `session.disconnect()`'s finally chain — firing `connect()` synchronously
-        would overwrite `self._ws` before `disconnect()` finishes cleaning it up.
-        """
+        """OpenAI session receive loop exited — clean up + schedule reconnect."""
         await self.coordinator.on_session_disconnected()
         if self.state_machine.state == AppState.CONVERSING:
             await self.state_machine.trigger("disconnect")
 
-        if self._shutting_down:
-            return
-        if self.state_machine.state != AppState.IDLE:
+        will_reconnect = not self._shutting_down and self.state_machine.state == AppState.IDLE
+        await logger.ainfo(
+            "app.session_end",
+            shutting_down=self._shutting_down,
+            state=self.state_machine.state.name,
+            will_reconnect=will_reconnect,
+        )
+
+        if not will_reconnect:
             return
         self._reconnect_task = asyncio.create_task(self._auto_reconnect())
 
@@ -266,6 +260,10 @@ class Application:
 
     async def _on_wake_word(self) -> None:
         if self.state_machine.state != AppState.IDLE:
+            await logger.ainfo(
+                "app.wake_word_rejected",
+                state=self.state_machine.state.name,
+            )
             return
         await self.server.send_audio_clear()
         await self.state_machine.trigger("wake_word")
@@ -276,8 +274,10 @@ class Application:
 
     async def _on_ptt_start(self) -> None:
         if self.state_machine.state != AppState.CONVERSING:
-            # Rare race — client only sends ptt_start from CONVERSING.
-            # If we land here it's usually the auto-reconnect window.
+            await logger.ainfo(
+                "app.ptt_rejected",
+                state=self.state_machine.state.name,
+            )
             await self.server.send_status("Conectando — espera un segundo")
             return
         await self.coordinator.on_ptt_start()

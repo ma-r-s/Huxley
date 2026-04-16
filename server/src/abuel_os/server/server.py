@@ -100,18 +100,26 @@ class AudioServer:
             await logger.ainfo("client_disconnected")
 
     async def _dispatch(self, raw: str | bytes) -> None:
-        with contextlib.suppress(json.JSONDecodeError, KeyError):
+        try:
             msg: dict[str, Any] = json.loads(raw)
-            match msg.get("type"):
-                case "audio":
-                    pcm = base64.b64decode(msg["data"])
-                    await self._on_audio_frame(pcm)
-                case "ptt_start":
-                    await self._on_ptt_start()
-                case "ptt_stop":
-                    await self._on_ptt_stop()
-                case "wake_word":
-                    await self._on_wake_word()
+        except (json.JSONDecodeError, ValueError):
+            await logger.awarning("server.rx.malformed")
+            return
+        match msg.get("type"):
+            case "audio":
+                pcm = base64.b64decode(msg.get("data", ""))
+                await self._on_audio_frame(pcm)
+            case "ptt_start":
+                await logger.ainfo("server.rx.ptt_start")
+                await self._on_ptt_start()
+            case "ptt_stop":
+                await logger.ainfo("server.rx.ptt_stop")
+                await self._on_ptt_stop()
+            case "wake_word":
+                await logger.ainfo("server.rx.wake_word")
+                await self._on_wake_word()
+            case other:
+                await logger.awarning("server.rx.unknown", msg_type=other)
 
     # --- Server → client ---
 
@@ -120,15 +128,18 @@ class AudioServer:
 
     async def send_state(self, state: str) -> None:
         self._state = state
+        await logger.ainfo("server.tx.state", value=state)
         await self._send({"type": "state", "value": state})
 
     async def send_status(self, message: str) -> None:
+        await logger.adebug("server.tx.status", message=message)
         await self._send({"type": "status", "message": message})
 
     async def send_transcript(self, role: str, text: str) -> None:
         await self._send({"type": "transcript", "role": role, "text": text})
 
     async def send_model_speaking(self, value: bool) -> None:
+        await logger.ainfo("server.tx.model_speaking", value=value)
         await self._send({"type": "model_speaking", "value": value})
 
     async def send_dev_event(self, kind: str, payload: dict[str, Any]) -> None:
