@@ -1,0 +1,168 @@
+"""Core type definitions for the Huxley SDK.
+
+Skill authors import from `huxley_sdk`:
+
+    from huxley_sdk import Skill, ToolDefinition, ToolResult, SkillContext
+
+Everything here is persona-agnostic and framework-independent. Huxley core
+imports and implements these types, but a skill sees only this surface.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import Enum, auto
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Awaitable, Callable
+    from pathlib import Path
+
+    import structlog
+
+
+class AppState(Enum):
+    """Finite states for the application state machine.
+
+    Owned by the framework; skills don't interact with this directly but it
+    lives here so the `SessionManager`'s public protocol can reference it.
+    """
+
+    IDLE = auto()
+    CONNECTING = auto()
+    CONVERSING = auto()
+
+
+@dataclass(frozen=True, slots=True)
+class ToolDefinition:
+    """Maps to an OpenAI Realtime API tool schema.
+
+    `parameters` must be a valid JSON Schema object describing the function's
+    arguments. The `description` is in the persona's language — the LLM uses
+    it to decide when to call the tool.
+    """
+
+    name: str
+    description: str
+    parameters: dict[str, Any] = field(default_factory=lambda: {"type": "object"})
+
+    def to_api_format(self) -> dict[str, Any]:
+        """Convert to the format expected by OpenAI's session.update."""
+        return {
+            "type": "function",
+            "name": self.name,
+            "description": self.description,
+            "parameters": self.parameters,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ToolResult:
+    """Result of a skill handling a tool call.
+
+    `output` is JSON-serialized and sent back to the Realtime API as the
+    function call output. `audio_factory`, if present, is a callable the
+    framework invokes after the model's final speech to produce a media
+    stream (e.g. an audiobook).
+
+    `audio_factory` will be replaced by a generic `side_effect` field in
+    a future release (see the Huxley roadmap). For now it is the supported
+    field name.
+    """
+
+    output: str
+    audio_factory: Callable[[], AsyncIterator[bytes]] | None = None
+
+
+class InvalidTransitionError(Exception):
+    """Raised when a state machine transition is not allowed."""
+
+
+# --- Skill contract ---
+
+
+@runtime_checkable
+class SkillStorage(Protocol):
+    """Per-skill storage façade the framework hands to each skill.
+
+    Settings keys are namespaced automatically with the skill's name
+    (so `audiobooks` and another skill can both store a `last_id` without
+    collision). Concrete implementation lives in Huxley core.
+    """
+
+    async def get_setting(self, key: str) -> str | None: ...
+    async def set_setting(self, key: str, value: str) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class SkillContext:
+    """Dependencies the framework injects into each skill at `setup` time.
+
+    A skill's `__init__` takes no positional arguments (the framework
+    discovers and instantiates skills via entry points); all per-skill
+    configuration and infrastructure arrive here.
+
+    - `logger`: a structlog bound logger pre-tagged with `skill=<name>`.
+      Use `ctx.logger.ainfo(...)` for events your skill emits.
+    - `storage`: namespaced key-value storage scoped to this skill.
+    - `persona_data_dir`: absolute path to the persona's data directory.
+      Resolve your skill's file paths against this, not against CWD.
+    - `config`: the per-skill config dict from `persona.yaml`'s
+      `skills.<name>:` section.
+    """
+
+    logger: structlog.stdlib.BoundLogger
+    storage: SkillStorage
+    persona_data_dir: Path
+    config: dict[str, Any]
+
+
+@runtime_checkable
+class WakeWordDetectorProtocol(Protocol):
+    """Structural protocol for wake word detectors (framework-internal)."""
+
+    on_detected: Callable[[], Awaitable[None]] | None
+
+    @property
+    def enabled(self) -> bool: ...
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None: ...
+
+    async def setup(self) -> None: ...
+
+    async def process_frame(self, pcm_16k: bytes) -> None: ...
+
+
+@runtime_checkable
+class Skill(Protocol):
+    """Protocol for extensible skills.
+
+    A skill declares tools (OpenAI function schemas) and handles their
+    invocations. The framework discovers skills via entry points, constructs
+    them with no positional arguments, then calls `setup(ctx)` with a
+    `SkillContext` carrying the skill's logger, storage, persona data dir,
+    and per-skill config from `persona.yaml`.
+
+    Skills may optionally implement a `prompt_context(self) -> str` method
+    that injects baseline awareness into the system prompt. It is not part
+    of this Protocol — it is discovered by `getattr` in `SkillRegistry`.
+    """
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def tools(self) -> list[ToolDefinition]: ...
+
+    async def handle(self, tool_name: str, args: dict[str, Any]) -> ToolResult:
+        """Handle a tool call. Must return a ToolResult."""
+        ...
+
+    async def setup(self, ctx: SkillContext) -> None:
+        """Called once at startup with the skill's context. Optional default no-op."""
+        ...
+
+    async def teardown(self) -> None:
+        """Called on shutdown. Optional default no-op."""
+        ...

@@ -1,0 +1,48 @@
+[tool.uv.workspace]
+members = ["packages/sdk", "packages/core"]
+
+[tool.uv.sources]
+huxley-sdk = { workspace = true }
+
+# Shared tool config (each package's pyproject can override).
+
+[tool.ruff]
+target-version = "py313"
+line-length = 99
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "N",     # pep8-naming
+    "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "SIM",   # flake8-simplify
+    "TCH",   # flake8-type-checking
+    "RUF",   # ruff-specific
+    "PTH",   # flake8-use-pathlib
+    "ASYNC", # flake8-async
+]
+ignore = [
+    "E501",   # line length handled by formatter
+    "UP040",  # `type` keyword aliases break mypy with `from __future__ import annotations`
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["huxley", "huxley_sdk"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "openwakeword.*",
+    "numpy.*",
+]
+ignore_missing_imports = true
