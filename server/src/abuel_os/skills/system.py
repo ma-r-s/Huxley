@@ -1,9 +1,8 @@
 """System skill — basic device control and information.
 
-Provides tools for volume control and time queries. No longer depends on
-mpv since audiobook playback moved to a streaming architecture. Volume
-control here still adjusts the server host's output (valid for localhost
-browser dev); ESP32 will need its own volume command in the protocol.
+Provides tools for volume control and time queries. Volume control
+adjusts the server host's output (valid for localhost browser dev);
+ESP32 will need its own volume command in the protocol.
 """
 
 from __future__ import annotations
