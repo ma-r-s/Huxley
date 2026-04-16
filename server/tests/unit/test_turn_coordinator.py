@@ -40,11 +40,12 @@ def _factory(*chunks: bytes) -> Callable[[], AsyncIterator[bytes]]:
     return lambda: _stream(*chunks)
 
 
-async def _commit_turn(coordinator: TurnCoordinator, frames: int = 10) -> None:
+async def _commit_turn(coordinator: TurnCoordinator, frames: int = 25) -> None:
     """Helper: start a turn, stuff `frames` into user_audio_frames, and commit.
 
     Mirrors the production flow where `on_user_audio_frame` increments the
-    counter — we set it directly here to keep tests concise.
+    counter — we set it directly here to keep tests concise. Default of 25
+    is comfortably above the 19-frame minimum (OpenAI's 100 ms floor).
     """
     await coordinator.on_ptt_start()
     assert coordinator.current_turn is not None
@@ -106,11 +107,24 @@ class TestTurnLifecycle:
     async def test_ptt_stop_too_short_aborts_without_commit(
         self, coordinator: TurnCoordinator, mocks: dict[str, Any]
     ) -> None:
-        await _commit_turn(coordinator, frames=1)
+        await _commit_turn(coordinator, frames=10)  # below 19-frame threshold
 
         assert coordinator.current_turn is None
         mocks["oai_cancel"].assert_awaited_once()
         mocks["oai_commit"].assert_not_awaited()
+
+    async def test_commit_failed_aborts_stuck_turn(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        """If OpenAI rejects the commit, the turn must not hang in COMMITTING."""
+        await _commit_turn(coordinator)
+        assert coordinator.current_turn is not None
+        assert coordinator.current_turn.state == TurnState.COMMITTING
+
+        await coordinator.on_commit_failed()
+
+        assert coordinator.current_turn is None
+        mocks["send_status"].assert_awaited()
 
     async def test_simple_response_returns_to_idle(self, coordinator: TurnCoordinator) -> None:
         """Minimal happy path: no tool calls, just audio + response.done."""
@@ -407,24 +421,46 @@ class TestInterrupt:
         """`_shutdown()` calls `coordinator.interrupt()` unconditionally.
 
         If there's no active turn AND no running media task, the call must
-        not raise — it still flushes client audio (cheap), sets the drop
-        flag, and optionally tells OpenAI to cancel (if connected).
+        not raise — it still flushes client audio (cheap) and sets the drop
+        flag. `oai_cancel` is skipped because no response is in flight.
         """
-        # Fresh coordinator: no turn, no media task, flag unset.
         assert coordinator.current_turn is None
         assert coordinator.current_media_task is None
-        assert coordinator.response_cancelled is False
 
         await coordinator.interrupt()
 
         assert coordinator.response_cancelled is True
         assert coordinator.current_turn is None
-        assert coordinator.current_media_task is None
-        # audio_clear is fired regardless — client cleanup is cheap.
         mocks["send_audio_clear"].assert_awaited()
-        # oai_cancel IS awaited (connected mock returns True) — harmless if
-        # OpenAI has no in-flight response.
-        mocks["oai_cancel"].assert_awaited()
+        # No response in flight → cancel skipped.
+        mocks["oai_cancel"].assert_not_awaited()
+
+    async def test_interrupt_during_book_playback_skips_cancel(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        """PTT press during book: media task active but no turn → cancel skipped."""
+        import asyncio
+
+        async def forever_stream() -> AsyncIterator[bytes]:
+            while True:
+                yield b"x"
+                await asyncio.sleep(0.01)
+
+        mocks["dispatch_tool"].return_value = ToolResult(output="{}", audio_factory=forever_stream)
+
+        await _commit_turn(coordinator)
+        await coordinator.on_function_call("c1", "play", {})
+        await coordinator.on_response_done()  # spawns media task, current_turn = None
+
+        assert coordinator.current_turn is None
+        assert coordinator.current_media_task is not None
+
+        # Simulate PTT press mid-book
+        await coordinator.on_ptt_start()
+
+        # Media task was cancelled, but oai_cancel was NOT sent
+        assert coordinator.current_media_task is None or coordinator.current_media_task.done()
+        mocks["oai_cancel"].assert_not_awaited()
 
     async def test_interrupt_on_idle_disconnected_skips_oai_cancel(
         self, coordinator: TurnCoordinator, mocks: dict[str, Any]

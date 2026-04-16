@@ -68,6 +68,7 @@ class SessionManager:
         on_function_call: Callable[[str, str, dict[str, Any]], Awaitable[None]],
         on_response_done: Callable[[], Awaitable[None]],
         on_audio_done: Callable[[], Awaitable[None]],
+        on_commit_failed: Callable[[], Awaitable[None]],
         on_session_end: Callable[[], Awaitable[None]],
         on_transcript: Callable[[str, str], Awaitable[None]] | None = None,
     ) -> None:
@@ -78,6 +79,7 @@ class SessionManager:
         self._on_function_call = on_function_call
         self._on_response_done = on_response_done
         self._on_audio_done = on_audio_done
+        self._on_commit_failed = on_commit_failed
         self._on_session_end = on_session_end
         self._on_transcript = on_transcript
         self._ws: ClientConnection | None = None
@@ -271,21 +273,31 @@ class SessionManager:
                         await self._on_transcript(parsed.role, parsed.transcript)
 
                 elif isinstance(parsed, ErrorEvent):
-                    await logger.aerror(
-                        "realtime_api_error",
-                        message=parsed.message,
-                        error_type=parsed.type,
-                        code=parsed.code,
-                    )
-                    if parsed.code == "model_not_found":
-                        await logger.aerror(
-                            "realtime_api_access_hint",
-                            hint=(
-                                "The Realtime API requires Tier 1 access (≥$5 lifetime spend). "
-                                "Add a payment method and purchase credits at "
-                                "platform.openai.com/settings/billing"
-                            ),
+                    if parsed.code == "response_cancel_not_active":
+                        await logger.ainfo("realtime_api_cancel_noop")
+                    elif parsed.code == "input_audio_buffer_commit_empty":
+                        await logger.ainfo(
+                            "realtime_api_commit_rejected",
+                            message=parsed.message,
                         )
+                        await self._on_commit_failed()
+                    else:
+                        await logger.aerror(
+                            "realtime_api_error",
+                            message=parsed.message,
+                            error_type=parsed.type,
+                            code=parsed.code,
+                        )
+                        if parsed.code == "model_not_found":
+                            await logger.aerror(
+                                "realtime_api_access_hint",
+                                hint=(
+                                    "The Realtime API requires Tier 1 access "
+                                    "(≥$5 lifetime spend). Add a payment method "
+                                    "and purchase credits at "
+                                    "platform.openai.com/settings/billing"
+                                ),
+                            )
 
                 if event_type == ServerEventType.RESPONSE_AUDIO_DONE.value:
                     await self._on_audio_done()

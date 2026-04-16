@@ -114,7 +114,7 @@ async def _build_wired_coordinator(
     return coordinator, registry, skill, player, consumed, mocks
 
 
-async def _commit_turn(coordinator: TurnCoordinator, frames: int = 10) -> None:
+async def _commit_turn(coordinator: TurnCoordinator, frames: int = 25) -> None:
     """Start a turn and commit it (same helper as test_turn_coordinator)."""
     await coordinator.on_ptt_start()
     assert coordinator.current_turn is not None
@@ -272,7 +272,7 @@ class TestRewindReplacesPriorMediaTask:
         await coord.on_ptt_start()
         assert first_task.done()  # interrupt cancelled the old task
 
-        coord.current_turn.user_audio_frames = 10  # type: ignore[union-attr]
+        coord.current_turn.user_audio_frames = 25  # type: ignore[union-attr]
         await coord.on_ptt_stop()
         await coord.on_function_call("c2", "audiobook_control", {"action": "rewind", "seconds": 5})
         await coord.on_response_done()

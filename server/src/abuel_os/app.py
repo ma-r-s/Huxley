@@ -94,6 +94,7 @@ class Application:
             ),
             on_response_done=lambda: self.coordinator.on_response_done(),
             on_audio_done=lambda: self.coordinator.on_audio_done(),
+            on_commit_failed=lambda: self.coordinator.on_commit_failed(),
             on_session_end=self._on_session_end,
             on_transcript=self._on_transcript,
         )

@@ -138,8 +138,10 @@ class TurnCoordinator:
         """
         if self.current_turn is None:
             return
-        if self.current_turn.user_audio_frames < 3:
-            # Accidental tap — no commit, silent abort of the turn.
+        # AudioWorklet frames are 128 samples = 5.33 ms at 24 kHz.
+        # OpenAI requires ≥ 100 ms in the input buffer before commit.
+        # 19 frames x 5.33 ms = 101 ms -- just above the floor.
+        if self.current_turn.user_audio_frames < 19:
             await self._send_status("Muy corto — mantén el botón mientras hablas")
             if self._oai_is_connected():
                 await self._oai_cancel()
@@ -159,6 +161,18 @@ class TurnCoordinator:
         ):
             await self._send_user_audio_to_session(pcm)
             self.current_turn.user_audio_frames += 1
+
+    async def on_commit_failed(self) -> None:
+        """OpenAI rejected the input buffer commit (too little audio).
+
+        Abort the turn so it doesn't sit in COMMITTING forever waiting for
+        a response.done that will never come.
+        """
+        if self.current_turn is None:
+            return
+        await logger.ainfo("turn_commit_rejected", turn_id=str(self.current_turn.id))
+        await self._send_status("Muy corto — mantén el botón mientras hablas")
+        self.current_turn = None
 
     # --- OpenAI response events (from session/manager.py receive loop) ---
 
@@ -269,8 +283,16 @@ class TurnCoordinator:
             await self._send_model_speaking(False)
         # 4. Cancel any long-running media task (audiobook from a prior turn).
         await self._stop_current_media_task()
-        # 5. Tell OpenAI to cancel the in-flight response.
-        if self._oai_is_connected():
+        # 5. Cancel the in-flight response — but only if one could exist.
+        # When interrupting a book (current_turn is None, only media task
+        # was active) or a LISTENING turn (audio not committed yet), there's
+        # no OpenAI response to cancel.
+        has_response = self.current_turn is not None and self.current_turn.state in (
+            TurnState.COMMITTING,
+            TurnState.IN_RESPONSE,
+            TurnState.AWAITING_NEXT_RESPONSE,
+        )
+        if has_response and self._oai_is_connected():
             await self._oai_cancel()
         # 6. Mark current turn as interrupted + clear the reference.
         if self.current_turn is not None:

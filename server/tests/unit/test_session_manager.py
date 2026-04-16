@@ -46,6 +46,7 @@ def session_deps(tmp_path: Path) -> dict[str, Any]:
         "on_function_call": AsyncMock(),
         "on_response_done": AsyncMock(),
         "on_audio_done": AsyncMock(),
+        "on_commit_failed": AsyncMock(),
         "on_session_end": AsyncMock(),
     }
 
