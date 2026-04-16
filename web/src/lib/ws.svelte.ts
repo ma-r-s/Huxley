@@ -145,12 +145,12 @@ export function createWsStore() {
             if (msg.value) {
               // Model is about to emit audio — kill any pending tone.
               cancelSilenceTimer();
-            } else {
-              // Inter-round gap (or terminal). Start the silence timer; if
-              // the next round's first audio delta arrives in < 400 ms it
-              // will cancel before firing.
-              startSilenceTimer();
             }
+            // We intentionally do NOT start the timer on model_speaking:false.
+            // The terminal audio-done after a completed turn is
+            // indistinguishable from an inter-round gap, and starting the
+            // timer there causes the tone to play forever after the turn
+            // ends. The ptt_stop trigger covers the main silence gap.
             break;
           case "dev_event":
             pushDevEvent(msg.kind, msg.payload);
