@@ -2,6 +2,8 @@
 
 Append-only log of non-obvious calls. Format: date · context · decision · consequences. Each entry has a stable heading for cross-linking from other docs.
 
+> **Naming note**: ADRs predating 2026-04-16 reference "AbuelOS" because that was the project's name at the time. Today, **AbuelOS** is the canonical persona, and the framework itself is called **Huxley**. Historical ADRs are preserved verbatim — they record the decision in the language used at the time. New ADRs use the current naming.
+
 ## Template
 
 ```markdown
@@ -150,3 +152,27 @@ Append-only log of non-obvious calls. Format: date · context · decision · con
 - **Migration is staged in 6 steps**, down from v2's 8 (channel-implementation and client-per-channel-queues steps are gone). Additive through step 3, so the refactor is reversible if the abstraction turns out wrong under real code. Realistic estimate **2 focused days** for steps 1-5, plus a half day for step 6 and smoke testing.
 - **Decisions explicitly deferred**: rollback of storage side effects on interrupted turns, audible error recovery, **named channels / multi-stream routing (added when a v2 skill needs concurrent audio sources, not speculatively)**, priority preemption, persistent turn history, server-side enforcement of "one tool at a time." All tracked as gaps in `turns.md` "Open questions."
 - **Review process mattered.** v1 was rewritten after two independent critic reviews that caught load-bearing holes, then v2 was rewritten after self-review caught the channel layer as speculative over-engineering. Notable: _"chained responses"_ (a turn spanning multiple `response.done` events) was invisible without the first critic; _`_response_cancelled` flag preservation_ was invisible without the second; _"channels are speculative; sequencing solves the real problem"_ was invisible until Mario asked _"is this as simple as possible, or did we fall into any rabbit hole?"_ as a deliberate last-chance simplification prompt. Future load-bearing refactors should budget for at least one critic round AND one deliberate simplification pass before code is written.
+
+---
+
+## 2026-04-16 — AbuelOS becomes a persona; the project is renamed Huxley
+
+**Context**: The project started as "AbuelOS" — an assistant for Mario's grandfather. The skill system, the WebSocket protocol, the turn coordinator, the audio path are all generic — none are grandfather-specific. Continuing to call the framework "AbuelOS" conflates two things (the framework and the canonical instance of it), confuses anyone discovering the project, and fights against the goal of making it open-source-and-extensible. Mario's vision: "anyone with a chatbot need can build a voice agent on this; the grandfather case is one persona among many."
+
+**Decision**: Rename the project to **Huxley** — the voice agent framework. The grandfather's specific instance becomes a **persona** named **AbuelOS** that lives at [`personas/abuelos/`](./personas/abuelos.md). The vocabulary becomes:
+
+- **Persona** = who the agent is (config: name, voice, language, personality, constraints, list of skills). YAML.
+- **Skill** = what the agent can do (Python package, exports a class implementing the SDK protocol). Installable via PyPI under `huxley-skill-*` convention.
+- **Constraint** = a named behavioral rule layered onto the system prompt (`never_say_no`, `confirm_destructive`, `child_safe`). The "nunca decir no" rule, formerly project-wide, becomes the `never_say_no` constraint that the AbuelOS persona declares.
+- **Side effect** = the generalized version of `audio_factory` — what a tool produces beyond text. Audio is one kind. The framework can be extended to support more (notifications, state changes) without touching skills that don't use them.
+
+The Python namespace (`abuel_os/`) and repo path (`AbuelOS/`) are renamed as part of the next refactor, and the skill SDK is extracted into `packages/sdk/` so third-party authors import from a stable surface.
+
+**Consequences**:
+
+- **Documentation reorganized**: `vision.md` describes Huxley the framework; `personas/abuelos.md` is the grandfather's persona spec (what was in vision.md before). New: `concepts.md` (vocabulary), `personas/README.md` (how to write a persona), `observability.md` (logging/debugging workflow).
+- **Skill author surface area becomes stable**: skills depend on `huxley_sdk`, never on framework internals. Persona authors are non-developers writing YAML.
+- **The `never_say_no` rule is opt-in per persona**, not framework-mandated. AbuelOS keeps it; other personas (a child's tutor, a developer's assistant) may not need it.
+- **The repo grows a workspace structure**: `packages/sdk/`, `packages/core/`, `packages/skills/audiobooks/`, `packages/skills/system/`, `personas/abuelos/`. uv workspaces handle the multi-package layout.
+- **Historical ADRs preserved verbatim**. They reference "AbuelOS" because that was the project's name at the time. The naming note at the top of this file flags this for new readers.
+- **What does NOT change for v1**: the 3-state session machine, the turn coordinator, the audio path, the WebSocket protocol, the OpenAI Realtime integration. Those are framework, and they were already persona-agnostic by accident — the rename just makes the role explicit.

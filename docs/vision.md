@@ -1,79 +1,44 @@
-# Vision
+# Huxley
 
-## Who this is for
+> The voice agent framework. Built first for one grandfather. Now anyone's.
 
-One user: **Mario's grandfather**. 90 years old, blind, lives in Villavicencio (Colombia). Speaks only Spanish with a heavy llanero register. Zero technical literacy and does not care what an "AI assistant" is. He needs a helper, not a product.
+## What Huxley is
 
-**Other impairments**: none — only blindness.
+Huxley is an open-source platform for building voice-first AI agents. You give it a **persona** (who the agent is) and a set of **skills** (what the agent can do), and it does the rest: listens, understands, reasons, acts, speaks back.
 
-**What he cares about**: being heard, being helped, not being told _no_.
+A persona could be a companion for a grandparent who's losing their sight. A tutor for a kid. A hands-free assistant for a delivery driver. A nurse's clinical sidekick. Each is configuration, not a different product.
 
-## Why existing assistants fail him
+A skill could be playing audiobooks, controlling lights, sending messages, looking up a recipe, calling someone. Each is a small Python package; anyone can write one.
 
-1. **Wake-word rigidity** — _"Hey Google" / "Alexa"_ require precise enunciation and timing. He has neither the patience nor the precision.
-2. **Exact-phrase brittleness** — if you don't say the command the way the system expects, it fails. Elderly users don't adapt to systems; systems should adapt to them.
-3. **English bias** — Spanish is second-class in most assistants; llanero idiom is unsupported.
-4. **Dead-end "no"** — _"Lo siento, no puedo ayudar con eso"_ is the worst possible response for a blind, isolated user. It feels like rejection from the one thing that's supposed to help.
+The dream: **adding a capability to your voice agent should be as easy as `pip install huxley-skill-lights` plus one line in your persona file.**
 
-AbuelOS exists because no off-the-shelf product works for him.
+## What Huxley is not
 
-## The "nunca decir no" contract
+- **Not a chatbot.** Voice-first means the conversation runs in real time, with interruption, with side effects (audio playback, notifications), not turn-by-turn text.
+- **Not Alexa.** No walled garden, no certification fees, no centralized cloud lock-in. Skills are open code; personas are your config.
+- **Not multi-user.** One person talks to one agent. Multi-tenant SaaS is a different product, out of scope.
+- **Not a model.** Huxley uses OpenAI's Realtime API today; the architecture leaves room for other providers, but Huxley itself doesn't train or serve models.
 
-**This is the hardest rule in the project. It applies to every skill, every tool, every error message, and the system prompt itself.**
+## Who it's for
 
-1. **No dead-end negatives.** A tool must never return just _"not available" / "not found" / "error."_ Every negative response must include an alternative, a clarifying question, or an offer to relay to Mario.
+Three audiences, three different journeys:
 
-2. **Unknown asks get warm acknowledgement, never silence.** If he asks for something no skill handles (_"quiero desayuno"_), the assistant must respond with something like _"No puedo ayudarle con eso todavía, don. ¿Quiere que le avise a Mario?"_ — never _"comando no reconocido."_
+**Persona owners** (most users): you want a voice assistant tailored to someone in your life. You write a `persona.yaml`, pick the skills they need, run the server. No Python required for most of this.
 
-3. **Errors wrapped in plain Spanish.** He never hears "error 500" or any technical word. Failures become _"Algo no funcionó. Déjeme intentarlo de nuevo."_
+**Skill authors** (a smaller, growing community): you want your voice agent to do something new — turn off the porch light, read your unread emails, narrate the weather. You write a Python package using the Huxley SDK. Anyone whose persona enables your skill can use it.
 
-4. **Silence is a bug.** The system must always produce audio when expected. For a blind user, silence = the device is broken. Any backend delay must have audible feedback.
+**Framework contributors** (a small core): you make Huxley itself better — better audio handling, more provider integrations, better DX for the other two groups.
 
-### How the contract is enforced
+## Origin
 
-- **Skill layer**: every `ToolResult.output` JSON includes a `message` field phrased as an action, not a failure. See [`skills/README.md`](./skills/README.md#the-nunca-decir-no-contract--skill-author-rules) for the author rules.
-- **LLM layer**: the system prompt teaches the model to turn unknown asks into _"todavía no puedo, pero…"_ style responses and to forward bigger things to Mario.
-- **Client layer**: the browser/ESP32 client must play a status cue ("procesando…" or similar) while waiting for a response. Dead air = bug.
+Huxley exists because Mario's 90-year-old grandfather in Villavicencio, Colombia is blind, and the technology marketed to "elderly users" treats him like a problem to manage rather than a person to help. There was no off-the-shelf product that let him hold a button, ask for the audiobook from last night, and have it just play — in his llanero Spanish, without ever needing to figure out a screen.
 
-## Persona
+So Mario built one. The first persona — **AbuelOS**, a Spanish-language companion built around the rule "never tell the user no" — is named after him. Its full spec lives in [`personas/abuelos.md`](./personas/abuelos.md).
 
-| Attribute   | Value                                                                                  |
-| ----------- | -------------------------------------------------------------------------------------- |
-| Tratamiento | _usted_, formal but warm                                                               |
-| Ritmo       | pausado, claro                                                                         |
-| Tono        | cálido, paciente, nunca condescendiente                                                |
-| Registro    | español colombiano; modismos llaneros bienvenidos, nunca forzados                      |
-| Nombre      | ninguno por ahora — abierto, baja prioridad                                            |
-| Auto-imagen | _"soy un ayudante"_, nunca _"soy una inteligencia artificial"_ a menos que él pregunte |
+Huxley the framework grew out of that work. Anyone else's persona is just a different config.
 
-The full system prompt lives in [`server/src/abuel_os/config.py`](../server/src/abuel_os/config.py) as `Settings.system_prompt`. Any change to the persona above must land in the system prompt in the same commit.
+## Status
 
-## Success criteria for v1
+Huxley is pre-1.0. The framework runs end-to-end for the AbuelOS persona on a browser dev client. ESP32 hardware support is planned. The skill SDK is being extracted from the framework into its own package; once that lands, third-party skills become first-class.
 
-From Mario, verbatim:
-
-> _"The moment I can speak to the assistant and it helps me find a book, listen to it, and move forward, backwards, stop and resume another time — that's v1 done."_
-
-Concretely, v1 ships when **all** of these work end-to-end via voice only, with no technical help:
-
-- [ ] Search for a book by natural phrase (_"busca el libro de García Márquez sobre el coronel"_)
-- [ ] Start playback from a search result, or have the LLM pick the obvious top match
-- [ ] Pause / resume mid-sentence
-- [ ] Navigate forward / backward (by seconds, minutes, or chapters)
-- [ ] Stop playback
-- [ ] Resume later (_"sigue con el libro"_) — persists across sessions and app restarts
-- [ ] Every negative response offers an alternative (see the contract above)
-
-The full v1 checklist including implementation gaps is in [`roadmap.md`](./roadmap.md#v1--the-mvp-marios-bar) and [`skills/audiobooks.md`](./skills/audiobooks.md#gaps--todo-for-v1).
-
-## Non-goals for v1
-
-- Wake word / always-on listening — PTT only
-- Proactive / unprompted speech — strictly turn-based
-- Multi-user / multi-client
-- Languages other than Spanish
-- Religious content — explicitly excluded
-- ESP32 hardware — browser is the v1 client; ESP32 is v∞
-- Offline mode
-- Privacy / no-log mode
-- Error recovery as a P0 concern (handled in v2)
+What works today, what's in flight, and what's deferred lives in [`roadmap.md`](./roadmap.md).

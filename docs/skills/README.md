@@ -1,17 +1,19 @@
-# Skills
+# Writing a Skill
 
-Skills are AbuelOS's extension points. A skill declares a set of LLM tools and handles their invocations. The skill registry collects every tool at startup and routes incoming calls by tool name.
+A Huxley skill is a Python package that teaches the agent to do something new — play music, control lights, send messages, query an API. This document is for skill authors.
 
-This document covers **authoring**. For the v0 skill spec see [`audiobooks.md`](./audiobooks.md).
+For the conceptual model, see [`../concepts.md`](../concepts.md). For a full worked example, see [`audiobooks.md`](./audiobooks.md).
+
+> **SDK status**: the Huxley SDK (`huxley_sdk`) is being extracted into its own installable package. Until that ships, skills import from `abuel_os.types` and live inside `server/src/abuel_os/skills/`. Once the SDK lands, the skill author surface area becomes `huxley_sdk`-only. The protocol shape and contract below are stable across the rename.
 
 ## The Skill protocol
 
 Skills are structurally typed (PEP 544 `Protocol`), not nominal subclasses. Implement the interface and the registry accepts you — no inheritance required.
 
 ```python
-# server/src/abuel_os/types.py
-@runtime_checkable
-class Skill(Protocol):
+from huxley_sdk import Skill, ToolDefinition, ToolResult
+
+class MySkill:
     @property
     def name(self) -> str: ...
 
@@ -19,12 +21,13 @@ class Skill(Protocol):
     def tools(self) -> list[ToolDefinition]: ...
 
     async def handle(self, tool_name: str, args: dict[str, Any]) -> ToolResult: ...
+
     async def setup(self) -> None: ...
     async def teardown(self) -> None: ...
 ```
 
 - **`name`** — unique identifier for logging and registry lookups.
-- **`tools`** — list of tool schemas exposed to the LLM. See below.
+- **`tools`** — list of tool schemas exposed to the LLM (see below).
 - **`handle`** — dispatch entry point. Route on `tool_name`.
 - **`setup`** / **`teardown`** — lifecycle hooks. Load catalogs in `setup`, persist state in `teardown`.
 
@@ -33,13 +36,13 @@ class Skill(Protocol):
 ```python
 ToolDefinition(
     name="search_audiobooks",
-    description="Busca audiolibros en la biblioteca local del usuario.",
+    description="Searches the user's local audiobook library by title or author.",
     parameters={
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Texto de búsqueda (título, autor, o parte del nombre)",
+                "description": "Search text (title, author, or partial name)",
             }
         },
         "required": ["query"],
@@ -47,9 +50,13 @@ ToolDefinition(
 )
 ```
 
-- **`name`** — globally unique across all skills. Registration fails loudly if two skills declare the same tool name.
-- **`description`** — **written in Spanish**. The LLM uses it to decide when to call the tool. Vague descriptions cause bad dispatch; precise descriptions are worth their weight.
+- **`name`** — globally unique across all skills enabled in a persona. Registration fails loudly on collisions.
+- **`description`** — **written in the persona's language**. The LLM uses it to decide when to call the tool. Vague descriptions cause bad dispatch; precise descriptions are worth their weight.
 - **`parameters`** — standard JSON Schema. The LLM fills these from conversation context.
+
+### Multilingual descriptions
+
+A skill that supports multiple personas may need to expose its tool descriptions in multiple languages. The convention (still being designed): the skill receives the persona's `language` in its context at `setup()` and returns the appropriate description set. For now (single-language Huxley deployments), hardcode the description in the language your target persona uses.
 
 ## Returning results
 
@@ -57,21 +64,21 @@ Tools return a `ToolResult`:
 
 ```python
 ToolResult(
-    output=json.dumps({"results": [...], "message": "Encontré 3 libros"}),
+    output=json.dumps({"results": [...], "message": "Found 3 books"}),
 )
 ```
 
 - **`output`** is JSON text sent back to the LLM as the function-call output. The LLM narrates it to the user.
-- **`audio_factory`** (optional) is a callable that returns an async iterator of PCM16 chunks. The `TurnCoordinator` invokes it after the model finishes speaking, so any tool-produced audio (an audiobook stream, music, news clip) plays cleanly _after_ the model's verbal acknowledgement. Skills with no audio side effect leave it `None`. See [`turns.md`](../turns.md) for the full design.
+- **`audio_factory`** _(optional, will become `side_effect` after the next refactor)_ is a callable that returns an async iterator of PCM16 chunks. The framework invokes it after the model finishes speaking, so any tool-produced audio plays cleanly _after_ the model's verbal acknowledgement. Skills with no audio side effect leave it `None`.
 
 ### Info tools vs side-effect tools
 
-| Kind            | `audio_factory` | Examples                                     | Coordinator behavior                                                                                                                                          |
-| --------------- | --------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Info**        | `None`          | `search_audiobooks`, `get_current_time`      | Coordinator requests a follow-up response so the model can narrate the result. Multi-round chained turn.                                                      |
-| **Side-effect** | not `None`      | `play_audiobook`, `audiobook_control` (seek) | Coordinator latches the factory onto `pending_factories`. After the model's terminal `response.done`, the factory fires and streams PCM through `send_audio`. |
+| Kind            | `audio_factory` | Examples                                     | Framework behavior                                                                                                                        |
+| --------------- | --------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| **Info**        | `None`          | `search_audiobooks`, `get_current_time`      | Coordinator requests a follow-up response so the model can narrate the result. Multi-round chained turn.                                  |
+| **Side-effect** | not `None`      | `play_audiobook`, `audiobook_control` (seek) | Coordinator latches the factory; after the model's terminal `response.done`, the factory fires and streams PCM through the audio channel. |
 
-The model is told (via the tool description) to **pre-narrate** the side effect — e.g. _"Ahí le pongo el libro, don."_ — _before_ calling the tool. The coordinator guarantees the narration plays before the factory does.
+The model is told (via the tool description) to **pre-narrate** the side effect — e.g. _"Putting on the book for you."_ — _before_ calling the tool. The framework guarantees the narration plays before the factory does.
 
 ### The factory closure pattern
 
@@ -93,13 +100,15 @@ def _build_factory(self, book_id: str, path: str, start_position: float):
     return stream
 ```
 
-Why: if the turn is interrupted before the coordinator invokes the factory, the closure is never executed and storage stays at the last actually-played position. The skill never writes the new position eagerly during dispatch. This gives interrupt-atomicity without a transaction model.
+Why: if the turn is interrupted before the framework invokes the factory, the closure is never executed and storage stays at the last actually-played position. The skill never writes the new position eagerly during dispatch. This gives interrupt-atomicity without a transaction model.
 
-## The "nunca decir no" contract — skill author rules
+## Persona constraints — what your skill should respect
 
-This is non-negotiable. See [`../vision.md#the-nunca-decir-no-contract`](../vision.md#the-nunca-decir-no-contract) for the product rationale. A review that finds a violation is a blocker.
+Some personas declare behavioral constraints (see [`../concepts.md#constraint`](../concepts.md#constraint)). Skills targeting those personas should honor them. The current constraint set:
 
-### Rule 1 — No empty-handed negatives
+### `never_say_no`
+
+If the persona enables `never_say_no`, your skill must not return dead-end negatives. Every tool response must include a `message` field with a constructive alternative or a clarifying question.
 
 ❌ Bad:
 
@@ -107,89 +116,105 @@ This is non-negotiable. See [`../vision.md#the-nunca-decir-no-contract`](../visi
 return ToolResult(output=json.dumps({"error": "Not found"}))
 ```
 
-✅ Good:
+✅ Good (in the persona's language):
 
 ```python
 return ToolResult(output=json.dumps({
     "results": [],
-    "message": "No tengo ese libro exacto. Lo más parecido que tengo es 'Cien años de soledad'. ¿Quiere ese?",
+    "message": "I don't have that exact book. The closest match is 'Cien años de soledad'. Would you like that?",
     "closest_match": {"id": "...", "title": "Cien años de soledad"},
 }))
 ```
 
-The LLM reads this and offers the alternative naturally.
+The LLM reads this and offers the alternative naturally. See [`../personas/abuelos.md`](../personas/abuelos.md) for the canonical worked example of `never_say_no` in production.
 
-### Rule 2 — Every `output` includes a `message` field
+### `confirm_destructive`
 
-The `message` field is Spanish-language text aimed at the LLM narrator. It tells the LLM _what to tell grandpa_, in the tone required by [`../vision.md`](../vision.md#persona). Without it, the LLM invents explanations and often lands on _"no disponible"_ — the one thing we're trying to eliminate.
+If the persona enables `confirm_destructive`, any tool that performs an irreversible action should either:
 
-### Rule 3 — Errors wrapped in plain Spanish
+- Take an explicit `confirmed: true` parameter, OR
+- Have a separate "preview" tool that returns "what would happen if I did this," letting the model ask before calling the real action.
 
-Internal exceptions (file not found, socket error, timeout) must be caught and turned into a result the LLM can narrate gracefully:
+### `child_safe`
 
-```python
-try:
-    await self._player.probe(path)
-except PlayerError:
-    return ToolResult(output=json.dumps({
-        "playing": False,
-        "message": "No pude abrir ese libro. Déjeme intentar otra vez o escoger otro.",
-    }))
-```
+If your skill could surface adult or profane content (search results, news headlines, etc.), apply filtering when this constraint is active.
 
-### Rule 4 — Confirm ambiguity, don't guess
+### Forward-compatibility
 
-When multiple interpretations are valid, return the candidates in `output` and let the LLM ask. Never guess silently.
+A skill that doesn't know about a future constraint just won't handle it specially. The framework injects the matching system-prompt language regardless, so the LLM can still steer correctly. Skills opt in to constraint-aware behavior; they don't have to.
 
 ## Optional: `prompt_context()` for baseline awareness
 
-Some questions don't need a tool call — they need the LLM to already know. _"¿qué libros tienes?"_ is the canonical example: if the catalog is already in the session prompt, the LLM can answer immediately without round-tripping through `search_audiobooks`.
+Some questions don't need a tool call — they need the LLM to already know. _"What books do you have?"_ is the canonical example: if the catalog is already in the session prompt, the LLM can answer immediately without round-tripping through `search_audiobooks`.
 
-Skills that want to contribute baseline context to every session prompt can implement an **optional** `prompt_context()` method:
+Skills that want to contribute baseline context to every session prompt can implement an optional `prompt_context()` method:
 
 ```python
 class AudiobooksSkill:
     def prompt_context(self) -> str:
         if not self._catalog:
             return ""
-        lines = ["Biblioteca de audiolibros disponibles:"]
+        lines = ["Books in the user's library:"]
         for book in self._catalog[:50]:
-            lines.append(f'- "{book["title"]}" por {book["author"]}')
+            lines.append(f'- "{book["title"]}" by {book["author"]}')
         return "\n".join(lines)
 ```
 
-**How it's wired**: at connect time, `SkillRegistry.get_prompt_context()` iterates registered skills and collects any non-empty `prompt_context()` strings. `SessionManager.connect()` appends the result to the system prompt before sending `session.update`.
+**How it's wired**: at session connect time, the framework iterates registered skills and collects any non-empty `prompt_context()` strings, appending them to the system prompt before sending `session.update`.
 
-**Not in the Skill protocol** — it's optional. Skills that don't implement it contribute nothing. `getattr(skill, "prompt_context", None)` is how the registry discovers it, so you don't need to subclass or register a capability flag.
+**Not in the Skill protocol** — it's optional. Skills that don't implement it contribute nothing.
 
-**Scaling rule**: keep each skill's context under a few hundred tokens. For a library that would blow past that (e.g., thousands of audiobooks), return a short summary instead of the full list and let the LLM paginate via search. For single-user AbuelOS scale (dozens of books, a handful of skills), the full list is fine.
+**Scaling rule**: keep each skill's context under a few hundred tokens. For collections that would blow past that (e.g., thousands of items), return a short summary and let the LLM paginate via search.
 
-**When _not_ to use it**: don't dump state that changes frequently — the context is only refreshed on session connect, not mid-conversation. If grandpa adds a book mid-session, he won't see it until the next wake-word.
+**When _not_ to use it**: don't dump state that changes frequently — the context is only refreshed on session connect, not mid-conversation.
 
-## Registering a skill
+## Logging — make your skill debuggable
+
+Skills get a logger via the SDK context. Use it. The framework's debugging workflow (described in [`../observability.md`](../observability.md)) depends on every component emitting structured events with the right namespace.
 
 ```python
-# server/src/abuel_os/app.py
-audiobooks = AudiobooksSkill(library_path=..., player=..., storage=...)
-self.skill_registry.register(audiobooks)
+async def handle(self, tool_name: str, args: dict) -> ToolResult:
+    await self.log.info("audiobooks.dispatch", tool=tool_name, args_keys=list(args))
+    result = await self._do_the_thing(args)
+    await self.log.info("audiobooks.result", success=result.success)
+    return result
 ```
 
-The registry calls `setup()` on startup and `teardown()` on shutdown. Use them for catalog loading and state persistence respectively.
+The convention: `<skill_name>.<event>`. The framework auto-injects the `turn` ID, so you don't have to thread it through.
 
 ## Testing
 
-Skills must have unit tests. Mock the infrastructure (`AudiobookPlayer`, `Storage`), assert on `ToolResult.output` and — for side-effect tools — invoke `result.audio_factory()` and verify the underlying stream call. Example: [`server/tests/unit/test_audiobooks_skill.py`](../../server/tests/unit/test_audiobooks_skill.py).
+Skills must have unit tests. Mock the infrastructure (`Storage`, any external clients), assert on `ToolResult.output` and — for side-effect tools — invoke `result.audio_factory()` and verify the underlying stream call.
 
-For coordinator ↔ skill contract coverage (factory latching, mid-chain interrupts, follow-up rounds), see [`test_coordinator_skill_integration.py`](../../server/tests/unit/test_coordinator_skill_integration.py) — wires a real `TurnCoordinator` to a real skill with a mocked player.
+For end-to-end coverage of how your skill behaves inside the framework (factory latching, mid-chain interrupts, follow-up rounds), see the integration test pattern in [`test_coordinator_skill_integration.py`](../../server/tests/unit/test_coordinator_skill_integration.py) — it wires a real `TurnCoordinator` to a real skill with a mocked infrastructure.
 
-Integration tests that hit real ffmpeg or real OpenAI live in `server/tests/integration/` and are marked `@pytest.mark.integration`. They are skipped by default. Run them explicitly with `uv run pytest -m integration`.
+Integration tests that hit real subprocess (ffmpeg) or real provider APIs live in `server/tests/integration/` and are marked `@pytest.mark.integration`. Skipped by default.
 
-## File layout for a new skill
+## Distribution — making your skill installable
+
+Built-in skills (audiobooks, system) live in `packages/skills/<name>/` in this repo. Community skills are independent Python packages published on PyPI under the convention `huxley-skill-<name>`.
+
+A persona enables a skill by listing it in `persona.yaml`:
+
+```yaml
+skills:
+  - my_skill: { config_key: value }
+```
+
+The framework matches the YAML key (`my_skill`) to the package name (`huxley-skill-my_skill`) and instantiates it with the config dict.
+
+## File layout for a new skill (post-SDK-extraction)
 
 ```
-server/src/abuel_os/skills/my_skill.py      # the skill
-server/tests/unit/test_my_skill.py          # unit tests
-docs/skills/my_skill.md                     # product spec (copy audiobooks.md template)
+huxley-skill-my-thing/
+├── pyproject.toml            # depends on huxley-sdk
+├── README.md                 # what it does, config, examples
+├── src/
+│   └── huxley_skill_my_thing/
+│       ├── __init__.py       # exports MySkill class
+│       └── skill.py
+└── tests/
+    └── test_my_skill.py
 ```
 
-Then wire it in `app.py` next to existing skills, and add it to [`../roadmap.md`](../roadmap.md).
+For now, while the SDK is still being extracted, skills live in `server/src/abuel_os/skills/<name>.py` and tests in `server/tests/unit/test_<name>_skill.py`. Then add the skill spec doc under `docs/skills/<name>.md`.

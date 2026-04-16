@@ -1,20 +1,20 @@
 # Skill: audiobooks
 
-The v0 skill. The reason AbuelOS exists. Search, play, navigate, and resume audiobooks by voice.
+The first-party Huxley skill. Will be packaged as `huxley-skill-audiobooks` after the SDK extraction. The reason Huxley exists in the first place — Mario built this so his grandfather could listen to books by voice. The grandfather's full persona spec lives in [`../personas/abuelos.md`](../personas/abuelos.md); the Spanish examples below come from that persona because it's the canonical use case, but the skill works against any persona that enables it (with the appropriate language for tool descriptions).
 
 ## Product surface
 
-Grandpa must be able to:
+A user enabled with this skill must be able to:
 
-- **Find** a book by natural language (_"busca el libro de García Márquez"_, _"quiero ese del coronel"_).
-- **Start** playback from a search result, or have the LLM decide for him if the top match is obvious.
-- **Resume** the last-played book automatically (_"sigue con el libro"_).
+- **Find** a book by natural language (_"búscame el libro de García Márquez"_, _"that one about the colonel"_).
+- **Start** playback from a search result, or have the LLM decide if the top match is obvious.
+- **Resume** the last-played book automatically (_"sigue con el libro"_, _"keep going with the book"_).
 - **Pause / resume** mid-sentence.
 - **Navigate** — back a chapter, forward a minute, _"un poquito atrás"_.
-- **Stop** and come back tomorrow to the same second.
+- **Stop** and come back later to the same second.
 - **Hear what's playing** — _"¿qué estoy escuchando?"_
 - **Get recommendations** — _"¿qué libros tienes?"_
-- Never hit a dead-end _"no."_ See [Nunca-decir-no wiring](#nunca-decir-no-wiring).
+- Never hit a dead-end _"no"_ (when the persona enables `never_say_no`). See [Nunca-decir-no wiring](#nunca-decir-no-wiring).
 
 ## Content format
 

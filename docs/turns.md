@@ -1,6 +1,6 @@
 # Turn-based Audio Coordination
 
-> **Status**: **implemented** — landed across 6 staged commits on 2026-04-14 (steps 1–6). Spec history: v1 was under-specified (first critic round caught it); v2 over-engineered the audio layer with a named-channel abstraction that had no v1 consumer (self-review caught it after two critic rounds); v3 cuts the channels and ships. Same root-cause fix, ~40% less ceremony than v2. See [ADR — 2026-04-13 — Turn-based coordinator for voice tool calls](./decisions.md#2026-04-13--turn-based-coordinator-for-voice-tool-calls), and the source: [`server/src/abuel_os/turn/coordinator.py`](../server/src/abuel_os/turn/coordinator.py).
+> **Status**: **implemented** — landed across 6 staged commits on 2026-04-14 (steps 1–6). The Turn Coordinator is a Huxley framework component (persona-agnostic, skill-agnostic). Spec history: v1 was under-specified (first critic round caught it); v2 over-engineered the audio layer with a named-channel abstraction that had no v1 consumer (self-review caught it after two critic rounds); v3 cuts the channels and ships. Same root-cause fix, ~40% less ceremony than v2. See [ADR — 2026-04-13 — Turn-based coordinator for voice tool calls](./decisions.md#2026-04-13--turn-based-coordinator-for-voice-tool-calls), and the source: [`server/src/abuel_os/turn/coordinator.py`](../server/src/abuel_os/turn/coordinator.py) (will move to `packages/core/src/huxley/turn/coordinator.py` after the namespace rename).
 
 ## Purpose
 

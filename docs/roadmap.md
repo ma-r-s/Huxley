@@ -1,74 +1,99 @@
 # Roadmap
 
-The product evolves as a ladder. Each rung adds exactly one layer of capability; nothing is built speculatively.
+Two roadmaps live here: **Huxley** (the framework) and **AbuelOS** (the first persona). Each evolves at its own pace; the framework moves slower (stable surface area for skill authors) than personas (config tweaks ship continuously).
 
-## Legend
+## Huxley framework
 
-- **P0** — v0 / MVP: without this, there is no product
-- **P1** — v1: the "ship to grandpa" bar
-- **P2** — v2: next wave of skills once v1 is stable
-- **P3** — later: worth considering once v2 lands
-- **Excluded** — explicitly out of scope
+### Built today
 
-## v0 — what exists today
+| Component                                            | Status                                                          |
+| ---------------------------------------------------- | --------------------------------------------------------------- |
+| WebSocket audio server (Python)                      | ✅ built — single client at a time                              |
+| OpenAI Realtime API integration                      | ✅ built — auto-connect at startup, auto-reconnect on drop      |
+| Skill registry + dispatch                            | ✅ built                                                        |
+| 3-state session machine (IDLE/CONNECTING/CONVERSING) | ✅ built — media playback orthogonal, owned by turn coordinator |
+| Turn coordinator (audio sequencing + interrupts)     | ✅ built — see [`turns.md`](./turns.md)                         |
+| ffmpeg-based audiobook streamer                      | ✅ built (`AudiobookPlayer.stream()` async generator)           |
+| SQLite storage                                       | ✅ built                                                        |
+| Diagnostic logging (namespaced events, turn context) | ✅ built — see [`observability.md`](./observability.md)         |
+| Browser dev client (SvelteKit, one-button PTT)       | ✅ end-to-end audio path; thinking-tone gap filler              |
 
-The scaffolding: server + browser dev client + the audiobooks skill (partial).
+### Next: framework-product alignment
 
-| Component                                        | Status                                                                                        |
-| ------------------------------------------------ | --------------------------------------------------------------------------------------------- |
-| Python WebSocket audio server                    | ✅ built                                                                                      |
-| OpenAI Realtime API relay                        | ✅ built                                                                                      |
-| Skill registry + protocol                        | ✅ built                                                                                      |
-| State machine                                    | ✅ built (3 states; media is owned by the turn coordinator, not the session)                  |
-| Turn coordinator (audio sequencing + interrupts) | ✅ built — see [`turns.md`](./turns.md)                                                       |
-| ffmpeg-based audiobook streamer                  | ✅ built (`AudiobookPlayer.stream()` async generator)                                         |
-| SQLite storage                                   | ✅ built                                                                                      |
-| Audiobooks skill (search + play + basic control) | 🟡 partial — see [`skills/audiobooks.md#current-state`](./skills/audiobooks.md#current-state) |
-| Browser dev client (SvelteKit)                   | ✅ end-to-end audio path; one-button UX; thinking-tone gap filler                             |
+Make Huxley what it claims to be in [`vision.md`](./vision.md): a framework anyone can extend.
 
-## v1 — the MVP (Mario's bar)
+- [P0] **Rename / namespace cleanup**: `abuel_os` → `huxley`. Repo path `AbuelOS/` → `Huxley/` (TBD with Mario).
+- [P0] **Workspace split**: one repo, multiple uv-workspace packages: `packages/sdk/`, `packages/core/`, `packages/skills/audiobooks/`, `packages/skills/system/`. Skills become installable.
+- [P0] **Persona loader**: `personas/<name>/persona.yaml` parsed at startup. Currently the persona is hard-coded in `config.py`'s default system prompt; this moves it out into config.
+- [P0] **Constraint registry**: named constraints (`never_say_no`, `confirm_destructive`, `child_safe`) defined in core, composed into the system prompt by the persona.
+- [P0] **Generic side effects**: `ToolResult.audio_factory` → `side_effect: SideEffect | None` where `SideEffect` is a protocol/union. Audio is the only implementation initially.
+- [P1] **Skill SDK README + cookbook**: a third-party skill author can write a working skill in under 30 minutes with no Huxley-internals knowledge.
 
-**Done when**: grandpa can search, play, navigate, pause, and resume audiobooks by voice alone, with no dead-end "no" responses, without Mario's help.
+### Later
 
-- [P0] Audiobooks skill **complete** — full checklist in [`skills/audiobooks.md#gaps--todo-for-v1`](./skills/audiobooks.md#gaps--todo-for-v1)
-- [P0] M4B support with embedded chapter metadata
-- [P0] Cross-session resume (save on pause + seek + periodic + shutdown)
-- [P0] `resume_last` tool — _"sigue con el libro"_ just works
-- [P0] Chapter navigation via natural language (_"el siguiente capítulo"_, _"retrocede un minuto"_)
-- [P0] System prompt tuned for "nunca decir no" at the LLM layer
-- [P0] Browser client: full audio streaming end-to-end (mic → server → OpenAI → server → speaker)
-- [P0] End-to-end smoke test with a real M4B and the browser client
-- [P0] First session with grandpa, real-world
+- **Voice provider abstraction**: extract OpenAI Realtime as one implementation of a `VoiceProvider` interface. Trigger: a credible second provider exists. Not speculative.
+- **More side-effect kinds**: notifications, state changes, image output. Trigger: a real skill needs them.
+- **Skill discovery aids**: `huxley list-installed-skills`, `huxley enable foo` CLIs that mutate `persona.yaml`. Polish, not blocking anything.
+- **MCP compatibility shim**: optional adapter so existing MCP servers can be loaded as Huxley skills. Whole separate project; only if the ecosystem wants it.
 
-## v2 — next skills
+### Excluded from Huxley framework
 
-Once v1 is stable. Each skill is one focused PR with one spec doc under [`skills/`](./skills/).
+| Feature                        | Why                                                              |
+| ------------------------------ | ---------------------------------------------------------------- |
+| Multi-tenant / SaaS            | Different product. One person → one agent.                       |
+| Wake-word as framework feature | Persona-level concern; framework supports any client input model |
+| Cross-language skill authoring | Python-only for v1. MCP shim handles cross-language someday.     |
+| Marketplace / registry         | Open-source, distributed via PyPI. Registry is way later.        |
+| Multi-user voice               | One person at a time. Multi-voice = different system entirely.   |
 
-1. **News** — read headlines from a configurable source. `skills/news.md`.
-2. **Music / radio** — streaming radio and local music. `skills/music.md`.
-3. **Messaging relay** — outbound text to Mario / family via WhatsApp or voice memo. `skills/messaging.md`. **This is the concrete escape hatch that makes "nunca decir no" more than a verbal promise.**
-4. **Contacts** — small hand-edited contact list that messaging depends on. Not a skill; a config file.
+## AbuelOS persona
 
-## v3 — later
+The first persona Huxley runs in production. Spec lives at [`personas/abuelos.md`](./personas/abuelos.md).
 
-- **Reminders** — meds, appointments. Requires proactive speech (v∞).
+### v1 — Mario's bar
+
+> _"The moment I can speak to the assistant and it helps me find a book, listen to it, and move forward, backwards, stop and resume another time — that's v1 done."_
+
+| Capability                                      | Status                                                               |
+| ----------------------------------------------- | -------------------------------------------------------------------- |
+| Search for a book by natural phrase             | ✅                                                                   |
+| Start playback from a search result             | ✅                                                                   |
+| Pause / resume mid-sentence                     | ✅                                                                   |
+| Navigate forward / backward by seconds          | ✅                                                                   |
+| Navigate by chapter (_"el siguiente capítulo"_) | ❌ (chapter awareness pending)                                       |
+| Stop playback                                   | ✅                                                                   |
+| Resume later (_"sigue con el libro"_)           | ✅                                                                   |
+| Every negative response offers an alternative   | ⚠️ partial — coverage in `search` and `control` paths still has gaps |
+| End-to-end smoke test with grandpa              | ❌ never tested with him directly                                    |
+
+### v2 — next skills
+
+Once AbuelOS v1 is stable. Each is its own `huxley-skill-*` package.
+
+1. **`huxley-skill-news`** — read headlines from a configurable source
+2. **`huxley-skill-music`** — streaming radio and local music
+3. **`huxley-skill-messaging`** — outbound text to Mario / family via WhatsApp or voice memo. **This is the concrete escape hatch that makes the `never_say_no` constraint more than a verbal promise.**
+4. **`huxley-skill-contacts`** — config-driven contact list that messaging depends on
+
+### v∞ — when firmware lands
+
+Requires Huxley framework gaps to close first (proactive speech).
+
+- ESP32 walky-talky client — replaces browser as production client, same WebSocket protocol
+- Physical always-findable button — the one UI element grandpa touches
+- Proactive speech support — needed for reminders, inbound messages
+- **Reminders** — meds, appointments
 - **Memory / recall** — _"¿de qué hablamos ayer?"_
-- **Companionship mode** — open-ended chat without a specific skill behind it
+- **Companionship mode** — open-ended chat
 
-## v∞ — when firmware lands
+### Excluded from AbuelOS
 
-- **Proactive speech** — the system initiates audio without a button press. Needed for reminders and inbound messages.
-- **ESP32 walky-talky client** — replaces browser as the production client, same WebSocket protocol, same server.
-- **Physical always-findable button** — the one UI element grandpa touches.
+| Feature                      | Why                                                                 |
+| ---------------------------- | ------------------------------------------------------------------- |
+| Wake word                    | Fragile for elderly users; PTT button is more reliable              |
+| Religious content            | Mario confirmed out of scope                                        |
+| Privacy / no-log mode        | Not a concern for this user                                         |
+| Offline operation            | Not worth the complexity for v1                                     |
+| Languages other than Spanish | This persona is Spanish-only; other personas can do other languages |
 
-## Explicitly excluded
-
-| Feature                      | Why                                                                |
-| ---------------------------- | ------------------------------------------------------------------ |
-| Wake word                    | Fragile for elderly users; PTT button is more reliable             |
-| Religious content            | Mario confirmed out of scope                                       |
-| Privacy / no-log mode        | Not a concern for this user                                        |
-| Offline operation            | Not worth the complexity for v1; revisit if reliability demands it |
-| Languages other than Spanish | Single user, single language                                       |
-| Multi-user sessions          | One grandpa, one device                                            |
-| Windows / mobile clients     | Browser dev client + ESP32 prod client is the full target set      |
+(These are _AbuelOS persona_ exclusions. Other personas built on Huxley may include any of them.)

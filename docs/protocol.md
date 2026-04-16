@@ -1,6 +1,8 @@
 # WebSocket Protocol
 
-The contract between every audio client (browser today, ESP32 later) and the Python server. This is the product boundary: skills, state, and OpenAI live server-side; microphone and speaker live client-side.
+The contract between every audio client (browser today, ESP32 later) and the Huxley framework. This is the product boundary: skills, state, persona, and the voice provider live framework-side; microphone and speaker live client-side.
+
+Any client that implements this protocol is a valid Huxley client. The framework runs the same regardless of who's connected.
 
 ## Transport
 
