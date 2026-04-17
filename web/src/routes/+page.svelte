@@ -36,6 +36,7 @@
       () => playback.playThinkingTone(),
       () => playback.stopThinkingTone(),
     )
+    ws.setOnSetVolume((level) => playback.setVolume(level))
     mic.onFrame = (data) => ws.sendAudio(data)
     ws.connect()
   })

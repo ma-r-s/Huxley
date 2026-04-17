@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from huxley_sdk import SetVolume
 from huxley_sdk.testing import make_test_context
 from huxley_skill_system.skill import SystemSkill
 
@@ -53,34 +53,31 @@ class TestGetCurrentTime:
 
 class TestSetVolume:
     async def test_clamps_above_100(self, skill: SystemSkill) -> None:
-        with patch("huxley_skill_system.skill._set_system_volume", new_callable=AsyncMock):
-            result = await skill.handle("set_volume", {"level": 150})
+        result = await skill.handle("set_volume", {"level": 150})
         data = json.loads(result.output)
         assert data["volume"] == 100
         assert data["ok"] is True
+        assert isinstance(result.side_effect, SetVolume)
+        assert result.side_effect.level == 100
 
     async def test_clamps_below_0(self, skill: SystemSkill) -> None:
-        with patch("huxley_skill_system.skill._set_system_volume", new_callable=AsyncMock):
-            result = await skill.handle("set_volume", {"level": -10})
+        result = await skill.handle("set_volume", {"level": -10})
         data = json.loads(result.output)
         assert data["volume"] == 0
+        assert isinstance(result.side_effect, SetVolume)
+        assert result.side_effect.level == 0
 
     async def test_valid_level_passes_through(self, skill: SystemSkill) -> None:
-        with patch(
-            "huxley_skill_system.skill._set_system_volume", new_callable=AsyncMock
-        ) as mock_vol:
-            result = await skill.handle("set_volume", {"level": 42})
+        result = await skill.handle("set_volume", {"level": 42})
         data = json.loads(result.output)
         assert data["volume"] == 42
-        mock_vol.assert_awaited_once()
-        assert mock_vol.call_args.args[0] == 42
+        assert isinstance(result.side_effect, SetVolume)
+        assert result.side_effect.level == 42
 
-    async def test_volume_failure_does_not_raise(self, skill: SystemSkill) -> None:
-        # subprocess.run raises (e.g. amixer not found); _set_system_volume
-        # swallows it and logs a warning. The skill must still return OK.
-        with patch("subprocess.run", side_effect=OSError("amixer not found")):
-            result = await skill.handle("set_volume", {"level": 50})
-        assert json.loads(result.output)["ok"] is True
+    async def test_returns_set_volume_side_effect(self, skill: SystemSkill) -> None:
+        result = await skill.handle("set_volume", {"level": 75})
+        assert isinstance(result.side_effect, SetVolume)
+        assert result.side_effect.level == 75
 
 
 class TestUnknownTool:

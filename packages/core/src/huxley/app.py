@@ -101,6 +101,7 @@ class Application:
             send_status=self.server.send_status,
             send_model_speaking=self.server.send_model_speaking,
             send_dev_event=self.server.send_dev_event,
+            send_set_volume=self.server.send_set_volume,
             provider=self.provider,
             dispatch_tool=self.skill_registry.dispatch,
             status_messages=persona.ui_strings or None,

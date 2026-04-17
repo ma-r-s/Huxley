@@ -4,18 +4,20 @@ One client (browser, ESP32, future hardware) connects at a time. The client
 owns all audio I/O (mic capture, speaker playback). This server owns the
 OpenAI session, tool dispatch, state machine, and storage.
 
-Protocol — client → server
+Protocol — client -> server
     {"type": "audio",     "data": "<base64 PCM16 24 kHz>"}
     {"type": "ptt_start"}
     {"type": "ptt_stop"}
     {"type": "wake_word"}
 
-Protocol — server → client
+Protocol — server -> client
+    {"type": "hello",          "protocol": PROTOCOL_VERSION}  # first message
     {"type": "audio",          "data": "<base64 PCM16 24 kHz>"}
     {"type": "state",          "value": "IDLE"|"CONNECTING"|"CONVERSING"}
     {"type": "status",         "message": "..."}
     {"type": "transcript",     "role": "user"|"assistant", "text": "..."}
     {"type": "model_speaking", "value": bool}
+    {"type": "set_volume",     "level": int}  # 0-100, client-controlled
 """
 
 from __future__ import annotations
@@ -41,6 +43,8 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
 logger = structlog.get_logger()
+
+PROTOCOL_VERSION = 1
 
 
 class AudioServer:
@@ -89,7 +93,8 @@ class AudioServer:
         self._client = ws
         await logger.ainfo("client_connected", remote=str(ws.remote_address))
         try:
-            # Sync current state on connect
+            # Handshake: hello first, then current state sync.
+            await ws.send(json.dumps({"type": "hello", "protocol": PROTOCOL_VERSION}))
             await ws.send(json.dumps({"type": "state", "value": self._state}))
             async for raw in ws:
                 await self._dispatch(raw)
@@ -160,6 +165,10 @@ class AudioServer:
         (ESP32) ignore unknown message types. See docs/protocol.md.
         """
         await self._send({"type": "dev_event", "kind": kind, "payload": payload})
+
+    async def send_set_volume(self, level: int) -> None:
+        await logger.adebug("server.tx.set_volume", level=level)
+        await self._send({"type": "set_volume", "level": level})
 
     async def send_audio_clear(self) -> None:
         """Tell the client to immediately drop any queued audio.

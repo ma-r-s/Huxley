@@ -10,6 +10,7 @@
  */
 export class AudioPlayback {
   private ctx: AudioContext | null = null;
+  private masterGain: GainNode | null = null;
   private nextTime = 0;
   private activeSources: AudioBufferSourceNode[] = [];
   // Thinking-tone state — held so it can be stopped cleanly.
@@ -28,6 +29,18 @@ export class AudioPlayback {
   async init(): Promise<void> {
     if (this.ctx) return;
     this.ctx = new AudioContext({ sampleRate: 24000 });
+    this.masterGain = this.ctx.createGain();
+    this.masterGain.connect(this.ctx.destination);
+  }
+
+  /**
+   * Set master output volume. Level is 0-100 (matching the server's scale).
+   * Applies immediately to all future and currently-scheduled audio.
+   */
+  setVolume(level: number): void {
+    if (this.masterGain) {
+      this.masterGain.gain.value = Math.max(0, Math.min(100, level)) / 100;
+    }
   }
 
   async resume(): Promise<void> {
@@ -50,7 +63,7 @@ export class AudioPlayback {
 
     const source = this.ctx.createBufferSource();
     source.buffer = buffer;
-    source.connect(this.ctx.destination);
+    source.connect(this.masterGain ?? this.ctx.destination);
 
     // Schedule gaplessly: start no earlier than now + small jitter margin
     const now = this.ctx.currentTime;
@@ -87,7 +100,7 @@ export class AudioPlayback {
     gain.gain.setValueAtTime(0.25, end - 0.01);
     gain.gain.linearRampToValueAtTime(0, end);
     osc.connect(gain);
-    gain.connect(this.ctx.destination);
+    gain.connect(this.masterGain ?? this.ctx.destination);
     osc.start(now);
     osc.stop(end + 0.02);
   }
@@ -114,7 +127,7 @@ export class AudioPlayback {
 
     gain.gain.setValueAtTime(0, this.ctx.currentTime);
     osc.connect(gain);
-    gain.connect(this.ctx.destination);
+    gain.connect(this.masterGain ?? this.ctx.destination);
     osc.start(this.ctx.currentTime);
 
     this.thinkingToneOsc = osc;
@@ -208,6 +221,7 @@ export class AudioPlayback {
     this.stop();
     void this.ctx?.close();
     this.ctx = null;
+    this.masterGain = null;
   }
 }
 

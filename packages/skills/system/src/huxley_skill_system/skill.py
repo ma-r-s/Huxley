@@ -1,21 +1,19 @@
 """System skill — basic device control and information.
 
-Provides tools for volume control and time queries. Volume control
-adjusts the server host's output (valid for localhost browser dev);
-ESP32 will need its own volume command in the protocol.
+Provides tools for volume control and time queries. Volume control sends a
+`set_volume` WebSocket command to the connected audio client — the client owns
+its own speaker. This is deployment-agnostic: the server never touches audio
+hardware directly.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
-import platform
-import subprocess
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from huxley_sdk import SkillContext, SkillLogger, ToolDefinition, ToolResult
+from huxley_sdk import SetVolume, SkillContext, SkillLogger, ToolDefinition, ToolResult
 
 
 class SystemSkill:
@@ -61,9 +59,11 @@ class SystemSkill:
         match tool_name:
             case "set_volume":
                 level = max(0, min(100, args.get("level", 50)))
-                await _set_system_volume(level, self._logger)
                 await self._logger.ainfo("system.volume_set", level=level)
-                return ToolResult(output=json.dumps({"volume": level, "ok": True}))
+                return ToolResult(
+                    output=json.dumps({"volume": level, "ok": True}),
+                    side_effect=SetVolume(level=level),
+                )
             case "get_current_time":
                 now = datetime.now(tz=ZoneInfo(self._timezone))
                 await self._logger.ainfo(
@@ -90,19 +90,3 @@ class SystemSkill:
 
     async def teardown(self) -> None:
         pass
-
-
-async def _set_system_volume(level: int, logger: SkillLogger) -> None:
-    """Set OS output volume (0-100). Best-effort — logs on failure."""
-    loop = asyncio.get_running_loop()
-    try:
-        if platform.system() == "Darwin":
-            cmd = ["osascript", "-e", f"set volume output volume {level}"]
-        else:
-            cmd = ["amixer", "-D", "pulse", "sset", "Master", f"{level}%"]
-        await loop.run_in_executor(
-            None,
-            lambda: subprocess.run(cmd, check=True, capture_output=True),  # noqa: ASYNC221
-        )
-    except Exception:
-        await logger.awarning("system.volume_failed", level=level)

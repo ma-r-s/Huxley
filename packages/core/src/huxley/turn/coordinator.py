@@ -33,7 +33,7 @@ from uuid import UUID, uuid4
 
 import structlog
 
-from huxley_sdk import AudioStream, CancelMedia
+from huxley_sdk import AudioStream, CancelMedia, SetVolume
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -104,6 +104,7 @@ class TurnCoordinator:
         provider: VoiceProvider,
         dispatch_tool: Callable[[str, dict[str, Any]], Awaitable[ToolResult]],
         status_messages: dict[str, str] | None = None,
+        send_set_volume: Callable[[int], Awaitable[None]] | None = None,
     ) -> None:
         # Client-facing outputs (to the WebSocket audio server).
         self._send_audio = send_audio
@@ -111,6 +112,13 @@ class TurnCoordinator:
         self._send_status = send_status
         self._send_model_speaking = send_model_speaking
         self._send_dev_event = send_dev_event
+
+        async def _noop_volume(_level: int) -> None:
+            pass
+
+        self._send_set_volume: Callable[[int], Awaitable[None]] = (
+            send_set_volume if send_set_volume is not None else _noop_volume
+        )
         self._status = {**self._DEFAULT_STATUS, **(status_messages or {})}
         # Provider — outgoing verbs (send_user_audio, send_tool_output,
         # commit_and_request_response, cancel_current_response,
@@ -271,6 +279,12 @@ class TurnCoordinator:
             # model's confirmation speech plays. needs_follow_up=True lets the
             # model narrate the result (e.g. "Listo, pausé el libro").
             await self._stop_current_media_task()
+            self.current_turn.needs_follow_up = True
+        elif isinstance(result.side_effect, SetVolume):
+            # Forward the volume command to the client immediately. The model
+            # says the confirmation ("Listo, el volumen está al X%") via the
+            # follow-up response.
+            await self._send_set_volume(result.side_effect.level)
             self.current_turn.needs_follow_up = True
         else:
             # Tool calls without a side-effect that is dispatched serially.

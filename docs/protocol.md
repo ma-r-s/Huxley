@@ -30,11 +30,13 @@ Every message is a JSON object with a `type` field. Binary frames are not used (
 
 | `type`           | Payload                                             | Description                                                                                                                                                                                                                              |
 | ---------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hello`          | `{ protocol: number }`                              | **First message on every connection.** Client checks `protocol` against its own `EXPECTED_PROTOCOL` constant and closes with code `1002` if they differ. Current version: `1`.                                                           |
 | `audio`          | `{ data: string }` (base64 PCM16)                   | Audio chunk from the OpenAI model. Client plays it.                                                                                                                                                                                      |
 | `state`          | `{ value: "IDLE" \| "CONNECTING" \| "CONVERSING" }` | Server-side state machine's current state. Sent on every transition and once on client connect for initial sync. Media playback is NOT a session state — see [`turns.md`](./turns.md#7-session-vs-turn-lifetime--playing-state-removed). |
 | `status`         | `{ message: string }`                               | Human-readable status (`"Escuchando…"`, `"Respondiendo…"`). The browser dev UI displays it; a hardware client should **speak** it so blind users know the system is alive. **Dead air is a bug.**                                        |
 | `transcript`     | `{ role: "user" \| "assistant", text: string }`     | Incremental transcript of the conversation. Dev UI only; not used by the ESP32 client.                                                                                                                                                   |
 | `model_speaking` | `{ value: boolean }`                                | `true` when the model starts streaming audio, `false` when done. Client uses this to gate the PTT UI (disable while speaking, or offer it as an interrupt).                                                                              |
+| `set_volume`     | `{ level: number }` (0–100)                         | Adjust the client's output volume. The **client** owns its speaker — the server never touches audio hardware. Level is already clamped to `[0, 100]` before sending.                                                                     |
 | `dev_event`      | `{ kind: string, payload: object }`                 | Dev-UI observability channel. Additive — production clients ignore unknown types. See [Dev observability channel](#dev-observability-channel).                                                                                           |
 
 ## Connection lifecycle
@@ -47,6 +49,7 @@ sequenceDiagram
 
     C->>S: WebSocket upgrade
     S-->>C: 101 Switching Protocols
+    S->>C: { type: "hello", protocol: 1 }
     S->>C: { type: "state", value: "IDLE" } (initial sync)
     C->>S: { type: "wake_word" }
     S->>C: { type: "state", value: "CONNECTING" }
@@ -76,6 +79,7 @@ The server enforces these regardless of what the client sends:
 
 | Failure                       | Client observes                                                                                    |
 | ----------------------------- | -------------------------------------------------------------------------------------------------- |
+| Protocol version mismatch     | Client closes with code `1002`, reason `"Protocol version mismatch"`, shows status banner          |
 | Server busy (second client)   | Close code `1008`, reason `"Server busy — one client at a time"`                                   |
 | OpenAI connection fails       | `state: CONNECTING` → `state: IDLE` + `status: "Error al conectar — intenta de nuevo"`             |
 | OpenAI disconnect mid-session | `state: CONVERSING` → `state: IDLE` silently; next `ptt_start` outside CONVERSING returns a status |
@@ -113,7 +117,6 @@ No new message types. No new plumbing. Observability scales without touching the
 ## Future
 
 - **Binary frames** for audio — would reduce JSON+base64 overhead. Requires ESP32-side cbor/msgpack. Not worth it for the browser.
-- **Protocol versioning** — add a `protocol_version` field to the first client message. Worth adding when we have a second client type (ESP32).
 - **Rename `wake_word` → `start_session`** — current name is a legacy from when the server owned a real wake-word detector.
 - **Status-as-audio channel** — a parallel `status_audio` message with a short TTS clip for spoken status, so the ESP32 client doesn't need its own TTS.
 

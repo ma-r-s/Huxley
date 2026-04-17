@@ -105,6 +105,20 @@ class CancelMedia(SideEffect):
 
 
 @dataclass(frozen=True, slots=True)
+class SetVolume(SideEffect):
+    """Side effect: send a volume-control command to the audio client.
+
+    The coordinator forwards the level to the connected WebSocket client via
+    `send_set_volume`. The client owns the speaker — the server never touches
+    audio hardware directly. Level is clamped to [0, 100] before this is
+    constructed; the coordinator passes it through as-is.
+    """
+
+    kind: ClassVar[str] = "set_volume"
+    level: int
+
+
+@dataclass(frozen=True, slots=True)
 class ToolResult:
     """Result of a skill handling a tool call.
 

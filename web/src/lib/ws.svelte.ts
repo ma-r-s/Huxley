@@ -19,13 +19,17 @@ export interface DevEvent {
   ts: string;
 }
 
+const EXPECTED_PROTOCOL = 1;
+
 type ServerMessage =
+  | { type: "hello"; protocol: number }
   | { type: "audio"; data: string }
   | { type: "audio_clear" }
   | { type: "state"; value: AppState }
   | { type: "status"; message: string }
   | { type: "transcript"; role: "user" | "assistant"; text: string }
   | { type: "model_speaking"; value: boolean }
+  | { type: "set_volume"; level: number }
   | { type: "dev_event"; kind: string; payload: Record<string, unknown> };
 
 let _id = 0;
@@ -51,6 +55,7 @@ export function createWsStore() {
   let _onAudioClear: (() => void) | null = null;
   let _onThinkingToneStart: (() => void) | null = null;
   let _onThinkingToneStop: (() => void) | null = null;
+  let _onSetVolume: ((level: number) => void) | null = null;
 
   // Silence-detection timer for the thinking-tone gap-filler. Started on
   // ptt_stop send and on `model_speaking: false` receive (inter-round gap).
@@ -130,6 +135,14 @@ export function createWsStore() {
       try {
         const msg = JSON.parse(ev.data as string) as ServerMessage;
         switch (msg.type) {
+          case "hello":
+            if (msg.protocol !== EXPECTED_PROTOCOL) {
+              pushStatus(
+                `Protocol mismatch: server=${msg.protocol} client=${EXPECTED_PROTOCOL} — reload required`,
+              );
+              ws.close(1002, "Protocol version mismatch");
+            }
+            break;
           case "audio":
             // Real audio arrived — silence is over.
             cancelSilenceTimer("audio_arrived");
@@ -162,6 +175,9 @@ export function createWsStore() {
             // indistinguishable from an inter-round gap, and starting the
             // timer there causes the tone to play forever after the turn
             // ends. The ptt_stop trigger covers the main silence gap.
+            break;
+          case "set_volume":
+            _onSetVolume?.(msg.level);
             break;
           case "dev_event":
             pushDevEvent(msg.kind, msg.payload);
@@ -216,6 +232,9 @@ export function createWsStore() {
     setOnThinkingTone: (start: () => void, stop: () => void) => {
       _onThinkingToneStart = start;
       _onThinkingToneStop = stop;
+    },
+    setOnSetVolume: (fn: (level: number) => void) => {
+      _onSetVolume = fn;
     },
     sendAudio: (data: string) => send({ type: "audio", data }),
     sendClientEvent,
