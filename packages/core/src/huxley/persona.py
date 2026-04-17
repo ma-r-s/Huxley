@@ -46,6 +46,10 @@ class PersonaSpec(BaseModel):
     system_prompt: str
     constraints: list[str] = Field(default_factory=list)
     skills: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # UI status strings sent to the client over WebSocket. Keys: listening,
+    # too_short, sent, responding, ready. Defaults to English if omitted so
+    # the framework boots without persona config in tests.
+    ui_strings: dict[str, str] = Field(default_factory=dict)
 
     # Populated by `load_persona` from the persona file's parent directory.
     # Not user-settable in YAML (the loader injects it); tests constructing

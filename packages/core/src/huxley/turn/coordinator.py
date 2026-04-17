@@ -28,7 +28,7 @@ import contextlib
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID, uuid4
 
 import structlog
@@ -83,6 +83,16 @@ class TurnCoordinator:
     See the module docstring and `docs/turns.md` for the full design.
     """
 
+    # English fallbacks used when no persona ui_strings are provided (tests,
+    # non-Spanish personas that omit the key).
+    _DEFAULT_STATUS: ClassVar[dict[str, str]] = {
+        "listening": "Listening... (release to send)",
+        "too_short": "Too short — hold the button while speaking",
+        "sent": "Sent — waiting for response...",
+        "responding": "Responding...",
+        "ready": "Ready — hold button to respond",
+    }
+
     def __init__(
         self,
         *,
@@ -93,6 +103,7 @@ class TurnCoordinator:
         send_dev_event: Callable[[str, dict[str, Any]], Awaitable[None]],
         provider: VoiceProvider,
         dispatch_tool: Callable[[str, dict[str, Any]], Awaitable[ToolResult]],
+        status_messages: dict[str, str] | None = None,
     ) -> None:
         # Client-facing outputs (to the WebSocket audio server).
         self._send_audio = send_audio
@@ -100,6 +111,7 @@ class TurnCoordinator:
         self._send_status = send_status
         self._send_model_speaking = send_model_speaking
         self._send_dev_event = send_dev_event
+        self._status = {**self._DEFAULT_STATUS, **(status_messages or {})}
         # Provider — outgoing verbs (send_user_audio, send_tool_output,
         # commit_and_request_response, cancel_current_response,
         # request_response) are called directly. Incoming events arrive as
@@ -140,7 +152,7 @@ class TurnCoordinator:
 
         self.current_turn = Turn(state=TurnState.LISTENING)
         self._bind_turn()
-        await self._send_status("Escuchando… (suelta para enviar)")
+        await self._send_status(self._status["listening"])
         await self._log.ainfo(
             "coord.ptt_start",
             had_turn=active_turn,
@@ -159,7 +171,7 @@ class TurnCoordinator:
         # 19 frames x 5.33 ms = 101 ms -- just above the floor.
         if frames < 19:
             await self._log.ainfo("coord.ptt_stop", frames=frames, committed=False)
-            await self._send_status("Muy corto — mantén el botón mientras hablas")
+            await self._send_status(self._status["too_short"])
             if self._provider.is_connected:
                 await self._provider.cancel_current_response()
             self.current_turn = None
@@ -168,7 +180,7 @@ class TurnCoordinator:
         self.current_turn.state = TurnState.COMMITTING
         self.response_cancelled = False
         await self._log.ainfo("coord.ptt_stop", frames=frames, committed=True)
-        await self._send_status("Enviado — esperando respuesta…")
+        await self._send_status(self._status["sent"])
         await self._provider.commit_and_request_response()
 
     async def on_user_audio_frame(self, pcm: bytes) -> None:
@@ -192,7 +204,7 @@ class TurnCoordinator:
         if self.current_turn is None:
             return
         await self._log.ainfo("coord.commit_failed")
-        await self._send_status("Muy corto — mantén el botón mientras hablas")
+        await self._send_status(self._status["too_short"])
         self.current_turn = None
         self._bind_turn()
 
@@ -207,7 +219,7 @@ class TurnCoordinator:
         if not self._model_speaking:
             self._model_speaking = True
             await self._send_model_speaking(True)
-            await self._send_status("Respondiendo…")
+            await self._send_status(self._status["responding"])
             await self._log.ainfo(
                 "coord.audio_start",
                 state=self.current_turn.state.value if self.current_turn else None,
@@ -402,7 +414,7 @@ class TurnCoordinator:
         await self._log.ainfo("coord.turn_ended")
         self.current_turn = None
         self._bind_turn()
-        await self._send_status("Listo — mantén el botón para responder")
+        await self._send_status(self._status["ready"])
 
     async def _emit_turn_summary(self, *, reason: str, spawned_audio_stream: bool) -> None:
         """One-line summary at end-of-turn. Useful for grep + per-turn timing."""

@@ -56,7 +56,8 @@ class SystemSkill:
         ]
 
     async def handle(self, tool_name: str, args: dict[str, Any]) -> ToolResult:
-        assert self._logger is not None
+        if self._logger is None:
+            raise RuntimeError("SystemSkill: handle() called before setup()")
         match tool_name:
             case "set_volume":
                 level = max(0, min(100, args.get("level", 50)))

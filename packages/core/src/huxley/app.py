@@ -103,6 +103,7 @@ class Application:
             send_dev_event=self.server.send_dev_event,
             provider=self.provider,
             dispatch_tool=self.skill_registry.dispatch,
+            status_messages=persona.ui_strings or None,
         )
 
         self._shutdown_event = asyncio.Event()
