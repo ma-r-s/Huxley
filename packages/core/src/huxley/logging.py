@@ -159,9 +159,9 @@ class _TeeProcessor:
         file_dict = copy.copy(event_dict)
         file_line = str(self._file(logger, method, file_dict))
         self._fh.write(file_line + "\n")
-        # Flush immediately for WARNING+ so crash-adjacent lines reach disk.
-        # Lower-severity lines are flushed by the atexit handler on clean exit.
-        if method in ("warning", "error", "critical"):
+        # Skip flush only for debug — those are per-audio-frame and too frequent.
+        # INFO+ flushes immediately so the log is readable while the server runs.
+        if method != "debug":
             self._fh.flush()
 
         return str(self._console(logger, method, event_dict))

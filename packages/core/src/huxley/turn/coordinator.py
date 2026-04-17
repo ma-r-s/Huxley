@@ -180,6 +180,10 @@ class TurnCoordinator:
         if frames < 19:
             await self._log.ainfo("coord.ptt_stop", frames=frames, committed=False)
             await self._send_status(self._status["too_short"])
+            # audio_clear tells the client to cancel its silence timer — without
+            # it the thinking tone fires 400ms after ptt_stop and loops forever
+            # because no audio or model_speaking:true ever follows this path.
+            await self._send_audio_clear()
             if self._provider.is_connected:
                 await self._provider.cancel_current_response()
             self.current_turn = None
@@ -213,6 +217,7 @@ class TurnCoordinator:
             return
         await self._log.ainfo("coord.commit_failed")
         await self._send_status(self._status["too_short"])
+        await self._send_audio_clear()
         self.current_turn = None
         self._bind_turn()
 
