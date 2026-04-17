@@ -1,9 +1,9 @@
-"""Tests for the audiobooks skill (factory pattern + namespaced KV storage).
+"""Tests for the audiobooks skill (side-effect pattern + namespaced KV storage).
 
 The skill exposes its behavior through `setup(ctx) → handle(tool, args)`
-returning a `ToolResult`. For side-effect tools the result carries an
-`audio_factory` closure that the `TurnCoordinator` invokes at the turn's
-terminal barrier.
+returning a `ToolResult`. For playback tools the result carries an
+`AudioStream` side effect whose `factory` the `TurnCoordinator` invokes
+at the turn's terminal barrier.
 
 Storage layout (per-skill namespaced KV via `huxley_sdk.SkillStorage`):
 - `last_id`            → most-recently-played book id

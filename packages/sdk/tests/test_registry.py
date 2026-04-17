@@ -107,29 +107,6 @@ class TestDispatch:
         assert isinstance(result.side_effect, AudioStream)
         assert result.side_effect.factory is stub_stream
 
-    async def test_dispatch_preserves_audio_factory_deprecated(self) -> None:
-        """The `audio_factory=` alias keeps working; it promotes to AudioStream."""
-        import warnings
-
-        from huxley_sdk import AudioStream
-
-        async def stub_stream() -> Any:
-            if False:
-                yield b""
-
-        registry = SkillRegistry()
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            skill = FakeSkill(
-                name="player",
-                tools=[ToolDefinition(name="play", description="Play")],
-                result=ToolResult(output="{}", audio_factory=stub_stream),
-            )
-        registry.register(skill)
-        result = await registry.dispatch("play", {})
-        assert isinstance(result.side_effect, AudioStream)
-        assert result.side_effect.factory is stub_stream
-
 
 class TestLifecycle:
     async def test_setup_all_passes_context(self) -> None:

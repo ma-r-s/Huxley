@@ -6,12 +6,12 @@ A voice agent framework. You give it a persona (who the agent is) and a set of s
 
 This file is the quick-start for contributors and AI collaborators. For _why_, _what_, and _how_, read the docs.
 
-> **Naming-in-flight**: the repo directory is still `AbuelOS/` — it gets renamed to `Huxley/` in stage 5 of the refactor (a user-action `git mv`). The Python namespaces have already moved: framework code is `huxley`, SDK is `huxley_sdk`. _AbuelOS_ now refers to the canonical persona, never to the framework.
+> _AbuelOS_ is the canonical persona, never the framework. Framework code is `huxley`, SDK is `huxley_sdk`.
 
 ## Repo layout
 
 ```
-AbuelOS/                # repo dir (will be renamed to Huxley/ in stage 5)
+Huxley/                 # repo root
 ├── pyproject.toml      # uv workspace root
 ├── packages/
 │   ├── sdk/            # huxley-sdk: skill author surface
@@ -47,7 +47,7 @@ AbuelOS/                # repo dir (will be renamed to Huxley/ in stage 5)
 └── CLAUDE.md           # this file
 ```
 
-Refactor in progress: stage 5 is the repo rename `AbuelOS/` → `Huxley/` plus final docs polish. Stages 1–4 have shipped. See [`docs/roadmap.md`](./docs/roadmap.md) and the active plan at `~/.claude/plans/proud-conjuring-papert.md`.
+All five refactor stages have shipped — framework / SDK / skills / personas / constraints / entry-point loading are all in place. See [`docs/roadmap.md`](./docs/roadmap.md) for what's next.
 
 ## Commands
 
@@ -129,7 +129,7 @@ Tests hitting the OpenAI Realtime API or real `ffmpeg` live in `server/tests/int
 ### Session start for this repo
 
 1. Read this file + `docs/vision.md` + `docs/concepts.md` + `docs/roadmap.md`
-2. Glance at `~/.claude/projects/-Users-mario-Projects-Personal-Code-AbuelOS/memory/MEMORY.md`
+2. Glance at `~/.claude/projects/-Users-mario-Projects-Personal-Code-Huxley/memory/MEMORY.md`
 3. `git status` + `git log -5 --oneline`
 4. If resuming work, read any open plan file or the last few commits
 

@@ -90,7 +90,7 @@ Semantics:
 - **`side_effect is None`** — info tool. The model needs to narrate the tool output in a follow-up response. Example: `get_current_time`, `search_audiobooks`, `set_volume`.
 - **`isinstance(side_effect, AudioStream)`** — side-effect tool. The model pre-narrates before calling (per tool description). After all model speech in the turn, the coordinator invokes `side_effect.factory()`, iterates the async iterator, and forwards PCM chunks to `server.send_audio` as a long-running task. Example: `play_audiobook`, `audiobook_control` for rewind/forward/resume.
 
-`SideEffect` is the extension point: future kinds (notifications, state updates) reuse the same shape and the coordinator dispatches by `isinstance` check. The legacy `ToolResult(audio_factory=...)` constructor argument still works as a deprecated alias that auto-promotes to `side_effect=AudioStream(factory=...)`.
+`SideEffect` is the extension point: future kinds (notifications, state updates) reuse the same shape and the coordinator dispatches by `isinstance` check.
 
 **The coordinator owns one field for a long-running media stream**:
 

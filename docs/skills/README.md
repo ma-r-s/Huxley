@@ -69,7 +69,7 @@ ToolResult(
 ```
 
 - **`output`** is JSON text sent back to the LLM as the function-call output. The LLM narrates it to the user.
-- **`side_effect`** _(optional)_ is a `SideEffect` the framework runs after the model finishes speaking. Today there's one kind: `AudioStream(factory=...)`, where `factory` is a zero-arg callable returning an async iterator of PCM16 chunks. Future side-effect kinds (notifications, state updates) reuse the same shape. Skills with no side effect leave it `None`. The legacy `audio_factory=...` constructor argument still works as a deprecated alias — it auto-promotes to `side_effect=AudioStream(factory=...)`.
+- **`side_effect`** _(optional)_ is a `SideEffect` the framework runs after the model finishes speaking. Today there's one kind: `AudioStream(factory=...)`, where `factory` is a zero-arg callable returning an async iterator of PCM16 chunks. Future side-effect kinds (notifications, state updates) reuse the same shape. Skills with no side effect leave it `None`.
 
 ### Info tools vs side-effect tools
 

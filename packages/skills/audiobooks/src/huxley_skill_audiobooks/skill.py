@@ -1,12 +1,12 @@
 """Audiobook search and playback skill.
 
 Provides tools for searching a local audiobook library and controlling
-playback. Playback is modelled as a `ToolResult.audio_factory` — a
-closure the `TurnCoordinator` invokes at the turn's terminal barrier,
-after the model has finished speaking. The factory wraps
-`AudiobookPlayer.stream()` and persists the final playback position in
-its `finally` block, so rewind/forward/interrupt all get correct
-atomicity without the skill touching storage during dispatch.
+playback. Playback is modelled as a `ToolResult(side_effect=AudioStream(
+factory=...))` — a closure the `TurnCoordinator` invokes at the turn's
+terminal barrier, after the model has finished speaking. The factory
+wraps `AudiobookPlayer.stream()` and persists the final playback
+position in its `finally` block, so rewind/forward/interrupt all get
+correct atomicity without the skill touching storage during dispatch.
 
 State persisted via the SDK's `SkillStorage` (per-skill namespaced KV):
 - `last_id`            → most-recently-played book id

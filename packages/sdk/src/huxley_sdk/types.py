@@ -15,7 +15,6 @@ them structurally.
 
 from __future__ import annotations
 
-import warnings
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol, runtime_checkable
@@ -92,23 +91,6 @@ class AudioStream(SideEffect):
     factory: Callable[[], AsyncIterator[bytes]]
 
 
-_audio_factory_deprecation_warned = False
-
-
-def _warn_audio_factory_deprecated() -> None:
-    """Emit one deprecation warning per process for `ToolResult.audio_factory`."""
-    global _audio_factory_deprecation_warned
-    if _audio_factory_deprecation_warned:
-        return
-    _audio_factory_deprecation_warned = True
-    warnings.warn(
-        "ToolResult.audio_factory is deprecated; pass "
-        "side_effect=AudioStream(factory=...) instead.",
-        DeprecationWarning,
-        stacklevel=3,
-    )
-
-
 @dataclass(frozen=True, slots=True)
 class ToolResult:
     """Result of a skill handling a tool call.
@@ -117,27 +99,10 @@ class ToolResult:
     function call output. `side_effect`, if present, is a `SideEffect`
     the framework runs after the model's final speech — today only
     `AudioStream` (audiobook playback).
-
-    `audio_factory` is a deprecated alias for
-    `side_effect=AudioStream(factory=...)`. Setting it still works but
-    emits a one-time `DeprecationWarning`. Will be removed in a future
-    stage.
     """
 
     output: str
     side_effect: SideEffect | None = None
-    audio_factory: Callable[[], AsyncIterator[bytes]] | None = None
-
-    def __post_init__(self) -> None:
-        if self.audio_factory is None:
-            return
-        if self.side_effect is not None:
-            msg = "Pass either side_effect or audio_factory, not both."
-            raise ValueError(msg)
-        _warn_audio_factory_deprecated()
-        # frozen dataclass: bypass the freeze to backfill side_effect from
-        # the legacy alias, so downstream code only has to read side_effect.
-        object.__setattr__(self, "side_effect", AudioStream(factory=self.audio_factory))
 
 
 class InvalidTransitionError(Exception):
