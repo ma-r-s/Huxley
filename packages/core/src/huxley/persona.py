@@ -67,8 +67,19 @@ class PersonaSpec(BaseModel):
 SUPPORTED_VERSION = 1
 
 
-def _default_persona_root() -> Path:
-    return Path.cwd() / "personas" / "abuelos"
+def _find_personas_root(name: str) -> Path:
+    """Walk up from CWD until we find a personas/<name> directory.
+
+    Lets the server run from any subdirectory of the repo (e.g.
+    packages/core/) without requiring an explicit HUXLEY_PERSONA path.
+    Falls back to ./personas/<name> so the error message is readable.
+    """
+    cwd = Path.cwd()
+    for directory in [cwd, *cwd.parents]:
+        candidate = directory / "personas" / name
+        if candidate.is_dir():
+            return candidate
+    return cwd / "personas" / name
 
 
 def resolve_persona_path(
@@ -77,15 +88,12 @@ def resolve_persona_path(
 ) -> Path:
     """Resolve the persona directory to load.
 
-    Precedence: CLI path > `HUXLEY_PERSONA` env var > default
-    `./personas/abuelos`. `env_name` is just a name (e.g. `abuelos`);
-    it's joined under `./personas/`.
+    Precedence: CLI path > `HUXLEY_PERSONA` env var > default `abuelos`.
+    `env_name` is a persona name; searched upward from CWD.
     """
     if cli_path is not None:
         return cli_path.resolve()
-    if env_name:
-        return (Path.cwd() / "personas" / env_name).resolve()
-    return _default_persona_root().resolve()
+    return _find_personas_root(env_name or "abuelos").resolve()
 
 
 def load_persona(path: Path | None = None) -> PersonaSpec:
@@ -95,7 +103,7 @@ def load_persona(path: Path | None = None) -> PersonaSpec:
     Raises `PersonaError` with a readable message on any IO / parse /
     validation / version-mismatch failure — fail fast at startup.
     """
-    root = path.resolve() if path is not None else _default_persona_root().resolve()
+    root = path.resolve() if path is not None else _find_personas_root("abuelos").resolve()
     yaml_path = root / "persona.yaml"
     data_dir = (root / "data").resolve()
 
