@@ -426,13 +426,13 @@ Deferred explicitly, with reason:
 
 ## Source-of-truth pointers
 
-| Concept                                                  | File                                                   |
-| -------------------------------------------------------- | ------------------------------------------------------ |
-| `Turn`, `TurnState`, `TurnCoordinator`, interrupt method | `packages/core/src/huxley/turn/coordinator.py`         |
-| `ToolResult.audio_factory`                               | `packages/sdk/src/huxley_sdk/types.py`                 |
-| `AudiobookPlayer.stream()` factory                       | `packages/core/src/huxley/media/audiobook_player.py`   |
-| Thinking tone (client)                                   | `web/src/lib/audio/playback.ts` (`playThinkingTone()`) |
-| Silence-detection timer (client)                         | `web/src/lib/ws.svelte.ts`                             |
-| Protocol delta                                           | `docs/protocol.md`                                     |
+| Concept                                                  | File                                                               |
+| -------------------------------------------------------- | ------------------------------------------------------------------ |
+| `Turn`, `TurnState`, `TurnCoordinator`, interrupt method | `packages/core/src/huxley/turn/coordinator.py`                     |
+| `ToolResult.audio_factory`                               | `packages/sdk/src/huxley_sdk/types.py`                             |
+| `AudiobookPlayer.stream()` factory                       | `packages/skills/audiobooks/src/huxley_skill_audiobooks/player.py` |
+| Thinking tone (client)                                   | `web/src/lib/audio/playback.ts` (`playThinkingTone()`)             |
+| Silence-detection timer (client)                         | `web/src/lib/ws.svelte.ts`                                         |
+| Protocol delta                                           | `docs/protocol.md`                                                 |
 
 (File paths reflect the post-stage-1 workspace layout. Sections of this doc that describe the migration steps themselves still reference `server/src/abuel_os/...` — those are historical and intentionally left as-is.)

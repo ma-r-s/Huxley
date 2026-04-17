@@ -2,33 +2,18 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from unittest.mock import MagicMock
 
 import pytest
 
 from huxley.config import Settings
 from huxley.storage.db import Storage
-from huxley_sdk import SkillContext, ToolDefinition, ToolResult
+from huxley_sdk import ToolDefinition, ToolResult
 from huxley_sdk.testing import FakeSkill
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
-
-
-def _dummy_ctx() -> SkillContext:
-    """Build a no-op SkillContext for tests that need to call skill.setup(ctx).
-
-    Stage 1 stand-in: in stages 2+ this becomes the real `_build_skill_context`
-    helper from app.py. For now skills accept ctx but ignore most fields.
-    """
-    return SkillContext(
-        logger=MagicMock(),
-        storage=MagicMock(),
-        persona_data_dir=Path("/tmp"),
-        config={},
-    )
+    from pathlib import Path
 
 
 @pytest.fixture

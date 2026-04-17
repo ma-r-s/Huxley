@@ -8,6 +8,10 @@ after the model has finished speaking. The factory wraps
 its `finally` block, so rewind/forward/interrupt all get correct
 atomicity without the skill touching storage during dispatch.
 
+State persisted via the SDK's `SkillStorage` (per-skill namespaced KV):
+- `last_id`            → most-recently-played book id
+- `position:<book_id>` → float seconds for that book
+
 See `docs/turns.md` for the turn model and `docs/skills/audiobooks.md`
 for the skill's behavioral contract.
 """
@@ -18,23 +22,24 @@ import json
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Any
 
-import structlog
-
-from huxley.media.audiobook_player import BYTES_PER_SECOND, PlayerError
-from huxley_sdk import SkillContext, ToolDefinition, ToolResult
+from huxley_sdk import SkillContext, SkillLogger, SkillStorage, ToolDefinition, ToolResult
+from huxley_skill_audiobooks.player import (
+    BYTES_PER_SECOND,
+    AudiobookPlayer,
+    PlayerError,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
     from pathlib import Path
 
-    from huxley.media.audiobook_player import AudiobookPlayer
-    from huxley.storage.db import Storage
-
-logger = structlog.get_logger()
-
 _AUDIOBOOK_EXTENSIONS = {".mp3", ".m4a", ".m4b", ".ogg", ".opus", ".flac", ".wav"}
 
-LAST_BOOK_SETTING = "last_audiobook_id"
+LAST_BOOK_KEY = "last_id"
+
+
+def _position_key(book_id: str) -> str:
+    return f"position:{book_id}"
 
 
 def _fuzzy_score(query: str, candidate: str) -> float:
@@ -57,15 +62,13 @@ class AudiobooksSkill:
             └── María.m4b
     """
 
-    def __init__(
-        self,
-        library_path: Path,
-        player: AudiobookPlayer,
-        storage: Storage,
-    ) -> None:
-        self._library_path = library_path
-        self._player = player
-        self._storage = storage
+    def __init__(self, *, player: AudiobookPlayer | None = None) -> None:
+        # `player` is keyword-only and reserved for tests that inject a mock.
+        # In production setup() builds the player from ctx.config.
+        self._library_path: Path | None = None
+        self._player: AudiobookPlayer | None = player
+        self._storage: SkillStorage | None = None
+        self._logger: SkillLogger | None = None
         self._catalog: list[dict[str, str]] = []
 
     @property
@@ -181,18 +184,23 @@ class AudiobooksSkill:
                 return ToolResult(output=json.dumps({"error": f"Unknown tool: {tool_name}"}))
 
     async def setup(self, ctx: SkillContext) -> None:
-        """Scan the library directory and build the catalog.
-
-        Stage 1: ctx is accepted but storage/config injection happens in
-        stage 2 (when skills become entry-point loaded). For now the skill
-        still gets infra via __init__.
-        """
-        del ctx  # accepted for protocol compliance; used in stage 2
-        self._catalog = self._scan_library()
-        await logger.ainfo(
+        """Resolve config, build the player, scan the library."""
+        cfg = ctx.config
+        library_raw = cfg.get("library", "data/audiobooks")
+        library_path = (ctx.persona_data_dir / library_raw).resolve()
+        self._library_path = library_path
+        if self._player is None:
+            self._player = AudiobookPlayer(
+                ffmpeg_path=str(cfg.get("ffmpeg", "ffmpeg")),
+                ffprobe_path=str(cfg.get("ffprobe", "ffprobe")),
+            )
+        self._storage = ctx.storage
+        self._logger = ctx.logger
+        self._catalog = self._scan_library(library_path)
+        await ctx.logger.ainfo(
             "audiobooks.catalog_loaded",
             count=len(self._catalog),
-            path=str(self._library_path),
+            path=str(library_path),
         )
 
     async def teardown(self) -> None:
@@ -201,13 +209,7 @@ class AudiobooksSkill:
     def prompt_context(self) -> str:
         """Text injected into the session prompt so the LLM knows what's available.
 
-        Returned at connect time by `SkillRegistry.get_prompt_context()` and
-        appended to `Settings.system_prompt` before `session.update`. The LLM
-        reads this and can answer _"¿qué libros tienes?"_ without having to
-        call `search_audiobooks` first.
-
-        Capped at 50 books to keep the prompt bounded. If the library ever
-        grows past that, switch to tool-based listing instead.
+        Capped at 50 books to keep the prompt bounded.
         """
         if not self._catalog:
             return ""
@@ -218,18 +220,18 @@ class AudiobooksSkill:
             lines.append(f"(y {len(self._catalog) - 50} más, búscalos por título o autor)")
         return "\n".join(lines)
 
-    def _scan_library(self) -> list[dict[str, str]]:
+    def _scan_library(self, library_path: Path) -> list[dict[str, str]]:
         """Scan the library directory for audio files."""
         catalog: list[dict[str, str]] = []
 
-        if not self._library_path.exists():
+        if not library_path.exists():
             return catalog
 
-        for path in sorted(self._library_path.rglob("*")):
+        for path in sorted(library_path.rglob("*")):
             if path.suffix.lower() not in _AUDIOBOOK_EXTENSIONS:
                 continue
 
-            relative = path.relative_to(self._library_path)
+            relative = path.relative_to(library_path)
             parts = relative.parts
 
             if len(parts) > 1:
@@ -251,21 +253,28 @@ class AudiobooksSkill:
 
         return catalog
 
-    async def _search(self, query: str) -> ToolResult:
-        """Search the catalog by fuzzy matching against title and author.
+    async def _get_position(self, book_id: str) -> float:
+        assert self._storage is not None
+        raw = await self._storage.get_setting(_position_key(book_id))
+        if raw is None:
+            return 0.0
+        try:
+            return float(raw)
+        except ValueError:
+            return 0.0
 
-        For an empty or very short query (< 2 chars), returns the full catalog
-        instead of filtering. This covers the _"¿qué libros tienes?"_ case
-        where the LLM calls search without a specific term.
-        """
+    async def _set_position(self, book_id: str, position: float) -> None:
+        assert self._storage is not None
+        await self._storage.set_setting(_position_key(book_id), str(position))
+
+    async def _search(self, query: str) -> ToolResult:
+        """Search the catalog by fuzzy matching against title and author."""
         if not self._catalog:
             return ToolResult(
                 output=json.dumps(
                     {
                         "results": [],
-                        "message": (
-                            "La biblioteca está vacía. Hay que pedirle a Mario que agregue libros."
-                        ),
+                        "message": "La biblioteca está vacía.",
                     }
                 )
             )
@@ -329,19 +338,11 @@ class AudiobooksSkill:
         )
 
     async def _resolve_book(self, reference: str) -> dict[str, str] | None:
-        """Look up a book by exact ID, or fall back to fuzzy title/author match.
-
-        The LLM often passes the human-readable title (e.g. `"Cien años de
-        soledad"`) as `book_id` because that's what the prompt context shows
-        it. The real internal IDs are relative paths (`"Gabriel García
-        Márquez/Cien años de soledad.m4b"`), so an exact match would fail
-        and strand the user on a "no encuentro el libro" dead-end. We try
-        exact first, then fuzzy across id / title / author / author+title,
-        with a high confidence threshold (0.5) so we don't guess wildly.
-        """
+        """Look up a book by exact ID, or fall back to fuzzy title/author match."""
+        assert self._logger is not None
         exact = next((b for b in self._catalog if b["id"] == reference), None)
         if exact is not None:
-            await logger.ainfo(
+            await self._logger.ainfo(
                 "audiobooks.resolve",
                 reference=reference,
                 method="exact",
@@ -350,7 +351,7 @@ class AudiobooksSkill:
             return exact
 
         if not self._catalog:
-            await logger.ainfo("audiobooks.resolve", reference=reference, resolved=None)
+            await self._logger.ainfo("audiobooks.resolve", reference=reference, resolved=None)
             return None
 
         best_score = 0.0
@@ -367,7 +368,7 @@ class AudiobooksSkill:
                 best_score = score
                 best_book = candidate
         if best_book is not None and best_score > 0.5:
-            await logger.ainfo(
+            await self._logger.ainfo(
                 "audiobooks.resolve",
                 reference=reference,
                 method="fuzzy",
@@ -375,7 +376,7 @@ class AudiobooksSkill:
                 score=round(best_score, 3),
             )
             return best_book
-        await logger.ainfo(
+        await self._logger.ainfo(
             "audiobooks.resolve",
             reference=reference,
             method="fuzzy",
@@ -390,16 +391,12 @@ class AudiobooksSkill:
         path: str,
         start_position: float,
     ) -> Callable[[], AsyncIterator[bytes]]:
-        """Build a playback factory for the coordinator's terminal barrier.
-
-        The returned callable, when invoked, spawns ffmpeg via
-        `AudiobookPlayer.stream()` and yields PCM chunks. Its `finally`
-        block saves the terminal position to storage — if the factory is
-        never invoked (mid-chain interrupt), no save happens and storage
-        reflects the last _actually played_ position.
-        """
+        """Build a playback factory for the coordinator's terminal barrier."""
+        assert self._player is not None
+        assert self._logger is not None
         player = self._player
-        storage = self._storage
+        logger = self._logger
+        set_position = self._set_position
 
         async def stream() -> AsyncIterator[bytes]:
             bytes_read = 0
@@ -412,7 +409,7 @@ class AudiobooksSkill:
                 elapsed = bytes_read / BYTES_PER_SECOND
                 final_pos = start_position + elapsed
                 try:
-                    await storage.save_audiobook_position(book_id, final_pos)
+                    await set_position(book_id, final_pos)
                     await logger.ainfo(
                         "audiobooks.stream_ended",
                         book_id=book_id,
@@ -425,12 +422,10 @@ class AudiobooksSkill:
         return stream
 
     async def _play(self, book_id: str, *, from_beginning: bool = False) -> ToolResult:
-        """Resolve a book, build its factory, stamp last_audiobook_id.
-
-        Does NOT invoke the factory — the coordinator does that at the turn's
-        terminal barrier, after the model has finished speaking. The model
-        pre-narrates the ack per the tool description.
-        """
+        """Resolve a book, build its factory, stamp last_id."""
+        assert self._player is not None
+        assert self._storage is not None
+        assert self._logger is not None
         book = await self._resolve_book(book_id)
         if not book:
             return ToolResult(
@@ -444,22 +439,18 @@ class AudiobooksSkill:
                 )
             )
 
-        # After fuzzy resolution, use the book's canonical ID — NOT the
-        # original parameter (which could have been a title like
-        # "Cien años de soledad" when the real id is "García Márquez/Cien…m4b").
         resolved_id = book["id"]
 
         start_position = 0.0
         if not from_beginning:
-            start_position = await self._storage.get_audiobook_position(resolved_id)
+            start_position = await self._get_position(resolved_id)
 
-        # Cheap probe up front: fail early if the file is unreadable so the
-        # model can surface a friendly message instead of the turn hanging
-        # on a silently-broken factory.
         try:
             await self._player.probe(book["path"])
         except PlayerError as exc:
-            await logger.aerror("audiobooks.probe_failed", book_id=resolved_id, error=str(exc))
+            await self._logger.aerror(
+                "audiobooks.probe_failed", book_id=resolved_id, error=str(exc)
+            )
             return ToolResult(
                 output=json.dumps(
                     {
@@ -469,8 +460,8 @@ class AudiobooksSkill:
                 )
             )
 
-        await self._storage.set_setting(LAST_BOOK_SETTING, resolved_id)
-        await logger.ainfo(
+        await self._storage.set_setting(LAST_BOOK_KEY, resolved_id)
+        await self._logger.ainfo(
             "audiobooks.factory_built",
             book_id=resolved_id,
             start_position=start_position,
@@ -493,7 +484,8 @@ class AudiobooksSkill:
 
     async def _resume_last(self) -> ToolResult:
         """Resume the most-recently-played book from its saved position."""
-        last_id = await self._storage.get_setting(LAST_BOOK_SETTING)
+        assert self._storage is not None
+        last_id = await self._storage.get_setting(LAST_BOOK_KEY)
         if not last_id:
             return ToolResult(
                 output=json.dumps(
@@ -506,20 +498,9 @@ class AudiobooksSkill:
         return await self._play(last_id, from_beginning=False)
 
     async def _control(self, action: str, seconds: float = 10) -> ToolResult:
-        """Control current playback.
-
-        Rewind/forward/resume all funnel through `_play` so they share the
-        probe + factory construction path. The new position is captured in
-        the factory closure — not written to storage here. If the turn is
-        interrupted before the factory runs, storage stays put.
-
-        Pause/stop are info-only acknowledgements: they return
-        `audio_factory=None`, so the coordinator requests a follow-up
-        response where the model narrates the confirmation. Actual stopping
-        happens via the interrupt that fired when the user pressed PTT —
-        the prior media task is already cancelled by then, and its finally
-        block has saved the current position.
-        """
+        """Control current playback."""
+        assert self._storage is not None
+        assert self._logger is not None
         match action:
             case "pause":
                 return ToolResult(output=json.dumps({"paused": True, "message": "Pausado."}))
@@ -528,7 +509,7 @@ class AudiobooksSkill:
                 return ToolResult(output=json.dumps({"stopped": True, "message": "Detenido."}))
 
             case "resume":
-                book_id = await self._storage.get_setting(LAST_BOOK_SETTING)
+                book_id = await self._storage.get_setting(LAST_BOOK_KEY)
                 if book_id is None:
                     return ToolResult(
                         output=json.dumps(
@@ -541,7 +522,7 @@ class AudiobooksSkill:
                 return await self._play(book_id, from_beginning=False)
 
             case "rewind" | "forward":
-                book_id = await self._storage.get_setting(LAST_BOOK_SETTING)
+                book_id = await self._storage.get_setting(LAST_BOOK_KEY)
                 if book_id is None:
                     return ToolResult(
                         output=json.dumps(
@@ -551,10 +532,10 @@ class AudiobooksSkill:
                             }
                         )
                     )
-                saved = await self._storage.get_audiobook_position(book_id)
+                saved = await self._get_position(book_id)
                 delta = abs(seconds)
                 new_pos = max(0.0, saved - delta) if action == "rewind" else saved + delta
-                await logger.ainfo(
+                await self._logger.ainfo(
                     "audiobooks.seek",
                     action=action,
                     book_id=book_id,
@@ -572,9 +553,6 @@ class AudiobooksSkill:
                             }
                         )
                     )
-                # NOTE: position is NOT saved here. The factory captures
-                # new_pos in its closure and updates storage only when it
-                # actually starts streaming (via the finally-block save).
                 factory = self._build_factory(book_id, book["path"], new_pos)
                 return ToolResult(
                     output=json.dumps(

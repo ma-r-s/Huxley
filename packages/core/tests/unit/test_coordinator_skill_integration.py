@@ -20,10 +20,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from huxley.skills.audiobooks import AudiobooksSkill
+from huxley.storage.skill import NamespacedSkillStorage
 from huxley.turn.coordinator import TurnCoordinator, TurnState
 from huxley_sdk import SkillRegistry
-from tests.conftest import _dummy_ctx
+from huxley_sdk.testing import make_test_context
+from huxley_skill_audiobooks.skill import LAST_BOOK_KEY, AudiobooksSkill
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -87,8 +88,13 @@ async def _build_wired_coordinator(
     - mocks: the callback AsyncMocks (send_audio, oai_commit, etc.)
     """
     player, consumed = _make_player_with_tracker()
-    skill = AudiobooksSkill(library_path=library_path, player=player, storage=storage)
-    await skill.setup(_dummy_ctx())
+    skill = AudiobooksSkill(player=player)
+    ctx = make_test_context(
+        storage=NamespacedSkillStorage(storage, "audiobooks"),
+        persona_data_dir=library_path.parent,
+        config={"library": str(library_path)},
+    )
+    await skill.setup(ctx)
 
     registry = SkillRegistry()
     registry.register(skill)
@@ -303,7 +309,8 @@ class TestPauseRequestsFollowUp:
         book = skill._catalog[0]
         # Prime LAST_BOOK_SETTING so a later rewind/resume could find something;
         # pause itself doesn't need it, but this mirrors real flow.
-        await storage.set_setting("last_audiobook_id", book["id"])
+        # Mirror the namespaced layout the real skill uses.
+        await storage.set_setting(f"audiobooks:{LAST_BOOK_KEY}", book["id"])
 
         await _commit_turn(coord)
         await coord.on_audio_delta(b"listo, pauso")

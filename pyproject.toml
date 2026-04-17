@@ -1,8 +1,15 @@
 [tool.uv.workspace]
-members = ["packages/sdk", "packages/core"]
+members = [
+    "packages/sdk",
+    "packages/core",
+    "packages/skills/audiobooks",
+    "packages/skills/system",
+]
 
 [tool.uv.sources]
 huxley-sdk = { workspace = true }
+huxley-skill-audiobooks = { workspace = true }
+huxley-skill-system = { workspace = true }
 
 # Shared tool config (each package's pyproject can override).
 
@@ -31,7 +38,12 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["huxley", "huxley_sdk"]
+known-first-party = [
+    "huxley",
+    "huxley_sdk",
+    "huxley_skill_audiobooks",
+    "huxley_skill_system",
+]
 
 [tool.mypy]
 python_version = "3.13"

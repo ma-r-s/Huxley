@@ -2,9 +2,9 @@
 
 A Huxley skill is a Python package that teaches the agent to do something new — play music, control lights, send messages, query an API. This document is for skill authors.
 
-For the conceptual model, see [`../concepts.md`](../concepts.md). For a full worked example, see [`audiobooks.md`](./audiobooks.md).
+For the conceptual model, see [`../concepts.md`](../concepts.md). For a full worked example, see [`audiobooks.md`](./audiobooks.md). For an honest map of which skill ideas fit the framework today and where the real limits are, see [`../extensibility.md`](../extensibility.md).
 
-> **SDK status**: the Huxley SDK (`huxley_sdk`) lives at `packages/sdk/`. Skill authors import from it: `from huxley_sdk import Skill, ToolDefinition, ToolResult, SkillContext`. The two built-in skills (`audiobooks`, `system`) currently still live inside `packages/core/src/huxley/skills/` for legacy reasons; stage 2 of the active refactor moves them into their own `packages/skills/<name>/` packages with entry-point loading, at which point they become the model for third-party skill packages. The SDK protocol shape and contract below are stable across that move.
+> **SDK status**: the Huxley SDK (`huxley_sdk`) lives at `packages/sdk/`. Skill authors import from it: `from huxley_sdk import Skill, ToolDefinition, ToolResult, SkillContext`. The two first-party skills (`audiobooks`, `system`) live under `packages/skills/<name>/` and are loaded via `huxley.skills` entry points exactly like a third-party skill would be. Their layout is the canonical reference for the structure described below.
 
 ## The Skill protocol
 
@@ -217,4 +217,4 @@ huxley-skill-my-thing/
     └── test_my_skill.py
 ```
 
-For now, the two built-in skills (`audiobooks`, `system`) still live in `packages/core/src/huxley/skills/<name>.py` with tests in `packages/core/tests/unit/test_<name>_skill.py`; stage 2 of the active refactor moves them out into their own `packages/skills/<name>/` packages, which is the model third-party skills should follow.
+The two first-party skills (`audiobooks`, `system`) live under `packages/skills/<name>/` and are loaded via `huxley.skills` entry points exactly like a third-party skill would be. Their layout is the canonical reference for the structure above.

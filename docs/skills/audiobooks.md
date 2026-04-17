@@ -82,7 +82,7 @@ Configured via `audiobook_library_path` in [`packages/core/src/huxley/config.py`
 
 ## Current state
 
-The skill exists in [`server/src/abuel_os/skills/audiobooks.py`](../../server/src/abuel_os/skills/audiobooks.py). Backed by [`AudiobookPlayer`](../../server/src/abuel_os/media/audiobook_player.py), a stateless ffmpeg wrapper exposing `probe()` + `stream(path, start_position)`. The skill returns playback as a `ToolResult.audio_factory` closure that the [`TurnCoordinator`](../turns.md) invokes after the model finishes speaking — book audio is forwarded through the same `server.send_audio` channel as OpenAI model audio. Honest audit:
+The skill lives in [`packages/skills/audiobooks/src/huxley_skill_audiobooks/skill.py`](../../packages/skills/audiobooks/src/huxley_skill_audiobooks/skill.py). It's loaded via the `huxley.skills` entry point declared in its `pyproject.toml`. Backed by [`AudiobookPlayer`](../../packages/skills/audiobooks/src/huxley_skill_audiobooks/player.py), a stateless ffmpeg wrapper exposing `probe()` + `stream(path, start_position)`. The skill returns playback as a `ToolResult.audio_factory` closure that the [`TurnCoordinator`](../turns.md) invokes after the model finishes speaking — book audio is forwarded through the same `server.send_audio` channel as OpenAI model audio. Honest audit:
 
 | Capability                                                                              | Status                                                                                                            |
 | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |

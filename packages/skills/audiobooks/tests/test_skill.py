@@ -1,15 +1,17 @@
-"""Tests for the audiobooks skill (v3 factory pattern).
+"""Tests for the audiobooks skill (factory pattern + namespaced KV storage).
 
-With the turn coordinator in place, `_play` / `_control` no longer call
-`player.load(...)` imperatively — they return a `ToolResult.audio_factory`
-closure that wraps `player.stream(path, start_position)`. The coordinator
-invokes that closure at the turn's terminal barrier. These tests exercise
-the skill by:
+The skill exposes its behavior through `setup(ctx) → handle(tool, args)`
+returning a `ToolResult`. For side-effect tools the result carries an
+`audio_factory` closure that the `TurnCoordinator` invokes at the turn's
+terminal barrier.
 
-- asserting `result.audio_factory is not None` for side-effect tools
-- invoking the factory and checking `player.stream` was called with the
-  expected path + start_position
-- verifying the factory's `finally` block persists position to storage
+Storage layout (per-skill namespaced KV via `huxley_sdk.SkillStorage`):
+- `last_id`            → most-recently-played book id
+- `position:<book_id>` → float seconds for that book
+
+Tests stub `AudiobookPlayer` via the keyword-only `player=` test injection
+on the skill's constructor, then drive `setup(ctx)` to wire in the
+SDK-provided in-memory storage.
 """
 
 from __future__ import annotations
@@ -21,14 +23,19 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from huxley.skills.audiobooks import LAST_BOOK_SETTING, AudiobooksSkill, _fuzzy_score
-from tests.conftest import _dummy_ctx
+from huxley_sdk.testing import make_test_context
+from huxley_skill_audiobooks.skill import (
+    LAST_BOOK_KEY,
+    AudiobooksSkill,
+    _fuzzy_score,
+    _position_key,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
 
-    from huxley.storage.db import Storage
+    from huxley_sdk import SkillContext, SkillStorage
 
 
 # ---------------------------------------------------------------------------
@@ -36,11 +43,6 @@ if TYPE_CHECKING:
 
 
 async def _drain(factory: Any) -> int:
-    """Invoke a factory, iterate its generator to completion, return chunk count.
-
-    Triggers the generator's `finally` block so tests can assert that
-    storage writes happen on natural EOF / cancel.
-    """
     count = 0
     async for _chunk in factory():
         count += 1
@@ -48,20 +50,11 @@ async def _drain(factory: Any) -> int:
 
 
 def _make_player_mock(chunks: list[bytes] | None = None) -> MagicMock:
-    """Build a mock AudiobookPlayer.
-
-    `stream(path, start_position)` returns a fresh async generator yielding
-    the given chunks, then raises `StopAsyncIteration` (natural EOF). The
-    mock tracks call args so tests can verify path/start_position.
-    """
+    """Build a mock AudiobookPlayer."""
     player = MagicMock()
-
     default_chunks = chunks if chunks is not None else [b"chunk1", b"chunk2"]
 
-    def stream_impl(
-        path: Any,
-        start_position: float = 0.0,
-    ) -> AsyncIterator[bytes]:
+    def stream_impl(path: Any, start_position: float = 0.0) -> AsyncIterator[bytes]:
         async def gen() -> AsyncIterator[bytes]:
             for c in default_chunks:
                 yield c
@@ -96,16 +89,30 @@ def library_path(tmp_path: Path) -> Path:
     return lib
 
 
-@pytest.fixture
-async def audiobooks_skill(library_path: Path, storage: Storage) -> AudiobooksSkill:
-    player = _make_player_mock()
-    skill = AudiobooksSkill(
-        library_path=library_path,
-        player=player,
-        storage=storage,
+def _make_ctx(library_path: Path) -> SkillContext:
+    return make_test_context(
+        config={"library": str(library_path)},
+        persona_data_dir=library_path.parent,
     )
-    await skill.setup(_dummy_ctx())
+
+
+@pytest.fixture
+def player_mock() -> MagicMock:
+    return _make_player_mock()
+
+
+@pytest.fixture
+async def audiobooks_skill(library_path: Path, player_mock: MagicMock) -> AudiobooksSkill:
+    skill = AudiobooksSkill(player=player_mock)
+    await skill.setup(_make_ctx(library_path))
     return skill
+
+
+@pytest.fixture
+def storage(audiobooks_skill: AudiobooksSkill) -> SkillStorage:
+    """Skill's bound SkillStorage — same instance the skill writes through."""
+    assert audiobooks_skill._storage is not None
+    return audiobooks_skill._storage
 
 
 # ---------------------------------------------------------------------------
@@ -141,13 +148,9 @@ class TestCatalogScan:
         suelto = next(b for b in audiobooks_skill._catalog if "suelto" in b["title"].lower())
         assert suelto["author"] == "Desconocido"
 
-    async def test_empty_library(self, tmp_path: Path, storage: Storage) -> None:
-        skill = AudiobooksSkill(
-            library_path=tmp_path / "empty",
-            player=_make_player_mock(),
-            storage=storage,
-        )
-        await skill.setup(_dummy_ctx())
+    async def test_empty_library(self, tmp_path: Path) -> None:
+        skill = AudiobooksSkill(player=_make_player_mock())
+        await skill.setup(_make_ctx(tmp_path / "empty"))
         assert len(skill._catalog) == 0
 
 
@@ -170,17 +173,12 @@ class TestSearch:
         assert data["count"] == 0
 
     async def test_search_returns_no_factory(self, audiobooks_skill: AudiobooksSkill) -> None:
-        """Search is an info tool — should not carry an audio factory."""
         result = await audiobooks_skill.handle("search_audiobooks", {"query": "coronel"})
         assert result.audio_factory is None
 
-    async def test_search_empty_library(self, tmp_path: Path, storage: Storage) -> None:
-        skill = AudiobooksSkill(
-            library_path=tmp_path / "empty",
-            player=_make_player_mock(),
-            storage=storage,
-        )
-        await skill.setup(_dummy_ctx())
+    async def test_search_empty_library(self, tmp_path: Path) -> None:
+        skill = AudiobooksSkill(player=_make_player_mock())
+        await skill.setup(_make_ctx(tmp_path / "empty"))
         result = await skill.handle("search_audiobooks", {"query": "anything"})
         data = json.loads(result.output)
         assert "biblioteca está vacía" in data["message"]
@@ -197,7 +195,7 @@ class TestPlayback:
         assert len(data["message"]) > 0
 
     async def test_play_factory_streams_from_correct_position(
-        self, audiobooks_skill: AudiobooksSkill
+        self, audiobooks_skill: AudiobooksSkill, player_mock: MagicMock
     ) -> None:
         book = audiobooks_skill._catalog[0]
         result = await audiobooks_skill.handle("play_audiobook", {"book_id": book["id"]})
@@ -205,25 +203,31 @@ class TestPlayback:
 
         await _drain(result.audio_factory)
 
-        audiobooks_skill._player.stream.assert_called_once_with(book["path"], start_position=0.0)
+        player_mock.stream.assert_called_once_with(book["path"], start_position=0.0)
 
     async def test_play_factory_uses_saved_position(
-        self, audiobooks_skill: AudiobooksSkill, storage: Storage
+        self,
+        audiobooks_skill: AudiobooksSkill,
+        storage: SkillStorage,
+        player_mock: MagicMock,
     ) -> None:
         book = audiobooks_skill._catalog[0]
-        await storage.save_audiobook_position(book["id"], 120.5)
+        await storage.set_setting(_position_key(book["id"]), "120.5")
 
         result = await audiobooks_skill.handle("play_audiobook", {"book_id": book["id"]})
         assert result.audio_factory is not None
         await _drain(result.audio_factory)
 
-        audiobooks_skill._player.stream.assert_called_once_with(book["path"], start_position=120.5)
+        player_mock.stream.assert_called_once_with(book["path"], start_position=120.5)
 
     async def test_play_from_beginning_ignores_saved_position(
-        self, audiobooks_skill: AudiobooksSkill, storage: Storage
+        self,
+        audiobooks_skill: AudiobooksSkill,
+        storage: SkillStorage,
+        player_mock: MagicMock,
     ) -> None:
         book = audiobooks_skill._catalog[0]
-        await storage.save_audiobook_position(book["id"], 120.5)
+        await storage.set_setting(_position_key(book["id"]), "120.5")
 
         result = await audiobooks_skill.handle(
             "play_audiobook", {"book_id": book["id"], "from_beginning": True}
@@ -231,7 +235,7 @@ class TestPlayback:
         assert result.audio_factory is not None
         await _drain(result.audio_factory)
 
-        audiobooks_skill._player.stream.assert_called_once_with(book["path"], start_position=0.0)
+        player_mock.stream.assert_called_once_with(book["path"], start_position=0.0)
 
     async def test_play_unknown_book(self, audiobooks_skill: AudiobooksSkill) -> None:
         result = await audiobooks_skill.handle(
@@ -242,13 +246,14 @@ class TestPlayback:
         assert data.get("playing") is False
         assert result.audio_factory is None
 
-    async def test_play_by_title_fuzzy_match(self, audiobooks_skill: AudiobooksSkill) -> None:
-        """LLM passes title (as seen in prompt context), skill resolves to real id."""
+    async def test_play_by_title_fuzzy_match(
+        self, audiobooks_skill: AudiobooksSkill, player_mock: MagicMock
+    ) -> None:
         book = next(b for b in audiobooks_skill._catalog if "coronel" in b["title"].lower())
         result = await audiobooks_skill.handle("play_audiobook", {"book_id": book["title"]})
         assert result.audio_factory is not None
         await _drain(result.audio_factory)
-        audiobooks_skill._player.stream.assert_called_once_with(book["path"], start_position=0.0)
+        player_mock.stream.assert_called_once_with(book["path"], start_position=0.0)
 
     async def test_play_by_author_substring(self, audiobooks_skill: AudiobooksSkill) -> None:
         result = await audiobooks_skill.handle("play_audiobook", {"book_id": "García Márquez"})
@@ -257,29 +262,25 @@ class TestPlayback:
         assert result.audio_factory is not None
 
     async def test_play_persists_last_book_id(
-        self, audiobooks_skill: AudiobooksSkill, storage: Storage
+        self, audiobooks_skill: AudiobooksSkill, storage: SkillStorage
     ) -> None:
         book = audiobooks_skill._catalog[0]
         await audiobooks_skill.handle("play_audiobook", {"book_id": book["id"]})
-        saved = await storage.get_setting(LAST_BOOK_SETTING)
+        saved = await storage.get_setting(LAST_BOOK_KEY)
         assert saved == book["id"]
 
     async def test_play_factory_saves_position_on_natural_end(
-        self, audiobooks_skill: AudiobooksSkill, storage: Storage
+        self, audiobooks_skill: AudiobooksSkill, storage: SkillStorage
     ) -> None:
-        """When the factory drains to EOF, its finally saves the final position.
-
-        The mock player yields 2 chunks of 6 bytes each, so
-        bytes_read = 12, elapsed = 12 / 48_000 ≈ 0.00025s. With
-        start_position = 0.0, the persisted position is ~0.00025.
-        """
+        """When the factory drains to EOF, its finally saves the final position."""
         book = audiobooks_skill._catalog[0]
         result = await audiobooks_skill.handle("play_audiobook", {"book_id": book["id"]})
         assert result.audio_factory is not None
         await _drain(result.audio_factory)
 
-        saved = await storage.get_audiobook_position(book["id"])
-        assert saved > 0  # some position was written by the factory's finally
+        saved_raw = await storage.get_setting(_position_key(book["id"]))
+        assert saved_raw is not None
+        assert float(saved_raw) > 0
 
 
 class TestResumeLast:
@@ -291,30 +292,27 @@ class TestResumeLast:
         assert result.audio_factory is None
 
     async def test_resume_last_picks_up_previously_played_book(
-        self, audiobooks_skill: AudiobooksSkill, storage: Storage
+        self,
+        audiobooks_skill: AudiobooksSkill,
+        storage: SkillStorage,
+        player_mock: MagicMock,
     ) -> None:
         book = audiobooks_skill._catalog[0]
         await audiobooks_skill.handle("play_audiobook", {"book_id": book["id"]})
-        await storage.save_audiobook_position(book["id"], 250.0)
-        audiobooks_skill._player.stream.reset_mock()
+        await storage.set_setting(_position_key(book["id"]), "250.0")
+        player_mock.stream.reset_mock()
 
         result = await audiobooks_skill.handle("resume_last", {})
 
         assert result.audio_factory is not None
         await _drain(result.audio_factory)
-        audiobooks_skill._player.stream.assert_called_once_with(book["path"], start_position=250.0)
+        player_mock.stream.assert_called_once_with(book["path"], start_position=250.0)
         data = json.loads(result.output)
         assert data["playing"] is True
 
 
 class TestControl:
-    """Rewind/forward/resume build new factories with updated start_position.
-
-    Pause/stop are info-only responses (`audio_factory=None`) — the actual
-    stopping happens via the coordinator's interrupt when the user pressed
-    PTT to speak to the model. The prior media task's finally already saved
-    the terminal position by the time `_control` runs.
-    """
+    """Rewind/forward/resume build new factories with updated start_position."""
 
     async def test_pause_returns_no_factory(self, audiobooks_skill: AudiobooksSkill) -> None:
         result = await audiobooks_skill.handle("audiobook_control", {"action": "pause"})
@@ -329,29 +327,30 @@ class TestControl:
         assert result.audio_factory is None
 
     async def test_rewind_does_not_eagerly_persist_new_position(
-        self, audiobooks_skill: AudiobooksSkill, storage: Storage
+        self, audiobooks_skill: AudiobooksSkill, storage: SkillStorage
     ) -> None:
-        """Closure-captured atomicity: storage is untouched when `_control`
-        returns. The new position only lands when the factory actually runs.
-        """
+        """Storage is untouched when `_control` returns; only the factory writes."""
         book = audiobooks_skill._catalog[0]
-        await storage.save_audiobook_position(book["id"], 120.0)
-        await storage.set_setting(LAST_BOOK_SETTING, book["id"])
+        await storage.set_setting(_position_key(book["id"]), "120.0")
+        await storage.set_setting(LAST_BOOK_KEY, book["id"])
 
         result = await audiobooks_skill.handle(
             "audiobook_control", {"action": "rewind", "seconds": 10}
         )
 
         # Storage still at 120.0 — not updated yet.
-        assert await storage.get_audiobook_position(book["id"]) == 120.0
+        assert await storage.get_setting(_position_key(book["id"])) == "120.0"
         assert result.audio_factory is not None
 
     async def test_rewind_factory_streams_from_new_position(
-        self, audiobooks_skill: AudiobooksSkill, storage: Storage
+        self,
+        audiobooks_skill: AudiobooksSkill,
+        storage: SkillStorage,
+        player_mock: MagicMock,
     ) -> None:
         book = audiobooks_skill._catalog[0]
-        await storage.save_audiobook_position(book["id"], 120.0)
-        await storage.set_setting(LAST_BOOK_SETTING, book["id"])
+        await storage.set_setting(_position_key(book["id"]), "120.0")
+        await storage.set_setting(LAST_BOOK_KEY, book["id"])
 
         result = await audiobooks_skill.handle(
             "audiobook_control", {"action": "rewind", "seconds": 10}
@@ -359,14 +358,17 @@ class TestControl:
 
         assert result.audio_factory is not None
         await _drain(result.audio_factory)
-        audiobooks_skill._player.stream.assert_called_once_with(book["path"], start_position=110.0)
+        player_mock.stream.assert_called_once_with(book["path"], start_position=110.0)
 
     async def test_rewind_clamps_at_zero(
-        self, audiobooks_skill: AudiobooksSkill, storage: Storage
+        self,
+        audiobooks_skill: AudiobooksSkill,
+        storage: SkillStorage,
+        player_mock: MagicMock,
     ) -> None:
         book = audiobooks_skill._catalog[0]
-        await storage.save_audiobook_position(book["id"], 5.0)
-        await storage.set_setting(LAST_BOOK_SETTING, book["id"])
+        await storage.set_setting(_position_key(book["id"]), "5.0")
+        await storage.set_setting(LAST_BOOK_KEY, book["id"])
 
         result = await audiobooks_skill.handle(
             "audiobook_control", {"action": "rewind", "seconds": 60}
@@ -374,14 +376,17 @@ class TestControl:
 
         assert result.audio_factory is not None
         await _drain(result.audio_factory)
-        audiobooks_skill._player.stream.assert_called_once_with(book["path"], start_position=0.0)
+        player_mock.stream.assert_called_once_with(book["path"], start_position=0.0)
 
     async def test_forward_streams_from_new_position(
-        self, audiobooks_skill: AudiobooksSkill, storage: Storage
+        self,
+        audiobooks_skill: AudiobooksSkill,
+        storage: SkillStorage,
+        player_mock: MagicMock,
     ) -> None:
         book = audiobooks_skill._catalog[0]
-        await storage.save_audiobook_position(book["id"], 50.0)
-        await storage.set_setting(LAST_BOOK_SETTING, book["id"])
+        await storage.set_setting(_position_key(book["id"]), "50.0")
+        await storage.set_setting(LAST_BOOK_KEY, book["id"])
 
         result = await audiobooks_skill.handle(
             "audiobook_control", {"action": "forward", "seconds": 30}
@@ -389,20 +394,23 @@ class TestControl:
 
         assert result.audio_factory is not None
         await _drain(result.audio_factory)
-        audiobooks_skill._player.stream.assert_called_once_with(book["path"], start_position=80.0)
+        player_mock.stream.assert_called_once_with(book["path"], start_position=80.0)
 
     async def test_resume_streams_last_book_from_saved_position(
-        self, audiobooks_skill: AudiobooksSkill, storage: Storage
+        self,
+        audiobooks_skill: AudiobooksSkill,
+        storage: SkillStorage,
+        player_mock: MagicMock,
     ) -> None:
         book = audiobooks_skill._catalog[0]
-        await storage.save_audiobook_position(book["id"], 75.0)
-        await storage.set_setting(LAST_BOOK_SETTING, book["id"])
+        await storage.set_setting(_position_key(book["id"]), "75.0")
+        await storage.set_setting(LAST_BOOK_KEY, book["id"])
 
         result = await audiobooks_skill.handle("audiobook_control", {"action": "resume"})
 
         assert result.audio_factory is not None
         await _drain(result.audio_factory)
-        audiobooks_skill._player.stream.assert_called_once_with(book["path"], start_position=75.0)
+        player_mock.stream.assert_called_once_with(book["path"], start_position=75.0)
 
     async def test_rewind_with_no_book_returns_friendly_message(
         self, audiobooks_skill: AudiobooksSkill
@@ -419,18 +427,15 @@ class TestControl:
 class TestFactoryCancelPersistsPosition:
     """Cancelling mid-stream still persists the position via the finally block."""
 
-    async def test_cancellation_persists_position(
-        self, library_path: Path, storage: Storage
-    ) -> None:
+    async def test_cancellation_persists_position(self, library_path: Path) -> None:
         import asyncio
 
-        # Player that yields forever — so we can cancel mid-stream
         async def infinite_stream(
             _path: Any,
             start_position: float = 0.0,
         ) -> AsyncIterator[bytes]:
             while True:
-                yield b"x" * 480  # ~5 ms of audio
+                yield b"x" * 480
                 await asyncio.sleep(0.001)
 
         player = MagicMock()
@@ -441,16 +446,16 @@ class TestFactoryCancelPersistsPosition:
 
         player.probe = probe_ok
 
-        skill = AudiobooksSkill(library_path=library_path, player=player, storage=storage)
-        await skill.setup(_dummy_ctx())
+        skill = AudiobooksSkill(player=player)
+        await skill.setup(_make_ctx(library_path))
 
         book = skill._catalog[0]
         result = await skill.handle("play_audiobook", {"book_id": book["id"]})
         assert result.audio_factory is not None
+        factory = result.audio_factory
 
-        # Spawn the factory consumer as a task; cancel it after a few chunks.
         async def consume() -> None:
-            async for _chunk in result.audio_factory():
+            async for _chunk in factory():
                 pass
 
         task = asyncio.create_task(consume())
@@ -459,9 +464,10 @@ class TestFactoryCancelPersistsPosition:
         with contextlib.suppress(asyncio.CancelledError):
             await task
 
-        saved = await storage.get_audiobook_position(book["id"])
-        # Some positive position was persisted by the finally block.
-        assert saved > 0
+        assert skill._storage is not None
+        saved_raw = await skill._storage.get_setting(_position_key(book["id"]))
+        assert saved_raw is not None
+        assert float(saved_raw) > 0
 
 
 class TestPromptContext:
@@ -473,12 +479,9 @@ class TestPromptContext:
         assert "María" in ctx
         assert "Jorge Isaacs" in ctx
 
-    def test_empty_library_returns_empty_string(self, tmp_path: Path, storage: Storage) -> None:
-        skill = AudiobooksSkill(
-            library_path=tmp_path / "empty",
-            player=_make_player_mock(),
-            storage=storage,
-        )
+    def test_empty_library_returns_empty_string(self, tmp_path: Path) -> None:
+        skill = AudiobooksSkill(player=_make_player_mock())
+        # Skill not set up: catalog empty → prompt context empty.
         assert skill.prompt_context() == ""
 
 

@@ -6,6 +6,8 @@ requires-python = ">=3.13"
 members = [
     "huxley",
     "huxley-sdk",
+    "huxley-skill-audiobooks",
+    "huxley-skill-system",
 ]
 
 [[package]]
@@ -178,6 +180,8 @@ source = { editable = "packages/core" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "huxley-sdk" },
+    { name = "huxley-skill-audiobooks" },
+    { name = "huxley-skill-system" },
     { name = "openai" },
     { name = "pydantic-settings" },
     { name = "structlog" },
@@ -196,6 +200,8 @@ dev = [
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "huxley-sdk", editable = "packages/sdk" },
+    { name = "huxley-skill-audiobooks", editable = "packages/skills/audiobooks" },
+    { name = "huxley-skill-system", editable = "packages/skills/system" },
     { name = "openai", specifier = ">=1.60" },
     { name = "pydantic-settings", specifier = ">=2.7" },
     { name = "structlog", specifier = ">=24.4" },
@@ -227,6 +233,56 @@ dev = [
 
 [package.metadata]
 requires-dist = [{ name = "structlog", specifier = ">=24.4" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=1.13" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
+]
+
+[[package]]
+name = "huxley-skill-audiobooks"
+version = "0.1.0"
+source = { editable = "packages/skills/audiobooks" }
+dependencies = [
+    { name = "huxley-sdk" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "huxley-sdk", editable = "packages/sdk" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=1.13" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
+]
+
+[[package]]
+name = "huxley-skill-system"
+version = "0.1.0"
+source = { editable = "packages/skills/system" }
+dependencies = [
+    { name = "huxley-sdk" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "huxley-sdk", editable = "packages/sdk" }]
 
 [package.metadata.requires-dev]
 dev = [

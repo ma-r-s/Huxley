@@ -184,61 +184,61 @@ flowchart TD
     Server[server/server.py]
     Session[session/manager.py]
     Coord[turn/coordinator.py]
-    Skills[skills/*]
-    Registry[skills/__init__.py<br/>SkillRegistry]
+    Loader[loader.py<br/>entry-point discovery]
+    Registry[huxley_sdk/registry.py<br/>SkillRegistry]
+    Skills[packages/skills/*]
     State[state/machine.py]
-    Player[media/audiobook_player.py]
     Storage[storage/db.py]
-    Types[types.py]
+    NSStorage[storage/skill.py<br/>NamespacedSkillStorage]
+    Types[huxley_sdk/types.py]
 
     App --> Server
     App --> Session
     App --> Coord
+    App --> Loader
     App --> Registry
     App --> State
-    App --> Player
     App --> Storage
+    App --> NSStorage
+    Loader --> Skills
     Registry --> Skills
-    Skills --> Player
-    Skills --> Storage
+    NSStorage --> Storage
+    Skills --> Types
     Session --> Registry
     Session --> Storage
     State --> Types
-    Skills --> Types
     Registry --> Types
     Server --> Types
     Coord --> Types
 ```
 
-Dependencies flow **downward**. `types.py` is the universal leaf — everyone imports from it, it imports from nothing. `app.py` is the root — nothing imports from it, it wires everything.
-
-After the SDK extraction (next refactor), skills will depend only on `huxley_sdk`, never on framework internals. This is the boundary that makes third-party skills possible.
+Dependencies flow **downward**. `huxley_sdk/types.py` is the universal leaf — everyone imports from it, it imports from nothing. `app.py` is the root — nothing imports from it, it wires everything. Skill packages depend only on `huxley_sdk`, never on framework internals; the framework reaches them only through entry-point discovery and the `Skill` protocol. This is the boundary that makes third-party skills possible.
 
 ## Where to look in code
 
-| Concern                           | File                                                 |
-| --------------------------------- | ---------------------------------------------------- |
-| Orchestrator / all wiring         | `packages/core/src/huxley/app.py`                    |
-| WebSocket audio server            | `packages/core/src/huxley/server/server.py`          |
-| State machine + transitions       | `packages/core/src/huxley/state/machine.py`          |
-| Turn coordinator + factory fire   | `packages/core/src/huxley/turn/coordinator.py`       |
-| Voice provider (OpenAI Realtime)  | `packages/core/src/huxley/session/manager.py`        |
-| OpenAI event schemas              | `packages/core/src/huxley/session/protocol.py`       |
-| Skill protocol + ToolResult       | `packages/sdk/src/huxley_sdk/types.py`               |
-| Skill registry + dispatch         | `packages/sdk/src/huxley_sdk/registry.py`            |
-| SkillContext + SkillStorage       | `packages/sdk/src/huxley_sdk/types.py`               |
-| FakeSkill (test helper)           | `packages/sdk/src/huxley_sdk/testing.py`             |
-| Audiobooks skill (still inline)   | `packages/core/src/huxley/skills/audiobooks.py`      |
-| Audiobook ffmpeg stream generator | `packages/core/src/huxley/media/audiobook_player.py` |
-| System skill (still inline)       | `packages/core/src/huxley/skills/system.py`          |
-| SQLite wrapper                    | `packages/core/src/huxley/storage/db.py`             |
-| Config (env-driven settings)      | `packages/core/src/huxley/config.py`                 |
+| Concern                           | File                                                               |
+| --------------------------------- | ------------------------------------------------------------------ |
+| Orchestrator / all wiring         | `packages/core/src/huxley/app.py`                                  |
+| WebSocket audio server            | `packages/core/src/huxley/server/server.py`                        |
+| State machine + transitions       | `packages/core/src/huxley/state/machine.py`                        |
+| Turn coordinator + factory fire   | `packages/core/src/huxley/turn/coordinator.py`                     |
+| Voice provider (OpenAI Realtime)  | `packages/core/src/huxley/session/manager.py`                      |
+| OpenAI event schemas              | `packages/core/src/huxley/session/protocol.py`                     |
+| Skill protocol + ToolResult       | `packages/sdk/src/huxley_sdk/types.py`                             |
+| Skill registry + dispatch         | `packages/sdk/src/huxley_sdk/registry.py`                          |
+| SkillContext + SkillStorage       | `packages/sdk/src/huxley_sdk/types.py`                             |
+| FakeSkill (test helper)           | `packages/sdk/src/huxley_sdk/testing.py`                           |
+| Skill loader (entry points)       | `packages/core/src/huxley/loader.py`                               |
+| Audiobooks skill                  | `packages/skills/audiobooks/src/huxley_skill_audiobooks/skill.py`  |
+| Audiobook ffmpeg stream generator | `packages/skills/audiobooks/src/huxley_skill_audiobooks/player.py` |
+| System skill                      | `packages/skills/system/src/huxley_skill_system/skill.py`          |
+| SQLite wrapper                    | `packages/core/src/huxley/storage/db.py`                           |
+| Per-skill namespaced KV adapter   | `packages/core/src/huxley/storage/skill.py`                        |
+| Config (env-driven settings)      | `packages/core/src/huxley/config.py`                               |
 
-After stages 2–4 land, the two skills move out:
+After stage 4 lands, persona-driven configuration takes over:
 
 ```
-packages/skills/audiobooks/src/huxley_skill_audiobooks/   # built-in, entry-point loaded
-packages/skills/system/src/huxley_skill_system/           # built-in, entry-point loaded
-personas/abuelos/persona.yaml                             # the AbuelOS persona
-personas/abuelos/data/                                    # audiobooks library + sqlite db
+personas/abuelos/persona.yaml   # the AbuelOS persona spec
+personas/abuelos/data/          # audiobooks library + sqlite db
 ```

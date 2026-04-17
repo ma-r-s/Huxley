@@ -1,16 +1,65 @@
 """Test utilities for Huxley SDK consumers.
 
 `FakeSkill` is the minimal Skill-protocol implementation used across the
-test suite (registry tests, coordinator tests, integration tests). Importing
-from `huxley_sdk.testing` is intentional — these helpers are not part of
-the runtime SDK surface.
+test suite (registry tests, coordinator tests, integration tests).
+`make_test_context` builds a no-op `SkillContext` for testing skill
+`setup()` paths. Importing from `huxley_sdk.testing` is intentional —
+these helpers are not part of the runtime SDK surface.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock, MagicMock
 
 from huxley_sdk.types import SkillContext, ToolDefinition, ToolResult
+
+if TYPE_CHECKING:
+    from huxley_sdk.types import SkillStorage
+
+
+class _NoopSkillStorage:
+    """In-memory SkillStorage for tests. Implements the protocol structurally."""
+
+    def __init__(self) -> None:
+        self._data: dict[str, str] = {}
+
+    async def get_setting(self, key: str) -> str | None:
+        return self._data.get(key)
+
+    async def set_setting(self, key: str, value: str) -> None:
+        self._data[key] = value
+
+
+def make_test_context(
+    *,
+    name: str = "test",
+    config: dict[str, Any] | None = None,
+    persona_data_dir: Path | None = None,
+    storage: SkillStorage | None = None,
+) -> SkillContext:
+    """Build a SkillContext for unit-testing a skill's setup() and handle().
+
+    Defaults to:
+    - `logger`: an AsyncMock with the SkillLogger methods
+    - `storage`: an in-memory `_NoopSkillStorage` (overrideable)
+    - `persona_data_dir`: `/tmp` (override for path-resolution tests)
+    - `config`: `{}` (override per skill's expected keys)
+
+    Use `storage=` to inject a populated mock for tests that read pre-existing
+    state. Use `config=` to inject the keys your skill expects from
+    `persona.yaml`.
+    """
+    logger = MagicMock()
+    for method in ("ainfo", "adebug", "awarning", "aerror", "aexception"):
+        setattr(logger, method, AsyncMock())
+    return SkillContext(
+        logger=logger,
+        storage=storage if storage is not None else _NoopSkillStorage(),
+        persona_data_dir=persona_data_dir or Path("/tmp"),
+        config=config or {},
+    )
 
 
 class FakeSkill:

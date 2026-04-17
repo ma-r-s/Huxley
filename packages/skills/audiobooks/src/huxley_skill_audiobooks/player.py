@@ -25,13 +25,9 @@ import contextlib
 import json
 from typing import TYPE_CHECKING, Any
 
-import structlog
-
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
-
-logger = structlog.get_logger()
 
 SAMPLE_RATE = 24_000
 BYTES_PER_SAMPLE = 2  # PCM16 little-endian
@@ -118,10 +114,6 @@ class AudiobookPlayer:
             stdin=asyncio.subprocess.DEVNULL,
         )
         assert proc.stdout is not None
-        # The skill emits audiobooks.stream_started with logical context;
-        # this debug event surfaces the actual ffmpeg invocation for
-        # low-level diagnosis (wrong path, ffmpeg crash).
-        await logger.adebug("audiobooks.ffmpeg_spawned", path=str(path), start=start)
         try:
             while True:
                 try:

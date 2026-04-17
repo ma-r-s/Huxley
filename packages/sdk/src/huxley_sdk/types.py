@@ -6,6 +6,11 @@ Skill authors import from `huxley_sdk`:
 
 Everything here is persona-agnostic and framework-independent. Huxley core
 imports and implements these types, but a skill sees only this surface.
+
+Design intent: a skill package depends ONLY on `huxley-sdk`. No other
+runtime dep is required (no structlog, no pydantic, no openai). The
+SDK uses Protocol types so concrete framework implementations satisfy
+them structurally.
 """
 
 from __future__ import annotations
@@ -17,8 +22,6 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
     from pathlib import Path
-
-    import structlog
 
 
 class AppState(Enum):
@@ -85,13 +88,37 @@ class InvalidTransitionError(Exception):
 class SkillStorage(Protocol):
     """Per-skill storage façade the framework hands to each skill.
 
-    Settings keys are namespaced automatically with the skill's name
+    Setting keys are namespaced automatically with the skill's name
     (so `audiobooks` and another skill can both store a `last_id` without
     collision). Concrete implementation lives in Huxley core.
+
+    Two methods is enough: skills that need richer structure can use
+    composite keys like `position:<book_id>` and parse the value
+    themselves. If a real skill ever needs table-style queries, this
+    protocol grows; speculative additions are out of scope.
     """
 
     async def get_setting(self, key: str) -> str | None: ...
     async def set_setting(self, key: str, value: str) -> None: ...
+
+
+class SkillLogger(Protocol):
+    """Async logger interface the framework hands to each skill.
+
+    Satisfied structurally by structlog's BoundLogger. Skills depend on
+    this protocol (declared here in the SDK) and never need to import
+    structlog directly.
+
+    Skills emit events using the convention `<skill_name>.<event>` (see
+    `docs/observability.md`). The framework auto-injects the current turn
+    ID into all skill log lines via the bound logger.
+    """
+
+    async def ainfo(self, event: str, **kwargs: Any) -> None: ...
+    async def adebug(self, event: str, **kwargs: Any) -> None: ...
+    async def awarning(self, event: str, **kwargs: Any) -> None: ...
+    async def aerror(self, event: str, **kwargs: Any) -> None: ...
+    async def aexception(self, event: str, **kwargs: Any) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,8 +129,8 @@ class SkillContext:
     discovers and instantiates skills via entry points); all per-skill
     configuration and infrastructure arrive here.
 
-    - `logger`: a structlog bound logger pre-tagged with `skill=<name>`.
-      Use `ctx.logger.ainfo(...)` for events your skill emits.
+    - `logger`: a logger pre-tagged with `skill=<name>`. Use
+      `ctx.logger.ainfo(...)` for events your skill emits.
     - `storage`: namespaced key-value storage scoped to this skill.
     - `persona_data_dir`: absolute path to the persona's data directory.
       Resolve your skill's file paths against this, not against CWD.
@@ -111,7 +138,7 @@ class SkillContext:
       `skills.<name>:` section.
     """
 
-    logger: structlog.stdlib.BoundLogger
+    logger: SkillLogger
     storage: SkillStorage
     persona_data_dir: Path
     config: dict[str, Any]

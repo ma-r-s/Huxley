@@ -13,16 +13,17 @@ import platform
 import subprocess
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
-import structlog
-
-from huxley_sdk import SkillContext, ToolDefinition, ToolResult
-
-logger = structlog.get_logger()
+from huxley_sdk import SkillContext, SkillLogger, ToolDefinition, ToolResult
 
 
 class SystemSkill:
     """Provides system-level tools."""
+
+    def __init__(self) -> None:
+        self._logger: SkillLogger | None = None
+        self._timezone: str = "America/Bogota"
 
     @property
     def name(self) -> str:
@@ -49,44 +50,48 @@ class SystemSkill:
             ),
             ToolDefinition(
                 name="get_current_time",
-                description="Devuelve la hora y fecha actual en Colombia.",
+                description="Devuelve la hora y fecha actual.",
                 parameters={"type": "object", "properties": {}},
             ),
         ]
 
     async def handle(self, tool_name: str, args: dict[str, Any]) -> ToolResult:
+        assert self._logger is not None
         match tool_name:
             case "set_volume":
                 level = max(0, min(100, args.get("level", 50)))
-                await _set_system_volume(level)
-                await logger.ainfo("system.volume_set", level=level)
+                await _set_system_volume(level, self._logger)
+                await self._logger.ainfo("system.volume_set", level=level)
                 return ToolResult(output=json.dumps({"volume": level, "ok": True}))
             case "get_current_time":
-                from zoneinfo import ZoneInfo
-
-                now = datetime.now(tz=ZoneInfo("America/Bogota"))
-                await logger.ainfo("system.time_query", time=now.isoformat(timespec="seconds"))
+                now = datetime.now(tz=ZoneInfo(self._timezone))
+                await self._logger.ainfo(
+                    "system.time_query", time=now.isoformat(timespec="seconds")
+                )
                 return ToolResult(
                     output=json.dumps(
                         {
                             "time": now.strftime("%I:%M %p"),
                             "date": now.strftime("%A %d de %B de %Y"),
-                            "timezone": "America/Bogota",
+                            "timezone": self._timezone,
                         }
                     )
                 )
             case _:
-                await logger.awarning("system.unknown_tool", tool=tool_name)
+                await self._logger.awarning("system.unknown_tool", tool=tool_name)
                 return ToolResult(output=json.dumps({"error": f"Unknown tool: {tool_name}"}))
 
     async def setup(self, ctx: SkillContext) -> None:
-        del ctx  # accepted for protocol compliance; unused
+        self._logger = ctx.logger
+        tz_value = ctx.config.get("timezone")
+        if isinstance(tz_value, str) and tz_value:
+            self._timezone = tz_value
 
     async def teardown(self) -> None:
         pass
 
 
-async def _set_system_volume(level: int) -> None:
+async def _set_system_volume(level: int, logger: SkillLogger) -> None:
     """Set OS output volume (0-100). Best-effort — logs on failure."""
     loop = asyncio.get_running_loop()
     try:
@@ -99,4 +104,4 @@ async def _set_system_volume(level: int) -> None:
             lambda: subprocess.run(cmd, check=True, capture_output=True),  # noqa: ASYNC221
         )
     except Exception:
-        logger.warning("system.volume_failed", level=level)
+        await logger.awarning("system.volume_failed", level=level)

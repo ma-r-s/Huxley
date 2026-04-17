@@ -5,6 +5,11 @@ the `TurnCoordinator`, and every callback that connects them. No other module
 imports from app.py — communication is through callbacks injected at
 construction time.
 
+Skills are loaded via Python entry points (`huxley.loader.discover_skills`),
+so the framework never imports a concrete skill class. Each skill receives a
+`SkillContext` carrying a per-skill logger, namespaced storage, the persona
+data dir, and the per-skill config dict.
+
 Audio I/O is owned by the client (browser, ESP32). The server receives mic
 frames over WebSocket, routes them to OpenAI via the session manager, and
 streams response audio back through the same WebSocket via the `AudioServer`.
@@ -16,24 +21,22 @@ from __future__ import annotations
 
 import asyncio
 import signal
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from huxley.loader import discover_skills
 from huxley.logging import setup_logging
-from huxley.media.audiobook_player import AudiobookPlayer
 from huxley.server.server import AudioServer
 from huxley.session.manager import SessionManager
-from huxley.skills.audiobooks import AudiobooksSkill
-from huxley.skills.system import SystemSkill
 from huxley.state.machine import StateMachine
 from huxley.storage.db import Storage
+from huxley.storage.skill import NamespacedSkillStorage
 from huxley.turn import TurnCoordinator
 from huxley_sdk import AppState, SkillContext, SkillRegistry
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from huxley.config import Settings
 
 logger = structlog.get_logger()
@@ -61,28 +64,12 @@ class Application:
             on_audio_frame=self._on_audio_frame,
         )
 
-        # Stateless ffmpeg wrapper — used by AudiobooksSkill to build factory
-        # closures. The player has no callbacks or mutable state; each
-        # `stream()` call is an independent subprocess, cancelled cleanly by
-        # the coordinator's `interrupt()` when a new turn starts.
-        self.audiobook_player = AudiobookPlayer(
-            ffmpeg_path=config.ffmpeg_path,
-            ffprobe_path=config.ffprobe_path,
-        )
+        # Skill discovery via entry points. Stage 2 hardcodes the enabled
+        # skill list here; stage 4 will read it from `persona.yaml`.
+        for name, skill_cls in discover_skills(["audiobooks", "system"]).items():
+            del name  # name is on the instance via .name; entry-point key is just the dispatch
+            self.skill_registry.register(skill_cls())
 
-        self.audiobooks_skill = AudiobooksSkill(
-            library_path=config.audiobook_library_path,
-            player=self.audiobook_player,
-            storage=self.storage,
-        )
-        self.system_skill = SystemSkill()
-        self.skill_registry.register(self.audiobooks_skill)
-        self.skill_registry.register(self.system_skill)
-
-        # Session manager — thin transport. Callbacks reference
-        # `self.coordinator` via closures so construction order stays simple:
-        # session is built before the coordinator; the lambdas resolve
-        # `self.coordinator` at call time (after coordinator construction).
         self.session = SessionManager(
             config=config,
             skill_registry=self.skill_registry,
@@ -98,7 +85,6 @@ class Application:
             on_transcript=self._on_transcript,
         )
 
-        # Turn coordinator — owns all audio sequencing and interrupt logic.
         self.coordinator = TurnCoordinator(
             send_audio=self.server.send_audio,
             send_audio_clear=self.server.send_audio_clear,
@@ -115,33 +101,46 @@ class Application:
         )
 
         self._shutdown_event = asyncio.Event()
-        # Flipped True in `_shutdown()` before disconnecting the session, so
-        # `_on_session_end`'s auto-reconnect policy knows to stand down.
         self._shutting_down = False
-        # Held reference to the auto-reconnect background task so it isn't
-        # garbage-collected mid-flight (RUF006). See `_on_session_end`.
         self._reconnect_task: asyncio.Task[None] | None = None
 
     def _build_skill_context(self, skill_name: str) -> SkillContext:
         """Construct the SkillContext handed to a skill at setup() time.
 
-        Stage 1 implementation: minimal context with a bound logger; storage
-        is the framework's `Storage` (will be wrapped per-skill in stage 2).
-        Per-skill config is empty (will come from persona.yaml in stage 4).
+        Stage 2: storage is namespaced per-skill; logger is bound with
+        `skill=<name>`; persona_data_dir is CWD (stage 4 will swap to the
+        persona's data directory). Per-skill config is derived from
+        `Settings` defaults — same key shape the persona.yaml will deliver
+        in stage 4.
         """
-        from pathlib import Path
-
         return SkillContext(
             logger=structlog.get_logger().bind(skill=skill_name),
-            storage=self.storage,  # Stage 2 will wrap this in a namespaced SkillStorage
+            storage=NamespacedSkillStorage(self.storage, skill_name),
             persona_data_dir=Path.cwd(),
-            config={},
+            config=self._skill_config(skill_name),
         )
+
+    def _skill_config(self, skill_name: str) -> dict[str, Any]:
+        """Return the per-skill config dict.
+
+        Forward-designed for stage 4: the keys here mirror what
+        `persona.yaml`'s `skills.<name>:` block will deliver. Today they're
+        sourced from `Settings`; tomorrow from YAML.
+        """
+        match skill_name:
+            case "audiobooks":
+                return {
+                    "library": str(self.config.audiobook_library_path),
+                    "ffmpeg": self.config.ffmpeg_path,
+                    "ffprobe": self.config.ffprobe_path,
+                }
+            case "system":
+                return {}
+            case _:
+                return {}
 
     async def run(self) -> None:
         """Initialize subsystems and run the main loop."""
-        from pathlib import Path
-
         log_file: Path | None = self.config.log_file
         if log_file is None:
             log_file = Path("logs/huxley.log")
@@ -197,12 +196,8 @@ class Application:
         import contextlib
 
         await logger.ainfo("huxley_shutting_down")
-        # Must flip BEFORE disconnecting so `_on_session_end` sees it and
-        # doesn't kick off an auto-reconnect during teardown.
         self._shutting_down = True
 
-        # Any in-flight reconnect task must be cancelled — it'd try to open a
-        # new session while we're tearing the current one down.
         if self._reconnect_task is not None and not self._reconnect_task.done():
             self._reconnect_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -254,14 +249,7 @@ class Application:
         self._reconnect_task = asyncio.create_task(self._auto_reconnect())
 
     async def _auto_reconnect(self) -> None:
-        """Trigger a fresh wake_word → CONNECTING → CONVERSING transition.
-
-        Runs in its own task so the previous `disconnect()` can fully unwind
-        first. If the reconnect fails, `_enter_connecting` catches it and
-        trips `failed`, dropping back to IDLE — the user retries with a
-        manual press. No retry loop here: a broken OpenAI endpoint would
-        otherwise spam reconnects.
-        """
+        """Trigger a fresh wake_word → CONNECTING → CONVERSING transition."""
         await logger.ainfo("session_auto_reconnect")
         try:
             await self.state_machine.trigger("wake_word")
