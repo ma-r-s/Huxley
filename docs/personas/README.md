@@ -2,7 +2,7 @@
 
 A persona declares **who your agent is**. It's a YAML file in `personas/<name>/persona.yaml`. Huxley loads it at startup, builds the system prompt, registers the listed skills with their config, opens the voice session — and you have an agent.
 
-For the conceptual model, see [`../concepts.md`](../concepts.md). For a full worked example, see [`abuelos.md`](./abuelos.md) — the persona built for Mario's grandfather.
+For the conceptual model, see [`../concepts.md`](../concepts.md). For a full worked example, see [`abuelos.md`](./abuelos.md) — the canonical Spanish-language persona for an elderly blind user.
 
 ## Minimal example
 
@@ -52,7 +52,7 @@ skills:
       library: ./data/audiobooks
   - system: {}
   - weather:
-      location: "Villavicencio, Colombia"
+      location: "Bogotá, Colombia"
       units: metric
 ```
 
@@ -97,7 +97,7 @@ The persona is the unit of reproducibility. Two people running the same persona 
 
 ## Worked example
 
-[`abuelos.md`](./abuelos.md) is the canonical persona — Mario's grandfather's assistant. It's the most complete example of:
+[`abuelos.md`](./abuelos.md) is the canonical persona — a Spanish-language assistant for an elderly blind user. It's the most complete example of:
 
 - A constraint applied end-to-end (`never_say_no` → matching skill behavior → matching client behavior)
 - A non-English persona (Spanish, with regional register)

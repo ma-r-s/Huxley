@@ -1,6 +1,6 @@
 # Skill: audiobooks
 
-The first-party Huxley skill. Will be packaged as `huxley-skill-audiobooks` after the SDK extraction. The reason Huxley exists in the first place — Mario built this so his grandfather could listen to books by voice. The grandfather's full persona spec lives in [`../personas/abuelos.md`](../personas/abuelos.md); the Spanish examples below come from that persona because it's the canonical use case, but the skill works against any persona that enables it (with the appropriate language for tool descriptions).
+The first first-party Huxley skill. Will be packaged as `huxley-skill-audiobooks` after the SDK extraction. Provides voice-driven audiobook search, playback, and navigation against a local library of M4B files. The Spanish examples below come from the AbuelOS persona ([`../personas/abuelos.md`](../personas/abuelos.md)) because it's the canonical use case, but the skill works against any persona that enables it — tool descriptions and user-facing strings should be localized to the persona's language.
 
 ## Product surface
 
@@ -119,7 +119,7 @@ The skill exists in [`server/src/abuel_os/skills/audiobooks.py`](../../server/sr
 | `describe_current`  | —                                                                                                                                       | What's playing: title, author, chapter name + number, position, duration, remaining                                  |
 | `audiobook_control` | `action: pause \| resume \| stop \| seek_time \| seek_chapter`, `seconds?: number`, `chapter_delta?: number`, `chapter_number?: number` | Ok + new position/chapter                                                                                            |
 
-### Natural-language vocabulary — what grandpa says → what the LLM calls
+### Natural-language vocabulary — what the user says → what the LLM calls
 
 | He says                                            | LLM calls                                                    |
 | -------------------------------------------------- | ------------------------------------------------------------ |
@@ -138,7 +138,7 @@ The skill exists in [`server/src/abuel_os/skills/audiobooks.py`](../../server/sr
 
 ### Resume UX rule
 
-When grandpa says _"sigue con el libro"_ / _"el de anoche"_ / similar:
+When the user says _"sigue con el libro"_ / _"el de anoche"_ / similar:
 
 1. **Exactly one book** has a saved position → auto-resume, no confirmation. Say _"sigo con 'X' donde lo dejó, don."_
 2. **Multiple books** have saved positions → ask _"¿quiere seguir con 'X' o con 'Y'?"_
@@ -185,7 +185,7 @@ Every tool return path must include a `message` field written for the LLM narrat
 
 ### Edge cases
 
-- **Library empty** — `search_audiobooks` returns `{ results: [], message: "La biblioteca está vacía. Hay que pedirle a Mario que agregue libros." }`
+- **Library empty** — `search_audiobooks` returns `{ results: [], message: "La biblioteca está vacía. Hay que agregar libros." }`
 - **Corrupt file / probe fails** — wrap in Rule 3 of the [nunca-decir-no contract](./README.md#rule-3--errors-wrapped-in-plain-spanish).
 - **Saved position > book duration** (book truncated or replaced) — clamp to 0, log a warning, don't fail the tool call.
 - **Book renamed on disk** — `book_id` is the relative path, so a rename invalidates the id. Resume won't find it. Acceptable for v0; fix in v2 with a content-hash id if it bites.

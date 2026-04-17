@@ -22,7 +22,7 @@ Two roadmaps live here: **Huxley** (the framework) and **AbuelOS** (the first pe
 
 Make Huxley what it claims to be in [`vision.md`](./vision.md): a framework anyone can extend.
 
-- [P0] **Rename / namespace cleanup**: `abuel_os` → `huxley`. Repo path `AbuelOS/` → `Huxley/` (TBD with Mario).
+- [P0] **Rename / namespace cleanup**: `abuel_os` → `huxley`. Repo path `AbuelOS/` → `Huxley/` (final stage of the active refactor).
 - [P0] **Workspace split**: one repo, multiple uv-workspace packages: `packages/sdk/`, `packages/core/`, `packages/skills/audiobooks/`, `packages/skills/system/`. Skills become installable.
 - [P0] **Persona loader**: `personas/<name>/persona.yaml` parsed at startup. Currently the persona is hard-coded in `config.py`'s default system prompt; this moves it out into config.
 - [P0] **Constraint registry**: named constraints (`never_say_no`, `confirm_destructive`, `child_safe`) defined in core, composed into the system prompt by the persona.
@@ -50,7 +50,7 @@ Make Huxley what it claims to be in [`vision.md`](./vision.md): a framework anyo
 
 The first persona Huxley runs in production. Spec lives at [`personas/abuelos.md`](./personas/abuelos.md).
 
-### v1 — Mario's bar
+### v1 — the AbuelOS deployment bar
 
 > _"The moment I can speak to the assistant and it helps me find a book, listen to it, and move forward, backwards, stop and resume another time — that's v1 done."_
 
@@ -64,7 +64,7 @@ The first persona Huxley runs in production. Spec lives at [`personas/abuelos.md
 | Stop playback                                   | ✅                                                                   |
 | Resume later (_"sigue con el libro"_)           | ✅                                                                   |
 | Every negative response offers an alternative   | ⚠️ partial — coverage in `search` and `control` paths still has gaps |
-| End-to-end smoke test with grandpa              | ❌ never tested with him directly                                    |
+| End-to-end smoke test with target user              | ❌ not yet                                    |
 
 ### v2 — next skills
 
@@ -72,7 +72,7 @@ Once AbuelOS v1 is stable. Each is its own `huxley-skill-*` package.
 
 1. **`huxley-skill-news`** — read headlines from a configurable source
 2. **`huxley-skill-music`** — streaming radio and local music
-3. **`huxley-skill-messaging`** — outbound text to Mario / family via WhatsApp or voice memo. **This is the concrete escape hatch that makes the `never_say_no` constraint more than a verbal promise.**
+3. **`huxley-skill-messaging`** — outbound text to a family/caretaker contact via WhatsApp or voice memo. **This is the concrete escape hatch that makes the `never_say_no` constraint more than a verbal promise.**
 4. **`huxley-skill-contacts`** — config-driven contact list that messaging depends on
 
 ### v∞ — when firmware lands
@@ -80,7 +80,7 @@ Once AbuelOS v1 is stable. Each is its own `huxley-skill-*` package.
 Requires Huxley framework gaps to close first (proactive speech).
 
 - ESP32 walky-talky client — replaces browser as production client, same WebSocket protocol
-- Physical always-findable button — the one UI element grandpa touches
+- Physical always-findable button — the only UI element the user touches
 - Proactive speech support — needed for reminders, inbound messages
 - **Reminders** — meds, appointments
 - **Memory / recall** — _"¿de qué hablamos ayer?"_
@@ -91,7 +91,7 @@ Requires Huxley framework gaps to close first (proactive speech).
 | Feature                      | Why                                                                 |
 | ---------------------------- | ------------------------------------------------------------------- |
 | Wake word                    | Fragile for elderly users; PTT button is more reliable              |
-| Religious content            | Mario confirmed out of scope                                        |
+| Religious content            | out of scope by persona declaration                                        |
 | Privacy / no-log mode        | Not a concern for this user                                         |
 | Offline operation            | Not worth the complexity for v1                                     |
 | Languages other than Spanish | This persona is Spanish-only; other personas can do other languages |

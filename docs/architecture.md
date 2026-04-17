@@ -60,7 +60,7 @@ See [decision 2026-04-13 — Audiobook audio streams through the WebSocket](./de
 
 ### Persona is config, not code
 
-The framework loads a `persona.yaml` at startup and uses it to build the system prompt, register the listed skills, and configure the voice provider. Swap the persona file → swap the agent. Code does not know "this is for a blind grandpa" — that knowledge lives entirely in the persona file and the constraint definitions it references.
+The framework loads a `persona.yaml` at startup and uses it to build the system prompt, register the listed skills, and configure the voice provider. Swap the persona file → swap the agent. Code does not know "this is for a blind elderly user" — that knowledge lives entirely in the persona file and the constraint definitions it references.
 
 ## State machine
 

@@ -216,7 +216,7 @@ No `PLAYING`. Media playback is tracked by `current_media_task` on the coordinat
 
 **Cost check**: OpenAI Realtime API bills per token. Idle session (no audio flowing, no function calls) = zero tokens = zero cost. The original "save API cost" justification for PLAYING does not hold.
 
-**Mic privacy unchanged**: mic-to-OpenAI forwarding is gated by `_ptt_active`, independent of state. Removing PLAYING does not change what grandpa's mic streams.
+**Mic privacy unchanged**: mic-to-OpenAI forwarding is gated by `_ptt_active`, independent of state. Removing PLAYING does not change what the user's mic streams.
 
 **UX win**: first-press latency after a mid-book interrupt drops from ~1 s (reconnection) to ~0 s (session already open).
 

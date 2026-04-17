@@ -1,10 +1,10 @@
 # Huxley
 
-A voice agent framework. You give it a persona (who the agent is) and a set of skills (what it can do); it does the rest. Built first for one grandfather (the **AbuelOS** persona); now anyone's.
+A voice agent framework. You give it a persona (who the agent is) and a set of skills (what it can do); it does the rest. The first persona shipped on it is **AbuelOS**, a Spanish-language assistant for an elderly blind user.
 
-**📖 Full product + architecture docs: [`docs/`](./docs/)**. Start with [`docs/vision.md`](./docs/vision.md) and [`docs/concepts.md`](./docs/concepts.md).
+**📖 Full product + architecture docs: [`docs/`](./docs/)**. Start with [`docs/vision.md`](./docs/vision.md) and [`docs/concepts.md`](./docs/concepts.md). New visitors should read [`README.md`](./README.md) first.
 
-This file is the quick-start for Claude and Mario. For _why_, _what_, and _how_, read the docs.
+This file is the quick-start for contributors and AI collaborators. For _why_, _what_, and _how_, read the docs.
 
 > **Naming-in-flight**: the repo directory is still `AbuelOS/` — it gets renamed to `Huxley/` in stage 5 of the refactor (a user-action `git mv`). The Python namespaces have already moved: framework code is `huxley`, SDK is `huxley_sdk`. _AbuelOS_ now refers to the canonical persona, never to the framework.
 
@@ -33,7 +33,7 @@ AbuelOS/                # repo dir (will be renamed to Huxley/ in stage 5)
 │   ├── roadmap.md      # framework + persona roadmaps
 │   ├── personas/
 │   │   ├── README.md   # how to write a persona
-│   │   └── abuelos.md  # the grandfather's persona
+│   │   └── abuelos.md  # the canonical persona (Spanish-speaking elderly blind user)
 │   └── skills/
 │       ├── README.md   # how to write a skill
 │       └── audiobooks.md # first-party skill spec
@@ -103,11 +103,11 @@ Before presenting work as done:
 
 ### The dev loop — describe-symptom-read-log
 
-Mario's primary debugging mode is conversational: he tests via browser, describes a symptom, Claude reads the server log and diagnoses. This works because every meaningful event is logged with structured context.
+The primary debugging mode is conversational: a contributor tests via the browser dev client, describes a symptom, Claude (or another collaborator) reads the server log and diagnoses. This works because every meaningful event is logged with structured context.
 
 When you add a new feature or fix a bug, ask: **"if this breaks in production, what log line would I need to diagnose it?"** Then add that line. The framework's logging convention is documented in [`docs/observability.md`](./docs/observability.md).
 
-If a session ever ends with "I had to ask Mario what was happening because the log didn't show enough" — that's a bug in the logging, fix it.
+If a session ever ends with "I had to ask the contributor what was happening because the log didn't show enough" — that's a bug in the logging, fix it.
 
 ### Critic pattern
 

@@ -1,31 +1,35 @@
-# AbuelOS — Documentation
+# Huxley — Documentation
 
-Single source of truth for what AbuelOS is, why it exists, and how it's built. Code comments describe _what_; this folder describes _why_ and _what we're aiming at_.
+Single source of truth for what Huxley is, what it does, and how it's built. Code comments describe _what_; this folder describes _why_ and _what we're aiming at_.
 
 ## Reading order
 
-1. [**vision.md**](./vision.md) — Who this is for, why current assistants fail him, the _"nunca decir no"_ contract
-2. [**roadmap.md**](./roadmap.md) — v0 / v1 / v2 scope with skill priorities
-3. [**architecture.md**](./architecture.md) — System diagrams, state machine, sequence flows
-4. [**protocol.md**](./protocol.md) — WebSocket contract between client and server
-5. [**skills/README.md**](./skills/README.md) — How skills work, how to author one
-6. [**skills/audiobooks.md**](./skills/audiobooks.md) — The v0 skill spec
-7. [**decisions.md**](./decisions.md) — Architectural decision log (ADRs)
+1. [**vision.md**](./vision.md) — what Huxley is, who it's for, what it's not
+2. [**concepts.md**](./concepts.md) — vocabulary: persona, skill, tool, turn, side effect, factory, voice provider, constraint, client
+3. [**architecture.md**](./architecture.md) — system diagrams, state machine, sequence flows
+4. [**protocol.md**](./protocol.md) — WebSocket contract between client and framework
+5. [**observability.md**](./observability.md) — logging conventions and the diagnose-from-logs workflow
+6. [**skills/README.md**](./skills/README.md) — how skills work, how to author one
+7. [**personas/README.md**](./personas/README.md) — how to write a persona
+8. [**roadmap.md**](./roadmap.md) — framework + persona roadmaps
+9. [**decisions.md**](./decisions.md) — architectural decision log (ADRs)
 
-## Design specs (in flight)
+## Worked examples
 
-- [**turns.md**](./turns.md) — Turn-based audio coordination spec. How a tool call's side-effect audio is sequenced after the model's verbal acknowledgement. Not yet implemented — this is the design under review. See [ADR 2026-04-13 — Turn-based coordinator for voice tool calls](./decisions.md#2026-04-13--turn-based-coordinator-for-voice-tool-calls).
+- [**personas/abuelos.md**](./personas/abuelos.md) — canonical persona spec (Spanish-language assistant for an elderly blind user)
+- [**skills/audiobooks.md**](./skills/audiobooks.md) — first-party skill spec
+- [**turns.md**](./turns.md) — turn coordinator spec
 
-## Ownership
+## Hard rule
 
-Claude maintains this folder. Mario is the source of truth for product direction.
-
-**Hard rule**: any code change that invalidates a doc must update the doc in the same commit. No stale docs.
+Any code change that invalidates a doc must update the doc in the same commit. No stale docs.
 
 ## Where this fits in the repo
 
 - `docs/` — product + architecture + protocol (this folder)
-- `/CLAUDE.md` — quick-start for Claude and Mario; methodology; pointers into `docs/`
-- `server/` and `web/` — implementation; the "how" lives here, the "why" does not
+- `/README.md` — repo entry point: what Huxley is, install, run, link to docs
+- `/CLAUDE.md` — methodology and conventions for contributors and AI collaborators
+- `packages/` — implementation; the _how_ lives here
+- `web/` — dev client (browser mic + speaker over WebSocket)
 
-When in doubt about where something belongs: **product or architectural _why_ → `docs/`. How-to-run or methodology → `CLAUDE.md`. Implementation detail → code comments.**
+When in doubt about where something belongs: **product or architectural _why_ → `docs/`. Repo-wide methodology → `CLAUDE.md`. Implementation detail → code comments.**
