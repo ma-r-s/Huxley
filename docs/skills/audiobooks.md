@@ -78,7 +78,7 @@ server/data/audiobooks/
     └── María.m4b
 ```
 
-Configured via `audiobook_library_path` in [`packages/core/src/huxley/config.py`](../../packages/core/src/huxley/config.py), defaults to `data/audiobooks` (relative to `packages/core/`). After stage 4 of the active refactor, this moves into `personas/abuelos/persona.yaml` under the `skills.audiobooks.library_path` key.
+Configured in the persona's `skills.audiobooks` block (see [`personas/abuelos/persona.yaml`](../../personas/abuelos/persona.yaml)): `library` is a path relative to the persona's `data/` directory (default `audiobooks`). `ffmpeg` / `ffprobe` let a persona pin specific binaries if the PATH defaults aren't right.
 
 ## Current state
 

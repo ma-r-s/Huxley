@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from huxley.config import Settings
+from huxley.persona import PersonaSpec
 from huxley.storage.db import Storage
 from huxley_sdk import AudioStream, ToolDefinition, ToolResult
 from huxley_sdk.testing import FakeSkill
@@ -30,13 +31,22 @@ async def storage(tmp_db_path: Path) -> AsyncIterator[Storage]:
 
 
 @pytest.fixture
-def settings(tmp_path: Path) -> Settings:
-    return Settings(
-        openai_api_key="test-key",
-        db_path=tmp_path / "test.db",
-        audiobook_library_path=tmp_path / "audiobooks",
-        ffmpeg_path="ffmpeg",
-        ffprobe_path="ffprobe",
+def settings() -> Settings:
+    return Settings(openai_api_key="test-key")
+
+
+@pytest.fixture
+def persona(tmp_path: Path) -> PersonaSpec:
+    return PersonaSpec(
+        name="TestPersona",
+        voice="coral",
+        language_code="es",
+        transcription_language="es",
+        timezone="America/Bogota",
+        system_prompt="Eres un asistente de prueba en español.",
+        constraints=[],
+        skills={"audiobooks": {}, "system": {}},
+        data_dir=tmp_path,
     )
 
 

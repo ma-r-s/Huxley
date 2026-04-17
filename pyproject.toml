@@ -56,5 +56,6 @@ disallow_untyped_defs = true
 module = [
     "openwakeword.*",
     "numpy.*",
+    "yaml.*",
 ]
 ignore_missing_imports = true

@@ -25,10 +25,9 @@ htmlcov/
 packages/core/logs/
 logs/
 
-# Persona-local data (audiobooks, etc.) and framework data — large, user-provided
-packages/core/data/
-packages/core/models/
+# Persona-local data (audiobook library, sqlite DB) — large, user-provided
 personas/*/data/
+packages/core/models/
 
 # macOS
 .DS_Store

@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from websockets.asyncio.client import ClientConnection
 
     from huxley.config import Settings
+    from huxley.persona import PersonaSpec
     from huxley.storage.db import Storage
     from huxley_sdk import SkillRegistry
 
@@ -62,6 +63,7 @@ class SessionManager:
     def __init__(
         self,
         config: Settings,
+        persona: PersonaSpec,
         skill_registry: SkillRegistry,
         storage: Storage,
         on_audio_delta: Callable[[bytes], Awaitable[None]],
@@ -73,6 +75,7 @@ class SessionManager:
         on_transcript: Callable[[str, str], Awaitable[None]] | None = None,
     ) -> None:
         self._config = config
+        self._persona = persona
         self._skills = skill_registry
         self._storage = storage
         self._on_audio_delta = on_audio_delta
@@ -111,13 +114,13 @@ class SessionManager:
             raise
 
         # Build instructions from three layers:
-        #   1. the static system prompt (persona + nunca-decir-no contract)
+        #   1. the persona system prompt + named constraint snippets
         #   2. skill-contributed context (e.g. audiobook catalog) so the LLM
         #      has baseline awareness of available resources without needing
         #      extra tool calls for _"¿qué libros tienes?"_ style questions
         #   3. the last conversation summary for continuity across sessions
         summary = await self._storage.get_latest_summary()
-        instructions = self._config.system_prompt
+        instructions = self._persona.system_prompt_with_constraints
 
         skill_context = self._skills.get_prompt_context()
         if skill_context:
@@ -126,22 +129,25 @@ class SessionManager:
         if summary:
             instructions += f"\n\nContexto de la conversación anterior: {summary}"
 
+        # Voice: env-var override wins if set, otherwise the persona decides.
+        voice = self._config.openai_voice or self._persona.voice
+
         await self._send(
             ClientEventType.SESSION_UPDATE,
             {
                 "session": {
                     "instructions": instructions,
-                    "voice": self._config.openai_voice,
+                    "voice": voice,
                     "tools": self._skills.get_all_tool_definitions(),
                     "input_audio_format": "pcm16",
                     "output_audio_format": "pcm16",
-                    # Force Spanish transcription. Without `language`, Whisper
-                    # auto-detects per utterance and with heavy llanero accents
-                    # it flips to English on short inputs. Abuelo only speaks
-                    # Spanish — the hint eliminates the ambiguity.
+                    # Force the persona's transcription language. Without
+                    # `language`, Whisper auto-detects per utterance and with
+                    # heavy regional accents it flips languages on short
+                    # inputs; the hint eliminates the ambiguity.
                     "input_audio_transcription": {
                         "model": "whisper-1",
-                        "language": "es",
+                        "language": self._persona.transcription_language,
                     },
                     # PTT mode — disable server VAD, we commit manually on PTT release
                     "turn_detection": None,

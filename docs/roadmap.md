@@ -24,9 +24,9 @@ Make Huxley what it claims to be in [`vision.md`](./vision.md): a framework anyo
 
 - ✅ **Workspace split**: one repo, multiple uv-workspace packages: `packages/sdk/`, `packages/core/`, `packages/skills/audiobooks/`, `packages/skills/system/`. Skills installable via `huxley.skills` entry points.
 - ✅ **Generic side effects**: `ToolResult.side_effect: SideEffect | None` with `AudioStream` as the first kind. Coordinator dispatches by `isinstance`. Legacy `audio_factory=` still works as a deprecated alias.
-- [P0] **Rename / namespace cleanup**: `abuel_os` → `huxley`. Repo path `AbuelOS/` → `Huxley/` (final stage of the active refactor).
-- [P0] **Persona loader**: `personas/<name>/persona.yaml` parsed at startup. Currently the persona is hard-coded in `config.py`'s default system prompt; this moves it out into config.
-- [P0] **Constraint registry**: named constraints (`never_say_no`, `confirm_destructive`, `child_safe`) defined in core, composed into the system prompt by the persona.
+- ✅ **Persona loader**: `personas/<name>/persona.yaml` parsed at startup (version, name, voice, language, timezone, system_prompt, constraints, skills). Resolution order: `HUXLEY_PERSONA` env var > default `personas/abuelos`. Data lives under `personas/<name>/data/`.
+- ✅ **Constraint registry**: `never_say_no`, `confirm_destructive`, `child_safe`, `no_religious_content` defined in `huxley.constraints`; persona composes them into the system prompt at connect time. Unknown names fail at load.
+- [P0] **Rename / namespace cleanup**: Repo path `AbuelOS/` → `Huxley/` (final stage of the active refactor).
 - [P1] **Skill SDK README + cookbook**: a third-party skill author can write a working skill in under 30 minutes with no Huxley-internals knowledge.
 
 ### Later

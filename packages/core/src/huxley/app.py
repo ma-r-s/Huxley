@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import signal
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import structlog
 
@@ -38,6 +38,7 @@ from huxley_sdk import AppState, SkillContext, SkillRegistry
 
 if TYPE_CHECKING:
     from huxley.config import Settings
+    from huxley.persona import PersonaSpec
 
 logger = structlog.get_logger()
 
@@ -49,10 +50,11 @@ class Application:
     communication. Manages the async main loop and graceful shutdown.
     """
 
-    def __init__(self, config: Settings) -> None:
+    def __init__(self, config: Settings, persona: PersonaSpec) -> None:
         self.config = config
+        self.persona = persona
         self.state_machine = StateMachine()
-        self.storage = Storage(config.db_path)
+        self.storage = Storage(persona.data_dir / f"{persona.name.lower()}.db")
         self.skill_registry = SkillRegistry()
 
         self.server = AudioServer(
@@ -64,14 +66,16 @@ class Application:
             on_audio_frame=self._on_audio_frame,
         )
 
-        # Skill discovery via entry points. Stage 2 hardcodes the enabled
-        # skill list here; stage 4 will read it from `persona.yaml`.
-        for name, skill_cls in discover_skills(["audiobooks", "system"]).items():
-            del name  # name is on the instance via .name; entry-point key is just the dispatch
+        # Skill discovery via entry points. The persona names which skills it
+        # wants — in declaration order — and the loader resolves each to a
+        # class via the `huxley.skills` entry-point group.
+        enabled = list(persona.skills.keys())
+        for _name, skill_cls in discover_skills(enabled).items():
             self.skill_registry.register(skill_cls())
 
         self.session = SessionManager(
             config=config,
+            persona=persona,
             skill_registry=self.skill_registry,
             storage=self.storage,
             on_audio_delta=lambda pcm: self.coordinator.on_audio_delta(pcm),
@@ -107,37 +111,17 @@ class Application:
     def _build_skill_context(self, skill_name: str) -> SkillContext:
         """Construct the SkillContext handed to a skill at setup() time.
 
-        Stage 2: storage is namespaced per-skill; logger is bound with
-        `skill=<name>`; persona_data_dir is CWD (stage 4 will swap to the
-        persona's data directory). Per-skill config is derived from
-        `Settings` defaults — same key shape the persona.yaml will deliver
-        in stage 4.
+        Per-skill config comes straight from `persona.yaml`'s `skills.<name>:`
+        block. Storage is a per-skill namespaced view over the framework's
+        `Storage`; `persona_data_dir` is the persona's resolved data
+        directory, so any relative paths in cfg resolve there.
         """
         return SkillContext(
             logger=structlog.get_logger().bind(skill=skill_name),
             storage=NamespacedSkillStorage(self.storage, skill_name),
-            persona_data_dir=Path.cwd(),
-            config=self._skill_config(skill_name),
+            persona_data_dir=self.persona.data_dir,
+            config=self.persona.skills.get(skill_name, {}),
         )
-
-    def _skill_config(self, skill_name: str) -> dict[str, Any]:
-        """Return the per-skill config dict.
-
-        Forward-designed for stage 4: the keys here mirror what
-        `persona.yaml`'s `skills.<name>:` block will deliver. Today they're
-        sourced from `Settings`; tomorrow from YAML.
-        """
-        match skill_name:
-            case "audiobooks":
-                return {
-                    "library": str(self.config.audiobook_library_path),
-                    "ffmpeg": self.config.ffmpeg_path,
-                    "ffprobe": self.config.ffprobe_path,
-                }
-            case "system":
-                return {}
-            case _:
-                return {}
 
     async def run(self) -> None:
         """Initialize subsystems and run the main loop."""

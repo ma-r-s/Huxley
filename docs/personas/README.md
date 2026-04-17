@@ -7,27 +7,33 @@ For the conceptual model, see [`../concepts.md`](../concepts.md). For a full wor
 ## Minimal example
 
 ```yaml
+version: 1
 name: My Assistant
-language: en-US
 voice: alloy
-personality: |
-  You are a helpful and friendly assistant.
+language_code: en
+transcription_language: en
+timezone: America/New_York
+system_prompt: |
+  You are a helpful and friendly assistant. Respond in English.
 skills:
-  - system: {}
+  system: {}
 ```
 
-Run Huxley with `HUXLEY_PERSONA=my_assistant`, you have a voice agent that speaks English in the alloy voice and can tell the time / set volume.
+Run Huxley with `HUXLEY_PERSONA=my_assistant` (the directory name under `./personas/`). You have a voice agent that speaks English in the alloy voice and can tell the time / set volume.
 
 ## Fields
 
-| Field         | Required | Description                                                                                                                                        |
-| ------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`        | yes      | The agent's name. Used in logs and (optionally) by the model to refer to itself.                                                                   |
-| `language`    | yes      | BCP-47 language tag (`es-CO`, `en-US`, `pt-BR`). Sets the transcription hint and informs which language tool descriptions are loaded in.           |
-| `voice`       | yes      | Voice provider voice ID. For OpenAI Realtime: `alloy`, `echo`, `shimmer`, etc.                                                                     |
-| `personality` | yes      | Multi-line string. Goes into the system prompt verbatim. Write it in the persona's language. Describe tone, register, who the agent is talking to. |
-| `constraints` | no       | List of named behavioral constraints to layer onto the system prompt. See below.                                                                   |
-| `skills`      | yes      | List of skills the agent has access to, each with optional config. Order doesn't matter for tool dispatch (the LLM picks tools by description).    |
+| Field                    | Required | Description                                                                                                                                  |
+| ------------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`                | no       | Schema version (default `1`). The loader fails loudly on mismatch.                                                                           |
+| `name`                   | yes      | The agent's name. Used in logs and (optionally) by the model to refer to itself. Lowercased for the SQLite filename (`<name>.db`).           |
+| `voice`                  | yes      | Voice provider voice ID. For OpenAI Realtime: `alloy`, `coral`, `echo`, `shimmer`, etc. Overridable per-run via `HUXLEY_OPENAI_VOICE`.       |
+| `language_code`          | yes      | ISO 639-1 language code (`es`, `en`, `pt`). Reserved for future language-aware behavior; not currently used by the framework.                |
+| `transcription_language` | yes      | Whisper language hint (`es`, `en`). Sent in `input_audio_transcription.language` to eliminate auto-detection drift.                          |
+| `timezone`               | yes      | IANA timezone (`America/Bogota`, `Europe/Madrid`). Consumed by skills that report dates/times.                                               |
+| `system_prompt`          | yes      | Multi-line string. Goes into the OpenAI session prompt verbatim. Write it in the persona's language. Describe tone, register, who's talking. |
+| `constraints`            | no       | List of named behavioral constraints (see below). Snippets are composed and appended to `system_prompt` at connect time.                     |
+| `skills`                 | yes      | Map of skill name → config dict. Skills named here are discovered via `huxley.skills` entry points; missing names fail fast at startup.      |
 
 ## Constraints
 
@@ -44,19 +50,19 @@ Constraint definitions live in `packages/core/src/huxley/constraints/`. Adding a
 
 ## Skills
 
-The `skills` field is a list. Each item is a single-key map: skill name → config dict.
+The `skills` field is a map: skill name → config dict. Order matters only for log/dispatch determinism (the LLM picks tools by description).
 
 ```yaml
 skills:
-  - audiobooks:
-      library: ./data/audiobooks
-  - system: {}
-  - weather:
-      location: "Bogotá, Colombia"
-      units: metric
+  audiobooks:
+    library: audiobooks
+  system: {}
+  weather:
+    location: "Bogotá, Colombia"
+    units: metric
 ```
 
-The skill name (`audiobooks`, `system`, `weather`) matches the package name (minus the `huxley-skill-` prefix). The config dict is whatever the skill's docs say it accepts.
+The skill name (`audiobooks`, `system`, `weather`) matches the entry-point key registered by `huxley-skill-<name>`'s `pyproject.toml`. The config dict is whatever the skill's docs say it accepts. Relative paths in config values resolve against `personas/<name>/data/`.
 
 If a listed skill isn't installed, Huxley fails fast at startup with a clear error pointing you at `pip install huxley-skill-<name>`.
 
@@ -77,13 +83,13 @@ Data inside `personas/<name>/data/` is referenced by skill configs using paths r
 
 ## Selecting which persona to run
 
-Set the `HUXLEY_PERSONA` environment variable to the persona's directory name:
+Set the `HUXLEY_PERSONA` environment variable to the persona's directory name (under `./personas/`):
 
 ```bash
 HUXLEY_PERSONA=abuelos uv run python -m huxley
 ```
 
-If unset, Huxley picks the persona from a default in config (or fails fast if nothing's configured).
+Unset defaults to `personas/abuelos`. Framework fails fast if the directory has no `persona.yaml`.
 
 ## Sharing a persona
 

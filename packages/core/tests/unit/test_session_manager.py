@@ -26,20 +26,19 @@ from huxley_sdk import SkillRegistry
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from huxley.persona import PersonaSpec
+
 
 @pytest.fixture
-def session_deps(tmp_path: Path) -> dict[str, Any]:
+def session_deps(tmp_path: Path, persona: PersonaSpec) -> dict[str, Any]:
     """Create all SessionManager dependencies."""
-    config = Settings(
-        openai_api_key="test-key",
-        db_path=tmp_path / "test.db",
-        audiobook_library_path=tmp_path / "audiobooks",
-    )
+    config = Settings(openai_api_key="test-key")
     registry = SkillRegistry()
     storage = Storage(tmp_path / "test.db")
 
     return {
         "config": config,
+        "persona": persona,
         "skill_registry": registry,
         "storage": storage,
         "on_audio_delta": AsyncMock(),

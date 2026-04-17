@@ -15,32 +15,39 @@ AbuelOS/                # repo dir (will be renamed to Huxley/ in stage 5)
 ├── pyproject.toml      # uv workspace root
 ├── packages/
 │   ├── sdk/            # huxley-sdk: skill author surface
-│   │   └── src/huxley_sdk/   # Skill, Tool*, SkillContext, SkillRegistry
-│   └── core/           # huxley: framework runtime
-│       ├── src/huxley/       # app, session, turn, server, skills (still inline), media, storage
-│       ├── data/             # gitignored; audiobook library + sqlite db (moves to personas/ in stage 4)
-│       ├── tests/
-│       └── .env              # gitignored; HUXLEY_OPENAI_API_KEY etc
+│   │   └── src/huxley_sdk/   # Skill, Tool*, SkillContext, SideEffect/AudioStream, SkillRegistry
+│   ├── core/           # huxley: framework runtime
+│   │   ├── src/huxley/       # app, session, turn, server, persona, constraints, loader, storage
+│   │   ├── tests/
+│   │   └── .env              # gitignored; HUXLEY_OPENAI_API_KEY etc
+│   └── skills/
+│       ├── audiobooks/       # huxley-skill-audiobooks (entry-point loaded)
+│       └── system/           # huxley-skill-system (entry-point loaded)
+├── personas/
+│   └── abuelos/              # canonical persona
+│       ├── persona.yaml      # version, name, voice, language, system_prompt, constraints, skills
+│       ├── data/             # gitignored: audiobook library + abuelos.db
+│       └── README.md
+├── scripts/
+│   └── migrate-data-to-persona.sh  # one-time move from legacy packages/core/data/
 ├── web/                # SvelteKit dev client
 ├── docs/               # Single source of truth
 │   ├── vision.md       # what Huxley is
 │   ├── concepts.md     # vocabulary (persona, skill, turn, side effect, ...)
 │   ├── architecture.md # framework internals
+│   ├── extensibility.md # what skills fit, where the design gaps are
 │   ├── observability.md # logging conventions + debugging workflow
 │   ├── protocol.md     # WebSocket contract for clients
 │   ├── turns.md        # turn coordinator spec
 │   ├── decisions.md    # ADR log
 │   ├── roadmap.md      # framework + persona roadmaps
-│   ├── personas/
-│   │   ├── README.md   # how to write a persona
-│   │   └── abuelos.md  # the canonical persona (Spanish-speaking elderly blind user)
-│   └── skills/
-│       ├── README.md   # how to write a skill
-│       └── audiobooks.md # first-party skill spec
+│   ├── personas/{README,abuelos}.md
+│   ├── skills/{README,audiobooks}.md
+│   └── research/sonic-ux.md
 └── CLAUDE.md           # this file
 ```
 
-Refactor in progress: stages 2–5 will add `packages/skills/{audiobooks,system}/` (entry-point-loaded), `personas/abuelos/persona.yaml`, the data move, and the repo rename. See [`docs/roadmap.md`](./docs/roadmap.md) → "Huxley framework / Next" and the active plan at `~/.claude/plans/proud-conjuring-papert.md`.
+Refactor in progress: stage 5 is the repo rename `AbuelOS/` → `Huxley/` plus final docs polish. Stages 1–4 have shipped. See [`docs/roadmap.md`](./docs/roadmap.md) and the active plan at `~/.claude/plans/proud-conjuring-papert.md`.
 
 ## Commands
 
