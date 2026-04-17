@@ -59,11 +59,13 @@ class SystemSkill:
             case "set_volume":
                 level = max(0, min(100, args.get("level", 50)))
                 await _set_system_volume(level)
+                await logger.ainfo("system.volume_set", level=level)
                 return ToolResult(output=json.dumps({"volume": level, "ok": True}))
             case "get_current_time":
                 from zoneinfo import ZoneInfo
 
                 now = datetime.now(tz=ZoneInfo("America/Bogota"))
+                await logger.ainfo("system.time_query", time=now.isoformat(timespec="seconds"))
                 return ToolResult(
                     output=json.dumps(
                         {
@@ -74,6 +76,7 @@ class SystemSkill:
                     )
                 )
             case _:
+                await logger.awarning("system.unknown_tool", tool=tool_name)
                 return ToolResult(output=json.dumps({"error": f"Unknown tool: {tool_name}"}))
 
     async def setup(self, ctx: SkillContext) -> None:
@@ -96,4 +99,4 @@ async def _set_system_volume(level: int) -> None:
             lambda: subprocess.run(cmd, check=True, capture_output=True),  # noqa: ASYNC221
         )
     except Exception:
-        logger.warning("system_volume_failed", level=level)
+        logger.warning("system.volume_failed", level=level)

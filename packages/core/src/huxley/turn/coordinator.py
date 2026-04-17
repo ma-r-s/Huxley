@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -67,6 +68,10 @@ class Turn:
     response_ids: list[str] = field(default_factory=list)
     pending_factories: list[Callable[[], AsyncIterator[bytes]]] = field(default_factory=list)
     needs_follow_up: bool = False
+    # Summary tracking — emitted as coord.turn_summary at end-of-turn.
+    started_at: float = field(default_factory=lambda: time.monotonic())
+    tool_calls: int = 0
+    response_done_count: int = 0
 
 
 class TurnCoordinator:
@@ -229,6 +234,7 @@ class TurnCoordinator:
         await self._oai_send_function_output(call_id, result.output)
 
         has_factory = result.audio_factory is not None
+        self.current_turn.tool_calls += 1
         await self._log.ainfo(
             "coord.tool_dispatch",
             state=self.current_turn.state.value,
@@ -258,6 +264,7 @@ class TurnCoordinator:
 
         follow_up = self.current_turn.needs_follow_up
         factories = len(self.current_turn.pending_factories)
+        self.current_turn.response_done_count += 1
         await self._log.ainfo(
             "coord.response_done",
             state=self.current_turn.state.value,
@@ -339,9 +346,10 @@ class TurnCoordinator:
         # 5. Cancel the in-flight response (only if one could exist)
         if will_cancel:
             await self._oai_cancel()
-        # 6. Mark current turn as interrupted + clear the reference
+        # 6. Mark current turn as interrupted, emit summary, clear ref
         if self.current_turn is not None:
             self.current_turn.state = TurnState.INTERRUPTED
+            await self._emit_turn_summary(reason="interrupted", spawned_factory=False)
         self.current_turn = None
         self._bind_turn()
 
@@ -378,10 +386,26 @@ class TurnCoordinator:
             self.current_media_task = asyncio.create_task(self._consume_factory(factory, turn_id))
             await self._log.ainfo("coord.factory_started")
 
+        await self._emit_turn_summary(reason="ended", spawned_factory=bool(factories))
         await self._log.ainfo("coord.turn_ended")
         self.current_turn = None
         self._bind_turn()
         await self._send_status("Listo — mantén el botón para responder")
+
+    async def _emit_turn_summary(self, *, reason: str, spawned_factory: bool) -> None:
+        """One-line summary at end-of-turn. Useful for grep + per-turn timing."""
+        if self.current_turn is None:
+            return
+        elapsed_ms = int((time.monotonic() - self.current_turn.started_at) * 1000)
+        await self._log.ainfo(
+            "coord.turn_summary",
+            reason=reason,
+            elapsed_ms=elapsed_ms,
+            tool_calls=self.current_turn.tool_calls,
+            response_done_count=self.current_turn.response_done_count,
+            spawned_factory=spawned_factory,
+            user_audio_frames=self.current_turn.user_audio_frames,
+        )
 
     async def _consume_factory(
         self, factory: Callable[[], AsyncIterator[bytes]], turn_id: str | None

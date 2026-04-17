@@ -118,7 +118,10 @@ class AudiobookPlayer:
             stdin=asyncio.subprocess.DEVNULL,
         )
         assert proc.stdout is not None
-        await logger.ainfo("audiobook_stream_started", path=str(path), start=start)
+        # The skill emits audiobooks.stream_started with logical context;
+        # this debug event surfaces the actual ffmpeg invocation for
+        # low-level diagnosis (wrong path, ffmpeg crash).
+        await logger.adebug("audiobooks.ffmpeg_spawned", path=str(path), start=start)
         try:
             while True:
                 try:

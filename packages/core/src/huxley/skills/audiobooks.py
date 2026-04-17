@@ -190,7 +190,7 @@ class AudiobooksSkill:
         del ctx  # accepted for protocol compliance; used in stage 2
         self._catalog = self._scan_library()
         await logger.ainfo(
-            "audiobooks_catalog_loaded",
+            "audiobooks.catalog_loaded",
             count=len(self._catalog),
             path=str(self._library_path),
         )
@@ -328,7 +328,7 @@ class AudiobooksSkill:
             )
         )
 
-    def _resolve_book(self, reference: str) -> dict[str, str] | None:
+    async def _resolve_book(self, reference: str) -> dict[str, str] | None:
         """Look up a book by exact ID, or fall back to fuzzy title/author match.
 
         The LLM often passes the human-readable title (e.g. `"Cien años de
@@ -341,9 +341,16 @@ class AudiobooksSkill:
         """
         exact = next((b for b in self._catalog if b["id"] == reference), None)
         if exact is not None:
+            await logger.ainfo(
+                "audiobooks.resolve",
+                reference=reference,
+                method="exact",
+                resolved_id=exact["id"],
+            )
             return exact
 
         if not self._catalog:
+            await logger.ainfo("audiobooks.resolve", reference=reference, resolved=None)
             return None
 
         best_score = 0.0
@@ -360,7 +367,21 @@ class AudiobooksSkill:
                 best_score = score
                 best_book = candidate
         if best_book is not None and best_score > 0.5:
+            await logger.ainfo(
+                "audiobooks.resolve",
+                reference=reference,
+                method="fuzzy",
+                resolved_id=best_book["id"],
+                score=round(best_score, 3),
+            )
             return best_book
+        await logger.ainfo(
+            "audiobooks.resolve",
+            reference=reference,
+            method="fuzzy",
+            resolved=None,
+            best_score=round(best_score, 3),
+        )
         return None
 
     def _build_factory(
@@ -382,6 +403,7 @@ class AudiobooksSkill:
 
         async def stream() -> AsyncIterator[bytes]:
             bytes_read = 0
+            await logger.ainfo("audiobooks.stream_started", book_id=book_id, start=start_position)
             try:
                 async for chunk in player.stream(path, start_position=start_position):
                     bytes_read += len(chunk)
@@ -391,8 +413,14 @@ class AudiobooksSkill:
                 final_pos = start_position + elapsed
                 try:
                     await storage.save_audiobook_position(book_id, final_pos)
+                    await logger.ainfo(
+                        "audiobooks.stream_ended",
+                        book_id=book_id,
+                        elapsed=round(elapsed, 2),
+                        final_pos=round(final_pos, 2),
+                    )
                 except Exception:
-                    await logger.aexception("audiobook_position_save_failed")
+                    await logger.aexception("audiobooks.position_save_failed")
 
         return stream
 
@@ -403,7 +431,7 @@ class AudiobooksSkill:
         terminal barrier, after the model has finished speaking. The model
         pre-narrates the ack per the tool description.
         """
-        book = self._resolve_book(book_id)
+        book = await self._resolve_book(book_id)
         if not book:
             return ToolResult(
                 output=json.dumps(
@@ -431,7 +459,7 @@ class AudiobooksSkill:
         try:
             await self._player.probe(book["path"])
         except PlayerError as exc:
-            await logger.aerror("audiobook_probe_failed", book_id=resolved_id, error=str(exc))
+            await logger.aerror("audiobooks.probe_failed", book_id=resolved_id, error=str(exc))
             return ToolResult(
                 output=json.dumps(
                     {
@@ -443,7 +471,7 @@ class AudiobooksSkill:
 
         await self._storage.set_setting(LAST_BOOK_SETTING, resolved_id)
         await logger.ainfo(
-            "audiobook_factory_built",
+            "audiobooks.factory_built",
             book_id=resolved_id,
             start_position=start_position,
         )
@@ -526,7 +554,15 @@ class AudiobooksSkill:
                 saved = await self._storage.get_audiobook_position(book_id)
                 delta = abs(seconds)
                 new_pos = max(0.0, saved - delta) if action == "rewind" else saved + delta
-                book = self._resolve_book(book_id)
+                await logger.ainfo(
+                    "audiobooks.seek",
+                    action=action,
+                    book_id=book_id,
+                    from_pos=round(saved, 2),
+                    to_pos=round(new_pos, 2),
+                    delta=delta,
+                )
+                book = await self._resolve_book(book_id)
                 if book is None:
                     return ToolResult(
                         output=json.dumps(

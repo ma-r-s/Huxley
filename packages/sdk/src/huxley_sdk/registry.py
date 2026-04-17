@@ -4,14 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-import structlog
-
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from huxley_sdk.types import Skill, SkillContext, ToolResult
-
-logger = structlog.get_logger()
 
 
 class SkillNotFoundError(Exception):
@@ -58,20 +54,17 @@ class SkillRegistry:
         return definitions
 
     async def dispatch(self, tool_name: str, args: dict[str, Any]) -> ToolResult:
-        """Route a tool call to the correct skill handler."""
+        """Route a tool call to the correct skill handler.
+
+        No `tool_dispatch` log emitted here — `coord.tool_dispatch` covers
+        the same event with richer context (turn, state, has_factory).
+        Adding one here would duplicate the line in every turn's log.
+        """
         skill_name = self._tool_to_skill.get(tool_name)
         if skill_name is None:
             msg = f"No skill registered for tool '{tool_name}'"
             raise SkillNotFoundError(msg)
-
-        skill = self._skills[skill_name]
-        await logger.ainfo(
-            "tool_dispatch",
-            tool=tool_name,
-            skill=skill_name,
-            args=args,
-        )
-        return await skill.handle(tool_name, args)
+        return await self._skills[skill_name].handle(tool_name, args)
 
     def get_prompt_context(self) -> str:
         """Collect optional prompt context contributed by registered skills.
