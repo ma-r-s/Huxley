@@ -422,11 +422,18 @@ class AudiobooksSkill:
 
         async def stream() -> AsyncIterator[bytes]:
             bytes_read = 0
+            stream_error: str | None = None
             await logger.ainfo("audiobooks.stream_started", book_id=book_id, start=start_position)
             try:
                 async for chunk in player.stream(path, start_position=start_position):
                     bytes_read += len(chunk)
                     yield chunk
+            except Exception as exc:
+                # CancelledError is BaseException (not Exception) so cancellations
+                # propagate through here; only real errors (PlayerError, OSError, etc.)
+                # land in this branch.
+                stream_error = type(exc).__name__
+                await logger.aexception("audiobooks.stream_error", book_id=book_id, exc=str(exc))
             finally:
                 elapsed = bytes_read / BYTES_PER_SECOND
                 final_pos = start_position + elapsed
@@ -437,6 +444,7 @@ class AudiobooksSkill:
                         book_id=book_id,
                         elapsed=round(elapsed, 2),
                         final_pos=round(final_pos, 2),
+                        error=stream_error,
                     )
                 except Exception:
                     await logger.aexception("audiobooks.position_save_failed")

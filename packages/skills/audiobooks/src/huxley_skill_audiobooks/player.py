@@ -121,8 +121,11 @@ class AudiobookPlayer:
                 except asyncio.IncompleteReadError as exc:
                     if exc.partial:
                         yield exc.partial
-                    return
+                    break
                 yield chunk
+            returncode = await proc.wait()
+            if returncode != 0:
+                raise PlayerError(f"ffmpeg exited with code {returncode}")
         finally:
             with contextlib.suppress(ProcessLookupError):
                 proc.terminate()
