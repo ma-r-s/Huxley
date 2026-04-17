@@ -2,7 +2,7 @@
 
 This is the architecture of **Huxley the framework** — the parts that are persona-agnostic and skill-agnostic. Persona spec lives in [`personas/`](./personas/), skill spec in [`skills/`](./skills/). Diagrams use the AbuelOS persona as the worked example because it's the canonical one, but the architecture is identical for any persona.
 
-> **Code-vs-docs note**: the framework's Python namespace is currently `abuel_os` and lives in `server/src/abuel_os/`. The rename to `huxley` (and split into `packages/sdk/` + `packages/core/`) is the next refactor. Documentation refers to "Huxley" as the framework name; code references still use `abuel_os` until the refactor lands.
+> **Refactor in progress**: stage 1 (rename + workspace + SDK extraction) shipped on 2026-04-16. The Python namespaces are now `huxley` (framework runtime, in `packages/core/`) and `huxley_sdk` (skill author surface, in `packages/sdk/`). Stages 2–5 add entry-point-loaded skill packages, persona YAML loading, and the persona-data move; until they land, the two skills (`audiobooks`, `system`) still live inside `packages/core/src/huxley/skills/` and are constructed inline in `app.py`. The plan lives in `~/.claude/plans/proud-conjuring-papert.md`.
 
 ## System overview
 
@@ -216,27 +216,29 @@ After the SDK extraction (next refactor), skills will depend only on `huxley_sdk
 
 ## Where to look in code
 
-| Concern                           | File (current — pre-rename)                     |
-| --------------------------------- | ----------------------------------------------- |
-| Orchestrator / all wiring         | `server/src/abuel_os/app.py`                    |
-| WebSocket audio server            | `server/src/abuel_os/server/server.py`          |
-| State machine + transitions       | `server/src/abuel_os/state/machine.py`          |
-| Turn coordinator + factory fire   | `server/src/abuel_os/turn/coordinator.py`       |
-| Voice provider (OpenAI Realtime)  | `server/src/abuel_os/session/manager.py`        |
-| OpenAI event schemas              | `server/src/abuel_os/session/protocol.py`       |
-| Skill registry + dispatch         | `server/src/abuel_os/skills/__init__.py`        |
-| Skill protocol + ToolResult       | `server/src/abuel_os/types.py`                  |
-| Audiobooks skill                  | `server/src/abuel_os/skills/audiobooks.py`      |
-| Audiobook ffmpeg stream generator | `server/src/abuel_os/media/audiobook_player.py` |
-| SQLite wrapper                    | `server/src/abuel_os/storage/db.py`             |
-| Config (env + defaults)           | `server/src/abuel_os/config.py`                 |
+| Concern                           | File                                                 |
+| --------------------------------- | ---------------------------------------------------- |
+| Orchestrator / all wiring         | `packages/core/src/huxley/app.py`                    |
+| WebSocket audio server            | `packages/core/src/huxley/server/server.py`          |
+| State machine + transitions       | `packages/core/src/huxley/state/machine.py`          |
+| Turn coordinator + factory fire   | `packages/core/src/huxley/turn/coordinator.py`       |
+| Voice provider (OpenAI Realtime)  | `packages/core/src/huxley/session/manager.py`        |
+| OpenAI event schemas              | `packages/core/src/huxley/session/protocol.py`       |
+| Skill protocol + ToolResult       | `packages/sdk/src/huxley_sdk/types.py`               |
+| Skill registry + dispatch         | `packages/sdk/src/huxley_sdk/registry.py`            |
+| SkillContext + SkillStorage       | `packages/sdk/src/huxley_sdk/types.py`               |
+| FakeSkill (test helper)           | `packages/sdk/src/huxley_sdk/testing.py`             |
+| Audiobooks skill (still inline)   | `packages/core/src/huxley/skills/audiobooks.py`      |
+| Audiobook ffmpeg stream generator | `packages/core/src/huxley/media/audiobook_player.py` |
+| System skill (still inline)       | `packages/core/src/huxley/skills/system.py`          |
+| SQLite wrapper                    | `packages/core/src/huxley/storage/db.py`             |
+| Config (env-driven settings)      | `packages/core/src/huxley/config.py`                 |
 
-After the rename → split refactor, this table reorganizes into:
+After stages 2–4 land, the two skills move out:
 
 ```
-packages/core/src/huxley/...    # framework runtime
-packages/sdk/src/huxley_sdk/... # skill author interface
-packages/skills/audiobooks/...  # built-in audiobooks skill
-packages/skills/system/...      # built-in system skill
-personas/abuelos/persona.yaml   # the AbuelOS persona
+packages/skills/audiobooks/src/huxley_skill_audiobooks/   # built-in, entry-point loaded
+packages/skills/system/src/huxley_skill_system/           # built-in, entry-point loaded
+personas/abuelos/persona.yaml                             # the AbuelOS persona
+personas/abuelos/data/                                    # audiobooks library + sqlite db
 ```

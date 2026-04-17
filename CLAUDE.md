@@ -6,13 +6,21 @@ A voice agent framework. You give it a persona (who the agent is) and a set of s
 
 This file is the quick-start for Claude and Mario. For _why_, _what_, and _how_, read the docs.
 
-> **Naming-in-flight**: this repo is being renamed from "AbuelOS" to "Huxley" — _AbuelOS_ is now the canonical persona, the framework is _Huxley_. The Python namespace (`abuel_os/`) and the repo path (`AbuelOS/`) still use the old name; rename happens in an upcoming refactor. Until then, "Huxley" in docs and "abuel_os" in code refer to the same thing.
+> **Naming-in-flight**: the repo directory is still `AbuelOS/` — it gets renamed to `Huxley/` in stage 5 of the refactor (a user-action `git mv`). The Python namespaces have already moved: framework code is `huxley`, SDK is `huxley_sdk`. _AbuelOS_ now refers to the canonical persona, never to the framework.
 
 ## Repo layout
 
 ```
-AbuelOS/                # repo (will become Huxley/)
-├── server/             # Python — Huxley framework runtime
+AbuelOS/                # repo dir (will be renamed to Huxley/ in stage 5)
+├── pyproject.toml      # uv workspace root
+├── packages/
+│   ├── sdk/            # huxley-sdk: skill author surface
+│   │   └── src/huxley_sdk/   # Skill, Tool*, SkillContext, SkillRegistry
+│   └── core/           # huxley: framework runtime
+│       ├── src/huxley/       # app, session, turn, server, skills (still inline), media, storage
+│       ├── data/             # gitignored; audiobook library + sqlite db (moves to personas/ in stage 4)
+│       ├── tests/
+│       └── .env              # gitignored; HUXLEY_OPENAI_API_KEY etc
 ├── web/                # SvelteKit dev client
 ├── docs/               # Single source of truth
 │   ├── vision.md       # what Huxley is
@@ -32,20 +40,20 @@ AbuelOS/                # repo (will become Huxley/)
 └── CLAUDE.md           # this file
 ```
 
-After the planned workspace split: `packages/{sdk,core,skills/*}` + `personas/abuelos/persona.yaml`. See [`docs/architecture.md`](./docs/architecture.md) for the target shape.
+Refactor in progress: stages 2–5 will add `packages/skills/{audiobooks,system}/` (entry-point-loaded), `personas/abuelos/persona.yaml`, the data move, and the repo rename. See [`docs/roadmap.md`](./docs/roadmap.md) → "Huxley framework / Next" and the active plan at `~/.claude/plans/proud-conjuring-papert.md`.
 
 ## Commands
 
-Python framework (run from `server/`):
+Python (uv workspace; lint/typecheck/test work from repo root):
 
 ```bash
-cd server
-uv sync                              # install deps
-uv run ruff check src/ tests/        # lint
-uv run ruff format src/ tests/       # format
-uv run mypy src/                     # strict type check
-uv run pytest tests/unit/ -v         # unit tests
-uv run python -m abuel_os            # run Huxley
+uv sync                                                    # install all workspace packages
+uv run ruff check packages/                                # lint
+uv run ruff format packages/                               # format
+uv run mypy packages/sdk/src packages/core/src             # strict type check
+uv run --package huxley-sdk pytest packages/sdk/tests      # SDK tests (10)
+uv run --package huxley pytest packages/core/tests         # framework tests (126)
+cd packages/core && uv run huxley                          # run the server (loads .env from packages/core)
 ```
 
 Web dev client (run from `web/`):

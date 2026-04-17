@@ -4,7 +4,7 @@ A Huxley skill is a Python package that teaches the agent to do something new �
 
 For the conceptual model, see [`../concepts.md`](../concepts.md). For a full worked example, see [`audiobooks.md`](./audiobooks.md).
 
-> **SDK status**: the Huxley SDK (`huxley_sdk`) is being extracted into its own installable package. Until that ships, skills import from `abuel_os.types` and live inside `server/src/abuel_os/skills/`. Once the SDK lands, the skill author surface area becomes `huxley_sdk`-only. The protocol shape and contract below are stable across the rename.
+> **SDK status**: the Huxley SDK (`huxley_sdk`) lives at `packages/sdk/`. Skill authors import from it: `from huxley_sdk import Skill, ToolDefinition, ToolResult, SkillContext`. The two built-in skills (`audiobooks`, `system`) currently still live inside `packages/core/src/huxley/skills/` for legacy reasons; stage 2 of the active refactor moves them into their own `packages/skills/<name>/` packages with entry-point loading, at which point they become the model for third-party skill packages. The SDK protocol shape and contract below are stable across that move.
 
 ## The Skill protocol
 
@@ -186,9 +186,9 @@ The convention: `<skill_name>.<event>`. The framework auto-injects the `turn` ID
 
 Skills must have unit tests. Mock the infrastructure (`Storage`, any external clients), assert on `ToolResult.output` and — for side-effect tools — invoke `result.audio_factory()` and verify the underlying stream call.
 
-For end-to-end coverage of how your skill behaves inside the framework (factory latching, mid-chain interrupts, follow-up rounds), see the integration test pattern in [`test_coordinator_skill_integration.py`](../../server/tests/unit/test_coordinator_skill_integration.py) — it wires a real `TurnCoordinator` to a real skill with a mocked infrastructure.
+For end-to-end coverage of how your skill behaves inside the framework (factory latching, mid-chain interrupts, follow-up rounds), see the integration test pattern in [`test_coordinator_skill_integration.py`](../../packages/core/tests/unit/test_coordinator_skill_integration.py) — it wires a real `TurnCoordinator` to a real skill with a mocked infrastructure.
 
-Integration tests that hit real subprocess (ffmpeg) or real provider APIs live in `server/tests/integration/` and are marked `@pytest.mark.integration`. Skipped by default.
+Integration tests that hit real subprocess (ffmpeg) or real provider APIs live in `packages/core/tests/integration/` and are marked `@pytest.mark.integration`. Skipped by default.
 
 ## Distribution — making your skill installable
 
@@ -217,4 +217,4 @@ huxley-skill-my-thing/
     └── test_my_skill.py
 ```
 
-For now, while the SDK is still being extracted, skills live in `server/src/abuel_os/skills/<name>.py` and tests in `server/tests/unit/test_<name>_skill.py`. Then add the skill spec doc under `docs/skills/<name>.md`.
+For now, the two built-in skills (`audiobooks`, `system`) still live in `packages/core/src/huxley/skills/<name>.py` with tests in `packages/core/tests/unit/test_<name>_skill.py`; stage 2 of the active refactor moves them out into their own `packages/skills/<name>/` packages, which is the model third-party skills should follow.

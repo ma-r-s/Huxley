@@ -78,7 +78,7 @@ server/data/audiobooks/
     └── María.m4b
 ```
 
-Configured via `audiobook_library_path` in [`server/src/abuel_os/config.py`](../../server/src/abuel_os/config.py), defaults to `data/audiobooks` (relative to `server/`).
+Configured via `audiobook_library_path` in [`packages/core/src/huxley/config.py`](../../packages/core/src/huxley/config.py), defaults to `data/audiobooks` (relative to `packages/core/`). After stage 4 of the active refactor, this moves into `personas/abuelos/persona.yaml` under the `skills.audiobooks.library_path` key.
 
 ## Current state
 

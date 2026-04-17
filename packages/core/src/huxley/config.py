@@ -44,7 +44,9 @@ class Settings(BaseSettings):
     audiobook_library_path: Path = Path("data/audiobooks")
 
     # --- Storage ---
-    db_path: Path = Path("data/huxley.db")
+    # NOTE: filename intentionally still abuel_os.db until stage 4 (persona
+    # data move). Renaming now would orphan existing audiobook positions.
+    db_path: Path = Path("data/abuel_os.db")
 
     # --- Session ---
     conversation_max_minutes: int = 55

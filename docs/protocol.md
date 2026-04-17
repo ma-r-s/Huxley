@@ -118,4 +118,4 @@ No new message types. No new plumbing. Observability scales without touching the
 
 ## Source of truth
 
-The Python implementation in [`server/src/abuel_os/server/server.py`](../server/src/abuel_os/server/server.py) is the canonical implementation. This doc must match. If they diverge, fix whichever is wrong in the same commit.
+The Python implementation in [`packages/core/src/huxley/server/server.py`](../packages/core/src/huxley/server/server.py) is the canonical implementation. This doc must match. If they diverge, fix whichever is wrong in the same commit.

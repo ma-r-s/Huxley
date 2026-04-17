@@ -1,6 +1,6 @@
 # Turn-based Audio Coordination
 
-> **Status**: **implemented** — landed across 6 staged commits on 2026-04-14 (steps 1–6). The Turn Coordinator is a Huxley framework component (persona-agnostic, skill-agnostic). Spec history: v1 was under-specified (first critic round caught it); v2 over-engineered the audio layer with a named-channel abstraction that had no v1 consumer (self-review caught it after two critic rounds); v3 cuts the channels and ships. Same root-cause fix, ~40% less ceremony than v2. See [ADR — 2026-04-13 — Turn-based coordinator for voice tool calls](./decisions.md#2026-04-13--turn-based-coordinator-for-voice-tool-calls), and the source: [`server/src/abuel_os/turn/coordinator.py`](../server/src/abuel_os/turn/coordinator.py) (will move to `packages/core/src/huxley/turn/coordinator.py` after the namespace rename).
+> **Status**: **implemented** — landed across 6 staged commits on 2026-04-14 (steps 1–6). The Turn Coordinator is a Huxley framework component (persona-agnostic, skill-agnostic). Spec history: v1 was under-specified (first critic round caught it); v2 over-engineered the audio layer with a named-channel abstraction that had no v1 consumer (self-review caught it after two critic rounds); v3 cuts the channels and ships. Same root-cause fix, ~40% less ceremony than v2. See [ADR — 2026-04-13 — Turn-based coordinator for voice tool calls](./decisions.md#2026-04-13--turn-based-coordinator-for-voice-tool-calls), and the source: [`packages/core/src/huxley/turn/coordinator.py`](../packages/core/src/huxley/turn/coordinator.py).
 
 ## Purpose
 
@@ -426,13 +426,13 @@ Deferred explicitly, with reason:
 
 ## Source-of-truth pointers
 
-When the code lands:
-
 | Concept                                                  | File                                                   |
 | -------------------------------------------------------- | ------------------------------------------------------ |
-| `Turn`, `TurnState`, `TurnCoordinator`, interrupt method | `server/src/abuel_os/turn/coordinator.py`              |
-| `ToolResult.audio_factory`                               | `server/src/abuel_os/types.py`                         |
-| `AudiobookPlayer.stream()` factory                       | `server/src/abuel_os/media/audiobook_player.py`        |
+| `Turn`, `TurnState`, `TurnCoordinator`, interrupt method | `packages/core/src/huxley/turn/coordinator.py`         |
+| `ToolResult.audio_factory`                               | `packages/sdk/src/huxley_sdk/types.py`                 |
+| `AudiobookPlayer.stream()` factory                       | `packages/core/src/huxley/media/audiobook_player.py`   |
 | Thinking tone (client)                                   | `web/src/lib/audio/playback.ts` (`playThinkingTone()`) |
 | Silence-detection timer (client)                         | `web/src/lib/ws.svelte.ts`                             |
-| Protocol delta                                           | `docs/protocol.md` (updated in migration step 5)       |
+| Protocol delta                                           | `docs/protocol.md`                                     |
+
+(File paths reflect the post-stage-1 workspace layout. Sections of this doc that describe the migration steps themselves still reference `server/src/abuel_os/...` — those are historical and intentionally left as-is.)
