@@ -234,7 +234,7 @@
                 {#if ev.kind === 'tool_call' && typeof ev.payload.name === 'string'}
                   <span class="font-mono text-zinc-200">{ev.payload.name}</span>
                 {/if}
-                {#if ev.kind === 'tool_call' && ev.payload.has_audio_factory === true}
+                {#if ev.kind === 'tool_call' && ev.payload.has_audio_stream === true}
                   <span class="px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-300 text-[10px]">audio</span>
                 {/if}
               </summary>

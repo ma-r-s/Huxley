@@ -23,6 +23,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from huxley_sdk import AudioStream
 from huxley_sdk.testing import make_test_context
 from huxley_skill_audiobooks.skill import (
     LAST_BOOK_KEY,
@@ -174,7 +175,7 @@ class TestSearch:
 
     async def test_search_returns_no_factory(self, audiobooks_skill: AudiobooksSkill) -> None:
         result = await audiobooks_skill.handle("search_audiobooks", {"query": "coronel"})
-        assert result.audio_factory is None
+        assert not isinstance(result.side_effect, AudioStream)
 
     async def test_search_empty_library(self, tmp_path: Path) -> None:
         skill = AudiobooksSkill(player=_make_player_mock())
@@ -188,7 +189,7 @@ class TestPlayback:
     async def test_play_returns_audio_factory(self, audiobooks_skill: AudiobooksSkill) -> None:
         book_id = audiobooks_skill._catalog[0]["id"]
         result = await audiobooks_skill.handle("play_audiobook", {"book_id": book_id})
-        assert result.audio_factory is not None
+        assert isinstance(result.side_effect, AudioStream)
         data = json.loads(result.output)
         assert data["playing"] is True
         assert "message" in data
@@ -199,9 +200,9 @@ class TestPlayback:
     ) -> None:
         book = audiobooks_skill._catalog[0]
         result = await audiobooks_skill.handle("play_audiobook", {"book_id": book["id"]})
-        assert result.audio_factory is not None
+        assert isinstance(result.side_effect, AudioStream)
 
-        await _drain(result.audio_factory)
+        await _drain(result.side_effect.factory)
 
         player_mock.stream.assert_called_once_with(book["path"], start_position=0.0)
 
@@ -215,8 +216,8 @@ class TestPlayback:
         await storage.set_setting(_position_key(book["id"]), "120.5")
 
         result = await audiobooks_skill.handle("play_audiobook", {"book_id": book["id"]})
-        assert result.audio_factory is not None
-        await _drain(result.audio_factory)
+        assert isinstance(result.side_effect, AudioStream)
+        await _drain(result.side_effect.factory)
 
         player_mock.stream.assert_called_once_with(book["path"], start_position=120.5)
 
@@ -232,8 +233,8 @@ class TestPlayback:
         result = await audiobooks_skill.handle(
             "play_audiobook", {"book_id": book["id"], "from_beginning": True}
         )
-        assert result.audio_factory is not None
-        await _drain(result.audio_factory)
+        assert isinstance(result.side_effect, AudioStream)
+        await _drain(result.side_effect.factory)
 
         player_mock.stream.assert_called_once_with(book["path"], start_position=0.0)
 
@@ -244,22 +245,22 @@ class TestPlayback:
         data = json.loads(result.output)
         assert "message" in data
         assert data.get("playing") is False
-        assert result.audio_factory is None
+        assert not isinstance(result.side_effect, AudioStream)
 
     async def test_play_by_title_fuzzy_match(
         self, audiobooks_skill: AudiobooksSkill, player_mock: MagicMock
     ) -> None:
         book = next(b for b in audiobooks_skill._catalog if "coronel" in b["title"].lower())
         result = await audiobooks_skill.handle("play_audiobook", {"book_id": book["title"]})
-        assert result.audio_factory is not None
-        await _drain(result.audio_factory)
+        assert isinstance(result.side_effect, AudioStream)
+        await _drain(result.side_effect.factory)
         player_mock.stream.assert_called_once_with(book["path"], start_position=0.0)
 
     async def test_play_by_author_substring(self, audiobooks_skill: AudiobooksSkill) -> None:
         result = await audiobooks_skill.handle("play_audiobook", {"book_id": "García Márquez"})
         data = json.loads(result.output)
         assert data.get("playing") is True
-        assert result.audio_factory is not None
+        assert isinstance(result.side_effect, AudioStream)
 
     async def test_play_persists_last_book_id(
         self, audiobooks_skill: AudiobooksSkill, storage: SkillStorage
@@ -275,8 +276,8 @@ class TestPlayback:
         """When the factory drains to EOF, its finally saves the final position."""
         book = audiobooks_skill._catalog[0]
         result = await audiobooks_skill.handle("play_audiobook", {"book_id": book["id"]})
-        assert result.audio_factory is not None
-        await _drain(result.audio_factory)
+        assert isinstance(result.side_effect, AudioStream)
+        await _drain(result.side_effect.factory)
 
         saved_raw = await storage.get_setting(_position_key(book["id"]))
         assert saved_raw is not None
@@ -289,7 +290,7 @@ class TestResumeLast:
         data = json.loads(result.output)
         assert data["resumed"] is False
         assert "No tiene ningún libro a medias" in data["message"]
-        assert result.audio_factory is None
+        assert not isinstance(result.side_effect, AudioStream)
 
     async def test_resume_last_picks_up_previously_played_book(
         self,
@@ -304,8 +305,8 @@ class TestResumeLast:
 
         result = await audiobooks_skill.handle("resume_last", {})
 
-        assert result.audio_factory is not None
-        await _drain(result.audio_factory)
+        assert isinstance(result.side_effect, AudioStream)
+        await _drain(result.side_effect.factory)
         player_mock.stream.assert_called_once_with(book["path"], start_position=250.0)
         data = json.loads(result.output)
         assert data["playing"] is True
@@ -318,13 +319,13 @@ class TestControl:
         result = await audiobooks_skill.handle("audiobook_control", {"action": "pause"})
         data = json.loads(result.output)
         assert data["paused"] is True
-        assert result.audio_factory is None
+        assert not isinstance(result.side_effect, AudioStream)
 
     async def test_stop_returns_no_factory(self, audiobooks_skill: AudiobooksSkill) -> None:
         result = await audiobooks_skill.handle("audiobook_control", {"action": "stop"})
         data = json.loads(result.output)
         assert data["stopped"] is True
-        assert result.audio_factory is None
+        assert not isinstance(result.side_effect, AudioStream)
 
     async def test_rewind_does_not_eagerly_persist_new_position(
         self, audiobooks_skill: AudiobooksSkill, storage: SkillStorage
@@ -340,7 +341,7 @@ class TestControl:
 
         # Storage still at 120.0 — not updated yet.
         assert await storage.get_setting(_position_key(book["id"])) == "120.0"
-        assert result.audio_factory is not None
+        assert isinstance(result.side_effect, AudioStream)
 
     async def test_rewind_factory_streams_from_new_position(
         self,
@@ -356,8 +357,8 @@ class TestControl:
             "audiobook_control", {"action": "rewind", "seconds": 10}
         )
 
-        assert result.audio_factory is not None
-        await _drain(result.audio_factory)
+        assert isinstance(result.side_effect, AudioStream)
+        await _drain(result.side_effect.factory)
         player_mock.stream.assert_called_once_with(book["path"], start_position=110.0)
 
     async def test_rewind_clamps_at_zero(
@@ -374,8 +375,8 @@ class TestControl:
             "audiobook_control", {"action": "rewind", "seconds": 60}
         )
 
-        assert result.audio_factory is not None
-        await _drain(result.audio_factory)
+        assert isinstance(result.side_effect, AudioStream)
+        await _drain(result.side_effect.factory)
         player_mock.stream.assert_called_once_with(book["path"], start_position=0.0)
 
     async def test_forward_streams_from_new_position(
@@ -392,8 +393,8 @@ class TestControl:
             "audiobook_control", {"action": "forward", "seconds": 30}
         )
 
-        assert result.audio_factory is not None
-        await _drain(result.audio_factory)
+        assert isinstance(result.side_effect, AudioStream)
+        await _drain(result.side_effect.factory)
         player_mock.stream.assert_called_once_with(book["path"], start_position=80.0)
 
     async def test_resume_streams_last_book_from_saved_position(
@@ -408,8 +409,8 @@ class TestControl:
 
         result = await audiobooks_skill.handle("audiobook_control", {"action": "resume"})
 
-        assert result.audio_factory is not None
-        await _drain(result.audio_factory)
+        assert isinstance(result.side_effect, AudioStream)
+        await _drain(result.side_effect.factory)
         player_mock.stream.assert_called_once_with(book["path"], start_position=75.0)
 
     async def test_rewind_with_no_book_returns_friendly_message(
@@ -421,7 +422,7 @@ class TestControl:
         data = json.loads(result.output)
         assert data["ok"] is False
         assert "message" in data
-        assert result.audio_factory is None
+        assert not isinstance(result.side_effect, AudioStream)
 
 
 class TestFactoryCancelPersistsPosition:
@@ -451,8 +452,8 @@ class TestFactoryCancelPersistsPosition:
 
         book = skill._catalog[0]
         result = await skill.handle("play_audiobook", {"book_id": book["id"]})
-        assert result.audio_factory is not None
-        factory = result.audio_factory
+        assert isinstance(result.side_effect, AudioStream)
+        factory = result.side_effect.factory
 
         async def consume() -> None:
             async for _chunk in factory():

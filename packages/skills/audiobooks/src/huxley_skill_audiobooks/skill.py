@@ -22,7 +22,14 @@ import json
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Any
 
-from huxley_sdk import SkillContext, SkillLogger, SkillStorage, ToolDefinition, ToolResult
+from huxley_sdk import (
+    AudioStream,
+    SkillContext,
+    SkillLogger,
+    SkillStorage,
+    ToolDefinition,
+    ToolResult,
+)
 from huxley_skill_audiobooks.player import (
     BYTES_PER_SECOND,
     AudiobookPlayer,
@@ -479,7 +486,7 @@ class AudiobooksSkill:
                     "message": f'Cargado: "{book["title"]}" por {book["author"]}.',
                 }
             ),
-            audio_factory=factory,
+            side_effect=AudioStream(factory=factory),
         )
 
     async def _resume_last(self) -> ToolResult:
@@ -568,7 +575,7 @@ class AudiobooksSkill:
                             ),
                         }
                     ),
-                    audio_factory=factory,
+                    side_effect=AudioStream(factory=factory),
                 )
 
             case _:

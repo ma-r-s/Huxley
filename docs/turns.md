@@ -10,7 +10,7 @@ Every audio-coordination bug in April 2026 — _book-jumps-in_, _double-ack_, _s
 
 ## The contract, in one paragraph
 
-Every user interaction is a **Turn**. A Turn owns one ordering: all of the model's speech (across as many chained OpenAI responses as the model needs to handle info tools) plays first, then any tool-produced audio factories fire in declaration order. The coordinator forwards both kinds of chunks to the same `server.send_audio` pipe in that order — there is no parallel mixing, no per-source queue, no channel abstraction. Tools never touch playback; they return a `ToolResult` with an optional `audio_factory` callable that the coordinator invokes at the right moment. Interrupts atomically flush the client queue, cancel any long-running media task, and cancel the OpenAI response. A client-side **thinking tone** fills any silence longer than 400 ms so a blind user never hears dead air.
+Every user interaction is a **Turn**. A Turn owns one ordering: all of the model's speech (across as many chained OpenAI responses as the model needs to handle info tools) plays first, then any tool-produced audio streams fire in declaration order. The coordinator forwards both kinds of chunks to the same `server.send_audio` pipe in that order — there is no parallel mixing, no per-source queue, no channel abstraction. Tools never touch playback; they return a `ToolResult` with an optional `side_effect` (today an `AudioStream(factory=...)`) that the coordinator invokes at the right moment. Interrupts atomically flush the client queue, cancel any long-running media task, and cancel the OpenAI response. A client-side **thinking tone** fills any silence longer than 400 ms so a blind user never hears dead air.
 
 ## Why v3 is smaller than v2
 
@@ -54,35 +54,43 @@ class Turn:
 
 Allocated on `ptt_start`, ends when `state == IDLE` is reached. Strict sequential — at most one active Turn at any time.
 
-**Latching rules for `pending_factories`**:
+**Latching rules for `pending_audio_streams`**:
 
-- **Appended** during `IN_RESPONSE`: every function call whose `ToolResult.audio_factory is not None` has its factory appended.
-- **Fired** only on the terminal state transition at the end of the chain (after the last `response.done` with no follow-up needed), in declaration order. Each factory is invoked, its chunks forwarded to `server.send_audio`.
-- **Cleared** on interrupt — an interrupted turn's factories are dropped, never invoked.
+- **Appended** during `IN_RESPONSE`: every function call whose `ToolResult.side_effect` is an `AudioStream` has its stream appended.
+- **Fired** only on the terminal state transition at the end of the chain (after the last `response.done` with no follow-up needed), in declaration order. The last stream wins; each factory is invoked, its chunks forwarded to `server.send_audio`.
+- **Cleared** on interrupt — an interrupted turn's streams are dropped, never invoked.
 
 **`needs_follow_up` latching**:
 
-- **Set** when a function call with `audio_factory=None` is dispatched during the current response.
+- **Set** when a function call with `side_effect=None` is dispatched during the current response (info tool).
 - **Cleared** at the start of each new response in the chain (set fresh for each round's tools).
 - **Read** on `response.done`: if set, send `response.create` to request a follow-up narration round; if unset, terminate the turn.
 
-### 2. The factory pattern
+### 2. The side-effect pattern
 
-The skill protocol grows one optional field on `ToolResult`:
+The skill protocol grows an optional `side_effect` field on `ToolResult`:
 
 ```python
+class SideEffect:
+    kind: ClassVar[str]
+
+@dataclass(frozen=True, slots=True)
+class AudioStream(SideEffect):
+    kind: ClassVar[str] = "audio_stream"
+    factory: Callable[[], AsyncIterator[bytes]]
+
 @dataclass(frozen=True, slots=True)
 class ToolResult:
     output: str
-    audio_factory: Callable[[], AsyncIterator[bytes]] | None = None
+    side_effect: SideEffect | None = None
 ```
 
 Semantics:
 
-- **`audio_factory is None`** — info tool. The model needs to narrate the tool output in a follow-up response. Example: `get_current_time`, `search_audiobooks`, `set_volume`.
-- **`audio_factory is not None`** — side-effect tool. The model pre-narrates before calling (per tool description). After all model speech in the turn, the coordinator invokes the factory, iterates the async iterator, and forwards PCM chunks to `server.send_audio` as a long-running task. Example: `play_audiobook`, `audiobook_control` for rewind/forward/resume.
+- **`side_effect is None`** — info tool. The model needs to narrate the tool output in a follow-up response. Example: `get_current_time`, `search_audiobooks`, `set_volume`.
+- **`isinstance(side_effect, AudioStream)`** — side-effect tool. The model pre-narrates before calling (per tool description). After all model speech in the turn, the coordinator invokes `side_effect.factory()`, iterates the async iterator, and forwards PCM chunks to `server.send_audio` as a long-running task. Example: `play_audiobook`, `audiobook_control` for rewind/forward/resume.
 
-No separate `AudioEffect` wrapper type, no `EffectKind` enum. The presence or absence of the factory is the signal.
+`SideEffect` is the extension point: future kinds (notifications, state updates) reuse the same shape and the coordinator dispatches by `isinstance` check. The legacy `ToolResult(audio_factory=...)` constructor argument still works as a deprecated alias that auto-promotes to `side_effect=AudioStream(factory=...)`.
 
 **The coordinator owns one field for a long-running media stream**:
 
@@ -158,7 +166,7 @@ stateDiagram-v2
 
 Key transitions:
 
-- **IN_RESPONSE → AWAITING_NEXT_RESPONSE**: `response.done` arrives AND `needs_follow_up == True` (at least one tool this round had `audio_factory=None`). Coordinator sends `response.create` and clears `needs_follow_up` for the next round.
+- **IN_RESPONSE → AWAITING_NEXT_RESPONSE**: `response.done` arrives AND `needs_follow_up == True` (at least one tool this round had `side_effect=None`). Coordinator sends `response.create` and clears `needs_follow_up` for the next round.
 - **IN_RESPONSE → APPLYING_FACTORIES**: `response.done` arrives AND `needs_follow_up == False`. The model has fully finished talking for this turn. If `pending_factories` is non-empty, invoke them in order; if empty, transition directly to `IDLE`.
 - **AWAITING_NEXT_RESPONSE → IN_RESPONSE**: first event of the new response.
 - **APPLYING_FACTORIES → IDLE**: each pending factory has been invoked. Long-running factories (`current_media_task`) run in the background; the turn doesn't wait for them to complete.
@@ -225,11 +233,11 @@ No `PLAYING`. Media playback is tracked by `current_media_task` on the coordinat
 - **v1**: catch exceptions in the consumer task, log, stop the factory, emit a distinct error tone client-side + status message. Grandpa hears the tone + silence.
 - **v2 (of this spec)**: coordinator re-opens the session and injects a synthetic user message `"el reproductor falló"` for conversational recovery. Deferred.
 
-### 9. `system` skill + the `audio_factory=None` path in detail
+### 9. `system` skill + the `side_effect=None` path in detail
 
-`system.set_volume` and `system.get_current_time` return `ToolResult(audio_factory=None)`. Flow:
+`system.set_volume` and `system.get_current_time` return `ToolResult(side_effect=None)`. Flow:
 
-1. **IN_RESPONSE** — skill dispatched, result returned. `needs_follow_up = True`. `pending_factories` unchanged.
+1. **IN_RESPONSE** — skill dispatched, result returned. `needs_follow_up = True`. `pending_audio_streams` unchanged.
 2. Coordinator sends `function_call_output` to OpenAI.
 3. On `response.done`: `needs_follow_up` is set → `AWAITING_NEXT_RESPONSE`. Coordinator sends `response.create`, clears `needs_follow_up`.
 4. First event of the new response → `IN_RESPONSE`. Model generates audio narrating the result.
@@ -429,7 +437,7 @@ Deferred explicitly, with reason:
 | Concept                                                  | File                                                               |
 | -------------------------------------------------------- | ------------------------------------------------------------------ |
 | `Turn`, `TurnState`, `TurnCoordinator`, interrupt method | `packages/core/src/huxley/turn/coordinator.py`                     |
-| `ToolResult.audio_factory`                               | `packages/sdk/src/huxley_sdk/types.py`                             |
+| `ToolResult.side_effect`, `SideEffect`, `AudioStream`    | `packages/sdk/src/huxley_sdk/types.py`                             |
 | `AudiobookPlayer.stream()` factory                       | `packages/skills/audiobooks/src/huxley_skill_audiobooks/player.py` |
 | Thinking tone (client)                                   | `web/src/lib/audio/playback.ts` (`playThinkingTone()`)             |
 | Silence-detection timer (client)                         | `web/src/lib/ws.svelte.ts`                                         |

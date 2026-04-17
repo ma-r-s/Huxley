@@ -69,14 +69,14 @@ ToolResult(
 ```
 
 - **`output`** is JSON text sent back to the LLM as the function-call output. The LLM narrates it to the user.
-- **`audio_factory`** _(optional, will become `side_effect` after the next refactor)_ is a callable that returns an async iterator of PCM16 chunks. The framework invokes it after the model finishes speaking, so any tool-produced audio plays cleanly _after_ the model's verbal acknowledgement. Skills with no audio side effect leave it `None`.
+- **`side_effect`** _(optional)_ is a `SideEffect` the framework runs after the model finishes speaking. Today there's one kind: `AudioStream(factory=...)`, where `factory` is a zero-arg callable returning an async iterator of PCM16 chunks. Future side-effect kinds (notifications, state updates) reuse the same shape. Skills with no side effect leave it `None`. The legacy `audio_factory=...` constructor argument still works as a deprecated alias — it auto-promotes to `side_effect=AudioStream(factory=...)`.
 
 ### Info tools vs side-effect tools
 
-| Kind            | `audio_factory` | Examples                                     | Framework behavior                                                                                                                        |
-| --------------- | --------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| **Info**        | `None`          | `search_audiobooks`, `get_current_time`      | Coordinator requests a follow-up response so the model can narrate the result. Multi-round chained turn.                                  |
-| **Side-effect** | not `None`      | `play_audiobook`, `audiobook_control` (seek) | Coordinator latches the factory; after the model's terminal `response.done`, the factory fires and streams PCM through the audio channel. |
+| Kind            | `side_effect`          | Examples                                     | Framework behavior                                                                                                                            |
+| --------------- | ---------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Info**        | `None`                 | `search_audiobooks`, `get_current_time`      | Coordinator requests a follow-up response so the model can narrate the result. Multi-round chained turn.                                      |
+| **Side-effect** | `AudioStream(factory)` | `play_audiobook`, `audiobook_control` (seek) | Coordinator latches the AudioStream; after the model's terminal `response.done`, the factory fires and streams PCM through the audio channel. |
 
 The model is told (via the tool description) to **pre-narrate** the side effect — e.g. _"Putting on the book for you."_ — _before_ calling the tool. The framework guarantees the narration plays before the factory does.
 
@@ -184,7 +184,7 @@ The convention: `<skill_name>.<event>`. The framework auto-injects the `turn` ID
 
 ## Testing
 
-Skills must have unit tests. Mock the infrastructure (`Storage`, any external clients), assert on `ToolResult.output` and — for side-effect tools — invoke `result.audio_factory()` and verify the underlying stream call.
+Skills must have unit tests. Mock the infrastructure (`Storage`, any external clients), assert on `ToolResult.output` and — for side-effect tools — check `isinstance(result.side_effect, AudioStream)` and invoke `result.side_effect.factory()` to verify the underlying stream call.
 
 For end-to-end coverage of how your skill behaves inside the framework (factory latching, mid-chain interrupts, follow-up rounds), see the integration test pattern in [`test_coordinator_skill_integration.py`](../../packages/core/tests/unit/test_coordinator_skill_integration.py) — it wires a real `TurnCoordinator` to a real skill with a mocked infrastructure.
 

@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from huxley.turn.coordinator import Turn, TurnCoordinator, TurnState
-from huxley_sdk import ToolResult
+from huxley_sdk import AudioStream, ToolResult
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
@@ -196,14 +196,14 @@ class TestToolDispatch:
     ) -> None:
         factory = _factory(b"book chunk")
         mocks["dispatch_tool"].return_value = ToolResult(
-            output='{"ok": true}', audio_factory=factory
+            output='{"ok": true}', side_effect=AudioStream(factory=factory)
         )
 
         await _commit_turn(coordinator)
         await coordinator.on_function_call("call_1", "play_audiobook", {"book_id": "X"})
 
         assert coordinator.current_turn is not None
-        assert coordinator.current_turn.pending_factories == [factory]
+        assert coordinator.current_turn.pending_audio_streams == [AudioStream(factory=factory)]
         assert coordinator.current_turn.needs_follow_up is False
 
     async def test_tool_without_factory_sets_needs_follow_up(
@@ -215,7 +215,7 @@ class TestToolDispatch:
         await coordinator.on_function_call("call_1", "get_current_time", {})
 
         assert coordinator.current_turn is not None
-        assert coordinator.current_turn.pending_factories == []
+        assert coordinator.current_turn.pending_audio_streams == []
         assert coordinator.current_turn.needs_follow_up is True
 
     async def test_function_call_sends_output_back_to_openai(
@@ -232,7 +232,9 @@ class TestToolDispatch:
         self, coordinator: TurnCoordinator, mocks: dict[str, Any]
     ) -> None:
         factory = _factory(b"x")
-        mocks["dispatch_tool"].return_value = ToolResult(output="{}", audio_factory=factory)
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output="{}", side_effect=AudioStream(factory=factory)
+        )
 
         await _commit_turn(coordinator)
         await coordinator.on_function_call("call_1", "play_audiobook", {"book_id": "X"})
@@ -241,7 +243,7 @@ class TestToolDispatch:
         args, _ = mocks["send_dev_event"].call_args
         assert args[0] == "tool_call"
         assert args[1]["name"] == "play_audiobook"
-        assert args[1]["has_audio_factory"] is True
+        assert args[1]["has_audio_stream"] is True
 
 
 class TestChainedResponses:
@@ -304,7 +306,7 @@ class TestChainedResponses:
         async def dispatch(name: str, _args: dict[str, Any]) -> ToolResult:
             call_count[0] += 1
             if name == "play_audiobook":
-                return ToolResult(output="{}", audio_factory=factory)
+                return ToolResult(output="{}", side_effect=AudioStream(factory=factory))
             return ToolResult(output='{"time": "3pm"}')  # None factory
 
         mocks["dispatch_tool"].side_effect = dispatch
@@ -319,7 +321,7 @@ class TestChainedResponses:
         mocks["oai_request_response"].assert_awaited_once()
         # Factory still staged
         assert coordinator.current_turn is not None
-        assert len(coordinator.current_turn.pending_factories) == 1
+        assert len(coordinator.current_turn.pending_audio_streams) == 1
 
         # Round 2 narrates the time, no more tools
         await coordinator.on_audio_delta("ahí le pongo el libro y son las tres".encode())
@@ -333,7 +335,9 @@ class TestChainedResponses:
         self, coordinator: TurnCoordinator, mocks: dict[str, Any]
     ) -> None:
         factory = _factory(b"book")
-        mocks["dispatch_tool"].return_value = ToolResult(output="{}", audio_factory=factory)
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output="{}", side_effect=AudioStream(factory=factory)
+        )
 
         await _commit_turn(coordinator)
         await coordinator.on_function_call("c1", "play_audiobook", {})
@@ -362,7 +366,11 @@ class TestFactorySupersede:
             yield b"b"
 
         async def dispatch(name: str, _args: dict[str, Any]) -> ToolResult:
-            return ToolResult(output="{}", audio_factory=stream_a if name == "first" else stream_b)
+            stream = stream_a if name == "first" else stream_b
+            return ToolResult(
+                output="{}",
+                side_effect=AudioStream(factory=stream),
+            )
 
         mocks["dispatch_tool"].side_effect = dispatch
 
@@ -389,23 +397,25 @@ class TestInterrupt:
 
         assert coordinator.response_cancelled is True
 
-    async def test_interrupt_clears_pending_factories(
+    async def test_interrupt_clears_pending_audio_streams(
         self, coordinator: TurnCoordinator, mocks: dict[str, Any]
     ) -> None:
         factory = _factory(b"x")
-        mocks["dispatch_tool"].return_value = ToolResult(output="{}", audio_factory=factory)
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output="{}", side_effect=AudioStream(factory=factory)
+        )
 
         await _commit_turn(coordinator)
         await coordinator.on_function_call("c1", "play", {})
         assert coordinator.current_turn is not None
-        assert len(coordinator.current_turn.pending_factories) == 1
+        assert len(coordinator.current_turn.pending_audio_streams) == 1
 
         turn_before = coordinator.current_turn
         await coordinator.interrupt()
 
         # After interrupt, current_turn is None — but the old one had its
         # pending factories cleared before being detached.
-        assert turn_before.pending_factories == []
+        assert turn_before.pending_audio_streams == []
         assert coordinator.current_turn is None
 
     async def test_interrupt_sends_audio_clear(
@@ -446,7 +456,9 @@ class TestInterrupt:
                 yield b"x"
                 await asyncio.sleep(0.01)
 
-        mocks["dispatch_tool"].return_value = ToolResult(output="{}", audio_factory=forever_stream)
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output="{}", side_effect=AudioStream(factory=forever_stream)
+        )
 
         await _commit_turn(coordinator)
         await coordinator.on_function_call("c1", "play", {})
@@ -491,7 +503,9 @@ class TestInterrupt:
                 yield b"x"
                 await asyncio.sleep(0.01)
 
-        mocks["dispatch_tool"].return_value = ToolResult(output="{}", audio_factory=forever_stream)
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output="{}", side_effect=AudioStream(factory=forever_stream)
+        )
 
         await _commit_turn(coordinator)
         await coordinator.on_function_call("c1", "play", {})
@@ -684,9 +698,9 @@ class TestModelSpeaking:
 class TestTurnDataclass:
     """Small sanity checks on the Turn dataclass itself."""
 
-    def test_default_turn_has_empty_pending_factories(self) -> None:
+    def test_default_turn_has_empty_pending_audio_streams(self) -> None:
         t = Turn()
-        assert t.pending_factories == []
+        assert t.pending_audio_streams == []
         assert t.response_ids == []
         assert t.needs_follow_up is False
         assert t.user_audio_frames == 0

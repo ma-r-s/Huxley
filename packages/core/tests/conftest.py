@@ -8,7 +8,7 @@ import pytest
 
 from huxley.config import Settings
 from huxley.storage.db import Storage
-from huxley_sdk import ToolDefinition, ToolResult
+from huxley_sdk import AudioStream, ToolDefinition, ToolResult
 from huxley_sdk.testing import FakeSkill
 
 if TYPE_CHECKING:
@@ -63,5 +63,7 @@ def playback_skill() -> FakeSkill:
                 },
             ),
         ],
-        result=ToolResult(output='{"playing": true}', audio_factory=noop_stream),
+        result=ToolResult(
+            output='{"playing": true}', side_effect=AudioStream(factory=noop_stream)
+        ),
     )

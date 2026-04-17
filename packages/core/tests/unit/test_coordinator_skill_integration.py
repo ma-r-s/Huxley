@@ -6,7 +6,7 @@ containing a real `AudiobooksSkill`. Only the OpenAI session and the
 its production code path. Catches bugs in the coordinator ↔ skill
 contract that the per-side unit tests can miss:
 
-- factory closure actually reaches the coordinator's pending_factories
+- factory closure actually reaches the coordinator's pending_audio_streams
 - factory fires at the terminal barrier and streams via send_audio
 - mid-chain interrupts drop the accumulated factory
 - rewind/forward produce new factories, prior media task is cancelled
@@ -169,7 +169,7 @@ class TestPlayAudiobookEndToEnd:
 
         # Factory was latched — skill ran real code path.
         assert coord.current_turn is not None
-        assert len(coord.current_turn.pending_factories) == 1
+        assert len(coord.current_turn.pending_audio_streams) == 1
         assert coord.current_turn.needs_follow_up is False
 
         # Output was sent back to OpenAI.
@@ -183,7 +183,7 @@ class TestPlayAudiobookEndToEnd:
         kind, payload = mocks["send_dev_event"].await_args.args
         assert kind == "tool_call"
         assert payload["name"] == "play_audiobook"
-        assert payload["has_audio_factory"] is True
+        assert payload["has_audio_stream"] is True
 
         # Audio round done, then response done → factory fires.
         await coord.on_audio_done()
@@ -236,7 +236,7 @@ class TestMidChainInterruptDropsFactories:
         await _commit_turn(coord)
         await coord.on_function_call("c1", "play_audiobook", {"book_id": book["id"]})
         assert coord.current_turn is not None
-        assert len(coord.current_turn.pending_factories) == 1
+        assert len(coord.current_turn.pending_audio_streams) == 1
 
         # User interrupts before response.done fires.
         await coord.interrupt()
@@ -319,7 +319,7 @@ class TestPauseRequestsFollowUp:
         # Skill returned None-factory → needs_follow_up set
         assert coord.current_turn is not None
         assert coord.current_turn.needs_follow_up is True
-        assert coord.current_turn.pending_factories == []
+        assert coord.current_turn.pending_audio_streams == []
 
         await coord.on_audio_done()
         await coord.on_response_done()

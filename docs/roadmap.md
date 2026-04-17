@@ -22,11 +22,11 @@ Two roadmaps live here: **Huxley** (the framework) and **AbuelOS** (the first pe
 
 Make Huxley what it claims to be in [`vision.md`](./vision.md): a framework anyone can extend.
 
+- ✅ **Workspace split**: one repo, multiple uv-workspace packages: `packages/sdk/`, `packages/core/`, `packages/skills/audiobooks/`, `packages/skills/system/`. Skills installable via `huxley.skills` entry points.
+- ✅ **Generic side effects**: `ToolResult.side_effect: SideEffect | None` with `AudioStream` as the first kind. Coordinator dispatches by `isinstance`. Legacy `audio_factory=` still works as a deprecated alias.
 - [P0] **Rename / namespace cleanup**: `abuel_os` → `huxley`. Repo path `AbuelOS/` → `Huxley/` (final stage of the active refactor).
-- [P0] **Workspace split**: one repo, multiple uv-workspace packages: `packages/sdk/`, `packages/core/`, `packages/skills/audiobooks/`, `packages/skills/system/`. Skills become installable.
 - [P0] **Persona loader**: `personas/<name>/persona.yaml` parsed at startup. Currently the persona is hard-coded in `config.py`'s default system prompt; this moves it out into config.
 - [P0] **Constraint registry**: named constraints (`never_say_no`, `confirm_destructive`, `child_safe`) defined in core, composed into the system prompt by the persona.
-- [P0] **Generic side effects**: `ToolResult.audio_factory` → `side_effect: SideEffect | None` where `SideEffect` is a protocol/union. Audio is the only implementation initially.
 - [P1] **Skill SDK README + cookbook**: a third-party skill author can write a working skill in under 30 minutes with no Huxley-internals knowledge.
 
 ### Later

@@ -33,8 +33,10 @@ from uuid import UUID, uuid4
 
 import structlog
 
+from huxley_sdk import AudioStream
+
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable
+    from collections.abc import Awaitable, Callable
 
     from huxley_sdk import ToolResult
 
@@ -66,7 +68,7 @@ class Turn:
     state: TurnState = TurnState.LISTENING
     user_audio_frames: int = 0
     response_ids: list[str] = field(default_factory=list)
-    pending_factories: list[Callable[[], AsyncIterator[bytes]]] = field(default_factory=list)
+    pending_audio_streams: list[AudioStream] = field(default_factory=list)
     needs_follow_up: bool = False
     # Summary tracking — emitted as coord.turn_summary at end-of-turn.
     started_at: float = field(default_factory=lambda: time.monotonic())
@@ -233,13 +235,14 @@ class TurnCoordinator:
         result = await self._dispatch_tool(name, args)
         await self._oai_send_function_output(call_id, result.output)
 
-        has_factory = result.audio_factory is not None
+        audio_stream = result.side_effect if isinstance(result.side_effect, AudioStream) else None
+        has_audio_stream = audio_stream is not None
         self.current_turn.tool_calls += 1
         await self._log.ainfo(
             "coord.tool_dispatch",
             state=self.current_turn.state.value,
             name=name,
-            has_factory=has_factory,
+            has_audio_stream=has_audio_stream,
         )
 
         await self._send_dev_event(
@@ -248,12 +251,12 @@ class TurnCoordinator:
                 "name": name,
                 "args": args,
                 "output": result.output,
-                "has_audio_factory": has_factory,
+                "has_audio_stream": has_audio_stream,
             },
         )
 
-        if result.audio_factory is not None:
-            self.current_turn.pending_factories.append(result.audio_factory)
+        if audio_stream is not None:
+            self.current_turn.pending_audio_streams.append(audio_stream)
         else:
             self.current_turn.needs_follow_up = True
 
@@ -263,13 +266,13 @@ class TurnCoordinator:
             return
 
         follow_up = self.current_turn.needs_follow_up
-        factories = len(self.current_turn.pending_factories)
+        pending_streams = len(self.current_turn.pending_audio_streams)
         self.current_turn.response_done_count += 1
         await self._log.ainfo(
             "coord.response_done",
             state=self.current_turn.state.value,
             follow_up=follow_up,
-            factories=factories,
+            pending_audio_streams=pending_streams,
         )
 
         if follow_up:
@@ -279,7 +282,7 @@ class TurnCoordinator:
                 self.response_cancelled = False
                 await self._oai_request_response()
         else:
-            await self._apply_factories()
+            await self._apply_side_effects()
 
     async def on_session_disconnected(self) -> None:
         """OpenAI session dropped — abort any live turn without cancelling OpenAI."""
@@ -300,7 +303,7 @@ class TurnCoordinator:
 
         if self.current_turn is None:
             return
-        self.current_turn.pending_factories.clear()
+        self.current_turn.pending_audio_streams.clear()
         self.current_turn.state = TurnState.INTERRUPTED
         self.current_turn = None
         self._bind_turn()
@@ -321,21 +324,21 @@ class TurnCoordinator:
             TurnState.AWAITING_NEXT_RESPONSE,
         )
         will_cancel = has_response and self._oai_is_connected()
-        pending = len(self.current_turn.pending_factories) if self.current_turn else 0
+        pending = len(self.current_turn.pending_audio_streams) if self.current_turn else 0
 
         await self._log.ainfo(
             "coord.interrupt",
             prev_state=prev_state,
             has_media=has_media,
             will_cancel=will_cancel,
-            pending_factories=pending,
+            pending_audio_streams=pending,
         )
 
         # 1. Drop flag FIRST
         self.response_cancelled = True
-        # 2. Drop pending factories
+        # 2. Drop pending audio streams
         if self.current_turn is not None:
-            self.current_turn.pending_factories.clear()
+            self.current_turn.pending_audio_streams.clear()
         # 3. Flush client-side audio queue + clear model-speaking state
         await self._send_audio_clear()
         if self._model_speaking:
@@ -349,7 +352,7 @@ class TurnCoordinator:
         # 6. Mark current turn as interrupted, emit summary, clear ref
         if self.current_turn is not None:
             self.current_turn.state = TurnState.INTERRUPTED
-            await self._emit_turn_summary(reason="interrupted", spawned_factory=False)
+            await self._emit_turn_summary(reason="interrupted", spawned_audio_stream=False)
         self.current_turn = None
         self._bind_turn()
 
@@ -365,34 +368,36 @@ class TurnCoordinator:
         ):
             self.current_turn.state = TurnState.IN_RESPONSE
 
-    async def _apply_factories(self) -> None:
-        """Invoke the pending factories at the terminal barrier."""
+    async def _apply_side_effects(self) -> None:
+        """Invoke the pending side effects at the terminal barrier."""
         if self.current_turn is None:
             return
 
-        factories = self.current_turn.pending_factories
+        streams = self.current_turn.pending_audio_streams
         turn_id = self._tid()
         self.current_turn.state = TurnState.APPLYING_FACTORIES
 
-        if len(factories) > 1:
+        if len(streams) > 1:
             await self._log.ainfo(
-                "coord.factories_superseded",
-                dropped=len(factories) - 1,
+                "coord.audio_streams_superseded",
+                dropped=len(streams) - 1,
             )
 
-        if factories:
+        if streams:
             await self._stop_current_media_task()
-            factory = factories[-1]
-            self.current_media_task = asyncio.create_task(self._consume_factory(factory, turn_id))
-            await self._log.ainfo("coord.factory_started")
+            stream = streams[-1]
+            self.current_media_task = asyncio.create_task(
+                self._consume_audio_stream(stream, turn_id)
+            )
+            await self._log.ainfo("coord.audio_stream_started")
 
-        await self._emit_turn_summary(reason="ended", spawned_factory=bool(factories))
+        await self._emit_turn_summary(reason="ended", spawned_audio_stream=bool(streams))
         await self._log.ainfo("coord.turn_ended")
         self.current_turn = None
         self._bind_turn()
         await self._send_status("Listo — mantén el botón para responder")
 
-    async def _emit_turn_summary(self, *, reason: str, spawned_factory: bool) -> None:
+    async def _emit_turn_summary(self, *, reason: str, spawned_audio_stream: bool) -> None:
         """One-line summary at end-of-turn. Useful for grep + per-turn timing."""
         if self.current_turn is None:
             return
@@ -403,23 +408,21 @@ class TurnCoordinator:
             elapsed_ms=elapsed_ms,
             tool_calls=self.current_turn.tool_calls,
             response_done_count=self.current_turn.response_done_count,
-            spawned_factory=spawned_factory,
+            spawned_audio_stream=spawned_audio_stream,
             user_audio_frames=self.current_turn.user_audio_frames,
         )
 
-    async def _consume_factory(
-        self, factory: Callable[[], AsyncIterator[bytes]], turn_id: str | None
-    ) -> None:
-        """Pull chunks from a factory and forward them to send_audio."""
+    async def _consume_audio_stream(self, stream: AudioStream, turn_id: str | None) -> None:
+        """Pull chunks from an AudioStream side effect and forward them to send_audio."""
         try:
-            async for chunk in factory():
+            async for chunk in stream.factory():
                 await self._send_audio(chunk)
-            await logger.ainfo("coord.factory_ended", turn=turn_id, error=False)
+            await logger.ainfo("coord.audio_stream_ended", turn=turn_id, error=False)
         except asyncio.CancelledError:
-            await logger.ainfo("coord.factory_ended", turn=turn_id, cancelled=True)
+            await logger.ainfo("coord.audio_stream_ended", turn=turn_id, cancelled=True)
             raise
         except Exception:
-            await logger.aexception("coord.factory_ended", turn=turn_id, error=True)
+            await logger.aexception("coord.audio_stream_ended", turn=turn_id, error=True)
 
     async def _stop_current_media_task(self) -> None:
         """Cancel the running media task if any. Waits for cleanup."""

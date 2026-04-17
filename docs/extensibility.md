@@ -12,7 +12,7 @@ A skill is a Python class implementing the `Skill` protocol from `huxley_sdk`:
 
 - Declares **tools** (OpenAI function schemas) the LLM can call.
 - Implements `handle(tool_name, args) -> ToolResult` — synchronous request/response within the model's turn.
-- Optionally returns `ToolResult.audio_factory` — a closure the `TurnCoordinator` invokes after the model finishes speaking, used to stream PCM into the same audio channel as model speech.
+- Optionally returns `ToolResult.side_effect` — today `AudioStream(factory=...)` for tools that want to stream PCM (audiobook playback) into the same audio channel as model speech; the framework invokes the factory after the model finishes speaking. Future side-effect kinds (notifications, state updates) reuse the same shape.
 - Receives a `SkillContext` at `setup()` carrying a per-skill `logger`, namespaced KV `storage`, the `persona_data_dir`, and a `config` dict from `persona.yaml`.
 
 Everything below is graded against that shape.

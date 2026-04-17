@@ -15,7 +15,9 @@ from __future__ import annotations
 from huxley_sdk.registry import SkillNotFoundError, SkillRegistry
 from huxley_sdk.types import (
     AppState,
+    AudioStream,
     InvalidTransitionError,
+    SideEffect,
     Skill,
     SkillContext,
     SkillLogger,
@@ -27,7 +29,9 @@ from huxley_sdk.types import (
 
 __all__ = [
     "AppState",
+    "AudioStream",
     "InvalidTransitionError",
+    "SideEffect",
     "Skill",
     "SkillContext",
     "SkillLogger",

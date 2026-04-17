@@ -89,7 +89,9 @@ class TestDispatch:
         with pytest.raises(SkillNotFoundError, match="no_such_tool"):
             await registry.dispatch("no_such_tool", {})
 
-    async def test_dispatch_preserves_audio_factory(self) -> None:
+    async def test_dispatch_preserves_side_effect(self) -> None:
+        from huxley_sdk import AudioStream
+
         async def stub_stream() -> Any:
             if False:
                 yield b""
@@ -98,11 +100,35 @@ class TestDispatch:
         skill = FakeSkill(
             name="player",
             tools=[ToolDefinition(name="play", description="Play")],
-            result=ToolResult(output="{}", audio_factory=stub_stream),
+            result=ToolResult(output="{}", side_effect=AudioStream(factory=stub_stream)),
         )
         registry.register(skill)
         result = await registry.dispatch("play", {})
-        assert result.audio_factory is stub_stream
+        assert isinstance(result.side_effect, AudioStream)
+        assert result.side_effect.factory is stub_stream
+
+    async def test_dispatch_preserves_audio_factory_deprecated(self) -> None:
+        """The `audio_factory=` alias keeps working; it promotes to AudioStream."""
+        import warnings
+
+        from huxley_sdk import AudioStream
+
+        async def stub_stream() -> Any:
+            if False:
+                yield b""
+
+        registry = SkillRegistry()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            skill = FakeSkill(
+                name="player",
+                tools=[ToolDefinition(name="play", description="Play")],
+                result=ToolResult(output="{}", audio_factory=stub_stream),
+            )
+        registry.register(skill)
+        result = await registry.dispatch("play", {})
+        assert isinstance(result.side_effect, AudioStream)
+        assert result.side_effect.factory is stub_stream
 
 
 class TestLifecycle:
