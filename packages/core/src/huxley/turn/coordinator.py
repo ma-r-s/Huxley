@@ -33,7 +33,7 @@ from uuid import UUID, uuid4
 
 import structlog
 
-from huxley_sdk import AudioStream
+from huxley_sdk import AudioStream, CancelMedia
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -68,7 +68,6 @@ class Turn:
     id: UUID = field(default_factory=uuid4)
     state: TurnState = TurnState.LISTENING
     user_audio_frames: int = 0
-    response_ids: list[str] = field(default_factory=list)
     pending_audio_streams: list[AudioStream] = field(default_factory=list)
     needs_follow_up: bool = False
     # Summary tracking — emitted as coord.turn_summary at end-of-turn.
@@ -255,7 +254,17 @@ class TurnCoordinator:
 
         if audio_stream is not None:
             self.current_turn.pending_audio_streams.append(audio_stream)
+        elif isinstance(result.side_effect, CancelMedia):
+            # Cancel the running stream immediately so it stops before the
+            # model's confirmation speech plays. needs_follow_up=True lets the
+            # model narrate the result (e.g. "Listo, pausé el libro").
+            await self._stop_current_media_task()
+            self.current_turn.needs_follow_up = True
         else:
+            # Tool calls without a side-effect that is dispatched serially.
+            # If a future persona needs parallel dispatch (multiple I/O-heavy
+            # tools in one response), collect them and asyncio.gather before
+            # sending outputs. See docs/triage.md C2.
             self.current_turn.needs_follow_up = True
 
     async def on_response_done(self) -> None:

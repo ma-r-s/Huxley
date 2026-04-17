@@ -79,6 +79,9 @@ class OpenAIRealtimeProvider:
     async def connect(self) -> None:
         """Open WebSocket and configure the session."""
         model = self._config.openai_model
+        if not self._config.openai_api_key:
+            msg = "HUXLEY_OPENAI_API_KEY is required — set it in .env"
+            raise RuntimeError(msg)
         url = f"{REALTIME_API_URL}?model={model}"
 
         try:

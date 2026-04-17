@@ -298,25 +298,42 @@ class TestRewindReplacesPriorMediaTask:
 
 
 class TestPauseRequestsFollowUp:
-    """`audiobook_control` with action=pause returns None-factory → follow-up round."""
+    """`audiobook_control` with action=pause cancels media and requests a follow-up."""
 
-    async def test_pause_action_triggers_follow_up_response(
+    async def test_pause_cancels_media_task_and_requests_follow_up(
         self, library_path: Path, storage: Storage
     ) -> None:
+        import asyncio
+
         coord, _reg, skill, player, _consumed, mocks = await _build_wired_coordinator(
             library_path, storage
         )
         book = skill._catalog[0]
-        # Prime LAST_BOOK_SETTING so a later rewind/resume could find something;
-        # pause itself doesn't need it, but this mirrors real flow.
-        # Mirror the namespaced layout the real skill uses.
         await storage.set_setting(f"audiobooks:{LAST_BOOK_KEY}", book["id"])
 
+        # Turn 1: start playback
         await _commit_turn(coord)
-        await coord.on_audio_delta(b"listo, pauso")
-        await coord.on_tool_call("c1", "audiobook_control", {"action": "pause"})
+        await coord.on_tool_call("c1", "play_audiobook", {"book_id": book["id"]})
+        await coord.on_response_done()
+        assert coord.current_media_task is not None
+        first_task = coord.current_media_task
 
-        # Skill returned None-factory → needs_follow_up set
+        # Let the task start
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+        # Turn 2: user says pause — coordinator should cancel media immediately
+        await coord.on_ptt_start()
+        coord.current_turn.user_audio_frames = 25  # type: ignore[union-attr]
+        await coord.on_ptt_stop()
+        await coord.on_audio_delta(b"listo, pauso")
+        await coord.on_tool_call("c2", "audiobook_control", {"action": "pause"})
+
+        # CancelMedia side effect: media task cancelled immediately on tool call
+        assert coord.current_media_task is None or coord.current_media_task.done()
+        assert first_task.done()
+
+        # Coordinator still requests a follow-up for the model to narrate
         assert coord.current_turn is not None
         assert coord.current_turn.needs_follow_up is True
         assert coord.current_turn.pending_audio_streams == []
@@ -324,10 +341,6 @@ class TestPauseRequestsFollowUp:
         await coord.on_audio_done()
         await coord.on_response_done()
 
-        # Follow-up response requested
         assert ("request_response",) in mocks["provider"].sent
         assert coord.current_turn is not None
         assert coord.current_turn.state == TurnState.AWAITING_NEXT_RESPONSE
-
-        # No player.stream was invoked — pause doesn't play anything.
-        player.stream.assert_not_called()

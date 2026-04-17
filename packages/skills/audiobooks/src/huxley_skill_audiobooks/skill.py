@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from huxley_sdk import (
     AudioStream,
+    CancelMedia,
     SkillContext,
     SkillLogger,
     SkillStorage,
@@ -77,6 +78,25 @@ class AudiobooksSkill:
         self._storage: SkillStorage | None = None
         self._logger: SkillLogger | None = None
         self._catalog: list[dict[str, str]] = []
+
+    def _require_setup(self, attr: str) -> None:
+        if getattr(self, attr) is None:
+            raise RuntimeError(f"AudiobooksSkill.{attr[1:]} not set — call setup() first")
+
+    @property
+    def _storage_req(self) -> SkillStorage:
+        self._require_setup("_storage")
+        return self._storage  # type: ignore[return-value]
+
+    @property
+    def _logger_req(self) -> SkillLogger:
+        self._require_setup("_logger")
+        return self._logger  # type: ignore[return-value]
+
+    @property
+    def _player_req(self) -> AudiobookPlayer:
+        self._require_setup("_player")
+        return self._player  # type: ignore[return-value]
 
     @property
     def name(self) -> str:
@@ -261,8 +281,7 @@ class AudiobooksSkill:
         return catalog
 
     async def _get_position(self, book_id: str) -> float:
-        assert self._storage is not None
-        raw = await self._storage.get_setting(_position_key(book_id))
+        raw = await self._storage_req.get_setting(_position_key(book_id))
         if raw is None:
             return 0.0
         try:
@@ -271,8 +290,7 @@ class AudiobooksSkill:
             return 0.0
 
     async def _set_position(self, book_id: str, position: float) -> None:
-        assert self._storage is not None
-        await self._storage.set_setting(_position_key(book_id), str(position))
+        await self._storage_req.set_setting(_position_key(book_id), str(position))
 
     async def _search(self, query: str) -> ToolResult:
         """Search the catalog by fuzzy matching against title and author."""
@@ -346,10 +364,9 @@ class AudiobooksSkill:
 
     async def _resolve_book(self, reference: str) -> dict[str, str] | None:
         """Look up a book by exact ID, or fall back to fuzzy title/author match."""
-        assert self._logger is not None
         exact = next((b for b in self._catalog if b["id"] == reference), None)
         if exact is not None:
-            await self._logger.ainfo(
+            await self._logger_req.ainfo(
                 "audiobooks.resolve",
                 reference=reference,
                 method="exact",
@@ -358,7 +375,7 @@ class AudiobooksSkill:
             return exact
 
         if not self._catalog:
-            await self._logger.ainfo("audiobooks.resolve", reference=reference, resolved=None)
+            await self._logger_req.ainfo("audiobooks.resolve", reference=reference, resolved=None)
             return None
 
         best_score = 0.0
@@ -375,7 +392,7 @@ class AudiobooksSkill:
                 best_score = score
                 best_book = candidate
         if best_book is not None and best_score > 0.5:
-            await self._logger.ainfo(
+            await self._logger_req.ainfo(
                 "audiobooks.resolve",
                 reference=reference,
                 method="fuzzy",
@@ -383,7 +400,7 @@ class AudiobooksSkill:
                 score=round(best_score, 3),
             )
             return best_book
-        await self._logger.ainfo(
+        await self._logger_req.ainfo(
             "audiobooks.resolve",
             reference=reference,
             method="fuzzy",
@@ -399,8 +416,6 @@ class AudiobooksSkill:
         start_position: float,
     ) -> Callable[[], AsyncIterator[bytes]]:
         """Build a playback factory for the coordinator's terminal barrier."""
-        assert self._player is not None
-        assert self._logger is not None
         player = self._player
         logger = self._logger
         set_position = self._set_position
@@ -430,9 +445,6 @@ class AudiobooksSkill:
 
     async def _play(self, book_id: str, *, from_beginning: bool = False) -> ToolResult:
         """Resolve a book, build its factory, stamp last_id."""
-        assert self._player is not None
-        assert self._storage is not None
-        assert self._logger is not None
         book = await self._resolve_book(book_id)
         if not book:
             return ToolResult(
@@ -453,9 +465,9 @@ class AudiobooksSkill:
             start_position = await self._get_position(resolved_id)
 
         try:
-            await self._player.probe(book["path"])
+            await self._player_req.probe(book["path"])
         except PlayerError as exc:
-            await self._logger.aerror(
+            await self._logger_req.aerror(
                 "audiobooks.probe_failed", book_id=resolved_id, error=str(exc)
             )
             return ToolResult(
@@ -467,8 +479,8 @@ class AudiobooksSkill:
                 )
             )
 
-        await self._storage.set_setting(LAST_BOOK_KEY, resolved_id)
-        await self._logger.ainfo(
+        await self._storage_req.set_setting(LAST_BOOK_KEY, resolved_id)
+        await self._logger_req.ainfo(
             "audiobooks.factory_built",
             book_id=resolved_id,
             start_position=start_position,
@@ -491,8 +503,7 @@ class AudiobooksSkill:
 
     async def _resume_last(self) -> ToolResult:
         """Resume the most-recently-played book from its saved position."""
-        assert self._storage is not None
-        last_id = await self._storage.get_setting(LAST_BOOK_KEY)
+        last_id = await self._storage_req.get_setting(LAST_BOOK_KEY)
         if not last_id:
             return ToolResult(
                 output=json.dumps(
@@ -506,17 +517,21 @@ class AudiobooksSkill:
 
     async def _control(self, action: str, seconds: float = 10) -> ToolResult:
         """Control current playback."""
-        assert self._storage is not None
-        assert self._logger is not None
         match action:
             case "pause":
-                return ToolResult(output=json.dumps({"paused": True, "message": "Pausado."}))
+                return ToolResult(
+                    output=json.dumps({"paused": True}),
+                    side_effect=CancelMedia(),
+                )
 
             case "stop":
-                return ToolResult(output=json.dumps({"stopped": True, "message": "Detenido."}))
+                return ToolResult(
+                    output=json.dumps({"stopped": True}),
+                    side_effect=CancelMedia(),
+                )
 
             case "resume":
-                book_id = await self._storage.get_setting(LAST_BOOK_KEY)
+                book_id = await self._storage_req.get_setting(LAST_BOOK_KEY)
                 if book_id is None:
                     return ToolResult(
                         output=json.dumps(
@@ -529,7 +544,7 @@ class AudiobooksSkill:
                 return await self._play(book_id, from_beginning=False)
 
             case "rewind" | "forward":
-                book_id = await self._storage.get_setting(LAST_BOOK_KEY)
+                book_id = await self._storage_req.get_setting(LAST_BOOK_KEY)
                 if book_id is None:
                     return ToolResult(
                         output=json.dumps(
@@ -542,7 +557,7 @@ class AudiobooksSkill:
                 saved = await self._get_position(book_id)
                 delta = abs(seconds)
                 new_pos = max(0.0, saved - delta) if action == "rewind" else saved + delta
-                await self._logger.ainfo(
+                await self._logger_req.ainfo(
                     "audiobooks.seek",
                     action=action,
                     book_id=book_id,

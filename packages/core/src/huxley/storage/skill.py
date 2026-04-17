@@ -25,8 +25,8 @@ class NamespacedSkillStorage:
         self._base = base
         self._prefix = f"{namespace}:"
 
-    async def get_setting(self, key: str) -> str | None:
-        return await self._base.get_setting(self._prefix + key)
+    async def get_setting(self, key: str, default: str | None = None) -> str | None:
+        return await self._base.get_setting(self._prefix + key, default)
 
     async def set_setting(self, key: str, value: str) -> None:
         await self._base.set_setting(self._prefix + key, value)

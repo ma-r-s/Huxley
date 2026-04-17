@@ -78,7 +78,7 @@ bun run check                        # svelte-check
 - `ruff` for lint+format; `mypy --strict` must pass.
 - Skills implement the Skill protocol from `types.py`. Skills opt in to behavioral constraints (`never_say_no`, etc.) per the persona that runs them — see [`docs/skills/README.md`](./docs/skills/README.md#persona-constraints--what-your-skill-should-respect).
 - No circular imports — dependencies flow downward; see [`docs/architecture.md`](./docs/architecture.md#dependency-flow-no-cycles).
-- Config defaults assume the server runs from `server/` (relative paths `data/...`, `models/...`).
+- Config defaults assume the server runs from `packages/core/` (loads `.env` from that directory).
 - **Any code change that invalidates a doc must update the doc in the same commit.** No stale docs.
 - **Every new event handler / decision point gets a structured log line.** See [`docs/observability.md`](./docs/observability.md) for the convention. If a future bug isn't diagnosable from the log, the fix is also adding the log line that would have caught it.
 
@@ -102,9 +102,9 @@ Global `~/.claude/CLAUDE.md` is the baseline. This section concretizes it for Hu
 
 Before presenting work as done:
 
-- **Server**: `cd server && uv run ruff check src/ tests/ && uv run mypy src/ && uv run pytest tests/unit/` — all green.
+- **Python**: `uv run ruff check packages/ && uv run mypy packages/sdk/src packages/core/src && uv run --package huxley pytest packages/core/tests` — all green.
 - **Web**: `cd web && bun run check` — green.
-- **Protocol or audio-path changes**: above + manual browser smoke test (`bun dev`, hold PTT, speak, verify transcript + audio playback). The audio path has no automated test — acknowledge that gap rather than skip it.
+- **Protocol or audio-path changes**: above + manual browser smoke test (`bun dev`, hold PTT, speak, verify transcript + audio playback).
 - **Server changes that affect runtime behavior**: the running server must be on the new code (kill the old process and restart). Don't claim a change is deployed if you haven't verified the running pid is from the latest commit.
 - **Docs**: if the change affects behavior described in `docs/`, the doc is updated in the same commit.
 
@@ -124,7 +124,7 @@ If a session ever ends with "I had to ask the contributor what was happening bec
 
 ### Integration tests
 
-Tests hitting the OpenAI Realtime API or real `ffmpeg` live in `server/tests/integration/`, marked `@pytest.mark.integration`. Skipped by default; run with `uv run pytest -m integration` (requires `ABUEL_OPENAI_API_KEY`).
+Tests hitting the OpenAI Realtime API or real `ffmpeg` live in `packages/core/tests/integration/`, marked `@pytest.mark.integration`. Skipped by default; run with `uv run --package huxley pytest -m integration` (requires `HUXLEY_OPENAI_API_KEY`).
 
 ### Session start for this repo
 

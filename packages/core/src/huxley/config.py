@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     )
 
     # --- OpenAI Realtime API ---
-    openai_api_key: str = ""
+    openai_api_key: str | None = None
     openai_model: str = "gpt-4o-mini-realtime-preview"
     # `persona.voice` is the source of truth. Setting `HUXLEY_OPENAI_VOICE`
     # overrides it for a single run (useful when A/B-testing voices without

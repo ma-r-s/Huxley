@@ -720,7 +720,6 @@ class TestTurnDataclass:
     def test_default_turn_has_empty_pending_audio_streams(self) -> None:
         t = Turn()
         assert t.pending_audio_streams == []
-        assert t.response_ids == []
         assert t.needs_follow_up is False
         assert t.user_audio_frames == 0
 

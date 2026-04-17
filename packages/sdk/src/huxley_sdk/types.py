@@ -92,6 +92,19 @@ class AudioStream(SideEffect):
 
 
 @dataclass(frozen=True, slots=True)
+class CancelMedia(SideEffect):
+    """Side effect: cancel the currently running media task, if any.
+
+    Used by skills that stop playback (pause, stop) to signal the coordinator
+    to cancel `current_media_task` immediately when the tool call is processed
+    — not deferred to the terminal barrier — so the stream halts before the
+    model's confirmation speech plays.
+    """
+
+    kind: ClassVar[str] = "cancel_media"
+
+
+@dataclass(frozen=True, slots=True)
 class ToolResult:
     """Result of a skill handling a tool call.
 
@@ -126,7 +139,7 @@ class SkillStorage(Protocol):
     protocol grows; speculative additions are out of scope.
     """
 
-    async def get_setting(self, key: str) -> str | None: ...
+    async def get_setting(self, key: str, default: str | None = None) -> str | None: ...
     async def set_setting(self, key: str, value: str) -> None: ...
 
 

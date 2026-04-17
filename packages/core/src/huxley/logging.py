@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import atexit
+import copy
 import logging
 import sys
 from datetime import datetime
@@ -12,6 +14,19 @@ import structlog
 if TYPE_CHECKING:
     from pathlib import Path
     from typing import IO
+
+_log_file_handle: IO[str] | None = None
+
+
+def _close_log_file() -> None:
+    global _log_file_handle
+    if _log_file_handle is not None:
+        try:
+            _log_file_handle.flush()
+            _log_file_handle.close()
+        except OSError:
+            pass
+        _log_file_handle = None
 
 
 # Per-run rotation: at startup, the previous run's log is renamed to
@@ -90,7 +105,10 @@ def setup_logging(
     if log_file is not None:
         # Per-run rotation: previous run's file → logs/huxley_<ts>.log.
         _rotate_per_run(log_file)
-        _file_handle = log_file.open("w", encoding="utf-8")
+        global _log_file_handle
+        _close_log_file()  # close any handle from a previous setup_logging call
+        _log_file_handle = log_file.open("w", encoding="utf-8")
+        atexit.register(_close_log_file)
         structlog.configure(
             processors=[
                 *shared_processors,
@@ -98,7 +116,7 @@ def setup_logging(
                 _TeeProcessor(
                     console_renderer=renderer,
                     file_renderer=structlog.processors.JSONRenderer(),
-                    file_handle=_file_handle,
+                    file_handle=_log_file_handle,
                 ),
             ],
             wrapper_class=structlog.make_filtering_bound_logger(log_level),
@@ -138,11 +156,12 @@ class _TeeProcessor:
         method: str,
         event_dict: structlog.types.EventDict,
     ) -> str:
-        import copy
-
         file_dict = copy.copy(event_dict)
         file_line = str(self._file(logger, method, file_dict))
         self._fh.write(file_line + "\n")
-        self._fh.flush()
+        # Flush immediately for WARNING+ so crash-adjacent lines reach disk.
+        # Lower-severity lines are flushed by the atexit handler on clean exit.
+        if method in ("warning", "error", "critical"):
+            self._fh.flush()
 
         return str(self._console(logger, method, event_dict))

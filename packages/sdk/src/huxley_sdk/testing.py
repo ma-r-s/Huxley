@@ -25,8 +25,8 @@ class _NoopSkillStorage:
     def __init__(self) -> None:
         self._data: dict[str, str] = {}
 
-    async def get_setting(self, key: str) -> str | None:
-        return self._data.get(key)
+    async def get_setting(self, key: str, default: str | None = None) -> str | None:
+        return self._data.get(key, default)
 
     async def set_setting(self, key: str, value: str) -> None:
         self._data[key] = value
@@ -68,13 +68,18 @@ class FakeSkill:
     Tracks `setup_called`, `teardown_called`, and `handle_calls` for
     assertions. Defaults to a single tool `fake_tool` and a successful
     `ToolResult`. Override via constructor args for custom shapes.
+
+    `result` can be a single `ToolResult` (returned for every tool call) or a
+    `dict[str, ToolResult]` mapping tool names to results. Using a dict raises
+    a clear error if an unregistered tool is called, which catches tests that
+    accidentally dispatch to the wrong tool name.
     """
 
     def __init__(
         self,
         name: str = "fake",
         tools: list[ToolDefinition] | None = None,
-        result: ToolResult | None = None,
+        result: ToolResult | dict[str, ToolResult] | None = None,
     ) -> None:
         self._name = name
         self._tools = tools or [
@@ -87,7 +92,9 @@ class FakeSkill:
                 },
             )
         ]
-        self._result = result or ToolResult(output='{"ok": true}')
+        self._result: ToolResult | dict[str, ToolResult] = result or ToolResult(
+            output='{"ok": true}'
+        )
         self.handle_calls: list[tuple[str, dict[str, Any]]] = []
         self.setup_called = False
         self.setup_context: SkillContext | None = None
@@ -103,6 +110,14 @@ class FakeSkill:
 
     async def handle(self, tool_name: str, args: dict[str, Any]) -> ToolResult:
         self.handle_calls.append((tool_name, args))
+        if isinstance(self._result, dict):
+            if tool_name not in self._result:
+                registered = list(self._result.keys())
+                raise ValueError(
+                    f"FakeSkill '{self._name}': no result for tool '{tool_name}'. "
+                    f"Registered: {registered}"
+                )
+            return self._result[tool_name]
         return self._result
 
     async def setup(self, ctx: SkillContext) -> None:
