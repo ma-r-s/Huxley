@@ -30,9 +30,12 @@ Every log event uses a dotted namespace + direction prefix. This makes events `g
 | `server.rx.*`  | Messages received from the audio client                 | `server.rx.ptt_start`, `server.rx.ptt_stop`, `server.rx.wake_word`     |
 | `server.tx.*`  | Messages sent to the audio client                       | `server.tx.state`, `server.tx.model_speaking`                          |
 | `app.*`        | Application orchestration (lifecycle, guard rejections) | `app.session_end`, `app.ptt_rejected`                                  |
-| `<skill>.*`    | Per-skill events (skill author owns the namespace)      | `audiobooks.book_resolved`, `system.volume_set`                        |
+| `<skill>.*`    | Per-skill events (skill author owns the namespace)      | `audiobooks.resolve`, `audiobooks.stream_started`, `system.volume_set` |
+| `client.*`     | Telemetry forwarded from the audio client (web/ESP32)   | `client.silence_timer_started`, `client.thinking_tone_on`              |
 
-A skill named `audiobooks` emits events like `audiobooks.factory_built`, `audiobooks.position_saved`. The framework reserves `coord.`, `session.`, `server.`, `app.`; everything else is skill territory.
+A skill named `audiobooks` emits events like `audiobooks.factory_built`, `audiobooks.stream_ended`. The framework reserves `coord.`, `session.`, `server.`, `app.`, `client.`; everything else is skill territory.
+
+The `client.*` events come in via the `client_event` WebSocket message type — clients emit `{"type": "client_event", "event": "<name>", "data": {...}}` and the server logs them as `client.<name>` with the data fields spread. Pure observability — the framework takes no action. This closes the "client-side blackbox" gap; thinking-tone state, silence-timer fires, and PTT UI transitions are now visible in the same log file as the server-side flow.
 
 ## Context fields
 

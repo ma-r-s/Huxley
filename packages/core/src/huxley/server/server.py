@@ -118,6 +118,17 @@ class AudioServer:
             case "wake_word":
                 await logger.ainfo("server.rx.wake_word")
                 await self._on_wake_word()
+            case "client_event":
+                # Pure observability — client telemetry sink. No behavioral
+                # effect on the server. The client emits events that the
+                # server log can't otherwise see (UI state, audio queue,
+                # silence timer, thinking tone). Logged as client.<event>
+                # so the dev workflow's "describe symptom → read log" loop
+                # works for client-side bugs too.
+                event = str(msg.get("event", "unknown"))
+                raw_data = msg.get("data")
+                data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
+                await logger.ainfo(f"client.{event}", **data)
             case other:
                 await logger.awarning("server.rx.unknown", msg_type=other)
 

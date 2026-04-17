@@ -60,23 +60,34 @@ export function createWsStore() {
   let silenceTimer: ReturnType<typeof setTimeout> | null = null;
   let thinkingToneActive = false;
 
-  function startSilenceTimer() {
+  function startSilenceTimer(trigger: string) {
     if (silenceTimer !== null) clearTimeout(silenceTimer);
+    sendClientEvent("silence_timer_started", { trigger });
     silenceTimer = setTimeout(() => {
       silenceTimer = null;
       thinkingToneActive = true;
+      sendClientEvent("thinking_tone_on", { reason: "silence_timeout" });
       _onThinkingToneStart?.();
     }, SILENCE_TIMEOUT_MS);
   }
 
-  function cancelSilenceTimer() {
+  function cancelSilenceTimer(reason: string = "unknown") {
+    const hadTimer = silenceTimer !== null;
     if (silenceTimer !== null) {
       clearTimeout(silenceTimer);
       silenceTimer = null;
     }
+    const hadTone = thinkingToneActive;
     if (thinkingToneActive) {
       thinkingToneActive = false;
       _onThinkingToneStop?.();
+    }
+    if (hadTimer || hadTone) {
+      sendClientEvent("silence_timer_cancelled", {
+        reason,
+        had_timer: hadTimer,
+        had_tone: hadTone,
+      });
     }
   }
 
@@ -110,7 +121,7 @@ export function createWsStore() {
     ws.onclose = () => {
       connected = false;
       socket = null;
-      cancelSilenceTimer();
+      cancelSilenceTimer("socket_close");
       pushStatus("Disconnected — retrying in 2s…");
       setTimeout(connect, 2000);
     };
@@ -121,11 +132,11 @@ export function createWsStore() {
         switch (msg.type) {
           case "audio":
             // Real audio arrived — silence is over.
-            cancelSilenceTimer();
+            cancelSilenceTimer("audio_arrived");
             _onAudio?.(msg.data);
             break;
           case "audio_clear":
-            cancelSilenceTimer();
+            cancelSilenceTimer("audio_clear");
             _onAudioClear?.();
             break;
           case "state":
@@ -144,7 +155,7 @@ export function createWsStore() {
             modelSpeaking = msg.value;
             if (msg.value) {
               // Model is about to emit audio — kill any pending tone.
-              cancelSilenceTimer();
+              cancelSilenceTimer("model_speaking_true");
             }
             // We intentionally do NOT start the timer on model_speaking:false.
             // The terminal audio-done after a completed turn is
@@ -168,6 +179,11 @@ export function createWsStore() {
     if (socket?.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(msg));
     }
+  }
+
+  function sendClientEvent(event: string, data: Record<string, unknown> = {}) {
+    // Pure observability — server logs as `client.<event>`. See protocol.md.
+    send({ type: "client_event", event, data });
   }
 
   return {
@@ -202,18 +218,19 @@ export function createWsStore() {
       _onThinkingToneStop = stop;
     },
     sendAudio: (data: string) => send({ type: "audio", data }),
+    sendClientEvent,
     wakeWord: () => {
-      cancelSilenceTimer();
+      cancelSilenceTimer("wake_word");
       send({ type: "wake_word" });
     },
     pttStart: () => {
-      cancelSilenceTimer();
+      cancelSilenceTimer("ptt_start");
       send({ type: "ptt_start" });
     },
     pttStop: () => {
       send({ type: "ptt_stop" });
       // Initial gap: commit → OpenAI → first audio delta. Could be > 400 ms.
-      startSilenceTimer();
+      startSilenceTimer("ptt_stop");
     },
   };
 }
