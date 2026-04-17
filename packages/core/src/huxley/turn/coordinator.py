@@ -17,8 +17,8 @@ See `docs/turns.md` for the full spec. In short:
 
 The coordinator is transport-agnostic: all I/O happens through callbacks
 passed at construction time, which makes it straightforward to unit-test
-with `AsyncMock` and (in step 3) wire into the real `SessionManager` +
-`AudioServer`.
+with a `StubVoiceProvider` and wire into a concrete
+`VoiceProvider` at construction time.
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ from huxley_sdk import AudioStream
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from huxley.voice.provider import VoiceProvider
     from huxley_sdk import ToolResult
 
 logger = structlog.get_logger()
@@ -90,26 +91,23 @@ class TurnCoordinator:
         send_audio_clear: Callable[[], Awaitable[None]],
         send_status: Callable[[str], Awaitable[None]],
         send_model_speaking: Callable[[bool], Awaitable[None]],
-        send_user_audio_to_session: Callable[[bytes], Awaitable[None]],
         send_dev_event: Callable[[str, dict[str, Any]], Awaitable[None]],
-        oai_send_function_output: Callable[[str, str], Awaitable[None]],
-        oai_commit: Callable[[], Awaitable[None]],
-        oai_cancel: Callable[[], Awaitable[None]],
-        oai_request_response: Callable[[], Awaitable[None]],
-        oai_is_connected: Callable[[], bool],
+        provider: VoiceProvider,
         dispatch_tool: Callable[[str, dict[str, Any]], Awaitable[ToolResult]],
     ) -> None:
+        # Client-facing outputs (to the WebSocket audio server).
         self._send_audio = send_audio
         self._send_audio_clear = send_audio_clear
         self._send_status = send_status
         self._send_model_speaking = send_model_speaking
-        self._send_user_audio_to_session = send_user_audio_to_session
         self._send_dev_event = send_dev_event
-        self._oai_send_function_output = oai_send_function_output
-        self._oai_commit = oai_commit
-        self._oai_cancel = oai_cancel
-        self._oai_request_response = oai_request_response
-        self._oai_is_connected = oai_is_connected
+        # Provider — outgoing verbs (send_user_audio, send_tool_output,
+        # commit_and_request_response, cancel_current_response,
+        # request_response) are called directly. Incoming events arrive as
+        # on_tool_call / on_audio_delta / on_response_done / on_audio_done
+        # / on_commit_failed / on_session_end, wired via
+        # VoiceProviderCallbacks at construction on the provider side.
+        self._provider = provider
         self._dispatch_tool = dispatch_tool
 
         self.current_turn: Turn | None = None
@@ -163,8 +161,8 @@ class TurnCoordinator:
         if frames < 19:
             await self._log.ainfo("coord.ptt_stop", frames=frames, committed=False)
             await self._send_status("Muy corto — mantén el botón mientras hablas")
-            if self._oai_is_connected():
-                await self._oai_cancel()
+            if self._provider.is_connected:
+                await self._provider.cancel_current_response()
             self.current_turn = None
             self._bind_turn()
             return
@@ -172,16 +170,16 @@ class TurnCoordinator:
         self.response_cancelled = False
         await self._log.ainfo("coord.ptt_stop", frames=frames, committed=True)
         await self._send_status("Enviado — esperando respuesta…")
-        await self._oai_commit()
+        await self._provider.commit_and_request_response()
 
     async def on_user_audio_frame(self, pcm: bytes) -> None:
         """Mic frame from client. Forward to OpenAI iff we're LISTENING."""
         if (
             self.current_turn is not None
             and self.current_turn.state == TurnState.LISTENING
-            and self._oai_is_connected()
+            and self._provider.is_connected
         ):
-            await self._send_user_audio_to_session(pcm)
+            await self._provider.send_user_audio(pcm)
             self.current_turn.user_audio_frames += 1
             await self._log.adebug("coord.mic_fwd", bytes=len(pcm))
         elif self.current_turn is not None:
@@ -199,7 +197,7 @@ class TurnCoordinator:
         self.current_turn = None
         self._bind_turn()
 
-    # --- OpenAI response events (from session/manager.py receive loop) ---
+    # --- Provider events (fired by the VoiceProvider's receive loop) ---
 
     async def on_audio_delta(self, pcm: bytes) -> None:
         """Model audio chunk — forward to client unless the response is cancelled."""
@@ -226,14 +224,14 @@ class TurnCoordinator:
         await self._send_model_speaking(False)
         await self._log.ainfo("coord.audio_done")
 
-    async def on_function_call(self, call_id: str, name: str, args: dict[str, Any]) -> None:
+    async def on_tool_call(self, call_id: str, name: str, args: dict[str, Any]) -> None:
         """Model called a tool — dispatch, send output back, latch the result."""
         if self.response_cancelled or self.current_turn is None:
             return
         self._enter_in_response_if_idle_between_rounds()
 
         result = await self._dispatch_tool(name, args)
-        await self._oai_send_function_output(call_id, result.output)
+        await self._provider.send_tool_output(call_id, result.output)
 
         audio_stream = result.side_effect if isinstance(result.side_effect, AudioStream) else None
         has_audio_stream = audio_stream is not None
@@ -278,9 +276,9 @@ class TurnCoordinator:
         if follow_up:
             self.current_turn.needs_follow_up = False
             self.current_turn.state = TurnState.AWAITING_NEXT_RESPONSE
-            if self._oai_is_connected():
+            if self._provider.is_connected:
                 self.response_cancelled = False
-                await self._oai_request_response()
+                await self._provider.request_response()
         else:
             await self._apply_side_effects()
 
@@ -323,7 +321,7 @@ class TurnCoordinator:
             TurnState.IN_RESPONSE,
             TurnState.AWAITING_NEXT_RESPONSE,
         )
-        will_cancel = has_response and self._oai_is_connected()
+        will_cancel = has_response and self._provider.is_connected
         pending = len(self.current_turn.pending_audio_streams) if self.current_turn else 0
 
         await self._log.ainfo(
@@ -348,7 +346,7 @@ class TurnCoordinator:
         await self._stop_current_media_task()
         # 5. Cancel the in-flight response (only if one could exist)
         if will_cancel:
-            await self._oai_cancel()
+            await self._provider.cancel_current_response()
         # 6. Mark current turn as interrupted, emit summary, clear ref
         if self.current_turn is not None:
             self.current_turn.state = TurnState.INTERRUPTED

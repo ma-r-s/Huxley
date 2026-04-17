@@ -29,11 +29,12 @@ import structlog
 from huxley.loader import discover_skills
 from huxley.logging import setup_logging
 from huxley.server.server import AudioServer
-from huxley.session.manager import SessionManager
 from huxley.state.machine import StateMachine
 from huxley.storage.db import Storage
 from huxley.storage.skill import NamespacedSkillStorage
 from huxley.turn import TurnCoordinator
+from huxley.voice.openai_realtime import OpenAIRealtimeProvider
+from huxley.voice.provider import VoiceProviderCallbacks
 from huxley_sdk import AppState, SkillContext, SkillRegistry
 
 if TYPE_CHECKING:
@@ -73,15 +74,12 @@ class Application:
         for _name, skill_cls in discover_skills(enabled).items():
             self.skill_registry.register(skill_cls())
 
-        self.session = SessionManager(
-            config=config,
-            persona=persona,
-            skill_registry=self.skill_registry,
-            storage=self.storage,
+        # Provider callbacks — lambdas so `self.coordinator` resolves at call
+        # time (constructed below). The provider fires these as it receives
+        # events from the LLM; the coordinator processes them.
+        provider_callbacks = VoiceProviderCallbacks(
             on_audio_delta=lambda pcm: self.coordinator.on_audio_delta(pcm),
-            on_function_call=lambda cid, name, args: self.coordinator.on_function_call(
-                cid, name, args
-            ),
+            on_tool_call=lambda cid, name, args: self.coordinator.on_tool_call(cid, name, args),
             on_response_done=lambda: self.coordinator.on_response_done(),
             on_audio_done=lambda: self.coordinator.on_audio_done(),
             on_commit_failed=lambda: self.coordinator.on_commit_failed(),
@@ -89,18 +87,21 @@ class Application:
             on_transcript=self._on_transcript,
         )
 
+        self.provider = OpenAIRealtimeProvider(
+            config=config,
+            persona=persona,
+            skill_registry=self.skill_registry,
+            storage=self.storage,
+            callbacks=provider_callbacks,
+        )
+
         self.coordinator = TurnCoordinator(
             send_audio=self.server.send_audio,
             send_audio_clear=self.server.send_audio_clear,
             send_status=self.server.send_status,
             send_model_speaking=self.server.send_model_speaking,
-            send_user_audio_to_session=self.session.send_audio,
             send_dev_event=self.server.send_dev_event,
-            oai_send_function_output=self.session.send_function_output,
-            oai_commit=self.session.commit_and_respond,
-            oai_cancel=self.session.cancel_response,
-            oai_request_response=self.session.request_response,
-            oai_is_connected=lambda: self.session.is_connected,
+            provider=self.provider,
             dispatch_tool=self.skill_registry.dispatch,
         )
 
@@ -187,8 +188,8 @@ class Application:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._reconnect_task
 
-        if self.session.is_connected:
-            await self.session.disconnect(save_summary=True)
+        if self.provider.is_connected:
+            await self.provider.disconnect(save_summary=True)
 
         await self.coordinator.interrupt()
         await self.skill_registry.teardown_all()
@@ -201,7 +202,7 @@ class Application:
     async def _enter_connecting(self) -> None:
         await self.server.send_status("Conectando…")
         try:
-            await self.session.connect()
+            await self.provider.connect()
             await self.state_machine.trigger("connected")
             await self.server.send_status("Conectado — mantén el botón para hablar")
         except Exception:

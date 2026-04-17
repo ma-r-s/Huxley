@@ -4,30 +4,39 @@ Honest self-assessment of the repo as of 2026-04-17, written for a third-party r
 
 ## Verdict
 
-**Ready for review.** Framework end-to-end paths work from a fresh clone, six months of refactor are captured as six atomic commits with clear messages, docs cover vision / architecture / protocol / concepts / skills / personas / turns / observability / extensibility / research, strict typing and linting are green, 144 Python tests pass.
+**Ready for review.** Framework end-to-end paths work from a fresh clone, the refactor history is a series of atomic commits with clear messages, docs cover vision / architecture / protocol / concepts / skills / personas / turns / observability / extensibility / research, strict typing and linting are green, 148 Python tests pass.
 
 The items below are known rough edges. None are secrets; all are called out somewhere in the repo. Surface them yourself before a reviewer does.
 
+## Recently closed (for reviewers returning after a prior look)
+
+- **`VoiceProvider` abstraction extracted.** `TurnCoordinator` no longer takes five `oai_*` callbacks — it takes a single `provider: VoiceProvider`. The OpenAI Realtime implementation is one concrete impl at `huxley/voice/openai_realtime.py`; a `StubVoiceProvider` at `huxley/voice/stub.py` is used for tests. Protocol lives at `huxley/voice/provider.py`. Adding a second provider (Deepgram, local Whisper chain, etc.) is now a single-file drop.
+- **`on_function_call` renamed to `on_tool_call`** through the coordinator surface. Aligns with the rest of the framework vocabulary (`tools`, `ToolDefinition`, `ToolResult`, `dispatch_tool`) — "function call" is OpenAI wire-format terminology and stays inside the provider.
+- **End-to-end audio-path tests** — four scenarios driving the coordinator through the stub provider; closes the "no automated audio-path test" gap from prior reviews.
+
 ## What will still draw comments
 
-### 1. No automated test for the audio path
+### 1. ~~No automated test for the audio path~~ Closed
 
-`TurnCoordinator` is tested, skill logic is tested up to the factory closure, but the actual PCM-bytes-to-browser WebSocket path has no coverage. Manual smoke test 2 in [`verifying.md`](./verifying.md) is the only verification. Fixing is multi-session work (fake WebSocket client + assertion harness on byte streams). Worth doing before v1.0.
+_Previously_: `TurnCoordinator` was tested, skill logic was tested up to the factory closure, but the actual PCM-bytes path had no coverage.
+
+_Now closed_: [`tests/unit/test_end_to_end_with_stub.py`](../packages/core/tests/unit/test_end_to_end_with_stub.py) drives four full scenarios through the coordinator via `StubVoiceProvider` — info tool round-trip, side-effect tool with `AudioStream` draining to `send_audio`, mid-stream interrupt, and the full provider-verb coverage sweep. The PCM bytes themselves are assertions on what landed on `send_audio`.
 
 ### 2. Thinking tone violates the sonic-UX framework we documented
 
 The client-side `playThinkingTone()` is a 440 Hz sine pulse — inside the vocal band (200 Hz–4 kHz), which [`research/sonic-ux.md`](./research/sonic-ux.md) rule 11 explicitly forbids because it masks model speech. The current state vs. target is written up in that doc. Tracked as P2 on the roadmap. A reviewer with audio ears will catch it within a minute.
 
-### 3. OpenAI Realtime API access is a real gate
+### 3. OpenAI Realtime API access is a real gate (partially addressed)
 
 Not every OpenAI account has Realtime beta access. A reviewer without it can verify:
 
 - Persona loads, constraints compose, skills register via entry points
 - SQLite schema initialises at the right path
 - WebSocket server binds and accepts connections
-- Unit tests pass
+- Full coordinator / tool dispatch / audio stream path — via the stub-driven end-to-end tests
+- Unit tests pass (all 148, including the four end-to-end scenarios that drive the coordinator through a `StubVoiceProvider` with no network)
 
-…and gets `invalid_request_error.invalid_api_key` at the OpenAI session stage. Documented in `verifying.md`.
+…and gets `invalid_request_error.invalid_api_key` only at the actual OpenAI Realtime connect, which is one thin layer (`OpenAIRealtimeProvider`) rather than the whole framework. Documented in `verifying.md`. A second provider implementation (a Whisper → Chat Completions → TTS chain) would close this gap entirely — tracked on the roadmap.
 
 ### 4. Gitignored audiobook library
 

@@ -93,7 +93,7 @@ sequenceDiagram
     participant Client as Browser / ESP32
     participant Server as AudioServer
     participant Coord as TurnCoordinator
-    participant Sess as VoiceProvider
+    participant Prov as VoiceProvider
     participant LLM as OpenAI Realtime
 
     User->>Client: holds button
@@ -103,23 +103,23 @@ sequenceDiagram
     loop while button held
         Client->>Server: { type: "audio", data: PCM16 }
         Server->>Coord: on_user_audio_frame(pcm)
-        Coord->>Sess: send_audio(pcm)
-        Sess->>LLM: input_audio_buffer.append
+        Coord->>Prov: send_user_audio(pcm)
+        Prov->>LLM: input_audio_buffer.append
     end
     User->>Client: releases button
     Client->>Server: { type: "ptt_stop" }
     Server->>Coord: on_ptt_stop()
-    Coord->>Sess: commit_and_respond()
-    Sess->>LLM: buffer.commit + response.create
-    LLM-->>Sess: response.audio.delta (streaming)
-    Sess-->>Coord: on_audio_delta(pcm)
+    Coord->>Prov: commit_and_request_response()
+    Prov->>LLM: buffer.commit + response.create
+    LLM-->>Prov: response.audio.delta (streaming)
+    Prov-->>Coord: on_audio_delta(pcm)
     Coord->>Server: send_model_speaking(true)<br/>send_audio(pcm)
     Server-->>Client: { type: "audio", data: PCM16 }
-    LLM-->>Sess: response.audio.done
-    Sess-->>Coord: on_audio_done()
+    LLM-->>Prov: response.audio.done
+    Prov-->>Coord: on_audio_done()
     Coord->>Server: send_model_speaking(false)
-    LLM-->>Sess: response.done
-    Sess-->>Coord: on_response_done()
+    LLM-->>Prov: response.done
+    Prov-->>Coord: on_response_done()
     Note over Coord: terminal — no factory, turn ends
 ```
 
@@ -129,7 +129,7 @@ sequenceDiagram
 sequenceDiagram
     autonumber
     participant LLM as OpenAI Realtime
-    participant Sess as VoiceProvider
+    participant Prov as VoiceProvider
     participant Coord as TurnCoordinator
     participant Skill as audiobooks skill
     participant Player as AudiobookPlayer
@@ -138,23 +138,23 @@ sequenceDiagram
     participant WS as AudioServer
 
     Note over LLM: model pre-narrates ack<br/>(persona-language)
-    LLM-->>Sess: response.audio.delta (ack chunks)
-    Sess-->>Coord: on_audio_delta(...)
+    LLM-->>Prov: response.audio.delta (ack chunks)
+    Prov-->>Coord: on_audio_delta(...)
     Coord->>WS: send_audio(...)
-    LLM-->>Sess: response.function_call<br/>play_audiobook({book_id})
-    Sess-->>Coord: on_function_call(call_id, name, args)
+    LLM-->>Prov: response.function_call<br/>play_audiobook({book_id})
+    Prov-->>Coord: on_tool_call(call_id, name, args)
     Coord->>Skill: dispatch("play_audiobook", args)
     Skill->>DB: get_audiobook_position(book_id)
     Skill->>Player: probe(path)
     Skill->>DB: set_setting(LAST_BOOK_SETTING)
     Skill-->>Coord: ToolResult(output, side_effect=AudioStream(factory=closure))
-    Note over Coord: factory latched onto pending_factories
-    Coord->>Sess: send_function_output(call_id, output)
-    Sess->>LLM: conversation.item.create
-    LLM-->>Sess: response.audio.done
-    Sess-->>Coord: on_audio_done()
-    LLM-->>Sess: response.done
-    Sess-->>Coord: on_response_done()
+    Note over Coord: AudioStream latched onto pending_audio_streams
+    Coord->>Prov: send_tool_output(call_id, output)
+    Prov->>LLM: conversation.item.create
+    LLM-->>Prov: response.audio.done
+    Prov-->>Coord: on_audio_done()
+    LLM-->>Prov: response.done
+    Prov-->>Coord: on_response_done()
     Note over Coord: terminal barrier — invoke factory
     Coord->>Skill: factory() → generator
     Skill->>Player: stream(path, start_position)
@@ -182,7 +182,7 @@ sequenceDiagram
 flowchart TD
     App[app.py]
     Server[server/server.py]
-    Session[session/manager.py]
+    Session[voice/openai_realtime.py<br/>VoiceProvider impl]
     Coord[turn/coordinator.py]
     Loader[loader.py<br/>entry-point discovery]
     Registry[huxley_sdk/registry.py<br/>SkillRegistry]
@@ -222,8 +222,10 @@ Dependencies flow **downward**. `huxley_sdk/types.py` is the universal leaf — 
 | WebSocket audio server            | `packages/core/src/huxley/server/server.py`                        |
 | State machine + transitions       | `packages/core/src/huxley/state/machine.py`                        |
 | Turn coordinator + factory fire   | `packages/core/src/huxley/turn/coordinator.py`                     |
-| Voice provider (OpenAI Realtime)  | `packages/core/src/huxley/session/manager.py`                      |
-| OpenAI event schemas              | `packages/core/src/huxley/session/protocol.py`                     |
+| VoiceProvider protocol            | `packages/core/src/huxley/voice/provider.py`                       |
+| OpenAI Realtime implementation    | `packages/core/src/huxley/voice/openai_realtime.py`                |
+| OpenAI event schemas              | `packages/core/src/huxley/voice/openai_protocol.py`                |
+| StubVoiceProvider (for tests)     | `packages/core/src/huxley/voice/stub.py`                           |
 | Skill protocol + ToolResult       | `packages/sdk/src/huxley_sdk/types.py`                             |
 | Skill registry + dispatch         | `packages/sdk/src/huxley_sdk/registry.py`                          |
 | SkillContext + SkillStorage       | `packages/sdk/src/huxley_sdk/types.py`                             |

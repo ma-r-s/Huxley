@@ -18,11 +18,12 @@ from __future__ import annotations
 
 import contextlib
 from typing import TYPE_CHECKING, Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
 from huxley.turn.coordinator import Turn, TurnCoordinator, TurnState
+from huxley.voice.stub import StubVoiceProvider
 from huxley_sdk import AudioStream, ToolResult
 
 if TYPE_CHECKING:
@@ -54,20 +55,23 @@ async def _commit_turn(coordinator: TurnCoordinator, frames: int = 25) -> None:
 
 
 @pytest.fixture
-def mocks() -> dict[str, Any]:
-    """Dictionary of mock callbacks for building a coordinator under test."""
+def provider() -> StubVoiceProvider:
+    """Fresh stub VoiceProvider — connected, empty sent log."""
+    p = StubVoiceProvider()
+    p._connected = True  # skip the connect handshake; tests care about outgoing verbs
+    return p
+
+
+@pytest.fixture
+def mocks(provider: StubVoiceProvider) -> dict[str, Any]:
+    """Client-facing + dispatch mocks. Provider is separate (see `provider` fixture)."""
     return {
         "send_audio": AsyncMock(),
         "send_audio_clear": AsyncMock(),
         "send_status": AsyncMock(),
         "send_model_speaking": AsyncMock(),
-        "send_user_audio_to_session": AsyncMock(),
         "send_dev_event": AsyncMock(),
-        "oai_send_function_output": AsyncMock(),
-        "oai_commit": AsyncMock(),
-        "oai_cancel": AsyncMock(),
-        "oai_request_response": AsyncMock(),
-        "oai_is_connected": MagicMock(return_value=True),
+        "provider": provider,
         "dispatch_tool": AsyncMock(return_value=ToolResult(output="{}")),
     }
 
@@ -95,23 +99,23 @@ class TestTurnLifecycle:
         assert coordinator.current_turn.state == TurnState.LISTENING
 
     async def test_ptt_stop_with_enough_frames_commits(
-        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any], provider: StubVoiceProvider
     ) -> None:
         await _commit_turn(coordinator)
 
         assert coordinator.current_turn is not None
         assert coordinator.current_turn.state == TurnState.COMMITTING
-        mocks["oai_commit"].assert_awaited_once()
-        mocks["oai_cancel"].assert_not_awaited()
+        assert ("commit_and_request_response",) in provider.sent
+        assert ("cancel_current_response",) not in provider.sent
 
     async def test_ptt_stop_too_short_aborts_without_commit(
-        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any], provider: StubVoiceProvider
     ) -> None:
         await _commit_turn(coordinator, frames=10)  # below 19-frame threshold
 
         assert coordinator.current_turn is None
-        mocks["oai_cancel"].assert_awaited_once()
-        mocks["oai_commit"].assert_not_awaited()
+        assert ("cancel_current_response",) in provider.sent
+        assert ("commit_and_request_response",) not in provider.sent
 
     async def test_commit_failed_aborts_stuck_turn(
         self, coordinator: TurnCoordinator, mocks: dict[str, Any]
@@ -139,26 +143,26 @@ class TestAudioForwarding:
     """Mic-gate and model-audio-gate behavior."""
 
     async def test_mic_audio_forwarded_while_listening(
-        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider
     ) -> None:
         await coordinator.on_ptt_start()
         await coordinator.on_user_audio_frame(b"mic chunk")
 
-        mocks["send_user_audio_to_session"].assert_awaited_once_with(b"mic chunk")
+        assert provider.user_audio == [b"mic chunk"]
 
     async def test_mic_audio_not_forwarded_when_idle(
-        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider
     ) -> None:
         await coordinator.on_user_audio_frame(b"mic chunk")
-        mocks["send_user_audio_to_session"].assert_not_awaited()
+        assert len(provider.user_audio) == 0
 
     async def test_mic_audio_not_forwarded_after_commit(
-        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider
     ) -> None:
         await _commit_turn(coordinator)
         # State is now COMMITTING, not LISTENING
         await coordinator.on_user_audio_frame(b"mic chunk")
-        mocks["send_user_audio_to_session"].assert_not_awaited()
+        assert len(provider.user_audio) == 0
 
     async def test_model_audio_forwarded_to_client(
         self, coordinator: TurnCoordinator, mocks: dict[str, Any]
@@ -200,7 +204,7 @@ class TestToolDispatch:
         )
 
         await _commit_turn(coordinator)
-        await coordinator.on_function_call("call_1", "play_audiobook", {"book_id": "X"})
+        await coordinator.on_tool_call("call_1", "play_audiobook", {"book_id": "X"})
 
         assert coordinator.current_turn is not None
         assert coordinator.current_turn.pending_audio_streams == [AudioStream(factory=factory)]
@@ -212,21 +216,24 @@ class TestToolDispatch:
         mocks["dispatch_tool"].return_value = ToolResult(output='{"time": "3pm"}')
 
         await _commit_turn(coordinator)
-        await coordinator.on_function_call("call_1", "get_current_time", {})
+        await coordinator.on_tool_call("call_1", "get_current_time", {})
 
         assert coordinator.current_turn is not None
         assert coordinator.current_turn.pending_audio_streams == []
         assert coordinator.current_turn.needs_follow_up is True
 
     async def test_function_call_sends_output_back_to_openai(
-        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
     ) -> None:
         mocks["dispatch_tool"].return_value = ToolResult(output='{"result": "ok"}')
 
         await _commit_turn(coordinator)
-        await coordinator.on_function_call("call_abc", "some_tool", {"arg": "value"})
+        await coordinator.on_tool_call("call_abc", "some_tool", {"arg": "value"})
 
-        mocks["oai_send_function_output"].assert_awaited_once_with("call_abc", '{"result": "ok"}')
+        assert ("send_tool_output", "call_abc", '{"result": "ok"}') in provider.sent
 
     async def test_function_call_emits_dev_event(
         self, coordinator: TurnCoordinator, mocks: dict[str, Any]
@@ -237,7 +244,7 @@ class TestToolDispatch:
         )
 
         await _commit_turn(coordinator)
-        await coordinator.on_function_call("call_1", "play_audiobook", {"book_id": "X"})
+        await coordinator.on_tool_call("call_1", "play_audiobook", {"book_id": "X"})
 
         mocks["send_dev_event"].assert_awaited_once()
         args, _ = mocks["send_dev_event"].call_args
@@ -250,15 +257,15 @@ class TestChainedResponses:
     """Info tool → follow-up response → terminal barrier flow."""
 
     async def test_info_tool_requests_follow_up_response(
-        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any], provider: StubVoiceProvider
     ) -> None:
         mocks["dispatch_tool"].return_value = ToolResult(output='{"time": "3pm"}')
 
         await _commit_turn(coordinator)
-        await coordinator.on_function_call("c1", "get_current_time", {})
+        await coordinator.on_tool_call("c1", "get_current_time", {})
         await coordinator.on_response_done()
 
-        mocks["oai_request_response"].assert_awaited_once()
+        assert ("request_response",) in provider.sent
         assert coordinator.current_turn is not None
         assert coordinator.current_turn.state == TurnState.AWAITING_NEXT_RESPONSE
         # needs_follow_up is cleared now — fresh flag for round 2
@@ -270,7 +277,7 @@ class TestChainedResponses:
         mocks["dispatch_tool"].return_value = ToolResult(output='{"time": "3pm"}')
 
         await _commit_turn(coordinator)
-        await coordinator.on_function_call("c1", "get_current_time", {})
+        await coordinator.on_tool_call("c1", "get_current_time", {})
         await coordinator.on_response_done()
         # Round 2 starts — model narrates the time
         await coordinator.on_audio_delta(b"son las tres")
@@ -279,24 +286,27 @@ class TestChainedResponses:
         assert coordinator.current_turn.state == TurnState.IN_RESPONSE
 
     async def test_chained_response_terminates_on_final_done(
-        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any], provider: StubVoiceProvider
     ) -> None:
         """Full chained flow: info tool → round 2 narration → IDLE."""
         mocks["dispatch_tool"].return_value = ToolResult(output='{"time": "3pm"}')
 
         await _commit_turn(coordinator)
         # Round 1: silent + tool call
-        await coordinator.on_function_call("c1", "get_current_time", {})
+        await coordinator.on_tool_call("c1", "get_current_time", {})
         await coordinator.on_response_done()  # → AWAITING_NEXT_RESPONSE
         # Round 2: model narrates
         await coordinator.on_audio_delta(b"son las tres")
         await coordinator.on_response_done()  # → IDLE (no more tools)
 
         assert coordinator.current_turn is None
-        assert mocks["oai_request_response"].call_count == 1
+        assert sum(1 for c in provider.sent if c == ("request_response",)) == 1
 
     async def test_mixed_factory_and_none_tools_chain_before_firing_factory(
-        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
     ) -> None:
         """Round 1 has both kinds of tool — factory fires only after round 2 narration."""
         factory = _factory(b"book")
@@ -313,12 +323,12 @@ class TestChainedResponses:
 
         await _commit_turn(coordinator)
         # Round 1: both tools dispatched
-        await coordinator.on_function_call("c1", "play_audiobook", {})
-        await coordinator.on_function_call("c2", "get_current_time", {})
+        await coordinator.on_tool_call("c1", "play_audiobook", {})
+        await coordinator.on_tool_call("c2", "get_current_time", {})
         await coordinator.on_response_done()
 
         # Follow-up requested because of the info tool
-        mocks["oai_request_response"].assert_awaited_once()
+        assert ("request_response",) in provider.sent
         # Factory still staged
         assert coordinator.current_turn is not None
         assert len(coordinator.current_turn.pending_audio_streams) == 1
@@ -332,7 +342,7 @@ class TestChainedResponses:
         assert coordinator.current_media_task is not None
 
     async def test_no_follow_up_needed_fires_factories_immediately(
-        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any], provider: StubVoiceProvider
     ) -> None:
         factory = _factory(b"book")
         mocks["dispatch_tool"].return_value = ToolResult(
@@ -340,10 +350,10 @@ class TestChainedResponses:
         )
 
         await _commit_turn(coordinator)
-        await coordinator.on_function_call("c1", "play_audiobook", {})
+        await coordinator.on_tool_call("c1", "play_audiobook", {})
         await coordinator.on_response_done()  # terminal — factory fires
 
-        mocks["oai_request_response"].assert_not_awaited()
+        assert ("request_response",) not in provider.sent
         assert coordinator.current_turn is None
         assert coordinator.current_media_task is not None
 
@@ -375,8 +385,8 @@ class TestFactorySupersede:
         mocks["dispatch_tool"].side_effect = dispatch
 
         await _commit_turn(coordinator)
-        await coordinator.on_function_call("c1", "first", {})
-        await coordinator.on_function_call("c2", "second", {})
+        await coordinator.on_tool_call("c1", "first", {})
+        await coordinator.on_tool_call("c2", "second", {})
         await coordinator.on_response_done()
 
         # Wait briefly for the background consumer task to pull at least once.
@@ -406,7 +416,7 @@ class TestInterrupt:
         )
 
         await _commit_turn(coordinator)
-        await coordinator.on_function_call("c1", "play", {})
+        await coordinator.on_tool_call("c1", "play", {})
         assert coordinator.current_turn is not None
         assert len(coordinator.current_turn.pending_audio_streams) == 1
 
@@ -426,7 +436,7 @@ class TestInterrupt:
         mocks["send_audio_clear"].assert_awaited()
 
     async def test_interrupt_on_idle_coordinator_is_safe(
-        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any], provider: StubVoiceProvider
     ) -> None:
         """`_shutdown()` calls `coordinator.interrupt()` unconditionally.
 
@@ -443,10 +453,13 @@ class TestInterrupt:
         assert coordinator.current_turn is None
         mocks["send_audio_clear"].assert_awaited()
         # No response in flight → cancel skipped.
-        mocks["oai_cancel"].assert_not_awaited()
+        assert ("cancel_current_response",) not in provider.sent
 
     async def test_interrupt_during_book_playback_skips_cancel(
-        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
     ) -> None:
         """PTT press during book: media task active but no turn → cancel skipped."""
         import asyncio
@@ -461,7 +474,7 @@ class TestInterrupt:
         )
 
         await _commit_turn(coordinator)
-        await coordinator.on_function_call("c1", "play", {})
+        await coordinator.on_tool_call("c1", "play", {})
         await coordinator.on_response_done()  # spawns media task, current_turn = None
 
         assert coordinator.current_turn is None
@@ -472,25 +485,28 @@ class TestInterrupt:
 
         # Media task was cancelled, but oai_cancel was NOT sent
         assert coordinator.current_media_task is None or coordinator.current_media_task.done()
-        mocks["oai_cancel"].assert_not_awaited()
+        assert ("cancel_current_response",) not in provider.sent
 
-    async def test_interrupt_on_idle_disconnected_skips_oai_cancel(
-        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    async def test_interrupt_on_idle_disconnected_skips_cancel(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
     ) -> None:
-        """When the session is disconnected, interrupt must not call oai_cancel."""
-        mocks["oai_is_connected"].return_value = False
+        """When the transport is disconnected, interrupt must not call cancel."""
+        provider._connected = False
 
         await coordinator.interrupt()
 
-        mocks["oai_cancel"].assert_not_awaited()
+        assert ("cancel_current_response",) not in provider.sent
         mocks["send_audio_clear"].assert_awaited()
 
     async def test_interrupt_cancels_openai_response(
-        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider
     ) -> None:
         await _commit_turn(coordinator)
         await coordinator.interrupt()
-        mocks["oai_cancel"].assert_awaited()
+        assert ("cancel_current_response",) in provider.sent
 
     async def test_interrupt_cancels_running_media_task(
         self, coordinator: TurnCoordinator, mocks: dict[str, Any]
@@ -508,7 +524,7 @@ class TestInterrupt:
         )
 
         await _commit_turn(coordinator)
-        await coordinator.on_function_call("c1", "play", {})
+        await coordinator.on_tool_call("c1", "play", {})
         await coordinator.on_response_done()  # spawns the media task
 
         task = coordinator.current_media_task
@@ -521,7 +537,7 @@ class TestInterrupt:
         assert coordinator.current_media_task is None
 
     async def test_new_ptt_start_mid_turn_interrupts_and_restarts(
-        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider
     ) -> None:
         await _commit_turn(coordinator)
         first_turn = coordinator.current_turn
@@ -530,28 +546,31 @@ class TestInterrupt:
         # New press interrupts the first turn and starts a fresh one
         await coordinator.on_ptt_start()
 
-        mocks["oai_cancel"].assert_awaited()
+        assert ("cancel_current_response",) in provider.sent
         assert coordinator.current_turn is not None
         assert coordinator.current_turn is not first_turn
         assert coordinator.current_turn.state == TurnState.LISTENING
 
-    async def test_interrupt_ordering_drop_flag_before_oai_cancel(
-        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    async def test_interrupt_ordering_drop_flag_before_cancel(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider
     ) -> None:
-        """Drop flag MUST be set before `oai_cancel` is called.
+        """Drop flag MUST be set before `cancel_current_response` is called.
 
-        Rationale: if oai_cancel yielded control to the event loop and a
-        stale audio delta arrived before the flag was set, we'd forward
-        the stale delta to the client. The flag-first ordering prevents
-        this — any delta arriving after the flag is set is dropped at
-        `on_audio_delta`.
+        Rationale: if the provider's cancel yielded control to the event
+        loop and a stale audio delta arrived before the flag was set, we'd
+        forward the stale delta to the client. The flag-first ordering
+        prevents this — any delta arriving after the flag is set is
+        dropped at `on_audio_delta`.
         """
         flag_when_cancel_called: list[bool] = []
 
+        original_cancel = provider.cancel_current_response
+
         async def capture_flag() -> None:
             flag_when_cancel_called.append(coordinator.response_cancelled)
+            await original_cancel()
 
-        mocks["oai_cancel"].side_effect = capture_flag
+        provider.cancel_current_response = capture_flag  # type: ignore[method-assign]
 
         await _commit_turn(coordinator)
         await coordinator.interrupt()
@@ -568,12 +587,12 @@ class TestResponseCancelledFlag:
         assert coordinator.response_cancelled is False
 
     async def test_flag_is_reset_before_follow_up_response(
-        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any], provider: StubVoiceProvider
     ) -> None:
         mocks["dispatch_tool"].return_value = ToolResult(output='{"time": "3pm"}')
 
         await _commit_turn(coordinator)
-        await coordinator.on_function_call("c1", "get_current_time", {})
+        await coordinator.on_tool_call("c1", "get_current_time", {})
 
         # Pretend an interrupt would set the flag; then a follow-up comes in
         coordinator.response_cancelled = True
@@ -583,7 +602,7 @@ class TestResponseCancelledFlag:
         coordinator.response_cancelled = False
         await coordinator.on_response_done()
 
-        mocks["oai_request_response"].assert_awaited_once()
+        assert ("request_response",) in provider.sent
         assert coordinator.response_cancelled is False
 
 
@@ -662,7 +681,7 @@ class TestModelSpeaking:
         await _commit_turn(coordinator)
         # Round 1 — model starts speaking, calls tool, audio done, response done
         await coordinator.on_audio_delta(b"a")
-        await coordinator.on_function_call("c1", "get_current_time", {})
+        await coordinator.on_tool_call("c1", "get_current_time", {})
         await coordinator.on_audio_done()
         await coordinator.on_response_done()
         # Round 2 — narration resumes

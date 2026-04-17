@@ -1,10 +1,14 @@
-"""WebSocket session manager for the OpenAI Realtime API.
+"""`OpenAIRealtimeProvider` — a `VoiceProvider` for the OpenAI Realtime API.
 
-Thin transport — owns the WebSocket connection lifecycle, builds the
-initial `session.update`, and shuttles events between OpenAI and the
-`TurnCoordinator`. All tool dispatch, audio sequencing, and interrupt
-handling live on the coordinator. The session manager just forwards
-typed events to callbacks.
+Thin transport. Owns the WebSocket connection lifecycle, builds the
+initial `session.update`, and translates the Realtime wire format into
+the framework's provider-neutral `VoiceProviderCallbacks`. All tool
+dispatch, audio sequencing, and interrupt handling live on the
+`TurnCoordinator`.
+
+Other providers (a Whisper → Chat Completions → TTS chain, third-party
+services) implement the same `VoiceProvider` protocol and slot in
+anywhere this class does.
 """
 
 from __future__ import annotations
@@ -18,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 import websockets
 
-from huxley.session.protocol import (
+from huxley.voice.openai_protocol import (
     AudioDeltaEvent,
     ClientEventType,
     ErrorEvent,
@@ -29,13 +33,12 @@ from huxley.session.protocol import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-
     from websockets.asyncio.client import ClientConnection
 
     from huxley.config import Settings
     from huxley.persona import PersonaSpec
     from huxley.storage.db import Storage
+    from huxley.voice.provider import VoiceProviderCallbacks
     from huxley_sdk import SkillRegistry
 
 logger = structlog.get_logger()
@@ -43,21 +46,12 @@ logger = structlog.get_logger()
 REALTIME_API_URL = "wss://api.openai.com/v1/realtime"
 
 
-class SessionManager:
-    """Owns the WebSocket to OpenAI Realtime API; forwards events to callbacks.
+class OpenAIRealtimeProvider:
+    """`VoiceProvider` implementation for the OpenAI Realtime API.
 
-    Responsibilities:
-    - Connect/disconnect lifecycle (including the session.update config)
-    - Send client events: audio append, commit, response.create, response.cancel,
-      conversation.item.create (function output)
-    - Receive loop: parse server events and fire the matching callback
-    - Persist conversation transcripts for reconnection context
-
-    Non-responsibilities (owned by `TurnCoordinator`):
-    - Tool dispatch
-    - Audio sequencing, factory invocation, interrupt ordering
-    - The `response_cancelled` drop flag
-    - Tracking "is the model currently speaking"
+    Owns the WebSocket; translates Realtime events into the provider-neutral
+    callback set. Persists recent transcripts so reconnects can re-inject
+    a short summary for continuity.
     """
 
     def __init__(
@@ -66,25 +60,13 @@ class SessionManager:
         persona: PersonaSpec,
         skill_registry: SkillRegistry,
         storage: Storage,
-        on_audio_delta: Callable[[bytes], Awaitable[None]],
-        on_function_call: Callable[[str, str, dict[str, Any]], Awaitable[None]],
-        on_response_done: Callable[[], Awaitable[None]],
-        on_audio_done: Callable[[], Awaitable[None]],
-        on_commit_failed: Callable[[], Awaitable[None]],
-        on_session_end: Callable[[], Awaitable[None]],
-        on_transcript: Callable[[str, str], Awaitable[None]] | None = None,
+        callbacks: VoiceProviderCallbacks,
     ) -> None:
         self._config = config
         self._persona = persona
         self._skills = skill_registry
         self._storage = storage
-        self._on_audio_delta = on_audio_delta
-        self._on_function_call = on_function_call
-        self._on_response_done = on_response_done
-        self._on_audio_done = on_audio_done
-        self._on_commit_failed = on_commit_failed
-        self._on_session_end = on_session_end
-        self._on_transcript = on_transcript
+        self._cb = callbacks
         self._ws: ClientConnection | None = None
         self._receive_task: asyncio.Task[None] | None = None
         self._timeout_task: asyncio.Task[None] | None = None
@@ -182,8 +164,8 @@ class SessionManager:
         self._transcript_lines.clear()
         await logger.ainfo("session_disconnected")
 
-    async def commit_and_respond(self) -> None:
-        """Commit the audio buffer and request a response (PTT release)."""
+    async def commit_and_request_response(self) -> None:
+        """Commit the user's audio buffer and ask the model to respond."""
         if not self._ws:
             return
         await logger.ainfo("session.tx.commit")
@@ -198,7 +180,7 @@ class SessionManager:
         await logger.ainfo("session.tx.response_create")
         await self._send(ClientEventType.RESPONSE_CREATE, {})
 
-    async def cancel_response(self) -> None:
+    async def cancel_current_response(self) -> None:
         """Cancel any in-progress model response.
 
         The coordinator owns the `response_cancelled` drop flag — this method
@@ -211,22 +193,22 @@ class SessionManager:
         await self._send(ClientEventType.RESPONSE_CANCEL, {})
         await self._send(ClientEventType.INPUT_AUDIO_BUFFER_CLEAR, {})
 
-    async def send_audio(self, pcm_data: bytes) -> None:
-        """Send a PCM16 audio frame to the Realtime API."""
+    async def send_user_audio(self, pcm: bytes) -> None:
+        """Send a PCM16 audio frame from the user's mic to the Realtime API."""
         if not self._ws:
             return
-        encoded = base64.b64encode(pcm_data).decode("ascii")
+        encoded = base64.b64encode(pcm).decode("ascii")
         await self._send(
             ClientEventType.INPUT_AUDIO_BUFFER_APPEND,
             {"audio": encoded},
         )
         self._reset_timeout()
 
-    async def send_function_output(self, call_id: str, output: str) -> None:
+    async def send_tool_output(self, call_id: str, output: str) -> None:
         """Post a tool call's output back to OpenAI as a conversation item."""
         if not self._ws:
             return
-        await logger.ainfo("session.tx.function_output", call_id=call_id)
+        await logger.ainfo("session.tx.tool_output", call_id=call_id)
         await self._send(
             ClientEventType.CONVERSATION_ITEM_CREATE,
             {
@@ -268,7 +250,7 @@ class SessionManager:
 
                 if isinstance(parsed, AudioDeltaEvent):
                     audio_bytes = base64.b64decode(parsed.delta)
-                    await self._on_audio_delta(audio_bytes)
+                    await self._cb.on_audio_delta(audio_bytes)
 
                 elif isinstance(parsed, FunctionCallEvent):
                     try:
@@ -276,16 +258,16 @@ class SessionManager:
                     except json.JSONDecodeError:
                         args = {}
                     await logger.ainfo(
-                        "session.rx.function_call",
+                        "session.rx.tool_call",
                         name=parsed.name,
                         call_id=parsed.call_id,
                     )
-                    await self._on_function_call(parsed.call_id, parsed.name, args)
+                    await self._cb.on_tool_call(parsed.call_id, parsed.name, args)
 
                 elif isinstance(parsed, TranscriptEvent):
                     self._transcript_lines.append(parsed.transcript)
-                    if self._on_transcript:
-                        await self._on_transcript(parsed.role, parsed.transcript)
+                    if self._cb.on_transcript:
+                        await self._cb.on_transcript(parsed.role, parsed.transcript)
 
                 elif isinstance(parsed, ErrorEvent):
                     if parsed.code == "response_cancel_not_active":
@@ -296,7 +278,7 @@ class SessionManager:
                             code=parsed.code,
                             message=parsed.message,
                         )
-                        await self._on_commit_failed()
+                        await self._cb.on_commit_failed()
                     else:
                         await logger.aerror(
                             "session.rx.error",
@@ -316,10 +298,10 @@ class SessionManager:
                             )
 
                 if event_type == ServerEventType.RESPONSE_AUDIO_DONE.value:
-                    await self._on_audio_done()
+                    await self._cb.on_audio_done()
 
                 if event_type == ServerEventType.RESPONSE_DONE.value:
-                    await self._on_response_done()
+                    await self._cb.on_response_done()
 
         except websockets.ConnectionClosed:
             await logger.ainfo("session_connection_closed")
@@ -328,7 +310,7 @@ class SessionManager:
         except Exception:
             await logger.aexception("session_receive_error")
         finally:
-            await self._on_session_end()
+            await self._cb.on_session_end()
 
     def _reset_timeout(self) -> None:
         """Reset the silence/max-session timeout."""

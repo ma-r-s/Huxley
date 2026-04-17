@@ -22,6 +22,7 @@ import pytest
 
 from huxley.storage.skill import NamespacedSkillStorage
 from huxley.turn.coordinator import TurnCoordinator, TurnState
+from huxley.voice.stub import StubVoiceProvider
 from huxley_sdk import SkillRegistry
 from huxley_sdk.testing import make_test_context
 from huxley_skill_audiobooks.skill import LAST_BOOK_KEY, AudiobooksSkill
@@ -85,7 +86,7 @@ async def _build_wired_coordinator(
     - skill: exposes _catalog for picking a book
     - player: MagicMock — inspect stream.call_args
     - consumed: list of chunk tags the factory actually streamed
-    - mocks: the callback AsyncMocks (send_audio, oai_commit, etc.)
+    - mocks: send_audio/send_audio_clear/send_status/send_model_speaking/send_dev_event mocks + the StubVoiceProvider
     """
     player, consumed = _make_player_with_tracker()
     skill = AudiobooksSkill(player=player)
@@ -99,18 +100,15 @@ async def _build_wired_coordinator(
     registry = SkillRegistry()
     registry.register(skill)
 
+    stub_provider = StubVoiceProvider()
+    stub_provider._connected = True
     mocks = {
         "send_audio": AsyncMock(),
         "send_audio_clear": AsyncMock(),
         "send_status": AsyncMock(),
         "send_model_speaking": AsyncMock(),
-        "send_user_audio_to_session": AsyncMock(),
         "send_dev_event": AsyncMock(),
-        "oai_send_function_output": AsyncMock(),
-        "oai_commit": AsyncMock(),
-        "oai_cancel": AsyncMock(),
-        "oai_request_response": AsyncMock(),
-        "oai_is_connected": MagicMock(return_value=True),
+        "provider": stub_provider,
     }
 
     coordinator = TurnCoordinator(
@@ -165,16 +163,18 @@ class TestPlayAudiobookEndToEnd:
         # Model pre-narrates "Ahí le pongo el libro"
         await coord.on_audio_delta(b"pre-narration")
         # Model calls play_audiobook
-        await coord.on_function_call("call_1", "play_audiobook", {"book_id": book["id"]})
+        await coord.on_tool_call("call_1", "play_audiobook", {"book_id": book["id"]})
 
         # Factory was latched — skill ran real code path.
         assert coord.current_turn is not None
         assert len(coord.current_turn.pending_audio_streams) == 1
         assert coord.current_turn.needs_follow_up is False
 
-        # Output was sent back to OpenAI.
-        mocks["oai_send_function_output"].assert_awaited_once()
-        call_id, output = mocks["oai_send_function_output"].await_args.args
+        # Output was sent back to the provider.
+        provider: StubVoiceProvider = mocks["provider"]
+        tool_outputs = [c for c in provider.sent if c[0] == "send_tool_output"]
+        assert len(tool_outputs) == 1
+        _, call_id, output = tool_outputs[0]
         assert call_id == "call_1"
         assert '"playing": true' in output
 
@@ -214,7 +214,7 @@ class TestPlayAudiobookEndToEnd:
         book = skill._catalog[0]
 
         await _commit_turn(coord)
-        await coord.on_function_call("c1", "play_audiobook", {"book_id": book["id"]})
+        await coord.on_tool_call("c1", "play_audiobook", {"book_id": book["id"]})
         await coord.on_response_done()  # no follow-up, terminal barrier
         await _settle(coord.current_media_task)
 
@@ -234,7 +234,7 @@ class TestMidChainInterruptDropsFactories:
         book = skill._catalog[0]
 
         await _commit_turn(coord)
-        await coord.on_function_call("c1", "play_audiobook", {"book_id": book["id"]})
+        await coord.on_tool_call("c1", "play_audiobook", {"book_id": book["id"]})
         assert coord.current_turn is not None
         assert len(coord.current_turn.pending_audio_streams) == 1
 
@@ -263,7 +263,7 @@ class TestRewindReplacesPriorMediaTask:
 
         # Turn 1: play from start
         await _commit_turn(coord)
-        await coord.on_function_call("c1", "play_audiobook", {"book_id": book["id"]})
+        await coord.on_tool_call("c1", "play_audiobook", {"book_id": book["id"]})
         await coord.on_response_done()
         first_task = coord.current_media_task
         assert first_task is not None
@@ -281,7 +281,7 @@ class TestRewindReplacesPriorMediaTask:
 
         coord.current_turn.user_audio_frames = 25  # type: ignore[union-attr]
         await coord.on_ptt_stop()
-        await coord.on_function_call("c2", "audiobook_control", {"action": "rewind", "seconds": 5})
+        await coord.on_tool_call("c2", "audiobook_control", {"action": "rewind", "seconds": 5})
         await coord.on_response_done()
 
         # A NEW media task was spawned for the rewind factory.
@@ -314,7 +314,7 @@ class TestPauseRequestsFollowUp:
 
         await _commit_turn(coord)
         await coord.on_audio_delta(b"listo, pauso")
-        await coord.on_function_call("c1", "audiobook_control", {"action": "pause"})
+        await coord.on_tool_call("c1", "audiobook_control", {"action": "pause"})
 
         # Skill returned None-factory → needs_follow_up set
         assert coord.current_turn is not None
@@ -325,7 +325,7 @@ class TestPauseRequestsFollowUp:
         await coord.on_response_done()
 
         # Follow-up response requested
-        mocks["oai_request_response"].assert_awaited_once()
+        assert ("request_response",) in mocks["provider"].sent
         assert coord.current_turn is not None
         assert coord.current_turn.state == TurnState.AWAITING_NEXT_RESPONSE
 
