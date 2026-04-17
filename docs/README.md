@@ -14,6 +14,7 @@ Single source of truth for what Huxley is, what it does, and how it's built. Cod
 8. [**extensibility.md**](./extensibility.md) — what kinds of skills the framework supports today, where the real limits are
 9. [**roadmap.md**](./roadmap.md) — framework + persona roadmaps
 10. [**decisions.md**](./decisions.md) — architectural decision log (ADRs)
+11. [**verifying.md**](./verifying.md) — end-to-end smoke-test for a fresh checkout / reviewer
 
 ## Worked examples
 
