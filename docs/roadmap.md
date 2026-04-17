@@ -31,8 +31,12 @@ Make Huxley what it claims to be in [`vision.md`](./vision.md): a framework anyo
 
 ### Later
 
+- [P1] **Proactive notifications** (`ctx.notify(text)`): the single missing primitive that prevents reminders / inbound-message skills today. SDK gains a method that injects a synthetic system turn through `SessionManager`; protocol gains a server-initiated turn-start message. Should land before AbuelOS-v∞ work begins. See [`extensibility.md`](./extensibility.md) for the gap analysis.
+- [P1] **Per-skill secret interpolation** in `persona.yaml`: support `${HUXLEY_TELEGRAM_TOKEN}` so personas declare the shape of the secret without storing it. Decide before stage 4 ships.
+- [P2] **Background-task pattern for skills** (BLE, MQTT, polling daemons): formalize the "skill spawns an asyncio task in setup()" convention into an SDK helper so the framework can supervise / restart / log task crashes. Today it works but the framework is blind to failures.
+- [P2] **Sonic UX layer** — three-earcon system (listening chirp / thinking drone / error tone) per the framework in [`research/sonic-ux.md`](./research/sonic-ux.md). Current `playThinkingTone()` violates the vocal-band masking rule (440Hz sine pulse inside the 200Hz–4kHz speech band); current silence threshold (400ms) over-triggers (framework says 1500ms). Error tone doesn't exist. Concrete deltas listed in the research doc's "Current state vs. target framework" section. Blocked on picking three sounds — needs human ear, not more code.
 - **Voice provider abstraction**: extract OpenAI Realtime as one implementation of a `VoiceProvider` interface. Trigger: a credible second provider exists. Not speculative.
-- **More side-effect kinds**: notifications, state changes, image output. Trigger: a real skill needs them.
+- **More side-effect kinds**: state changes, image output. Trigger: a real skill needs them.
 - **Skill discovery aids**: `huxley list-installed-skills`, `huxley enable foo` CLIs that mutate `persona.yaml`. Polish, not blocking anything.
 - **MCP compatibility shim**: optional adapter so existing MCP servers can be loaded as Huxley skills. Whole separate project; only if the ecosystem wants it.
 
@@ -64,7 +68,7 @@ The first persona Huxley runs in production. Spec lives at [`personas/abuelos.md
 | Stop playback                                   | ✅                                                                   |
 | Resume later (_"sigue con el libro"_)           | ✅                                                                   |
 | Every negative response offers an alternative   | ⚠️ partial — coverage in `search` and `control` paths still has gaps |
-| End-to-end smoke test with target user              | ❌ not yet                                    |
+| End-to-end smoke test with target user          | ❌ not yet                                                           |
 
 ### v2 — next skills
 
@@ -77,11 +81,10 @@ Once AbuelOS v1 is stable. Each is its own `huxley-skill-*` package.
 
 ### v∞ — when firmware lands
 
-Requires Huxley framework gaps to close first (proactive speech).
+Blocked on the **Proactive notifications** framework primitive (see Huxley → Later above) — reminders and inbound messages need it. Tracking the gap in [`extensibility.md`](./extensibility.md).
 
 - ESP32 walky-talky client — replaces browser as production client, same WebSocket protocol
 - Physical always-findable button — the only UI element the user touches
-- Proactive speech support — needed for reminders, inbound messages
 - **Reminders** — meds, appointments
 - **Memory / recall** — _"¿de qué hablamos ayer?"_
 - **Companionship mode** — open-ended chat
@@ -91,7 +94,7 @@ Requires Huxley framework gaps to close first (proactive speech).
 | Feature                      | Why                                                                 |
 | ---------------------------- | ------------------------------------------------------------------- |
 | Wake word                    | Fragile for elderly users; PTT button is more reliable              |
-| Religious content            | out of scope by persona declaration                                        |
+| Religious content            | out of scope by persona declaration                                 |
 | Privacy / no-log mode        | Not a concern for this user                                         |
 | Offline operation            | Not worth the complexity for v1                                     |
 | Languages other than Spanish | This persona is Spanish-only; other personas can do other languages |

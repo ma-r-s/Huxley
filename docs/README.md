@@ -11,14 +11,19 @@ Single source of truth for what Huxley is, what it does, and how it's built. Cod
 5. [**observability.md**](./observability.md) — logging conventions and the diagnose-from-logs workflow
 6. [**skills/README.md**](./skills/README.md) — how skills work, how to author one
 7. [**personas/README.md**](./personas/README.md) — how to write a persona
-8. [**roadmap.md**](./roadmap.md) — framework + persona roadmaps
-9. [**decisions.md**](./decisions.md) — architectural decision log (ADRs)
+8. [**extensibility.md**](./extensibility.md) — what kinds of skills the framework supports today, where the real limits are
+9. [**roadmap.md**](./roadmap.md) — framework + persona roadmaps
+10. [**decisions.md**](./decisions.md) — architectural decision log (ADRs)
 
 ## Worked examples
 
 - [**personas/abuelos.md**](./personas/abuelos.md) — canonical persona spec (Spanish-language assistant for an elderly blind user)
 - [**skills/audiobooks.md**](./skills/audiobooks.md) — first-party skill spec
 - [**turns.md**](./turns.md) — turn coordinator spec
+
+## Research notes
+
+- [**research/sonic-ux.md**](./research/sonic-ux.md) — codified rules and synthesized framework for sonic UI / earcon design (Brewster, NPR, Karen Collins, NN/g)
 
 ## Hard rule
 
