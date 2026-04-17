@@ -264,11 +264,17 @@ class OpenAIRealtimeProvider:
                         "session.rx.tool_call",
                         name=parsed.name,
                         call_id=parsed.call_id,
+                        args=args,
                     )
                     await self._cb.on_tool_call(parsed.call_id, parsed.name, args)
 
                 elif isinstance(parsed, TranscriptEvent):
                     self._transcript_lines.append(parsed.transcript)
+                    await logger.ainfo(
+                        "transcript",
+                        role=parsed.role,
+                        text=parsed.transcript,
+                    )
                     if self._cb.on_transcript:
                         await self._cb.on_transcript(parsed.role, parsed.transcript)
 

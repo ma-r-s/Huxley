@@ -167,7 +167,7 @@ class AudioServer:
         await self._send({"type": "dev_event", "kind": kind, "payload": payload})
 
     async def send_set_volume(self, level: int) -> None:
-        await logger.adebug("server.tx.set_volume", level=level)
+        await logger.ainfo("server.tx.set_volume", level=level)
         await self._send({"type": "set_volume", "level": level})
 
     async def send_audio_clear(self) -> None:
