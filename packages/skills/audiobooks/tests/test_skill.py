@@ -942,3 +942,59 @@ class TestSpeedControl:
     ) -> None:
         assert audiobooks_skill._now_playing_id is None
         assert audiobooks_skill._live_position() is None
+
+    async def test_set_speed_with_saved_book_resumes_at_new_speed(
+        self,
+        audiobooks_skill: AudiobooksSkill,
+        player_mock: MagicMock,
+        storage: SkillStorage,
+    ) -> None:
+        """T1.7 follow-up bug fix: PTT to interrupt, then 'más lento', should
+        not leave the user in silence. set_speed must resume the last book at
+        the new tempo when no stream is currently live but a saved book
+        exists. Captured live 2026-04-18 (see triage T1.7 lessons)."""
+        book = audiobooks_skill._catalog[0]
+        # Simulate prior playback: book was started + paused via PTT.
+        # _now_playing_id is None (stream's finally cleared it on cancel).
+        # last_id and a saved position remain in storage.
+        await storage.set_setting(LAST_BOOK_KEY, book["id"])
+        await storage.set_setting(_position_key(book["id"]), "120.0")
+
+        result = await audiobooks_skill.handle(
+            "audiobook_control", {"action": "set_speed", "speed": 0.85}
+        )
+
+        # Must return AudioStream so the model knows playback is resuming
+        # AND the coordinator actually starts the audio.
+        assert isinstance(result.side_effect, AudioStream)
+        data = json.loads(result.output)
+        assert data["playing"] is True
+
+        # Stream invoked at the saved position (minus rewind buffer) and
+        # at the newly-set speed (loaded from storage by _play -> _get_speed).
+        await _drain(result.side_effect.factory)
+        player_mock.stream.assert_called_once_with(
+            book["path"],
+            start_position=120.0 - RESUME_REWIND_SECONDS,
+            speed=0.85,
+        )
+
+    async def test_set_speed_with_no_saved_book_only_acks(
+        self,
+        audiobooks_skill: AudiobooksSkill,
+        storage: SkillStorage,
+    ) -> None:
+        """No live stream + no last_id = nothing to play. Set speed for next
+        time, ack only, no side effect. Don't try to resume nothing."""
+        # Storage has no LAST_BOOK_KEY by default.
+        assert await storage.get_setting(LAST_BOOK_KEY) is None
+
+        result = await audiobooks_skill.handle(
+            "audiobook_control", {"action": "set_speed", "speed": 1.2}
+        )
+
+        assert result.side_effect is None
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert data["playing"] is False
+        assert data["speed"] == 1.2

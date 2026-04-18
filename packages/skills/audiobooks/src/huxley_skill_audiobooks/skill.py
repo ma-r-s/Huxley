@@ -915,13 +915,17 @@ class AudiobooksSkill:
                 )
 
     async def _set_speed(self, speed: float | None) -> ToolResult:
-        """Persist new playback speed and restart the active stream at that tempo.
+        """Persist new playback speed and (re)start playback at that tempo.
 
-        If a book is currently playing, restarts it from the live position
-        with the new tempo filter. If nothing is playing, persists the new
-        speed for the next play. Returns an `AudioStream` side-effect when
-        a stream restart is needed; otherwise a plain ack — the next
-        play_audiobook / resume will pick up the new speed.
+        Three cases:
+        1. Live stream playing → restart from live position at new speed.
+        2. Nothing live but a book is in-progress (saved `last_id`) →
+           resume that book at the new speed. The natural user flow is
+           "PTT to interrupt → 'más lento' → expect playback to continue
+           slower" — without this, set_speed would silently persist the
+           value and the user would be left in silence (T1.7 follow-up
+           bug captured live 2026-04-18).
+        3. No live stream + no last_id → ack only. Nothing to play.
         """
         if speed is None:
             return ToolResult(
@@ -934,17 +938,23 @@ class AudiobooksSkill:
             )
         new_speed = _clamp_speed(float(speed))
         await self._storage_req.set_setting(CURRENT_SPEED_KEY, str(new_speed))
+
+        live_pos = self._live_position()
+        book_id = self._now_playing_id
         await self._logger_req.ainfo(
             "audiobooks.speed_set",
             speed=new_speed,
             requested=speed,
-            had_active_stream=self._now_playing_id is not None,
+            had_active_stream=book_id is not None and live_pos is not None,
         )
 
-        # Nothing playing: just persist + ack. Next play will use the new speed.
-        live_pos = self._live_position()
-        book_id = self._now_playing_id
+        # Case 2 + 3: nothing live. Try to resume the last book if any,
+        # otherwise just ack. _play loads speed from storage (which we just
+        # wrote above), so the new tempo applies on the next stream.
         if book_id is None or live_pos is None:
+            last_id = await self._storage_req.get_setting(LAST_BOOK_KEY)
+            if last_id is not None:
+                return await self._play(last_id, from_beginning=False)
             return ToolResult(
                 output=json.dumps({"ok": True, "speed": new_speed, "playing": False})
             )
