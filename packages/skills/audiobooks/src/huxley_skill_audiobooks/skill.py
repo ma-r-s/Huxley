@@ -241,6 +241,9 @@ class AudiobooksSkill:
                     "search_audiobooks), o simplemente el título o el autor — la "
                     "skill hace coincidencia aproximada. Reanuda desde la última "
                     "posición guardada a menos que se especifique lo contrario. "
+                    "Si el usuario dice 'desde el principio', 'desde el inicio', "
+                    "'empieza de nuevo', 'vuelve al inicio', 'empieza de cero' "
+                    "o algo parecido, pasa `from_beginning: true`. "
                     "Antes de reproducir, acusa recibo brevemente al usuario "
                     "(por ejemplo: 'Ahí le pongo {título}, don.'). Nunca empieces "
                     "el libro en silencio."
@@ -257,7 +260,12 @@ class AudiobooksSkill:
                         },
                         "from_beginning": {
                             "type": "boolean",
-                            "description": "Si es true, empieza desde el inicio",
+                            "description": (
+                                "Pasa `true` cuando el usuario pida explícitamente "
+                                "empezar de cero ('desde el principio', 'desde el "
+                                "inicio', 'empieza de nuevo', 'vuelve al inicio'). "
+                                "Por defecto `false` — reanuda donde se quedó."
+                            ),
                         },
                     },
                     "required": ["book_id"],
