@@ -622,8 +622,7 @@ above). Mario asked for ruthless honesty. Verdict: substrate is solid
 enough to build Stage 2 on, with one must-fix and handful of should-fix
 items. Full critic report in session transcript; summary here.
 
-**🔴 Must-fix before Stage 2** (real latent bugs, to ship in a single
-focused commit):
+**🔴 Must-fix before Stage 2** (real latent bugs) — ✅ **shipped in `b7c30e6`** (Stage 1a):
 
 - **(#2) Self-cancel guard in `ContentStreamObserver._cancel_pump`.**
   ⚠️ **Revised assessment after implementation**: the critic's "deadlock"
@@ -707,9 +706,11 @@ Stage 1 originally planned `inject_turn` + arbitration + ducking as one
 chunk. Post-pivot, that chunk breaks into smaller pieces — several
 shippable in isolation. Re-ordered by "smallest user-visible win":
 
-**Stage 1a — Must-fix commit (~70 min, queued)**. The 🔴 critic findings
-above, one focused commit, no behavior change beyond bug elimination.
-Unblocks everything downstream by removing the self-cancel landmine.
+**Stage 1a — Must-fix commit** ✅ **done** (`b7c30e6`, 2026-04-18).
+The 🔴 critic findings above, one focused commit, no behavior change
+beyond bug elimination. 253 tests green (was 244; +9 new regression
+tests). Ordering fix verified — `TestCleanupOrdering` tests correctly
+fail if reordering is reverted.
 
 **Stage 1b — Server-side duck PCM envelope (~1 day, queued).** Wire
 `ContentStreamObserver.on_focus_changed(BACKGROUND, MAY_DUCK)` to an
