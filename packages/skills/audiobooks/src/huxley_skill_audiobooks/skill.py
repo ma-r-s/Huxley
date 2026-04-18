@@ -20,12 +20,13 @@ from __future__ import annotations
 
 import json
 import time
-from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Any
 
 from huxley_sdk import (
     AudioStream,
     CancelMedia,
+    Catalog,
+    Hit,
     SkillContext,
     SkillLogger,
     SkillStorage,
@@ -98,12 +99,47 @@ def _position_key(book_id: str) -> str:
     return f"position:{book_id}"
 
 
-def _fuzzy_score(query: str, candidate: str) -> float:
-    """Case-insensitive fuzzy match score between 0 and 1."""
-    return SequenceMatcher(None, query.lower(), candidate.lower()).ratio()
+def _hit_summary(hit: Hit) -> dict[str, str]:
+    """Pluck the LLM-facing fields from a Catalog Hit (id/title/author).
+
+    The catalog stores `path` (and other audio metadata) in `payload`; the
+    skill only surfaces the user-readable fields when listing search
+    results. Used by `_search` and `_list_in_progress` for consistent
+    JSON shape.
+    """
+    return {
+        "id": hit.id,
+        "title": hit.fields.get("title", ""),
+        "author": hit.fields.get("author", ""),
+    }
+
+
+def _hit_to_book(hit: Hit) -> dict[str, str]:
+    """Flatten a Catalog Hit into the dict shape callers of `_resolve_book`
+    expect: `{id, title, author, path}`.
+
+    Bridge between the new Catalog primitive (fields + payload split) and
+    the legacy book-dict shape inside the skill — keeps the refactor a
+    drop-in for `_play`, `_get_progress`, etc., without touching every
+    callsite.
+    """
+    return {
+        "id": hit.id,
+        "title": hit.fields.get("title", ""),
+        "author": hit.fields.get("author", ""),
+        "path": str(hit.payload.get("path", "")),
+    }
 
 
 _KNOWN_SOUND_ROLES = ("book_start", "book_end")
+
+# Confidence threshold for fuzzy resolution. Below this, the catalog hit is
+# treated as "no match" — preserves the legacy `_resolve_book` behavior
+# (sub-threshold = None) after the Catalog refactor (T1.1).
+_RESOLVE_THRESHOLD = 0.5
+# Threshold for `_search` results. Lower than resolve because search is
+# user-facing (returns a list to choose from), not a definitive resolve.
+_SEARCH_THRESHOLD = 0.3
 
 
 class AudiobooksSkill:
@@ -128,7 +164,9 @@ class AudiobooksSkill:
         self._player: AudiobookPlayer | None = player
         self._storage: SkillStorage | None = None
         self._logger: SkillLogger | None = None
-        self._catalog: list[dict[str, str]] = []
+        # Personal-content catalog (T1.1). Built at setup() from the library
+        # scan; all fuzzy match + prompt-context generation goes through it.
+        self._catalog: Catalog | None = None
         # Sound palette: {name: raw_pcm_bytes}. Loaded at setup() from sounds_path.
         # Empty dict = no earcons; skill runs silently.
         self._sounds: dict[str, bytes] = {}
@@ -166,6 +204,11 @@ class AudiobooksSkill:
     def _player_req(self) -> AudiobookPlayer:
         self._require_setup("_player")
         return self._player  # type: ignore[return-value]
+
+    @property
+    def _catalog_req(self) -> Catalog:
+        self._require_setup("_catalog")
+        return self._catalog  # type: ignore[return-value]
 
     @property
     def name(self) -> str:
@@ -336,7 +379,13 @@ class AudiobooksSkill:
             )
         self._storage = ctx.storage
         self._logger = ctx.logger
-        self._catalog = self._scan_library(library_path)
+        self._catalog = ctx.catalog()
+        for book in self._scan_library(library_path):
+            await self._catalog.upsert(
+                id=book["id"],
+                fields={"title": book["title"], "author": book["author"]},
+                payload={"path": book["path"]},
+            )
 
         sounds_enabled = bool(cfg.get("sounds_enabled", True))
         sounds_raw = cfg.get("sounds_path", "sounds")
@@ -377,16 +426,17 @@ class AudiobooksSkill:
     def prompt_context(self) -> str:
         """Text injected into the session prompt so the LLM knows what's available.
 
-        Capped at 50 books to keep the prompt bounded.
+        Capped at 50 books via Catalog (T1.1). Output is byte-identical to
+        the pre-refactor format so the LLM's first-connect behavior is
+        preserved.
         """
-        if not self._catalog:
+        if self._catalog is None or len(self._catalog) == 0:
             return ""
-        lines = ["Biblioteca de audiolibros disponibles:"]
-        for book in self._catalog[:50]:
-            lines.append(f'- "{book["title"]}" por {book["author"]}')
-        if len(self._catalog) > 50:
-            lines.append(f"(y {len(self._catalog) - 50} más, búscalos por título o autor)")
-        return "\n".join(lines)
+        return self._catalog.as_prompt_lines(
+            limit=50,
+            header="Biblioteca de audiolibros disponibles",
+            line=lambda h: f'- "{h.fields["title"]}" por {h.fields["author"]}',
+        )
 
     def _scan_library(self, library_path: Path) -> list[dict[str, str]]:
         """Scan the library directory for audio files."""
@@ -434,46 +484,39 @@ class AudiobooksSkill:
         await self._storage_req.set_setting(_position_key(book_id), str(position))
 
     async def _search(self, query: str) -> ToolResult:
-        """Search the catalog by fuzzy matching against title and author."""
-        if not self._catalog:
+        """Search the catalog by fuzzy matching against title and author.
+
+        Refactored onto Catalog (T1.1). Behavior preserved:
+        - Empty catalog → "biblioteca vacía"
+        - Query < 2 chars → return first 20 books in insertion order
+        - Otherwise: catalog.search with `_SEARCH_THRESHOLD` filter,
+          top 5 results
+        """
+        catalog = self._catalog_req
+        total = len(catalog)
+        if total == 0:
             return ToolResult(
-                output=json.dumps(
-                    {
-                        "results": [],
-                        "message": "La biblioteca está vacía.",
-                    }
-                )
+                output=json.dumps({"results": [], "message": "La biblioteca está vacía."})
             )
 
         query_stripped = query.strip()
         if len(query_stripped) < 2:
-            results = self._catalog[:20]
+            preview = list(catalog)[:20]
             return ToolResult(
                 output=json.dumps(
                     {
-                        "results": [
-                            {"id": b["id"], "title": b["title"], "author": b["author"]}
-                            for b in results
-                        ],
-                        "count": len(results),
-                        "total": len(self._catalog),
+                        "results": [_hit_summary(h) for h in preview],
+                        "count": len(preview),
+                        "total": total,
                         "message": "Éstos son los libros que tengo.",
                     }
                 )
             )
 
-        scored = []
-        for book in self._catalog:
-            title_score = _fuzzy_score(query_stripped, book["title"])
-            author_score = _fuzzy_score(query_stripped, book["author"])
-            combined = f"{book['author']} {book['title']}"
-            combined_score = _fuzzy_score(query_stripped, combined)
-            best = max(title_score, author_score, combined_score)
-            if best > 0.3:
-                scored.append((best, book))
-
-        scored.sort(key=lambda x: x[0], reverse=True)
-        results = [book for _, book in scored[:5]]
+        hits = await catalog.search(query_stripped, limit=5)
+        # Catalog returns score-sorted hits with score > 0; apply the
+        # search confidence floor that the legacy `_search` used.
+        results = [h for h in hits if h.score > _SEARCH_THRESHOLD]
 
         if not results:
             return ToolResult(
@@ -481,7 +524,7 @@ class AudiobooksSkill:
                     {
                         "results": [],
                         "count": 0,
-                        "total": len(self._catalog),
+                        "total": total,
                         "message": (
                             "No encontré nada con esas palabras, don. "
                             "¿Quiere que le diga qué tengo?"
@@ -493,10 +536,7 @@ class AudiobooksSkill:
         return ToolResult(
             output=json.dumps(
                 {
-                    "results": [
-                        {"id": b["id"], "title": b["title"], "author": b["author"]}
-                        for b in results
-                    ],
+                    "results": [_hit_summary(h) for h in results],
                     "count": len(results),
                     "message": "Encontré estos libros.",
                 }
@@ -504,43 +544,47 @@ class AudiobooksSkill:
         )
 
     async def _resolve_book(self, reference: str) -> dict[str, str] | None:
-        """Look up a book by exact ID, or fall back to fuzzy title/author match."""
-        exact = next((b for b in self._catalog if b["id"] == reference), None)
+        """Look up a book by exact ID, or fall back to fuzzy match.
+
+        Refactored onto Catalog (T1.1). Behavior preserved:
+        - Exact id hit → resolved
+        - Fuzzy match with score > `_RESOLVE_THRESHOLD` (0.5) → resolved
+        - Otherwise → None (skill caller's responsibility to surface
+          "no encuentro" UX)
+
+        Returns a flat dict for caller compatibility (`{id, title,
+        author, path}`); the Catalog stores `path` in `payload` and the
+        rest in `fields`.
+        """
+        catalog = self._catalog_req
+
+        exact = await catalog.get(reference)
         if exact is not None:
             await self._logger_req.ainfo(
                 "audiobooks.resolve",
                 reference=reference,
                 method="exact",
-                resolved_id=exact["id"],
+                resolved_id=exact.id,
             )
-            return exact
+            return _hit_to_book(exact)
 
-        if not self._catalog:
+        if len(catalog) == 0:
             await self._logger_req.ainfo("audiobooks.resolve", reference=reference, resolved=None)
             return None
 
-        best_score = 0.0
-        best_book: dict[str, str] | None = None
-        for candidate in self._catalog:
-            candidates = [
-                candidate["title"],
-                candidate["author"],
-                f"{candidate['author']} {candidate['title']}",
-                candidate["id"],
-            ]
-            score = max(_fuzzy_score(reference, c) for c in candidates)
-            if score > best_score:
-                best_score = score
-                best_book = candidate
-        if best_book is not None and best_score > 0.5:
+        hits = await catalog.search(reference, limit=1)
+        if hits and hits[0].score > _RESOLVE_THRESHOLD:
+            top = hits[0]
             await self._logger_req.ainfo(
                 "audiobooks.resolve",
                 reference=reference,
                 method="fuzzy",
-                resolved_id=best_book["id"],
-                score=round(best_score, 3),
+                resolved_id=top.id,
+                score=round(top.score, 3),
             )
-            return best_book
+            return _hit_to_book(top)
+
+        best_score = hits[0].score if hits else 0.0
         await self._logger_req.ainfo(
             "audiobooks.resolve",
             reference=reference,
@@ -793,14 +837,14 @@ class AudiobooksSkill:
     async def _list_in_progress(self) -> ToolResult:
         """Return all books that have a non-zero saved position."""
         in_progress = []
-        for book in self._catalog:
-            pos = await self._get_position(book["id"])
+        for hit in self._catalog_req:
+            pos = await self._get_position(hit.id)
             if pos > 0:
                 in_progress.append(
                     {
-                        "id": book["id"],
-                        "title": book["title"],
-                        "author": book["author"],
+                        "id": hit.id,
+                        "title": hit.fields.get("title", ""),
+                        "author": hit.fields.get("author", ""),
                         "position_seconds": round(pos, 1),
                         "position_label": _fmt_duration(pos),
                     }

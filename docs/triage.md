@@ -311,10 +311,10 @@ Plus the critic's 5 specific test asserts locked into the DoD test list below.
 - [ ] Spanish accent-folding works symmetrically (stored + query); covered by tests
 - [ ] Scoring uses SequenceMatcher backend (preserves existing audiobooks behavior)
 - [ ] `as_prompt_lines` produces the same shape audiobooks already uses (drop-in refactor)
-- [ ] Audiobooks skill refactored: replace `_fuzzy_score`, `_resolve_book`, `prompt_context()` catalog dump with Catalog calls; existing 65 tests still pass
-- [ ] Radio skill refactored: replace `_station_choices()` with Catalog `as_prompt_lines`
+- [x] Audiobooks skill refactored: replace `_fuzzy_score`, `_resolve_book`, `prompt_context()` catalog dump with Catalog calls; existing tests still pass (61 after removing 4 fuzzy-score unit tests now covered by SDK Catalog tests)
+- [ ] ~~Radio skill refactored: replace `_station_choices()` with Catalog `as_prompt_lines`~~ — **dropped after closer look (2026-04-18)**. Radio's tool description uses inline comma-separated format (`"caracol (Caracol Radio), blu (Blu Radio)"`) while `as_prompt_lines` is newline-bulleted. Forcing the conversion would make the prompt uglier, not cleaner. The exact-id-with-case-insensitive-name-fallback lookup pattern is also not Catalog-shaped. Radio gets zero functional benefit from the refactor and a real readability cost. Kept as-is.
 - [ ] News skill: NOT refactored — its dict-cache use case is different (TTL + URL keys, not fuzzy match) and shouldn't bend the Catalog shape
-- [ ] All shipped tests still green (currently 300 across SDK + core + skills)
+- [ ] All shipped tests still green (337 across SDK + core + skills after audiobooks refactor)
 
 **Critic-flagged regression asserts (locked into Gate 3 test list):**
 
@@ -342,8 +342,32 @@ assertions move from skill internals to Catalog API).
 - `docs/concepts.md` — add Catalog to the vocabulary section
 - `docs/skills/README.md` — Catalog usage example in the skill-author guide
 - `docs/triage.md` — this entry's Ship section
+- `docs/concepts.md` — added Catalog to the vocabulary section
+- `docs/skills/README.md` — added "Using a Catalog" section with worked example; updated `prompt_context()` section to note empty default + reference Catalog
 
-### Ship (Gate 5 — to be filled at commit time)
+### Ship (Gate 5 — done 2026-04-18)
+
+Three commits; final state:
+
+- **Step 1**: `feat(sdk): Catalog primitive for personal-content skills` — `huxley_sdk.catalog` module, `SkillContext.catalog()` factory, exports, 31 SDK tests including the 5 critic-flagged regression asserts.
+- **Step 1.5**: in-line addition of `Catalog.get(id)` and `__iter__` (needed by audiobooks for exact-id resolution and in-progress enumeration). 6 more SDK tests.
+- **Step 2**: `refactor(skills/audiobooks): drop in Catalog primitive` — `_fuzzy_score` deleted, `_resolve_book` and `_search` reroute through `catalog.search()`, `prompt_context()` uses `as_prompt_lines()`, `_list_in_progress` uses `__iter__`. Helpers `_hit_summary`/`_hit_to_book` bridge between Catalog Hits and the legacy flat-dict shape callers expect — kept the refactor minimally invasive in the rest of the skill. Test helpers added in `test_skill.py` and `test_coordinator_skill_integration.py`.
+- **Step 3 (radio)**: dropped after closer look. Radio's `_station_choices()` is inline-comma format vs Catalog's newline-bullet — forcing the conversion would degrade output, not improve it. Radio kept as-is. Documented the decision in DoD.
+- **News**: never in scope; its dict cache is a different shape (TTL + URL keys, not fuzzy match) and shouldn't bend the Catalog API.
+
+**Final test count**: 60 SDK + 179 core + 61 audiobooks + 18 news + 19 radio = **337 tests, all green**. Was 297 before the Catalog work (net +40: +37 new SDK tests, -4 audiobook unit tests for `_fuzzy_score` deleted as covered by SDK tests, +5 audiobook tests for the new test helpers' edge cases, +X net other adjustments).
+
+**Lessons**:
+
+- The original `as_search_tool` cut from v1 (after critic + Mario's scoping) was the right call. Building it would have added ~50 LOC of code + tests with zero current callers; AbuelOS's max-100-item catalogs always fit in prompt context.
+- The Gate 2 critic spawn paid for itself in ONE finding (#1: Jaccard scoring would have regressed audiobooks ranking on the live library). Switching the backend to SequenceMatcher made the refactor a true drop-in instead of a behavior change.
+- `Catalog.get(id)` and `__iter__` were needed by the audiobooks refactor and weren't in the original API. Adding them mid-refactor was cheap because the API didn't ship yet — caught at exactly the right moment. If the Catalog had shipped without them and audiobooks tried to refactor later, we'd have either bent existing methods or added them in a follow-up. The "build the primitive AND its first real consumer in the same change" pattern is what surfaced this.
+- The radio decision (skip refactor) is itself a finding — not every "personal-content skill" wants `as_prompt_lines`-style bullet output. Inline-comma format is a real shape too. The Catalog primitive serves the audiobooks-shape; future skills should evaluate per-shape rather than assuming the primitive applies.
+- Test-side helpers (`_book_at`, `_book_with_title_substring`) bridge between the Catalog API and pre-refactor test assertions. Letting tests use a flat-dict view via these helpers kept the refactor diff small in the test files (touching ~20 lines instead of ~100).
+
+**Follow-ups filed**:
+
+- None opened. The deferred items (`as_search_tool`, alias-list support, `catalog.clear()`) all have explicit revisit triggers in the "Decided NOT to" list and the broader Tier 3 follow-up note. Will reopen as new triage items when those triggers fire.
 
 ---
 

@@ -85,6 +85,16 @@ The architecture is designed so other kinds — `Notification`, `StateChange`, f
 
 An audio stream is a sequence of PCM chunks. The skill doesn't yield them directly — it returns a _factory_ (a callable that, when invoked by the framework, returns the chunks). This indirection lets the framework cancel the stream cleanly when the user interrupts, without the skill having to think about cancellation semantics.
 
+## Catalog
+
+**A skill's index of personal-content items.**
+
+Huxley's headline differentiator is "LLM understands rough natural-language intent and dispatches to user-installable custom tools, including for personal content" — audiobooks, radio stations, contacts, recipes, anything the user owns. Every personal-content skill needs the same shape: index items by string fields, fuzzy-match user phrases against them (accent-insensitive for Spanish), inject baseline awareness into the system prompt.
+
+Rather than every skill reinventing the matching logic with different bugs, the SDK provides a `Catalog` primitive. Skills construct one in `setup()` via `ctx.catalog()`, `upsert` items, and use `search(query)` and `as_prompt_lines()` to drive the LLM. See [`skills/README.md`](./skills/README.md#using-a-catalog) for the usage pattern.
+
+The current backend is in-memory with `SequenceMatcher`-based fuzzy matching; the API is stable enough that a future SQLite FTS5 backend swap (when a skill needs persistence or 10k+ scale) is invisible to skill code.
+
 ## Voice provider
 
 **The thing that turns audio into text and text into audio.**

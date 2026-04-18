@@ -32,7 +32,6 @@ from huxley_skill_audiobooks.skill import (
     MIN_SPEED,
     RESUME_REWIND_SECONDS,
     AudiobooksSkill,
-    _fuzzy_score,
     _position_key,
 )
 
@@ -52,6 +51,43 @@ async def _drain(factory: Any) -> int:
     async for _chunk in factory():
         count += 1
     return count
+
+
+def _book_at(skill: AudiobooksSkill, index: int = 0) -> dict[str, str]:
+    """Get a book from the skill's Catalog as the legacy flat-dict shape.
+
+    Test helper that bridges between the new Catalog primitive (Hit
+    objects with fields + payload split) and the pre-refactor test
+    assertions that use `book["title"]`, `book["path"]`, etc. Catalog
+    iterates in insertion order, matching the old `_catalog: list[dict]`
+    behavior.
+    """
+    catalog = skill._catalog
+    assert catalog is not None, "skill not set up"
+    hits = list(catalog)
+    hit = hits[index]
+    return {
+        "id": hit.id,
+        "title": hit.fields.get("title", ""),
+        "author": hit.fields.get("author", ""),
+        "path": str(hit.payload.get("path", "")),
+    }
+
+
+def _book_with_title_substring(skill: AudiobooksSkill, needle: str) -> dict[str, str]:
+    """Get the first book whose (lowercased) title contains `needle`."""
+    catalog = skill._catalog
+    assert catalog is not None, "skill not set up"
+    needle_lower = needle.lower()
+    for hit in catalog:
+        if needle_lower in hit.fields.get("title", "").lower():
+            return {
+                "id": hit.id,
+                "title": hit.fields.get("title", ""),
+                "author": hit.fields.get("author", ""),
+                "path": str(hit.payload.get("path", "")),
+            }
+    raise StopIteration(f"no book with title containing {needle!r}")
 
 
 def _make_player_mock(chunks: list[bytes] | None = None) -> MagicMock:
@@ -125,34 +161,18 @@ def storage(audiobooks_skill: AudiobooksSkill) -> SkillStorage:
 # ---------------------------------------------------------------------------
 
 
-class TestFuzzyScore:
-    def test_exact_match(self) -> None:
-        assert _fuzzy_score("hello", "hello") == 1.0
-
-    def test_case_insensitive(self) -> None:
-        assert _fuzzy_score("Hello", "hello") == 1.0
-
-    def test_partial_match(self) -> None:
-        score = _fuzzy_score("coronel", "El coronel no tiene quien le escriba")
-        assert score > 0.3
-
-    def test_no_match(self) -> None:
-        score = _fuzzy_score("xyz123", "Gabriel García Márquez")
-        assert score < 0.3
-
-
 class TestCatalogScan:
     async def test_finds_all_books(self, audiobooks_skill: AudiobooksSkill) -> None:
         assert len(audiobooks_skill._catalog) == 4
 
     async def test_parses_author_from_directory(self, audiobooks_skill: AudiobooksSkill) -> None:
-        coronel = next(b for b in audiobooks_skill._catalog if "coronel" in b["title"].lower())
+        coronel = _book_with_title_substring(audiobooks_skill, "coronel")
         assert coronel["author"] == "Gabriel García Márquez"
 
     async def test_root_level_book_has_unknown_author(
         self, audiobooks_skill: AudiobooksSkill
     ) -> None:
-        suelto = next(b for b in audiobooks_skill._catalog if "suelto" in b["title"].lower())
+        suelto = _book_with_title_substring(audiobooks_skill, "suelto")
         assert suelto["author"] == "Desconocido"
 
     async def test_empty_library(self, tmp_path: Path) -> None:
@@ -193,7 +213,7 @@ class TestSearch:
 
 class TestPlayback:
     async def test_play_returns_audio_factory(self, audiobooks_skill: AudiobooksSkill) -> None:
-        book_id = audiobooks_skill._catalog[0]["id"]
+        book_id = _book_at(audiobooks_skill, 0)["id"]
         result = await audiobooks_skill.handle("play_audiobook", {"book_id": book_id})
         assert isinstance(result.side_effect, AudioStream)
         data = json.loads(result.output)
@@ -204,7 +224,7 @@ class TestPlayback:
     async def test_play_factory_streams_from_correct_position(
         self, audiobooks_skill: AudiobooksSkill, player_mock: MagicMock
     ) -> None:
-        book = audiobooks_skill._catalog[0]
+        book = _book_at(audiobooks_skill, 0)
         result = await audiobooks_skill.handle("play_audiobook", {"book_id": book["id"]})
         assert isinstance(result.side_effect, AudioStream)
 
@@ -218,7 +238,7 @@ class TestPlayback:
         storage: SkillStorage,
         player_mock: MagicMock,
     ) -> None:
-        book = audiobooks_skill._catalog[0]
+        book = _book_at(audiobooks_skill, 0)
         await storage.set_setting(_position_key(book["id"]), "120.5")
 
         result = await audiobooks_skill.handle("play_audiobook", {"book_id": book["id"]})
@@ -235,7 +255,7 @@ class TestPlayback:
         storage: SkillStorage,
         player_mock: MagicMock,
     ) -> None:
-        book = audiobooks_skill._catalog[0]
+        book = _book_at(audiobooks_skill, 0)
         await storage.set_setting(_position_key(book["id"]), "120.5")
 
         result = await audiobooks_skill.handle(
@@ -258,7 +278,7 @@ class TestPlayback:
     async def test_play_by_title_fuzzy_match(
         self, audiobooks_skill: AudiobooksSkill, player_mock: MagicMock
     ) -> None:
-        book = next(b for b in audiobooks_skill._catalog if "coronel" in b["title"].lower())
+        book = _book_with_title_substring(audiobooks_skill, "coronel")
         result = await audiobooks_skill.handle("play_audiobook", {"book_id": book["title"]})
         assert isinstance(result.side_effect, AudioStream)
         await _drain(result.side_effect.factory)
@@ -273,7 +293,7 @@ class TestPlayback:
     async def test_play_persists_last_book_id(
         self, audiobooks_skill: AudiobooksSkill, storage: SkillStorage
     ) -> None:
-        book = audiobooks_skill._catalog[0]
+        book = _book_at(audiobooks_skill, 0)
         await audiobooks_skill.handle("play_audiobook", {"book_id": book["id"]})
         saved = await storage.get_setting(LAST_BOOK_KEY)
         assert saved == book["id"]
@@ -282,7 +302,7 @@ class TestPlayback:
         self, audiobooks_skill: AudiobooksSkill, storage: SkillStorage
     ) -> None:
         """When the factory drains to EOF, its finally saves the final position."""
-        book = audiobooks_skill._catalog[0]
+        book = _book_at(audiobooks_skill, 0)
         result = await audiobooks_skill.handle("play_audiobook", {"book_id": book["id"]})
         assert isinstance(result.side_effect, AudioStream)
         await _drain(result.side_effect.factory)
@@ -306,7 +326,7 @@ class TestResumeLast:
         storage: SkillStorage,
         player_mock: MagicMock,
     ) -> None:
-        book = audiobooks_skill._catalog[0]
+        book = _book_at(audiobooks_skill, 0)
         await audiobooks_skill.handle("play_audiobook", {"book_id": book["id"]})
         await storage.set_setting(_position_key(book["id"]), "250.0")
         player_mock.stream.reset_mock()
@@ -341,7 +361,7 @@ class TestControl:
         self, audiobooks_skill: AudiobooksSkill, storage: SkillStorage
     ) -> None:
         """Storage is untouched when `_control` returns; only the factory writes."""
-        book = audiobooks_skill._catalog[0]
+        book = _book_at(audiobooks_skill, 0)
         await storage.set_setting(_position_key(book["id"]), "120.0")
         await storage.set_setting(LAST_BOOK_KEY, book["id"])
 
@@ -359,7 +379,7 @@ class TestControl:
         storage: SkillStorage,
         player_mock: MagicMock,
     ) -> None:
-        book = audiobooks_skill._catalog[0]
+        book = _book_at(audiobooks_skill, 0)
         await storage.set_setting(_position_key(book["id"]), "120.0")
         await storage.set_setting(LAST_BOOK_KEY, book["id"])
 
@@ -377,7 +397,7 @@ class TestControl:
         storage: SkillStorage,
         player_mock: MagicMock,
     ) -> None:
-        book = audiobooks_skill._catalog[0]
+        book = _book_at(audiobooks_skill, 0)
         await storage.set_setting(_position_key(book["id"]), "5.0")
         await storage.set_setting(LAST_BOOK_KEY, book["id"])
 
@@ -395,7 +415,7 @@ class TestControl:
         storage: SkillStorage,
         player_mock: MagicMock,
     ) -> None:
-        book = audiobooks_skill._catalog[0]
+        book = _book_at(audiobooks_skill, 0)
         await storage.set_setting(_position_key(book["id"]), "50.0")
         await storage.set_setting(LAST_BOOK_KEY, book["id"])
 
@@ -413,7 +433,7 @@ class TestControl:
         storage: SkillStorage,
         player_mock: MagicMock,
     ) -> None:
-        book = audiobooks_skill._catalog[0]
+        book = _book_at(audiobooks_skill, 0)
         await storage.set_setting(_position_key(book["id"]), "75.0")
         await storage.set_setting(LAST_BOOK_KEY, book["id"])
 
@@ -463,7 +483,7 @@ class TestFactoryCancelPersistsPosition:
         skill = AudiobooksSkill(player=player)
         await skill.setup(_make_ctx(library_path))
 
-        book = skill._catalog[0]
+        book = _book_at(skill, 0)
         result = await skill.handle("play_audiobook", {"book_id": book["id"]})
         assert isinstance(result.side_effect, AudioStream)
         factory = result.side_effect.factory
@@ -698,7 +718,7 @@ class TestOnCompletePromptFromConfig:
         skill = AudiobooksSkill(player=player_mock)
         await skill.setup(ctx)
         assert skill._on_complete_prompt == "Custom completion message."
-        result = await skill.handle("play_audiobook", {"book_id": skill._catalog[0]["id"]})
+        result = await skill.handle("play_audiobook", {"book_id": _book_at(skill, 0)["id"]})
         assert isinstance(result.side_effect, AudioStream)
         assert result.side_effect.on_complete_prompt == "Custom completion message."
 
@@ -712,7 +732,7 @@ class TestCompletionSilenceMs:
         self, audiobooks_skill: AudiobooksSkill
     ) -> None:
         result = await audiobooks_skill.handle(
-            "play_audiobook", {"book_id": audiobooks_skill._catalog[0]["id"]}
+            "play_audiobook", {"book_id": _book_at(audiobooks_skill, 0)["id"]}
         )
         assert isinstance(result.side_effect, AudioStream)
         assert result.side_effect.completion_silence_ms == 500
@@ -726,7 +746,7 @@ class TestCompletionSilenceMs:
         )
         skill = AudiobooksSkill(player=player_mock)
         await skill.setup(ctx)
-        result = await skill.handle("play_audiobook", {"book_id": skill._catalog[0]["id"]})
+        result = await skill.handle("play_audiobook", {"book_id": _book_at(skill, 0)["id"]})
         assert isinstance(result.side_effect, AudioStream)
         assert result.side_effect.completion_silence_ms == 1200
 
@@ -742,7 +762,7 @@ class TestOnCompletePromptOnAllPaths:
         self, audiobooks_skill: AudiobooksSkill
     ) -> None:
         result = await audiobooks_skill.handle(
-            "play_audiobook", {"book_id": audiobooks_skill._catalog[0]["id"]}
+            "play_audiobook", {"book_id": _book_at(audiobooks_skill, 0)["id"]}
         )
         assert isinstance(result.side_effect, AudioStream)
         assert result.side_effect.on_complete_prompt is not None
@@ -751,8 +771,8 @@ class TestOnCompletePromptOnAllPaths:
     async def test_resume_last_carries_on_complete_prompt(
         self, audiobooks_skill: AudiobooksSkill, storage: SkillStorage
     ) -> None:
-        await storage.set_setting(LAST_BOOK_KEY, audiobooks_skill._catalog[0]["id"])
-        await storage.set_setting(_position_key(audiobooks_skill._catalog[0]["id"]), "100.0")
+        await storage.set_setting(LAST_BOOK_KEY, _book_at(audiobooks_skill, 0)["id"])
+        await storage.set_setting(_position_key(_book_at(audiobooks_skill, 0)["id"]), "100.0")
         result = await audiobooks_skill.handle("resume_last", {})
         assert isinstance(result.side_effect, AudioStream)
         assert result.side_effect.on_complete_prompt is not None
@@ -761,7 +781,7 @@ class TestOnCompletePromptOnAllPaths:
         self, audiobooks_skill: AudiobooksSkill, storage: SkillStorage
     ) -> None:
         """Regression for #6: rewinding near book end must still announce completion."""
-        book_id = audiobooks_skill._catalog[0]["id"]
+        book_id = _book_at(audiobooks_skill, 0)["id"]
         await storage.set_setting(LAST_BOOK_KEY, book_id)
         await storage.set_setting(_position_key(book_id), "200.0")
         result = await audiobooks_skill.handle(
@@ -773,7 +793,7 @@ class TestOnCompletePromptOnAllPaths:
     async def test_seek_forward_carries_on_complete_prompt(
         self, audiobooks_skill: AudiobooksSkill, storage: SkillStorage
     ) -> None:
-        book_id = audiobooks_skill._catalog[0]["id"]
+        book_id = _book_at(audiobooks_skill, 0)["id"]
         await storage.set_setting(LAST_BOOK_KEY, book_id)
         await storage.set_setting(_position_key(book_id), "200.0")
         result = await audiobooks_skill.handle(
@@ -811,7 +831,7 @@ class TestEarconCompletionTiming:
         )
         skill = AudiobooksSkill(player=player)
         await skill.setup(ctx)
-        book_id = skill._catalog[0]["id"]
+        book_id = _book_at(skill, 0)["id"]
 
         # Start streaming the book; pause inside the book_end yield by cancelling
         # right after the player chunks finish but before the chime drains.
@@ -885,7 +905,7 @@ class TestSpeedControl:
         storage: SkillStorage,
     ) -> None:
         await storage.set_setting(CURRENT_SPEED_KEY, "0.75")
-        book = audiobooks_skill._catalog[0]
+        book = _book_at(audiobooks_skill, 0)
 
         result = await audiobooks_skill.handle("play_audiobook", {"book_id": book["id"]})
 
@@ -899,7 +919,7 @@ class TestSpeedControl:
         player_mock: MagicMock,
     ) -> None:
         # Simulate a live stream so set_speed has something to restart.
-        book = audiobooks_skill._catalog[0]
+        book = _book_at(audiobooks_skill, 0)
         audiobooks_skill._now_playing_id = book["id"]
         audiobooks_skill._now_playing_start_pos = 100.0
         audiobooks_skill._now_playing_speed = 1.0
@@ -953,7 +973,7 @@ class TestSpeedControl:
         not leave the user in silence. set_speed must resume the last book at
         the new tempo when no stream is currently live but a saved book
         exists. Captured live 2026-04-18 (see triage T1.7 lessons)."""
-        book = audiobooks_skill._catalog[0]
+        book = _book_at(audiobooks_skill, 0)
         # Simulate prior playback: book was started + paused via PTT.
         # _now_playing_id is None (stream's finally cleared it on cancel).
         # last_id and a saved position remain in storage.

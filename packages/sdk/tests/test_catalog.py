@@ -382,3 +382,49 @@ class TestAsPromptLines:
             await catalog.upsert(id=str(i), fields={"title": f"Book {i}"})
         out = catalog.as_prompt_lines(limit=10)
         assert "más" not in out
+
+
+# ---------------------------------------------------------------------------
+# get + iter (added for audiobooks refactor)
+
+
+class TestCatalogGet:
+    async def test_get_returns_hit_for_existing_id(self) -> None:
+        catalog = Catalog()
+        await catalog.upsert(id="x", fields={"title": "Hello"}, payload={"path": "/foo.mp3"})
+        hit = await catalog.get("x")
+        assert hit is not None
+        assert hit.id == "x"
+        assert hit.fields == {"title": "Hello"}
+        assert hit.payload == {"path": "/foo.mp3"}
+        assert hit.score == 1.0
+
+    async def test_get_returns_none_for_missing_id(self) -> None:
+        catalog = Catalog()
+        await catalog.upsert(id="x", fields={"title": "Hello"})
+        assert await catalog.get("y") is None
+
+    async def test_get_on_empty_catalog(self) -> None:
+        catalog = Catalog()
+        assert await catalog.get("x") is None
+
+
+class TestCatalogIter:
+    async def test_iterates_in_insertion_order(self) -> None:
+        catalog = Catalog()
+        await catalog.upsert(id="b", fields={"title": "Second"})
+        await catalog.upsert(id="a", fields={"title": "First"})
+        ids = [hit.id for hit in catalog]
+        assert ids == ["b", "a"]
+
+    async def test_iter_yields_full_hits(self) -> None:
+        catalog = Catalog()
+        await catalog.upsert(id="x", fields={"title": "Hello"}, payload={"path": "/foo"})
+        hits = list(catalog)
+        assert len(hits) == 1
+        assert hits[0].fields == {"title": "Hello"}
+        assert hits[0].payload == {"path": "/foo"}
+
+    async def test_iter_empty_catalog(self) -> None:
+        catalog = Catalog()
+        assert list(catalog) == []

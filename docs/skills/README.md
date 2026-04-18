@@ -160,28 +160,67 @@ Prompt-level only — no skill action required. The model asks one clarifying qu
 
 A skill that doesn't know about a future constraint just won't handle it specially. The framework injects the matching system-prompt language regardless, so the LLM can still steer correctly. Skills opt in to constraint-aware behavior; they don't have to.
 
+## Using a Catalog
+
+If your skill ships personal-content items (audiobooks, radio stations, contacts, recipes, anything the user owns and refers to by name), use the SDK's `Catalog` primitive instead of rolling your own fuzzy match + prompt formatter. It's the framework's headline ergonomic for the personal-content + LLM-dispatch pattern.
+
+```python
+from huxley_sdk import Catalog, Hit, Skill, SkillContext, ToolResult
+
+class RecipesSkill:
+    @property
+    def name(self) -> str:
+        return "recipes"
+
+    async def setup(self, ctx: SkillContext) -> None:
+        self._catalog = ctx.catalog()
+        for recipe in scan_recipes(ctx.persona_data_dir / "recipes"):
+            await self._catalog.upsert(
+                id=recipe["id"],
+                fields={"title": recipe["title"], "cuisine": recipe["cuisine"]},
+                payload={"path": recipe["path"], "duration_min": recipe["duration_min"]},
+            )
+
+    async def handle(self, tool_name: str, args: dict) -> ToolResult:
+        if tool_name == "play_recipe":
+            hits = await self._catalog.search(args["query"], limit=1)
+            if hits and hits[0].score > 0.5:
+                top = hits[0]
+                return ToolResult(output=json.dumps({"title": top.fields["title"]}))
+            return ToolResult(output=json.dumps({"error": "no_match"}))
+
+    def prompt_context(self) -> str:
+        return self._catalog.as_prompt_lines(
+            limit=50,
+            header="Recetas disponibles",
+            line=lambda h: f'- "{h.fields["title"]}" ({h.fields["cuisine"]})',
+        )
+```
+
+**What you get for free**:
+
+- **Accent-insensitive matching** for Spanish (`"garcia"` matches `"García"` cleanly). Symmetric — applied on both sides at insert and query.
+- **Deterministic scoring** via `SequenceMatcher` ratio across fields, max-across-fields. Same algorithm the audiobooks skill used pre-Catalog, so refactoring onto Catalog is drop-in.
+- **Consistent `as_prompt_lines` output** across every personal-content skill — the LLM sees the same shape from `audiobooks`, `recipes`, `contacts`, etc., so its prompt-pattern recognition transfers.
+- **Stable API** for a future SQLite FTS5 backend swap when a skill genuinely needs persistence or 10k+ scale.
+
+**Confidence threshold lives in the skill, not the Catalog.** `catalog.search()` returns scored hits; the skill decides what counts as "good enough" (audiobooks uses `> 0.5` for resolve, `> 0.3` for the broader search-results listing). This separation lets each skill tune its own UX without bending the primitive.
+
+**Catalog is for skill-owned data**, not framework state. Don't put cached HTTP responses or session-scoped state in a Catalog — those have different lifecycle and access patterns. The news skill's TTL cache, for example, is a plain dict and stays a plain dict.
+
+See [`audiobooks.md`](./audiobooks.md) for a full worked example.
+
 ## Optional: `prompt_context()` for baseline awareness
 
 Some questions don't need a tool call — they need the LLM to already know. _"What books do you have?"_ is the canonical example: if the catalog is already in the session prompt, the LLM can answer immediately without round-tripping through `search_audiobooks`.
 
-Skills that want to contribute baseline context to every session prompt can implement an optional `prompt_context()` method:
-
-```python
-class AudiobooksSkill:
-    def prompt_context(self) -> str:
-        if not self._catalog:
-            return ""
-        lines = ["Books in the user's library:"]
-        for book in self._catalog[:50]:
-            lines.append(f'- "{book["title"]}" by {book["author"]}')
-        return "\n".join(lines)
-```
+Skills that want to contribute baseline context to every session prompt implement `prompt_context()`. The simplest implementation is `return self._catalog.as_prompt_lines(...)` (see "Using a Catalog" above); skills that don't have a Catalog can build the string by hand.
 
 **How it's wired**: at session connect time, the framework iterates registered skills and collects any non-empty `prompt_context()` strings, appending them to the system prompt before sending `session.update`.
 
-**Not in the Skill protocol** — it's optional. Skills that don't implement it contribute nothing.
+**In the Skill protocol with an empty default** — skills that don't override it contribute nothing.
 
-**Scaling rule**: keep each skill's context under a few hundred tokens. For collections that would blow past that (e.g., thousands of items), return a short summary and let the LLM paginate via search.
+**Scaling rule**: keep each skill's context under a few hundred tokens. For collections that would blow past that (thousands of items), the framework will eventually grow a search-tool delivery mode on Catalog; today, just trim with `limit=N`.
 
 **When _not_ to use it**: don't dump state that changes frequently — the context is only refreshed on session connect, not mid-conversation.
 

@@ -244,5 +244,33 @@ class Catalog:
             lines.append(overflow)
         return "\n".join(lines)
 
+    async def get(self, id: str) -> Hit | None:
+        """Look up an item by exact id. Returns `None` if not present.
+
+        Cheap O(1) for the in-memory backend. Use this when the skill
+        already knows the item id (e.g. resolved from saved storage state)
+        and needs the item's fields/payload without going through fuzzy
+        search.
+        """
+        item = self._items.get(id)
+        if item is None:
+            return None
+        return Hit(id=item.id, score=1.0, fields=item.fields, payload=item.payload)
+
+    def __iter__(self) -> Any:
+        """Iterate items in insertion order, yielding `Hit` objects.
+
+        Useful for skills that need to enumerate the whole catalog
+        (e.g. find all in-progress books from saved positions). Hits have
+        `score=1.0` since iteration isn't query-driven.
+        """
+        for item in sorted(self._items.values(), key=lambda it: it.insert_order):
+            yield Hit(
+                id=item.id,
+                score=1.0,
+                fields=item.fields,
+                payload=item.payload,
+            )
+
     def __len__(self) -> int:
         return len(self._items)

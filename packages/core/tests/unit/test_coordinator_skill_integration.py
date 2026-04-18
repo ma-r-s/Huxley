@@ -129,6 +129,24 @@ async def _commit_turn(coordinator: TurnCoordinator, frames: int = 60) -> None:
     await coordinator.on_ptt_stop()
 
 
+def _book_at(skill: AudiobooksSkill, index: int = 0) -> dict[str, str]:
+    """Get a book from the skill's Catalog as the legacy flat-dict shape.
+
+    Test bridge: pre-T1.1 the skill exposed `_catalog: list[dict]`; now
+    `_catalog` is a Catalog primitive (yields Hit objects via iteration).
+    """
+    catalog = skill._catalog
+    assert catalog is not None, "skill not set up"
+    hits = list(catalog)
+    hit = hits[index]
+    return {
+        "id": hit.id,
+        "title": hit.fields.get("title", ""),
+        "author": hit.fields.get("author", ""),
+        "path": str(hit.payload.get("path", "")),
+    }
+
+
 async def _settle(task: Any) -> None:
     """Let a background media task drain, cancelling if it takes too long."""
     import asyncio
@@ -159,7 +177,7 @@ class TestPlayAudiobookEndToEnd:
         coord, _reg, skill, player, consumed, mocks = await _build_wired_coordinator(
             library_path, storage
         )
-        book = skill._catalog[0]
+        book = _book_at(skill, 0)
 
         await _commit_turn(coord)
         # Model pre-narrates "Ahí le pongo el libro"
@@ -213,7 +231,7 @@ class TestPlayAudiobookEndToEnd:
         coord, _reg, skill, _player, _consumed, mocks = await _build_wired_coordinator(
             library_path, storage
         )
-        book = skill._catalog[0]
+        book = _book_at(skill, 0)
 
         await _commit_turn(coord)
         await coord.on_tool_call("c1", "play_audiobook", {"book_id": book["id"]})
@@ -233,7 +251,7 @@ class TestMidChainInterruptDropsFactories:
         coord, _reg, skill, player, consumed, _mocks = await _build_wired_coordinator(
             library_path, storage
         )
-        book = skill._catalog[0]
+        book = _book_at(skill, 0)
 
         await _commit_turn(coord)
         await coord.on_tool_call("c1", "play_audiobook", {"book_id": book["id"]})
@@ -261,7 +279,7 @@ class TestRewindReplacesPriorMediaTask:
         coord, _reg, skill, player, _consumed, _mocks = await _build_wired_coordinator(
             library_path, storage
         )
-        book = skill._catalog[0]
+        book = _book_at(skill, 0)
 
         # Turn 1: play from start
         await _commit_turn(coord)
@@ -310,7 +328,7 @@ class TestPauseRequestsFollowUp:
         coord, _reg, skill, player, _consumed, mocks = await _build_wired_coordinator(
             library_path, storage
         )
-        book = skill._catalog[0]
+        book = _book_at(skill, 0)
         await storage.set_setting(f"audiobooks:{LAST_BOOK_KEY}", book["id"])
 
         # Turn 1: start playback
