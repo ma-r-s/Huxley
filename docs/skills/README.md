@@ -252,7 +252,15 @@ await ctx.inject_turn(
 
 **`expires_after`** — TTL. Drops from the queue silently after this. Defaults from persona config per tier (see `docs/io-plane.md`).
 
-**Don't build retry into the skill's call to `inject_turn`.** If your skill needs retry-until-acknowledged semantics (medication reminders), use your own `background_task` scheduler to re-call `inject_turn` at escalating urgency. Framework doesn't model retry.
+**Don't build retry into the skill's call to `inject_turn`.** If your skill needs retry-until-acknowledged semantics (medication reminders), use your own `background_task` scheduler to re-call `inject_turn` at escalating urgency. The returned handle exposes `wait_outcome()` which resolves to one of `ACKNOWLEDGED | DELIVERED | EXPIRED | PREEMPTED | CANCELLED` (first-writer-wins); your skill branches on the outcome to decide whether to re-fire.
+
+```python
+handle = await self._ctx.inject_turn(prompt, urgency=Urgency.INTERRUPT)
+outcome = await handle.wait_outcome()
+if outcome != TurnOutcome.ACKNOWLEDGED:
+    # Retry at higher urgency in 5 minutes (skill's own schedule)
+    ...
+```
 
 **Who narrates**: the LLM, in persona voice. Your `prompt` is the instruction (what to say), not the rendered speech. Same pattern as audiobook's `AudioStream.on_complete_prompt`.
 
@@ -297,6 +305,14 @@ async def _on_panic(self, payload: dict) -> None:
 **Unsubscribing**: automatic on skill teardown. Don't track subscriptions yourself.
 
 **Not for PTT or audio** — those are framework-owned fixed message types. `client_event` is for everything else.
+
+**Pushing events back to the client** — use `ctx.emit_server_event(key, payload)`. Symmetric to `client_event` but server-to-client. No-op (with debug log) if the client's capabilities array doesn't include `server_event`. If your skill's flow depends on a specific capability, check first:
+
+```python
+if not self._ctx.client_has_capability("calls.led_red"):
+    # Degrade gracefully — audio-only confirmation instead
+    ...
+```
 
 ## Taking over the mic — `InputClaim`
 

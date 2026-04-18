@@ -155,8 +155,19 @@ class InjectedTurnHandle:
         active. wait_outcome() resolves to CANCELLED."""
 
     async def wait_outcome(self) -> TurnOutcome:
-        """Suspend until the turn reaches a terminal state. Idempotent —
-        multiple awaiters all receive the same outcome."""
+        """Suspend until the turn reaches a terminal state.
+
+        **Resolution is first-writer-wins.** Whichever transition happens
+        first — skill calling `cancel()`, framework firing DELIVERED,
+        TTL expiring, a CRITICAL turn preempting, or the user PTTing in
+        the ack window — sets the outcome. Subsequent attempts are
+        no-ops. Multiple awaiters all receive the same value.
+
+        This matters for retry: the reminders skill's pattern is
+        `outcome = await handle.wait_outcome()` followed by
+        `if outcome != ACKNOWLEDGED: re-inject`. First-writer-wins
+        guarantees the skill sees exactly one terminal state per handle,
+        never a race between `cancel()` and `DELIVERED`."""
 
 
 # On SkillContext:
@@ -186,19 +197,37 @@ async def inject_turn(
 ### Arbitration (the pure function)
 
 The speaker is a single-claim resource. Arbitration is a pure function
-`(urgency, yield_policy) -> Decision` with five possible outcomes:
+with five possible outcomes:
 
 ```python
 class Decision(Enum):
-    SPEAK_NOW   = "speak_now"     # idle — no preemption needed
+    SPEAK_NOW   = "speak_now"     # no current owner — speak immediately
     PREEMPT     = "preempt"       # cancel current stream, play earcon + speak
     DUCK_CHIME  = "duck_chime"    # dip current stream -18dB, play tier chime,
                                   # hold speech for next PTT
     HOLD        = "hold"          # queue for next PTT; no earcon now
     DROP        = "drop"          # ambient event dropped while busy
+
+
+def arbitrate(
+    urgency: Urgency,
+    current_owner_yield: YieldPolicy | None,
+) -> Decision:
+    """Pure function. `current_owner_yield=None` means no AudioStream/
+    InputClaim/user-turn currently owns the speaker (idle). Otherwise
+    it's the yield_policy of whatever owns it right now."""
 ```
 
-The function's decision table:
+The caller (coordinator's `MediaTaskManager`) snapshots the current owner's
+`yield_policy` at the moment of decision and feeds it in — the function
+itself reads no state, takes no locks, and has no side effects. 20 total
+cases (16 urgency×yield_policy + 4 idle).
+
+**Idle branch** (`current_owner_yield is None`): any urgency returns
+`SPEAK_NOW`. Framework still plays the tier earcon before speech for all
+non-AMBIENT.
+
+**Busy branch** (`current_owner_yield` is a policy):
 
 ```
 rank: AMBIENT=0, CHIME_DEFER=1, INTERRUPT=2, CRITICAL=3
@@ -208,34 +237,24 @@ yield_threshold:
   YIELD_ABOVE     → 1   (yields above CHIME_DEFER)
   YIELD_CRITICAL  → 2   (yields above INTERRUPT)
 
-If no media playing AND no user turn active:
-    AMBIENT / CHIME_DEFER / INTERRUPT / CRITICAL -> SPEAK_NOW
-    (Framework still plays the tier earcon before speech for all non-AMBIENT.)
-
-Otherwise (media playing OR user turn active):
-    AMBIENT                                    -> DROP
-    CHIME_DEFER & yield_threshold >= 1 (YIELD_ABOVE, YIELD_CRITICAL)
-                                               -> DUCK_CHIME
-    CHIME_DEFER & yield_threshold == 0 (IMMEDIATE)
-                                               -> PREEMPT
-    INTERRUPT   & yield_threshold >= 2 (YIELD_CRITICAL)
-                                               -> DUCK_CHIME
-    INTERRUPT   & yield_threshold < 2
-                                               -> PREEMPT
-    CRITICAL                                   -> PREEMPT (no yield policy blocks CRITICAL)
+AMBIENT                                             -> DROP
+CHIME_DEFER & yield_threshold >= 1                  -> DUCK_CHIME
+CHIME_DEFER & yield_threshold == 0 (IMMEDIATE)      -> PREEMPT
+INTERRUPT   & yield_threshold >= 2 (YIELD_CRITICAL) -> DUCK_CHIME
+INTERRUPT   & yield_threshold < 2                   -> PREEMPT
+CRITICAL                                            -> PREEMPT (no policy blocks)
 ```
 
 Why five outcomes instead of "preempt yes/no": an honest spec. `DUCK_CHIME`
 is a third behavior distinct from both preempt and silent hold — the tier
 earcon plays (user gets auditory signal that SOMETHING happened), the
 current stream dips but continues, and the speech payload waits for the
-user's next PTT. Saying "preempt iff rank > threshold" hides this; the
-five-outcome model names it.
+user's next PTT. Calling this "preempt iff rank > threshold" hides it.
 
-Lives in `huxley.turn.arbitration` as a pure function + exhaustive 16-row
-test table. The function has no dependencies on coordinator state; calling
-code feeds in the current `yield_policy` of whatever is playing (None
-treated as "idle").
+**Purity guarantee**: the function has no dependencies on coordinator
+state. The caller passes `None` for idle, a concrete policy for busy.
+All 20 cases (16 busy + 4 idle) are deterministic and exhaustively
+tested. Lives in `huxley.turn.arbitration`.
 
 ### Cross-cutting behavior rules
 
@@ -402,6 +421,46 @@ an active claim. Skills override case-by-case:
 - Calls skill: `YIELD_CRITICAL` (only another call-priority event
   preempts an active call)
 
+**Scope of `yield_policy` on a claim with both mic and speaker**: the single
+field governs BOTH the mic-takeover AND the speaker-source simultaneously.
+If a future skill needs split semantics (e.g., speaker dipable but mic not
+droppable mid-sentence), it should either split into two separate claims
+or the spec grows separate `mic_yield_policy` / `speaker_yield_policy`
+fields. Neither is needed in v1; calls-skill's needs are met by
+`YIELD_CRITICAL` on both sides.
+
+### Race: direct-entry claim + in-flight CRITICAL turn
+
+Two paths can latch the speaker's single-owner slot at the "same time":
+
+- `ctx.start_input_claim(...)` fired from a `client_event` handler (e.g.
+  panic button)
+- `ctx.inject_turn(CRITICAL, ...)` from a `background_task` (e.g. a
+  medication reminder firing at the exact same moment)
+
+Both go through the coordinator, which serializes state transitions via
+a single mutex around "read current owner → arbitrate → apply decision."
+Resolution rule: **first-arriver-at-the-coordinator-wins**, with the
+loser applying its normal arbitration outcome against the new state:
+
+- If the claim latches first (acquires `SpeakingState` as `"claim"`),
+  the subsequent CRITICAL inject_turn sees `current_owner_yield =
+claim.yield_policy`. For a `YIELD_CRITICAL` claim, arbitration returns
+  `PREEMPT` — the claim ends with `on_claim_end(PREEMPTED)`, the turn
+  plays, and (critically) the claim does NOT auto-restart. If the calls
+  skill wants it back, it re-calls `start_input_claim`.
+- If the inject_turn starts first (acquires `SpeakingState` as
+  `"injected"`), the subsequent `start_input_claim` queues until the
+  turn drains (HOLD-equivalent for claims). The calls skill's handler
+  sees the claim latch ~1-2s later when the CRITICAL turn finishes.
+
+This is deterministic given arrival order. For life-safety panic-button
+scenarios, the 1-2s delay from a queued claim is acceptable — the
+CRITICAL inject_turn that won the race is itself also a life-safety
+event. The spec explicitly DOES NOT attempt to preempt in-flight turns
+from the claim side, which would require a more complex arbitration
+with two active speakers' policies.
+
 ---
 
 ## Primitive 4 — `ClientEvent` subscription
@@ -503,10 +562,43 @@ async def emit_server_event(
     """Send a server_event to the client. No-op if the client's
     capabilities don't include "server_event". Framework logs a debug
     line when skipped so skill authors can see the degraded path."""
+
+
+def client_has_capability(self, key: str) -> bool:
+    """Query whether the connected client advertised the given capability
+    in its `hello` handshake. Skills use this to branch between
+    required-capability flows and degraded flows.
+
+    Example: a calls skill with a LED-confirmation requirement calls
+    `ctx.client_has_capability("calls.led_red")` before committing to a
+    flow that needs it. If absent, the skill falls back to audio-only
+    confirmation rather than silently degrading mid-flow."""
 ```
 
 No framework-side event type registry. Skills document their own
 conventions in their own skill-doc pages.
+
+**Namespace enforcement — convention-only for v1.** The `huxley.*`
+reservation is advisory, not runtime-enforced. A malicious or sloppy
+skill could subscribe to `huxley.ptt_start` and crash under load when
+the framework emits it. The rationale for not enforcing:
+
+- Framework doesn't currently emit any `huxley.*` events through the
+  `client_event` / `server_event` channel. The reservation is
+  aspirational (Stage 4+ may migrate some existing telemetry onto this
+  channel).
+- A runtime check in `subscribe_client_event` / `emit_server_event`
+  that raises on `huxley.*` from a skill context is a 10-line addition
+  when first needed. Adding it today forces a choice about what to do
+  when the framework itself wants to emit/subscribe (presumably an
+  internal `subscribe` that bypasses the check).
+- Skill-author discipline + code review + the convention being documented
+  is sufficient for the framework's current scale (one-developer,
+  pre-community).
+
+Revisit: promote to runtime-enforced when the first `huxley.*` event is
+actually emitted, OR when the first third-party skill ships to the
+(hypothetical) Huxley skill registry.
 
 ---
 
@@ -559,6 +651,12 @@ Named for log attribution. Per-skill namespaced. The
 `on_permanent_failure` callback is itself supervised — if it raises,
 the framework logs and stops (doesn't recurse).
 
+**Teardown interaction**: when the skill's `teardown()` fires (skill
+shutdown, server shutdown), all of that skill's supervised tasks are
+cancelled. An in-flight `on_permanent_failure` callback is cancelled
+via the same supervisor — no dangling coroutines, no "skill failed
+during its own shutdown" cascade.
+
 ---
 
 ## How the primitives compose (examples)
@@ -586,7 +684,6 @@ class RemindersSkill:
                 urgency=urgency,
                 dedup_key=f"reminder:{due.id}",
                 expires_after=timedelta(hours=2),
-                tag=f"reminder:{due.kind}",
             )
 ```
 
@@ -758,13 +855,24 @@ Deltas the spec adds to the queued T1.3 plan:
 **Provider suspend/resume contract** (tightened explicitly so Stage 2's
 `InputClaim` doesn't discover gaps late):
 
-- `provider.suspend()`: drops any pending assistant audio (not replayed
-  on resume); blocks further inference until `resume()`; keeps the
-  WebSocket session alive so reconnect cost is avoided. Idempotent —
-  multiple suspend calls are safe.
-- `provider.resume()`: unblocks inference; session ID unchanged;
-  no pending audio replayed (if a skill wants resume-with-context, that's
-  a skill-layer concern). Idempotent — resume without suspend is a no-op.
+- `provider.suspend()`:
+  - Sends `response.cancel` to OpenAI if an inference is in flight (not
+    just dropping client-side — the server-side response is cancelled to
+    avoid paying for tokens the user won't hear).
+  - Drops any pending assistant audio from the client's playback queue
+    (not replayed on resume).
+  - Blocks `send_user_audio` / `commit_and_request_response` /
+    `request_response` / `send_tool_output` / `send_conversation_message`
+    until `resume()` (these raise `ProviderSuspendedError` so skill bugs
+    are loud, not silent).
+  - Keeps the WebSocket session alive so reconnect cost is avoided.
+  - Idempotent — multiple suspend calls are safe.
+- `provider.resume()`:
+  - Unblocks the methods above.
+  - Session ID unchanged.
+  - No pending audio replayed (if a skill wants resume-with-context,
+    that's a skill-layer concern).
+  - Idempotent — resume without suspend is a no-op.
 - Contract is behavioral, not just API-shape. Stage 0 tests assert the
   behavioral properties with a fake provider; Stage 2 tests exercise
   them against the real OpenAI Realtime provider via T2.3's fixture harness.
@@ -782,7 +890,10 @@ Integration tests from T2.3 already shipped cover the refactor.
 ### Stage 1 — `inject_turn` + arbitration + ducking
 
 First user-visible primitive. End of this stage a minimal "proactive
-greetings" toy skill can demo.
+greetings" toy skill can demo. **Effort**: ~1.5 weeks (bumped from 1w
+after Stage-1 scope audit: arbitration + test table + `DuckingController`
+envelope + TTL + dedup + multi-item queue + `wait_outcome` mechanics +
+6+ tests + docs is more work than one-line-of-scope-per-bullet suggests).
 
 **Deliverables**:
 
@@ -810,8 +921,17 @@ greetings" toy skill can demo.
 - `docs/concepts.md`: turn injection entry
 - `docs/skills/README.md`: using `inject_turn` section
 
-**UX validation**: a throwaway `huxley-skill-hello` with a `background_task`
-(Stage 3) — or a manual `inject_turn` trigger for Stage 1 alone — that
+**Stage 1 dev trigger**: since `background_task` (Stage 3) and
+`client_event` (Stage 4) aren't shipped yet, Stage 1 needs its own way
+to fire `inject_turn` for smoke testing. Ship a `dev_event` handler on
+the browser dev client: browser sends `{"type": "dev_event", "kind":
+"inject_turn_fire", "payload": {"urgency": "interrupt", "prompt":
+"..."}}`, server wires this to a dev-only handler on `AudioServer` that
+calls `coordinator.inject_turn_direct(...)`. The handler is gated on
+`HUXLEY_DEBUG=1` so it's inert in prod. Removed when Stage 3 ships and
+a real `background_task` scheduler can fire it.
+
+**UX validation**: browser dev client's new "fire inject_turn" panel
 fires at each urgency tier. Browser smoke confirms: AMBIENT drops when
 playing audiobook; CHIME_DEFER ducks audiobook + chime earcon, speech
 held for next PTT; INTERRUPT preempts audiobook + earcon + speech + book

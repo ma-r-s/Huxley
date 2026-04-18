@@ -120,7 +120,7 @@ Two enums together drive the single arbitration decision of "does this interrupt
 - `Urgency` (on the interrupting side): `AMBIENT` (drop if busy), `CHIME_DEFER` (chime + hold speech), `INTERRUPT` (preempt media), `CRITICAL` (top priority, preempts everything including other media claims). Framework doesn't know what generates each tier; skills pick.
 - `YieldPolicy` (on the current-stream side): `IMMEDIATE` (yields to anything above AMBIENT), `YIELD_ABOVE` (yields to INTERRUPT and above — default), `YIELD_CRITICAL` (yields only to CRITICAL).
 
-The arbitration is a pure function: `preempt iff urgency_rank > yield_threshold_rank`. 16-case truth table; deterministic; testable independently of the coordinator.
+Arbitration is a pure function `(urgency, current_owner_yield) -> Decision` with five outcomes (`SPEAK_NOW`, `PREEMPT`, `DUCK_CHIME`, `HOLD`, `DROP`) across 20 cases (16 busy combinations + 4 idle). `DUCK_CHIME` is a distinct third behavior — the tier earcon plays, the current stream dips but continues, and speech waits for the user's next PTT — that a binary "preempt-or-not" rule would hide.
 
 See [`io-plane.md`](./io-plane.md) for composition examples.
 

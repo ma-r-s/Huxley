@@ -587,7 +587,7 @@ Stage 3 adds the scheduler substrate, at which point reminders skill
 
 ### Stage 1 — `inject_turn` + arbitration + ducking
 
-**Effort**: ~1 week. **Depends on**: T1.3 (`TurnSource.INJECTED`, `SpeakingState` named owners, `MediaTaskManager` without DuckingController stub — DuckingController lives here where it's actually used).
+**Effort**: ~1.5 weeks (bumped from 1w after scope audit). **Depends on**: T1.3 (`TurnSource.INJECTED`, `SpeakingState` named owners, `MediaTaskManager` without DuckingController stub — DuckingController lives here where it's actually used).
 
 **Deliverables**:
 
@@ -666,6 +666,13 @@ early de-risks the remaining stages.
 
 - `docs/skills/README.md` — "using `InputClaim`" section (done in this triage pass, covers both entry points)
 - `docs/architecture.md` — audio routing description
+
+**Stage-2 integration checkpoint — full cascade smoke**: after Stage 2, the
+first two primitives compose. Add one integration test (in the T2.3
+replay harness) that exercises the cascade: simulated `inject_turn`
+fires during an active `InputClaim`, arbitration runs, `on_claim_end`
+triggers, claim-preempted outcome surfaces correctly. Keeps the
+end-to-end path from degrading silently as Stages 3+4 pile on.
 
 ### Stage 3 — Supervised `background_task`
 
