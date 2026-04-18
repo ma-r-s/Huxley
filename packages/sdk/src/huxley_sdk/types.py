@@ -261,9 +261,10 @@ class Skill(Protocol):
     `SkillContext` carrying the skill's logger, storage, persona data dir,
     and per-skill config from `persona.yaml`.
 
-    Skills may optionally implement a `prompt_context(self) -> str` method
-    that injects baseline awareness into the system prompt. It is not part
-    of this Protocol — it is discovered by `getattr` in `SkillRegistry`.
+    Optional methods (`prompt_context`, `setup`, `teardown`) have empty
+    defaults so skill authors only implement what they need. The defaults
+    are inherited by Protocol subtyping — a class with `name`, `tools`,
+    and `handle` is a valid Skill.
     """
 
     @property
@@ -276,10 +277,23 @@ class Skill(Protocol):
         """Handle a tool call. Must return a ToolResult."""
         ...
 
-    async def setup(self, ctx: SkillContext) -> None:
-        """Called once at startup with the skill's context. Optional default no-op."""
-        ...
+    async def setup(self, ctx: SkillContext) -> None:  # pragma: no cover - default no-op
+        """Called once at startup with the skill's context. Default no-op."""
+        return None
 
-    async def teardown(self) -> None:
-        """Called on shutdown. Optional default no-op."""
-        ...
+    async def teardown(self) -> None:  # pragma: no cover - default no-op
+        """Called on shutdown. Default no-op."""
+        return None
+
+    def prompt_context(self) -> str:  # pragma: no cover - default empty
+        """Text injected into the system prompt at session connect time.
+
+        Skills override this to give the LLM baseline awareness without
+        forcing a tool call (e.g. the audiobooks skill lists its catalog
+        so the model can resolve title fuzzy-matches in one shot).
+
+        Default: empty string — no contribution. The framework filters
+        empty contributions, so subclasses that have nothing to add do
+        not need to override.
+        """
+        return ""

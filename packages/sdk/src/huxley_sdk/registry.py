@@ -69,13 +69,19 @@ class SkillRegistry:
     def get_prompt_context(self) -> str:
         """Collect optional prompt context contributed by registered skills.
 
-        Any skill that defines `prompt_context(self) -> str` can inject
-        baseline awareness into the system prompt at session-connect time.
-        This is how the audiobooks skill tells the LLM what's in the library
-        without the LLM having to call `search_audiobooks` first.
+        `prompt_context()` is part of the `Skill` Protocol with a
+        default empty implementation (T3 #96). Skills override it to
+        inject baseline awareness into the system prompt at
+        session-connect time — e.g. the audiobooks skill lists its
+        catalog so the model can resolve title fuzzy-matches in one
+        shot. Empty contributions are filtered, so skills that have
+        nothing to add inherit the default and pay no cost.
 
-        The method is not part of the `Skill` protocol — it's optional.
-        Skills that don't implement it contribute nothing.
+        Falls back to `getattr` for backward compatibility with skills
+        from before this method was promoted to the Protocol — they may
+        still expose `prompt_context` without inheriting the new
+        default. Remove the fallback once all first-party skills are
+        confirmed to use the new shape.
         """
         parts: list[str] = []
         for skill in self._skills.values():

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import MagicMock
 
 import pytest
@@ -123,3 +123,77 @@ class TestLifecycle:
         registry.register(skill)
         await registry.teardown_all()
         assert skill.teardown_called
+
+
+class TestPromptContext:
+    """T3 #96 — prompt_context() is in the Skill Protocol with empty default."""
+
+    def test_skill_without_prompt_context_contributes_nothing(self) -> None:
+        # FakeSkill doesn't define prompt_context; registry returns "".
+        registry = SkillRegistry()
+        registry.register(FakeSkill(name="quiet"))
+        assert registry.get_prompt_context() == ""
+
+    def test_skill_with_prompt_context_contributes_text(self) -> None:
+        class TalkativeSkill:
+            name = "loud"
+            tools: ClassVar[list[ToolDefinition]] = []
+
+            async def setup(self, _ctx: Any) -> None: ...
+            async def teardown(self) -> None: ...
+            async def handle(self, _name: str, _args: dict[str, Any]) -> ToolResult:
+                return ToolResult(output="{}")
+
+            def prompt_context(self) -> str:
+                return "I have things to say"
+
+        registry = SkillRegistry()
+        registry.register(TalkativeSkill())
+        assert registry.get_prompt_context() == "I have things to say"
+
+    def test_multiple_contributions_joined_with_blank_line(self) -> None:
+        class A:
+            name = "a"
+            tools: ClassVar[list[ToolDefinition]] = []
+
+            async def setup(self, _ctx: Any) -> None: ...
+            async def teardown(self) -> None: ...
+            async def handle(self, _name: str, _args: dict[str, Any]) -> ToolResult:
+                return ToolResult(output="{}")
+
+            def prompt_context(self) -> str:
+                return "first"
+
+        class B:
+            name = "b"
+            tools: ClassVar[list[ToolDefinition]] = []
+
+            async def setup(self, _ctx: Any) -> None: ...
+            async def teardown(self) -> None: ...
+            async def handle(self, _name: str, _args: dict[str, Any]) -> ToolResult:
+                return ToolResult(output="{}")
+
+            def prompt_context(self) -> str:
+                return "second"
+
+        registry = SkillRegistry()
+        registry.register(A())
+        registry.register(B())
+        assert registry.get_prompt_context() == "first\n\nsecond"
+
+    def test_empty_string_contribution_is_filtered(self) -> None:
+        class Silent:
+            name = "silent"
+            tools: ClassVar[list[ToolDefinition]] = []
+
+            async def setup(self, _ctx: Any) -> None: ...
+            async def teardown(self) -> None: ...
+            async def handle(self, _name: str, _args: dict[str, Any]) -> ToolResult:
+                return ToolResult(output="{}")
+
+            def prompt_context(self) -> str:
+                return ""
+
+        registry = SkillRegistry()
+        registry.register(Silent())
+        assert registry.get_prompt_context() == ""
