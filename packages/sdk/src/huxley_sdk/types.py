@@ -134,6 +134,26 @@ class SetVolume(SideEffect):
 
 
 @dataclass(frozen=True, slots=True)
+class PlaySound(SideEffect):
+    """Side effect: play a short pre-loaded PCM clip just before the model speaks.
+
+    For info tools that want a brief sonic cue marking "I'm responding now"
+    (e.g. a news-intro chime). The coordinator queues the bytes immediately
+    after firing `request_response()` for the info tool's follow-up round, so
+    they reach the WebSocket ahead of the model's audio deltas — the user
+    hears: chime → model voice.
+
+    Unlike `AudioStream`, this is a one-shot clip with no completion-prompt or
+    silence-buffer mechanics. Mutually exclusive with `AudioStream` on a given
+    `ToolResult` (`side_effect` is a single field). Skipped silently when the
+    response is cancelled (PTT race).
+    """
+
+    kind: ClassVar[str] = "play_sound"
+    pcm: bytes  # raw PCM16 24kHz mono
+
+
+@dataclass(frozen=True, slots=True)
 class ToolResult:
     """Result of a skill handling a tool call.
 

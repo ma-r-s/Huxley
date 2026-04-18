@@ -33,7 +33,7 @@ from uuid import UUID, uuid4
 
 import structlog
 
-from huxley_sdk import AudioStream, CancelMedia, SetVolume
+from huxley_sdk import AudioStream, CancelMedia, PlaySound, SetVolume
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -70,6 +70,11 @@ class Turn:
     user_audio_frames: int = 0
     pending_audio_streams: list[AudioStream] = field(default_factory=list)
     needs_follow_up: bool = False
+    # Latched PlaySound from an info-tool call. Sent to the audio channel
+    # right after request_response() so the chime queues ahead of the model's
+    # response audio (FIFO on the WebSocket). Latest tool wins — a new
+    # PlaySound on a chained tool call replaces an earlier one.
+    pending_play_sound: PlaySound | None = None
     # Summary tracking — emitted as coord.turn_summary at end-of-turn.
     started_at: float = field(default_factory=lambda: time.monotonic())
     tool_calls: int = 0
@@ -291,6 +296,12 @@ class TurnCoordinator:
             # follow-up response.
             await self._send_set_volume(result.side_effect.level)
             self.current_turn.needs_follow_up = True
+        elif isinstance(result.side_effect, PlaySound):
+            # Latch the chime; sent to the audio channel right after
+            # request_response() so it queues ahead of model audio (FIFO).
+            # Latest tool wins — overwrites any earlier pending PlaySound.
+            self.current_turn.pending_play_sound = result.side_effect
+            self.current_turn.needs_follow_up = True
         else:
             # Tool calls without a side-effect that is dispatched serially.
             # If a future persona needs parallel dispatch (multiple I/O-heavy
@@ -319,6 +330,17 @@ class TurnCoordinator:
             if self._provider.is_connected:
                 self.response_cancelled = False
                 await self._provider.request_response()
+                # Latched PlaySound (e.g. news intro chime): send right after
+                # request_response so the chime hits the WebSocket ahead of the
+                # model's audio deltas (FIFO). Skipped if PTT raced and set
+                # response_cancelled while we were waiting.
+                pending_sound = self.current_turn.pending_play_sound
+                if pending_sound is not None and not self.response_cancelled:
+                    self.current_turn.pending_play_sound = None
+                    await self._send_audio(pending_sound.pcm)
+                    await self._log.ainfo(
+                        "coord.play_sound_dispatched", bytes=len(pending_sound.pcm)
+                    )
         else:
             await self._apply_side_effects()
 
@@ -374,9 +396,10 @@ class TurnCoordinator:
 
         # 1. Drop flag FIRST
         self.response_cancelled = True
-        # 2. Drop pending audio streams
+        # 2. Drop pending audio streams + any latched PlaySound chime
         if self.current_turn is not None:
             self.current_turn.pending_audio_streams.clear()
+            self.current_turn.pending_play_sound = None
         # 3. Flush client-side audio queue + clear model-speaking state
         await self._send_audio_clear()
         if self._model_speaking:

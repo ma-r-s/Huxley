@@ -24,7 +24,7 @@ import pytest
 
 from huxley.turn.coordinator import Turn, TurnCoordinator, TurnState
 from huxley.voice.stub import StubVoiceProvider
-from huxley_sdk import AudioStream, ToolResult
+from huxley_sdk import AudioStream, PlaySound, ToolResult
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
@@ -908,6 +908,120 @@ class TestCompletionSilenceAfterRequest:
 
         # Only the book chunk should land on send_audio — no silence injected
         assert mocks["send_audio"].await_count == 1
+
+
+class TestPlaySound:
+    """PlaySound queues a chime ahead of the model's response audio (FIFO on
+    the WebSocket). Latest pending sound wins; cleared on interrupt."""
+
+    async def test_play_sound_is_latched_on_tool_call(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+    ) -> None:
+        chime = b"chime_pcm"
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output='{"items": []}', side_effect=PlaySound(pcm=chime)
+        )
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("c1", "get_news", {})
+
+        assert coordinator.current_turn is not None
+        assert coordinator.current_turn.pending_play_sound is not None
+        assert coordinator.current_turn.pending_play_sound.pcm == chime
+        assert coordinator.current_turn.needs_follow_up is True
+
+    async def test_play_sound_dispatched_after_request_response(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        """The chime PCM hits send_audio AFTER request_response is fired."""
+        chime = b"chime_pcm"
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output='{"items": []}', side_effect=PlaySound(pcm=chime)
+        )
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("c1", "get_news", {})
+        await coordinator.on_response_done()
+
+        # Provider got request_response (the follow-up round)
+        assert ("request_response",) in provider.sent
+        # And then send_audio received the chime bytes
+        assert mocks["send_audio"].await_args_list[-1].args == (chime,)
+        # Latched chime cleared
+        assert coordinator.current_turn is not None
+        assert coordinator.current_turn.pending_play_sound is None
+
+    async def test_play_sound_skipped_when_response_cancelled(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+    ) -> None:
+        """If response_cancelled flips between latch and dispatch, no chime."""
+        chime = b"chime_pcm"
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output='{"items": []}', side_effect=PlaySound(pcm=chime)
+        )
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("c1", "get_news", {})
+        # Simulate PTT race: cancel between the latch and on_response_done
+        coordinator.response_cancelled = True
+
+        # on_response_done early-returns when response_cancelled is True, so
+        # the chime can't fire through that path. (The fix at line ~330 is
+        # the safety net for the race that survives the early-return.)
+        await coordinator.on_response_done()
+
+        # send_audio was NOT called with the chime
+        chime_calls = [c for c in mocks["send_audio"].await_args_list if c.args == (chime,)]
+        assert chime_calls == []
+
+    async def test_play_sound_cleared_on_interrupt(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+    ) -> None:
+        chime = b"chime_pcm"
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output='{"items": []}', side_effect=PlaySound(pcm=chime)
+        )
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("c1", "get_news", {})
+        assert coordinator.current_turn is not None
+        assert coordinator.current_turn.pending_play_sound is not None
+
+        await coordinator.interrupt()
+
+        # interrupt() drops the turn; verify if a new turn is started, no
+        # stale chime carries over.
+        assert coordinator.current_turn is None
+
+    async def test_latest_play_sound_overwrites_earlier(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+    ) -> None:
+        """Two chained tool calls each emitting PlaySound: latest wins."""
+        first = b"first_chime"
+        second = b"second_chime"
+        mocks["dispatch_tool"].side_effect = [
+            ToolResult(output="{}", side_effect=PlaySound(pcm=first)),
+            ToolResult(output="{}", side_effect=PlaySound(pcm=second)),
+        ]
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("c1", "get_weather", {})
+        await coordinator.on_tool_call("c2", "get_news", {})
+
+        assert coordinator.current_turn is not None
+        assert coordinator.current_turn.pending_play_sound is not None
+        assert coordinator.current_turn.pending_play_sound.pcm == second
 
 
 class TestResponseCancelledFlag:

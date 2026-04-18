@@ -32,6 +32,7 @@ from huxley_sdk import (
     ToolDefinition,
     ToolResult,
 )
+from huxley_sdk.audio import load_pcm_palette
 from huxley_skill_audiobooks.player import (
     BYTES_PER_SECOND,
     AudiobookPlayer,
@@ -88,38 +89,6 @@ def _fuzzy_score(query: str, candidate: str) -> float:
 
 
 _KNOWN_SOUND_ROLES = ("book_start", "book_end")
-
-
-def _load_sound_palette(directory: Path) -> dict[str, bytes]:
-    """Load known-role WAVs from directory; return raw PCM16 24kHz mono bytes per name.
-
-    Only loads files matching the role names the skill actually uses
-    (`book_start.wav`, `book_end.wav`). Other WAVs in the directory are
-    ignored so the catalog log isn't polluted and memory isn't wasted on
-    audition leftovers. Wrong-format files (non-mono / non-24kHz / non-PCM16)
-    are skipped silently — they'd play as garbage through the 24kHz channel
-    anyway. Uses `wave.open()` so non-standard WAV headers (LIST/INFO chunks)
-    still parse correctly.
-    """
-    import wave
-    from pathlib import Path as _Path
-
-    palette: dict[str, bytes] = {}
-    d = _Path(directory)
-    if not d.exists():
-        return palette
-    for role in _KNOWN_SOUND_ROLES:
-        wav = d / f"{role}.wav"
-        if not wav.exists():
-            continue
-        try:
-            with wave.open(str(wav), "rb") as wf:
-                if wf.getnchannels() != 1 or wf.getsampwidth() != 2 or wf.getframerate() != 24000:
-                    continue
-                palette[role] = wf.readframes(wf.getnframes())
-        except (wave.Error, OSError):
-            continue
-    return palette
 
 
 class AudiobooksSkill:
@@ -338,7 +307,7 @@ class AudiobooksSkill:
             if Path(sounds_raw).is_absolute()
             else (ctx.persona_data_dir / sounds_raw)
         )
-        self._sounds = _load_sound_palette(sounds_dir) if sounds_enabled else {}
+        self._sounds = load_pcm_palette(sounds_dir, _KNOWN_SOUND_ROLES) if sounds_enabled else {}
         self._silence_ms = int(cfg.get("silence_ms", 500)) if sounds_enabled else 0
         self._on_complete_prompt = str(cfg.get("on_complete_prompt", _DEFAULT_ON_COMPLETE_PROMPT))
 
