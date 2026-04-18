@@ -60,41 +60,46 @@ The AbuelOS persona sound palette lives in `personas/abuelos/sounds/`. Sounds ar
 
 ### Catalog: extracted BIOS sounds
 
-Extracted from `All Wii BIOS Sounds.aiff` (83.5s compilation) using silence detection (threshold: -40dB, min gap: 0.5s). All files at `personas/abuelos/sounds/raw/`.
+Extracted from `All Wii BIOS Sounds.aiff` (83.5s compilation) by `scripts/extract_sounds.py`. Pipeline:
 
-| File                   | Raw dur | Peak     | Notes                                      |
-| ---------------------- | ------- | -------- | ------------------------------------------ |
-| s00_short_open.wav     | 0.91s   | -19.7 dB | quiet blip, likely pre-roll                |
-| s01_long_chime.wav     | 2.66s   | -5.6 dB  | sustained chime — book_start candidate     |
-| s02_chime.wav          | 1.94s   | -5.7 dB  | chime — **book_start candidate**           |
-| s03_long_sequence.wav  | 3.53s   | -3.1 dB  | long sequence — too long for earcon        |
-| s04_sequence.wav       | 2.43s   | -1.1 dB  | sequence — border-line long                |
-| s05_long_sequence2.wav | 3.70s   | -2.5 dB  | long — too long                            |
-| s06_short_click.wav    | 0.49s   | -3.5 dB  | short click — error/notification candidate |
-| s07_click.wav          | 0.73s   | -4.3 dB  | click — navigation                         |
-| s08_chime.wav          | 1.25s   | -2.3 dB  | chime — **book_end candidate**             |
-| s09_chime.wav          | 1.49s   | -2.9 dB  | chime — book_end candidate                 |
-| s10_short.wav          | 0.84s   | -1.5 dB  | short                                      |
-| s11_long_music.wav     | 4.76s   | -1.8 dB  | full music segment — too long              |
-| s12_short.wav          | 0.83s   | -3.2 dB  | short                                      |
-| s13_short.wav          | 0.60s   | -7.7 dB  | short                                      |
-| s14_short.wav          | 0.72s   | -17.8 dB | very quiet — likely filler                 |
-| s15_short.wav          | 0.81s   | -8.1 dB  | short                                      |
-| s16_short.wav          | 0.79s   | -2.9 dB  | short                                      |
-| s17_short.wav          | 0.68s   | -4.8 dB  | short                                      |
-| s18_short.wav          | 0.64s   | -7.7 dB  | short                                      |
-| s19_tiny.wav           | 0.38s   | -4.4 dB  | tiny                                       |
-| s20_short.wav          | 0.52s   | -3.0 dB  | short                                      |
-| s21_chime.wav          | 1.03s   | -16.4 dB | quiet — likely filler                      |
+1. `silencedetect` at `-55dB` (catches the actual silence floor — `-40dB` cut reverb tails mid-decay) with min gap `0.5s` to find boundaries between sounds.
+2. Each non-silent segment + `0.5s` of tail padding (capped at half the following gap so it can't bleed into the next sound's onset).
+3. Convert to PCM16 / 24kHz / mono. **No level normalization** — earlier `dynaudnorm` pass artificially boosted what little reverb survived the aggressive cut.
 
-**Selection for v1 production (subject to listening review):**
+To re-run: `python3 scripts/extract_sounds.py`. Files land in `personas/abuelos/sounds/raw/` (gitignored). Sequential names (`s00.wav`, `s01.wav`, …); no semantic naming until you've listened.
 
-| Role         | Candidate         | Rationale                            |
-| ------------ | ----------------- | ------------------------------------ |
-| `book_start` | s02_chime (1.94s) | Good duration; -5.7dB — not too loud |
-| `book_end`   | s08_chime (1.25s) | Conclusive feel; slightly louder     |
+| File   | Src window   | Out dur | Peak     |
+| ------ | ------------ | ------- | -------- |
+| s00    | 0.00–1.94s   | 1.94s   | -19.7 dB |
+| s01    | 3.01–6.84s   | 3.83s   | -5.9 dB  |
+| s02    | 7.79–10.65s  | 2.86s   | -8.0 dB  |
+| s03    | 11.07–18.32s | 7.24s   | -4.6 dB  |
+| s04    | 18.71–24.00s | 5.28s   | -6.0 dB  |
+| s05    | 24.39–25.57s | 1.19s   | -7.7 dB  |
+| s06    | 25.96–28.10s | 2.14s   | -5.8 dB  |
+| s07    | 28.54–30.69s | 2.15s   | -6.3 dB  |
+| s08    | 31.17–32.49s | 1.31s   | -4.8 dB  |
+| s09    | 32.85–38.33s | 5.49s   | -4.9 dB  |
+| s10–11 | 38.80–40.04s | <1s     | quiet    |
+| s12    | 40.41–42.10s | 1.68s   | -6.4 dB  |
+| s13–17 | 42.63–48.62s | <1.5s   | varied   |
+| s18    | 49.32–50.64s | 1.32s   | -6.4 dB  |
+| s19    | 51.26–52.95s | 1.69s   | -8.1 dB  |
+| s20    | 53.66–55.04s | 1.38s   | -10.8 dB |
+| s21–33 | 55.60–75.19s | <1.1s   | varied   |
+| s34    | 76.54–78.08s | 1.54s   | -17.7 dB |
+| s35–36 | 79.26–81.51s | ~0.5s   | varied   |
 
-To finalize: listen to each candidate in the `raw/` directory and copy the winners to `sounds/book_start.wav` and `sounds/book_end.wav`.
+37 segments total. `extract_sounds.py` prints the full per-file table on each run (it's auto-detected, so the source-of-truth catalog is the script's stdout, not this doc).
+
+**To finalize**: `afplay personas/abuelos/sounds/raw/*.wav` to audition. The Wii startup chime is most likely in the early sounds (s01 through s09 range — durations 1.3–5.5s with -4 to -8dB peaks fit a "welcome" chime profile). Pick two and copy:
+
+```bash
+cp personas/abuelos/sounds/raw/sNN.wav personas/abuelos/sounds/book_start.wav
+cp personas/abuelos/sounds/raw/sMM.wav personas/abuelos/sounds/book_end.wav
+```
+
+Skill picks them up on next server start.
 
 ### Adding silence padding
 
@@ -368,12 +373,14 @@ These are client changes only. They do not affect the server or the WebSocket pr
 
 ### Stage A — Extract and catalog sounds ⚠️ partial
 
-- [x] Run silence detection on `All Wii BIOS Sounds.aiff`
-- [x] Extract 22 candidate segments as PCM16 24kHz WAV files (`scripts/extract_sounds.py`)
-- [x] Build duration + peak level catalog (this document)
-- [ ] Listen to candidates and copy winners to `personas/abuelos/sounds/{book_start,book_end}.wav`. Until done, the skill loads an empty palette and runs without earcons (warning logged at startup). Best candidates by length+peak: `s02_chime.wav` (1.94s, -5.7dB) for book_start, `s08_chime.wav` (1.25s, -2.3dB) for book_end.
+- [x] `scripts/extract_sounds.py` auto-detects silence boundaries at `-55dB` (with `0.5s` minimum gap) and extracts each non-silent segment + `0.5s` of tail padding so reverb decays naturally
+- [x] 37 segments produced as PCM16 / 24kHz / mono WAV (`s00.wav` … `s36.wav`)
+- [x] Catalog table + per-file durations/peak levels generated (this document; full table printed by the script on each run)
+- [ ] Listen to candidates and copy winners to `personas/abuelos/sounds/{book_start,book_end}.wav`. Until done, the skill loads an empty palette and runs without earcons (warning logged at startup). Sounds in the s01–s09 range are the most likely Wii startup-chime candidates (longer durations, healthy peak levels).
 
 **Caveat**: candidates derive from copyrighted Nintendo audio. Personal-use only — replace with CC0 / generated chimes before distributing the AbuelOS persona publicly.
+
+**Earlier extraction bug (fixed 2026-04-17)**: the first pass used `silencedetect` at `-40dB` with no tail padding + `dynaudnorm` post-processing. This cut reverb tails mid-decay (chimes sounded clipped/dry), then artificially boosted what little tail survived. Re-extraction at `-55dB` + 500ms tail pad + no normalization gives natural decays. If you previously tried these sounds, re-run `extract_sounds.py` to get the fixed versions.
 
 ### Stage B — SDK + coordinator wiring ✅
 
@@ -415,8 +422,8 @@ These are client changes only. They do not affect the server or the WebSocket pr
 Quick sanity check for any `.wav` file in the sounds directory:
 
 ```bash
-# Play through system speaker (macOS)
-afplay personas/abuelos/sounds/raw/s02_chime.wav
+# Play through system speaker (macOS) — audition all extracted candidates
+afplay personas/abuelos/sounds/raw/s01.wav
 
 # Convert to PCM bytes and check size
 ffprobe -v error -show_entries format=duration \

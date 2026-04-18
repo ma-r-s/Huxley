@@ -1,10 +1,24 @@
 #!/usr/bin/env python3
 """Extract individual sounds from the Wii BIOS sounds AIFF compilation.
 
-Parses silence boundaries, identifies non-silent segments, extracts each
-as a stripped/normalized PCM16 24kHz mono WAV file.
+Pipeline:
+1. Run ffmpeg silencedetect to find silence boundaries (gaps between sounds).
+2. Compute non-silent segments + add tail padding so reverb decays naturally.
+3. Extract each as a PCM16 24kHz mono WAV. No level normalization (keep
+   original dynamics; reverb tails were getting clipped + boosted before).
+
+Tunable knobs:
+- SILENCE_DB: how quiet counts as silence. Lower = more reverb tail captured.
+  -55dB catches the natural decay floor; -40dB cuts decays mid-way.
+- MIN_GAP: minimum silence duration to count as a sound boundary. Anything
+  shorter is treated as part of the same sound.
+- TAIL_PAD: extra audio appended past each detected silence_start so reverb
+  trails don't get cut. Capped at half the following gap so it can't bleed
+  into the next sound.
+- MIN_SOUND_LEN: skip extracted segments shorter than this (artifacts).
 """
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -13,38 +27,67 @@ SOURCE = Path(
     "/Users/mario/iCloud Drive (Archive)/GarageBand for iOS/My Song.band/Media/All Wii BIOS Sounds.aiff"
 )
 OUT_DIR = Path("/Users/mario/Projects/Personal/Code/Huxley/personas/abuelos/sounds/raw")
-TOTAL_DURATION = 83.50
 
-# Segments derived from silencedetect -n=-40dB:d=0.5
-# Format: (start, end, label_hint)
-# Tiny segments (<0.3s) excluded; very long ones flagged.
-SEGMENTS = [
-    (0.000, 0.909, "s00_short_open"),
-    (3.015, 5.676, "s01_long_chime"),
-    (7.792, 9.731, "s02_chime"),
-    (11.075, 14.604, "s03_long_sequence"),
-    (15.304, 17.738, "s04_sequence"),
-    (18.723, 22.425, "s05_long_sequence2"),
-    (23.003, 23.494, "s06_short_click"),
-    (24.387, 25.121, "s07_click"),
-    (25.957, 27.202, "s08_chime"),
-    (28.542, 30.029, "s09_chime"),
-    (31.173, 32.013, "s10_short"),
-    (32.909, 37.666, "s11_long_music"),
-    (40.414, 41.245, "s12_short"),
-    (42.629, 43.232, "s13_short"),
-    (43.830, 44.550, "s14_short"),
-    (45.492, 46.297, "s15_short"),
-    (49.323, 50.116, "s16_short"),
-    (51.261, 51.943, "s17_short"),
-    (53.662, 54.306, "s18_short"),
-    (55.615, 55.998, "s19_tiny"),
-    (64.479, 65.000, "s20_short"),
-    (76.542, 77.575, "s21_chime"),
-]
+SILENCE_DB = "-55dB"  # was -40dB; that cut reverb tails mid-decay
+MIN_GAP = 0.5  # seconds; silences shorter than this don't split sounds
+TAIL_PAD = 0.5  # seconds; how much reverb to append past the silence start
+MIN_SOUND_LEN = 0.3  # seconds; skip artifacts
 
 
-def extract(start: float, end: float, name: str) -> None:
+def detect_silences(source: Path) -> list[tuple[float, float]]:
+    """Return list of (silence_start, silence_end) tuples."""
+    cmd = [
+        "ffmpeg",
+        "-i",
+        str(source),
+        "-af",
+        f"silencedetect=n={SILENCE_DB}:d={MIN_GAP}",
+        "-f",
+        "null",
+        "-",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    starts = [float(m) for m in re.findall(r"silence_start: ([\d.]+)", result.stderr)]
+    ends = [float(m) for m in re.findall(r"silence_end: ([\d.]+)", result.stderr)]
+    # silence_start without a matching silence_end means the file ended in silence
+    return list(zip(starts, ends, strict=False))
+
+
+def get_duration(source: Path) -> float:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(source),
+    ]
+    return float(subprocess.run(cmd, capture_output=True, text=True).stdout.strip())
+
+
+def compute_segments(
+    silences: list[tuple[float, float]], total: float
+) -> list[tuple[float, float]]:
+    """Convert silence boundaries into (start, end) sound segments with tail pad."""
+    segments: list[tuple[float, float]] = []
+    cursor = 0.0
+    for sil_start, sil_end in silences:
+        if sil_start > cursor:
+            # Cap the tail pad at half the silence gap so it can't bleed into
+            # the next sound's onset.
+            gap = sil_end - sil_start
+            tail = min(TAIL_PAD, gap / 2)
+            segments.append((cursor, min(sil_start + tail, sil_end)))
+        cursor = sil_end
+    if cursor < total:
+        segments.append((cursor, total))
+    return [s for s in segments if (s[1] - s[0]) >= MIN_SOUND_LEN]
+
+
+def extract(start: float, end: float, name: str) -> tuple[float, str]:
+    """Run ffmpeg to extract one segment. Returns (actual_duration_seconds, peak_db_str)."""
     duration = end - start
     out = OUT_DIR / f"{name}.wav"
     cmd = [
@@ -56,9 +99,6 @@ def extract(start: float, end: float, name: str) -> None:
         str(start),
         "-t",
         str(duration),
-        # Convert to PCM16 24kHz mono; silence boundaries already tight from analysis
-        "-af",
-        "dynaudnorm=p=0.9:r=0.5",
         "-ar",
         "24000",
         "-ac",
@@ -70,8 +110,7 @@ def extract(start: float, end: float, name: str) -> None:
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"  ERROR: {result.stderr[-200:]}", file=sys.stderr)
-        return
-    # Report actual duration after processing
+        return (-1, "?")
     probe = subprocess.run(
         [
             "ffprobe",
@@ -86,20 +125,38 @@ def extract(start: float, end: float, name: str) -> None:
         capture_output=True,
         text=True,
     )
-    raw_dur = probe.stdout.strip()
     try:
-        actual = float(raw_dur) if probe.returncode == 0 else -1
+        actual = float(probe.stdout.strip())
     except ValueError:
         actual = -1
-    print(f"  {name}.wav  raw={duration:.2f}s  stripped={actual:.2f}s")
+    vol = subprocess.run(
+        ["ffmpeg", "-i", str(out), "-af", "volumedetect", "-f", "null", "-"],
+        capture_output=True,
+        text=True,
+    )
+    peak_match = re.search(r"max_volume: ([-\d.]+)", vol.stderr)
+    peak = peak_match.group(1) if peak_match else "?"
+    return (actual, peak)
 
 
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"Extracting {len(SEGMENTS)} segments to {OUT_DIR}\n")
-    for start, end, name in SEGMENTS:
-        print(f"[{start:.2f}-{end:.2f}] {name}")
-        extract(start, end, name)
+    # Wipe stale extractions from previous runs (different threshold/pad).
+    for stale in OUT_DIR.glob("*.wav"):
+        stale.unlink()
+
+    total = get_duration(SOURCE)
+    silences = detect_silences(SOURCE)
+    segments = compute_segments(silences, total)
+    print(
+        f"Source: {total:.2f}s, "
+        f"silences detected at {SILENCE_DB} (min gap {MIN_GAP}s, tail pad {TAIL_PAD}s)"
+    )
+    print(f"Extracting {len(segments)} segments to {OUT_DIR}\n")
+    for i, (start, end) in enumerate(segments):
+        name = f"s{i:02d}"
+        dur, peak = extract(start, end, name)
+        print(f"  {name}.wav  src=[{start:6.2f}-{end:6.2f}]  out={dur:.2f}s  peak={peak}dB")
     print("\nDone.")
 
 
