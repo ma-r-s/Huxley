@@ -207,3 +207,101 @@ The Python namespace (`abuel_os/`) and repo path (`AbuelOS/`) are renamed as par
 - **Context continuity wins over cost.** The model knows what book is playing, what the user asked for five minutes ago, and the flow of the conversation. Proactive disconnect would force the model to re-orient (`get_progress` / `list_in_progress`) on every resume. For a blind elderly user, that's a noticeably dumber assistant with zero meaningful cost savings.
 - **`conversation_max_minutes` in `Settings` still forces a Huxley-side disconnect every N minutes** — but that path already calls `save_summary=True` and auto-reconnects. Raise the knob only if summary-on-reconnect ever proves insufficient.
 - **Revisit if**: a future cost audit shows idle sessions aren't truly $0 (OpenAI could change this), OR a persona ships with a huge prompt whose per-reconnect bill matters even when no Response is created.
+
+---
+
+## 2026-04-18 — Pivot I/O-plane coordination from arbitration to AVS focus-management
+
+**Context**: T1.2's I/O-plane spec (`docs/io-plane.md`) proposed coordination via
+an arbitration model: each speaker claim carries an `Urgency` (AMBIENT /
+CHIME_DEFER / INTERRUPT / CRITICAL), each current stream owner carries a
+`YieldPolicy` (IMMEDIATE / YIELD_ABOVE / YIELD_CRITICAL), and a pure
+`arbitrate(urgency, yield_policy) → Decision` function over 20 cases picked one
+of five outcomes (SPEAK_NOW / PREEMPT / DUCK_CHIME / HOLD / DROP). T1.3 shipped
+the scaffolding for this: `MediaTaskManager` (task slot + `decide()` hook),
+`arbitrate()` pure function, `DuckingController` stub, `Urgency` + `YieldPolicy`
+enums in the SDK. T1.4 Stage 1 was planned to wire it: `inject_turn` → arbitrate
+→ preempt/duck, with an `InjectedTurnHandle` and a TTL/dedup queue on top.
+
+Starting T1.4 Stage 1 design, the tuple-based model started feeling like a
+coarser re-expression of what is actually a stacked-claims-per-resource problem:
+
+- Every "channel" (dialog, calls, alerts, content) is really just a named slot
+  with its own priority. Arbitration between two claims on the same channel
+  (e.g., two media streams) is different from arbitration across channels —
+  the tuple form couldn't express this without adding a channel parameter
+  everywhere.
+- "Patience" for being displaced — the AVS concept where a BACKGROUND Activity
+  gets N seconds to finish its sentence before being dropped — has no clean
+  place in the tuple model. It ended up as an ad-hoc TTL queue in Stage 1's
+  plan, which is exactly the thing AVS designed `FocusState.BACKGROUND +
+MixingBehavior.MUST_PAUSE + patience timer` to replace.
+- Ducking is orthogonal to preemption: the same "higher-priority thing wants
+  the speaker" event can mean "duck the music under the alert" OR "preempt
+  the music entirely" OR "hold the alert for a convenient moment," depending
+  on the two Activities' `ContentType` (MIXABLE / NONMIXABLE). The tuple model
+  conflated these into one `Decision` enum.
+- Amazon's Alexa Voice Service (AVS) solved this shape 10 years ago with a
+  channel-oriented focus-management model. The vocabulary transfers cleanly
+  to Huxley's single-speaker case.
+
+**Decision**: Pivot the coordination substrate from arbitration to AVS-style
+focus management, **mid-Stage-1**. Replace `Urgency` / `YieldPolicy` /
+`arbitrate()` / `Decision` / `MediaTaskManager` with:
+
+- `Channel` — `DIALOG` (100), `COMMS` (150), `ALERT` (200), `CONTENT` (300).
+  Lower number = higher priority (AVS convention).
+- `FocusState` — `FOREGROUND`, `BACKGROUND`, `NONE`. Verbatim AVS.
+- `MixingBehavior` — `PRIMARY`, `MAY_DUCK`, `MUST_PAUSE`, `MUST_STOP`.
+  Verbatim AVS.
+- `ContentType` — `MIXABLE` / `NONMIXABLE`. Determines background behavior
+  (MIXABLE → MAY_DUCK; NONMIXABLE → MUST_PAUSE).
+- `Activity(channel, interface_name, content_type, observer, patience)` —
+  one claim, dedup'd by `(channel, interface_name)`.
+- `FocusManager` — single-task actor draining a mailbox of `Acquire / Release /
+PatienceExpired / StopForeground / StopAll` events. Serialized mutation,
+  races impossible by construction.
+- `ChannelObserver` protocol — `async def on_focus_changed(new_focus, behavior)`.
+  Observers are thin adapters owned by the coordinator or skills;
+  `DialogObserver` fires `on_stop` on NONE; `ContentStreamObserver` owns the
+  stream pump task.
+
+One deliberate AVS flip: **patience belongs to the incumbent** (being-displaced
+Activity), not the acquiring one. Documented in `io-plane.md#patience-attribution`.
+
+**Consequences**:
+
+- **`Urgency` / `YieldPolicy` / `arbitrate()` / `Decision` / `MediaTaskManager` /
+  `DuckingController` are deleted** — ~500 LOC removed across code + tests.
+  Three commits: `1f9b232` (FocusManager + vocabulary), `a1afabd` (observers),
+  `31a18cf` (coordinator wiring + scaffolding deletion).
+- **Stage 1 is partially done**: the substrate ships; `inject_turn` itself and
+  its skill-facing surface are not wired. Stages 2-4 (`InputClaim`,
+  `background_task`, `ClientEvent`) are orthogonal to the coordination
+  substrate and unaffected by the pivot.
+- **`SpeakingState` stays**. It tracks the named-owner model-speech flag —
+  distinct concern from focus-channel arbitration, and the FocusManager's
+  actor loop can't expose the synchronous `is_speaking` check the coordinator
+  needs. A later follow-up could fold it into a `DialogObserver`-driven flag
+  once the trade-off is clearly worth the mechanical complexity.
+- **`docs/io-plane.md` is partially superseded**. The primitives' shapes
+  (AudioStream, inject_turn, InputClaim, ClientEvent, background_task) still
+  describe the right thing, but the coordination vocabulary (Urgency /
+  YieldPolicy / arbitrate) is gone. The doc has a banner marking it as
+  pre-pivot; full rewrite queued until T1.4 Stage 2 direction is locked.
+- **Ducking is not yet implemented**. `ContentStreamObserver` logs
+  `focus.duck_not_implemented` on MAY_DUCK and falls back to pause per AVS
+  contract. Server-side PCM gain envelope is a concrete future deliverable
+  — still scoped, just under a different module (likely as part of
+  `ContentStreamObserver`'s BACKGROUND handler, not a separate
+  `DuckingController`).
+- **Skill-facing docs hold**. `skills/README.md`'s forward-looking sections
+  (`inject_turn`, `InputClaim`, `background_task`, `subscribe_client_event`)
+  are bannered as "planned; vocabulary may change post-pivot" until Stage 2
+  lands. Tradeoff: readers get a preview of the future surface, with honest
+  acknowledgement that the names on enums may shift.
+- **Revisit if**: the focus-management model fails to compose naturally when
+  we build `inject_turn`, `InputClaim`, or calls-as-a-skill. If it does fail
+  in Stage 2+, revert the pivot (restore arbitrate + tuple model) — the
+  critic gate for Stage 2 should explicitly test composition against all
+  three skills, not just inject_turn.

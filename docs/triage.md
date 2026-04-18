@@ -182,7 +182,7 @@ user-installable custom tools, including for personal content."
 
 ## T1.1 — `Catalog` / `SearchableIndex` SDK primitive
 
-**Status**: in_progress (design locked 2026-04-18) · **Task**: #86 · **Effort**: ~1 week (was estimated 2 weeks; in-memory backend + scope cuts shorten it)
+**Status**: done (2026-04-18) · **Task**: #86 · **Effort**: ~3 commits · **See Ship section below for final state**
 
 **Problem.** Every personal-content skill reinvents fuzzy-search + prompt-context.
 Audiobooks does `SequenceMatcher` + `prompt_context()` dump (top 50). Radio does
@@ -535,7 +535,7 @@ duck_chime | hold | drop`.
 - [x] `SpeakingState` module extracted with named-owner API
       (`huxley.turn.speaking_state` — `SpeakingOwner` enum with
       `user|factory|completion|injected|claim` + `acquire/release/
-    force_release/transfer`)
+force_release/transfer`)
 - [x] `MediaTaskManager` module extracted with `arbitrate()` +
       `DuckingController` stub (`huxley.turn.media_task` +
       `huxley.turn.arbitration` pure function, 16-case table)
@@ -578,9 +578,9 @@ between each. If any single commit's diff exceeds ~300 LOC, split further.
 
 ---
 
-## T1.4 — I/O plane implementation (four staged primitives)
+## T1.4 — I/O plane implementation (staged primitives)
 
-**Status**: blocked by T1.3 (coordinator refactor) · **Task**: #89 · **Effort**: ~4 weeks across four stages · **Scope**: implements `docs/io-plane.md` primitives
+**Status**: Stage 1 substrate shipped (focus management); Stages 2-4 need re-scoping post-pivot (see below) · **Task**: #89 · **Scope**: implements `docs/io-plane.md` primitives — vocabulary has since evolved (see 2026-04-18 ADR "Pivot from arbitration model to AVS focus-management")
 
 **Problem.** See T1.2 for full context. The I/O plane (turn injection,
 `InputClaim`, `ClientEvent` subscription, supervised `background_task`) is
@@ -591,26 +591,67 @@ voice-memo, memory recall, companionship-mode greetings, and any future
 skill that extends the runtime beyond request/response text. The primitives
 are framework-level; each should land before its first-consumer skill ships.
 
-### Stage order (revised after critic pass 2026-04-18)
+### Pivot note (2026-04-18, mid-Stage-1)
 
-Original draft: inject_turn → background_task → ClientEvent → InputClaim.
-Critic (F3) flagged this inverts the risk curve — `InputClaim` is the
-lynchpin for calls, the motivating use case, and should be validated
-early against the `MicRouter` seam before other stages pile on. Revised:
+The plan recorded below — `Urgency` + `YieldPolicy` + `arbitrate()` +
+`DuckingController` as the coordination vocabulary — was started at T1.3
+and partially realized. During Stage 1 design it became clear the
+tuple-based arbitration model was less composable than AVS's channel-
+oriented focus management, which models the same decisions as stacked
+Activities per named channel (DIALOG / COMMS / ALERT / CONTENT) with
+FocusState transitions.
 
-**inject_turn → InputClaim → background_task → ClientEvent**
+**What shipped instead** (T1.4 Stage 1, three commits):
 
-This also means Stage 1 (inject_turn) ships before any skill can USE it
-(skills need `background_task` to schedule, which is Stage 3). That's OK
-— Stage 1's UX validation uses a manual trigger for smoke testing;
-Stage 3 adds the scheduler substrate, at which point reminders skill
-(T1.8) is unblocked.
+- `1f9b232` — `huxley.focus.vocabulary` (Channel, FocusState, MixingBehavior,
+  Activity, ContentType, ChannelObserver) + `huxley.focus.manager`
+  (`FocusManager` actor-pattern arbitrator with mailbox serialization).
+  34 tests.
+- `a1afabd` — `huxley.turn.observers` (`DialogObserver` + `ContentStreamObserver`
+  implementing `ChannelObserver`). 14 tests.
+- `31a18cf` — `TurnCoordinator` rewired to drive `ContentStreamObserver` directly
+  (FOREGROUND/PRIMARY on start, NONE/MUST_STOP on stop). Deleted:
+  `MediaTaskManager`, `DuckingController`, `arbitrate()`, `Urgency`,
+  `YieldPolicy`, and their tests (~500 LOC removed). `SpeakingState` kept —
+  it's still the right shape for the DIALOG-channel speaker flag today.
 
-### Stage 1 — `inject_turn` + arbitration + ducking
+**What this leaves for the rest of T1.4**:
 
-**Effort**: ~1.5 weeks (bumped from 1w after scope audit). **Depends on**: T1.3 (`TurnSource.INJECTED`, `SpeakingState` named owners, `MediaTaskManager` without DuckingController stub — DuckingController lives here where it's actually used).
+Stage 1 as originally scoped (`inject_turn` + arbitration + DuckingController +
+InjectedTurnHandle + TTL queue + earcon slot) is **not** shipped. The
+substrate underneath it is. The remaining work is:
 
-**Deliverables**:
+- Wire `FocusManager` into the coordinator (replacing the direct-drive of
+  `ContentStreamObserver`) so multi-channel arbitration is real
+- Build `inject_turn` on top of `FocusManager` — `DIALOG` channel Activity
+  with priority-based preemption (no custom arbitrate() needed; the
+  channel priority map does it)
+- Implement the patience-expiry path for BACKGROUND Activities (the
+  FocusManager already has the hook; needs the coordinator-side integration)
+- Build `DuckingController` — still needed as a PCM gain envelope; integrates
+  with `ContentStreamObserver` when CONTENT goes BACKGROUND/MAY_DUCK
+- Everything else in the original Stage 2-4 scope (`InputClaim`, `background_task`,
+  `ClientEvent`) is unaffected by the pivot — those were always orthogonal
+
+### Open question — does the re-scope change the stage order?
+
+Originally: inject_turn → InputClaim → background_task → ClientEvent (to
+validate `MicRouter` suspend/resume early). Post-pivot, `inject_turn` is
+simpler (a DIALOG Activity acquire), which weakens the "keep
+InputClaim early to de-risk" argument. Worth a fresh critic pass before
+starting Stage 2. Flag to resolve when we pick up Stage 2.
+
+### (Archived) original Stage 1 plan — `inject_turn` + arbitration + ducking
+
+Kept for traceability. Arbitration / DuckingController / Urgency /
+YieldPolicy references below describe the pre-pivot vocabulary and are
+**superseded** by the focus-management substrate. When Stage 2+ picks up,
+re-derive deliverables from the new vocabulary (Channel, FocusState,
+MixingBehavior), not from this list.
+
+**Effort estimate (pre-pivot)**: ~1.5 weeks. **Depended on**: T1.3.
+
+**Deliverables (pre-pivot, superseded)**:
 
 - `Urgency` + `YieldPolicy` + `Decision` + `TurnOutcome` enums in SDK
 - `AudioStream.yield_policy: YieldPolicy = YIELD_ABOVE` field
@@ -624,7 +665,7 @@ Stage 3 adds the scheduler substrate, at which point reminders skill
 - Dedup: hash `dedup_key` per in-memory queue; replace on collision
 - Multi-item hold queue: FIFO drain on PTT, each deferred turn plays as a separate proactive turn in arrival order
 
-**Tests**:
+**Tests (pre-pivot, superseded)**:
 
 - Pure-function arbitration tests (16-row table covering all urgency × yield_policy combinations + the idle path)
 - Coordinator unit tests for each decision outcome
@@ -634,15 +675,15 @@ Stage 3 adds the scheduler substrate, at which point reminders skill
 - `wait_outcome()` resolves correctly for each terminal state (ACKNOWLEDGED, DELIVERED, EXPIRED, PREEMPTED, CANCELLED)
 - Earcon-missing graceful degradation
 
-**UX validation**: manual trigger from a dev endpoint (no background_task
-yet — that's Stage 3). Fires `inject_turn` at each urgency tier.
-Browser smoke confirms the four decision behaviors.
+**UX validation (pre-pivot, superseded)**: manual trigger from a dev
+endpoint (no background_task yet — that's Stage 3). Fires `inject_turn` at
+each urgency tier. Browser smoke confirms the four decision behaviors.
 
-**Docs touched**:
+**Docs touched (original plan)**:
 
-- `docs/concepts.md` — new entry for turn injection (done in this triage pass)
-- `docs/skills/README.md` — "using `inject_turn`" section (done in this triage pass)
-- `docs/observability.md` — new event names (`coord.inject_turn`, `coord.arbitrate`, `coord.inject_expired`, `coord.inject_preempted`)
+- `docs/concepts.md` — new entry for turn injection (done in this triage pass — the Urgency/YieldPolicy section; replaced 2026-04-18 with "Focus management" section)
+- `docs/skills/README.md` — "using `inject_turn`" section (written; currently bannered as "planned — SDK surface not yet shipped; vocabulary will change post-pivot")
+- `docs/observability.md` — new event names (`coord.inject_turn`, `coord.arbitrate`, `coord.inject_expired`, `coord.inject_preempted`) — **not yet added; arbitration events won't exist; focus events (`focus.acquire`, `focus.release`, `focus.change`, etc.) shipped in Stage 1 Part 1 but aren't documented in `observability.md` yet**
 
 ### Stage 2 — `InputClaim` + `MicRouter` wiring
 

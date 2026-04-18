@@ -226,6 +226,16 @@ Skills that want to contribute baseline context to every session prompt implemen
 
 ## Proactive speech — `ctx.inject_turn`
 
+> ⚠️ **Planned — not yet shipped.** This section describes the target SDK
+> surface for proactive speech. The underlying substrate (`FocusManager` +
+> `ContentStreamObserver`) shipped in T1.4 Stage 1, but `ctx.inject_turn`
+> itself isn't wired yet. The code sample's `Urgency` vocabulary reflects
+> the pre-pivot design — see
+> [`concepts.md#focus-management`](../concepts.md#focus-management-channel--focusstate--mixingbehavior)
+> for the post-pivot primitives this will re-express in. Expect the
+> `urgency=` parameter to be replaced by a `Channel` + priority
+> combination. See `triage.md` T1.4 for current status.
+
 Some skills need to speak without the user asking first: a medication reminder fires at 9am; a message from family arrives; an appointment is 30 minutes away. The framework's turn loop normally only runs on user PTT, but `ctx.inject_turn` lets a skill inject a synthetic turn from outside.
 
 ```python
@@ -266,6 +276,9 @@ if outcome != TurnOutcome.ACKNOWLEDGED:
 
 ## Supervised background tasks — `ctx.background_task`
 
+> ⚠️ **Planned — not yet shipped.** SDK surface reserved; supervisor
+> implementation is T1.4 Stage 3 work. API below is the target shape.
+
 Skills that schedule proactive events or listen for external input need long-running tasks. Don't spawn `asyncio.create_task` directly — the framework can't see crashes and your scheduler will silently die.
 
 ```python
@@ -286,6 +299,11 @@ async def _scheduler_loop(self) -> None:
 **Teardown**: all your tasks are cancelled on `skill.teardown()`. Framework handles it.
 
 ## Client events — `ctx.subscribe_client_event`
+
+> ⚠️ **Planned — not yet shipped.** The `client_event` protocol message
+> already reaches the server (`AudioServer` logs it), but the skill-side
+> `subscribe_client_event` / `emit_server_event` SDK surface is T1.4
+> Stage 4 work. API below is the target shape.
 
 Hardware buttons, sensor data, client-side state transitions — anything the client wants the server to know about beyond audio. Clients emit `{"type": "client_event", "event": "<namespaced-key>", "payload": {...}}`. Skills subscribe by key.
 
@@ -315,6 +333,14 @@ if not self._ctx.client_has_capability("calls.led_red"):
 ```
 
 ## Taking over the mic — `InputClaim`
+
+> ⚠️ **Planned — not yet shipped.** This is T1.4 Stage 2 work.
+> `MicRouter` shipped in T1.3 (one handler: the voice provider), but the
+> `InputClaim` side-effect type, the claim lifecycle (`ClaimHandle`,
+> `on_claim_end`, `ClaimEndReason`), and the provider suspend/resume
+> contract aren't wired yet. The `yield_policy=YieldPolicy.YIELD_ABOVE`
+> in the sample reflects pre-pivot vocabulary and will likely be replaced
+> by a channel/priority expression. See `triage.md` T1.4.
 
 Some skills need mic PCM to go somewhere other than the voice provider: a voice-memo skill writes mic to a file, a calls skill pipes mic to a remote peer. Return an `InputClaim` side effect from a tool result.
 

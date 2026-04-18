@@ -1,6 +1,34 @@
 # Huxley I/O plane — spec for skill-extensible streams
 
-> Status: spec. Locks the framework primitives that let skills extend audio I/O
+> ⚠️ **Status: partially superseded (pre-pivot spec)**. This document was
+> written assuming an arbitration-based coordination model
+> (`Urgency` × `YieldPolicy` → `Decision`, with a `MediaTaskManager`
+> executing preempt / duck / hold / drop). During T1.4 Stage 1 we
+> pivoted to AVS-style **focus management** — the same decisions expressed
+> as stacked `Activity` objects per named `Channel`, with priority-map
+> arbitration and observer notifications. See the 2026-04-18 ADR
+> ["Pivot from arbitration model to AVS focus-management"](./decisions.md#2026-04-18--pivot-io-plane-coordination-from-arbitration-to-avs-focus-management)
+> for why.
+>
+> **What's still accurate in this spec**: the high-level streams model
+> (mic / speaker / events plus turn loop), the five primitives skills
+> get (`AudioStream`, `inject_turn`, `InputClaim`, `ClientEvent`,
+> `background_task`), the shapes of their public APIs (mostly), and
+> the reasoning about skill-extensibility.
+>
+> **What's superseded**: every reference to `Urgency`, `YieldPolicy`,
+> `arbitrate()`, `Decision`, `DuckingController`, and `MediaTaskManager`.
+> The replacements are `Channel`, `FocusState`, `MixingBehavior`,
+> `FocusManager`, and `ContentStreamObserver`. See
+> [`concepts.md#focus-management`](./concepts.md#focus-management-channel--focusstate--mixingbehavior)
+> and [`architecture.md`](./architecture.md) for the current vocabulary.
+>
+> A full rewrite is queued for after T1.4 Stage 2 direction is locked —
+> see `triage.md` T1.4 for the current status.
+>
+> ---
+>
+> Original status: spec. Locks the framework primitives that let skills extend audio I/O
 > and the turn loop without the framework knowing what any skill does.
 > Implementation plan in `triage.md` T1.2 / T1.3 / T1.4.
 
