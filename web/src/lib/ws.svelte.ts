@@ -37,9 +37,13 @@ function nextId() {
   return _id++;
 }
 
-// 400ms is the threshold for a blind user to start hearing dead air as
-// "the device is broken". Anything past that, fill with the thinking tone.
-const SILENCE_TIMEOUT_MS = 400;
+// 1500ms threshold before filling silence with the thinking-tone drone.
+// 400ms (the original) over-triggered: normal model first-token latency
+// (400-800ms typical, 2-3s worst case) was firing the tone constantly,
+// teaching grandpa to treat it as background noise. 1500ms means the tone
+// fires only when something's actually wrong, so its presence still
+// communicates "still working" instead of "always on."
+const SILENCE_TIMEOUT_MS = 1500;
 
 export function createWsStore() {
   let socket = $state<WebSocket | null>(null);

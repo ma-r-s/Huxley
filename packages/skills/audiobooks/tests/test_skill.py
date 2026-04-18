@@ -593,12 +593,13 @@ class TestSoundPalette:
     async def test_wrong_format_wav_is_skipped(
         self, tmp_path: Path, library_path: Path, player_mock: MagicMock
     ) -> None:
-        """A 44.1kHz stereo WAV is silently skipped — wouldn't play correctly anyway."""
+        """A 44.1kHz stereo WAV at a known role name is silently skipped."""
         import wave
 
         sounds_dir = tmp_path / "sounds"
         sounds_dir.mkdir()
-        wav_path = sounds_dir / "wrong_format.wav"
+        # Use a known role name so we exercise the format check, not the role filter.
+        wav_path = sounds_dir / "book_start.wav"
         with wave.open(str(wav_path), "wb") as wf:
             wf.setnchannels(2)  # stereo, not mono
             wf.setsampwidth(2)
@@ -611,6 +612,34 @@ class TestSoundPalette:
         )
         skill = AudiobooksSkill(player=player_mock)
         await skill.setup(ctx)
+        assert skill._sounds == {}
+
+    async def test_unknown_role_wav_is_ignored(
+        self, tmp_path: Path, library_path: Path, player_mock: MagicMock
+    ) -> None:
+        """A correctly-formatted WAV at an unknown role name is ignored.
+
+        The skill only loads files matching `_KNOWN_SOUND_ROLES` so audition
+        leftovers (notification.wav, error.wav, etc.) don't pollute the palette.
+        """
+        import wave
+
+        sounds_dir = tmp_path / "sounds"
+        sounds_dir.mkdir()
+        wav_path = sounds_dir / "notification.wav"
+        with wave.open(str(wav_path), "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(24000)
+            wf.writeframes(b"\x00\x01" * 100)
+
+        ctx = make_test_context(
+            config={"library": str(library_path), "sounds_path": str(sounds_dir)},
+            persona_data_dir=library_path.parent,
+        )
+        skill = AudiobooksSkill(player=player_mock)
+        await skill.setup(ctx)
+        assert "notification" not in skill._sounds
         assert skill._sounds == {}
 
 

@@ -106,16 +106,49 @@ export class AudioPlayback {
   }
 
   /**
+   * Descending two-tone error chime: 660 Hz → 330 Hz, ~280 ms total.
+   *
+   * Falling intervals are universally read as "negative outcome" (Brewster).
+   * Used when the session drops to IDLE after an error, so a blind user can
+   * tell the device hit a problem rather than just "stopped responding."
+   * Distinct from the rising 880 Hz ready-tone so the two can't be confused.
+   */
+  playErrorTone(): void {
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    const beepDur = 0.12;
+    const gap = 0.04;
+    const dest = this.masterGain ?? this.ctx.destination;
+    const beep = (start: number, freq: number) => {
+      const osc = this.ctx!.createOscillator();
+      const g = this.ctx!.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      g.gain.setValueAtTime(0, start);
+      g.gain.linearRampToValueAtTime(0.22, start + 0.005);
+      g.gain.setValueAtTime(0.22, start + beepDur - 0.02);
+      g.gain.linearRampToValueAtTime(0, start + beepDur);
+      osc.connect(g);
+      g.connect(dest);
+      osc.start(start);
+      osc.stop(start + beepDur + 0.02);
+    };
+    beep(now, 660);
+    beep(now + beepDur + gap, 330);
+  }
+
+  /**
    * Start the "thinking" gap-filler tone.
    *
-   * 440 Hz pulsing at 150 ms on / 250 ms off, softer than the ready tone
-   * so it's clearly distinct. Plays continuously until `stopThinkingTone()`
-   * is called. Idempotent: calling twice does nothing the second time.
+   * 120 Hz sine pulse — deliberately BELOW the 200 Hz–4 kHz vocal band so
+   * it doesn't mask incoming model speech (the earlier 440 Hz sat squarely
+   * in the speech band, per the sonic-UX research in docs/research/sonic-ux.md).
+   * Pulses 150 ms on / 250 ms off, softer than the ready tone so it reads
+   * as "low background hum, system thinking" rather than "alarm."
    *
-   * The tone is owned by the silence-detection timer in `ws.svelte.ts`,
-   * which fires it on PTT-stop and on inter-round `model_speaking: false`
-   * gaps to fill any silence > 400 ms — grandpa is blind, so dead air is
-   * indistinguishable from "the device is broken."
+   * Owned by the silence-detection timer in `ws.svelte.ts`, fires after
+   * `SILENCE_TIMEOUT_MS` of dead air. Grandpa is blind — dead air past
+   * the threshold is indistinguishable from a broken device.
    */
   playThinkingTone(): void {
     if (!this.ctx || this.thinkingToneOsc) return;
@@ -123,7 +156,7 @@ export class AudioPlayback {
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
     osc.type = "sine";
-    osc.frequency.value = 440;
+    osc.frequency.value = 120;
 
     gain.gain.setValueAtTime(0, this.ctx.currentTime);
     osc.connect(gain);

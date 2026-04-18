@@ -186,6 +186,16 @@ cd web && bun run check                                         # svelte-check
 
 172 Python tests + 0 svelte-check errors is the green bar. See [`CLAUDE.md`](./CLAUDE.md) for the contributor workflow and [`docs/verifying.md`](./docs/verifying.md) for an end-to-end smoke-test script.
 
+## Run as a background service (macOS)
+
+```bash
+./scripts/launchd/install.sh    # starts at login, restarts on crash
+tail -f ~/Library/Logs/Huxley/huxley.log
+./scripts/launchd/uninstall.sh
+```
+
+See [`scripts/launchd/README.md`](./scripts/launchd/README.md). For Linux deployment (Raspberry Pi, home server) write a systemd unit — same shape, no helper script provided yet.
+
 ## License
 
 MIT — see [`LICENSE`](./LICENSE).

@@ -87,13 +87,19 @@ def _fuzzy_score(query: str, candidate: str) -> float:
     return SequenceMatcher(None, query.lower(), candidate.lower()).ratio()
 
 
-def _load_sound_palette(directory: Path) -> dict[str, bytes]:
-    """Load *.wav files from directory; return raw PCM16 24kHz mono bytes per name.
+_KNOWN_SOUND_ROLES = ("book_start", "book_end")
 
-    Uses `wave.open()` so files with non-standard headers (LIST/INFO chunks,
-    larger riff chunks) still produce correct PCM. Files with the wrong
-    sample rate / channel count / sample width are skipped — they would play
-    as garbage through the 24kHz mono channel anyway.
+
+def _load_sound_palette(directory: Path) -> dict[str, bytes]:
+    """Load known-role WAVs from directory; return raw PCM16 24kHz mono bytes per name.
+
+    Only loads files matching the role names the skill actually uses
+    (`book_start.wav`, `book_end.wav`). Other WAVs in the directory are
+    ignored so the catalog log isn't polluted and memory isn't wasted on
+    audition leftovers. Wrong-format files (non-mono / non-24kHz / non-PCM16)
+    are skipped silently — they'd play as garbage through the 24kHz channel
+    anyway. Uses `wave.open()` so non-standard WAV headers (LIST/INFO chunks)
+    still parse correctly.
     """
     import wave
     from pathlib import Path as _Path
@@ -102,12 +108,15 @@ def _load_sound_palette(directory: Path) -> dict[str, bytes]:
     d = _Path(directory)
     if not d.exists():
         return palette
-    for wav in sorted(d.glob("*.wav")):
+    for role in _KNOWN_SOUND_ROLES:
+        wav = d / f"{role}.wav"
+        if not wav.exists():
+            continue
         try:
             with wave.open(str(wav), "rb") as wf:
                 if wf.getnchannels() != 1 or wf.getsampwidth() != 2 or wf.getframerate() != 24000:
                     continue
-                palette[wav.stem] = wf.readframes(wf.getnframes())
+                palette[role] = wf.readframes(wf.getnframes())
         except (wave.Error, OSError):
             continue
     return palette

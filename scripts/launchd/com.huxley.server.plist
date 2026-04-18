@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd plist for Huxley server.
+
+  Install:    scripts/launchd/install.sh
+  Uninstall:  scripts/launchd/uninstall.sh
+  Status:     launchctl list | grep huxley
+  Stop:       launchctl unload ~/Library/LaunchAgents/com.huxley.server.plist
+  Start:      launchctl load   ~/Library/LaunchAgents/com.huxley.server.plist
+  Logs:       tail -f ~/Library/Logs/Huxley/huxley.log
+
+  Auto-restarts on crash (KeepAlive). Runs at user login.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.huxley.server</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/mario/.local/bin/uv</string>
+        <string>run</string>
+        <string>--package</string>
+        <string>huxley</string>
+        <string>huxley</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mario/Projects/Personal/Code/Huxley/packages/core</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/mario/.local/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <!-- Structured JSON log with per-run rotation (see logging.py).
+             Last 10 runs archived as huxley_<ISO timestamp>.log. -->
+        <key>HUXLEY_LOG_FILE</key>
+        <string>/Users/mario/Library/Logs/Huxley/huxley.log</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <!-- Throttle restart attempts so a permanent failure doesn't burn CPU. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- StandardErrorPath captures uncaught Python crashes / startup errors that
+         happen before structlog initialises. Normal structured logs go through
+         HUXLEY_LOG_FILE above. -->
+    <key>StandardErrorPath</key>
+    <string>/Users/mario/Library/Logs/Huxley/huxley.stderr.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

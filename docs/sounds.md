@@ -402,13 +402,14 @@ These are client changes only. They do not affect the server or the WebSocket pr
 - [x] `sounds_enabled` toggle disables palette + silence atomically (#11)
 - [x] Persona-overridable `on_complete_prompt` via `skills.audiobooks.on_complete_prompt` (#5)
 
-### Stage D — Client-side thinking tone (deferred)
+### Stage D — Client-side thinking tone ✅
 
-- [ ] `web/src/routes/+page.svelte`: change thinking tone from 440Hz to ~120Hz (sub-vocal)
-- [ ] Raise silence timeout 400ms → 1500ms
-- [ ] Add descending two-tone error chime on `state: IDLE` after error
+- [x] `web/src/lib/audio/playback.ts`: thinking tone frequency 440Hz → 120Hz (below the 200Hz–4kHz vocal band so it can't mask incoming speech)
+- [x] `web/src/lib/ws.svelte.ts`: `SILENCE_TIMEOUT_MS` 400ms → 1500ms (was over-triggering on every normal model first-token gap, teaching the user to ignore it)
+- [x] `web/src/lib/audio/playback.ts`: new `playErrorTone()` — descending 660Hz → 330Hz two-tone chime (~280ms total). Falling intervals universally read as "negative outcome" (Brewster).
+- [x] `web/src/routes/+page.svelte`: `$effect` watches state transitions; `(CONNECTING|CONVERSING) → IDLE` plays the error chime so a session drop is audibly distinguishable from a normal end.
 
-**DoD**: `bun run check` passes. Browser smoke test: hold PTT with no content → thinking tone starts at ~1.5s, is clearly non-speech frequency.
+`bun run check` clean. Browser-tested: hold PTT with no audio → 1.5s of silence → low drone fills until model speaks; kill the server mid-session → descending error chime fires.
 
 ### Open follow-up
 

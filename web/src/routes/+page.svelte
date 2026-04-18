@@ -29,6 +29,19 @@
     }
   })
 
+  // Track previous state to detect "session dropped" transitions: any
+  // CONNECTING/CONVERSING → IDLE that wasn't user-initiated. Plays the
+  // descending two-tone error chime so a blind user can tell the device
+  // hit a problem rather than just "stopped responding."
+  let prevState: typeof ws.appState = ws.appState
+  $effect(() => {
+    const cur = ws.appState
+    if ((prevState === 'CONNECTING' || prevState === 'CONVERSING') && cur === 'IDLE') {
+      playback.playErrorTone()
+    }
+    prevState = cur
+  })
+
   onMount(() => {
     ws.setOnAudio((data) => playback.play(data))
     ws.setOnAudioClear(() => playback.stop())

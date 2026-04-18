@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract individual sounds from the Wii BIOS sounds AIFF compilation.
+"""Extract individual sounds from a compilation audio file (e.g., a Wii BIOS dump).
 
 Pipeline:
 1. Run ffmpeg silencedetect to find silence boundaries (gaps between sounds).
@@ -7,41 +7,43 @@ Pipeline:
 3. Extract each as a PCM16 24kHz mono WAV. No level normalization (keep
    original dynamics; reverb tails were getting clipped + boosted before).
 
-Tunable knobs:
-- SILENCE_DB: how quiet counts as silence. Lower = more reverb tail captured.
+Usage:
+    python3 scripts/extract_sounds.py --source path/to/compilation.aiff [options]
+
+Or set HUXLEY_SOUND_SOURCE in the env if you'd rather not pass --source each run.
+
+Tunable knobs (all flags):
+- --silence-db: how quiet counts as silence. Lower = more reverb tail captured.
   -55dB catches the natural decay floor; -40dB cuts decays mid-way.
-- MIN_GAP: minimum silence duration to count as a sound boundary. Anything
+- --min-gap: minimum silence duration to count as a sound boundary. Anything
   shorter is treated as part of the same sound.
-- TAIL_PAD: extra audio appended past each detected silence_start so reverb
+- --tail-pad: extra audio appended past each detected silence_start so reverb
   trails don't get cut. Capped at half the following gap so it can't bleed
   into the next sound.
-- MIN_SOUND_LEN: skip extracted segments shorter than this (artifacts).
+- --min-sound-len: skip extracted segments shorter than this (artifacts).
+- --out: output directory (default: personas/abuelos/sounds/raw)
 """
 
+import argparse
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 
-SOURCE = Path(
-    "/Users/mario/iCloud Drive (Archive)/GarageBand for iOS/My Song.band/Media/All Wii BIOS Sounds.aiff"
+DEFAULT_OUT_DIR = (
+    Path(__file__).resolve().parent.parent / "personas" / "abuelos" / "sounds" / "raw"
 )
-OUT_DIR = Path("/Users/mario/Projects/Personal/Code/Huxley/personas/abuelos/sounds/raw")
-
-SILENCE_DB = "-55dB"  # was -40dB; that cut reverb tails mid-decay
-MIN_GAP = 0.5  # seconds; silences shorter than this don't split sounds
-TAIL_PAD = 0.5  # seconds; how much reverb to append past the silence start
-MIN_SOUND_LEN = 0.3  # seconds; skip artifacts
 
 
-def detect_silences(source: Path) -> list[tuple[float, float]]:
+def detect_silences(source: Path, silence_db: str, min_gap: float) -> list[tuple[float, float]]:
     """Return list of (silence_start, silence_end) tuples."""
     cmd = [
         "ffmpeg",
         "-i",
         str(source),
         "-af",
-        f"silencedetect=n={SILENCE_DB}:d={MIN_GAP}",
+        f"silencedetect=n={silence_db}:d={min_gap}",
         "-f",
         "null",
         "-",
@@ -68,7 +70,10 @@ def get_duration(source: Path) -> float:
 
 
 def compute_segments(
-    silences: list[tuple[float, float]], total: float
+    silences: list[tuple[float, float]],
+    total: float,
+    tail_pad: float,
+    min_sound_len: float,
 ) -> list[tuple[float, float]]:
     """Convert silence boundaries into (start, end) sound segments with tail pad."""
     segments: list[tuple[float, float]] = []
@@ -78,23 +83,23 @@ def compute_segments(
             # Cap the tail pad at half the silence gap so it can't bleed into
             # the next sound's onset.
             gap = sil_end - sil_start
-            tail = min(TAIL_PAD, gap / 2)
+            tail = min(tail_pad, gap / 2)
             segments.append((cursor, min(sil_start + tail, sil_end)))
         cursor = sil_end
     if cursor < total:
         segments.append((cursor, total))
-    return [s for s in segments if (s[1] - s[0]) >= MIN_SOUND_LEN]
+    return [s for s in segments if (s[1] - s[0]) >= min_sound_len]
 
 
-def extract(start: float, end: float, name: str) -> tuple[float, str]:
+def extract(source: Path, out_dir: Path, start: float, end: float, name: str) -> tuple[float, str]:
     """Run ffmpeg to extract one segment. Returns (actual_duration_seconds, peak_db_str)."""
     duration = end - start
-    out = OUT_DIR / f"{name}.wav"
+    out = out_dir / f"{name}.wav"
     cmd = [
         "ffmpeg",
         "-y",
         "-i",
-        str(SOURCE),
+        str(source),
         "-ss",
         str(start),
         "-t",
@@ -139,23 +144,71 @@ def extract(start: float, end: float, name: str) -> tuple[float, str]:
     return (actual, peak)
 
 
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Extract individual sounds from a compilation audio file.",
+    )
+    p.add_argument(
+        "--source",
+        type=Path,
+        default=os.environ.get("HUXLEY_SOUND_SOURCE"),
+        help="Path to the compilation audio file. Falls back to HUXLEY_SOUND_SOURCE env var.",
+    )
+    p.add_argument(
+        "--out",
+        type=Path,
+        default=DEFAULT_OUT_DIR,
+        help=f"Output directory (default: {DEFAULT_OUT_DIR}).",
+    )
+    p.add_argument("--silence-db", default="-55dB", help="Silence threshold (default: -55dB).")
+    p.add_argument(
+        "--min-gap",
+        type=float,
+        default=0.5,
+        help="Min silence duration to count as a boundary (default: 0.5s).",
+    )
+    p.add_argument(
+        "--tail-pad",
+        type=float,
+        default=0.5,
+        help="Reverb tail to keep past silence_start (default: 0.5s).",
+    )
+    p.add_argument(
+        "--min-sound-len",
+        type=float,
+        default=0.3,
+        help="Skip extracted segments shorter than this (default: 0.3s).",
+    )
+    return p.parse_args()
+
+
 def main() -> None:
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    args = parse_args()
+    if args.source is None:
+        sys.exit(
+            "error: no source file given. Pass --source <path> or set HUXLEY_SOUND_SOURCE in env."
+        )
+    source: Path = Path(args.source).expanduser()
+    if not source.exists():
+        sys.exit(f"error: source file not found: {source}")
+
+    out_dir: Path = Path(args.out).expanduser()
+    out_dir.mkdir(parents=True, exist_ok=True)
     # Wipe stale extractions from previous runs (different threshold/pad).
-    for stale in OUT_DIR.glob("*.wav"):
+    for stale in out_dir.glob("*.wav"):
         stale.unlink()
 
-    total = get_duration(SOURCE)
-    silences = detect_silences(SOURCE)
-    segments = compute_segments(silences, total)
+    total = get_duration(source)
+    silences = detect_silences(source, args.silence_db, args.min_gap)
+    segments = compute_segments(silences, total, args.tail_pad, args.min_sound_len)
     print(
-        f"Source: {total:.2f}s, "
-        f"silences detected at {SILENCE_DB} (min gap {MIN_GAP}s, tail pad {TAIL_PAD}s)"
+        f"Source: {source} ({total:.2f}s); "
+        f"silences at {args.silence_db}, min gap {args.min_gap}s, tail pad {args.tail_pad}s"
     )
-    print(f"Extracting {len(segments)} segments to {OUT_DIR}\n")
+    print(f"Extracting {len(segments)} segments to {out_dir}\n")
     for i, (start, end) in enumerate(segments):
         name = f"s{i:02d}"
-        dur, peak = extract(start, end, name)
+        dur, peak = extract(source, out_dir, start, end, name)
         print(f"  {name}.wav  src=[{start:6.2f}-{end:6.2f}]  out={dur:.2f}s  peak={peak}dB")
     print("\nDone.")
 
