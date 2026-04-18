@@ -95,6 +95,35 @@ Rather than every skill reinventing the matching logic with different bugs, the 
 
 The current backend is in-memory with `SequenceMatcher`-based fuzzy matching; the API is stable enough that a future SQLite FTS5 backend swap (when a skill needs persistence or 10k+ scale) is invisible to skill code.
 
+## I/O plane
+
+**The framework's mechanism for skill-extensible streams.**
+
+Huxley is an audio-first agent runtime. Below the skill line, everything reduces to three streams (mic input, speaker output, client events) plus the turn loop. The I/O plane is the set of framework primitives that let skills claim, route, inject into, or subscribe to these mechanisms — **without the framework ever knowing what the skill is doing**.
+
+Five primitives (all documented in [`io-plane.md`](./io-plane.md)):
+
+- **`AudioStream` / `PlaySound` / `CancelMedia` / `SetVolume`** — claim the speaker output stream (already shipped)
+- **Turn injection (`ctx.inject_turn`)** — a skill synthesizes a turn into the turn loop from outside the user's speech path
+- **`InputClaim`** — a skill takes over the mic stream (and optionally the speaker) for a duration
+- **`ClientEvent` subscription (`ctx.subscribe_client_event`)** — skills subscribe to string-keyed control events from the client
+- **`background_task` (`ctx.background_task`)** — skills register supervised long-running tasks (schedulers, listeners)
+
+**Guiding principle**: the framework names mechanisms, not use cases. Nothing in `huxley_sdk` or `huxley` core mentions "call," "reminder," "message," or "emergency." Those live in skills. A future skill names itself what it is.
+
+## Urgency + YieldPolicy
+
+**The language skills use to describe priority during proactive turns and stream claims.**
+
+Two enums together drive the single arbitration decision of "does this interrupting turn preempt current media":
+
+- `Urgency` (on the interrupting side): `AMBIENT` (drop if busy), `CHIME_DEFER` (chime + hold speech), `INTERRUPT` (preempt media), `CRITICAL` (top priority, preempts everything including other media claims). Framework doesn't know what generates each tier; skills pick.
+- `YieldPolicy` (on the current-stream side): `IMMEDIATE` (yields to anything above AMBIENT), `YIELD_ABOVE` (yields to INTERRUPT and above — default), `YIELD_CRITICAL` (yields only to CRITICAL).
+
+The arbitration is a pure function: `preempt iff urgency_rank > yield_threshold_rank`. 16-case truth table; deterministic; testable independently of the coordinator.
+
+See [`io-plane.md`](./io-plane.md) for composition examples.
+
 ## Voice provider
 
 **The thing that turns audio into text and text into audio.**

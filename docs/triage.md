@@ -371,91 +371,371 @@ Three commits; final state:
 
 ---
 
-## T1.2 — `ProactiveTurn` spec (`docs/proactive-turns.md`)
+## T1.2 — I/O plane spec (`docs/io-plane.md`)
 
-**Status**: queued · **Task**: #87 · **Effort**: 1 week of design (spec only, no code)
+**Status**: spec drafted (2026-04-18), awaiting critic review · **Task**: #87 · **Effort**: spec complete; implementation staged across T1.3 (refactor prereq) + T1.4 (primitives) + T1.8/T1.9/T1.10 (skills that use them)
 
-**Problem.** Current `TurnCoordinator` assumes user-originated turns. There is no
-entry point for "framework wants to start speaking now." Every v∞ feature on the
-roadmap (reminders, inbound messages, memory recall, companionship-mode greetings)
-requires this primitive.
+**Scope expansion (2026-04-18)**: this triage item was originally
+"ProactiveTurn spec." During design, Mario's father surfaced two load-
+bearing requirements (panic button, instant-connect inbound calls) that
+pulled the design into a broader architectural question: what are Huxley's
+abstract primitives for skill-extensible I/O? A narrow ProactiveTurn spec
+would have forced skill-specific concepts ("call," "emergency," "ring")
+into the framework. The expanded scope defines three sibling primitives
+that together let any skill extend the runtime without the framework
+knowing what it does.
 
-**Why it matters.** Existential for the framework dream past v2. Adding it as a
-5th `SideEffect` kind is the wrong shape — it inverts the coordinator's causality
-and the current state machine cannot handle it.
+**Problem.** Current `TurnCoordinator` and `AudioServer` hard-code:
 
-**Spec must answer**:
+- User turns originate from PTT (no "framework wants to speak now" entry point)
+- Mic PCM routes to OpenAI (no "skill takes over mic" mechanism)
+- Wire protocol has fixed message types (no "hardware button / arbitrary client
+  event" generic channel)
+- Background tasks are unsupervised (skills spawn `asyncio.create_task`;
+  framework blind to crashes — explicit gap in `docs/extensibility.md`)
 
-1. **Trigger sources**: time-based (cron-style), external events (webhook, MQTT),
-   internal (audiobook-end announcement is already a proto-proactive turn —
-   formalize the pattern).
-2. **Interrupt policies** (per-notification, declared by the skill):
-   - `now` — cancel current_media_task immediately, speak
-   - `defer` — queue, speak when current activity naturally ends
-   - `chime+defer` — earcon now, hold speech until user PTTs to ask
-   - `now_if_idle` — speak immediately only if state is idle, else defer
-3. **Coordinator state model**: how does `current_media_task` arbitration work?
-   Who owns `model_speaking` during proactive speech?
-4. **SDK surface**: `await ctx.notify(text, *, interrupt_policy="defer", expires_after=None, dedup_key=None)`
-5. **Wire protocol**: new server-initiated `assistant_turn_start{reason: "proactive"}`
-   message. Client behavior on receive (PTT during proactive should still interrupt).
-6. **Background-task supervision**: skills running schedulers/listeners need
-   framework-managed task lifecycle with crash logging + restart.
+Each of these blocks a different planned skill class. Together, they're "the
+I/O plane" — the mechanisms that connect clients to skills.
 
-**Output**: `docs/proactive-turns.md` written before any line of T1.4 code.
+**Why it matters.** The mandate from Mario: "The framework should allow for
+this extensibility without it ever thinking about specific skills. Just allow
+for new behaviors in such an abstract way that implementation has a direction
+around the model that Huxley itself is." Adding skill-specific concepts to
+the framework is a one-way architectural debt.
+
+### Locked design decisions (Mario 2026-04-18)
+
+1. **Scope: expanded (option B)**. Design all three primitives (turn
+   injection, `InputClaim`, `ClientEvent` subscription) + supervised
+   `background_task` helper as a coherent I/O-plane spec, not as separate
+   narrow items.
+
+2. **Urgency top tier renamed `CRITICAL`** (not `RING`). Framework doesn't
+   know what lives in the top tier; skills decide. A future fire-alarm
+   skill uses the same tier as a future calls skill.
+
+3. **`ctx.notify()` renamed `ctx.inject_turn()`**. Primitive name
+   reflects the mechanism (synthetic-turn injection), not a use case
+   (notifying the user).
+
+4. **Wire protocol: hybrid**. Framework-reserved message types stay fixed.
+   Add one generic `{"type": "client_event", "event": "<namespaced-key>",
+"payload": {...}}` for skill subscriptions.
+
+Plus a fifth locked decision from the critic pass: **earcons deferred**.
+Three urgency tiers have distinct persona-owned earcons; the audio files
+are curated separately from Stage 1 implementation. Missing earcons log a
+warning and play nothing (framework doesn't block on audio curation).
+
+### Spec artifact
+
+`docs/io-plane.md` — authoritative design, includes:
+
+- Abstract model (three streams + turn loop)
+- Guiding principle (framework names mechanisms, not use cases)
+- Five primitives in full detail with SDK surfaces, arbitration, tests
+- Composition examples for reminders, messaging, calls, voice-memo, panic
+  button
+- Staged implementation plan (Stage 0 refactor, Stages 1-4 primitives)
+- Descope candidates + revisit triggers
+- Single open product question (earcon sourcing)
+
+### Deliverables of T1.2 itself
+
+- [x] `docs/io-plane.md` spec written
+- [x] Triage entries updated: T1.3 (refactor deltas), T1.4 (staged impl)
+- [x] New triage entries filed: T1.8 (reminders), T1.9 (messaging), T1.10 (calls)
+- [x] `docs/concepts.md` updated with new vocabulary
+- [x] `docs/protocol.md` updated with hybrid wire protocol
+- [x] `docs/skills/README.md` updated with skill-author sections per primitive
+- [ ] Critic review against "the dream of Huxley" — spawned after doc pass
+- [ ] Critic findings incorporated
+- [ ] Final commit of spec package
 
 ---
 
-## T1.3 — Coordinator refactor (extract `SpeakingState` / `MediaTaskManager` / `TurnFactory`)
+## T1.3 — Coordinator refactor (extract collaborators for I/O plane)
 
-**Status**: queued · **Task**: #88 · **Effort**: ~2 weeks · **Risk**: needs T2.4 (integration tests) for safe verification — currently deferred; see decision below
+**Status**: queued · **Task**: #88 · **Effort**: ~2 weeks · **Risk**: T2.3
+shipped (integration-test harness in place) — safer than original plan;
+refactor can proceed with confidence.
 
-**Problem.** `coordinator.py` is 586 LOC juggling PTT lifecycle, model deltas, tool
-dispatch, six side-effect kinds, atomic interrupts, completion-prompt synthesis,
-synthetic turn injection, and `model_speaking` flag ownership transfer. Adding
-ProactiveTurn (T1.4) into this without restructuring will produce code that's
-unmaintainable.
+**Problem.** `coordinator.py` is 586 LOC juggling PTT lifecycle, model deltas,
+tool dispatch, six side-effect kinds, atomic interrupts, completion-prompt
+synthesis, synthetic turn injection, and `model_speaking` flag ownership
+transfer. Adding the I/O-plane primitives (T1.4) without restructuring
+produces unmaintainable code.
 
-**Why it matters.** Must precede T1.4. The "ownership transfer of `model_speaking`"
-gymnastics in `_consume_audio_stream` is already a code smell; proactive turns
-will compound it.
+**Why it matters.** Must precede T1.4. The "ownership transfer of
+`model_speaking`" gymnastics in `_consume_audio_stream` is already a code
+smell; turn injection + `InputClaim` compound it into an unreviewable mess.
 
-**Proposed solution.** Extract three internal collaborators; `TurnCoordinator`
-becomes the thin orchestrator:
+### Scope expansion (2026-04-18 after T1.2 spec)
 
-- `SpeakingState` — owns `model_speaking` flag transitions
-  (factory_audio takes ownership → model reclaims → completion_prompt re-owns →
-  proactive will own too)
-- `MediaTaskManager` — owns `current_media_task` lifecycle (start, cancel,
-  on_complete, arbitration when proactive interrupts)
-- `TurnFactory` — creates Turns (user-originated today, completion-prompt synthetic
-  today, ProactiveTurn future)
+The I/O plane spec (`docs/io-plane.md`) reshaped what the refactor needs to
+extract. Four collaborators (was three), each with a shape informed by the
+primitives they'll support:
 
-**Risk note.** Refactor without behavior change is hard to verify by manual smoke
-testing. T2.4 (integration smoke tests against real OpenAI) is currently deferred.
-**Decision needed before starting**: pull T2.4 forward, OR proceed with heavy
-manual smoke + git-rollback safety. Recommendation: pull T2.4 forward.
+**1. `SpeakingState` — owns the "who's on the speaker" flag.**
+
+- Currently: boolean `model_speaking`.
+- Refactored: named-owner enum — `"user" | "factory" | "completion" |
+"injected" | "claim"` | `None`.
+- `acquire(new_owner)` / `release(expected_owner)` methods. Release is a
+  safe no-op if the owner has already changed (another claim preempted).
+- Rationale: the current boolean forces guard-checks scattered across the
+  coordinator (`if self._model_speaking: ...`). Named owners centralize
+  the state machine; `SpeakingState.owner == "injected"` is self-documenting.
+- T1.3 MUST land with the named-owner shape even though some owners
+  (`"injected"`, `"claim"`) aren't used yet. Otherwise T1.4 retouches
+  SpeakingState in every stage.
+
+**2. `MediaTaskManager` — owns the running audio stream task.**
+
+- Currently: single `asyncio.Task` slot (`current_media_task`) with ad-hoc
+  cancellation in `_stop_current_media_task`.
+- Refactored: encapsulates the task + `arbitrate(incoming_urgency,
+yield_policy) -> Decision` method. Decision is one of `preempt |
+duck_chime | hold | drop`.
+- Includes a `DuckingController` stub (no-op in Stage 0, wired in Stage 1):
+  `duck_for(ms: int)` ramps output gain down, holds, ramps up.
+- Rationale: arbitration logic lives in one place, testable as a pure
+  function. Stage 1 fills in the duck_chime branch; Stage 0 only needs
+  the interface.
+- Ducking is server-side software gain (multiply PCM samples by ratio).
+  Simple and client-agnostic. Client-side ducking is a deferred improvement.
+
+**3. `TurnFactory` — single turn-creation entry point.**
+
+- Currently: Turn objects constructed in three places (`on_ptt_start`,
+  `_maybe_fire_completion_prompt`, implicit completion flow) with subtle
+  shared invariants.
+- Refactored: `TurnFactory.create(*, source: TurnSource, initial_state)`
+  where `TurnSource` is an enum: `USER | COMPLETION | INJECTED`.
+- Stage 0 MUST include `TurnSource.INJECTED` as an enum value even though
+  nothing creates injected turns yet. Same reasoning as SpeakingState —
+  don't force retouch.
+
+**4. `MicRouter` — new collaborator.**
+
+- Currently: mic PCM flows directly `AudioServer.on_audio_frame` →
+  `coordinator.on_user_audio_frame` → `provider.send_user_audio`. Hard-
+  coded routing.
+- Refactored: `MicRouter` is the single destination dispatcher. Default
+  handler = voice provider. An active `InputClaim` swaps the handler;
+  claim end restores default.
+- `MicRouter.claim(on_frame: Callable)` → returns a handle;
+  `handle.release()` restores default.
+- Stage 0 MUST extract the interface even though only the default handler
+  exists yet. Stage 4 wires `InputClaim` through it.
+
+### Deliverables
+
+- [ ] `SpeakingState` module extracted with named-owner API
+- [ ] `MediaTaskManager` module extracted with `arbitrate()` +
+      `DuckingController` stub
+- [ ] `TurnFactory` module extracted with `TurnSource` enum including
+      `INJECTED`
+- [ ] `MicRouter` module extracted with claim/release API (only default
+      handler wired)
+- [ ] `TurnCoordinator` reduced to thin orchestrator (target: < 400 LOC;
+      currently 586)
+- [ ] All existing coordinator + skill-integration tests pass unchanged
+      (T2.3 harness replays session fixtures for regression safety)
+- [ ] New unit tests per extracted collaborator
+- [ ] `docs/architecture.md` updated with the new collaborator list
+- [ ] `docs/turns.md` updated with the new state-machine shape
+
+### Risk + verification
+
+T2.3 (integration smoke tests against real OpenAI) shipped — the
+refactor has an automated net. Original risk note ("needs T2.4 forward")
+is obsolete; refactor can proceed on the existing test infrastructure.
+
+Recommended discipline: extract one collaborator per commit, tests green
+between each. If any single commit's diff exceeds ~300 LOC, split further.
 
 ---
 
-## T1.4 — `ProactiveTurn` implementation
+## T1.4 — I/O plane implementation (four staged primitives)
 
-**Status**: blocked by T1.2 (spec) + T1.3 (coordinator refactor) · **Task**: #89 · **Effort**: ~3 weeks
+**Status**: blocked by T1.3 (coordinator refactor) · **Task**: #89 · **Effort**: ~4 weeks across four stages · **Scope**: implements `docs/io-plane.md` primitives
 
-**Problem.** See T1.2 for full context.
+**Problem.** See T1.2 for full context. The I/O plane (turn injection,
+`InputClaim`, `ClientEvent` subscription, supervised `background_task`) is
+the framework-level infrastructure every v∞ skill needs.
 
-**Why it matters.** Unblocks reminders, inbound messaging, memory recall,
-companionship-mode greetings — every roadmap feature past v2.
+**Why it matters.** Unblocks reminders, messaging, calls, panic button,
+voice-memo, memory recall, companionship-mode greetings, and any future
+skill that extends the runtime beyond request/response text. The primitives
+are framework-level; each should land before its first-consumer skill ships.
 
-**Implementation sketch** (per the T1.2 spec):
+### Stage order (revised after critic pass 2026-04-18)
 
-- `SessionManager.notify(text, interrupt_policy=...)` entry point
-- Coordinator extensions for proactive-turn arbitration (uses T1.3's
-  `MediaTaskManager`)
-- Wire protocol: `assistant_turn_start{reason: "proactive"}` server-initiated
-  message. Browser dev client + future ESP32 firmware both handle.
-- Supervised background-task pattern in SDK so reminder schedulers and inbound-
-  message listeners survive crashes.
+Original draft: inject_turn → background_task → ClientEvent → InputClaim.
+Critic (F3) flagged this inverts the risk curve — `InputClaim` is the
+lynchpin for calls, the motivating use case, and should be validated
+early against the `MicRouter` seam before other stages pile on. Revised:
+
+**inject_turn → InputClaim → background_task → ClientEvent**
+
+This also means Stage 1 (inject_turn) ships before any skill can USE it
+(skills need `background_task` to schedule, which is Stage 3). That's OK
+— Stage 1's UX validation uses a manual trigger for smoke testing;
+Stage 3 adds the scheduler substrate, at which point reminders skill
+(T1.8) is unblocked.
+
+### Stage 1 — `inject_turn` + arbitration + ducking
+
+**Effort**: ~1 week. **Depends on**: T1.3 (`TurnSource.INJECTED`, `SpeakingState` named owners, `MediaTaskManager` without DuckingController stub — DuckingController lives here where it's actually used).
+
+**Deliverables**:
+
+- `Urgency` + `YieldPolicy` + `Decision` + `TurnOutcome` enums in SDK
+- `AudioStream.yield_policy: YieldPolicy = YIELD_ABOVE` field
+- `SkillContext.inject_turn(prompt, *, urgency, dedup_key, expires_after) -> InjectedTurnHandle` (note: `tag` param dropped — redundant with dedup_key + logger's skill binding)
+- `InjectedTurnHandle` with `.acknowledge()`, `.cancel()`, `.wait_outcome()` returning `TurnOutcome`
+- Arbitration pure function `huxley.turn.arbitration.arbitrate(urgency, yield_policy) -> Decision` with 5 outcomes (`SPEAK_NOW | PREEMPT | DUCK_CHIME | HOLD | DROP`)
+- `DuckingController` wired into `MediaTaskManager` (server-side PCM gain envelope)
+- Coordinator integration: accepts `inject_turn`, routes through `TurnFactory(source=INJECTED)`, arbitrates, acquires `SpeakingState` as `"injected"` owner; `DUCK_CHIME` outcome plays tier earcon on top of ducked media
+- Earcon playback slot: framework plays persona-owned `notify_chime_defer` / `notify_interrupt` / `notify_critical` roles. Missing → log warning + play nothing (audio curation is separate task)
+- TTL expiry with persona-level defaults; expiry emits `coord.inject_expired`
+- Dedup: hash `dedup_key` per in-memory queue; replace on collision
+- Multi-item hold queue: FIFO drain on PTT, each deferred turn plays as a separate proactive turn in arrival order
+
+**Tests**:
+
+- Pure-function arbitration tests (16-row table covering all urgency × yield_policy combinations + the idle path)
+- Coordinator unit tests for each decision outcome
+- Queue behavior: hold, drain on PTT, TTL expiry mid-flight, dedup replace
+- **TTL expiry during active media** (critic IS3): CHIME_DEFER with 5s TTL during audiobook; PTT after 10s must not fire the expired turn but must emit the `N pendiente(s) expiraron` note
+- **Multi-item FIFO drain** (critic IS5): two CHIME_DEFER queued; PTT drains both in insertion order
+- `wait_outcome()` resolves correctly for each terminal state (ACKNOWLEDGED, DELIVERED, EXPIRED, PREEMPTED, CANCELLED)
+- Earcon-missing graceful degradation
+
+**UX validation**: manual trigger from a dev endpoint (no background_task
+yet — that's Stage 3). Fires `inject_turn` at each urgency tier.
+Browser smoke confirms the four decision behaviors.
+
+**Docs touched**:
+
+- `docs/concepts.md` — new entry for turn injection (done in this triage pass)
+- `docs/skills/README.md` — "using `inject_turn`" section (done in this triage pass)
+- `docs/observability.md` — new event names (`coord.inject_turn`, `coord.arbitrate`, `coord.inject_expired`, `coord.inject_preempted`)
+
+### Stage 2 — `InputClaim` + `MicRouter` wiring
+
+Pulled earlier (was Stage 4 in original plan). Rationale: it's the
+lynchpin of the motivating use case (panic button + instant-connect
+calls). Validating `MicRouter` and the provider suspend/resume contract
+early de-risks the remaining stages.
+
+**Effort**: ~2 weeks. **Depends on**: T1.3 (`MicRouter`), Stage 1 (`YieldPolicy` enum).
+
+**Deliverables**:
+
+- `InputClaim` SideEffect type in SDK
+- `ClaimEndReason` enum (`NATURAL | USER_PTT | PREEMPTED | ERROR`)
+- `ClaimHandle` with `.cancel()` and `.wait_end()`
+- **Two entry points** for claim activation:
+  - `ToolResult.side_effect = InputClaim(...)` — for tool-dispatched claims (voice memo)
+  - `SkillContext.start_input_claim(claim) -> ClaimHandle` — direct entry point for event-driven latching (panic button, auto-connect inbound call) where no tool call is in the causal chain
+- Both paths land in the same `MicRouter.claim(handler)` + `provider.suspend()` sequence
+- Latch invariant (test-enforced): **suspend provider FIRST, then swap mic routing** — prevents audio leak during the swap window
+- `on_claim_end(reason)` fires on all termination paths
+- Claim's `yield_policy` participates in arbitration — a `YIELD_CRITICAL` claim only yields to CRITICAL-urgency injected turns
+
+**Tests**:
+
+- Both entry points latch correctly (ToolResult + direct context method)
+- Mic frames reach handler (not voice provider) while active
+- `speaker_source` frames reach `send_audio`
+- PTT during claim fires `on_claim_end(USER_PTT)`, cleanup runs, voice resumes
+- Natural end fires `on_claim_end(NATURAL)`
+- CRITICAL `inject_turn` during `YIELD_CRITICAL` claim fires `on_claim_end(PREEMPTED)`; the critical turn plays after cleanup
+- Non-CRITICAL `inject_turn` during `YIELD_CRITICAL` claim: turn held (does not preempt)
+- **Provider suspend/resume contract** (critic IS4): idempotency (multi-suspend, resume-without-suspend); session ID preserved across suspend/resume; pending assistant audio discarded not replayed; inference blocked while suspended
+- Suspend-first-then-swap ordering test (fake provider records call order)
+
+**UX validation**:
+
+- Tool-driven: throwaway voice-memo skill. `record_memo(seconds=10)` returns `InputClaim(on_mic_frame=writer.write, speaker_source=None)`. Speak 10s; confirm WAV file created; voice provider resumes; next PTT works; no leaked tasks.
+- Direct-entry: manual test harness calls `ctx.start_input_claim(...)` simulating an event-driven flow; confirm latch behaves identically.
+
+**Docs touched**:
+
+- `docs/skills/README.md` — "using `InputClaim`" section (done in this triage pass, covers both entry points)
+- `docs/architecture.md` — audio routing description
+
+### Stage 3 — Supervised `background_task`
+
+**Effort**: ~3 days. **Depends on**: Application startup (already in `app.py`).
+
+**Deliverables**:
+
+- `SkillContext.background_task(name, coro_factory, *, restart_on_crash, max_restarts_per_hour, on_permanent_failure)`
+- `PermanentFailure` dataclass (last exception + restart count + elapsed)
+- `huxley.background.TaskSupervisor` (new module): owns the task pool, crash logging via `aexception`, restart with exponential backoff
+- Permanent failure: log + `dev_event("background_task_failed")` + invoke `on_permanent_failure` callback if provided (with its own supervision — callback raising doesn't recurse)
+- Teardown: all tasks cancelled on skill teardown
+
+**Tests**:
+
+- Task runs normally
+- Task crashes, restarts once, succeeds
+- Task crashes repeatedly, exceeds budget, permanent-fail event fires
+- `on_permanent_failure` callback fires with failure details
+- Callback that raises is logged + stops (no recursion into itself)
+- Teardown cancels cleanly
+
+**UX validation**: extend a hello skill to deliberately crash its background task. Confirm restart. Bump past budget; confirm callback fires + dev event.
+
+**Docs touched**:
+
+- `docs/skills/README.md` — "using `background_task`" section (done in this triage pass; includes `on_permanent_failure` for life-safety skills)
+- `docs/observability.md` — new events documented
+
+### Stage 4 — `ClientEvent` + `server_event` + capabilities handshake
+
+**Effort**: ~3 days. **Depends on**: `AudioServer` accepts new message types; `hello` message extended.
+
+**Deliverables**:
+
+- Wire protocol additions: `{"type": "client_event", ...}` (C→S) and `{"type": "server_event", ...}` (S→C)
+- `hello` message gains `capabilities: list[str]` array; old clients (no field) treated as `capabilities=[]`
+- `AudioServer` dispatches inbound `client_event` messages through a subscription registry
+- `SkillContext.subscribe_client_event(key, handler)` — unsubscribe automatic at teardown
+- `SkillContext.emit_server_event(key, payload)` — no-op with debug log if client capabilities don't include `server_event`
+- Namespace convention documented: `huxley.*` reserved; skills use `<skill-name>.*`; no framework-side validation
+
+**Tests**:
+
+- Single subscriber: handler called with payload
+- Multiple subscribers to same key: all called
+- Unsubscription on teardown: handler no longer called after skill stops
+- Unknown key: logs at debug
+- `emit_server_event` skipped with debug log when capability absent
+- Capabilities fallback (old client without field → treated as empty capabilities)
+
+**UX validation**: browser dev client dev panel (or Shift+E) fires a `hello.ping` client event → toy skill subscribed calls `inject_turn("pong")`. Separately, toy skill emits `hello.pong` server event → browser dev client logs receipt. Both directions covered.
+
+**Docs touched**:
+
+- `docs/protocol.md` — hybrid wire protocol documented (done in this triage pass, dual-purpose client_event + symmetric server_event + capabilities)
+- `docs/skills/README.md` — "using `subscribe_client_event` / `emit_server_event`" sections
+
+### Skill-level follow-ons (file as separate triage items, depend on T1.4 stages)
+
+- **T1.8 — `huxley-skill-reminders`** (after Stages 1 + 3): medication +
+  appointment reminders via `inject_turn` + `background_task`. First real
+  user-facing benefit of the I/O plane.
+- **T1.9 — `huxley-skill-messaging`** (after Stages 1 + 3): inbound
+  WhatsApp via `background_task` + `inject_turn`; outbound trigger via
+  `ClientEvent` (Stage 4) optional.
+- **T1.10 — `huxley-skill-calls`** (after all four stages — especially
+  Stage 2 for `InputClaim` and Stage 4 for the panic-button
+  `ClientEvent`): two-way calls using all four primitives. Requires
+  voice-call provider integration (Twilio/SIP); separate design effort.
 
 ---
 
@@ -693,6 +973,154 @@ Plus stream mock signatures in `test_skill.py` and `test_coordinator_skill_integ
 - **Position math drift**: with the current `bytes_read / BYTES_PER_SECOND` calculation and `-re` throttling, output_seconds == wall_seconds. atempo affects what content is in those seconds, not the rate at which they emerge. The math `book_advance = output_seconds * speed` is correct in this regime.
 
 **Follow-up bug (fixed same day, 2026-04-18)**: when `set_speed` is called and nothing is actively streaming but a `last_id` exists in storage (the natural flow: PTT to interrupt → "más lento"), the original implementation only persisted the value and returned a plain ack. Result: user heard silence, model said "ahora se reproduce a un ritmo más pausado" (misleading), user had to ask again. Fix: `_set_speed` now resumes the last book at the new speed when no stream is live but `last_id` exists. `_play` loads the just-persisted speed from storage so the new tempo applies on the resume. Two new regression tests: `test_set_speed_with_saved_book_resumes_at_new_speed` (paused-then-slowdown path) and `test_set_speed_with_no_saved_book_only_acks` (truly fresh path stays ack-only). 65 audiobooks tests green (was 63).
+
+---
+
+## T1.8 — `huxley-skill-reminders`
+
+**Status**: queued · **Effort**: ~1 week · **Blocked by**: T1.4 Stage 1 (`inject_turn`) + Stage 3 (`background_task`)
+
+**Problem.** Medication + appointment reminders are the first concrete user
+benefit of the I/O plane. Without them, "the agent can speak proactively"
+is an abstract capability with no shipped consumer.
+
+**Why it matters.** Mario's father specifically flagged reminders as a
+daily-use need. Medication reminders are also the canonical
+"retry-until-acknowledged" pattern — they validate that the framework's
+choice to push retry semantics to the skill (not the primitive) is the
+right call.
+
+**Sketch**:
+
+- Persona config declares a reminder list: each has `{id, when, prompt,
+kind, retry}` fields; `kind` in `{medication, appointment, generic}`
+  drives the urgency tier default
+- `setup()`: load reminders from persona data (YAML or SQLite), register a
+  `background_task("scheduler", ...)`
+- Scheduler loop: pick next due → sleep until due → fire
+  `inject_turn(prompt, urgency=...)` → on ack (handle's ack callback fires
+  when user PTTs within the default window), mark fired. If no ack within
+  configured retry window and `kind == medication`, re-fire at escalating
+  urgency
+- Tool surface: `add_reminder`, `list_reminders`, `cancel_reminder`
+- Prompt context: list upcoming reminders so the LLM can mention them on
+  request
+
+**Framework changes needed**: none. Uses existing `inject_turn` +
+`background_task` + `Catalog` (for reminder list storage + fuzzy lookup).
+
+**UX validation**: set a medication reminder for 1 minute in the future;
+verify: the interrupt earcon plays, book (if playing) is cancelled, model
+speaks "Es hora de la pastilla"; grandpa PTTs "ya me la tomé"; reminder
+marked acknowledged. Set a second reminder, don't acknowledge; verify re-
+fire at escalating urgency.
+
+---
+
+## T1.9 — `huxley-skill-messaging`
+
+**Status**: queued · **Effort**: ~1 week (plus webhook provider integration, not scoped here) · **Blocked by**: T1.4 Stages 1 + 3 (optionally 4 for outbound trigger via `ClientEvent`)
+
+**Problem.** Inbound family messages ("Carlos te mandó un mensaje...") are
+the second biggest expected user value after reminders. Outbound messaging
+(send a voice memo to Carlos) is the messaging counterpart; depends on a
+hardware button or voice command trigger.
+
+**Why it matters.** The `never_say_no` constraint's biggest credibility
+test is "user says 'avísale a Carlos que estoy bien' and the agent can
+actually do it." Without messaging, the constraint is a verbal promise
+without substance.
+
+**Sketch (inbound only for first pass)**:
+
+- Webhook listener (WhatsApp Business API, Telegram, or Twilio — provider
+  choice separate concern) runs as a `background_task`
+- On inbound message: resolve sender via `Catalog` of known contacts,
+  fire `inject_turn` at `CHIME_DEFER` urgency with dedup key
+  `msg:{contact_id}` (coalesces multiple pings from same contact)
+- Tool surface: `send_message(contact, text)` (outbound), `list_messages`
+- Contact list managed by a companion `huxley-skill-contacts` (bundled or
+  separate; TBD)
+
+**Outbound**: later pass. Could ride on a hardware "mic button for memo"
+via `ClientEvent`, or voice command `"mándale un mensaje a Carlos"`.
+
+**UX validation**: webhook delivers a test inbound message; verify
+chime+defer: chime ducks book, message held; grandpa PTTs "¿qué decía?" →
+LLM narrates the message.
+
+---
+
+## T1.10 — `huxley-skill-calls`
+
+**Status**: queued · **Effort**: ~2-3 weeks (plus call-provider integration) · **Blocked by**: T1.4 Stage 2 (`InputClaim`) + Stage 4 (`ClientEvent` for panic button) + Stage 3 (`background_task` for SIP listener)
+
+**Problem.** Two musts surfaced during T1.2 design:
+
+1. **Panic button** — grandpa presses a physical button → instant outbound
+   call to family
+2. **Instant-connect inbound** — family calls from their phone → device
+   auto-answers, audio plane swaps, no grandpa action required
+
+Both are life-safety features; grandpa's biggest fear is having an
+emergency and not reaching anyone.
+
+**Why it matters.** Directly validates the I/O plane's core claim: skills
+extend the runtime without the framework knowing what they do. The calls
+skill uses ALL four primitives (`inject_turn` for the "Mario te está
+llamando" announcement, `InputClaim` for the duplex audio plane,
+`ClientEvent` for the panic button input, `background_task` for the
+call-provider listener) and framework code never contains the word
+"call."
+
+**Sketch**:
+
+- Voice-provider choice: Twilio Programmable Voice is the likely pick
+  (WebRTC capable, proven, Python SDK). Evaluate alternatives during
+  detailed design.
+- Inbound listener: `background_task` registered against the call
+  provider's webhook events
+- Inbound flow: on incoming call, check caller against whitelisted
+  emergency contacts. If whitelisted → auto-answer (brief
+  `inject_turn("{name} te está llamando")` at `CRITICAL` urgency, then
+  emit `InputClaim(mic→call, speaker←call)` side effect). If not
+  whitelisted → a traditional ring pattern (requires a future
+  `LoopingAudioStream` or similar — skip in v1; unknown inbound callers
+  go to voicemail instead)
+- Outbound flow via panic button: skill subscribes to
+  `calls.panic_button` ClientEvent, on fire picks next-priority
+  emergency contact, dials out via call provider, emits `InputClaim` when
+  peer answers
+- Outbound flow via voice command: `call_contact(name)` tool; same
+  `InputClaim` path after dialing
+
+**Framework changes**: none beyond the I/O plane primitives. Framework
+code has no knowledge of calls, caller IDs, emergency contacts, or SIP.
+
+**Hardware coupling**: one of the ESP32 hardware buttons is dedicated to
+`calls.panic_button`. Firmware sends `{"type": "client_event", "event":
+"calls.panic_button", "payload": {}}`. Device must be wearable/on-person
+for the panic button to be useful (lanyard, clip-on, or similar).
+
+**UX validation**: end-to-end with a real Twilio account, a real family
+phone, and the ESP32 device or a stub simulating the panic button event.
+Verify:
+
+- Press panic button → grandpa hears "Llamando a Mario"; Mario's phone
+  rings; on answer, two-way audio works
+- Mario calls from his phone (whitelisted) → grandpa hears "Mario te está
+  llamando"; ~1 second later audio plane is swapped; two-way call works
+- Mid-call, PTT on the ESP32 button → call ends cleanly, voice agent
+  resumes
+
+**Open design work (before implementation starts)**:
+
+- Call provider selection + integration sketch
+- Emergency contact list format (lives in persona config? separate
+  storage?)
+- Whitelist semantics (per-contact auto-answer flag? quiet hours
+  override? priority ordering for panic-button dialing sequence?)
+- Hardware button specification for ESP32 firmware
 
 ---
 

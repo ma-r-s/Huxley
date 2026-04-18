@@ -12,6 +12,8 @@ A skill could be playing audiobooks, controlling lights, sending messages, looki
 
 The dream: **adding a capability to your voice agent should be as easy as `pip install huxley-skill-lights` plus one line in your persona file.**
 
+**Audio-first by default.** The framework guarantees that every meaningful event the agent produces has an audible trail — earcons before proactive speech, confirmations on every state change, explicit acknowledgments of failures. No visual-only failure modes. A blind user should never be in a state where something happened and they don't know.
+
 ## What Huxley is not
 
 - **Not a chatbot.** Voice-first means the conversation runs in real time, with interruption, with side effects (audio playback, notifications), not turn-by-turn text.

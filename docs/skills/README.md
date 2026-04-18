@@ -224,6 +224,118 @@ Skills that want to contribute baseline context to every session prompt implemen
 
 **When _not_ to use it**: don't dump state that changes frequently — the context is only refreshed on session connect, not mid-conversation.
 
+## Proactive speech — `ctx.inject_turn`
+
+Some skills need to speak without the user asking first: a medication reminder fires at 9am; a message from family arrives; an appointment is 30 minutes away. The framework's turn loop normally only runs on user PTT, but `ctx.inject_turn` lets a skill inject a synthetic turn from outside.
+
+```python
+from datetime import timedelta
+from huxley_sdk import Urgency
+
+await ctx.inject_turn(
+    "Es hora de la pastilla de las nueve.",
+    urgency=Urgency.INTERRUPT,
+    dedup_key="med_9am_2026-04-18",
+    expires_after=timedelta(hours=2),
+    tag="medication",
+)
+```
+
+**`urgency`** (pick the tier that matches your intent — the framework doesn't care what generates each tier):
+
+- `AMBIENT` — speak only if user is idle; otherwise drop silently. For social/low-signal events like scheduled greetings.
+- `CHIME_DEFER` (default) — play a tier earcon now, hold speech for the next time the user PTTs. For non-urgent messages, routine reminders.
+- `INTERRUPT` — preempt current media, play earcon, speak now. For time-sensitive reminders (medication).
+- `CRITICAL` — preempts everything including other stream claims. Reserved for top-priority events (incoming calls, emergencies).
+
+**`dedup_key`** — if a turn with the same key is already pending, replace it. Prevents "5 pings for the same message."
+
+**`expires_after`** — TTL. Drops from the queue silently after this. Defaults from persona config per tier (see `docs/io-plane.md`).
+
+**Don't build retry into the skill's call to `inject_turn`.** If your skill needs retry-until-acknowledged semantics (medication reminders), use your own `background_task` scheduler to re-call `inject_turn` at escalating urgency. Framework doesn't model retry.
+
+**Who narrates**: the LLM, in persona voice. Your `prompt` is the instruction (what to say), not the rendered speech. Same pattern as audiobook's `AudioStream.on_complete_prompt`.
+
+## Supervised background tasks — `ctx.background_task`
+
+Skills that schedule proactive events or listen for external input need long-running tasks. Don't spawn `asyncio.create_task` directly — the framework can't see crashes and your scheduler will silently die.
+
+```python
+async def setup(self, ctx: SkillContext) -> None:
+    self._ctx = ctx
+    ctx.background_task("scheduler", self._scheduler_loop)
+    ctx.background_task("webhook_listener", self._listen)
+
+async def _scheduler_loop(self) -> None:
+    while True:
+        due = await self._next_due()
+        await asyncio.sleep(max(0, (due.when - now()).total_seconds()))
+        await self._ctx.inject_turn(due.prompt, urgency=Urgency.INTERRUPT)
+```
+
+**What you get**: logs on crash (via `aexception`), automatic restart with exponential backoff, permanent-failure event if the task exceeds `max_restarts_per_hour`. Framework-owned; no skill-side retry logic needed.
+
+**Teardown**: all your tasks are cancelled on `skill.teardown()`. Framework handles it.
+
+## Client events — `ctx.subscribe_client_event`
+
+Hardware buttons, sensor data, client-side state transitions — anything the client wants the server to know about beyond audio. Clients emit `{"type": "client_event", "event": "<namespaced-key>", "payload": {...}}`. Skills subscribe by key.
+
+```python
+async def setup(self, ctx: SkillContext) -> None:
+    ctx.subscribe_client_event("calls.panic_button", self._on_panic)
+
+async def _on_panic(self, payload: dict) -> None:
+    await self._ctx.inject_turn(
+        "Llamando a Mario", urgency=Urgency.CRITICAL
+    )
+    # ... dial out via call provider ...
+```
+
+**Namespace your keys as `<skill-name>.<event>`.** The framework reserves `huxley.*` for its own telemetry. Multiple skills can subscribe to the same key; all subscribers are called.
+
+**Unsubscribing**: automatic on skill teardown. Don't track subscriptions yourself.
+
+**Not for PTT or audio** — those are framework-owned fixed message types. `client_event` is for everything else.
+
+## Taking over the mic — `InputClaim`
+
+Some skills need mic PCM to go somewhere other than the voice provider: a voice-memo skill writes mic to a file, a calls skill pipes mic to a remote peer. Return an `InputClaim` side effect from a tool result.
+
+```python
+from huxley_sdk import InputClaim, YieldPolicy
+
+async def handle(self, tool_name: str, args: dict) -> ToolResult:
+    if tool_name == "record_memo":
+        writer = AudioWriter(self._memo_dir / f"{now_iso()}.wav")
+        return ToolResult(
+            output='{"recording": true}',
+            side_effect=InputClaim(
+                on_mic_frame=writer.write,
+                speaker_source=None,
+                on_claim_end=writer.close,
+                yield_policy=YieldPolicy.YIELD_ABOVE,
+            ),
+        )
+```
+
+**While the claim is active**:
+
+- Mic PCM frames go to your `on_mic_frame` handler, not the voice provider
+- The voice provider session is suspended (resumes automatically when the claim ends)
+- Optional `speaker_source` async iterator streams bytes to the client speaker (bidirectional I/O for calls)
+
+**The claim ends when**:
+
+- Your `speaker_source` iterator exhausts
+- The user PTTs (escape hatch — always available)
+- Your skill cancels via the returned handle
+- A higher-priority `inject_turn` preempts (per your `yield_policy`)
+
+In every case, your `on_claim_end(reason)` callback fires so you can clean up (flush files, close sockets, hang up calls).
+
+**`yield_policy`** — same enum as `AudioStream`. Default `YIELD_CRITICAL` means only `CRITICAL`-urgency injected turns can preempt your claim. A voice-memo skill might use `YIELD_ABOVE` (lets `INTERRUPT`-urgency reminders through); a calls skill uses `YIELD_CRITICAL` (only another critical event interrupts an active call).
+
 ## Logging — make your skill debuggable
 
 Skills get a logger via the SDK context. Use it. The framework's debugging workflow (described in [`../observability.md`](../observability.md)) depends on every component emitting structured events with the right namespace.
