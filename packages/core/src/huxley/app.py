@@ -30,6 +30,7 @@ from huxley.loader import discover_skills
 from huxley.logging import setup_logging
 from huxley.server.server import AudioServer
 from huxley.state.machine import StateMachine
+from huxley.storage.backup import ensure_daily_snapshot
 from huxley.storage.db import Storage
 from huxley.storage.skill import NamespacedSkillStorage
 from huxley.turn import TurnCoordinator
@@ -138,6 +139,15 @@ class Application:
             log_file=log_file,
         )
         await logger.ainfo("huxley_starting")
+
+        # Snapshot the existing DB before opening it for the new run, so
+        # today's backup captures the state we're about to mutate. Idempotent
+        # (no-op if today's snapshot exists). On a fresh checkout this is a
+        # no-op since the DB doesn't exist yet.
+        try:
+            ensure_daily_snapshot(self.storage.db_path)
+        except Exception:
+            await logger.aexception("storage_snapshot_failed")
 
         await self.storage.init()
         await self.skill_registry.setup_all(self._build_skill_context)

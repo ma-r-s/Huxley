@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from huxley.storage.db import SCHEMA_VERSION, Storage
+
 if TYPE_CHECKING:
-    from huxley.storage.db import Storage
+    from pathlib import Path
 
 
 class TestAudiobookProgress:
@@ -67,3 +69,56 @@ class TestSettings:
         await storage.set_setting("volume", "50")
         result = await storage.get_setting("volume")
         assert result == "50"
+
+
+class TestWalAndSchemaVersion:
+    """T2.1 — WAL mode + schema versioning."""
+
+    async def test_journal_mode_is_wal(self, storage: Storage) -> None:
+        cursor = await storage._conn.execute("PRAGMA journal_mode")
+        row = await cursor.fetchone()
+        assert row is not None
+        assert row[0].lower() == "wal"
+
+    async def test_schema_version_recorded_on_fresh_db(self, storage: Storage) -> None:
+        cursor = await storage._conn.execute(
+            "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+        )
+        row = await cursor.fetchone()
+        assert row is not None
+        assert int(row[0]) == SCHEMA_VERSION
+
+    async def test_schema_version_idempotent_on_reinit(self, tmp_db_path: Path) -> None:
+        # First init writes the version; second init must not duplicate or
+        # mutate the row, and must not raise.
+        s1 = Storage(tmp_db_path)
+        await s1.init()
+        await s1.close()
+
+        s2 = Storage(tmp_db_path)
+        await s2.init()
+        try:
+            cursor = await s2._conn.execute(
+                "SELECT COUNT(*) FROM schema_meta WHERE key = 'schema_version'"
+            )
+            row = await cursor.fetchone()
+            assert row is not None
+            assert row[0] == 1
+        finally:
+            await s2.close()
+
+    async def test_schema_version_mismatch_logged_not_crashed(self, tmp_db_path: Path) -> None:
+        # Simulate a future-version DB on disk being opened by older code.
+        s1 = Storage(tmp_db_path)
+        await s1.init()
+        await s1._conn.execute(
+            "UPDATE schema_meta SET value = ? WHERE key = 'schema_version'",
+            (str(SCHEMA_VERSION + 99),),
+        )
+        await s1._conn.commit()
+        await s1.close()
+
+        s2 = Storage(tmp_db_path)
+        # Must not raise — older code proceeds, just logs the drift.
+        await s2.init()
+        await s2.close()

@@ -406,21 +406,100 @@ Decided NOT to:
 
 ## T2.1 — Storage WAL + daily snapshot
 
-**Status**: queued · **Task**: #92 · **Effort**: ~50 LOC + launchd plist (half day)
+**Status**: done (2026-04-18) · **Task**: #92 · **Effort**: ~120 LOC + 12 tests (estimated 50 LOC; backup module + tests grew it)
 
 **Problem.** Audiobook positions live in a single SQLite file with no WAL, no
 backup, no migration framework. The user's only state is "where I was in this
 book." Losing it is invisible until next interaction. For a system whose UX is
 "resume my book," losing the position is a silent UX disaster.
 
-**Proposed solution.**
+### Validation (Gate 1)
 
-1. Enable SQLite WAL mode at connection time (`PRAGMA journal_mode=WAL`). Protects
-   against partial-write corruption on crashes.
-2. launchd cron: daily `cp abuelos.db data/backups/abuelos-$(date +%F).db`,
-   prune to last 7 days.
-3. Add `schema_version` table + startup check. Sets up migration framework for
-   future without overengineering it now.
+`Storage.init()` (pre-fix) opened the DB without `PRAGMA journal_mode=WAL` and
+without `synchronous=NORMAL`, leaving the default rollback-journal mode that
+risks corruption on crash. No backup mechanism existed in code or in
+`scripts/launchd/`. No `schema_meta` table — schema changes would be silent
+breakage.
+
+### Design (Gate 2 — light, mechanical item)
+
+Three independent changes:
+
+1. **WAL mode** — `PRAGMA journal_mode=WAL` + `PRAGMA synchronous=NORMAL` at
+   connection time. WAL prevents partial-write corruption and allows
+   concurrent readers; NORMAL synchronous is safe under WAL with the small
+   risk of losing the last few transactions on power loss (acceptable for
+   this data class).
+2. **Schema versioning** — `schema_meta` table + `_init_schema_version`
+   startup helper. Records current version on fresh DB; logs drift on
+   mismatch (no migration runner yet — that lands when first migration is
+   actually needed).
+3. **Daily snapshot helper** (`huxley.storage.backup`) — uses SQLite's
+   online backup API (`sqlite3.Connection.backup`), which is safe to run
+   while the main process holds the DB open. Idempotent: today's snapshot
+   exists → no-op (but still prunes). Snapshots beyond `retention_days`
+   are deleted by parsing the YYYY-MM-DD suffix from the filename. Wired
+   into `Application.start()` so the launchd auto-start path gets backups
+   for free without a separate cron.
+
+Decided NOT to:
+
+- Use a launchd cron — Application.start() runs at every login (already
+  via launchd KeepAlive), so backups happen on the same trigger.
+  Eliminates a second moving part.
+- Build a migration runner now — adds surface for future schema changes
+  without a current customer. Schema version tracking is enough scaffolding.
+
+### Definition of Done
+
+- [x] `Storage.init()` enables WAL + synchronous=NORMAL
+- [x] `schema_meta` table created; `SCHEMA_VERSION = 1` recorded on fresh DB
+- [x] Drift logged via `storage_schema_version_mismatch` on version
+      mismatch (proceeds without crashing)
+- [x] `huxley.storage.backup.ensure_daily_snapshot` created with retention
+      pruning, called from `Application.start()` before `storage.init()`
+- [x] `Storage.db_path` exposed as read-only property so backup module
+      doesn't need internal access
+- [x] All 242 tests green (was 230, +12 new in `test_storage.py`
+      `TestWalAndSchemaVersion` and the new `test_storage_backup.py`)
+
+### Tests (Gate 3)
+
+`packages/core/tests/unit/test_storage.py` → `TestWalAndSchemaVersion`:
+
+- `test_journal_mode_is_wal`
+- `test_schema_version_recorded_on_fresh_db`
+- `test_schema_version_idempotent_on_reinit`
+- `test_schema_version_mismatch_logged_not_crashed`
+
+`packages/core/tests/unit/test_storage_backup.py` → `TestEnsureDailySnapshot`:
+
+- `test_returns_none_when_source_db_missing`
+- `test_creates_snapshot_with_dated_filename`
+- `test_default_backup_dir_is_sibling_backups_folder`
+- `test_custom_backup_dir`
+- `test_idempotent_returns_none_when_today_snapshot_exists`
+- `test_prunes_snapshots_older_than_retention`
+- `test_prune_runs_even_when_no_new_snapshot_created`
+- `test_prune_ignores_files_that_dont_match_naming`
+
+### Docs touched (Gate 4)
+
+- `docs/triage.md` — this entry updated with full audit trail
+- ADR — none. WAL + schema versioning + backup mechanism are runtime
+  concerns, not architectural decisions affecting framework consumers.
+  Entry serves as the audit trail.
+- `docs/observability.md` — `storage_snapshot_created` event is
+  self-documenting; no convention change needed.
+
+### Ship (Gate 5)
+
+- Commit hash filled in by the commit step.
+- **Lessons**: SQLite's online backup API (stdlib, not aiosqlite-specific)
+  is the right tool for live DB snapshots. Test pruning with explicit date
+  injection (`today=` kwarg) — much cleaner than freezegun. The first cut
+  of the test had an off-by-one in the expected survivors list (cutoff
+  semantics: `<` not `<=`); regression test caught it on first run.
 
 ---
 

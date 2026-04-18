@@ -12,6 +12,11 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
+SCHEMA_VERSION = 1
+"""Bump when an _SCHEMA change requires a migration. Today's startup check
+just records drift in the log; migration runner lands when first migration
+is needed (see docs/triage.md T2.1)."""
+
 _SCHEMA = """\
 CREATE TABLE IF NOT EXISTS audiobook_progress (
     book_id    TEXT PRIMARY KEY,
@@ -29,6 +34,11 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS schema_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 
@@ -39,13 +49,64 @@ class Storage:
         self._db_path = db_path
         self._db: aiosqlite.Connection | None = None
 
+    @property
+    def db_path(self) -> Path:
+        """Filesystem path of the SQLite database (read-only)."""
+        return self._db_path
+
     async def init(self) -> None:
-        """Open database and create tables if needed."""
+        """Open database, enable WAL, create tables, record schema version."""
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db = await aiosqlite.connect(self._db_path)
+
+        # WAL mode protects against partial-write corruption on crash and
+        # allows concurrent reads while a write is in progress. The -wal
+        # sidecar file is acceptable since we already own the data dir.
+        # NORMAL synchronous is safe under WAL with the small extra risk of
+        # losing the last few transactions on power loss — fine for
+        # audiobook positions and conversation summaries.
+        await self._db.execute("PRAGMA journal_mode=WAL")
+        await self._db.execute("PRAGMA synchronous=NORMAL")
+
         await self._db.executescript(_SCHEMA)
         await self._db.commit()
-        await logger.ainfo("storage_initialized", path=str(self._db_path))
+        await self._init_schema_version()
+        await logger.ainfo(
+            "storage_initialized",
+            path=str(self._db_path),
+            schema_version=SCHEMA_VERSION,
+        )
+
+    async def _init_schema_version(self) -> None:
+        """Record the schema version, or warn on drift.
+
+        Fresh DB or pre-versioning DB: insert current version.
+        Matching version: no-op.
+        Mismatch: log a warning and proceed — no migrations defined yet, so
+        the best we can do is record drift. Migration runner (see triage
+        T2.1 follow-up) lands when first migration is needed.
+        """
+        cursor = await self._conn.execute(
+            "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            await self._conn.execute(
+                "INSERT INTO schema_meta (key, value) VALUES ('schema_version', ?)",
+                (str(SCHEMA_VERSION),),
+            )
+            await self._conn.commit()
+            await logger.ainfo("storage_schema_version_set", version=SCHEMA_VERSION)
+            return
+
+        current = int(row[0])
+        if current != SCHEMA_VERSION:
+            await logger.awarning(
+                "storage_schema_version_mismatch",
+                db=current,
+                code=SCHEMA_VERSION,
+                note="no migrations defined yet — proceeding with newer code",
+            )
 
     async def close(self) -> None:
         """Close the database connection."""
