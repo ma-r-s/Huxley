@@ -455,7 +455,15 @@ class TurnCoordinator:
         try:
             async for chunk in stream.factory():
                 await self._send_audio(chunk)
-            await logger.ainfo("coord.audio_stream_ended", turn=turn_id, error=False)
+            await logger.ainfo("coord.audio_stream_ended", turn=turn_id, cancelled=False)
+            if stream.on_complete_prompt:
+                await logger.ainfo(
+                    "coord.audio_stream_complete_prompt",
+                    turn=turn_id,
+                    prompt_len=len(stream.on_complete_prompt),
+                )
+                await self._provider.send_conversation_message(stream.on_complete_prompt)
+                await self._provider.request_response()
         except asyncio.CancelledError:
             await logger.ainfo("coord.audio_stream_ended", turn=turn_id, cancelled=True)
             raise

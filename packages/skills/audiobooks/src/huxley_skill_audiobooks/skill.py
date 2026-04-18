@@ -42,6 +42,18 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
     from pathlib import Path
 
+# Prompt sent to the LLM when a book ends naturally (not interrupted).
+# The model narrates it in the persona's tone and language.
+_ON_COMPLETE_PROMPT = (
+    "El libro ha llegado a su fin. "
+    "Felicita al usuario por haber terminado el libro y preguntale "
+    "si quiere que busque otro."
+)
+
+# WAV header size in bytes (standard PCM WAV: 44 bytes). Stripped when
+# loading sound files so only raw PCM16 24kHz mono bytes remain.
+_WAV_HEADER_BYTES = 44
+
 _AUDIOBOOK_EXTENSIONS = {".mp3", ".m4a", ".m4b", ".ogg", ".opus", ".flac", ".wav"}
 
 LAST_BOOK_KEY = "last_id"
@@ -76,6 +88,21 @@ def _fuzzy_score(query: str, candidate: str) -> float:
     return SequenceMatcher(None, query.lower(), candidate.lower()).ratio()
 
 
+def _load_sound_palette(directory: Path) -> dict[str, bytes]:
+    """Load *.wav files from directory; strip WAV header; cache as raw PCM16."""
+    from pathlib import Path as _Path
+
+    palette: dict[str, bytes] = {}
+    d = _Path(directory)
+    if not d.exists():
+        return palette
+    for wav in sorted(d.glob("*.wav")):
+        raw = wav.read_bytes()
+        if len(raw) > _WAV_HEADER_BYTES:
+            palette[wav.stem] = raw[_WAV_HEADER_BYTES:]
+    return palette
+
+
 class AudiobooksSkill:
     """Skill for searching and playing audiobooks from a local library.
 
@@ -99,6 +126,11 @@ class AudiobooksSkill:
         self._storage: SkillStorage | None = None
         self._logger: SkillLogger | None = None
         self._catalog: list[dict[str, str]] = []
+        # Sound palette: {name: raw_pcm_bytes}. Loaded at setup() from sounds_path.
+        # Empty dict = no earcons; skill runs silently.
+        self._sounds: dict[str, bytes] = {}
+        # Trailing silence injected after book_end earcon to buffer model latency.
+        self._silence_ms: int = 500
         # Live-playback tracking — set at stream start, cleared in finally.
         # Used by get_progress to estimate current position without storage round-trip.
         self._now_playing_id: str | None = None
@@ -261,7 +293,9 @@ class AudiobooksSkill:
                 return ToolResult(output=json.dumps({"error": f"Unknown tool: {tool_name}"}))
 
     async def setup(self, ctx: SkillContext) -> None:
-        """Resolve config, build the player, scan the library."""
+        """Resolve config, build the player, scan the library, load sounds."""
+        from pathlib import Path
+
         cfg = ctx.config
         library_raw = cfg.get("library", "data/audiobooks")
         library_path = (ctx.persona_data_dir / library_raw).resolve()
@@ -274,10 +308,21 @@ class AudiobooksSkill:
         self._storage = ctx.storage
         self._logger = ctx.logger
         self._catalog = self._scan_library(library_path)
+
+        sounds_raw = cfg.get("sounds_path", "sounds")
+        sounds_dir = (
+            Path(sounds_raw)
+            if Path(sounds_raw).is_absolute()
+            else (ctx.persona_data_dir / sounds_raw)
+        )
+        self._sounds = _load_sound_palette(sounds_dir)
+        self._silence_ms = int(cfg.get("silence_ms", 500))
+
         await ctx.logger.ainfo(
             "audiobooks.catalog_loaded",
             count=len(self._catalog),
             path=str(library_path),
+            sounds=list(self._sounds.keys()),
         )
 
     async def teardown(self) -> None:
@@ -466,10 +511,17 @@ class AudiobooksSkill:
         start_position: float,
     ) -> Callable[[], AsyncIterator[bytes]]:
         """Build a playback factory for the coordinator's terminal barrier."""
-        player = self._player
-        logger = self._logger
+        player = self._player_req
+        logger = self._logger_req
         set_position = self._set_position
         skill = self  # for live-position tracking via get_progress
+        book_start_pcm = self._sounds.get("book_start", b"")
+        book_end_pcm = self._sounds.get("book_end", b"")
+        # Trailing silence (PCM16 24kHz mono) buffering model generation latency.
+        sample_rate, channels, bytes_per_sample = 24000, 1, 2
+        silence_bytes = b"\x00" * (
+            sample_rate * channels * bytes_per_sample * self._silence_ms // 1000
+        )
 
         async def stream() -> AsyncIterator[bytes]:
             skill._now_playing_id = book_id
@@ -480,9 +532,17 @@ class AudiobooksSkill:
             completed = False
             await logger.ainfo("audiobooks.stream_started", book_id=book_id, start=start_position)
             try:
+                if book_start_pcm:
+                    yield book_start_pcm
+
                 async for chunk in player.stream(path, start_position=start_position):
                     bytes_read += len(chunk)
                     yield chunk
+
+                # Natural completion — trailing earcon + silence before on_complete_prompt.
+                if book_end_pcm:
+                    yield book_end_pcm
+                yield silence_bytes
                 completed = True
             except Exception as exc:
                 # CancelledError is BaseException (not Exception) so cancellations
@@ -569,7 +629,7 @@ class AudiobooksSkill:
                     "resuming": resuming,
                 }
             ),
-            side_effect=AudioStream(factory=factory),
+            side_effect=AudioStream(factory=factory, on_complete_prompt=_ON_COMPLETE_PROMPT),
         )
 
     async def _resume_last(self) -> ToolResult:

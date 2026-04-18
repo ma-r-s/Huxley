@@ -93,6 +93,15 @@ class VoiceProvider(Protocol):
         """Return the output of a tool the LLM invoked via `on_tool_call`."""
         ...
 
+    async def send_conversation_message(self, text: str) -> None:
+        """Inject a user-role text message into the conversation without audio.
+
+        Used after natural audio stream completion to prompt the LLM to narrate
+        what just happened (e.g., a book finishing). The caller follows this
+        with `request_response()`.
+        """
+        ...
+
     async def commit_and_request_response(self) -> None:
         """Seal the user's audio turn and ask the LLM to respond.
 

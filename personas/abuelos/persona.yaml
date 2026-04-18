@@ -44,4 +44,9 @@ skills:
     library: audiobooks
     ffmpeg: ffmpeg
     ffprobe: ffprobe
+    # Earcon sounds directory (relative to persona data_dir or absolute).
+    # book_start.wav plays before book audio; book_end.wav plays on natural completion.
+    sounds_path: ../sounds
+    # Trailing silence (ms) injected after book_end to cover model generation latency.
+    silence_ms: 500
   system: {}

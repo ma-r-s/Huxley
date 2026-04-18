@@ -85,10 +85,17 @@ class AudioStream(SideEffect):
     chunks. The framework invokes it at the turn's terminal barrier, so
     the skill's `handle()` can return quickly and the audio lives in
     the coordinator's media task lifecycle.
+
+    `on_complete_prompt`: when the stream ends naturally (not cancelled), the
+    coordinator sends this text as a user-role conversation item and triggers
+    a model response. Use it for end-of-content announcements — e.g., when a
+    book finishes, the model narrates the completion in the persona's tone.
+    Leave `None` for streams where natural completion needs no follow-up.
     """
 
     kind: ClassVar[str] = "audio_stream"
     factory: Callable[[], AsyncIterator[bytes]]
+    on_complete_prompt: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -578,6 +578,93 @@ class TestInterrupt:
         assert flag_when_cancel_called == [True]
 
 
+class TestAudioStreamCompletion:
+    """on_complete_prompt fires after natural stream end; not on cancel."""
+
+    async def test_on_complete_prompt_fires_after_natural_end(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        import asyncio
+
+        stream = AudioStream(
+            factory=_factory(b"audio"),
+            on_complete_prompt="El libro terminó.",
+        )
+        mocks["dispatch_tool"].return_value = ToolResult(output="{}", side_effect=stream)
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("c1", "play_audiobook", {"book_id": "x"})
+        await coordinator.on_response_done()
+
+        # Media task is async — wait for it to finish
+        for _ in range(20):
+            if coordinator.current_media_task is None or coordinator.current_media_task.done():
+                break
+            await asyncio.sleep(0.001)
+
+        names = [entry[0] for entry in provider.sent]
+        assert "send_conversation_message" in names
+        assert ("send_conversation_message", "El libro terminó.") in provider.sent
+        # request_response fires immediately after send_conversation_message
+        cm_idx = next(
+            i for i, e in enumerate(provider.sent) if e[0] == "send_conversation_message"
+        )
+        assert provider.sent[cm_idx + 1] == ("request_response",)
+
+    async def test_on_complete_prompt_skipped_when_none(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        import asyncio
+
+        stream = AudioStream(factory=_factory(b"audio"), on_complete_prompt=None)
+        mocks["dispatch_tool"].return_value = ToolResult(output="{}", side_effect=stream)
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("c1", "play_audiobook", {"book_id": "x"})
+        await coordinator.on_response_done()
+
+        for _ in range(20):
+            if coordinator.current_media_task is None or coordinator.current_media_task.done():
+                break
+            await asyncio.sleep(0.001)
+
+        names = [entry[0] for entry in provider.sent]
+        assert "send_conversation_message" not in names
+
+    async def test_on_complete_prompt_not_fired_on_cancel(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        """If the media task is cancelled mid-stream, no prompt fires."""
+        import asyncio
+
+        event = asyncio.Event()
+
+        async def slow_factory() -> AsyncIterator[bytes]:
+            yield b"first chunk"
+            await event.wait()  # blocks until cancelled
+            yield b"second chunk"
+
+        stream = AudioStream(factory=slow_factory, on_complete_prompt="should not fire")
+        mocks["dispatch_tool"].return_value = ToolResult(output="{}", side_effect=stream)
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("c1", "play_audiobook", {"book_id": "x"})
+        await asyncio.sleep(0.001)  # let media task start
+        await coordinator.interrupt()
+
+        names = [entry[0] for entry in provider.sent]
+        assert "send_conversation_message" not in names
+
+
 class TestResponseCancelledFlag:
     """Stale delta drop flag behavior."""
 

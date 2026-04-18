@@ -90,6 +90,9 @@ class StubVoiceProvider:
     async def request_response(self) -> None:
         self.sent.append(("request_response",))
 
+    async def send_conversation_message(self, text: str) -> None:
+        self.sent.append(("send_conversation_message", text))
+
     # --- Test-driver surface: emit events the provider "received" ---
 
     async def emit_audio_delta(self, pcm: bytes) -> None:

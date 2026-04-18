@@ -218,8 +218,8 @@ class TestPlayAudiobookEndToEnd:
         await coord.on_response_done()  # no follow-up, terminal barrier
         await _settle(coord.current_media_task)
 
-        # Player mock yields 3 chunks per stream.
-        assert mocks["send_audio"].await_count == 3
+        # Player mock yields 3 chunks; +1 trailing silence on natural completion.
+        assert mocks["send_audio"].await_count == 4
 
 
 class TestMidChainInterruptDropsFactories:

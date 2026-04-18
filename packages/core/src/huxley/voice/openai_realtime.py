@@ -215,6 +215,26 @@ class OpenAIRealtimeProvider:
         )
         self._reset_timeout()
 
+    async def send_conversation_message(self, text: str) -> None:
+        """Inject a user-role text message into the conversation without audio.
+
+        Used by the coordinator after natural audio stream completion to
+        trigger an LLM narration (e.g., announcing a book finished).
+        """
+        if not self._ws:
+            return
+        await logger.ainfo("session.tx.conversation_message", text_len=len(text))
+        await self._send(
+            ClientEventType.CONVERSATION_ITEM_CREATE,
+            {
+                "item": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": text}],
+                }
+            },
+        )
+
     async def send_tool_output(self, call_id: str, output: str) -> None:
         """Post a tool call's output back to OpenAI as a conversation item."""
         if not self._ws:
