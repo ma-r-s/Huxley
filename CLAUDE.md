@@ -58,9 +58,10 @@ uv sync                                                    # install all workspa
 uv run ruff check packages/                                # lint
 uv run ruff format packages/                               # format
 uv run mypy packages/sdk/src packages/core/src             # strict type check
-uv run --package huxley-sdk pytest packages/sdk/tests      # SDK tests (10)
-uv run --package huxley pytest packages/core/tests         # framework tests (126)
-cd packages/core && uv run huxley                          # run the server (loads .env from packages/core)
+uv run --package huxley-sdk pytest packages/sdk/tests                     # SDK tests (10)
+uv run --package huxley pytest packages/core/tests                        # framework tests (108)
+uv run --package huxley-skill-audiobooks pytest packages/skills/audiobooks/tests  # audiobooks skill (54)
+cd packages/core && uv run huxley                                         # run the server (loads .env from packages/core)
 ```
 
 Web dev client (run from `web/`):

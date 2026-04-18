@@ -20,7 +20,7 @@ v2 proposed named audio channels (`speech`, `media`, cut to just those two after
 
 - `AudioChannel` type → gone
 - `AudioRouter` → gone
-- `EffectKind` enum (`NONE`/`START_STREAM`/`CLEAR_STREAM`) → gone; replaced by `audio_factory: Callable | None` on `ToolResult`
+- `EffectKind` enum (`NONE`/`START_STREAM`/`CLEAR_STREAM`) → gone; replaced by `side_effect: SideEffect | None` on `ToolResult`, with `AudioStream(factory=...)` as the first kind
 - `channel` field on `audio` and `audio_clear` WebSocket messages → gone; the protocol stays near-unchanged
 - Per-channel client-side queues in `playback.ts` → gone; `AudioPlayback` stays as it is today
 - Separate `InterruptBarrier` class → gone; interrupt becomes an atomic method on `TurnCoordinator`
@@ -321,6 +321,8 @@ server/src/abuel_os/
 - **Net**: **approximately -100 lines** for v3 (v2 projected ~zero net). The repo ends up smaller, not the same size.
 
 ## Migration plan — **6 steps**
+
+> **Historical** — all six steps shipped 2026-04-14. Field names below reflect the v3-spec naming used during migration; the field landed as `side_effect: SideEffect | None` with `AudioStream(factory=...)` as the first kind, NOT as a top-level `audio_factory`. Read the current `packages/sdk/src/huxley_sdk/types.py` for the actual surface; this section is preserved as a record of the rollout.
 
 Down from v2's 8. Steps for "implement channel queue" and "client per-channel state" disappear because there are no channels.
 

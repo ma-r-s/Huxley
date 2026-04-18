@@ -71,12 +71,19 @@ constraints:
 skills:
   audiobooks:
     library: audiobooks
+    sounds_path: ../sounds # earcon palette (book_start.wav, book_end.wav)
+    sounds_enabled: true # master toggle for all earcons + completion silence
+    silence_ms: 500 # silence sent AFTER request_response to mask model latency
+    on_complete_prompt:
+      | # LLM-narrated end-of-book message; persona-overridable
+      El libro ha llegado a su fin. Felicita al usuario por haber terminado
+      el libro y preguntale si quiere que busque otro.
   system: {}
 ```
 
 The live file is at [`personas/abuelos/persona.yaml`](../../personas/abuelos/persona.yaml). A real deployment customizes the `system_prompt` block with the user's actual name, location, and any other context that helps the agent feel personal.
 
-A real deployment customizes the `personality` block with the user's actual name, location, and any other context that helps the agent feel personal.
+The sound UX architecture (earcons, completion-prompt mechanism, persona overrides) is documented in [`../sounds.md`](../sounds.md).
 
 ## Success criteria for AbuelOS v1
 

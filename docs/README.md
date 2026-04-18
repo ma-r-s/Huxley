@@ -22,6 +22,7 @@ Single source of truth for what Huxley is, what it does, and how it's built. Cod
 - [**personas/abuelos.md**](./personas/abuelos.md) — canonical persona spec (Spanish-language assistant for an elderly blind user)
 - [**skills/audiobooks.md**](./skills/audiobooks.md) — first-party skill spec
 - [**turns.md**](./turns.md) — turn coordinator spec
+- [**sounds.md**](./sounds.md) — sound UX architecture: earcons, completion-prompt mechanism, persona config, the critic-list state
 
 ## Research notes
 

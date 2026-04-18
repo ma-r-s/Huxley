@@ -366,47 +366,47 @@ These are client changes only. They do not affect the server or the WebSocket pr
 
 ## Implementation stages
 
-### Stage A — Extract and catalog sounds (done)
+### Stage A — Extract and catalog sounds ⚠️ partial
 
 - [x] Run silence detection on `All Wii BIOS Sounds.aiff`
 - [x] Extract 22 candidate segments as PCM16 24kHz WAV files (`scripts/extract_sounds.py`)
 - [x] Build duration + peak level catalog (this document)
-- [ ] Listen to each candidate; copy winners to `personas/abuelos/sounds/book_start.wav` and `book_end.wav`
+- [ ] Listen to candidates and copy winners to `personas/abuelos/sounds/{book_start,book_end}.wav`. Until done, the skill loads an empty palette and runs without earcons (warning logged at startup). Best candidates by length+peak: `s02_chime.wav` (1.94s, -5.7dB) for book_start, `s08_chime.wav` (1.25s, -2.3dB) for book_end.
 
-**DoD**: `personas/abuelos/sounds/book_start.wav` and `book_end.wav` exist, are correct format, play correctly, are under 2s each.
+**Caveat**: candidates derive from copyrighted Nintendo audio. Personal-use only — replace with CC0 / generated chimes before distributing the AbuelOS persona publicly.
 
-### Stage B — SDK + coordinator changes
+### Stage B — SDK + coordinator wiring ✅
 
-Files to change:
+- [x] `AudioStream.on_complete_prompt: str | None = None` (SDK)
+- [x] `AudioStream.completion_silence_ms: int = 0` (SDK; coordinator owns the silence injection so it can fire `request_response` first)
+- [x] `VoiceProvider.send_conversation_message(text)` + `OpenAIRealtimeProvider` impl
+- [x] `_consume_audio_stream` sets `model_speaking=True` for factory audio (#9)
+- [x] `_maybe_fire_completion_prompt` creates a synthetic IN_RESPONSE turn (#2), bails on `response_cancelled` (#4), fires `request_response` BEFORE silence (#8)
+- [x] `_apply_side_effects` clears `current_turn = None` BEFORE spawning the media task (race fix for #2)
+- [x] Coordinator + SDK tests for natural-end, cancellation, race, model_speaking, silence ordering
 
-- `packages/sdk/src/huxley_sdk/types.py` — add `on_complete_prompt: str | None = None` to `AudioStream`
-- `packages/core/src/huxley/voice/openai_realtime.py` — add `send_conversation_message(text: str)`
-- `packages/core/src/huxley/voice/protocol.py` (or wherever `VoiceProvider` lives) — add method to protocol
-- `packages/core/src/huxley/turn/coordinator.py` — check `stream.on_complete_prompt` after natural completion
-- Tests: `test_turn_coordinator.py`, `test_coordinator_skill_integration.py`
+### Stage C — Audiobooks skill wiring ✅
 
-**DoD**: Tests pass. Integration test (manual): after book ends naturally, model speaks the completion message.
+- [x] `_load_sound_palette()` uses `wave.open()` (handles non-44-byte WAV headers, skips wrong-format files) (#10)
+- [x] `setup()` loads palette from `ctx.config["sounds_path"]` (relative to persona data_dir, or absolute)
+- [x] `setup()` warns when sounds_dir exists but palette is empty / book_start / book_end missing (#1)
+- [x] `_build_factory` yields `book_start_pcm` first, `book_end_pcm` after natural completion; `completed = True` set BEFORE the trailing chime so PTT during decoration still records the book as done (#3)
+- [x] `_play` and seek/control paths all carry `on_complete_prompt` + `completion_silence_ms` (#6)
+- [x] `sounds_enabled` toggle disables palette + silence atomically (#11)
+- [x] Persona-overridable `on_complete_prompt` via `skills.audiobooks.on_complete_prompt` (#5)
 
-### Stage C — Skill changes (earcon injection + on_complete_prompt)
+### Stage D — Client-side thinking tone (deferred)
 
-Files to change:
-
-- `packages/skills/audiobooks/src/huxley_skill_audiobooks/skill.py`:
-  - `setup()`: load sounds palette from `ctx.config["sounds_path"]`
-  - `_build_factory()`: inject leading/trailing PCM
-  - `_play()`: pass `on_complete_prompt=ON_COMPLETE_PROMPT` on the `AudioStream`
-- `personas/abuelos/persona.yaml`: add `sounds_path` and `silence_ms` under `skills.audiobooks`
-- Tests: `test_skill.py` — assert factory yields earcon bytes first/last; assert `on_complete_prompt` set
-
-**DoD**: Tests pass. Integration test (manual): start book → hear chime → book plays → book ends → chime → model speaks.
-
-### Stage D — Client-side thinking tone (later)
-
-- [ ] `web/src/routes/+page.svelte`: change thinking tone from 440Hz to ~120Hz
+- [ ] `web/src/routes/+page.svelte`: change thinking tone from 440Hz to ~120Hz (sub-vocal)
 - [ ] Raise silence timeout 400ms → 1500ms
 - [ ] Add descending two-tone error chime on `state: IDLE` after error
 
 **DoD**: `bun run check` passes. Browser smoke test: hold PTT with no content → thinking tone starts at ~1.5s, is clearly non-speech frequency.
+
+### Open follow-up
+
+- [ ] Replace Wii BIOS earcons with CC0 / generated sounds (synth via numpy or download from freesound.org). Personal-use only until done.
+- [ ] Extract WAV-loading + PCM-injection into a framework `PlaySound` primitive when a second skill needs chimes (deferred — premature today).
 
 ---
 

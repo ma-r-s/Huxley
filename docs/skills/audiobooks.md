@@ -103,6 +103,12 @@ The skill lives in [`packages/skills/audiobooks/src/huxley_skill_audiobooks/skil
 | Human-readable `position_label` in play/seek responses (e.g. "23 minutos y 40 segundos") | ✅                                                                                                                |
 | `get_progress` tool — current position, total duration, remaining time, % complete       | ✅ (estimates live position without storage round-trip while playing)                                             |
 | `list_in_progress` tool — all books with a saved position > 0                            | ✅                                                                                                                |
+| **`book_start` earcon** before book audio begins                                         | ✅ leading PCM bytes yielded by factory; loaded from `personas/<name>/sounds/book_start.wav`                      |
+| **`book_end` earcon** after natural completion                                           | ✅ trailing PCM bytes yielded by factory before `completed = True`; PTT during chime still records book as done   |
+| **`on_complete_prompt` triggers LLM-narrated end-of-book announcement**                  | ✅ persona-overridable text; coordinator creates synthetic IN_RESPONSE turn and calls `request_response`          |
+| **Completion silence buffer overlaps with model first-token latency**                    | ✅ `completion_silence_ms` on `AudioStream`; coordinator sends silence AFTER firing `request_response`            |
+| **`sounds_enabled` master toggle** to opt persona out of all earcons                     | ✅ `false` clears palette + zeros silence_ms                                                                      |
+| **WAV palette loaded via `wave.open()`** (handles non-44-byte headers)                   | ✅ wrong-format files (non-mono / non-24kHz / non-PCM16) silently skipped                                         |
 | Periodic position save while playing (every 10 s)                                        | ❌ not implemented (no longer needed in practice — finally-block save covers cancel/EOF, only matters on SIGKILL) |
 | M4B embedded metadata parsing (read title/author/desc from tags)                         | ❌ uses filename only (ffprobe has it, not wired into catalog)                                                    |
 | Chapter navigation (`seek_chapter`)                                                      | ❌ only seconds-based rewind/forward                                                                              |
@@ -209,12 +215,14 @@ Every tool return path must include a `message` field written for the LLM narrat
 
 ## Gaps / TODO
 
-- [ ] End-of-book announcement — audio stops silently; blind user can't tell if the book ended or the device crashed. Requires a coordinator-level callback when a media stream completes naturally.
+- [x] **End-of-book announcement** — earcon (`book_end.wav`) plays via the stream factory; coordinator then injects `on_complete_prompt` into the conversation and the LLM narrates "el libro terminó, ¿busco otro?" in the persona's tone. Full architecture in [`../sounds.md`](../sounds.md).
+- [x] **Sound UX (earcons + completion silence buffer)** — `book_start` plays before book audio; `book_end` plays after natural completion; coordinator sends `completion_silence_ms` of silence concurrently with model first-token latency. All configurable via `personas/<name>/persona.yaml`.
 - [ ] Playback speed control — elderly users may benefit from 0.8x. ffmpeg `atempo` filter; stored per-session.
 - [ ] M4B embedded-metadata reader (surface `ffprobe`'s `format.tags` into the catalog)
 - [ ] Chapter awareness via `ffprobe`'s `chapters` array + `seek_chapter` action
 - [ ] Periodic position save while playing — only matters under SIGKILL; finally-block covers all normal shutdown paths.
 - [ ] Nunca-decir-no audit: every `search` / `control` return path has a `message` field
 - [ ] MP3-folder-with-sidecar fallback support
+- [ ] Replace Wii BIOS earcons with CC0/original sounds — current `book_start.wav` / `book_end.wav` are derived from copyrighted Nintendo audio. Personal-use only until replaced; ship-blocker if AbuelOS persona is ever distributed.
 
 Roadmap reference: [v1 — the MVP in roadmap.md](../roadmap.md#v1--the-mvp-marios-bar).

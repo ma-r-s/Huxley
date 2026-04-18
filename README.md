@@ -179,12 +179,12 @@ uv run mypy packages/sdk/src packages/core/src \
             packages/skills/audiobooks/src \
             packages/skills/system/src                          # strict type check
 uv run --directory packages/sdk pytest                          # SDK tests (10)
-uv run --directory packages/core pytest                         # framework tests (94)
-uv run --directory packages/skills/audiobooks pytest            # audiobooks skill tests (40)
+uv run --directory packages/core pytest                         # framework tests (108)
+uv run --directory packages/skills/audiobooks pytest            # audiobooks skill tests (54)
 cd web && bun run check                                         # svelte-check
 ```
 
-144 Python tests + 0 svelte-check errors is the green bar. See [`CLAUDE.md`](./CLAUDE.md) for the contributor workflow and [`docs/verifying.md`](./docs/verifying.md) for an end-to-end smoke-test script.
+172 Python tests + 0 svelte-check errors is the green bar. See [`CLAUDE.md`](./CLAUDE.md) for the contributor workflow and [`docs/verifying.md`](./docs/verifying.md) for an end-to-end smoke-test script.
 
 ## License
 

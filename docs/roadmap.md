@@ -27,6 +27,7 @@ Make Huxley what it claims to be in [`vision.md`](./vision.md): a framework anyo
 - ✅ **Persona loader**: `personas/<name>/persona.yaml` parsed at startup (version, name, voice, language, timezone, system_prompt, constraints, skills). Resolution order: `HUXLEY_PERSONA` env var > default `personas/abuelos`. Data lives under `personas/<name>/data/`.
 - ✅ **Constraint registry**: `never_say_no`, `confirm_destructive`, `child_safe`, `no_religious_content` defined in `huxley.constraints`; persona composes them into the system prompt at connect time. Unknown names fail at load.
 - ✅ **Rename / namespace cleanup**: repo path and Python namespace both on `huxley`; _AbuelOS_ is the persona.
+- ✅ **Sound UX layer (server-side)** — `AudioStream` carries `on_complete_prompt` + `completion_silence_ms`; coordinator creates a synthetic IN_RESPONSE turn for the LLM-narrated end-of-content announcement, fires `request_response` BEFORE the silence buffer so model latency overlaps with silence playback. Skill loads sound palette via `wave.open()`. Persona owns `sounds_path` / `sounds_enabled` / `silence_ms` / `on_complete_prompt`. Full design + critic-list state in [`sounds.md`](./sounds.md).
 - [P1] **Skill SDK README + cookbook**: a third-party skill author can write a working skill in under 30 minutes with no Huxley-internals knowledge.
 
 ### Later
@@ -34,7 +35,8 @@ Make Huxley what it claims to be in [`vision.md`](./vision.md): a framework anyo
 - [P1] **Proactive notifications** (`ctx.notify(text)`): the single missing primitive that prevents reminders / inbound-message skills today. SDK gains a method that injects a synthetic system turn through `SessionManager`; protocol gains a server-initiated turn-start message. Should land before AbuelOS-v∞ work begins. See [`extensibility.md`](./extensibility.md) for the gap analysis.
 - [P1] **Per-skill secret interpolation** in `persona.yaml`: support `${HUXLEY_TELEGRAM_TOKEN}` so personas declare the shape of the secret without storing it. Decide before stage 4 ships.
 - [P2] **Background-task pattern for skills** (BLE, MQTT, polling daemons): formalize the "skill spawns an asyncio task in setup()" convention into an SDK helper so the framework can supervise / restart / log task crashes. Today it works but the framework is blind to failures.
-- [P1] **Sound UX layer** — earcons for book_start and book_end (Stage A done: 22 candidate sounds extracted from Wii BIOS sounds; Stages B+C still needed). Full architecture in [`sounds.md`](./sounds.md). When book ends naturally, model voice announces it via `on_complete_prompt` mechanism (coordinator injects prompt, model responds in persona tone). Client-side thinking tone fix (440Hz → sub-200Hz drone, 400ms → 1500ms threshold) is Stage D. See sounds.md for implementation stages.
+- [P2] **Client-side sonic UX (Stage D from `sounds.md`)** — fix the dev client's thinking tone: 440Hz pulse → sub-200Hz drone (out of vocal band), 400ms → 1500ms silence threshold, add a descending two-tone error chime when `state: IDLE` after a session drop. Server-side sound work is done; this is a `web/` change only.
+- [P2] **`PlaySound` framework primitive** — when the second skill needs a chime (system notifications, error tones), extract the audiobooks skill's WAV-loading + PCM-injection into a reusable framework helper. Premature until the second use case lands.
 - **Voice provider abstraction**: extract OpenAI Realtime as one implementation of a `VoiceProvider` interface. Trigger: a credible second provider exists. Not speculative.
 - **More side-effect kinds**: state changes, image output. Trigger: a real skill needs them.
 - **Skill discovery aids**: `huxley list-installed-skills`, `huxley enable foo` CLIs that mutate `persona.yaml`. Polish, not blocking anything.
@@ -58,18 +60,18 @@ The first persona Huxley runs in production. Spec lives at [`personas/abuelos.md
 
 > _"The moment I can speak to the assistant and it helps me find a book, listen to it, and move forward, backwards, stop and resume another time — that's v1 done."_
 
-| Capability                                      | Status                                                               |
-| ----------------------------------------------- | -------------------------------------------------------------------- |
-| Search for a book by natural phrase             | ✅                                                                   |
-| Start playback from a search result             | ✅                                                                   |
-| Pause / resume mid-sentence                     | ✅                                                                   |
-| Navigate forward / backward by seconds          | ✅                                                                   |
-| Navigate by chapter (_"el siguiente capítulo"_) | ❌ (chapter awareness pending)                                       |
-| Stop playback                                   | ✅                                                                   |
-| Resume later (_"sigue con el libro"_)           | ✅                                                                   |
-| Every negative response offers an alternative   | ⚠️ partial — coverage in `search` and `control` paths still has gaps |
-| End-of-book announcement (earcon + model voice) | ⚠️ architecture designed; Stages B+C pending (see sounds.md)         |
-| End-to-end smoke test with target user          | ❌ not yet                                                           |
+| Capability                                      | Status                                                                                    |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Search for a book by natural phrase             | ✅                                                                                        |
+| Start playback from a search result             | ✅                                                                                        |
+| Pause / resume mid-sentence                     | ✅                                                                                        |
+| Navigate forward / backward by seconds          | ✅                                                                                        |
+| Navigate by chapter (_"el siguiente capítulo"_) | ❌ (chapter awareness pending)                                                            |
+| Stop playback                                   | ✅                                                                                        |
+| Resume later (_"sigue con el libro"_)           | ✅                                                                                        |
+| Every negative response offers an alternative   | ⚠️ partial — coverage in `search` and `control` paths still has gaps                      |
+| End-of-book announcement (earcon + model voice) | ✅ shipped — see [`sounds.md`](./sounds.md); curated chimes still pending CC0 replacement |
+| End-to-end smoke test with target user          | ❌ not yet                                                                                |
 
 ### v2 — next skills
 
