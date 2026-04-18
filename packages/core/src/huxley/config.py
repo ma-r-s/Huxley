@@ -42,17 +42,14 @@ class Settings(BaseSettings):
     openai_voice: str | None = None
 
     # --- Persona selection ---
-    # When unset, falls back to the default persona directory
-    # (`./personas/abuelos`). Set to a directory name under `./personas/`.
+    # When unset, the loader auto-discovers the only persona under
+    # `./personas/` (if exactly one exists). Set to a directory name
+    # under `./personas/` to disambiguate when multiple are present.
     persona: str | None = None
 
     # --- WebSocket server ---
     server_host: str = "localhost"
     server_port: int = 8765
-
-    # --- Wake word (Pi hardware client — not used by server directly) ---
-    wakeword_model_path: str = "models/hey_abuela.tflite"
-    wakeword_threshold: float = 0.7
 
     # --- Session ---
     conversation_max_minutes: int = 55

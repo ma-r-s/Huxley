@@ -1,10 +1,11 @@
 """Persona spec — YAML-driven declaration of who the agent is.
 
 A persona is `personas/<name>/persona.yaml` plus a `data/` dir. At
-startup Huxley picks one (CLI > `HUXLEY_PERSONA` env var > default
-`./personas/abuelos`), parses it into a `PersonaSpec`, and uses it to
-drive the system prompt, voice, skill list, per-skill config, and
-storage location.
+startup Huxley picks one — precedence: CLI path > `HUXLEY_PERSONA` env
+var > autodiscovery (the only persona under `./personas/`, if exactly
+one is present). Parses it into a `PersonaSpec` and uses it to drive
+the system prompt, voice, skill list, per-skill config, and storage
+location.
 
 Keep this file small: schema definition + file loader + prompt
 composition. Anything richer (multi-language constraints, persona
@@ -67,19 +68,52 @@ class PersonaSpec(BaseModel):
 SUPPORTED_VERSION = 1
 
 
-def _find_personas_root(name: str) -> Path:
-    """Walk up from CWD until we find a personas/<name> directory.
+def _find_personas_dir() -> Path | None:
+    """Walk up from CWD looking for a `./personas/` directory.
 
-    Lets the server run from any subdirectory of the repo (e.g.
-    packages/core/) without requiring an explicit HUXLEY_PERSONA path.
-    Falls back to ./personas/<name> so the error message is readable.
+    Returns the first match (so the server can run from any subdirectory
+    of the repo, e.g. `packages/core/`). Returns `None` if no `personas/`
+    directory exists between CWD and filesystem root.
     """
     cwd = Path.cwd()
     for directory in [cwd, *cwd.parents]:
-        candidate = directory / "personas" / name
+        candidate = directory / "personas"
         if candidate.is_dir():
             return candidate
-    return cwd / "personas" / name
+    return None
+
+
+def _find_named_persona(name: str) -> Path:
+    """Locate `./personas/<name>/` by walking up from CWD.
+
+    Falls back to `./personas/<name>` (relative to CWD) so the error
+    message is readable when the directory really doesn't exist.
+    """
+    personas_dir = _find_personas_dir()
+    if personas_dir is not None:
+        candidate = personas_dir / name
+        if candidate.is_dir():
+            return candidate
+    return Path.cwd() / "personas" / name
+
+
+def _autodiscover_persona() -> Path | None:
+    """Return the only persona dir under `./personas/`, or None.
+
+    When `HUXLEY_PERSONA` isn't set and no CLI path is given, the
+    framework can still pick the right persona if exactly one exists in
+    the local `./personas/` directory. If zero or multiple are present,
+    returns None — caller raises a clear error pointing at the env var.
+    """
+    personas_dir = _find_personas_dir()
+    if personas_dir is None:
+        return None
+    persona_dirs = [
+        d for d in personas_dir.iterdir() if d.is_dir() and (d / "persona.yaml").is_file()
+    ]
+    if len(persona_dirs) == 1:
+        return persona_dirs[0]
+    return None
 
 
 def resolve_persona_path(
@@ -88,12 +122,24 @@ def resolve_persona_path(
 ) -> Path:
     """Resolve the persona directory to load.
 
-    Precedence: CLI path > `HUXLEY_PERSONA` env var > default `abuelos`.
-    `env_name` is a persona name; searched upward from CWD.
+    Precedence: CLI path > `HUXLEY_PERSONA` env var > autodiscovery
+    (single persona under `./personas/`). If autodiscovery cannot pick
+    a single persona, raises `PersonaError` with a message pointing at
+    the env var — the framework refuses to guess.
     """
     if cli_path is not None:
         return cli_path.resolve()
-    return _find_personas_root(env_name or "abuelos").resolve()
+    if env_name is not None:
+        return _find_named_persona(env_name).resolve()
+    discovered = _autodiscover_persona()
+    if discovered is not None:
+        return discovered.resolve()
+    msg = (
+        "no persona could be auto-discovered. Set HUXLEY_PERSONA to a "
+        "directory name under ./personas/, or run with exactly one "
+        "persona present under ./personas/."
+    )
+    raise PersonaError(msg)
 
 
 def load_persona(path: Path | None = None) -> PersonaSpec:
@@ -103,7 +149,7 @@ def load_persona(path: Path | None = None) -> PersonaSpec:
     Raises `PersonaError` with a readable message on any IO / parse /
     validation / version-mismatch failure — fail fast at startup.
     """
-    root = path.resolve() if path is not None else _find_personas_root("abuelos").resolve()
+    root = path.resolve() if path is not None else resolve_persona_path()
     yaml_path = root / "persona.yaml"
     data_dir = (root / "data").resolve()
 

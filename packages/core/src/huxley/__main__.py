@@ -29,7 +29,9 @@ def main() -> None:
         print(f"Persona error: {e}", file=sys.stderr)
         print(
             "Set HUXLEY_PERSONA to a persona name under ./personas/, "
-            "or run from a directory with ./personas/abuelos/persona.yaml.",
+            "or run from a directory containing ./personas/<name>/persona.yaml. "
+            "If exactly one persona is present under ./personas/, it is "
+            "picked automatically.",
             file=sys.stderr,
         )
         sys.exit(1)

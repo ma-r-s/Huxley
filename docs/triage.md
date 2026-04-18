@@ -833,12 +833,14 @@ If first-user sessions show frequent refusals, this jumps to Tier 1.
 
 ## D3 — Tier 3 polish (4 items)
 
-| Task | Title                                                 | Effort   |
-| ---- | ----------------------------------------------------- | -------- |
-| #96  | Add `prompt_context()` to Skill Protocol with default | 30 min   |
-| #97  | Auto-namespace tool names (`<skill>.<tool>`)          | ~50 LOC  |
-| #98  | Strip remaining `AbuelOS` hardcoded refs              | 30 min   |
-| #99  | Allow second WS client as monitor in dev              | ~4 hours |
+| Task | Title                                                 | Effort   | Status              |
+| ---- | ----------------------------------------------------- | -------- | ------------------- |
+| #96  | Add `prompt_context()` to Skill Protocol with default | 30 min   | queued              |
+| #97  | Auto-namespace tool names (`<skill>.<tool>`)          | ~50 LOC  | queued              |
+| #98  | Strip remaining `AbuelOS` hardcoded refs              | 30 min   | **done 2026-04-18** |
+| #99  | Allow second WS client as monitor in dev              | ~4 hours | queued              |
+
+**#98 — done**. Removed the hardcoded `"abuelos"` fallback from `persona.py`'s persona resolution; replaced with autodiscovery (uses the only persona under `./personas/`, raises clear `PersonaError` otherwise). Deleted dead `wakeword_model_path = "models/hey_abuela.tflite"` + `wakeword_threshold` fields from `Settings` (no code reads them). Updated `__main__.py` error message and module docstrings. The two remaining hits to `grep -ri abuel packages/core/src/` are honest contextualization comments in `cost.py` and `constraints/__init__.py` (calibration notes, not behavior). 6 new tests in `TestResolvePersonaPath` cover CLI > env > autodiscovery > clear-error precedence.
 
 **Revisit when**: any session has spare cycles, OR the first community skill is
 about to land (#97 becomes urgent), OR ESP32 hardware arrives (#99 becomes

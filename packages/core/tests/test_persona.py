@@ -90,3 +90,89 @@ class TestLoadPersona:
         _write_persona(tmp_path, body)
         with pytest.raises(PersonaError, match="Invalid persona spec"):
             load_persona(tmp_path)
+
+
+class TestResolvePersonaPath:
+    """T1.6/T2.3 follow-up: framework no longer hardcodes 'abuelos'."""
+
+    def test_cli_path_takes_precedence(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from huxley.persona import resolve_persona_path
+
+        explicit = _write_persona(tmp_path / "explicit", VALID_YAML)
+        monkeypatch.chdir(tmp_path)
+
+        resolved = resolve_persona_path(cli_path=explicit, env_name="ignored")
+
+        assert resolved == explicit.resolve()
+
+    def test_env_name_resolves_under_personas(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from huxley.persona import resolve_persona_path
+
+        target = _write_persona(tmp_path / "personas" / "myagent", VALID_YAML)
+        monkeypatch.chdir(tmp_path)
+
+        resolved = resolve_persona_path(env_name="myagent")
+
+        assert resolved == target.resolve()
+
+    def test_autodiscovers_single_persona_when_unset(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from huxley.persona import resolve_persona_path
+
+        target = _write_persona(tmp_path / "personas" / "only", VALID_YAML)
+        monkeypatch.chdir(tmp_path)
+
+        resolved = resolve_persona_path()
+
+        assert resolved == target.resolve()
+
+    def test_autodiscovery_picks_named_when_multiple(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from huxley.persona import resolve_persona_path
+
+        a = _write_persona(tmp_path / "personas" / "a", VALID_YAML)
+        _write_persona(tmp_path / "personas" / "b", VALID_YAML)
+        monkeypatch.chdir(tmp_path)
+
+        # Multiple personas: env_name disambiguates.
+        resolved = resolve_persona_path(env_name="a")
+        assert resolved == a.resolve()
+
+    def test_autodiscovery_fails_when_multiple_and_no_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from huxley.persona import resolve_persona_path
+
+        _write_persona(tmp_path / "personas" / "a", VALID_YAML)
+        _write_persona(tmp_path / "personas" / "b", VALID_YAML)
+        monkeypatch.chdir(tmp_path)
+
+        # Multiple personas + no env_name = framework refuses to guess.
+        with pytest.raises(PersonaError, match="auto-discovered"):
+            resolve_persona_path()
+
+    def test_autodiscovery_fails_when_no_personas_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from huxley.persona import resolve_persona_path
+
+        # Empty tmp_path — no personas/ directory anywhere up the tree.
+        # We need to chdir somewhere that won't have the project's
+        # personas/ visible up the tree, so use a deep tmp subdir.
+        deep = tmp_path / "a" / "b" / "c"
+        deep.mkdir(parents=True)
+        monkeypatch.chdir(deep)
+
+        # tmp_path lives under /private/var/folders/... and there's no
+        # personas/ in that tree, so autodiscovery returns None.
+        # If the actual repo's personas/ is reachable from the test's
+        # ancestors (it shouldn't be from /tmp), this test would falsely
+        # pass — but tmp_path under /tmp is isolated.
+        with pytest.raises(PersonaError, match="auto-discovered"):
+            resolve_persona_path()
