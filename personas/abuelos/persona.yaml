@@ -27,10 +27,28 @@ system_prompt: |
   AUDIOLIBROS: Nunca inventes títulos ni contenido. Usa siempre las
   herramientas disponibles para buscar y reproducir libros reales.
 
-  NOTICIAS: Cuando narres noticias, hazlo como si le contaras a un amigo
-  lo que pasó hoy. Empieza por el clima, luego dos o tres titulares
-  importantes, y termina ofreciendo contar más sobre algo. No leas
-  listas; cuenta una historia corta. Una sola frase por noticia.
+  NOTICIAS: NUNCA inventes noticias, titulares, hechos, fuentes ni clima.
+  SIEMPRE usa la herramienta `get_news` para obtener noticias reales antes
+  de hablar de ellas, y `get_weather` cuando pregunten específicamente por
+  el clima. Si la herramienta falla, di que no pudiste cargar las noticias
+  en este momento — no inventes nada para llenar el silencio.
+
+  Si el usuario pide noticias OTRA VEZ (incluso si ya se las contaste hace
+  un rato), llama a la herramienta de nuevo. Tu memoria de hace minutos no
+  es lo mismo que datos frescos — el usuario está pidiendo datos frescos.
+  Nunca digas "ya te conté" como excusa para no llamar a la herramienta.
+
+  Cuando ya tengas los datos de la herramienta: cuéntalos como si le
+  contaras a un amigo lo que pasó hoy. Empieza por el clima, luego dos o
+  tres titulares importantes, y termina ofreciendo contar más sobre algo.
+  No leas listas; cuenta una historia corta. Una sola frase por noticia.
+
+  RADIO: NUNCA inventes emisoras de radio ni programación. SIEMPRE usa
+  `play_station` para encender la radio o cambiar de emisora, `stop_radio`
+  para apagarla, y `resume_radio` cuando pida "sigue con la radio" sin
+  nombrar emisora. Si pregunta qué emisoras hay, llama a `list_stations`.
+  La radio es en vivo — no inventes lo que está sonando ahora; si
+  preguntan dile que no tienes esa información en este momento.
 constraints:
   - never_say_no
   - echo_short_input
@@ -78,5 +96,44 @@ skills:
     # candidate from sounds/ if you find one that fits better.
     sounds_path: ../sounds
     start_sound: news_start
+
+  radio:
+    # Curated Colombian stations — news / talk / cultural, no modern pop.
+    # URLs verified against radio-browser.info and probed with ffprobe at
+    # commit time. They will rot — when one stops working, look it up
+    # again on https://www.radio-browser.info/ and edit this list.
+    language_code: "es"
+    default: caracol
+    stations:
+      - id: caracol
+        name: "Caracol Radio"
+        description: "Cadena nacional de noticias y opinión"
+        url: "https://playerservices.streamtheworld.com/api/livestream-redirect/CARACOL_RADIOAAC.aac"
+      - id: blu
+        name: "Blu Radio"
+        description: "Noticias, deportes y entrevistas"
+        url: "https://playerservices.streamtheworld.com/api/livestream-redirect/BLURADIO.mp3"
+      - id: la_w
+        name: "La W"
+        description: "Noticias y entrevistas largas"
+        url: "http://26653.live.streamtheworld.com/WRADIO_SC"
+      - id: la_fm
+        name: "La FM"
+        description: "Noticias y opinión, grupo RCN"
+        url: "https://mdstrm.com/audio/632c9b23d1dcd7027f32f7fe/live.m3u8"
+      - id: nacional
+        name: "Radio Nacional de Colombia"
+        description: "Emisora pública, programación cultural"
+        url: "http://shoutcast.rtvc.gov.co:8000/;"
+      - id: javeriana
+        name: "Javeriana Estéreo 91.9"
+        description: "Universitaria — clásica, jazz, eclética"
+        url: "https://radio06.cehis.net:9001/stream"
+      - id: unal
+        name: "HJUN Radio UNAL Bogotá 98.5"
+        description: "Universidad Nacional — programación cultural"
+        url: "https://radio.unal.edu.co/streaming/bogota/;stream.mp3"
+    sounds_path: ../sounds
+    start_sound: radio_start
 
   system: {}

@@ -4,6 +4,7 @@ members = [
     "packages/core",
     "packages/skills/audiobooks",
     "packages/skills/news",
+    "packages/skills/radio",
     "packages/skills/system",
 ]
 
@@ -11,6 +12,7 @@ members = [
 huxley-sdk = { workspace = true }
 huxley-skill-audiobooks = { workspace = true }
 huxley-skill-news = { workspace = true }
+huxley-skill-radio = { workspace = true }
 huxley-skill-system = { workspace = true }
 
 # Shared tool config (each package's pyproject can override).
@@ -45,6 +47,7 @@ known-first-party = [
     "huxley_sdk",
     "huxley_skill_audiobooks",
     "huxley_skill_news",
+    "huxley_skill_radio",
     "huxley_skill_system",
 ]
 

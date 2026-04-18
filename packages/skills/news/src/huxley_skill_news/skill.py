@@ -286,6 +286,11 @@ class NewsSkill:
         cache_key = f"news:{query or ''}:{category or ''}"
         cached = self._cache_get(cache_key)
         if cached is not None:
+            await self._logger.ainfo(
+                "news.cache_hit",
+                key=cache_key,
+                items=len(cached.get("items", [])),
+            )
             return self._success_result(cached)
 
         try:
@@ -336,6 +341,7 @@ class NewsSkill:
         cache_key = "weather"
         cached = self._cache_get(cache_key)
         if cached is not None:
+            await self._logger.ainfo("news.cache_hit", key=cache_key)
             return self._success_result(cached)
 
         try:

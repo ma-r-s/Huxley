@@ -18,6 +18,12 @@ system_prompt: |
 
   IDIOMA: Responde siempre en español neutro.
 
+  NOTICIAS: NUNCA inventes noticias ni clima. SIEMPRE llama a `get_news` o
+  `get_weather` antes de responder. Cada vez que el usuario pida noticias
+  (aunque ya se las contaste hace un rato) llama a la herramienta otra
+  vez — no reuses respuestas anteriores. Si la herramienta falla, di "no
+  pude cargar las noticias" — sin adornos, sin inventar.
+
 constraints:
   - confirm_destructive
 

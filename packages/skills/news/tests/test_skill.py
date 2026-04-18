@@ -245,13 +245,23 @@ class TestGetNews:
             }
         )
         skill = NewsSkill(http=http)
-        await skill.setup(_make_ctx(tmp_path))
+        ctx = _make_ctx(tmp_path)
+        await skill.setup(ctx)
 
         await skill.handle("get_news", {})
         request_count_after_first = len(http.requested_urls)
         await skill.handle("get_news", {})
         # Second call hits cache → no new HTTP requests
         assert len(http.requested_urls) == request_count_after_first
+        # Cache hit must be logged so it's visible in production logs
+        # (otherwise debugging "the chime fired but the news is the same"
+        # requires guessing whether the tool ran with stale data).
+        cache_hit_calls = [
+            c
+            for c in ctx.logger.ainfo.await_args_list  # type: ignore[attr-defined]
+            if c.args and c.args[0] == "news.cache_hit"
+        ]
+        assert len(cache_hit_calls) == 1
 
     async def test_category_weather_routes_to_weather_handler(self, tmp_path: Path) -> None:
         http = FakeHttpClient(responses={"open-meteo.com": _open_meteo_response()})

@@ -23,6 +23,7 @@ Single source of truth for what Huxley is, what it does, and how it's built. Cod
 - [**personas/basicos.md**](./personas/basicos.md) — terse counter-persona; proves skills are persona-agnostic
 - [**skills/audiobooks.md**](./skills/audiobooks.md) — first-party skill (audio playback via `AudioStream`)
 - [**skills/news.md**](./skills/news.md) — second first-party skill (info tool via `PlaySound` chime)
+- [**skills/radio.md**](./skills/radio.md) — internet radio (live HTTP/Icecast streams via ffmpeg)
 - [**turns.md**](./turns.md) — turn coordinator spec
 - [**sounds.md**](./sounds.md) — sound UX architecture: earcons, completion-prompt mechanism, persona config, the critic-list state
 

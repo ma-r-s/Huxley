@@ -182,10 +182,11 @@ uv run --directory packages/sdk pytest                          # SDK tests (19)
 uv run --directory packages/core pytest                         # framework tests (113)
 uv run --directory packages/skills/audiobooks pytest            # audiobooks skill tests (55)
 uv run --directory packages/skills/news pytest                  # news skill tests (18)
+uv run --directory packages/skills/radio pytest                 # radio skill tests (19)
 cd web && bun run check                                         # svelte-check
 ```
 
-205 Python tests + 0 svelte-check errors is the green bar. See [`CLAUDE.md`](./CLAUDE.md) for the contributor workflow and [`docs/verifying.md`](./docs/verifying.md) for an end-to-end smoke-test script.
+224 Python tests + 0 svelte-check errors is the green bar. See [`CLAUDE.md`](./CLAUDE.md) for the contributor workflow and [`docs/verifying.md`](./docs/verifying.md) for an end-to-end smoke-test script.
 
 ## Run as a background service (macOS)
 

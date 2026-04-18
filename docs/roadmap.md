@@ -80,9 +80,10 @@ The first persona Huxley runs in production. Spec lives at [`personas/abuelos.md
 Each is its own `huxley-skill-*` package.
 
 1. ✅ **`huxley-skill-news`** — Open-Meteo + Google News RSS, persona-agnostic. See [`skills/news.md`](./skills/news.md).
-2. **`huxley-skill-music`** — streaming radio and local music
-3. **`huxley-skill-messaging`** — outbound text to a contact via WhatsApp or voice memo. **This is the concrete escape hatch that makes the `never_say_no` constraint more than a verbal promise.**
-4. **`huxley-skill-contacts`** — config-driven contact list that messaging depends on
+2. ✅ **`huxley-skill-radio`** — curated HTTP/Icecast streams via ffmpeg. See [`skills/radio.md`](./skills/radio.md).
+3. **`huxley-skill-music`** — local music library (separate from radio; library management + search)
+4. **`huxley-skill-messaging`** — outbound text to a contact via WhatsApp or voice memo. **This is the concrete escape hatch that makes the `never_say_no` constraint more than a verbal promise.**
+5. **`huxley-skill-contacts`** — config-driven contact list that messaging depends on
 
 ### v∞ — when firmware lands
 
