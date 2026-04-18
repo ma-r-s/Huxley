@@ -156,6 +156,21 @@ class ContentStreamObserver:
     async def _cancel_pump(self) -> None:
         task = self._task
         if task is not None and not task.done():
+            # Self-cancel guard: if an observer callback chain ends up
+            # delivering NONE back to this observer while still executing
+            # inside `_pump` (e.g., `on_eof` → caller routes through a
+            # release that triggers NONE notification), `task is
+            # current_task()`. Python doesn't deadlock here — CancelledError
+            # fires at `await task` and is suppressed, the task still
+            # completes — but we'd have called `task.cancel()` on a task
+            # that's finishing naturally, leaving it in a "cancelling"
+            # state briefly and potentially interacting with other
+            # cancel-aware constructs (`asyncio.shield`, etc.) in
+            # surprising ways. Skip the cancel-await dance; the task is
+            # already on its way out, let it exit naturally.
+            if task is asyncio.current_task():
+                self._task = None
+                return
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task

@@ -121,9 +121,9 @@ class TurnCoordinator:
         self.response_cancelled = True                      # 1. drop flag FIRST
         if self.current_turn:
             self.current_turn.pending_factories.clear()     # 2. drop pending factories
-        await self.server.send_audio_clear()                # 3. flush client queue
+        await self._stop_content_stream()                   # 3. cancel producer FIRST
+        await self.server.send_audio_clear()                # 4. flush client queue
         await self.speaking_state.force_release()           #    + clear speaker owner
-        await self._stop_content_stream()                   # 4. cancel long-running producer
         if self.session.is_connected:                       # 5. cancel model response
             await self.session.cancel_response()
         if self.current_turn:
@@ -131,6 +131,8 @@ class TurnCoordinator:
 ```
 
 **Rationale for step 1 (drop flag first)**: OpenAI audio deltas arrive asynchronously. Between "we sent `response.cancel`" and "OpenAI actually processed it," more deltas can land. The receive loop checks `response_cancelled` before forwarding each delta — if set, the delta is dropped at the receive point. Without the flag, flush + cancel is not atomic: stale deltas could re-fill a just-flushed client queue.
+
+**Rationale for step 3 before step 4** (content stream stop before force_release): if force_release ran first, the await window before `_stop_content_stream` completes gives the pump task time to execute `_factory_send_audio`. That callback sees `is_speaking=False` (force_release just cleared it) and calls `acquire(FACTORY)` — leaving `SpeakingState` stuck on a dead pump after cleanup completes. Stop the producer first, then clear the flag; nothing can re-acquire what doesn't exist. Same reasoning applies to `on_session_disconnected`.
 
 This is **not** a new invention — `session/manager.py:82` has the same flag today. The coordinator takes ownership of it; session manager becomes thin transport.
 

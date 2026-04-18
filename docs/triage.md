@@ -625,13 +625,22 @@ items. Full critic report in session transcript; summary here.
 **🔴 Must-fix before Stage 2** (real latent bugs, to ship in a single
 focused commit):
 
-- **(#2) Self-cancel deadlock in `ContentStreamObserver._cancel_pump`.**
-  Today's coordinator doesn't route `on_eof → NONE`, so no deadlock. But
-  Stage 2's FocusManager wiring will do exactly that: actor delivers
-  NONE → observer calls `_cancel_pump` → awaits its own task → Python
-  raises `RuntimeError: Task cannot await on itself` → `_notify_safe`
-  swallows it → `on_natural_completion` never fires → audiobook ends
-  silently. Fix: self-task guard in `_cancel_pump` + regression test.
+- **(#2) Self-cancel guard in `ContentStreamObserver._cancel_pump`.**
+  ⚠️ **Revised assessment after implementation**: the critic's "deadlock"
+  claim was wrong. Empirically verified: Python raises `CancelledError`
+  (not `RuntimeError`) at `await task` when the cancel flag is set by
+  the preceding `task.cancel()`, and `contextlib.suppress` catches it —
+  the task completes cleanly and `on_natural_completion` fires. No
+  deadlock, no silent failure. Additionally, the Stage 2 path the
+  critic worried about (`FocusManager.release` from inside `on_eof`)
+  doesn't actually reenter synchronously — the actor serializes via the
+  mailbox, so NONE delivery happens after the pump task has already
+  completed. The guard is kept as **defensive programming**: calling
+  `task.cancel()` on a task that's finishing naturally leaves it in a
+  transient "cancelling" state that could interact surprisingly with
+  `asyncio.shield` / cancel-aware code in the future. Cost: 4 lines.
+  Tests (`TestContentStreamObserverSelfCancel`) verify reentrant NONE
+  delivery behaves identically to a normal natural-end flow.
 - **(#5) `on_session_disconnected` race**: `force_release()` before
   `_stop_content_stream()` has multiple await points between them.
   Pump can re-acquire FACTORY in the gap, surviving past cleanup.

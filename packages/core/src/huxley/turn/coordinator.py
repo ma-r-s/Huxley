@@ -413,11 +413,19 @@ class TurnCoordinator:
             await self._apply_side_effects()
 
     async def on_session_disconnected(self) -> None:
-        """OpenAI session dropped — abort any live turn without cancelling OpenAI."""
+        """OpenAI session dropped — abort any live turn without cancelling OpenAI.
+
+        Ordering note: content stream MUST stop before `force_release`.
+        Between the two awaits, the pump task can run `_factory_send_audio`,
+        observe `is_speaking=False`, and re-acquire FACTORY — leaving
+        SpeakingState stuck on a dead pump after cleanup completes.
+        """
         had_media = self._content_is_running()
         was_speaking = self._speaking_state.is_speaking
         tid = self._tid()
 
+        # Stop the pump FIRST so no subsequent acquire can race with force_release.
+        await self._stop_content_stream()
         await self._speaking_state.force_release()
 
         await logger.ainfo(
@@ -433,7 +441,6 @@ class TurnCoordinator:
         self.current_turn.state = TurnState.INTERRUPTED
         self.current_turn = None
         self._bind_turn()
-        await self._stop_content_stream()
         await self._send_audio_clear()
 
     # --- Interrupt: the atomic barrier ---
@@ -466,11 +473,15 @@ class TurnCoordinator:
         if self.current_turn is not None:
             self.current_turn.pending_audio_streams.clear()
             self.current_turn.pending_play_sound = None
-        # 3. Flush client-side audio queue + clear model-speaking state
+        # 3. Cancel any live content stream (pump task -> done) BEFORE
+        #    force_release. If the pump is mid-`_factory_send_audio`
+        #    during force_release's await, it can see `is_speaking=False`,
+        #    re-acquire FACTORY, and leave SpeakingState stuck on a dead
+        #    stream after cleanup. Stop the producer first.
+        await self._stop_content_stream()
+        # 4. Flush client-side audio queue + clear model-speaking state
         await self._send_audio_clear()
         await self._speaking_state.force_release()
-        # 4. Cancel any live content stream (pump task -> done)
-        await self._stop_content_stream()
         # 5. Cancel the in-flight response (only if one could exist)
         if will_cancel:
             await self._provider.cancel_current_response()

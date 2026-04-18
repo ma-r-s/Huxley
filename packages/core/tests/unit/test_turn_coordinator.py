@@ -1264,6 +1264,130 @@ class TestModelSpeaking:
         assert states == [True, False]
 
 
+class TestCleanupOrdering:
+    """Regression: content stream must stop BEFORE SpeakingState.force_release.
+
+    Both `interrupt()` and `on_session_disconnected()` previously ran
+    `force_release()` before `_stop_content_stream()`. Between the two
+    awaits, the pump task could re-enter `_factory_send_audio`, see
+    `is_speaking=False`, and re-acquire FACTORY — leaving SpeakingState
+    stuck on a dead pump. These tests lock down the fixed order.
+    """
+
+    @staticmethod
+    def _wrap_call_order(
+        coordinator: TurnCoordinator,
+    ) -> list[str]:
+        """Monkey-patch the two ordering-critical awaits to record order."""
+        calls: list[str] = []
+        original_stop = coordinator._stop_content_stream
+        original_force_release = coordinator._speaking_state.force_release
+
+        async def tracking_stop() -> None:
+            calls.append("stop_content_stream")
+            await original_stop()
+
+        async def tracking_force_release() -> bool:
+            calls.append("force_release")
+            return await original_force_release()
+
+        coordinator._stop_content_stream = tracking_stop  # type: ignore[method-assign]
+        coordinator._speaking_state.force_release = tracking_force_release  # type: ignore[method-assign]
+        return calls
+
+    async def test_interrupt_stops_stream_before_force_release(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+    ) -> None:
+        """`interrupt()` step 3 (stop content) must run before step 4
+        (force_release). Reverse order opens a race where the pump's
+        `_factory_send_audio` re-acquires FACTORY after force_release clears it.
+        """
+        import asyncio
+
+        async def forever_stream() -> AsyncIterator[bytes]:
+            while True:
+                yield b"x"
+                await asyncio.sleep(0.01)
+
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output="{}", side_effect=AudioStream(factory=forever_stream)
+        )
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("c1", "play", {})
+        await coordinator.on_response_done()  # spawns the content stream
+        assert coordinator.current_media_task is not None
+
+        calls = self._wrap_call_order(coordinator)
+        await coordinator.interrupt()
+
+        assert calls.index("stop_content_stream") < calls.index("force_release"), (
+            f"stop_content_stream must run before force_release; got {calls}"
+        )
+
+    async def test_session_disconnect_stops_stream_before_force_release(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+    ) -> None:
+        """Same ordering invariant for `on_session_disconnected`."""
+        import asyncio
+
+        async def forever_stream() -> AsyncIterator[bytes]:
+            while True:
+                yield b"x"
+                await asyncio.sleep(0.01)
+
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output="{}", side_effect=AudioStream(factory=forever_stream)
+        )
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("c1", "play", {})
+        await coordinator.on_response_done()
+        assert coordinator.current_media_task is not None
+
+        calls = self._wrap_call_order(coordinator)
+        await coordinator.on_session_disconnected()
+
+        assert calls.index("stop_content_stream") < calls.index("force_release"), (
+            f"stop_content_stream must run before force_release; got {calls}"
+        )
+
+    async def test_interrupt_leaves_speaking_state_clean_after_factory_stream(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+    ) -> None:
+        """End-state invariant: after interrupting a content stream, no FACTORY
+        owner survives. Directly proves the bug (even without monkey-patching
+        — if the race ever leaks through, owner stays FACTORY)."""
+        import asyncio
+
+        async def forever_stream() -> AsyncIterator[bytes]:
+            while True:
+                yield b"x"
+                await asyncio.sleep(0.01)
+
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output="{}", side_effect=AudioStream(factory=forever_stream)
+        )
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("c1", "play", {})
+        await coordinator.on_response_done()
+        # Let the pump acquire FACTORY via the first chunk
+        await asyncio.sleep(0.02)
+
+        await coordinator.interrupt()
+
+        # Pump is gone and FACTORY (or any owner) is released.
+        assert coordinator._speaking_state.owner is None
+        assert coordinator._speaking_state.is_speaking is False
+
+
 class TestTurnDataclass:
     """Small sanity checks on the Turn dataclass itself."""
 

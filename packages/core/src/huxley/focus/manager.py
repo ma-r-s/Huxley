@@ -349,7 +349,10 @@ class FocusManager:
         Routing through the mailbox keeps the serialization invariant —
         patience expiry is just another event, processed in order.
         """
-        loop = asyncio.get_event_loop()
+        # `get_running_loop()` (not `get_event_loop()`) — this is only called
+        # from within `_run`, which means a loop is always running. The
+        # deprecated fallback behavior of `get_event_loop()` isn't needed.
+        loop = asyncio.get_running_loop()
         key = (activity.channel, activity.interface_name)
         channel = activity.channel
         interface_name = activity.interface_name

@@ -470,3 +470,182 @@ class TestConcurrency:
         assert attempt["raised"] is True
         # Manager is still running — stop() raised before it could tear down.
         assert fm._task is not None and not fm._task.done()
+
+
+class TestTransitionOrder:
+    """Lock down the 'old-off before new-on' invariant across transitions.
+
+    Observers of displaced Activities must complete their NONE/MUST_STOP
+    or BACKGROUND/MUST_PAUSE notification _before_ the newly-foreground
+    Activity's FOREGROUND/PRIMARY notification starts. Without this,
+    observers that rely on the previous owner having released (e.g. a
+    DialogObserver that unlocks mic routing on `on_stop` before a new
+    Activity claims it) will race.
+
+    Today the code holds this invariant by accident (each `_handle_*`
+    awaits the outgoing notification to completion before firing the
+    incoming one). These tests lock it down so a future refactor
+    reordering the awaits fails loudly.
+    """
+
+    @staticmethod
+    def _witness_observer(
+        events: list[tuple[str, str, FocusState]],
+        name: str,
+    ) -> object:
+        """Observer that appends (name, 'start'|'end', focus) to shared list."""
+
+        class Witness:
+            async def on_focus_changed(
+                self, new_focus: FocusState, behavior: MixingBehavior
+            ) -> None:
+                _ = behavior
+                events.append((name, "start", new_focus))
+                # Yield once so if another notification fired concurrently
+                # it would interleave here; with serialized awaits it can't.
+                await asyncio.sleep(0)
+                events.append((name, "end", new_focus))
+
+        return Witness()
+
+    @staticmethod
+    def _assert_old_off_before_new_on(
+        events: list[tuple[str, str, FocusState]],
+        old_name: str,
+        new_name: str,
+        old_focus: FocusState,
+        new_focus: FocusState = FocusState.FOREGROUND,
+    ) -> None:
+        """Old Activity's `old_focus` notification must finish strictly
+        before new Activity's `new_focus` notification starts."""
+        old_end = next(i for i, ev in enumerate(events) if ev == (old_name, "end", old_focus))
+        new_start = next(i for i, ev in enumerate(events) if ev == (new_name, "start", new_focus))
+        assert old_end < new_start, (
+            f"ordering violation: {old_name}'s {old_focus.value} ended at "
+            f"index {old_end}, but {new_name}'s {new_focus.value} started "
+            f"at index {new_start} (events: {events})"
+        )
+
+    async def test_acquire_displaces_with_patience_zero_old_off_before_new_on(self) -> None:
+        """Cross-channel displacement with patience=0 (direct → NONE)."""
+        fm = FocusManager.with_default_channels()
+        fm.start()
+        events: list[tuple[str, str, FocusState]] = []
+
+        a = Activity(
+            channel=Channel.CONTENT,
+            interface_name="content.a",
+            content_type=ContentType.NONMIXABLE,
+            observer=self._witness_observer(events, "a"),
+            patience=timedelta(0),
+        )
+        b = Activity(
+            channel=Channel.DIALOG,  # higher priority (100 < 300)
+            interface_name="dialog.b",
+            content_type=ContentType.NONMIXABLE,
+            observer=self._witness_observer(events, "b"),
+        )
+
+        await fm.acquire(a)
+        await _drain(fm)
+        await fm.acquire(b)
+        await _drain(fm)
+
+        # a went FG, then got displaced to NONE when b acquired.
+        self._assert_old_off_before_new_on(events, "a", "b", FocusState.NONE)
+        await fm.stop()
+
+    async def test_acquire_displaces_with_patience_old_bg_before_new_fg(self) -> None:
+        """Cross-channel displacement with patience > 0 (FG → BACKGROUND)."""
+        fm = FocusManager.with_default_channels()
+        fm.start()
+        events: list[tuple[str, str, FocusState]] = []
+
+        a = Activity(
+            channel=Channel.CONTENT,
+            interface_name="content.a",
+            content_type=ContentType.NONMIXABLE,
+            observer=self._witness_observer(events, "a"),
+            patience=timedelta(seconds=60),
+        )
+        b = Activity(
+            channel=Channel.DIALOG,
+            interface_name="dialog.b",
+            content_type=ContentType.NONMIXABLE,
+            observer=self._witness_observer(events, "b"),
+        )
+
+        await fm.acquire(a)
+        await _drain(fm)
+        await fm.acquire(b)
+        await _drain(fm)
+
+        # a went FG, then BACKGROUND (patience > 0); b then FG.
+        self._assert_old_off_before_new_on(events, "a", "b", FocusState.BACKGROUND)
+        await fm.stop()
+
+    async def test_release_promotes_old_off_before_new_on(self) -> None:
+        """When the FG is released, the next activity in stack promotes.
+        The released Activity's NONE must complete before the promoted
+        Activity's FOREGROUND starts."""
+        fm = FocusManager.with_default_channels()
+        fm.start()
+        events: list[tuple[str, str, FocusState]] = []
+
+        a = Activity(
+            channel=Channel.CONTENT,
+            interface_name="content.a",
+            content_type=ContentType.NONMIXABLE,
+            observer=self._witness_observer(events, "a"),
+            patience=timedelta(seconds=60),
+        )
+        b = Activity(
+            channel=Channel.DIALOG,
+            interface_name="dialog.b",
+            content_type=ContentType.NONMIXABLE,
+            observer=self._witness_observer(events, "b"),
+        )
+
+        await fm.acquire(a)
+        await _drain(fm)
+        await fm.acquire(b)
+        await _drain(fm)
+        # b is FG, a is BACKGROUND. Release b → a re-promotes.
+        events.clear()
+        await fm.release(Channel.DIALOG, "dialog.b")
+        await _drain(fm)
+
+        # b's NONE must finish before a's FG promotion starts.
+        self._assert_old_off_before_new_on(events, "b", "a", FocusState.NONE)
+        await fm.stop()
+
+    async def test_stop_foreground_old_off_before_new_on(self) -> None:
+        """`stop_foreground` also promotes the next activity; same ordering."""
+        fm = FocusManager.with_default_channels()
+        fm.start()
+        events: list[tuple[str, str, FocusState]] = []
+
+        a = Activity(
+            channel=Channel.CONTENT,
+            interface_name="content.a",
+            content_type=ContentType.NONMIXABLE,
+            observer=self._witness_observer(events, "a"),
+            patience=timedelta(seconds=60),
+        )
+        b = Activity(
+            channel=Channel.DIALOG,
+            interface_name="dialog.b",
+            content_type=ContentType.NONMIXABLE,
+            observer=self._witness_observer(events, "b"),
+        )
+
+        await fm.acquire(a)
+        await _drain(fm)
+        await fm.acquire(b)
+        await _drain(fm)
+        events.clear()
+        await fm.stop_foreground()
+        await _drain(fm)
+
+        self._assert_old_off_before_new_on(events, "b", "a", FocusState.NONE)
+        await fm.stop()
