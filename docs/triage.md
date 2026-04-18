@@ -182,7 +182,7 @@ user-installable custom tools, including for personal content."
 
 ## T1.1 — `Catalog` / `SearchableIndex` SDK primitive
 
-**Status**: queued · **Task**: #86 · **Effort**: large (2 weeks: spec + impl + 3-skill refactor)
+**Status**: in_progress (design locked 2026-04-18) · **Task**: #86 · **Effort**: ~1 week (was estimated 2 weeks; in-memory backend + scope cuts shorten it)
 
 **Problem.** Every personal-content skill reinvents fuzzy-search + prompt-context.
 Audiobooks does `SequenceMatcher` + `prompt_context()` dump (top 50). Radio does
@@ -195,24 +195,155 @@ help with the personal-content half.
 skills. De-risks the next 5. Without it, every new personal-content skill
 re-imports fuzzy-match.
 
-**Proposed solution.** `ctx.catalog(name)` returns a `SearchableCatalog` backed by
-SQLite FTS5 (no extra deps; FTS5 ships with sqlite3) with Spanish accent-folding
-tokenizer. Two delivery modes for the LLM-side handoff:
+### Validation (Gate 1)
+
+Code paths reinventing the same pattern, all confirmed:
+
+- `packages/skills/audiobooks/src/huxley_skill_audiobooks/skill.py` — `_fuzzy_score` (SequenceMatcher), `_resolve_book` (fuzzy iter over `_catalog`), `prompt_context()` (manual dump of `_catalog[:50]` as Spanish lines)
+- `packages/skills/radio/src/huxley_skill_radio/skill.py` — `_station_choices()` (manual prompt dump), case-insensitive station name iter
+- `packages/skills/news/src/huxley_skill_news/skill.py` — `dict[str, tuple[float, dict]]` cache layer with manual TTL/key composition
+- Future, per `docs/roadmap.md` v2: contacts (messaging), music library, recipes — all need fuzzy search + prompt awareness
+
+The repeated pattern across 3 shipped skills + 3 planned skills is the validation.
+
+### Design (Gate 2 — locked 2026-04-18 after user sign-off on four decisions)
+
+**Decision 1 — Scope: full Catalog primitive, not a thin helper module.**
+The framework is committing to "personal content + LLM dispatch" as the headline
+differentiator; building a real primitive matches that thesis. A thin helper
+(`huxley_sdk.search.fuzzy_match`) would do half the work and force a rewrite when
+the full primitive lands.
+
+**Decision 2 — Persistence: in-memory rebuilt at `setup()`, with FTS5 upgrade
+path baked into the API.** All current and near-future AbuelOS skills have small
+catalogs (19 books, 7 stations, ~100 contacts) where rebuild-from-source-of-truth
+is fast (sub-second) and avoids the staleness problem that persistent indexes
+have. The `Catalog` interface stays stable; backend swaps to FTS5 later when a
+skill genuinely needs persistence (10k music files etc.).
+
+**Decision 3 — Spanish handling: pre-fold on insert + query.** Lowercase +
+`unicodedata.normalize('NFKD')` strip-accents, applied symmetrically to stored
+fields and incoming queries. ~5 LOC. Avoids the C-extension territory that
+custom FTS5 tokenizers require. Language-agnostic enough for a future English
+persona without rework.
+
+**Decision 4 — Two delivery modes always available.** Both
+`catalog.as_prompt_lines(limit)` and `catalog.as_search_tool(name, description)`
+exposed on every Catalog instance. Skill picks per use case. Cost is zero; avoids
+forcing a guess about future skill needs.
+
+**Locked API** (revised post-critic 2026-04-18 + Mario scoping confirmation that no Huxley deployment will ever ship a >100-item catalog):
 
 ```python
-catalog = ctx.catalog("audiobooks")
-await catalog.upsert(id="brave-new-world", fields={"title": "...", "author": "..."}, payload={...})
-hits = await catalog.search("mundo feliz", limit=5)
-prompt_lines = catalog.as_prompt_lines(limit=50)            # small catalogs: dump in system prompt
-search_tool  = catalog.as_search_tool("search_audiobooks")  # large catalogs: expose tool to LLM
+catalog = ctx.catalog()  # default name; ctx.catalog("playlists") only when skill has multiple
+await catalog.upsert(
+    id="garcia-cien-anos",
+    fields={"title": "Cien años de soledad", "author": "Gabriel García Márquez"},
+    payload={"path": "...", "duration": 1234.5},
+)
+hits = await catalog.search("garcia marquez", limit=5)
+# → [Hit(id, score, fields, payload)]
+
+prompt_text = catalog.as_prompt_lines(limit=50)
+# → "Biblioteca:\n- \"Cien años de soledad\" por Gabriel García Márquez\n- ..."
 ```
 
-The dual-mode matters: 19 books → dump in prompt; 10,000 music files → search-on-
-demand tool. Same primitive.
+**Module layout**:
 
-**Spec questions to answer first**: lifecycle (rebuilt on `setup()` vs
-persistent), multi-field weighting (title vs author), invalidation on file-watcher
-events, where the SQLite file lives (per-skill namespaced under `data_dir`).
+- `packages/sdk/src/huxley_sdk/catalog.py` — public `Catalog` class + `Hit` dataclass + `_fold` accent-stripper
+- `packages/sdk/src/huxley_sdk/types.py` — extend `SkillContext` with `catalog(name) -> Catalog` factory method (returns a fresh in-memory Catalog per name; framework doesn't share state across skills)
+- `packages/sdk/src/huxley_sdk/__init__.py` — export `Catalog`, `Hit`
+- `packages/sdk/tests/test_catalog.py` — primitive tests (insert, search, fold, prompt format, tool def)
+
+**Scoring**: SequenceMatcher ratio per field, max across fields. Preserves the
+current audiobooks behavior (which we know works on the live library) exactly —
+refactor is drop-in. Hits sorted by descending score; ties broken by insertion
+order. Accent folding (NFKD strip + lowercase) applied symmetrically to stored
+fields and incoming queries before scoring.
+
+### Critic Notes (Gate 2)
+
+Spawned a critic against the locked design. Five findings; outcome:
+
+- **(1) Don't ship equal-weight Jaccard** — accepted. Switched scoring backend
+  to SequenceMatcher. Drop-in refactor is now provable via regression-parity
+  test against the existing `_resolve_book`.
+- **(2) Cut `as_search_tool` from v1** — accepted after Mario's scoping
+  confirmation: max audiobook library 100, max contacts 10, music never
+  ships locally. No catalog Huxley will ever ship needs search-on-demand
+  delivery; everything fits in prompt context. Removing this cuts ~50 LOC
+  of public API surface + speculative test surface. Add when caller
+  materializes.
+- **(3) Alias-list support for contacts** — deferred. With 10 contacts max,
+  the contacts skill can fold aliases into the field string ("Carlos
+  Carlitos mi hermano") and let the model do alias resolution from prompt
+  context. Revisit when a future skill genuinely needs structured alias
+  lookup.
+- **(4) `catalog.clear()` for mid-session reindex** — deferred. Use case
+  (reminders skill) is blocked on ProactiveTurn (T1.4), months out.
+  Audiobooks/radio/contacts don't mutate mid-session in this deployment.
+- **(5) SequenceMatcher typo tolerance** — resolved by accepting Finding (1).
+  Same backend → same typo behavior → regression test posture preserved.
+- **(6) Default `name` parameter** — accepted. `ctx.catalog()` is the
+  common case; `ctx.catalog("playlists")` only when a skill has multiple.
+- **(7) Async API over sync backend** — confirmed kept. FTS5 swap stays
+  invisible to skills.
+
+Plus the critic's 5 specific test asserts locked into the DoD test list below.
+
+**Decided NOT to (final):**
+
+- `as_search_tool` method (cut per critic + scoping)
+- Alias-list support `fields: dict[str, str | list[str]]` (deferred)
+- `catalog.clear()` (deferred)
+- Multi-skill shared catalogs (each skill gets its own namespace)
+- File-watcher invalidation (skills can re-call `setup()` if needed; framework doesn't watch)
+- Per-field weighting in v1 (max-across-fields suffices for current shape)
+- Persistent FTS5 backend in v1 (in-memory matches current scale and Mario-confirmed future scope)
+
+`upsert/search` are async even for the in-memory backend so a future FTS5 swap is a backend change, not an API change.
+
+### Definition of Done
+
+- [ ] `huxley_sdk.catalog` module: `Catalog` class with `upsert`, `search`, `as_prompt_lines` methods; `Hit` dataclass; `_fold` helper
+- [ ] `SkillContext.catalog(name="default")` factory method on the existing dataclass
+- [ ] `huxley_sdk.__init__` exports `Catalog`, `Hit`
+- [ ] Spanish accent-folding works symmetrically (stored + query); covered by tests
+- [ ] Scoring uses SequenceMatcher backend (preserves existing audiobooks behavior)
+- [ ] `as_prompt_lines` produces the same shape audiobooks already uses (drop-in refactor)
+- [ ] Audiobooks skill refactored: replace `_fuzzy_score`, `_resolve_book`, `prompt_context()` catalog dump with Catalog calls; existing 65 tests still pass
+- [ ] Radio skill refactored: replace `_station_choices()` with Catalog `as_prompt_lines`
+- [ ] News skill: NOT refactored — its dict-cache use case is different (TTL + URL keys, not fuzzy match) and shouldn't bend the Catalog shape
+- [ ] All shipped tests still green (currently 300 across SDK + core + skills)
+
+**Critic-flagged regression asserts (locked into Gate 3 test list):**
+
+- [ ] **Regression parity**: `test_catalog_matches_legacy_audiobooks_resolution` — load full AbuelOS-style audiobook fixture, run 10 queries the old `_resolve_book` handled correctly + 3 misspelling cases. Top-1 must match. _This is the "drop-in refactor" proof; without it, "65 tests pass" means nothing because those tests mock the fuzzy layer._
+- [ ] **Misspelling tolerance**: query "naufrago" (no accent, missing g) → top hit "Relato de un náufrago"
+- [ ] **Stopword noise**: query "el" against 5 "El X" titles → no result scores above a low threshold
+- [ ] **Determinism**: same fixture + same query → byte-identical top-10 across 100 runs
+- [ ] **Prompt parity**: `as_prompt_lines(50)` on the audiobook fixture produces byte-identical output to the current `prompt_context()` (so system prompt hash is preserved across the refactor)
+
+### Tests (Gate 3 — to be filled after impl)
+
+To be added in `packages/sdk/tests/test_catalog.py`:
+
+- `TestCatalogInsert` — basic upsert, dup id replaces, payload preserved
+- `TestCatalogSearch` — exact match, fuzzy, multi-field, accent-folded, empty query
+- `TestCatalogScoring` — deterministic order, descending score, ties broken by insertion
+- `TestAsPromptLines` — formatting, limit, empty catalog, header customization
+- Plus the 5 critic-flagged regression asserts above
+
+Plus refactor of existing audiobooks + radio tests (no new behavior, but
+assertions move from skill internals to Catalog API).
+
+### Docs touched (Gate 4 — to be filled after impl)
+
+- `docs/concepts.md` — add Catalog to the vocabulary section
+- `docs/skills/README.md` — Catalog usage example in the skill-author guide
+- `docs/triage.md` — this entry's Ship section
+
+### Ship (Gate 5 — to be filled at commit time)
 
 ---
 
@@ -907,7 +1038,7 @@ If first-user sessions show frequent refusals, this jumps to Tier 1.
 
 **Status**: pulled forward to active Tier 2 as **T2.3** (2026-04-18). Coordinator refactor (T1.3) is the riskiest item on the list and refactor without behavior change is exactly where the test net matters. See T2.3 in Active Tier 2 above.
 
-## D3 — Tier 3 polish (4 items)
+## D3 — Tier 3 polish (6 items)
 
 | Task | Title                                                 | Effort   | Status              |
 | ---- | ----------------------------------------------------- | -------- | ------------------- |
@@ -915,6 +1046,8 @@ If first-user sessions show frequent refusals, this jumps to Tier 1.
 | #97  | Auto-namespace tool names (`<skill>.<tool>`)          | ~50 LOC  | queued              |
 | #98  | Strip remaining `AbuelOS` hardcoded refs              | 30 min   | **done 2026-04-18** |
 | #99  | Allow second WS client as monitor in dev              | ~4 hours | queued              |
+| #101 | systemd unit + install script for Linux deployment    | ~30 min  | queued              |
+| #102 | `Dockerfile` + `docker-compose.yml`                   | ~2 hours | deferred            |
 
 **#96 — done**. Added `prompt_context(self) -> str` (returns `""` by default) to the `Skill` Protocol in `huxley_sdk/types.py`. Skills that subclass `Skill` explicitly inherit the empty default — mypy / IDE autocomplete now recognize the method, and a typo (`prompt_contxt`) gets flagged instead of silently doing nothing. Existing duck-typed skills (audiobooks, news, radio, system) are unchanged; the `SkillRegistry.get_prompt_context` keeps its `getattr` fallback for backward compatibility, and that fallback can be removed once those four skills explicitly subclass `Skill`. 4 new tests in `TestPromptContext` cover: skill without override → empty contribution, skill with override → text returned, multiple skills → joined with blank line, empty contribution → filtered.
 
@@ -922,7 +1055,35 @@ If first-user sessions show frequent refusals, this jumps to Tier 1.
 
 **Revisit when**: any session has spare cycles, OR the first community skill is
 about to land (#97 becomes urgent), OR ESP32 hardware arrives (#99 becomes
-urgent).
+urgent), OR Pi deployment is about to start (#101 becomes urgent).
+
+**#101 — systemd unit + install script for Linux deployment**
+
+`scripts/launchd/` ships the macOS auto-start path. Pi deployment needs the
+Linux mirror: a `scripts/systemd/huxley.service` unit + `install.sh` that copies
+to `/etc/systemd/system/`, runs `daemon-reload`, and enables the service.
+Roadmap (`docs/roadmap.md`) already mentions the gap. Same shape as launchd:
+auto-start at boot, restart on crash with backoff, picks up `.env` from
+`packages/core/`, runs as the deploying user. Daily snapshot is already
+cross-platform (T2.1 fires from `Application.start()` — no cron needed).
+**Ship before the first Pi deployment.**
+
+**#102 — `Dockerfile` + `docker-compose.yml` (deferred)**
+
+Deferred per the cost/benefit analysis 2026-04-18: Docker is genuinely useful
+for the framework's "anyone can install Huxley" story, but premature for
+AbuelOS today (one user, one operator, no upgrade-pain incidents yet). Ship
+when (a) the first non-Mario user shows up wanting to try Huxley, OR (b) a
+dependency upgrade burns 30+ minutes of Pi-vs-Mac debugging, OR (c) a
+contributor explicitly asks for it. Container would: pin Python 3.13 + uv +
+ffmpeg, expose port 8765, bind-mount `personas/<name>/data/` for the
+audiobook library + DB, bind-mount `.env` for the API key. Multi-arch build
+(amd64 + arm64) via buildx. Don't deprecate the bare-metal path when this
+ships — keep both supported.
+
+**Revisit trigger for #102**: any of the three conditions above. Otherwise
+quarterly check that the bare-metal path still works on the active Mac/Pi
+deployments.
 
 ## D4 — `VoiceProvider` abstraction redesign
 

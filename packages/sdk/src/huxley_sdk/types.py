@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol, runtime_checkable
 
+from huxley_sdk.catalog import Catalog
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
     from pathlib import Path
@@ -232,6 +234,23 @@ class SkillContext:
     storage: SkillStorage
     persona_data_dir: Path
     config: dict[str, Any]
+
+    def catalog(self, name: str = "default") -> Catalog:
+        """Construct a fresh `Catalog` for this skill's personal-content data.
+
+        Call once from `setup()` and keep the reference on your skill —
+        each call returns an independent Catalog (the framework does NOT
+        cache by name). The `name` parameter is purely for skill-side
+        bookkeeping when a single skill maintains multiple catalogs (e.g.
+        a music skill with both `tracks` and `playlists`).
+
+        See `huxley_sdk.catalog` for the full API and usage example.
+        """
+        # name reserved for future per-name caching when a skill needs it;
+        # today every call yields a fresh in-memory Catalog and the skill
+        # owns the lifetime.
+        del name
+        return Catalog()
 
 
 @runtime_checkable
