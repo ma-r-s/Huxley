@@ -24,17 +24,25 @@ with a `StubVoiceProvider` and wire into a concrete
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import time
-from dataclasses import dataclass, field
-from enum import Enum
 from typing import TYPE_CHECKING, Any, ClassVar
-from uuid import UUID, uuid4
 
 import structlog
 
 from huxley_sdk import AudioStream, CancelMedia, PlaySound, SetVolume
+
+from .factory import TurnFactory
+from .media_task import MediaTaskManager
+from .mic_router import MicRouter
+from .speaking_state import SpeakingOwner, SpeakingState
+from .state import Turn, TurnSource, TurnState
+
+_SOURCE_TO_OWNER: dict[TurnSource, SpeakingOwner] = {
+    TurnSource.USER: SpeakingOwner.USER,
+    TurnSource.COMPLETION: SpeakingOwner.COMPLETION,
+    TurnSource.INJECTED: SpeakingOwner.INJECTED,
+}
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -44,42 +52,7 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
-
-class TurnState(Enum):
-    """Finite states for a single user-assistant Turn.
-
-    See `docs/turns.md#turn-lifecycle` for the full state diagram and
-    transition rules. The `BARRIER` state from v2 was collapsed into
-    the `IN_RESPONSE → APPLYING_FACTORIES` transition in v3.
-    """
-
-    IDLE = "idle"
-    LISTENING = "listening"
-    COMMITTING = "committing"
-    IN_RESPONSE = "in_response"
-    AWAITING_NEXT_RESPONSE = "awaiting_next_response"
-    APPLYING_FACTORIES = "applying_factories"
-    INTERRUPTED = "interrupted"
-
-
-@dataclass
-class Turn:
-    """One user-assistant exchange. See `docs/turns.md#1-turn`."""
-
-    id: UUID = field(default_factory=uuid4)
-    state: TurnState = TurnState.LISTENING
-    user_audio_frames: int = 0
-    pending_audio_streams: list[AudioStream] = field(default_factory=list)
-    needs_follow_up: bool = False
-    # Latched PlaySound from an info-tool call. Sent to the audio channel
-    # right after request_response() so the chime queues ahead of the model's
-    # response audio (FIFO on the WebSocket). Latest tool wins — a new
-    # PlaySound on a chained tool call replaces an earlier one.
-    pending_play_sound: PlaySound | None = None
-    # Summary tracking — emitted as coord.turn_summary at end-of-turn.
-    started_at: float = field(default_factory=lambda: time.monotonic())
-    tool_calls: int = 0
-    response_done_count: int = 0
+__all__ = ["Turn", "TurnCoordinator", "TurnFactory", "TurnSource", "TurnState"]
 
 
 class TurnCoordinator:
@@ -125,6 +98,7 @@ class TurnCoordinator:
         self._send_set_volume: Callable[[int], Awaitable[None]] = (
             send_set_volume if send_set_volume is not None else _noop_volume
         )
+        self._speaking_state = SpeakingState(notify=send_model_speaking)
         self._status = {**self._DEFAULT_STATUS, **(status_messages or {})}
         # Provider — outgoing verbs (send_user_audio, send_tool_output,
         # commit_and_request_response, cancel_current_response,
@@ -134,13 +108,19 @@ class TurnCoordinator:
         # VoiceProviderCallbacks at construction on the provider side.
         self._provider = provider
         self._dispatch_tool = dispatch_tool
+        self._turn_factory = TurnFactory()
+        self._mic_router = MicRouter(default_handler=provider.send_user_audio)
+        self._media_tasks = MediaTaskManager()
 
         self.current_turn: Turn | None = None
-        self.current_media_task: asyncio.Task[None] | None = None
         self.response_cancelled: bool = False
-        self._model_speaking: bool = False
         # Bound logger — rebound with turn= in on_ptt_start, reset on turn end.
         self._log: structlog.stdlib.BoundLogger = logger
+
+    @property
+    def current_media_task(self) -> asyncio.Task[None] | None:
+        """Back-compat accessor; the authoritative owner is `self._media_tasks`."""
+        return self._media_tasks.task
 
     def _tid(self) -> str | None:
         """Short turn ID for explicit passing (factory tasks, etc.)."""
@@ -158,13 +138,15 @@ class TurnCoordinator:
     async def on_ptt_start(self) -> None:
         """User pressed PTT. Start a new turn or interrupt + restart."""
         active_turn = self.current_turn is not None and self.current_turn.state != TurnState.IDLE
-        active_media = self.current_media_task is not None and not self.current_media_task.done()
+        active_media = self._media_tasks.is_running
         prev_state = self.current_turn.state.value if self.current_turn else None
 
         if active_turn or active_media:
             await self.interrupt()
 
-        self.current_turn = Turn(state=TurnState.LISTENING)
+        self.current_turn = self._turn_factory.create(
+            source=TurnSource.USER, initial_state=TurnState.LISTENING
+        )
         self._bind_turn()
         await self._send_status(self._status["listening"])
         await self._log.ainfo(
@@ -202,13 +184,17 @@ class TurnCoordinator:
         await self._provider.commit_and_request_response()
 
     async def on_user_audio_frame(self, pcm: bytes) -> None:
-        """Mic frame from client. Forward to OpenAI iff we're LISTENING."""
+        """Mic frame from client. Forward via MicRouter iff we're LISTENING.
+
+        MicRouter today always has the voice provider as its sole handler;
+        T1.4 Stage 2 adds skill-claim routing through the same dispatch.
+        """
         if (
             self.current_turn is not None
             and self.current_turn.state == TurnState.LISTENING
             and self._provider.is_connected
         ):
-            await self._provider.send_user_audio(pcm)
+            await self._mic_router.dispatch(pcm)
             self.current_turn.user_audio_frames += 1
             await self._log.adebug("coord.mic_fwd", bytes=len(pcm))
         elif self.current_turn is not None:
@@ -235,23 +221,27 @@ class TurnCoordinator:
             await self._log.adebug("coord.audio_dropped")
             return
         self._enter_in_response_if_idle_between_rounds()
-        if not self._model_speaking:
-            self._model_speaking = True
-            await self._send_model_speaking(True)
+        if not self._speaking_state.is_speaking:
+            owner = (
+                _SOURCE_TO_OWNER[self.current_turn.source]
+                if self.current_turn is not None
+                else SpeakingOwner.USER
+            )
+            await self._speaking_state.acquire(owner)
             await self._send_status(self._status["responding"])
             await self._log.ainfo(
                 "coord.audio_start",
                 state=self.current_turn.state.value if self.current_turn else None,
+                owner=owner.value,
             )
         await self._send_audio(pcm)
         await self._log.adebug("coord.audio_fwd", bytes=len(pcm))
 
     async def on_audio_done(self) -> None:
         """OpenAI finished emitting audio for the current response."""
-        if self.response_cancelled or not self._model_speaking:
+        if self.response_cancelled or not self._speaking_state.is_speaking:
             return
-        self._model_speaking = False
-        await self._send_model_speaking(False)
+        await self._speaking_state.force_release()
         await self._log.ainfo("coord.audio_done")
 
     async def on_tool_call(self, call_id: str, name: str, args: dict[str, Any]) -> None:
@@ -299,7 +289,7 @@ class TurnCoordinator:
             # Cancel the running stream immediately so it stops before the
             # model's confirmation speech plays. needs_follow_up=True lets the
             # model narrate the result (e.g. "Listo, pausé el libro").
-            await self._stop_current_media_task()
+            await self._media_tasks.stop()
             self.current_turn.needs_follow_up = True
         elif isinstance(result.side_effect, SetVolume):
             # Forward the volume command to the client immediately. The model
@@ -404,13 +394,11 @@ class TurnCoordinator:
 
     async def on_session_disconnected(self) -> None:
         """OpenAI session dropped — abort any live turn without cancelling OpenAI."""
-        had_media = self.current_media_task is not None and not self.current_media_task.done()
-        was_speaking = self._model_speaking
+        had_media = self._media_tasks.is_running
+        was_speaking = self._speaking_state.is_speaking
         tid = self._tid()
 
-        if self._model_speaking:
-            self._model_speaking = False
-            await self._send_model_speaking(False)
+        await self._speaking_state.force_release()
 
         await logger.ainfo(
             "coord.session_disconnected",
@@ -425,7 +413,7 @@ class TurnCoordinator:
         self.current_turn.state = TurnState.INTERRUPTED
         self.current_turn = None
         self._bind_turn()
-        await self._stop_current_media_task()
+        await self._media_tasks.stop()
         await self._send_audio_clear()
 
     # --- Interrupt: the atomic barrier ---
@@ -435,7 +423,7 @@ class TurnCoordinator:
         `docs/turns.md#3-interrupt`. Order matters.
         """
         prev_state = self.current_turn.state.value if self.current_turn else None
-        has_media = self.current_media_task is not None and not self.current_media_task.done()
+        has_media = self._media_tasks.is_running
         has_response = self.current_turn is not None and self.current_turn.state in (
             TurnState.COMMITTING,
             TurnState.IN_RESPONSE,
@@ -460,11 +448,9 @@ class TurnCoordinator:
             self.current_turn.pending_play_sound = None
         # 3. Flush client-side audio queue + clear model-speaking state
         await self._send_audio_clear()
-        if self._model_speaking:
-            self._model_speaking = False
-            await self._send_model_speaking(False)
+        await self._speaking_state.force_release()
         # 4. Cancel any long-running media task
-        await self._stop_current_media_task()
+        await self._media_tasks.stop()
         # 5. Cancel the in-flight response (only if one could exist)
         if will_cancel:
             await self._provider.cancel_current_response()
@@ -517,11 +503,9 @@ class TurnCoordinator:
         await self._send_status(self._status["ready"])
 
         if streams:
-            await self._stop_current_media_task()
+            await self._media_tasks.stop()
             stream = streams[-1]
-            self.current_media_task = asyncio.create_task(
-                self._consume_audio_stream(stream, turn_id)
-            )
+            self._media_tasks.start(self._consume_audio_stream(stream, turn_id))
             await logger.ainfo("coord.audio_stream_started", turn=turn_id)
 
     async def _emit_turn_summary(self, *, reason: str, spawned_audio_stream: bool) -> None:
@@ -549,17 +533,16 @@ class TurnCoordinator:
         """
         owns_speaking = False
         try:
-            if not self._model_speaking:
-                self._model_speaking = True
+            if not self._speaking_state.is_speaking:
+                await self._speaking_state.acquire(SpeakingOwner.FACTORY)
                 owns_speaking = True
-                await self._send_model_speaking(True)
             async for chunk in stream.factory():
                 await self._send_audio(chunk)
             await logger.ainfo("coord.audio_stream_ended", turn=turn_id, cancelled=False)
             transferred = await self._maybe_fire_completion_prompt(stream, turn_id)
             if transferred:
-                # Synthetic turn now owns model_speaking; on_audio_delta keeps it
-                # true until on_audio_done clears it normally.
+                # Ownership transferred to the synthetic turn (COMPLETION);
+                # don't release FACTORY here — on_audio_done clears COMPLETION.
                 owns_speaking = False
         except asyncio.CancelledError:
             await logger.ainfo("coord.audio_stream_ended", turn=turn_id, cancelled=True)
@@ -567,11 +550,10 @@ class TurnCoordinator:
         except Exception:
             await logger.aexception("coord.audio_stream_ended", turn=turn_id, error=True)
         finally:
-            # Stream finished without firing a completion prompt (no prompt set,
-            # response cancelled, or new turn won the race). Clear the flag we set.
-            if owns_speaking and self._model_speaking:
-                self._model_speaking = False
-                await self._send_model_speaking(False)
+            # Release FACTORY iff we still own it. release(expected) is a
+            # safe no-op if interrupt or transfer already changed ownership.
+            if owns_speaking:
+                await self._speaking_state.release(SpeakingOwner.FACTORY)
 
     async def _maybe_fire_completion_prompt(
         self, stream: AudioStream, parent_turn_id: str | None
@@ -613,7 +595,9 @@ class TurnCoordinator:
             )
             return False
 
-        self.current_turn = Turn(state=TurnState.IN_RESPONSE)
+        self.current_turn = self._turn_factory.create(
+            source=TurnSource.COMPLETION, initial_state=TurnState.IN_RESPONSE
+        )
         self._bind_turn()
         self.response_cancelled = False
         await self._log.ainfo(
@@ -632,13 +616,8 @@ class TurnCoordinator:
                 sample_rate * channels * bytes_per_sample * stream.completion_silence_ms // 1000
             )
             await self._send_audio(silence)
+        # Transfer speaker ownership FACTORY → COMPLETION. No notify fires —
+        # the client already sees model_speaking=true; the synthetic turn's
+        # on_audio_done will clear it normally.
+        self._speaking_state.transfer(SpeakingOwner.FACTORY, SpeakingOwner.COMPLETION)
         return True
-
-    async def _stop_current_media_task(self) -> None:
-        """Cancel the running media task if any. Waits for cleanup."""
-        task = self.current_media_task
-        if task is not None and not task.done():
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-        self.current_media_task = None

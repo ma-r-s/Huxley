@@ -943,7 +943,7 @@ class TestModelSpeakingDuringFactoryAudio:
             c for c in mocks["send_model_speaking"].await_args_list if c.args == (False,)
         ]
         assert false_calls, "model_speaking(False) should fire when factory ends without prompt"
-        assert coordinator._model_speaking is False
+        assert coordinator._speaking_state.is_speaking is False
 
 
 class TestCompletionSilenceAfterRequest:

@@ -80,7 +80,7 @@ stateDiagram-v2
 - **CONNECTING** — opening the session, sending `session.update` with tool schemas.
 - **CONVERSING** — session open, PTT works, tool calls dispatch, audiobook playback may be happening — media is orthogonal to session state.
 
-Media playback is **not** a session state. It's tracked by `TurnCoordinator.current_media_task`, which outlives turns: a book started in turn N keeps playing until turn N+M interrupts it. The voice provider session stays open during book playback (idle sessions cost zero tokens), and pressing PTT mid-book goes through the turn coordinator's interrupt method rather than a state transition.
+Media playback is **not** a session state. It's tracked by the coordinator's `MediaTaskManager`, which outlives turns: a book started in turn N keeps playing until turn N+M interrupts it. The voice provider session stays open during book playback (idle sessions cost zero tokens), and pressing PTT mid-book goes through the turn coordinator's interrupt method rather than a state transition.
 
 See [`turns.md`](./turns.md) and [decision 2026-04-13 — Turn-based coordinator for voice tool calls](./decisions.md#2026-04-13--turn-based-coordinator-for-voice-tool-calls).
 
@@ -176,6 +176,37 @@ sequenceDiagram
 3. **Same audio pipe for everything.** Model speech and tool audio both travel through `server.send_audio`. The client doesn't branch on source.
 4. **Atomic interrupts.** A new `ptt_start` during a live turn runs `coordinator.interrupt()`: drop flag → clear pending factories → audio_clear → cancel media task → cancel LLM response → mark turn interrupted. The running media task's `finally` block persists any terminal state (e.g. audiobook position), so seek/forward/interrupt are all transaction-safe without eager storage writes.
 
+## Turn coordinator internals
+
+The `TurnCoordinator` orchestrates a single user-assistant exchange. State
+lives in four collaborators — each one owns a single axis of responsibility
+so the I/O-plane primitives (T1.4) slot into existing seams instead of
+reshaping the coordinator:
+
+- **`TurnFactory`** creates every `Turn` instance, tagged with `TurnSource`
+  (`USER`, `COMPLETION`, `INJECTED`). `INJECTED` is reserved for the
+  `inject_turn` primitive.
+- **`MicRouter`** is the sole destination for mic PCM. The voice provider
+  is today's only handler; `InputClaim` will install short-lived claims
+  through the same `claim()/release()` API.
+- **`SpeakingState`** tracks who currently owns the speaker — one of
+  `user | factory | completion | injected | claim | None`. The named-owner
+  shape replaces the boolean flag that used to be flipped at six call
+  sites; `release(expected)` is a safe no-op when something else has taken
+  over.
+- **`MediaTaskManager`** wraps the single running audio-stream `asyncio.Task`
+  plus a pure `arbitrate(urgency, yield_policy) → Decision` function for
+  preempt / duck / drop / hold outcomes. Also carries a no-op
+  `DuckingController` stub that T1.4 Stage 1 wires into a PCM gain envelope.
+
+`Urgency` and `YieldPolicy` live in `huxley_sdk.priority` — they're part of
+the skill-author surface because skills supply the urgency of an
+`inject_turn` or an `InputClaim.yield_policy`. The `Decision` enum is
+framework-internal.
+
+See `docs/io-plane.md` for the primitives these collaborators support and
+`docs/turns.md` for the turn state machine they orchestrate.
+
 ## Dependency flow (no cycles)
 
 ```mermaid
@@ -222,6 +253,13 @@ Dependencies flow **downward**. `huxley_sdk/types.py` is the universal leaf — 
 | WebSocket audio server            | `packages/core/src/huxley/server/server.py`                        |
 | State machine + transitions       | `packages/core/src/huxley/state/machine.py`                        |
 | Turn coordinator + factory fire   | `packages/core/src/huxley/turn/coordinator.py`                     |
+| Turn vocabulary (`Turn`, states)  | `packages/core/src/huxley/turn/state.py`                           |
+| `TurnFactory`                     | `packages/core/src/huxley/turn/factory.py`                         |
+| `MicRouter` (mic-frame dispatch)  | `packages/core/src/huxley/turn/mic_router.py`                      |
+| `SpeakingState` (speaker owner)   | `packages/core/src/huxley/turn/speaking_state.py`                  |
+| `MediaTaskManager` + ducking stub | `packages/core/src/huxley/turn/media_task.py`                      |
+| `arbitrate()` pure function       | `packages/core/src/huxley/turn/arbitration.py`                     |
+| `Urgency` / `YieldPolicy` enums   | `packages/sdk/src/huxley_sdk/priority.py`                          |
 | VoiceProvider protocol            | `packages/core/src/huxley/voice/provider.py`                       |
 | OpenAI Realtime implementation    | `packages/core/src/huxley/voice/openai_realtime.py`                |
 | OpenAI event schemas              | `packages/core/src/huxley/voice/openai_protocol.py`                |
