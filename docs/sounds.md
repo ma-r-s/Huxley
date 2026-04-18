@@ -114,19 +114,15 @@ The book_end sound is followed by model speech. To prevent an abrupt chime→voi
 
 ## Stream injection pattern
 
-The `AudiobooksSkill` injects earcon bytes directly in the stream factory:
+The `AudiobooksSkill` injects earcons directly in the stream factory; the trailing silence buffer is owned by the **coordinator** (via `AudioStream.completion_silence_ms`) so the silence can be sent AFTER firing the request_response, overlapping with model first-token latency:
 
 ```python
-SILENCE_MS = 500
-SILENCE_BYTES = b"\x00" * (24000 * 2 * SILENCE_MS // 1000)  # PCM16 24kHz mono
-
 def _build_factory(self, book_id, path, start_position):
     player = self._player
     set_position = self._set_position
     skill = self
     book_start_pcm = self._sounds.get("book_start", b"")
     book_end_pcm = self._sounds.get("book_end", b"")
-    on_complete = self._on_complete_prompt   # e.g. "El libro ha terminado..."
 
     async def stream():
         skill._now_playing_id = book_id
@@ -135,7 +131,6 @@ def _build_factory(self, book_id, path, start_position):
         bytes_read = 0
         completed = False
         try:
-            # Leading earcon — plays before book audio
             if book_start_pcm:
                 yield book_start_pcm
 
@@ -144,13 +139,12 @@ def _build_factory(self, book_id, path, start_position):
                 yield chunk
 
             # Book audio finished cleanly — mark completed BEFORE the trailing
-            # chime/silence so a PTT during decoration still records the book
-            # as complete (position 0.0).
+            # chime so a PTT during decoration still records the book as
+            # complete (position 0.0).
             completed = True
 
             if book_end_pcm:
                 yield book_end_pcm
-            yield SILENCE_BYTES
         finally:
             skill._now_playing_id = None
             elapsed = bytes_read / BYTES_PER_SECOND
@@ -158,12 +152,22 @@ def _build_factory(self, book_id, path, start_position):
             await set_position(book_id, final_pos)
 
     return stream
+
+# In _play():
+return ToolResult(
+    output=...,
+    side_effect=AudioStream(
+        factory=factory,
+        on_complete_prompt=self._on_complete_prompt,
+        completion_silence_ms=self._silence_ms,  # coordinator handles it
+    ),
+)
 ```
 
 **Interrupt safety**:
 
 - PTT mid-book → generator cancelled with `completed = False` → position saves as `start_pos + elapsed`. Resume works.
-- PTT during trailing chime/silence → generator cancelled with `completed = True` (already set) → position saves as `0.0`. Book correctly recorded as finished even if the decoration was interrupted.
+- PTT during trailing chime → generator cancelled with `completed = True` (already set) → position saves as `0.0`. Book correctly recorded as finished even if the decoration was interrupted.
 - The `book_start` earcon yields unconditionally as the first chunk — even on a play that the user immediately interrupts. Acceptable: tells the user the play command was understood.
 
 ---
@@ -174,7 +178,7 @@ When a book ends naturally, the user needs to hear what happened. Rather than ha
 
 ### The `on_complete_prompt` field
 
-`AudioStream` gains an optional field:
+`AudioStream` gains two optional fields:
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -182,7 +186,12 @@ class AudioStream(SideEffect):
     kind: ClassVar[str] = "audio_stream"
     factory: Callable[[], AsyncIterator[bytes]]
     on_complete_prompt: str | None = None
+    completion_silence_ms: int = 0
 ```
+
+`on_complete_prompt`: when set and the stream ends naturally (not cancelled), the coordinator narrates this prompt via the LLM after the stream completes.
+
+`completion_silence_ms`: the coordinator sends this much PCM16 silence to the client AFTER firing `request_response`. It overlaps with the LLM's first-token latency so the user hears _book → chime → silence → model voice_ with minimal dead air. 500–1000ms covers typical OpenAI Realtime latency. Set to 0 to disable.
 
 When the stream ends naturally (not cancelled), the coordinator sends `on_complete_prompt` as a user-role conversation item and triggers a model response. The coordinator must (a) skip the prompt if a PTT-induced cancel raced the trailing silence, and (b) create a synthetic IN_RESPONSE turn so the incoming model reply (deltas, tool calls, response_done) is handled by the existing turn-aware paths instead of being silently dropped:
 
@@ -277,8 +286,13 @@ skills:
     ffmpeg_path: ffmpeg
     ffprobe_path: ffprobe
     sounds_path: sounds # relative to persona data_dir
-    silence_ms: 500 # trailing silence before stream completes
+    sounds_enabled: true # master toggle — set false to silence everything
+    silence_ms: 500 # silence after firing request_response
+    on_complete_prompt: | # localized per-persona
+      El libro ha llegado a su fin. Felicita al usuario...
 ```
+
+If `sounds_enabled: false`, the skill loads no palette and `silence_ms` is forced to 0 — the persona behaves as if no sounds were configured.
 
 The skill loads sounds at `setup()` time:
 

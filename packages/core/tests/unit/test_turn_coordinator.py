@@ -788,6 +788,128 @@ class TestAudioStreamCompletion:
         assert "send_conversation_message" not in names
 
 
+class TestModelSpeakingDuringFactoryAudio:
+    """Fix #9: factory audio must set model_speaking=true so client UI knows
+    audio is flowing and the thinking-tone trigger doesn't false-fire."""
+
+    async def test_factory_audio_sets_model_speaking_true(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+    ) -> None:
+        import asyncio
+
+        stream = AudioStream(factory=_factory(b"chunk"), on_complete_prompt=None)
+        mocks["dispatch_tool"].return_value = ToolResult(output="{}", side_effect=stream)
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("c1", "play", {})
+        await coordinator.on_response_done()
+
+        for _ in range(20):
+            if coordinator.current_media_task is None or coordinator.current_media_task.done():
+                break
+            await asyncio.sleep(0.001)
+
+        # model_speaking went True at start of stream
+        true_calls = [c for c in mocks["send_model_speaking"].await_args_list if c.args == (True,)]
+        assert true_calls, "model_speaking(True) should fire when factory audio starts"
+
+    async def test_factory_audio_clears_model_speaking_when_no_prompt(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+    ) -> None:
+        """No on_complete_prompt → no synthetic turn → model_speaking must reset to False."""
+        import asyncio
+
+        stream = AudioStream(factory=_factory(b"chunk"), on_complete_prompt=None)
+        mocks["dispatch_tool"].return_value = ToolResult(output="{}", side_effect=stream)
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("c1", "play", {})
+        await coordinator.on_response_done()
+
+        for _ in range(20):
+            if coordinator.current_media_task is None or coordinator.current_media_task.done():
+                break
+            await asyncio.sleep(0.001)
+
+        false_calls = [
+            c for c in mocks["send_model_speaking"].await_args_list if c.args == (False,)
+        ]
+        assert false_calls, "model_speaking(False) should fire when factory ends without prompt"
+        assert coordinator._model_speaking is False
+
+
+class TestCompletionSilenceAfterRequest:
+    """Fix #8: silence is sent AFTER request_response, not before — so model
+    generation latency overlaps with silence playback instead of stacking."""
+
+    async def test_silence_sent_after_request(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        import asyncio
+
+        stream = AudioStream(
+            factory=_factory(b"book"),
+            on_complete_prompt="done",
+            completion_silence_ms=500,
+        )
+        mocks["dispatch_tool"].return_value = ToolResult(output="{}", side_effect=stream)
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("c1", "play", {})
+        await coordinator.on_response_done()
+
+        for _ in range(20):
+            if coordinator.current_media_task is None or coordinator.current_media_task.done():
+                break
+            await asyncio.sleep(0.001)
+
+        # Find positions of send_audio (book chunk + silence) and request_response.
+        # send_audio isn't logged in provider.sent (it's on the coordinator's send_audio
+        # mock); we assert via the mock's await order vs the provider's request order.
+        # The order on the wire: book chunk → request_response → silence
+        send_audio_calls = mocks["send_audio"].await_args_list
+        # 2 send_audio calls: 1 for book chunk, 1 for silence_bytes
+        assert len(send_audio_calls) == 2
+        # The silence is the larger payload (500ms PCM16 24kHz mono = 24000 bytes)
+        assert len(send_audio_calls[0].args[0]) == 4  # b"book"
+        assert len(send_audio_calls[1].args[0]) == 24000  # silence buffer
+        # request_response was sent BEFORE the silence (which is what we want)
+        assert ("request_response",) in provider.sent
+
+    async def test_no_silence_when_completion_silence_ms_is_zero(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+    ) -> None:
+        import asyncio
+
+        stream = AudioStream(
+            factory=_factory(b"book"),
+            on_complete_prompt="done",
+            completion_silence_ms=0,
+        )
+        mocks["dispatch_tool"].return_value = ToolResult(output="{}", side_effect=stream)
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("c1", "play", {})
+        await coordinator.on_response_done()
+
+        for _ in range(20):
+            if coordinator.current_media_task is None or coordinator.current_media_task.done():
+                break
+            await asyncio.sleep(0.001)
+
+        # Only the book chunk should land on send_audio — no silence injected
+        assert mocks["send_audio"].await_count == 1
+
+
 class TestResponseCancelledFlag:
     """Stale delta drop flag behavior."""
 

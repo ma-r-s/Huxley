@@ -91,11 +91,19 @@ class AudioStream(SideEffect):
     a model response. Use it for end-of-content announcements — e.g., when a
     book finishes, the model narrates the completion in the persona's tone.
     Leave `None` for streams where natural completion needs no follow-up.
+
+    `completion_silence_ms`: when `on_complete_prompt` is set, the coordinator
+    fires the request FIRST so the LLM starts generating, then sends this much
+    silence (PCM16 24kHz mono) to the client. The silence overlaps with model
+    generation latency, so by the time the client finishes playing it, the
+    model's response audio is usually already in flight. 500-1000ms covers
+    typical OpenAI Realtime first-token latency. Set to 0 to disable.
     """
 
     kind: ClassVar[str] = "audio_stream"
     factory: Callable[[], AsyncIterator[bytes]]
     on_complete_prompt: str | None = None
+    completion_silence_ms: int = 0
 
 
 @dataclass(frozen=True, slots=True)

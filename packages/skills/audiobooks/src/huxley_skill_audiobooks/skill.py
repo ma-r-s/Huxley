@@ -42,9 +42,11 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
     from pathlib import Path
 
-# Prompt sent to the LLM when a book ends naturally (not interrupted).
-# The model narrates it in the persona's tone and language.
-_ON_COMPLETE_PROMPT = (
+# Default prompt sent to the LLM when a book ends naturally (not interrupted).
+# Personas override via `skills.audiobooks.on_complete_prompt` in persona.yaml —
+# the default is Spanish because AbuelOS is the only persona today; localize it
+# from the persona for any other language.
+_DEFAULT_ON_COMPLETE_PROMPT = (
     "El libro ha llegado a su fin. "
     "Felicita al usuario por haber terminado el libro y preguntale "
     "si quiere que busque otro."
@@ -139,6 +141,9 @@ class AudiobooksSkill:
         self._sounds: dict[str, bytes] = {}
         # Trailing silence injected after book_end earcon to buffer model latency.
         self._silence_ms: int = 500
+        # Prompt the LLM narrates when a book ends naturally. Resolved from
+        # persona config in setup() with the Spanish default as fallback.
+        self._on_complete_prompt: str = _DEFAULT_ON_COMPLETE_PROMPT
         # Live-playback tracking — set at stream start, cleared in finally.
         # Used by get_progress to estimate current position without storage round-trip.
         self._now_playing_id: str | None = None
@@ -317,16 +322,18 @@ class AudiobooksSkill:
         self._logger = ctx.logger
         self._catalog = self._scan_library(library_path)
 
+        sounds_enabled = bool(cfg.get("sounds_enabled", True))
         sounds_raw = cfg.get("sounds_path", "sounds")
         sounds_dir = (
             Path(sounds_raw)
             if Path(sounds_raw).is_absolute()
             else (ctx.persona_data_dir / sounds_raw)
         )
-        self._sounds = _load_sound_palette(sounds_dir)
-        self._silence_ms = int(cfg.get("silence_ms", 500))
+        self._sounds = _load_sound_palette(sounds_dir) if sounds_enabled else {}
+        self._silence_ms = int(cfg.get("silence_ms", 500)) if sounds_enabled else 0
+        self._on_complete_prompt = str(cfg.get("on_complete_prompt", _DEFAULT_ON_COMPLETE_PROMPT))
 
-        if sounds_dir.exists() and not self._sounds:
+        if sounds_enabled and sounds_dir.exists() and not self._sounds:
             await ctx.logger.awarning(
                 "audiobooks.sounds_empty",
                 path=str(sounds_dir),
@@ -540,11 +547,9 @@ class AudiobooksSkill:
         skill = self  # for live-position tracking via get_progress
         book_start_pcm = self._sounds.get("book_start", b"")
         book_end_pcm = self._sounds.get("book_end", b"")
-        # Trailing silence (PCM16 24kHz mono) buffering model generation latency.
-        sample_rate, channels, bytes_per_sample = 24000, 1, 2
-        silence_bytes = b"\x00" * (
-            sample_rate * channels * bytes_per_sample * self._silence_ms // 1000
-        )
+        # Note: trailing silence buffer is owned by the coordinator (via the
+        # AudioStream.completion_silence_ms field) so it can be sent AFTER the
+        # request_response, overlapping with model first-token latency.
 
         async def stream() -> AsyncIterator[bytes]:
             skill._now_playing_id = book_id
@@ -563,13 +568,12 @@ class AudiobooksSkill:
                     yield chunk
 
                 # Book audio finished cleanly — mark completed BEFORE yielding the
-                # trailing chime/silence. If the user interrupts during the
-                # decoration, the position still saves as 0.0 (book is done).
+                # trailing chime. If the user interrupts during the decoration,
+                # the position still saves as 0.0 (book is done).
                 completed = True
 
                 if book_end_pcm:
                     yield book_end_pcm
-                yield silence_bytes
             except Exception as exc:
                 # CancelledError is BaseException (not Exception) so cancellations
                 # propagate through here; only real errors (PlayerError, OSError, etc.)
@@ -655,7 +659,11 @@ class AudiobooksSkill:
                     "resuming": resuming,
                 }
             ),
-            side_effect=AudioStream(factory=factory, on_complete_prompt=_ON_COMPLETE_PROMPT),
+            side_effect=AudioStream(
+                factory=factory,
+                on_complete_prompt=self._on_complete_prompt,
+                completion_silence_ms=self._silence_ms,
+            ),
         )
 
     async def _resume_last(self) -> ToolResult:
@@ -827,7 +835,9 @@ class AudiobooksSkill:
                         }
                     ),
                     side_effect=AudioStream(
-                        factory=factory, on_complete_prompt=_ON_COMPLETE_PROMPT
+                        factory=factory,
+                        on_complete_prompt=self._on_complete_prompt,
+                        completion_silence_ms=self._silence_ms,
                     ),
                 )
 

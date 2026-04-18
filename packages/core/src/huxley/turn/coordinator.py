@@ -459,49 +459,78 @@ class TurnCoordinator:
         )
 
     async def _consume_audio_stream(self, stream: AudioStream, turn_id: str | None) -> None:
-        """Pull chunks from an AudioStream side effect and forward them to send_audio."""
+        """Pull chunks from an AudioStream side effect and forward them to send_audio.
+
+        Holds `model_speaking = true` for the duration of the factory so the
+        client UI knows audio is flowing (otherwise factory chunks would arrive
+        with `model_speaking = false`, potentially racing with the client-side
+        thinking-tone trigger).
+        """
+        owns_speaking = False
         try:
+            if not self._model_speaking:
+                self._model_speaking = True
+                owns_speaking = True
+                await self._send_model_speaking(True)
             async for chunk in stream.factory():
                 await self._send_audio(chunk)
             await logger.ainfo("coord.audio_stream_ended", turn=turn_id, cancelled=False)
-            await self._maybe_fire_completion_prompt(stream, turn_id)
+            transferred = await self._maybe_fire_completion_prompt(stream, turn_id)
+            if transferred:
+                # Synthetic turn now owns model_speaking; on_audio_delta keeps it
+                # true until on_audio_done clears it normally.
+                owns_speaking = False
         except asyncio.CancelledError:
             await logger.ainfo("coord.audio_stream_ended", turn=turn_id, cancelled=True)
             raise
         except Exception:
             await logger.aexception("coord.audio_stream_ended", turn=turn_id, error=True)
+        finally:
+            # Stream finished without firing a completion prompt (no prompt set,
+            # response cancelled, or new turn won the race). Clear the flag we set.
+            if owns_speaking and self._model_speaking:
+                self._model_speaking = False
+                await self._send_model_speaking(False)
 
     async def _maybe_fire_completion_prompt(
         self, stream: AudioStream, parent_turn_id: str | None
-    ) -> None:
+    ) -> bool:
         """After natural stream end, send on_complete_prompt under a synthetic turn.
 
-        Skips when:
-        - The stream has no prompt (most streams).
-        - `response_cancelled` flipped while the trailing chime/silence played
-          (user pressed PTT during the buffer — let their new turn proceed).
-        - A new turn is already in progress (race won by the user's PTT).
+        Returns True iff the prompt was actually fired (a synthetic turn was
+        created and request_response sent). Caller uses the return value to
+        decide whether `model_speaking` ownership transferred to the synthetic
+        turn (True) or stayed with the caller's stream (False).
 
-        Otherwise creates a synthetic IN_RESPONSE turn so the model's
-        announcement reply flows through the normal on_response_done /
-        on_tool_call paths instead of being silently dropped.
+        Order matters for low dead-air latency:
+        1. Send the prompt + request_response immediately so the LLM starts
+           generating during the silence below (overlapping latency with audio).
+        2. Send `completion_silence_ms` of silence — covers model first-token
+           latency. Once silence ends, the model's audio deltas (queued by the
+           provider receive loop) play seamlessly afterward via on_audio_delta.
+
+        Returns False when:
+        - The stream has no prompt (most streams).
+        - `response_cancelled` flipped while the stream was finishing (user
+          pressed PTT — let their new turn proceed).
+        - A new turn is already in progress (race won by the user's PTT).
         """
         if not stream.on_complete_prompt:
-            return
+            return False
         if self.response_cancelled:
             await logger.ainfo(
                 "coord.completion_prompt_skipped",
                 turn=parent_turn_id,
                 reason="response_cancelled",
             )
-            return
+            return False
         if self.current_turn is not None:
             await logger.ainfo(
                 "coord.completion_prompt_skipped",
                 turn=parent_turn_id,
                 reason="turn_in_progress",
             )
-            return
+            return False
 
         self.current_turn = Turn(state=TurnState.IN_RESPONSE)
         self._bind_turn()
@@ -510,9 +539,19 @@ class TurnCoordinator:
             "coord.completion_turn_started",
             parent_turn=parent_turn_id,
             prompt_len=len(stream.on_complete_prompt),
+            silence_ms=stream.completion_silence_ms,
         )
+        # Fire the request FIRST so the LLM begins generating concurrently
+        # with the silence buffer below (covers first-token latency).
         await self._provider.send_conversation_message(stream.on_complete_prompt)
         await self._provider.request_response()
+        if stream.completion_silence_ms > 0:
+            sample_rate, channels, bytes_per_sample = 24000, 1, 2
+            silence = b"\x00" * (
+                sample_rate * channels * bytes_per_sample * stream.completion_silence_ms // 1000
+            )
+            await self._send_audio(silence)
+        return True
 
     async def _stop_current_media_task(self) -> None:
         """Cancel the running media task if any. Waits for cleanup."""

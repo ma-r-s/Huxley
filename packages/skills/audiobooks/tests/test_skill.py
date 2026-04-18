@@ -614,6 +614,88 @@ class TestSoundPalette:
         assert skill._sounds == {}
 
 
+class TestSoundsEnabledToggle:
+    """`sounds_enabled: false` opts a persona out of all earcons + silence buffer."""
+
+    async def test_sounds_disabled_skips_palette_load(
+        self, tmp_path: Path, library_path: Path, player_mock: MagicMock
+    ) -> None:
+        import wave
+
+        sounds_dir = tmp_path / "sounds"
+        sounds_dir.mkdir()
+        with wave.open(str(sounds_dir / "book_start.wav"), "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(24000)
+            wf.writeframes(b"\x00\x01" * 100)
+
+        ctx = make_test_context(
+            config={
+                "library": str(library_path),
+                "sounds_path": str(sounds_dir),
+                "sounds_enabled": False,
+            },
+            persona_data_dir=library_path.parent,
+        )
+        skill = AudiobooksSkill(player=player_mock)
+        await skill.setup(ctx)
+        assert skill._sounds == {}
+        assert skill._silence_ms == 0
+
+
+class TestOnCompletePromptFromConfig:
+    """`on_complete_prompt` can be overridden per-persona via persona.yaml."""
+
+    async def test_default_prompt_used_when_unset(self, audiobooks_skill: AudiobooksSkill) -> None:
+        assert "libro" in audiobooks_skill._on_complete_prompt.lower()
+
+    async def test_persona_can_override_prompt(
+        self, library_path: Path, player_mock: MagicMock
+    ) -> None:
+        ctx = make_test_context(
+            config={
+                "library": str(library_path),
+                "on_complete_prompt": "Custom completion message.",
+            },
+            persona_data_dir=library_path.parent,
+        )
+        skill = AudiobooksSkill(player=player_mock)
+        await skill.setup(ctx)
+        assert skill._on_complete_prompt == "Custom completion message."
+        result = await skill.handle("play_audiobook", {"book_id": skill._catalog[0]["id"]})
+        assert isinstance(result.side_effect, AudioStream)
+        assert result.side_effect.on_complete_prompt == "Custom completion message."
+
+
+class TestCompletionSilenceMs:
+    """Skill passes silence_ms to AudioStream.completion_silence_ms — the
+    coordinator owns the actual silence injection (it fires AFTER request_response
+    so model latency overlaps with silence playback)."""
+
+    async def test_silence_ms_propagates_to_audiostream(
+        self, audiobooks_skill: AudiobooksSkill
+    ) -> None:
+        result = await audiobooks_skill.handle(
+            "play_audiobook", {"book_id": audiobooks_skill._catalog[0]["id"]}
+        )
+        assert isinstance(result.side_effect, AudioStream)
+        assert result.side_effect.completion_silence_ms == 500
+
+    async def test_persona_can_override_silence_ms(
+        self, library_path: Path, player_mock: MagicMock
+    ) -> None:
+        ctx = make_test_context(
+            config={"library": str(library_path), "silence_ms": 1200},
+            persona_data_dir=library_path.parent,
+        )
+        skill = AudiobooksSkill(player=player_mock)
+        await skill.setup(ctx)
+        result = await skill.handle("play_audiobook", {"book_id": skill._catalog[0]["id"]})
+        assert isinstance(result.side_effect, AudioStream)
+        assert result.side_effect.completion_silence_ms == 1200
+
+
 class TestOnCompletePromptOnAllPaths:
     """Every audiobook AudioStream must carry on_complete_prompt — the dead-air rule.
 

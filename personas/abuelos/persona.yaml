@@ -47,6 +47,15 @@ skills:
     # Earcon sounds directory (relative to persona data_dir or absolute).
     # book_start.wav plays before book audio; book_end.wav plays on natural completion.
     sounds_path: ../sounds
-    # Trailing silence (ms) injected after book_end to cover model generation latency.
+    # Master toggle for all earcons + completion silence buffer.
+    sounds_enabled: true
+    # Silence (ms) the coordinator sends AFTER firing on_complete_prompt's
+    # request_response, so the silence overlaps with model first-token latency
+    # and the user hears chime → silence → model voice with minimal dead air.
     silence_ms: 500
+    # Prompt the LLM narrates when a book ends naturally. Override per-persona
+    # for non-Spanish deployments. Default lives in the audiobooks skill.
+    on_complete_prompt: |
+      El libro ha llegado a su fin. Felicita al usuario por haber terminado
+      el libro y preguntale si quiere que busque otro.
   system: {}
