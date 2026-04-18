@@ -111,18 +111,22 @@ Five primitives (all documented in [`io-plane.md`](./io-plane.md)):
 
 **Guiding principle**: the framework names mechanisms, not use cases. Nothing in `huxley_sdk` or `huxley` core mentions "call," "reminder," "message," or "emergency." Those live in skills. A future skill names itself what it is.
 
-## Urgency + YieldPolicy
+## Focus management (Channel + FocusState + MixingBehavior)
 
-**The language skills use to describe priority during proactive turns and stream claims.**
+**The vocabulary the framework uses to arbitrate who owns the speaker at any moment.**
 
-Two enums together drive the single arbitration decision of "does this interrupting turn preempt current media":
+Channels are named resource scopes on the single speaker: `DIALOG` (conversation with the user), `COMMS` (inbound/outbound calls), `ALERT` (urgent announcements), `CONTENT` (audiobooks, radio, other streams). Lower-numbered channels win against higher-numbered ones (AVS convention).
 
-- `Urgency` (on the interrupting side): `AMBIENT` (drop if busy), `CHIME_DEFER` (chime + hold speech), `INTERRUPT` (preempt media), `CRITICAL` (top priority, preempts everything including other media claims). Framework doesn't know what generates each tier; skills pick.
-- `YieldPolicy` (on the current-stream side): `IMMEDIATE` (yields to anything above AMBIENT), `YIELD_ABOVE` (yields to INTERRUPT and above — default), `YIELD_CRITICAL` (yields only to CRITICAL).
+Every `Activity` registered on a channel gets delivered a `(FocusState, MixingBehavior)` pair as the focus picture changes:
 
-Arbitration is a pure function `(urgency, current_owner_yield) -> Decision` with five outcomes (`SPEAK_NOW`, `PREEMPT`, `DUCK_CHIME`, `HOLD`, `DROP`) across 20 cases (16 busy combinations + 4 idle). `DUCK_CHIME` is a distinct third behavior — the tier earcon plays, the current stream dips but continues, and speech waits for the user's next PTT — that a binary "preempt-or-not" rule would hide.
+- `FocusState` — `FOREGROUND` (I'm the primary speaker), `BACKGROUND` (someone above me is speaking; I may duck or pause), `NONE` (I'm displaced entirely).
+- `MixingBehavior` — `PRIMARY`, `MAY_DUCK`, `MUST_PAUSE`, `MUST_STOP`. Derived from FocusState + the Activity's `ContentType` (`MIXABLE` → `MAY_DUCK` on background; `NONMIXABLE` → `MUST_PAUSE`).
 
-See [`io-plane.md`](./io-plane.md) for composition examples.
+`FocusManager` is the serialized actor that enforces invariants: exactly one FOREGROUND Activity across all channels; same `(channel, interface_name)` replaces its prior Activity; displaced Activities get a configurable `patience` grace period at BACKGROUND before being cleared. Skills never talk to `FocusManager` directly — they return `SideEffect` side-effects (today, just `AudioStream`; tomorrow, inject_turn / InputClaim equivalents) and the framework translates them into focus acquires/releases.
+
+The Stage 1 substrate ships now; the coordinator drives a `ContentStreamObserver` directly today, and wires in the `FocusManager` once skill-level arbitration (inject_turn, ducking) lands.
+
+See [`io-plane.md`](./io-plane.md) for the composition vocabulary and [`architecture.md#focus-management`](./architecture.md#focus-management) for the actor model.
 
 ## Voice provider
 

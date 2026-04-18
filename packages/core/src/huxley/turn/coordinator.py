@@ -9,11 +9,19 @@ See `docs/turns.md` for the full spec. In short:
   fire, in declaration order. The last factory wins when a turn accumulates
   multiple (earlier ones are superseded).
 - Interrupts are atomic: a new `ptt_start` during a live turn runs the
-  6-step `interrupt()` method (drop flag → clear pending → audio_clear →
-  cancel media task → cancel OpenAI response → mark INTERRUPTED).
+  6-step `interrupt()` method (drop flag -> clear pending -> audio_clear ->
+  cancel content stream -> cancel OpenAI response -> mark INTERRUPTED).
 - The `response_cancelled` drop flag discards stale audio deltas that
   OpenAI emits in the race window between `response.cancel` sent and
   actually processed.
+
+Content-channel audio (audiobook playback etc.) is owned by a
+`ContentStreamObserver` — the same observer implementation used by the
+focus-management layer. Today the coordinator drives it directly
+(acquire = FOREGROUND notification, stop = NONE notification) rather
+than through a `FocusManager`. A future stage can swap in the
+`FocusManager` once we need real arbitration (duck, background,
+inject_turn); the observer API was chosen to make that swap mechanical.
 
 The coordinator is transport-agnostic: all I/O happens through callbacks
 passed at construction time, which makes it straightforward to unit-test
@@ -23,18 +31,18 @@ with a `StubVoiceProvider` and wire into a concrete
 
 from __future__ import annotations
 
-import asyncio
 import json
 import time
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import structlog
 
+from huxley.focus.vocabulary import FocusState, MixingBehavior
 from huxley_sdk import AudioStream, CancelMedia, PlaySound, SetVolume
 
 from .factory import TurnFactory
-from .media_task import MediaTaskManager
 from .mic_router import MicRouter
+from .observers import ContentStreamObserver
 from .speaking_state import SpeakingOwner, SpeakingState
 from .state import Turn, TurnSource, TurnState
 
@@ -45,6 +53,7 @@ _SOURCE_TO_OWNER: dict[TurnSource, SpeakingOwner] = {
 }
 
 if TYPE_CHECKING:
+    import asyncio
     from collections.abc import Awaitable, Callable
 
     from huxley.voice.provider import VoiceProvider
@@ -110,7 +119,11 @@ class TurnCoordinator:
         self._dispatch_tool = dispatch_tool
         self._turn_factory = TurnFactory()
         self._mic_router = MicRouter(default_handler=provider.send_user_audio)
-        self._media_tasks = MediaTaskManager()
+        # Current content-stream observer (audiobook / radio / etc.). Exactly
+        # one at a time — `_start_content_stream` always stops the previous.
+        # A reference of None means idle. The observer owns the pump task;
+        # access it via `current_media_task` for back-compat.
+        self._content_obs: ContentStreamObserver | None = None
 
         self.current_turn: Turn | None = None
         self.response_cancelled: bool = False
@@ -119,8 +132,15 @@ class TurnCoordinator:
 
     @property
     def current_media_task(self) -> asyncio.Task[None] | None:
-        """Back-compat accessor; the authoritative owner is `self._media_tasks`."""
-        return self._media_tasks.task
+        """Back-compat accessor — points at the pump task owned by the
+        current `ContentStreamObserver`, or `None` when idle.
+        """
+        return self._content_obs.task if self._content_obs is not None else None
+
+    def _content_is_running(self) -> bool:
+        """True iff a content stream is currently playing (pump task live)."""
+        obs = self._content_obs
+        return obs is not None and obs.task is not None and not obs.task.done()
 
     def _tid(self) -> str | None:
         """Short turn ID for explicit passing (factory tasks, etc.)."""
@@ -138,7 +158,7 @@ class TurnCoordinator:
     async def on_ptt_start(self) -> None:
         """User pressed PTT. Start a new turn or interrupt + restart."""
         active_turn = self.current_turn is not None and self.current_turn.state != TurnState.IDLE
-        active_media = self._media_tasks.is_running
+        active_media = self._content_is_running()
         prev_state = self.current_turn.state.value if self.current_turn else None
 
         if active_turn or active_media:
@@ -289,7 +309,7 @@ class TurnCoordinator:
             # Cancel the running stream immediately so it stops before the
             # model's confirmation speech plays. needs_follow_up=True lets the
             # model narrate the result (e.g. "Listo, pausé el libro").
-            await self._media_tasks.stop()
+            await self._stop_content_stream()
             self.current_turn.needs_follow_up = True
         elif isinstance(result.side_effect, SetVolume):
             # Forward the volume command to the client immediately. The model
@@ -394,7 +414,7 @@ class TurnCoordinator:
 
     async def on_session_disconnected(self) -> None:
         """OpenAI session dropped — abort any live turn without cancelling OpenAI."""
-        had_media = self._media_tasks.is_running
+        had_media = self._content_is_running()
         was_speaking = self._speaking_state.is_speaking
         tid = self._tid()
 
@@ -413,7 +433,7 @@ class TurnCoordinator:
         self.current_turn.state = TurnState.INTERRUPTED
         self.current_turn = None
         self._bind_turn()
-        await self._media_tasks.stop()
+        await self._stop_content_stream()
         await self._send_audio_clear()
 
     # --- Interrupt: the atomic barrier ---
@@ -423,7 +443,7 @@ class TurnCoordinator:
         `docs/turns.md#3-interrupt`. Order matters.
         """
         prev_state = self.current_turn.state.value if self.current_turn else None
-        has_media = self._media_tasks.is_running
+        has_media = self._content_is_running()
         has_response = self.current_turn is not None and self.current_turn.state in (
             TurnState.COMMITTING,
             TurnState.IN_RESPONSE,
@@ -449,8 +469,8 @@ class TurnCoordinator:
         # 3. Flush client-side audio queue + clear model-speaking state
         await self._send_audio_clear()
         await self._speaking_state.force_release()
-        # 4. Cancel any long-running media task
-        await self._media_tasks.stop()
+        # 4. Cancel any live content stream (pump task -> done)
+        await self._stop_content_stream()
         # 5. Cancel the in-flight response (only if one could exist)
         if will_cancel:
             await self._provider.cancel_current_response()
@@ -476,9 +496,9 @@ class TurnCoordinator:
     async def _apply_side_effects(self) -> None:
         """Invoke the pending side effects at the terminal barrier.
 
-        Clears `current_turn` BEFORE spawning the media task so the task's
-        natural-completion path (which may fire a synthetic-turn announcement)
-        doesn't race with our own turn-cleanup awaits.
+        Clears `current_turn` BEFORE spawning the content stream so the
+        stream's natural-completion path (which may fire a synthetic-turn
+        announcement) doesn't race with our own turn-cleanup awaits.
         """
         if self.current_turn is None:
             return
@@ -493,9 +513,10 @@ class TurnCoordinator:
                 dropped=len(streams) - 1,
             )
 
-        # Tear down the parent turn fully before spawning the media task.
-        # Otherwise the media task can complete during one of these awaits and
-        # see `current_turn != None`, falsely concluding a new turn started.
+        # Tear down the parent turn fully before spawning the content stream.
+        # Otherwise the stream's natural-completion callback can fire during
+        # one of these awaits and see `current_turn != None`, falsely
+        # concluding a new turn started.
         await self._emit_turn_summary(reason="ended", spawned_audio_stream=bool(streams))
         await self._log.ainfo("coord.turn_ended")
         self.current_turn = None
@@ -503,10 +524,7 @@ class TurnCoordinator:
         await self._send_status(self._status["ready"])
 
         if streams:
-            await self._media_tasks.stop()
-            stream = streams[-1]
-            self._media_tasks.start(self._consume_audio_stream(stream, turn_id))
-            await logger.ainfo("coord.audio_stream_started", turn=turn_id)
+            await self._start_content_stream(streams[-1], turn_id)
 
     async def _emit_turn_summary(self, *, reason: str, spawned_audio_stream: bool) -> None:
         """One-line summary at end-of-turn. Useful for grep + per-turn timing."""
@@ -523,37 +541,83 @@ class TurnCoordinator:
             user_audio_frames=self.current_turn.user_audio_frames,
         )
 
-    async def _consume_audio_stream(self, stream: AudioStream, turn_id: str | None) -> None:
-        """Pull chunks from an AudioStream side effect and forward them to send_audio.
+    async def _start_content_stream(self, stream: AudioStream, turn_id: str | None) -> None:
+        """Spawn a pump for `stream` via a fresh `ContentStreamObserver`.
 
-        Holds `model_speaking = true` for the duration of the factory so the
-        client UI knows audio is flowing (otherwise factory chunks would arrive
-        with `model_speaking = false`, potentially racing with the client-side
-        thinking-tone trigger).
+        Any previously-running content stream is stopped first. The observer
+        takes FOREGROUND immediately (stage-1 direct-drive; FocusManager
+        arbitration lands in a later stage). SpeakingState acquires FACTORY
+        on the first chunk and releases it when the stream ends naturally,
+        unless `_maybe_fire_completion_prompt` transfers ownership to
+        COMPLETION (synthetic audiobook-end turn).
         """
-        owns_speaking = False
-        try:
-            if not self._speaking_state.is_speaking:
+        await self._stop_content_stream()
+        interface_name = f"turn.content.{turn_id or 'unknown'}"
+        # Boxed so the async closures below can mutate it (Python has no
+        # plain `nonlocal` for coroutines closed-over by multiple callables).
+        owns_speaking = [False]
+
+        async def _factory_send_audio(chunk: bytes) -> None:
+            # Acquire FACTORY speaker lazily on the first chunk. If another
+            # owner already holds the flag (unlikely but possible if the
+            # stream starts while the model is still finishing its round),
+            # defer to them — the chunk still forwards, we just don't take
+            # the flag.
+            if not owns_speaking[0] and not self._speaking_state.is_speaking:
                 await self._speaking_state.acquire(SpeakingOwner.FACTORY)
-                owns_speaking = True
-            async for chunk in stream.factory():
-                await self._send_audio(chunk)
-            await logger.ainfo("coord.audio_stream_ended", turn=turn_id, cancelled=False)
+                owns_speaking[0] = True
+            await self._send_audio(chunk)
+
+        async def _on_eof() -> None:
+            await logger.ainfo(
+                "coord.audio_stream_ended",
+                turn=turn_id,
+                interface=interface_name,
+                cancelled=False,
+            )
             transferred = await self._maybe_fire_completion_prompt(stream, turn_id)
             if transferred:
-                # Ownership transferred to the synthetic turn (COMPLETION);
-                # don't release FACTORY here — on_audio_done clears COMPLETION.
-                owns_speaking = False
-        except asyncio.CancelledError:
-            await logger.ainfo("coord.audio_stream_ended", turn=turn_id, cancelled=True)
-            raise
-        except Exception:
-            await logger.aexception("coord.audio_stream_ended", turn=turn_id, error=True)
-        finally:
-            # Release FACTORY iff we still own it. release(expected) is a
-            # safe no-op if interrupt or transfer already changed ownership.
-            if owns_speaking:
+                # Ownership moved FACTORY -> COMPLETION; don't release here.
+                # The synthetic turn's `on_audio_done` clears COMPLETION.
+                owns_speaking[0] = False
+            elif owns_speaking[0]:
                 await self._speaking_state.release(SpeakingOwner.FACTORY)
+                owns_speaking[0] = False
+
+        self._content_obs = ContentStreamObserver(
+            interface_name=interface_name,
+            stream=stream,
+            send_audio=_factory_send_audio,
+            on_eof=_on_eof,
+        )
+        await logger.ainfo(
+            "coord.audio_stream_started",
+            turn=turn_id,
+            interface=interface_name,
+        )
+        # Direct-drive FOREGROUND notification — spawns the pump task.
+        await self._content_obs.on_focus_changed(FocusState.FOREGROUND, MixingBehavior.PRIMARY)
+
+    async def _stop_content_stream(self) -> None:
+        """Cancel any running content-stream observer. Idempotent.
+
+        Delivers `NONE / MUST_STOP` to the observer, which cancels the
+        pump task and awaits its cleanup. Safe to call when no observer
+        is active (no-op).
+        """
+        obs = self._content_obs
+        if obs is None:
+            return
+        task = obs.task
+        was_running = task is not None and not task.done()
+        if was_running:
+            await logger.ainfo(
+                "coord.audio_stream_ended",
+                interface=obs.interface_name,
+                cancelled=True,
+            )
+        self._content_obs = None
+        await obs.on_focus_changed(FocusState.NONE, MixingBehavior.MUST_STOP)
 
     async def _maybe_fire_completion_prompt(
         self, stream: AudioStream, parent_turn_id: str | None
@@ -616,7 +680,7 @@ class TurnCoordinator:
                 sample_rate * channels * bytes_per_sample * stream.completion_silence_ms // 1000
             )
             await self._send_audio(silence)
-        # Transfer speaker ownership FACTORY → COMPLETION. No notify fires —
+        # Transfer speaker ownership FACTORY -> COMPLETION. No notify fires —
         # the client already sees model_speaking=true; the synthetic turn's
         # on_audio_done will clear it normally.
         self._speaking_state.transfer(SpeakingOwner.FACTORY, SpeakingOwner.COMPLETION)

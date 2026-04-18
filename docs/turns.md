@@ -92,9 +92,9 @@ Semantics:
 
 `SideEffect` is the extension point: future kinds (notifications, state updates) reuse the same shape and the coordinator dispatches by `isinstance` check.
 
-**Long-running media streams live in a `MediaTaskManager`** owned by the coordinator (`huxley.turn.media_task`). The manager wraps one `asyncio.Task` slot plus a `DuckingController` stub and exposes a pure `arbitrate(urgency, yield_policy) → Decision` for the I/O plane.
+**Long-running media streams live in a `ContentStreamObserver`** owned by the coordinator (`huxley.turn.observers`). The observer wraps one `asyncio.Task` slot — the pump running `async for chunk in factory(): await send_audio(chunk)`. The coordinator drives focus-state transitions directly (`FOREGROUND/PRIMARY` on start, `NONE/MUST_STOP` on cancel); a `FocusManager` will mediate these transitions in a later stage, once skill-level arbitration (inject_turn, ducking) actually needs it.
 
-It's the task running `async for chunk in factory(): await send_audio(chunk)`. The task outlives turns — an audiobook started in one turn keeps playing until the next turn's interrupt. When a new factory is applied, the coordinator awaits `MediaTaskManager.stop()` first, then `start()`s the new one. Single slot, not a channel abstraction. No queue. The coordinator exposes `current_media_task` as a read-only property for callers who want to await the task directly.
+The pump outlives turns — an audiobook started in one turn keeps playing until the next turn's interrupt. When a new stream is applied, the coordinator calls `_stop_content_stream()` to cancel the previous observer, then starts a fresh one. Single slot, not a channel abstraction. No queue. The coordinator exposes `current_media_task` as a read-only property for callers who want to await the task directly.
 
 **Factory contract** (unchanged from v2):
 
@@ -102,7 +102,7 @@ It's the task running `async for chunk in factory(): await send_audio(chunk)`. T
 - **Yields**: PCM16 little-endian, 24 kHz, mono; any chunk size.
 - **Pacing**: the factory is responsible for realtime pacing (ffmpeg `-re`, explicit `asyncio.sleep`).
 - **Cancellation**: the iterator MUST honor cancellation cleanly. On `task.cancel()`, the iterator's next `yield` must tear down any subprocess / file / network resource.
-- **Completion**: natural EOF (`StopAsyncIteration`) is fine; `MediaTaskManager` surfaces `is_running=False` once the task finishes.
+- **Completion**: natural EOF (`StopAsyncIteration`) is fine; the `ContentStreamObserver`'s pump task simply returns, and `coordinator.current_media_task.done()` becomes `True` once it finishes.
 - **Errors**: exceptions caught by the coordinator, logged, surface a distinct error tone client-side + status message. **Tested via integration test with a real subprocess**, not unit mock.
 
 **Critical: closure-captured new position for rewind/forward**. The skill does not write `saved_position = new_pos` to storage during dispatch. The new position lives in the factory closure: `lambda: player.stream(path, start=new_pos)`. If the turn is interrupted, the factory is never invoked, and storage is untouched — the stored position still reflects last _actually played_ position, not last _requested_ seek. This fixes an interrupt-atomicity gap in the current code.
@@ -123,7 +123,7 @@ class TurnCoordinator:
             self.current_turn.pending_factories.clear()     # 2. drop pending factories
         await self.server.send_audio_clear()                # 3. flush client queue
         await self.speaking_state.force_release()           #    + clear speaker owner
-        await self.media_tasks.stop()                       # 4. cancel long-running producer
+        await self._stop_content_stream()                   # 4. cancel long-running producer
         if self.session.is_connected:                       # 5. cancel model response
             await self.session.cancel_response()
         if self.current_turn:
@@ -162,7 +162,7 @@ Key transitions:
 - **IN_RESPONSE → AWAITING_NEXT_RESPONSE**: `response.done` arrives AND `needs_follow_up == True` (at least one tool this round had `side_effect=None`). Coordinator sends `response.create` and clears `needs_follow_up` for the next round.
 - **IN_RESPONSE → APPLYING_FACTORIES**: `response.done` arrives AND `needs_follow_up == False`. The model has fully finished talking for this turn. If `pending_factories` is non-empty, invoke them in order; if empty, transition directly to `IDLE`.
 - **AWAITING_NEXT_RESPONSE → IN_RESPONSE**: first event of the new response.
-- **APPLYING_FACTORIES → IDLE**: each pending factory has been invoked. Long-running factories (`MediaTaskManager`) run in the background; the turn doesn't wait for them to complete.
+- **APPLYING_FACTORIES → IDLE**: each pending factory has been invoked. Long-running factories (`ContentStreamObserver` pump) run in the background; the turn doesn't wait for them to complete.
 - **Any state → INTERRUPTED**: new `ptt_start` during a live turn calls `coordinator.interrupt()`.
 
 ## Concrete decisions
@@ -180,7 +180,7 @@ The terminal `response.done` of the chain — one that leaves `needs_follow_up =
 
 ### 3. `START_STREAM` vs `MODIFY_STREAM` — this question is now moot
 
-No enum. No kinds. If a tool has a factory, the coordinator runs it. If the `MediaTaskManager` has a running task, it's cancelled first. Whether that's _starting fresh_ or _modifying_ is semantics for the tool description, not for the runtime.
+No enum. No kinds. If a tool has a factory, the coordinator runs it. If the current `ContentStreamObserver` has a running pump, it's cancelled first. Whether that's _starting fresh_ or _modifying_ is semantics for the tool description, not for the runtime.
 
 ### 4. Factory contract
 
@@ -213,7 +213,7 @@ Session state machine simplifies to:
 IDLE → CONNECTING → CONVERSING → IDLE
 ```
 
-No `PLAYING`. Media playback is tracked by `MediaTaskManager` inside the coordinator, not by the session state machine.
+No `PLAYING`. Media playback is tracked by the coordinator's active `ContentStreamObserver`, not by the session state machine.
 
 **Cost check**: OpenAI Realtime API bills per token. Idle session (no audio flowing, no function calls) = zero tokens = zero cost. The original "save API cost" justification for PLAYING does not hold.
 

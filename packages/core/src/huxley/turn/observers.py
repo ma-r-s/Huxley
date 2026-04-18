@@ -107,6 +107,11 @@ class ContentStreamObserver:
         """The pump task. Exposed for tests + for the coord to await shutdown."""
         return self._task
 
+    @property
+    def interface_name(self) -> str:
+        """The stable `interface_name` this observer was constructed with."""
+        return self._interface_name
+
     async def on_focus_changed(self, new_focus: FocusState, behavior: MixingBehavior) -> None:
         match new_focus:
             case FocusState.FOREGROUND:
