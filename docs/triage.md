@@ -338,7 +338,7 @@ stale during long idle: regenerate-on-stale is probably fine for v1.
 
 ## T1.6 — Per-skill error envelope
 
-**Status**: queued · **Task**: #91 · **Effort**: ~30 LOC (half day) · **Recommended Day-1 win**
+**Status**: done (2026-04-18) · **Task**: #91 · **Effort**: ~30 LOC (matched estimate)
 
 **Problem.** When a skill's `handle()` raises, the exception propagates up the
 asyncio call chain and likely kills the receive loop. For a blind elderly user,
@@ -348,27 +348,57 @@ down the agent mid-conversation.
 **Why it matters.** Critical pre-ship. Without this, a single skill bug = silent
 dead device for the user.
 
-**Proposed solution.** Wrap `coordinator.on_tool_call` dispatch in
-`try/except Exception` (NOT `BaseException` — let `asyncio.CancelledError`
-propagate). On exception:
+### Validation (Gate 1)
 
-1. Return structured error `ToolResult`:
-   ```python
-   ToolResult(output=json.dumps({
-       "error": "skill_failed",
-       "skill": skill_name,
-       "tool": tool_name,
-       "message": "algo no funcionó, intenta de nuevo",
-   }))
-   ```
-2. LLM sees the error in the tool output and apologizes naturally.
-3. Optional: `PlaySound` error chime so user hears "something went wrong"
-   audibly.
-4. Log full exception with `skill_name`, `tool_name`, `args`, traceback.
+Code path traced:
 
-**Follow-up (belongs in T1.4 / supervised-task pattern):** when skills run
-long-lived background tasks for proactive notifications, they need framework-
-supervised lifecycle with restart-on-crash + backoff. Not part of this item.
+- `voice/openai_realtime.py:297` calls `on_tool_call` from receive loop
+- `coordinator.py:262` (pre-fix) calls `await self._dispatch_tool(name, args)` with no try/except
+- `sdk/registry.py:67` calls `await self._skills[skill_name].handle(tool_name, args)` with no try/except
+- `voice/openai_realtime.py:347` catches generic `Exception` in `_receive_loop`, logs, then `finally:` calls `on_session_end()` → triggers `_auto_reconnect`
+
+So failure mode = skill exception → session dies → 2s reconnect → no `tool_output` ever sent for that call → user hears silence + reconnect chime.
+
+### Design (Gate 2)
+
+Wrap dispatch in `try/except Exception` (not `BaseException` — preserve `asyncio.CancelledError`). On exception, send structured error JSON as `tool_output` so OpenAI's response loop continues; LLM verbalizes apology naturally on next response round.
+
+Decided NOT to:
+
+- Add a `PlaySound` error chime (requires curated `error.wav`; deferred until persona has one).
+- Surface `skill_name` to the error envelope (registry private field; logging `tool` + `args` is sufficient context).
+
+### Definition of Done
+
+- [x] `coord.on_tool_call` wraps `_dispatch_tool` in `try/except Exception`
+- [x] Structured error `tool_output` sent via `provider.send_tool_output(call_id, ...)`
+- [x] `current_turn.needs_follow_up = True` so model produces audible apology
+- [x] `coord.tool_error` log event with `tool`, `args`, `exception_class`, full traceback via `aexception`
+- [x] `tool_error` dev event so browser surfaces failures live
+- [x] Regression tests prove: (a) no exception propagates, (b) error tool_output sent, (c) needs_follow_up set, (d) dev_event emitted, (e) no audio stream latched, (f) `SkillNotFoundError` (routing failure) handled by same envelope
+- [x] All 230 tests green (was 224, +6 new)
+
+### Tests (Gate 3)
+
+`packages/core/tests/unit/test_turn_coordinator.py` → `TestToolErrorEnvelope`:
+
+- `test_skill_exception_does_not_propagate`
+- `test_skill_exception_sends_error_tool_output`
+- `test_skill_exception_sets_needs_follow_up`
+- `test_skill_exception_emits_tool_error_dev_event`
+- `test_skill_exception_does_not_latch_audio_stream`
+- `test_skill_not_found_error_handled_same_way`
+
+### Docs touched (Gate 4)
+
+- `docs/observability.md` — new "Skill failures" section documenting the `coord.tool_error` and `tool_error` dev event, and the no-session-death guarantee
+- `docs/triage.md` — this entry updated with full audit trail
+
+### Ship (Gate 5)
+
+- Commit hash filled in by the commit step.
+- **Lessons**: Validation-first (tracing the actual failure path) caught that the failure mode was bigger than "skill exception logged" — it was full session death. Worth doing for every Tier 1 item.
+- **Follow-up**: when persona has an `error.wav` curated, wire `PlaySound` in this code path so blind users get audio confirmation that something went wrong (separate small triage item).
 
 ---
 

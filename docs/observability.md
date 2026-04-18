@@ -156,6 +156,15 @@ Read top to bottom: user pressed PTT (frame 28), coordinator committed, model st
 
 Every event is grep-able. To filter to one turn: `grep "turn=abc12345"`. To see only coordinator decisions: `grep "^coord\."`. To see what the agent sent the user: `grep "^server.tx\."`.
 
+## Skill failures
+
+When a skill's `handle()` raises, the coordinator catches it (see `docs/triage.md` T1.6) and emits two events:
+
+- `coord.tool_error` (structured log, with `exception_class`, `tool`, `args`, full traceback) — this is the diagnostic line.
+- `tool_error` dev event to the browser/client — surfaces the failure in the UI for live observation.
+
+The session does not die. A structured error `tool_output` is sent back to OpenAI with a Spanish apology hint, and the model produces an audible acknowledgement on the next response round. Look for `coord.tool_error` first when a tool call seems to disappear silently.
+
 ## When something looks wrong
 
 The dev workflow:

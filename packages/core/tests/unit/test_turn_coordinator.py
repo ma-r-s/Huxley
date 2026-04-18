@@ -253,6 +253,110 @@ class TestToolDispatch:
         assert args[1]["has_audio_stream"] is True
 
 
+class TestToolErrorEnvelope:
+    """Skill exceptions are caught and turned into structured tool_output.
+
+    See docs/triage.md T1.6. Without this, a skill bug propagates to the
+    receive loop, kills the OpenAI session via on_session_end's finally
+    clause, and the user hears silence + a 2s reconnect — for a blind user
+    this looks identical to a dead device.
+    """
+
+    async def test_skill_exception_does_not_propagate(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        mocks["dispatch_tool"].side_effect = RuntimeError("skill boom")
+
+        await _commit_turn(coordinator)
+        # Must not raise — coordinator absorbs the exception.
+        await coordinator.on_tool_call("call_err", "broken_tool", {"x": 1})
+
+        # Session is still alive, current_turn intact.
+        assert coordinator.current_turn is not None
+
+    async def test_skill_exception_sends_error_tool_output(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        import json
+
+        mocks["dispatch_tool"].side_effect = ValueError("library not found")
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("call_err", "search_audiobooks", {"q": "x"})
+
+        # Find the error output frame on the provider.
+        sent_outputs = [s for s in provider.sent if s[0] == "send_tool_output"]
+        assert len(sent_outputs) == 1
+        _, call_id, output_str = sent_outputs[0]
+        assert call_id == "call_err"
+        payload = json.loads(output_str)
+        assert payload["error"] == "tool_failed"
+        assert payload["tool"] == "search_audiobooks"
+        # Spanish apology hint; persona-agnostic strings can come later.
+        assert "discúlpate" in payload["message"]
+
+    async def test_skill_exception_sets_needs_follow_up(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        mocks["dispatch_tool"].side_effect = RuntimeError("boom")
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("call_err", "broken_tool", {})
+
+        assert coordinator.current_turn is not None
+        assert coordinator.current_turn.needs_follow_up is True
+        # Counter still increments — the call did happen, even if it failed.
+        assert coordinator.current_turn.tool_calls == 1
+
+    async def test_skill_exception_emits_tool_error_dev_event(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        mocks["dispatch_tool"].side_effect = RuntimeError("skill boom")
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("call_err", "broken_tool", {"arg": 42})
+
+        mocks["send_dev_event"].assert_awaited_once()
+        args, _ = mocks["send_dev_event"].call_args
+        assert args[0] == "tool_error"
+        assert args[1]["name"] == "broken_tool"
+        assert args[1]["args"] == {"arg": 42}
+        assert args[1]["exception_class"] == "RuntimeError"
+        assert args[1]["message"] == "skill boom"
+
+    async def test_skill_exception_does_not_latch_audio_stream(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        mocks["dispatch_tool"].side_effect = RuntimeError("boom mid-play")
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("call_err", "play_audiobook", {"book_id": "X"})
+
+        assert coordinator.current_turn is not None
+        assert coordinator.current_turn.pending_audio_streams == []
+
+    async def test_skill_not_found_error_handled_same_way(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any], provider: StubVoiceProvider
+    ) -> None:
+        # Same envelope catches dispatch-routing failures (unknown tool name),
+        # not just skill-internal exceptions.
+        from huxley_sdk.registry import SkillNotFoundError
+
+        mocks["dispatch_tool"].side_effect = SkillNotFoundError(
+            "No skill registered for tool 'ghost_tool'"
+        )
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("call_x", "ghost_tool", {})
+
+        assert coordinator.current_turn is not None
+        sent_outputs = [s for s in provider.sent if s[0] == "send_tool_output"]
+        assert len(sent_outputs) == 1
+
+
 class TestChainedResponses:
     """Info tool → follow-up response → terminal barrier flow."""
 

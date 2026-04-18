@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -254,12 +255,22 @@ class TurnCoordinator:
         await self._log.ainfo("coord.audio_done")
 
     async def on_tool_call(self, call_id: str, name: str, args: dict[str, Any]) -> None:
-        """Model called a tool — dispatch, send output back, latch the result."""
+        """Model called a tool — dispatch, send output back, latch the result.
+
+        Skill exceptions are caught here and turned into a structured error
+        `tool_output` so the OpenAI session survives. Without this envelope a
+        skill bug propagates to the receive loop, kills the session, and the
+        user hears silence — see docs/triage.md T1.6.
+        """
         if self.response_cancelled or self.current_turn is None:
             return
         self._enter_in_response_if_idle_between_rounds()
 
-        result = await self._dispatch_tool(name, args)
+        try:
+            result = await self._dispatch_tool(name, args)
+        except Exception as exc:
+            await self._handle_tool_error(call_id, name, args, exc)
+            return
         await self._provider.send_tool_output(call_id, result.output)
 
         audio_stream = result.side_effect if isinstance(result.side_effect, AudioStream) else None
@@ -308,6 +319,53 @@ class TurnCoordinator:
             # tools in one response), collect them and asyncio.gather before
             # sending outputs. See docs/triage.md C2.
             self.current_turn.needs_follow_up = True
+
+    async def _handle_tool_error(
+        self,
+        call_id: str,
+        name: str,
+        args: dict[str, Any],
+        exc: BaseException,
+    ) -> None:
+        """Skill raised in `handle()`. Don't kill the session.
+
+        Sends a structured error tool_output back to OpenAI so the model can
+        verbalize an apology naturally instead of going silent. Sets
+        `needs_follow_up=True` to make the model produce that audible
+        acknowledgement on the next response round. Logs the full traceback
+        with tool/args context for diagnosis. The receive loop never sees the
+        exception — see docs/triage.md T1.6.
+        """
+        await self._log.aexception(
+            "coord.tool_error",
+            tool=name,
+            args=args,
+            exception_class=type(exc).__name__,
+            tid=self._tid(),
+        )
+        error_output = json.dumps(
+            {
+                "error": "tool_failed",
+                "tool": name,
+                "message": (
+                    "esta acción falló inesperadamente; "
+                    "discúlpate brevemente con el usuario y ofrece otra alternativa"
+                ),
+            }
+        )
+        await self._provider.send_tool_output(call_id, error_output)
+        if self.current_turn is not None:
+            self.current_turn.tool_calls += 1
+            self.current_turn.needs_follow_up = True
+        await self._send_dev_event(
+            "tool_error",
+            {
+                "name": name,
+                "args": args,
+                "exception_class": type(exc).__name__,
+                "message": str(exc),
+            },
+        )
 
     async def on_response_done(self) -> None:
         """OpenAI finished a response. Decide if we need more rounds or barrier."""
