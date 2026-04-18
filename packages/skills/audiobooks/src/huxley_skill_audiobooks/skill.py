@@ -50,9 +50,6 @@ _ON_COMPLETE_PROMPT = (
     "si quiere que busque otro."
 )
 
-# WAV header size in bytes (standard PCM WAV: 44 bytes). Stripped when
-# loading sound files so only raw PCM16 24kHz mono bytes remain.
-_WAV_HEADER_BYTES = 44
 
 _AUDIOBOOK_EXTENSIONS = {".mp3", ".m4a", ".m4b", ".ogg", ".opus", ".flac", ".wav"}
 
@@ -89,7 +86,14 @@ def _fuzzy_score(query: str, candidate: str) -> float:
 
 
 def _load_sound_palette(directory: Path) -> dict[str, bytes]:
-    """Load *.wav files from directory; strip WAV header; cache as raw PCM16."""
+    """Load *.wav files from directory; return raw PCM16 24kHz mono bytes per name.
+
+    Uses `wave.open()` so files with non-standard headers (LIST/INFO chunks,
+    larger riff chunks) still produce correct PCM. Files with the wrong
+    sample rate / channel count / sample width are skipped — they would play
+    as garbage through the 24kHz mono channel anyway.
+    """
+    import wave
     from pathlib import Path as _Path
 
     palette: dict[str, bytes] = {}
@@ -97,9 +101,13 @@ def _load_sound_palette(directory: Path) -> dict[str, bytes]:
     if not d.exists():
         return palette
     for wav in sorted(d.glob("*.wav")):
-        raw = wav.read_bytes()
-        if len(raw) > _WAV_HEADER_BYTES:
-            palette[wav.stem] = raw[_WAV_HEADER_BYTES:]
+        try:
+            with wave.open(str(wav), "rb") as wf:
+                if wf.getnchannels() != 1 or wf.getsampwidth() != 2 or wf.getframerate() != 24000:
+                    continue
+                palette[wav.stem] = wf.readframes(wf.getnframes())
+        except (wave.Error, OSError):
+            continue
     return palette
 
 
@@ -317,6 +325,21 @@ class AudiobooksSkill:
         )
         self._sounds = _load_sound_palette(sounds_dir)
         self._silence_ms = int(cfg.get("silence_ms", 500))
+
+        if sounds_dir.exists() and not self._sounds:
+            await ctx.logger.awarning(
+                "audiobooks.sounds_empty",
+                path=str(sounds_dir),
+                hint="Directory exists but no PCM16/24kHz/mono WAV files found.",
+            )
+        if self._sounds and "book_start" not in self._sounds:
+            await ctx.logger.awarning(
+                "audiobooks.sound_missing", role="book_start", path=str(sounds_dir)
+            )
+        if self._sounds and "book_end" not in self._sounds:
+            await ctx.logger.awarning(
+                "audiobooks.sound_missing", role="book_end", path=str(sounds_dir)
+            )
 
         await ctx.logger.ainfo(
             "audiobooks.catalog_loaded",
@@ -539,11 +562,14 @@ class AudiobooksSkill:
                     bytes_read += len(chunk)
                     yield chunk
 
-                # Natural completion — trailing earcon + silence before on_complete_prompt.
+                # Book audio finished cleanly — mark completed BEFORE yielding the
+                # trailing chime/silence. If the user interrupts during the
+                # decoration, the position still saves as 0.0 (book is done).
+                completed = True
+
                 if book_end_pcm:
                     yield book_end_pcm
                 yield silence_bytes
-                completed = True
             except Exception as exc:
                 # CancelledError is BaseException (not Exception) so cancellations
                 # propagate through here; only real errors (PlayerError, OSError, etc.)
@@ -800,7 +826,9 @@ class AudiobooksSkill:
                             "position_label": _fmt_duration(new_pos),
                         }
                     ),
-                    side_effect=AudioStream(factory=factory),
+                    side_effect=AudioStream(
+                        factory=factory, on_complete_prompt=_ON_COMPLETE_PROMPT
+                    ),
                 )
 
             case _:

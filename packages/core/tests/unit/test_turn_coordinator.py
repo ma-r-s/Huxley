@@ -664,6 +664,129 @@ class TestAudioStreamCompletion:
         names = [entry[0] for entry in provider.sent]
         assert "send_conversation_message" not in names
 
+    async def test_completion_creates_synthetic_turn_for_response_handling(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+    ) -> None:
+        """Fix #2: post-completion response needs a turn so on_response_done works."""
+        import asyncio
+
+        stream = AudioStream(
+            factory=_factory(b"a"),
+            on_complete_prompt="El libro terminó.",
+        )
+        mocks["dispatch_tool"].return_value = ToolResult(output="{}", side_effect=stream)
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("c1", "play_audiobook", {"book_id": "x"})
+        await coordinator.on_response_done()
+
+        for _ in range(20):
+            if coordinator.current_media_task is None or coordinator.current_media_task.done():
+                break
+            await asyncio.sleep(0.001)
+
+        # After the synthetic prompt fires, current_turn must be set so the
+        # incoming model response (deltas, tool calls, response_done) is handled.
+        assert coordinator.current_turn is not None
+        assert coordinator.current_turn.state == TurnState.IN_RESPONSE
+
+    async def test_completion_response_audio_flows_through_normally(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        """Fix #14: model audio for the announcement reply must reach the client.
+
+        Validates the full path: stream completes → synthetic turn created →
+        prompt sent → simulated model deltas + done → client got audio →
+        coordinator returns to a clean state (current_turn cleared, ready status).
+        """
+        import asyncio
+
+        stream = AudioStream(
+            factory=_factory(b"book"),
+            on_complete_prompt="El libro terminó.",
+        )
+        mocks["dispatch_tool"].return_value = ToolResult(output="{}", side_effect=stream)
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("c1", "play", {})
+        await coordinator.on_response_done()
+
+        # Wait for media task + synthetic turn creation
+        for _ in range(20):
+            if coordinator.current_media_task is None or coordinator.current_media_task.done():
+                break
+            await asyncio.sleep(0.001)
+
+        assert coordinator.current_turn is not None  # synthetic turn live
+
+        # Simulate model response: audio deltas → audio_done → response_done
+        # (Tests call coordinator handlers directly — provider callbacks aren't
+        # wired in this fixture.)
+        send_audio_count_before = mocks["send_audio"].await_count
+        await coordinator.on_audio_delta(b"announce_chunk_1")
+        await coordinator.on_audio_delta(b"announce_chunk_2")
+        await coordinator.on_audio_done()
+        await coordinator.on_response_done()
+
+        # Audio for the announcement reached the client
+        assert mocks["send_audio"].await_count == send_audio_count_before + 2
+        # The synthetic turn was torn down cleanly via on_response_done → _apply_side_effects
+        assert coordinator.current_turn is None
+        # Status was updated back to ready at end of synthetic turn
+        ready_status_calls = [
+            c
+            for c in mocks["send_status"].await_args_list
+            if "Ready" in str(c) or "ready" in str(c).lower()
+        ]
+        assert ready_status_calls, "ready status should be sent after synthetic turn ends"
+
+    async def test_completion_skipped_when_user_started_new_turn(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        """Fix #4: PTT during chime/silence wins; completion prompt skipped."""
+        import asyncio
+
+        # Slow stream that yields one chunk then waits; we'll let the player
+        # finish but block in the trailing silence by using a custom factory.
+        gate = asyncio.Event()
+
+        async def gated_stream() -> AsyncIterator[bytes]:
+            yield b"book"
+            await gate.wait()  # Block until test releases — simulates trailing silence
+            # When released, complete naturally
+            yield b"chime"
+
+        stream = AudioStream(factory=gated_stream, on_complete_prompt="end of book")
+        mocks["dispatch_tool"].return_value = ToolResult(output="{}", side_effect=stream)
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("c1", "play", {})
+        await coordinator.on_response_done()
+        # Let the media task start and consume the first chunk
+        await asyncio.sleep(0.005)
+
+        # Simulate user PTT during the trailing silence: starts a new turn,
+        # which interrupts the media task. After interrupt, release the gate.
+        await coordinator.on_ptt_start()
+        gate.set()
+        # Wait for any cleanup
+        for _ in range(20):
+            if coordinator.current_media_task is None or coordinator.current_media_task.done():
+                break
+            await asyncio.sleep(0.001)
+
+        names = [entry[0] for entry in provider.sent]
+        # PTT cancelled the stream mid-flight → completion should NOT fire
+        assert "send_conversation_message" not in names
+
 
 class TestResponseCancelledFlag:
     """Stale delta drop flag behavior."""

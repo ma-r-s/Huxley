@@ -530,3 +530,185 @@ class TestToolsExposed:
     def test_resume_last_tool_is_exposed(self, audiobooks_skill: AudiobooksSkill) -> None:
         names = [t.name for t in audiobooks_skill.tools]
         assert "resume_last" in names
+
+
+class TestSoundPalette:
+    """Sound loading + warning behavior."""
+
+    async def test_missing_sounds_path_is_silent(
+        self, library_path: Path, player_mock: MagicMock
+    ) -> None:
+        """No sounds_path config + no default 'sounds' dir → empty palette, no error."""
+        skill = AudiobooksSkill(player=player_mock)
+        await skill.setup(_make_ctx(library_path))
+        assert skill._sounds == {}
+
+    async def test_existing_empty_sounds_dir_logs_warning(
+        self, tmp_path: Path, library_path: Path, player_mock: MagicMock
+    ) -> None:
+        """sounds_path exists but contains no valid wavs → warn, don't crash."""
+        sounds_dir = tmp_path / "empty_sounds"
+        sounds_dir.mkdir()
+        ctx = make_test_context(
+            config={"library": str(library_path), "sounds_path": str(sounds_dir)},
+            persona_data_dir=library_path.parent,
+        )
+        skill = AudiobooksSkill(player=player_mock)
+        await skill.setup(ctx)
+        assert skill._sounds == {}
+        # logger.awarning is an AsyncMock; check it was called with sounds_empty
+        warning_calls = [
+            call
+            for call in ctx.logger.awarning.await_args_list
+            if call.args and call.args[0] == "audiobooks.sounds_empty"
+        ]
+        assert warning_calls, (
+            f"sounds_empty warning not fired. Got: {ctx.logger.awarning.await_args_list}"
+        )
+
+    async def test_valid_wav_loads_into_palette(
+        self, tmp_path: Path, library_path: Path, player_mock: MagicMock
+    ) -> None:
+        """A correctly-formatted PCM16/24kHz/mono WAV loads as raw bytes."""
+        import wave
+
+        sounds_dir = tmp_path / "sounds"
+        sounds_dir.mkdir()
+        wav_path = sounds_dir / "book_start.wav"
+        with wave.open(str(wav_path), "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(24000)
+            wf.writeframes(b"\x00\x01" * 100)  # 100 samples of fake PCM
+
+        ctx = make_test_context(
+            config={"library": str(library_path), "sounds_path": str(sounds_dir)},
+            persona_data_dir=library_path.parent,
+        )
+        skill = AudiobooksSkill(player=player_mock)
+        await skill.setup(ctx)
+        assert "book_start" in skill._sounds
+        assert skill._sounds["book_start"] == b"\x00\x01" * 100
+
+    async def test_wrong_format_wav_is_skipped(
+        self, tmp_path: Path, library_path: Path, player_mock: MagicMock
+    ) -> None:
+        """A 44.1kHz stereo WAV is silently skipped — wouldn't play correctly anyway."""
+        import wave
+
+        sounds_dir = tmp_path / "sounds"
+        sounds_dir.mkdir()
+        wav_path = sounds_dir / "wrong_format.wav"
+        with wave.open(str(wav_path), "wb") as wf:
+            wf.setnchannels(2)  # stereo, not mono
+            wf.setsampwidth(2)
+            wf.setframerate(44100)  # not 24kHz
+            wf.writeframes(b"\x00\x01\x00\x01" * 100)
+
+        ctx = make_test_context(
+            config={"library": str(library_path), "sounds_path": str(sounds_dir)},
+            persona_data_dir=library_path.parent,
+        )
+        skill = AudiobooksSkill(player=player_mock)
+        await skill.setup(ctx)
+        assert skill._sounds == {}
+
+
+class TestOnCompletePromptOnAllPaths:
+    """Every audiobook AudioStream must carry on_complete_prompt — the dead-air rule.
+
+    Otherwise a book ending after a seek/forward/rewind goes silent and the user
+    can't tell if the device crashed.
+    """
+
+    async def test_play_carries_on_complete_prompt(
+        self, audiobooks_skill: AudiobooksSkill
+    ) -> None:
+        result = await audiobooks_skill.handle(
+            "play_audiobook", {"book_id": audiobooks_skill._catalog[0]["id"]}
+        )
+        assert isinstance(result.side_effect, AudioStream)
+        assert result.side_effect.on_complete_prompt is not None
+        assert "libro" in result.side_effect.on_complete_prompt.lower()
+
+    async def test_resume_last_carries_on_complete_prompt(
+        self, audiobooks_skill: AudiobooksSkill, storage: SkillStorage
+    ) -> None:
+        await storage.set_setting(LAST_BOOK_KEY, audiobooks_skill._catalog[0]["id"])
+        await storage.set_setting(_position_key(audiobooks_skill._catalog[0]["id"]), "100.0")
+        result = await audiobooks_skill.handle("resume_last", {})
+        assert isinstance(result.side_effect, AudioStream)
+        assert result.side_effect.on_complete_prompt is not None
+
+    async def test_seek_rewind_carries_on_complete_prompt(
+        self, audiobooks_skill: AudiobooksSkill, storage: SkillStorage
+    ) -> None:
+        """Regression for #6: rewinding near book end must still announce completion."""
+        book_id = audiobooks_skill._catalog[0]["id"]
+        await storage.set_setting(LAST_BOOK_KEY, book_id)
+        await storage.set_setting(_position_key(book_id), "200.0")
+        result = await audiobooks_skill.handle(
+            "audiobook_control", {"action": "rewind", "seconds": 30}
+        )
+        assert isinstance(result.side_effect, AudioStream)
+        assert result.side_effect.on_complete_prompt is not None
+
+    async def test_seek_forward_carries_on_complete_prompt(
+        self, audiobooks_skill: AudiobooksSkill, storage: SkillStorage
+    ) -> None:
+        book_id = audiobooks_skill._catalog[0]["id"]
+        await storage.set_setting(LAST_BOOK_KEY, book_id)
+        await storage.set_setting(_position_key(book_id), "200.0")
+        result = await audiobooks_skill.handle(
+            "audiobook_control", {"action": "forward", "seconds": 30}
+        )
+        assert isinstance(result.side_effect, AudioStream)
+        assert result.side_effect.on_complete_prompt is not None
+
+
+class TestEarconCompletionTiming:
+    """Regression #3: position must save as 0.0 if user interrupts during the
+    trailing book_end + silence (book itself is done — chime is decoration)."""
+
+    async def test_completed_set_before_trailing_chime(
+        self, tmp_path: Path, library_path: Path
+    ) -> None:
+        """If we cancel during the trailing chime, position should still be 0.0."""
+        import wave
+
+        # Create a sounds dir with book_end so the chime path runs
+        sounds_dir = tmp_path / "sounds"
+        sounds_dir.mkdir()
+        wav_path = sounds_dir / "book_end.wav"
+        with wave.open(str(wav_path), "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(24000)
+            wf.writeframes(b"\x00\x00" * 24000)  # 1s of silence as the "chime"
+
+        # Player yields one chunk then completes immediately
+        player = _make_player_mock(chunks=[b"book_chunk"])
+        ctx = make_test_context(
+            config={"library": str(library_path), "sounds_path": str(sounds_dir)},
+            persona_data_dir=library_path.parent,
+        )
+        skill = AudiobooksSkill(player=player)
+        await skill.setup(ctx)
+        book_id = skill._catalog[0]["id"]
+
+        # Start streaming the book; pause inside the book_end yield by cancelling
+        # right after the player chunks finish but before the chime drains.
+        result = await skill.handle("play_audiobook", {"book_id": book_id})
+        assert isinstance(result.side_effect, AudioStream)
+        gen = result.side_effect.factory()
+        chunks = []
+        async for chunk in gen:
+            chunks.append(chunk)
+            if len(chunks) >= 2:  # got book_chunk + at least 1 chime byte
+                await gen.aclose()
+                break
+
+        # After interrupt during chime, position should be 0.0 (book completed)
+        pos_str = await skill._storage_req.get_setting(_position_key(book_id))
+        assert pos_str is not None
+        assert float(pos_str) == 0.0

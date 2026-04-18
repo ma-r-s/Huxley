@@ -143,11 +143,14 @@ def _build_factory(self, book_id, path, start_position):
                 bytes_read += len(chunk)
                 yield chunk
 
-            # Natural completion — trailing earcon + silence buffer
+            # Book audio finished cleanly — mark completed BEFORE the trailing
+            # chime/silence so a PTT during decoration still records the book
+            # as complete (position 0.0).
+            completed = True
+
             if book_end_pcm:
                 yield book_end_pcm
             yield SILENCE_BYTES
-            completed = True
         finally:
             skill._now_playing_id = None
             elapsed = bytes_read / BYTES_PER_SECOND
@@ -157,7 +160,11 @@ def _build_factory(self, book_id, path, start_position):
     return stream
 ```
 
-**Interrupt safety**: if the user presses PTT mid-book, the generator is cancelled before `completed = True`. The `book_end` earcon is never yielded. The book_start earcon is already yielded (unavoidable — it's the first thing out of the factory). The position save in `finally` still runs.
+**Interrupt safety**:
+
+- PTT mid-book → generator cancelled with `completed = False` → position saves as `start_pos + elapsed`. Resume works.
+- PTT during trailing chime/silence → generator cancelled with `completed = True` (already set) → position saves as `0.0`. Book correctly recorded as finished even if the decoration was interrupted.
+- The `book_start` earcon yields unconditionally as the first chunk — even on a play that the user immediately interrupts. Acceptable: tells the user the play command was understood.
 
 ---
 
@@ -177,7 +184,7 @@ class AudioStream(SideEffect):
     on_complete_prompt: str | None = None
 ```
 
-When the stream ends naturally (not cancelled), the coordinator sends `on_complete_prompt` as a user-role conversation item and triggers a model response:
+When the stream ends naturally (not cancelled), the coordinator sends `on_complete_prompt` as a user-role conversation item and triggers a model response. The coordinator must (a) skip the prompt if a PTT-induced cancel raced the trailing silence, and (b) create a synthetic IN_RESPONSE turn so the incoming model reply (deltas, tool calls, response_done) is handled by the existing turn-aware paths instead of being silently dropped:
 
 ```python
 # packages/core/src/huxley/turn/coordinator.py
@@ -187,16 +194,31 @@ async def _consume_audio_stream(self, stream: AudioStream, turn_id: str | None) 
         async for chunk in stream.factory():
             await self._send_audio(chunk)
         await logger.ainfo("coord.audio_stream_ended", turn=turn_id, cancelled=False)
-        # Natural completion — trigger model response if prompt provided
-        if stream.on_complete_prompt:
-            await self._session.send_conversation_message(stream.on_complete_prompt)
-            await self._session.request_response()
+        await self._maybe_fire_completion_prompt(stream, turn_id)
     except asyncio.CancelledError:
         await logger.ainfo("coord.audio_stream_ended", turn=turn_id, cancelled=True)
         raise
     except Exception:
         await logger.aexception("coord.audio_stream_ended", turn=turn_id, error=True)
+
+async def _maybe_fire_completion_prompt(self, stream, parent_turn_id):
+    if not stream.on_complete_prompt:
+        return
+    # PTT during the trailing chime/silence — let the user's new turn proceed.
+    if self.response_cancelled:
+        return
+    # The user already started a new turn (race won by PTT).
+    if self.current_turn is not None:
+        return
+    # Synthetic turn so on_response_done / on_tool_call / status updates run.
+    self.current_turn = Turn(state=TurnState.IN_RESPONSE)
+    self._bind_turn()
+    self.response_cancelled = False
+    await self._provider.send_conversation_message(stream.on_complete_prompt)
+    await self._provider.request_response()
 ```
+
+For the synthetic turn to work, `_apply_side_effects` must clear `current_turn = None` BEFORE spawning the media task — otherwise the task can complete during the cleanup awaits and see `current_turn != None`, falsely concluding a new user turn started.
 
 ### The `send_conversation_message` provider method
 

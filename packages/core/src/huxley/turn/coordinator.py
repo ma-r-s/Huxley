@@ -407,7 +407,12 @@ class TurnCoordinator:
             self.current_turn.state = TurnState.IN_RESPONSE
 
     async def _apply_side_effects(self) -> None:
-        """Invoke the pending side effects at the terminal barrier."""
+        """Invoke the pending side effects at the terminal barrier.
+
+        Clears `current_turn` BEFORE spawning the media task so the task's
+        natural-completion path (which may fire a synthetic-turn announcement)
+        doesn't race with our own turn-cleanup awaits.
+        """
         if self.current_turn is None:
             return
 
@@ -421,19 +426,22 @@ class TurnCoordinator:
                 dropped=len(streams) - 1,
             )
 
+        # Tear down the parent turn fully before spawning the media task.
+        # Otherwise the media task can complete during one of these awaits and
+        # see `current_turn != None`, falsely concluding a new turn started.
+        await self._emit_turn_summary(reason="ended", spawned_audio_stream=bool(streams))
+        await self._log.ainfo("coord.turn_ended")
+        self.current_turn = None
+        self._bind_turn()
+        await self._send_status(self._status["ready"])
+
         if streams:
             await self._stop_current_media_task()
             stream = streams[-1]
             self.current_media_task = asyncio.create_task(
                 self._consume_audio_stream(stream, turn_id)
             )
-            await self._log.ainfo("coord.audio_stream_started")
-
-        await self._emit_turn_summary(reason="ended", spawned_audio_stream=bool(streams))
-        await self._log.ainfo("coord.turn_ended")
-        self.current_turn = None
-        self._bind_turn()
-        await self._send_status(self._status["ready"])
+            await logger.ainfo("coord.audio_stream_started", turn=turn_id)
 
     async def _emit_turn_summary(self, *, reason: str, spawned_audio_stream: bool) -> None:
         """One-line summary at end-of-turn. Useful for grep + per-turn timing."""
@@ -456,19 +464,55 @@ class TurnCoordinator:
             async for chunk in stream.factory():
                 await self._send_audio(chunk)
             await logger.ainfo("coord.audio_stream_ended", turn=turn_id, cancelled=False)
-            if stream.on_complete_prompt:
-                await logger.ainfo(
-                    "coord.audio_stream_complete_prompt",
-                    turn=turn_id,
-                    prompt_len=len(stream.on_complete_prompt),
-                )
-                await self._provider.send_conversation_message(stream.on_complete_prompt)
-                await self._provider.request_response()
+            await self._maybe_fire_completion_prompt(stream, turn_id)
         except asyncio.CancelledError:
             await logger.ainfo("coord.audio_stream_ended", turn=turn_id, cancelled=True)
             raise
         except Exception:
             await logger.aexception("coord.audio_stream_ended", turn=turn_id, error=True)
+
+    async def _maybe_fire_completion_prompt(
+        self, stream: AudioStream, parent_turn_id: str | None
+    ) -> None:
+        """After natural stream end, send on_complete_prompt under a synthetic turn.
+
+        Skips when:
+        - The stream has no prompt (most streams).
+        - `response_cancelled` flipped while the trailing chime/silence played
+          (user pressed PTT during the buffer — let their new turn proceed).
+        - A new turn is already in progress (race won by the user's PTT).
+
+        Otherwise creates a synthetic IN_RESPONSE turn so the model's
+        announcement reply flows through the normal on_response_done /
+        on_tool_call paths instead of being silently dropped.
+        """
+        if not stream.on_complete_prompt:
+            return
+        if self.response_cancelled:
+            await logger.ainfo(
+                "coord.completion_prompt_skipped",
+                turn=parent_turn_id,
+                reason="response_cancelled",
+            )
+            return
+        if self.current_turn is not None:
+            await logger.ainfo(
+                "coord.completion_prompt_skipped",
+                turn=parent_turn_id,
+                reason="turn_in_progress",
+            )
+            return
+
+        self.current_turn = Turn(state=TurnState.IN_RESPONSE)
+        self._bind_turn()
+        self.response_cancelled = False
+        await self._log.ainfo(
+            "coord.completion_turn_started",
+            parent_turn=parent_turn_id,
+            prompt_len=len(stream.on_complete_prompt),
+        )
+        await self._provider.send_conversation_message(stream.on_complete_prompt)
+        await self._provider.request_response()
 
     async def _stop_current_media_task(self) -> None:
         """Cancel the running media task if any. Waits for cleanup."""
