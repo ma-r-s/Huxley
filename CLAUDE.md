@@ -141,9 +141,24 @@ Tests hitting the OpenAI Realtime API or real `ffmpeg` live in `packages/core/te
 ### Session start for this repo
 
 1. Read this file + `docs/vision.md` + `docs/concepts.md` + `docs/roadmap.md`
-2. Glance at `~/.claude/projects/-Users-mario-Projects-Personal-Code-Huxley/memory/MEMORY.md`
-3. `git status` + `git log -5 --oneline`
-4. If resuming work, read any open plan file or the last few commits
+2. **Read [`docs/triage.md`](./docs/triage.md)** — living tracker for what's in flight, queued, blocked, deferred. Source of truth for "what should I work on now?"
+3. Glance at `~/.claude/projects/-Users-mario-Projects-Personal-Code-Huxley/memory/MEMORY.md`
+4. `git status` + `git log -5 --oneline`
+5. If resuming work, read any open plan file or the last few commits
+
+When picking up a task: flip its status in `docs/triage.md` to `in_progress` with a date stamp before starting; flip to `done` with the commit hash when shipped. New findings get added to `triage.md` as a fresh entry (problem · why · solution · effort), not just buried in a commit message.
+
+### Triage discipline — the five gates
+
+Every triage item moves through five gates documented in [`docs/triage.md`](./docs/triage.md#workflow-per-item). Skipping a gate is a defect, not a shortcut.
+
+1. **Validate** — prove the problem exists with concrete evidence in the entry. No "this might be nice" items get worked.
+2. **Design + critic** (non-trivial only) — sketch the design, then **spawn a fresh critic agent** with the prompt skeleton in `triage.md`. Lock the Definition of Done as a bullet list.
+3. **Implement** — code + regression test that proves the symptom is gone + contract tests for new abstraction surfaces. ruff + mypy + pytest green.
+4. **Document** — walk the doc checklist explicitly. If nothing applies, write `Docs: none affected (verified each)` in the entry.
+5. **Ship + capture** — commit references the triage ID; entry gets the commit hash + a one-line lessons note; memory file updated if a durable lesson emerged.
+
+Trivial items (< 1 day, mechanical) collapse Gates 1–2 into a few minutes and skip the critic. Anything Tier 1 or design-shaped goes through the full path. **The work artifacts (validation evidence, design sketch, critic notes, DoD, tests, docs touched, lessons) live in the triage entry — not in commit messages alone.**
 
 ### Simplicity — Huxley specifically
 

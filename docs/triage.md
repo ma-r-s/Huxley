@@ -1,4 +1,508 @@
-# Issue triage — second critic review (2026-04-17)
+# Triage — work tracker
+
+Living source of truth for what's in flight, queued, blocked, deferred, and done.
+Mini-ADR for each non-trivial item (problem · why it matters · proposed solution ·
+effort). Item-level status lives here so any session can pick up where the last
+left off.
+
+## How to use
+
+- **New finding** → add under the right tier with status `queued`, link to a task ID
+  if one exists.
+- **Starting work** → flip status to `in_progress`, add a date stamp.
+- **Shipped** → flip to `done`, add commit hash, leave the writeup in place. Prune
+  done items quarterly to keep the doc readable.
+- **Pulling out of scope** → move to "Deferred" with the trigger that should
+  revisit it. Don't delete deferred items — the trigger is the contract.
+
+## Status legend
+
+`queued` · `in_progress` · `blocked` (note blocker) · `done` (note commit) ·
+`deferred` (note revisit trigger)
+
+---
+
+# Workflow per item
+
+Every triage item moves through five gates. **Trivial items** (< 1 day,
+mechanical) collapse Gates 1–2 into ~5 minutes and skip the critic. **Non-trivial
+items** (any Tier 1, or anything design-shaped) get the full path. The work
+artifacts live in the entry itself — not buried in commits.
+
+## Gate 1 — Validate the problem exists
+
+Before flipping `queued` → `in_progress`, prove the problem is real. Add a
+"Validation" subsection with evidence.
+
+- **Bugs**: paste a reproduction (log line, failing test, recorded session).
+- **Missing primitives**: cite specific current or imminent code that suffers
+  without it. _Adding a primitive because it sounds elegant is the failure mode
+  this gate exists to prevent._
+
+If you cannot validate: move to Deferred with reason "could not validate", or
+delete the entry.
+
+## Gate 2 — Design + critic
+
+For non-trivial items only (Tier 1, or anything estimated > 1 day):
+
+1. Sketch the design in a "Design" subsection.
+2. **Spawn a critic agent** with full context — problem statement, design
+   sketch, relevant code paths. Use the prompt skeleton at the bottom of this
+   section.
+3. Capture findings in "Critic Notes". For each: incorporate, or document
+   why dismissed.
+4. **Lock the Definition of Done** as a bullet list. This is the contract for
+   "shipped." Anything outside the bullets is scope creep — file as a separate
+   triage item.
+
+Trivial items skip this gate.
+
+## Gate 3 — Implement
+
+1. Write code.
+2. **Write the regression test that proves the symptom is gone** alongside (or
+   before) the fix. The test is the proof Gate 1's problem is solved.
+3. Write contract tests for any new abstraction surface (unit + integration).
+4. `uv run ruff check packages/` + `uv run mypy packages/sdk/src packages/core/src` +
+   per-package `pytest` all green.
+5. For audio/protocol changes: manual browser smoke per
+   [`docs/verifying.md`](./verifying.md). Audio regressions don't show up in
+   `pytest`.
+
+## Gate 4 — Document
+
+For every item, walk this checklist explicitly. The act of checking is the work
+— not just "I think nothing changed."
+
+- [ ] Affected `docs/*.md` (architecture, protocol, `skills/*`, `personas/*`,
+      `extensibility.md`, `concepts.md`, `observability.md`)
+- [ ] [`docs/decisions.md`](./decisions.md) ADR — if any architectural decision
+      was made or reaffirmed
+- [ ] [`CLAUDE.md`](../CLAUDE.md) — if methodology / convention / commands changed
+- [ ] Skill authoring docs — if SDK surface changed
+- [ ] [`README.md`](../README.md) — if user-facing setup, features, or commands changed
+- [ ] Memory file under
+      `~/.claude/projects/-Users-mario-Projects-Personal-Code-Huxley/memory/` —
+      if non-obvious knowledge worth carrying across sessions
+
+If nothing applies: write `Docs: none affected (verified each)` in the entry.
+The verified-each clause forces explicit consideration.
+
+## Gate 5 — Ship + capture
+
+1. Commit referencing the triage ID: `feat(skill): add Catalog primitive (T1.1)`.
+2. Flip status to `done` with commit hash + date in the entry.
+3. Add a "Lessons" line: anything surprising? Critic right or wrong? Anything
+   for future-self?
+4. Update a memory file if a real durable lesson emerged.
+
+## Critic agent prompt skeleton
+
+When spawning the Gate 2 critic, use this prompt structure (fill from the
+entry):
+
+> You are reviewing a proposed solution in the Huxley voice-agent framework.
+> Your job is to find every reason this design is wrong, overcomplicated,
+> missing the point, or has a simpler alternative. Mario has explicitly asked
+> for ruthless honesty over politeness.
+>
+> **Problem**: <paste from triage entry>
+> **Why it matters**: <paste>
+> **Proposed design**: <paste>
+> **Relevant code paths**: <list with file:line refs>
+> **Definition of Done (proposed)**: <paste>
+>
+> Answer concretely:
+>
+> 1. Does this design actually solve the problem stated? Where does it fall
+>    short of the Definition of Done?
+> 2. What is the simplest possible alternative? Is it strictly worse, or
+>    competitive?
+> 3. What does this design make harder for the next active items
+>    (`docs/triage.md` Tier 1) — especially proactive turns, messaging, custom
+>    hardware client?
+> 4. What hidden assumption is the design making about the user, the runtime,
+>    the data, or the persona?
+> 5. If you had to bet on what about this design will need to change within 3
+>    months of shipping, what is it?
+> 6. What test would catch the most likely subtle regression?
+
+## Per-item template
+
+When adding a new entry to the Active sections, use this skeleton:
+
+```md
+## T<tier>.<n> — Short title
+
+**Status**: queued · **Task**: #N · **Effort**: S/M/L
+
+**Problem.** <one paragraph>
+
+**Why it matters.** <one paragraph>
+
+### Validation (Gate 1)
+
+<evidence the problem is real — log, repro, code citation>
+
+### Design (Gate 2 — non-trivial only)
+
+<sketch>
+
+### Critic notes (Gate 2 — non-trivial only)
+
+<findings + responses>
+
+### Definition of Done (locked at Gate 2)
+
+- bullet
+- bullet
+
+### Tests (Gate 3)
+
+- regression test for the symptom
+- contract tests for new abstraction surfaces
+
+### Docs touched (Gate 4)
+
+- list, or `none affected (verified each)`
+
+### Ship (Gate 5)
+
+- commit hash · date · one-line lessons
+```
+
+---
+
+# Active — Tier 1 (framework dream)
+
+These advance the central thesis: a voice-agent framework whose load-bearing
+differentiator is "LLM understands rough natural-language intent and dispatches to
+user-installable custom tools, including for personal content."
+
+## T1.1 — `Catalog` / `SearchableIndex` SDK primitive
+
+**Status**: queued · **Task**: #86 · **Effort**: large (2 weeks: spec + impl + 3-skill refactor)
+
+**Problem.** Every personal-content skill reinvents fuzzy-search + prompt-context.
+Audiobooks does `SequenceMatcher` + `prompt_context()` dump (top 50). Radio does
+`_station_choices()`. News does its own dict cache. Future skills (contacts,
+recipes, music files, voice notes, photos) will reinvent it again. The framework's
+core differentiator is "personal content + LLM dispatch" and the SDK provides zero
+help with the personal-content half.
+
+**Why it matters.** Highest-leverage SDK addition. Collapses code in 3 existing
+skills. De-risks the next 5. Without it, every new personal-content skill
+re-imports fuzzy-match.
+
+**Proposed solution.** `ctx.catalog(name)` returns a `SearchableCatalog` backed by
+SQLite FTS5 (no extra deps; FTS5 ships with sqlite3) with Spanish accent-folding
+tokenizer. Two delivery modes for the LLM-side handoff:
+
+```python
+catalog = ctx.catalog("audiobooks")
+await catalog.upsert(id="brave-new-world", fields={"title": "...", "author": "..."}, payload={...})
+hits = await catalog.search("mundo feliz", limit=5)
+prompt_lines = catalog.as_prompt_lines(limit=50)            # small catalogs: dump in system prompt
+search_tool  = catalog.as_search_tool("search_audiobooks")  # large catalogs: expose tool to LLM
+```
+
+The dual-mode matters: 19 books → dump in prompt; 10,000 music files → search-on-
+demand tool. Same primitive.
+
+**Spec questions to answer first**: lifecycle (rebuilt on `setup()` vs
+persistent), multi-field weighting (title vs author), invalidation on file-watcher
+events, where the SQLite file lives (per-skill namespaced under `data_dir`).
+
+---
+
+## T1.2 — `ProactiveTurn` spec (`docs/proactive-turns.md`)
+
+**Status**: queued · **Task**: #87 · **Effort**: 1 week of design (spec only, no code)
+
+**Problem.** Current `TurnCoordinator` assumes user-originated turns. There is no
+entry point for "framework wants to start speaking now." Every v∞ feature on the
+roadmap (reminders, inbound messages, memory recall, companionship-mode greetings)
+requires this primitive.
+
+**Why it matters.** Existential for the framework dream past v2. Adding it as a
+5th `SideEffect` kind is the wrong shape — it inverts the coordinator's causality
+and the current state machine cannot handle it.
+
+**Spec must answer**:
+
+1. **Trigger sources**: time-based (cron-style), external events (webhook, MQTT),
+   internal (audiobook-end announcement is already a proto-proactive turn —
+   formalize the pattern).
+2. **Interrupt policies** (per-notification, declared by the skill):
+   - `now` — cancel current_media_task immediately, speak
+   - `defer` — queue, speak when current activity naturally ends
+   - `chime+defer` — earcon now, hold speech until user PTTs to ask
+   - `now_if_idle` — speak immediately only if state is idle, else defer
+3. **Coordinator state model**: how does `current_media_task` arbitration work?
+   Who owns `model_speaking` during proactive speech?
+4. **SDK surface**: `await ctx.notify(text, *, interrupt_policy="defer", expires_after=None, dedup_key=None)`
+5. **Wire protocol**: new server-initiated `assistant_turn_start{reason: "proactive"}`
+   message. Client behavior on receive (PTT during proactive should still interrupt).
+6. **Background-task supervision**: skills running schedulers/listeners need
+   framework-managed task lifecycle with crash logging + restart.
+
+**Output**: `docs/proactive-turns.md` written before any line of T1.4 code.
+
+---
+
+## T1.3 — Coordinator refactor (extract `SpeakingState` / `MediaTaskManager` / `TurnFactory`)
+
+**Status**: queued · **Task**: #88 · **Effort**: ~2 weeks · **Risk**: needs T2.4 (integration tests) for safe verification — currently deferred; see decision below
+
+**Problem.** `coordinator.py` is 586 LOC juggling PTT lifecycle, model deltas, tool
+dispatch, six side-effect kinds, atomic interrupts, completion-prompt synthesis,
+synthetic turn injection, and `model_speaking` flag ownership transfer. Adding
+ProactiveTurn (T1.4) into this without restructuring will produce code that's
+unmaintainable.
+
+**Why it matters.** Must precede T1.4. The "ownership transfer of `model_speaking`"
+gymnastics in `_consume_audio_stream` is already a code smell; proactive turns
+will compound it.
+
+**Proposed solution.** Extract three internal collaborators; `TurnCoordinator`
+becomes the thin orchestrator:
+
+- `SpeakingState` — owns `model_speaking` flag transitions
+  (factory_audio takes ownership → model reclaims → completion_prompt re-owns →
+  proactive will own too)
+- `MediaTaskManager` — owns `current_media_task` lifecycle (start, cancel,
+  on_complete, arbitration when proactive interrupts)
+- `TurnFactory` — creates Turns (user-originated today, completion-prompt synthetic
+  today, ProactiveTurn future)
+
+**Risk note.** Refactor without behavior change is hard to verify by manual smoke
+testing. T2.4 (integration smoke tests against real OpenAI) is currently deferred.
+**Decision needed before starting**: pull T2.4 forward, OR proceed with heavy
+manual smoke + git-rollback safety. Recommendation: pull T2.4 forward.
+
+---
+
+## T1.4 — `ProactiveTurn` implementation
+
+**Status**: blocked by T1.2 (spec) + T1.3 (coordinator refactor) · **Task**: #89 · **Effort**: ~3 weeks
+
+**Problem.** See T1.2 for full context.
+
+**Why it matters.** Unblocks reminders, inbound messaging, memory recall,
+companionship-mode greetings — every roadmap feature past v2.
+
+**Implementation sketch** (per the T1.2 spec):
+
+- `SessionManager.notify(text, interrupt_policy=...)` entry point
+- Coordinator extensions for proactive-turn arbitration (uses T1.3's
+  `MediaTaskManager`)
+- Wire protocol: `assistant_turn_start{reason: "proactive"}` server-initiated
+  message. Browser dev client + future ESP32 firmware both handle.
+- Supervised background-task pattern in SDK so reminder schedulers and inbound-
+  message listeners survive crashes.
+
+---
+
+## T1.5 — Real LLM summarization on reconnect
+
+**Status**: queued · **Task**: #90 · **Effort**: ~100 LOC (1-2 days)
+
+**Problem.** Today's `disconnect(save_summary=True)` injects raw "last 20 transcript
+lines" into the next session's system prompt. After 22 reconnects in a 20-hour
+audiobook session, the model is reading lines that may have nothing to do with
+current state. "The assistant forgets what we were just doing" is the most jarring
+possible failure for an elderly user who relies on continuity.
+
+**Why it matters.** OpenAI's 30–60 min forced session reset already hits us
+multiple times per long listening session. Without real summarization the
+continuity loss is invisible until the user notices.
+
+**Proposed solution.** On `disconnect(save_summary=True)`:
+
+1. Fetch last N transcript lines from `Storage` (already there)
+2. Call `gpt-4o-mini` (chat completion, NOT realtime) with system prompt:
+   "Resume esta conversación en 3 frases concisas para que un asistente que se
+   reconecta pueda continuar sin perder contexto."
+3. Store summary string in `Storage.save_summary(text)`
+4. On next `connect()`, inject summary into system prompt before
+   catalog/tool context
+
+**Cost.** ~$0.001 per disconnect (mini chat completion is cheap). Latency fits
+into the natural ~2s reconnect window — no extra user-facing latency.
+
+**Edge cases.** First connect (no prior summary): skip injection. Summary becomes
+stale during long idle: regenerate-on-stale is probably fine for v1.
+
+---
+
+## T1.6 — Per-skill error envelope
+
+**Status**: queued · **Task**: #91 · **Effort**: ~30 LOC (half day) · **Recommended Day-1 win**
+
+**Problem.** When a skill's `handle()` raises, the exception propagates up the
+asyncio call chain and likely kills the receive loop. For a blind elderly user,
+silence = device broken with no recovery path. Today, any bug in any skill takes
+down the agent mid-conversation.
+
+**Why it matters.** Critical pre-ship. Without this, a single skill bug = silent
+dead device for the user.
+
+**Proposed solution.** Wrap `coordinator.on_tool_call` dispatch in
+`try/except Exception` (NOT `BaseException` — let `asyncio.CancelledError`
+propagate). On exception:
+
+1. Return structured error `ToolResult`:
+   ```python
+   ToolResult(output=json.dumps({
+       "error": "skill_failed",
+       "skill": skill_name,
+       "tool": tool_name,
+       "message": "algo no funcionó, intenta de nuevo",
+   }))
+   ```
+2. LLM sees the error in the tool output and apologizes naturally.
+3. Optional: `PlaySound` error chime so user hears "something went wrong"
+   audibly.
+4. Log full exception with `skill_name`, `tool_name`, `args`, traceback.
+
+**Follow-up (belongs in T1.4 / supervised-task pattern):** when skills run
+long-lived background tasks for proactive notifications, they need framework-
+supervised lifecycle with restart-on-crash + backoff. Not part of this item.
+
+---
+
+# Active — Tier 2 (pre-ship hardening)
+
+## T2.1 — Storage WAL + daily snapshot
+
+**Status**: queued · **Task**: #92 · **Effort**: ~50 LOC + launchd plist (half day)
+
+**Problem.** Audiobook positions live in a single SQLite file with no WAL, no
+backup, no migration framework. The user's only state is "where I was in this
+book." Losing it is invisible until next interaction. For a system whose UX is
+"resume my book," losing the position is a silent UX disaster.
+
+**Proposed solution.**
+
+1. Enable SQLite WAL mode at connection time (`PRAGMA journal_mode=WAL`). Protects
+   against partial-write corruption on crashes.
+2. launchd cron: daily `cp abuelos.db data/backups/abuelos-$(date +%F).db`,
+   prune to last 7 days.
+3. Add `schema_version` table + startup check. Sets up migration framework for
+   future without overengineering it now.
+
+---
+
+## T2.2 — Cost observability + bug-canary ceiling
+
+**Status**: queued · **Task**: #93 · **Effort**: ~80 LOC
+
+**Problem.** Tool retry loop bug → silent bill spike. No tracking of cumulative
+cost per session or per day. No threshold logging. No kill switch.
+
+**Why it matters.** This is bug detection more than spend control. A 10x daily
+bill = something is wrong, not "user used a lot today." Catching that early saves
+investigation time.
+
+**Proposed solution.**
+
+1. OpenAI returns token counts in `response.done` events. Accumulate
+   `tokens_input` / `tokens_output` per-session and per-day in `Storage`.
+2. Compute cost using current model price table.
+3. Log warnings at thresholds: `$0.50/day` (1× normal), `$5/day` (10× — likely
+   bug), `$20/day` (kill switch).
+4. Surface in `dev_event` log so browser dev client can display.
+5. Optional: hard daily ceiling that disconnects the session at $X/day — protects
+   against runaway tool loops.
+
+---
+
+## T2.3 — Integration smoke tests against real OpenAI Realtime
+
+**Status**: queued · **Task**: #95 · **Effort**: ~1 week (pulled from D2 on 2026-04-18) · **Blocks**: T1.3
+
+**Problem.** Voice-first project, text-first test surface. Audio regressions
+slip through. The single biggest risk on the active list — T1.3 coordinator
+refactor — has no automated test net. Manual browser smoke is the only thing
+catching subtle regressions today.
+
+**Why it matters.** T1.3 is "refactor without behavior change". The way to verify
+no behavior change is integration tests that exercise the full receive-loop ↔
+coordinator ↔ skill ↔ side-effect path. Without these, T1.3 is a leap of faith.
+
+**Proposed solution.** Two layers:
+
+1. **Recorded-fixture replay** (cheap, runs in CI, no API key required):
+   - Capture or hand-author JSONL fixtures of OpenAI Realtime sessions
+     (server-event sequences for representative scenarios: simple turn,
+     audiobook play+interrupt, news fetch, radio start+stop, error responses).
+   - `FixtureReplayProvider` implements `VoiceProvider` interface, plays the
+     fixture as if it were the real OpenAI WebSocket.
+   - Tests assert downstream behavior: state transitions, side-effect
+     dispatching, audio frame ordering, summary persistence.
+
+2. **One happy-path live test** (gated behind `HUXLEY_INTEGRATION=1`, runs
+   nightly, requires API key):
+   - Spin up the full server, simulate a client, do a `play_audiobook`
+     round-trip with real OpenAI, assert audio frames flow + tool dispatched
+     - cancel works.
+   - Catches breaking changes in OpenAI's API shape that fixtures wouldn't
+     catch.
+
+Couples to T1.3: the refactor needs replay coverage of the coordinator's
+existing behavior to verify the refactor preserves it.
+
+---
+
+# Deferred (with revisit trigger)
+
+## D1 — `never_say_no` enforcement (layered defense)
+
+**Was**: Tier 2 candidate · **Task**: #94 · **Revisit when**: first real user session shows actual model refusals
+
+**Reason for deferral.** The layered fix (tool-side discipline + refusal pattern
+detection + LLM-as-judge tie-breaker) is real work but not blocking. Today's
+defense is the prompt; on-the-record observation will tell us how often it leaks.
+If first-user sessions show frequent refusals, this jumps to Tier 1.
+
+## D2 — Integration smoke tests against real OpenAI
+
+**Status**: pulled forward to active Tier 2 as **T2.3** (2026-04-18). Coordinator refactor (T1.3) is the riskiest item on the list and refactor without behavior change is exactly where the test net matters. See T2.3 in Active Tier 2 above.
+
+## D3 — Tier 3 polish (4 items)
+
+| Task | Title                                                 | Effort   |
+| ---- | ----------------------------------------------------- | -------- |
+| #96  | Add `prompt_context()` to Skill Protocol with default | 30 min   |
+| #97  | Auto-namespace tool names (`<skill>.<tool>`)          | ~50 LOC  |
+| #98  | Strip remaining `AbuelOS` hardcoded refs              | 30 min   |
+| #99  | Allow second WS client as monitor in dev              | ~4 hours |
+
+**Revisit when**: any session has spare cycles, OR the first community skill is
+about to land (#97 becomes urgent), OR ESP32 hardware arrives (#99 becomes
+urgent).
+
+## D4 — `VoiceProvider` abstraction redesign
+
+**Reason for deferral.** Current shape is leaked from OpenAI Realtime semantics
+and won't fit a non-OpenAI provider cleanly. Saving it now is cargo cult — the
+abstraction will be redesigned in light of the actual second provider's shape.
+
+**Revisit when**: a credible second voice provider (local Whisper+Llama+Piper, or
+a different cloud Realtime API) is actually being integrated.
+
+---
+
+# Historical reviews
+
+The sections below are issue analyses from earlier critic reviews. Several were
+shipped during the refactor stages (1–4); status of each is "presumed done unless
+re-flagged" — check `git log` for the actual fix commit before re-acting.
+
+---
+
+## 2026-04-17 — second critic review
 
 Root cause analysis and solution proposals for every issue raised in the second
 independent code review. Issues are ordered: blockers first, real concerns second,
@@ -6,7 +510,10 @@ nitpicks last.
 
 ---
 
-## B1 — `pause` and `stop` do not cancel playback
+### B1 — `pause` and `stop` do not cancel playback
+
+**Status**: presumed done (CancelMedia SideEffect shipped in stage 3 — commit
+`20407f0`). Verify in `packages/sdk/src/huxley_sdk/types.py`.
 
 **Symptom.** `audiobook_control(action="pause")` and `audiobook_control(action="stop")`
 return a `ToolResult` with no side effect. The coordinator sees a plain result,
@@ -73,7 +580,9 @@ test is updated; one new test added.
 
 ---
 
-## B2 — Log file handle has no `atexit` registration
+### B2 — Log file handle has no `atexit` registration
+
+**Status**: presumed done unless re-flagged. Verify in `packages/core/src/huxley/logging.py`.
 
 **Symptom.** If the process is killed (SIGKILL, kernel OOM, hard power-off), any
 lines buffered in `_file_handle` but not yet written to disk are lost. Since the
@@ -121,7 +630,9 @@ This also prevents handle leaks if `setup_logging` is called more than once
 
 ---
 
-## C1 — `openai_api_key` defaults to `""` instead of `None`
+### C1 — `openai_api_key` defaults to `""` instead of `None`
+
+**Status**: presumed done unless re-flagged. Verify in `packages/core/src/huxley/config.py`.
 
 **Symptom.** A developer who sets `HUXLEY_OPENAI_API_KEY=` (explicitly empty) in
 their shell gets past the `__main__.py` guard (which checks `if not config.openai_api_key`)
@@ -154,7 +665,9 @@ And update the type annotation in `OpenAIRealtimeProvider.__init__` to handle
 
 ---
 
-## C2 — Concurrent tool calls within one response serialize
+### C2 — Concurrent tool calls within one response serialize
+
+**Status**: doc-only acknowledgement intended; verify the comment is in `coordinator.py` `on_tool_call`.
 
 **Symptom.** If the model issues two tool calls in one response (OpenAI Realtime
 sends two `response.function_call_arguments.done` events in sequence), the second
@@ -189,7 +702,9 @@ change. Flag on the roadmap under "multi-tool parallelism." Add a comment in
 
 ---
 
-## C3 — Audiobook position under-counts what the user actually heard
+### C3 — Audiobook position under-counts what the user actually heard
+
+**Status**: doc-only acknowledgement intended; verify the comment is in audiobooks `_build_factory`.
 
 **Symptom.** When the user interrupts playback, the saved resume position can be
 ahead of what they actually heard. Under event loop pressure (heavy tool calls,
@@ -230,7 +745,9 @@ the delivered-bytes count is exact.
 
 ---
 
-## C4 — `SkillStorage` protocol missing the `default` parameter
+### C4 — `SkillStorage` protocol missing the `default` parameter
+
+**Status**: presumed done unless re-flagged. Verify in `packages/sdk/src/huxley_sdk/types.py` + `packages/core/src/huxley/storage/skill.py`.
 
 **Symptom.** Skills cannot use `await ctx.storage.get_setting("key", default="x")`
 even though the underlying `Storage.get_setting` supports it. Skill authors who
@@ -260,7 +777,9 @@ async def get_setting(self, key: str, default: str | None = None) -> str | None:
 
 ---
 
-## C5 — `FakeSkill` ignores `tool_name`; all tools return the same result
+### C5 — `FakeSkill` ignores `tool_name`; all tools return the same result
+
+**Status**: presumed done unless re-flagged. Verify in `packages/sdk/src/huxley_sdk/testing.py`.
 
 **Symptom.** `FakeSkill(name="x", result=ToolResult(...))` returns the same
 `ToolResult` no matter which tool is called. Tests that register a multi-tool skill
@@ -298,7 +817,9 @@ can pass `result={"play": ToolResult(...), "pause": ToolResult(...)}`.
 
 ---
 
-## C6 — `flush()` on every log line causes syscall pressure at DEBUG
+### C6 — `flush()` on every log line causes syscall pressure at DEBUG
+
+**Status**: presumed done unless re-flagged. Verify in `packages/core/src/huxley/logging.py`.
 
 **Symptom.** At `HUXLEY_LOG_LEVEL=DEBUG`, every audio delta frame and every chunk
 forwarded to `send_audio` generates a structlog event. Each event calls
@@ -326,7 +847,9 @@ not lost on normal exit.
 
 ---
 
-## N1 — `assert` as runtime guards in skill code
+### N1 — `assert` as runtime guards in skill code
+
+**Status**: open / unknown. Verify with `grep -rn "assert " packages/skills/`.
 
 **Symptom.** `packages/skills/audiobooks/src/huxley_skill_audiobooks/skill.py`
 contains 11 guards of the form `assert self._storage is not None`. Python strips
@@ -360,7 +883,9 @@ Then call `self._storage_required.get_setting(...)` instead.
 
 ---
 
-## N2 — Spanish UI strings hardcoded in framework code
+### N2 — Spanish UI strings hardcoded in framework code
+
+**Status**: open by design — Spanish-everywhere is acceptable today. Revisit when a non-Spanish persona ships.
 
 **Symptom.** `coordinator.py` lines 144, 163, 196, 396 contain Spanish status
 strings (`"Escuchando… (suelta para enviar)"`, `"Muy corto — mantén el botón
@@ -391,7 +916,9 @@ different strings.
 
 ---
 
-## N3 — `Turn.response_ids` field is never populated
+### N3 — `Turn.response_ids` field is never populated
+
+**Status**: presumed done unless re-flagged. Verify in `packages/core/src/huxley/turn/coordinator.py`.
 
 **Symptom.** `coordinator.py` line 71: `response_ids: list[str] = field(default_factory=list)`.
 No code anywhere appends to this list. It is initialized empty and stays empty for
@@ -409,7 +936,9 @@ reasonably use it).
 
 ---
 
-## N4 — `import copy` inside a hot `__call__` path
+### N4 — `import copy` inside a hot `__call__` path
+
+**Status**: presumed done unless re-flagged. Verify in `packages/core/src/huxley/logging.py`.
 
 **Symptom.** `logging.py` line 141: `import copy` is inside `_TeeProcessor.__call__`.
 Python caches imports after the first call so there is no measurable overhead, but
@@ -425,7 +954,9 @@ annotations` was in place) and placed where it was needed without being hoisted.
 
 ---
 
-## N5 — `CLAUDE.md` references `server/` paths that no longer exist
+### N5 — `CLAUDE.md` references `server/` paths that no longer exist
+
+**Status**: done. Current `CLAUDE.md` references `packages/core/`.
 
 **Symptom.** `CLAUDE.md` "Definition of Done" section (line ~106) references
 `cd server && uv run ruff check src/ tests/ && uv run mypy src/ && uv run pytest
@@ -444,7 +975,7 @@ The correct commands are already documented at the top of CLAUDE.md.
 
 ---
 
-## Priority order
+### Priority order (as written 2026-04-17)
 
 | ID  | What                                | Effort  | When        |
 | --- | ----------------------------------- | ------- | ----------- |

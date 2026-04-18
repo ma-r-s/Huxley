@@ -178,3 +178,32 @@ The Python namespace (`abuel_os/`) and repo path (`AbuelOS/`) are renamed as par
 - **The repo grows a workspace structure**: `packages/sdk/`, `packages/core/`, `packages/skills/audiobooks/`, `packages/skills/system/`, `personas/abuelos/`. uv workspaces handle the multi-package layout.
 - **Historical ADRs preserved verbatim**. They reference "AbuelOS" because that was the project's name at the time. The naming note at the top of this file flags this for new readers.
 - **What does NOT change for v1**: the 3-state session machine, the turn coordinator, the audio path, the WebSocket protocol, the OpenAI Realtime integration. Those are framework, and they were already persona-agnostic by accident — the rename just makes the role explicit.
+
+---
+
+## 2026-04-18 — Default model is `gpt-4o-mini-realtime-preview`
+
+**Context**: Initial dev ran on `gpt-4o-realtime-preview` (full model). Text input tokens are ~8x more expensive on the full model than on mini ($5 vs $0.60 per 1M tokens). For AbuelOS, the agent dispatches tool calls in Spanish against a fixed set of skills — not reasoning-heavy work. Mini is sufficient.
+
+**Decision**: Default `Settings.openai_model` is `gpt-4o-mini-realtime-preview`. `.env` can override to the full model for A/B testing.
+
+**Consequences**:
+
+- Session startup overhead (system prompt + 14 tool schemas re-sent on every reconnect) drops to ~$0.002 per reconnect.
+- If a future persona needs heavier reasoning (multi-step agent work, long-form narration), it can override `HUXLEY_OPENAI_MODEL` in that persona's launch env.
+- Voice quality is unchanged — voice is a separate axis (`coral`, `alloy`, etc.) and works identically on both models.
+
+---
+
+## 2026-04-18 — Keep Realtime session alive during media playback
+
+**Context**: During audiobook/radio playback the OpenAI Realtime session sits open but idle — no audio flows either direction. An optimization considered: proactively close the OpenAI session when media starts, reopen it on next PTT. This would eliminate the ~22 reconnects triggered during a 20-hour listening session by `conversation_max_minutes = 55` + OpenAI's own 30–60 min session cap.
+
+**Decision**: Keep the session alive. Let OpenAI decide when to disconnect. Rely on `disconnect(save_summary=True)` → `_auto_reconnect()` to preserve context across forced resets.
+
+**Consequences**:
+
+- **Cost of keeping it alive is effectively $0 during silence.** OpenAI bills per Response created (audio in + audio out + the system prompt + tools as input context for that response). A session that opens, sends `session.update`, and closes without ever creating a Response incurs no token charges. So 22 silent reconnects across a 20-hour book = ~$0.00, not the ~$0.05 first estimated.
+- **Context continuity wins over cost.** The model knows what book is playing, what the user asked for five minutes ago, and the flow of the conversation. Proactive disconnect would force the model to re-orient (`get_progress` / `list_in_progress`) on every resume. For a blind elderly user, that's a noticeably dumber assistant with zero meaningful cost savings.
+- **`conversation_max_minutes` in `Settings` still forces a Huxley-side disconnect every N minutes** — but that path already calls `save_summary=True` and auto-reconnects. Raise the knob only if summary-on-reconnect ever proves insufficient.
+- **Revisit if**: a future cost audit shows idle sessions aren't truly $0 (OpenAI could change this), OR a persona ships with a huge prompt whose per-reconnect bill matters even when no Response is created.
