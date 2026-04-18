@@ -505,25 +505,123 @@ Decided NOT to:
 
 ## T2.2 — Cost observability + bug-canary ceiling
 
-**Status**: queued · **Task**: #93 · **Effort**: ~80 LOC
+**Status**: done (2026-04-18) · **Task**: #93 · **Effort**: ~270 LOC + 16 tests (estimated 80 LOC; price table + threshold tracking grew it)
 
 **Problem.** Tool retry loop bug → silent bill spike. No tracking of cumulative
 cost per session or per day. No threshold logging. No kill switch.
 
-**Why it matters.** This is bug detection more than spend control. A 10x daily
-bill = something is wrong, not "user used a lot today." Catching that early saves
+**Why it matters.** Bug detection more than spend control. A 10x daily bill =
+something is wrong, not "user used a lot today." Catching that early saves
 investigation time.
 
-**Proposed solution.**
+### Validation (Gate 1)
 
-1. OpenAI returns token counts in `response.done` events. Accumulate
-   `tokens_input` / `tokens_output` per-session and per-day in `Storage`.
-2. Compute cost using current model price table.
-3. Log warnings at thresholds: `$0.50/day` (1× normal), `$5/day` (10× — likely
-   bug), `$20/day` (kill switch).
-4. Surface in `dev_event` log so browser dev client can display.
-5. Optional: hard daily ceiling that disconnects the session at $X/day — protects
-   against runaway tool loops.
+`response.done` events from OpenAI carry a `usage` payload (`input_token_details`,
+`output_token_details`, `cached_tokens`). The receive loop in
+`voice/openai_realtime.py` previously fired the void `on_response_done` callback
+and discarded the usage data entirely. No tokens were tracked, no cost computed,
+no thresholds checked.
+
+### Design (Gate 2 — light)
+
+New `huxley.cost` module with three pieces:
+
+1. **`PRICES` table + `compute_cost_usd(model, usage)`** — pricing for the two
+   shipped models (mini + full Realtime), verified 2026-04-18 from
+   openai.com/api/pricing. Cached token portions billed at cached rate.
+   Unknown models fall back to mini pricing with a warning log so a future
+   model rollout doesn't silently zero the bill.
+
+2. **`CostThresholds` dataclass** with three tiers:
+   - `warn_usd = 0.50` (1x a normal day; informational)
+   - `bug_canary_usd = 5.00` (10x normal; "investigate")
+   - `kill_switch_usd = 20.00` (100x normal; "stop now")
+
+3. **`CostTracker`** persists daily totals to `Storage` under
+   `cost:YYYY-MM-DD:cents` (cents as int avoid float drift). Threshold
+   warnings idempotent within a day via `cost:YYYY-MM-DD:warned`. Optional
+   `on_kill_switch` callback fires once when ceiling crossed.
+
+Wired into `OpenAIRealtimeProvider.__init__(cost_tracker=...)`. Receive loop
+extracts `data["response"]["usage"]` on `response.done`, calls
+`tracker.record(usage)` — wrapped in try/except so cost-tracking failure can
+never affect the session. Application wires the kill switch to
+`provider.disconnect(save_summary=True)` so context survives the forced halt.
+
+Decided NOT to:
+
+- Surface in `dev_event` (the original sketch mentioned it). Browser dev
+  client doesn't display cost today; can be added later by reading the
+  `cost:*` settings keys directly.
+- Make thresholds persona-configurable. Default thresholds work for the
+  AbuelOS daily-driver pattern; per-persona override can be added when a
+  persona legitimately needs higher ceilings.
+- Break out per-session cost (only daily). Daily is the load-bearing
+  granularity for "is something wrong?"
+
+### Definition of Done
+
+- [x] `huxley.cost.compute_cost_usd(model, usage)` returns USD for a `response.done.usage` payload, with cached-token handling
+- [x] `PRICES` table includes both shipped models; unknown model falls back with warning
+- [x] `CostTracker.record(usage)` persists daily total cents, logs `cost.response_done` info event with model + per-response cost + day total
+- [x] Threshold warnings (`warn` / `bug_canary` / `kill_switch`) fire at most once per day each, persisted to Storage
+- [x] Kill-switch callback invoked exactly once per day when ceiling crossed; wired in `Application` to `provider.disconnect(save_summary=True)`
+- [x] OpenAI provider's receive loop extracts `usage` from `response.done` and calls `tracker.record(usage)` with try/except so cost-tracking failure can never affect the session
+- [x] All 258 tests green (was 242, +16 new in `test_cost.py`)
+
+### Tests (Gate 3)
+
+`packages/core/tests/unit/test_cost.py`:
+
+`TestComputeCostUsd` (8 tests):
+
+- mini pricing for simple usage
+- full-model pricing for same usage shape
+- cached tokens billed at cached rate
+- cache-without-breakdown fallback (assumes text)
+- unknown model falls back to mini pricing
+- missing token-detail subkeys treated as zero
+- missing top-level keys treated as zero
+- known-models table includes both shipped models
+
+`TestCostTrackerAccumulates` (4 tests):
+
+- records cents to Storage
+- accumulates across multiple records
+- zero-cost record is no-op (no Storage write)
+- per-day keys are independent (clock injection)
+
+`TestCostTrackerThresholds` (4 tests):
+
+- warn fires below kill-switch threshold; kill-switch does NOT fire
+- kill-switch callback invoked when ceiling crossed
+- threshold warning idempotent within a day (kill switch only fires once)
+- thresholds reset on new day (kill switch can fire again next day)
+
+### Docs touched (Gate 4)
+
+- `docs/triage.md` — this entry updated with full audit trail
+- ADR — none. Cost tracking is a runtime concern, not architectural.
+  Pricing table cross-references the existing ADR `2026-04-18 — Default
+model is gpt-4o-mini-realtime-preview` for the source-of-truth on prices.
+- `docs/observability.md` — `cost.response_done`, `cost.threshold_crossed`,
+  `cost.kill_switch_triggered` events follow the existing namespacing
+  convention; no doc convention change needed.
+- `README.md` / `CLAUDE.md` — no user-facing setup or contributor command
+  changed.
+
+### Ship (Gate 5)
+
+- Commit hash filled in by the commit step.
+- **Lessons**: Gate 1 trace through the receive loop revealed the discard
+  cleanly — knowing `data.get("response", {}).get("usage")` was the right
+  extraction point came from reading the existing event-parsing code, not
+  guessing. Cents-as-int avoided a class of float-formatting bugs the
+  first sketch had. The clock-injection pattern (`clock=Callable[[], datetime]`)
+  is much cleaner than freezegun for time-based tests; reuse it.
+- **Follow-up**: surface daily-total in browser dev client (small UI
+  addition; new triage item if it becomes painful not to see). Per-persona
+  threshold config when the first persona needs different defaults.
 
 ---
 

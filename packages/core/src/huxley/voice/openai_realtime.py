@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from websockets.asyncio.client import ClientConnection
 
     from huxley.config import Settings
+    from huxley.cost import CostTracker
     from huxley.persona import PersonaSpec
     from huxley.storage.db import Storage
     from huxley.voice.provider import VoiceProviderCallbacks
@@ -61,12 +62,14 @@ class OpenAIRealtimeProvider:
         skill_registry: SkillRegistry,
         storage: Storage,
         callbacks: VoiceProviderCallbacks,
+        cost_tracker: CostTracker | None = None,
     ) -> None:
         self._config = config
         self._persona = persona
         self._skills = skill_registry
         self._storage = storage
         self._cb = callbacks
+        self._cost_tracker = cost_tracker
         self._ws: ClientConnection | None = None
         self._receive_task: asyncio.Task[None] | None = None
         self._timeout_task: asyncio.Task[None] | None = None
@@ -338,6 +341,15 @@ class OpenAIRealtimeProvider:
                     await self._cb.on_audio_done()
 
                 if event_type == ServerEventType.RESPONSE_DONE.value:
+                    if self._cost_tracker is not None:
+                        usage = (data.get("response") or {}).get("usage")
+                        if usage:
+                            try:
+                                await self._cost_tracker.record(usage)
+                            except Exception:
+                                # Cost tracking failure must never affect the
+                                # session — log and proceed.
+                                await logger.aexception("cost.record_failed")
                     await self._cb.on_response_done()
 
         except websockets.ConnectionClosed:

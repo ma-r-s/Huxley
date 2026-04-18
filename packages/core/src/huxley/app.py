@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from huxley.cost import CostTracker
 from huxley.loader import discover_skills
 from huxley.logging import setup_logging
 from huxley.server.server import AudioServer
@@ -89,12 +90,23 @@ class Application:
             on_transcript=self._on_transcript,
         )
 
+        # Cost tracker observes per-response usage and warns at daily-total
+        # thresholds. Kill switch fires `provider.disconnect(save_summary=True)`
+        # when the hard ceiling is crossed — protection against runaway
+        # tool-loop bugs that could 100x a normal day's bill. See cost.py.
+        self.cost_tracker = CostTracker(
+            storage=self.storage,
+            model=config.openai_model,
+            on_kill_switch=self._cost_kill_switch_disconnect,
+        )
+
         self.provider = OpenAIRealtimeProvider(
             config=config,
             persona=persona,
             skill_registry=self.skill_registry,
             storage=self.storage,
             callbacks=provider_callbacks,
+            cost_tracker=self.cost_tracker,
         )
 
         self.coordinator = TurnCoordinator(
@@ -227,6 +239,19 @@ class Application:
         await self.server.send_state(new_state.name)
 
     # --- Session callbacks ---
+
+    async def _cost_kill_switch_disconnect(self) -> None:
+        """Cost ceiling crossed — drop the OpenAI session, save summary.
+
+        Triggered by `CostTracker` when the day's cost crosses the
+        kill-switch threshold (default $20). Disconnect halts ongoing
+        token consumption; auto-reconnect will fire on the next user
+        action (PTT). The summary is preserved so context survives the
+        forced reset.
+        """
+        await logger.aerror("app.cost_kill_switch_disconnect")
+        if self.provider.is_connected:
+            await self.provider.disconnect(save_summary=True)
 
     async def _on_session_end(self) -> None:
         """OpenAI session receive loop exited — clean up + schedule reconnect."""
