@@ -19,6 +19,7 @@ for the skill's behavioral contract.
 from __future__ import annotations
 
 import json
+import time
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Any
 
@@ -44,6 +45,26 @@ if TYPE_CHECKING:
 _AUDIOBOOK_EXTENSIONS = {".mp3", ".m4a", ".m4b", ".ogg", ".opus", ".flac", ".wav"}
 
 LAST_BOOK_KEY = "last_id"
+
+# Seconds to rewind before the saved position when resuming — avoids starting
+# mid-sentence after an interrupt. 20s covers most sentence/paragraph lengths.
+RESUME_REWIND_SECONDS = 20.0
+
+# Default jump amount when the user says "atrás un poco" / "adelanta un poco"
+# without specifying a time. 30s covers a typical spoken paragraph.
+DEFAULT_SEEK_SECONDS = 30.0
+
+
+def _fmt_duration(seconds: float) -> str:
+    """Format a duration in seconds to a natural Spanish string."""
+    total = int(seconds)
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h} hora{'s' if h != 1 else ''} y {m} minuto{'s' if m != 1 else ''}"
+    if m:
+        return f"{m} minuto{'s' if m != 1 else ''} y {s} segundo{'s' if s != 1 else ''}"
+    return f"{s} segundo{'s' if s != 1 else ''}"
 
 
 def _position_key(book_id: str) -> str:
@@ -78,6 +99,11 @@ class AudiobooksSkill:
         self._storage: SkillStorage | None = None
         self._logger: SkillLogger | None = None
         self._catalog: list[dict[str, str]] = []
+        # Live-playback tracking — set at stream start, cleared in finally.
+        # Used by get_progress to estimate current position without storage round-trip.
+        self._now_playing_id: str | None = None
+        self._now_playing_start_pos: float = 0.0
+        self._now_playing_start_time: float = 0.0
 
     def _require_setup(self, attr: str) -> None:
         if getattr(self, attr) is None:
@@ -168,9 +194,9 @@ class AudiobooksSkill:
                     "Controla la reproducción del audiolibro actual: pausar, "
                     "reanudar, retroceder, adelantar, detener. Antes de llamar "
                     "esta herramienta, acusa recibo brevemente al usuario (por "
-                    "ejemplo: 'Listo, retrocedo 10 segundos, don.'). Nunca "
+                    "ejemplo: 'Listo, retrocedo 30 segundos, don.'). Nunca "
                     "ejecutes la acción en silencio. Para retroceder/adelantar, "
-                    "el valor por defecto es 10 segundos si el usuario no "
+                    "el valor por defecto es 30 segundos si el usuario no "
                     "especifica un tiempo."
                 ),
                 parameters={
@@ -183,11 +209,31 @@ class AudiobooksSkill:
                         },
                         "seconds": {
                             "type": "number",
-                            "description": "Segundos para retroceder/adelantar (default: 10)",
+                            "description": "Segundos para retroceder/adelantar (default: 30)",
                         },
                     },
                     "required": ["action"],
                 },
+            ),
+            ToolDefinition(
+                name="get_progress",
+                description=(
+                    "Devuelve el progreso del libro que se está escuchando (o el último "
+                    "reproducido): posición actual, duración total y tiempo restante. "
+                    "Úsalo cuando el usuario pregunte '¿cuánto llevo?', '¿cuánto me "
+                    "queda?', '¿en qué parte voy?' y similares."
+                ),
+                parameters={"type": "object", "properties": {}},
+            ),
+            ToolDefinition(
+                name="list_in_progress",
+                description=(
+                    "Lista todos los audiolibros que tienen una posición guardada — "
+                    "es decir, los que el usuario ha empezado y no ha terminado. "
+                    "Úsalo cuando el usuario pregunte '¿qué libros tengo empezados?', "
+                    "'¿cuáles tengo a medias?', '¿qué estaba escuchando?' y similares."
+                ),
+                parameters={"type": "object", "properties": {}},
             ),
         ]
 
@@ -205,8 +251,12 @@ class AudiobooksSkill:
             case "audiobook_control":
                 return await self._control(
                     args["action"],
-                    seconds=args.get("seconds", 10),
+                    seconds=args.get("seconds", DEFAULT_SEEK_SECONDS),
                 )
+            case "get_progress":
+                return await self._get_progress()
+            case "list_in_progress":
+                return await self._list_in_progress()
             case _:
                 return ToolResult(output=json.dumps({"error": f"Unknown tool: {tool_name}"}))
 
@@ -419,15 +469,21 @@ class AudiobooksSkill:
         player = self._player
         logger = self._logger
         set_position = self._set_position
+        skill = self  # for live-position tracking via get_progress
 
         async def stream() -> AsyncIterator[bytes]:
+            skill._now_playing_id = book_id
+            skill._now_playing_start_pos = start_position
+            skill._now_playing_start_time = time.monotonic()
             bytes_read = 0
             stream_error: str | None = None
+            completed = False
             await logger.ainfo("audiobooks.stream_started", book_id=book_id, start=start_position)
             try:
                 async for chunk in player.stream(path, start_position=start_position):
                     bytes_read += len(chunk)
                     yield chunk
+                completed = True
             except Exception as exc:
                 # CancelledError is BaseException (not Exception) so cancellations
                 # propagate through here; only real errors (PlayerError, OSError, etc.)
@@ -435,8 +491,11 @@ class AudiobooksSkill:
                 stream_error = type(exc).__name__
                 await logger.aexception("audiobooks.stream_error", book_id=book_id, exc=str(exc))
             finally:
+                skill._now_playing_id = None
                 elapsed = bytes_read / BYTES_PER_SECOND
-                final_pos = start_position + elapsed
+                # Natural completion → reset to 0 so next listen starts over.
+                # Interrupted (cancel or error) → save current position to resume.
+                final_pos = 0.0 if completed else start_position + elapsed
                 try:
                     await set_position(book_id, final_pos)
                     await logger.ainfo(
@@ -444,6 +503,7 @@ class AudiobooksSkill:
                         book_id=book_id,
                         elapsed=round(elapsed, 2),
                         final_pos=round(final_pos, 2),
+                        completed=completed,
                         error=stream_error,
                     )
                 except Exception:
@@ -470,7 +530,8 @@ class AudiobooksSkill:
 
         start_position = 0.0
         if not from_beginning:
-            start_position = await self._get_position(resolved_id)
+            saved = await self._get_position(resolved_id)
+            start_position = max(0.0, saved - RESUME_REWIND_SECONDS)
 
         try:
             await self._player_req.probe(book["path"])
@@ -496,14 +557,16 @@ class AudiobooksSkill:
 
         factory = self._build_factory(resolved_id, book["path"], start_position)
 
+        resuming = start_position > 0
         return ToolResult(
             output=json.dumps(
                 {
                     "playing": True,
                     "title": book["title"],
                     "author": book["author"],
-                    "position": start_position,
-                    "message": f'Cargado: "{book["title"]}" por {book["author"]}.',
+                    "position_seconds": start_position,
+                    "position_label": _fmt_duration(start_position) if resuming else "el inicio",
+                    "resuming": resuming,
                 }
             ),
             side_effect=AudioStream(factory=factory),
@@ -523,7 +586,90 @@ class AudiobooksSkill:
             )
         return await self._play(last_id, from_beginning=False)
 
-    async def _control(self, action: str, seconds: float = 10) -> ToolResult:
+    async def _get_progress(self) -> ToolResult:
+        """Return position, duration, and remaining time for the active or last book."""
+        # Prefer live tracking (book is currently streaming) for accuracy.
+        book_id = self._now_playing_id
+        if book_id is not None:
+            elapsed = time.monotonic() - self._now_playing_start_time
+            current_pos = self._now_playing_start_pos + elapsed
+            is_live = True
+        else:
+            book_id = await self._storage_req.get_setting(LAST_BOOK_KEY)
+            if not book_id:
+                return ToolResult(
+                    output=json.dumps(
+                        {"message": "No hay ningún libro activo. ¿Quiere que busque uno?"}
+                    )
+                )
+            current_pos = await self._get_position(book_id)
+            is_live = False
+
+        book = await self._resolve_book(book_id)
+        if book is None:
+            return ToolResult(
+                output=json.dumps({"message": "No encuentro ese libro en la biblioteca."})
+            )
+
+        # Probe for total duration. Fail gracefully if ffprobe is unavailable.
+        total_duration: float | None = None
+        try:
+            probe = await self._player_req.probe(book["path"])
+            raw = probe.get("format", {}).get("duration")
+            if raw is not None:
+                total_duration = float(raw)
+        except Exception:
+            pass
+
+        result: dict[str, Any] = {
+            "title": book["title"],
+            "author": book["author"],
+            "position_seconds": round(current_pos, 1),
+            "position_label": _fmt_duration(current_pos),
+            "playing": is_live,
+        }
+        if total_duration:
+            remaining = max(0.0, total_duration - current_pos)
+            result["total_seconds"] = round(total_duration, 1)
+            result["remaining_seconds"] = round(remaining, 1)
+            result["remaining_label"] = _fmt_duration(remaining)
+            result["percent"] = min(100, int(current_pos / total_duration * 100))
+
+        return ToolResult(output=json.dumps(result))
+
+    async def _list_in_progress(self) -> ToolResult:
+        """Return all books that have a non-zero saved position."""
+        in_progress = []
+        for book in self._catalog:
+            pos = await self._get_position(book["id"])
+            if pos > 0:
+                in_progress.append(
+                    {
+                        "id": book["id"],
+                        "title": book["title"],
+                        "author": book["author"],
+                        "position_seconds": round(pos, 1),
+                        "position_label": _fmt_duration(pos),
+                    }
+                )
+
+        if not in_progress:
+            return ToolResult(
+                output=json.dumps(
+                    {"message": "No tiene ningún libro empezado. ¿Quiere que le busque uno?"}
+                )
+            )
+
+        return ToolResult(
+            output=json.dumps(
+                {
+                    "count": len(in_progress),
+                    "books": in_progress,
+                }
+            )
+        )
+
+    async def _control(self, action: str, seconds: float = DEFAULT_SEEK_SECONDS) -> ToolResult:
         """Control current playback."""
         match action:
             case "pause":
@@ -590,12 +736,8 @@ class AudiobooksSkill:
                             "playing": True,
                             "title": book["title"],
                             "author": book["author"],
-                            "position": new_pos,
-                            "message": (
-                                f"Retrocediendo a {int(new_pos)}s"
-                                if action == "rewind"
-                                else f"Adelantando a {int(new_pos)}s"
-                            ),
+                            "position_seconds": new_pos,
+                            "position_label": _fmt_duration(new_pos),
                         }
                     ),
                     side_effect=AudioStream(factory=factory),

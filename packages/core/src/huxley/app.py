@@ -65,6 +65,7 @@ class Application:
             on_ptt_start=self._on_ptt_start,
             on_ptt_stop=self._on_ptt_stop,
             on_audio_frame=self._on_audio_frame,
+            on_reset=self._on_reset,
         )
 
         # Skill discovery via entry points. The persona names which skills it
@@ -257,6 +258,17 @@ class Application:
             return
         await self.server.send_audio_clear()
         await self.state_machine.trigger("wake_word")
+
+    async def _on_reset(self) -> None:
+        """Drop the current OpenAI session and reconnect fresh — dev tool."""
+        await logger.ainfo("app.reset", state=self.state_machine.state.name)
+        await self.coordinator.interrupt()
+        await self.storage.clear_summaries()
+        if self.provider.is_connected:
+            await self.provider.disconnect(save_summary=False)
+        # on_session_end fires from the receive loop's finally clause,
+        # transitions state → IDLE, and schedules a fresh auto-reconnect.
+        # Nothing else needed here.
 
     async def _on_audio_frame(self, pcm: bytes) -> None:
         """Mic frame from client — forward to the coordinator."""

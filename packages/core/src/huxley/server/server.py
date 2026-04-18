@@ -9,6 +9,7 @@ Protocol — client -> server
     {"type": "ptt_start"}
     {"type": "ptt_stop"}
     {"type": "wake_word"}
+    {"type": "reset"}                     # dev: disconnect + fresh OpenAI session
 
 Protocol — server -> client
     {"type": "hello",          "protocol": PROTOCOL_VERSION}  # first message
@@ -63,6 +64,7 @@ class AudioServer:
         on_ptt_start: Callable[[], Awaitable[None]],
         on_ptt_stop: Callable[[], Awaitable[None]],
         on_audio_frame: Callable[[bytes], Awaitable[None]],
+        on_reset: Callable[[], Awaitable[None]],
     ) -> None:
         self._host = host
         self._port = port
@@ -70,6 +72,7 @@ class AudioServer:
         self._on_ptt_start = on_ptt_start
         self._on_ptt_stop = on_ptt_stop
         self._on_audio_frame = on_audio_frame
+        self._on_reset = on_reset
         self._client: ServerConnection | None = None
         self._state = "IDLE"
 
@@ -123,6 +126,9 @@ class AudioServer:
             case "wake_word":
                 await logger.ainfo("server.rx.wake_word")
                 await self._on_wake_word()
+            case "reset":
+                await logger.ainfo("server.rx.reset")
+                await self._on_reset()
             case "client_event":
                 # Pure observability — client telemetry sink. No behavioral
                 # effect on the server. The client emits events that the

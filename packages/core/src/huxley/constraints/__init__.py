@@ -41,6 +41,24 @@ CONSTRAINTS: dict[str, str] = {
         "Evita iniciar o profundizar en temas religiosos. Si el usuario los "
         "trae, responde con cortesía y redirige."
     ),
+    "echo_short_input": (
+        "Cuando el usuario diga algo muy corto (una o dos palabras), repite en "
+        "una frase breve lo que entendiste ANTES de actuar o responder de fondo. "
+        "Ejemplo: el usuario dice '¿libros?' → tú dices '¿Preguntaste por los "
+        "libros?' y esperas confirmación antes de hacer nada. "
+        "Si el usuario dice algo largo y claro, actúa directo sin repetir."
+    ),
+    "confirm_if_unclear": (
+        "Antes de ejecutar cualquier acción (reproducir un libro, cambiar el "
+        "volumen, pausar, etc.), evalúa si entendiste bien la solicitud.\n"
+        "— Si la intención es clara y no hay ambigüedad: actúa directamente, "
+        "sin pedir confirmación.\n"
+        "— Si el audio sonó cortado, la solicitud fue ambigua, o no estás "
+        "seguro de lo que pidieron: NO llames ninguna herramienta. En cambio, "
+        "di en una frase corta lo que crees haber entendido y pregunta si es "
+        "correcto. Espera la respuesta antes de actuar.\n"
+        "Ejemplo: '¿Querías que pusiera el libro?' — luego espera."
+    ),
 }
 
 

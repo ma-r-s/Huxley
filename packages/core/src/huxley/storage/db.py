@@ -95,6 +95,10 @@ class Storage:
         row = await cursor.fetchone()
         return str(row[0]) if row else None
 
+    async def clear_summaries(self) -> None:
+        await self._conn.execute("DELETE FROM conversation_summaries")
+        await self._conn.commit()
+
     # --- Settings ---
 
     async def get_setting(self, key: str, default: str | None = None) -> str | None:

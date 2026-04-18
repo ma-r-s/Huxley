@@ -139,6 +139,14 @@ If the persona enables `confirm_destructive`, any tool that performs an irrevers
 
 If your skill could surface adult or profane content (search results, news headlines, etc.), apply filtering when this constraint is active.
 
+### `echo_short_input`
+
+Prompt-level only — no skill action required. The model echoes very short inputs back to the user before acting. Your tool descriptions should be precise enough that even a single-word input like _"libros"_ resolves unambiguously.
+
+### `confirm_if_unclear`
+
+Prompt-level only — no skill action required. The model asks one clarifying question if it isn't confident it understood the request before calling a tool. Your tool descriptions should document unambiguous trigger phrases so the model can act directly on clear input.
+
 ### Forward-compatibility
 
 A skill that doesn't know about a future constraint just won't handle it specially. The framework injects the matching system-prompt language regardless, so the LLM can still steer correctly. Skills opt in to constraint-aware behavior; they don't have to.

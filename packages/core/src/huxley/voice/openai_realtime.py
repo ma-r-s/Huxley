@@ -146,23 +146,31 @@ class OpenAIRealtimeProvider:
 
     async def disconnect(self, *, save_summary: bool = True) -> None:
         """Close the WebSocket connection."""
-        if self._timeout_task:
-            self._timeout_task.cancel()
-            self._timeout_task = None
+        # Capture refs and clear instance attrs synchronously before any
+        # awaits. connect() may be scheduled (via on_session_end → auto-
+        # reconnect) and run during the awaits below; clearing first ensures
+        # it writes to clean state and we don't clobber the new connection.
+        timeout_task = self._timeout_task
+        receive_task = self._receive_task
+        ws = self._ws
+        self._timeout_task = None
+        self._receive_task = None
+        self._ws = None
 
-        if self._receive_task:
-            self._receive_task.cancel()
+        if timeout_task:
+            timeout_task.cancel()
+
+        if receive_task:
+            receive_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await self._receive_task
-            self._receive_task = None
+                await receive_task
 
         if save_summary and self._transcript_lines:
             transcript = "\n".join(self._transcript_lines[-20:])
             await self._storage.save_summary(transcript)
 
-        if self._ws:
-            await self._ws.close()
-            self._ws = None
+        if ws:
+            await ws.close()
 
         self._transcript_lines.clear()
         await logger.ainfo("session_disconnected")

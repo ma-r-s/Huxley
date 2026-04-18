@@ -41,12 +41,12 @@ def _factory(*chunks: bytes) -> Callable[[], AsyncIterator[bytes]]:
     return lambda: _stream(*chunks)
 
 
-async def _commit_turn(coordinator: TurnCoordinator, frames: int = 25) -> None:
+async def _commit_turn(coordinator: TurnCoordinator, frames: int = 60) -> None:
     """Helper: start a turn, stuff `frames` into user_audio_frames, and commit.
 
     Mirrors the production flow where `on_user_audio_frame` increments the
-    counter — we set it directly here to keep tests concise. Default of 25
-    is comfortably above the 19-frame minimum (OpenAI's 100 ms floor).
+    counter — we set it directly here to keep tests concise. Default of 60
+    is comfortably above the 57-frame minimum (~300 ms speech floor).
     """
     await coordinator.on_ptt_start()
     assert coordinator.current_turn is not None
@@ -111,7 +111,7 @@ class TestTurnLifecycle:
     async def test_ptt_stop_too_short_aborts_without_commit(
         self, coordinator: TurnCoordinator, mocks: dict[str, Any], provider: StubVoiceProvider
     ) -> None:
-        await _commit_turn(coordinator, frames=10)  # below 19-frame threshold
+        await _commit_turn(coordinator, frames=10)  # below 25-frame threshold
 
         assert coordinator.current_turn is None
         assert ("cancel_current_response",) in provider.sent

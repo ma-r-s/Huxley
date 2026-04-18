@@ -27,6 +27,7 @@ from huxley_sdk import AudioStream
 from huxley_sdk.testing import make_test_context
 from huxley_skill_audiobooks.skill import (
     LAST_BOOK_KEY,
+    RESUME_REWIND_SECONDS,
     AudiobooksSkill,
     _fuzzy_score,
     _position_key,
@@ -192,8 +193,8 @@ class TestPlayback:
         assert isinstance(result.side_effect, AudioStream)
         data = json.loads(result.output)
         assert data["playing"] is True
-        assert "message" in data
-        assert len(data["message"]) > 0
+        assert "title" in data
+        assert "position_label" in data
 
     async def test_play_factory_streams_from_correct_position(
         self, audiobooks_skill: AudiobooksSkill, player_mock: MagicMock
@@ -219,7 +220,9 @@ class TestPlayback:
         assert isinstance(result.side_effect, AudioStream)
         await _drain(result.side_effect.factory)
 
-        player_mock.stream.assert_called_once_with(book["path"], start_position=120.5)
+        player_mock.stream.assert_called_once_with(
+            book["path"], start_position=120.5 - RESUME_REWIND_SECONDS
+        )
 
     async def test_play_from_beginning_ignores_saved_position(
         self,
@@ -281,7 +284,7 @@ class TestPlayback:
 
         saved_raw = await storage.get_setting(_position_key(book["id"]))
         assert saved_raw is not None
-        assert float(saved_raw) > 0
+        assert float(saved_raw) == 0.0  # natural completion resets to beginning
 
 
 class TestResumeLast:
@@ -307,7 +310,9 @@ class TestResumeLast:
 
         assert isinstance(result.side_effect, AudioStream)
         await _drain(result.side_effect.factory)
-        player_mock.stream.assert_called_once_with(book["path"], start_position=250.0)
+        player_mock.stream.assert_called_once_with(
+            book["path"], start_position=250.0 - RESUME_REWIND_SECONDS
+        )
         data = json.loads(result.output)
         assert data["playing"] is True
 
@@ -411,7 +416,9 @@ class TestControl:
 
         assert isinstance(result.side_effect, AudioStream)
         await _drain(result.side_effect.factory)
-        player_mock.stream.assert_called_once_with(book["path"], start_position=75.0)
+        player_mock.stream.assert_called_once_with(
+            book["path"], start_position=75.0 - RESUME_REWIND_SECONDS
+        )
 
     async def test_rewind_with_no_book_returns_friendly_message(
         self, audiobooks_skill: AudiobooksSkill

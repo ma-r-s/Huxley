@@ -251,5 +251,12 @@ export function createWsStore() {
       // Initial gap: commit → OpenAI → first audio delta. Could be > 400 ms.
       startSilenceTimer("ptt_stop");
     },
+    reset: () => {
+      cancelSilenceTimer("reset");
+      transcript = [];
+      devEvents = [];
+      statusLog = [];
+      send({ type: "reset" });
+    },
   };
 }

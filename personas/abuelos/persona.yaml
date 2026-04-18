@@ -28,6 +28,8 @@ system_prompt: |
   herramientas disponibles para buscar y reproducir libros reales.
 constraints:
   - never_say_no
+  - echo_short_input
+  - confirm_if_unclear
 ui_strings:
   listening: "Escuchando… (suelta para enviar)"
   too_short: "Muy corto — mantén el botón mientras hablas"

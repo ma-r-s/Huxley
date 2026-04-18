@@ -186,6 +186,15 @@
       <p class="text-sm text-red-400">{micError}</p>
     {/if}
 
+    <!-- Dev: reset button — wipes conversation history, reconnects fresh -->
+    <button
+      onclick={() => ws.reset()}
+      disabled={!ws.connected}
+      class="text-xs text-zinc-500 hover:text-zinc-300 disabled:opacity-25 disabled:cursor-not-allowed transition-colors px-3 py-1 rounded border border-zinc-800 hover:border-zinc-600"
+    >
+      Nueva sesión
+    </button>
+
     <!-- Status log -->
     {#if ws.statusLog.length}
       <section class="w-full">

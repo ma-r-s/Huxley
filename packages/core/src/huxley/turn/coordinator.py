@@ -175,9 +175,9 @@ class TurnCoordinator:
             return
         frames = self.current_turn.user_audio_frames
         # AudioWorklet frames are 128 samples = 5.33 ms at 24 kHz.
-        # OpenAI requires >= 100 ms in the input buffer before commit.
-        # 19 frames x 5.33 ms = 101 ms -- just above the floor.
-        if frames < 19:
+        # 25 frames x 5.33 ms = ~133 ms — just above the tap-noise floor
+        # (accidental presses are <100 ms) while still allowing a quick "Sí".
+        if frames < 25:
             await self._log.ainfo("coord.ptt_stop", frames=frames, committed=False)
             await self._send_status(self._status["too_short"])
             # audio_clear tells the client to cancel its silence timer — without

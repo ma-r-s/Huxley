@@ -29,6 +29,10 @@ logs/
 personas/*/data/
 packages/core/models/
 
+# Sound assets — raw extraction workspace; only curated *.wav belong in git
+personas/*/sounds/raw/
+wii-system-soundtrack-flac/
+
 # macOS
 .DS_Store
 

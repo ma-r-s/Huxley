@@ -25,6 +25,7 @@ Every message is a JSON object with a `type` field. Binary frames are not used (
 | `ptt_stop`     | —                                  | User released PTT. Server commits the audio buffer and asks OpenAI to respond.                                                                                                                                                                                                                                                |
 | `wake_word`    | —                                  | User wants to start a session. Transitions `IDLE → CONNECTING`. Despite the legacy name, this is **not** a wake word in the traditional sense — it's a "start session" button. May rename to `start_session` in v1.                                                                                                           |
 | `client_event` | `{ event: string, data?: object }` | **Observability sink.** Pure telemetry — server logs as `client.<event>` and takes no other action. Use for client-side state transitions the server can't otherwise see (thinking-tone start/stop, silence-timer fire, audio queue depth, ptt UI state). Has no effect on framework behavior; safe to add new events freely. |
+| `reset`        | —                                  | **Dev tool.** Drops the current OpenAI session, clears the stored conversation summary, and reconnects fresh. Useful when you want a blank-slate session without restarting the server. No-op if called from a non-dev client (treated as a recoverable unknown type).                                                        |
 
 ## Server → client
 
@@ -72,7 +73,7 @@ The server enforces these regardless of what the client sends:
    - `_ptt_active == true`
    - `session.is_connected == true`
    - `session.is_model_speaking == false` (prevents echo feedback)
-2. A PTT release with fewer than 3 captured frames is treated as an accidental tap: no commit, no response, just a status _"Muy corto — mantén el botón mientras hablas."_
+2. A PTT release with fewer than 25 captured frames (~133 ms of audio) is treated as an accidental tap: no commit, no response, just a status _"Muy corto — mantén el botón mientras hablas."_ The threshold is set above the tap-noise floor while still allowing a quick _"Sí"_.
 3. Pressing PTT while the model is speaking **cancels** the current response and starts listening (interrupt behavior).
 
 ## Error behavior

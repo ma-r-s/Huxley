@@ -34,7 +34,7 @@ Make Huxley what it claims to be in [`vision.md`](./vision.md): a framework anyo
 - [P1] **Proactive notifications** (`ctx.notify(text)`): the single missing primitive that prevents reminders / inbound-message skills today. SDK gains a method that injects a synthetic system turn through `SessionManager`; protocol gains a server-initiated turn-start message. Should land before AbuelOS-v∞ work begins. See [`extensibility.md`](./extensibility.md) for the gap analysis.
 - [P1] **Per-skill secret interpolation** in `persona.yaml`: support `${HUXLEY_TELEGRAM_TOKEN}` so personas declare the shape of the secret without storing it. Decide before stage 4 ships.
 - [P2] **Background-task pattern for skills** (BLE, MQTT, polling daemons): formalize the "skill spawns an asyncio task in setup()" convention into an SDK helper so the framework can supervise / restart / log task crashes. Today it works but the framework is blind to failures.
-- [P2] **Sonic UX layer** — three-earcon system (listening chirp / thinking drone / error tone) per the framework in [`research/sonic-ux.md`](./research/sonic-ux.md). Current `playThinkingTone()` violates the vocal-band masking rule (440Hz sine pulse inside the 200Hz–4kHz speech band); current silence threshold (400ms) over-triggers (framework says 1500ms). Error tone doesn't exist. Concrete deltas listed in the research doc's "Current state vs. target framework" section. Blocked on picking three sounds — needs human ear, not more code.
+- [P1] **Sound UX layer** — earcons for book_start and book_end (Stage A done: 22 candidate sounds extracted from Wii BIOS sounds; Stages B+C still needed). Full architecture in [`sounds.md`](./sounds.md). When book ends naturally, model voice announces it via `on_complete_prompt` mechanism (coordinator injects prompt, model responds in persona tone). Client-side thinking tone fix (440Hz → sub-200Hz drone, 400ms → 1500ms threshold) is Stage D. See sounds.md for implementation stages.
 - **Voice provider abstraction**: extract OpenAI Realtime as one implementation of a `VoiceProvider` interface. Trigger: a credible second provider exists. Not speculative.
 - **More side-effect kinds**: state changes, image output. Trigger: a real skill needs them.
 - **Skill discovery aids**: `huxley list-installed-skills`, `huxley enable foo` CLIs that mutate `persona.yaml`. Polish, not blocking anything.
@@ -68,6 +68,7 @@ The first persona Huxley runs in production. Spec lives at [`personas/abuelos.md
 | Stop playback                                   | ✅                                                                   |
 | Resume later (_"sigue con el libro"_)           | ✅                                                                   |
 | Every negative response offers an alternative   | ⚠️ partial — coverage in `search` and `control` paths still has gaps |
+| End-of-book announcement (earcon + model voice) | ⚠️ architecture designed; Stages B+C pending (see sounds.md)         |
 | End-to-end smoke test with target user          | ❌ not yet                                                           |
 
 ### v2 — next skills

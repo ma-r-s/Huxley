@@ -92,11 +92,14 @@ For MVP, this abstraction stays minimal. We don't ship multiple providers. The s
 
 Personas don't rewrite the system prompt from scratch — they compose it from their `personality` string plus named constraints.
 
-| Constraint            | Effect                                                                                                  |
-| --------------------- | ------------------------------------------------------------------------------------------------------- |
-| `never_say_no`        | The agent never returns a bare "no" or "I can't." Every negative includes an alternative or escalation. |
-| `confirm_destructive` | The agent confirms before any irreversible action.                                                      |
-| `child_safe`          | Filters profanity and adult topics.                                                                     |
+| Constraint             | Effect                                                                                                                                                                                   |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `never_say_no`         | The agent never returns a bare "no" or "I can't." Every negative includes an alternative or escalation.                                                                                  |
+| `confirm_destructive`  | The agent confirms before any irreversible action.                                                                                                                                       |
+| `child_safe`           | Filters profanity and adult topics.                                                                                                                                                      |
+| `no_religious_content` | Avoids initiating or deepening religious topics; redirects politely if the user brings them up.                                                                                          |
+| `echo_short_input`     | When the user says only one or two words, the agent echoes what it understood before acting — prevents acting on a mishear.                                                              |
+| `confirm_if_unclear`   | Before calling any tool, the agent evaluates whether it understood the request. If the audio was cut or the intent ambiguous, it asks one short clarifying question instead of guessing. |
 
 Constraint definitions live in `packages/core/src/huxley/constraints/`. Adding one is a one-file PR.
 
