@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 import websockets
 
+from huxley.summarize import summarize_transcript
 from huxley.voice.openai_protocol import (
     AudioDeltaEvent,
     ClientEventType,
@@ -169,8 +170,17 @@ class OpenAIRealtimeProvider:
                 await receive_task
 
         if save_summary and self._transcript_lines:
-            transcript = "\n".join(self._transcript_lines[-20:])
-            await self._storage.save_summary(transcript)
+            # Try LLM-backed summarization first (T1.5). Falls back to raw
+            # tail if the call fails or returns nothing — some context
+            # beats no context, and the previous behavior was raw-tail
+            # only, so the fallback degrades to prior behavior cleanly.
+            summary = await summarize_transcript(
+                self._transcript_lines,
+                self._config.openai_api_key or "",
+            )
+            if summary is None:
+                summary = "\n".join(self._transcript_lines[-20:])
+            await self._storage.save_summary(summary)
 
         if ws:
             await ws.close()

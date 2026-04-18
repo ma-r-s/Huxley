@@ -306,7 +306,7 @@ companionship-mode greetings — every roadmap feature past v2.
 
 ## T1.5 — Real LLM summarization on reconnect
 
-**Status**: queued · **Task**: #90 · **Effort**: ~100 LOC (1-2 days)
+**Status**: done (2026-04-18) · **Task**: #90 · **Effort**: ~110 LOC + 10 tests
 
 **Problem.** Today's `disconnect(save_summary=True)` injects raw "last 20 transcript
 lines" into the next session's system prompt. After 22 reconnects in a 20-hour
@@ -318,21 +318,84 @@ possible failure for an elderly user who relies on continuity.
 multiple times per long listening session. Without real summarization the
 continuity loss is invisible until the user notices.
 
-**Proposed solution.** On `disconnect(save_summary=True)`:
+### Validation (Gate 1)
 
-1. Fetch last N transcript lines from `Storage` (already there)
-2. Call `gpt-4o-mini` (chat completion, NOT realtime) with system prompt:
-   "Resume esta conversación en 3 frases concisas para que un asistente que se
-   reconecta pueda continuar sin perder contexto."
-3. Store summary string in `Storage.save_summary(text)`
-4. On next `connect()`, inject summary into system prompt before
-   catalog/tool context
+`voice/openai_realtime.py:171-173` (pre-fix):
 
-**Cost.** ~$0.001 per disconnect (mini chat completion is cheap). Latency fits
-into the natural ~2s reconnect window — no extra user-facing latency.
+```python
+if save_summary and self._transcript_lines:
+    transcript = "\n".join(self._transcript_lines[-20:])
+    await self._storage.save_summary(transcript)
+```
 
-**Edge cases.** First connect (no prior summary): skip injection. Summary becomes
-stale during long idle: regenerate-on-stale is probably fine for v1.
+The "summary" is literally a `\n`.join of the last 20 raw transcript lines.
+On reconnect, `connect()` reads that string and appends it to the system
+prompt as `"Contexto de la conversación anterior: <raw lines>"`. Worst
+case: 20 lines of "user: pause / assistant: ahí va" — useless.
+
+### Design (Gate 2)
+
+New `huxley.summarize` module with one function: `summarize_transcript(lines,
+api_key) -> str | None`. Calls `gpt-4o-mini` (cheap chat completion, NOT
+the realtime API) with a Spanish system prompt instructing 3-sentence
+context summary. Caps input to last 60 lines. Wrapped in try/except;
+returns `None` on any failure.
+
+Wired into `OpenAIRealtimeProvider.disconnect()` — replaces the raw-tail
+join. **Falls back to raw-tail when `summarize_transcript` returns
+`None`** so disconnect always saves _something_; this preserves the prior
+behavior as the safety net rather than silently dropping context on
+summarizer outage.
+
+`openai>=1.60` is already a core dep; uses `AsyncOpenAI` directly. No new
+dependency.
+
+Decided NOT to:
+
+- Add a separate `huxley.config` knob for the summary model. The model
+  string is a module constant; if a future persona needs a different
+  summarization model, this becomes a kwarg on `summarize_transcript`.
+- Pre-compute summaries periodically. Disconnect is the natural trigger
+  (and is bounded — at most 22 per 20-hour session); pre-computing during
+  idle would burn tokens for sessions that don't reconnect.
+- Inject `dev_event` for the summary call. Browser dev client doesn't
+  display summaries today; can be added later.
+
+### Definition of Done
+
+- [x] `huxley.summarize.summarize_transcript(lines, api_key, *, model, max_lines, max_output_tokens) -> str | None` implemented using `AsyncOpenAI`
+- [x] Returns `None` on empty transcript, missing API key, API exception, no choices, empty content
+- [x] Caps input to `max_lines` (default 60) — last lines kept (recent state)
+- [x] `OpenAIRealtimeProvider.disconnect(save_summary=True)` calls `summarize_transcript` and falls back to raw `\n`.join of last 20 lines on `None`
+- [x] Logs `summarize.completed` (info), `summarize.failed` (error), `summarize.skipped_no_api_key` / `summarize.empty_choices` / `summarize.empty_content` (warnings)
+- [x] All 268 tests green (was 258, +10 new in `test_summarize.py`)
+
+### Tests (Gate 3)
+
+`packages/core/tests/unit/test_summarize.py` (10 tests, AsyncOpenAI mocked at module level):
+
+- `test_returns_summary_text_on_success`
+- `test_strips_whitespace_from_summary`
+- `test_returns_none_for_empty_transcript` (no API call attempted)
+- `test_returns_none_for_missing_api_key` (no API call attempted)
+- `test_returns_none_when_api_raises`
+- `test_returns_none_when_choices_empty`
+- `test_returns_none_when_content_empty_string`
+- `test_caps_input_to_max_lines` (only last `DEFAULT_MAX_LINES` sent)
+- `test_uses_default_model` (verifies `gpt-4o-mini`)
+- `test_includes_system_prompt` (verifies Spanish summarization instruction)
+
+### Docs touched (Gate 4)
+
+- `docs/triage.md` — this entry updated with full audit trail
+- ADR — none. Module pick is a runtime concern; the "why summarize" rationale lives in this entry.
+- `docs/observability.md` — `summarize.*` events follow the existing namespacing convention; no doc convention change needed.
+
+### Ship (Gate 5)
+
+- Commit hash filled in by the commit step.
+- **Lessons**: keeping the raw-tail fallback in `disconnect` made the summarizer additive rather than replacing — disconnect always saves something, even if the summarizer breaks tomorrow. Mocking `AsyncOpenAI` at the module level (`monkeypatch.setattr(summarize_module, "AsyncOpenAI", factory)`) is much cleaner than mocking the network — no stub openai server needed. Test runtime jumped from ~0.3s to ~2s after adding summarize tests because openai client import is heavy; acceptable.
+- **Follow-up**: regenerate-on-stale (if a session stays connected for hours but transcript moved on) — out of scope for v1, file as a separate triage item if observed in practice.
 
 ---
 
