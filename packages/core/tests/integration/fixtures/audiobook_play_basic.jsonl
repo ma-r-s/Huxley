@@ -1,0 +1,19 @@
+// audiobook_play_basic.jsonl
+// Synthetic capture of a minimal "play me a book" round-trip. Authored
+// by hand for T2.3; replace with a recorded real-API session when the
+// recorder lands. Comments and blank lines are skipped by the loader.
+
+// User PTT: "ponme un libro de garcia marquez"
+{"type": "conversation.item.input_audio_transcription.completed", "transcript": "ponme un libro de garcia marquez"}
+
+// Model speaks the acknowledgement ("ahí va") — two short audio chunks.
+{"type": "response.audio_transcript.done", "transcript": "Ahí va, don."}
+{"type": "response.audio.delta", "delta": "AAECAw=="}
+{"type": "response.audio.delta", "delta": "BAUGBw=="}
+{"type": "response.audio.done"}
+
+// Tool call to play_audiobook.
+{"type": "response.function_call_arguments.done", "call_id": "call_1", "name": "play_audiobook", "arguments": "{\"book_id\": \"garcia-marquez-cien-anos\"}"}
+
+// Response done with usage payload — exercises the cost tracker path.
+{"type": "response.done", "response": {"id": "resp_1", "usage": {"input_token_details": {"text_tokens": 1500, "audio_tokens": 30, "cached_tokens": 0}, "output_token_details": {"text_tokens": 8, "audio_tokens": 60}}}}

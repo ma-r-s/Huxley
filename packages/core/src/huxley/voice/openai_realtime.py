@@ -283,85 +283,94 @@ class OpenAIRealtimeProvider:
                 )
             raise
 
+    async def _handle_server_event(self, data: dict[str, Any]) -> None:
+        """Dispatch one server event dict to the right callback.
+
+        Extracted from `_receive_loop` so integration tests can drive the
+        provider with crafted event dicts (see
+        `tests/integration/test_session_replay.py`) without needing a real
+        WebSocket. Exercises the full parse + cost-track + dispatch path.
+        """
+        event_type = data.get("type", "")
+        parsed = parse_server_event(data)
+
+        if isinstance(parsed, AudioDeltaEvent):
+            audio_bytes = base64.b64decode(parsed.delta)
+            await self._cb.on_audio_delta(audio_bytes)
+
+        elif isinstance(parsed, FunctionCallEvent):
+            try:
+                args = json.loads(parsed.arguments)
+            except json.JSONDecodeError:
+                args = {}
+            await logger.ainfo(
+                "session.rx.tool_call",
+                name=parsed.name,
+                call_id=parsed.call_id,
+                args=args,
+            )
+            await self._cb.on_tool_call(parsed.call_id, parsed.name, args)
+
+        elif isinstance(parsed, TranscriptEvent):
+            self._transcript_lines.append(parsed.transcript)
+            await logger.ainfo(
+                "transcript",
+                role=parsed.role,
+                text=parsed.transcript,
+            )
+            if self._cb.on_transcript:
+                await self._cb.on_transcript(parsed.role, parsed.transcript)
+
+        elif isinstance(parsed, ErrorEvent):
+            if parsed.code == "response_cancel_not_active":
+                await logger.ainfo("session.rx.error", code=parsed.code)
+            elif parsed.code == "input_audio_buffer_commit_empty":
+                await logger.ainfo(
+                    "session.rx.error",
+                    code=parsed.code,
+                    message=parsed.message,
+                )
+                await self._cb.on_commit_failed()
+            else:
+                await logger.aerror(
+                    "session.rx.error",
+                    code=parsed.code,
+                    message=parsed.message,
+                    error_type=parsed.type,
+                )
+                if parsed.code == "model_not_found":
+                    await logger.aerror(
+                        "session.rx.error",
+                        hint=(
+                            "The Realtime API requires Tier 1 access "
+                            "(>=5 USD lifetime spend). Add a payment "
+                            "method and purchase credits at "
+                            "platform.openai.com/settings/billing"
+                        ),
+                    )
+
+        if event_type == ServerEventType.RESPONSE_AUDIO_DONE.value:
+            await self._cb.on_audio_done()
+
+        if event_type == ServerEventType.RESPONSE_DONE.value:
+            if self._cost_tracker is not None:
+                usage = (data.get("response") or {}).get("usage")
+                if usage:
+                    try:
+                        await self._cost_tracker.record(usage)
+                    except Exception:
+                        # Cost tracking failure must never affect the
+                        # session — log and proceed.
+                        await logger.aexception("cost.record_failed")
+            await self._cb.on_response_done()
+
     async def _receive_loop(self) -> None:
         """Parse WebSocket messages and forward to the coordinator callbacks."""
         assert self._ws is not None
         try:
             async for raw_msg in self._ws:
                 data = json.loads(raw_msg)
-                event_type = data.get("type", "")
-                parsed = parse_server_event(data)
-
-                if isinstance(parsed, AudioDeltaEvent):
-                    audio_bytes = base64.b64decode(parsed.delta)
-                    await self._cb.on_audio_delta(audio_bytes)
-
-                elif isinstance(parsed, FunctionCallEvent):
-                    try:
-                        args = json.loads(parsed.arguments)
-                    except json.JSONDecodeError:
-                        args = {}
-                    await logger.ainfo(
-                        "session.rx.tool_call",
-                        name=parsed.name,
-                        call_id=parsed.call_id,
-                        args=args,
-                    )
-                    await self._cb.on_tool_call(parsed.call_id, parsed.name, args)
-
-                elif isinstance(parsed, TranscriptEvent):
-                    self._transcript_lines.append(parsed.transcript)
-                    await logger.ainfo(
-                        "transcript",
-                        role=parsed.role,
-                        text=parsed.transcript,
-                    )
-                    if self._cb.on_transcript:
-                        await self._cb.on_transcript(parsed.role, parsed.transcript)
-
-                elif isinstance(parsed, ErrorEvent):
-                    if parsed.code == "response_cancel_not_active":
-                        await logger.ainfo("session.rx.error", code=parsed.code)
-                    elif parsed.code == "input_audio_buffer_commit_empty":
-                        await logger.ainfo(
-                            "session.rx.error",
-                            code=parsed.code,
-                            message=parsed.message,
-                        )
-                        await self._cb.on_commit_failed()
-                    else:
-                        await logger.aerror(
-                            "session.rx.error",
-                            code=parsed.code,
-                            message=parsed.message,
-                            error_type=parsed.type,
-                        )
-                        if parsed.code == "model_not_found":
-                            await logger.aerror(
-                                "session.rx.error",
-                                hint=(
-                                    "The Realtime API requires Tier 1 access "
-                                    "(>=5 USD lifetime spend). Add a payment "
-                                    "method and purchase credits at "
-                                    "platform.openai.com/settings/billing"
-                                ),
-                            )
-
-                if event_type == ServerEventType.RESPONSE_AUDIO_DONE.value:
-                    await self._cb.on_audio_done()
-
-                if event_type == ServerEventType.RESPONSE_DONE.value:
-                    if self._cost_tracker is not None:
-                        usage = (data.get("response") or {}).get("usage")
-                        if usage:
-                            try:
-                                await self._cost_tracker.record(usage)
-                            except Exception:
-                                # Cost tracking failure must never affect the
-                                # session — log and proceed.
-                                await logger.aexception("cost.record_failed")
-                    await self._cb.on_response_done()
-
+                await self._handle_server_event(data)
         except websockets.ConnectionClosed:
             await logger.ainfo("session_connection_closed")
         except asyncio.CancelledError:

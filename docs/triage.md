@@ -690,38 +690,129 @@ model is gpt-4o-mini-realtime-preview` for the source-of-truth on prices.
 
 ## T2.3 — Integration smoke tests against real OpenAI Realtime
 
-**Status**: queued · **Task**: #95 · **Effort**: ~1 week (pulled from D2 on 2026-04-18) · **Blocks**: T1.3
+**Status**: done — Layer 1 (2026-04-18) · **Task**: #95 · **Effort**: ~330 LOC + 16 tests + 1 fixture · **Unblocks**: T1.3
 
 **Problem.** Voice-first project, text-first test surface. Audio regressions
 slip through. The single biggest risk on the active list — T1.3 coordinator
 refactor — has no automated test net. Manual browser smoke is the only thing
 catching subtle regressions today.
 
-**Why it matters.** T1.3 is "refactor without behavior change". The way to verify
-no behavior change is integration tests that exercise the full receive-loop ↔
-coordinator ↔ skill ↔ side-effect path. Without these, T1.3 is a leap of faith.
+**Why it matters.** T1.3 is "refactor without behavior change". The way to
+verify no behavior change is tests that exercise the full receive-loop +
+coordinator + skill + side-effect path. Without these, T1.3 is a leap of faith.
 
-**Proposed solution.** Two layers:
+### Validation (Gate 1)
 
-1. **Recorded-fixture replay** (cheap, runs in CI, no API key required):
-   - Capture or hand-author JSONL fixtures of OpenAI Realtime sessions
-     (server-event sequences for representative scenarios: simple turn,
-     audiobook play+interrupt, news fetch, radio start+stop, error responses).
-   - `FixtureReplayProvider` implements `VoiceProvider` interface, plays the
-     fixture as if it were the real OpenAI WebSocket.
-   - Tests assert downstream behavior: state transitions, side-effect
-     dispatching, audio frame ordering, summary persistence.
+`OpenAIRealtimeProvider._receive_loop` (pre-refactor) inlined the full
+per-event branching: parse, audio decode, tool args parse, transcript
+append, error code matching, response.done usage extraction, cost
+tracking. Every behavior was reachable only by spinning up a real
+WebSocket — no Python-level test could exercise the dispatch path.
+Refactoring the coordinator (T1.3) without an automated regression net
+in this code path was indeed a leap of faith.
 
-2. **One happy-path live test** (gated behind `HUXLEY_INTEGRATION=1`, runs
-   nightly, requires API key):
-   - Spin up the full server, simulate a client, do a `play_audiobook`
-     round-trip with real OpenAI, assert audio frames flow + tool dispatched
-     - cancel works.
-   - Catches breaking changes in OpenAI's API shape that fixtures wouldn't
-     catch.
+### Design (Gate 2)
 
-Couples to T1.3: the refactor needs replay coverage of the coordinator's
-existing behavior to verify the refactor preserves it.
+Two-layer plan from the original triage entry. **Layer 2 (live test
+against real OpenAI) deferred** for tonight's autonomous work — running
+it would burn the user's API tokens overnight without supervision. Layer
+1 (recorded-fixture replay) shipped.
+
+**Refactor first**: extracted `_handle_server_event(self, data)` from
+`_receive_loop`. The receive loop now does only `json.loads + handle`;
+all per-event branching is in the new method, directly testable.
+Behavior-preserving — all existing tests stayed green after the
+extraction.
+
+**Layer 1 implementation**:
+
+- `tests/integration/replay.py` — `RecordedSession` dataclass +
+  `load_session(path)` JSONL parser (skips `//` comments + blanks for
+  human-authoring) + `replay(provider, session)` async helper that feeds
+  events through `_handle_server_event`.
+- `tests/integration/fixtures/audiobook_play_basic.jsonl` — first
+  hand-authored fixture: user transcript → assistant ack → 2 audio
+  chunks → audio.done → tool call → response.done with usage payload.
+  Replace with recorded real-API capture when the recorder lands.
+- `tests/integration/test_session_replay.py` — three end-to-end scenario
+  tests verifying full callback sequencing + transcript accumulation +
+  cost tracker invocation + loader robustness.
+- `tests/unit/test_openai_realtime_event_handler.py` — 13 direct unit
+  tests of `_handle_server_event` covering every branch: audio delta
+  base64 decode, function call args parse + malformed-JSON fallback,
+  user/assistant transcript routing, error codes (cancel-not-active /
+  buffer-empty / model-not-found / other), audio.done, response.done
+  with-and-without usage, cost-tracker exception isolation, unknown
+  event no-op.
+
+Decided NOT to (this round):
+
+- Build a full `FixtureReplayProvider` implementing the entire
+  `VoiceProvider` protocol. The current `_handle_server_event` direct
+  call covers the same ground for receive-loop logic, with much less
+  surface to maintain. Promote to a full provider impl when send-side
+  testing (commit/cancel/etc.) needs the same harness.
+- Live API test. Layer 2. Unblocked from T1.3 since Layer 1 covers the
+  refactor's regression need; Layer 2 is for OpenAI API drift detection
+  and can ship later as a nightly job.
+- Build a session recorder. The replay loader accepts JSONL of the
+  same shape OpenAI sends, so a future recorder is just a JSONL writer
+  in a wrapped provider.
+
+### Definition of Done
+
+- [x] `_handle_server_event` extracted from `_receive_loop`,
+      behavior-preserving (existing 173 core tests still green after extraction)
+- [x] Direct unit tests cover every branch of `_handle_server_event`
+      (13 tests in `test_openai_realtime_event_handler.py`)
+- [x] JSONL fixture loader + replay helper in `tests/integration/replay.py`
+- [x] One representative fixture (`audiobook_play_basic.jsonl`)
+- [x] Three scenario tests using fixture replay verify full chain (callbacks
+      sequence, transcript accumulation, cost tracking, loader robustness)
+- [x] All 284 tests green (was 268, +16 new)
+- [ ] Layer 2 (live API smoke gated behind `HUXLEY_INTEGRATION=1`) —
+      deferred to follow-up triage item; not a blocker for T1.3
+
+### Tests (Gate 3)
+
+`packages/core/tests/unit/test_openai_realtime_event_handler.py`:
+
+- `TestHandleAudioDelta` — base64 decode + dispatch
+- `TestHandleFunctionCall` — args parse + malformed-JSON fallback
+- `TestHandleTranscript` — assistant + user role routing
+- `TestHandleError` — silent-cancel + commit-empty + other-codes paths
+- `TestHandleResponseDone` — audio.done + response.done with/without
+  usage + cost-tracker exception isolation
+- `TestHandleUnknownEvents` — unknown event types are silent no-ops
+
+`packages/core/tests/integration/test_session_replay.py`:
+
+- `TestAudiobookPlayBasic` — full callback sequence + cost recording
+- `TestLoaderHandlesCommentsAndBlankLines` — JSONL parser robustness
+
+### Docs touched (Gate 4)
+
+- `docs/triage.md` — this entry updated; T1.3 status will note the
+  unblock when it's picked up.
+- ADR — none. The `_handle_server_event` extraction is a refactor with
+  the rationale captured here.
+- `docs/observability.md` — no new event names introduced.
+- `README.md` — no user-facing change.
+
+### Ship (Gate 5)
+
+- Commit hash filled in by the commit step.
+- **Lessons**: Extracting a previously-inline method to make it
+  directly testable is one of the highest-leverage refactors available
+  — paid for itself within the same gate (13 tests + 3 integration in
+  ~330 LOC). The JSONL+comments fixture format is much more
+  human-readable than I expected; can imagine future scenarios being
+  authored directly without a recorder. Layer 2 (live API) deferred is
+  honest given the autonomous-overnight constraint; tracking as a new
+  triage item below.
+- **Follow-up triage item to file** (T2.4 candidate): live API smoke
+  test gated behind `HUXLEY_INTEGRATION=1`, runs nightly. Needs
+  user-supervised first run to verify token cost.
 
 ---
 
