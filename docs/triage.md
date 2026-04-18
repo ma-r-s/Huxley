@@ -465,6 +465,80 @@ Decided NOT to:
 
 ---
 
+## T1.7 — Audiobook playback speed control
+
+**Status**: done (2026-04-18) · **Effort**: ~140 LOC + 8 tests
+
+**Problem.** Discovered live by Mario: model said "voy a poner el libro **a una velocidad más lenta**" but `audiobook_control` had no speed parameter. Model hallucinated speed adjustment by pause+resume cycles. Nothing actually slowed; user had to keep asking. Same hallucination class as the news/radio "lying about tool execution" bug.
+
+**Why it matters.** For an elderly user, slowing narration is a real accessibility win — and the prior absence wasn't just a missing feature, it was actively misleading: the assistant claimed to do something it couldn't. Tightening the prompt without adding the feature would have made the assistant honestly say "no soporto" but would not have helped the user.
+
+### Validation (Gate 1)
+
+Captured live in browser session 2026-04-18T14:17–14:18:
+
+- Turn at 14:17:40: user "Ponme... Baskerville", model said "y a una velocidad más lenta", fired `play_audiobook` (no speed param exists)
+- 14:17:57: user "más lento", model fired `audiobook_control(action=resume)` — wrong tool, no speed change
+- 14:18:04: user "más lento", model said "Voy a reproducir el audiolibro más despacio", fired `audiobook_control(pause)` then `(resume)` — pure hallucination
+
+Tool spec confirmed: enum was `[pause, resume, rewind, forward, stop]`. No speed.
+
+### Design (Gate 2)
+
+ffmpeg's `atempo` filter changes tempo without pitch shift; single-filter range 0.5x-2.0x. Three deliberate choices:
+
+1. **Add `set_speed` to `audiobook_control`'s action enum** rather than a separate tool — keeps tool count down (LLM already has 14) and stays semantically grouped with playback control.
+2. **Persist via per-skill storage** (`current_speed` key, default 1.0) so speed survives across `play_audiobook` calls — set once, every subsequent play uses it. The user shouldn't have to slow down every new book.
+3. **Position math fix**: at non-1.0 speed, `book_advance = wall_elapsed * speed`. Three call sites needed updating — `_build_factory.stream` finally block, `_get_progress`, and the new `_set_speed`. Refactored into `_live_position()` helper to centralize.
+
+`set_speed` while a book is playing returns an `AudioStream` side-effect with the new factory, which the coordinator's existing `_apply_side_effects` handles cleanly: cancels old media, starts new one. Old stream's `finally` block writes its position; new stream's `start_position` was captured at set_speed time. Race is benign — both paths write to the same position key, last write wins, drift is sub-second.
+
+Decided NOT to:
+
+- Discrete speed buckets (0.75/1.0/1.25). Float lets the LLM map "un poquito más lento" to 0.85, "mucho más lento" to 0.7, etc.
+- Save speed per book. Speed preference is about the user, not the book.
+- Use chained atempo for sub-0.5 or super-2.0. Range matches normal accessibility need.
+
+### Definition of Done
+
+- [x] `AudiobookPlayer.stream(path, start_position, speed=1.0)` accepts speed; adds `-af atempo=N` when speed != 1.0
+- [x] `audiobook_control` action enum gains `set_speed`; new `speed` parameter in tool spec
+- [x] Speed persisted in skill storage under `CURRENT_SPEED_KEY`; clamped to `[MIN_SPEED, MAX_SPEED] = [0.5, 2.0]`
+- [x] All `_build_factory` call sites (`_play`, rewind/forward) load persisted speed and pass to factory
+- [x] `_live_position()` helper centralizes position math; multiplies elapsed by current speed
+- [x] `_set_speed` handler: persists value, restarts current stream from live position at new tempo (returns AudioStream side-effect); ack-only when nothing playing
+- [x] Persona prompt teaches the new action with example mappings ("0.85 para un poco más lento" etc.) AND forbids claiming speed change without calling the tool
+- [x] All 298 tests green (was 290, +8 new in `TestSpeedControl`); existing 6 audiobook test assertions updated to include `speed=1.0` kwarg
+
+### Tests (Gate 3)
+
+`packages/skills/audiobooks/tests/test_skill.py` → `TestSpeedControl`:
+
+- `test_set_speed_with_no_value_returns_friendly_message` — defense vs missing arg
+- `test_set_speed_persists_when_no_book_playing` — ack path, persisted, no side effect
+- `test_set_speed_clamps_below_min` — 0.1 → 0.5
+- `test_set_speed_clamps_above_max` — 5.0 → 2.0
+- `test_play_uses_persisted_speed` — set_speed once, then play loads 0.75 from storage
+- `test_set_speed_during_playback_returns_audio_stream` — restart path with live position injection
+- `test_position_math_under_non_unit_speed` — speed=0.5 means 10s wall = 5s book advance
+- `test_no_book_playing_live_position_is_none`
+
+Plus stream mock signatures in `test_skill.py` and `test_coordinator_skill_integration.py` updated to accept `speed` kwarg, and 6 existing assertions updated to include `speed=1.0`.
+
+### Docs touched (Gate 4)
+
+- `docs/triage.md` — this entry
+- `personas/abuelos/persona.yaml` — AUDIOLIBROS section restructured + new VELOCIDAD section
+- `docs/skills/audiobooks.md` — out of scope tonight; the user-facing tool spec lives in the tool description string itself, which is what the LLM reads
+
+### Ship (Gate 5)
+
+- Commit hash filled in by the commit step.
+- **Lessons**: This bug class — model lying about tool execution because the tool can't do what was claimed — is the _third_ hallucination instance after news (fabricated headlines) and radio (fabricated "what's playing"). Pattern is consistent: weak/missing tool → model fakes via wrong tool → user re-asks. Future skills should explicitly map "things the user might ask for" to tool capabilities and either ship the capability or honestly forbid the claim. The persona prompt addition ("NUNCA digas X sin haber llamado primero a Y") is the right shape for closing the loop, but only meaningful when Y exists.
+- **Position math drift**: with the current `bytes_read / BYTES_PER_SECOND` calculation and `-re` throttling, output_seconds == wall_seconds. atempo affects what content is in those seconds, not the rate at which they emerge. The math `book_advance = output_seconds * speed` is correct in this regime.
+
+---
+
 # Active — Tier 2 (pre-ship hardening)
 
 ## T2.1 — Storage WAL + daily snapshot

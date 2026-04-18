@@ -26,7 +26,10 @@ import pytest
 from huxley_sdk import AudioStream
 from huxley_sdk.testing import make_test_context
 from huxley_skill_audiobooks.skill import (
+    CURRENT_SPEED_KEY,
     LAST_BOOK_KEY,
+    MAX_SPEED,
+    MIN_SPEED,
     RESUME_REWIND_SECONDS,
     AudiobooksSkill,
     _fuzzy_score,
@@ -56,7 +59,9 @@ def _make_player_mock(chunks: list[bytes] | None = None) -> MagicMock:
     player = MagicMock()
     default_chunks = chunks if chunks is not None else [b"chunk1", b"chunk2"]
 
-    def stream_impl(path: Any, start_position: float = 0.0) -> AsyncIterator[bytes]:
+    def stream_impl(
+        path: Any, start_position: float = 0.0, speed: float = 1.0
+    ) -> AsyncIterator[bytes]:
         async def gen() -> AsyncIterator[bytes]:
             for c in default_chunks:
                 yield c
@@ -205,7 +210,7 @@ class TestPlayback:
 
         await _drain(result.side_effect.factory)
 
-        player_mock.stream.assert_called_once_with(book["path"], start_position=0.0)
+        player_mock.stream.assert_called_once_with(book["path"], start_position=0.0, speed=1.0)
 
     async def test_play_factory_uses_saved_position(
         self,
@@ -221,7 +226,7 @@ class TestPlayback:
         await _drain(result.side_effect.factory)
 
         player_mock.stream.assert_called_once_with(
-            book["path"], start_position=120.5 - RESUME_REWIND_SECONDS
+            book["path"], start_position=120.5 - RESUME_REWIND_SECONDS, speed=1.0
         )
 
     async def test_play_from_beginning_ignores_saved_position(
@@ -239,7 +244,7 @@ class TestPlayback:
         assert isinstance(result.side_effect, AudioStream)
         await _drain(result.side_effect.factory)
 
-        player_mock.stream.assert_called_once_with(book["path"], start_position=0.0)
+        player_mock.stream.assert_called_once_with(book["path"], start_position=0.0, speed=1.0)
 
     async def test_play_unknown_book(self, audiobooks_skill: AudiobooksSkill) -> None:
         result = await audiobooks_skill.handle(
@@ -257,7 +262,7 @@ class TestPlayback:
         result = await audiobooks_skill.handle("play_audiobook", {"book_id": book["title"]})
         assert isinstance(result.side_effect, AudioStream)
         await _drain(result.side_effect.factory)
-        player_mock.stream.assert_called_once_with(book["path"], start_position=0.0)
+        player_mock.stream.assert_called_once_with(book["path"], start_position=0.0, speed=1.0)
 
     async def test_play_by_author_substring(self, audiobooks_skill: AudiobooksSkill) -> None:
         result = await audiobooks_skill.handle("play_audiobook", {"book_id": "García Márquez"})
@@ -311,7 +316,7 @@ class TestResumeLast:
         assert isinstance(result.side_effect, AudioStream)
         await _drain(result.side_effect.factory)
         player_mock.stream.assert_called_once_with(
-            book["path"], start_position=250.0 - RESUME_REWIND_SECONDS
+            book["path"], start_position=250.0 - RESUME_REWIND_SECONDS, speed=1.0
         )
         data = json.loads(result.output)
         assert data["playing"] is True
@@ -364,7 +369,7 @@ class TestControl:
 
         assert isinstance(result.side_effect, AudioStream)
         await _drain(result.side_effect.factory)
-        player_mock.stream.assert_called_once_with(book["path"], start_position=110.0)
+        player_mock.stream.assert_called_once_with(book["path"], start_position=110.0, speed=1.0)
 
     async def test_rewind_clamps_at_zero(
         self,
@@ -382,7 +387,7 @@ class TestControl:
 
         assert isinstance(result.side_effect, AudioStream)
         await _drain(result.side_effect.factory)
-        player_mock.stream.assert_called_once_with(book["path"], start_position=0.0)
+        player_mock.stream.assert_called_once_with(book["path"], start_position=0.0, speed=1.0)
 
     async def test_forward_streams_from_new_position(
         self,
@@ -400,7 +405,7 @@ class TestControl:
 
         assert isinstance(result.side_effect, AudioStream)
         await _drain(result.side_effect.factory)
-        player_mock.stream.assert_called_once_with(book["path"], start_position=80.0)
+        player_mock.stream.assert_called_once_with(book["path"], start_position=80.0, speed=1.0)
 
     async def test_resume_streams_last_book_from_saved_position(
         self,
@@ -417,7 +422,7 @@ class TestControl:
         assert isinstance(result.side_effect, AudioStream)
         await _drain(result.side_effect.factory)
         player_mock.stream.assert_called_once_with(
-            book["path"], start_position=75.0 - RESUME_REWIND_SECONDS
+            book["path"], start_position=75.0 - RESUME_REWIND_SECONDS, speed=1.0
         )
 
     async def test_rewind_with_no_book_returns_friendly_message(
@@ -441,6 +446,7 @@ class TestFactoryCancelPersistsPosition:
         async def infinite_stream(
             _path: Any,
             start_position: float = 0.0,
+            speed: float = 1.0,
         ) -> AsyncIterator[bytes]:
             while True:
                 yield b"x" * 480
@@ -823,3 +829,116 @@ class TestEarconCompletionTiming:
         pos_str = await skill._storage_req.get_setting(_position_key(book_id))
         assert pos_str is not None
         assert float(pos_str) == 0.0
+
+
+class TestSpeedControl:
+    """T1.7 — `audiobook_control(action='set_speed', speed=...)` support."""
+
+    async def test_set_speed_with_no_value_returns_friendly_message(
+        self, audiobooks_skill: AudiobooksSkill
+    ) -> None:
+        result = await audiobooks_skill.handle("audiobook_control", {"action": "set_speed"})
+        data = json.loads(result.output)
+        assert data["ok"] is False
+        assert "velocidad" in data["message"].lower()
+
+    async def test_set_speed_persists_when_no_book_playing(
+        self,
+        audiobooks_skill: AudiobooksSkill,
+        storage: SkillStorage,
+    ) -> None:
+        result = await audiobooks_skill.handle(
+            "audiobook_control", {"action": "set_speed", "speed": 0.85}
+        )
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert data["speed"] == 0.85
+        assert data["playing"] is False
+        # No side effect — nothing to restart.
+        assert result.side_effect is None
+        # Speed persisted for next play.
+        stored = await storage.get_setting(CURRENT_SPEED_KEY)
+        assert stored == "0.85"
+
+    async def test_set_speed_clamps_below_min(
+        self,
+        audiobooks_skill: AudiobooksSkill,
+        storage: SkillStorage,
+    ) -> None:
+        await audiobooks_skill.handle("audiobook_control", {"action": "set_speed", "speed": 0.1})
+        stored = await storage.get_setting(CURRENT_SPEED_KEY)
+        assert stored == str(MIN_SPEED)
+
+    async def test_set_speed_clamps_above_max(
+        self,
+        audiobooks_skill: AudiobooksSkill,
+        storage: SkillStorage,
+    ) -> None:
+        await audiobooks_skill.handle("audiobook_control", {"action": "set_speed", "speed": 5.0})
+        stored = await storage.get_setting(CURRENT_SPEED_KEY)
+        assert stored == str(MAX_SPEED)
+
+    async def test_play_uses_persisted_speed(
+        self,
+        audiobooks_skill: AudiobooksSkill,
+        player_mock: MagicMock,
+        storage: SkillStorage,
+    ) -> None:
+        await storage.set_setting(CURRENT_SPEED_KEY, "0.75")
+        book = audiobooks_skill._catalog[0]
+
+        result = await audiobooks_skill.handle("play_audiobook", {"book_id": book["id"]})
+
+        assert isinstance(result.side_effect, AudioStream)
+        await _drain(result.side_effect.factory)
+        player_mock.stream.assert_called_once_with(book["path"], start_position=0.0, speed=0.75)
+
+    async def test_set_speed_during_playback_returns_audio_stream(
+        self,
+        audiobooks_skill: AudiobooksSkill,
+        player_mock: MagicMock,
+    ) -> None:
+        # Simulate a live stream so set_speed has something to restart.
+        book = audiobooks_skill._catalog[0]
+        audiobooks_skill._now_playing_id = book["id"]
+        audiobooks_skill._now_playing_start_pos = 100.0
+        audiobooks_skill._now_playing_speed = 1.0
+        # Pretend stream started 10 wall-seconds ago at 1.0x — live pos = 110.
+        import time as _time
+
+        audiobooks_skill._now_playing_start_time = _time.monotonic() - 10.0
+
+        result = await audiobooks_skill.handle(
+            "audiobook_control", {"action": "set_speed", "speed": 0.85}
+        )
+
+        # Returns an AudioStream so coordinator restarts the stream.
+        assert isinstance(result.side_effect, AudioStream)
+        await _drain(result.side_effect.factory)
+        # New stream invoked with the new speed and the live position.
+        # Position will be approximately 110 (some jitter from monotonic).
+        call = player_mock.stream.call_args
+        assert call.kwargs["speed"] == 0.85
+        assert 109.0 < call.kwargs["start_position"] < 111.0
+
+    async def test_position_math_under_non_unit_speed(
+        self,
+        audiobooks_skill: AudiobooksSkill,
+    ) -> None:
+        """At speed 0.5, 10 wall-seconds = 5 book seconds advance."""
+        import time as _time
+
+        audiobooks_skill._now_playing_id = "x"
+        audiobooks_skill._now_playing_start_pos = 0.0
+        audiobooks_skill._now_playing_speed = 0.5
+        audiobooks_skill._now_playing_start_time = _time.monotonic() - 10.0
+
+        pos = audiobooks_skill._live_position()
+        assert pos is not None
+        assert 4.5 < pos < 5.5
+
+    async def test_no_book_playing_live_position_is_none(
+        self, audiobooks_skill: AudiobooksSkill
+    ) -> None:
+        assert audiobooks_skill._now_playing_id is None
+        assert audiobooks_skill._live_position() is None

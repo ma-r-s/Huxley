@@ -80,6 +80,7 @@ class AudiobookPlayer:
         self,
         path: str | Path,
         start_position: float = 0.0,
+        speed: float = 1.0,
     ) -> AsyncIterator[bytes]:
         """Yield PCM16 chunks from `path` at realtime pace, starting at `start_position`.
 
@@ -88,12 +89,22 @@ class AudiobookPlayer:
         output to realtime playback rate, which gives us natural backpressure
         over the WebSocket without explicit rate limiting.
 
+        `speed` applies an `atempo` filter for tempo adjustment without
+        pitch shift. atempo's single-filter range is 0.5-2.0; the caller
+        is expected to clamp before calling. `speed=1.0` skips the filter
+        entirely so the unmodified path stays a clean passthrough.
+
+        At non-1.0 speed, `-re` still throttles the OUTPUT to realtime
+        wall-clock rate, but each output second represents `speed` book
+        seconds. Position math at the caller side must multiply elapsed
+        wall-clock by `speed` to get book-content advance.
+
         Cancellation: if the caller's task is cancelled mid-iteration, the
         generator's finally block terminates ffmpeg. The subprocess is
         never leaked.
         """
         start = max(0.0, start_position)
-        proc = await asyncio.create_subprocess_exec(
+        ffmpeg_args: list[str] = [
             self._ffmpeg_path,
             "-loglevel",
             "quiet",
@@ -106,9 +117,18 @@ class AudiobookPlayer:
             "1",  # mono
             "-ar",
             str(SAMPLE_RATE),
-            "-f",
-            "s16le",  # raw PCM16 LE
-            "-",  # stdout
+        ]
+        if speed != 1.0:
+            ffmpeg_args.extend(["-af", f"atempo={speed}"])
+        ffmpeg_args.extend(
+            [
+                "-f",
+                "s16le",  # raw PCM16 LE
+                "-",  # stdout
+            ]
+        )
+        proc = await asyncio.create_subprocess_exec(
+            *ffmpeg_args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
             stdin=asyncio.subprocess.DEVNULL,

@@ -56,7 +56,9 @@ def _make_player_with_tracker() -> tuple[MagicMock, list[str]]:
     consumed: list[str] = []
     player = MagicMock()
 
-    def stream_impl(path: Any, start_position: float = 0.0) -> AsyncIterator[bytes]:
+    def stream_impl(
+        path: Any, start_position: float = 0.0, speed: float = 1.0
+    ) -> AsyncIterator[bytes]:
         async def gen() -> AsyncIterator[bytes]:
             tag = f"{path}@{start_position}"
             for _ in range(3):

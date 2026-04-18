@@ -66,6 +66,21 @@ RESUME_REWIND_SECONDS = 20.0
 # without specifying a time. 30s covers a typical spoken paragraph.
 DEFAULT_SEEK_SECONDS = 30.0
 
+# Persistent per-skill key for the user's chosen tempo. Survives across books
+# and across server restarts so "más lento" once stays slow forever (or until
+# the user asks for "normal").
+CURRENT_SPEED_KEY = "current_speed"
+
+# atempo's single-filter range. The persona prompt teaches the LLM these
+# bounds; the skill clamps as a defense.
+MIN_SPEED = 0.5
+MAX_SPEED = 2.0
+DEFAULT_SPEED = 1.0
+
+
+def _clamp_speed(value: float) -> float:
+    return max(MIN_SPEED, min(MAX_SPEED, value))
+
 
 def _fmt_duration(seconds: float) -> str:
     """Format a duration in seconds to a natural Spanish string."""
@@ -127,6 +142,11 @@ class AudiobooksSkill:
         self._now_playing_id: str | None = None
         self._now_playing_start_pos: float = 0.0
         self._now_playing_start_time: float = 0.0
+        # Speed of the currently-playing stream. Tracked per-stream because
+        # set_speed restarts the stream and the new value persists; needed by
+        # position math (book_advance = wall_elapsed * speed, see
+        # docs/triage.md T1.7).
+        self._now_playing_speed: float = DEFAULT_SPEED
 
     def _require_setup(self, attr: str) -> None:
         if getattr(self, attr) is None:
@@ -215,24 +235,41 @@ class AudiobooksSkill:
                 name="audiobook_control",
                 description=(
                     "Controla la reproducción del audiolibro actual: pausar, "
-                    "reanudar, retroceder, adelantar, detener. Antes de llamar "
-                    "esta herramienta, acusa recibo brevemente al usuario (por "
-                    "ejemplo: 'Listo, retrocedo 30 segundos, don.'). Nunca "
-                    "ejecutes la acción en silencio. Para retroceder/adelantar, "
-                    "el valor por defecto es 30 segundos si el usuario no "
-                    "especifica un tiempo."
+                    "reanudar, retroceder, adelantar, detener, o cambiar la "
+                    "velocidad. Antes de llamar esta herramienta, acusa recibo "
+                    "brevemente al usuario (por ejemplo: 'Listo, retrocedo 30 "
+                    "segundos, don.'). Nunca ejecutes la acción en silencio. "
+                    "Para retroceder/adelantar, el valor por defecto es 30 "
+                    "segundos. Para `set_speed`, usa `speed` entre 0.5 (mitad "
+                    "de velocidad) y 2.0 (doble); 1.0 es la velocidad normal. "
+                    "Sugerencias: 0.85 para 'un poco más lento', 0.7 para "
+                    "'mucho más lento', 1.15 para 'un poco más rápido'."
                 ),
                 parameters={
                     "type": "object",
                     "properties": {
                         "action": {
                             "type": "string",
-                            "enum": ["pause", "resume", "rewind", "forward", "stop"],
+                            "enum": [
+                                "pause",
+                                "resume",
+                                "rewind",
+                                "forward",
+                                "stop",
+                                "set_speed",
+                            ],
                             "description": "Acción a realizar",
                         },
                         "seconds": {
                             "type": "number",
                             "description": "Segundos para retroceder/adelantar (default: 30)",
+                        },
+                        "speed": {
+                            "type": "number",
+                            "description": (
+                                "Velocidad de reproducción para `set_speed`. "
+                                "Rango 0.5 a 2.0; 1.0 es normal."
+                            ),
                         },
                     },
                     "required": ["action"],
@@ -275,6 +312,7 @@ class AudiobooksSkill:
                 return await self._control(
                     args["action"],
                     seconds=args.get("seconds", DEFAULT_SEEK_SECONDS),
+                    speed=args.get("speed"),
                 )
             case "get_progress":
                 return await self._get_progress()
@@ -517,8 +555,15 @@ class AudiobooksSkill:
         book_id: str,
         path: str,
         start_position: float,
+        speed: float = DEFAULT_SPEED,
     ) -> Callable[[], AsyncIterator[bytes]]:
-        """Build a playback factory for the coordinator's terminal barrier."""
+        """Build a playback factory for the coordinator's terminal barrier.
+
+        `speed` is the tempo applied via ffmpeg's atempo filter (see
+        AudiobookPlayer.stream). Position math accounts for it: at
+        speed=0.5, one wall-clock second = 0.5 book seconds, so
+        `book_advance = wall_elapsed * speed`.
+        """
         player = self._player_req
         logger = self._logger_req
         set_position = self._set_position
@@ -533,15 +578,21 @@ class AudiobooksSkill:
             skill._now_playing_id = book_id
             skill._now_playing_start_pos = start_position
             skill._now_playing_start_time = time.monotonic()
+            skill._now_playing_speed = speed
             bytes_read = 0
             stream_error: str | None = None
             completed = False
-            await logger.ainfo("audiobooks.stream_started", book_id=book_id, start=start_position)
+            await logger.ainfo(
+                "audiobooks.stream_started",
+                book_id=book_id,
+                start=start_position,
+                speed=speed,
+            )
             try:
                 if book_start_pcm:
                     yield book_start_pcm
 
-                async for chunk in player.stream(path, start_position=start_position):
+                async for chunk in player.stream(path, start_position=start_position, speed=speed):
                     bytes_read += len(chunk)
                     yield chunk
 
@@ -560,16 +611,21 @@ class AudiobooksSkill:
                 await logger.aexception("audiobooks.stream_error", book_id=book_id, exc=str(exc))
             finally:
                 skill._now_playing_id = None
-                elapsed = bytes_read / BYTES_PER_SECOND
+                # `bytes_read / BYTES_PER_SECOND` is OUTPUT seconds (wall-clock).
+                # Book content advanced = output_seconds * speed. With -re
+                # throttling output to realtime, output_seconds == wall_elapsed.
+                output_seconds = bytes_read / BYTES_PER_SECOND
+                book_advance = output_seconds * speed
                 # Natural completion → reset to 0 so next listen starts over.
                 # Interrupted (cancel or error) → save current position to resume.
-                final_pos = 0.0 if completed else start_position + elapsed
+                final_pos = 0.0 if completed else start_position + book_advance
                 try:
                     await set_position(book_id, final_pos)
                     await logger.ainfo(
                         "audiobooks.stream_ended",
                         book_id=book_id,
-                        elapsed=round(elapsed, 2),
+                        elapsed=round(output_seconds, 2),
+                        speed=speed,
                         final_pos=round(final_pos, 2),
                         completed=completed,
                         error=stream_error,
@@ -617,13 +673,15 @@ class AudiobooksSkill:
             )
 
         await self._storage_req.set_setting(LAST_BOOK_KEY, resolved_id)
+        speed = await self._get_speed()
         await self._logger_req.ainfo(
             "audiobooks.factory_built",
             book_id=resolved_id,
             start_position=start_position,
+            speed=speed,
         )
 
-        factory = self._build_factory(resolved_id, book["path"], start_position)
+        factory = self._build_factory(resolved_id, book["path"], start_position, speed=speed)
 
         resuming = start_position > 0
         return ToolResult(
@@ -658,13 +716,36 @@ class AudiobooksSkill:
             )
         return await self._play(last_id, from_beginning=False)
 
+    async def _get_speed(self) -> float:
+        """Return the persisted playback speed, default 1.0 if unset."""
+        raw = await self._storage_req.get_setting(CURRENT_SPEED_KEY)
+        if raw is None:
+            return DEFAULT_SPEED
+        try:
+            return _clamp_speed(float(raw))
+        except (TypeError, ValueError):
+            return DEFAULT_SPEED
+
+    def _live_position(self) -> float | None:
+        """Live position estimate, accounting for current playback speed.
+
+        Returns `None` if no book is currently playing. Used by both
+        `_get_progress` (to report position without storage round-trip) and
+        `set_speed` (to compute the resume point when restarting the stream
+        at a new tempo). Math: `book_advance = wall_elapsed * speed`.
+        """
+        if self._now_playing_id is None:
+            return None
+        elapsed = time.monotonic() - self._now_playing_start_time
+        return self._now_playing_start_pos + elapsed * self._now_playing_speed
+
     async def _get_progress(self) -> ToolResult:
         """Return position, duration, and remaining time for the active or last book."""
         # Prefer live tracking (book is currently streaming) for accuracy.
         book_id = self._now_playing_id
-        if book_id is not None:
-            elapsed = time.monotonic() - self._now_playing_start_time
-            current_pos = self._now_playing_start_pos + elapsed
+        live_pos = self._live_position()
+        if book_id is not None and live_pos is not None:
+            current_pos = live_pos
             is_live = True
         else:
             book_id = await self._storage_req.get_setting(LAST_BOOK_KEY)
@@ -741,7 +822,12 @@ class AudiobooksSkill:
             )
         )
 
-    async def _control(self, action: str, seconds: float = DEFAULT_SEEK_SECONDS) -> ToolResult:
+    async def _control(
+        self,
+        action: str,
+        seconds: float = DEFAULT_SEEK_SECONDS,
+        speed: float | None = None,
+    ) -> ToolResult:
         """Control current playback."""
         match action:
             case "pause":
@@ -801,7 +887,8 @@ class AudiobooksSkill:
                             }
                         )
                     )
-                factory = self._build_factory(book_id, book["path"], new_pos)
+                speed = await self._get_speed()
+                factory = self._build_factory(book_id, book["path"], new_pos, speed=speed)
                 return ToolResult(
                     output=json.dumps(
                         {
@@ -819,7 +906,77 @@ class AudiobooksSkill:
                     ),
                 )
 
+            case "set_speed":
+                return await self._set_speed(speed)
+
             case _:
                 return ToolResult(
                     output=json.dumps({"ok": False, "message": "No entendí la acción."})
                 )
+
+    async def _set_speed(self, speed: float | None) -> ToolResult:
+        """Persist new playback speed and restart the active stream at that tempo.
+
+        If a book is currently playing, restarts it from the live position
+        with the new tempo filter. If nothing is playing, persists the new
+        speed for the next play. Returns an `AudioStream` side-effect when
+        a stream restart is needed; otherwise a plain ack — the next
+        play_audiobook / resume will pick up the new speed.
+        """
+        if speed is None:
+            return ToolResult(
+                output=json.dumps(
+                    {
+                        "ok": False,
+                        "message": "Indícame la velocidad. Por ejemplo, 0.85 para más lento.",
+                    }
+                )
+            )
+        new_speed = _clamp_speed(float(speed))
+        await self._storage_req.set_setting(CURRENT_SPEED_KEY, str(new_speed))
+        await self._logger_req.ainfo(
+            "audiobooks.speed_set",
+            speed=new_speed,
+            requested=speed,
+            had_active_stream=self._now_playing_id is not None,
+        )
+
+        # Nothing playing: just persist + ack. Next play will use the new speed.
+        live_pos = self._live_position()
+        book_id = self._now_playing_id
+        if book_id is None or live_pos is None:
+            return ToolResult(
+                output=json.dumps({"ok": True, "speed": new_speed, "playing": False})
+            )
+
+        # A book is playing: restart from current position at the new speed.
+        # Save the position-at-cut-over so the new factory starts there. The
+        # outgoing stream's finally-block will also save its own final_pos
+        # when the coordinator cancels it; the new stream's start_position
+        # was captured here, so its own writes on cancel/end will overwrite
+        # cleanly with the right base.
+        book = await self._resolve_book(book_id)
+        if book is None:
+            # Lost the book record between play and set_speed — degrade to ack.
+            return ToolResult(
+                output=json.dumps({"ok": True, "speed": new_speed, "playing": False})
+            )
+        await self._set_position(book_id, live_pos)
+        factory = self._build_factory(book_id, book["path"], live_pos, speed=new_speed)
+        return ToolResult(
+            output=json.dumps(
+                {
+                    "ok": True,
+                    "speed": new_speed,
+                    "playing": True,
+                    "title": book["title"],
+                    "position_seconds": round(live_pos, 1),
+                    "position_label": _fmt_duration(live_pos),
+                }
+            ),
+            side_effect=AudioStream(
+                factory=factory,
+                on_complete_prompt=self._on_complete_prompt,
+                completion_silence_ms=self._silence_ms,
+            ),
+        )
