@@ -615,31 +615,156 @@ FocusState transitions.
   `YieldPolicy`, and their tests (~500 LOC removed). `SpeakingState` kept —
   it's still the right shape for the DIALOG-channel speaker flag today.
 
-**What this leaves for the rest of T1.4**:
+### Stage 1 — Gate-2 critic findings (2026-04-18, belated Gate-2 review)
 
-Stage 1 as originally scoped (`inject_turn` + arbitration + DuckingController +
-InjectedTurnHandle + TTL queue + earcon slot) is **not** shipped. The
-substrate underneath it is. The remaining work is:
+Spawned a critic against the shipped Stage 1 substrate (three commits
+above). Mario asked for ruthless honesty. Verdict: substrate is solid
+enough to build Stage 2 on, with one must-fix and handful of should-fix
+items. Full critic report in session transcript; summary here.
 
-- Wire `FocusManager` into the coordinator (replacing the direct-drive of
-  `ContentStreamObserver`) so multi-channel arbitration is real
-- Build `inject_turn` on top of `FocusManager` — `DIALOG` channel Activity
-  with priority-based preemption (no custom arbitrate() needed; the
-  channel priority map does it)
-- Implement the patience-expiry path for BACKGROUND Activities (the
-  FocusManager already has the hook; needs the coordinator-side integration)
-- Build `DuckingController` — still needed as a PCM gain envelope; integrates
-  with `ContentStreamObserver` when CONTENT goes BACKGROUND/MAY_DUCK
-- Everything else in the original Stage 2-4 scope (`InputClaim`, `background_task`,
-  `ClientEvent`) is unaffected by the pivot — those were always orthogonal
+**🔴 Must-fix before Stage 2** (real latent bugs, to ship in a single
+focused commit):
 
-### Open question — does the re-scope change the stage order?
+- **(#2) Self-cancel deadlock in `ContentStreamObserver._cancel_pump`.**
+  Today's coordinator doesn't route `on_eof → NONE`, so no deadlock. But
+  Stage 2's FocusManager wiring will do exactly that: actor delivers
+  NONE → observer calls `_cancel_pump` → awaits its own task → Python
+  raises `RuntimeError: Task cannot await on itself` → `_notify_safe`
+  swallows it → `on_natural_completion` never fires → audiobook ends
+  silently. Fix: self-task guard in `_cancel_pump` + regression test.
+- **(#5) `on_session_disconnected` race**: `force_release()` before
+  `_stop_content_stream()` has multiple await points between them.
+  Pump can re-acquire FACTORY in the gap, surviving past cleanup.
+  Fix: reorder — stop content stream first, then force_release.
+- **(#6) Same race in `interrupt()` step 3 vs step 4.** Identical fix.
+- **(#1) Transition-order invariant test.** Critic notes "old-off before
+  new-on" holds in `_handle_acquire`/`_handle_release`/
+  `_handle_stop_foreground` but isn't locked down by a test — a future
+  refactor could silently break it. No code change; add regression test.
+- **(#7) Trivial cleanup**: `asyncio.get_event_loop()` →
+  `asyncio.get_running_loop()` in `FocusManager._start_patience_timer`
+  (deprecated call path).
 
-Originally: inject_turn → InputClaim → background_task → ClientEvent (to
-validate `MicRouter` suspend/resume early). Post-pivot, `inject_turn` is
-simpler (a DIALOG Activity acquire), which weakens the "keep
-InputClaim early to de-risk" argument. Worth a fresh critic pass before
-starting Stage 2. Flag to resolve when we pick up Stage 2.
+**🟠 Defer to Stage 2 planning** (architectural concerns, not bugs):
+
+- **(#3) `_notify_safe` swallows all observer exceptions including bugs.**
+  Add `dev_event("focus_observer_failed", ...)` routing + richer context
+  (`was_foreground`, `had_pump_task`). Needs plumbing from FocusManager
+  to coordinator's `send_dev_event` — coordinator integration work,
+  book it with Stage 2.
+- **(#4) `_stop_content_stream` clears `self._content_obs = None` before
+  awaiting NONE.** Latent — reader-during-teardown gets stale view. Stage 2
+  FocusManager wiring restructures this path entirely (observer ref lives
+  in Activity, not coordinator), so fixing now is churn. Revisit at Stage 2.
+- **(#8) Test: reentrant `acquire()` from within observer callback.**
+  Docstring claims this is safe; no test locks it down. Stage 2 will
+  rely on it (inject_turn acquires DIALOG from within a tool handler).
+- **(#9) Test: same-channel LIFO stack semantics with patience > 0.**
+  Existing test only covers patience=0. Add A1 (patience=60s) →
+  displaced by A2 → A2 released → A1 re-promoted with correct call
+  history.
+- **(#10) `FocusManager.stop()` doesn't await observer-spawned follow-up
+  tasks.** Contract question: if a DialogObserver's `on_stop` kicks off
+  async work (storage write, etc.), `fm.stop()` returns before it
+  completes. Document "observers must not spawn unsupervised tasks
+  from on_stop" or add a join mechanism. Resolve at Stage 2 when
+  `inject_turn` adds real cleanup semantics.
+- **Design A — SpeakingState vs FocusManager authority contract.**
+  Two sources of truth for "is anyone speaking right now": DIALOG
+  channel's FG state (claimed the speaker) vs `SpeakingState.owner`
+  (actual audio flow). Today synced by convention. Critic recommends
+  writing the contract into `docs/architecture.md` explicitly:
+  `SpeakingState` = "client speaking indicator should be on";
+  `FocusManager` DIALOG FG = "a turn has claimed the speaker."
+  Do alongside Stage 2 when Activity↔SpeakingState relationship
+  becomes concrete.
+- **Design B — "Mechanical swap" claim in the pivot ADR is optimistic.**
+  Migrating from direct-drive observer to FocusManager-owned Activity
+  changes: `current_media_task` becomes None until first pump spawns
+  (async-acquire); `_content_obs` field goes away (query FocusManager
+  instead); closures currently capturing coordinator state may need
+  restructuring. Critic budgets **1-2 extra days in Stage 2** for this.
+
+**✅ Dismissed:**
+
+- **(Design C)** Critic flagged `AudioStream.content_type` as exposed to
+  skills but unexercised. Verified: `content_type` is NOT a public SDK
+  field. `ContentType` only lives in `focus/vocabulary.py`, framework-
+  internal. Non-issue.
+
+### What's left for the rest of T1.4 (post-pivot rescope)
+
+Stage 1 originally planned `inject_turn` + arbitration + ducking as one
+chunk. Post-pivot, that chunk breaks into smaller pieces — several
+shippable in isolation. Re-ordered by "smallest user-visible win":
+
+**Stage 1a — Must-fix commit (~70 min, queued)**. The 🔴 critic findings
+above, one focused commit, no behavior change beyond bug elimination.
+Unblocks everything downstream by removing the self-cancel landmine.
+
+**Stage 1b — Server-side duck PCM envelope (~1 day, queued).** Wire
+`ContentStreamObserver.on_focus_changed(BACKGROUND, MAY_DUCK)` to an
+actual gain ramp on outgoing PCM (instead of today's
+`focus.duck_not_implemented` log + fallback to pause). This is the
+cheapest test that the FocusManager-plus-observer substrate actually
+composes cleanly for a real multi-channel interaction. If it doesn't,
+we catch it on a 1-day diff instead of later. Validates:
+FOREGROUND→BACKGROUND→FOREGROUND patience path end-to-end.
+
+**Stage 1c — `inject_turn` MVP (~3 days, queued).** Wire
+`FocusManager.acquire(Activity(DIALOG, ...))` from
+`SkillContext.inject_turn()`. **One urgency tier only** (the
+"speak now, preempt whatever's playing" case). No queue, no TTL, no
+dedup, no `InjectedTurnHandle.wait_outcome()`. Just: skill calls
+`inject_turn(prompt)`, framework synthesizes a DIALOG-channel
+Activity, FocusManager preempts CONTENT, LLM narrates the prompt.
+Unblocks a reminder-skill MVP (`huxley-skill-reminders` T1.8).
+Validates cross-channel arbitration in production, not just tests.
+
+**Stage 1d — Hold queue + TTL + dedup (~2 days, queued).** Add
+CHIME_DEFER-equivalent semantics on top of 1c: `inject_turn(urgency=
+LOW_PRIORITY)` queues instead of preempting; `expires_after` drops
+from queue silently; `dedup_key` replaces on collision; next PTT
+drains FIFO. Needs `InjectedTurnHandle.wait_outcome()` to become
+useful (first consumer: medication reminder retry loop).
+
+**Stage 1e — `docs/observability.md` update (~30 min, queued).**
+Document the `focus.acquire`, `focus.release`, `focus.change`,
+`focus.patience_expired`, `focus.observer_failed`, `focus.observer_slow`
+events that shipped in Stage 1 Part 1 but aren't yet in the
+observability canon. Minor gap noted during doc realignment commit
+`9695e0f`.
+
+**Stage 2 — `InputClaim` + `MicRouter` wiring.** Unchanged in scope;
+see original Stage 2 section below. Open question (below) on whether
+it still follows Stage 1c/d or comes first.
+
+**Stage 3 — Supervised `background_task`.** Unchanged in scope.
+
+**Stage 4 — `ClientEvent` + `server_event` + capabilities handshake.**
+Unchanged in scope.
+
+### Open questions (resolve before picking up Stage 2)
+
+1. **Stage order post-pivot.** Originally: inject_turn → InputClaim →
+   background_task → ClientEvent (to validate `MicRouter` suspend/resume
+   early against a simpler `inject_turn`). Post-pivot, Stage 1c's
+   `inject_turn` MVP is simpler (a DIALOG Activity acquire via
+   FocusManager), which weakens the "keep InputClaim early to de-risk"
+   argument. Worth a fresh critic pass before starting Stage 2. **Flag
+   to resolve when we pick up Stage 2.**
+
+2. **SpeakingState authority contract** (Design A above). Must be
+   written down in `docs/architecture.md` before `inject_turn` MVP
+   (Stage 1c) lands — or Stage 1c re-opens the "who owns model_speaking"
+   question we punted on during the pivot. **Resolve during Stage 1c
+   design.**
+
+3. **Duck envelope location**: does the PCM gain ramp live on
+   `ContentStreamObserver` (per-observer implementation) or on a
+   shared `huxley.audio.ducking` module that any observer can reuse?
+   Decision deferred to Stage 1b kickoff. **Resolve during Stage 1b
+   design.**
 
 ### (Archived) original Stage 1 plan — `inject_turn` + arbitration + ducking
 
