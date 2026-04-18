@@ -9,6 +9,38 @@
   const mic = new MicCapture()
   const playback = new AudioPlayback()
 
+  // Persona list. Parsed from VITE_HUXLEY_PERSONAS=name1:url1,name2:url2.
+  // Falls back to a single AbuelOS entry pointing at the conventional
+  // dev port. Each entry is its own server process — start them with
+  // `HUXLEY_PERSONA=<name> HUXLEY_SERVER_PORT=<port> uv run huxley`.
+  type PersonaEntry = { name: string; url: string }
+  function parsePersonas(): PersonaEntry[] {
+    const raw = (import.meta.env.VITE_HUXLEY_PERSONAS as string | undefined) ?? ''
+    const fallback: PersonaEntry[] = [
+      { name: 'abuelos', url: `ws://${typeof window === 'undefined' ? 'localhost' : window.location.hostname}:8765` },
+    ]
+    if (!raw.trim()) return fallback
+    const entries = raw.split(',').map(s => s.trim()).filter(Boolean).map(pair => {
+      const idx = pair.indexOf(':')
+      if (idx === -1) return null
+      const name = pair.slice(0, idx).trim()
+      const url = pair.slice(idx + 1).trim()
+      return name && url ? { name, url } : null
+    }).filter((e): e is PersonaEntry => e !== null)
+    return entries.length > 0 ? entries : fallback
+  }
+  const personas = parsePersonas()
+  let selectedPersona = $state(personas[0]?.name ?? 'abuelos')
+
+  function handlePersonaChange(e: Event) {
+    const target = e.currentTarget as HTMLSelectElement
+    const next = personas.find(p => p.name === target.value)
+    if (next) {
+      selectedPersona = next.name
+      ws.switchPersona(next.url)
+    }
+  }
+
   // ONE button. Press-and-hold = talk. No other buttons exist. This matches
   // the production hardware (walky-talky with a single big button). Every
   // interaction — start a session, push-to-talk, interrupt the assistant
@@ -51,7 +83,8 @@
     )
     ws.setOnSetVolume((level) => playback.setVolume(level))
     mic.onFrame = (data) => ws.sendAudio(data)
-    ws.connect()
+    const initial = personas.find(p => p.name === selectedPersona) ?? personas[0]
+    ws.connect(initial?.url)
   })
 
   onDestroy(() => {
@@ -149,7 +182,20 @@
   <!-- Header -->
   <header class="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
     <div class="flex items-center gap-3">
-      <span class="text-lg font-semibold tracking-tight">AbuelOS</span>
+      <span class="text-lg font-semibold tracking-tight">Huxley</span>
+      {#if personas.length > 1}
+        <select
+          value={selectedPersona}
+          onchange={handlePersonaChange}
+          class="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200"
+        >
+          {#each personas as p (p.name)}
+            <option value={p.name}>{p.name}</option>
+          {/each}
+        </select>
+      {:else}
+        <span class="text-xs text-zinc-500">{selectedPersona}</span>
+      {/if}
     </div>
     <div class="flex items-center gap-2">
       <div class={cn(

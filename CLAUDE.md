@@ -15,18 +15,23 @@ Huxley/                 # repo root
 ├── pyproject.toml      # uv workspace root
 ├── packages/
 │   ├── sdk/            # huxley-sdk: skill author surface
-│   │   └── src/huxley_sdk/   # Skill, Tool*, SkillContext, SideEffect/AudioStream, SkillRegistry
+│   │   └── src/huxley_sdk/   # Skill, Tool*, SkillContext, SideEffect/AudioStream/PlaySound, audio.load_pcm_palette, SkillRegistry
 │   ├── core/           # huxley: framework runtime
 │   │   ├── src/huxley/       # app, session, turn, server, persona, constraints, loader, storage
 │   │   ├── tests/
 │   │   └── .env              # gitignored; HUXLEY_OPENAI_API_KEY etc
 │   └── skills/
 │       ├── audiobooks/       # huxley-skill-audiobooks (entry-point loaded)
+│       ├── news/             # huxley-skill-news (Open-Meteo + Google News RSS)
 │       └── system/           # huxley-skill-system (entry-point loaded)
 ├── personas/
-│   └── abuelos/              # canonical persona
-│       ├── persona.yaml      # version, name, voice, language, system_prompt, constraints, skills
-│       ├── data/             # gitignored: audiobook library + abuelos.db
+│   ├── abuelos/              # canonical persona — slow, warm, audio-only target
+│   │   ├── persona.yaml      # version, name, voice, language, system_prompt, constraints, skills
+│   │   ├── data/             # gitignored: audiobook library + abuelos.db
+│   │   ├── sounds/           # earcons (book_start.wav, book_end.wav, news_start.wav)
+│   │   └── README.md
+│   └── basicos/              # terse counter-persona — proves skills are persona-agnostic
+│       ├── persona.yaml
 │       └── README.md
 ├── scripts/
 │   └── migrate-data-to-persona.sh  # one-time move from legacy packages/core/data/
@@ -41,8 +46,9 @@ Huxley/                 # repo root
 │   ├── turns.md        # turn coordinator spec
 │   ├── decisions.md    # ADR log
 │   ├── roadmap.md      # framework + persona roadmaps
-│   ├── personas/{README,abuelos}.md
-│   ├── skills/{README,audiobooks}.md
+│   ├── personas/{README,abuelos,basicos}.md
+│   ├── skills/{README,audiobooks,news}.md
+│   ├── sounds.md       # sound UX architecture (PlaySound, AudioStream, earcons)
 │   └── research/sonic-ux.md
 └── CLAUDE.md           # this file
 ```
@@ -58,10 +64,13 @@ uv sync                                                    # install all workspa
 uv run ruff check packages/                                # lint
 uv run ruff format packages/                               # format
 uv run mypy packages/sdk/src packages/core/src             # strict type check
-uv run --package huxley-sdk pytest packages/sdk/tests                     # SDK tests (10)
-uv run --package huxley pytest packages/core/tests                        # framework tests (108)
-uv run --package huxley-skill-audiobooks pytest packages/skills/audiobooks/tests  # audiobooks skill (54)
-cd packages/core && uv run huxley                                         # run the server (loads .env from packages/core)
+uv run --package huxley-sdk pytest packages/sdk/tests                              # SDK tests (19)
+uv run --package huxley pytest packages/core/tests                                 # framework tests (113)
+uv run --package huxley-skill-audiobooks pytest packages/skills/audiobooks/tests   # audiobooks skill (55)
+uv run --package huxley-skill-news pytest packages/skills/news/tests               # news skill (18)
+cd packages/core && uv run huxley                                                  # run the server (loads .env from packages/core)
+# Run BasicOS in parallel for persona A/B testing:
+cd packages/core && HUXLEY_PERSONA=basicos HUXLEY_SERVER_PORT=8766 uv run huxley
 ```
 
 Web dev client (run from `web/`):

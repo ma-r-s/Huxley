@@ -69,16 +69,25 @@ ToolResult(
 ```
 
 - **`output`** is JSON text sent back to the LLM as the function-call output. The LLM narrates it to the user.
-- **`side_effect`** _(optional)_ is a `SideEffect` the framework runs after the model finishes speaking. Today there's one kind: `AudioStream(factory=...)`, where `factory` is a zero-arg callable returning an async iterator of PCM16 chunks. Future side-effect kinds (notifications, state updates) reuse the same shape. Skills with no side effect leave it `None`.
+- **`side_effect`** _(optional)_ is a `SideEffect` the framework runs around the model's response. Skills with no side effect leave it `None`. Available kinds:
+  - `AudioStream(factory, on_complete_prompt?, completion_silence_ms?)` — long-running PCM stream (audiobook playback). Factory fires at the turn's terminal barrier.
+  - `PlaySound(pcm)` — short one-shot chime that plays just before the model's response audio (used by info tools that want a sonic intro — e.g. news chime). See [`docs/sounds.md`](../sounds.md).
+  - `CancelMedia()` — stop the running media task immediately (pause/stop tools).
+  - `SetVolume(level)` — forward a volume change to the client.
 
 ### Info tools vs side-effect tools
 
-| Kind            | `side_effect`          | Examples                                     | Framework behavior                                                                                                                            |
-| --------------- | ---------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Info**        | `None`                 | `search_audiobooks`, `get_current_time`      | Coordinator requests a follow-up response so the model can narrate the result. Multi-round chained turn.                                      |
-| **Side-effect** | `AudioStream(factory)` | `play_audiobook`, `audiobook_control` (seek) | Coordinator latches the AudioStream; after the model's terminal `response.done`, the factory fires and streams PCM through the audio channel. |
+| Kind                         | `side_effect`          | Examples                                     | Framework behavior                                                                                                                            |
+| ---------------------------- | ---------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Info (no chime)**          | `None`                 | `search_audiobooks`, `get_current_time`      | Coordinator requests a follow-up response so the model can narrate the result. Multi-round chained turn.                                      |
+| **Info (with chime)**        | `PlaySound(pcm)`       | `get_news`                                   | Same as above + the chime is sent right after `request_response()`, hitting the WebSocket ahead of the model's audio (FIFO).                  |
+| **Audio-stream side-effect** | `AudioStream(factory)` | `play_audiobook`, `audiobook_control` (seek) | Coordinator latches the AudioStream; after the model's terminal `response.done`, the factory fires and streams PCM through the audio channel. |
 
-The model is told (via the tool description) to **pre-narrate** the side effect — e.g. _"Putting on the book for you."_ — _before_ calling the tool. The framework guarantees the narration plays before the factory does.
+The model is told (via the tool description) to **pre-narrate** the side effect — e.g. _"Putting on the book for you."_ or _"a ver, un momento"_ — _before_ calling the tool. The framework guarantees the narration plays before the factory does.
+
+### Loading sound files
+
+The SDK ships `huxley_sdk.audio.load_pcm_palette(directory, roles)` for skills that bundle WAV files (chimes, tones). It expects PCM16 / 24 kHz / mono and silently skips wrong-format files — wrong-format would play as garbage through the channel anyway. Both audiobooks (`book_start.wav`, `book_end.wav`) and news (`news_start.wav`) use it.
 
 ### The factory closure pattern
 

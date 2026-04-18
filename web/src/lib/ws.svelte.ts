@@ -118,21 +118,33 @@ export function createWsStore() {
     ].slice(0, 50);
   }
 
-  function connect() {
-    const url = `ws://${window.location.hostname}:8765`;
-    const ws = new WebSocket(url);
+  // Active WS URL. Initialized by `connect(url)`. Auto-reconnect on
+  // unexpected disconnect re-uses this; persona switching reassigns it.
+  let activeUrl: string | null = null;
+  // Set true while the user is intentionally switching personas so the
+  // socket close handler doesn't kick off the 2s reconnect to the old URL.
+  let switching = false;
+
+  function connect(url?: string) {
+    activeUrl = url ?? activeUrl ?? `ws://${window.location.hostname}:8765`;
+    const ws = new WebSocket(activeUrl);
 
     ws.onopen = () => {
       connected = true;
-      pushStatus("Connected to backend");
+      pushStatus(`Connected to ${activeUrl}`);
     };
 
     ws.onclose = () => {
       connected = false;
       socket = null;
       cancelSilenceTimer("socket_close");
+      if (switching) {
+        // Caller is switching personas — let them call connect() with the
+        // new URL; don't auto-reconnect to the old one.
+        return;
+      }
       pushStatus("Disconnected — retrying in 2s…");
-      setTimeout(connect, 2000);
+      setTimeout(() => connect(), 2000);
     };
 
     ws.onmessage = (ev) => {
@@ -206,12 +218,38 @@ export function createWsStore() {
     send({ type: "client_event", event, data });
   }
 
+  function switchPersona(url: string) {
+    if (url === activeUrl && socket !== null) {
+      return; // already connected to this URL
+    }
+    pushStatus(`Switching to ${url}…`);
+    switching = true;
+    appState = "IDLE";
+    transcript = [];
+    devEvents = [];
+    statusLog = statusLog.slice(0, 5); // keep a few lines for context
+    cancelSilenceTimer("persona_switch");
+    if (socket !== null) {
+      socket.close();
+    }
+    activeUrl = url;
+    // Yield to the event loop so the close handler runs before we
+    // open the new connection.
+    setTimeout(() => {
+      switching = false;
+      connect(url);
+    }, 50);
+  }
+
   return {
     get connected() {
       return connected;
     },
     get appState() {
       return appState;
+    },
+    get activeUrl() {
+      return activeUrl;
     },
     get modelSpeaking() {
       return modelSpeaking;
@@ -226,6 +264,7 @@ export function createWsStore() {
       return devEvents;
     },
     connect,
+    switchPersona,
     pushStatus,
     setOnAudio: (fn: (data: string) => void) => {
       _onAudio = fn;

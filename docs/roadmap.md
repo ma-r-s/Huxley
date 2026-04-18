@@ -29,6 +29,9 @@ Make Huxley what it claims to be in [`vision.md`](./vision.md): a framework anyo
 - ✅ **Rename / namespace cleanup**: repo path and Python namespace both on `huxley`; _AbuelOS_ is the persona.
 - ✅ **Sound UX layer (server-side)** — `AudioStream` carries `on_complete_prompt` + `completion_silence_ms`; coordinator creates a synthetic IN_RESPONSE turn for the LLM-narrated end-of-content announcement, fires `request_response` BEFORE the silence buffer so model latency overlaps with silence playback. Skill loads sound palette via `wave.open()`. Persona owns `sounds_path` / `sounds_enabled` / `silence_ms` / `on_complete_prompt`. Full design + critic-list state in [`sounds.md`](./sounds.md).
 - ✅ **Sound UX layer (client-side)** — thinking tone at 120Hz (out of vocal band, can't mask speech); silence threshold raised to 1500ms (was 400ms — over-triggered constantly); descending 660→330Hz error chime fires on session drop so a blind user can distinguish "device crashed" from "still working." Stage D in [`sounds.md`](./sounds.md).
+- ✅ **`PlaySound` SideEffect primitive + shared `huxley_sdk.audio` helper** — info tools can emit a one-shot chime that lands on the WebSocket ahead of the model's response audio (FIFO). Audiobooks + news both use it; news skill (`get_news`) is the canonical example.
+- ✅ **Second first-party skill (`huxley-skill-news`)** — proves the persona-agnostic abstraction. Same skill, totally different audio for AbuelOS (slow + chime) vs BasicOS (terse + no chime). See [`skills/news.md`](./skills/news.md) and [`personas/basicos.md`](./personas/basicos.md).
+- ✅ **Web UI persona dropdown** — `web/.env.local`'s `VITE_HUXLEY_PERSONAS` lists `name:url` pairs; the header dropdown switches the active WebSocket connection cleanly.
 - [P1] **Skill SDK README + cookbook**: a third-party skill author can write a working skill in under 30 minutes with no Huxley-internals knowledge.
 
 ### Later
@@ -36,7 +39,6 @@ Make Huxley what it claims to be in [`vision.md`](./vision.md): a framework anyo
 - [P1] **Proactive notifications** (`ctx.notify(text)`): the single missing primitive that prevents reminders / inbound-message skills today. SDK gains a method that injects a synthetic system turn through `SessionManager`; protocol gains a server-initiated turn-start message. Should land before AbuelOS-v∞ work begins. See [`extensibility.md`](./extensibility.md) for the gap analysis.
 - [P1] **Per-skill secret interpolation** in `persona.yaml`: support `${HUXLEY_TELEGRAM_TOKEN}` so personas declare the shape of the secret without storing it. Decide before stage 4 ships.
 - [P2] **Background-task pattern for skills** (BLE, MQTT, polling daemons): formalize the "skill spawns an asyncio task in setup()" convention into an SDK helper so the framework can supervise / restart / log task crashes. Today it works but the framework is blind to failures.
-- [P2] **`PlaySound` framework primitive** — when the second skill needs a chime (system notifications, error tones), extract the audiobooks skill's WAV-loading + PCM-injection into a reusable framework helper. Premature until the second use case lands.
 - **Voice provider abstraction**: extract OpenAI Realtime as one implementation of a `VoiceProvider` interface. Trigger: a credible second provider exists. Not speculative.
 - **More side-effect kinds**: state changes, image output. Trigger: a real skill needs them.
 - **Skill discovery aids**: `huxley list-installed-skills`, `huxley enable foo` CLIs that mutate `persona.yaml`. Polish, not blocking anything.
@@ -75,11 +77,11 @@ The first persona Huxley runs in production. Spec lives at [`personas/abuelos.md
 
 ### v2 — next skills
 
-Once AbuelOS v1 is stable. Each is its own `huxley-skill-*` package.
+Each is its own `huxley-skill-*` package.
 
-1. **`huxley-skill-news`** — read headlines from a configurable source
+1. ✅ **`huxley-skill-news`** — Open-Meteo + Google News RSS, persona-agnostic. See [`skills/news.md`](./skills/news.md).
 2. **`huxley-skill-music`** — streaming radio and local music
-3. **`huxley-skill-messaging`** — outbound text to a family/caretaker contact via WhatsApp or voice memo. **This is the concrete escape hatch that makes the `never_say_no` constraint more than a verbal promise.**
+3. **`huxley-skill-messaging`** — outbound text to a contact via WhatsApp or voice memo. **This is the concrete escape hatch that makes the `never_say_no` constraint more than a verbal promise.**
 4. **`huxley-skill-contacts`** — config-driven contact list that messaging depends on
 
 ### v∞ — when firmware lands

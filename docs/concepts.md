@@ -68,9 +68,16 @@ A `ToolResult` has two parts:
 
 **Something a skill produces beyond text.**
 
-Some tools have observable effects: an audiobook starts playing, a notification fires, a light turns off. These are side effects. The framework sequences them — they fire _after_ the agent finishes speaking, never during, so the user always hears the acknowledgement before the thing happens.
+Some tools have observable effects: an audiobook starts playing, a notification fires, a light turns off. These are side effects. The framework sequences them — they fire _after_ the agent finishes speaking (or, in the case of pre-response chimes, immediately before), never colliding with model speech mid-word, so the user always hears one stream at a time.
 
-Today the only side effect kind is `AudioStream` (for audiobook playback). The architecture is designed so other kinds — `Notification`, `StateChange`, future ones — can be added without touching skills that don't use them.
+Side effect kinds today:
+
+- **`AudioStream`** — long-running PCM byte stream (audiobook playback). Coordinator invokes the factory at the turn's terminal barrier.
+- **`PlaySound`** — short one-shot PCM clip (news-intro chime, etc.) for info tools that want a sonic cue marking "I'm responding now." Coordinator queues the bytes right after firing `request_response()` so the chime hits the WebSocket ahead of the model's audio deltas (FIFO).
+- **`CancelMedia`** — stop the running media task immediately (for pause/stop tools).
+- **`SetVolume`** — forward a volume command to the client.
+
+The architecture is designed so other kinds — `Notification`, `StateChange`, future ones — can be added without touching skills that don't use them.
 
 ## Factory
 

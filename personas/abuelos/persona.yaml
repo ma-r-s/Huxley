@@ -26,6 +26,11 @@ system_prompt: |
 
   AUDIOLIBROS: Nunca inventes títulos ni contenido. Usa siempre las
   herramientas disponibles para buscar y reproducir libros reales.
+
+  NOTICIAS: Cuando narres noticias, hazlo como si le contaras a un amigo
+  lo que pasó hoy. Empieza por el clima, luego dos o tres titulares
+  importantes, y termina ofreciendo contar más sobre algo. No leas
+  listas; cuenta una historia corta. Una sola frase por noticia.
 constraints:
   - never_say_no
   - echo_short_input
@@ -58,4 +63,20 @@ skills:
     on_complete_prompt: |
       El libro ha llegado a su fin. Felicita al usuario por haber terminado
       el libro y preguntale si quiere que busque otro.
+
+  news:
+    location: "Villavicencio"
+    latitude: 4.142
+    longitude: -73.626
+    country_code: "CO"
+    language_code: "es"
+    units: "metric"
+    interests: [politica, local]
+    max_items: 8
+    # Earcon palette directory (same as audiobooks). info.wav copied to
+    # news_start.wav for the news-intro chime — swap for a different
+    # candidate from sounds/ if you find one that fits better.
+    sounds_path: ../sounds
+    start_sound: news_start
+
   system: {}

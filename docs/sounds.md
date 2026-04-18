@@ -336,9 +336,9 @@ Sounds that are tightly coupled to a specific audio stream: book_start and book_
 
 **Trade-off**: The book_start earcon yields before any positioning logic can fail. If `player.stream()` raises on the first chunk, the user has already heard the start chime. Acceptable: the error handler will produce a spoken error message anyway.
 
-### Layer 2 — `PlaySound(SideEffect)` (next)
+### Layer 2 — `PlaySound(SideEffect)` ✅
 
-A new `SideEffect` kind for turn-boundary sounds that aren't part of a stream:
+Shipped 2026-04-18 alongside the news skill (the second skill that needed a chime). The framework-level primitive:
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -347,9 +347,11 @@ class PlaySound(SideEffect):
     pcm: bytes  # raw PCM16 24kHz mono
 ```
 
-Use case: the `system` skill wants to play a notification chime when a timer fires. The coordinator handles `PlaySound` by yielding the bytes through `send_audio`, then asking for a follow-up response. Same pattern as `AudioStream` but no factory — just bytes.
+How the coordinator wires it: when a tool call returns `ToolResult(side_effect=PlaySound(pcm))`, the coordinator latches the bytes on the current Turn (`pending_play_sound`) and marks `needs_follow_up = True`. After `on_response_done` fires `request_response()` for the follow-up round, the chime PCM is sent via `_send_audio` immediately — landing on the WebSocket ahead of the model's audio deltas (FIFO ordering). User hears: chime → model voice. Mutually exclusive with `AudioStream` on a given `ToolResult` (`side_effect` is one field). Cleared on interrupt; skipped silently if `response_cancelled` flips before dispatch.
 
-Not built yet. Add when a skill actually needs it.
+The shared WAV-loading helper landed alongside it as `huxley_sdk.audio.load_pcm_palette(directory, roles)` — used by both audiobooks and news.
+
+Used by: news skill (`news_start` chime, persona-opt-in via `start_sound` config).
 
 ### Layer 3 — Framework-level state machine sounds (later)
 
@@ -414,7 +416,7 @@ These are client changes only. They do not affect the server or the WebSocket pr
 ### Open follow-up
 
 - [ ] Replace Wii BIOS earcons with CC0 / generated sounds (synth via numpy or download from freesound.org). Personal-use only until done.
-- [ ] Extract WAV-loading + PCM-injection into a framework `PlaySound` primitive when a second skill needs chimes (deferred — premature today).
+- [x] Extract WAV-loading + PCM-injection into a framework `PlaySound` primitive — shipped 2026-04-18 with news skill (`huxley_sdk.audio.load_pcm_palette`, `huxley_sdk.PlaySound`).
 
 ---
 
