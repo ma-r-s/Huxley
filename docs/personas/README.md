@@ -58,7 +58,7 @@ skills:
     library: audiobooks
   system: {}
   weather:
-    location: "Bogotá, Colombia"
+    location: "Madrid"
     units: metric
 ```
 

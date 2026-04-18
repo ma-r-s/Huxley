@@ -174,8 +174,8 @@ class TestSideEffectToolRoundTrip:
         # Turn flow
         await _commit_turn(coordinator)
 
-        # Pre-narration ("Le pongo el libro, don.")
-        await provider.emit_audio_delta(b"le pongo el libro")
+        # Pre-narration ("Ahí le pongo el libro.")
+        await provider.emit_audio_delta(b"ahi le pongo el libro")
         assert mocks["send_model_speaking"].await_args.args == (True,)
 
         # Tool call

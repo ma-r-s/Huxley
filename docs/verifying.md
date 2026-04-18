@@ -87,7 +87,7 @@ Open `http://localhost:5173`. You should see:
 ## Smoke test 1 — info tool path (`get_current_time`)
 
 1. **Hold** the PTT button, say _"¿qué hora es?"_, **release**.
-2. Expected: the agent replies with the current time in Colombian Spanish.
+2. Expected: the agent replies with the current time in Spanish.
 
 Watch the log for:
 
@@ -107,7 +107,7 @@ Two `response_done` events confirm the chained-round behavior: first round calls
 Requires at least one `.m4b`/`.mp3` in `personas/abuelos/data/audiobooks/`.
 
 1. Hold, say _"reproduce [title or author]"_ or _"sigue con el libro"_, release.
-2. Expected: the agent says something brief (_"Le pongo ..., don."_), then the book audio starts playing.
+2. Expected: the agent says something brief (_"Ahí le pongo el libro."_), then the book audio starts playing.
 
 Watch the log for:
 

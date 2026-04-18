@@ -141,7 +141,7 @@ Tests hitting the OpenAI Realtime API or real `ffmpeg` live in `packages/core/te
 - **The framework grows slowly.** Stable surface area for skill authors matters more than feature count. New abstractions added only when a real use case forces them — never speculatively.
 - **Personas can experiment freely.** Persona-level changes (the AbuelOS persona's prompt, its skill list, its constraints) are cheap. Try things; iterate.
 - **Skills opt into persona constraints, not the other way around.** A skill targeting AbuelOS should respect `never_say_no`. A skill targeting a different persona may not need to.
-- For the AbuelOS persona specifically: every user-facing failure must have an audio surface. Grandpa is blind — visual-only failure modes don't exist for him.
+- For the AbuelOS persona specifically: every user-facing failure must have an audio surface. The target user is blind — visual-only failure modes don't exist for them.
 
 ## Decisions
 

@@ -40,7 +40,7 @@ function nextId() {
 // 1500ms threshold before filling silence with the thinking-tone drone.
 // 400ms (the original) over-triggered: normal model first-token latency
 // (400-800ms typical, 2-3s worst case) was firing the tone constantly,
-// teaching grandpa to treat it as background noise. 1500ms means the tone
+// teaching the user to treat it as background noise. 1500ms means the tone
 // fires only when something's actually wrong, so its presence still
 // communicates "still working" instead of "always on."
 const SILENCE_TIMEOUT_MS = 1500;

@@ -265,7 +265,7 @@ ON_COMPLETE_PROMPT = (
 )
 ```
 
-The model receives this as a user utterance, applies the persona constraints (`never_say_no`, the warm tone), and produces a natural spoken response — something like _"¡Ya terminó el libro! ¿Quiere que le ponga otro, don?"_
+The model receives this as a user utterance, applies the persona constraints (`never_say_no`, the warm tone), and produces a natural spoken response — something like _"¡Ya terminó el libro! ¿Quiere que le ponga otro?"_
 
 ### Turn state machine implications
 

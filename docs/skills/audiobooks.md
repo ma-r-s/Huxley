@@ -148,7 +148,7 @@ The skill lives in [`packages/skills/audiobooks/src/huxley_skill_audiobooks/skil
 
 When the user says _"sigue con el libro"_ / _"el de anoche"_ / similar:
 
-1. **Exactly one book** has a saved position → auto-resume, no confirmation. Say _"sigo con 'X' donde lo dejó, don."_
+1. **Exactly one book** has a saved position → auto-resume, no confirmation. Say _"sigo con 'X' donde lo dejó."_
 2. **Multiple books** have saved positions → ask _"¿quiere seguir con 'X' o con 'Y'?"_
 3. **No book** has a saved position → _"no hay ningún libro a medias. ¿Busco algo?"_ — and wait.
 
@@ -193,16 +193,16 @@ async def stream():
 
 Every tool return path must include a `message` field written for the LLM narrator, in the tone required by [`../vision.md#persona`](../vision.md#persona).
 
-| Scenario                                            | Return payload                                                                                                            |
-| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Search with zero results                            | `{ results: [], available_count: N, message: "No encontré nada con esas palabras, don. ¿Quiere que le diga qué tengo?" }` |
-| Search with results                                 | `{ results: [...], message: "Encontré estos libros…" }`                                                                   |
-| Play: book not found                                | `{ playing: false, closest: {...}, message: "No tengo ese exacto. Lo más parecido es 'X'. ¿Pongo ese?" }`                 |
-| Play: probe / decode error                          | `{ playing: false, message: "Algo pasó con el reproductor. Déjeme intentarlo otra vez." }`                                |
-| Resume last: nothing pending                        | `{ resumed: false, message: "No tiene ningún libro a medias. ¿Busco algo?" }`                                             |
-| Resume last: ambiguous (N candidates)               | `{ resumed: false, candidates: [...], message: "Tiene varios a medias. ¿Sigue con 'X' o con 'Y'?" }`                      |
-| get_progress: no active or last book                | `{ message: "No hay ningún libro activo. ¿Quiere que busque uno?" }`                                                      |
-| Control: invalid action (shouldn't hit, enum-gated) | `{ ok: false, message: "No entendí qué hacer. ¿Pauso o sigo?" }`                                                          |
+| Scenario                                            | Return payload                                                                                                       |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Search with zero results                            | `{ results: [], available_count: N, message: "No encontré nada con esas palabras. ¿Quiere que le diga qué tengo?" }` |
+| Search with results                                 | `{ results: [...], message: "Encontré estos libros…" }`                                                              |
+| Play: book not found                                | `{ playing: false, closest: {...}, message: "No tengo ese exacto. Lo más parecido es 'X'. ¿Pongo ese?" }`            |
+| Play: probe / decode error                          | `{ playing: false, message: "Algo pasó con el reproductor. Déjeme intentarlo otra vez." }`                           |
+| Resume last: nothing pending                        | `{ resumed: false, message: "No tiene ningún libro a medias. ¿Busco algo?" }`                                        |
+| Resume last: ambiguous (N candidates)               | `{ resumed: false, candidates: [...], message: "Tiene varios a medias. ¿Sigue con 'X' o con 'Y'?" }`                 |
+| get_progress: no active or last book                | `{ message: "No hay ningún libro activo. ¿Quiere que busque uno?" }`                                                 |
+| Control: invalid action (shouldn't hit, enum-gated) | `{ ok: false, message: "No entendí qué hacer. ¿Pauso o sigo?" }`                                                     |
 
 ### Edge cases
 

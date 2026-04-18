@@ -44,7 +44,7 @@ Not every OpenAI account has Realtime beta access. A reviewer without it can ver
 
 ### 5. Spanish-first canonical persona
 
-The bundled persona is AbuelOS — Spanish, Colombian register, Bogotá timezone. A reviewer expecting English-first docs will notice. The persona schema is language-agnostic; only the shipped example is Spanish. A template English persona would help, but hasn't been written yet.
+The bundled persona is AbuelOS — Spanish-language, targeting an elderly blind user. A reviewer expecting English-first docs will notice. The persona schema is language-agnostic; only the shipped example is Spanish. A template English persona would help, but hasn't been written yet.
 
 ### 6. Python 3.13 requirement is tight
 
