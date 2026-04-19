@@ -286,6 +286,183 @@ class TestClaimVsInjectTurn:
         assert ("request_response",) in provider.sent
 
 
+class TestToolDispatchedClaim:
+    """`ToolResult.side_effect = InputClaim(...)` path — commit 3c.
+
+    A tool returning an `InputClaim` latches it on the current turn.
+    At the terminal barrier (`_apply_side_effects`), the framework
+    starts it via `start_input_claim`, dropping any pending audio
+    stream (claim wins over content). Matches the AudioStream timing
+    pattern so the model's pre-narration ("starting recording now")
+    plays before the mic swaps.
+    """
+
+    async def _run_tool_turn(
+        self,
+        coordinator: TurnCoordinator,
+        claim: InputClaim,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        """Helper: fire a user turn whose single tool call returns an
+        InputClaim side-effect, drive the state machine through commit →
+        response → tool-dispatch → response.done so the terminal barrier
+        runs and dispatches the claim."""
+        mocks["dispatch_tool"].return_value = ToolResult(output="{}", side_effect=claim)
+        await coordinator.on_ptt_start()
+        assert coordinator.current_turn is not None
+        coordinator.current_turn.user_audio_frames = 60
+        await coordinator.on_ptt_stop()
+        # Tool dispatched — latches the claim on the turn.
+        await coordinator.on_tool_call("call_1", "start_record", {})
+        assert coordinator.current_turn is not None
+        assert coordinator.current_turn.pending_input_claim is claim
+        # Drive to terminal barrier.
+        await coordinator.on_audio_done()
+        await coordinator.on_response_done()
+
+    async def test_latches_pending_input_claim_on_tool_dispatch(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        claim = InputClaim(on_mic_frame=AsyncMock())
+        mocks["dispatch_tool"].return_value = ToolResult(output="{}", side_effect=claim)
+        await coordinator.on_ptt_start()
+        assert coordinator.current_turn is not None
+        coordinator.current_turn.user_audio_frames = 60
+        await coordinator.on_ptt_stop()
+        await coordinator.on_tool_call("call_1", "start_record", {})
+        assert coordinator.current_turn is not None
+        assert coordinator.current_turn.pending_input_claim is claim
+
+    async def test_starts_claim_at_terminal_barrier(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        on_mic = AsyncMock()
+        on_end = AsyncMock()
+        claim = InputClaim(on_mic_frame=on_mic, on_claim_end=on_end)
+        await self._run_tool_turn(coordinator, claim, mocks, provider)
+        # Claim started — observer exists + mic swapped + provider suspended.
+        assert coordinator._claim_obs is not None
+        assert provider.is_suspended is True
+        await coordinator._mic_router.dispatch(b"\x01")
+        on_mic.assert_awaited_once_with(b"\x01")
+
+    async def test_claim_wins_over_audio_stream_in_same_turn(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        """Rare edge case: one turn produces both an AudioStream and an
+        InputClaim (two tool calls, chained). Latest tool wins per side-
+        effect type, and claim wins over streams at the barrier."""
+        # Craft a tool that returns an audio stream first, then the next
+        # tool returns a claim. Simulate by manually populating the turn.
+        claim = InputClaim(on_mic_frame=AsyncMock())
+
+        async def _factory() -> AsyncIterator[bytes]:
+            yield b"\x00\x01"
+
+        from huxley_sdk import AudioStream
+
+        stream = AudioStream(factory=_factory)
+
+        mocks["dispatch_tool"].return_value = ToolResult(output="{}", side_effect=stream)
+        await coordinator.on_ptt_start()
+        assert coordinator.current_turn is not None
+        coordinator.current_turn.user_audio_frames = 60
+        await coordinator.on_ptt_stop()
+        await coordinator.on_tool_call("call_1", "play", {})
+
+        # Second tool returns the claim — overwrite dispatch_tool.
+        mocks["dispatch_tool"].return_value = ToolResult(output="{}", side_effect=claim)
+        await coordinator.on_tool_call("call_2", "record", {})
+        assert coordinator.current_turn is not None
+        assert len(coordinator.current_turn.pending_audio_streams) == 1
+        assert coordinator.current_turn.pending_input_claim is claim
+
+        await coordinator.on_audio_done()
+        await coordinator.on_response_done()
+
+        # Claim won: observer alive, content stream NOT started.
+        assert coordinator._claim_obs is not None
+        assert coordinator._content_obs is None
+
+    async def test_preempt_inject_drops_pending_claim_and_fires_on_end(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        """If a PREEMPT inject_turn is queued while the user's turn is
+        latching a claim, the terminal barrier fires the inject instead
+        of the claim. The dropped claim's `on_claim_end(PREEMPTED)`
+        still fires so the skill sees one lifecycle callback."""
+        from huxley_sdk import InjectPriority
+
+        on_end = AsyncMock()
+        claim = InputClaim(on_mic_frame=AsyncMock(), on_claim_end=on_end)
+        mocks["dispatch_tool"].return_value = ToolResult(output="{}", side_effect=claim)
+
+        # Start turn, dispatch tool (latches claim), then queue a PREEMPT
+        # before terminal barrier fires.
+        await coordinator.on_ptt_start()
+        assert coordinator.current_turn is not None
+        coordinator.current_turn.user_audio_frames = 60
+        await coordinator.on_ptt_stop()
+        await coordinator.on_tool_call("call_1", "start_record", {})
+
+        # Queue a PREEMPT — since current_turn is active, inject_turn queues.
+        await coordinator.inject_turn("pastilla", priority=InjectPriority.PREEMPT)
+        assert len(coordinator._injected_queue) == 1
+
+        # Barrier fires. PREEMPT drains, claim dropped.
+        await coordinator.on_audio_done()
+        await coordinator.on_response_done()
+
+        # Dropped claim's on_end fired with PREEMPTED.
+        on_end.assert_awaited_once_with(ClaimEndReason.PREEMPTED)
+        # Claim never started — no observer.
+        assert coordinator._claim_obs is None
+        # Injected turn took over (sent conversation_message).
+        assert ("send_conversation_message", "pastilla") in provider.sent
+
+    async def test_interrupt_before_barrier_drops_pending_claim_silently(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        """If PTT fires between tool dispatch and terminal barrier, the
+        turn is interrupted and the pending claim never starts. Skill's
+        on_claim_end does NOT fire — from the skill's perspective the
+        tool never fully succeeded (interrupt before terminal)."""
+        on_end = AsyncMock()
+        claim = InputClaim(on_mic_frame=AsyncMock(), on_claim_end=on_end)
+        mocks["dispatch_tool"].return_value = ToolResult(output="{}", side_effect=claim)
+
+        await coordinator.on_ptt_start()
+        assert coordinator.current_turn is not None
+        coordinator.current_turn.user_audio_frames = 60
+        await coordinator.on_ptt_stop()
+        await coordinator.on_tool_call("call_1", "start_record", {})
+        assert coordinator.current_turn is not None
+        assert coordinator.current_turn.pending_input_claim is claim
+
+        # Interrupt before the barrier.
+        await coordinator.interrupt()
+
+        # Claim never started, on_end never called.
+        assert coordinator._claim_obs is None
+        on_end.assert_not_awaited()
+
+
 class TestClaimFailsIfRouterBusy:
     async def test_mic_router_busy_fires_error_end(
         self,

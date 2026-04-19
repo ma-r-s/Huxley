@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 if TYPE_CHECKING:
-    from huxley_sdk import AudioStream, PlaySound
+    from huxley_sdk import AudioStream, InputClaim, PlaySound
 
 
 class TurnState(Enum):
@@ -65,6 +65,14 @@ class Turn:
     # response audio (FIFO on the WebSocket). Latest tool wins — a new
     # PlaySound on a chained tool call replaces an earlier one.
     pending_play_sound: PlaySound | None = None
+    # Latched InputClaim from a tool call (T1.4 Stage 2 commit 3c).
+    # Mutually exclusive with `pending_audio_streams` semantically — a
+    # tool that latches the mic isn't also playing a book — but the
+    # coordinator enforces: at terminal barrier, if `pending_input_claim`
+    # is set, audio streams are dropped (the claim wins) and the claim
+    # is started via `start_input_claim`. Last tool wins if multiple
+    # claims are returned (same pattern as `pending_play_sound`).
+    pending_input_claim: InputClaim | None = None
     # Summary tracking — emitted as coord.turn_summary at end-of-turn.
     started_at: float = field(default_factory=lambda: time.monotonic())
     tool_calls: int = 0

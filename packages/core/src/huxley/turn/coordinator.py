@@ -383,6 +383,14 @@ class TurnCoordinator:
             # Latest tool wins — overwrites any earlier pending PlaySound.
             self.current_turn.pending_play_sound = result.side_effect
             self.current_turn.needs_follow_up = True
+        elif isinstance(result.side_effect, InputClaim):
+            # Latch the claim for the terminal barrier. The claim latches
+            # the mic + suspends the LLM provider, so the model's speech
+            # for THIS turn must finish first — that's why we dispatch at
+            # the barrier, same timing as AudioStream. Latest-wins: a
+            # chained tool returning a second claim replaces the first;
+            # the dispatch path only ever starts one.
+            self.current_turn.pending_input_claim = result.side_effect
         else:
             # Tool calls without a side-effect that is dispatched serially.
             # If a future persona needs parallel dispatch (multiple I/O-heavy
@@ -506,6 +514,7 @@ class TurnCoordinator:
         if self.current_turn is None:
             return
         self.current_turn.pending_audio_streams.clear()
+        self.current_turn.pending_input_claim = None
         self.current_turn.state = TurnState.INTERRUPTED
         self.current_turn = None
         # Defensive invariant — see matching pattern in `interrupt()`.
@@ -539,10 +548,16 @@ class TurnCoordinator:
 
         # 1. Drop flag FIRST
         self.response_cancelled = True
-        # 2. Drop pending audio streams + any latched PlaySound chime
+        # 2. Drop pending audio streams + any latched PlaySound chime +
+        #    any latched InputClaim (tool returned a claim but interrupt
+        #    fires before the terminal barrier — claim never starts).
+        #    Skill's on_claim_end doesn't fire here because from the
+        #    skill's perspective the interrupt-at-tool-dispatch is the
+        #    same as the tool never having succeeded.
         if self.current_turn is not None:
             self.current_turn.pending_audio_streams.clear()
             self.current_turn.pending_play_sound = None
+            self.current_turn.pending_input_claim = None
         # 3. Cancel any live content stream (pump task -> done) BEFORE
         #    force_release. If the pump is mid-`_factory_send_audio`
         #    during force_release's await, it can see `is_speaking=False`,
@@ -606,6 +621,7 @@ class TurnCoordinator:
             return
 
         streams = self.current_turn.pending_audio_streams
+        claim = self.current_turn.pending_input_claim
         turn_id = self._tid()
         self.current_turn.state = TurnState.APPLYING_FACTORIES
 
@@ -619,7 +635,10 @@ class TurnCoordinator:
         # Otherwise the stream's natural-completion callback can fire during
         # one of these awaits and see `current_turn != None`, falsely
         # concluding a new turn started.
-        await self._emit_turn_summary(reason="ended", spawned_audio_stream=bool(streams))
+        await self._emit_turn_summary(
+            reason="ended",
+            spawned_audio_stream=bool(streams),
+        )
         await self._log.ainfo("coord.turn_ended")
         # Release any DIALOG Activity this turn held (injected turn finishing
         # normally). Content Activities are released by `_stop_content_stream`
@@ -634,40 +653,67 @@ class TurnCoordinator:
         self._bind_turn()
         await self._send_status(self._status["ready"])
 
-        await self._dispatch_post_turn(streams, turn_id)
+        await self._dispatch_post_turn(streams, claim, turn_id)
 
     async def _dispatch_post_turn(
         self,
         streams: list[AudioStream],
+        claim: InputClaim | None,
         turn_id: str | None,
     ) -> None:
         """Decide what happens after a turn ends.
 
-        Three mutually-exclusive branches:
+        Mutually-exclusive branches in priority order:
 
-        1. **PREEMPT over content** — if the queue has a PREEMPT entry
-           and this turn spawned content, fire the PREEMPT and drop
-           the stream. PREEMPT callers accept the tradeoff of dropping
-           user-requested content (book, radio, etc.) to surface a
-           time-critical event (medication, safety). NORMAL entries
-           ahead of it keep their place.
-        2. **Content wins** — if no PREEMPT is waiting, start the
-           pending stream.
-        3. **Quiet moment** — no stream, no PREEMPT: drain the head of
-           the queue (FIFO, any priority). Only one per turn-end; the
-           injected turn itself ends via `_apply_side_effects` again
-           and this branch re-fires for the next queued item.
+        1. **PREEMPT over content/claim** — if the queue has a PREEMPT
+           entry and this turn spawned content OR latched a claim, fire
+           the PREEMPT and drop both. PREEMPT callers accept the tradeoff
+           of dropping user-requested work (audiobook, voice memo,
+           incoming call) to surface a time-critical event (medication,
+           safety). NORMAL entries ahead of it keep their place. A
+           dropped claim fires its own `on_claim_end(PREEMPTED)` so
+           skills see the same lifecycle they would on mid-flight
+           preemption.
+        2. **Claim wins over streams** — a tool that latched the mic
+           takes priority over a tool that also requested audio playback
+           (rare — typically one tool returns one side-effect). Latest
+           tool wins anyway, but we'd rather start the claim than play
+           audio into a mic the skill wanted captured.
+        3. **Content wins** — no claim, no PREEMPT: start the pending
+           stream.
+        4. **Quiet moment** — nothing pending: drain the head of the
+           queue (FIFO, any priority).
         """
         preempt_index = self._find_first_preempt_index()
-        if streams and preempt_index is not None:
+        has_foreground_work = bool(streams) or claim is not None
+        if has_foreground_work and preempt_index is not None:
             request = self._injected_queue.pop(preempt_index)
             await self._log.ainfo(
                 "coord.inject_turn_preempted_content",
                 remaining=len(self._injected_queue),
                 dedup_key=request.dedup_key,
                 dropped_streams=len(streams),
+                dropped_claim=claim is not None,
             )
+            # Fire the dropped claim's `on_claim_end(PREEMPTED)` so skills
+            # see the lifecycle callback even when the claim never started.
+            # Preserves the invariant "every InputClaim returned gets one
+            # on_claim_end call." Skill callback raising is isolated.
+            if claim is not None and claim.on_claim_end is not None:
+                try:
+                    await claim.on_claim_end(ClaimEndReason.PREEMPTED)
+                except Exception:
+                    await logger.aexception(
+                        "coord.dropped_claim_on_end_raised",
+                    )
             await self._fire_injected_turn(request.prompt, request.dedup_key)
+            return
+        if claim is not None:
+            # Claim wins over streams: a mic latch is more authoritative
+            # than audio playback in the same turn (rare — most skills
+            # return one side-effect — but if a tool somehow returns
+            # both, we start the claim and drop the stream silently).
+            await self.start_input_claim(claim)
             return
         if streams:
             await self._start_content_stream(streams[-1], turn_id)
