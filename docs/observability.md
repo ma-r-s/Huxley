@@ -207,9 +207,10 @@ When `inject_turn` is called while a user or synthetic turn is in progress, the 
 - **`coord.inject_turn_dequeued`** — a queued request is firing now (drained at a turn-end with no pending content stream). Fields: `remaining`, `dedup_key`.
 - **`coord.inject_turn_deduped`** — an enqueue replaced one or more same-key entries already in the queue. Fields: `dedup_key`, `removed`.
 - **`coord.inject_turn_dropped`** — an enqueue was silently dropped because a same-key inject is currently firing. Fields: `reason=dedup_in_flight`, `dedup_key`.
+- **`coord.inject_turn_preempted_content`** — a `PREEMPT`-priority inject drained at turn-end and displaced a pending content stream (the stream request is discarded). Fields: `remaining` (queue depth after pop), `dedup_key`, `dropped_streams` (count). Only fires for priority=PREEMPT; NORMAL always waits for a quiet moment instead.
 - **`coord.inject_turn`** — the moment a request actually fires (whether immediate from `inject_turn` itself or drained from the queue). Fields: `interface`, `prompt_len`, `dedup_key`.
 
-If a skill's `inject_turn` "didn't speak," look for these in order: `inject_turn_dropped` (dedup'd against in-flight), `inject_turn_queued` followed by `inject_turn_dequeued` after a delay (queued, drained later), or no events at all (caller never invoked it).
+If a skill's `inject_turn` "didn't speak," look for these in order: `inject_turn_dropped` (dedup'd against in-flight), `inject_turn_queued` followed by `inject_turn_dequeued` after a delay (queued, drained later), or no events at all (caller never invoked it). If a PREEMPT reminder displaced a book, look for `inject_turn_preempted_content`.
 
 ## Background-task events — supervised lifecycle
 

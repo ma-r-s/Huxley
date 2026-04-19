@@ -717,8 +717,8 @@ review 2026-04-18; see session transcript). Broken into four small
 commits instead of one 3-day monolith. Each is individually
 smoke-testable with no regression from the previous state.
 
-- **Stage 1c.0 — SpeakingState authority doc** ✅ **done** (`<this
-commit>`, 2026-04-18). Written into `docs/architecture.md` under
+- **Stage 1c.0 — SpeakingState authority doc** ✅ **done**
+  (`ce46787`, 2026-04-18). Written into `docs/architecture.md` under
   "Turn coordinator internals → Authority contract." Defines:
   `SpeakingState` authoritative for "client speaker indicator";
   `FocusManager` authoritative for "who holds the claim"; coordinator
@@ -727,7 +727,7 @@ commit>`, 2026-04-18). Written into `docs/architecture.md` under
   Resolves Open Question 2 below.
 
 - **Stage 1c.1 — Wire FocusManager into Application lifecycle** ✅
-  **done** (`<this commit>`, 2026-04-18). `Application` constructs
+  **done** (`d1719c2`, 2026-04-18). `Application` constructs
   `FocusManager.with_default_channels()`, `start()` in `run()` (after
   storage init, before skill setup), `stop()` in `_shutdown` (after
   coordinator interrupt, before skill teardown). Coordinator accepts
@@ -735,7 +735,7 @@ commit>`, 2026-04-18). Written into `docs/architecture.md` under
   until 1c.2). 253 tests still green; no behavior change.
 
 - **Stage 1c.2 — Route CONTENT through FocusManager** ✅ **done**
-  (`<this commit>`, 2026-04-18). `_start_content_stream` creates
+  (`373d8da`, 2026-04-18). `_start_content_stream` creates
   `Activity(channel=CONTENT, content_type=NONMIXABLE,
 observer=ContentStreamObserver(...))` + `fm.acquire(activity)` +
   `fm.wait_drained()`. `_stop_content_stream` →
@@ -750,7 +750,7 @@ observer=ContentStreamObserver(...))` + `fm.acquire(activity)` +
   files got `FocusManager` fixtures. 253 tests still green.
 
 - **Stage 1c.3 — `SkillContext.inject_turn(prompt)` MVP** ✅ **done**
-  (`<this commit>`, 2026-04-18). Added `inject_turn: Callable[[str],
+  (`229cdfb`, 2026-04-18). Added `inject_turn: Callable[[str],
 Awaitable[None]]` field on `SkillContext` (no-op default for test
   contexts; real callable wired from `TurnCoordinator.inject_turn` in
   `app._build_skill_context`). Coordinator creates
@@ -769,8 +769,8 @@ DialogObserver(...))`, `fm.acquire()` + `fm.wait_drained()` (content
   core tests green. **Ships `inject_turn` as a working framework
   surface — unblocks reminder skill MVP (T1.8).**
 
-**Stage 1b — Server-side duck PCM envelope** ✅ **done** (`<this
-commit>`, 2026-04-18). `ContentStreamObserver` grew linear gain
+**Stage 1b — Server-side duck PCM envelope** ✅ **done** (`061996a`,
+2026-04-18). `ContentStreamObserver` grew linear gain
 envelope state (`_gain`, `_ramp_target`, `_ramp_start_time`,
 `_ramp_start_gain`) + `_apply_gain` helper that per-sample
 interpolates PCM16 across the ramp window (avoids click at chunk
@@ -789,8 +789,8 @@ NONMIXABLE so MAY_DUCK doesn't fire through production code paths
 — but the primitive is unit-tested in isolation and ready to fire
 the first time a MIXABLE stream lands.
 
-**Stage 1d.1 — inject_turn queue + dedup_key** ✅ **done** (`<this
-commit>`, 2026-04-18). The "request was silently dropped because a
+**Stage 1d.1 — inject_turn queue + dedup_key** ✅ **done** (`a45f72c`,
+2026-04-18). The "request was silently dropped because a
 turn was active" hole from 1c.3 is closed: `inject_turn` now queues
 when busy and drains in `_apply_side_effects` when a turn ends
 **without** a pending content stream. Content always wins over a
@@ -817,8 +817,8 @@ medication-retry pattern where a reminder reschedules itself if
 not delivered. Defer until a real consumer (T1.8 evolved reminder
 skill) needs it — the timers MVP doesn't.
 
-**Stage 1d.3 — `InjectPriority` enum (two-tier)** ✅ **done** (`<this
-commit>`, 2026-04-19). Added `InjectPriority = NORMAL | PREEMPT` to
+**Stage 1d.3 — `InjectPriority` enum (two-tier)** ✅ **done** (`bc5a4e2`,
+2026-04-19). Added `InjectPriority = NORMAL | PREEMPT` to
 the SDK. `inject_turn(prompt, *, priority=NORMAL)` signature
 extended. `NORMAL` preserves the 1d.1 "content wins at turn-end"
 policy; `PREEMPT` drains the queue even when the draining turn
@@ -832,7 +832,7 @@ normal, preempt-from-idle-same-as-normal, preempt-doesn't-barge-into-
 user-turn.
 
 **Stage 1f — Stale FACTORY owner after inject_turn preemption**
-✅ **done** (`<this commit>`, 2026-04-18, shipped alongside 1b).
+✅ **done** (`061996a`, 2026-04-18, shipped alongside 1b).
 `coordinator.inject_turn` now calls
 `self._speaking_state.force_release()` after `fm.acquire` +
 `wait_drained` (pump is dead by this point) and before sending the
@@ -845,8 +845,8 @@ idempotent (`force_release` on owner=None is a no-op, so
 inject_turn from idle doesn't break). Verified via existing
 TestInjectTurn tests — they still pass.
 
-**Stage 1e — `docs/observability.md` update** ✅ **done** (`<this
-commit>`, 2026-04-18). Documented every framework log event that
+**Stage 1e — `docs/observability.md` update** ✅ **done** (`7ba76bb`,
+2026-04-18). Documented every framework log event that
 shipped during Stage 1 but wasn't in the observability canon:
 
 - Added `focus.*` to the namespace table.
@@ -897,6 +897,26 @@ Unchanged in scope.
    kickoff**. Lives **inside `ContentStreamObserver`** (not a shared
    `huxley.audio.ducking` module). One consumer today; extract later
    if a second observer type wants ducking (YAGNI).
+
+### Post-Stage-3 critic findings (2026-04-19, belated Gate-2 for Stages 1d+3)
+
+Spawned a fresh critic against the full Stage-1-through-Stage-3
+substrate before Stage 2. Full report in session transcript; summary
+here. Three tiers of finding:
+
+**🔴 Ship-fix** — ✅ **shipped in `c2fa2b1`**:
+
+- **(#1) dedup_key leak on non-standard turn-end paths.** `_current_injected_dedup_key` was only cleared on the natural `_apply_side_effects` return path. Interrupt and `on_session_disconnected` left it set — a same-key inject_turn after either barrier would be silently dropped as "already firing." Fix: defensive `_current_injected_dedup_key = None` alongside `current_turn = None` in all three paths.
+- **(#6/#7) Duck envelope was end-to-end unreachable.** Stage 1b shipped the PCM duck envelope but no content stream produced it: (a) `ContentType` lived in `focus/vocabulary.py` (framework-internal), so skills couldn't mark an AudioStream as MIXABLE; (b) FM patience defaulted to 0 for CONTENT Activities, so FocusManager sent MUST_STOP instead of MAY_DUCK. Fix: moved `ContentType` to SDK, added `AudioStream.content_type` field (default NONMIXABLE), coordinator reads it and sets `patience=5min` for MIXABLE. New end-to-end test composes mixable→dialog preempt and asserts the duck envelope actually attenuates samples.
+- **(#4) Supervisor tests burned 5–7s each via real `asyncio.sleep`.** Fix: injectable `sleep` parameter on `TaskSupervisor` (default `asyncio.sleep`); tests inject a near-zero stub. Suite now runs in ~0.3s.
+
+**🟠 PQ — product questions that needed Mario's call**:
+
+- **PQ-1 — audiobook-strands-medication.** During a 10-hour audiobook the Stage-1d.1 queue policy ("content always wins at turn-end") means a medication reminder queued mid-book never fires. Mario's call: ship two-tier `InjectPriority` (NORMAL default preserves content; PREEMPT drains over content). ✅ **shipped in `bc5a4e2`** (Stage 1d.3).
+- **PQ-2 — timers fire_prompt hard-coded for AbuelOS.** Default was Spanish / warm-friend register embedded in the skill; non-Spanish personas inherit broken narration. Mario's call: persona-config override (`timers.fire_prompt` in persona.yaml with `{message}` substitution; empty/missing-placeholder falls back to default with a warning log). ✅ **shipped in `c6bd19e`**.
+- **PQ-3 — Stage 3 "done" hid persistence gap.** Original Stage 3 entry marked itself done without acknowledging tasks die on restart — a real gap for medication reminders. Mario's call: relabel Stage 3 → Stage 3a (in-memory), file Stage 3b (persistence) as queued. ✅ **shipped in `c6bd19e`**. Stage 3c (PermanentFailure elapsed_s semantics) also filed.
+
+**🟡 Pre-Stage-2 cleanup** — queued tiny items, see next section.
 
 ### Pre-Stage-2 cleanup (queued, tiny items from post-Stage-3 critic)
 

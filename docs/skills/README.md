@@ -70,7 +70,7 @@ ToolResult(
 
 - **`output`** is JSON text sent back to the LLM as the function-call output. The LLM narrates it to the user.
 - **`side_effect`** _(optional)_ is a `SideEffect` the framework runs around the model's response. Skills with no side effect leave it `None`. Available kinds:
-  - `AudioStream(factory, on_complete_prompt?, completion_silence_ms?)` — long-running PCM stream (audiobook playback). Factory fires at the turn's terminal barrier.
+  - `AudioStream(factory, on_complete_prompt?, completion_silence_ms?, content_type?)` — long-running PCM stream (audiobook playback). Factory fires at the turn's terminal barrier. `content_type` defaults to `ContentType.NONMIXABLE` (spoken-word — an injected turn hard-cancels the stream). Set to `ContentType.MIXABLE` for music / ambience so the framework ducks it under an injected turn instead of cutting it. Today all shipped content is NONMIXABLE; MIXABLE is wired end-to-end and ready for the first music skill.
   - `PlaySound(pcm)` — short one-shot chime that plays just before the model's response audio (used by info tools that want a sonic intro — e.g. news chime). See [`docs/sounds.md`](../sounds.md).
   - `CancelMedia()` — stop the running media task immediately (pause/stop tools).
   - `SetVolume(level)` — forward a volume change to the client.
