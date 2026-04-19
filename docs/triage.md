@@ -992,19 +992,58 @@ each urgency tier. Browser smoke confirms the four decision behaviors.
 - `docs/skills/README.md` — "using `inject_turn`" section (written; currently bannered as "planned — SDK surface not yet shipped; vocabulary will change post-pivot")
 - `docs/observability.md` — new event names (`coord.inject_turn`, `coord.arbitrate`, `coord.inject_expired`, `coord.inject_preempted`) — **not yet added; arbitration events won't exist; focus events (`focus.acquire`, `focus.release`, `focus.change`, etc.) shipped in Stage 1 Part 1 but aren't documented in `observability.md` yet**
 
-### Stage 2 — `InputClaim` + `MicRouter` wiring
+### Stage 2 — `InputClaim` + `MicRouter` wiring ✅ **done** (2026-04-19)
 
-**Status**: in_progress (2026-04-19). Motivating consumer locked in: a web-app phone UI Mario uses to ring grandpa. Plan + critic pass captured in session transcript. Effort re-scoped post-pivot to ~5–7 days (down from 2 weeks; YieldPolicy eliminated, MicRouter already extracted in T1.3).
+**Status**: shipped end-to-end on 2026-04-19. The MVP call loop runs against the real OpenAI Realtime API. **Effort (actual)**: ~1 day vs the 5-7 day re-scoped estimate (and 2-week pre-pivot estimate). The post-pivot scope reduction held — no YieldPolicy, no Arbitrator, MicRouter pre-extracted in T1.3, focus management substrate from Stage 1 carried the matrix without new logic.
 
-**Progress**:
+**Progress** (every commit pinned by hash):
 
-- ✅ **Pre-work spike** (`00c17e9`, 2026-04-19) — characterized OpenAI Realtime suspend/resume behavior against the real API (<$1). Findings in `docs/research/realtime-suspend.md`. Critical: "pause" ≠ "stop reading" — the model keeps generating server-side and buffers hundreds of KB of audio without an explicit `response.cancel`.
-- ✅ **Commit 1** (`c4c90af`, 2026-04-19) — SDK surface. `InputClaim` SideEffect, `ClaimHandle`, `ClaimEndReason(NATURAL|USER_PTT|PREEMPTED|ERROR)`, `StartInputClaim` Protocol, `SkillContext.start_input_claim` field with no-op default. 12 new SDK tests.
-- ✅ **Commit 2** (`07a3eca`, 2026-04-19) — Provider `suspend()/resume()` contract + OpenAI Realtime impl + `StubVoiceProvider` parity + tests. Suspend: cancel + clear + set flag. Resume: clear flag, zero wire traffic. While suspended: `send_user_audio` drops, receive loop drops content (audio deltas, tool calls, transcripts); lifecycle events (`response.done`, `audio.done`, errors) pass through. Idempotent both ways. 11 new tests.
-- ⏳ **Commit 3** (queued) — coordinator hook: dispatch `InputClaim` from `ToolResult.side_effect` at terminal barrier; CONTENT-channel Activity acquire (per critic — not DIALOG); MicRouter race fix ("one claim at a time" invariant); integrate `provider.suspend()` at claim start and `provider.resume()` at claim end; wire `ClaimHandle` lifetime.
-- ⏳ **Commits 4–5** (queued) — MVP calls skill: HTTP POST `/call/ring` + shared-secret + second WebSocket accept for caller-side audio + PCM relay + auto-pickup UX + bidirectional end mechanics. Skip Stage 4 ClientEvent initially per critic's MVP suggestion; migrate to proper ClientEvent in weeks 2–3 once UX is validated with grandpa.
+- ✅ **Pre-work spike** (`00c17e9`) — characterized OpenAI Realtime suspend/resume behavior against the real API (<$1). Findings in `docs/research/realtime-suspend.md`. Critical: "pause" ≠ "stop reading" — the model keeps generating server-side and buffers hundreds of KB of audio without an explicit `response.cancel`.
+- ✅ **Commit 1** (`c4c90af`) — SDK surface. `InputClaim` SideEffect, `ClaimHandle`, `ClaimEndReason(NATURAL|USER_PTT|PREEMPTED|ERROR)`, `StartInputClaim` Protocol, `SkillContext.start_input_claim` field with no-op default. 12 new SDK tests.
+- ✅ **Commit 2** (`07a3eca`) — Provider `suspend()/resume()` contract + OpenAI Realtime impl + `StubVoiceProvider` parity + 11 tests. Suspend: cancel + clear + set flag. Resume: clear flag, zero wire traffic. Receive loop drops content events while suspended; lifecycle events pass through.
+- ✅ **Commit 3a** (`3597d8b`) — `MicRouter.claim()` enforces at-most-one-claim invariant via `MicAlreadyClaimedError`. Closes the critic-flagged race where a direct-entry claim could capture another claim's `_previous` handler.
+- ✅ **Commit 3b** (`6d5450a`) — `ClaimObserver` on the CONTENT channel (per critic — not DIALOG, to avoid same-channel stacking conflicts with PREEMPT injects). `coordinator.start_input_claim` direct-entry method with proper `ClaimHandle` (`cancel()` + `wait_end()`). All four `ClaimEndReason` exit paths wired: NATURAL via handle.cancel, USER_PTT via interrupt, PREEMPTED via FocusManager NONE delivery default, ERROR via mic-router-busy or handler exception. 14 tests including the matrix-defining `test_preempt_inject_ends_claim_with_preempted`.
+- ✅ **Commit 3c** (`38b695e`) — tool-dispatched path. `ToolResult.side_effect = InputClaim(...)` latches on `Turn.pending_input_claim`; terminal barrier starts via `_dispatch_post_turn` (claim wins over content stream; PREEMPT inject still wins over both). Pre-barrier-PREEMPT drop fires `on_claim_end(PREEMPTED)` so skills see the lifecycle even when the claim never started. 5 new tests.
+- ✅ **Commit 4** (`5a26448`) — AudioServer routes. `GET /call/ring` (HTTP, header auth, returns 200/401/409/503) + `WS /call?secret=` (path-based routing, query-param auth). Both go through `process_request` on the existing port — no new dep, AudioServer remains "all connections from outside the server." 9 tests against real `serve()`.
+- ✅ **Commit 5** (`89f62c2`) — `huxley-skill-calls` package. `answer_call` / `reject_call` / `end_call` tools; `on_ring(params) -> bool` and `on_caller_connected(ws)` framework hooks; PCM relay via `InputClaim.on_mic_frame` (grandpa→caller) and `speaker_source` async iterator backed by `asyncio.Queue` (caller→grandpa); persona-overridable Spanish/AbuelOS-toned prompts for ring + four end reasons; secret precedence `HUXLEY_CALLS_SECRET` env > persona config. 26 unit tests with a `FakeWS` stand-in.
+- ✅ **Commit 6** (`14204d1`) — Application wiring. New `_wire_call_hooks_if_any()` runs after `setup_all`, duck-types skills for `(secret, on_ring, on_caller_connected)` shape, calls new `AudioServer.set_call_hooks(...)` setter. Framework stays skill-agnostic — duck-type instead of importing calls. `start_input_claim` wired into `SkillContext` from `coordinator.start_input_claim`. AbuelOS persona.yaml gets `calls:` block.
 
-**Original effort estimate (pre-pivot)**: ~2 weeks. **Depends on**: T1.3 (`MicRouter`), Stage 1 (`YieldPolicy` enum — dropped by pivot).
+**Live verification on the running server** (2026-04-19, post-commit-6):
+
+- Boot: `calls.setup_complete has_secret=True` → `app.call_hooks_wired skill=calls` → `audio_server_listening calls_enabled=True` → `huxley_ready ... tools=[..., answer_call, reject_call, end_call]`.
+- Ring smoke (curl): no-secret → 401, wrong-secret → 401, valid-secret → 200 with `server.rx.ring`, `calls.ring_accepted from_name=Mario`, `coord.inject_turn` firing the announcement to OpenAI.
+
+**Final test count**: 338 core + 72 SDK + 30 timers + 26 calls + 60 audiobooks = **526 unit tests green** across the workspace.
+
+**The conversation interactions matrix** (the original "Alexa-style focus management") is now fully populated in code via FocusManager composition — every cell falls out of the substrate without dedicated if/else logic:
+
+| Active             | Incoming             | Outcome                                            | Wired by          |
+| ------------------ | -------------------- | -------------------------------------------------- | ----------------- |
+| Audiobook (NMX)    | User PTT             | Book pauses; user speaks                           | Stage 1a          |
+| Audiobook          | inject_turn(NORMAL)  | Queues; fires at quiet turn-end                    | Stage 1d.1        |
+| Audiobook          | inject_turn(PREEMPT) | Book drops; reminder narrates                      | Stage 1d.3        |
+| Music (MIX)        | inject_turn          | Music ducks to 0.3 gain; voice overlays            | Stage 1b          |
+| User speaking      | inject_turn (any)    | Queues — never barges user                         | Stage 1d.1        |
+| Call (InputClaim)  | User PTT             | Claim ends USER_PTT; "Llamada finalizada"          | Stage 2 commit 3b |
+| Call               | inject_turn(PREEMPT) | Claim ends PREEMPTED; medication reminder narrates | Stage 2 commit 3b |
+| Call               | inject_turn(NORMAL)  | Queues behind call; fires at end                   | Stage 2 commit 3b |
+| Call               | Audiobook tool call  | FM forces single-CONTENT; older claim ends         | FM stage 1 part 1 |
+| Tool latches claim | PREEMPT queued       | Claim dropped pre-start; on_claim_end(PREEMPTED)   | Stage 2 commit 3c |
+
+**Lessons captured**:
+
+- (a) The Stage 1 focus-management pivot paid off here. Modeling claim as a CONTENT-channel NONMIXABLE Activity meant zero new preemption logic — the matrix above is a documentation artifact, not code. Same substrate handles audiobooks, calls, and any future skill that needs "this thing is playing-ish."
+- (b) The pre-work spike (~$1 in API spend) saved days. The "stop reading isn't pause" finding would have surfaced as a billing leak + correctness bug a week into commit 5; instead it shaped commit 2's contract from day one.
+- (c) Duck-typed skill discovery for framework hooks (`hasattr` over the registry) keeps `huxley` core from importing skill packages. Same pattern reusable when Stage 4 ClientEvent lands — skills register subscriptions, framework iterates without knowing names.
+
+**Known follow-ups** (filed below as separate entries, not blocking Stage 2 done):
+
+- T1.4 Stage 2.1 — expose `ClaimHandle` for side-effect-dispatched claims so the calls skill can cancel cleanly when the caller WS closes (currently waits for grandpa PTT or PREEMPT inject).
+- T1.4 Stage 2.2 — voicemail / missed-call inject_turn when ring fires but answer never dispatches (timeout + reject paths).
+- T1.4 Stage 2.3 — per-caller secrets in calls skill (currently a single shared secret; 20-line change before the second family member joins).
+- T1.4 Stage 4 — proper `ClientEvent` wire protocol; migrate calls skill from HTTP-POST + path-routing-WS to the unified ClientEvent surface.
+
+**Original effort estimate (pre-pivot)**: ~2 weeks. **Depends on (now resolved)**: T1.3 (`MicRouter`), Stage 1 (`YieldPolicy` enum — dropped by pivot).
 
 **Deliverables**:
 
@@ -1047,6 +1086,53 @@ replay harness) that exercises the cascade: simulated `inject_turn`
 fires during an active `InputClaim`, arbitration runs, `on_claim_end`
 triggers, claim-preempted outcome surfaces correctly. Keeps the
 end-to-end path from degrading silently as Stages 3+4 pile on.
+
+### Stage 2.1 — Expose ClaimHandle for side-effect-dispatched claims (queued)
+
+**Status**: queued · **Effort**: ~1–2h · **Blocked by**: nothing · **Unblocks**: clean caller-WS-close → "Mario colgó" narration in the calls skill.
+
+The Stage 2 commit 5 calls skill has a known gap: when the caller's WebSocket closes, the skill detects it (read loop exits) but **can't directly cancel the active claim** because the framework only returns a `ClaimHandle` from the direct-entry path (`coordinator.start_input_claim`). Side-effect-dispatched claims (the path the calls skill uses, where `ToolResult.side_effect = InputClaim(...)`) start at the terminal barrier with no handle handed back to the skill.
+
+Today's workaround: the skill waits for grandpa to press PTT or for a `PREEMPT` inject to end the claim. Acceptable for early smoke testing but a real UX bug — the natural "caller hangs up, grandpa hears 'Mario colgó'" flow doesn't fire.
+
+**Two paths to fix**:
+
+1. **Per-skill claim cancel API** on `SkillContext`: `ctx.cancel_active_claim() -> bool` — looks up `coordinator._claim_obs` and triggers release with `ClaimEndReason.NATURAL`. Tiny surface, works today.
+2. **Return ClaimHandle from side-effect dispatch**: extend `ToolResult` with an optional `on_side_effect_started: Callable[[ClaimHandle], Awaitable[None]]` callback. Cleaner architecturally; matches the direct-entry shape; opens the door for skills that want to track AudioStream lifetimes too.
+
+**Recommendation**: start with (1) — solves the calls bug in <1h, no SDK contract changes. Migrate to (2) when a second skill needs lifecycle handles.
+
+### Stage 2.2 — Voicemail / missed-call inject_turn (queued)
+
+**Status**: queued · **Effort**: ~1h · **Blocked by**: nothing.
+
+When a ring fires but `answer_call` never dispatches — timeout (caller gives up before the LLM finishes the announcement), or `reject_call` fires (grandpa says "no") — grandpa hears nothing more. From his perspective: a phone rang, then silence. He doesn't know who tried to reach him.
+
+**Fix**: when `on_ring` accepts but neither `answer_call` nor `reject_call` fires within N seconds (configurable, default 30s), inject a missed-call notification: "Mario te llamó pero no contestaste." Same path for explicit reject — narrate "Le dije a Mario que llame más tarde."
+
+Implementation: skill spawns a `ctx.background_task("calls.ring_timeout", ...)` on ring-accept; the task sleeps N seconds; if the pending state is still set when it wakes, fire the inject. `answer_call` and `reject_call` cancel the task via the returned `BackgroundTaskHandle`.
+
+### Stage 2.3 — Per-caller secrets / multi-caller auth (queued)
+
+**Status**: queued · **Effort**: ~30 min · **Blocked by**: nothing · **Unblocks**: family members beyond Mario adding themselves as callers.
+
+Today the calls skill uses a single shared secret. Two real problems when the family grows:
+
+- **Rotation**: changing the secret requires updating every caller in lockstep.
+- **Per-caller policy**: can't differentiate "always pick up for Mario" vs "auto-pickup for family" vs "ring through to voicemail for unknown."
+
+**MVP fix**: replace `secret: str` with `callers: dict[str, str]` mapping caller name to per-caller secret. AudioServer accepts any matching `(caller, secret)` pair; the matched caller name flows into `params["from"]` so the inject_turn announcement uses it.
+
+```yaml
+skills:
+  calls:
+    callers:
+      mario: "mario-token-xxx"
+      mom: "mom-token-yyy"
+      hermano: "hermano-token-zzz"
+```
+
+Web app sends both `X-Caller: mario` and `X-Shared-Secret: mario-token-xxx`. Future evolution: OAuth via Google/Apple if the family grows beyond ~5 trusted callers.
 
 ### Stage 3a — Supervised `background_task` (in-memory) ✅ done (`521f269`, 2026-04-18)
 

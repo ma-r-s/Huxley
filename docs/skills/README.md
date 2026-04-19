@@ -509,7 +509,15 @@ Integration tests that hit real subprocess (ffmpeg) or real provider APIs live i
 
 ## Distribution — making your skill installable
 
-Built-in skills (audiobooks, system) live in `packages/skills/<name>/` in this repo. Community skills are independent Python packages published on PyPI under the convention `huxley-skill-<name>`.
+Built-in skills (audiobooks, calls, news, radio, system, timers) live in `packages/skills/<name>/` in this repo. Community skills are independent Python packages published on PyPI under the convention `huxley-skill-<name>`.
+
+Skill-specific docs:
+
+- [`audiobooks.md`](audiobooks.md) — long-form spoken audio playback with bookmark resume.
+- [`calls.md`](calls.md) — inbound voice calls via `InputClaim` + PCM relay (Stage 2 first consumer).
+- [`news.md`](news.md) — Open-Meteo weather + Google News RSS summarization.
+- [`radio.md`](radio.md) — HTTP/Icecast streams via ffmpeg.
+- [`timers.md`](timers.md) — one-shot reminders via proactive speech, persisted across restart.
 
 A persona enables a skill by listing it in `persona.yaml`:
 
