@@ -40,7 +40,15 @@ class TestSetTimer:
 
         # Wait long enough for the timer to fire.
         await asyncio.sleep(1.1)
-        inject_mock.assert_awaited_once_with("Recordatorio: sacar la ropa de la lavadora")
+        inject_mock.assert_awaited_once()
+        prompt = inject_mock.await_args.args[0]
+        # Prompt shape (imperative, LLM-friendly) contains both the message
+        # and an instruction to the model to narrate warmly. Asserting on
+        # specific wording would be brittle; these invariants are what
+        # matter: the user's message is there, and it's framed as an
+        # instruction so the LLM doesn't minimally echo it.
+        assert "sacar la ropa de la lavadora" in prompt
+        assert "temporizador" in prompt.lower() or "recuerd" in prompt.lower()
 
     async def test_clamps_below_minimum(self) -> None:
         skill, _ = await _setup_skill()

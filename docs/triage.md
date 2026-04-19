@@ -785,6 +785,25 @@ from queue silently; `dedup_key` replaces on collision; next PTT
 drains FIFO. Needs `InjectedTurnHandle.wait_outcome()` to become
 useful (first consumer: medication reminder retry loop).
 
+**Stage 1f — Stale FACTORY owner after inject_turn preemption
+(~30 min, queued)**. Surfaced during the 1c.3 + timers smoke on
+2026-04-18. When `inject_turn` preempts a content stream, the pump
+task raises `CancelledError` which skips the `owns_speaking`
+release path — so `SpeakingState.owner` stays at `FACTORY` until
+the next `on_audio_done` (from the injected turn's response) or
+`interrupt()` clears it. Visible effect: the client sees one
+unbroken `model_speaking=True` span from the book through the
+injected narration, no transition boundary. Not a correctness bug
+(is cleaned up by the next event), but **becomes more visible when
+Stage 1b ships ducking** — the natural client-side cue of "book
+audio got quieter, then narration started" won't be paired with a
+`model_speaking` toggle. **Fix shape**: in `coordinator.inject_turn`
+after `fm.acquire` + `wait_drained` (content pump is dead by this
+point), call `self._speaking_state.force_release()` to clear the
+stale owner before the model's narration audio arrives. Then
+`on_audio_delta` correctly acquires INJECTED and fires
+`model_speaking=True` as a fresh transition.
+
 **Stage 1e — `docs/observability.md` update (~30 min, queued).**
 Document the `focus.acquire`, `focus.release`, `focus.change`,
 `focus.patience_expired`, `focus.observer_failed`, `focus.observer_slow`

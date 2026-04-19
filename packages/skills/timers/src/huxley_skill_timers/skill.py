@@ -148,10 +148,23 @@ class TimersSkill:
         try:
             await asyncio.sleep(seconds)
             await self._logger.ainfo("timers.fired", timer_id=timer_id, message=message)
+            # Prompt shape matters: this gets sent to the LLM as a
+            # conversation message. If it reads like a note ("Recordatorio:
+            # X") the model minimally satisfies it; if it reads like an
+            # instruction ("Avísale al usuario que...") the model narrates
+            # naturally. Compare `AudioStream.on_complete_prompt` in the
+            # audiobooks skill, which is imperative and works well.
+            prompt = (
+                "Ha sonado un temporizador que el usuario programó. "
+                f"Avísale con tono amable y natural sobre: {message}. "
+                "Empieza la frase como si se lo estuvieras recordando a "
+                "un amigo (por ejemplo 'oye, recuerda que...' o 'ya es "
+                "hora de...'). Usa una o dos frases cortas."
+            )
             try:
                 # The framework wraps this in a DIALOG-channel Activity;
                 # preempts content streams, asks the LLM to narrate.
-                await self._inject_turn(f"Recordatorio: {message}")
+                await self._inject_turn(prompt)
             except Exception:
                 # Don't let an inject_turn failure propagate out of an asyncio task
                 # and kill the event loop's exception handler. Log and move on.
