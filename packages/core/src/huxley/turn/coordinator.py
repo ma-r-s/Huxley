@@ -44,7 +44,14 @@ from typing import TYPE_CHECKING, Any, ClassVar
 import structlog
 
 from huxley.focus.vocabulary import Activity, Channel
-from huxley_sdk import AudioStream, CancelMedia, ContentType, PlaySound, SetVolume
+from huxley_sdk import (
+    AudioStream,
+    CancelMedia,
+    ContentType,
+    InjectPriority,
+    PlaySound,
+    SetVolume,
+)
 
 from .factory import TurnFactory
 from .mic_router import MicRouter
@@ -61,12 +68,14 @@ _SOURCE_TO_OWNER: dict[TurnSource, SpeakingOwner] = {
 
 @dataclass(frozen=True, slots=True)
 class _InjectedRequest:
-    """One queued `inject_turn` request. Stage 1d: FIFO queue, dedup only.
-    TTL and outcome handle arrive in a later stage.
+    """One queued `inject_turn` request. Stage 1d: FIFO queue, dedup,
+    two-tier priority (NORMAL | PREEMPT). TTL and outcome handle arrive
+    in a later stage.
     """
 
     prompt: str
     dedup_key: str | None
+    priority: InjectPriority
 
 
 if TYPE_CHECKING:
@@ -592,21 +601,52 @@ class TurnCoordinator:
         self._bind_turn()
         await self._send_status(self._status["ready"])
 
-        if streams:
+        # Drain policy at turn-end:
+        #
+        # 1. If the queue has a PREEMPT entry, fire it — even if this
+        #    turn spawned content. PREEMPT callers accept the tradeoff
+        #    of dropping user-requested content (book, radio, etc.) to
+        #    surface a time-critical event (medication, safety). Find
+        #    the first PREEMPT in FIFO order; NORMAL entries ahead of
+        #    it keep their place (they wait for a quiet turn-end as
+        #    designed).
+        # 2. Otherwise, content wins: start the pending stream if any.
+        # 3. Otherwise (no streams, no PREEMPT), drain the next NORMAL
+        #    entry — this is the "quiet moment" path.
+        preempt_index = self._find_first_preempt_index()
+        if streams and preempt_index is not None:
+            request = self._injected_queue.pop(preempt_index)
+            await self._log.ainfo(
+                "coord.inject_turn_preempted_content",
+                remaining=len(self._injected_queue),
+                dedup_key=request.dedup_key,
+                dropped_streams=len(streams),
+            )
+            await self._fire_injected_turn(request.prompt, request.dedup_key)
+        elif streams:
             await self._start_content_stream(streams[-1], turn_id)
         elif self._injected_queue:
-            # No content pending — this is a quiet moment. Drain one
-            # queued inject_turn request. (Only one per turn-end: if
-            # there are more, the injected turn itself ends via
-            # `_apply_side_effects` again and this branch re-fires for
-            # the next queued item. FIFO preserved.)
+            # Quiet moment — drain head of queue (any priority; FIFO).
+            # Only one per turn-end: if there are more, the injected
+            # turn itself ends via `_apply_side_effects` again and this
+            # branch re-fires for the next queued item.
             request = self._injected_queue.pop(0)
             await self._log.ainfo(
                 "coord.inject_turn_dequeued",
                 remaining=len(self._injected_queue),
                 dedup_key=request.dedup_key,
+                priority=request.priority.value,
             )
             await self._fire_injected_turn(request.prompt, request.dedup_key)
+
+    def _find_first_preempt_index(self) -> int | None:
+        """Return the index of the first PREEMPT request in the queue,
+        or None if none exist. Used by the turn-end drain to decide
+        whether to override the "content wins" default."""
+        for i, req in enumerate(self._injected_queue):
+            if req.priority is InjectPriority.PREEMPT:
+                return i
+        return None
 
     async def _emit_turn_summary(self, *, reason: str, spawned_audio_stream: bool) -> None:
         """One-line summary at end-of-turn. Useful for grep + per-turn timing."""
@@ -746,21 +786,38 @@ class TurnCoordinator:
 
     # --- Proactive speech (T1.4 Stages 1c.3 + 1d — inject_turn) ---
 
-    async def inject_turn(self, prompt: str, *, dedup_key: str | None = None) -> None:
+    async def inject_turn(
+        self,
+        prompt: str,
+        *,
+        dedup_key: str | None = None,
+        priority: InjectPriority = InjectPriority.NORMAL,
+    ) -> None:
         """Speak `prompt` proactively via a synthetic DIALOG turn.
 
         Behavior:
 
         - If idle (no current turn), fire immediately. Any playing
           content stream gets preempted via FocusManager (CONTENT →
-          BACKGROUND/MUST_PAUSE → pump cancels).
+          BACKGROUND/MUST_PAUSE → pump cancels). Priority doesn't
+          matter from idle — both tiers behave the same.
         - If a user or synthetic turn is already in progress, **queue**
           the request. The queue drains in `_apply_side_effects` when
-          a turn ends without a pending content stream. This prevents
-          dropped reminders when the user happens to PTT the moment a
-          timer fires.
+          a turn ends — but WHAT drains depends on `priority`:
+            - `NORMAL` drains only when the turn ends without a pending
+              content stream (content wins; reminder waits for the next
+              quiet moment).
+            - `PREEMPT` drains unconditionally, even displacing a
+              freshly-spawned content stream. Right for medication
+              reminders and safety-critical events where "wait until
+              the user PTTs again" could mean hours.
 
-        `dedup_key` (Stage 1d): an opaque string identifying this
+        Priority never barges into a live user turn — the queue always
+        waits for turn-end, regardless of tier. Interrupting a user
+        mid-speech is hostile; PREEMPT is about beating a content
+        stream, not the user.
+
+        `dedup_key` (Stage 1d.1): an opaque string identifying this
         logical request. If a queued entry already exists with the same
         key, the new request REPLACES it (last-writer-wins). If the
         currently-firing injected turn has the same key, the new
@@ -768,14 +825,19 @@ class TurnCoordinator:
         is worse than a missed dedup. `dedup_key=None` bypasses dedup.
 
         Not yet shipped (future stage): `expires_after` TTL, outcome
-        handle with `wait_outcome()`, cross-channel arbitration tiers.
+        handle with `wait_outcome()`, finer arbitration tiers.
         """
         if self.current_turn is not None:
-            await self._enqueue_injected(prompt, dedup_key)
+            await self._enqueue_injected(prompt, dedup_key, priority)
             return
         await self._fire_injected_turn(prompt, dedup_key)
 
-    async def _enqueue_injected(self, prompt: str, dedup_key: str | None) -> None:
+    async def _enqueue_injected(
+        self,
+        prompt: str,
+        dedup_key: str | None,
+        priority: InjectPriority,
+    ) -> None:
         """Append or dedup-replace a pending inject_turn request."""
         if dedup_key is not None:
             if self._current_injected_dedup_key == dedup_key:
@@ -794,11 +856,14 @@ class TurnCoordinator:
                     dedup_key=dedup_key,
                     removed=before - len(self._injected_queue),
                 )
-        self._injected_queue.append(_InjectedRequest(prompt=prompt, dedup_key=dedup_key))
+        self._injected_queue.append(
+            _InjectedRequest(prompt=prompt, dedup_key=dedup_key, priority=priority)
+        )
         await self._log.ainfo(
             "coord.inject_turn_queued",
             queue_depth=len(self._injected_queue),
             dedup_key=dedup_key,
+            priority=priority.value,
             prev_state=self.current_turn.state.value if self.current_turn else None,
         )
 

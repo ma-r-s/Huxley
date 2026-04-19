@@ -817,6 +817,20 @@ medication-retry pattern where a reminder reschedules itself if
 not delivered. Defer until a real consumer (T1.8 evolved reminder
 skill) needs it — the timers MVP doesn't.
 
+**Stage 1d.3 — `InjectPriority` enum (two-tier)** ✅ **done** (`<this
+commit>`, 2026-04-19). Added `InjectPriority = NORMAL | PREEMPT` to
+the SDK. `inject_turn(prompt, *, priority=NORMAL)` signature
+extended. `NORMAL` preserves the 1d.1 "content wins at turn-end"
+policy; `PREEMPT` drains the queue even when the draining turn
+spawned a content stream (the stream request is dropped). Neither
+tier barges into a user mid-speech — priority only decides
+content-vs-queue at turn-end, not user-right-to-finish. Closes the
+"10-hour audiobook strands medication reminder" failure mode
+flagged by the post-Stage-3 critic (issue B / PQ-1). 5 new tests:
+preempt-over-content, normal-still-waits, preempt-ahead-of-earlier-
+normal, preempt-from-idle-same-as-normal, preempt-doesn't-barge-into-
+user-turn.
+
 **Stage 1f — Stale FACTORY owner after inject_turn preemption**
 ✅ **done** (`<this commit>`, 2026-04-18, shipped alongside 1b).
 `coordinator.inject_turn` now calls

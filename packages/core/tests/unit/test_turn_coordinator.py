@@ -1767,6 +1767,146 @@ class TestInjectTurnQueue:
         assert ("send_conversation_message", "C") in provider.sent[pre_sent:]
 
 
+class TestInjectTurnPriority:
+    """Stage 1d (PREEMPT priority): time-critical requests override
+    the default 'content wins' drain policy.
+
+    Closes the "10-hour audiobook suppresses medication reminder"
+    failure mode flagged by the post-Stage-3 critic (issue B / PQ-1).
+    """
+
+    async def test_preempt_drains_over_pending_content_stream(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        """User turn spawns a content stream → queued PREEMPT fires
+        instead; the content is dropped. Canonical medication-during-
+        new-book scenario."""
+        from huxley_sdk import InjectPriority
+
+        factory = _factory(b"book")
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output="{}", side_effect=AudioStream(factory=factory)
+        )
+
+        await _commit_turn(coordinator)
+        await coordinator.inject_turn(
+            "Medication reminder.",
+            dedup_key="med_9am",
+            priority=InjectPriority.PREEMPT,
+        )
+        assert len(coordinator._injected_queue) == 1
+
+        await coordinator.on_tool_call("c1", "play_audiobook", {})
+        await coordinator.on_response_done()
+
+        # PREEMPT fired; content stream is NOT running.
+        assert coordinator.current_media_task is None
+        assert coordinator.current_turn is not None
+        assert coordinator.current_turn.source.value == "injected"
+        assert ("send_conversation_message", "Medication reminder.") in provider.sent
+        # Queue cleared.
+        assert coordinator._injected_queue == []
+
+    async def test_normal_waits_behind_content_as_before(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+    ) -> None:
+        """NORMAL priority is unchanged from 1d.1 behavior — content
+        wins at turn-end, reminder stays queued."""
+        factory = _factory(b"book")
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output="{}", side_effect=AudioStream(factory=factory)
+        )
+
+        await _commit_turn(coordinator)
+        # Default priority is NORMAL.
+        await coordinator.inject_turn("Social reminder.", dedup_key="social")
+
+        await coordinator.on_tool_call("c1", "play_audiobook", {})
+        await coordinator.on_response_done()
+
+        # Content started; NORMAL entry still queued.
+        assert coordinator.current_media_task is not None
+        assert len(coordinator._injected_queue) == 1
+        assert coordinator._injected_queue[0].prompt == "Social reminder."
+
+    async def test_preempt_fires_ahead_of_earlier_normal_when_content_pending(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        """Queue = [NORMAL_social, PREEMPT_med] + pending content →
+        PREEMPT fires (ahead of its FIFO position); NORMAL stays queued
+        waiting for a quiet turn-end."""
+        from huxley_sdk import InjectPriority
+
+        factory = _factory(b"book")
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output="{}", side_effect=AudioStream(factory=factory)
+        )
+
+        await _commit_turn(coordinator)
+        await coordinator.inject_turn("social", dedup_key="s1")  # NORMAL (default)
+        await coordinator.inject_turn(
+            "medication",
+            dedup_key="m1",
+            priority=InjectPriority.PREEMPT,
+        )
+        assert [r.prompt for r in coordinator._injected_queue] == ["social", "medication"]
+
+        await coordinator.on_tool_call("c1", "play_audiobook", {})
+        await coordinator.on_response_done()
+
+        # Medication fired (PREEMPT). Social still queued.
+        assert ("send_conversation_message", "medication") in provider.sent
+        assert ("send_conversation_message", "social") not in provider.sent
+        assert [r.prompt for r in coordinator._injected_queue] == ["social"]
+        # Content stream was dropped.
+        assert coordinator.current_media_task is None
+
+    async def test_preempt_from_idle_fires_immediately_same_as_normal(
+        self,
+        coordinator: TurnCoordinator,
+        provider: StubVoiceProvider,
+    ) -> None:
+        """When no turn is active, PREEMPT and NORMAL behave identically:
+        both fire immediately from idle (preempting any content stream
+        via FM). Priority only matters at the turn-end drain decision."""
+        from huxley_sdk import InjectPriority
+
+        await coordinator.inject_turn("urgent", priority=InjectPriority.PREEMPT)
+        assert coordinator.current_turn is not None
+        assert ("send_conversation_message", "urgent") in provider.sent
+
+    async def test_preempt_does_not_barge_into_user_turn(
+        self,
+        coordinator: TurnCoordinator,
+        provider: StubVoiceProvider,
+    ) -> None:
+        """Even PREEMPT respects an active user turn — queues, doesn't
+        interrupt mid-speech. Priority only overrides content-vs-queue
+        decisions at turn-end, not the user's right to finish speaking."""
+        from huxley_sdk import InjectPriority
+
+        await coordinator.on_ptt_start()
+        assert coordinator.current_turn is not None
+        pre_sent_count = len(provider.sent)
+
+        await coordinator.inject_turn("medication", priority=InjectPriority.PREEMPT)
+
+        # Still queued. Provider sent nothing new.
+        assert len(coordinator._injected_queue) == 1
+        assert coordinator._injected_queue[0].priority is InjectPriority.PREEMPT
+        assert len(provider.sent) == pre_sent_count
+        # User turn unchanged.
+        assert coordinator.current_turn.state == TurnState.LISTENING
+
+
 class TestTurnDataclass:
     """Small sanity checks on the Turn dataclass itself."""
 

@@ -256,6 +256,33 @@ await self._ctx.inject_turn(
 
 `dedup_key` is an opaque string identifying the logical event. If a queued entry already has the same key, the new request **replaces** it (last-writer-wins). If the same key is currently firing (DIALOG already acquired with that key), the new request is **silently dropped** — repeating the same reminder while it's mid-narration would just create a confused stack. Skip `dedup_key=None` (default) to bypass dedup.
 
+**Priority** (optional `priority`):
+
+```python
+from huxley_sdk import InjectPriority
+
+# Medication reminders: fire even if the user is listening to a book.
+await self._ctx.inject_turn(
+    "Es hora de la pastilla de las nueve.",
+    dedup_key="med_9am",
+    priority=InjectPriority.PREEMPT,
+)
+
+# Social reminders: wait for a quiet moment (default is NORMAL).
+await self._ctx.inject_turn(
+    "Carlos mandó un mensaje.",
+    dedup_key="msg_12345",
+    # priority=InjectPriority.NORMAL — the default
+)
+```
+
+Two tiers today:
+
+- **`NORMAL`** (default) — queue drains only when a turn ends WITHOUT a pending content stream. If the user starts a book, the reminder waits for the next quiet turn-end (user PTT + any response that doesn't spawn content). Right for events that can wait an indeterminate time — social messages, routine chatter, scheduled greetings.
+- **`PREEMPT`** — queue drains even when a turn ends WITH a pending content stream. The content stream request is dropped (user has to re-ask). Right for events that can't wait hours — medication reminders, safety alerts, inbound calls. Users give up book playback in exchange for the reliable reminder surface.
+
+Neither tier barges into a user mid-speech. The queue always waits for turn-end; `PREEMPT` only wins against content, not users. If a user is speaking when a `PREEMPT` reminder fires, it queues and drains at the end of whatever turn follows (including any tool-call follow-up rounds).
+
 **What `prompt` should contain**: an instruction for the LLM, not the literal words to speak. The persona prompt + the persona's voice transform your instruction into the actual utterance. For a medication reminder, `"Es hora de la pastilla de las nueve"` is fine — the LLM narrates that verbatim or close to it; for something needing more context, `"Dile al usuario que su hijo Carlos mandó un mensaje que dice '<text>', pregúntale si quiere escucharlo"` works too.
 
 **Future surface (Stage 1d, not yet shipped)**:

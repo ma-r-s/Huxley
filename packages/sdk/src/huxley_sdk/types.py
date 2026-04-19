@@ -61,6 +61,34 @@ class ToolDefinition:
         }
 
 
+class InjectPriority(Enum):
+    """Priority tier for `SkillContext.inject_turn`.
+
+    - `NORMAL` (default) — respectful scheduling. If idle, fires
+      immediately (preempts any content stream, since the framework
+      assumes the skill wouldn't have fired without a reason). If a
+      user or synthetic turn is in progress, queues and drains at the
+      next quiet turn-end (a turn ending WITHOUT a pending content
+      stream). Right for social reminders, routine chatter.
+    - `PREEMPT` — urgent. If idle, fires immediately. If a turn is in
+      progress, still queues (barging in on a user mid-speech is
+      hostile). But at turn-end, PREEMPT fires even if the turn
+      spawned a content stream — the queue doesn't wait for a "quiet
+      moment" that might never come during a long audiobook session.
+      The content stream request is dropped (user has to re-ask).
+      Right for time-critical events: medication reminders, safety
+      alerts, inbound calls you can't miss.
+
+    Only two tiers today; the AVS-style 4-tier model
+    (AMBIENT/CHIME_DEFER/INTERRUPT/CRITICAL) from the original
+    io-plane spec was dropped at the focus-management pivot. Stage 1d.2
+    may grow this enum when TTL + outcome handle arrive.
+    """
+
+    NORMAL = "normal"
+    PREEMPT = "preempt"
+
+
 class ContentType(Enum):
     """How an audio stream behaves when a higher-priority speaker
     preempts it. Verbatim from AVS Focus Management.
@@ -333,16 +361,20 @@ class SkillContext:
       Resolve your skill's file paths against this, not against CWD.
     - `config`: the per-skill config dict from `persona.yaml`'s
       `skills.<name>:` section.
-    - `inject_turn(prompt, *, dedup_key=None)`: speak proactively —
-      framework synthesizes a DIALOG turn that narrates `prompt` in
-      the persona's voice. If idle, fires immediately (preempts any
-      playing content stream). If a user or synthetic turn is already
-      active, the request is **queued** and drains when a turn ends
-      without pending content. `dedup_key` (optional, opaque string):
-      replaces a same-key entry in the queue (last-writer-wins);
-      drops silently if a same-key request is currently firing.
-      `expires_after` and an outcome-tracking handle are deferred to
-      a later stage. See `docs/skills/README.md` for usage pattern.
+    - `inject_turn(prompt, *, dedup_key=None, priority=NORMAL)`:
+      speak proactively — framework synthesizes a DIALOG turn that
+      narrates `prompt` in the persona's voice. If idle, fires
+      immediately (preempts any playing content stream). If a user
+      or synthetic turn is active, the request is **queued**.
+      `priority` controls drain behavior at turn-end: `NORMAL`
+      waits for a quiet turn (one ending without content), `PREEMPT`
+      fires even over a pending content stream (right for medication
+      reminders and safety events). `dedup_key` (optional, opaque
+      string): replaces a same-key entry in the queue
+      (last-writer-wins); drops silently if a same-key request is
+      currently firing. `expires_after` and an outcome-tracking
+      handle are deferred to a later stage. See `docs/skills/README.md`
+      for usage pattern.
     - `background_task(name, coro_factory, *, restart_on_crash=True,
       max_restarts_per_hour=10, on_permanent_failure=None) ->
       BackgroundTaskHandle`: spawn a long-running supervised task.
