@@ -712,24 +712,55 @@ beyond bug elimination. 253 tests green (was 244; +9 new regression
 tests). Ordering fix verified — `TestCleanupOrdering` tests correctly
 fail if reordering is reverted.
 
-**Stage 1b — Server-side duck PCM envelope (~1 day, queued).** Wire
-`ContentStreamObserver.on_focus_changed(BACKGROUND, MAY_DUCK)` to an
-actual gain ramp on outgoing PCM (instead of today's
-`focus.duck_not_implemented` log + fallback to pause). This is the
-cheapest test that the FocusManager-plus-observer substrate actually
-composes cleanly for a real multi-channel interaction. If it doesn't,
-we catch it on a 1-day diff instead of later. Validates:
-FOREGROUND→BACKGROUND→FOREGROUND patience path end-to-end.
+**Stage 1c — `inject_turn` MVP** (reordered ahead of 1b after plan-level
+review 2026-04-18; see session transcript). Broken into four small
+commits instead of one 3-day monolith. Each is individually
+smoke-testable with no regression from the previous state.
 
-**Stage 1c — `inject_turn` MVP (~3 days, queued).** Wire
-`FocusManager.acquire(Activity(DIALOG, ...))` from
-`SkillContext.inject_turn()`. **One urgency tier only** (the
-"speak now, preempt whatever's playing" case). No queue, no TTL, no
-dedup, no `InjectedTurnHandle.wait_outcome()`. Just: skill calls
-`inject_turn(prompt)`, framework synthesizes a DIALOG-channel
-Activity, FocusManager preempts CONTENT, LLM narrates the prompt.
-Unblocks a reminder-skill MVP (`huxley-skill-reminders` T1.8).
-Validates cross-channel arbitration in production, not just tests.
+- **Stage 1c.0 — SpeakingState authority doc** ✅ **done** (`<this
+commit>`, 2026-04-18). Written into `docs/architecture.md` under
+  "Turn coordinator internals → Authority contract." Defines:
+  `SpeakingState` authoritative for "client speaker indicator";
+  `FocusManager` authoritative for "who holds the claim"; coordinator
+  owns the bridge. Transition table documents every DIALOG/CONTENT
+  FocusState change and the corresponding SpeakingState write.
+  Resolves Open Question 2 below.
+
+- **Stage 1c.1 — Wire FocusManager into Application lifecycle**
+  (~80 LOC, ~1h, queued). `Application` constructs +
+  `FocusManager.with_default_channels()`, `start()` in `run()`,
+  `stop()` in `_shutdown`. Coordinator gets a reference via
+  constructor. **Still direct-drives the observer — no behavior
+  change.** Smoke: audiobook playback and interrupt paths unchanged.
+
+- **Stage 1c.2 — Route CONTENT through FocusManager** (~150 LOC,
+  ~2-3h, queued). `_start_content_stream` creates
+  `Activity(channel=CONTENT, interface_name, content_type=NONMIXABLE,
+observer=ContentStreamObserver(...))` and calls
+  `fm.acquire(activity)` instead of
+  `obs.on_focus_changed(FOREGROUND)`. `_stop_content_stream` →
+  `fm.release(CONTENT, interface_name)`. `current_media_task` becomes
+  a query through FocusManager's stack (critic's Design B concern
+  applies here — budget carefully). **Invisible to users; substrate
+  now driving.**
+
+- **Stage 1c.3 — `SkillContext.inject_turn(prompt)` MVP** (~80 LOC,
+  ~2h, queued). Add method to `SkillContext`. Implementation: framework
+  creates `Activity(channel=DIALOG, ...)` on coordinator's FocusManager.
+  Content channel Activity (if present) goes BACKGROUND → MUST_PAUSE
+  (NONMIXABLE) → pump cancels via the path already shipped in 1a. LLM
+  narrates the injected prompt. **Ships inject_turn as a working
+  feature.** Unblocks reminder skill MVP (T1.8). Single urgency tier
+  (preempt); queue, TTL, dedup all deferred to Stage 1d.
+
+**Stage 1b — Server-side duck PCM envelope (~1 day, queued, moved
+after 1c).** Replaces the MUST_PAUSE fallback for MAY_DUCK+MIXABLE
+Activities with a real PCM gain ramp. Open Question 3 decided:
+ducking lives **inside `ContentStreamObserver`** (not a shared
+`huxley.audio.ducking` module); extract later if a second consumer
+needs it. Linear ramp, 100ms duration, 0.3 target gain. PCM16 scaling
+via `struct` (no numpy dep). Polishes the UX of 1c.3 from hard-pause
+to smooth duck.
 
 **Stage 1d — Hold queue + TTL + dedup (~2 days, queued).** Add
 CHIME_DEFER-equivalent semantics on top of 1c: `inject_turn(urgency=
@@ -764,17 +795,20 @@ Unchanged in scope.
    argument. Worth a fresh critic pass before starting Stage 2. **Flag
    to resolve when we pick up Stage 2.**
 
-2. **SpeakingState authority contract** (Design A above). Must be
-   written down in `docs/architecture.md` before `inject_turn` MVP
-   (Stage 1c) lands — or Stage 1c re-opens the "who owns model_speaking"
-   question we punted on during the pivot. **Resolve during Stage 1c
-   design.**
+2. **SpeakingState authority contract** (Design A above). ✅ **resolved
+   Stage 1c.0 (this commit)**. Documented in `docs/architecture.md`
+   "Turn coordinator internals → Authority contract" with a transition
+   table covering every DIALOG/CONTENT FocusState change and the
+   coordinator's corresponding SpeakingState write. Summary:
+   `SpeakingState` is authoritative for "client speaker indicator";
+   `FocusManager` is authoritative for "who holds the claim";
+   coordinator bridges. They can transiently disagree; reconciliation
+   happens at barriers.
 
-3. **Duck envelope location**: does the PCM gain ramp live on
-   `ContentStreamObserver` (per-observer implementation) or on a
-   shared `huxley.audio.ducking` module that any observer can reuse?
-   Decision deferred to Stage 1b kickoff. **Resolve during Stage 1b
-   design.**
+3. **Duck envelope location**: ✅ **resolved 2026-04-18 at Stage 1b
+   kickoff**. Lives **inside `ContentStreamObserver`** (not a shared
+   `huxley.audio.ducking` module). One consumer today; extract later
+   if a second observer type wants ducking (YAGNI).
 
 ### (Archived) original Stage 1 plan — `inject_turn` + arbitration + ducking
 

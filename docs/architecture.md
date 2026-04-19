@@ -209,6 +209,45 @@ reshaping the coordinator:
 See `docs/io-plane.md` for the primitives these collaborators will support
 and `docs/turns.md` for the turn state machine they orchestrate.
 
+### Authority contract — `SpeakingState` vs `FocusManager`
+
+Two overlapping-but-distinct concerns live side by side. To prevent drift, the split is explicit:
+
+**`SpeakingState` is authoritative for "should the client show a speaking indicator right now."** It tracks actual audio flow out the WebSocket. Its `notify(bool)` callback fires the `model_speaking` wire event that drives the client's UI and silence-timer gating. Writes happen on concrete audio-bearing events:
+
+- `acquire(owner)` when the first audio chunk of a turn actually lands (first `on_audio_delta`, or first chunk of a content-stream pump)
+- `force_release()` on `on_audio_done`, `interrupt()`, `on_session_disconnected`
+- `transfer(from, to)` when a stream hands ownership to a synthetic follow-up turn (e.g. FACTORY → COMPLETION at `_maybe_fire_completion_prompt`) — no notify fires; the client is still seeing `model_speaking=true`, only the internal owner label changes
+
+**`FocusManager` is authoritative for "who has claimed the speaker resource."** A channel `Activity` being FOREGROUND means "this activity holds the right to speak," which is a _logical_ claim — it can precede actual audio by hundreds of milliseconds (first-token latency on the LLM, subprocess spawn on a content stream). Writes happen on claim lifecycle events:
+
+- `acquire(activity)` when a skill or the coordinator registers an intent to speak
+- `release(channel, interface_name)` on clean end
+- `stop_foreground()` / `stop()` on barrier events
+- patience expiry, preemption, same-interface replacement — all mailbox-driven
+
+**The invariant** (maintained by the coordinator, not the framework): every transition of `FocusManager`-delivered FocusState for a DIALOG or CONTENT channel corresponds to exactly one matched transition of `SpeakingState` — but _not necessarily at the same instant_. The coordinator owns the bridge:
+
+| FocusManager event                                    | Coordinator response       | SpeakingState write                                        |
+| ----------------------------------------------------- | -------------------------- | ---------------------------------------------------------- |
+| DIALOG → FOREGROUND (user turn starts)                | wait for first audio delta | on first delta: `acquire(USER)`                            |
+| DIALOG → NONE (turn interrupted / ends)               | stop consuming model audio | `force_release()` (idempotent — may already be clear)      |
+| CONTENT → FOREGROUND (stream starts)                  | spawn pump                 | on first chunk: `acquire(FACTORY)`                         |
+| CONTENT → BACKGROUND/MAY_DUCK                         | ramp gain (no pause)       | no change; factory still speaking                          |
+| CONTENT → BACKGROUND/MUST_PAUSE                       | cancel pump                | `release(FACTORY)` if owned                                |
+| CONTENT → NONE                                        | cancel pump, clean up      | `release(FACTORY)` if owned                                |
+| DIALOG preempts CONTENT (completion follow-up prompt) | synthesize COMPLETION turn | `transfer(FACTORY → COMPLETION)` — no notify, same speaker |
+
+**Consequences for callers:**
+
+- Skills never touch `SpeakingState`. It's a framework-internal artifact of the audio pipeline.
+- Skills describe their intent via `SideEffect` types (`AudioStream`, future `InputClaim`); the framework translates to `FocusManager` events and, as audio actually flows, updates `SpeakingState`.
+- Tests can assert on either — `FocusManager` state for "did this claim land," `SpeakingState` for "did the user hear audio" — but never on both as if they're the same thing.
+
+**When they disagree** (a turn holds DIALOG FOREGROUND but no audio has flowed yet, or a stream pumped one chunk then was preempted before `release` fired), `SpeakingState` is what the client sees. `FocusManager` is what the framework knows. Reconciliation happens at the next barrier (`interrupt()`, `on_session_disconnected`, natural response-done).
+
+This contract is load-bearing for T1.4 Stage 1c onward. Any future primitive that speaks (inject_turn, InputClaim with `speaker_source`) must name explicitly which of the two it's writing to, and the framework bridges the rest.
+
 ## Dependency flow (no cycles)
 
 ```mermaid
