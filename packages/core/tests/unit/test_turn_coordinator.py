@@ -1424,23 +1424,28 @@ class TestInjectTurn:
         assert ("send_conversation_message", "Es hora de la pastilla.") in provider.sent
         assert ("request_response",) in provider.sent
 
-    async def test_inject_skipped_when_user_turn_active(
+    async def test_inject_queued_when_user_turn_active(
         self,
         coordinator: TurnCoordinator,
         provider: StubVoiceProvider,
     ) -> None:
-        """If a user turn is live, inject_turn is a no-op (logs + returns)."""
+        """Stage 1d: if a user turn is live, inject_turn is QUEUED (not
+        dropped). The provider sees nothing new; the user's turn proceeds
+        unchanged; the request waits in the queue until a turn ends."""
         await coordinator.on_ptt_start()
         assert coordinator.current_turn is not None
         pre_sent_count = len(provider.sent)
 
         await coordinator.inject_turn("Aviso urgente.")
 
-        # Nothing new on the provider.
+        # Nothing new on the provider yet — still queued.
         assert len(provider.sent) == pre_sent_count
-        # User turn still LISTENING (unchanged).
+        # User turn unchanged.
         assert coordinator.current_turn.state == TurnState.LISTENING
         assert coordinator.current_turn.source.value == "user"
+        # Queue holds the request.
+        assert len(coordinator._injected_queue) == 1
+        assert coordinator._injected_queue[0].prompt == "Aviso urgente."
 
     async def test_inject_preempts_active_content_stream(
         self,
@@ -1519,6 +1524,155 @@ class TestInjectTurn:
 
         assert not focus_manager._stacks[Channel.DIALOG]
         assert coordinator._dialog_interface_name is None
+
+
+class TestInjectTurnQueue:
+    """Stage 1d: queue + dedup behavior for `inject_turn`.
+
+    Queue holds prompts that arrive while a user/synthetic turn is
+    active. Drains in `_apply_side_effects` when a turn ends without
+    pending content streams. Preserved across `interrupt()` so a user
+    PTT mid-reminder doesn't lose pending reminders.
+    """
+
+    async def test_queued_request_drains_on_natural_turn_end(
+        self,
+        coordinator: TurnCoordinator,
+        provider: StubVoiceProvider,
+    ) -> None:
+        """User turn → inject queues → user turn ends with no content →
+        queued inject fires."""
+        # User turn in progress.
+        await _commit_turn(coordinator)
+        await coordinator.inject_turn("Recordatorio de pastilla.")
+        assert len(coordinator._injected_queue) == 1
+
+        # Model responds with a simple audio response (no tools, no content).
+        await coordinator.on_audio_delta(b"ok")
+        await coordinator.on_audio_done()
+        await coordinator.on_response_done()
+
+        # The queued inject fired during _apply_side_effects.
+        assert len(coordinator._injected_queue) == 0
+        assert ("send_conversation_message", "Recordatorio de pastilla.") in provider.sent
+        assert coordinator.current_turn is not None
+        assert coordinator.current_turn.source.value == "injected"
+
+    async def test_queued_request_held_when_turn_ends_with_content(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+    ) -> None:
+        """If the natural turn end spawns a content stream, the queue
+        does NOT drain — content wins, reminder waits for the next
+        quiet moment."""
+        factory = _factory(b"book")
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output="{}", side_effect=AudioStream(factory=factory)
+        )
+
+        await _commit_turn(coordinator)
+        await coordinator.inject_turn("aviso", dedup_key="r1")
+        assert len(coordinator._injected_queue) == 1
+
+        await coordinator.on_tool_call("c1", "play_audiobook", {})
+        await coordinator.on_response_done()
+
+        # Content stream started, queue still has the inject.
+        assert coordinator.current_media_task is not None
+        assert len(coordinator._injected_queue) == 1
+        assert coordinator._injected_queue[0].prompt == "aviso"
+
+    async def test_queued_requests_drain_fifo(
+        self,
+        coordinator: TurnCoordinator,
+        provider: StubVoiceProvider,
+    ) -> None:
+        """Two queued requests drain in arrival order across consecutive
+        turn-ends."""
+        await _commit_turn(coordinator)
+        await coordinator.inject_turn("primero")
+        await coordinator.inject_turn("segundo")
+        assert [r.prompt for r in coordinator._injected_queue] == ["primero", "segundo"]
+
+        # End the user turn — `primero` fires.
+        await coordinator.on_audio_delta(b"ok")
+        await coordinator.on_audio_done()
+        await coordinator.on_response_done()
+        assert ("send_conversation_message", "primero") in provider.sent
+        assert [r.prompt for r in coordinator._injected_queue] == ["segundo"]
+        assert coordinator.current_turn is not None  # injected turn live
+
+        # End the injected turn — `segundo` fires.
+        await coordinator.on_audio_delta(b"ok")
+        await coordinator.on_audio_done()
+        await coordinator.on_response_done()
+        assert ("send_conversation_message", "segundo") in provider.sent
+        assert coordinator._injected_queue == []
+
+    async def test_dedup_key_replaces_queued_entry(
+        self,
+        coordinator: TurnCoordinator,
+    ) -> None:
+        """A second enqueue with the same `dedup_key` replaces the first
+        (last-writer-wins) — protects against repeated timer fires
+        spamming the queue."""
+        await _commit_turn(coordinator)
+        await coordinator.inject_turn("v1", dedup_key="med_9am")
+        await coordinator.inject_turn("v2", dedup_key="med_9am")
+
+        assert len(coordinator._injected_queue) == 1
+        assert coordinator._injected_queue[0].prompt == "v2"
+
+    async def test_dedup_key_drops_when_in_flight_matches(
+        self,
+        coordinator: TurnCoordinator,
+        provider: StubVoiceProvider,
+    ) -> None:
+        """A new enqueue is dropped when a same-key inject is currently
+        firing (already speaking — duplicate would stack)."""
+        # Fire one inject (idle path) → DIALOG acquired, in-flight.
+        await coordinator.inject_turn("primera vez", dedup_key="med_9am")
+        assert coordinator._current_injected_dedup_key == "med_9am"
+        sent_before = len(provider.sent)
+
+        # Same-key inject while in-flight → dropped, no enqueue.
+        await coordinator.inject_turn("segunda vez", dedup_key="med_9am")
+        assert coordinator._injected_queue == []
+        # No new send_conversation_message — second was dropped at
+        # enqueue time, not fired.
+        new_messages = [
+            s for s in provider.sent[sent_before:] if s and s[0] == "send_conversation_message"
+        ]
+        assert new_messages == []
+
+    async def test_dedup_key_none_bypasses_dedup(
+        self,
+        coordinator: TurnCoordinator,
+    ) -> None:
+        """Two requests with `dedup_key=None` both queue independently —
+        no implicit dedup."""
+        await _commit_turn(coordinator)
+        await coordinator.inject_turn("uno")
+        await coordinator.inject_turn("dos")
+
+        assert len(coordinator._injected_queue) == 2
+
+    async def test_queue_preserved_across_interrupt(
+        self,
+        coordinator: TurnCoordinator,
+    ) -> None:
+        """User PTTs (interrupt) during a queued state — queue stays.
+        The user's new turn ending will eventually drain it."""
+        await _commit_turn(coordinator)
+        await coordinator.inject_turn("aviso")
+        assert len(coordinator._injected_queue) == 1
+
+        await coordinator.interrupt()
+
+        # Queue intact — interrupt clears DIALOG / content but not
+        # the pending-injects queue.
+        assert len(coordinator._injected_queue) == 1
 
 
 class TestTurnDataclass:

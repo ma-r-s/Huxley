@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import structlog
@@ -55,6 +56,17 @@ _SOURCE_TO_OWNER: dict[TurnSource, SpeakingOwner] = {
     TurnSource.COMPLETION: SpeakingOwner.COMPLETION,
     TurnSource.INJECTED: SpeakingOwner.INJECTED,
 }
+
+
+@dataclass(frozen=True, slots=True)
+class _InjectedRequest:
+    """One queued `inject_turn` request. Stage 1d: FIFO queue, dedup only.
+    TTL and outcome handle arrive in a later stage.
+    """
+
+    prompt: str
+    dedup_key: str | None
+
 
 if TYPE_CHECKING:
     import asyncio
@@ -139,6 +151,16 @@ class TurnCoordinator:
         # The interface_name is the framework-internal handle used to
         # release via `fm.release(Channel.DIALOG, ...)`.
         self._dialog_interface_name: str | None = None
+        # FIFO queue of inject_turn requests that couldn't fire immediately
+        # (a user or synthetic turn was already in progress). Drained in
+        # `_apply_side_effects` when a turn ends without pending content.
+        # Preserved across `interrupt()` and `on_session_disconnected` so
+        # reminders aren't lost when the user PTTs mid-reminder.
+        self._injected_queue: list[_InjectedRequest] = []
+        # Dedup key of the currently-firing injected turn (if any). Used
+        # to drop a re-enqueue with the same key while it's in-flight.
+        # Cleared by `_release_dialog`.
+        self._current_injected_dedup_key: str | None = None
 
         self.current_turn: Turn | None = None
         self.response_cancelled: bool = False
@@ -561,6 +583,19 @@ class TurnCoordinator:
 
         if streams:
             await self._start_content_stream(streams[-1], turn_id)
+        elif self._injected_queue:
+            # No content pending — this is a quiet moment. Drain one
+            # queued inject_turn request. (Only one per turn-end: if
+            # there are more, the injected turn itself ends via
+            # `_apply_side_effects` again and this branch re-fires for
+            # the next queued item. FIFO preserved.)
+            request = self._injected_queue.pop(0)
+            await self._log.ainfo(
+                "coord.inject_turn_dequeued",
+                remaining=len(self._injected_queue),
+                dedup_key=request.dedup_key,
+            )
+            await self._fire_injected_turn(request.prompt, request.dedup_key)
 
     async def _emit_turn_summary(self, *, reason: str, spawned_audio_stream: bool) -> None:
         """One-line summary at end-of-turn. Useful for grep + per-turn timing."""
@@ -685,31 +720,67 @@ class TurnCoordinator:
         await self._focus_manager.release(Channel.CONTENT, obs.interface_name)
         await self._focus_manager.wait_drained()
 
-    # --- Proactive speech (T1.4 Stage 1c.3 — inject_turn MVP) ---
+    # --- Proactive speech (T1.4 Stages 1c.3 + 1d — inject_turn) ---
 
-    async def inject_turn(self, prompt: str) -> None:
+    async def inject_turn(self, prompt: str, *, dedup_key: str | None = None) -> None:
         """Speak `prompt` proactively via a synthetic DIALOG turn.
 
-        MVP scope: preempt whatever content stream is playing, narrate the
-        prompt, return to idle. No queue, no TTL, no dedup, no handle —
-        those arrive in Stage 1d. If a user or synthetic turn is currently
-        active, inject_turn logs and returns; the skill should retry later.
+        Behavior:
 
-        The DIALOG acquire goes through the FocusManager: any CONTENT
-        Activity on the stack goes BACKGROUND → (NONMIXABLE) MUST_PAUSE →
-        the content observer cancels its pump. `wait_drained()` ensures
-        that chain completes before we send the conversation message, so
-        the preempted content audio can't trail into the narration.
+        - If idle (no current turn), fire immediately. Any playing
+          content stream gets preempted via FocusManager (CONTENT →
+          BACKGROUND/MUST_PAUSE → pump cancels).
+        - If a user or synthetic turn is already in progress, **queue**
+          the request. The queue drains in `_apply_side_effects` when
+          a turn ends without a pending content stream. This prevents
+          dropped reminders when the user happens to PTT the moment a
+          timer fires.
+
+        `dedup_key` (Stage 1d): an opaque string identifying this
+        logical request. If a queued entry already exists with the same
+        key, the new request REPLACES it (last-writer-wins). If the
+        currently-firing injected turn has the same key, the new
+        request is silently DROPPED — duplicate narration-in-progress
+        is worse than a missed dedup. `dedup_key=None` bypasses dedup.
+
+        Not yet shipped (future stage): `expires_after` TTL, outcome
+        handle with `wait_outcome()`, cross-channel arbitration tiers.
         """
         if self.current_turn is not None:
-            await self._log.ainfo(
-                "coord.inject_turn_skipped",
-                reason="turn_active",
-                prev_state=self.current_turn.state.value,
-                prev_source=self.current_turn.source.value,
-            )
+            await self._enqueue_injected(prompt, dedup_key)
             return
+        await self._fire_injected_turn(prompt, dedup_key)
 
+    async def _enqueue_injected(self, prompt: str, dedup_key: str | None) -> None:
+        """Append or dedup-replace a pending inject_turn request."""
+        if dedup_key is not None:
+            if self._current_injected_dedup_key == dedup_key:
+                await self._log.ainfo(
+                    "coord.inject_turn_dropped",
+                    reason="dedup_in_flight",
+                    dedup_key=dedup_key,
+                )
+                return
+            # Remove any same-key entries already queued (last-writer-wins).
+            before = len(self._injected_queue)
+            self._injected_queue = [r for r in self._injected_queue if r.dedup_key != dedup_key]
+            if len(self._injected_queue) < before:
+                await self._log.ainfo(
+                    "coord.inject_turn_deduped",
+                    dedup_key=dedup_key,
+                    removed=before - len(self._injected_queue),
+                )
+        self._injected_queue.append(_InjectedRequest(prompt=prompt, dedup_key=dedup_key))
+        await self._log.ainfo(
+            "coord.inject_turn_queued",
+            queue_depth=len(self._injected_queue),
+            dedup_key=dedup_key,
+            prev_state=self.current_turn.state.value if self.current_turn else None,
+        )
+
+    async def _fire_injected_turn(self, prompt: str, dedup_key: str | None) -> None:
+        """Actually create the INJECTED turn, acquire DIALOG, send prompt.
+        Caller guarantees `self.current_turn is None`."""
         # Synthesize the Turn. Skills pass a plain string; the framework
         # wraps it in a TurnSource.INJECTED turn that the rest of the
         # coordinator treats like any other in-response turn — audio
@@ -723,6 +794,7 @@ class TurnCoordinator:
 
         interface_name = f"turn.dialog.{self._tid() or 'unknown'}"
         self._dialog_interface_name = interface_name
+        self._current_injected_dedup_key = dedup_key
 
         async def _on_stop() -> None:
             # Fired when FM delivers NONE/MUST_STOP to the observer —
@@ -744,6 +816,7 @@ class TurnCoordinator:
             "coord.inject_turn",
             prompt_len=len(prompt),
             interface=interface_name,
+            dedup_key=dedup_key,
         )
         await self._focus_manager.acquire(activity)
         await self._focus_manager.wait_drained()
@@ -776,6 +849,9 @@ class TurnCoordinator:
         if iface is None:
             return
         self._dialog_interface_name = None
+        # Clear the in-flight dedup key alongside the activity — a
+        # re-enqueue with the same key is now allowed.
+        self._current_injected_dedup_key = None
         await self._focus_manager.release(Channel.DIALOG, iface)
         await self._focus_manager.wait_drained()
 

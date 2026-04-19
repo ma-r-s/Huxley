@@ -789,12 +789,33 @@ NONMIXABLE so MAY_DUCK doesn't fire through production code paths
 — but the primitive is unit-tested in isolation and ready to fire
 the first time a MIXABLE stream lands.
 
-**Stage 1d — Hold queue + TTL + dedup (~2 days, queued).** Add
-CHIME_DEFER-equivalent semantics on top of 1c: `inject_turn(urgency=
-LOW_PRIORITY)` queues instead of preempting; `expires_after` drops
-from queue silently; `dedup_key` replaces on collision; next PTT
-drains FIFO. Needs `InjectedTurnHandle.wait_outcome()` to become
-useful (first consumer: medication reminder retry loop).
+**Stage 1d.1 — inject_turn queue + dedup_key** ✅ **done** (`<this
+commit>`, 2026-04-18). The "request was silently dropped because a
+turn was active" hole from 1c.3 is closed: `inject_turn` now queues
+when busy and drains in `_apply_side_effects` when a turn ends
+**without** a pending content stream. Content always wins over a
+queued reminder (preempting a freshly-started book to fire a stale
+reminder is bad UX); the queue waits for the next quiet moment.
+`dedup_key` (opaque string): if the queued list has a same-key
+entry, the new request replaces it (last-writer-wins); if a same-key
+inject is currently firing, the new one is silently dropped.
+`SkillContext.inject_turn` signature relaxed to `Callable[...,
+Awaitable[None]]` so skills can pass `dedup_key=...`. 7 new unit
+tests in `TestInjectTurnQueue`. The first user-visible consumer
+(timers skill) doesn't pass `dedup_key` today — its IDs are unique
+per-timer — but a future medication-reminder skill will use
+`dedup_key="med_<schedule_id>_<date>"` to handle re-fires from the
+scheduler.
+
+**Stage 1d.2 — TTL + outcome handle** (~1 day, queued, deferred from
+1d.1). Add `expires_after: timedelta | None` parameter — queued
+requests older than the TTL are dropped silently when reached at
+drain time. Add `InjectedTurnHandle` returned from `inject_turn`
+exposing `.wait_outcome()` resolving to a `TurnOutcome` enum
+(`DELIVERED | EXPIRED | CANCELLED | PREEMPTED`); enables the
+medication-retry pattern where a reminder reschedules itself if
+not delivered. Defer until a real consumer (T1.8 evolved reminder
+skill) needs it — the timers MVP doesn't.
 
 **Stage 1f — Stale FACTORY owner after inject_turn preemption**
 ✅ **done** (`<this commit>`, 2026-04-18, shipped alongside 1b).

@@ -226,15 +226,12 @@ Skills that want to contribute baseline context to every session prompt implemen
 
 ## Proactive speech — `ctx.inject_turn`
 
-> ℹ️ **MVP shipped (T1.4 Stage 1c.3).** Today's API is one urgency tier
-> (preempt), no queue, no TTL, no dedup, no return handle. If a user or
-> synthetic turn is already active when you call `inject_turn`, it's
-> silently skipped — retry later. Stage 1d adds the hold queue,
-> `expires_after`, `dedup_key`, and the `InjectedTurnHandle` with
-> `.wait_outcome()`. The multi-urgency code sample in the old plan
-> (`urgency=Urgency.INTERRUPT` etc.) is **not** the shipped surface —
-> that vocabulary was dropped in the focus-management pivot. The
-> current surface is below.
+> ℹ️ **Shipped (Stages 1c.3 + 1d).** Today's API supports the queue
+>
+> - dedup behaviors below. **Not yet shipped**: `expires_after` TTL,
+>   `InjectedTurnHandle` with `.wait_outcome()` for outcome-driven
+>   retry, multi-urgency tiers (one preempt level today; defer-to-next-
+>   idle is a future addition).
 
 Some skills need to speak without the user asking first: a medication reminder fires at 9am; a message from family arrives; an appointment is 30 minutes away. The framework's turn loop normally only runs on user PTT, but `ctx.inject_turn` lets a skill inject a synthetic turn from outside.
 
@@ -243,7 +240,21 @@ Some skills need to speak without the user asking first: a medication reminder f
 await self._ctx.inject_turn("Es hora de la pastilla de las nueve.")
 ```
 
-The framework handles the rest: it preempts any playing audiobook / radio / stream, flushes the client audio buffer so preempted chunks don't play over the narration, then asks the LLM to narrate the prompt in persona voice. The user hears (content cuts) → narration. When narration ends, the content stays stopped — **Stage 1d will add a "resume or drop" policy based on the content's `patience`**, but today it just stops.
+**Behavior**:
+
+- **Idle (no turn in progress)**: fires immediately. Any playing content stream (audiobook, radio) is preempted via FocusManager — the LLM narrates the prompt in persona voice, then the framework releases focus. The content stays stopped (a future stage will add "resume or drop" based on the stream's patience).
+- **Busy (a user or synthetic turn is in progress)**: the request is **queued**. It drains automatically when a turn ends without spawning a content stream. This protects against dropped reminders when the user happens to PTT at the moment a timer fires.
+
+**Dedup** (optional `dedup_key`):
+
+```python
+await self._ctx.inject_turn(
+    "Es hora de la pastilla de las nueve.",
+    dedup_key="med_9am_2026-04-19",
+)
+```
+
+`dedup_key` is an opaque string identifying the logical event. If a queued entry already has the same key, the new request **replaces** it (last-writer-wins). If the same key is currently firing (DIALOG already acquired with that key), the new request is **silently dropped** — repeating the same reminder while it's mid-narration would just create a confused stack. Skip `dedup_key=None` (default) to bypass dedup.
 
 **What `prompt` should contain**: an instruction for the LLM, not the literal words to speak. The persona prompt + the persona's voice transform your instruction into the actual utterance. For a medication reminder, `"Es hora de la pastilla de las nueve"` is fine — the LLM narrates that verbatim or close to it; for something needing more context, `"Dile al usuario que su hijo Carlos mandó un mensaje que dice '<text>', pregúntale si quiere escucharlo"` works too.
 

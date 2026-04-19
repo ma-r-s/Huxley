@@ -213,10 +213,13 @@ class SkillLogger(Protocol):
     async def aexception(self, event: str, **kwargs: Any) -> None: ...
 
 
-async def _noop_inject_turn(_prompt: str) -> None:
+async def _noop_inject_turn(_prompt: str, **_kwargs: Any) -> None:
     """Default `inject_turn` for `SkillContext` — used by test fixtures that
     don't wire a real coordinator. Framework-built contexts replace this
     with the real callable from the `TurnCoordinator`.
+
+    Accepts **kwargs so that skills can pass Stage 1d arguments like
+    `dedup_key=...` to test contexts without them raising.
     """
     return None
 
@@ -236,19 +239,23 @@ class SkillContext:
       Resolve your skill's file paths against this, not against CWD.
     - `config`: the per-skill config dict from `persona.yaml`'s
       `skills.<name>:` section.
-    - `inject_turn(prompt)`: speak proactively — framework synthesizes a
-      DIALOG turn that narrates `prompt` in the persona's voice,
-      preempting any content stream. MVP: one urgency tier (preempt);
-      skipped silently if a user or synthetic turn is already active
-      (the skill can retry later). Queue/TTL/dedup arrive in a later
-      stage. See `docs/skills/README.md` for usage pattern.
+    - `inject_turn(prompt, *, dedup_key=None)`: speak proactively —
+      framework synthesizes a DIALOG turn that narrates `prompt` in
+      the persona's voice. If idle, fires immediately (preempts any
+      playing content stream). If a user or synthetic turn is already
+      active, the request is **queued** and drains when a turn ends
+      without pending content. `dedup_key` (optional, opaque string):
+      replaces a same-key entry in the queue (last-writer-wins);
+      drops silently if a same-key request is currently firing.
+      `expires_after` and an outcome-tracking handle are deferred to
+      a later stage. See `docs/skills/README.md` for usage pattern.
     """
 
     logger: SkillLogger
     storage: SkillStorage
     persona_data_dir: Path
     config: dict[str, Any]
-    inject_turn: Callable[[str], Awaitable[None]] = _noop_inject_turn
+    inject_turn: Callable[..., Awaitable[None]] = _noop_inject_turn
 
     def catalog(self, name: str = "default") -> Catalog:
         """Construct a fresh `Catalog` for this skill's personal-content data.
