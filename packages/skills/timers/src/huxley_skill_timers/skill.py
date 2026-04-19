@@ -7,17 +7,21 @@ fires `ctx.inject_turn(message)` when the timer expires. The
 framework preempts any playing content stream and narrates the
 reminder in persona voice.
 
-Scope (T1.4 Stage 3 — supervised tasks now adopted):
+Scope (T1.4 Stage 3b — persistence shipped):
 
 - **Supervised tasks**: each timer runs under
   `ctx.background_task(name="timer:N", ...)` with
   `restart_on_crash=False` (one-shot — restarting a fired-too-early
   reminder would re-sleep for the original duration). Crashes log
   via the supervisor; teardown cancels via the returned handle.
-- **Still in-memory** — timers do NOT survive a server restart.
-  Persistence (via `SkillStorage`) is the next obvious step; the
-  setup-time restore path is straightforward now that supervised
-  tasks are available.
+- **Persistent across restart**: each timer writes a JSON entry to
+  skill-namespaced `SkillStorage` keyed `timer:<id>` with the
+  wall-clock fire time. `setup()` enumerates pending entries via
+  `ctx.storage.list_settings("timer:")` and reschedules or drops
+  them based on age (see `_restore_pending` for the policy). A
+  `fired_at` field, written just before `inject_turn`, acts as a
+  dedup guard so a process crash *between* narration and entry
+  delete doesn't cause a second reminder on restore.
 - `set_timer` only — no `list_timers` or `cancel_timer` yet. Add
   when a user flow actually needs them.
 """
@@ -26,12 +30,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from huxley_sdk import (
     BackgroundTaskHandle,
     SkillContext,
     SkillLogger,
+    SkillStorage,
     ToolDefinition,
     ToolResult,
 )
@@ -43,6 +49,20 @@ _MIN_SECONDS = 1
 _MAX_SECONDS = 3600  # 1 hour — anything longer suggests the user wants
 # a different primitive (appointment / calendar), which this skill
 # deliberately doesn't grow into.
+
+# Storage key prefix for persisted pending timers. `setup()` enumerates
+# this prefix on boot to rebuild `_handles` across a server restart.
+_STORAGE_PREFIX = "timer:"
+
+# Entry schema version — bumped if the persisted shape changes so a
+# future migration can recognize v1 entries and upgrade them.
+_ENTRY_VERSION = 1
+
+# How stale a pending entry can be on restore before we drop it instead
+# of firing immediately. One hour = matches `_MAX_SECONDS`; anything
+# older than the max timer duration almost certainly belongs to a
+# different intent the user has moved past.
+_STALE_RESTORE_THRESHOLD = timedelta(hours=1)
 
 # Default fire prompt — Spanish, AbuelOS-toned. A persona can override
 # via the `fire_prompt` config key in `persona.yaml`'s `timers:` block.
@@ -63,6 +83,11 @@ _DEFAULT_FIRE_PROMPT = (
 )
 
 
+def _utcnow() -> datetime:
+    """Indirection point so tests can monkeypatch the clock."""
+    return datetime.now(UTC)
+
+
 class TimersSkill:
     """Proactive one-shot reminders via `inject_turn`.
 
@@ -77,6 +102,7 @@ class TimersSkill:
         self._logger: SkillLogger | None = None
         self._inject_turn: Callable[[str], Awaitable[None]] | None = None
         self._background_task: Callable[..., BackgroundTaskHandle] | None = None
+        self._storage: SkillStorage | None = None
         # Per-timer handles — held so teardown can pre-shutdown cancel
         # specific timers (and a future `cancel_timer` tool can target
         # by id without going through the supervisor's name lookup).
@@ -149,22 +175,19 @@ class TimersSkill:
 
         timer_id = self._next_id
         self._next_id += 1
-        # restart_on_crash=False because timers are one-shot — restarting
-        # would re-sleep for `seconds` and fire too late, OR fire
-        # immediately with stale duration, neither of which the user
-        # asked for. A crashed timer is a lost reminder; the supervisor
-        # logs it and we move on.
-        handle = self._background_task(
-            f"timer:{timer_id}",
-            lambda: self._fire_after(timer_id, seconds, message),
-            restart_on_crash=False,
-        )
-        self._handles[timer_id] = handle
+        fire_at = _utcnow() + timedelta(seconds=seconds)
+        # Persist BEFORE scheduling the task so a crash between the
+        # schedule and the write can't leave a live task with no
+        # backing entry (would survive nowhere after restart).
+        await self._write_entry(timer_id, fire_at=fire_at, message=message, fired_at=None)
+        await self._schedule_fire(timer_id, seconds, message)
+
         await self._logger.ainfo(
             "timers.scheduled",
             timer_id=timer_id,
             seconds=seconds,
             message=message,
+            fire_at=fire_at.isoformat(),
         )
         return ToolResult(
             output=json.dumps(
@@ -176,19 +199,53 @@ class TimersSkill:
             )
         )
 
-    async def _fire_after(self, timer_id: int, seconds: int, message: str) -> None:
-        """Sleep then fire `inject_turn`. Remove from tracking on completion
-        (natural OR cancelled), so teardown doesn't see a stale entry.
+    async def _schedule_fire(self, timer_id: int, seconds: int, message: str) -> None:
+        """Spawn the supervised sleep-then-fire task.
 
-        Cancellation propagates through cleanly — we don't log it here,
-        because any `await logger.ainfo` inside a cancel handler runs
-        against a partially-cancelled task and can behave oddly on some
-        event loops. Teardown tracks the cancellation count separately.
+        `restart_on_crash=False` because a one-shot that crashed mid-
+        sleep can't be meaningfully restarted (we'd either re-sleep
+        the original duration — too late — or fire immediately with
+        stale intent). Restore on next process boot via `setup()`
+        handles the server-restart case instead.
+        """
+        assert self._background_task is not None
+        handle = self._background_task(
+            f"timer:{timer_id}",
+            lambda: self._fire_after(timer_id, seconds, message),
+            restart_on_crash=False,
+        )
+        self._handles[timer_id] = handle
+
+    async def _fire_after(self, timer_id: int, seconds: int, message: str) -> None:
+        """Sleep then fire `inject_turn`.
+
+        Lifecycle transitions mark the storage entry so a restore on
+        the next boot can tell "pending, reschedule me" from "fired,
+        don't re-deliver":
+
+        - During `asyncio.sleep(...)`: entry has `fired_at = None`.
+          If the process dies, `setup()` reschedules on next boot.
+        - After sleep completes, BEFORE `inject_turn`: we write
+          `fired_at` and flip `_fired`. From this moment the entry is
+          considered "committed to fire" — any crash between here and
+          delete is interpreted as "the reminder probably played" by
+          the restore path, which deletes + skips (better than
+          double-firing a medication reminder).
+        - Natural completion OR any exception after commit: the
+          finally deletes the entry. The `_handles` pop runs in all
+          paths so teardown's bookkeeping stays accurate.
         """
         assert self._logger is not None
         assert self._inject_turn is not None
+        fired = False
         try:
             await asyncio.sleep(seconds)
+            # Past the sleep — commit to fire by stamping fired_at.
+            # If the process dies between here and the delete in
+            # `finally`, restore sees the entry as "fired" and skips.
+            fire_at = _utcnow() - timedelta(seconds=0)  # stamp "now"
+            await self._write_entry(timer_id, fire_at=fire_at, message=message, fired_at=fire_at)
+            fired = True
             await self._logger.ainfo("timers.fired", timer_id=timer_id, message=message)
             # Prompt shape matters: this gets sent to the LLM as a
             # conversation message. If it reads like a note ("Recordatorio:
@@ -196,10 +253,6 @@ class TimersSkill:
             # instruction ("Avísale al usuario que...") the model narrates
             # naturally. Compare `AudioStream.on_complete_prompt` in the
             # audiobooks skill, which is imperative and works well.
-            #
-            # `_fire_prompt` is the persona-configurable template; the
-            # default is Spanish / AbuelOS-toned, overridden via
-            # `persona.yaml` → `timers.fire_prompt`.
             prompt = self._fire_prompt.format(message=message)
             try:
                 # The framework wraps this in a DIALOG-channel Activity;
@@ -210,15 +263,21 @@ class TimersSkill:
                 # and kill the event loop's exception handler. Log and move on.
                 await self._logger.aexception("timers.fire_failed", timer_id=timer_id)
         finally:
-            # Scrub self from tracking regardless of why we exited — natural
-            # completion, cancellation, or unexpected exception — so teardown
-            # and `prompt_context` see an accurate picture.
+            # Scrub from in-memory tracking regardless of why we exited —
+            # natural completion, cancellation, or unexpected exception.
             self._handles.pop(timer_id, None)
+            # Only remove the persisted entry if we actually committed to
+            # firing. Cancellation during the sleep (e.g., teardown at
+            # server shutdown) must preserve the entry so it can be
+            # restored on next boot.
+            if fired:
+                await self._delete_entry(timer_id)
 
     async def setup(self, ctx: SkillContext) -> None:
         self._logger = ctx.logger
         self._inject_turn = ctx.inject_turn
         self._background_task = ctx.background_task
+        self._storage = ctx.storage
         # Persona override for the fire prompt, if provided. Falls back
         # to the Spanish/AbuelOS-toned default defined above.
         configured = ctx.config.get("fire_prompt")
@@ -230,10 +289,125 @@ class TimersSkill:
                 )
             else:
                 self._fire_prompt = configured
+        restored, dropped = await self._restore_pending()
         await ctx.logger.ainfo(
             "timers.setup_complete",
             fire_prompt_source="persona_override" if configured else "default",
+            restored=restored,
+            dropped=dropped,
         )
+
+    async def _restore_pending(self) -> tuple[int, int]:
+        """Rebuild `_handles` from persisted entries on boot.
+
+        Policy (derived from post-Stage-3 critic):
+
+        - `fired_at` set → the timer was mid-fire when the process
+          died. Re-delivery risks a double dose for medication
+          reminders (worse than a miss), so delete + skip regardless
+          of how long ago `fired_at` is.
+        - `now - fire_at > _STALE_RESTORE_THRESHOLD` → original intent
+          is stale; delete + log.
+        - Else → reschedule via `ctx.background_task` with
+          `max(1s, fire_at - now)` so an already-due entry fires
+          within a tick.
+
+        Malformed entries are skipped with a warning (no delete — a
+        schema-migration opportunity, not a data loss event).
+
+        Returns `(restored_count, dropped_count)` for the setup log.
+        """
+        assert self._logger is not None
+        assert self._storage is not None
+        entries = await self._storage.list_settings(_STORAGE_PREFIX)
+        restored = 0
+        dropped = 0
+        ids_seen: list[int] = []
+        now = _utcnow()
+        for key, value in entries:
+            timer_id = self._parse_timer_id(key)
+            if timer_id is None:
+                await self._logger.awarning("timers.restore_key_malformed", key=key)
+                continue
+            try:
+                entry = json.loads(value)
+                fire_at = datetime.fromisoformat(entry["fire_at"])
+                message = entry["message"]
+                fired_at_raw = entry.get("fired_at")
+                fired_at = datetime.fromisoformat(fired_at_raw) if fired_at_raw else None
+            except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+                await self._logger.awarning(
+                    "timers.restore_entry_malformed", key=key, value=value[:80]
+                )
+                continue
+
+            ids_seen.append(timer_id)
+            if fired_at is not None:
+                await self._logger.ainfo(
+                    "timers.restore_skipped_fired",
+                    timer_id=timer_id,
+                    fired_at=fired_at.isoformat(),
+                )
+                await self._delete_entry(timer_id)
+                dropped += 1
+                continue
+            age = now - fire_at
+            if age > _STALE_RESTORE_THRESHOLD:
+                await self._logger.awarning(
+                    "timers.restore_skipped_stale",
+                    timer_id=timer_id,
+                    fire_at=fire_at.isoformat(),
+                    age_s=age.total_seconds(),
+                )
+                await self._delete_entry(timer_id)
+                dropped += 1
+                continue
+            remaining = max(_MIN_SECONDS, int((fire_at - now).total_seconds()))
+            await self._schedule_fire(timer_id, remaining, message)
+            await self._logger.ainfo(
+                "timers.restored",
+                timer_id=timer_id,
+                remaining_s=remaining,
+                message=message,
+            )
+            restored += 1
+
+        # Prime `_next_id` so new `set_timer` calls after boot don't
+        # overwrite a restored entry's key.
+        if ids_seen:
+            self._next_id = max(ids_seen) + 1
+        return restored, dropped
+
+    @staticmethod
+    def _parse_timer_id(key: str) -> int | None:
+        suffix = key.removeprefix(_STORAGE_PREFIX)
+        if not suffix.isdigit():
+            return None
+        try:
+            return int(suffix)
+        except ValueError:
+            return None
+
+    async def _write_entry(
+        self,
+        timer_id: int,
+        *,
+        fire_at: datetime,
+        message: str,
+        fired_at: datetime | None,
+    ) -> None:
+        assert self._storage is not None
+        payload = {
+            "v": _ENTRY_VERSION,
+            "fire_at": fire_at.isoformat(),
+            "message": message,
+            "fired_at": fired_at.isoformat() if fired_at else None,
+        }
+        await self._storage.set_setting(f"{_STORAGE_PREFIX}{timer_id}", json.dumps(payload))
+
+    async def _delete_entry(self, timer_id: int) -> None:
+        assert self._storage is not None
+        await self._storage.delete_setting(f"{_STORAGE_PREFIX}{timer_id}")
 
     async def teardown(self) -> None:
         assert self._logger is not None
@@ -242,6 +416,11 @@ class TimersSkill:
         # `_fire_after` finally a chance to clear `_handles` cleanly;
         # otherwise the supervisor's stop() would do the same cancel
         # but without the per-handle bookkeeping side effect.
+        #
+        # Storage entries are deliberately NOT deleted — that's what
+        # makes persistence work. `_fire_after`'s `if fired` guard
+        # ensures a mid-sleep cancel (e.g., this teardown) leaves the
+        # persisted entry alone for the next boot to restore.
         pending = list(self._handles.values())
         for handle in pending:
             handle.cancel()

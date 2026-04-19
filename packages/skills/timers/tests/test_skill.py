@@ -4,20 +4,26 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
-from huxley_sdk.testing import make_test_context
+from huxley_sdk.testing import _NoopSkillStorage, make_test_context
 from huxley_skill_timers.skill import TimersSkill
+
+if TYPE_CHECKING:
+    from huxley_sdk import SkillStorage
 
 
 async def _setup_skill(
     inject_turn: AsyncMock | None = None,
     config: dict[str, object] | None = None,
+    storage: SkillStorage | None = None,
 ) -> tuple[TimersSkill, AsyncMock]:
     """Build a TimersSkill wired to a recording `inject_turn` mock."""
     skill = TimersSkill()
     inject_mock = inject_turn or AsyncMock()
-    ctx = make_test_context(config=dict(config) if config else None)
+    ctx = make_test_context(config=dict(config) if config else None, storage=storage)
     # `make_test_context` populates a no-op inject_turn; override it with
     # the recording mock so tests can assert on what the timer fired.
     object.__setattr__(ctx, "inject_turn", inject_mock)
@@ -201,3 +207,183 @@ class TestTimerFiresDuringNormalFlow:
         await asyncio.sleep(1.2)
         # The fire path's `finally` clears the entry.
         assert skill._handles == {}
+
+
+class TestPersistence:
+    """Stage 3b — timers survive a server restart.
+
+    Tests exercise the write-on-schedule / delete-on-fire invariant
+    plus the `setup()` restore path for the four restore outcomes:
+    reschedule, fire-immediately, stale-drop, fired-dedup-drop.
+    """
+
+    async def test_set_timer_writes_entry_to_storage(self) -> None:
+        storage = _NoopSkillStorage()
+        skill, _ = await _setup_skill(storage=storage)
+        await skill.handle("set_timer", {"seconds": 300, "message": "pastilla"})
+
+        entries = await storage.list_settings("timer:")
+        assert len(entries) == 1
+        key, value = entries[0]
+        assert key == "timer:1"
+        payload = json.loads(value)
+        assert payload["v"] == 1
+        assert payload["message"] == "pastilla"
+        assert payload["fired_at"] is None
+        # fire_at is ~now + 300s; just check it parses and is in the future.
+        fire_at = datetime.fromisoformat(payload["fire_at"])
+        assert fire_at > datetime.now(UTC)
+        await skill.teardown()
+
+    async def test_fire_deletes_entry_from_storage(self) -> None:
+        storage = _NoopSkillStorage()
+        skill, _ = await _setup_skill(storage=storage)
+        await skill.handle("set_timer", {"seconds": 1, "message": "agua"})
+        assert len(await storage.list_settings("timer:")) == 1
+
+        await asyncio.sleep(1.2)
+        # After natural fire, the entry is gone so it won't replay on restart.
+        assert await storage.list_settings("timer:") == []
+
+    async def test_teardown_preserves_entries_for_restore(self) -> None:
+        storage = _NoopSkillStorage()
+        skill, _ = await _setup_skill(storage=storage)
+        await skill.handle("set_timer", {"seconds": 3600, "message": "nunca"})
+        await skill.teardown()
+        # Teardown cancels the in-memory task but MUST keep the persisted
+        # entry — that's what makes restore-across-restart work.
+        entries = await storage.list_settings("timer:")
+        assert len(entries) == 1
+
+    async def test_restore_reschedules_pending_timer(self) -> None:
+        """A fresh skill sees a pending entry, reschedules it, fires it."""
+        storage = _NoopSkillStorage()
+        inject_mock = AsyncMock()
+        fire_at = datetime.now(UTC) + timedelta(seconds=1)
+        await storage.set_setting(
+            "timer:42",
+            json.dumps(
+                {
+                    "v": 1,
+                    "fire_at": fire_at.isoformat(),
+                    "message": "leche",
+                    "fired_at": None,
+                }
+            ),
+        )
+        skill, _ = await _setup_skill(inject_turn=inject_mock, storage=storage)
+        assert 42 in skill._handles
+
+        await asyncio.sleep(1.2)
+        inject_mock.assert_awaited_once()
+        assert "leche" in inject_mock.await_args.args[0]
+        # Entry deleted after natural fire.
+        assert await storage.list_settings("timer:") == []
+
+    async def test_restore_fires_immediately_when_slightly_stale(self) -> None:
+        """`fire_at` already past but within the stale threshold → fire
+        on next tick, don't drop. Clamped to _MIN_SECONDS (1s) so the
+        user at least hears a reminder."""
+        storage = _NoopSkillStorage()
+        inject_mock = AsyncMock()
+        fire_at = datetime.now(UTC) - timedelta(seconds=30)
+        await storage.set_setting(
+            "timer:7",
+            json.dumps(
+                {
+                    "v": 1,
+                    "fire_at": fire_at.isoformat(),
+                    "message": "pill",
+                    "fired_at": None,
+                }
+            ),
+        )
+        skill, _ = await _setup_skill(inject_turn=inject_mock, storage=storage)
+
+        await asyncio.sleep(1.2)
+        inject_mock.assert_awaited_once()
+
+    async def test_restore_drops_entry_older_than_stale_threshold(self) -> None:
+        storage = _NoopSkillStorage()
+        inject_mock = AsyncMock()
+        fire_at = datetime.now(UTC) - timedelta(hours=2)
+        await storage.set_setting(
+            "timer:99",
+            json.dumps(
+                {
+                    "v": 1,
+                    "fire_at": fire_at.isoformat(),
+                    "message": "ancient",
+                    "fired_at": None,
+                }
+            ),
+        )
+        skill, _ = await _setup_skill(inject_turn=inject_mock, storage=storage)
+        # Too old — dropped without scheduling a task and without firing.
+        assert 99 not in skill._handles
+        await asyncio.sleep(0.3)
+        inject_mock.assert_not_awaited()
+        assert await storage.list_settings("timer:") == []
+
+    async def test_restore_drops_entry_with_fired_at_set(self) -> None:
+        """Critical: a crash between `inject_turn` and the storage delete
+        leaves `fired_at` set. Restore MUST skip (no second dose)."""
+        storage = _NoopSkillStorage()
+        inject_mock = AsyncMock()
+        now = datetime.now(UTC)
+        await storage.set_setting(
+            "timer:50",
+            json.dumps(
+                {
+                    "v": 1,
+                    "fire_at": now.isoformat(),
+                    "message": "dose",
+                    "fired_at": now.isoformat(),
+                }
+            ),
+        )
+        skill, _ = await _setup_skill(inject_turn=inject_mock, storage=storage)
+        assert 50 not in skill._handles
+        await asyncio.sleep(0.3)
+        inject_mock.assert_not_awaited()
+        assert await storage.list_settings("timer:") == []
+
+    async def test_restore_primes_next_id_past_existing(self) -> None:
+        """After restore, `set_timer` must not overwrite a restored entry."""
+        storage = _NoopSkillStorage()
+        fire_at = datetime.now(UTC) + timedelta(seconds=3600)
+        await storage.set_setting(
+            "timer:5",
+            json.dumps(
+                {
+                    "v": 1,
+                    "fire_at": fire_at.isoformat(),
+                    "message": "existing",
+                    "fired_at": None,
+                }
+            ),
+        )
+        skill, _ = await _setup_skill(storage=storage)
+        result = await skill.handle("set_timer", {"seconds": 60, "message": "new"})
+        assert json.loads(result.output)["timer_id"] == 6
+        await skill.teardown()
+
+    async def test_restore_skips_malformed_entries(self) -> None:
+        """Garbage in storage must not crash setup()."""
+        storage = _NoopSkillStorage()
+        await storage.set_setting("timer:bogus", "not json")
+        await storage.set_setting("timer:1", "{}")  # valid JSON, missing fields
+        await storage.set_setting("timer:abc", '{"v":1}')  # non-numeric id suffix
+        # Should complete without raising.
+        skill, _ = await _setup_skill(storage=storage)
+        assert skill._handles == {}
+        await skill.teardown()
+
+    async def test_restore_empty_storage_is_noop(self) -> None:
+        storage = _NoopSkillStorage()
+        skill, _ = await _setup_skill(storage=storage)
+        assert skill._handles == {}
+        # Fresh skill should start assigning ids from 1.
+        result = await skill.handle("set_timer", {"seconds": 60, "message": "first"})
+        assert json.loads(result.output)["timer_id"] == 1
+        await skill.teardown()

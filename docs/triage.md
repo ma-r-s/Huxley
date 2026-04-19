@@ -1100,22 +1100,39 @@ robustness).
 - `docs/skills/README.md` — "using `background_task`" section (done in this triage pass; includes `on_permanent_failure` for life-safety skills)
 - `docs/observability.md` — new events documented
 
-### Stage 3b — Persistent supervised tasks across restart (queued)
+### Stage 3b — Persistent supervised tasks across restart ✅ **done** (`<this commit>`, 2026-04-19)
 
-**Status**: queued · **Effort**: ~1 day · **Blocked by**: nothing (Stage 3a shipped) · **Unblocks**: T1.8 evolved reminders that survive server restart
+**Effort (actual)**: ~3h (vs 1-day estimate) — the skill-owned approach chosen below needed far less plumbing than the framework primitive originally speced.
 
-The critic (post-Stage-3 review) flagged that Stage 3 "done" hides a real gap: supervised tasks are in-memory only. A server crash or restart loses every scheduled timer, reminder, webhook listener, etc. Mario's target user (elderly, blind) can't be asked to re-set a medication timer after a restart.
+**Design pivot (Gate 2 critic, 2026-04-19)**: the original spec called for a framework-level primitive — `persist_key` arg on `ctx.background_task`, supervisor serializes `(name, coro_factory, kwargs)` to `SkillStorage`, `restore_all()` driven from `Application.run()`. Critic pushed back: `coro_factory` is a closure (`lambda: self._fire_after(...)`) and serializing it forces either a "factories must be config-pure" skill contract or a factory registry — real SDK cost for one consumer. T1.8 reminders and T1.9 messaging both persist different shapes (cron-spec, thread cursor), so they won't share the primitive. Chose **skill-owned persistence** instead: timers skill does its own `SkillStorage` writes, framework stays inert. Extract the pattern when a second skill needs the same shape; premature extraction is the bigger risk.
 
-**Deliverables**:
+**Deliverables (shipped)**:
 
-- Optional `persist_key: str | None` argument to `ctx.background_task(...)` — when set, the supervisor serializes `(name, coro_factory, kwargs)` into a skill-namespaced `SkillStorage` entry on `start()`.
-- Supervisor `restore_all()` method invoked from `Application.run()` after `skill_registry.setup_all` — each skill's `setup` can check its storage and re-call `ctx.background_task(persist_key=...)` for any previously-pending tasks.
-- `coro_factory` must be constructible from config alone (not a closure over live state). This is a skill contract — the supervisor can't persist closures. Document it as "persisted tasks must be serializable."
-- Deleted-on-fire: once a persisted task's coroutine completes naturally, its storage entry is cleaned up (mirrors how `_fire_after`'s finally clears `_handles`).
+- **SDK / framework — `b16ee3f`**: added `list_settings(prefix) -> list[(key, value)]` and `delete_setting(key)` to the `SkillStorage` Protocol. Framework adapter passes through with proper `ESCAPE '\'` on the LIKE query so prefixes containing `%` or `_` don't glob. 10 new unit tests (`TestListAndDelete` + `TestNamespacedSkillStorage`) cover prefix matching, wildcard escape, namespace isolation, delete scoping.
+- **Timers skill — `<this commit>`**: each `set_timer` writes `timer:<id>` → `{"v":1, "fire_at": ISO, "message": str, "fired_at": null}` before scheduling. `_fire_after` stamps `fired_at` after the sleep and before awaiting `inject_turn`; deletes only when commit (`fired = True`) ran so mid-sleep cancellation (teardown) preserves entries. `setup()` enumerates `timer:*`, applies the restore policy (below), primes `_next_id = max(ids) + 1`.
+- **Critic's required dedup guard**: the `fired_at` field catches the "process died between narration and delete" failure mode. Restore unconditionally skips + deletes entries with `fired_at` set — preferring a missed reminder to a double-dose reminder (user-safety call for medication use case).
 
-**Out of scope**: persisting CRASHED tasks across restart. A task that crashed during its pre-restart run is considered "lost at shutdown"; the user can reschedule manually.
+**Restore policy** (fully documented in `docs/skills/timers.md`):
 
-**First consumer**: T1.8 evolved reminders (persistent medication reminders).
+| State                        | Action                                                                   |
+| ---------------------------- | ------------------------------------------------------------------------ |
+| `fired_at` set               | Delete + skip (dedup — no double dose on crash-between-fire-and-delete). |
+| `now - fire_at > 1h`         | Delete + skip (stale; intent is past).                                   |
+| `fire_at` past but within 1h | Fire immediately (1s scheduled). Better late than never.                 |
+| `fire_at` future             | Reschedule with `fire_at − now` remaining.                               |
+| Malformed (JSON / key)       | Skip with warning log. No delete — future migration opportunity.         |
+
+**Tests added**: 10 new (`TestPersistence`), 27 timer tests total (was 17). Cover: entry written on schedule, entry deleted on fire, teardown preserves entries, reschedule on restore fires correctly, stale-but-recoverable fires immediately, stale-past-threshold dropped, `fired_at`-set dropped (critical dedup), `_next_id` primed past existing, malformed entries skipped, empty storage is noop.
+
+**Decisions deferred to first real user**:
+
+- Clock skew mitigation beyond the stale-threshold guard. UTC wall clock on a fixed device is fine for AbuelOS; revisit if timers get deployed somewhere with unstable NTP.
+- Schema version migration. Every entry carries `"v": 1`; the first real schema change writes the migration code.
+- `cancel_timer` / `list_timers` tools (still out of scope — no user flow needs them yet, but now a one-liner each).
+
+**First consumer beneficiary**: T1.8 evolved reminders (persistent medication reminders) now has half its work done — persistence pattern is proven. T1.8 picks up cron/recurrence logic on top of this foundation.
+
+**Lessons**: (a) the critic's "skill-owned, not framework-owned" call was right — adding `list_settings` + `delete_setting` was strictly smaller and more reusable than the `persist_key=` alternative. (b) `fired_at` dedup is cheap (one extra storage write per fire) but removes the worst failure mode. Not something I'd have arrived at without the critic flagging the medication-double-dose scenario.
 
 ### Stage 3c — PermanentFailure elapsed_s semantics ✅ **done** (`a286205`, 2026-04-19)
 

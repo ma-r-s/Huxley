@@ -24,22 +24,53 @@ skills:
       One sentence, neutral tone.
 ```
 
-## Scope limits (MVP)
+## Persistence (Stage 3b)
 
-Known gaps, all intentional for the MVP:
+Timers survive a server restart. The skill writes each pending timer to its namespaced `SkillStorage` as a JSON entry keyed `timer:<id>`; `setup()` enumerates those entries on boot via `ctx.storage.list_settings("timer:")` and re-registers each one with `ctx.background_task`.
 
-- **In-memory only.** Timers set in session N do not survive to session N+1. Restart the server and pending timers are lost. Persistence via `SkillStorage` is the obvious next step now that Stage 3 ships supervised tasks: `setup()` would read pending timers from storage and re-spawn each via `ctx.background_task`. Filed as future work.
-- **Single tool — no list / cancel.** If a user asks "cuántos temporizadores tengo," the LLM can see `prompt_context()`'s summary count but can't enumerate or cancel them. Add `list_timers` + `cancel_timer` when a user flow needs it. The `BackgroundTaskHandle` is already kept per-timer in `_handles`, so a `cancel_timer` tool would just be `self._handles[id].cancel()`.
+**Entry schema** (`v: 1`):
+
+```json
+{
+  "v": 1,
+  "fire_at": "2026-04-19T14:05:00+00:00",
+  "message": "sacar la ropa de la lavadora",
+  "fired_at": null
+}
+```
+
+**Restore policy** (on `setup()`, for each entry):
+
+| State                                                              | Action                                                                                                                                  |
+| ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `fired_at` set                                                     | Delete + skip. Prevents double-fire if the process died between `inject_turn` and the entry delete — critical for medication reminders. |
+| `now − fire_at > 1h` (the skill's own `_MAX_SECONDS` duration cap) | Delete + skip. Original intent is stale.                                                                                                |
+| `fire_at` in the past but ≤ 1h late                                | Fire immediately (1 s scheduled). Better a late reminder than none.                                                                     |
+| `fire_at` in the future                                            | Reschedule with `fire_at − now` remaining.                                                                                              |
+| Malformed JSON / key                                               | Skip with a warning log. No delete — a future schema migration opportunity.                                                             |
+
+`set_timer` writes the entry _before_ scheduling the supervised task. `_fire_after` stamps `fired_at` **after** the sleep completes but **before** awaiting `inject_turn`, so a crash during narration still flips the entry into dedup territory. The entry is deleted only when firing ran to the point of committing (`fired = True`); cancellation during the sleep (e.g., `teardown()` at server shutdown) preserves the entry untouched so the next boot can restore it.
+
+**Wall-clock caveat**: `fire_at` is UTC wall clock. An NTP jump or manual clock change makes timers fire earlier / later by the skew. Fixed-device deployments (AbuelOS is one) rarely see this, and the stale-threshold guard catches the only dangerous shape (clock jumps days forward). Logs `timers.restore_skipped_stale` with `age_s` so "why didn't my timer fire" is diagnosable.
+
+## Scope limits
+
+- **Single tool — no list / cancel.** If a user asks "cuántos temporizadores tengo," the LLM can see `prompt_context()`'s summary count but can't enumerate or cancel them. Add `list_timers` + `cancel_timer` when a user flow needs it. The `BackgroundTaskHandle` is already kept per-timer in `_handles`, so a `cancel_timer` tool would just be `self._handles[id].cancel()` plus `self._delete_entry(id)`.
 - **No acknowledgment tracking.** The reminder fires once and returns. If the user doesn't hear it (asleep, out of room) there's no retry. Stage 1d.2's `InjectedTurnHandle.wait_outcome()` adds the hook for retry; the skill doesn't use it yet.
 - **Seconds-only unit.** The tool description tells the LLM to convert minutes/hours to seconds. This keeps the surface simple and leaves unit handling to the LLM's arithmetic.
-- **No cross-session persistence** means even "recuérdame mañana" doesn't work — by tomorrow the server has restarted. File this with persistence.
+- **1 h max duration.** Anything longer wants a different primitive (appointment / calendar). The stale-drop threshold matches the max so a restart picks up any live timer at worst "1 h late into a 1 h timer."
 
 ## Logging
 
-- `timers.setup_complete` — skill initialized
-- `timers.scheduled` — `timer_id`, `seconds`, `message` at creation
-- `timers.fired` — `timer_id`, `message` at firing (just before `inject_turn`)
+- `timers.setup_complete` — skill initialized; fields: `fire_prompt_source`, `restored`, `dropped`
+- `timers.scheduled` — `timer_id`, `seconds`, `message`, `fire_at` at creation
+- `timers.fired` — `timer_id`, `message` at firing (just after `fired_at` stamp, just before `inject_turn`)
 - `timers.fire_failed` — `timer_id`, exception info if `inject_turn` raised
+- `timers.restored` — `timer_id`, `remaining_s`, `message` when a persisted entry was rescheduled on boot
+- `timers.restore_skipped_fired` — `timer_id`, `fired_at` when dedup guard fires (crash mid-fire)
+- `timers.restore_skipped_stale` — `timer_id`, `fire_at`, `age_s` when `> 1h` stale
+- `timers.restore_entry_malformed` — `key`, `value` (truncated) for unparseable entries
+- `timers.restore_key_malformed` — `key` when the `timer:N` suffix isn't numeric
 - `timers.cancelled` — NOT logged today (cancellation happens synchronously in teardown; no per-timer async event to hook)
 - `timers.invalid_args` — rejected arguments (non-int seconds, empty message)
 - `timers.teardown_complete` — `cancelled=N`
