@@ -227,6 +227,26 @@ The `background.*` namespace surfaces every `ctx.background_task(...)` lifecycle
 
 For one-shot tasks (timers, with `restart_on_crash=False`), a crash produces just `background.task_crashed will_restart=False` — no restart, no permanent failure event. The task quietly dies; the skill's `_handles` (or equivalent tracking) clears via the coroutine's own `finally` if it ran far enough, otherwise the supervisor's `stop()` cleans it up at shutdown.
 
+## Timer persistence — restore events
+
+The timers skill persists each pending timer via `ctx.storage` and enumerates them on `setup()` across a server restart (see [`docs/skills/timers.md`](./skills/timers.md#persistence-stage-3b)). Restore outcomes are observable via structured events:
+
+| Event                            | When it fires                                                                                     | Key fields                                  |
+| -------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| `timers.restored`                | A pending entry was rescheduled via `ctx.background_task`. Will fire on its original schedule.    | `timer_id`, `remaining_s`, `message`        |
+| `timers.restore_skipped_fired`   | Entry had `fired_at` set — crash between narration and delete. Dedup drop (no double-fire).       | `timer_id`, `fired_at`                      |
+| `timers.restore_skipped_stale`   | `now − fire_at > stale-threshold` (default 1 h). Original intent is past; entry deleted.          | `timer_id`, `fire_at`, `age_s`              |
+| `timers.restore_entry_malformed` | JSON or schema shape couldn't be parsed. Entry kept untouched (future migration opportunity).     | `key`, `value` (truncated to 80 chars)      |
+| `timers.restore_key_malformed`   | Storage key didn't end in a numeric `timer:N` suffix. Entry kept untouched.                       | `key`                                       |
+| `timers.setup_complete`          | Skill initialization finished. Reports the restore counts so you can see "we picked up N timers." | `restored`, `dropped`, `fire_prompt_source` |
+
+Diagnosing "my timer didn't fire after restart":
+
+1. Grep for `timer_id=<N>` across the old process's log — was it ever scheduled (`timers.scheduled`)?
+2. In the new process's log, look for `timers.setup_complete restored=…`. Was N in the restored count?
+3. If dropped, look for `restore_skipped_*` events with that id — the reason line tells you why.
+4. If restored but `inject_turn` never fired, jump to the [inject_turn queue events](#inject_turn-queue-events--diagnosing-dropped-or-queued-reminders) section — restore just re-enters the normal fire path.
+
 ## Skill failures
 
 When a skill's `handle()` raises, the coordinator catches it (see `docs/triage.md` T1.6) and emits two events:

@@ -224,6 +224,47 @@ Skills that want to contribute baseline context to every session prompt implemen
 
 **When _not_ to use it**: don't dump state that changes frequently — the context is only refreshed on session connect, not mid-conversation.
 
+## Persistent state — `ctx.storage`
+
+Skills that need data to survive across sessions or server restarts use `ctx.storage`, a per-skill KV adapter namespaced on the skill's name (so two skills can both store `last_id` without colliding). The framework wraps SQLite in WAL mode under the hood — skills see only a flat string-valued KV API.
+
+```python
+class SkillStorage(Protocol):
+    async def get_setting(self, key: str, default: str | None = None) -> str | None: ...
+    async def set_setting(self, key: str, value: str) -> None: ...
+    async def list_settings(self, prefix: str = "") -> list[tuple[str, str]]: ...
+    async def delete_setting(self, key: str) -> None: ...
+```
+
+**Composite keys are the vocabulary for richer data.** The API is intentionally flat — no nested types, no schema. Skills that store families of entries use colon-separated keys:
+
+```python
+# Timer persistence (skills/timers):
+await ctx.storage.set_setting(f"timer:{timer_id}", json.dumps({...}))
+
+# Audiobook progress (skills/audiobooks uses a dedicated table, but a future
+# skill without migration access would do):
+await ctx.storage.set_setting(f"position:{book_id}", str(seconds))
+```
+
+**`list_settings(prefix)`** enumerates every `(key, value)` whose key starts with `prefix`. Keys are returned WITHOUT the skill's namespace prefix. Use this for restore-on-boot patterns where `setup()` needs to see every `timer:*` entry.
+
+```python
+async def setup(self, ctx: SkillContext) -> None:
+    for key, value in await ctx.storage.list_settings("timer:"):
+        entry = json.loads(value)
+        # ... reschedule the task via ctx.background_task
+```
+
+**`delete_setting(key)`** removes an entry outright. Prefer this over `set_setting(key, "")`: an empty-string tombstone would leak into every `list_settings` caller and force filter logic at every read. SQL `LIKE` queries escape `%` and `_` in the caller's prefix so keys containing those characters don't accidentally glob.
+
+**Schema versioning**: if you persist JSON, include a `"v": 1` field from day one. Shape changes are inevitable; a version byte costs nothing and makes the first migration tractable instead of best-guess.
+
+**When _not_ to use `ctx.storage`**:
+
+- Large binary blobs — it's a string KV, not a file system. Use `ctx.persona_data_dir` for files.
+- High-frequency writes — every `set_setting` is a SQLite commit. Fine for user events ("bookmark position on turn end"), not fine for per-frame state.
+
 ## Proactive speech — `ctx.inject_turn`
 
 > ℹ️ **Shipped (Stages 1c.3 + 1d).** Today's API supports the queue

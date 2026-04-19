@@ -305,3 +305,22 @@ Activity), not the acquiring one. Documented in `io-plane.md#patience-attributio
   in Stage 2+, revert the pivot (restore arbitrate + tuple model) — the
   critic gate for Stage 2 should explicitly test composition against all
   three skills, not just inject_turn.
+
+
+## 2026-04-19 — Skill-owned persistence over a framework primitive
+
+**Context**: T1.4 Stage 3b needed timers that survive a server restart (Mario's elderly blind user cannot be asked to re-set a medication timer after a reboot). The original triage spec called for a framework primitive: a `persist_key: str` argument on `ctx.background_task(...)` that would have the `TaskSupervisor` serialize `(name, coro_factory, kwargs)` to `SkillStorage` and restore them on boot via `Application.run()`. A Gate-2 critic pushed back: `coro_factory` is a Python closure, so either skills must guarantee their factories are config-pure (a significant new contract) or the framework maintains a factory-name registry (complexity cost).
+
+**Decision**: Skills own their persistence. The framework grows only two additions to `SkillStorage`:
+
+- `list_settings(prefix="") -> list[(key, value)]` — enumerate a composite-key family (`timer:*`, `position:*`, …).
+- `delete_setting(key)` — remove an entry outright (no empty-string tombstones leaking into list callers).
+
+Timers (the Stage 3b forcing function) writes `timer:<id>` JSON entries via `ctx.storage.set_setting`, reads them in `setup()` via `ctx.storage.list_settings("timer:")`, and applies its own restore policy (stale threshold, `fired_at` dedup, `_next_id` priming). The supervisor stays inert; no new skill contract.
+
+**Consequences**:
+
+- **Saved** a new SDK surface (`persist_key`), a new `coro_factory` contract, and framework-level restore orchestration. Instead, skills get two primitive storage operations that are generically useful beyond persistence (`list_settings` is the obvious right answer for any composite-key consumer).
+- **Each persistent skill writes its own restore logic.** Today that's fine — timers is the only consumer. When T1.8 reminders lands with recurring medication schedules, and T1.9 messaging lands with inbound thread cursors, the restore shapes will likely NOT look alike (cron-spec evaluation vs. last-seen-seq comparison). If they DO rhyme surprisingly, extract a framework helper; if not, skill-owned keeps being cheap.
+- **Revisit if**: three or more skills end up re-implementing the same restore pattern. The threshold is "rule of three," not "rule of two."
+- **Doesn't close**: Stage 3b's `fired_at` dedup is specific to the medication-reminder worst case (double-dose > missed-dose). A future skill with different safety semantics (a radio scheduler, say) might prefer "re-fire on crash." The policy lives in the skill, which is the right layer for this kind of choice.
