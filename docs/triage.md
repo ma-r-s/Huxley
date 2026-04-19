@@ -994,12 +994,17 @@ each urgency tier. Browser smoke confirms the four decision behaviors.
 
 ### Stage 2 — `InputClaim` + `MicRouter` wiring
 
-Pulled earlier (was Stage 4 in original plan). Rationale: it's the
-lynchpin of the motivating use case (panic button + instant-connect
-calls). Validating `MicRouter` and the provider suspend/resume contract
-early de-risks the remaining stages.
+**Status**: in_progress (2026-04-19). Motivating consumer locked in: a web-app phone UI Mario uses to ring grandpa. Plan + critic pass captured in session transcript. Effort re-scoped post-pivot to ~5–7 days (down from 2 weeks; YieldPolicy eliminated, MicRouter already extracted in T1.3).
 
-**Effort**: ~2 weeks. **Depends on**: T1.3 (`MicRouter`), Stage 1 (`YieldPolicy` enum).
+**Progress**:
+
+- ✅ **Pre-work spike** (`00c17e9`, 2026-04-19) — characterized OpenAI Realtime suspend/resume behavior against the real API (<$1). Findings in `docs/research/realtime-suspend.md`. Critical: "pause" ≠ "stop reading" — the model keeps generating server-side and buffers hundreds of KB of audio without an explicit `response.cancel`.
+- ✅ **Commit 1** (`c4c90af`, 2026-04-19) — SDK surface. `InputClaim` SideEffect, `ClaimHandle`, `ClaimEndReason(NATURAL|USER_PTT|PREEMPTED|ERROR)`, `StartInputClaim` Protocol, `SkillContext.start_input_claim` field with no-op default. 12 new SDK tests.
+- ✅ **Commit 2** (`<this commit>`, 2026-04-19) — Provider `suspend()/resume()` contract + OpenAI Realtime impl + `StubVoiceProvider` parity + tests. Suspend: cancel + clear + set flag. Resume: clear flag, zero wire traffic. While suspended: `send_user_audio` drops, receive loop drops content (audio deltas, tool calls, transcripts); lifecycle events (`response.done`, `audio.done`, errors) pass through. Idempotent both ways. 11 new tests.
+- ⏳ **Commit 3** (queued) — coordinator hook: dispatch `InputClaim` from `ToolResult.side_effect` at terminal barrier; CONTENT-channel Activity acquire (per critic — not DIALOG); MicRouter race fix ("one claim at a time" invariant); integrate `provider.suspend()` at claim start and `provider.resume()` at claim end; wire `ClaimHandle` lifetime.
+- ⏳ **Commits 4–5** (queued) — MVP calls skill: HTTP POST `/call/ring` + shared-secret + second WebSocket accept for caller-side audio + PCM relay + auto-pickup UX + bidirectional end mechanics. Skip Stage 4 ClientEvent initially per critic's MVP suggestion; migrate to proper ClientEvent in weeks 2–3 once UX is validated with grandpa.
+
+**Original effort estimate (pre-pivot)**: ~2 weeks. **Depends on**: T1.3 (`MicRouter`), Stage 1 (`YieldPolicy` enum — dropped by pivot).
 
 **Deliverables**:
 

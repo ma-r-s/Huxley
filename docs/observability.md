@@ -22,18 +22,18 @@ That's the goal. It only works if the log carries the right events with the righ
 
 Every log event uses a dotted namespace + direction prefix. This makes events `grep`-able, filterable, and identifiable at a glance.
 
-| Namespace      | Source                                                  | Examples                                                                                      |
-| -------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `coord.*`      | TurnCoordinator decisions (the core state machine)      | `coord.ptt_start`, `coord.interrupt`, `coord.tool_dispatch`                                   |
-| `focus.*`      | FocusManager arbitration (acquire / release / change)   | `focus.acquire`, `focus.release`, `focus.change`                                              |
-| `background.*` | Supervised background-task lifecycle                    | `background.task_crashed`, `background.task_restarting`, `background.task_permanently_failed` |
-| `session.rx.*` | Messages received from the voice provider (OpenAI)      | `session.rx.tool_call`, `session.rx.error`                                                    |
-| `session.tx.*` | Messages sent to the voice provider                     | `session.tx.commit`, `session.tx.cancel`, `session.tx.tool_output`                            |
-| `server.rx.*`  | Messages received from the audio client                 | `server.rx.ptt_start`, `server.rx.ptt_stop`, `server.rx.wake_word`                            |
-| `server.tx.*`  | Messages sent to the audio client                       | `server.tx.state`, `server.tx.model_speaking`                                                 |
-| `app.*`        | Application orchestration (lifecycle, guard rejections) | `app.session_end`, `app.ptt_rejected`                                                         |
-| `<skill>.*`    | Per-skill events (skill author owns the namespace)      | `audiobooks.resolve`, `audiobooks.stream_started`, `system.volume_set`                        |
-| `client.*`     | Telemetry forwarded from the audio client (web/ESP32)   | `client.silence_timer_started`, `client.thinking_tone_on`                                     |
+| Namespace      | Source                                                  | Examples                                                                                                      |
+| -------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `coord.*`      | TurnCoordinator decisions (the core state machine)      | `coord.ptt_start`, `coord.interrupt`, `coord.tool_dispatch`                                                   |
+| `focus.*`      | FocusManager arbitration (acquire / release / change)   | `focus.acquire`, `focus.release`, `focus.change`                                                              |
+| `background.*` | Supervised background-task lifecycle                    | `background.task_crashed`, `background.task_restarting`, `background.task_permanently_failed`                 |
+| `session.rx.*` | Messages received from the voice provider (OpenAI)      | `session.rx.tool_call`, `session.rx.error`                                                                    |
+| `session.tx.*` | Messages sent to the voice provider                     | `session.tx.commit`, `session.tx.cancel`, `session.tx.tool_output`, `session.tx.suspend`, `session.tx.resume` |
+| `server.rx.*`  | Messages received from the audio client                 | `server.rx.ptt_start`, `server.rx.ptt_stop`, `server.rx.wake_word`                                            |
+| `server.tx.*`  | Messages sent to the audio client                       | `server.tx.state`, `server.tx.model_speaking`                                                                 |
+| `app.*`        | Application orchestration (lifecycle, guard rejections) | `app.session_end`, `app.ptt_rejected`                                                                         |
+| `<skill>.*`    | Per-skill events (skill author owns the namespace)      | `audiobooks.resolve`, `audiobooks.stream_started`, `system.volume_set`                                        |
+| `client.*`     | Telemetry forwarded from the audio client (web/ESP32)   | `client.silence_timer_started`, `client.thinking_tone_on`                                                     |
 
 A skill named `audiobooks` emits events like `audiobooks.factory_built`, `audiobooks.stream_ended`. The framework reserves `coord.`, `focus.`, `background.`, `session.`, `server.`, `app.`, `client.`; everything else is skill territory.
 

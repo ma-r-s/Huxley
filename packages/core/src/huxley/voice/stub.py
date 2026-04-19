@@ -44,11 +44,15 @@ class StubVoiceProvider:
         # coordinator.
         self._callbacks: VoiceProviderCallbacks = callbacks or _noop_callbacks()
         self._connected = False
+        self._suspended = False
         # Log of every outgoing method call the coordinator made. Each
         # entry is a tuple of (method_name, *args).
         self.sent: list[tuple[Any, ...]] = []
         # User audio frames the coordinator forwarded during LISTENING.
+        # Frames arriving while suspended land in `dropped_audio_while_suspended`
+        # instead so tests can assert the suspend gate actually gates.
         self.user_audio: list[bytes] = []
+        self.dropped_audio_while_suspended: list[bytes] = []
 
     def install_callbacks(self, callbacks: VoiceProviderCallbacks) -> None:
         """Swap the callback set after construction.
@@ -74,6 +78,9 @@ class StubVoiceProvider:
         self.sent.append(("disconnect", save_summary))
 
     async def send_user_audio(self, pcm: bytes) -> None:
+        if self._suspended:
+            self.dropped_audio_while_suspended.append(pcm)
+            return
         self.user_audio.append(pcm)
         # Intentionally NOT appended to `sent` — user audio is high-volume
         # and would clutter the log; use `user_audio` for explicit assertions.
@@ -92,6 +99,23 @@ class StubVoiceProvider:
 
     async def send_conversation_message(self, text: str) -> None:
         self.sent.append(("send_conversation_message", text))
+
+    async def suspend(self) -> None:
+        # Idempotent — repeat suspend is a no-op in the log too.
+        if self._suspended:
+            return
+        self._suspended = True
+        self.sent.append(("suspend",))
+
+    async def resume(self) -> None:
+        if not self._suspended:
+            return
+        self._suspended = False
+        self.sent.append(("resume",))
+
+    @property
+    def is_suspended(self) -> bool:
+        return self._suspended
 
     # --- Test-driver surface: emit events the provider "received" ---
 

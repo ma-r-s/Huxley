@@ -191,3 +191,192 @@ class TestTranscript:
         summary = await storage.get_latest_summary()
         assert summary is None
         await storage.close()
+
+
+class TestSuspendResume:
+    """Provider-side half of T1.4 Stage 2 `InputClaim`.
+
+    Contract in docs/research/realtime-suspend.md — summary:
+    - suspend: cancels in-flight response, clears input buffer, sets flag
+    - resume: clears flag, zero wire traffic
+    - Both idempotent
+    - While suspended: send_user_audio drops, receive-loop drops content
+      events (audio/tool_call/transcript) but lifecycle events pass
+    """
+
+    async def test_suspend_sends_cancel_and_clear(self, provider: OpenAIRealtimeProvider) -> None:
+        sent: list[dict[str, Any]] = []
+
+        async def capture(msg: str) -> None:
+            sent.append(json.loads(msg))
+
+        mock_ws = AsyncMock()
+        mock_ws.send = capture
+        provider._ws = mock_ws
+
+        await provider.suspend()
+        types = [m["type"] for m in sent]
+        # Cancel first (stop server-side generation), then clear input
+        # buffer (don't let uncommitted audio leak into resume). Order is
+        # asserted because the spike showed the reverse order left a small
+        # race where a commit event could land between the two.
+        assert types == [
+            ClientEventType.RESPONSE_CANCEL.value,
+            ClientEventType.INPUT_AUDIO_BUFFER_CLEAR.value,
+        ]
+        assert provider._suspended is True
+
+    async def test_suspend_is_idempotent(self, provider: OpenAIRealtimeProvider) -> None:
+        sent: list[dict[str, Any]] = []
+
+        async def capture(msg: str) -> None:
+            sent.append(json.loads(msg))
+
+        mock_ws = AsyncMock()
+        mock_ws.send = capture
+        provider._ws = mock_ws
+
+        await provider.suspend()
+        await provider.suspend()
+        # Second suspend emitted nothing extra.
+        assert len(sent) == 2  # from the first suspend only
+
+    async def test_suspend_noop_when_disconnected(self, provider: OpenAIRealtimeProvider) -> None:
+        # No WebSocket — should not raise, should not flip flag (no-op).
+        await provider.suspend()
+        assert provider._suspended is False
+
+    async def test_resume_clears_flag_and_sends_nothing(
+        self, provider: OpenAIRealtimeProvider
+    ) -> None:
+        sent: list[dict[str, Any]] = []
+
+        async def capture(msg: str) -> None:
+            sent.append(json.loads(msg))
+
+        mock_ws = AsyncMock()
+        mock_ws.send = capture
+        provider._ws = mock_ws
+
+        await provider.suspend()
+        sent.clear()
+        await provider.resume()
+        assert provider._suspended is False
+        # Resume is silent — no session.update, no wake-up ping, nothing.
+        assert sent == []
+
+    async def test_resume_is_idempotent(self, provider: OpenAIRealtimeProvider) -> None:
+        # Resume-without-suspend is a no-op, not an error.
+        await provider.resume()
+        await provider.resume()
+        assert provider._suspended is False
+
+    async def test_send_user_audio_drops_while_suspended(
+        self, provider: OpenAIRealtimeProvider
+    ) -> None:
+        sent: list[dict[str, Any]] = []
+
+        async def capture(msg: str) -> None:
+            sent.append(json.loads(msg))
+
+        mock_ws = AsyncMock()
+        mock_ws.send = capture
+        provider._ws = mock_ws
+
+        await provider.suspend()
+        sent.clear()  # drop the suspend's own wire traffic
+
+        await provider.send_user_audio(b"\x01\x02\x03\x04")
+        # Nothing made it to the wire.
+        assert sent == []
+
+        # After resume, audio flows again.
+        await provider.resume()
+        await provider.send_user_audio(b"\x05\x06\x07\x08")
+        assert len(sent) == 1
+        assert sent[0]["type"] == ClientEventType.INPUT_AUDIO_BUFFER_APPEND.value
+
+    async def test_audio_delta_dropped_while_suspended(
+        self, provider_deps: dict[str, Any]
+    ) -> None:
+        """A response.audio.delta arriving after our cancel (network race)
+        must not reach the coordinator — its audio would play stale on
+        resume. This is the worst bug from the spike if not guarded."""
+        callbacks = _callbacks()
+        provider_deps["callbacks"] = callbacks
+        provider = OpenAIRealtimeProvider(**provider_deps)
+        provider._ws = AsyncMock()  # needed for suspend to run
+        await provider.suspend()
+
+        # Simulate a delta arriving from the wire after suspend.
+        pcm = b"\xaa\xbb" * 10
+        event = {
+            "type": "response.audio.delta",
+            "delta": base64.b64encode(pcm).decode("ascii"),
+        }
+        await provider._handle_server_event(event)
+
+        callbacks.on_audio_delta.assert_not_awaited()  # type: ignore[attr-defined]
+
+    async def test_audio_delta_flows_after_resume(self, provider_deps: dict[str, Any]) -> None:
+        callbacks = _callbacks()
+        provider_deps["callbacks"] = callbacks
+        provider = OpenAIRealtimeProvider(**provider_deps)
+        provider._ws = AsyncMock()
+        await provider.suspend()
+        await provider.resume()
+
+        pcm = b"\xaa\xbb" * 10
+        event = {
+            "type": "response.audio.delta",
+            "delta": base64.b64encode(pcm).decode("ascii"),
+        }
+        await provider._handle_server_event(event)
+
+        callbacks.on_audio_delta.assert_awaited_once_with(pcm)  # type: ignore[attr-defined]
+
+    async def test_tool_call_dropped_while_suspended(self, provider_deps: dict[str, Any]) -> None:
+        """Tool calls from a cancelled response shouldn't dispatch. The
+        coordinator's tool-dispatch machinery assumes a live turn context
+        that doesn't exist during a claim."""
+        callbacks = _callbacks()
+        provider_deps["callbacks"] = callbacks
+        provider = OpenAIRealtimeProvider(**provider_deps)
+        provider._ws = AsyncMock()
+        await provider.suspend()
+
+        event = {
+            "type": "response.function_call_arguments.done",
+            "call_id": "call_xyz",
+            "name": "play_audiobook",
+            "arguments": '{"title":"ghost"}',
+        }
+        await provider._handle_server_event(event)
+
+        callbacks.on_tool_call.assert_not_awaited()  # type: ignore[attr-defined]
+
+    async def test_response_done_still_fires_while_suspended(
+        self, provider_deps: dict[str, Any]
+    ) -> None:
+        """Lifecycle events MUST pass through so the coordinator can close
+        out a cancelled turn's state. Only content is dropped."""
+        callbacks = _callbacks()
+        provider_deps["callbacks"] = callbacks
+        provider = OpenAIRealtimeProvider(**provider_deps)
+        provider._ws = AsyncMock()
+        await provider.suspend()
+
+        await provider._handle_server_event({"type": "response.done"})
+        callbacks.on_response_done.assert_awaited_once()  # type: ignore[attr-defined]
+
+    async def test_audio_done_still_fires_while_suspended(
+        self, provider_deps: dict[str, Any]
+    ) -> None:
+        callbacks = _callbacks()
+        provider_deps["callbacks"] = callbacks
+        provider = OpenAIRealtimeProvider(**provider_deps)
+        provider._ws = AsyncMock()
+        await provider.suspend()
+
+        await provider._handle_server_event({"type": "response.audio.done"})
+        callbacks.on_audio_done.assert_awaited_once()  # type: ignore[attr-defined]

@@ -121,3 +121,55 @@ class VoiceProvider(Protocol):
         multi-round tool-narration flows). The provider assumes the input
         buffer has already been committed."""
         ...
+
+    async def suspend(self) -> None:
+        """Pause user-audio forwarding and any in-flight assistant response.
+
+        Used by the framework when an `InputClaim` latches the mic to a
+        skill handler (voice memo, call) — the LLM must stop processing
+        user audio and stop generating, so we don't pay for compute the
+        skill won't use and don't queue stale audio to play on resume.
+
+        Contract (informed by `docs/research/realtime-suspend.md`):
+
+        - **Idempotent.** Calling on an already-suspended provider is a
+          no-op. Calling before the session is connected is a no-op.
+        - **Cancels in-flight response** (provider-native "stop
+          generating" signal). No-op if nothing was active.
+        - **Clears pending input audio buffer** so uncommitted user
+          audio doesn't leak into the next turn.
+        - **Drops subsequent `send_user_audio` calls silently** until
+          `resume()` is called. The coordinator's `MicRouter` is the
+          primary gate, but this is a defense-in-depth backstop if an
+          audio frame sneaks through the router during the swap.
+        - **Drops content events arriving from the LLM** in the receive
+          loop (audio deltas, transcript deltas, tool calls from a
+          cancelled response). Lifecycle events (`response.done`,
+          `on_audio_done`, errors) still fire so the coordinator can
+          close any in-flight turn state.
+        - **Keeps the session alive.** Does NOT close the WebSocket;
+          session ID and conversation context persist across the pause
+          so the skill can return to normal conversation afterward.
+        - **No keepalive.** OpenAI Realtime survives multi-minute idle
+          without pings (verified by the spike). Other providers that
+          need keepalives can wire them in their own impl.
+        """
+        ...
+
+    async def resume(self) -> None:
+        """Unpause. Restores user-audio forwarding to the LLM.
+
+        Contract:
+
+        - **Idempotent.** Calling on a non-suspended provider is a no-op.
+        - **Does NOT re-establish a session** — the same session
+          continues. No `session.update`, no re-auth, no transcript
+          re-injection.
+        - **No warm-up signal.** The next user turn (PTT commit +
+          request_response) naturally validates the session is still
+          healthy. Resume alone generates zero wire traffic.
+        - **Stops dropping content events.** The receive loop returns
+          to forwarding audio deltas / tool calls / transcripts as
+          normal.
+        """
+        ...

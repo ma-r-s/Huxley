@@ -75,6 +75,13 @@ class OpenAIRealtimeProvider:
         self._receive_task: asyncio.Task[None] | None = None
         self._timeout_task: asyncio.Task[None] | None = None
         self._transcript_lines: list[str] = []
+        # Suspend flag — set by `suspend()`, cleared by `resume()`. While
+        # True, the receive loop drops content events (audio deltas, tool
+        # calls, transcripts) from the LLM and `send_user_audio` discards
+        # any mic frames that sneak past the MicRouter. Lifecycle events
+        # (response.done, audio_done, errors) still fire so the coordinator
+        # can unwind an in-flight turn cleanly. See suspend()/resume().
+        self._suspended: bool = False
 
     @property
     def is_connected(self) -> bool:
@@ -217,9 +224,48 @@ class OpenAIRealtimeProvider:
         await self._send(ClientEventType.RESPONSE_CANCEL, {})
         await self._send(ClientEventType.INPUT_AUDIO_BUFFER_CLEAR, {})
 
+    async def suspend(self) -> None:
+        """Stop user-audio forwarding and any in-flight response.
+
+        Sends `response.cancel` + `input_audio_buffer.clear` — the spike
+        (docs/research/realtime-suspend.md) showed that without this,
+        OpenAI keeps generating server-side and buffers hundreds of KB
+        of stale audio that would play on resume. Sets `_suspended` so
+        the receive loop drops late in-flight content events (network
+        race: a few deltas may already be over the wire when the cancel
+        lands). Idempotent; no-op if not connected or already suspended.
+        """
+        if not self._ws or self._suspended:
+            return
+        await logger.ainfo("session.tx.suspend")
+        self._suspended = True
+        # Order: cancel generation first so the server stops emitting,
+        # then clear pending input buffer so an uncommitted PTT doesn't
+        # leak into the resumed session.
+        await self._send(ClientEventType.RESPONSE_CANCEL, {})
+        await self._send(ClientEventType.INPUT_AUDIO_BUFFER_CLEAR, {})
+
+    async def resume(self) -> None:
+        """Unpause user-audio forwarding.
+
+        Clears the suspend flag. Zero wire traffic — the next PTT commit
+        naturally validates the session is still alive. Idempotent;
+        no-op if not suspended.
+        """
+        if not self._suspended:
+            return
+        await logger.ainfo("session.tx.resume")
+        self._suspended = False
+
     async def send_user_audio(self, pcm: bytes) -> None:
-        """Send a PCM16 audio frame from the user's mic to the Realtime API."""
-        if not self._ws:
+        """Send a PCM16 audio frame from the user's mic to the Realtime API.
+
+        Drops silently while suspended — the `MicRouter` should be routing
+        frames to a skill handler in that case, but this is a belt-and-
+        suspenders guard against a frame sneaking through during the
+        suspend/swap window.
+        """
+        if not self._ws or self._suspended:
             return
         encoded = base64.b64encode(pcm).decode("ascii")
         await self._send(
@@ -290,26 +336,48 @@ class OpenAIRealtimeProvider:
         provider with crafted event dicts (see
         `tests/integration/test_session_replay.py`) without needing a real
         WebSocket. Exercises the full parse + cost-track + dispatch path.
+
+        While suspended (`_suspended=True`), drops content events (audio
+        deltas, tool calls, transcripts) from any in-flight response.
+        Lifecycle events (response.done, audio.done, errors) still fire
+        so the coordinator can close out a cancelled turn's state. See
+        `suspend()` for the contract rationale.
         """
         event_type = data.get("type", "")
         parsed = parse_server_event(data)
 
         if isinstance(parsed, AudioDeltaEvent):
-            audio_bytes = base64.b64decode(parsed.delta)
-            await self._cb.on_audio_delta(audio_bytes)
+            if self._suspended:
+                # Race: delta arrived after our response.cancel. Drop the
+                # audio so it doesn't play on resume. Log at debug to keep
+                # the suspend path diagnosable without noisy info logs.
+                await logger.adebug(
+                    "session.rx.audio_delta_dropped_while_suspended",
+                    bytes=len(parsed.delta),
+                )
+            else:
+                audio_bytes = base64.b64decode(parsed.delta)
+                await self._cb.on_audio_delta(audio_bytes)
 
         elif isinstance(parsed, FunctionCallEvent):
-            try:
-                args = json.loads(parsed.arguments)
-            except json.JSONDecodeError:
-                args = {}
-            await logger.ainfo(
-                "session.rx.tool_call",
-                name=parsed.name,
-                call_id=parsed.call_id,
-                args=args,
-            )
-            await self._cb.on_tool_call(parsed.call_id, parsed.name, args)
+            if self._suspended:
+                await logger.ainfo(
+                    "session.rx.tool_call_dropped_while_suspended",
+                    name=parsed.name,
+                    call_id=parsed.call_id,
+                )
+            else:
+                try:
+                    args = json.loads(parsed.arguments)
+                except json.JSONDecodeError:
+                    args = {}
+                await logger.ainfo(
+                    "session.rx.tool_call",
+                    name=parsed.name,
+                    call_id=parsed.call_id,
+                    args=args,
+                )
+                await self._cb.on_tool_call(parsed.call_id, parsed.name, args)
 
         elif isinstance(parsed, TranscriptEvent):
             self._transcript_lines.append(parsed.transcript)
@@ -318,7 +386,7 @@ class OpenAIRealtimeProvider:
                 role=parsed.role,
                 text=parsed.transcript,
             )
-            if self._cb.on_transcript:
+            if self._cb.on_transcript and not self._suspended:
                 await self._cb.on_transcript(parsed.role, parsed.transcript)
 
         elif isinstance(parsed, ErrorEvent):
