@@ -151,6 +151,103 @@ class TestNamespacedSkillStorage:
         assert await ns_b.get_setting("shared") == "B"
 
 
+class TestTimerPersistenceEndToEnd:
+    """Cross-cutting test: real TimersSkill over real SQLite via the real
+    NamespacedSkillStorage adapter.
+
+    The skill's own test suite uses `_NoopSkillStorage` (dict-backed) so
+    skill logic is tested in isolation; the storage suite above tests
+    the adapter against real SQLite. Neither proves they compose. This
+    test closes that gap by exercising the full write → persist →
+    cross-process-equivalent-restart → restore path against the actual
+    `Storage` implementation.
+
+    Pattern mirrors `test_coordinator_skill_integration.py` — a core
+    test may reach into an entry-point skill to prove framework
+    plumbing end-to-end.
+    """
+
+    async def test_set_persists_through_real_storage_and_restores(self, storage: Storage) -> None:
+        import json
+        from datetime import UTC, datetime, timedelta
+
+        from huxley.storage.skill import NamespacedSkillStorage
+        from huxley_sdk.testing import make_test_context
+        from huxley_skill_timers.skill import TimersSkill
+
+        # --- Session 1: write a pending entry, then tear down (simulating
+        # a server shutdown before the timer fires). Use a far-future
+        # fire_at so the test doesn't need to deal with timing.
+        ns = NamespacedSkillStorage(storage, "timers")
+        skill_1 = TimersSkill()
+        ctx_1 = make_test_context(storage=ns)
+        await skill_1.setup(ctx_1)
+        fire_at = datetime.now(UTC) + timedelta(hours=1)
+        # Hand-write the entry in the same shape `set_timer` would, so
+        # we don't have to wait on real `asyncio.sleep`. Tests that the
+        # restore READ path works; the write path is covered separately.
+        await ns.set_setting(
+            "timer:1",
+            json.dumps(
+                {
+                    "v": 1,
+                    "fire_at": fire_at.isoformat(),
+                    "message": "medication",
+                    "fired_at": None,
+                }
+            ),
+        )
+        # Skill teardown does NOT delete the entry — that's what persistence
+        # relies on.
+        await skill_1.teardown()
+
+        # --- Verify the entry really lives in SQLite (not just in a stub).
+        rows = await storage.list_settings("timers:")
+        assert any(k == "timers:timer:1" for k, _ in rows), rows
+
+        # --- Session 2: fresh skill instance over the SAME storage.
+        # `setup()` must discover the entry via list_settings and reschedule.
+        skill_2 = TimersSkill()
+        ctx_2 = make_test_context(storage=ns)
+        await skill_2.setup(ctx_2)
+        assert 1 in skill_2._handles, "restored handle missing"
+        # _next_id primed past the restored entry's id.
+        assert skill_2._next_id == 2
+        await skill_2.teardown()
+
+    async def test_fired_at_dedup_through_real_storage(self, storage: Storage) -> None:
+        """A crash-surviving entry with `fired_at` set must drop on
+        restore via real SQLite — not just through the `_NoopSkillStorage`
+        path the skill unit tests use."""
+        import json
+        from datetime import UTC, datetime
+
+        from huxley.storage.skill import NamespacedSkillStorage
+        from huxley_sdk.testing import make_test_context
+        from huxley_skill_timers.skill import TimersSkill
+
+        ns = NamespacedSkillStorage(storage, "timers")
+        now = datetime.now(UTC)
+        await ns.set_setting(
+            "timer:7",
+            json.dumps(
+                {
+                    "v": 1,
+                    "fire_at": now.isoformat(),
+                    "message": "dose",
+                    "fired_at": now.isoformat(),  # critical dedup marker
+                }
+            ),
+        )
+        skill = TimersSkill()
+        ctx = make_test_context(storage=ns)
+        await skill.setup(ctx)
+        assert 7 not in skill._handles, "fired_at entry should not have been rescheduled"
+        # Entry deleted from real SQLite, not just from a stub.
+        assert await storage.list_settings("timers:") == []
+        await skill.teardown()
+
+
 class TestWalAndSchemaVersion:
     """T2.1 — WAL mode + schema versioning."""
 
