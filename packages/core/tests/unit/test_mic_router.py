@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from huxley.turn.mic_router import MicRouter
+from huxley.turn.mic_router import MicAlreadyClaimedError, MicRouter
 
 
 @pytest.fixture
@@ -65,19 +65,35 @@ class TestClaim:
         await router.dispatch(b"pcm")
         default.assert_awaited_once_with(b"pcm")
 
-    async def test_nested_claims_stack_lifo(self, router: MicRouter, default: AsyncMock) -> None:
-        """Inner claim release restores the outer claim, not the default."""
-        outer = AsyncMock()
-        inner = AsyncMock()
+    async def test_second_claim_raises(self, router: MicRouter) -> None:
+        """At-most-one-claim invariant: a second `claim()` while one is
+        active raises. Closes the race the Stage 2 critic flagged where
+        a direct-entry `start_input_claim` firing concurrently with a
+        tool-dispatched `InputClaim` side effect would capture the
+        other claim's handler as `_previous` and leak on release.
+        """
+        first = AsyncMock()
+        second = AsyncMock()
+        router.claim(first)
 
-        outer_handle = router.claim(outer)
-        inner_handle = router.claim(inner)
+        with pytest.raises(MicAlreadyClaimedError):
+            router.claim(second)
 
-        inner_handle.release()
-        await router.dispatch(b"a")
-        assert outer.await_count == 1
-        assert inner.await_count == 0
+    async def test_release_then_claim_works(self, router: MicRouter, default: AsyncMock) -> None:
+        """After releasing a claim, a new claim is allowed. Covers the
+        sequential flow of a voice memo finishing followed by an
+        incoming call — each is fine in isolation."""
+        first = AsyncMock()
+        second = AsyncMock()
 
-        outer_handle.release()
-        await router.dispatch(b"b")
-        default.assert_awaited_once_with(b"b")
+        first_handle = router.claim(first)
+        first_handle.release()
+        second_handle = router.claim(second)
+
+        await router.dispatch(b"pcm")
+        second.assert_awaited_once_with(b"pcm")
+        first.assert_not_awaited()
+        default.assert_not_awaited()
+
+        second_handle.release()
+        assert router.is_claimed is False
