@@ -184,12 +184,17 @@ class ContentStreamObserver:
         """Begin a linear gain ramp from the current effective gain to
         `target` over `_RAMP_DURATION_S`. Idempotent — starting a new
         ramp while one is in flight re-anchors from the current gain.
+        No-op when the effective gain already matches `target` (no
+        pointless per-sample interpolation on every chunk).
         """
-        # Evaluate current gain at the moment of the new ramp's start so
-        # we don't jump discontinuously (interrupting a prior ramp mid-way).
-        self._ramp_start_gain = self._current_gain(time.monotonic())
+        now = time.monotonic()
+        current = self._current_gain(now)
+        if self._ramp_target is None and current == target:
+            # Already at target with no ramp in flight — nothing to do.
+            return
+        self._ramp_start_gain = current
         self._ramp_target = target
-        self._ramp_start_time = time.monotonic()
+        self._ramp_start_time = now
 
     def _current_gain(self, now: float) -> float:
         """Return the effective gain at wall-clock time `now`. Clamps ramp
@@ -276,18 +281,20 @@ class ContentStreamObserver:
     async def _cancel_pump(self) -> None:
         task = self._task
         if task is not None and not task.done():
-            # Self-cancel guard: if an observer callback chain ends up
-            # delivering NONE back to this observer while still executing
-            # inside `_pump` (e.g., `on_eof` → caller routes through a
-            # release that triggers NONE notification), `task is
-            # current_task()`. Python doesn't deadlock here — CancelledError
-            # fires at `await task` and is suppressed, the task still
-            # completes — but we'd have called `task.cancel()` on a task
-            # that's finishing naturally, leaving it in a "cancelling"
-            # state briefly and potentially interacting with other
-            # cancel-aware constructs (`asyncio.shield`, etc.) in
-            # surprising ways. Skip the cancel-await dance; the task is
-            # already on its way out, let it exit naturally.
+            # Self-cancel guard — Stage-2 reentrance safety. Today's
+            # coordinator never routes `on_eof` back through NONE
+            # synchronously (the FocusManager's mailbox serializes,
+            # so the NONE arrives on a later tick with the pump
+            # already completed). But Stage 2's `InputClaim` adds
+            # new reentrance paths: a stream's natural end might
+            # trigger a claim-end that cascades into an observer-
+            # NONE delivery on the same tick as the pump's finally.
+            # Without this guard, `task.cancel()` + `await task` in
+            # that scenario would call cancel on a naturally-
+            # finishing task, leaving it in a transient cancelling
+            # state that interacts oddly with `asyncio.shield` and
+            # other cancel-aware constructs. Skip the cancel-await
+            # dance; the task is exiting on its own.
             if task is asyncio.current_task():
                 self._task = None
                 return

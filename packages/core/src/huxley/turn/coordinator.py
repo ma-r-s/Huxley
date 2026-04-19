@@ -38,12 +38,13 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import structlog
 
-from huxley.focus.vocabulary import Activity, Channel, ContentType
-from huxley_sdk import AudioStream, CancelMedia, PlaySound, SetVolume
+from huxley.focus.vocabulary import Activity, Channel
+from huxley_sdk import AudioStream, CancelMedia, ContentType, PlaySound, SetVolume
 
 from .factory import TurnFactory
 from .mic_router import MicRouter
@@ -480,6 +481,8 @@ class TurnCoordinator:
         self.current_turn.pending_audio_streams.clear()
         self.current_turn.state = TurnState.INTERRUPTED
         self.current_turn = None
+        # Defensive invariant — see matching pattern in `interrupt()`.
+        self._current_injected_dedup_key = None
         self._bind_turn()
         await self._send_audio_clear()
 
@@ -533,6 +536,9 @@ class TurnCoordinator:
             self.current_turn.state = TurnState.INTERRUPTED
             await self._emit_turn_summary(reason="interrupted", spawned_audio_stream=False)
         self.current_turn = None
+        # Invariant with `_release_dialog` (called above) but clear defensively
+        # in case a future code path interrupts without going through it.
+        self._current_injected_dedup_key = None
         self._bind_turn()
 
     # --- Internal ---
@@ -578,6 +584,11 @@ class TurnCoordinator:
         # which the caller path reaches separately.
         await self._release_dialog()
         self.current_turn = None
+        # Clear the in-flight dedup key alongside `current_turn` (defensive —
+        # `_release_dialog` also clears it, but coupling the clear to the
+        # turn-clear makes the invariant robust against future code paths
+        # that might end a turn without going through _release_dialog).
+        self._current_injected_dedup_key = None
         self._bind_turn()
         await self._send_status(self._status["ready"])
 
@@ -672,16 +683,29 @@ class TurnCoordinator:
         # and downstream callbacks might query `current_media_task`.
         self._content_obs = obs
 
-        # CONTENT is NONMIXABLE today (audiobooks, radio, news all use
-        # spoken word). MIXABLE would imply ducking-safe content like
-        # background music — no skill produces that yet. When one does,
-        # the stream itself should declare content_type via a new
-        # AudioStream field (deferred).
+        # `AudioStream.content_type` defaults to NONMIXABLE (right for
+        # spoken content — audiobooks, radio, news). A skill shipping
+        # MIXABLE content (background music, ambient) sets it on the
+        # stream; the FocusManager then delivers BACKGROUND/MAY_DUCK on
+        # preemption (not NONE/MUST_STOP) and the observer's gain
+        # envelope ramps down instead of hard-pausing.
+        #
+        # `patience` is non-zero for MIXABLE streams so the FM delivers
+        # BACKGROUND (grace window) instead of immediately cutting to
+        # NONE. Without it, any DIALOG acquire kills the stream outright
+        # regardless of content_type — the duck envelope never fires.
+        # 5 minutes is enough for most inject_turn narrations + a little
+        # slack; past that we assume the user meaningfully changed
+        # context and the ambient stream can be dropped.
+        patience = (
+            timedelta(minutes=5) if stream.content_type is ContentType.MIXABLE else timedelta(0)
+        )
         activity = Activity(
             channel=Channel.CONTENT,
             interface_name=interface_name,
-            content_type=ContentType.NONMIXABLE,
+            content_type=stream.content_type,
             observer=obs,
+            patience=patience,
         )
         await logger.ainfo(
             "coord.audio_stream_started",

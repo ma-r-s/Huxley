@@ -1525,6 +1525,69 @@ class TestInjectTurn:
         assert not focus_manager._stacks[Channel.DIALOG]
         assert coordinator._dialog_interface_name is None
 
+    async def test_mixable_content_ducks_on_inject_turn_preemption(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+    ) -> None:
+        """🟠 End-to-end duck proof (critic finding #7): a MIXABLE content
+        stream stays running under an injected turn, with gain ramped
+        down. Today's skills all ship NONMIXABLE streams (pump cancels
+        on preemption), so this test is scaffolding — but it's the only
+        thing that proves the duck envelope composes through the real
+        FocusManager/observer path. Without this test, the Stage 1b
+        duck code is unreachable in any integration scenario."""
+        import asyncio
+
+        from huxley_sdk import ContentType
+
+        async def forever_stream() -> AsyncIterator[bytes]:
+            # Real PCM so the gain envelope doesn't crash on the first chunk.
+            chunk = bytes(480 * 2)  # 480 int16 samples of silence, 20ms at 24kHz
+            while True:
+                yield chunk
+                await asyncio.sleep(0.01)
+
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output="{}",
+            side_effect=AudioStream(
+                factory=forever_stream,
+                content_type=ContentType.MIXABLE,
+            ),
+        )
+
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("c1", "play_music", {})
+        await coordinator.on_response_done()
+        # Let the pump get running.
+        for _ in range(5):
+            if (
+                coordinator.current_media_task is not None
+                and not coordinator.current_media_task.done()
+            ):
+                break
+            await asyncio.sleep(0.001)
+        pump_task = coordinator.current_media_task
+        assert pump_task is not None
+        assert not pump_task.done()
+        obs = coordinator._content_obs
+        assert obs is not None
+        # Pre-duck: gain at 1.0, no ramp.
+        assert obs._gain == pytest.approx(1.0)
+        assert obs._ramp_target is None
+
+        await coordinator.inject_turn("Hora de pastilla.")
+
+        # MIXABLE → the pump should STILL be alive (ducked, not cancelled).
+        assert pump_task is not None
+        assert not pump_task.done()
+        # Gain envelope started a ramp to 0.3.
+        assert obs._ramp_target == pytest.approx(0.3)
+        # Coordinator has both CONTENT (background) and DIALOG (foreground)
+        # activities on the FocusManager.
+        assert coordinator._content_obs is obs
+        assert coordinator._dialog_interface_name is not None
+
 
 class TestInjectTurnQueue:
     """Stage 1d: queue + dedup behavior for `inject_turn`.
@@ -1673,6 +1736,35 @@ class TestInjectTurnQueue:
         # Queue intact — interrupt clears DIALOG / content but not
         # the pending-injects queue.
         assert len(coordinator._injected_queue) == 1
+
+    async def test_in_flight_dedup_key_clears_on_natural_end_reallowing_refire(
+        self,
+        coordinator: TurnCoordinator,
+        provider: StubVoiceProvider,
+    ) -> None:
+        """🔴 Regression (critic finding #1): after an injected turn
+        completes naturally, `_current_injected_dedup_key` clears, so
+        a new inject with the same key fires immediately (not dropped).
+        Previously this was only tested with A-in-flight-drops-B;
+        nothing asserted that after A ends, a same-key C fires cleanly.
+        """
+        await coordinator.inject_turn("A", dedup_key="med_9am")
+        assert coordinator._current_injected_dedup_key == "med_9am"
+
+        # Simulate A's natural response flow to completion.
+        await coordinator.on_audio_delta(b"a")
+        await coordinator.on_audio_done()
+        await coordinator.on_response_done()
+
+        # In-flight key cleared.
+        assert coordinator._current_injected_dedup_key is None
+
+        # Same-key C fires immediately (not dropped).
+        pre_sent = len(provider.sent)
+        await coordinator.inject_turn("C", dedup_key="med_9am")
+        assert coordinator.current_turn is not None
+        assert coordinator.current_turn.source.value == "injected"
+        assert ("send_conversation_message", "C") in provider.sent[pre_sent:]
 
 
 class TestTurnDataclass:

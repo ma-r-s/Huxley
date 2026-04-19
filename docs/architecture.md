@@ -256,7 +256,9 @@ Two overlapping-but-distinct concerns live side by side. To prevent drift, the s
 
 **When they disagree** (a turn holds DIALOG FOREGROUND but no audio has flowed yet, or a stream pumped one chunk then was preempted before `release` fired), `SpeakingState` is what the client sees. `FocusManager` is what the framework knows. Reconciliation happens at the next barrier (`interrupt()`, `on_session_disconnected`, natural response-done).
 
-This contract is load-bearing for T1.4 Stage 1c onward. Any future primitive that speaks (inject_turn, InputClaim with `speaker_source`) must name explicitly which of the two it's writing to, and the framework bridges the rest.
+**A third state holder: `_injected_queue` on the coordinator (Stage 1d).** When `inject_turn` is called while a user or synthetic turn is already in progress, the request is queued here and drains in `_apply_side_effects` when a turn ends without pending content. This is authoritative for "what proactive speech is pending that hasn't been claimed yet" — a distinct question from either "who holds the speaker" (FocusManager) or "is audio flowing" (SpeakingState). Skills never see this queue directly; they call `ctx.inject_turn(prompt, dedup_key=...)` and the framework decides "fire now or queue." The `coord.inject_turn_queued / _dequeued / _deduped / _dropped` log events are the observability surface — a skill debugging "why didn't my reminder fire" should look here first, not at FocusManager stacks. The queue is preserved across `interrupt()` and `on_session_disconnected` so user interruptions don't lose pending reminders.
+
+This contract is load-bearing for T1.4 Stage 1c onward. Any future primitive that speaks (inject_turn, InputClaim with `speaker_source`) must name explicitly which of the three it's writing to, and the framework bridges the rest.
 
 ## Dependency flow (no cycles)
 

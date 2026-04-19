@@ -61,6 +61,27 @@ class ToolDefinition:
         }
 
 
+class ContentType(Enum):
+    """How an audio stream behaves when a higher-priority speaker
+    preempts it. Verbatim from AVS Focus Management.
+
+    - `MIXABLE` — the stream plays through but is ducked (quieter)
+      while another voice overlays. Appropriate for ambient / musical
+      content where overlapping voices don't clash.
+    - `NONMIXABLE` — the stream pauses entirely when preempted.
+      Appropriate for spoken-word content (audiobooks, radio talk,
+      narrated news) where overlapping voices would be unintelligible.
+
+    Skills declare this per-stream via `AudioStream.content_type`.
+    Defaults to `NONMIXABLE` because spoken word is the dominant
+    case; MIXABLE-declaring streams (background music, ambience)
+    must opt in explicitly.
+    """
+
+    MIXABLE = "mixable"
+    NONMIXABLE = "nonmixable"
+
+
 class SideEffect:
     """Marker base class for side effects carried by a `ToolResult`.
 
@@ -100,12 +121,21 @@ class AudioStream(SideEffect):
     generation latency, so by the time the client finishes playing it, the
     model's response audio is usually already in flight. 500-1000ms covers
     typical OpenAI Realtime first-token latency. Set to 0 to disable.
+
+    `content_type`: drives framework behavior when a proactive speech
+    event (e.g. `inject_turn`) preempts this stream. `NONMIXABLE`
+    (default) → stream pauses immediately; `MIXABLE` → stream ducks
+    (gain ramps to ~0.3 over 100ms) and keeps playing under the
+    overlay. Pick `NONMIXABLE` for spoken content (audiobooks,
+    narrated news, talk radio) and `MIXABLE` for ambient / musical
+    content where two voices don't clash.
     """
 
     kind: ClassVar[str] = "audio_stream"
     factory: Callable[[], AsyncIterator[bytes]]
     on_complete_prompt: str | None = None
     completion_silence_ms: int = 0
+    content_type: ContentType = ContentType.NONMIXABLE
 
 
 @dataclass(frozen=True, slots=True)

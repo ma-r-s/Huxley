@@ -10,11 +10,11 @@ from huxley.focus.vocabulary import (
     Activity,
     Channel,
     ChannelObserver,
-    ContentType,
     FocusState,
     MixingBehavior,
     mixing_for_background,
 )
+from huxley_sdk import ContentType
 
 __all__ = [
     "CHANNEL_PRIORITY",

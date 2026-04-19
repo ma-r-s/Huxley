@@ -1,10 +1,13 @@
-"""Focus vocabulary — channels, focus states, content types, activities.
+"""Focus vocabulary — channels, focus states, activities.
 
-Dependency-free by design: nothing in this module imports from
-`huxley.turn`, `huxley.persona`, `huxley_sdk`, or anywhere else in
-Huxley. That keeps the focus package at the bottom of the import graph
-so `FocusManager`, observers, and the coordinator can all depend on it
-without risking cycles.
+Nothing in this module imports from `huxley.turn`, `huxley.persona`,
+or anywhere else in the framework. That keeps the focus package at
+the bottom of the framework's import graph, so `FocusManager`,
+observers, and the coordinator can all depend on it without risking
+cycles. (`huxley_sdk` sits below the framework entirely — its
+`ContentType` enum is the canonical source for
+`AudioStream.content_type` and framework code imports it directly
+from there.)
 
 See `docs/architecture.md#focus-management` for the model and
 `docs/io-plane.md` for the AVS lineage.
@@ -16,6 +19,8 @@ from dataclasses import dataclass
 from datetime import timedelta
 from enum import StrEnum
 from typing import Protocol
+
+from huxley_sdk import ContentType
 
 
 class Channel(StrEnum):
@@ -52,15 +57,9 @@ class FocusState(StrEnum):
     NONE = "none"
 
 
-class ContentType(StrEnum):
-    """How an Activity behaves when backgrounded. Verbatim from AVS.
-
-    - `MIXABLE` → `MAY_DUCK` on BACKGROUND.
-    - `NONMIXABLE` → `MUST_PAUSE` on BACKGROUND.
-    """
-
-    MIXABLE = "mixable"
-    NONMIXABLE = "nonmixable"
+# ContentType lives in huxley_sdk (skills declare it on AudioStream).
+# Framework internals that need the type import it directly from
+# `huxley_sdk`; keeping a re-export here would invite drift.
 
 
 class MixingBehavior(StrEnum):

@@ -884,6 +884,26 @@ Unchanged in scope.
    `huxley.audio.ducking` module). One consumer today; extract later
    if a second observer type wants ducking (YAGNI).
 
+### Pre-Stage-2 cleanup (queued, tiny items from post-Stage-3 critic)
+
+Small items the critic flagged that aren't blocking but should land
+before Stage 2 stacks more on:
+
+4. **Tighten `SkillContext.inject_turn` / `background_task` typing to
+   Protocols.** Currently `Callable[..., ...]`. Protocol classes (in
+   `huxley_sdk/types.py`) are strictly more precise with zero skill-
+   side import cost (structural typing). Stage 2 will add `InputClaim`
+   to the SkillContext surface; tightening now prevents the looseness
+   from compounding. ~30 min.
+
+5. **Extract `_post_turn_sequence()` from `_apply_side_effects`.** The
+   method is 48 lines branching 3 ways (stream / queue drain / idle).
+   Stage 1d.2's TTL expiry check will push this to 70+ lines. Extract
+   a helper returning a discriminated-union-of-post-turn-intent. ~1h.
+   Not blocking Stage 2 but pays off immediately when 1d.2 or Stage 2
+   (which adds another post-turn branch for `InputClaim` cleanup)
+   lands.
+
 ### (Archived) original Stage 1 plan — `inject_turn` + arbitration + ducking
 
 Kept for traceability. Arbitration / DuckingController / Urgency /
@@ -1027,6 +1047,29 @@ robustness).
 
 - `docs/skills/README.md` — "using `background_task`" section (done in this triage pass; includes `on_permanent_failure` for life-safety skills)
 - `docs/observability.md` — new events documented
+
+### Stage 3b — Persistent supervised tasks across restart (queued)
+
+**Status**: queued · **Effort**: ~1 day · **Blocked by**: nothing (Stage 3a shipped) · **Unblocks**: T1.8 evolved reminders that survive server restart
+
+The critic (post-Stage-3 review) flagged that Stage 3 "done" hides a real gap: supervised tasks are in-memory only. A server crash or restart loses every scheduled timer, reminder, webhook listener, etc. Mario's target user (elderly, blind) can't be asked to re-set a medication timer after a restart.
+
+**Deliverables**:
+
+- Optional `persist_key: str | None` argument to `ctx.background_task(...)` — when set, the supervisor serializes `(name, coro_factory, kwargs)` into a skill-namespaced `SkillStorage` entry on `start()`.
+- Supervisor `restore_all()` method invoked from `Application.run()` after `skill_registry.setup_all` — each skill's `setup` can check its storage and re-call `ctx.background_task(persist_key=...)` for any previously-pending tasks.
+- `coro_factory` must be constructible from config alone (not a closure over live state). This is a skill contract — the supervisor can't persist closures. Document it as "persisted tasks must be serializable."
+- Deleted-on-fire: once a persisted task's coroutine completes naturally, its storage entry is cleaned up (mirrors how `_fire_after`'s finally clears `_handles`).
+
+**Out of scope**: persisting CRASHED tasks across restart. A task that crashed during its pre-restart run is considered "lost at shutdown"; the user can reschedule manually.
+
+**First consumer**: T1.8 evolved reminders (persistent medication reminders).
+
+### Stage 3c — PermanentFailure elapsed_s semantics (tiny, queued)
+
+**Status**: queued · **Effort**: ~30 min
+
+The critic noted: `supervisor.py` computes `elapsed_s = now - window_start`, but `window_start` resets when the 1-hour budget window expires. So `elapsed_s` is actually "time since last window reset," not "time since first crash." Either rename the field (`elapsed_in_window_s`), add `first_crash_time` tracking so `elapsed_s` reflects total age, or document current semantics explicitly. Low impact; consistent semantics matter for anyone using `elapsed_s` to decide "is this a sporadic or sustained failure."
 
 ### Stage 4 — `ClientEvent` + `server_event` + capabilities handshake
 

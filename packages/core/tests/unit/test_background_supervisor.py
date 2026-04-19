@@ -21,7 +21,14 @@ def dev_event() -> AsyncMock:
 
 @pytest.fixture
 def supervisor(dev_event: AsyncMock) -> TaskSupervisor:
-    return TaskSupervisor(send_dev_event=dev_event)
+    # Inject a no-op sleep so the restart-backoff loop doesn't burn real
+    # seconds in tests. Production wires `asyncio.sleep` via the default.
+    async def _fast_sleep(_duration: float) -> None:
+        # A single event-loop tick is enough to let the task state settle
+        # between restart attempts without real wall-clock wait.
+        await asyncio.sleep(0)
+
+    return TaskSupervisor(send_dev_event=dev_event, sleep=_fast_sleep)
 
 
 class TestNaturalCompletion:
@@ -55,15 +62,10 @@ class TestRestartOnCrash:
                 raise RuntimeError("first attempt fails")
             done.set()
 
-        # Backoff for the second try is 2**1 = 2s; patch _MAX_BACKOFF to keep
-        # the test fast, OR just override max_restarts to take the natural
-        # backoff path. Cheaper: monkey-patch the supervisor's sleep.
-        # Actually the simplest: 2s sleep is acceptable for a test.
-        # We set max_restarts_per_hour=10 (default) — first crash → restart 1
-        # → backoff 2s → second attempt succeeds → done.
+        # Fixture's `_fast_sleep` is a single event-loop yield, so the
+        # real 2s backoff collapses to ~0ms. Test completes instantly.
         supervisor.start("flaky", coro, max_restarts_per_hour=10)
-        # 2s backoff + slack
-        await asyncio.wait_for(done.wait(), timeout=3.5)
+        await asyncio.wait_for(done.wait(), timeout=1.0)
         assert attempts == 2
         # No permanent failure dev_event fired.
         dev_event.assert_not_awaited()
@@ -72,7 +74,7 @@ class TestRestartOnCrash:
         self, supervisor: TaskSupervisor, dev_event: AsyncMock
     ) -> None:
         # Restart budget = 2 → after 3rd crash declare permanent failure.
-        # Backoffs: 2s, 4s. Total ~6s. Acceptable for a single test.
+        # With the fast-sleep fixture, backoffs collapse; test runs in <100ms.
         attempts = 0
         callback_seen: list[PermanentFailure] = []
 
@@ -90,12 +92,14 @@ class TestRestartOnCrash:
             max_restarts_per_hour=2,
             on_permanent_failure=on_failure,
         )
-        # Wait ~7s for: attempt 1 (instant), backoff 2s, attempt 2, backoff 4s,
-        # attempt 3 → exceeds budget → permanent failure.
-        for _ in range(80):
-            if callback_seen:
-                break
-            await asyncio.sleep(0.1)
+        # Await the supervisor's run-loop task directly — it finishes once
+        # permanent_failure fires + callback runs. Deterministic; no poll.
+        task = supervisor._tasks.get("doomed")
+        assert task is not None
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            await task
 
         assert callback_seen, "on_permanent_failure callback should have fired"
         failure = callback_seen[0]
@@ -230,12 +234,13 @@ class TestPermanentFailureCallbackRobustness:
             max_restarts_per_hour=1,
             on_permanent_failure=bad_callback,
         )
-        # Wait for: attempt 1, backoff 2s, attempt 2 → exceeds 1 → callback
-        # → callback raises → still cleaned up.
-        for _ in range(40):
-            if "nested_failure" not in supervisor._tasks:
-                break
-            await asyncio.sleep(0.1)
+        # Await the supervisor's run-loop deterministically.
+        task = supervisor._tasks.get("nested_failure")
+        assert task is not None
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            await task
 
         assert "nested_failure" not in supervisor._tasks
         assert callback_invocations == 1  # called exactly once

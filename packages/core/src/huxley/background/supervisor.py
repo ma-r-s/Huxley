@@ -59,9 +59,17 @@ class TaskSupervisor:
         self,
         *,
         send_dev_event: Callable[[str, dict[str, Any]], Awaitable[None]],
+        sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
         self._send_dev_event = send_dev_event
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        # `sleep` is injectable so tests can skip real wall-clock backoff
+        # between crash retries. Defaults to `asyncio.sleep`; tests
+        # override with a no-op (or accelerated) version to keep the
+        # suite fast without losing the restart-loop coverage.
+        self._sleep: Callable[[float], Awaitable[None]] = (
+            sleep if sleep is not None else asyncio.sleep
+        )
 
     def start(
         self,
@@ -149,7 +157,7 @@ class TaskSupervisor:
                         restart_count=restart_count,
                         backoff_s=backoff_s,
                     )
-                    await asyncio.sleep(backoff_s)
+                    await self._sleep(backoff_s)
         finally:
             # Scrub from the pool whether we exit normally, by cancellation,
             # or via permanent failure. Stop() works on a snapshot so a
