@@ -568,6 +568,12 @@ class TurnCoordinator:
         Clears `current_turn` BEFORE spawning the content stream so the
         stream's natural-completion path (which may fire a synthetic-turn
         announcement) doesn't race with our own turn-cleanup awaits.
+
+        Split into two phases: (1) tear down the ending turn; (2) dispatch
+        the post-turn sequence (preempt / content / queue drain). The
+        dispatch branch count grows with future stages (1d.2 adds a TTL
+        expiry branch; Stage 2 adds `InputClaim` cleanup), so keeping the
+        decision in its own method keeps this one focused on cleanup.
         """
         if self.current_turn is None:
             return
@@ -601,18 +607,30 @@ class TurnCoordinator:
         self._bind_turn()
         await self._send_status(self._status["ready"])
 
-        # Drain policy at turn-end:
-        #
-        # 1. If the queue has a PREEMPT entry, fire it — even if this
-        #    turn spawned content. PREEMPT callers accept the tradeoff
-        #    of dropping user-requested content (book, radio, etc.) to
-        #    surface a time-critical event (medication, safety). Find
-        #    the first PREEMPT in FIFO order; NORMAL entries ahead of
-        #    it keep their place (they wait for a quiet turn-end as
-        #    designed).
-        # 2. Otherwise, content wins: start the pending stream if any.
-        # 3. Otherwise (no streams, no PREEMPT), drain the next NORMAL
-        #    entry — this is the "quiet moment" path.
+        await self._dispatch_post_turn(streams, turn_id)
+
+    async def _dispatch_post_turn(
+        self,
+        streams: list[AudioStream],
+        turn_id: str | None,
+    ) -> None:
+        """Decide what happens after a turn ends.
+
+        Three mutually-exclusive branches:
+
+        1. **PREEMPT over content** — if the queue has a PREEMPT entry
+           and this turn spawned content, fire the PREEMPT and drop
+           the stream. PREEMPT callers accept the tradeoff of dropping
+           user-requested content (book, radio, etc.) to surface a
+           time-critical event (medication, safety). NORMAL entries
+           ahead of it keep their place.
+        2. **Content wins** — if no PREEMPT is waiting, start the
+           pending stream.
+        3. **Quiet moment** — no stream, no PREEMPT: drain the head of
+           the queue (FIFO, any priority). Only one per turn-end; the
+           injected turn itself ends via `_apply_side_effects` again
+           and this branch re-fires for the next queued item.
+        """
         preempt_index = self._find_first_preempt_index()
         if streams and preempt_index is not None:
             request = self._injected_queue.pop(preempt_index)
@@ -623,13 +641,11 @@ class TurnCoordinator:
                 dropped_streams=len(streams),
             )
             await self._fire_injected_turn(request.prompt, request.dedup_key)
-        elif streams:
+            return
+        if streams:
             await self._start_content_stream(streams[-1], turn_id)
-        elif self._injected_queue:
-            # Quiet moment — drain head of queue (any priority; FIFO).
-            # Only one per turn-end: if there are more, the injected
-            # turn itself ends via `_apply_side_effects` again and this
-            # branch re-fires for the next queued item.
+            return
+        if self._injected_queue:
             request = self._injected_queue.pop(0)
             await self._log.ainfo(
                 "coord.inject_turn_dequeued",

@@ -936,13 +936,17 @@ before Stage 2 stacks more on:
    17 timers tests green; no skill-side changes required (structural
    typing — existing callables already satisfy the shape).
 
-5. **Extract `_post_turn_sequence()` from `_apply_side_effects`.** The
-   method is 48 lines branching 3 ways (stream / queue drain / idle).
-   Stage 1d.2's TTL expiry check will push this to 70+ lines. Extract
-   a helper returning a discriminated-union-of-post-turn-intent. ~1h.
-   Not blocking Stage 2 but pays off immediately when 1d.2 or Stage 2
-   (which adds another post-turn branch for `InputClaim` cleanup)
-   lands.
+5. **Extract `_post_turn_sequence()` from `_apply_side_effects`.**
+   ✅ **done** (`<this commit>`, 2026-04-19). Extracted as
+   `_dispatch_post_turn(streams, turn_id)` with a docstring listing
+   the three branches (PREEMPT-over-content / content-wins /
+   quiet-moment). `_apply_side_effects` is now focused on turn
+   teardown; the drain policy lives where Stage 1d.2 (TTL expiry)
+   and Stage 2 (`InputClaim` cleanup) can add branches without
+   bloating the cleanup method. Pure extraction, no behavior change;
+   286 core tests still green without modification. Opted against
+   the discriminated-union-of-intent the critic suggested — three
+   branches today, YAGNI; revisit if the branch count doubles.
 
 ### (Archived) original Stage 1 plan — `inject_turn` + arbitration + ducking
 
