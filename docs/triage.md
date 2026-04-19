@@ -1100,7 +1100,7 @@ robustness).
 - `docs/skills/README.md` — "using `background_task`" section (done in this triage pass; includes `on_permanent_failure` for life-safety skills)
 - `docs/observability.md` — new events documented
 
-### Stage 3b — Persistent supervised tasks across restart ✅ **done** (`<this commit>`, 2026-04-19)
+### Stage 3b — Persistent supervised tasks across restart ✅ **done** (`6e1fce9`, 2026-04-19)
 
 **Effort (actual)**: ~3h (vs 1-day estimate) — the skill-owned approach chosen below needed far less plumbing than the framework primitive originally speced.
 
