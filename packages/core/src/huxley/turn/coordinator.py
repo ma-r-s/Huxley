@@ -35,6 +35,8 @@ with a `StubVoiceProvider` and wire into a concrete
 
 from __future__ import annotations
 
+import asyncio
+import itertools
 import json
 import time
 from dataclasses import dataclass
@@ -47,15 +49,18 @@ from huxley.focus.vocabulary import Activity, Channel
 from huxley_sdk import (
     AudioStream,
     CancelMedia,
+    ClaimEndReason,
+    ClaimHandle,
     ContentType,
     InjectPriority,
+    InputClaim,
     PlaySound,
     SetVolume,
 )
 
 from .factory import TurnFactory
 from .mic_router import MicRouter
-from .observers import ContentStreamObserver, DialogObserver
+from .observers import ClaimObserver, ContentStreamObserver, DialogObserver
 from .speaking_state import SpeakingOwner, SpeakingState
 from .state import Turn, TurnSource, TurnState
 
@@ -79,7 +84,6 @@ class _InjectedRequest:
 
 
 if TYPE_CHECKING:
-    import asyncio
     from collections.abc import Awaitable, Callable
 
     from huxley.focus.manager import FocusManager
@@ -155,6 +159,15 @@ class TurnCoordinator:
         # A reference of None means idle. The observer owns the pump task;
         # access it via `current_media_task` for back-compat.
         self._content_obs: ContentStreamObserver | None = None
+        # Current InputClaim observer (call / voice memo). Shares the
+        # CONTENT channel with `_content_obs` — FocusManager enforces
+        # single-occupant, and starting a claim first stops any running
+        # content stream (and vice versa). A ref of None means no claim.
+        self._claim_obs: ClaimObserver | None = None
+        # Counter for interface_name uniqueness on claims. A per-process
+        # integer is plenty — the interface_name only needs to be unique
+        # within the FocusManager's lifetime, not globally.
+        self._claim_counter: itertools.count[int] = itertools.count(1)
         # Current DIALOG-channel Activity's interface_name (if any). Set by
         # `inject_turn`; cleared by `_release_dialog` called from
         # `_apply_side_effects` (natural end) or `interrupt()` (preemption).
@@ -473,8 +486,13 @@ class TurnCoordinator:
 
         # Stop the pump FIRST so no subsequent acquire can race with force_release.
         # Release DIALOG too so FM's stacks don't carry orphan activities
-        # across the disconnect.
+        # across the disconnect. End any active claim with ERROR — a
+        # session disconnect during a call isn't a natural close.
         await self._stop_content_stream()
+        claim = self._claim_obs
+        if claim is not None:
+            claim.set_end_reason(ClaimEndReason.ERROR)
+            await self._end_input_claim(claim)
         await self._release_dialog()
         await self._speaking_state.force_release()
 
@@ -533,6 +551,15 @@ class TurnCoordinator:
         #    any DIALOG Activity (from an in-flight inject_turn) so FM's
         #    stacks stay consistent with the coordinator's view.
         await self._stop_content_stream()
+        # End any active InputClaim with USER_PTT reason (grandpa held
+        # PTT during a call / voice memo — skill knows this wasn't a
+        # natural close). The observer's cleanup calls `provider.resume()`
+        # so the subsequent normal PTT flow works. Idempotent: no-op if
+        # no claim is active.
+        claim = self._claim_obs
+        if claim is not None:
+            claim.set_end_reason(ClaimEndReason.USER_PTT)
+            await self._end_input_claim(claim)
         await self._release_dialog()
         # 4. Flush client-side audio queue + clear model-speaking state
         await self._send_audio_clear()
@@ -798,6 +825,113 @@ class TurnCoordinator:
             )
         self._content_obs = None
         await self._focus_manager.release(Channel.CONTENT, obs.interface_name)
+        await self._focus_manager.wait_drained()
+
+    # --- Input claim (T1.4 Stage 2 — mic-capture skills) ---
+
+    async def start_input_claim(self, claim: InputClaim) -> ClaimHandle:
+        """Latch the mic to `claim`'s handler via a CONTENT-channel Activity.
+
+        Direct-entry path — used by skills that start a claim from a
+        `background_task` (incoming call, panic button). For claims
+        triggered by a tool call, the side-effect path through
+        `_apply_side_effects` (Stage 2 commit 3c) reaches this same
+        internal machinery.
+
+        Steps (order enforced by the observer's `_start`):
+
+        1. `provider.suspend()` — stops OpenAI generating / processing.
+        2. `mic_router.claim(handler)` — routes future mic frames to
+           the skill.
+        3. (If supplied) start speaker_source pump.
+
+        Returns a `ClaimHandle` with `cancel()` (skill-initiated end
+        with `NATURAL` reason) and `wait_end()` (resolves to the
+        `ClaimEndReason` when the claim ends for any reason).
+        """
+        claim_id = next(self._claim_counter)
+        interface_name = f"claim:{claim_id}"
+        end_event = asyncio.Event()
+        final_reason: dict[str, ClaimEndReason] = {}
+
+        async def _observer_on_end(reason: ClaimEndReason) -> None:
+            # Coordinator-side cleanup after observer fires its skill
+            # callback. Scrub local ref + resolve wait_end for any
+            # skill awaiting the handle.
+            final_reason["reason"] = reason
+            end_event.set()
+            if self._claim_obs is observer:
+                self._claim_obs = None
+
+        # `release_self` bound to the observer's specific interface_name
+        # so the observer can drive its own unwind on error (e.g., mic
+        # router busy at FOREGROUND time) without holding a FocusManager
+        # reference directly.
+        async def _release_self() -> None:
+            await self._focus_manager.release(Channel.CONTENT, interface_name)
+
+        observer = ClaimObserver(
+            interface_name=interface_name,
+            claim=claim,
+            mic_router=self._mic_router,
+            send_audio=self._send_audio,
+            suspend_provider=self._provider.suspend,
+            resume_provider=self._provider.resume,
+            speaking_state=self._speaking_state,
+            release_self=_release_self,
+            on_end=_observer_on_end,
+        )
+        # Latch ref before acquire — the FM may deliver FOREGROUND
+        # before `wait_drained` returns if the mailbox is busy.
+        self._claim_obs = observer
+        activity = Activity(
+            channel=Channel.CONTENT,
+            interface_name=interface_name,
+            content_type=ContentType.NONMIXABLE,
+            observer=observer,
+            patience=timedelta(0),
+        )
+        await self._log.ainfo("coord.claim_starting", interface=interface_name)
+        await self._focus_manager.acquire(activity)
+        # Wait for FOREGROUND to be fully processed so suspend + mic
+        # swap are done before the caller's next tick.
+        await self._focus_manager.wait_drained()
+
+        coord = self
+        # Holds a reference to the background cancel task so Python's GC
+        # doesn't collect it mid-release. Cleared when the task completes.
+        cancel_task_ref: dict[str, asyncio.Task[None]] = {}
+
+        def _cancel_sync() -> None:
+            """Synchronous cancel from ClaimHandle. Idempotent: if the
+            observer has already ended we no-op (second cancel, or race
+            with coordinator interrupt / inject PREEMPT that got there
+            first). Fires the async release as a detached task — the
+            handle's `wait_end()` is the caller-facing sync point."""
+            if observer.is_ended:
+                return
+            observer.set_end_reason(ClaimEndReason.NATURAL)
+            task = asyncio.create_task(
+                coord._end_input_claim(observer),
+                name=f"claim_cancel:{interface_name}",
+            )
+            cancel_task_ref["task"] = task
+            task.add_done_callback(lambda _t: cancel_task_ref.pop("task", None))
+
+        async def _wait() -> ClaimEndReason:
+            await end_event.wait()
+            return final_reason["reason"]
+
+        return ClaimHandle(_cancel=_cancel_sync, _wait_end=_wait)
+
+    async def _end_input_claim(self, observer: ClaimObserver) -> None:
+        """Release the observer's Activity via FocusManager. Used by the
+        skill-cancel path (async-triggered from sync `ClaimHandle.cancel`)
+        and by the coordinator's user-PTT interrupt path. FM delivers
+        NONE to the observer, which fires its cleanup chain."""
+        if observer.is_ended:
+            return
+        await self._focus_manager.release(Channel.CONTENT, observer.interface_name)
         await self._focus_manager.wait_drained()
 
     # --- Proactive speech (T1.4 Stages 1c.3 + 1d — inject_turn) ---

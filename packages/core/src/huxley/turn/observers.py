@@ -22,11 +22,16 @@ from typing import TYPE_CHECKING
 import structlog
 
 from huxley.focus.vocabulary import FocusState, MixingBehavior
+from huxley.turn.mic_router import MicAlreadyClaimedError
+from huxley.turn.speaking_state import SpeakingOwner
+from huxley_sdk import ClaimEndReason
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
-    from huxley_sdk import AudioStream
+    from huxley.turn.mic_router import MicClaimHandle, MicRouter
+    from huxley.turn.speaking_state import SpeakingState
+    from huxley_sdk import AudioStream, InputClaim
 
 logger = structlog.get_logger()
 
@@ -302,3 +307,263 @@ class ContentStreamObserver:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         self._task = None
+
+
+class ClaimObserver:
+    """Observer for a CONTENT-channel `InputClaim` Activity (T1.4 Stage 2).
+
+    A claim is input capture (calls, voice memo). Mechanically it
+    occupies the CONTENT channel the same way an audiobook does —
+    both are "something playing-ish that a DIALOG acquire should
+    preempt" — but the data flow is inverted:
+
+    - **Mic** (client → claim): `MicRouter` is swapped to the claim's
+      `on_mic_frame` during FOREGROUND; released on end.
+    - **Speaker** (claim → client): optional. If
+      `claim.speaker_source` is set (calls: caller's voice), a pump
+      task iterates it and forwards chunks to `send_audio`. The pump
+      acquires FACTORY speaker lazily on the first chunk, same
+      pattern as `ContentStreamObserver`.
+    - **Provider suspend**: at FOREGROUND we call `suspend_provider`
+      so the Realtime session stops processing user audio + generating
+      responses. At end we call `resume_provider`. Mirrors the
+      `docs/research/realtime-suspend.md` contract.
+
+    Lifecycle (mirrors the `FocusState` table):
+
+    - `FOREGROUND` → suspend provider, claim mic, start speaker pump
+      (if supplied).
+    - `BACKGROUND / MUST_PAUSE` → no meaningful "pause a call"
+      semantic; end the claim as if preempted. `MAY_DUCK` can't fire
+      for a claim (NONMIXABLE by construction).
+    - `NONE` → end the claim. Reason is whatever was latched in
+      `_pending_end_reason` before release; defaults to `PREEMPTED`
+      if nothing set it (FocusManager forced us off because a foreign
+      channel acquired).
+
+    End reason table — who latches which value:
+
+    - `NATURAL`: `ClaimHandle.cancel()` — skill-driven close.
+    - `USER_PTT`: `coordinator.interrupt()` — grandpa held PTT to end.
+    - `PREEMPTED`: default when NONE arrives with no explicit reason.
+      Covers the `inject_turn(PREEMPT)` path where DIALOG acquire
+      forces CONTENT NONE without us setting the flag.
+    - `ERROR`: `on_mic_frame` raised, or speaker pump crashed.
+    """
+
+    def __init__(
+        self,
+        *,
+        interface_name: str,
+        claim: InputClaim,
+        mic_router: MicRouter,
+        send_audio: Callable[[bytes], Awaitable[None]],
+        suspend_provider: Callable[[], Awaitable[None]],
+        resume_provider: Callable[[], Awaitable[None]],
+        speaking_state: SpeakingState,
+        release_self: Callable[[], Awaitable[None]],
+        on_end: Callable[[ClaimEndReason], Awaitable[None]],
+    ) -> None:
+        self._interface_name = interface_name
+        self._claim = claim
+        self._mic_router = mic_router
+        self._send_audio = send_audio
+        self._suspend_provider = suspend_provider
+        self._resume_provider = resume_provider
+        self._speaking_state = speaking_state
+        # Self-release handle: invoked when the observer detects an end-
+        # condition it must drive (e.g., mic-router busy at start). Bound
+        # to `fm.release(CONTENT, interface_name)` by the coordinator.
+        # We cannot release directly — observers don't know about the FM.
+        self._release_self = release_self
+        self._on_end = on_end
+        self._pending_end_reason: ClaimEndReason | None = None
+        self._mic_handle: MicClaimHandle | None = None
+        self._speaker_task: asyncio.Task[None] | None = None
+        self._owns_speaking = False
+        self._started = False
+        self._ended = False
+
+    @property
+    def interface_name(self) -> str:
+        return self._interface_name
+
+    @property
+    def is_ended(self) -> bool:
+        return self._ended
+
+    def set_end_reason(self, reason: ClaimEndReason) -> None:
+        """Latch the reason before releasing, so the observer's end path
+        fires `on_claim_end(reason)` with the correct value. Idempotent:
+        a second call overwrites only if the first was never consumed."""
+        if not self._ended:
+            self._pending_end_reason = reason
+
+    async def on_focus_changed(self, new_focus: FocusState, behavior: MixingBehavior) -> None:
+        _ = behavior  # NONMIXABLE — MAY_DUCK never fires for claims
+        match new_focus:
+            case FocusState.FOREGROUND:
+                await self._start()
+            case FocusState.BACKGROUND:
+                # MUST_PAUSE is the only BG variant for NONMIXABLE. No
+                # "pause the call" semantic; treat as preemption.
+                if self._pending_end_reason is None:
+                    self._pending_end_reason = ClaimEndReason.PREEMPTED
+                await self._end()
+            case FocusState.NONE:
+                await self._end()
+
+    async def _start(self) -> None:
+        """FOREGROUND entry: suspend provider, claim mic, start speaker pump."""
+        if self._started:
+            return  # duplicate FOREGROUND (shouldn't happen but defensive)
+        self._started = True
+
+        # Order matters: suspend BEFORE swapping mic, so any in-flight
+        # mic frame arriving during the swap lands in the still-normal
+        # MicRouter path, which the suspended provider drops silently.
+        # The inverse order would forward a frame to the real provider
+        # after we'd committed to the claim. See spike findings.
+        await self._suspend_provider()
+        try:
+            self._mic_handle = self._mic_router.claim(self._wrap_mic_handler())
+        except MicAlreadyClaimedError:
+            # The MicRouter race the critic flagged — a concurrent claim
+            # sneaked in. We've already suspended; latch ERROR and route
+            # the unwind through the FM so the Activity is properly
+            # released (otherwise FM's stacks carry an orphan).
+            self._pending_end_reason = ClaimEndReason.ERROR
+            await logger.awarning(
+                "claim.mic_router_busy",
+                interface=self._interface_name,
+            )
+            await self._release_self()
+            return
+
+        if self._claim.speaker_source is not None:
+            self._speaker_task = asyncio.create_task(
+                self._speaker_pump(self._claim.speaker_source),
+                name=f"claim_speaker:{self._interface_name}",
+            )
+
+        await logger.ainfo(
+            "claim.started",
+            interface=self._interface_name,
+            has_speaker_source=self._claim.speaker_source is not None,
+        )
+
+    def _wrap_mic_handler(self) -> Callable[[bytes], Awaitable[None]]:
+        """Wrap the skill's handler with error catching so a raising
+        handler doesn't propagate through `MicRouter.dispatch` and kill
+        the audio server's receive loop. A handler exception latches
+        `ERROR` so the next FocusManager tick (scheduled elsewhere —
+        the observer doesn't self-release) can end the claim."""
+        handler = self._claim.on_mic_frame
+        observer = self
+
+        async def safe(pcm: bytes) -> None:
+            try:
+                await handler(pcm)
+            except Exception:
+                await logger.aexception(
+                    "claim.mic_handler_failed",
+                    interface=observer._interface_name,
+                )
+                # Latch the ERROR reason; the coordinator polls or the
+                # claim's cancel path eventually triggers release.
+                observer.set_end_reason(ClaimEndReason.ERROR)
+
+        return safe
+
+    async def _speaker_pump(self, source: AsyncIterator[bytes]) -> None:
+        """Read from the claim's speaker_source and forward to the client.
+
+        Natural end of the iterator does NOT terminate the claim — the
+        skill drives termination explicitly via `ClaimHandle.cancel()`
+        or by the caller hanging up (coordinator-side logic outside
+        this observer). This is intentional: a call's speaker_source
+        (caller's audio) might briefly end with silence mid-call and
+        we don't want to hang up just because the caller paused.
+        """
+        try:
+            async for chunk in source:
+                # Lazy FACTORY acquire on the first chunk — same pattern
+                # as ContentStreamObserver so speaker-indicator semantics
+                # match.
+                if not self._owns_speaking and not self._speaking_state.is_speaking:
+                    await self._speaking_state.acquire(SpeakingOwner.FACTORY)
+                    self._owns_speaking = True
+                await self._send_audio(chunk)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            await logger.aexception(
+                "claim.speaker_pump_failed",
+                interface=self._interface_name,
+            )
+            self.set_end_reason(ClaimEndReason.ERROR)
+
+    async def _end(self) -> None:
+        """NONE delivery: tear down everything and fire the end callbacks.
+
+        Idempotent. Any cleanup step that was already done (e.g., never
+        started the speaker pump because speaker_source was None) is a
+        no-op."""
+        if self._ended:
+            return
+        self._ended = True
+        reason = self._pending_end_reason or ClaimEndReason.PREEMPTED
+
+        # Cancel speaker pump.
+        task = self._speaker_task
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self._speaker_task = None
+
+        # Release mic router claim (restores default dispatch to provider).
+        if self._mic_handle is not None:
+            self._mic_handle.release()
+            self._mic_handle = None
+
+        # Release FACTORY speaker if we took it.
+        if self._owns_speaking:
+            await self._speaking_state.release(SpeakingOwner.FACTORY)
+            self._owns_speaking = False
+
+        # Resume the provider so subsequent user audio reaches the LLM
+        # again. Idempotent if it was never suspended (direct-entry that
+        # failed during claim setup took the ERROR branch which already
+        # resumed).
+        await self._resume_provider()
+
+        await self._fire_end_callbacks(reason)
+
+    async def _fire_end_callbacks(self, reason: ClaimEndReason) -> None:
+        """Fire skill-provided `on_claim_end` (if any), then the
+        coordinator's `on_end` hook (which resolves `wait_end` and
+        scrubs observer references). Skill callback exceptions are
+        logged but do not propagate."""
+        if self._claim.on_claim_end is not None:
+            try:
+                await self._claim.on_claim_end(reason)
+            except Exception:
+                await logger.aexception(
+                    "claim.on_claim_end_raised",
+                    interface=self._interface_name,
+                )
+        try:
+            await self._on_end(reason)
+        except Exception:
+            # Coordinator hook failure would leak state; log loudly but
+            # don't raise — the observer has done its local cleanup.
+            await logger.aexception(
+                "claim.observer_on_end_raised",
+                interface=self._interface_name,
+            )
+        await logger.ainfo(
+            "claim.ended",
+            interface=self._interface_name,
+            reason=reason.value,
+        )
