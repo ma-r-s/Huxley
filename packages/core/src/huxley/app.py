@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 from huxley.cost import CostTracker
+from huxley.focus.manager import FocusManager
 from huxley.loader import discover_skills
 from huxley.logging import setup_logging
 from huxley.server.server import AudioServer
@@ -109,6 +110,13 @@ class Application:
             cost_tracker=self.cost_tracker,
         )
 
+        # FocusManager — serialized arbitrator over the single speaker.
+        # Constructed here so it outlives the coordinator (survives session
+        # reconnects); started in `run()` where a running loop is guaranteed,
+        # stopped in `_shutdown`. The coordinator holds the reference but
+        # doesn't use it until Stage 1c.2 (CONTENT-channel routing).
+        self.focus_manager = FocusManager.with_default_channels()
+
         self.coordinator = TurnCoordinator(
             send_audio=self.server.send_audio,
             send_audio_clear=self.server.send_audio_clear,
@@ -119,6 +127,7 @@ class Application:
             provider=self.provider,
             dispatch_tool=self.skill_registry.dispatch,
             status_messages=persona.ui_strings or None,
+            focus_manager=self.focus_manager,
         )
 
         self._shutdown_event = asyncio.Event()
@@ -162,6 +171,10 @@ class Application:
             await logger.aexception("storage_snapshot_failed")
 
         await self.storage.init()
+        # Spawn the FocusManager's actor task now that a loop is running.
+        # Safe to do before any skill needs it — observers acquire/release
+        # through the mailbox, so events are serialized from the first call.
+        self.focus_manager.start()
         await self.skill_registry.setup_all(self._build_skill_context)
 
         self.state_machine.on_enter(AppState.CONNECTING, self._enter_connecting)
@@ -217,6 +230,12 @@ class Application:
             await self.provider.disconnect(save_summary=True)
 
         await self.coordinator.interrupt()
+        # Stop the FocusManager AFTER the coordinator's interrupt (which
+        # fires its own NONE cleanup through the observer directly). FM stop
+        # drains any pending mailbox events + delivers StopAll to all
+        # remaining Activities. Safe to call here — skills have torn down
+        # by now; no new acquires arrive.
+        await self.focus_manager.stop()
         await self.skill_registry.teardown_all()
         await self.storage.close()
 

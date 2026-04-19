@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import Awaitable, Callable
 
+    from huxley.focus.manager import FocusManager
     from huxley.voice.provider import VoiceProvider
     from huxley_sdk import ToolResult
 
@@ -93,6 +94,7 @@ class TurnCoordinator:
         dispatch_tool: Callable[[str, dict[str, Any]], Awaitable[ToolResult]],
         status_messages: dict[str, str] | None = None,
         send_set_volume: Callable[[int], Awaitable[None]] | None = None,
+        focus_manager: FocusManager | None = None,
     ) -> None:
         # Client-facing outputs (to the WebSocket audio server).
         self._send_audio = send_audio
@@ -119,6 +121,10 @@ class TurnCoordinator:
         self._dispatch_tool = dispatch_tool
         self._turn_factory = TurnFactory()
         self._mic_router = MicRouter(default_handler=provider.send_user_audio)
+        # FocusManager (Application-owned, passed in). Plumbed here in 1c.1;
+        # starts being USED in 1c.2 (CONTENT-channel routing) and 1c.3
+        # (inject_turn). Today nothing on the coordinator touches it.
+        self._focus_manager = focus_manager
         # Current content-stream observer (audiobook / radio / etc.). Exactly
         # one at a time — `_start_content_stream` always stops the previous.
         # A reference of None means idle. The observer owns the pump task;

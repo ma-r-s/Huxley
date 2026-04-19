@@ -726,12 +726,13 @@ commit>`, 2026-04-18). Written into `docs/architecture.md` under
   FocusState change and the corresponding SpeakingState write.
   Resolves Open Question 2 below.
 
-- **Stage 1c.1 — Wire FocusManager into Application lifecycle**
-  (~80 LOC, ~1h, queued). `Application` constructs +
-  `FocusManager.with_default_channels()`, `start()` in `run()`,
-  `stop()` in `_shutdown`. Coordinator gets a reference via
-  constructor. **Still direct-drives the observer — no behavior
-  change.** Smoke: audiobook playback and interrupt paths unchanged.
+- **Stage 1c.1 — Wire FocusManager into Application lifecycle** ✅
+  **done** (`<this commit>`, 2026-04-18). `Application` constructs
+  `FocusManager.with_default_channels()`, `start()` in `run()` (after
+  storage init, before skill setup), `stop()` in `_shutdown` (after
+  coordinator interrupt, before skill teardown). Coordinator accepts
+  an optional `focus_manager` parameter (reference held but unused
+  until 1c.2). 253 tests still green; no behavior change.
 
 - **Stage 1c.2 — Route CONTENT through FocusManager** (~150 LOC,
   ~2-3h, queued). `_start_content_stream` creates
