@@ -126,10 +126,10 @@ Every `Activity` registered on a channel gets delivered a `(FocusState, MixingBe
 
 Today's live paths through `FocusManager`:
 
-- **CONTENT** — any `AudioStream` side-effect returned from a skill's `handle()` gets an Activity on CONTENT; pump runs while FOREGROUND, cancels on BACKGROUND/MUST_PAUSE (NONMIXABLE today) or NONE.
+- **CONTENT** — any `AudioStream` side-effect returned from a skill's `handle()` gets an Activity on CONTENT; pump runs while FOREGROUND, cancels on BACKGROUND/MUST_PAUSE (NONMIXABLE today) or NONE. On BACKGROUND/MAY_DUCK (for future MIXABLE streams) the pump keeps running with a 100ms ramp to 0.3 gain — classic AVS ducking.
 - **DIALOG** — `ctx.inject_turn(prompt)` creates a synthetic INJECTED turn with a DIALOG Activity. Higher channel priority (100) than CONTENT (300) means CONTENT gets displaced; the LLM narrates the prompt; DIALOG releases when the turn ends.
 
-Not yet wired: patience-expiry path, duck envelope (MAY_DUCK falls back to pause), ALERT and COMMS channels, `InputClaim` on DIALOG/mic routing.
+Not yet wired: patience-expiry path, ALERT and COMMS channels, `InputClaim` on DIALOG/mic routing.
 
 See [`io-plane.md`](./io-plane.md) for the composition vocabulary and [`architecture.md#focus-management`](./architecture.md#focus-management) for the actor model.
 

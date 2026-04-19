@@ -195,13 +195,19 @@ reshaping the coordinator:
   sites; `release(expected)` is a safe no-op when something else has taken
   over.
 - **`ContentStreamObserver`** wraps the single running audio-stream
-  `asyncio.Task`. Implements the focus-management `ChannelObserver`
+  `asyncio.Task` and applies a linear PCM gain envelope on focus
+  transitions. Implements the focus-management `ChannelObserver`
   protocol. Lives as the `observer` field of a CONTENT-channel
   `Activity`; `FocusManager` delivers `FOREGROUND/PRIMARY` on acquire
-  (spawns the pump), `NONE/MUST_STOP` on release (cancels the pump),
-  and `BACKGROUND/MAY_DUCK|MUST_PAUSE` when a higher-priority channel
-  preempts (ducking is Stage 1b; until then MAY_DUCK falls back to
-  MUST_PAUSE).
+  (spawns the pump, ramps gain up to 1.0 if it was ducked),
+  `NONE/MUST_STOP` on release (cancels the pump),
+  `BACKGROUND/MAY_DUCK` when a MIXABLE Activity is preempted (ramps
+  gain down to 0.3 over 100ms; **pump keeps running**), and
+  `BACKGROUND/MUST_PAUSE` when a NONMIXABLE Activity is preempted
+  (cancels the pump immediately — overlaying two voices is worse
+  than a pause). All current AbuelOS content is NONMIXABLE (spoken
+  word), so the MAY_DUCK code path is scaffolding for future MIXABLE
+  streams (background music, ambient).
 - **`FocusManager`** (app-owned, constructed by `Application`,
   injected into `TurnCoordinator`) is the serialized arbitrator over
   the speaker. Manages Activity stacks per channel (`DIALOG`, `COMMS`,

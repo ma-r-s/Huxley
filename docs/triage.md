@@ -769,14 +769,25 @@ DialogObserver(...))`, `fm.acquire()` + `fm.wait_drained()` (content
   core tests green. **Ships `inject_turn` as a working framework
   surface — unblocks reminder skill MVP (T1.8).**
 
-**Stage 1b — Server-side duck PCM envelope (~1 day, queued, moved
-after 1c).** Replaces the MUST_PAUSE fallback for MAY_DUCK+MIXABLE
-Activities with a real PCM gain ramp. Open Question 3 decided:
-ducking lives **inside `ContentStreamObserver`** (not a shared
-`huxley.audio.ducking` module); extract later if a second consumer
-needs it. Linear ramp, 100ms duration, 0.3 target gain. PCM16 scaling
-via `struct` (no numpy dep). Polishes the UX of 1c.3 from hard-pause
-to smooth duck.
+**Stage 1b — Server-side duck PCM envelope** ✅ **done** (`<this
+commit>`, 2026-04-18). `ContentStreamObserver` grew linear gain
+envelope state (`_gain`, `_ramp_target`, `_ramp_start_time`,
+`_ramp_start_gain`) + `_apply_gain` helper that per-sample
+interpolates PCM16 across the ramp window (avoids click at chunk
+boundaries). `BACKGROUND/MAY_DUCK` now ramps to 0.3 over 100ms and
+keeps the pump running — classic AVS duck, not the old fallback to
+pause. `FOREGROUND` after a duck ramps back up to 1.0.
+`BACKGROUND/MUST_PAUSE` is unchanged (still hard cancel — spoken-
+word content shouldn't overlap with injected narration). Fast path
+for the common case `gain == 1.0 && no ramp active` returns chunks
+byte-identical to input (no allocation, no math). 4 new unit tests
+cover: fast path, duck attenuation (max sample ≈ amplitude × 0.3),
+duck-then-resume rearms to 1.0, MUST_PAUSE still cancels. No new
+deps (`struct` + `time` stdlib only). Scaffolding for future
+MIXABLE streams; today's content (audiobooks/news/radio) is all
+NONMIXABLE so MAY_DUCK doesn't fire through production code paths
+— but the primitive is unit-tested in isolation and ready to fire
+the first time a MIXABLE stream lands.
 
 **Stage 1d — Hold queue + TTL + dedup (~2 days, queued).** Add
 CHIME_DEFER-equivalent semantics on top of 1c: `inject_turn(urgency=
@@ -785,24 +796,19 @@ from queue silently; `dedup_key` replaces on collision; next PTT
 drains FIFO. Needs `InjectedTurnHandle.wait_outcome()` to become
 useful (first consumer: medication reminder retry loop).
 
-**Stage 1f — Stale FACTORY owner after inject_turn preemption
-(~30 min, queued)**. Surfaced during the 1c.3 + timers smoke on
-2026-04-18. When `inject_turn` preempts a content stream, the pump
-task raises `CancelledError` which skips the `owns_speaking`
-release path — so `SpeakingState.owner` stays at `FACTORY` until
-the next `on_audio_done` (from the injected turn's response) or
-`interrupt()` clears it. Visible effect: the client sees one
-unbroken `model_speaking=True` span from the book through the
-injected narration, no transition boundary. Not a correctness bug
-(is cleaned up by the next event), but **becomes more visible when
-Stage 1b ships ducking** — the natural client-side cue of "book
-audio got quieter, then narration started" won't be paired with a
-`model_speaking` toggle. **Fix shape**: in `coordinator.inject_turn`
-after `fm.acquire` + `wait_drained` (content pump is dead by this
-point), call `self._speaking_state.force_release()` to clear the
-stale owner before the model's narration audio arrives. Then
-`on_audio_delta` correctly acquires INJECTED and fires
-`model_speaking=True` as a fresh transition.
+**Stage 1f — Stale FACTORY owner after inject_turn preemption**
+✅ **done** (`<this commit>`, 2026-04-18, shipped alongside 1b).
+`coordinator.inject_turn` now calls
+`self._speaking_state.force_release()` after `fm.acquire` +
+`wait_drained` (pump is dead by this point) and before sending the
+prompt. Clears the stale FACTORY owner left by the preempted pump's
+CancelledError path. Effect: the client sees `model_speaking=True`
+→ `False` transition at preemption, then `True` again when the
+injected turn's first audio delta arrives — a real transition
+cue instead of one unbroken span. Low-cost fix (one await),
+idempotent (`force_release` on owner=None is a no-op, so
+inject_turn from idle doesn't break). Verified via existing
+TestInjectTurn tests — they still pass.
 
 **Stage 1e — `docs/observability.md` update (~30 min, queued).**
 Document the `focus.acquire`, `focus.release`, `focus.change`,

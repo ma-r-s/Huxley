@@ -751,6 +751,15 @@ class TurnCoordinator:
         # chunks still in the client's audio queue so preempted book
         # audio doesn't trail into the injected narration.
         await self._send_audio_clear()
+        # Clear any stale FACTORY owner on SpeakingState (Stage 1f fix).
+        # The preempted pump raised CancelledError without releasing its
+        # speaker-owner label, so without this the client sees one
+        # unbroken `model_speaking=True` span from content → narration
+        # with no transition cue, and the injected turn's audio_delta
+        # skips the INJECTED acquire (because `is_speaking` is already
+        # True). force_release is a no-op when owner is already None
+        # (inject_turn from idle with no content playing).
+        await self._speaking_state.force_release()
 
         # Send the prompt + ask the model to respond. The model narrates
         # in persona voice; subsequent `on_audio_delta` / `on_audio_done`
