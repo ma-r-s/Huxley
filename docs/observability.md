@@ -216,14 +216,14 @@ If a skill's `inject_turn` "didn't speak," look for these in order: `inject_turn
 
 The `background.*` namespace surfaces every `ctx.background_task(...)` lifecycle event. Use these to diagnose "my scheduler stopped firing" symptoms — was it cancelled by shutdown, did it crash and restart silently, did it exhaust its restart budget?
 
-| Event                                             | When it fires                                                                                                     | Key fields                                              |
-| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| `background.task_crashed`                         | A supervised task's coroutine raised. Logged via `aexception` (full traceback).                                   | `name`, `restart_count`, `will_restart`                 |
-| `background.task_restarting`                      | Crash + `restart_on_crash=True` + within budget — restarting after exponential backoff.                           | `name`, `restart_count`, `backoff_s`                    |
-| `background.task_permanently_failed`              | Restart budget exhausted (`max_restarts_per_hour` exceeded). The task is dropped from the supervisor.             | `name`, `restart_count`, `elapsed_s`, `exception_class` |
-| `background.dev_event_failed`                     | The `dev_event("background_task_failed", ...)` post-failure notification itself raised.                           | `name`                                                  |
-| `background.on_permanent_failure_callback_raised` | The skill-supplied `on_permanent_failure` callback raised. Doesn't recurse — supervisor logs and exits.           | `name`                                                  |
-| `background.supervisor_stopped`                   | `TaskSupervisor.stop()` completed during framework shutdown. `cancelled` is the count of live tasks at stop time. | `cancelled`                                             |
+| Event                                             | When it fires                                                                                                     | Key fields                                                        |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `background.task_crashed`                         | A supervised task's coroutine raised. Logged via `aexception` (full traceback).                                   | `name`, `restart_count`, `will_restart`                           |
+| `background.task_restarting`                      | Crash + `restart_on_crash=True` + within budget — restarting after exponential backoff.                           | `name`, `restart_count`, `backoff_s`                              |
+| `background.task_permanently_failed`              | Restart budget exhausted (`max_restarts_per_hour` exceeded). The task is dropped from the supervisor.             | `name`, `restart_count`, `elapsed_in_window_s`, `exception_class` |
+| `background.dev_event_failed`                     | The `dev_event("background_task_failed", ...)` post-failure notification itself raised.                           | `name`                                                            |
+| `background.on_permanent_failure_callback_raised` | The skill-supplied `on_permanent_failure` callback raised. Doesn't recurse — supervisor logs and exits.           | `name`                                                            |
+| `background.supervisor_stopped`                   | `TaskSupervisor.stop()` completed during framework shutdown. `cancelled` is the count of live tasks at stop time. | `cancelled`                                                       |
 
 For one-shot tasks (timers, with `restart_on_crash=False`), a crash produces just `background.task_crashed will_restart=False` — no restart, no permanent failure event. The task quietly dies; the skill's `_handles` (or equivalent tracking) clears via the coroutine's own `finally` if it ran far enough, otherwise the supervisor's `stop()` cleans it up at shutdown.
 

@@ -271,14 +271,64 @@ class SkillLogger(Protocol):
     async def aexception(self, event: str, **kwargs: Any) -> None: ...
 
 
-async def _noop_inject_turn(_prompt: str, **_kwargs: Any) -> None:
+class InjectTurn(Protocol):
+    """Structural signature for `SkillContext.inject_turn`.
+
+    Framework's real implementation (in `TurnCoordinator.inject_turn`)
+    and the test-fixture no-op below both satisfy this shape without
+    inheritance. Keyword arguments mirror the coordinator API; adding
+    new optional parameters here is back-compat as long as defaults
+    are supplied.
+
+    Why a Protocol instead of `Callable[..., Awaitable[None]]`: Protocol
+    spells out the named kwargs (`dedup_key`, `priority`), so a skill
+    calling `ctx.inject_turn(prompt, dedup_ky=...)` (typo) gets caught
+    by mypy rather than silently becoming **kwargs soup. Stage 2's
+    `InputClaim` will extend this pattern.
+    """
+
+    async def __call__(
+        self,
+        prompt: str,
+        /,
+        *,
+        dedup_key: str | None = None,
+        priority: InjectPriority = InjectPriority.NORMAL,
+    ) -> None: ...
+
+
+class BackgroundTask(Protocol):
+    """Structural signature for `SkillContext.background_task`.
+
+    Satisfied by the framework's `TaskSupervisor.start` bound method and
+    by `_default_background_task` below. Rationale is the same as
+    `InjectTurn`: keyword arguments are named, so mistyping
+    `restart_on_crsh=False` in a skill is a type error.
+    """
+
+    def __call__(
+        self,
+        name: str,
+        coro_factory: Callable[[], Coroutine[Any, Any, None]],
+        *,
+        restart_on_crash: bool = True,
+        max_restarts_per_hour: int = 10,
+        on_permanent_failure: Callable[[PermanentFailure], Awaitable[None]] | None = None,
+    ) -> BackgroundTaskHandle: ...
+
+
+async def _noop_inject_turn(
+    _prompt: str,
+    /,
+    *,
+    dedup_key: str | None = None,
+    priority: InjectPriority = InjectPriority.NORMAL,
+) -> None:
     """Default `inject_turn` for `SkillContext` — used by test fixtures that
     don't wire a real coordinator. Framework-built contexts replace this
     with the real callable from the `TurnCoordinator`.
-
-    Accepts **kwargs so that skills can pass Stage 1d arguments like
-    `dedup_key=...` to test contexts without them raising.
     """
+    del dedup_key, priority
     return None
 
 
@@ -313,13 +363,20 @@ class PermanentFailure:
     `last_exception_class` / `last_exception_message` are strings (not the
     exception object) so the dataclass is hashable and serializable for
     `dev_event` payloads.
+
+    `elapsed_in_window_s` is the time since the *current* budget window
+    opened, not the time since the first crash. The supervisor resets
+    its window every `_BUDGET_WINDOW_S` (1h) of quiet, so a task that
+    crashes repeatedly for 30 minutes, runs cleanly for 2 hours, then
+    crashes again reports `elapsed_in_window_s` relative to that later
+    crash — not to the original 30-min streak.
     """
 
     name: str
     last_exception_class: str
     last_exception_message: str
     restart_count: int
-    elapsed_s: float
+    elapsed_in_window_s: float
 
 
 def _default_background_task(
@@ -388,8 +445,8 @@ class SkillContext:
     storage: SkillStorage
     persona_data_dir: Path
     config: dict[str, Any]
-    inject_turn: Callable[..., Awaitable[None]] = _noop_inject_turn
-    background_task: Callable[..., BackgroundTaskHandle] = _default_background_task
+    inject_turn: InjectTurn = _noop_inject_turn
+    background_task: BackgroundTask = _default_background_task
 
     def catalog(self, name: str = "default") -> Catalog:
         """Construct a fresh `Catalog` for this skill's personal-content data.

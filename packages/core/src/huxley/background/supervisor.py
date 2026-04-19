@@ -145,7 +145,7 @@ class TaskSupervisor:
                             name=name,
                             exc=exc,
                             restart_count=restart_count,
-                            elapsed_s=now - window_start,
+                            elapsed_in_window_s=now - window_start,
                             on_permanent_failure=on_permanent_failure,
                         )
                         return
@@ -170,7 +170,7 @@ class TaskSupervisor:
         name: str,
         exc: BaseException,
         restart_count: int,
-        elapsed_s: float,
+        elapsed_in_window_s: float,
         on_permanent_failure: Callable[[PermanentFailure], Awaitable[None]] | None,
     ) -> None:
         """Log, fire dev_event, invoke caller callback (with its own
@@ -180,13 +180,13 @@ class TaskSupervisor:
             last_exception_class=type(exc).__name__,
             last_exception_message=str(exc),
             restart_count=restart_count,
-            elapsed_s=elapsed_s,
+            elapsed_in_window_s=elapsed_in_window_s,
         )
         await logger.aerror(
             "background.task_permanently_failed",
             name=name,
             restart_count=restart_count,
-            elapsed_s=elapsed_s,
+            elapsed_in_window_s=elapsed_in_window_s,
             exception_class=failure.last_exception_class,
         )
         try:
@@ -195,7 +195,7 @@ class TaskSupervisor:
                 {
                     "name": name,
                     "restart_count": restart_count,
-                    "elapsed_s": elapsed_s,
+                    "elapsed_in_window_s": elapsed_in_window_s,
                     "exception_class": failure.last_exception_class,
                     "exception_message": failure.last_exception_message,
                 },

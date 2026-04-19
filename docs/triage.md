@@ -924,11 +924,17 @@ Small items the critic flagged that aren't blocking but should land
 before Stage 2 stacks more on:
 
 4. **Tighten `SkillContext.inject_turn` / `background_task` typing to
-   Protocols.** Currently `Callable[..., ...]`. Protocol classes (in
-   `huxley_sdk/types.py`) are strictly more precise with zero skill-
-   side import cost (structural typing). Stage 2 will add `InputClaim`
-   to the SkillContext surface; tightening now prevents the looseness
-   from compounding. ~30 min.
+   Protocols.** ✅ **done** (`efe0cb6`, 2026-04-19). Added
+   `InjectTurn` and `BackgroundTask` Protocol classes to
+   `huxley_sdk/types.py`; `SkillContext` fields now carry those types
+   instead of `Callable[..., ...]`. Protocol `__call__` methods spell
+   out keyword arguments by name, so a skill calling
+   `inject_turn(prompt, dedup_ky=...)` (typo) now fails mypy instead
+   of becoming silent `**kwargs`. `prompt` made positional-only with
+   `/` so the test-fixture `_noop_inject_turn`'s `_prompt` name
+   doesn't collide with the Protocol's `prompt`. 286 core + 60 SDK +
+   17 timers tests green; no skill-side changes required (structural
+   typing — existing callables already satisfy the shape).
 
 5. **Extract `_post_turn_sequence()` from `_apply_side_effects`.** The
    method is 48 lines branching 3 ways (stream / queue drain / idle).
@@ -1107,11 +1113,17 @@ The critic (post-Stage-3 review) flagged that Stage 3 "done" hides a real gap: s
 
 **First consumer**: T1.8 evolved reminders (persistent medication reminders).
 
-### Stage 3c — PermanentFailure elapsed_s semantics (tiny, queued)
+### Stage 3c — PermanentFailure elapsed_s semantics ✅ **done** (`efe0cb6`, 2026-04-19)
 
-**Status**: queued · **Effort**: ~30 min
-
-The critic noted: `supervisor.py` computes `elapsed_s = now - window_start`, but `window_start` resets when the 1-hour budget window expires. So `elapsed_s` is actually "time since last window reset," not "time since first crash." Either rename the field (`elapsed_in_window_s`), add `first_crash_time` tracking so `elapsed_s` reflects total age, or document current semantics explicitly. Low impact; consistent semantics matter for anyone using `elapsed_s` to decide "is this a sporadic or sustained failure."
+Renamed `PermanentFailure.elapsed_s` → `elapsed_in_window_s` to match
+the supervisor's actual computation (`now - window_start`, where
+`window_start` resets every `_BUDGET_WINDOW_S` of quiet). Docstring
+now explains the window-reset semantics explicitly. `supervisor.py`
+call site + `background.task_permanently_failed` log field +
+`background_task_failed` dev_event payload all renamed to match.
+Decision: pure rename + doc — no new `first_crash_time` tracking,
+since no caller today needs total-age semantics and YAGNI. 286 core
+tests green; no test referenced the field by name.
 
 ### Stage 4 — `ClientEvent` + `server_event` + capabilities handshake
 
