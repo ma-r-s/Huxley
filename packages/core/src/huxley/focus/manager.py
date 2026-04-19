@@ -163,6 +163,24 @@ class FocusManager:
         """Force the current FOREGROUND Activity to NONE/MUST_STOP."""
         await self._mailbox.put(StopForeground())
 
+    async def wait_drained(self) -> None:
+        """Block until the mailbox has processed every currently-queued event.
+
+        Callers that need to observe the effects of a preceding
+        `acquire()` / `release()` / `stop_foreground()` (e.g. the
+        coordinator syncing its `interrupt()` barrier) await this
+        before proceeding. Internally uses `Queue.join()`: returns once
+        every enqueued event has had its `task_done()` matched — which
+        the actor calls after the full `_handle` sequence completes,
+        including observer notifications and their internal awaits
+        (pump cancellation, callback chains).
+
+        Safe to call from outside the actor. Do NOT call from within
+        an observer callback — you'd be awaiting your own processing
+        to finish.
+        """
+        await self._mailbox.join()
+
     # --- Actor loop ---
 
     async def _run(self) -> None:

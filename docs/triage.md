@@ -734,16 +734,20 @@ commit>`, 2026-04-18). Written into `docs/architecture.md` under
   an optional `focus_manager` parameter (reference held but unused
   until 1c.2). 253 tests still green; no behavior change.
 
-- **Stage 1c.2 — Route CONTENT through FocusManager** (~150 LOC,
-  ~2-3h, queued). `_start_content_stream` creates
-  `Activity(channel=CONTENT, interface_name, content_type=NONMIXABLE,
-observer=ContentStreamObserver(...))` and calls
-  `fm.acquire(activity)` instead of
-  `obs.on_focus_changed(FOREGROUND)`. `_stop_content_stream` →
-  `fm.release(CONTENT, interface_name)`. `current_media_task` becomes
-  a query through FocusManager's stack (critic's Design B concern
-  applies here — budget carefully). **Invisible to users; substrate
-  now driving.**
+- **Stage 1c.2 — Route CONTENT through FocusManager** ✅ **done**
+  (`<this commit>`, 2026-04-18). `_start_content_stream` creates
+  `Activity(channel=CONTENT, content_type=NONMIXABLE,
+observer=ContentStreamObserver(...))` + `fm.acquire(activity)` +
+  `fm.wait_drained()`. `_stop_content_stream` →
+  `fm.release(CONTENT, interface_name)` + `fm.wait_drained()`.
+  `wait_drained` is a new FocusManager method wrapping
+  `self._mailbox.join()` — blocks until every queued event has been
+  fully processed, including observer notifications. Preserves
+  `interrupt()`'s strict step order (pump dies before `force_release`
+  runs, per 1a). `current_media_task` still works as a back-compat
+  sync accessor via a coordinator-local cache of the observer ref.
+  `focus_manager` is now a required kwarg on `TurnCoordinator`; 3 test
+  files got `FocusManager` fixtures. 253 tests still green.
 
 - **Stage 1c.3 — `SkillContext.inject_turn(prompt)` MVP** (~80 LOC,
   ~2h, queued). Add method to `SkillContext`. Implementation: framework

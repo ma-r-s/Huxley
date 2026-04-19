@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from huxley.focus.manager import FocusManager
 from huxley.storage.skill import NamespacedSkillStorage
 from huxley.turn.coordinator import TurnCoordinator, TurnState
 from huxley.voice.stub import StubVoiceProvider
@@ -32,6 +33,15 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from huxley.storage.db import Storage
+
+
+@pytest.fixture
+async def focus_manager() -> AsyncIterator[FocusManager]:
+    """Fresh FocusManager — started + torn down per test."""
+    fm = FocusManager.with_default_channels()
+    fm.start()
+    yield fm
+    await fm.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +89,7 @@ def _make_player_with_tracker() -> tuple[MagicMock, list[str]]:
 async def _build_wired_coordinator(
     library_path: Path,
     storage: Storage,
+    focus_manager: FocusManager,
 ) -> tuple[TurnCoordinator, SkillRegistry, AudiobooksSkill, MagicMock, list[str], dict[str, Any]]:
     """Wire a real TurnCoordinator to a real SkillRegistry + real AudiobooksSkill.
 
@@ -116,6 +127,7 @@ async def _build_wired_coordinator(
     coordinator = TurnCoordinator(
         **mocks,
         dispatch_tool=registry.dispatch,
+        focus_manager=focus_manager,
     )
 
     return coordinator, registry, skill, player, consumed, mocks
@@ -172,10 +184,10 @@ class TestPlayAudiobookEndToEnd:
     """Full flow: ptt → pre-narration → function_call → barrier → factory."""
 
     async def test_play_tool_latches_and_fires_factory(
-        self, library_path: Path, storage: Storage
+        self, library_path: Path, storage: Storage, focus_manager: FocusManager
     ) -> None:
         coord, _reg, skill, player, consumed, mocks = await _build_wired_coordinator(
-            library_path, storage
+            library_path, storage, focus_manager
         )
         book = _book_at(skill, 0)
 
@@ -225,11 +237,11 @@ class TestPlayAudiobookEndToEnd:
         assert all(book["path"] in tag for tag in consumed)
 
     async def test_play_factory_drains_to_send_audio(
-        self, library_path: Path, storage: Storage
+        self, library_path: Path, storage: Storage, focus_manager: FocusManager
     ) -> None:
         """Each chunk the factory yields must land on send_audio exactly once."""
         coord, _reg, skill, _player, _consumed, mocks = await _build_wired_coordinator(
-            library_path, storage
+            library_path, storage, focus_manager
         )
         book = _book_at(skill, 0)
 
@@ -246,10 +258,10 @@ class TestMidChainInterruptDropsFactories:
     """If the user interrupts mid-chain, accumulated factories must be dropped."""
 
     async def test_interrupt_after_latch_drops_factory(
-        self, library_path: Path, storage: Storage
+        self, library_path: Path, storage: Storage, focus_manager: FocusManager
     ) -> None:
         coord, _reg, skill, player, consumed, _mocks = await _build_wired_coordinator(
-            library_path, storage
+            library_path, storage, focus_manager
         )
         book = _book_at(skill, 0)
 
@@ -272,12 +284,12 @@ class TestRewindReplacesPriorMediaTask:
     """A rewind factory cancels the previous media task and streams fresh."""
 
     async def test_rewind_during_playback_cancels_and_starts_new(
-        self, library_path: Path, storage: Storage
+        self, library_path: Path, storage: Storage, focus_manager: FocusManager
     ) -> None:
         import asyncio
 
         coord, _reg, skill, player, _consumed, _mocks = await _build_wired_coordinator(
-            library_path, storage
+            library_path, storage, focus_manager
         )
         book = _book_at(skill, 0)
 
@@ -321,12 +333,12 @@ class TestPauseRequestsFollowUp:
     """`audiobook_control` with action=pause cancels media and requests a follow-up."""
 
     async def test_pause_cancels_media_task_and_requests_follow_up(
-        self, library_path: Path, storage: Storage
+        self, library_path: Path, storage: Storage, focus_manager: FocusManager
     ) -> None:
         import asyncio
 
         coord, _reg, skill, player, _consumed, mocks = await _build_wired_coordinator(
-            library_path, storage
+            library_path, storage, focus_manager
         )
         book = _book_at(skill, 0)
         await storage.set_setting(f"audiobooks:{LAST_BOOK_KEY}", book["id"])

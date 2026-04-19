@@ -92,7 +92,7 @@ Semantics:
 
 `SideEffect` is the extension point: future kinds (notifications, state updates) reuse the same shape and the coordinator dispatches by `isinstance` check.
 
-**Long-running media streams live in a `ContentStreamObserver`** owned by the coordinator (`huxley.turn.observers`). The observer wraps one `asyncio.Task` slot — the pump running `async for chunk in factory(): await send_audio(chunk)`. The coordinator drives focus-state transitions directly (`FOREGROUND/PRIMARY` on start, `NONE/MUST_STOP` on cancel); a `FocusManager` will mediate these transitions in a later stage, once skill-level arbitration (inject_turn, ducking) actually needs it.
+**Long-running media streams live in a `ContentStreamObserver`** attached to a CONTENT-channel `Activity` on the app-owned `FocusManager`. The observer wraps one `asyncio.Task` slot — the pump running `async for chunk in factory(): await send_audio(chunk)`. On `fm.acquire(activity)`, the actor delivers `FOREGROUND/PRIMARY` which spawns the pump. On `fm.release(CONTENT, interface_name)`, the actor delivers `NONE/MUST_STOP` which cancels it. The coordinator's `_start_content_stream` / `_stop_content_stream` call `fm.wait_drained()` right after acquire/release so the synchronous post-conditions callers expect (pump running, pump dead) are genuine, not "eventually."
 
 The pump outlives turns — an audiobook started in one turn keeps playing until the next turn's interrupt. When a new stream is applied, the coordinator calls `_stop_content_stream()` to cancel the previous observer, then starts a fresh one. Single slot, not a channel abstraction. No queue. The coordinator exposes `current_media_task` as a read-only property for callers who want to await the task directly.
 

@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from huxley.focus.manager import FocusManager
 from huxley.turn.coordinator import Turn, TurnCoordinator, TurnState
 from huxley.voice.stub import StubVoiceProvider
 from huxley_sdk import AudioStream, PlaySound, ToolResult
@@ -77,8 +78,17 @@ def mocks(provider: StubVoiceProvider) -> dict[str, Any]:
 
 
 @pytest.fixture
-def coordinator(mocks: dict[str, Any]) -> TurnCoordinator:
-    return TurnCoordinator(**mocks)
+async def focus_manager() -> AsyncIterator[FocusManager]:
+    """Fresh FocusManager with default channels — started + torn down per test."""
+    fm = FocusManager.with_default_channels()
+    fm.start()
+    yield fm
+    await fm.stop()
+
+
+@pytest.fixture
+def coordinator(mocks: dict[str, Any], focus_manager: FocusManager) -> TurnCoordinator:
+    return TurnCoordinator(**mocks, focus_manager=focus_manager)
 
 
 # ---------------------------------------------------------------------------

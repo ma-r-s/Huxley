@@ -25,6 +25,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from huxley.focus.manager import FocusManager
 from huxley.turn.coordinator import TurnCoordinator, TurnState
 from huxley.voice.provider import VoiceProviderCallbacks
 from huxley.voice.stub import StubVoiceProvider
@@ -41,16 +42,23 @@ async def _async_iter(*chunks: bytes) -> AsyncIterator[bytes]:
 
 
 @pytest.fixture
-async def wired() -> tuple[TurnCoordinator, StubVoiceProvider, SkillRegistry, dict[str, Any]]:
+async def wired() -> AsyncIterator[
+    tuple[TurnCoordinator, StubVoiceProvider, SkillRegistry, dict[str, Any]]
+]:
     """Coordinator + stub provider + empty registry wired together.
 
     Mirrors the real `app.py` wiring: provider is created first, then the
     coordinator is created against it, then the provider's callbacks are
     installed to point at the coordinator's event handlers. `install_callbacks`
     exists on the stub for exactly this "build order matters" reason.
+
+    A fresh FocusManager is started per test and torn down in cleanup.
     """
     provider = StubVoiceProvider()
     await provider.connect()
+
+    fm = FocusManager.with_default_channels()
+    fm.start()
 
     registry = SkillRegistry()
     mocks = {
@@ -64,6 +72,7 @@ async def wired() -> tuple[TurnCoordinator, StubVoiceProvider, SkillRegistry, di
         **mocks,
         provider=provider,
         dispatch_tool=registry.dispatch,
+        focus_manager=fm,
     )
     provider.install_callbacks(
         VoiceProviderCallbacks(
@@ -75,7 +84,10 @@ async def wired() -> tuple[TurnCoordinator, StubVoiceProvider, SkillRegistry, di
             on_session_end=coordinator.on_session_disconnected,
         )
     )
-    return coordinator, provider, registry, mocks
+    try:
+        yield coordinator, provider, registry, mocks
+    finally:
+        await fm.stop()
 
 
 async def _commit_turn(coordinator: TurnCoordinator) -> None:

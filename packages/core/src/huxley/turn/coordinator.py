@@ -15,13 +15,17 @@ See `docs/turns.md` for the full spec. In short:
   OpenAI emits in the race window between `response.cancel` sent and
   actually processed.
 
-Content-channel audio (audiobook playback etc.) is owned by a
-`ContentStreamObserver` — the same observer implementation used by the
-focus-management layer. Today the coordinator drives it directly
-(acquire = FOREGROUND notification, stop = NONE notification) rather
-than through a `FocusManager`. A future stage can swap in the
-`FocusManager` once we need real arbitration (duck, background,
-inject_turn); the observer API was chosen to make that swap mechanical.
+Content-channel audio (audiobook playback etc.) flows through a
+`ContentStreamObserver` attached to an `Activity` on the CONTENT
+channel of the app-owned `FocusManager`. `_start_content_stream`
+calls `fm.acquire(activity)` + `fm.wait_drained()` to spawn the pump
+task through the actor; `_stop_content_stream` calls
+`fm.release(CONTENT, interface_name)` + `fm.wait_drained()` to tear
+it down. `wait_drained()` is the synchronization primitive that keeps
+`interrupt()`'s strict step order intact — by the time
+`_stop_content_stream` returns, the pump is fully dead and
+`force_release` can safely clear SpeakingState without a re-acquire
+race (per the 1a fix).
 
 The coordinator is transport-agnostic: all I/O happens through callbacks
 passed at construction time, which makes it straightforward to unit-test
@@ -37,7 +41,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 import structlog
 
-from huxley.focus.vocabulary import FocusState, MixingBehavior
+from huxley.focus.vocabulary import Activity, Channel, ContentType
 from huxley_sdk import AudioStream, CancelMedia, PlaySound, SetVolume
 
 from .factory import TurnFactory
@@ -92,9 +96,9 @@ class TurnCoordinator:
         send_dev_event: Callable[[str, dict[str, Any]], Awaitable[None]],
         provider: VoiceProvider,
         dispatch_tool: Callable[[str, dict[str, Any]], Awaitable[ToolResult]],
+        focus_manager: FocusManager,
         status_messages: dict[str, str] | None = None,
         send_set_volume: Callable[[int], Awaitable[None]] | None = None,
-        focus_manager: FocusManager | None = None,
     ) -> None:
         # Client-facing outputs (to the WebSocket audio server).
         self._send_audio = send_audio
@@ -121,9 +125,8 @@ class TurnCoordinator:
         self._dispatch_tool = dispatch_tool
         self._turn_factory = TurnFactory()
         self._mic_router = MicRouter(default_handler=provider.send_user_audio)
-        # FocusManager (Application-owned, passed in). Plumbed here in 1c.1;
-        # starts being USED in 1c.2 (CONTENT-channel routing) and 1c.3
-        # (inject_turn). Today nothing on the coordinator touches it.
+        # FocusManager (Application-owned, passed in). Required; drives
+        # CONTENT-channel lifecycle as of 1c.2 (DIALOG arrives in 1c.3).
         self._focus_manager = focus_manager
         # Current content-stream observer (audiobook / radio / etc.). Exactly
         # one at a time — `_start_content_stream` always stops the previous.
@@ -561,11 +564,17 @@ class TurnCoordinator:
     async def _start_content_stream(self, stream: AudioStream, turn_id: str | None) -> None:
         """Spawn a pump for `stream` via a fresh `ContentStreamObserver`.
 
-        Any previously-running content stream is stopped first. The observer
-        takes FOREGROUND immediately (stage-1 direct-drive; FocusManager
-        arbitration lands in a later stage). SpeakingState acquires FACTORY
-        on the first chunk and releases it when the stream ends naturally,
-        unless `_maybe_fire_completion_prompt` transfers ownership to
+        Any previously-running content stream is stopped first. Routes
+        through `FocusManager`: constructs an Activity on the CONTENT
+        channel and acquires; the actor delivers FOREGROUND to the
+        observer, which spawns the pump task. `wait_drained()` blocks
+        until FOREGROUND has been fully processed, so
+        `current_media_task` is non-None immediately on return
+        (synchronous-looking semantics preserved for callers).
+
+        SpeakingState acquires FACTORY on the first chunk and releases
+        it when the stream ends naturally, unless
+        `_maybe_fire_completion_prompt` transfers ownership to
         COMPLETION (synthetic audiobook-end turn).
         """
         await self._stop_content_stream()
@@ -601,26 +610,49 @@ class TurnCoordinator:
                 await self._speaking_state.release(SpeakingOwner.FACTORY)
                 owns_speaking[0] = False
 
-        self._content_obs = ContentStreamObserver(
+        obs = ContentStreamObserver(
             interface_name=interface_name,
             stream=stream,
             send_audio=_factory_send_audio,
             on_eof=_on_eof,
+        )
+        # Set the local cache BEFORE acquire — the actor may deliver
+        # FOREGROUND before wait_drained returns if the mailbox is busy,
+        # and downstream callbacks might query `current_media_task`.
+        self._content_obs = obs
+
+        # CONTENT is NONMIXABLE today (audiobooks, radio, news all use
+        # spoken word). MIXABLE would imply ducking-safe content like
+        # background music — no skill produces that yet. When one does,
+        # the stream itself should declare content_type via a new
+        # AudioStream field (deferred).
+        activity = Activity(
+            channel=Channel.CONTENT,
+            interface_name=interface_name,
+            content_type=ContentType.NONMIXABLE,
+            observer=obs,
         )
         await logger.ainfo(
             "coord.audio_stream_started",
             turn=turn_id,
             interface=interface_name,
         )
-        # Direct-drive FOREGROUND notification — spawns the pump task.
-        await self._content_obs.on_focus_changed(FocusState.FOREGROUND, MixingBehavior.PRIMARY)
+        await self._focus_manager.acquire(activity)
+        # Wait for the actor to process the Acquire event → deliver
+        # FOREGROUND to the observer → spawn the pump task. After this,
+        # `obs.task is not None` and the stream is actually running.
+        await self._focus_manager.wait_drained()
 
     async def _stop_content_stream(self) -> None:
         """Cancel any running content-stream observer. Idempotent.
 
-        Delivers `NONE / MUST_STOP` to the observer, which cancels the
-        pump task and awaits its cleanup. Safe to call when no observer
-        is active (no-op).
+        Routes through `FocusManager`: releases the CONTENT-channel
+        Activity; the actor delivers NONE/MUST_STOP to the observer,
+        which cancels the pump task and awaits its cleanup.
+        `wait_drained()` blocks until that whole chain completes, so
+        by the time we return the pump is fully dead — preserving
+        `interrupt()`'s strict ordering guarantee (pump gone before
+        `force_release` runs, per the 1a fix).
         """
         obs = self._content_obs
         if obs is None:
@@ -634,7 +666,8 @@ class TurnCoordinator:
                 cancelled=True,
             )
         self._content_obs = None
-        await obs.on_focus_changed(FocusState.NONE, MixingBehavior.MUST_STOP)
+        await self._focus_manager.release(Channel.CONTENT, obs.interface_name)
+        await self._focus_manager.wait_drained()
 
     async def _maybe_fire_completion_prompt(
         self, stream: AudioStream, parent_turn_id: str | None

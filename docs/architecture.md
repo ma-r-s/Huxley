@@ -195,16 +195,20 @@ reshaping the coordinator:
   sites; `release(expected)` is a safe no-op when something else has taken
   over.
 - **`ContentStreamObserver`** wraps the single running audio-stream
-  `asyncio.Task`. It implements the focus-management `ChannelObserver`
-  protocol — the coordinator drives it directly today (`FOREGROUND/PRIMARY`
-  on start, `NONE/MUST_STOP` on stop); a `FocusManager` mediates the same
-  transitions when skill-level arbitration lands.
-- **`FocusManager`** (shipped, not yet wired into the coordinator) is the
-  serialized arbitrator over the speaker. It manages Activity stacks per
-  channel (`DIALOG`, `COMMS`, `ALERT`, `CONTENT`), delivers
-  `(FocusState, MixingBehavior)` transitions to observers, and enforces
-  single-task mutation via the actor pattern. See
-  `docs/architecture.md#focus-management` for the channel model.
+  `asyncio.Task`. Implements the focus-management `ChannelObserver`
+  protocol. Lives as the `observer` field of a CONTENT-channel
+  `Activity`; `FocusManager` delivers `FOREGROUND/PRIMARY` on acquire
+  (spawns the pump), `NONE/MUST_STOP` on release (cancels the pump),
+  and `BACKGROUND/MAY_DUCK|MUST_PAUSE` when a higher-priority channel
+  preempts (ducking is Stage 1b; until then MAY_DUCK falls back to
+  MUST_PAUSE).
+- **`FocusManager`** (app-owned, constructed by `Application`,
+  injected into `TurnCoordinator`) is the serialized arbitrator over
+  the speaker. Manages Activity stacks per channel (`DIALOG`, `COMMS`,
+  `ALERT`, `CONTENT`), delivers `(FocusState, MixingBehavior)`
+  transitions to observers, and enforces single-task mutation via the
+  actor pattern. Exposes `wait_drained()` so the coordinator can
+  synchronize interrupt barriers against the actor's event processing.
 
 See `docs/io-plane.md` for the primitives these collaborators will support
 and `docs/turns.md` for the turn state machine they orchestrate.
