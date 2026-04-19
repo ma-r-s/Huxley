@@ -403,24 +403,23 @@ class CallsSkill:
 
     async def _on_caller_disconnected(self) -> None:
         """Caller WS read loop exited (caller closed their side). End
-        the active claim if any — `on_claim_end` will narrate."""
+        the active claim via `ctx.cancel_active_claim` so the observer's
+        `on_claim_end` fires with NATURAL → "Mario colgó" narration.
+
+        `cancel_active_claim` (Stage 2.1) is the escape hatch for side-
+        effect-dispatched claims that don't yield a `ClaimHandle` to
+        the skill. No-op when the claim is already mid-end (race with
+        a concurrent USER_PTT or PREEMPT)."""
         assert self._logger is not None
+        assert self._ctx is not None
         await self._logger.ainfo("calls.caller_disconnected")
-        # Drop the WS ref first so on_mic_frame doesn't try to send.
+        # Drop the WS ref first so on_mic_frame doesn't try to send into
+        # a closed socket while the cancel propagates.
         self._caller_ws = None
-        # Claim cancellation is handled by the framework once we detect
-        # the caller is gone. Today we route through ctx.start_input_claim
-        # only on the side-effect path; we don't hold a ClaimHandle.
-        # The framework's interrupt-or-PREEMPT path is the only way to
-        # end a side-effect-dispatched claim from outside the observer.
-        # Workaround: drain the speaker queue so the speaker_pump's
-        # `await queue.get()` blocks indefinitely; the claim ends only
-        # when grandpa PTTs or a PREEMPT inject fires.
-        #
-        # TODO(commit 6): coordinator should expose a way to cancel
-        # the active claim from outside the handle, OR side-effect
-        # InputClaim should yield a handle the skill can hold.
-        # For MVP: rely on grandpa noticing silence and PTT-ending.
+        # Drive the claim to NONE — observer's _end fires resume_provider
+        # + on_claim_end(NATURAL) → narration via _on_call_ended.
+        if self._claim_active:
+            await self._ctx.cancel_active_claim(reason=ClaimEndReason.NATURAL)
 
     async def _cleanup_caller_state(self) -> None:
         """Reset everything to idle. Idempotent — safe to call from

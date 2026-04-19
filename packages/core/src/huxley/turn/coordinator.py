@@ -980,6 +980,38 @@ class TurnCoordinator:
         await self._focus_manager.release(Channel.CONTENT, observer.interface_name)
         await self._focus_manager.wait_drained()
 
+    async def cancel_active_claim(
+        self,
+        *,
+        reason: ClaimEndReason = ClaimEndReason.NATURAL,
+    ) -> bool:
+        """End any active InputClaim from outside the observer.
+
+        Stage 2.1 — closes the gap where a side-effect-dispatched claim
+        (the calls skill's path) has no `ClaimHandle` exposed to the
+        skill. When the caller's WebSocket closes, the calls skill needs
+        to end the claim so `on_claim_end` fires and "Mario colgó"
+        narrates; without this method the skill would have to wait for
+        grandpa to PTT or for a PREEMPT inject.
+
+        Returns True if a claim was active and is being torn down,
+        False if no claim was active (caller doesn't need to do anything).
+
+        Idempotent: calling while a claim is already mid-end (observer
+        marked `is_ended`) is a no-op that returns False.
+
+        `reason` defaults to NATURAL (skill-initiated close). The calls
+        skill could pass a custom reason in the future (e.g. a hypothetical
+        `CALLER_HUNG_UP` if we ever differentiate from skill-cancel).
+        For now NATURAL covers it.
+        """
+        observer = self._claim_obs
+        if observer is None or observer.is_ended:
+            return False
+        observer.set_end_reason(reason)
+        await self._end_input_claim(observer)
+        return True
+
     # --- Proactive speech (T1.4 Stages 1c.3 + 1d — inject_turn) ---
 
     async def inject_turn(

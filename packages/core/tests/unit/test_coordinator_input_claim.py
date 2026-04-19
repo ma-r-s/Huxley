@@ -489,3 +489,54 @@ class TestClaimFailsIfRouterBusy:
         on_end.assert_awaited_once_with(ClaimEndReason.ERROR)
         # Provider un-suspended even though the claim failed.
         assert provider.is_suspended is False
+
+
+class TestCancelActiveClaim:
+    """Stage 2.1 — `coordinator.cancel_active_claim()` for skills that
+    dispatch claims via `ToolResult.side_effect` and need to end them
+    from outside the observer (caller WS closes, voice memo finishes,
+    etc.). Direct-entry callers use the `ClaimHandle.cancel()` they
+    already have; this is the side-effect-path equivalent."""
+
+    async def test_returns_false_when_no_claim_active(
+        self, coordinator: TurnCoordinator
+    ) -> None:
+        result = await coordinator.cancel_active_claim()
+        assert result is False
+
+    async def test_ends_active_claim_with_natural_default(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider
+    ) -> None:
+        on_end = AsyncMock()
+        handle = await coordinator.start_input_claim(
+            InputClaim(on_mic_frame=AsyncMock(), on_claim_end=on_end)
+        )
+        result = await coordinator.cancel_active_claim()
+        assert result is True
+        reason = await asyncio.wait_for(handle.wait_end(), timeout=1.0)
+        assert reason is ClaimEndReason.NATURAL
+        on_end.assert_awaited_once_with(ClaimEndReason.NATURAL)
+        assert provider.is_suspended is False
+
+    async def test_custom_reason_propagates(
+        self, coordinator: TurnCoordinator
+    ) -> None:
+        on_end = AsyncMock()
+        handle = await coordinator.start_input_claim(
+            InputClaim(on_mic_frame=AsyncMock(), on_claim_end=on_end)
+        )
+        await coordinator.cancel_active_claim(reason=ClaimEndReason.ERROR)
+        reason = await asyncio.wait_for(handle.wait_end(), timeout=1.0)
+        assert reason is ClaimEndReason.ERROR
+
+    async def test_idempotent_when_claim_already_ended(
+        self, coordinator: TurnCoordinator
+    ) -> None:
+        handle = await coordinator.start_input_claim(
+            InputClaim(on_mic_frame=AsyncMock())
+        )
+        await coordinator.cancel_active_claim()
+        await handle.wait_end()
+        # Second cancel — claim is already ended, returns False cleanly.
+        result = await coordinator.cancel_active_claim()
+        assert result is False

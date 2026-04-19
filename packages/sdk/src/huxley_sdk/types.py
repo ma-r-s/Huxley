@@ -370,6 +370,34 @@ async def _default_start_input_claim(_claim: InputClaim) -> ClaimHandle:
     return ClaimHandle(_cancel=lambda: None, _wait_end=_wait)
 
 
+class CancelActiveClaim(Protocol):
+    """Structural signature for `SkillContext.cancel_active_claim`.
+
+    Stage 2.1 escape hatch for skills that dispatch a claim via
+    `ToolResult.side_effect = InputClaim(...)` (the calls skill is the
+    motivating consumer). The side-effect path doesn't return a
+    `ClaimHandle` to the skill, so when an external event ends the
+    relationship from the skill's side — caller hangs up the WebSocket,
+    voice memo recorder finished writing, etc. — the skill calls this
+    to drive the claim to NONE so `on_claim_end` fires and the matrix
+    finishes cleanly.
+
+    Returns True if a claim was active and is now ending; False if no
+    claim was active. Idempotent.
+    """
+
+    async def __call__(self, /, *, reason: ClaimEndReason = ClaimEndReason.NATURAL) -> bool: ...
+
+
+async def _default_cancel_active_claim(*, reason: ClaimEndReason = ClaimEndReason.NATURAL) -> bool:
+    """Default `cancel_active_claim` for `SkillContext` — no-op for
+    test fixtures that aren't backed by a real coordinator. Returns
+    False to signal "no claim was active" so a skill's caller can
+    branch accordingly without raising in tests."""
+    del reason
+    return False
+
+
 @dataclass(frozen=True, slots=True)
 class ToolResult:
     """Result of a skill handling a tool call.
@@ -610,6 +638,12 @@ class SkillContext:
       use `start_input_claim` only for event-driven claims with no
       tool in the causal chain (inbound call from a background task).
       Returns a `ClaimHandle` with `cancel()` and `wait_end()`.
+    - `cancel_active_claim(*, reason=NATURAL) -> bool`: end any active
+      `InputClaim` from outside the observer. The escape hatch for
+      side-effect-dispatched claims (the calls skill's path), which
+      don't return a `ClaimHandle` to the skill. Returns True if a
+      claim was active; False if there was nothing to cancel.
+      Idempotent.
     """
 
     logger: SkillLogger
@@ -619,6 +653,7 @@ class SkillContext:
     inject_turn: InjectTurn = _noop_inject_turn
     background_task: BackgroundTask = _default_background_task
     start_input_claim: StartInputClaim = _default_start_input_claim
+    cancel_active_claim: CancelActiveClaim = _default_cancel_active_claim
 
     def catalog(self, name: str = "default") -> Catalog:
         """Construct a fresh `Catalog` for this skill's personal-content data.

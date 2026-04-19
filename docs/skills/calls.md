@@ -56,7 +56,7 @@ If neither is set, the skill loads but logs `calls.no_secret_configured` and the
 
 - **Auto-pickup with countdown.** The ring prompt instructs the LLM to announce the caller and start a 3-second countdown, then dispatch `answer_call` automatically. No "press to answer" — grandpa is blind and shouldn't have to learn a voice command under the stress of a ringing phone.
 - **Opt-out during countdown.** If grandpa says "no" or "ahora no" during the countdown, the LLM is told to call `reject_call` instead of `answer_call`.
-- **Caller hangs up = primary end mechanic.** When the `/call` WS closes, the skill cleans up and the inject narrates "{from_name} colgó".
+- **Caller hangs up = primary end mechanic.** When the `/call` WS closes, the skill calls `ctx.cancel_active_claim(reason=NATURAL)` (Stage 2.1); the observer's `on_claim_end` fires, the inject narrates "{from_name} colgó", and the provider resumes for grandpa's next interaction.
 - **Grandpa's PTT = secondary end mechanic.** During a call, grandpa pressing PTT triggers the coordinator's `interrupt()` path. The active claim ends with `ClaimEndReason.USER_PTT`; the skill narrates "Llamada finalizada"; the normal PTT turn proceeds.
 - **No speech-based "adiós" detection.** The OpenAI Realtime session is suspended during the call (that's literally what `InputClaim` is — grandpa's mic goes to the caller, not OpenAI). To detect "adiós" we'd need parallel speech recognition or partial un-suspend, both of which add latency/cost and defeat the point. Grandpa saying goodbye is heard by **the caller**, who clicks hang up.
 
@@ -107,7 +107,6 @@ A reference snippet of the AudioWorklet path lives outside this repo (Mario's we
 - **HTTP `/call/ring` is GET-only.** `websockets` v16 only allows GET through `process_request`. POST would be more RESTful but functionally identical for this internal trigger; not worth a separate HTTP server.
 - **Single shared secret across all callers.** When you add the second family member, replace with per-caller tokens (filed as Stage 2.3 in triage).
 - **No voicemail.** Ring fires but answer never dispatches (timeout / explicit reject) → silence on grandpa's side. Future: inject_turn "Mario te llamó pero no contestaste" (filed as Stage 2.2).
-- **No ClaimHandle exposed to side-effect dispatch.** When the caller hangs up, the skill can't directly cancel the claim — relies on grandpa pressing PTT or a PREEMPT inject to fire end. Filed as Stage 2.1.
 - **Single concurrent call.** Second ring during active call gets 409 Busy. No call-waiting / hold semantics.
 - **Stage 4 ClientEvent not yet used.** Ring trigger is HTTP for MVP per the critic's "ship the rough thing in week 1, migrate when UX is proven" recommendation. ~50 LOC of HTTP glue gets thrown away when Stage 4 lands.
 

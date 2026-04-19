@@ -1087,20 +1087,20 @@ fires during an active `InputClaim`, arbitration runs, `on_claim_end`
 triggers, claim-preempted outcome surfaces correctly. Keeps the
 end-to-end path from degrading silently as Stages 3+4 pile on.
 
-### Stage 2.1 — Expose ClaimHandle for side-effect-dispatched claims (queued)
+### Stage 2.1 — `ctx.cancel_active_claim` for side-effect-dispatched claims ✅ **done** (`<this commit>`, 2026-04-19)
 
-**Status**: queued · **Effort**: ~1–2h · **Blocked by**: nothing · **Unblocks**: clean caller-WS-close → "Mario colgó" narration in the calls skill.
+**Effort (actual)**: ~45 min vs the 1–2h estimate. Path (1) shipped per the recommendation: smaller diff, no `ToolResult` contract change, motivating consumer's bug closed.
 
-The Stage 2 commit 5 calls skill has a known gap: when the caller's WebSocket closes, the skill detects it (read loop exits) but **can't directly cancel the active claim** because the framework only returns a `ClaimHandle` from the direct-entry path (`coordinator.start_input_claim`). Side-effect-dispatched claims (the path the calls skill uses, where `ToolResult.side_effect = InputClaim(...)`) start at the terminal barrier with no handle handed back to the skill.
+**Shipped**:
 
-Today's workaround: the skill waits for grandpa to press PTT or for a `PREEMPT` inject to end the claim. Acceptable for early smoke testing but a real UX bug — the natural "caller hangs up, grandpa hears 'Mario colgó'" flow doesn't fire.
+- `coordinator.cancel_active_claim(*, reason=NATURAL) -> bool` — looks up `_claim_obs`, sets the end reason, drives `_end_input_claim` → FM release → observer's `_end` chain. Idempotent (returns False if no active claim or already ending). 4 new coordinator tests.
+- `CancelActiveClaim` Protocol on the SDK + new `SkillContext.cancel_active_claim` field defaulting to a no-op for test fixtures (returns False so skill tests can branch cleanly).
+- Wired in `Application._build_skill_context` from `coordinator.cancel_active_claim`.
+- Calls skill's `_on_caller_disconnected` replaced its TODO workaround with a real `await self._ctx.cancel_active_claim(reason=ClaimEndReason.NATURAL)`. Now caller-WS-close drives the full end chain → `on_claim_end(NATURAL)` → "Mario colgó" inject narration. 2 new calls-skill tests covering the active and no-claim cases.
 
-**Two paths to fix**:
+**Path (2) deferred** (return `ClaimHandle` from side-effect dispatch, extending `ToolResult` with an `on_side_effect_started` callback) — leave for when a second skill needs full lifecycle handles. Per CLAUDE.md "rule of three" instinct: extract the abstraction at the third consumer, not the second.
 
-1. **Per-skill claim cancel API** on `SkillContext`: `ctx.cancel_active_claim() -> bool` — looks up `coordinator._claim_obs` and triggers release with `ClaimEndReason.NATURAL`. Tiny surface, works today.
-2. **Return ClaimHandle from side-effect dispatch**: extend `ToolResult` with an optional `on_side_effect_started: Callable[[ClaimHandle], Awaitable[None]]` callback. Cleaner architecturally; matches the direct-entry shape; opens the door for skills that want to track AudioStream lifetimes too.
-
-**Recommendation**: start with (1) — solves the calls bug in <1h, no SDK contract changes. Migrate to (2) when a second skill needs lifecycle handles.
+342 core (+4) + 28 calls (+2) tests green. docs/skills/calls.md scope-limits list updated to remove the gap.
 
 ### Stage 2.2 — Voicemail / missed-call inject_turn (queued)
 

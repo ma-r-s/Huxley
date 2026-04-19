@@ -167,6 +167,51 @@ class TestCallerConnection:
         assert ws2.closed is True
         assert ws2.close_code == 1008
 
+    async def test_caller_close_drives_cancel_active_claim(self) -> None:
+        """Stage 2.1: when the caller WS closes during an active call,
+        the skill invokes `ctx.cancel_active_claim(NATURAL)` so the
+        observer's on_claim_end fires and "Mario colgó" narrates. Before
+        2.1 this was a TODO / workaround; now verified end-to-end."""
+        skill, _ = await _setup_skill()
+        ctx = skill._ctx
+        assert ctx is not None
+        # Replace the default no-op cancel_active_claim with a recorder.
+        cancel_mock = AsyncMock(return_value=True)
+        object.__setattr__(ctx, "cancel_active_claim", cancel_mock)
+
+        ws = FakeWS()
+        # Simulate "answer_call already ran": claim active, queue set.
+        skill._claim_active = True
+        skill._caller_pcm_queue = asyncio.Queue()
+        task = asyncio.create_task(skill.on_caller_connected(ws))  # type: ignore[arg-type]
+        for _ in range(5):
+            await asyncio.sleep(0)
+        # Caller disconnects.
+        await ws.close()
+        await task
+
+        cancel_mock.assert_awaited_once_with(reason=ClaimEndReason.NATURAL)
+
+    async def test_caller_close_without_active_claim_no_cancel(self) -> None:
+        """If the caller WS closes before `answer_call` has fired (e.g.
+        caller gave up during the countdown), there's no claim to cancel
+        — skill must not call `cancel_active_claim`."""
+        skill, _ = await _setup_skill()
+        ctx = skill._ctx
+        assert ctx is not None
+        cancel_mock = AsyncMock(return_value=False)
+        object.__setattr__(ctx, "cancel_active_claim", cancel_mock)
+
+        ws = FakeWS()
+        assert skill._claim_active is False
+        task = asyncio.create_task(skill.on_caller_connected(ws))  # type: ignore[arg-type]
+        for _ in range(5):
+            await asyncio.sleep(0)
+        await ws.close()
+        await task
+
+        cancel_mock.assert_not_awaited()
+
 
 # --- answer_call ---
 

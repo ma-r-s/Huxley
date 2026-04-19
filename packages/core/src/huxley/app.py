@@ -160,6 +160,7 @@ class Application:
             inject_turn=self.coordinator.inject_turn,
             background_task=self.task_supervisor.start,
             start_input_claim=self.coordinator.start_input_claim,
+            cancel_active_claim=self.coordinator.cancel_active_claim,
         )
 
     def _wire_call_hooks_if_any(self) -> None:
