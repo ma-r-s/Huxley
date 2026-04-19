@@ -12,7 +12,17 @@ User says "recuérdame en 5 minutos que saque la ropa". The LLM translates this 
 
 ## Persona config
 
-Nothing today — `timers: {}` in the persona's `skills:` block is enough. Persona-specific tone (how warm the reminder sounds) comes from the persona's system prompt, not the skill's config.
+- **`fire_prompt`** _(optional)_ — template for the prompt `inject_turn` sends to the LLM when a timer fires. Must contain `{message}`, which is substituted with the user's reminder text. Defaults to a Spanish / AbuelOS-toned template (warm-friend register, "oye, recuerda que…"). Non-Spanish or non-warm personas should override; the default assumes Spanish and a warm tone, so a terse English persona gets a broken narration otherwise. If the configured value is missing the `{message}` placeholder the skill logs `timers.fire_prompt_missing_placeholder` and falls back to the default; empty strings are ignored.
+
+Example (BasicOS-style terse English):
+
+```yaml
+skills:
+  timers:
+    fire_prompt: |
+      A timer the user set has fired. Tell them briefly: {message}.
+      One sentence, neutral tone.
+```
 
 ## Scope limits (MVP)
 

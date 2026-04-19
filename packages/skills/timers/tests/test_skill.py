@@ -12,11 +12,12 @@ from huxley_skill_timers.skill import TimersSkill
 
 async def _setup_skill(
     inject_turn: AsyncMock | None = None,
+    config: dict[str, object] | None = None,
 ) -> tuple[TimersSkill, AsyncMock]:
     """Build a TimersSkill wired to a recording `inject_turn` mock."""
     skill = TimersSkill()
     inject_mock = inject_turn or AsyncMock()
-    ctx = make_test_context()
+    ctx = make_test_context(config=dict(config) if config else None)
     # `make_test_context` populates a no-op inject_turn; override it with
     # the recording mock so tests can assert on what the timer fired.
     object.__setattr__(ctx, "inject_turn", inject_mock)
@@ -127,6 +128,57 @@ class TestPromptContext:
         ctx = skill.prompt_context()
         assert "2 temporizadores activos" in ctx
         await skill.teardown()
+
+
+class TestFirePromptPersonaConfig:
+    """Persona config override for the fire-prompt template (PQ-2).
+
+    The default is Spanish / AbuelOS-toned. Any persona can override
+    via `persona.yaml`'s `timers.fire_prompt`; the skill interpolates
+    `{message}` at fire time.
+    """
+
+    async def test_default_template_used_when_config_absent(self) -> None:
+        skill, inject_mock = await _setup_skill()
+        await skill.handle("set_timer", {"seconds": 1, "message": "agua"})
+        await asyncio.sleep(1.1)
+        prompt = inject_mock.await_args.args[0]
+        # Default is the Spanish/AbuelOS-toned template.
+        assert "temporizador" in prompt.lower()
+        assert "agua" in prompt
+
+    async def test_persona_override_replaces_default(self) -> None:
+        skill, inject_mock = await _setup_skill(
+            config={
+                "fire_prompt": "Timer. Tell user: {message}. Terse.",
+            }
+        )
+        await skill.handle("set_timer", {"seconds": 1, "message": "drink water"})
+        await asyncio.sleep(1.1)
+        prompt = inject_mock.await_args.args[0]
+        assert prompt == "Timer. Tell user: drink water. Terse."
+
+    async def test_missing_placeholder_falls_back_to_default(self) -> None:
+        """If persona config sets `fire_prompt` without `{message}`,
+        skill logs a warning and keeps the default — better than
+        silently dropping the message."""
+        skill, inject_mock = await _setup_skill(
+            config={"fire_prompt": "broken template with no placeholder"}
+        )
+        await skill.handle("set_timer", {"seconds": 1, "message": "pills"})
+        await asyncio.sleep(1.1)
+        prompt = inject_mock.await_args.args[0]
+        # Default template used; user's message is still surfaced.
+        assert "pills" in prompt
+        assert "temporizador" in prompt.lower()
+
+    async def test_empty_string_override_ignored(self) -> None:
+        skill, inject_mock = await _setup_skill(config={"fire_prompt": ""})
+        await skill.handle("set_timer", {"seconds": 1, "message": "x"})
+        await asyncio.sleep(1.1)
+        prompt = inject_mock.await_args.args[0]
+        # Empty string shouldn't silently disable the prompt.
+        assert "temporizador" in prompt.lower()
 
 
 class TestUnknownTool:

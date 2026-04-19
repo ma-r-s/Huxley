@@ -1013,7 +1013,15 @@ fires during an active `InputClaim`, arbitration runs, `on_claim_end`
 triggers, claim-preempted outcome surfaces correctly. Keeps the
 end-to-end path from degrading silently as Stages 3+4 pile on.
 
-### Stage 3 — Supervised `background_task` ✅ done (`<this commit>`, 2026-04-18)
+### Stage 3a — Supervised `background_task` (in-memory) ✅ done (`521f269`, 2026-04-18)
+
+> **Split rationale (PQ-3 from 2026-04-19 critic):** the original
+> "Stage 3" triage entry labeled itself `done` without acknowledging
+> the in-memory-only scope. Persistence across restart is a real gap
+> that blocks T1.8 evolved reminders (a medication reminder the user
+> set before a server restart should still fire). Stage 3a = this
+> commit, Stage 3b = the persistence work (filed below as a separate
+> queued entry).
 
 Shipped. `huxley.background.TaskSupervisor` owns a pool of named
 asyncio tasks. `SkillContext.background_task(name, coro_factory, *,

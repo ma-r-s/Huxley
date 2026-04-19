@@ -44,6 +44,24 @@ _MAX_SECONDS = 3600  # 1 hour — anything longer suggests the user wants
 # a different primitive (appointment / calendar), which this skill
 # deliberately doesn't grow into.
 
+# Default fire prompt — Spanish, AbuelOS-toned. A persona can override
+# via the `fire_prompt` config key in `persona.yaml`'s `timers:` block.
+# `{message}` is substituted at fire time via `str.format`; additional
+# placeholders fail with a clear error.
+#
+# This default is opinionated (assumes Spanish, warm-friend register)
+# because AbuelOS is the 99%-case consumer today. Non-Spanish or
+# non-warm personas MUST override; they get a broken narration
+# otherwise (LLM sees Spanish instruction in an English-system-prompt
+# context and either translates weirdly or overfits the phrasing).
+_DEFAULT_FIRE_PROMPT = (
+    "Ha sonado un temporizador que el usuario programó. "
+    "Avísale con tono amable y natural sobre: {message}. "
+    "Empieza la frase como si se lo estuvieras recordando a un "
+    "amigo (por ejemplo 'oye, recuerda que...' o 'ya es hora "
+    "de...'). Usa una o dos frases cortas."
+)
+
 
 class TimersSkill:
     """Proactive one-shot reminders via `inject_turn`.
@@ -64,6 +82,10 @@ class TimersSkill:
         # by id without going through the supervisor's name lookup).
         self._handles: dict[int, BackgroundTaskHandle] = {}
         self._next_id: int = 1
+        # Fire-prompt template — persona-configurable so non-AbuelOS
+        # personas don't inherit the Spanish/warm-friend default.
+        # Populated in `setup()` from `ctx.config.get("fire_prompt")`.
+        self._fire_prompt: str = _DEFAULT_FIRE_PROMPT
 
     @property
     def name(self) -> str:
@@ -174,13 +196,11 @@ class TimersSkill:
             # instruction ("Avísale al usuario que...") the model narrates
             # naturally. Compare `AudioStream.on_complete_prompt` in the
             # audiobooks skill, which is imperative and works well.
-            prompt = (
-                "Ha sonado un temporizador que el usuario programó. "
-                f"Avísale con tono amable y natural sobre: {message}. "
-                "Empieza la frase como si se lo estuvieras recordando a "
-                "un amigo (por ejemplo 'oye, recuerda que...' o 'ya es "
-                "hora de...'). Usa una o dos frases cortas."
-            )
+            #
+            # `_fire_prompt` is the persona-configurable template; the
+            # default is Spanish / AbuelOS-toned, overridden via
+            # `persona.yaml` → `timers.fire_prompt`.
+            prompt = self._fire_prompt.format(message=message)
             try:
                 # The framework wraps this in a DIALOG-channel Activity;
                 # preempts content streams, asks the LLM to narrate.
@@ -199,7 +219,21 @@ class TimersSkill:
         self._logger = ctx.logger
         self._inject_turn = ctx.inject_turn
         self._background_task = ctx.background_task
-        await ctx.logger.ainfo("timers.setup_complete")
+        # Persona override for the fire prompt, if provided. Falls back
+        # to the Spanish/AbuelOS-toned default defined above.
+        configured = ctx.config.get("fire_prompt")
+        if isinstance(configured, str) and configured:
+            if "{message}" not in configured:
+                await ctx.logger.awarning(
+                    "timers.fire_prompt_missing_placeholder",
+                    hint="persona 'fire_prompt' must contain '{message}'",
+                )
+            else:
+                self._fire_prompt = configured
+        await ctx.logger.ainfo(
+            "timers.setup_complete",
+            fire_prompt_source="persona_override" if configured else "default",
+        )
 
     async def teardown(self) -> None:
         assert self._logger is not None
