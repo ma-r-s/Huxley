@@ -196,3 +196,17 @@ skills:
       tono amable y natural sobre: {message}. Empieza la frase como si
       se lo estuvieras recordando a un amigo (por ejemplo 'oye, recuerda
       que...' o 'ya es hora de...'). Usa una o dos frases cortas.
+
+  # Calls skill — Mario's web app rings grandpa via HTTP /call/ring;
+  # caller voice flows over WS /call. Auto-pickup with countdown
+  # announcement (locked UX 2026-04-19). Shared secret authenticates
+  # both routes. The `HUXLEY_CALLS_SECRET` env var overrides this
+  # value if set — preferred for production deployments so the secret
+  # doesn't live in checked-in yaml.
+  calls:
+    secret: "change-me-set-HUXLEY_CALLS_SECRET-env"
+    # Default Spanish/AbuelOS-toned templates ship in the skill —
+    # override here only if you want to tweak the wording. {from_name}
+    # is substituted with the caller's name from the ring URL.
+    # ring_prompt: |
+    #   Suena el teléfono. Tienes una llamada de {from_name}. ...

@@ -139,7 +139,7 @@ class TestSkillContextIntegration:
         that cleanly resolves with NATURAL end — lets skills call
         `start_input_claim` in unit tests without a full framework."""
         ctx = make_test_context()
-        handle = ctx.start_input_claim(InputClaim(on_mic_frame=AsyncMock()))
+        handle = await ctx.start_input_claim(InputClaim(on_mic_frame=AsyncMock()))
         assert isinstance(handle, ClaimHandle)
         reason = await handle.wait_end()
         assert reason is ClaimEndReason.NATURAL
@@ -152,7 +152,7 @@ class TestSkillContextIntegration:
         same pattern used for `inject_turn` in the timers tests."""
         recorded: list[InputClaim] = []
 
-        def _record(claim: InputClaim) -> ClaimHandle:
+        async def _record(claim: InputClaim) -> ClaimHandle:
             recorded.append(claim)
 
             async def _wait() -> ClaimEndReason:
@@ -164,7 +164,7 @@ class TestSkillContextIntegration:
         object.__setattr__(ctx, "start_input_claim", _record)
 
         claim = InputClaim(on_mic_frame=AsyncMock())
-        handle = ctx.start_input_claim(claim)
+        handle = await ctx.start_input_claim(claim)
         assert recorded == [claim]
         reason = await handle.wait_end()
         assert reason is ClaimEndReason.USER_PTT

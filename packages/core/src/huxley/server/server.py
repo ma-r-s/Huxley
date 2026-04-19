@@ -109,6 +109,33 @@ class AudioServer:
     def has_client(self) -> bool:
         return self._client is not None
 
+    def set_call_hooks(
+        self,
+        *,
+        secret: str | None,
+        on_ring: Callable[[dict[str, str]], Awaitable[bool]],
+        on_caller_connected: Callable[[ServerConnection], Awaitable[None]],
+    ) -> None:
+        """Register the calls skill's hooks AFTER construction.
+
+        The skill is set up by `skill_registry.setup_all` AFTER the
+        AudioServer is constructed (Application's `__init__` builds the
+        server first, `run()` sets up skills second), so the call hooks
+        can't go in the constructor. This setter is called from
+        `Application.run()` after `setup_all` returns and before
+        `server.run()` starts serving. Read at request time, so setting
+        them late is safe — the `process_request` and connection handlers
+        reference `self._on_ring` / `self._on_caller_connected` at call
+        time, not at server-start time.
+
+        If `secret` is None, the routes stay disabled even if the
+        callbacks are set — there's no defensible way to expose an
+        unauthenticated trigger.
+        """
+        self._on_ring = on_ring
+        self._on_caller_connected = on_caller_connected
+        self._ring_secret = secret
+
     async def run(self) -> None:
         async with serve(
             self._handle_connection,

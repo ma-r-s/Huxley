@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import signal
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -159,6 +159,66 @@ class Application:
             config=self.persona.skills.get(skill_name, {}),
             inject_turn=self.coordinator.inject_turn,
             background_task=self.task_supervisor.start,
+            start_input_claim=self.coordinator.start_input_claim,
+        )
+
+    def _wire_call_hooks_if_any(self) -> None:
+        """Find a skill that exposes call-relay hooks and wire them into
+        AudioServer. Duck-typed (`hasattr`) so the framework doesn't
+        import any specific skill package — today only `huxley-skill-calls`
+        provides the shape, but a future fork could supply its own.
+
+        Required attributes (all callable / accessible on the skill):
+        - `secret: str | None` — shared secret for both routes; if None
+          the hook wiring is skipped (routes stay disabled).
+        - `on_ring(params: dict[str, str]) -> Awaitable[bool]`
+        - `on_caller_connected(ws) -> Awaitable[None]`
+
+        At most one skill provides hooks. If multiple match, the first
+        in registry order wins (= persona declaration order); the
+        others get a warning log so the misconfiguration is visible.
+        """
+        match: Any = None
+        for skill in self.skill_registry.skills:
+            if (
+                hasattr(skill, "on_ring")
+                and hasattr(skill, "on_caller_connected")
+                and hasattr(skill, "secret")
+            ):
+                if match is not None:
+                    # Two skills both want the call routes. Keep the
+                    # first-registered one; log so the persona author
+                    # notices the conflict.
+                    logger.warning(
+                        "app.call_hooks_conflict",
+                        first=match.name,
+                        ignored=skill.name,
+                    )
+                    continue
+                match = skill
+        if match is None:
+            return
+        if not match.secret:
+            # Skill loaded but has no configured secret — the routes
+            # would 503 anyway. Skip wiring + log loudly so the
+            # operator knows why their web app can't connect.
+            logger.warning(
+                "app.call_hooks_skipped_no_secret",
+                skill=match.name,
+                hint=(
+                    "set persona.skills.<skill>.secret OR "
+                    "HUXLEY_CALLS_SECRET env var to enable /call/ring + /call"
+                ),
+            )
+            return
+        self.server.set_call_hooks(
+            secret=match.secret,
+            on_ring=match.on_ring,
+            on_caller_connected=match.on_caller_connected,
+        )
+        logger.info(
+            "app.call_hooks_wired",
+            skill=match.name,
         )
 
     async def run(self) -> None:
@@ -188,6 +248,13 @@ class Application:
         # through the mailbox, so events are serialized from the first call.
         self.focus_manager.start()
         await self.skill_registry.setup_all(self._build_skill_context)
+
+        # Wire optional call hooks from any skill that exposes them
+        # (today: huxley-skill-calls). Duck-typed via attribute check
+        # so the framework doesn't import skill packages directly. At
+        # most one skill provides hooks; the registry order is the
+        # persona's declaration order, and we take the first match.
+        self._wire_call_hooks_if_any()
 
         self.state_machine.on_enter(AppState.CONNECTING, self._enter_connecting)
         self.state_machine.on_transition(self._on_state_transition)

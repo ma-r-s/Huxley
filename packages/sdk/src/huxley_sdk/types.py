@@ -347,20 +347,16 @@ class StartInputClaim(Protocol):
     panic-button fired from a wake-word detector, etc.). Tool-dispatched
     claims use `ToolResult.side_effect = InputClaim(...)` instead —
     same semantics, different invocation shape.
+
+    Async because the framework awaits a FocusManager acquire +
+    wait_drained before returning the handle (so the caller sees a
+    fully-latched mic by the time the await resolves).
     """
 
-    def __call__(self, claim: InputClaim, /) -> ClaimHandle: ...
+    async def __call__(self, claim: InputClaim, /) -> ClaimHandle: ...
 
 
-async def _noop_start_input_claim_wait(reason: ClaimEndReason) -> ClaimEndReason:
-    """Return a pre-baked reason immediately — used by the SDK's
-    test-fixture default so a skill calling `start_input_claim` in a
-    test context gets a predictable handle without a real coordinator.
-    """
-    return reason
-
-
-def _default_start_input_claim(_claim: InputClaim) -> ClaimHandle:
+async def _default_start_input_claim(_claim: InputClaim) -> ClaimHandle:
     """Default `start_input_claim` for `SkillContext` — used by test
     fixtures that don't wire a real coordinator. Returns a handle that
     claims "already ended naturally" so assertions on `wait_end` work

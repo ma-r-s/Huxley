@@ -117,3 +117,10 @@ class SkillRegistry:
     @property
     def tool_names(self) -> list[str]:
         return list(self._tool_to_skill.keys())
+
+    @property
+    def skills(self) -> list[Skill]:
+        """All registered skills in declaration order. Used by the
+        framework for cross-skill discovery (e.g., finding the call-
+        hooks provider in `Application._wire_call_hooks_if_any`)."""
+        return list(self._skills.values())
