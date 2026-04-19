@@ -22,19 +22,20 @@ That's the goal. It only works if the log carries the right events with the righ
 
 Every log event uses a dotted namespace + direction prefix. This makes events `grep`-able, filterable, and identifiable at a glance.
 
-| Namespace      | Source                                                  | Examples                                                               |
-| -------------- | ------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `coord.*`      | TurnCoordinator decisions (the core state machine)      | `coord.ptt_start`, `coord.interrupt`, `coord.tool_dispatch`            |
-| `focus.*`      | FocusManager arbitration (acquire / release / change)   | `focus.acquire`, `focus.release`, `focus.change`                       |
-| `session.rx.*` | Messages received from the voice provider (OpenAI)      | `session.rx.tool_call`, `session.rx.error`                             |
-| `session.tx.*` | Messages sent to the voice provider                     | `session.tx.commit`, `session.tx.cancel`, `session.tx.tool_output`     |
-| `server.rx.*`  | Messages received from the audio client                 | `server.rx.ptt_start`, `server.rx.ptt_stop`, `server.rx.wake_word`     |
-| `server.tx.*`  | Messages sent to the audio client                       | `server.tx.state`, `server.tx.model_speaking`                          |
-| `app.*`        | Application orchestration (lifecycle, guard rejections) | `app.session_end`, `app.ptt_rejected`                                  |
-| `<skill>.*`    | Per-skill events (skill author owns the namespace)      | `audiobooks.resolve`, `audiobooks.stream_started`, `system.volume_set` |
-| `client.*`     | Telemetry forwarded from the audio client (web/ESP32)   | `client.silence_timer_started`, `client.thinking_tone_on`              |
+| Namespace      | Source                                                  | Examples                                                                                      |
+| -------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `coord.*`      | TurnCoordinator decisions (the core state machine)      | `coord.ptt_start`, `coord.interrupt`, `coord.tool_dispatch`                                   |
+| `focus.*`      | FocusManager arbitration (acquire / release / change)   | `focus.acquire`, `focus.release`, `focus.change`                                              |
+| `background.*` | Supervised background-task lifecycle                    | `background.task_crashed`, `background.task_restarting`, `background.task_permanently_failed` |
+| `session.rx.*` | Messages received from the voice provider (OpenAI)      | `session.rx.tool_call`, `session.rx.error`                                                    |
+| `session.tx.*` | Messages sent to the voice provider                     | `session.tx.commit`, `session.tx.cancel`, `session.tx.tool_output`                            |
+| `server.rx.*`  | Messages received from the audio client                 | `server.rx.ptt_start`, `server.rx.ptt_stop`, `server.rx.wake_word`                            |
+| `server.tx.*`  | Messages sent to the audio client                       | `server.tx.state`, `server.tx.model_speaking`                                                 |
+| `app.*`        | Application orchestration (lifecycle, guard rejections) | `app.session_end`, `app.ptt_rejected`                                                         |
+| `<skill>.*`    | Per-skill events (skill author owns the namespace)      | `audiobooks.resolve`, `audiobooks.stream_started`, `system.volume_set`                        |
+| `client.*`     | Telemetry forwarded from the audio client (web/ESP32)   | `client.silence_timer_started`, `client.thinking_tone_on`                                     |
 
-A skill named `audiobooks` emits events like `audiobooks.factory_built`, `audiobooks.stream_ended`. The framework reserves `coord.`, `focus.`, `session.`, `server.`, `app.`, `client.`; everything else is skill territory.
+A skill named `audiobooks` emits events like `audiobooks.factory_built`, `audiobooks.stream_ended`. The framework reserves `coord.`, `focus.`, `background.`, `session.`, `server.`, `app.`, `client.`; everything else is skill territory.
 
 The `client.*` events come in via the `client_event` WebSocket message type — clients emit `{"type": "client_event", "event": "<name>", "data": {...}}` and the server logs them as `client.<name>` with the data fields spread. Pure observability — the framework takes no action. This closes the "client-side blackbox" gap; thinking-tone state, silence-timer fires, and PTT UI transitions are now visible in the same log file as the server-side flow.
 
@@ -209,6 +210,21 @@ When `inject_turn` is called while a user or synthetic turn is in progress, the 
 - **`coord.inject_turn`** — the moment a request actually fires (whether immediate from `inject_turn` itself or drained from the queue). Fields: `interface`, `prompt_len`, `dedup_key`.
 
 If a skill's `inject_turn` "didn't speak," look for these in order: `inject_turn_dropped` (dedup'd against in-flight), `inject_turn_queued` followed by `inject_turn_dequeued` after a delay (queued, drained later), or no events at all (caller never invoked it).
+
+## Background-task events — supervised lifecycle
+
+The `background.*` namespace surfaces every `ctx.background_task(...)` lifecycle event. Use these to diagnose "my scheduler stopped firing" symptoms — was it cancelled by shutdown, did it crash and restart silently, did it exhaust its restart budget?
+
+| Event                                             | When it fires                                                                                                     | Key fields                                              |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `background.task_crashed`                         | A supervised task's coroutine raised. Logged via `aexception` (full traceback).                                   | `name`, `restart_count`, `will_restart`                 |
+| `background.task_restarting`                      | Crash + `restart_on_crash=True` + within budget — restarting after exponential backoff.                           | `name`, `restart_count`, `backoff_s`                    |
+| `background.task_permanently_failed`              | Restart budget exhausted (`max_restarts_per_hour` exceeded). The task is dropped from the supervisor.             | `name`, `restart_count`, `elapsed_s`, `exception_class` |
+| `background.dev_event_failed`                     | The `dev_event("background_task_failed", ...)` post-failure notification itself raised.                           | `name`                                                  |
+| `background.on_permanent_failure_callback_raised` | The skill-supplied `on_permanent_failure` callback raised. Doesn't recurse — supervisor logs and exits.           | `name`                                                  |
+| `background.supervisor_stopped`                   | `TaskSupervisor.stop()` completed during framework shutdown. `cancelled` is the count of live tasks at stop time. | `cancelled`                                             |
+
+For one-shot tasks (timers, with `restart_on_crash=False`), a crash produces just `background.task_crashed will_restart=False` — no restart, no permanent failure event. The task quietly dies; the skill's `_handles` (or equivalent tracking) clears via the coroutine's own `finally` if it ran far enough, otherwise the supervisor's `stop()` cleans it up at shutdown.
 
 ## Skill failures
 

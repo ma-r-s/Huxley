@@ -2,31 +2,39 @@
 
 The user sets a timer by voice ("recuérdame en 5 minutos que saque la
 ropa"); the LLM dispatches `set_timer(seconds, message)`; the skill
-schedules a background task that fires `ctx.inject_turn(message)` when
-the timer expires. The framework preempts any playing content stream
-and narrates the reminder in persona voice.
+schedules a supervised background task (`ctx.background_task`) that
+fires `ctx.inject_turn(message)` when the timer expires. The
+framework preempts any playing content stream and narrates the
+reminder in persona voice.
 
-MVP scope (T1.4 Stage 1c.3 follow-on):
+Scope (T1.4 Stage 3 — supervised tasks now adopted):
 
-- In-memory only — timers do NOT survive a server restart. Persistence
-  (via `SkillStorage`) is an obvious follow-up once Stage 3's
-  `background_task` supervisor lands, since the same setup-time restore
-  path both needs.
-- Per-timer `asyncio.create_task` (not supervised). If the task crashes
-  before firing, the reminder is lost silently. Stage 3 adopts these
-  under `background_task` for crash-resilience.
-- `set_timer` only — no `list_timers` or `cancel_timer` yet. Add when
-  a user flow actually needs them.
+- **Supervised tasks**: each timer runs under
+  `ctx.background_task(name="timer:N", ...)` with
+  `restart_on_crash=False` (one-shot — restarting a fired-too-early
+  reminder would re-sleep for the original duration). Crashes log
+  via the supervisor; teardown cancels via the returned handle.
+- **Still in-memory** — timers do NOT survive a server restart.
+  Persistence (via `SkillStorage`) is the next obvious step; the
+  setup-time restore path is straightforward now that supervised
+  tasks are available.
+- `set_timer` only — no `list_timers` or `cancel_timer` yet. Add
+  when a user flow actually needs them.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 from typing import TYPE_CHECKING, Any
 
-from huxley_sdk import SkillContext, SkillLogger, ToolDefinition, ToolResult
+from huxley_sdk import (
+    BackgroundTaskHandle,
+    SkillContext,
+    SkillLogger,
+    ToolDefinition,
+    ToolResult,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -41,14 +49,20 @@ class TimersSkill:
     """Proactive one-shot reminders via `inject_turn`.
 
     One tool: `set_timer(seconds, message)`. The skill keeps each
-    scheduled task in `self._tasks` so `teardown()` can cancel them on
-    shutdown without leaking work into the event loop.
+    scheduled task's `BackgroundTaskHandle` in `self._handles` so
+    `teardown()` can cancel pending timers (and a future
+    `cancel_timer` tool can target by id) without leaking work into
+    the event loop.
     """
 
     def __init__(self) -> None:
         self._logger: SkillLogger | None = None
         self._inject_turn: Callable[[str], Awaitable[None]] | None = None
-        self._tasks: dict[int, asyncio.Task[None]] = {}
+        self._background_task: Callable[..., BackgroundTaskHandle] | None = None
+        # Per-timer handles — held so teardown can pre-shutdown cancel
+        # specific timers (and a future `cancel_timer` tool can target
+        # by id without going through the supervisor's name lookup).
+        self._handles: dict[int, BackgroundTaskHandle] = {}
         self._next_id: int = 1
 
     @property
@@ -94,7 +108,7 @@ class TimersSkill:
         ]
 
     async def handle(self, tool_name: str, args: dict[str, Any]) -> ToolResult:
-        if self._logger is None or self._inject_turn is None:
+        if self._logger is None or self._inject_turn is None or self._background_task is None:
             raise RuntimeError("TimersSkill: handle() called before setup()")
         if tool_name != "set_timer":
             await self._logger.awarning("timers.unknown_tool", tool=tool_name)
@@ -113,11 +127,17 @@ class TimersSkill:
 
         timer_id = self._next_id
         self._next_id += 1
-        task = asyncio.create_task(
-            self._fire_after(timer_id, seconds, message),
-            name=f"timer:{timer_id}",
+        # restart_on_crash=False because timers are one-shot — restarting
+        # would re-sleep for `seconds` and fire too late, OR fire
+        # immediately with stale duration, neither of which the user
+        # asked for. A crashed timer is a lost reminder; the supervisor
+        # logs it and we move on.
+        handle = self._background_task(
+            f"timer:{timer_id}",
+            lambda: self._fire_after(timer_id, seconds, message),
+            restart_on_crash=False,
         )
-        self._tasks[timer_id] = task
+        self._handles[timer_id] = handle
         await self._logger.ainfo(
             "timers.scheduled",
             timer_id=timer_id,
@@ -172,32 +192,31 @@ class TimersSkill:
         finally:
             # Scrub self from tracking regardless of why we exited — natural
             # completion, cancellation, or unexpected exception — so teardown
-            # sees an accurate picture.
-            self._tasks.pop(timer_id, None)
+            # and `prompt_context` see an accurate picture.
+            self._handles.pop(timer_id, None)
 
     async def setup(self, ctx: SkillContext) -> None:
         self._logger = ctx.logger
         self._inject_turn = ctx.inject_turn
+        self._background_task = ctx.background_task
         await ctx.logger.ainfo("timers.setup_complete")
 
     async def teardown(self) -> None:
         assert self._logger is not None
-        pending = list(self._tasks.values())
-        for task in pending:
-            task.cancel()
-        for task in pending:
-            # Teardown is defensive — suppress everything so one misbehaving
-            # timer can't prevent the others (or the rest of shutdown) from
-            # tearing down cleanly. The inject_turn failure path inside
-            # `_fire_after` already logs via `aexception`.
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
-        # Clear authoritatively. Tasks cancelled before their coroutine body
-        # ever runs (e.g., created then cancelled in the same tick) never
-        # execute their own `finally`, so the per-timer pop wouldn't fire.
-        # We know the bookkeeping must be empty after teardown; assert that
-        # by clearing directly.
-        self._tasks.clear()
+        # Cancel any pending timers before the framework's TaskSupervisor
+        # stops everything globally. Per-handle cancel here gives the
+        # `_fire_after` finally a chance to clear `_handles` cleanly;
+        # otherwise the supervisor's stop() would do the same cancel
+        # but without the per-handle bookkeeping side effect.
+        pending = list(self._handles.values())
+        for handle in pending:
+            handle.cancel()
+        # Clear authoritatively. Tasks cancelled before their coroutine
+        # body ever runs (e.g., created then cancelled in the same tick)
+        # never execute their own `finally`, so the per-timer pop
+        # wouldn't fire — see the matching pattern in
+        # huxley.background.TaskSupervisor.stop.
+        self._handles.clear()
         await self._logger.ainfo("timers.teardown_complete", cancelled=len(pending))
 
     def prompt_context(self) -> str:
@@ -206,9 +225,9 @@ class TimersSkill:
         Empty when no timers are pending — avoids polluting the system
         prompt on fresh sessions.
         """
-        if not self._tasks:
+        if not self._handles:
             return ""
-        count = len(self._tasks)
+        count = len(self._handles)
         # Singular / plural Spanish — the AbuelOS persona is the only user
         # today; a future multilingual persona can override prompt_context
         # via a different skill class or accept the mismatch.

@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Protocol, runtime_checkable
 from huxley_sdk.catalog import Catalog
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable
+    from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
     from pathlib import Path
 
 
@@ -225,6 +225,70 @@ async def _noop_inject_turn(_prompt: str, **_kwargs: Any) -> None:
 
 
 @dataclass(frozen=True, slots=True)
+class BackgroundTaskHandle:
+    """Handle to a supervised background task spawned via
+    `SkillContext.background_task`.
+
+    Skills typically don't need this — the framework's task supervisor
+    cancels every supervised task at shutdown. Hold the handle only when
+    your skill wants to cancel a specific task before shutdown
+    (e.g., a `cancel_timer` tool that needs to stop a pending timer's
+    sleep loop).
+    """
+
+    name: str
+    _cancel: Callable[[], None]
+
+    def cancel(self) -> None:
+        """Cancel the underlying asyncio task. Idempotent — calling twice
+        is harmless. The task's CancelledError propagates through its
+        `finally` blocks per normal asyncio semantics.
+        """
+        self._cancel()
+
+
+@dataclass(frozen=True, slots=True)
+class PermanentFailure:
+    """Passed to a `background_task`'s `on_permanent_failure` callback
+    when its restart budget is exhausted.
+
+    `last_exception_class` / `last_exception_message` are strings (not the
+    exception object) so the dataclass is hashable and serializable for
+    `dev_event` payloads.
+    """
+
+    name: str
+    last_exception_class: str
+    last_exception_message: str
+    restart_count: int
+    elapsed_s: float
+
+
+def _default_background_task(
+    name: str,
+    coro_factory: Callable[[], Coroutine[Any, Any, None]],
+    **_kwargs: Any,
+) -> BackgroundTaskHandle:
+    """Default `background_task` for `SkillContext` — used by test fixtures.
+
+    Spawns the coroutine via `asyncio.create_task` with no supervision
+    (no restart, no rate limiting, no permanent-failure handling). The
+    framework's `Application` replaces this with the supervised version
+    backed by `huxley.background.TaskSupervisor`. Returning a real
+    handle (not `None`) lets skills cancel even in test contexts so
+    teardown semantics match production.
+    """
+    import asyncio  # local import — keeps types.py runtime-import minimal
+
+    task: asyncio.Task[None] = asyncio.create_task(coro_factory(), name=f"bg-unsupervised:{name}")
+
+    def _cancel() -> None:
+        task.cancel()
+
+    return BackgroundTaskHandle(name=name, _cancel=_cancel)
+
+
+@dataclass(frozen=True, slots=True)
 class SkillContext:
     """Dependencies the framework injects into each skill at `setup` time.
 
@@ -249,6 +313,13 @@ class SkillContext:
       drops silently if a same-key request is currently firing.
       `expires_after` and an outcome-tracking handle are deferred to
       a later stage. See `docs/skills/README.md` for usage pattern.
+    - `background_task(name, coro_factory, *, restart_on_crash=True,
+      max_restarts_per_hour=10, on_permanent_failure=None) ->
+      BackgroundTaskHandle`: spawn a long-running supervised task.
+      Use this instead of `asyncio.create_task` so the framework
+      sees crashes (logged via `aexception`), restarts within budget,
+      and cancels everything at shutdown. One-shot timer-style tasks
+      pass `restart_on_crash=False`.
     """
 
     logger: SkillLogger
@@ -256,6 +327,7 @@ class SkillContext:
     persona_data_dir: Path
     config: dict[str, Any]
     inject_turn: Callable[..., Awaitable[None]] = _noop_inject_turn
+    background_task: Callable[..., BackgroundTaskHandle] = _default_background_task
 
     def catalog(self, name: str = "default") -> Catalog:
         """Construct a fresh `Catalog` for this skill's personal-content data.

@@ -279,27 +279,63 @@ if outcome != TurnOutcome.ACKNOWLEDGED:
 
 ## Supervised background tasks — `ctx.background_task`
 
-> ⚠️ **Planned — not yet shipped.** SDK surface reserved; supervisor
-> implementation is T1.4 Stage 3 work. API below is the target shape.
+> ℹ️ **Shipped (T1.4 Stage 3).** Use this instead of
+> `asyncio.create_task` for any long-running work. The framework
+> sees crashes, restarts within budget, and cancels everything at
+> shutdown.
 
 Skills that schedule proactive events or listen for external input need long-running tasks. Don't spawn `asyncio.create_task` directly — the framework can't see crashes and your scheduler will silently die.
 
 ```python
-async def setup(self, ctx: SkillContext) -> None:
-    self._ctx = ctx
-    ctx.background_task("scheduler", self._scheduler_loop)
-    ctx.background_task("webhook_listener", self._listen)
+from huxley_sdk import BackgroundTaskHandle, PermanentFailure, SkillContext
 
-async def _scheduler_loop(self) -> None:
-    while True:
-        due = await self._next_due()
-        await asyncio.sleep(max(0, (due.when - now()).total_seconds()))
-        await self._ctx.inject_turn(due.prompt, urgency=Urgency.INTERRUPT)
+class MySkill:
+    async def setup(self, ctx: SkillContext) -> None:
+        self._ctx = ctx
+        # Long-running scheduler — auto-restart if it crashes.
+        self._scheduler: BackgroundTaskHandle = ctx.background_task(
+            "scheduler",
+            self._scheduler_loop,
+            on_permanent_failure=self._on_scheduler_dead,
+        )
+
+    async def _scheduler_loop(self) -> None:
+        while True:
+            due = await self._next_due()
+            await asyncio.sleep(max(0, (due.when - now()).total_seconds()))
+            await self._ctx.inject_turn(due.prompt)
+
+    async def _on_scheduler_dead(self, failure: PermanentFailure) -> None:
+        # Restart budget exhausted — surface to user / page on-call / etc.
+        ...
 ```
 
-**What you get**: logs on crash (via `aexception`), automatic restart with exponential backoff, permanent-failure event if the task exceeds `max_restarts_per_hour`. Framework-owned; no skill-side retry logic needed.
+**Signature**:
 
-**Teardown**: all your tasks are cancelled on `skill.teardown()`. Framework handles it.
+```python
+ctx.background_task(
+    name: str,                        # unique within the supervisor pool
+    coro_factory: Callable[[], Coroutine[Any, Any, None]],
+    *,
+    restart_on_crash: bool = True,    # False for one-shot tasks (e.g. timers)
+    max_restarts_per_hour: int = 10,  # rate limit before declaring permanent failure
+    on_permanent_failure: Callable[[PermanentFailure], Awaitable[None]] | None = None,
+) -> BackgroundTaskHandle
+```
+
+**What you get**:
+
+- **Crash logs** via `aexception` (full traceback, `name`, `restart_count`).
+- **Automatic restart** with exponential backoff (2s, 4s, 8s, ..., capped at 60s).
+- **Permanent failure** when crashes exceed `max_restarts_per_hour` within a 1-hour window: a `dev_event("background_task_failed", ...)` fires for the client, and your `on_permanent_failure` callback (if provided) is invoked with a `PermanentFailure` dataclass. The supervisor then drops the task — your callback is the place to reschedule it differently or surface the failure.
+- **Coordinated shutdown**: every supervised task is cancelled at framework shutdown. Skills don't need to track tasks for cleanup; the supervisor's pool owns lifecycle.
+
+**One-shot vs long-running**:
+
+- One-shot tasks (the timers skill is the canonical example) pass `restart_on_crash=False`. Restarting a fired-too-early reminder makes no sense — it would re-sleep for the original duration, fire late, and confuse the user. The cost of `restart_on_crash=False` is "a crashed timer is a lost reminder, logged once."
+- Long-running tasks (scheduler loops, webhook listeners) keep the default `True` — they should survive transient errors.
+
+**Pre-shutdown cancel**: if your skill wants to cancel a specific task before framework shutdown (a `cancel_timer` tool, say), hold the returned `BackgroundTaskHandle` and call `.cancel()`. Otherwise rely on the supervisor's bulk cancel.
 
 ## Client events — `ctx.subscribe_client_event`
 

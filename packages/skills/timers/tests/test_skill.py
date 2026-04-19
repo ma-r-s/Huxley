@@ -71,7 +71,7 @@ class TestSetTimer:
         payload = json.loads(result.output)
         assert "error" in payload
         # No task should have been scheduled.
-        assert skill._tasks == {}
+        assert skill._handles == {}
         inject_mock.assert_not_awaited()
 
     async def test_rejects_non_int_seconds(self) -> None:
@@ -95,11 +95,11 @@ class TestTeardown:
 
         # Schedule a timer that would fire in an hour (won't in this test).
         await skill.handle("set_timer", {"seconds": 3600, "message": "nunca"})
-        assert len(skill._tasks) == 1
+        assert len(skill._handles) == 1
 
         await skill.teardown()
 
-        assert skill._tasks == {}
+        assert skill._handles == {}
         inject_mock.assert_not_awaited()
 
     async def test_teardown_idempotent_when_no_timers(self) -> None:
@@ -140,12 +140,12 @@ class TestUnknownTool:
 
 class TestTimerFiresDuringNormalFlow:
     async def test_fire_clears_task_from_tracking(self) -> None:
-        """After a timer fires, it's removed from `_tasks` so teardown
+        """After a timer fires, it's removed from `_handles` so teardown
         doesn't try to cancel an already-completed task."""
         skill, _ = await _setup_skill()
         await skill.handle("set_timer", {"seconds": 1, "message": "bien"})
-        assert len(skill._tasks) == 1
+        assert len(skill._handles) == 1
 
         await asyncio.sleep(1.2)
         # The fire path's `finally` clears the entry.
-        assert skill._tasks == {}
+        assert skill._handles == {}

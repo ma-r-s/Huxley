@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from huxley.background import TaskSupervisor
 from huxley.cost import CostTracker
 from huxley.focus.manager import FocusManager
 from huxley.loader import discover_skills
@@ -117,6 +118,15 @@ class Application:
         # doesn't use it until Stage 1c.2 (CONTENT-channel routing).
         self.focus_manager = FocusManager.with_default_channels()
 
+        # TaskSupervisor — pool of named long-running async tasks for skills.
+        # Owns lifecycle: skills call `ctx.background_task(...)`, supervisor
+        # restarts crashes within budget, cancels everything at shutdown.
+        # Stored on `self` so `_shutdown` can stop it; passed into each
+        # SkillContext via the `background_task` field.
+        self.task_supervisor = TaskSupervisor(
+            send_dev_event=self.server.send_dev_event,
+        )
+
         self.coordinator = TurnCoordinator(
             send_audio=self.server.send_audio,
             send_audio_clear=self.server.send_audio_clear,
@@ -148,6 +158,7 @@ class Application:
             persona_data_dir=self.persona.data_dir,
             config=self.persona.skills.get(skill_name, {}),
             inject_turn=self.coordinator.inject_turn,
+            background_task=self.task_supervisor.start,
         )
 
     async def run(self) -> None:
@@ -238,6 +249,11 @@ class Application:
         # by now; no new acquires arrive.
         await self.focus_manager.stop()
         await self.skill_registry.teardown_all()
+        # Cancel any background tasks the skills had supervised. Skills
+        # got first crack at clean cancellation via their own teardown
+        # (which can call `handle.cancel()` for tasks they want to stop
+        # gracefully); this is the safety-net cancel for whatever's left.
+        await self.task_supervisor.stop()
         await self.storage.close()
 
         await logger.ainfo("huxley_stopped")

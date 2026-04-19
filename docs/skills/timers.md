@@ -1,6 +1,6 @@
 # `huxley-skill-timers`
 
-One-shot reminders via proactive speech. The first real consumer of `inject_turn` — exercises the full DIALOG-channel preemption path end-to-end (user turn → tool dispatch → async sleep → `inject_turn` fires → LLM narrates → framework releases DIALOG).
+One-shot reminders via proactive speech. The first real consumer of `inject_turn` — exercises the full DIALOG-channel preemption path end-to-end (user turn → tool dispatch → supervised background sleep → `inject_turn` fires → LLM narrates → framework releases DIALOG). Also the first consumer of `ctx.background_task` (Stage 3) — each timer runs as a supervised one-shot task instead of raw `asyncio.create_task`.
 
 ## What it does
 
@@ -18,9 +18,9 @@ Nothing today — `timers: {}` in the persona's `skills:` block is enough. Perso
 
 Known gaps, all intentional for the MVP:
 
-- **In-memory only.** Timers set in session N do not survive to session N+1. Restart the server and pending timers are lost. Persistence via `SkillStorage` is a follow-up; it pairs naturally with Stage 3's `background_task` supervisor, which will re-schedule any storage-persisted timers on `setup()`.
-- **Single tool — no list / cancel.** If a user asks "cuántos temporizadores tengo," the LLM can see `prompt_context()`'s summary count but can't enumerate or cancel them. Add `list_timers` + `cancel_timer` when a user flow needs it.
-- **No acknowledgment tracking.** The reminder fires once and returns. If the user doesn't hear it (asleep, out of room) there's no retry. Stage 1d's `InjectedTurnHandle.wait_outcome()` adds the hook for retry; the skill doesn't use it yet.
+- **In-memory only.** Timers set in session N do not survive to session N+1. Restart the server and pending timers are lost. Persistence via `SkillStorage` is the obvious next step now that Stage 3 ships supervised tasks: `setup()` would read pending timers from storage and re-spawn each via `ctx.background_task`. Filed as future work.
+- **Single tool — no list / cancel.** If a user asks "cuántos temporizadores tengo," the LLM can see `prompt_context()`'s summary count but can't enumerate or cancel them. Add `list_timers` + `cancel_timer` when a user flow needs it. The `BackgroundTaskHandle` is already kept per-timer in `_handles`, so a `cancel_timer` tool would just be `self._handles[id].cancel()`.
+- **No acknowledgment tracking.** The reminder fires once and returns. If the user doesn't hear it (asleep, out of room) there's no retry. Stage 1d.2's `InjectedTurnHandle.wait_outcome()` adds the hook for retry; the skill doesn't use it yet.
 - **Seconds-only unit.** The tool description tells the LLM to convert minutes/hours to seconds. This keeps the surface simple and leaves unit handling to the LLM's arithmetic.
 - **No cross-session persistence** means even "recuérdame mañana" doesn't work — by tomorrow the server has restarted. File this with persistence.
 

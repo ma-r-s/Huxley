@@ -17,8 +17,10 @@ from huxley_sdk.registry import SkillNotFoundError, SkillRegistry
 from huxley_sdk.types import (
     AppState,
     AudioStream,
+    BackgroundTaskHandle,
     CancelMedia,
     InvalidTransitionError,
+    PermanentFailure,
     PlaySound,
     SetVolume,
     SideEffect,
@@ -34,10 +36,12 @@ from huxley_sdk.types import (
 __all__ = [
     "AppState",
     "AudioStream",
+    "BackgroundTaskHandle",
     "CancelMedia",
     "Catalog",
     "Hit",
     "InvalidTransitionError",
+    "PermanentFailure",
     "PlaySound",
     "SetVolume",
     "SideEffect",

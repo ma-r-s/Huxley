@@ -979,9 +979,30 @@ fires during an active `InputClaim`, arbitration runs, `on_claim_end`
 triggers, claim-preempted outcome surfaces correctly. Keeps the
 end-to-end path from degrading silently as Stages 3+4 pile on.
 
-### Stage 3 — Supervised `background_task`
+### Stage 3 — Supervised `background_task` ✅ done (`<this commit>`, 2026-04-18)
 
-**Effort**: ~3 days. **Depends on**: Application startup (already in `app.py`).
+Shipped. `huxley.background.TaskSupervisor` owns a pool of named
+asyncio tasks. `SkillContext.background_task(name, coro_factory, *,
+restart_on_crash=True, max_restarts_per_hour=10,
+on_permanent_failure=None) -> BackgroundTaskHandle` is the skill-
+facing API. Crashes log via `aexception`, restart with exponential
+backoff (2s, 4s, 8s, ..., capped 60s), and after the per-hour budget
+is exhausted fire `dev_event("background_task_failed", ...)` plus the
+caller's optional `on_permanent_failure(PermanentFailure)` callback.
+Application wires the supervisor into the lifecycle: instantiated in
+`__init__`, `stop()` in `_shutdown` after `skill_registry.teardown_all`.
+Timers skill refactored to use `ctx.background_task(..., restart_on_crash=False)`
+instead of raw `asyncio.create_task` — first real consumer.
+
+**Effort (actual)**: ~2 hours (vs. 3-day estimate). Smaller than
+expected because the SDK side is just one new field + a default
+no-op-with-real-task fallback for tests; the supervisor itself is
+~150 LOC; the timers refactor is ~10 LOC. Tests took longer than
+the implementation (10 supervisor tests cover crash + restart +
+budget exhaustion + cancel + stop + name uniqueness + callback
+robustness).
+
+**Deliverables (original spec, all shipped)**:
 
 **Deliverables**:
 
