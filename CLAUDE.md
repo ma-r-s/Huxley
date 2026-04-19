@@ -120,13 +120,18 @@ Before presenting work as done:
 - **Server changes that affect runtime behavior**: the running server must be on the new code (kill the old process and restart). Don't claim a change is deployed if you haven't verified the running pid is from the latest commit.
 - **Docs**: if the change affects behavior described in `docs/`, the doc is updated in the same commit.
 
-### The dev loop — describe-symptom-read-log
+### The dev loop — Mario tests, Claude reads logs
 
-The primary debugging mode is conversational: a contributor tests via the browser dev client, describes a symptom, Claude (or another collaborator) reads the server log and diagnoses. This works because every meaningful event is logged with structured context.
+The work division is:
+
+- **Mario runs the browser smoke tests.** He's the human ear — he can detect audio glitches, interrupt latency, "this feels wrong" UX things that logs can't capture. His job ends at "I did X, here's what I heard."
+- **Claude reads the server log + web dev log + network frames and diagnoses.** Don't ask Mario what he did step-by-step — read the timeline from logs. If the log doesn't show what happened, that's a logging bug, fix it in the same commit.
 
 When you add a new feature or fix a bug, ask: **"if this breaks in production, what log line would I need to diagnose it?"** Then add that line. The framework's logging convention is documented in [`docs/observability.md`](./docs/observability.md).
 
-If a session ever ends with "I had to ask the contributor what was happening because the log didn't show enough" — that's a bug in the logging, fix it.
+A session that ends with "I had to ask what you did because the log didn't show enough" is a defect — capture the missing event, don't paper over it.
+
+**Server restart discipline**: after any commit that changes server runtime behavior, the previously-running process is stale. Kill it and restart yourself before asking Mario to smoke test. "I committed it" ≠ "it's running on the new code." See Definition of Done above.
 
 ### Critic pattern
 
@@ -159,6 +164,19 @@ Every triage item moves through five gates documented in [`docs/triage.md`](./do
 5. **Ship + capture** — commit references the triage ID; entry gets the commit hash + a one-line lessons note; memory file updated if a durable lesson emerged.
 
 Trivial items (< 1 day, mechanical) collapse Gates 1–2 into a few minutes and skip the critic. Anything Tier 1 or design-shaped goes through the full path. **The work artifacts (validation evidence, design sketch, critic notes, DoD, tests, docs touched, lessons) live in the triage entry — not in commit messages alone.**
+
+### Dream check — does this match what Huxley is trying to be?
+
+Huxley has a clear vision: a **voice agent framework** that ships with **AbuelOS** as its first persona. The framework names mechanisms, not use cases. Personas name the product.
+
+Before shipping any non-trivial commit, re-read [`docs/vision.md`](./docs/vision.md) and [`docs/concepts.md`](./docs/concepts.md) with fresh eyes and ask:
+
+1. **Am I adding framework scope or persona scope?** Framework scope requires stable surface area, skill-author ergonomics, persona-agnostic semantics. Persona scope (AbuelOS's prompt, its skill list, its constraints) can iterate freely. If a commit mixes both, split it.
+2. **Am I naming a mechanism or a use case?** Framework code should not contain words like "call," "reminder," "emergency," "audiobook" — those are skill-level concepts. If you wrote one of those words in `packages/core` or `packages/sdk`, something's in the wrong layer.
+3. **Is this for "grandpa" or for the framework?** AbuelOS-specific UX (slow speech, Spanish, warm tone, no dialect assumptions) lives in the persona. The framework stays neutral.
+4. **Is this solving a real problem today, or a speculative one?** If speculative, cut it. See Simplicity below.
+
+If the commit drifts from any of these, flag it in the commit message and escalate as a behavioral question — that's Mario's lane, not yours.
 
 ### Simplicity — Huxley specifically
 
