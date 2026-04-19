@@ -924,7 +924,7 @@ Small items the critic flagged that aren't blocking but should land
 before Stage 2 stacks more on:
 
 4. **Tighten `SkillContext.inject_turn` / `background_task` typing to
-   Protocols.** ✅ **done** (`efe0cb6`, 2026-04-19). Added
+   Protocols.** ✅ **done** (`a286205`, 2026-04-19). Added
    `InjectTurn` and `BackgroundTask` Protocol classes to
    `huxley_sdk/types.py`; `SkillContext` fields now carry those types
    instead of `Callable[..., ...]`. Protocol `__call__` methods spell
@@ -1113,7 +1113,7 @@ The critic (post-Stage-3 review) flagged that Stage 3 "done" hides a real gap: s
 
 **First consumer**: T1.8 evolved reminders (persistent medication reminders).
 
-### Stage 3c — PermanentFailure elapsed_s semantics ✅ **done** (`efe0cb6`, 2026-04-19)
+### Stage 3c — PermanentFailure elapsed_s semantics ✅ **done** (`a286205`, 2026-04-19)
 
 Renamed `PermanentFailure.elapsed_s` → `elapsed_in_window_s` to match
 the supervisor's actual computation (`now - window_start`, where
