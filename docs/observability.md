@@ -14,7 +14,7 @@ The dream interaction:
 
 > **You**: "I asked it to play a book, it said it would, but no audio came."
 >
-> **LLM (reading log)**: "I see — `coord.tool_dispatch` fired with `has_factory=true`, then `coord.factory_started`, then `coord.factory_ended` with `cancelled=true` 200 ms later. Something cancelled the media task. Looking at `coord.interrupt` — none. Looking at `coord.session_disconnected` — yes. The voice provider session dropped, which cancelled the factory. The auto-reconnect didn't restart playback because that's not its job. Want a 'resume in-progress book on auto-reconnect' feature?"
+> **LLM (reading log)**: "I see — `coord.tool_dispatch` fired with `has_audio_stream=true`, then `coord.audio_stream_started` and `focus.acquire channel=content`, then `coord.audio_stream_ended cancelled=true` 200 ms later. Something cancelled the pump. Looking at `coord.interrupt` — none. Looking at `coord.session_disconnected` — yes. The voice provider session dropped, which cancelled the content stream. The auto-reconnect didn't restart playback because that's not its job. Want a 'resume in-progress book on auto-reconnect' feature?"
 
 That's the goal. It only works if the log carries the right events with the right fields.
 
@@ -25,15 +25,16 @@ Every log event uses a dotted namespace + direction prefix. This makes events `g
 | Namespace      | Source                                                  | Examples                                                               |
 | -------------- | ------------------------------------------------------- | ---------------------------------------------------------------------- |
 | `coord.*`      | TurnCoordinator decisions (the core state machine)      | `coord.ptt_start`, `coord.interrupt`, `coord.tool_dispatch`            |
-| `session.rx.*` | Messages received from the voice provider (OpenAI)      | `session.rx.function_call`, `session.rx.error`                         |
-| `session.tx.*` | Messages sent to the voice provider                     | `session.tx.commit`, `session.tx.cancel`, `session.tx.function_output` |
+| `focus.*`      | FocusManager arbitration (acquire / release / change)   | `focus.acquire`, `focus.release`, `focus.change`                       |
+| `session.rx.*` | Messages received from the voice provider (OpenAI)      | `session.rx.tool_call`, `session.rx.error`                             |
+| `session.tx.*` | Messages sent to the voice provider                     | `session.tx.commit`, `session.tx.cancel`, `session.tx.tool_output`     |
 | `server.rx.*`  | Messages received from the audio client                 | `server.rx.ptt_start`, `server.rx.ptt_stop`, `server.rx.wake_word`     |
 | `server.tx.*`  | Messages sent to the audio client                       | `server.tx.state`, `server.tx.model_speaking`                          |
 | `app.*`        | Application orchestration (lifecycle, guard rejections) | `app.session_end`, `app.ptt_rejected`                                  |
 | `<skill>.*`    | Per-skill events (skill author owns the namespace)      | `audiobooks.resolve`, `audiobooks.stream_started`, `system.volume_set` |
 | `client.*`     | Telemetry forwarded from the audio client (web/ESP32)   | `client.silence_timer_started`, `client.thinking_tone_on`              |
 
-A skill named `audiobooks` emits events like `audiobooks.factory_built`, `audiobooks.stream_ended`. The framework reserves `coord.`, `session.`, `server.`, `app.`, `client.`; everything else is skill territory.
+A skill named `audiobooks` emits events like `audiobooks.factory_built`, `audiobooks.stream_ended`. The framework reserves `coord.`, `focus.`, `session.`, `server.`, `app.`, `client.`; everything else is skill territory.
 
 The `client.*` events come in via the `client_event` WebSocket message type — clients emit `{"type": "client_event", "event": "<name>", "data": {...}}` and the server logs them as `client.<name>` with the data fields spread. Pure observability — the framework takes no action. This closes the "client-side blackbox" gap; thinking-tone state, silence-timer fires, and PTT UI transitions are now visible in the same log file as the server-side flow.
 
@@ -135,26 +136,79 @@ A typical turn looks like this (reformatted for readability):
 
 ```
 server.rx.ptt_start
-coord.ptt_start         turn=abc12345  had_turn=false  had_media=false
-coord.ptt_stop          turn=abc12345  frames=28  committed=true
+coord.ptt_start            turn=abc12345  had_turn=false  had_media=false
+coord.ptt_stop             turn=abc12345  frames=28  committed=true
 session.tx.commit
-coord.audio_start       turn=abc12345  state=IN_RESPONSE
-server.tx.model_speaking value=true
-session.rx.function_call name=play_audiobook  call_id=c1
-coord.tool_dispatch     turn=abc12345  state=IN_RESPONSE  name=play_audiobook  has_factory=true
-audiobooks.factory_built turn=abc12345  book_id=...  start_position=0.0
-session.tx.function_output call_id=c1
-coord.audio_done        turn=abc12345
-server.tx.model_speaking value=false
-coord.response_done     turn=abc12345  state=IN_RESPONSE  follow_up=false  factories=1
-coord.factory_started   turn=abc12345
-coord.turn_ended        turn=abc12345
-audiobooks.stream_started turn=abc12345  path=...  start=0.0
+coord.audio_start          turn=abc12345  state=in_response  owner=user
+server.tx.model_speaking   value=true
+session.rx.tool_call       name=play_audiobook  call_id=c1
+coord.tool_dispatch        turn=abc12345  state=in_response  name=play_audiobook  has_audio_stream=true
+audiobooks.factory_built   turn=abc12345  book_id=...  start_position=0.0
+session.tx.tool_output     call_id=c1
+coord.audio_done           turn=abc12345
+server.tx.model_speaking   value=false
+coord.response_done        turn=abc12345  state=in_response  follow_up=false  pending_audio_streams=1
+coord.turn_ended           turn=abc12345
+coord.audio_stream_started turn=abc12345  interface=turn.content.abc12345
+focus.acquire              channel=content  interface=turn.content.abc12345  content_type=nonmixable  became_foreground=true
+focus.change               channel=content  interface=turn.content.abc12345  new_state=foreground  behavior=primary
+audiobooks.stream_started  turn=abc12345  path=...  start=0.0
+server.tx.model_speaking   value=true
 ```
 
-Read top to bottom: user pressed PTT (frame 28), coordinator committed, model started speaking ("ahí le pongo el libro"), called the play_audiobook tool, the audiobooks skill built a factory and announced it, model finished speaking, response done, factory fired, book started streaming.
+Read top to bottom: user pressed PTT (frame 28), coordinator committed, model started speaking ("ahí le pongo el libro"), called the play_audiobook tool, the audiobooks skill built a stream and announced it, model finished speaking, response done, the parent turn ended, the content stream's Activity was acquired on the FocusManager (CONTENT channel went FOREGROUND), pump spawned, first chunk acquired the FACTORY speaker.
 
-Every event is grep-able. To filter to one turn: `grep "turn=abc12345"`. To see only coordinator decisions: `grep "^coord\."`. To see what the agent sent the user: `grep "^server.tx\."`.
+Every event is grep-able. To filter to one turn: `grep "turn=abc12345"`. To see only coordinator decisions: `grep "^coord\."`. To see only focus arbitration: `grep "^focus\."`. To see what the agent sent the user: `grep "^server.tx\."`.
+
+## Focus events — what they tell you
+
+The `focus.*` namespace surfaces every move on the FocusManager's Activity stacks. These are mailbox-driven, so they appear slightly after the coordinator's `coord.*` event that triggered them (~5–50ms typical actor-loop processing).
+
+| Event                    | When it fires                                                                                                                                | Key fields                                                                                                           |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `focus.acquire`          | An `Activity` was registered on a channel.                                                                                                   | `channel`, `interface`, `content_type`, `patience_ms`, `became_foreground`, `displaced`                              |
+| `focus.release`          | An `Activity` was released by interface name.                                                                                                | `channel`, `interface`, `was_foreground`                                                                             |
+| `focus.change`           | An observer was notified of a focus transition. Fires for every `(activity, focus_state, behavior)` delivered.                               | `channel`, `interface`, `new_state` (foreground/background/none), `behavior` (primary/may_duck/must_pause/must_stop) |
+| `focus.duck_started`     | A MAY_DUCK `BACKGROUND` notification began the gain ramp on a `ContentStreamObserver`. Diagnostic for "is the duck envelope firing?"         | `interface`, `target_gain`, `duration_ms`                                                                            |
+| `focus.patience_expired` | A backgrounded Activity's patience window elapsed without re-acquire — Activity is being cleared.                                            | `channel`, `interface`                                                                                               |
+| `focus.observer_failed`  | An observer's `on_focus_changed` raised. Logged via `aexception` (full traceback). Other observers in the transition still get notified.     | `channel`, `interface`, `focus`, `behavior`                                                                          |
+| `focus.observer_slow`    | An observer took more than 100ms to handle a notification. Likely a bug — observers should return fast and offload work to tasks.            | `interface`, `elapsed_ms`                                                                                            |
+| `focus.event_failed`     | The actor loop's top-level handler caught an exception while processing an event. Should never happen; look here if focus state seems stuck. | `event_type`                                                                                                         |
+
+A typical `inject_turn` preempting an audiobook:
+
+```
+timers.fired                  timer_id=1  message=...
+coord.inject_turn             turn=fda08425  interface=turn.dialog.fda08425  prompt_len=56
+focus.acquire                 channel=dialog  interface=turn.dialog.fda08425  content_type=nonmixable  became_foreground=true
+audiobooks.stream_ended       book_id=...  cancelled=true  final_pos=22.4
+focus.change                  channel=content  new_state=none  behavior=must_stop
+focus.change                  channel=dialog  new_state=foreground  behavior=primary
+session.tx.conversation_message text_len=56
+session.tx.response_create
+server.tx.model_speaking      value=false
+coord.audio_done              turn=fda08425
+coord.response_done           turn=fda08425  follow_up=false
+coord.turn_ended              turn=fda08425
+focus.release                 channel=dialog  interface=turn.dialog.fda08425  was_foreground=true
+focus.change                  channel=dialog  new_state=none  behavior=must_stop
+```
+
+Read top to bottom: timer fired, coordinator created an injected turn and acquired DIALOG, FocusManager preempted the CONTENT activity (audiobook pump confirmed cancellation), DIALOG was promoted, prompt + request were sent to the LLM, model narrated, turn ended, DIALOG released cleanly.
+
+If `coord.inject_turn` fires but no subsequent `focus.acquire channel=dialog` appears, the FocusManager actor is stuck — check for `focus.event_failed` or a long gap before the next `focus.*` event.
+
+## Inject_turn queue events — diagnosing dropped or queued reminders
+
+When `inject_turn` is called while a user or synthetic turn is in progress, the request goes onto a FIFO queue (Stage 1d). These events tell you why a reminder fired late, was deduped, or got dropped:
+
+- **`coord.inject_turn_queued`** — request couldn't fire immediately; queued. Fields: `queue_depth`, `dedup_key`, `prev_state` (what turn was active).
+- **`coord.inject_turn_dequeued`** — a queued request is firing now (drained at a turn-end with no pending content stream). Fields: `remaining`, `dedup_key`.
+- **`coord.inject_turn_deduped`** — an enqueue replaced one or more same-key entries already in the queue. Fields: `dedup_key`, `removed`.
+- **`coord.inject_turn_dropped`** — an enqueue was silently dropped because a same-key inject is currently firing. Fields: `reason=dedup_in_flight`, `dedup_key`.
+- **`coord.inject_turn`** — the moment a request actually fires (whether immediate from `inject_turn` itself or drained from the queue). Fields: `interface`, `prompt_len`, `dedup_key`.
+
+If a skill's `inject_turn` "didn't speak," look for these in order: `inject_turn_dropped` (dedup'd against in-flight), `inject_turn_queued` followed by `inject_turn_dequeued` after a delay (queued, drained later), or no events at all (caller never invoked it).
 
 ## Skill failures
 

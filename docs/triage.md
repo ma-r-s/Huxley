@@ -831,12 +831,24 @@ idempotent (`force_release` on owner=None is a no-op, so
 inject_turn from idle doesn't break). Verified via existing
 TestInjectTurn tests — they still pass.
 
-**Stage 1e — `docs/observability.md` update (~30 min, queued).**
-Document the `focus.acquire`, `focus.release`, `focus.change`,
-`focus.patience_expired`, `focus.observer_failed`, `focus.observer_slow`
-events that shipped in Stage 1 Part 1 but aren't yet in the
-observability canon. Minor gap noted during doc realignment commit
-`9695e0f`.
+**Stage 1e — `docs/observability.md` update** ✅ **done** (`<this
+commit>`, 2026-04-18). Documented every framework log event that
+shipped during Stage 1 but wasn't in the observability canon:
+
+- Added `focus.*` to the namespace table.
+- Rewrote the example narrative to use current event names
+  (`coord.audio_stream_started/ended` instead of the deleted
+  `coord.factory_started/ended`; `session.rx.tool_call` instead
+  of `session.rx.function_call`; `has_audio_stream=true` instead
+  of `has_factory=true`).
+- Updated the dream-interaction example at the top with current
+  vocabulary.
+- Added a "Focus events — what they tell you" section: table of
+  every `focus.*` event with fields, plus a worked example showing
+  the `inject_turn` preempting an audiobook through the FM.
+- Added an "Inject_turn queue events" section explaining
+  `coord.inject_turn_queued/dequeued/deduped/dropped` and how to
+  diagnose "the reminder didn't speak" symptoms.
 
 **Stage 2 — `InputClaim` + `MicRouter` wiring.** Unchanged in scope;
 see original Stage 2 section below. Open question (below) on whether
