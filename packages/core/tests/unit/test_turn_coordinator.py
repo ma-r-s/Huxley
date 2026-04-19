@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from huxley.focus.manager import FocusManager
+from huxley.focus.vocabulary import Channel
 from huxley.turn.coordinator import Turn, TurnCoordinator, TurnState
 from huxley.voice.stub import StubVoiceProvider
 from huxley_sdk import AudioStream, PlaySound, ToolResult
@@ -1396,6 +1397,128 @@ class TestCleanupOrdering:
         # Pump is gone and FACTORY (or any owner) is released.
         assert coordinator._speaking_state.owner is None
         assert coordinator._speaking_state.is_speaking is False
+
+
+class TestInjectTurn:
+    """`SkillContext.inject_turn(prompt)` — proactive speech via DIALOG channel.
+
+    MVP (Stage 1c.3): one urgency tier (preempt), no queue, no TTL, no
+    dedup, no handle. Skipped silently when a user or synthetic turn
+    is active.
+    """
+
+    async def test_idle_inject_fires_conversation_and_response(
+        self,
+        coordinator: TurnCoordinator,
+        provider: StubVoiceProvider,
+    ) -> None:
+        """From idle state, inject_turn creates an INJECTED turn and
+        sends conversation_message + request_response to the provider."""
+        assert coordinator.current_turn is None
+
+        await coordinator.inject_turn("Es hora de la pastilla.")
+
+        assert coordinator.current_turn is not None
+        assert coordinator.current_turn.source.value == "injected"
+        assert coordinator.current_turn.state == TurnState.IN_RESPONSE
+        assert ("send_conversation_message", "Es hora de la pastilla.") in provider.sent
+        assert ("request_response",) in provider.sent
+
+    async def test_inject_skipped_when_user_turn_active(
+        self,
+        coordinator: TurnCoordinator,
+        provider: StubVoiceProvider,
+    ) -> None:
+        """If a user turn is live, inject_turn is a no-op (logs + returns)."""
+        await coordinator.on_ptt_start()
+        assert coordinator.current_turn is not None
+        pre_sent_count = len(provider.sent)
+
+        await coordinator.inject_turn("Aviso urgente.")
+
+        # Nothing new on the provider.
+        assert len(provider.sent) == pre_sent_count
+        # User turn still LISTENING (unchanged).
+        assert coordinator.current_turn.state == TurnState.LISTENING
+        assert coordinator.current_turn.source.value == "user"
+
+    async def test_inject_preempts_active_content_stream(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+    ) -> None:
+        """A running content stream goes BACKGROUND/MUST_PAUSE when DIALOG
+        acquires — its pump task gets cancelled before the narration
+        plays."""
+        import asyncio
+
+        async def forever_stream() -> AsyncIterator[bytes]:
+            while True:
+                yield b"x"
+                await asyncio.sleep(0.01)
+
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output="{}", side_effect=AudioStream(factory=forever_stream)
+        )
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("c1", "play", {})
+        await coordinator.on_response_done()
+        # Wait for the pump to actually start streaming.
+        for _ in range(10):
+            if (
+                coordinator.current_media_task is not None
+                and not coordinator.current_media_task.done()
+            ):
+                break
+            await asyncio.sleep(0.001)
+        pump_task = coordinator.current_media_task
+        assert pump_task is not None
+        assert not pump_task.done()
+        assert coordinator.current_turn is None  # turn ended, only stream remains
+
+        await coordinator.inject_turn("Hora de pastilla.")
+
+        # Content pump was cancelled by FM-mediated BACKGROUND/MUST_PAUSE.
+        assert pump_task.done()
+        # Coordinator now holds a DIALOG activity + synthetic turn.
+        assert coordinator.current_turn is not None
+        assert coordinator.current_turn.source.value == "injected"
+        assert coordinator.current_media_task is None
+
+    async def test_natural_end_releases_dialog(
+        self,
+        coordinator: TurnCoordinator,
+        focus_manager: FocusManager,
+    ) -> None:
+        """After the injected turn's response_done fires, the DIALOG
+        Activity is released on the FocusManager."""
+        await coordinator.inject_turn("Hola.")
+        # FM now has a DIALOG Activity.
+        assert focus_manager._stacks[Channel.DIALOG]
+
+        # Simulate the model's normal response flow.
+        await coordinator.on_audio_delta(b"hola de vuelta")
+        await coordinator.on_audio_done()
+        await coordinator.on_response_done()
+
+        # After terminal response_done → _apply_side_effects → _release_dialog.
+        assert coordinator.current_turn is None
+        assert not focus_manager._stacks[Channel.DIALOG]
+
+    async def test_interrupt_during_injected_releases_dialog(
+        self,
+        coordinator: TurnCoordinator,
+        focus_manager: FocusManager,
+    ) -> None:
+        """If the user PTTs during an injected turn, interrupt() releases
+        the DIALOG activity as part of its barrier."""
+        await coordinator.inject_turn("Aviso.")
+        assert focus_manager._stacks[Channel.DIALOG]
+
+        await coordinator.interrupt()
+
+        assert not focus_manager._stacks[Channel.DIALOG]
+        assert coordinator._dialog_interface_name is None
 
 
 class TestTurnDataclass:

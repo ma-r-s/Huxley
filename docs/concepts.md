@@ -122,9 +122,14 @@ Every `Activity` registered on a channel gets delivered a `(FocusState, MixingBe
 - `FocusState` — `FOREGROUND` (I'm the primary speaker), `BACKGROUND` (someone above me is speaking; I may duck or pause), `NONE` (I'm displaced entirely).
 - `MixingBehavior` — `PRIMARY`, `MAY_DUCK`, `MUST_PAUSE`, `MUST_STOP`. Derived from FocusState + the Activity's `ContentType` (`MIXABLE` → `MAY_DUCK` on background; `NONMIXABLE` → `MUST_PAUSE`).
 
-`FocusManager` is the serialized actor that enforces invariants: exactly one FOREGROUND Activity across all channels; same `(channel, interface_name)` replaces its prior Activity; displaced Activities get a configurable `patience` grace period at BACKGROUND before being cleared. Skills never talk to `FocusManager` directly — they return `SideEffect` side-effects (today, just `AudioStream`; tomorrow, inject_turn / InputClaim equivalents) and the framework translates them into focus acquires/releases.
+`FocusManager` is the serialized actor that enforces invariants: exactly one FOREGROUND Activity across all channels; same `(channel, interface_name)` replaces its prior Activity; displaced Activities get a configurable `patience` grace period at BACKGROUND before being cleared. Skills never talk to `FocusManager` directly — they either return `SideEffect` side-effects from a tool call (today: `AudioStream`; future: `InputClaim`) or call a `SkillContext` method like `inject_turn(prompt)`, and the framework translates those into focus acquires/releases.
 
-The Stage 1 substrate ships now; the coordinator drives a `ContentStreamObserver` directly today, and wires in the `FocusManager` once skill-level arbitration (inject_turn, ducking) lands.
+Today's live paths through `FocusManager`:
+
+- **CONTENT** — any `AudioStream` side-effect returned from a skill's `handle()` gets an Activity on CONTENT; pump runs while FOREGROUND, cancels on BACKGROUND/MUST_PAUSE (NONMIXABLE today) or NONE.
+- **DIALOG** — `ctx.inject_turn(prompt)` creates a synthetic INJECTED turn with a DIALOG Activity. Higher channel priority (100) than CONTENT (300) means CONTENT gets displaced; the LLM narrates the prompt; DIALOG releases when the turn ends.
+
+Not yet wired: patience-expiry path, duck envelope (MAY_DUCK falls back to pause), ALERT and COMMS channels, `InputClaim` on DIALOG/mic routing.
 
 See [`io-plane.md`](./io-plane.md) for the composition vocabulary and [`architecture.md#focus-management`](./architecture.md#focus-management) for the actor model.
 

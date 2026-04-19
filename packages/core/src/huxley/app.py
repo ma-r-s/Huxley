@@ -147,6 +147,7 @@ class Application:
             storage=NamespacedSkillStorage(self.storage, skill_name),
             persona_data_dir=self.persona.data_dir,
             config=self.persona.skills.get(skill_name, {}),
+            inject_turn=self.coordinator.inject_turn,
         )
 
     async def run(self) -> None:

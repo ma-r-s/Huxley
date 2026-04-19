@@ -226,51 +226,43 @@ Skills that want to contribute baseline context to every session prompt implemen
 
 ## Proactive speech — `ctx.inject_turn`
 
-> ⚠️ **Planned — not yet shipped.** This section describes the target SDK
-> surface for proactive speech. The underlying substrate (`FocusManager` +
-> `ContentStreamObserver`) shipped in T1.4 Stage 1, but `ctx.inject_turn`
-> itself isn't wired yet. The code sample's `Urgency` vocabulary reflects
-> the pre-pivot design — see
-> [`concepts.md#focus-management`](../concepts.md#focus-management-channel--focusstate--mixingbehavior)
-> for the post-pivot primitives this will re-express in. Expect the
-> `urgency=` parameter to be replaced by a `Channel` + priority
-> combination. See `triage.md` T1.4 for current status.
+> ℹ️ **MVP shipped (T1.4 Stage 1c.3).** Today's API is one urgency tier
+> (preempt), no queue, no TTL, no dedup, no return handle. If a user or
+> synthetic turn is already active when you call `inject_turn`, it's
+> silently skipped — retry later. Stage 1d adds the hold queue,
+> `expires_after`, `dedup_key`, and the `InjectedTurnHandle` with
+> `.wait_outcome()`. The multi-urgency code sample in the old plan
+> (`urgency=Urgency.INTERRUPT` etc.) is **not** the shipped surface —
+> that vocabulary was dropped in the focus-management pivot. The
+> current surface is below.
 
 Some skills need to speak without the user asking first: a medication reminder fires at 9am; a message from family arrives; an appointment is 30 minutes away. The framework's turn loop normally only runs on user PTT, but `ctx.inject_turn` lets a skill inject a synthetic turn from outside.
 
 ```python
-from datetime import timedelta
-from huxley_sdk import Urgency
-
-await ctx.inject_turn(
-    "Es hora de la pastilla de las nueve.",
-    urgency=Urgency.INTERRUPT,
-    dedup_key="med_9am_2026-04-18",
-    expires_after=timedelta(hours=2),
-    tag="medication",
-)
+# Inside a skill's setup or background task:
+await self._ctx.inject_turn("Es hora de la pastilla de las nueve.")
 ```
 
-**`urgency`** (pick the tier that matches your intent — the framework doesn't care what generates each tier):
+The framework handles the rest: it preempts any playing audiobook / radio / stream, flushes the client audio buffer so preempted chunks don't play over the narration, then asks the LLM to narrate the prompt in persona voice. The user hears (content cuts) → narration. When narration ends, the content stays stopped — **Stage 1d will add a "resume or drop" policy based on the content's `patience`**, but today it just stops.
 
-- `AMBIENT` — speak only if user is idle; otherwise drop silently. For social/low-signal events like scheduled greetings.
-- `CHIME_DEFER` (default) — play a tier earcon now, hold speech for the next time the user PTTs. For non-urgent messages, routine reminders.
-- `INTERRUPT` — preempt current media, play earcon, speak now. For time-sensitive reminders (medication).
-- `CRITICAL` — preempts everything including other stream claims. Reserved for top-priority events (incoming calls, emergencies).
+**What `prompt` should contain**: an instruction for the LLM, not the literal words to speak. The persona prompt + the persona's voice transform your instruction into the actual utterance. For a medication reminder, `"Es hora de la pastilla de las nueve"` is fine — the LLM narrates that verbatim or close to it; for something needing more context, `"Dile al usuario que su hijo Carlos mandó un mensaje que dice '<text>', pregúntale si quiere escucharlo"` works too.
 
-**`dedup_key`** — if a turn with the same key is already pending, replace it. Prevents "5 pings for the same message."
-
-**`expires_after`** — TTL. Drops from the queue silently after this. Defaults from persona config per tier (see `docs/io-plane.md`).
-
-**Don't build retry into the skill's call to `inject_turn`.** If your skill needs retry-until-acknowledged semantics (medication reminders), use your own `background_task` scheduler to re-call `inject_turn` at escalating urgency. The returned handle exposes `wait_outcome()` which resolves to one of `ACKNOWLEDGED | DELIVERED | EXPIRED | PREEMPTED | CANCELLED` (first-writer-wins); your skill branches on the outcome to decide whether to re-fire.
+**Future surface (Stage 1d, not yet shipped)**:
 
 ```python
-handle = await self._ctx.inject_turn(prompt, urgency=Urgency.INTERRUPT)
-outcome = await handle.wait_outcome()
+# Not yet available — preview of Stage 1d shape:
+handle = await self._ctx.inject_turn(
+    "Es hora de la pastilla de las nueve.",
+    dedup_key="med_9am_2026-04-18",
+    expires_after=timedelta(hours=2),
+)
+outcome = await handle.wait_outcome()  # ACKNOWLEDGED | DELIVERED | EXPIRED | PREEMPTED | CANCELLED
 if outcome != TurnOutcome.ACKNOWLEDGED:
-    # Retry at higher urgency in 5 minutes (skill's own schedule)
+    # Reschedule at higher urgency via your own background task
     ...
 ```
+
+**Don't build retry into the call itself.** If your skill needs retry-until-acknowledged semantics (medication reminders), use your own scheduler (today: plain `asyncio.create_task`; Stage 3: `ctx.background_task`) to re-call `inject_turn` on a cadence you control. Stage 1d will expose `handle.wait_outcome()` so retry can be outcome-driven; until then, retry blind.
 
 **Who narrates**: the LLM, in persona voice. Your `prompt` is the instruction (what to say), not the rendered speech. Same pattern as audiobook's `AudioStream.on_complete_prompt`.
 

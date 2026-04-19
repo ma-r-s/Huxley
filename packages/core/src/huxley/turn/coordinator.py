@@ -46,7 +46,7 @@ from huxley_sdk import AudioStream, CancelMedia, PlaySound, SetVolume
 
 from .factory import TurnFactory
 from .mic_router import MicRouter
-from .observers import ContentStreamObserver
+from .observers import ContentStreamObserver, DialogObserver
 from .speaking_state import SpeakingOwner, SpeakingState
 from .state import Turn, TurnSource, TurnState
 
@@ -133,6 +133,12 @@ class TurnCoordinator:
         # A reference of None means idle. The observer owns the pump task;
         # access it via `current_media_task` for back-compat.
         self._content_obs: ContentStreamObserver | None = None
+        # Current DIALOG-channel Activity's interface_name (if any). Set by
+        # `inject_turn`; cleared by `_release_dialog` called from
+        # `_apply_side_effects` (natural end) or `interrupt()` (preemption).
+        # The interface_name is the framework-internal handle used to
+        # release via `fm.release(Channel.DIALOG, ...)`.
+        self._dialog_interface_name: str | None = None
 
         self.current_turn: Turn | None = None
         self.response_cancelled: bool = False
@@ -434,7 +440,10 @@ class TurnCoordinator:
         tid = self._tid()
 
         # Stop the pump FIRST so no subsequent acquire can race with force_release.
+        # Release DIALOG too so FM's stacks don't carry orphan activities
+        # across the disconnect.
         await self._stop_content_stream()
+        await self._release_dialog()
         await self._speaking_state.force_release()
 
         await logger.ainfo(
@@ -486,8 +495,11 @@ class TurnCoordinator:
         #    force_release. If the pump is mid-`_factory_send_audio`
         #    during force_release's await, it can see `is_speaking=False`,
         #    re-acquire FACTORY, and leave SpeakingState stuck on a dead
-        #    stream after cleanup. Stop the producer first.
+        #    stream after cleanup. Stop the producer first. Also release
+        #    any DIALOG Activity (from an in-flight inject_turn) so FM's
+        #    stacks stay consistent with the coordinator's view.
         await self._stop_content_stream()
+        await self._release_dialog()
         # 4. Flush client-side audio queue + clear model-speaking state
         await self._send_audio_clear()
         await self._speaking_state.force_release()
@@ -539,6 +551,10 @@ class TurnCoordinator:
         # concluding a new turn started.
         await self._emit_turn_summary(reason="ended", spawned_audio_stream=bool(streams))
         await self._log.ainfo("coord.turn_ended")
+        # Release any DIALOG Activity this turn held (injected turn finishing
+        # normally). Content Activities are released by `_stop_content_stream`
+        # which the caller path reaches separately.
+        await self._release_dialog()
         self.current_turn = None
         self._bind_turn()
         await self._send_status(self._status["ready"])
@@ -667,6 +683,91 @@ class TurnCoordinator:
             )
         self._content_obs = None
         await self._focus_manager.release(Channel.CONTENT, obs.interface_name)
+        await self._focus_manager.wait_drained()
+
+    # --- Proactive speech (T1.4 Stage 1c.3 — inject_turn MVP) ---
+
+    async def inject_turn(self, prompt: str) -> None:
+        """Speak `prompt` proactively via a synthetic DIALOG turn.
+
+        MVP scope: preempt whatever content stream is playing, narrate the
+        prompt, return to idle. No queue, no TTL, no dedup, no handle —
+        those arrive in Stage 1d. If a user or synthetic turn is currently
+        active, inject_turn logs and returns; the skill should retry later.
+
+        The DIALOG acquire goes through the FocusManager: any CONTENT
+        Activity on the stack goes BACKGROUND → (NONMIXABLE) MUST_PAUSE →
+        the content observer cancels its pump. `wait_drained()` ensures
+        that chain completes before we send the conversation message, so
+        the preempted content audio can't trail into the narration.
+        """
+        if self.current_turn is not None:
+            await self._log.ainfo(
+                "coord.inject_turn_skipped",
+                reason="turn_active",
+                prev_state=self.current_turn.state.value,
+                prev_source=self.current_turn.source.value,
+            )
+            return
+
+        # Synthesize the Turn. Skills pass a plain string; the framework
+        # wraps it in a TurnSource.INJECTED turn that the rest of the
+        # coordinator treats like any other in-response turn — audio
+        # deltas, audio_done, response_done all flow through the same
+        # handlers and clean up at the terminal barrier.
+        self.current_turn = self._turn_factory.create(
+            source=TurnSource.INJECTED, initial_state=TurnState.IN_RESPONSE
+        )
+        self._bind_turn()
+        self.response_cancelled = False
+
+        interface_name = f"turn.dialog.{self._tid() or 'unknown'}"
+        self._dialog_interface_name = interface_name
+
+        async def _on_stop() -> None:
+            # Fired when FM delivers NONE/MUST_STOP to the observer —
+            # i.e. when the coordinator releases the DIALOG activity.
+            # The turn-end bookkeeping (current_turn clear, summary,
+            # status) happens in `_apply_side_effects` or `interrupt`;
+            # this callback is a no-op placeholder that keeps the
+            # DialogObserver contract satisfied.
+            pass
+
+        activity = Activity(
+            channel=Channel.DIALOG,
+            interface_name=interface_name,
+            content_type=ContentType.NONMIXABLE,
+            observer=DialogObserver(interface_name=interface_name, on_stop=_on_stop),
+        )
+
+        await self._log.ainfo(
+            "coord.inject_turn",
+            prompt_len=len(prompt),
+            interface=interface_name,
+        )
+        await self._focus_manager.acquire(activity)
+        await self._focus_manager.wait_drained()
+        # Any content stream is now cancelled + pump dead. Flush any
+        # chunks still in the client's audio queue so preempted book
+        # audio doesn't trail into the injected narration.
+        await self._send_audio_clear()
+
+        # Send the prompt + ask the model to respond. The model narrates
+        # in persona voice; subsequent `on_audio_delta` / `on_audio_done`
+        # / `on_response_done` flow through the normal turn handlers.
+        await self._provider.send_conversation_message(prompt)
+        await self._provider.request_response()
+
+    async def _release_dialog(self) -> None:
+        """Release any held DIALOG Activity. Idempotent. Called from turn
+        cleanup paths (`_apply_side_effects`, `interrupt`,
+        `on_session_disconnected`).
+        """
+        iface = self._dialog_interface_name
+        if iface is None:
+            return
+        self._dialog_interface_name = None
+        await self._focus_manager.release(Channel.DIALOG, iface)
         await self._focus_manager.wait_drained()
 
     async def _maybe_fire_completion_prompt(

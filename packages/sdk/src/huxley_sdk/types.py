@@ -213,6 +213,14 @@ class SkillLogger(Protocol):
     async def aexception(self, event: str, **kwargs: Any) -> None: ...
 
 
+async def _noop_inject_turn(_prompt: str) -> None:
+    """Default `inject_turn` for `SkillContext` — used by test fixtures that
+    don't wire a real coordinator. Framework-built contexts replace this
+    with the real callable from the `TurnCoordinator`.
+    """
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class SkillContext:
     """Dependencies the framework injects into each skill at `setup` time.
@@ -228,12 +236,19 @@ class SkillContext:
       Resolve your skill's file paths against this, not against CWD.
     - `config`: the per-skill config dict from `persona.yaml`'s
       `skills.<name>:` section.
+    - `inject_turn(prompt)`: speak proactively — framework synthesizes a
+      DIALOG turn that narrates `prompt` in the persona's voice,
+      preempting any content stream. MVP: one urgency tier (preempt);
+      skipped silently if a user or synthetic turn is already active
+      (the skill can retry later). Queue/TTL/dedup arrive in a later
+      stage. See `docs/skills/README.md` for usage pattern.
     """
 
     logger: SkillLogger
     storage: SkillStorage
     persona_data_dir: Path
     config: dict[str, Any]
+    inject_turn: Callable[[str], Awaitable[None]] = _noop_inject_turn
 
     def catalog(self, name: str = "default") -> Catalog:
         """Construct a fresh `Catalog` for this skill's personal-content data.

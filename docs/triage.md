@@ -749,14 +749,25 @@ observer=ContentStreamObserver(...))` + `fm.acquire(activity)` +
   `focus_manager` is now a required kwarg on `TurnCoordinator`; 3 test
   files got `FocusManager` fixtures. 253 tests still green.
 
-- **Stage 1c.3 — `SkillContext.inject_turn(prompt)` MVP** (~80 LOC,
-  ~2h, queued). Add method to `SkillContext`. Implementation: framework
-  creates `Activity(channel=DIALOG, ...)` on coordinator's FocusManager.
-  Content channel Activity (if present) goes BACKGROUND → MUST_PAUSE
-  (NONMIXABLE) → pump cancels via the path already shipped in 1a. LLM
-  narrates the injected prompt. **Ships inject_turn as a working
-  feature.** Unblocks reminder skill MVP (T1.8). Single urgency tier
-  (preempt); queue, TTL, dedup all deferred to Stage 1d.
+- **Stage 1c.3 — `SkillContext.inject_turn(prompt)` MVP** ✅ **done**
+  (`<this commit>`, 2026-04-18). Added `inject_turn: Callable[[str],
+Awaitable[None]]` field on `SkillContext` (no-op default for test
+  contexts; real callable wired from `TurnCoordinator.inject_turn` in
+  `app._build_skill_context`). Coordinator creates
+  `Activity(channel=DIALOG, content_type=NONMIXABLE, observer=
+DialogObserver(...))`, `fm.acquire()` + `fm.wait_drained()` (content
+  stream gets BACKGROUND/MUST_PAUSE → pump cancels), `send_audio_clear`
+  to flush preempted chunks, then `send_conversation_message` +
+  `request_response`. Normal `on_audio_delta`/`on_audio_done`/
+  `on_response_done` flow drives the turn to completion; terminal
+  `_apply_side_effects` releases DIALOG. `interrupt()` and
+  `on_session_disconnected` also release DIALOG so FM stacks stay
+  consistent across barriers. MVP scope: skipped silently when a user
+  or synthetic turn is already active (skill retries later; queue is
+  Stage 1d work). 5 new unit tests cover idle-inject, skip-when-
+  active, content-preemption, natural release, interrupt-release. 258
+  core tests green. **Ships `inject_turn` as a working framework
+  surface — unblocks reminder skill MVP (T1.8).**
 
 **Stage 1b — Server-side duck PCM envelope (~1 day, queued, moved
 after 1c).** Replaces the MUST_PAUSE fallback for MAY_DUCK+MIXABLE
