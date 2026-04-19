@@ -213,6 +213,167 @@ class PlaySound(SideEffect):
     pcm: bytes  # raw PCM16 24kHz mono
 
 
+class ClaimEndReason(Enum):
+    """Why an `InputClaim` ended. Delivered to `on_claim_end` callbacks
+    and returned from `ClaimHandle.wait_end()`.
+
+    Skills use this to distinguish "user hung up" from "caller hung up"
+    from "a medication reminder preempted us" — each may trigger
+    different cleanup (save recording vs. discard, announce to user vs.
+    silent close, etc.).
+    """
+
+    # Skill-initiated close. The handler returned normally, the skill
+    # called `handle.cancel()` as part of its own natural flow, or a
+    # wait_end-tracked call finished (e.g., caller hung up their WebSocket
+    # and the skill chose to end the claim in response).
+    NATURAL = "natural"
+
+    # The user pressed / held PTT during the claim. For a call skill
+    # this means "grandpa wants to end the call"; for a voice-memo skill
+    # this means "grandpa wants to interact with AbuelOS instead."
+    # Framework translates PTT-during-claim into this end reason and
+    # resumes the normal conversation flow after cleanup.
+    USER_PTT = "user_ptt"
+
+    # A higher-priority injected turn (`InjectPriority.PREEMPT`) fired
+    # while the claim was active. Examples: medication reminder during
+    # a voice memo, safety alert during a call. The claim is torn down
+    # so the injected turn can narrate.
+    PREEMPTED = "preempted"
+
+    # The claim handler (`on_mic_frame` or `speaker_source`) raised an
+    # unexpected exception. The framework logs the traceback, cleans up,
+    # and fires this end reason. Skills that want to report the failure
+    # to the user should do it from `on_claim_end`.
+    ERROR = "error"
+
+
+@dataclass(frozen=True, slots=True)
+class InputClaim(SideEffect):
+    """Side effect: latch the microphone to a skill handler.
+
+    Used by skills that need raw user audio frames (voice memo recording,
+    a phone call relaying grandpa's voice to the caller, a panic-button
+    wake-word listener). While the claim is active:
+
+    - `send_user_audio` to the LLM provider is suspended — the model
+      stops receiving user audio and stops generating responses.
+    - Incoming PCM16 mic frames are routed to `on_mic_frame` instead
+      of the LLM.
+    - If `speaker_source` is supplied, the framework reads PCM16 chunks
+      from it and forwards them to the client speaker — for two-way
+      audio like calls. Leave `None` for one-way captures (voice memo).
+    - When the claim ends (any `ClaimEndReason`), the framework unwinds:
+      resumes the LLM provider, restores default mic routing, and
+      invokes `on_claim_end` if supplied.
+
+    Entry point — **as a `ToolResult.side_effect`**: the claim latches
+    at the turn's terminal barrier (same timing as `AudioStream`), so
+    the model can pre-narrate ("starting recording now") before the
+    mic swaps. For event-driven claims with no tool in the causal
+    chain (inbound call arriving from a `ctx.background_task`), use
+    `SkillContext.start_input_claim(claim)` instead — same semantics,
+    immediate latch.
+
+    See `docs/research/realtime-suspend.md` for the provider-contract
+    rationale — specifically, why "stop sending audio" alone isn't
+    enough (the LLM keeps generating server-side and we pay for it).
+    """
+
+    kind: ClassVar[str] = "input_claim"
+
+    # Called with each PCM16 mono chunk the client sends while the claim
+    # is active. Must be async (the framework awaits it per-chunk).
+    # Chunk size matches the client's upload cadence — today ~50 ms at
+    # 24 kHz = 2400 bytes, but skills shouldn't depend on a specific
+    # chunk size.
+    on_mic_frame: Callable[[bytes], Awaitable[None]]
+
+    # Optional: an async iterator yielding PCM16 chunks for playback to
+    # the client speaker. Framework reads until the iterator is
+    # exhausted (the skill can end the claim by returning from it) or
+    # until some other `ClaimEndReason` fires. Leave `None` for
+    # capture-only flows.
+    speaker_source: AsyncIterator[bytes] | None = None
+
+    # Optional: fires once when the claim ends, after all cleanup has
+    # run. Skills use this to release resources (close a file handle,
+    # notify a caller that grandpa hung up, update session storage).
+    # Exception from this callback is logged but does not propagate.
+    on_claim_end: Callable[[ClaimEndReason], Awaitable[None]] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimHandle:
+    """Skill-facing handle to an active `InputClaim`.
+
+    Returned from `SkillContext.start_input_claim(claim)` (direct-entry
+    path). For claims dispatched via `ToolResult.side_effect`, the
+    skill gets the handle delivered through `on_claim_end`'s closure
+    if it needs to cancel early — otherwise the framework owns the
+    lifecycle and the skill doesn't need a handle.
+
+    `cancel()` is idempotent: call twice and the second call is a no-op.
+    Cancellation triggers `on_claim_end` with `ClaimEndReason.NATURAL`.
+
+    `wait_end()` returns the `ClaimEndReason` the claim actually ended
+    with. Useful for skills that need to branch on cleanup (call skill:
+    narrate differently when caller hangs up vs. grandpa ends via PTT).
+    """
+
+    _cancel: Callable[[], None]
+    _wait_end: Callable[[], Awaitable[ClaimEndReason]]
+
+    def cancel(self) -> None:
+        """Cancel the claim. Idempotent. Fires `on_claim_end(NATURAL)`
+        on the underlying claim, restores mic routing, resumes the LLM
+        provider.
+        """
+        self._cancel()
+
+    async def wait_end(self) -> ClaimEndReason:
+        """Block until the claim ends; return the reason. If the claim
+        is already over, returns immediately with the cached reason.
+        """
+        return await self._wait_end()
+
+
+class StartInputClaim(Protocol):
+    """Structural signature for `SkillContext.start_input_claim`.
+
+    Direct-entry point for event-driven claims where there's no tool in
+    the causal chain (inbound call detected by a `background_task`,
+    panic-button fired from a wake-word detector, etc.). Tool-dispatched
+    claims use `ToolResult.side_effect = InputClaim(...)` instead —
+    same semantics, different invocation shape.
+    """
+
+    def __call__(self, claim: InputClaim, /) -> ClaimHandle: ...
+
+
+async def _noop_start_input_claim_wait(reason: ClaimEndReason) -> ClaimEndReason:
+    """Return a pre-baked reason immediately — used by the SDK's
+    test-fixture default so a skill calling `start_input_claim` in a
+    test context gets a predictable handle without a real coordinator.
+    """
+    return reason
+
+
+def _default_start_input_claim(_claim: InputClaim) -> ClaimHandle:
+    """Default `start_input_claim` for `SkillContext` — used by test
+    fixtures that don't wire a real coordinator. Returns a handle that
+    claims "already ended naturally" so assertions on `wait_end` work
+    without a real latch. The framework's `Application` replaces this
+    with the real callable (wired in Stage 2 commit 3).
+    """
+
+    async def _wait() -> ClaimEndReason:
+        return ClaimEndReason.NATURAL
+
+    return ClaimHandle(_cancel=lambda: None, _wait_end=_wait)
+
+
 @dataclass(frozen=True, slots=True)
 class ToolResult:
     """Result of a skill handling a tool call.
@@ -445,6 +606,14 @@ class SkillContext:
       sees crashes (logged via `aexception`), restarts within budget,
       and cancels everything at shutdown. One-shot timer-style tasks
       pass `restart_on_crash=False`.
+    - `start_input_claim(claim) -> ClaimHandle`: latch the microphone
+      to a skill handler. Used by skills that need raw user audio
+      outside the LLM loop (voice memo, phone call). Prefer
+      `ToolResult.side_effect = InputClaim(...)` for claims triggered
+      by a tool call (lets the model pre-narrate before the latch);
+      use `start_input_claim` only for event-driven claims with no
+      tool in the causal chain (inbound call from a background task).
+      Returns a `ClaimHandle` with `cancel()` and `wait_end()`.
     """
 
     logger: SkillLogger
@@ -453,6 +622,7 @@ class SkillContext:
     config: dict[str, Any]
     inject_turn: InjectTurn = _noop_inject_turn
     background_task: BackgroundTask = _default_background_task
+    start_input_claim: StartInputClaim = _default_start_input_claim
 
     def catalog(self, name: str = "default") -> Catalog:
         """Construct a fresh `Catalog` for this skill's personal-content data.
