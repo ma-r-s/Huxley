@@ -1087,7 +1087,7 @@ fires during an active `InputClaim`, arbitration runs, `on_claim_end`
 triggers, claim-preempted outcome surfaces correctly. Keeps the
 end-to-end path from degrading silently as Stages 3+4 pile on.
 
-### Stage 2.1 — `ctx.cancel_active_claim` for side-effect-dispatched claims ✅ **done** (`<this commit>`, 2026-04-19)
+### Stage 2.1 — `ctx.cancel_active_claim` for side-effect-dispatched claims ✅ **done** (`5ea2c8c`, 2026-04-19)
 
 **Effort (actual)**: ~45 min vs the 1–2h estimate. Path (1) shipped per the recommendation: smaller diff, no `ToolResult` contract change, motivating consumer's bug closed.
 
