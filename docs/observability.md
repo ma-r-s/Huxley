@@ -231,14 +231,16 @@ For one-shot tasks (timers, with `restart_on_crash=False`), a crash produces jus
 
 The timers skill persists each pending timer via `ctx.storage` and enumerates them on `setup()` across a server restart (see [`docs/skills/timers.md`](./skills/timers.md#persistence-stage-3b)). Restore outcomes are observable via structured events:
 
-| Event                            | When it fires                                                                                     | Key fields                                  |
-| -------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------- |
-| `timers.restored`                | A pending entry was rescheduled via `ctx.background_task`. Will fire on its original schedule.    | `timer_id`, `remaining_s`, `message`        |
-| `timers.restore_skipped_fired`   | Entry had `fired_at` set — crash between narration and delete. Dedup drop (no double-fire).       | `timer_id`, `fired_at`                      |
-| `timers.restore_skipped_stale`   | `now − fire_at > stale-threshold` (default 1 h). Original intent is past; entry deleted.          | `timer_id`, `fire_at`, `age_s`              |
-| `timers.restore_entry_malformed` | JSON or schema shape couldn't be parsed. Entry kept untouched (future migration opportunity).     | `key`, `value` (truncated to 80 chars)      |
-| `timers.restore_key_malformed`   | Storage key didn't end in a numeric `timer:N` suffix. Entry kept untouched.                       | `key`                                       |
-| `timers.setup_complete`          | Skill initialization finished. Reports the restore counts so you can see "we picked up N timers." | `restored`, `dropped`, `fire_prompt_source` |
+| Event                            | When it fires                                                                                                             | Key fields                                                       |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `timers.restored`                | A pending entry was rescheduled via `ctx.background_task` with a future `fire_at`. Will fire on its original schedule.    | `timer_id`, `remaining_s`, `message`                             |
+| `timers.restored_overdue`        | Restored entry's `fire_at` was already in the past but within the stale threshold. Fired 1 s after boot (crash recovery). | `timer_id`, `overdue_s`, `message`                               |
+| `timers.restore_skipped_fired`   | Entry had `fired_at` set — crash between narration and delete. Dedup drop (no double-fire).                               | `timer_id`, `fired_at`                                           |
+| `timers.restore_skipped_stale`   | `now − fire_at > stale_restore_threshold_s` (default 1 h, persona-overridable). Original intent is past; entry deleted.   | `timer_id`, `fire_at`, `age_s`                                   |
+| `timers.restore_entry_malformed` | JSON or schema shape couldn't be parsed. Entry kept untouched (future migration opportunity).                             | `key`, `value` (truncated to 80 chars)                           |
+| `timers.restore_key_malformed`   | Storage key didn't end in a numeric `timer:N` suffix. Entry kept untouched.                                               | `key`                                                            |
+| `timers.stale_threshold_invalid` | Persona config's `stale_restore_threshold_s` wasn't a positive number. Default (1 h) kept.                                | `hint`, `value`                                                  |
+| `timers.setup_complete`          | Skill initialization finished. Reports restore counts + the effective stale threshold so you can see "we picked up N."    | `restored`, `dropped`, `fire_prompt_source`, `stale_threshold_s` |
 
 Diagnosing "my timer didn't fire after restart":
 

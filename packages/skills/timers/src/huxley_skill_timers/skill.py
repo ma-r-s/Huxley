@@ -58,11 +58,14 @@ _STORAGE_PREFIX = "timer:"
 # future migration can recognize v1 entries and upgrade them.
 _ENTRY_VERSION = 1
 
-# How stale a pending entry can be on restore before we drop it instead
-# of firing immediately. One hour = matches `_MAX_SECONDS`; anything
-# older than the max timer duration almost certainly belongs to a
-# different intent the user has moved past.
-_STALE_RESTORE_THRESHOLD = timedelta(hours=1)
+# Default "how stale" threshold on restore: an entry older than this is
+# dropped rather than fired late. 1 h matches `_MAX_SECONDS` — a timer
+# that was supposed to fire 1 h ago, when the max duration is 1 h, is
+# almost certainly a different intent the user has moved past. Personas
+# that extend `_MAX_SECONDS` (not currently configurable) or that want
+# a different latency tolerance override via `stale_restore_threshold_s`
+# in their persona.yaml.
+_DEFAULT_STALE_RESTORE_THRESHOLD = timedelta(hours=1)
 
 # Default fire prompt — Spanish, AbuelOS-toned. A persona can override
 # via the `fire_prompt` config key in `persona.yaml`'s `timers:` block.
@@ -98,7 +101,11 @@ class TimersSkill:
     the event loop.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        sleep: Callable[[float], Awaitable[None]] | None = None,
+    ) -> None:
         self._logger: SkillLogger | None = None
         self._inject_turn: Callable[[str], Awaitable[None]] | None = None
         self._background_task: Callable[..., BackgroundTaskHandle] | None = None
@@ -112,6 +119,18 @@ class TimersSkill:
         # personas don't inherit the Spanish/warm-friend default.
         # Populated in `setup()` from `ctx.config.get("fire_prompt")`.
         self._fire_prompt: str = _DEFAULT_FIRE_PROMPT
+        # How stale a pending entry can be on restore before we drop it
+        # instead of firing immediately. Default 1 h (matches the skill's
+        # own `_MAX_SECONDS`); personas that extend the max duration
+        # MUST extend this in lockstep, or restored entries longer than
+        # the threshold will drop. Populated in `setup()` from
+        # `ctx.config.get("stale_restore_threshold_s")`.
+        self._stale_threshold: timedelta = _DEFAULT_STALE_RESTORE_THRESHOLD
+        # Injection point for the `asyncio.sleep` used in `_fire_after` —
+        # tests pass a near-instant stub to avoid burning wall-clock time
+        # in the suite. Default is `asyncio.sleep` so production is
+        # unchanged. Supervisor applies the same pattern (c2fa2b1).
+        self._sleep: Callable[[float], Awaitable[None]] = sleep or asyncio.sleep
 
     @property
     def name(self) -> str:
@@ -239,12 +258,12 @@ class TimersSkill:
         assert self._inject_turn is not None
         fired = False
         try:
-            await asyncio.sleep(seconds)
+            await self._sleep(seconds)
             # Past the sleep — commit to fire by stamping fired_at.
             # If the process dies between here and the delete in
             # `finally`, restore sees the entry as "fired" and skips.
-            fire_at = _utcnow() - timedelta(seconds=0)  # stamp "now"
-            await self._write_entry(timer_id, fire_at=fire_at, message=message, fired_at=fire_at)
+            now = _utcnow()
+            await self._write_entry(timer_id, fire_at=now, message=message, fired_at=now)
             fired = True
             await self._logger.ainfo("timers.fired", timer_id=timer_id, message=message)
             # Prompt shape matters: this gets sent to the LLM as a
@@ -289,10 +308,22 @@ class TimersSkill:
                 )
             else:
                 self._fire_prompt = configured
+        # Persona override for the stale-restore threshold. An int or
+        # float in seconds; non-numeric values get a warning + default.
+        threshold_raw = ctx.config.get("stale_restore_threshold_s")
+        if isinstance(threshold_raw, int | float) and threshold_raw > 0:
+            self._stale_threshold = timedelta(seconds=float(threshold_raw))
+        elif threshold_raw is not None:
+            await ctx.logger.awarning(
+                "timers.stale_threshold_invalid",
+                hint="persona 'stale_restore_threshold_s' must be a positive number of seconds",
+                value=threshold_raw,
+            )
         restored, dropped = await self._restore_pending()
         await ctx.logger.ainfo(
             "timers.setup_complete",
             fire_prompt_source="persona_override" if configured else "default",
+            stale_threshold_s=self._stale_threshold.total_seconds(),
             restored=restored,
             dropped=dropped,
         )
@@ -306,11 +337,13 @@ class TimersSkill:
           died. Re-delivery risks a double dose for medication
           reminders (worse than a miss), so delete + skip regardless
           of how long ago `fired_at` is.
-        - `now - fire_at > _STALE_RESTORE_THRESHOLD` → original intent
+        - `now - fire_at > self._stale_threshold` → original intent
           is stale; delete + log.
-        - Else → reschedule via `ctx.background_task` with
-          `max(1s, fire_at - now)` so an already-due entry fires
-          within a tick.
+        - `fire_at` in the past but within threshold → reschedule at
+          `_MIN_SECONDS` and emit `timers.restored_overdue` so
+          operators can tell "fired late because crash recovery" from
+          "user just set a 1-second timer."
+        - Future `fire_at` → reschedule with `fire_at - now` remaining.
 
         Malformed entries are skipped with a warning (no delete — a
         schema-migration opportunity, not a data loss event).
@@ -352,7 +385,7 @@ class TimersSkill:
                 dropped += 1
                 continue
             age = now - fire_at
-            if age > _STALE_RESTORE_THRESHOLD:
+            if age > self._stale_threshold:
                 await self._logger.awarning(
                     "timers.restore_skipped_stale",
                     timer_id=timer_id,
@@ -362,14 +395,26 @@ class TimersSkill:
                 await self._delete_entry(timer_id)
                 dropped += 1
                 continue
-            remaining = max(_MIN_SECONDS, int((fire_at - now).total_seconds()))
+            raw_remaining = int((fire_at - now).total_seconds())
+            remaining = max(_MIN_SECONDS, raw_remaining)
             await self._schedule_fire(timer_id, remaining, message)
-            await self._logger.ainfo(
-                "timers.restored",
-                timer_id=timer_id,
-                remaining_s=remaining,
-                message=message,
-            )
+            if raw_remaining < 0:
+                # Stale but recoverable — fired late because of a crash
+                # or restart. Distinct event so logs can tell "1s timer
+                # the user just set" from "1h overdue recovery."
+                await self._logger.ainfo(
+                    "timers.restored_overdue",
+                    timer_id=timer_id,
+                    overdue_s=-raw_remaining,
+                    message=message,
+                )
+            else:
+                await self._logger.ainfo(
+                    "timers.restored",
+                    timer_id=timer_id,
+                    remaining_s=remaining,
+                    message=message,
+                )
             restored += 1
 
         # Prime `_next_id` so new `set_timer` calls after boot don't
