@@ -1230,9 +1230,25 @@ Plus stream mock signatures in `test_skill.py` and `test_coordinator_skill_integ
 
 ---
 
-## T1.8 — `huxley-skill-reminders`
+## T1.8 — `huxley-skill-reminders` (full medication/appointment UX)
 
-**Status**: queued · **Effort**: ~1 week · **Blocked by**: T1.4 Stage 1 (`inject_turn`) + Stage 3 (`background_task`)
+**Status**: partially shipped as `huxley-skill-timers` MVP (`<this
+commit>`, 2026-04-18) — one-shot timers via `set_timer(seconds,
+message)`, in-memory only, no persistence / ack / retry. Full
+reminders skill remains queued. · **Effort**: ~1 week for the full
+version · **Still blocked by**: Stage 3 (`background_task` for
+persistence + restart) + Stage 1d (`InjectedTurnHandle.wait_outcome`
+for acknowledgment tracking)
+
+**MVP shipped (2026-04-18)**: `packages/skills/timers/` — proves the
+full inject_turn path works end-to-end. User says "recuérdame en 5
+minutos X" → LLM calls `set_timer` → skill spawns asyncio task → 5min
+later `ctx.inject_turn` fires → framework preempts any content
+stream, narrates the reminder. AbuelOS persona system prompt gained
+a TEMPORIZADORES section. 13 skill tests + workspace integration.
+Known gaps (see `docs/skills/timers.md` for detail): no persistence
+across restart; no list/cancel tools; no ack/retry semantics; seconds
+only (no date-specific scheduling).
 
 **Problem.** Medication + appointment reminders are the first concrete user
 benefit of the I/O plane. Without them, "the agent can speak proactively"

@@ -6,6 +6,7 @@ members = [
     "packages/skills/news",
     "packages/skills/radio",
     "packages/skills/system",
+    "packages/skills/timers",
 ]
 
 [tool.uv.sources]
@@ -14,6 +15,7 @@ huxley-skill-audiobooks = { workspace = true }
 huxley-skill-news = { workspace = true }
 huxley-skill-radio = { workspace = true }
 huxley-skill-system = { workspace = true }
+huxley-skill-timers = { workspace = true }
 
 # Shared tool config (each package's pyproject can override).
 
@@ -49,6 +51,7 @@ known-first-party = [
     "huxley_skill_news",
     "huxley_skill_radio",
     "huxley_skill_system",
+    "huxley_skill_timers",
 ]
 
 [tool.mypy]

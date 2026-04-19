@@ -81,6 +81,18 @@ system_prompt: |
   nombrar emisora. Si pregunta qué emisoras hay, llama a `list_stations`.
   La radio es en vivo — no inventes lo que está sonando ahora; si
   preguntan dile que no tienes esa información en este momento.
+
+  TEMPORIZADORES: Cuando el usuario pida un recordatorio — "recuérdame
+  en X minutos que...", "avísame en X que...", "ponme un temporizador
+  de X para..." — llama a `set_timer` con `seconds` (convirtiendo
+  minutos a segundos) y `message` con una descripción corta de qué
+  recordarle. Ejemplos: "recuérdame en 5 minutos sacar la ropa" →
+  `set_timer(seconds=300, message="sacar la ropa de la lavadora")`.
+  "recuérdame en media hora la pastilla" → `set_timer(seconds=1800,
+  message="tomar la pastilla")`. Después de programarlo, confirma
+  brevemente ("Listo, te aviso en cinco minutos"). Cuando el
+  temporizador suene el sistema te hará narrar el recordatorio —
+  hazlo con tono amable, como si se lo recordaras a un amigo.
 constraints:
   - never_say_no
   - echo_short_input
@@ -169,3 +181,9 @@ skills:
     start_sound: radio_start
 
   system: {}
+
+  # Timers skill — `set_timer(seconds, message)` tool + proactive
+  # announcement via `inject_turn`. In-memory only for now (lost on
+  # server restart); persistence arrives when Stage 3's background_task
+  # supervisor lands.
+  timers: {}

@@ -24,7 +24,8 @@ Huxley/                 # repo root
 │       ├── audiobooks/       # huxley-skill-audiobooks (entry-point loaded)
 │       ├── news/             # huxley-skill-news (Open-Meteo + Google News RSS)
 │       ├── radio/            # huxley-skill-radio (HTTP/Icecast streams via ffmpeg)
-│       └── system/           # huxley-skill-system (entry-point loaded)
+│       ├── system/           # huxley-skill-system (volume, time)
+│       └── timers/           # huxley-skill-timers (proactive reminders via inject_turn)
 ├── personas/
 │   ├── abuelos/              # canonical persona — slow, warm, audio-only target
 │   │   ├── persona.yaml      # version, name, voice, language, system_prompt, constraints, skills
@@ -48,7 +49,7 @@ Huxley/                 # repo root
 │   ├── decisions.md    # ADR log
 │   ├── roadmap.md      # framework + persona roadmaps
 │   ├── personas/{README,abuelos,basicos}.md
-│   ├── skills/{README,audiobooks,news,radio}.md
+│   ├── skills/{README,audiobooks,news,radio,timers}.md
 │   ├── sounds.md       # sound UX architecture (PlaySound, AudioStream, earcons)
 │   └── research/sonic-ux.md
 └── CLAUDE.md           # this file
@@ -67,9 +68,10 @@ uv run ruff format packages/                               # format
 uv run mypy packages/sdk/src packages/core/src             # strict type check
 uv run --package huxley-sdk pytest packages/sdk/tests                              # SDK tests (19)
 uv run --package huxley pytest packages/core/tests                                 # framework tests (113)
-uv run --package huxley-skill-audiobooks pytest packages/skills/audiobooks/tests   # audiobooks skill (55)
+uv run --package huxley-skill-audiobooks pytest packages/skills/audiobooks/tests   # audiobooks skill (61)
 uv run --package huxley-skill-news pytest packages/skills/news/tests               # news skill (18)
 uv run --package huxley-skill-radio pytest packages/skills/radio/tests             # radio skill (19)
+uv run --package huxley-skill-timers pytest packages/skills/timers/tests           # timers skill (13)
 cd packages/core && uv run huxley                                                  # run the server (loads .env from packages/core)
 # Run BasicOS in parallel for persona A/B testing:
 cd packages/core && HUXLEY_PERSONA=basicos HUXLEY_SERVER_PORT=8766 uv run huxley
