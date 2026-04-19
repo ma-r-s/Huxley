@@ -71,6 +71,86 @@ class TestSettings:
         assert result == "50"
 
 
+class TestListAndDelete:
+    async def test_list_empty_returns_empty(self, storage: Storage) -> None:
+        assert await storage.list_settings("timer:") == []
+
+    async def test_list_matches_prefix(self, storage: Storage) -> None:
+        await storage.set_setting("timer:1", "a")
+        await storage.set_setting("timer:2", "b")
+        await storage.set_setting("other", "c")
+        rows = await storage.list_settings("timer:")
+        assert rows == [("timer:1", "a"), ("timer:2", "b")]
+
+    async def test_list_empty_prefix_returns_all(self, storage: Storage) -> None:
+        await storage.set_setting("x", "1")
+        await storage.set_setting("y", "2")
+        rows = await storage.list_settings()
+        keys = [k for k, _ in rows]
+        assert "x" in keys
+        assert "y" in keys
+
+    async def test_list_escapes_wildcards_in_prefix(self, storage: Storage) -> None:
+        # Keys containing `%` or `_` must not glob when used as prefix.
+        await storage.set_setting("a%b:1", "first")
+        await storage.set_setting("axb:1", "should_not_match")
+        rows = await storage.list_settings("a%b:")
+        assert rows == [("a%b:1", "first")]
+
+    async def test_delete_removes_key(self, storage: Storage) -> None:
+        await storage.set_setting("tombstone", "v")
+        await storage.delete_setting("tombstone")
+        assert await storage.get_setting("tombstone") is None
+
+    async def test_delete_missing_is_noop(self, storage: Storage) -> None:
+        # Should not raise on a key that never existed.
+        await storage.delete_setting("never_set")
+
+
+class TestNamespacedSkillStorage:
+    async def test_namespace_isolation(self, storage: Storage) -> None:
+        from huxley.storage.skill import NamespacedSkillStorage
+
+        ns_a = NamespacedSkillStorage(storage, "timers")
+        ns_b = NamespacedSkillStorage(storage, "reminders")
+        await ns_a.set_setting("1", "A")
+        await ns_b.set_setting("1", "B")
+        assert await ns_a.get_setting("1") == "A"
+        assert await ns_b.get_setting("1") == "B"
+
+    async def test_list_strips_namespace_prefix(self, storage: Storage) -> None:
+        from huxley.storage.skill import NamespacedSkillStorage
+
+        ns = NamespacedSkillStorage(storage, "timers")
+        await ns.set_setting("timer:1", "x")
+        await ns.set_setting("timer:2", "y")
+        rows = await ns.list_settings("timer:")
+        # Caller sees keys WITHOUT the namespace prefix.
+        assert rows == [("timer:1", "x"), ("timer:2", "y")]
+
+    async def test_list_scoped_to_namespace(self, storage: Storage) -> None:
+        from huxley.storage.skill import NamespacedSkillStorage
+
+        ns_a = NamespacedSkillStorage(storage, "timers")
+        ns_b = NamespacedSkillStorage(storage, "reminders")
+        await ns_a.set_setting("k", "A")
+        await ns_b.set_setting("k", "B")
+        # Listing ns_a must not see ns_b entries.
+        assert await ns_a.list_settings() == [("k", "A")]
+
+    async def test_delete_scoped_to_namespace(self, storage: Storage) -> None:
+        from huxley.storage.skill import NamespacedSkillStorage
+
+        ns_a = NamespacedSkillStorage(storage, "timers")
+        ns_b = NamespacedSkillStorage(storage, "reminders")
+        await ns_a.set_setting("shared", "A")
+        await ns_b.set_setting("shared", "B")
+        await ns_a.delete_setting("shared")
+        assert await ns_a.get_setting("shared") is None
+        # Same key under a different namespace must still exist.
+        assert await ns_b.get_setting("shared") == "B"
+
+
 class TestWalAndSchemaVersion:
     """T2.1 — WAL mode + schema versioning."""
 

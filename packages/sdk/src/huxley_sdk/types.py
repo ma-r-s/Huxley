@@ -242,14 +242,20 @@ class SkillStorage(Protocol):
     (so `audiobooks` and another skill can both store a `last_id` without
     collision). Concrete implementation lives in Huxley core.
 
-    Two methods is enough: skills that need richer structure can use
-    composite keys like `position:<book_id>` and parse the value
-    themselves. If a real skill ever needs table-style queries, this
-    protocol grows; speculative additions are out of scope.
+    Skills that need richer structure use composite keys like
+    `position:<book_id>` or `timer:<id>` and parse the values
+    themselves. `list_settings(prefix)` enumerates a composite-key
+    family (first real consumer: timer persistence, where `setup()`
+    needs to see every `timer:*` entry after a restart).
+    `delete_setting(key)` removes an entry outright — setting to
+    empty string would leave a tombstone that every list caller has
+    to filter.
     """
 
     async def get_setting(self, key: str, default: str | None = None) -> str | None: ...
     async def set_setting(self, key: str, value: str) -> None: ...
+    async def list_settings(self, prefix: str = "") -> list[tuple[str, str]]: ...
+    async def delete_setting(self, key: str) -> None: ...
 
 
 class SkillLogger(Protocol):

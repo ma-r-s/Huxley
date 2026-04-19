@@ -30,3 +30,13 @@ class NamespacedSkillStorage:
 
     async def set_setting(self, key: str, value: str) -> None:
         await self._base.set_setting(self._prefix + key, value)
+
+    async def list_settings(self, prefix: str = "") -> list[tuple[str, str]]:
+        """Return every (key, value) in this skill's namespace whose key
+        starts with `prefix`. The namespace prefix is stripped before
+        returning so the caller sees its own keys unmodified."""
+        rows = await self._base.list_settings(self._prefix + prefix)
+        return [(k.removeprefix(self._prefix), v) for k, v in rows]
+
+    async def delete_setting(self, key: str) -> None:
+        await self._base.delete_setting(self._prefix + key)

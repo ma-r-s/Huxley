@@ -174,3 +174,22 @@ class Storage:
             (key, value, value),
         )
         await self._conn.commit()
+
+    async def list_settings(self, prefix: str = "") -> list[tuple[str, str]]:
+        """Return every (key, value) whose key starts with `prefix`.
+
+        SQLite LIKE with `ESCAPE '\\'` so callers that pass a prefix
+        containing `%` or `_` don't accidentally glob. Empty prefix
+        returns everything — use sparingly.
+        """
+        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        cursor = await self._conn.execute(
+            "SELECT key, value FROM settings WHERE key LIKE ? ESCAPE '\\' ORDER BY key",
+            (escaped + "%",),
+        )
+        rows = await cursor.fetchall()
+        return [(str(r[0]), str(r[1])) for r in rows]
+
+    async def delete_setting(self, key: str) -> None:
+        await self._conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+        await self._conn.commit()

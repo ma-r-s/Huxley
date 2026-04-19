@@ -31,6 +31,12 @@ class _NoopSkillStorage:
     async def set_setting(self, key: str, value: str) -> None:
         self._data[key] = value
 
+    async def list_settings(self, prefix: str = "") -> list[tuple[str, str]]:
+        return sorted((k, v) for k, v in self._data.items() if k.startswith(prefix))
+
+    async def delete_setting(self, key: str) -> None:
+        self._data.pop(key, None)
+
 
 def make_test_context(
     *,
