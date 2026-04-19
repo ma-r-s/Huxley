@@ -937,7 +937,7 @@ before Stage 2 stacks more on:
    typing — existing callables already satisfy the shape).
 
 5. **Extract `_post_turn_sequence()` from `_apply_side_effects`.**
-   ✅ **done** (`<this commit>`, 2026-04-19). Extracted as
+   ✅ **done** (`2a3eb2c`, 2026-04-19). Extracted as
    `_dispatch_post_turn(streams, turn_id)` with a docstring listing
    the three branches (PREEMPT-over-content / content-wins /
    quiet-moment). `_apply_side_effects` is now focused on turn
