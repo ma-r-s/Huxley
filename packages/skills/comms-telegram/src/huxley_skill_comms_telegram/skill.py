@@ -45,6 +45,7 @@ from huxley_skill_comms_telegram.transport import (
 )
 
 if TYPE_CHECKING:
+    import asyncio
     from collections.abc import Callable
 
 
@@ -63,6 +64,9 @@ class CommsTelegramSkill:
         self._contacts: dict[str, str] = {}  # lowercased name → normalized phone
         self._transport: TelegramTransport | None = None
         self._transport_factory = transport_factory or TelegramTransport
+        # Holds refs to in-flight hangup tasks spawned by `_on_claim_end`
+        # so GC doesn't eat them mid-hangup. Task removes itself on done.
+        self._end_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def name(self) -> str:
@@ -229,11 +233,24 @@ class CommsTelegramSkill:
         Any `ClaimEndReason` — grandpa pressed PTT, a medication
         reminder preempted, the speaker iterator ran dry, or an error
         — means "we're no longer bridging audio", so end the call.
+
+        Fire-and-forget: the observer's unwind chain awaits this, and
+        an ntgcalls-side hang in `end_call` would stall the claim_ended
+        / input_mode notify the client depends on. Spawn the actual
+        hangup as a background task so the observer resolves
+        immediately; `end_call` has its own internal timeouts.
         """
         assert self._logger is not None
         await self._logger.ainfo("comms_telegram.claim_ended", reason=reason.value)
         if self._transport is not None:
-            await self._transport.end_call()
+            import asyncio
+
+            transport = self._transport
+            # Track the task so Python's GC doesn't collect it mid-hangup.
+            # Cleared when the task completes. See docs/background.md.
+            task = asyncio.create_task(transport.end_call())
+            self._end_tasks.add(task)
+            task.add_done_callback(self._end_tasks.discard)
 
     async def teardown(self) -> None:
         if self._transport is not None:

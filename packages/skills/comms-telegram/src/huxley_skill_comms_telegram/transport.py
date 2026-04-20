@@ -27,6 +27,7 @@ import os
 import re
 import struct
 import threading
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -57,6 +58,17 @@ PEER_CHANNELS = 2
 # the already-authenticated spike session file across instead of
 # re-running the SMS flow.
 _SESSION_NAME = "huxley_userbot"
+
+
+def _rms_pcm16(data: bytes) -> float:
+    """RMS of a PCM16 buffer. For diagnostic heartbeats — silence is
+    ~0, voice speech is tens to hundreds. Tolerant of odd lengths."""
+    if len(data) < 2:
+        return 0.0
+    n = len(data) // 2
+    samples = struct.unpack(f"<{n}h", data[: n * 2])
+    sq = sum(s * s for s in samples)
+    return float((sq / n) ** 0.5)
 
 
 def downsample_48k_stereo_to_24k_mono(pcm_in: bytes) -> bytes:
@@ -129,10 +141,26 @@ class TelegramTransport:
         self._writer_stop = threading.Event()
         # Thread-safe buffer: the writer thread consumes from this;
         # the async producer (skill's on_mic_frame) appends. `_sent_count`
-        # tracks total chunks pushed so we can log first-chunk arrival.
+        # tracks total chunks pushed for first-chunk + heartbeat logging.
         self._outbound_chunks: list[bytes] = []
         self._outbound_lock = threading.Lock()
         self._sent_count = 0
+        # Bytes dropped by the outbound backlog-cap policy in `send_pcm`.
+        # Accumulated per heartbeat so we can tell "clean call" from
+        # "dropping audio to keep latency low."
+        self._outbound_dropped_bytes = 0
+        # Heartbeat counters — inbound peer-frame arrival and outbound
+        # mic-frame push. Logged every 2s during a call so we can see
+        # if the pipe went silent mid-conversation. RMS accumulators
+        # track audio energy so we can tell "frames arriving but empty"
+        # (codec bug) from "frames carrying real speech" (working).
+        self._peer_frames_received = 0
+        self._peer_bytes_received = 0
+        self._peer_rms_sum = 0.0
+        self._peer_rms_count = 0
+        self._mic_rms_sum = 0.0
+        self._mic_rms_count = 0
+        self._heartbeat_task: asyncio.Task[None] | None = None
 
         # Incoming audio: downsampled peer PCM enqueued by the
         # stream_frame handler; speaker_source drains it.
@@ -190,6 +218,10 @@ class TelegramTransport:
                     first_frame_bytes=len(update.frames[0].frame) if update.frames else 0,
                 )
             for frame in update.frames:
+                self._peer_frames_received += 1
+                self._peer_bytes_received += len(frame.frame)
+                self._peer_rms_sum += _rms_pcm16(frame.frame)
+                self._peer_rms_count += 1
                 mono24k = downsample_48k_stereo_to_24k_mono(frame.frame)
                 if mono24k:
                     with contextlib.suppress(asyncio.QueueFull):
@@ -259,7 +291,14 @@ class TelegramTransport:
         os.mkfifo(str(fifo))
         # O_RDWR avoids the "reader opens, writer races, reader sees
         # EOF" pitfall that cost us 2 spike rounds — see research doc.
-        fd = os.open(str(fifo), os.O_RDWR)
+        # O_NONBLOCK is critical: without it, `os.write` can block
+        # indefinitely in kernel space on macOS when the reader (ffmpeg)
+        # dies abruptly and the kernel hasn't registered the closed
+        # read end yet. The OS thread ends up in uninterruptible wait
+        # state (`ps` shows 'U'); even kill -9 can't stop it. With
+        # O_NONBLOCK, a full pipe raises BlockingIOError and the
+        # writer loop gets a chance to see the stop event.
+        fd = os.open(str(fifo), os.O_RDWR | os.O_NONBLOCK)
         # Prefill with 80 ms of silence so ffmpeg's first read returns
         # immediately with valid bytes.
         silence = b"\x00\x00" * (HUXLEY_SAMPLE_RATE_HZ * 80 // 1000)
@@ -316,16 +355,61 @@ class TelegramTransport:
             await self._tear_down_call()
             raise
 
+        # Heartbeat task — logs inbound/outbound frame counts every 2s
+        # so we can tell "call running but went silent" from "call never
+        # had audio." Runs until `_ended` is set by tear-down.
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+
         await logger.ainfo(
             "comms_telegram.transport.call_placed",
             user_id=user_id,
             fifo=str(fifo),
         )
 
+    async def _heartbeat_loop(self) -> None:
+        while not self._ended.is_set():
+            await asyncio.sleep(2.0)
+            if self._ended.is_set():
+                return
+            peer_rms = self._peer_rms_sum / self._peer_rms_count if self._peer_rms_count else 0.0
+            mic_rms = self._mic_rms_sum / self._mic_rms_count if self._mic_rms_count else 0.0
+            with self._outbound_lock:
+                outbound_backlog = sum(len(c) for c in self._outbound_chunks)
+                dropped = self._outbound_dropped_bytes
+                self._outbound_dropped_bytes = 0
+            await logger.ainfo(
+                "comms_telegram.transport.heartbeat",
+                peer_frames=self._peer_frames_received,
+                peer_bytes=self._peer_bytes_received,
+                peer_mean_rms=round(peer_rms, 1),
+                mic_chunks=self._sent_count,
+                mic_mean_rms=round(mic_rms, 1),
+                outbound_backlog_bytes=outbound_backlog,
+                outbound_dropped_bytes=dropped,
+                inbound_queue_depth=(
+                    self._inbound_queue.qsize() if self._inbound_queue is not None else 0
+                ),
+            )
+            # Reset per-heartbeat accumulators so each window shows
+            # "is audio flowing right now?" rather than smoothing across
+            # the whole call.
+            self._peer_rms_sum = 0.0
+            self._peer_rms_count = 0
+            self._mic_rms_sum = 0.0
+            self._mic_rms_count = 0
+
     def send_pcm(self, pcm_24k_mono: bytes) -> None:
         """Queue a PCM chunk for outbound send. Safe to call from an
         asyncio coroutine — the actual write happens in the writer
         thread. Zero-length chunks are ignored.
+
+        Caps the queue at ~OUTBOUND_QUEUE_MAX_BYTES (~200 ms of 24 kHz
+        mono PCM). Phone calls prioritize low latency over
+        completeness — if the browser's audio clock drifts faster than
+        our writer's pacing clock, the queue would otherwise grow
+        without bound and Mario ends up hearing grandpa 10 seconds
+        late. Dropping the oldest chunks keeps latency bounded; the
+        user experience is "occasional blip" rather than "laggy call."
         """
         if not pcm_24k_mono:
             return
@@ -333,6 +417,20 @@ class TelegramTransport:
             was_first = self._sent_count == 0
             self._outbound_chunks.append(pcm_24k_mono)
             self._sent_count += 1
+            self._mic_rms_sum += _rms_pcm16(pcm_24k_mono)
+            self._mic_rms_count += 1
+            # Drop oldest chunks if the queue has accumulated too much
+            # backlog. Threshold = ~200 ms worth of 24 kHz mono PCM16
+            # (9600 bytes). Writer consumes 960 bytes per 20 ms frame.
+            _max_bytes = HUXLEY_SAMPLE_RATE_HZ * BYTES_PER_SAMPLE // 5
+            total = sum(len(c) for c in self._outbound_chunks)
+            dropped = 0
+            while total > _max_bytes and self._outbound_chunks:
+                removed = self._outbound_chunks.pop(0)
+                total -= len(removed)
+                dropped += len(removed)
+            if dropped:
+                self._outbound_dropped_bytes += dropped
         if was_first:
             # Fire-and-forget log — can't await from a sync function,
             # but structlog's sync logger is fine from any thread.
@@ -342,27 +440,66 @@ class TelegramTransport:
             )
 
     def _writer_loop(self, fd: int) -> None:
-        """Drain `_outbound_chunks` to the FIFO. Pads with silence if
-        the producer is slower than ffmpeg's read pace.
+        """Pump `_outbound_chunks` to the FIFO at real-time pace.
 
-        The FIFO buffer in the kernel is ~64 KB on macOS; if we fall
-        behind we lose nothing — ffmpeg just reads silence until we
-        catch up. If we get ahead, write() blocks briefly (non-fatal).
+        Every `FRAME_MS` we write exactly `FRAME_BYTES` of PCM — either
+        drained from `_outbound_chunks` (accumulated from grandpa's mic
+        frames via `send_pcm`) or padded with silence when the producer
+        hasn't supplied enough bytes yet. Pacing matters because the
+        FIFO is O_NONBLOCK: unbounded writes would fill the kernel
+        buffer, raise `BlockingIOError`, and (without this loop's
+        retry) kill the writer thread — which is exactly the bug that
+        silenced the outbound path on the first call attempt.
+
+        Accumulating the tail of a partially consumed chunk into
+        `leftover` preserves every mic sample even though the worklet
+        emits 256-byte chunks on a 5.33 ms cadence and we're writing
+        on a 20 ms cadence.
         """
-        # 20 ms worth of silence at Huxley's rate — 480 samples = 960 bytes.
-        silence_chunk = b"\x00\x00" * (HUXLEY_SAMPLE_RATE_HZ * 20 // 1000)
+        frame_ms = 20
+        frame_bytes = (HUXLEY_SAMPLE_RATE_HZ * frame_ms // 1000) * BYTES_PER_SAMPLE
+        silence_chunk = b"\x00" * frame_bytes
+        leftover = bytearray()
+        next_write_at = time.monotonic()
+
         while not self._writer_stop.is_set():
+            # Assemble exactly one frame's worth of bytes.
             with self._outbound_lock:
-                chunk: bytes = (
-                    self._outbound_chunks.pop(0) if self._outbound_chunks else silence_chunk
-                )
+                while len(leftover) < frame_bytes and self._outbound_chunks:
+                    leftover.extend(self._outbound_chunks.pop(0))
+            if len(leftover) >= frame_bytes:
+                chunk = bytes(leftover[:frame_bytes])
+                del leftover[:frame_bytes]
+            else:
+                chunk = silence_chunk
+
             try:
                 os.write(fd, chunk)
             except BrokenPipeError:
                 # ffmpeg closed — call ended. Stop cleanly.
                 break
+            except BlockingIOError:
+                # Kernel FIFO buffer is full — ffmpeg hasn't drained yet.
+                # Back off half a frame and retry without losing the chunk.
+                time.sleep(frame_ms / 2000)
+                # Put it back on the front of the leftover buffer so we
+                # retry the same bytes next iteration — no drops.
+                leftover[0:0] = chunk
+                continue
             except OSError:
                 break
+
+            # Pace: sleep until the next frame's deadline. Drift-aware,
+            # so tiny write jitter doesn't accumulate into a growing lag.
+            next_write_at += frame_ms / 1000
+            slack = next_write_at - time.monotonic()
+            if slack > 0:
+                time.sleep(slack)
+            elif slack < -0.1:
+                # We're more than 100ms behind schedule — reset the
+                # clock rather than try to catch up with a burst of
+                # back-to-back writes (would overflow the buffer).
+                next_write_at = time.monotonic()
 
     async def peer_audio_chunks(self) -> AsyncIterator[bytes]:
         """Async iterator yielding 24 kHz mono PCM chunks from the peer.
@@ -395,7 +532,14 @@ class TelegramTransport:
         )
 
     async def end_call(self) -> None:
-        """Hang up and clean up the outbound FIFO + writer thread."""
+        """Hang up and clean up the outbound FIFO + writer thread.
+
+        Bounded by hard timeouts so an ntgcalls-side hang (which we've
+        observed — `leave_call` can block indefinitely if the peer
+        already hung up or the underlying WebRTC state is inconsistent)
+        doesn't wedge the observer-unwind chain that has to fire
+        `_observer_on_end` for the mic-mode protocol to flip back.
+        """
         if self._active_user_id is None:
             return
         user_id = self._active_user_id
@@ -404,16 +548,33 @@ class TelegramTransport:
         from pytgcalls.exceptions import NotInCallError
 
         if self._call_py is not None:
-            with contextlib.suppress(NotInCallError, Exception):
-                await self._call_py.leave_call(user_id)  # type: ignore[attr-defined]
+            try:
+                await asyncio.wait_for(
+                    self._call_py.leave_call(user_id),  # type: ignore[attr-defined]
+                    timeout=2.0,
+                )
+            except (NotInCallError, TimeoutError, Exception) as exc:
+                await logger.awarning(
+                    "comms_telegram.transport.leave_call_swallowed",
+                    exc_type=type(exc).__name__,
+                )
 
         await self._tear_down_call()
+        await logger.ainfo("comms_telegram.transport.ended_call", user_id=user_id)
 
     async def _tear_down_call(self) -> None:
         self._ended.set()
         self._writer_stop.set()
+        if self._heartbeat_task is not None:
+            self._heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._heartbeat_task
+            self._heartbeat_task = None
         if self._writer_thread is not None:
-            self._writer_thread.join(timeout=2.0)
+            # Offload the blocking join to a worker thread so we don't
+            # stall the event loop while waiting for the writer to
+            # notice the stop event.
+            await asyncio.to_thread(self._writer_thread.join, 2.0)
             self._writer_thread = None
         if self._mic_fd is not None:
             with contextlib.suppress(OSError):
@@ -428,6 +589,8 @@ class TelegramTransport:
         with self._outbound_lock:
             self._outbound_chunks.clear()
             self._sent_count = 0
+        self._peer_frames_received = 0
+        self._peer_bytes_received = 0
 
     async def disconnect(self) -> None:
         """Stop pyrogram + PyTgCalls. Hangs up any active call first."""

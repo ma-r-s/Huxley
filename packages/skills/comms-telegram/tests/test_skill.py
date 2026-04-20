@@ -406,8 +406,14 @@ class TestCallContactTool:
         transport = captured[0]
         assert transport.ended_calls == 0
 
-        # Simulate the framework firing on_claim_end.
+        # Simulate the framework firing on_claim_end. The hangup is
+        # fire-and-forget (the skill schedules a task so an ntgcalls
+        # hang doesn't stall the observer unwind) — yield once so the
+        # scheduled end_call task gets to run.
+        import asyncio
+
         await result.side_effect.on_claim_end(ClaimEndReason.USER_PTT)
+        await asyncio.sleep(0)  # let the background task fire end_call
         assert transport.ended_calls == 1
 
     @pytest.mark.asyncio
