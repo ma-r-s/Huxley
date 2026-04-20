@@ -37,6 +37,10 @@ logs/
 # Persona-local data (audiobook library, sqlite DB) — large, user-provided
 personas/*/data/
 packages/core/models/
+# Local audiobook staging at repo root — not the canonical library path
+# (that's personas/abuelos/data/audiobooks/). Keep out of git regardless
+# of where the .m4b files land.
+/Audiobooks/
 
 # Sound assets — raw extraction workspace; only curated *.wav belong in git
 personas/*/sounds/raw/

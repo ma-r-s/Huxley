@@ -100,10 +100,12 @@
     ws.pttStart()
   }
 
-  async function buttonDown(e: PointerEvent) {
+  // Core press/release — no DOM event coupling. Both the on-screen
+  // button (pointer events) and the spacebar (window keydown/keyup)
+  // route through these.
+  async function pressPtt() {
     if (!ws.connected) return
-    e.preventDefault()
-    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    if (pttHeld || pttPendingStart) return  // already pressed; ignore key-repeat
 
     micError = null
 
@@ -142,9 +144,8 @@
     }
   }
 
-  function buttonUp(e: PointerEvent) {
+  function releasePtt() {
     if (!pttHeld && !pttPendingStart) return
-    e.preventDefault()
 
     if (pttPendingStart && !mic.active) {
       // Released before the session came up — silent cancel. No commit,
@@ -160,6 +161,40 @@
     ws.pttStop()
   }
 
+  // Pointer (mouse / touch / pen) — preferred for the visible button.
+  async function buttonDown(e: PointerEvent) {
+    e.preventDefault()
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    await pressPtt()
+  }
+  function buttonUp(e: PointerEvent) {
+    e.preventDefault()
+    releasePtt()
+  }
+
+  // Spacebar — global, so grandpa never has to focus the button. Skip
+  // when typing in form fields (e.g. the persona-selector dropdown when
+  // open) so the key works normally there. `e.repeat` is the auto-repeat
+  // OS sends while a key is held — we only care about the initial press.
+  function isFormElement(t: EventTarget | null): boolean {
+    if (!(t instanceof HTMLElement)) return false
+    const tag = t.tagName
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable
+  }
+  async function onKeyDown(e: KeyboardEvent) {
+    if (e.code !== 'Space') return
+    if (e.repeat) return
+    if (isFormElement(e.target)) return
+    e.preventDefault()
+    await pressPtt()
+  }
+  function onKeyUp(e: KeyboardEvent) {
+    if (e.code !== 'Space') return
+    if (isFormElement(e.target)) return
+    e.preventDefault()
+    releasePtt()
+  }
+
   const stateMeta: Record<AppState, { label: string; color: string }> = {
     IDLE:       { label: 'Inactivo',     color: 'bg-zinc-600 text-zinc-200' },
     CONNECTING: { label: 'Conectando…',  color: 'bg-yellow-500 text-yellow-950' },
@@ -171,11 +206,12 @@
     if (!ws.connected) return 'Sin conexión'
     if (pttHeld && mic.active) return 'Escuchando…'
     if (pttPendingStart) return 'Conectando…'
-    return 'Mantén para hablar'
+    return 'Mantén o espacio para hablar'
   })
 </script>
 
 <svelte:head><title>AbuelOS</title></svelte:head>
+<svelte:window on:keydown={onKeyDown} on:keyup={onKeyUp} />
 
 <div class="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col">
 
