@@ -2,6 +2,8 @@
 
 > **How to use this doc**: paste this entire file into your AI design tool (v0, Lovable, Claude, etc.) as the project brief. It defines what you're building, who it's for, what the technical contract is, and what's explicitly out of scope. It deliberately leaves design decisions (visual identity, layout, navigation patterns, animation, copy beyond functional strings) to the design conversation. The doc gives the AI tool grounding; you supply the design taste.
 >
+> **Companion doc**: [`huxley-web-ui-surfaces.md`](./huxley-web-ui-surfaces.md) is the enumerated UI-surface contract — every piece of state, event, skill tool, and config field the PWA can expose, with plausible UI shapes for each. Paste it alongside this brief when the design tool needs concrete slots to place widgets into. This brief describes _what_ and _why_; the surfaces doc describes _what's available to render_.
+>
 > Last updated: 2026-04-19 (rev 2 — rewritten after scope correction: the PWA is the Huxley user's interface to their own Huxley, not a family-coordination app). Lives in the `huxley` repo at `docs/research/huxley-web-brief.md`. Will move to the `huxley-web` repo as its README/docs once that repo exists.
 
 ---
