@@ -144,7 +144,10 @@ class TestTransportConstruction:
         assert t._outbound_chunks == []  # type: ignore[attr-defined]
 
     def test_send_pcm_is_thread_safe_under_concurrent_writers(self, tmp_path: Path) -> None:
-        """A smoke test that the lock actually guards the list.
+        """A smoke test that the lock actually guards the list. Also
+        exercises the latency-cap policy in `send_pcm` — under heavy
+        concurrent bursts the queue caps at ~200 ms of audio rather
+        than growing unboundedly (which would accrue latency).
 
         Not exhaustive; catches the obvious "someone removed the lock"
         regression. Real concurrency properties are tested by the
@@ -157,7 +160,9 @@ class TestTransportConstruction:
             api_hash="abcdef0123456789",
             session_dir=tmp_path,
         )
-        payload = b"\x01\x02" * 480
+        # Match the AudioWorklet frame size (256 bytes = 5.33 ms of 24
+        # kHz mono PCM16) so 400 sends approximate a realistic burst.
+        payload = b"\x01\x02" * 128
 
         def producer() -> None:
             for _ in range(100):
@@ -169,6 +174,12 @@ class TestTransportConstruction:
         for th in threads:
             th.join()
 
-        # Each of 4 threads appended 100 chunks = 400 total; no drops
-        # because no contention-based loss possible under a lock.
-        assert len(t._outbound_chunks) == 400  # type: ignore[attr-defined]
+        # All 400 sends completed without raising (lock held). The
+        # backlog cap trims oldest chunks so the queue stays near the
+        # ~9600-byte / ~38-chunk limit — by definition much smaller
+        # than the 400-chunk input burst.
+        remaining = t._outbound_chunks  # type: ignore[attr-defined]
+        total_bytes = sum(len(c) for c in remaining)
+        max_bytes = 24_000 * 2 // 5  # mirrors OUTBOUND_QUEUE_MAX_BYTES in send_pcm
+        assert total_bytes <= max_bytes, f"backlog cap exceeded: {total_bytes} > {max_bytes}"
+        assert len(remaining) < 400, "queue should be capped, not hold the full burst"
