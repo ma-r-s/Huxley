@@ -2678,7 +2678,7 @@ DNS resolution to OpenAI failed (transient — your network blip OR an upstream 
 - Backoff: `(1s, 3s, 10s, 30s)` then 60s floor indefinitely. Exits when `should_continue()` flips False (shutdown, user PTT reconnected, or success).
 - Audible cue from attempt 4 onward: synthesized double-beep PCM16 @ 24kHz played via `server.send_audio()` (no persona asset required, no LLM needed — the whole point is that we're offline). 9 unit tests in `test_reconnect.py`.
 - Deviation from spec: the cue is a beep tone, not a spoken "No tengo conexión" inject_turn. `inject_turn` requires a live session; during an outage there isn't one. Proper voiced announcement would need a pre-recorded persona asset or local TTS — filed as a follow-up if Mario wants a voice message instead of a tone.
-- Commit: `<hash>`.
+- Commit: `453f840`.
 - Lessons: extract retry policies as pure functions with injected sleep — mocking `asyncio.sleep` globally is a trap; a callable sleep parameter gives deterministic tests in 0.02s.
 
 ### F3 — 🟠 _"¿Cuántos libros tienes?"_ doesn't use the catalog
