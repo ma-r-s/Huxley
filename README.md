@@ -24,7 +24,7 @@ The dream: adding a capability to your voice agent is `pip install huxley-skill-
 
 ## Status
 
-Pre-1.0. Framework runs end-to-end against a browser dev client. One persona ships in the repo (AbuelOS — Spanish-language assistant with audiobook playback + system controls). Two first-party skills ship as workspace packages (`huxley-skill-audiobooks`, `huxley-skill-system`). See [`docs/roadmap.md`](./docs/roadmap.md) for what's next.
+Pre-1.0. Framework runs end-to-end against the in-tree browser dev client (`web/`). One persona ships in the repo (AbuelOS — Spanish-language assistant for an elderly blind user; audiobooks + radio + news + timers + calls). First-party skills live as workspace packages under `packages/skills/`. The consumer-facing PWA — what family members will install on their phones to call grandpa, receive his calls, and admin the device — lives in a separate repo (`huxley-web`, planned). The architecture is documented in [`docs/clients.md`](./docs/clients.md). See [`docs/roadmap.md`](./docs/roadmap.md) for what's next.
 
 ## Quick start
 
@@ -162,6 +162,7 @@ Full guide: [`docs/personas/README.md`](./docs/personas/README.md). Canonical re
 - [`docs/extensibility.md`](./docs/extensibility.md) — what skills fit the framework, where the limits are
 - [`docs/observability.md`](./docs/observability.md) — logging conventions and the debugging workflow
 - [`docs/protocol.md`](./docs/protocol.md) — WebSocket contract for clients
+- [`docs/clients.md`](./docs/clients.md) — client architecture (dev `web/`, planned `huxley-web` PWA, future `huxley-firmware`) + Huxley-vs-AbuelOS naming convention
 - [`docs/turns.md`](./docs/turns.md) — turn coordinator spec
 - [`docs/decisions.md`](./docs/decisions.md) — architectural decision log
 - [`docs/verifying.md`](./docs/verifying.md) — smoke-test checklist for a fresh checkout
