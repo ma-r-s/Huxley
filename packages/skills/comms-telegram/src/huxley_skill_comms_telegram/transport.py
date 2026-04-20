@@ -51,9 +51,12 @@ PEER_CHANNELS = 2
 
 # Session-file bookkeeping. A persona whose data dir is
 # `personas/abuelos/data/` gets its userbot session persisted at
-# `personas/abuelos/data/comms_telegram.session` so the first-run
-# SMS-code auth only happens once per deploy.
-_SESSION_NAME = "comms_telegram"
+# `personas/abuelos/data/huxley_userbot.session` so the first-run
+# SMS-code auth only happens once per deploy. The name matches
+# `spikes/test_telegram_call.py`'s session name so Mario can copy
+# the already-authenticated spike session file across instead of
+# re-running the SMS flow.
+_SESSION_NAME = "huxley_userbot"
 
 
 def downsample_48k_stereo_to_24k_mono(pcm_in: bytes) -> bytes:
