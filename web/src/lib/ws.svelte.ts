@@ -19,7 +19,15 @@ export interface DevEvent {
   ts: string;
 }
 
-const EXPECTED_PROTOCOL = 1;
+const EXPECTED_PROTOCOL = 2;
+
+// Mic-streaming policy the server instructs the client to use.
+// - "assistant_ptt": client gates mic streaming by PTT (or future wake-word
+//   / VAD). Default, and what we fall back to when no claim is active.
+// - "skill_continuous": a skill owns the mic via an active InputClaim. The
+//   client streams mic frames continuously until the mode flips back.
+// See docs/protocol.md.
+export type InputMode = "assistant_ptt" | "skill_continuous";
 
 type ServerMessage =
   | { type: "hello"; protocol: number }
@@ -30,6 +38,14 @@ type ServerMessage =
   | { type: "transcript"; role: "user" | "assistant"; text: string }
   | { type: "model_speaking"; value: boolean }
   | { type: "set_volume"; level: number }
+  | {
+      type: "input_mode";
+      mode: InputMode;
+      reason: "idle" | "claim_started" | "claim_ended" | "claim_preempted";
+      claim_id: string | null;
+    }
+  | { type: "claim_started"; claim_id: string; skill: string }
+  | { type: "claim_ended"; claim_id: string; end_reason: string }
   | { type: "dev_event"; kind: string; payload: Record<string, unknown> };
 
 let _id = 0;
@@ -50,6 +66,8 @@ export function createWsStore() {
   let connected = $state(false);
   let appState = $state<AppState>("IDLE");
   let modelSpeaking = $state(false);
+  let inputMode = $state<InputMode>("assistant_ptt");
+  let activeClaimId = $state<string | null>(null);
   let statusLog = $state<StatusEntry[]>([]);
   let transcript = $state<TranscriptEntry[]>([]);
   let devEvents = $state<DevEvent[]>([]);
@@ -60,6 +78,9 @@ export function createWsStore() {
   let _onThinkingToneStart: (() => void) | null = null;
   let _onThinkingToneStop: (() => void) | null = null;
   let _onSetVolume: ((level: number) => void) | null = null;
+  let _onInputMode:
+    | ((mode: InputMode, claimId: string | null, reason: string) => void)
+    | null = null;
 
   // Silence-detection timer for the thinking-tone gap-filler. Started on
   // ptt_stop send and on `model_speaking: false` receive (inter-round gap).
@@ -195,6 +216,26 @@ export function createWsStore() {
           case "set_volume":
             _onSetVolume?.(msg.level);
             break;
+          case "input_mode":
+            inputMode = msg.mode;
+            activeClaimId = msg.claim_id;
+            pushStatus(
+              `Mic mode → ${msg.mode}${msg.reason ? ` (${msg.reason})` : ""}`,
+            );
+            _onInputMode?.(msg.mode, msg.claim_id, msg.reason);
+            break;
+          case "claim_started":
+            pushDevEvent("claim_started", {
+              claim_id: msg.claim_id,
+              skill: msg.skill,
+            });
+            break;
+          case "claim_ended":
+            pushDevEvent("claim_ended", {
+              claim_id: msg.claim_id,
+              end_reason: msg.end_reason,
+            });
+            break;
           case "dev_event":
             pushDevEvent(msg.kind, msg.payload);
             break;
@@ -254,6 +295,12 @@ export function createWsStore() {
     get modelSpeaking() {
       return modelSpeaking;
     },
+    get inputMode() {
+      return inputMode;
+    },
+    get activeClaimId() {
+      return activeClaimId;
+    },
     get statusLog() {
       return statusLog;
     },
@@ -278,6 +325,11 @@ export function createWsStore() {
     },
     setOnSetVolume: (fn: (level: number) => void) => {
       _onSetVolume = fn;
+    },
+    setOnInputMode: (
+      fn: (mode: InputMode, claimId: string | null, reason: string) => void,
+    ) => {
+      _onInputMode = fn;
     },
     sendAudio: (data: string) => send({ type: "audio", data }),
     sendClientEvent,

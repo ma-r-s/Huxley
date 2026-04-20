@@ -5,12 +5,21 @@ from __future__ import annotations
 import asyncio
 import sys
 
+from dotenv import load_dotenv
+
 from huxley.config import Settings
 from huxley.persona import PersonaError, load_persona, resolve_persona_path
 
 
 def main() -> None:
     """Parse config, load persona, run the application."""
+    # Load .env into os.environ BEFORE constructing Settings. pydantic-settings
+    # reads .env too, but only for fields declared on the model — skill
+    # secrets like HUXLEY_TELEGRAM_API_ID aren't framework config and
+    # shouldn't be; they need to land in os.environ so skill setup code
+    # can read them.
+    load_dotenv()
+
     try:
         config = Settings()
     except Exception as e:

@@ -125,6 +125,9 @@ class TurnCoordinator:
         focus_manager: FocusManager,
         status_messages: dict[str, str] | None = None,
         send_set_volume: Callable[[int], Awaitable[None]] | None = None,
+        send_input_mode: Callable[..., Awaitable[None]] | None = None,
+        send_claim_started: Callable[[str, str], Awaitable[None]] | None = None,
+        send_claim_ended: Callable[[str, str], Awaitable[None]] | None = None,
     ) -> None:
         # Client-facing outputs (to the WebSocket audio server).
         self._send_audio = send_audio
@@ -136,8 +139,32 @@ class TurnCoordinator:
         async def _noop_volume(_level: int) -> None:
             pass
 
+        async def _noop_input_mode(
+            _mode: str,
+            *,
+            reason: str = "",
+            claim_id: str | None = None,
+        ) -> None:
+            _ = (reason, claim_id)
+
+        async def _noop_claim(_id: str, _arg: str) -> None:
+            pass
+
         self._send_set_volume: Callable[[int], Awaitable[None]] = (
             send_set_volume if send_set_volume is not None else _noop_volume
+        )
+        # Mic-policy + claim-lifecycle notifications to the client. Defaults
+        # are no-ops so existing tests that construct `TurnCoordinator`
+        # without a server wired in keep working — the claim still starts
+        # correctly, the client just isn't told.
+        self._send_input_mode: Callable[..., Awaitable[None]] = (
+            send_input_mode if send_input_mode is not None else _noop_input_mode
+        )
+        self._send_claim_started: Callable[[str, str], Awaitable[None]] = (
+            send_claim_started if send_claim_started is not None else _noop_claim
+        )
+        self._send_claim_ended: Callable[[str, str], Awaitable[None]] = (
+            send_claim_ended if send_claim_ended is not None else _noop_claim
         )
         self._speaking_state = SpeakingState(notify=send_model_speaking)
         self._status = {**self._DEFAULT_STATUS, **(status_messages or {})}
@@ -168,6 +195,11 @@ class TurnCoordinator:
         # integer is plenty — the interface_name only needs to be unique
         # within the FocusManager's lifetime, not globally.
         self._claim_counter: itertools.count[int] = itertools.count(1)
+        # Wall clock when the current claim latched. Used by the PTT
+        # debounce in `on_ptt_start` — a press within 300ms of a
+        # claim-start is treated as a client-side bounce / race of the
+        # same tap and ignored. None when no claim is active.
+        self._claim_started_at: float | None = None
         # Current DIALOG-channel Activity's interface_name (if any). Set by
         # `inject_turn`; cleared by `_release_dialog` called from
         # `_apply_side_effects` (natural end) or `interrupt()` (preemption).
@@ -216,12 +248,38 @@ class TurnCoordinator:
     # --- PTT lifecycle (from client) ---
 
     async def on_ptt_start(self) -> None:
-        """User pressed PTT. Start a new turn or interrupt + restart."""
+        """User pressed PTT. Start a new turn or interrupt + restart.
+
+        An active `InputClaim` (a call / voice memo) also counts as
+        "something to interrupt" — press during a call means "end the
+        call, I want to talk to the assistant again." Without this
+        branch, pressing PTT during a claim would start a new LISTENING
+        turn while the mic stayed latched to the skill handler, with no
+        way to actually send audio to the LLM.
+
+        Claim-start debounce: a PTT press within 300 ms of a claim
+        latching is treated as a client-side bounce / race of the same
+        tap that dispatched the tool call (especially with the PWA's
+        keyboard-repeat-defeating logic). Dropped silently so grandpa
+        doesn't hang up on himself the moment the call connects.
+        """
         active_turn = self.current_turn is not None and self.current_turn.state != TurnState.IDLE
         active_media = self._content_is_running()
+        active_claim = self._claim_obs is not None
         prev_state = self.current_turn.state.value if self.current_turn else None
 
-        if active_turn or active_media:
+        if (
+            active_claim
+            and self._claim_started_at is not None
+            and time.monotonic() - self._claim_started_at < 0.3
+        ):
+            await self._log.ainfo(
+                "coord.ptt_start_debounced",
+                since_claim_start_ms=int((time.monotonic() - self._claim_started_at) * 1000),
+            )
+            return
+
+        if active_turn or active_media or active_claim:
             await self.interrupt()
 
         self.current_turn = self._turn_factory.create(
@@ -234,7 +292,8 @@ class TurnCoordinator:
             had_turn=active_turn,
             prev_state=prev_state,
             had_media=active_media,
-            will_interrupt=active_turn or active_media,
+            had_claim=active_claim,
+            will_interrupt=active_turn or active_media or active_claim,
         )
 
     async def on_ptt_stop(self) -> None:
@@ -264,11 +323,24 @@ class TurnCoordinator:
         await self._provider.commit_and_request_response()
 
     async def on_user_audio_frame(self, pcm: bytes) -> None:
-        """Mic frame from client. Forward via MicRouter iff we're LISTENING.
+        """Mic frame from client. Forward via MicRouter on one of two paths:
 
-        MicRouter today always has the voice provider as its sole handler;
-        T1.4 Stage 2 adds skill-claim routing through the same dispatch.
+        1. Normal PTT flow — forward iff we're in `LISTENING` and the
+           provider is connected. This is the "talking to the assistant"
+           path; MicRouter.dispatch routes to the voice provider.
+
+        2. Active `InputClaim` — forward unconditionally. The client is
+           in `skill_continuous` input mode and streams mic frames
+           continuously; MicRouter.dispatch routes to the claim's
+           `on_mic_frame` handler (the provider is suspended). Frames
+           arriving before the claim has fully latched or after it's
+           released fall through to the default handler (provider),
+           which drops them silently while suspended. That's the
+           stage-2 invariant the MicRouter was built for.
         """
+        if self._mic_router.is_claimed:
+            await self._mic_router.dispatch(pcm)
+            return
         if (
             self.current_turn is not None
             and self.current_turn.state == TurnState.LISTENING
@@ -908,6 +980,26 @@ class TurnCoordinator:
             end_event.set()
             if self._claim_obs is observer:
                 self._claim_obs = None
+                self._claim_started_at = None
+            # Tell the client the mic-policy is back to assistant_ptt
+            # and fire the observability event so UIs can de-render
+            # their "en llamada" indicator. Reason-mapped so a
+            # preempted claim shows up distinctly in logs and UX.
+            mode_reason = (
+                "claim_preempted" if reason is ClaimEndReason.PREEMPTED else "claim_ended"
+            )
+            try:
+                await self._send_claim_ended(interface_name, reason.value)
+                await self._send_input_mode(
+                    "assistant_ptt",
+                    reason=mode_reason,
+                    claim_id=None,
+                )
+            except Exception:
+                # Never let a client-send error propagate out of the
+                # observer's end callback — the claim must still
+                # unwind cleanly server-side.
+                await logger.aexception("coord.claim_end_notify_failed")
 
         # `release_self` bound to the observer's specific interface_name
         # so the observer can drive its own unwind on error (e.g., mic
@@ -942,6 +1034,32 @@ class TurnCoordinator:
         # Wait for FOREGROUND to be fully processed so suspend + mic
         # swap are done before the caller's next tick.
         await self._focus_manager.wait_drained()
+
+        # Record the claim's start time for the debounce window — a PTT
+        # press within 300ms of claim_started is ignored (same tap that
+        # dispatched the tool-call would otherwise also end-claim).
+        self._claim_started_at = time.monotonic()
+
+        # Tell the client to switch to continuous mic streaming. Pure
+        # observability events (claim_started) fire first so a
+        # forward-thinking UI can transition visuals before the mic
+        # mode actually flips on the wire. Errors are swallowed —
+        # the claim is fully functional server-side even if the client
+        # never learns about it.
+        try:
+            # Skill name isn't currently plumbed into InputClaim; passing
+            # the interface name is enough for observability today and
+            # the client doesn't use it for behavior (that's input_mode).
+            # Thread a real skill identifier when the dev UI grows a
+            # claim indicator.
+            await self._send_claim_started(interface_name, interface_name)
+            await self._send_input_mode(
+                "skill_continuous",
+                reason="claim_started",
+                claim_id=interface_name,
+            )
+        except Exception:
+            await logger.aexception("coord.claim_start_notify_failed")
 
         coord = self
         # Holds a reference to the background cancel task so Python's GC
