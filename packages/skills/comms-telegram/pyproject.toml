@@ -1,0 +1,41 @@
+[project]
+name = "huxley-skill-comms-telegram"
+version = "0.1.0"
+description = "Telegram voice-call skill for Huxley — bridges grandpa's mic/speaker to a Telegram peer via py-tgcalls."
+requires-python = ">=3.13"
+dependencies = [
+    "huxley-sdk",
+    # kurigram: drop-in pyrogram replacement that py-tgcalls imports at runtime.
+    # Mainline pyrogram 2.0.x is missing GroupcallForbidden; py-tgcalls fails to
+    # import against it. See docs/research/telegram-voice.md.
+    "kurigram>=2.2,<3",
+    "py-tgcalls==2.2.11",
+    # ntgcalls: native C++ backend py-tgcalls depends on. Must be >=2.2.1b2
+    # because earlier versions have ntgcalls#44 (PacedSender paused on p2p,
+    # silently drops outbound RTP). Without the fix live-PCM on p2p is silent.
+    "ntgcalls>=2.2.1b2",
+    # TgCrypto speeds up pyrogram's MTProto significantly. Optional but
+    # recommended; omitting it doesn't break correctness.
+    "tgcrypto",
+]
+
+[project.entry-points."huxley.skills"]
+comms_telegram = "huxley_skill_comms_telegram:CommsTelegramSkill"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "mypy>=1.13",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/huxley_skill_comms_telegram"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

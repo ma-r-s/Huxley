@@ -514,7 +514,7 @@ Built-in skills (audiobooks, calls, news, radio, system, timers) live in `packag
 Skill-specific docs:
 
 - [`audiobooks.md`](audiobooks.md) — long-form spoken audio playback with bookmark resume.
-- [`calls.md`](calls.md) — inbound voice calls via `InputClaim` + PCM relay (Stage 2 first consumer).
+- [`comms-telegram.md`](comms-telegram.md) — outbound p2p Telegram voice calls via py-tgcalls + FIFO-bridged PCM.
 - [`news.md`](news.md) — Open-Meteo weather + Google News RSS summarization.
 - [`radio.md`](radio.md) — HTTP/Icecast streams via ffmpeg.
 - [`timers.md`](timers.md) — one-shot reminders via proactive speech, persisted across restart.
