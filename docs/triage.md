@@ -1617,7 +1617,13 @@ LLM narrates the message.
 
 ## T1.10 — `huxley-skill-calls`
 
-**Status**: queued · **Effort**: ~2-3 weeks (plus call-provider integration) · **Blocked by**: T1.4 Stage 2 (`InputClaim`) + Stage 4 (`ClientEvent` for panic button) + Stage 3 (`background_task` for SIP listener)
+**Status**: partial (2026-04-19) · split into two deliverables · **Effort remaining**: ~1 week for panic button + auto-answer · **Blocked by**: T1.4 Stage 4 (`ClientEvent` for panic button)
+
+**Progress note (2026-04-19)**:
+
+- Outbound voice-command calling is **shipped** under a different skill name: `huxley-skill-comms-telegram` (commit `4627ee1`). Uses Telegram (userbot + py-tgcalls + ntgcalls) as the transport instead of Twilio, which eliminates the paid infra dependency and keeps all call audio on Mario's family's existing tools. Bidirectional live-PCM on p2p is proven working after 5 iterative spikes; see `docs/research/telegram-voice.md` §"Bidirectional live-PCM on p2p" for the recipe and `docs/skills/comms-telegram.md` for the skill design.
+- **Still open under this ticket**: (a) panic button, (b) incoming-call auto-answer, (c) peer-hangup detection. Panic button is blocked on T1.4 Stage 4 (ClientEvent); the other two are blocked only on skill code + a persona config for the whitelist.
+- Call-provider question is RESOLVED: Telegram, not Twilio. No monthly cost, integrates natively with how Mario's family already reaches each other. Keep Twilio as a fallback if Telegram policy ever turns unfriendly to userbots.
 
 **Problem.** Two musts surfaced during T1.2 design:
 
