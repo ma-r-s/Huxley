@@ -589,8 +589,13 @@ class TelegramTransport:
         with self._outbound_lock:
             self._outbound_chunks.clear()
             self._sent_count = 0
+            self._outbound_dropped_bytes = 0
         self._peer_frames_received = 0
         self._peer_bytes_received = 0
+        self._peer_rms_sum = 0.0
+        self._peer_rms_count = 0
+        self._mic_rms_sum = 0.0
+        self._mic_rms_count = 0
 
     async def disconnect(self) -> None:
         """Stop pyrogram + PyTgCalls. Hangs up any active call first."""
