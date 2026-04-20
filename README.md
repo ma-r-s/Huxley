@@ -24,7 +24,7 @@ The dream: adding a capability to your voice agent is `pip install huxley-skill-
 
 ## Status
 
-Pre-1.0. Framework runs end-to-end against the in-tree browser dev client (`web/`). One persona ships in the repo (AbuelOS — Spanish-language assistant for an elderly blind user; audiobooks + radio + news + timers + calls). First-party skills live as workspace packages under `packages/skills/`. The consumer-facing PWA — what family members will install on their phones to call grandpa, receive his calls, and admin the device — lives in a separate repo (`huxley-web`, planned). The architecture is documented in [`docs/clients.md`](./docs/clients.md). See [`docs/roadmap.md`](./docs/roadmap.md) for what's next.
+Pre-1.0. Framework runs end-to-end against the in-tree browser dev client (`web/`). Two example personas ship in the repo — **AbuelOS** (Spanish-language, warm-toned, enables audiobooks + radio + news + timers) and **BasicOS** (a terse counter-persona that proves skills are persona-agnostic). First-party skills live as workspace packages under `packages/skills/`. The user-facing PWA — what a Huxley user installs on their phone / tablet / laptop to interact with their own Huxley instance — lives in a separate repo (`huxley-web`, planned). The client architecture, the naming convention (Huxley is the platform brand; AbuelOS is one persona running on it), and the boundary between framework and clients are documented in [`docs/clients.md`](./docs/clients.md). See [`docs/roadmap.md`](./docs/roadmap.md) for what's next.
 
 ## Quick start
 
