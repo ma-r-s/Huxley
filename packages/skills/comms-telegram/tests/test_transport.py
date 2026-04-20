@@ -134,52 +134,24 @@ class TestTransportConstruction:
         with pytest.raises(TransportError, match="before connect"):
             await t.place_call(7392572538)
 
-    def test_send_pcm_queues_nothing_for_empty_input(self, tmp_path: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_send_pcm_before_call_is_noop(self, tmp_path: Path) -> None:
+        # Without an active call (no `_active_user_id`), `send_pcm`
+        # should swallow the bytes silently — no crash, no send.
         t = TelegramTransport(
             api_id=12345678,
             api_hash="abcdef0123456789",
             session_dir=tmp_path,
         )
-        t.send_pcm(b"")
-        assert t._outbound_chunks == []  # type: ignore[attr-defined]
+        await t.send_pcm(b"\x01\x02" * 128)
+        assert t._sent_count == 0  # type: ignore[attr-defined]
 
-    def test_send_pcm_is_thread_safe_under_concurrent_writers(self, tmp_path: Path) -> None:
-        """A smoke test that the lock actually guards the list. Also
-        exercises the latency-cap policy in `send_pcm` — under heavy
-        concurrent bursts the queue caps at ~200 ms of audio rather
-        than growing unboundedly (which would accrue latency).
-
-        Not exhaustive; catches the obvious "someone removed the lock"
-        regression. Real concurrency properties are tested by the
-        integration smoke.
-        """
-        import threading
-
+    @pytest.mark.asyncio
+    async def test_send_pcm_zero_length_is_noop(self, tmp_path: Path) -> None:
         t = TelegramTransport(
             api_id=12345678,
             api_hash="abcdef0123456789",
             session_dir=tmp_path,
         )
-        # Match the AudioWorklet frame size (256 bytes = 5.33 ms of 24
-        # kHz mono PCM16) so 400 sends approximate a realistic burst.
-        payload = b"\x01\x02" * 128
-
-        def producer() -> None:
-            for _ in range(100):
-                t.send_pcm(payload)
-
-        threads = [threading.Thread(target=producer) for _ in range(4)]
-        for th in threads:
-            th.start()
-        for th in threads:
-            th.join()
-
-        # All 400 sends completed without raising (lock held). The
-        # backlog cap trims oldest chunks so the queue stays near the
-        # ~9600-byte / ~38-chunk limit — by definition much smaller
-        # than the 400-chunk input burst.
-        remaining = t._outbound_chunks  # type: ignore[attr-defined]
-        total_bytes = sum(len(c) for c in remaining)
-        max_bytes = 24_000 * 2 // 5  # mirrors OUTBOUND_QUEUE_MAX_BYTES in send_pcm
-        assert total_bytes <= max_bytes, f"backlog cap exceeded: {total_bytes} > {max_bytes}"
-        assert len(remaining) < 400, "queue should be capped, not hold the full burst"
+        await t.send_pcm(b"")
+        assert t._sent_count == 0  # type: ignore[attr-defined]
