@@ -1,42 +1,32 @@
-"""WebSocket audio server — the single interface point for all clients.
+"""WebSocket audio server — the single interface point for Huxley clients.
 
-One grandpa client (browser, ESP32, future hardware) connects at a time
-on the default path. The client owns all audio I/O (mic capture, speaker
-playback). This server owns the OpenAI session, tool dispatch, state
-machine, and storage.
+One client at a time (browser, ESP32, future `huxley-web` PWA, any
+other client speaking the Huxley wire protocol). The client owns
+audio I/O (mic capture, speaker playback); this server owns the
+OpenAI session, tool dispatch, state machine, and storage.
 
-T1.4 Stage 2 commit 4 adds **call routes** on the same port:
+See [`docs/clients.md`](../../../../../docs/clients.md) for how this
+fits into the multi-client architecture and [`docs/protocol.md`](../../../../../docs/protocol.md)
+for the wire-level spec of everything below.
 
-- `GET /call/ring?from=<name>` — out-of-band trigger that fires the
-  calls skill's ring handler. Used by Mario's web app to ring grandpa.
-  Authenticates via `X-Shared-Secret` header. Returns 200 if the ring
-  was accepted, 409 if grandpa is already on a call.
-- `WS  /call?secret=<secret>` — caller's WebSocket. Same shared-secret
-  auth via query param (browsers can't easily set headers on WS
-  upgrade). The CallsSkill takes ownership of the connection from
-  there; PCM relay between this WS and grandpa's default WS happens
-  inside the skill.
-
-Both endpoints are optional — `on_ring` and `on_caller_connected` are
-constructor params; if either is None, the corresponding route returns
-503. AudioServer doesn't know about "calls" — it just owns the routing
-substrate. The skill registers the hooks via Application wiring.
-
-Protocol — grandpa client -> server (path "/")
+Protocol — client → server
     {"type": "audio",     "data": "<base64 PCM16 24 kHz>"}
     {"type": "ptt_start"}
     {"type": "ptt_stop"}
     {"type": "wake_word"}
     {"type": "reset"}                     # dev: disconnect + fresh OpenAI session
+    {"type": "client_event", "event": "<name>", "data": {...}}  # telemetry only
 
-Protocol — server -> grandpa client
+Protocol — server → client
     {"type": "hello",          "protocol": PROTOCOL_VERSION}  # first message
     {"type": "audio",          "data": "<base64 PCM16 24 kHz>"}
+    {"type": "audio_clear"}                               # drop queued audio
     {"type": "state",          "value": "IDLE"|"CONNECTING"|"CONVERSING"}
     {"type": "status",         "message": "..."}
     {"type": "transcript",     "role": "user"|"assistant", "text": "..."}
     {"type": "model_speaking", "value": bool}
-    {"type": "set_volume",     "level": int}  # 0-100, client-controlled
+    {"type": "set_volume",     "level": int}              # 0-100, client-controlled
+    {"type": "dev_event",      "kind": "...", "payload": {...}}
 """
 
 from __future__ import annotations
@@ -46,14 +36,11 @@ import base64
 import contextlib
 import json
 from typing import TYPE_CHECKING, Any
-from urllib.parse import parse_qs, urlsplit
 
 import structlog
 import websockets
 import websockets.http11
 from websockets.asyncio.server import ServerConnection, serve
-from websockets.datastructures import Headers
-from websockets.http11 import Request, Response
 
 # Localhost cookie jars from dev tools (React DevTools, HMR clients, etc.) can
 # push the WebSocket upgrade's Cookie header past websockets v16's default 8 KB
@@ -86,11 +73,6 @@ class AudioServer:
         on_ptt_stop: Callable[[], Awaitable[None]],
         on_audio_frame: Callable[[bytes], Awaitable[None]],
         on_reset: Callable[[], Awaitable[None]],
-        # T1.4 Stage 2 commit 4 — optional call routes. If both are None,
-        # the `/call/ring` and `/call` endpoints return 503.
-        on_ring: Callable[[dict[str, str]], Awaitable[bool]] | None = None,
-        on_caller_connected: Callable[[ServerConnection], Awaitable[None]] | None = None,
-        ring_secret: str | None = None,
     ) -> None:
         self._host = host
         self._port = port
@@ -99,9 +81,6 @@ class AudioServer:
         self._on_ptt_stop = on_ptt_stop
         self._on_audio_frame = on_audio_frame
         self._on_reset = on_reset
-        self._on_ring = on_ring
-        self._on_caller_connected = on_caller_connected
-        self._ring_secret = ring_secret
         self._client: ServerConnection | None = None
         self._state = "IDLE"
 
@@ -109,115 +88,15 @@ class AudioServer:
     def has_client(self) -> bool:
         return self._client is not None
 
-    def set_call_hooks(
-        self,
-        *,
-        secret: str | None,
-        on_ring: Callable[[dict[str, str]], Awaitable[bool]],
-        on_caller_connected: Callable[[ServerConnection], Awaitable[None]],
-    ) -> None:
-        """Register the calls skill's hooks AFTER construction.
-
-        The skill is set up by `skill_registry.setup_all` AFTER the
-        AudioServer is constructed (Application's `__init__` builds the
-        server first, `run()` sets up skills second), so the call hooks
-        can't go in the constructor. This setter is called from
-        `Application.run()` after `setup_all` returns and before
-        `server.run()` starts serving. Read at request time, so setting
-        them late is safe — the `process_request` and connection handlers
-        reference `self._on_ring` / `self._on_caller_connected` at call
-        time, not at server-start time.
-
-        If `secret` is None, the routes stay disabled even if the
-        callbacks are set — there's no defensible way to expose an
-        unauthenticated trigger.
-        """
-        self._on_ring = on_ring
-        self._on_caller_connected = on_caller_connected
-        self._ring_secret = secret
-
     async def run(self) -> None:
-        async with serve(
-            self._handle_connection,
-            self._host,
-            self._port,
-            process_request=self._process_request,
-        ):
+        async with serve(self._handle_connection, self._host, self._port):
             await logger.ainfo(
                 "audio_server_listening",
                 url=f"ws://{self._host}:{self._port}",
-                calls_enabled=self._on_ring is not None,
             )
             await asyncio.Future()  # run until cancelled
 
-    async def _process_request(
-        self,
-        connection: ServerConnection,
-        request: Request,
-    ) -> Response | None:
-        """Pre-handshake hook. Intercept HTTP-only routes; let WebSocket
-        upgrades fall through with `None`.
-
-        websockets v16 rejects non-GET requests at parse time — only GET
-        ever reaches this hook. That's why `/call/ring` is documented as
-        GET (with auth via header), not POST. Functionally the same for
-        an internal trigger endpoint.
-        """
-        _ = connection  # signature requirement; we don't need it here
-        # urlsplit because request.path includes the query string.
-        split = urlsplit(request.path)
-        path = split.path
-        if path == "/call/ring":
-            return await self._handle_ring_request(request, query=split.query)
-        # All other paths (default "/" and "/call") proceed to the WS
-        # handshake. Routing happens in `_handle_connection`.
-        return None
-
-    async def _handle_ring_request(
-        self,
-        request: Request,
-        *,
-        query: str,
-    ) -> Response:
-        """HTTP `GET /call/ring` — fires the calls skill's ring handler.
-
-        Auth: `X-Shared-Secret` header must match the configured secret.
-        Returns:
-            200 ringing — skill accepted; ring earcon + announcement
-                          starting on grandpa's device.
-            401 bad secret — header missing or wrong value.
-            409 busy — skill rejected (e.g., grandpa already on a call).
-            503 calls disabled — server has no `on_ring` callback.
-        """
-        if self._on_ring is None or self._ring_secret is None:
-            await logger.awarning("server.rx.ring_disabled")
-            return _http_response(503, b"calls disabled\n")
-        secret = request.headers.get("X-Shared-Secret", "")
-        if secret != self._ring_secret:
-            await logger.awarning("server.rx.ring_unauthorized")
-            return _http_response(401, b"bad secret\n")
-        params = {k: v[0] for k, v in parse_qs(query).items()}
-        await logger.ainfo("server.rx.ring", params=params)
-        try:
-            accepted = await self._on_ring(params)
-        except Exception:
-            await logger.aexception("server.rx.ring_handler_failed")
-            return _http_response(500, b"internal error\n")
-        if accepted:
-            return _http_response(200, b"ringing\n")
-        return _http_response(409, b"busy\n")
-
     async def _handle_connection(self, ws: ServerConnection) -> None:
-        # WS path-based routing: `/call` is the caller-side connection
-        # for a phone-call flow (handled by the calls skill); everything
-        # else is the grandpa-default audio client.
-        # `ws.request` is set by the time the handler runs (post-handshake).
-        assert ws.request is not None
-        path = urlsplit(ws.request.path).path
-        if path == "/call":
-            await self._handle_caller_connection(ws)
-            return
-
         if self._client is not None:
             await ws.close(1008, "Server busy — one client at a time")
             return
@@ -235,43 +114,6 @@ class AudioServer:
         finally:
             self._client = None
             await logger.ainfo("client_disconnected")
-
-    async def _handle_caller_connection(self, ws: ServerConnection) -> None:
-        """Caller-side WebSocket (Mario's web app calling grandpa).
-
-        Auth: `?secret=<value>` query param — browsers can't easily set
-        custom headers on a WebSocket upgrade. Closing with 1008 (policy
-        violation) on auth failure is the standard WS rejection code.
-
-        On success, the connection is handed to the calls skill via
-        `on_caller_connected`. The skill owns lifecycle from there:
-        reading caller PCM frames, forwarding them as the
-        `InputClaim.on_mic_frame`, and dispatching grandpa's mic to the
-        caller's WS. AudioServer never touches the connection again.
-        """
-        if self._on_caller_connected is None or self._ring_secret is None:
-            await ws.close(1008, "Calls disabled")
-            return
-        assert ws.request is not None
-        params = {k: v[0] for k, v in parse_qs(urlsplit(ws.request.path).query).items()}
-        secret = params.get("secret", "")
-        if secret != self._ring_secret:
-            await logger.awarning(
-                "server.rx.caller_unauthorized",
-                remote=str(ws.remote_address),
-            )
-            await ws.close(1008, "Bad secret")
-            return
-        await logger.ainfo(
-            "server.rx.caller_connected",
-            remote=str(ws.remote_address),
-        )
-        try:
-            await self._on_caller_connected(ws)
-        except Exception:
-            await logger.aexception("server.rx.caller_handler_failed")
-        finally:
-            await logger.ainfo("server.rx.caller_disconnected")
 
     async def _dispatch(self, raw: str | bytes) -> None:
         try:
@@ -355,23 +197,3 @@ class AudioServer:
             return
         with contextlib.suppress(websockets.ConnectionClosed):
             await self._client.send(json.dumps(msg))
-
-
-def _http_response(status: int, body: bytes) -> Response:
-    """Build an HTTP response for `process_request`. websockets' Response
-    expects a `Headers` object — convenience wrapper to keep the call
-    sites in `_handle_ring_request` short."""
-    reason = {
-        200: "OK",
-        401: "Unauthorized",
-        409: "Conflict",
-        500: "Internal Server Error",
-        503: "Service Unavailable",
-    }.get(status, "Error")
-    headers = Headers(
-        [
-            ("Content-Type", "text/plain; charset=utf-8"),
-            ("Content-Length", str(len(body))),
-        ]
-    )
-    return Response(status, reason, headers, body)

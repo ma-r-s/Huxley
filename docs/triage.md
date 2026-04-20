@@ -1102,37 +1102,43 @@ end-to-end path from degrading silently as Stages 3+4 pile on.
 
 342 core (+4) + 28 calls (+2) tests green. docs/skills/calls.md scope-limits list updated to remove the gap.
 
-### Stage 2.2 — Voicemail / missed-call inject_turn (queued)
+### Stage 2.2 / 2.3 — ❌ ripped per scope correction (2026-04-19)
 
-**Status**: queued · **Effort**: ~1h · **Blocked by**: nothing.
+Both were filed against the now-abandoned "custom PWA as caller" model. Under the single-user PWA framing (see `docs/clients.md`), the PWA isn't a caller — it's the Huxley user's own interface. Inter-user communication belongs in skills bridging to third-party apps. These entries are retained only as historical context for why they existed; no work to be done against them.
 
-When a ring fires but `answer_call` never dispatches — timeout (caller gives up before the LLM finishes the announcement), or `reject_call` fires (grandpa says "no") — grandpa hears nothing more. From his perspective: a phone rang, then silence. He doesn't know who tried to reach him.
+- Stage 2.2 (voicemail / missed-call inject) — obsolete because the calls skill being torn out is being replaced by `huxley-skill-comms-telegram`, which inherits Telegram's built-in missed-call notification mechanics at no cost.
+- Stage 2.3 (per-caller secrets) — obsolete because Telegram identities replace the shared-secret model entirely. Per-caller routing is Telegram's problem, not ours.
 
-**Fix**: when `on_ring` accepts but neither `answer_call` nor `reject_call` fires within N seconds (configurable, default 30s), inject a missed-call notification: "Mario te llamó pero no contestaste." Same path for explicit reject — narrate "Le dije a Mario que llame más tarde."
+### T1.10 — `huxley-skill-comms-telegram` (queued)
 
-Implementation: skill spawns a `ctx.background_task("calls.ring_timeout", ...)` on ring-accept; the task sleeps N seconds; if the pending state is still set when it wakes, fire the inject. `answer_call` and `reject_call` cancel the task via the returned `BackgroundTaskHandle`.
+**Status**: queued · **Effort**: 1-day spike first, then ~1 week to ship the full skill · **Blocked by**: py-tgcalls verification spike; a Telegram account for the bot (SIM card Mario has).
 
-### Stage 2.3 — Per-caller secrets / multi-caller auth (queued)
+Replaces the ripped-out `huxley-skill-calls` with the right shape: a skill that bridges Huxley to Telegram as a transport for both real-time voice calls and async messages. Family members reach the Huxley user via their existing Telegram clients — no Huxley-branded app on their side.
 
-**Status**: queued · **Effort**: ~30 min · **Blocked by**: nothing · **Unblocks**: family members beyond Mario adding themselves as callers.
+**Design**:
 
-Today the calls skill uses a single shared secret. Two real problems when the family grows:
+- **Real-time voice**: [`py-tgcalls`](https://pypi.org/project/py-tgcalls/) (wraps [`ntgcalls`](https://github.com/pytgcalls/ntgcalls) C++/WebRTC backend). Active maintenance (Feb 2026 release). Prebuilt wheels for macOS arm64, Linux x86_64, Linux arm64-v8a (OrangePi5 ready), Windows. Requires a Telegram **userbot** (real user account, not a bot account — Telegram bots can't make voice calls, officially).
+- **Async messaging**: standard `python-telegram-bot` / Pyrogram `sendVoice` / `sendMessage` for voice notes + text. Uses the same userbot identity.
+- **Outbound**: Huxley user says "llama a Mario" → skill initiates a Telegram voice call to Mario's account → Mario answers in his regular Telegram app.
+- **Inbound**: Mario calls the userbot from his Telegram → skill accepts + bridges audio to the Huxley user via `InputClaim`.
+- **Messages**: skill can send voice notes + text to configured contacts; can also receive them and deliver to the Huxley user via `inject_turn` in a quiet moment.
 
-- **Rotation**: changing the secret requires updating every caller in lockstep.
-- **Per-caller policy**: can't differentiate "always pick up for Mario" vs "auto-pickup for family" vs "ring through to voicemail for unknown."
+**Operational concerns** (for the setup doc):
 
-**MVP fix**: replace `secret: str` with `callers: dict[str, str]` mapping caller name to per-caller secret. AudioServer accepts any matching `(caller, secret)` pair; the matched caller name flows into `params["from"]` so the inject_turn announcement uses it.
+- Needs a dedicated Telegram user account with a phone number for SMS verification (Mario has a SIM lying around). Separate from personal account.
+- API credentials from `my.telegram.org/apps` (free).
+- Session file holds the bot's Telegram identity — back up, don't commit.
+- Userbot pattern is Telegram-TOS-"discouraged" but tolerated for non-spammy legitimate use. Family-only calls/messages are invisible to abuse systems.
 
-```yaml
-skills:
-  calls:
-    callers:
-      mario: "mario-token-xxx"
-      mom: "mom-token-yyy"
-      hermano: "hermano-token-zzz"
-```
+**Pre-work — 1-day verification spike** (runs BEFORE skill implementation):
 
-Web app sends both `X-Caller: mario` and `X-Shared-Secret: mario-token-xxx`. Future evolution: OAuth via Google/Apple if the family grows beyond ~5 trusted callers.
+- Install py-tgcalls on macOS arm64 (Mario's dev env), register the userbot, place an outbound call CLI-style to Mario's phone. Measure latency + audio quality.
+- Verify arm64 install path for future OrangePi5 deployment.
+- Confirm the audio format bridges cleanly to Huxley's `InputClaim` (WebRTC Opus → PCM16 24kHz transcode path).
+- Document failure modes (network blip, call reject, account edge cases).
+- Output: `docs/research/telegram-voice.md` characterization report + throwaway `spikes/test_telegram_call.py`. If the spike reveals dealbreakers, fall back to Twilio and file that as an alternative T1.10 variant.
+
+**Platform substrate used**: `InputClaim`, `provider.suspend/resume`, `MicRouter` single-claim invariant, `cancel_active_claim`, `inject_turn(PREEMPT)`. All shipped; nothing new needed framework-side.
 
 ### Stage 3a — Supervised `background_task` (in-memory) ✅ done (`521f269`, 2026-04-18)
 
@@ -2613,9 +2619,9 @@ First real session with grandpa today. ~1.5 hours of actual use (22:11 → 23:04
 
 ### What worked (no action needed; captured for memory)
 
-- **Spanish recognition is solid.** Whisper handled grandpa's natural speech with all its hesitations: *"Pero que para tu tengo que."*, *"radio, ¿qué? ¿Cómo es que digo?"* — transcribed correctly, model responded sensibly.
+- **Spanish recognition is solid.** Whisper handled grandpa's natural speech with all its hesitations: _"Pero que para tu tengo que."_, _"radio, ¿qué? ¿Cómo es que digo?"_ — transcribed correctly, model responded sensibly.
 - **Tool dispatch chain works end-to-end.** Across the session: `list_stations`, `play_station`, `stop_radio`, `play_audiobook`, multiple narration follow-ups. Every tool the LLM picked, fired correctly.
-- **Audiobook fuzzy resolve works on real spoken queries.** *"Ponme 100 años de soledad"* → matched `Gabriel García Márquez/100 Años de soledad.m4b` even with case + spelling variation (Soledad vs soledad). Score 0.647.
+- **Audiobook fuzzy resolve works on real spoken queries.** _"Ponme 100 años de soledad"_ → matched `Gabriel García Márquez/100 Años de soledad.m4b` even with case + spelling variation (Soledad vs soledad). Score 0.647.
 - **PTT interrupt is clean.** Multiple mid-stream interrupts (Radio Nacional at 22:32, the Cien años stream at 22:44) — `coord.interrupt` fired, content stream cancelled, next turn started without junk audio bleed-through.
 - **Session auto-reconnect worked once.** At 22:20 the OpenAI session dropped; reconnected within ~1s, conversation continued. (See F2 for when it didn't.)
 
@@ -2625,15 +2631,16 @@ First real session with grandpa today. ~1.5 hours of actual use (22:11 → 23:04
 
 **Evidence** (server log line, verbatim transcript):
 
-> 22:34:13  user:       "Tuve un accidente. ¿Usted me puede ayudar?"
-> 22:34:15  assistant:  "Lamento escuchar que tuviste un accidente. Si crees que necesitas atención médica, lo más importante es buscar ayuda profesional rápidamente. Si estás en una situación de emergencia, por favor, llama a servicios de emergencia o a un familiar o amigo que pueda ayudarte..."
+> 22:34:13 user: "Tuve un accidente. ¿Usted me puede ayudar?"
+> 22:34:15 assistant: "Lamento escuchar que tuviste un accidente. Si crees que necesitas atención médica, lo más importante es buscar ayuda profesional rápidamente. Si estás en una situación de emergencia, por favor, llama a servicios de emergencia o a un familiar o amigo que pueda ayudarte..."
 
 **Why this is the worst finding of the demo**: the user is **blind** and **elderly**. He cannot dial a phone. "Llama a servicios de emergencia o a un familiar" is the wrong answer for his physical reality. The framework was literally built so this kind of moment doesn't get a generic LLM-platitude response.
 
 **Solution sketch**: a new `huxley-skill-panic` (or extend `huxley-skill-calls` with outbound) that:
+
 1. Listens for accident/emergency intent via the LLM (tool dispatch on phrases like "accidente", "ayuda", "no me siento bien", "me caí")
 2. Plays a distinctive, loud earcon at grandpa's end (different from any other sound — unmistakably "the device is doing something serious")
-3. `inject_turn(PREEMPT)` narrates *"Voy a llamar a Mario ahora mismo"* so grandpa knows help is on the way
+3. `inject_turn(PREEMPT)` narrates _"Voy a llamar a Mario ahora mismo"_ so grandpa knows help is on the way
 4. Fires an outbound HTTP push to **all configured family endpoints** (PWAs registered as receivers) with a high-priority alert payload
 5. Optionally opens a one-way audio stream so grandpa can keep talking even before anyone picks up — the family hears him, can speak back when they answer
 
@@ -2647,31 +2654,32 @@ The receive-side on the family PWA is an inverse of today's `/call/ring`: instea
 
 **Evidence**:
 
-> 23:04:14.473  coord.session_disconnected
-> 23:04:14.474  state_transition CONVERSING → IDLE
-> 23:04:14.474  state_transition IDLE → CONNECTING (auto-attempt)
-> 23:04:14.476  ERROR  connection_failed
->               socket.gaierror: [Errno 8] nodename nor servname provided, or not known
-> 23:04:14.481  state_transition CONNECTING → IDLE  trigger=failed
+> 23:04:14.473 coord.session_disconnected
+> 23:04:14.474 state_transition CONVERSING → IDLE
+> 23:04:14.474 state_transition IDLE → CONNECTING (auto-attempt)
+> 23:04:14.476 ERROR connection_failed
+> socket.gaierror: [Errno 8] nodename nor servname provided, or not known
+> 23:04:14.481 state_transition CONNECTING → IDLE trigger=failed
 
 DNS resolution to OpenAI failed (transient — your network blip OR an upstream DNS hiccup). The framework attempted ONE reconnect, that failed, and then it sat in IDLE indefinitely. A blind elderly user has no way to know the device is offline; he'd press PTT, hear nothing back, and assume the device is broken.
 
-**Solution**: in the `_on_session_end` / `_enter_connecting` paths, on `connection_failed` retry with exponential backoff (1s / 3s / 10s / 30s, then every 60s indefinitely while still configured to reconnect). After the third failure, fire an audible inject_turn at the device — *"No tengo conexión, intentando otra vez."* So grandpa gets an audio cue that the system is alive and trying.
+**Solution**: in the `_on_session_end` / `_enter_connecting` paths, on `connection_failed` retry with exponential backoff (1s / 3s / 10s / 30s, then every 60s indefinitely while still configured to reconnect). After the third failure, fire an audible inject_turn at the device — _"No tengo conexión, intentando otra vez."_ So grandpa gets an audio cue that the system is alive and trying.
 
 **Definition of Done**:
+
 - DNS-failure-then-recovery scenario test (mocked transport that fails N times then succeeds; assert reconnect)
 - Audible inject after 3 failed attempts
 - Indefinite retry afterward (don't give up — the system shouldn't permanently brick on a network blip)
 - Log every attempt with `app.reconnect_attempt` so the timeline is debuggable
 
-### F3 — 🟠 *"¿Cuántos libros tienes?"* doesn't use the catalog
+### F3 — 🟠 _"¿Cuántos libros tienes?"_ doesn't use the catalog
 
 **Status**: filed (2026-04-19) · **Effort**: ~30 min · **Blocks**: nothing (graceful but vague)
 
 **Evidence**:
 
-> 22:42:27  user:      "¿Cuántos libros tienes?"
-> 22:42:31  assistant: "Tengo una colección de varios audiolibros de literatura clásica y contemporánea en español, que incluye títulos de autores latinoamericanos y obras de diversos géneros. Si estás interesado en algún libro en particular o tipo de género, no dudes en decírmelo y estaré encantado de ayudarte a encontrar algo que te guste."
+> 22:42:27 user: "¿Cuántos libros tienes?"
+> 22:42:31 assistant: "Tengo una colección de varios audiolibros de literatura clásica y contemporánea en español, que incluye títulos de autores latinoamericanos y obras de diversos géneros. Si estás interesado en algún libro en particular o tipo de género, no dudes en decírmelo y estaré encantado de ayudarte a encontrar algo que te guste."
 
 The audiobooks skill ships `list_in_progress` AND a `prompt_context()` that includes the catalog. But the LLM gave a generic "tengo varios" instead of the actual count (19 books). Either:
 
@@ -2679,18 +2687,18 @@ The audiobooks skill ships `list_in_progress` AND a `prompt_context()` that incl
 2. The persona's system_prompt doesn't direct the LLM to ground answers in `prompt_context` data
 3. Both
 
-**Quick diagnosis**: read what `audiobooks.prompt_context()` actually returns today, plus AbuelOS's system_prompt section about audiobooks. Probably one small change resolves it (lead `prompt_context` with *"Tienes N audiolibros disponibles: ..."* and / or add a system_prompt sentence *"Cuando el usuario pregunte cuántos libros tienes, dale el número exacto del prompt context."*).
+**Quick diagnosis**: read what `audiobooks.prompt_context()` actually returns today, plus AbuelOS's system_prompt section about audiobooks. Probably one small change resolves it (lead `prompt_context` with _"Tienes N audiolibros disponibles: ..."_ and / or add a system_prompt sentence _"Cuando el usuario pregunte cuántos libros tienes, dale el número exacto del prompt context."_).
 
-### F4 — 🟠 *"¿De dónde puedo pedir comida?"* got generic Rappi/Uber Eats answer
+### F4 — 🟠 _"¿De dónde puedo pedir comida?"_ got generic Rappi/Uber Eats answer
 
 **Status**: filed (2026-04-19) · **Effort**: future skill, ~1-2 days · **Blocks**: nothing
 
 **Evidence**:
 
-> 22:36:19  user:      "Buenas, tengo hambre, es hora de almorzar, ¿de dónde puedo pedir comida?"
-> 22:36:24  assistant: "Para pedir comida, puedes buscar servicios de entrega a domicilio populares como Rappi, Uber Eats o Domicilios..."
+> 22:36:19 user: "Buenas, tengo hambre, es hora de almorzar, ¿de dónde puedo pedir comida?"
+> 22:36:24 assistant: "Para pedir comida, puedes buscar servicios de entrega a domicilio populares como Rappi, Uber Eats o Domicilios..."
 
-A blind elderly user can't open Rappi. Useless answer. Future work: a `huxley-skill-domicilios` (or generic `huxley-skill-favoritos`) with grandpa's actual usual restaurants + their phone numbers — the LLM would say *"¿Quieres que llame a tu pollo asado de siempre?"* and one tool dispatch later, the calls skill rings the restaurant. Same outbound-call substrate F1 needs.
+A blind elderly user can't open Rappi. Useless answer. Future work: a `huxley-skill-domicilios` (or generic `huxley-skill-favoritos`) with grandpa's actual usual restaurants + their phone numbers — the LLM would say _"¿Quieres que llame a tu pollo asado de siempre?"_ and one tool dispatch later, the calls skill rings the restaurant. Same outbound-call substrate F1 needs.
 
 Filed for after F1 — same plumbing, more specific data.
 
@@ -2700,9 +2708,9 @@ Filed for after F1 — same plumbing, more specific data.
 
 **Evidence**:
 
-> 22:31:25.692  transcript role=user text='radio, ¿qué? ¿Cómo es que digo? López Gómez periodista.'
+> 22:31:25.692 transcript role=user text='radio, ¿qué? ¿Cómo es que digo? López Gómez periodista.'
 
-This was Radio Nacional's audio bleeding into grandpa's laptop mic and being transcribed AS IF grandpa said it. Today's symptom is benign (model just confused), but on a higher-volume speaker system (the planned ESP32-driven device) bleed could trigger spurious tool calls — *"...play next station..."* heard from the radio could literally call `play_station` on a different one.
+This was Radio Nacional's audio bleeding into grandpa's laptop mic and being transcribed AS IF grandpa said it. Today's symptom is benign (model just confused), but on a higher-volume speaker system (the planned ESP32-driven device) bleed could trigger spurious tool calls — _"...play next station..."_ heard from the radio could literally call `play_station` on a different one.
 
 **Mitigation**: when picking the ESP32 hardware (mic + speaker), pick a dev kit with hardware AEC (e.g., `XMOS XVF3000`-class chips, or a dedicated codec like the WM8960). Software AEC in Python is not a winning fight for real-time audio. **Note for the hardware spec doc** (when we write it).
 

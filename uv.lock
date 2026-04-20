@@ -7,7 +7,6 @@ members = [
     "huxley",
     "huxley-sdk",
     "huxley-skill-audiobooks",
-    "huxley-skill-calls",
     "huxley-skill-news",
     "huxley-skill-radio",
     "huxley-skill-system",
@@ -264,35 +263,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [{ name = "huxley-sdk", editable = "packages/sdk" }]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mypy", specifier = ">=1.13" },
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "pytest-asyncio", specifier = ">=0.24" },
-]
-
-[[package]]
-name = "huxley-skill-calls"
-version = "0.1.0"
-source = { editable = "packages/skills/calls" }
-dependencies = [
-    { name = "huxley-sdk" },
-    { name = "websockets" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "huxley-sdk", editable = "packages/sdk" },
-    { name = "websockets", specifier = ">=14.0" },
-]
 
 [package.metadata.requires-dev]
 dev = [
