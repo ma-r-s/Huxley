@@ -26,6 +26,11 @@ Protocol — server → client
     {"type": "transcript",     "role": "user"|"assistant", "text": "..."}
     {"type": "model_speaking", "value": bool}
     {"type": "set_volume",     "level": int}              # 0-100, client-controlled
+    {"type": "input_mode",     "mode": "assistant_ptt"|"skill_continuous",
+                               "reason": "idle"|"claim_started"|"claim_ended"|"claim_preempted",
+                               "claim_id": str|None}      # mic-streaming policy
+    {"type": "claim_started",  "claim_id": str, "skill": str}  # observability
+    {"type": "claim_ended",    "claim_id": str, "end_reason": str}
     {"type": "dev_event",      "kind": "...", "payload": {...}}
 """
 
@@ -53,7 +58,16 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
+
+# Mic-streaming policy values (server → client in `input_mode`).
+# - `assistant_ptt`: the client gates mic streaming by the user's
+#   assistant-address trigger (today: PTT hold; tomorrow: wake word / VAD).
+# - `skill_continuous`: a skill owns the mic via an active InputClaim;
+#   the client streams mic frames continuously until the mode flips back.
+# See docs/protocol.md "Mic mode" for the full semantics.
+INPUT_MODE_ASSISTANT_PTT = "assistant_ptt"
+INPUT_MODE_SKILL_CONTINUOUS = "skill_continuous"
 
 
 class AudioServer:
@@ -83,6 +97,11 @@ class AudioServer:
         self._on_reset = on_reset
         self._client: ServerConnection | None = None
         self._state = "IDLE"
+        # Last-sent input mode — cached so a new client can be brought
+        # up to the current mic policy on connect. Defaults to PTT
+        # because a fresh client has no active claim by definition.
+        self._input_mode = INPUT_MODE_ASSISTANT_PTT
+        self._active_claim_id: str | None = None
 
     @property
     def has_client(self) -> bool:
@@ -104,9 +123,22 @@ class AudioServer:
         self._client = ws
         await logger.ainfo("client_connected", remote=str(ws.remote_address))
         try:
-            # Handshake: hello first, then current state sync.
+            # Handshake: hello first, then current state + input mode
+            # sync so a reconnecting client knows whether a claim is
+            # already active on the server (if we land mid-call, the
+            # client should jump straight to continuous-mic).
             await ws.send(json.dumps({"type": "hello", "protocol": PROTOCOL_VERSION}))
             await ws.send(json.dumps({"type": "state", "value": self._state}))
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "input_mode",
+                        "mode": self._input_mode,
+                        "reason": "idle",
+                        "claim_id": self._active_claim_id,
+                    },
+                ),
+            )
             async for raw in ws:
                 await self._dispatch(raw)
         except websockets.ConnectionClosed:
@@ -183,6 +215,61 @@ class AudioServer:
     async def send_set_volume(self, level: int) -> None:
         await logger.ainfo("server.tx.set_volume", level=level)
         await self._send({"type": "set_volume", "level": level})
+
+    async def send_input_mode(
+        self,
+        mode: str,
+        *,
+        reason: str,
+        claim_id: str | None = None,
+    ) -> None:
+        """Tell the client to switch mic-streaming policy.
+
+        Cached locally so a reconnecting client gets the current mode in
+        the initial-sync burst (see `_handle_connection`). Emits a
+        structured log because every mode flip is load-bearing for the
+        "why did the call go silent?" debugging path.
+        """
+        if mode not in (INPUT_MODE_ASSISTANT_PTT, INPUT_MODE_SKILL_CONTINUOUS):
+            msg = f"send_input_mode: unknown mode {mode!r}"
+            raise ValueError(msg)
+        self._input_mode = mode
+        self._active_claim_id = claim_id
+        await logger.ainfo(
+            "server.tx.input_mode",
+            mode=mode,
+            reason=reason,
+            claim_id=claim_id,
+        )
+        await self._send(
+            {
+                "type": "input_mode",
+                "mode": mode,
+                "reason": reason,
+                "claim_id": claim_id,
+            },
+        )
+
+    async def send_claim_started(self, claim_id: str, skill: str) -> None:
+        """Observability message — pure telemetry for clients that want
+        to render a "call connecting" UI. The behavioral signal is
+        `input_mode=skill_continuous`; this is flavor on top.
+        """
+        await logger.ainfo("server.tx.claim_started", claim_id=claim_id, skill=skill)
+        await self._send(
+            {"type": "claim_started", "claim_id": claim_id, "skill": skill},
+        )
+
+    async def send_claim_ended(self, claim_id: str, end_reason: str) -> None:
+        """Observability message — claim has terminated for the given
+        reason ("natural", "user_ptt", "preempted", "error"). The
+        behavioral signal is `input_mode=assistant_ptt` fired
+        immediately after.
+        """
+        await logger.ainfo("server.tx.claim_ended", claim_id=claim_id, end_reason=end_reason)
+        await self._send(
+            {"type": "claim_ended", "claim_id": claim_id, "end_reason": end_reason},
+        )
 
     async def send_audio_clear(self) -> None:
         """Tell the client to immediately drop any queued audio.

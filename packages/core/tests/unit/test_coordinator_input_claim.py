@@ -198,6 +198,139 @@ class TestClaimEndPreempted:
         on_end.assert_awaited_once_with(ClaimEndReason.ERROR)
 
 
+class TestInputModeEvents:
+    """Client-facing input_mode / claim_started / claim_ended events
+    fire on claim lifecycle (T1.10 protocol for mic-mode handoff)."""
+
+    async def test_start_emits_claim_started_and_skill_continuous(
+        self, focus_manager: FocusManager, provider: StubVoiceProvider
+    ) -> None:
+        send_input_mode = AsyncMock()
+        send_claim_started = AsyncMock()
+        send_claim_ended = AsyncMock()
+        coord = TurnCoordinator(
+            send_audio=AsyncMock(),
+            send_audio_clear=AsyncMock(),
+            send_status=AsyncMock(),
+            send_model_speaking=AsyncMock(),
+            send_dev_event=AsyncMock(),
+            send_input_mode=send_input_mode,
+            send_claim_started=send_claim_started,
+            send_claim_ended=send_claim_ended,
+            provider=provider,
+            dispatch_tool=AsyncMock(return_value=ToolResult(output="{}")),
+            focus_manager=focus_manager,
+        )
+        await coord.start_input_claim(InputClaim(on_mic_frame=AsyncMock()))
+
+        send_claim_started.assert_awaited_once()
+        args, _ = send_claim_started.await_args
+        assert args[0].startswith("claim:")
+        send_input_mode.assert_awaited_once()
+        _, kwargs = send_input_mode.await_args
+        assert send_input_mode.await_args.args[0] == "skill_continuous"
+        assert kwargs["reason"] == "claim_started"
+        assert kwargs["claim_id"].startswith("claim:")
+
+    async def test_end_emits_claim_ended_and_assistant_ptt(
+        self, focus_manager: FocusManager, provider: StubVoiceProvider
+    ) -> None:
+        send_input_mode = AsyncMock()
+        send_claim_ended = AsyncMock()
+        coord = TurnCoordinator(
+            send_audio=AsyncMock(),
+            send_audio_clear=AsyncMock(),
+            send_status=AsyncMock(),
+            send_model_speaking=AsyncMock(),
+            send_dev_event=AsyncMock(),
+            send_input_mode=send_input_mode,
+            send_claim_started=AsyncMock(),
+            send_claim_ended=send_claim_ended,
+            provider=provider,
+            dispatch_tool=AsyncMock(return_value=ToolResult(output="{}")),
+            focus_manager=focus_manager,
+        )
+        handle = await coord.start_input_claim(InputClaim(on_mic_frame=AsyncMock()))
+        send_input_mode.reset_mock()
+        handle.cancel()
+        await handle.wait_end()
+
+        send_claim_ended.assert_awaited_once()
+        args, _ = send_claim_ended.await_args
+        assert args[0].startswith("claim:")
+        assert args[1] == "natural"
+
+        # After end, input_mode goes back to assistant_ptt.
+        mode_args = send_input_mode.await_args.args
+        assert mode_args[0] == "assistant_ptt"
+        assert send_input_mode.await_args.kwargs["reason"] == "claim_ended"
+
+    async def test_preempted_end_uses_claim_preempted_reason(
+        self, focus_manager: FocusManager, provider: StubVoiceProvider
+    ) -> None:
+        # An InjectPriority.PREEMPT request while a claim is live fires
+        # ClaimEndReason.PREEMPTED; the mic-mode flip carries a distinct
+        # reason so a dev UI can tell "user hung up" from "medication
+        # reminder kicked them out."
+        send_input_mode = AsyncMock()
+        coord = TurnCoordinator(
+            send_audio=AsyncMock(),
+            send_audio_clear=AsyncMock(),
+            send_status=AsyncMock(),
+            send_model_speaking=AsyncMock(),
+            send_dev_event=AsyncMock(),
+            send_input_mode=send_input_mode,
+            send_claim_started=AsyncMock(),
+            send_claim_ended=AsyncMock(),
+            provider=provider,
+            dispatch_tool=AsyncMock(return_value=ToolResult(output="{}")),
+            focus_manager=focus_manager,
+        )
+        obs = coord._claim_obs
+        assert obs is None
+        await coord.start_input_claim(InputClaim(on_mic_frame=AsyncMock()))
+        send_input_mode.reset_mock()
+        # Fire the preempted end path directly via the observer hook.
+        live = coord._claim_obs
+        assert live is not None
+        live.set_end_reason(ClaimEndReason.PREEMPTED)
+        await coord._end_input_claim(live)
+
+        # Assert the last input_mode flip used the preempted reason.
+        reasons = [c.kwargs.get("reason") for c in send_input_mode.await_args_list]
+        assert "claim_preempted" in reasons
+
+
+class TestPttClaimDebounce:
+    """300ms debounce after claim latches — swallows the same-tap bounce
+    that would otherwise end the claim the instant it connects."""
+
+    async def test_ptt_within_300ms_of_claim_start_is_dropped(
+        self, coordinator: TurnCoordinator
+    ) -> None:
+        await coordinator.start_input_claim(InputClaim(on_mic_frame=AsyncMock()))
+        # Claim is live; _claim_started_at is "now". A PTT press at this
+        # instant must not end it (bounce protection).
+        assert coordinator._claim_obs is not None
+        await coordinator.on_ptt_start()
+        # Claim still active — the press was debounced.
+        assert coordinator._claim_obs is not None
+        assert coordinator.current_turn is None
+
+    async def test_ptt_after_debounce_ends_claim(self, coordinator: TurnCoordinator) -> None:
+        import time
+
+        await coordinator.start_input_claim(InputClaim(on_mic_frame=AsyncMock()))
+        # Simulate time passing past the debounce window.
+        coordinator._claim_started_at = time.monotonic() - 1.0
+
+        await coordinator.on_ptt_start()
+
+        # Claim ended; a USER turn started listening.
+        assert coordinator._claim_obs is None
+        assert coordinator.current_turn is not None
+
+
 class TestWaitEndBlocksUntilEnd:
     async def test_wait_end_blocks_while_claim_active(self, coordinator: TurnCoordinator) -> None:
         handle = await coordinator.start_input_claim(InputClaim(on_mic_frame=AsyncMock()))
@@ -498,9 +631,7 @@ class TestCancelActiveClaim:
     etc.). Direct-entry callers use the `ClaimHandle.cancel()` they
     already have; this is the side-effect-path equivalent."""
 
-    async def test_returns_false_when_no_claim_active(
-        self, coordinator: TurnCoordinator
-    ) -> None:
+    async def test_returns_false_when_no_claim_active(self, coordinator: TurnCoordinator) -> None:
         result = await coordinator.cancel_active_claim()
         assert result is False
 
@@ -518,9 +649,7 @@ class TestCancelActiveClaim:
         on_end.assert_awaited_once_with(ClaimEndReason.NATURAL)
         assert provider.is_suspended is False
 
-    async def test_custom_reason_propagates(
-        self, coordinator: TurnCoordinator
-    ) -> None:
+    async def test_custom_reason_propagates(self, coordinator: TurnCoordinator) -> None:
         on_end = AsyncMock()
         handle = await coordinator.start_input_claim(
             InputClaim(on_mic_frame=AsyncMock(), on_claim_end=on_end)
@@ -529,12 +658,8 @@ class TestCancelActiveClaim:
         reason = await asyncio.wait_for(handle.wait_end(), timeout=1.0)
         assert reason is ClaimEndReason.ERROR
 
-    async def test_idempotent_when_claim_already_ended(
-        self, coordinator: TurnCoordinator
-    ) -> None:
-        handle = await coordinator.start_input_claim(
-            InputClaim(on_mic_frame=AsyncMock())
-        )
+    async def test_idempotent_when_claim_already_ended(self, coordinator: TurnCoordinator) -> None:
+        handle = await coordinator.start_input_claim(InputClaim(on_mic_frame=AsyncMock()))
         await coordinator.cancel_active_claim()
         await handle.wait_end()
         # Second cancel — claim is already ended, returns False cleanly.

@@ -74,6 +74,31 @@
     prevState = cur
   })
 
+  // Mic-mode sync: the server is the source of truth for whether the
+  // client should stream mic continuously (claim active) or gate by PTT
+  // (assistant mode). PTT is UNRELATED to the mic-mode switch — it still
+  // means "I want the assistant's attention", which during a claim ends
+  // the claim (server-side interrupt) and returns us to assistant_ptt.
+  $effect(() => {
+    const mode = ws.inputMode
+    if (mode === 'skill_continuous') {
+      // Skill owns the mic now — open it regardless of PTT. Guarded
+      // against double-init; mic.init is idempotent after first call.
+      void (async () => {
+        try {
+          await mic.init()
+          await mic.resume()
+          mic.active = true
+        } catch {
+          micError = 'No pude abrir el micrófono para la llamada'
+        }
+      })()
+    } else if (mode === 'assistant_ptt' && !pttHeld && !pttPendingStart) {
+      // Back to PTT gating and the user isn't holding — release the mic.
+      mic.active = false
+    }
+  })
+
   onMount(() => {
     ws.setOnAudio((data) => playback.play(data))
     ws.setOnAudioClear(() => playback.stop())
@@ -204,6 +229,7 @@
 
   const buttonLabel = $derived.by(() => {
     if (!ws.connected) return 'Sin conexión'
+    if (ws.inputMode === 'skill_continuous') return 'En llamada — aprieta para terminar'
     if (pttHeld && mic.active) return 'Escuchando…'
     if (pttPendingStart) return 'Conectando…'
     return 'Mantén o espacio para hablar'
@@ -261,14 +287,18 @@
       class={cn(
         'w-56 h-56 rounded-full font-bold text-xl transition-all duration-100 select-none touch-none',
         'disabled:opacity-25 disabled:cursor-not-allowed',
-        pttHeld && mic.active
-          ? 'bg-red-500 scale-110 shadow-2xl shadow-red-500/40 ring-4 ring-red-400'
-          : pttPendingStart
-            ? 'bg-yellow-600 scale-105 ring-2 ring-yellow-400 animate-pulse'
-            : 'bg-red-800 hover:bg-red-700 active:scale-105',
+        ws.inputMode === 'skill_continuous'
+          ? 'bg-blue-600 scale-110 shadow-2xl shadow-blue-500/40 ring-4 ring-blue-400 animate-pulse'
+          : pttHeld && mic.active
+            ? 'bg-red-500 scale-110 shadow-2xl shadow-red-500/40 ring-4 ring-red-400'
+            : pttPendingStart
+              ? 'bg-yellow-600 scale-105 ring-2 ring-yellow-400 animate-pulse'
+              : 'bg-red-800 hover:bg-red-700 active:scale-105',
       )}
     >
-      {#if pttHeld && mic.active}
+      {#if ws.inputMode === 'skill_continuous'}
+        📞<br>En llamada
+      {:else if pttHeld && mic.active}
         🎙<br>Escuchando…
       {:else if pttPendingStart}
         ⏳<br>Conectando…

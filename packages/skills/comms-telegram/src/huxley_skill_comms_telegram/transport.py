@@ -128,9 +128,11 @@ class TelegramTransport:
         self._writer_thread: threading.Thread | None = None
         self._writer_stop = threading.Event()
         # Thread-safe buffer: the writer thread consumes from this;
-        # the async producer (skill's on_mic_frame) appends.
+        # the async producer (skill's on_mic_frame) appends. `_sent_count`
+        # tracks total chunks pushed so we can log first-chunk arrival.
         self._outbound_chunks: list[bytes] = []
         self._outbound_lock = threading.Lock()
+        self._sent_count = 0
 
         # Incoming audio: downsampled peer PCM enqueued by the
         # stream_frame handler; speaker_source drains it.
@@ -161,11 +163,16 @@ class TelegramTransport:
 
     def _wire_peer_audio_handler(self, call_py: object) -> None:
         """Attach the stream_frame filter that pumps peer audio into
-        `_inbound_queue`. Must run before `call_py.start()` per the
-        upstream example pattern.
+        `_inbound_queue`, plus a chat_update filter that ends the claim
+        when the peer hangs up. Must run before `call_py.start()` per
+        the upstream example pattern.
         """
         from pytgcalls import filters as fl
-        from pytgcalls.types import Device, Direction
+        from pytgcalls.types import ChatUpdate, Device, Direction
+
+        # Log once per call so we know frames are flowing without
+        # spamming the log with one event per 10ms frame.
+        saw_first_frame = {"value": False}
 
         @call_py.on_update(  # type: ignore[attr-defined, untyped-decorator]
             fl.stream_frame(devices=Device.MICROPHONE | Device.SPEAKER),
@@ -175,11 +182,36 @@ class TelegramTransport:
                 return
             if self._inbound_queue is None:
                 return  # no active call — drop frames
+            if not saw_first_frame["value"]:
+                saw_first_frame["value"] = True
+                await logger.ainfo(
+                    "comms_telegram.transport.first_peer_frame",
+                    frame_count=len(update.frames),
+                    first_frame_bytes=len(update.frames[0].frame) if update.frames else 0,
+                )
             for frame in update.frames:
                 mono24k = downsample_48k_stereo_to_24k_mono(frame.frame)
                 if mono24k:
                     with contextlib.suppress(asyncio.QueueFull):
                         self._inbound_queue.put_nowait(mono24k)
+
+        @call_py.on_update(  # type: ignore[attr-defined, untyped-decorator]
+            fl.chat_update(
+                ChatUpdate.Status.DISCARDED_CALL | ChatUpdate.Status.BUSY_CALL,
+            ),
+        )
+        async def on_chat_update(_, update) -> None:  # type: ignore[no-untyped-def]
+            # Peer hung up OR call failed to establish → close the claim
+            # so grandpa doesn't sit on a dead-silent line forever.
+            # Setting _ended short-circuits the speaker_source iterator.
+            await logger.ainfo(
+                "comms_telegram.transport.chat_update",
+                status=str(update.status),
+                chat_id=update.chat_id,
+            )
+            if update.chat_id == self._active_user_id:
+                self._ended.set()
+                saw_first_frame["value"] = False  # reset for next call
 
     async def resolve_contact(self, identifier: str) -> int:
         """Return the Telegram `user_id` for a phone number OR @handle.
@@ -298,7 +330,16 @@ class TelegramTransport:
         if not pcm_24k_mono:
             return
         with self._outbound_lock:
+            was_first = self._sent_count == 0
             self._outbound_chunks.append(pcm_24k_mono)
+            self._sent_count += 1
+        if was_first:
+            # Fire-and-forget log — can't await from a sync function,
+            # but structlog's sync logger is fine from any thread.
+            structlog.get_logger().info(
+                "comms_telegram.transport.first_send_pcm",
+                chunk_bytes=len(pcm_24k_mono),
+            )
 
     def _writer_loop(self, fd: int) -> None:
         """Drain `_outbound_chunks` to the FIFO. Pads with silence if
@@ -331,14 +372,27 @@ class TelegramTransport:
         """
         q = self._inbound_queue
         if q is None:
+            await logger.awarning("comms_telegram.transport.speaker_source_no_queue")
             return
+        await logger.ainfo("comms_telegram.transport.speaker_source_started")
+        yielded = 0
         while not self._ended.is_set():
             try:
                 chunk = await asyncio.wait_for(q.get(), timeout=0.5)
             except TimeoutError:
                 continue
             if chunk:
+                yielded += 1
+                if yielded == 1:
+                    await logger.ainfo(
+                        "comms_telegram.transport.speaker_source_first_yield",
+                        chunk_bytes=len(chunk),
+                    )
                 yield chunk
+        await logger.ainfo(
+            "comms_telegram.transport.speaker_source_ended",
+            yielded_total=yielded,
+        )
 
     async def end_call(self) -> None:
         """Hang up and clean up the outbound FIFO + writer thread."""
@@ -373,6 +427,7 @@ class TelegramTransport:
         self._inbound_queue = None
         with self._outbound_lock:
             self._outbound_chunks.clear()
+            self._sent_count = 0
 
     async def disconnect(self) -> None:
         """Stop pyrogram + PyTgCalls. Hangs up any active call first."""

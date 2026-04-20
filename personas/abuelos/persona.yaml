@@ -209,10 +209,11 @@ skills:
   # PEER_ID_INVALID.
   comms_telegram:
     contacts:
-      # Replace with real family phones. Names are lowercased at load.
-      # Example:
-      #   hija: "+573186851696"
-      #   hijo: "+573001234567"
+      # Target phone from spikes/ (Mario's personal Telegram) — lets us
+      # end-to-end test the skill by dialing Mario from the userbot.
+      # Replace with real family phones for production. Names are
+      # lowercased at load.
+      mario: "+573186851696"
 
   # Timers skill — `set_timer(seconds, message)` tool + proactive
   # announcement via `inject_turn`. In-memory only for now (lost on
