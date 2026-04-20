@@ -153,14 +153,30 @@ class TestSetup:
         assert captured[0].session_dir == tmp_path
 
     @pytest.mark.asyncio
-    async def test_missing_api_id_raises(self, tmp_path: Path) -> None:
+    async def test_missing_api_id_soft_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Ensure no env vars leak in from the test environment.
+        monkeypatch.delenv("HUXLEY_TELEGRAM_API_ID", raising=False)
+        monkeypatch.delenv("HUXLEY_TELEGRAM_API_HASH", raising=False)
+
         skill = CommsTelegramSkill(transport_factory=StubTransport)
         ctx, _ = _build_ctx(
             {"api_hash": "abc", "contacts": {"x": "+1"}},
             tmp_path,
         )
-        with pytest.raises(RuntimeError, match="api_id"):
-            await skill.setup(ctx)
+        # Soft-fail: setup completes, but transport stays None so
+        # a persona listing this skill can still boot. `call_contact`
+        # returns an LLM-facing error rather than exploding.
+        await skill.setup(ctx)
+        assert skill._transport is None  # type: ignore[attr-defined]
+
+        result = await skill.handle("call_contact", {"name": "x"})
+        import json
+
+        payload = json.loads(result.output)
+        assert payload["ok"] is False
+        assert "configura" in payload["error"].lower()
 
     @pytest.mark.asyncio
     async def test_empty_contacts_still_sets_up(self, tmp_path: Path) -> None:
@@ -173,6 +189,62 @@ class TestSetup:
         )
         await skill.setup(ctx)
         assert skill._contacts == {}  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_env_vars_override_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Secrets should come from env when set, even if persona.yaml has
+        # placeholder values — so a public repo can commit the skeleton
+        # without leaking api_id/hash.
+        monkeypatch.setenv("HUXLEY_TELEGRAM_API_ID", "99999999")
+        monkeypatch.setenv("HUXLEY_TELEGRAM_API_HASH", "env_hash_winning")
+        monkeypatch.setenv("HUXLEY_TELEGRAM_USERBOT_PHONE", "+19999999999")
+
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            captured.append(t)
+            return t
+
+        skill = CommsTelegramSkill(transport_factory=factory)
+        ctx, _ = _build_ctx(
+            {
+                "api_id": 111,  # config value — should be overridden
+                "api_hash": "config_hash",
+                "userbot_phone": "+57111",
+                "contacts": {"x": "+1"},
+            },
+            tmp_path,
+        )
+        await skill.setup(ctx)
+        assert captured[0].api_id == 99999999
+        assert captured[0].api_hash == "env_hash_winning"
+        assert captured[0].userbot_phone == "+19999999999"
+
+    @pytest.mark.asyncio
+    async def test_env_vars_only_also_work(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Persona.yaml sets NO credentials at all; env provides everything.
+        monkeypatch.setenv("HUXLEY_TELEGRAM_API_ID", "77777777")
+        monkeypatch.setenv("HUXLEY_TELEGRAM_API_HASH", "envhashonly")
+
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            captured.append(t)
+            return t
+
+        skill = CommsTelegramSkill(transport_factory=factory)
+        ctx, _ = _build_ctx(
+            {"contacts": {"x": "+1"}},
+            tmp_path,
+        )
+        await skill.setup(ctx)
+        assert captured[0].api_id == 77777777
 
     @pytest.mark.asyncio
     async def test_non_string_phone_values_dropped(self, tmp_path: Path) -> None:
