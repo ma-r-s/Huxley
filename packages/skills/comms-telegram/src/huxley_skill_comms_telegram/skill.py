@@ -27,6 +27,7 @@ fires once per deploy.
 from __future__ import annotations
 
 import json
+import os
 from typing import TYPE_CHECKING, Any
 
 from huxley_sdk import (
@@ -101,43 +102,68 @@ class CommsTelegramSkill:
         self._logger = ctx.logger
 
         cfg = ctx.config
-        api_id = cfg.get("api_id")
-        api_hash = cfg.get("api_hash")
-        userbot_phone = cfg.get("userbot_phone")
+        # Env vars take precedence so secrets (api_id/hash/phone) don't have
+        # to live in a checked-in persona.yaml. A real deployment sets these
+        # in `.env` at packages/core/; dev/test can put them directly in the
+        # persona file. Contacts stay in persona.yaml — they're not really
+        # "secrets" for a family-specific persona.
+        api_id_raw = os.environ.get("HUXLEY_TELEGRAM_API_ID") or cfg.get("api_id")
+        api_hash = os.environ.get("HUXLEY_TELEGRAM_API_HASH") or cfg.get("api_hash")
+        userbot_phone = os.environ.get("HUXLEY_TELEGRAM_USERBOT_PHONE") or cfg.get("userbot_phone")
         raw_contacts = cfg.get("contacts") or {}
 
-        if not isinstance(api_id, int) or not isinstance(api_hash, str) or not api_hash:
-            msg = (
-                "comms_telegram: persona.yaml skills.comms_telegram must set "
-                "integer `api_id` and string `api_hash` (from my.telegram.org/apps)"
-            )
-            raise RuntimeError(msg)
-        if not isinstance(raw_contacts, dict) or not raw_contacts:
-            await ctx.logger.awarning(
-                "comms_telegram.no_contacts_configured",
-                hint="persona.yaml skills.comms_telegram.contacts is empty — "
-                "call_contact will always fail. Add at least one name→phone.",
-            )
+        try:
+            api_id = int(api_id_raw) if api_id_raw is not None else None
+        except (TypeError, ValueError):
+            api_id = None
 
         self._contacts = {
             str(name).lower().strip(): normalize_phone(str(phone))
-            for name, phone in raw_contacts.items()
+            for name, phone in (raw_contacts.items() if isinstance(raw_contacts, dict) else [])
             if isinstance(phone, str) and phone
         }
 
-        # Session file goes in the persona's data dir, alongside the
-        # sqlite DB. Gitignored via personas/*/data/ in .gitignore.
-        self._transport = self._transport_factory(
-            api_id=api_id,
-            api_hash=api_hash,
-            session_dir=ctx.persona_data_dir,
-            userbot_phone=userbot_phone if isinstance(userbot_phone, str) else None,
-        )
+        # Soft-fail when credentials are missing: log loudly, skip the
+        # transport build, and let `call_contact` return an LLM-facing
+        # error explaining what's not set up. Cleaner than a hard RuntimeError
+        # in setup() — otherwise a persona that *lists* this skill can't boot
+        # at all until someone configures Telegram, which blocks unrelated
+        # development and demos.
+        if not isinstance(api_id, int) or not isinstance(api_hash, str) or not api_hash:
+            await ctx.logger.awarning(
+                "comms_telegram.credentials_missing",
+                hint=(
+                    "Set HUXLEY_TELEGRAM_API_ID + HUXLEY_TELEGRAM_API_HASH env "
+                    "vars (or `api_id` / `api_hash` in persona.yaml); get them "
+                    "from my.telegram.org/apps. Skill will register but "
+                    "call_contact will return an error until configured."
+                ),
+            )
+            self._transport = None
+        else:
+            if not self._contacts:
+                await ctx.logger.awarning(
+                    "comms_telegram.no_contacts_configured",
+                    hint=(
+                        "persona.yaml skills.comms_telegram.contacts is empty — "
+                        "call_contact will always fail. Add at least one name→phone."
+                    ),
+                )
+            # Session file goes in the persona's data dir, alongside the
+            # sqlite DB. Gitignored via personas/*/data/ in .gitignore.
+            self._transport = self._transport_factory(
+                api_id=api_id,
+                api_hash=api_hash,
+                session_dir=ctx.persona_data_dir,
+                userbot_phone=userbot_phone if isinstance(userbot_phone, str) else None,
+            )
+
         # Lazy-connect in the first handle() so setup() stays fast and
         # tests can construct the skill without network calls.
         await ctx.logger.ainfo(
             "comms_telegram.setup_complete",
             contacts=list(self._contacts),
+            configured=self._transport is not None,
         )
 
     async def handle(self, tool_name: str, args: dict[str, Any]) -> ToolResult:
@@ -149,6 +175,13 @@ class CommsTelegramSkill:
         if not isinstance(name_raw, str) or not name_raw.strip():
             return _error_result("call_contact requires a non-empty `name` argument")
         name = name_raw.lower().strip()
+
+        if self._transport is None:
+            await self._logger.awarning("comms_telegram.called_unconfigured", name=name)
+            return _error_result(
+                "Las llamadas de Telegram no están configuradas en este dispositivo. "
+                "No puedo llamar a nadie hasta que alguien configure las credenciales."
+            )
 
         phone = self._contacts.get(name)
         if phone is None:

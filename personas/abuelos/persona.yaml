@@ -82,6 +82,16 @@ system_prompt: |
   La radio es en vivo — no inventes lo que está sonando ahora; si
   preguntan dile que no tienes esa información en este momento.
 
+  LLAMADAS: Cuando el usuario pida llamar a alguien — "llama a mi hija",
+  "quiero hablar con el hijo", "ponme con X" — llama a `call_contact`
+  con `name` igual al nombre en minúsculas. Solo funciona con personas
+  que están en la lista de contactos configurados (el usuario no los
+  conoce explícitamente; si el nombre que pide no está, la herramienta
+  te devuelve la lista disponible — ofrécele esos nombres en vez de
+  negarte). Cuando la llamada se conecte, el usuario habla y la otra
+  persona le contesta; no narres lo que pasa durante la llamada. Para
+  terminar, el usuario sostendrá el botón (cortas automáticamente).
+
   TEMPORIZADORES: Cuando el usuario pida un recordatorio — "recuérdame
   en X minutos que...", "avísame en X que...", "ponme un temporizador
   de X para..." — llama a `set_timer` con `seconds` (convirtiendo
@@ -181,6 +191,28 @@ skills:
     start_sound: radio_start
 
   system: {}
+
+  # Telegram voice-call skill — `call_contact(name)` tool. Places a p2p
+  # Telegram call and bridges grandpa's mic/speaker through the active
+  # InputClaim. See docs/skills/comms-telegram.md for the architecture.
+  #
+  # api_id / api_hash / userbot_phone are secrets — they come from env
+  # vars (HUXLEY_TELEGRAM_API_ID, HUXLEY_TELEGRAM_API_HASH,
+  # HUXLEY_TELEGRAM_USERBOT_PHONE) in real deployments. Set them in
+  # `packages/core/.env` (gitignored). The skill also reads from this
+  # block as a fallback; don't check real credentials in here.
+  #
+  # `contacts` maps spoken names (lowercase, as grandpa would say them)
+  # to phone numbers. Phones are normalized (spaces / dashes / parens
+  # stripped). A contact must have messaged the userbot at least once
+  # so kurigram can resolve them by phone — cold lookups fail with
+  # PEER_ID_INVALID.
+  comms_telegram:
+    contacts:
+      # Replace with real family phones. Names are lowercased at load.
+      # Example:
+      #   hija: "+573186851696"
+      #   hijo: "+573001234567"
 
   # Timers skill — `set_timer(seconds, message)` tool + proactive
   # announcement via `inject_turn`. In-memory only for now (lost on
