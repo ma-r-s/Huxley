@@ -20,6 +20,7 @@ Turn sequencing (model speech vs tool factories, interrupts) lives on the
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import signal
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -31,6 +32,7 @@ from huxley.cost import CostTracker
 from huxley.focus.manager import FocusManager
 from huxley.loader import discover_skills
 from huxley.logging import setup_logging
+from huxley.reconnect import no_signal_tone_pcm, run_reconnect_loop
 from huxley.server.server import AudioServer
 from huxley.state.machine import StateMachine
 from huxley.storage.backup import ensure_daily_snapshot
@@ -39,7 +41,7 @@ from huxley.storage.skill import NamespacedSkillStorage
 from huxley.turn import TurnCoordinator
 from huxley.voice.openai_realtime import OpenAIRealtimeProvider
 from huxley.voice.provider import VoiceProviderCallbacks
-from huxley_sdk import AppState, SkillContext, SkillRegistry
+from huxley_sdk import AppState, InvalidTransitionError, SkillContext, SkillRegistry
 
 if TYPE_CHECKING:
     from huxley.config import Settings
@@ -230,8 +232,6 @@ class Application:
 
     async def _shutdown(self) -> None:
         """Tear down all subsystems in reverse order."""
-        import contextlib
-
         await logger.ainfo("huxley_shutting_down")
         self._shutting_down = True
 
@@ -310,12 +310,42 @@ class Application:
         self._reconnect_task = asyncio.create_task(self._auto_reconnect())
 
     async def _auto_reconnect(self) -> None:
-        """Trigger a fresh wake_word → CONNECTING → CONVERSING transition."""
+        """Retry connect with backoff until success or state leaves IDLE.
+
+        Each attempt triggers a fresh wake_word → CONNECTING transition;
+        `_enter_connecting` calls `provider.connect()` and flips us to
+        CONVERSING on success or back to IDLE on failure. The loop
+        watches the resulting state to decide whether to keep retrying.
+        After 3 consecutive failures an audible beep plays before every
+        subsequent attempt so a blind user knows the device is alive.
+        """
         await logger.ainfo("session_auto_reconnect")
-        try:
-            await self.state_machine.trigger("wake_word")
-        except Exception:
-            await logger.aexception("auto_reconnect_failed")
+
+        def is_connected() -> bool:
+            return self.state_machine.state == AppState.CONVERSING
+
+        async def attempt() -> bool:
+            if self.state_machine.state != AppState.IDLE:
+                return True  # someone else (user PTT) already reconnected
+            # InvalidTransitionError is possible if another task raced us
+            # into CONNECTING. Treat as "someone else is handling it" —
+            # the state check below tells us whether it worked.
+            with contextlib.suppress(InvalidTransitionError):
+                await self.state_machine.trigger("wake_word")
+            return is_connected()
+
+        async def announce() -> None:
+            await self.server.send_audio(no_signal_tone_pcm())
+
+        def should_continue() -> bool:
+            return not self._shutting_down and self.state_machine.state == AppState.IDLE
+
+        await run_reconnect_loop(
+            connect_attempt=attempt,
+            announce=announce,
+            should_continue=should_continue,
+            sleep=asyncio.sleep,
+        )
 
     async def _on_transcript(self, role: str, text: str) -> None:
         await self.server.send_transcript(role, text)
