@@ -109,15 +109,88 @@ Validated working in the spike:
 Not yet tested but needed for the full skill:
 
 - **Incoming call handler**: `@call_py.on_update(fl.chat_update(ChatUpdate.Status.INCOMING_CALL))` — fires when the userbot receives a call. The T1.10 skill uses this to bridge inbound calls from family members → device-side `InputClaim`. Worked in the reference `p2p_example.py` upstream; likely works, but this spike didn't exercise it.
-- **Live mic input (audio from Huxley device → Telegram)**: ntgcalls supports `AudioQuality` / raw frame streaming via `capture_mic` example. The skill will need to pipe PCM16 chunks from the Huxley device's `InputClaim.on_mic_frame` into ntgcalls's input. Spike didn't exercise this — it only streamed a pre-recorded WAV — so this is the next risky unknown for the skill.
-- **Audio from Telegram peer → Huxley device**: same shape in reverse. Example in `capture_mic` upstream. Also not exercised in this spike.
+
+## Bidirectional live-PCM on p2p — the working recipe (added 2026-04-19)
+
+This is the pattern `huxley-skill-comms-telegram` must use. Five spikes worth of learning compressed into one working sequence in [`spikes/test_telegram_mediastream_fifo.py`](../../spikes/test_telegram_mediastream_fifo.py).
+
+**Outbound (Huxley → peer)**:
+
+```python
+from ntgcalls import MediaSource
+from pytgcalls.types.raw import AudioParameters, AudioStream, Stream
+
+mic_fifo = Path("/tmp/huxley_call_mic.pcm")
+os.mkfifo(mic_fifo)
+# O_RDWR (not O_WRONLY) before dialing: keeps a writer attached from
+# Python's POV even before the app starts producing frames. Without it,
+# ffmpeg's initial read sees 0 bytes → EOF → exits → call stalls.
+mic_fd = os.open(mic_fifo, os.O_RDWR)
+os.write(mic_fd, b"\x00\x00" * 24000 * 0.08)  # 80ms silence prefill
+
+# Writer MUST be an OS thread, not an asyncio task. play() blocks the
+# event loop in C++ for ~7s during WebRTC handshake; an asyncio writer
+# would starve ffmpeg, and ffmpeg would exit on empty input.
+threading.Thread(target=pcm_writer_loop, args=(mic_fd, ...), daemon=True).start()
+
+# Use raw Stream + MediaSource.SHELL, NOT MediaStream. MediaStream runs
+# check_stream() which invokes ffprobe on the FIFO path and hangs forever
+# trying to sniff a header that doesn't exist.
+shell = (
+    f"ffmpeg -f s16le -ar 24000 -ac 1 -i {mic_fifo} "
+    f"-f s16le -ar 24000 -ac 1 -v quiet pipe:1"
+)
+stream = Stream(
+    microphone=AudioStream(MediaSource.SHELL, shell, AudioParameters(24000, 1)),
+)
+await call_py.play(peer_id, stream)
+```
+
+**Inbound (peer → Huxley)**:
+
+```python
+from pytgcalls.types import Device, Direction, RecordStream
+from pytgcalls import filters as fl
+
+# MUST be 48 kHz stereo, not 24 kHz mono. Requesting 24k mono from
+# record() returns zero-filled frames (an ntgcalls internal-resampler
+# bug on p2p). HIGH quality delivers real PCM; downsample to 24k mono
+# in Python for the OpenAI Realtime session.
+await call_py.record(
+    peer_id,
+    RecordStream(audio=True, audio_parameters=AudioParameters(48000, 2)),
+)
+
+@call_py.on_update(fl.stream_frame(devices=Device.MICROPHONE))
+async def on_peer_audio(_, update):
+    if update.direction != Direction.INCOMING:
+        return
+    for f in update.frames:
+        pcm48k_stereo = f.frame
+        # downsample to 24k mono -> forward to InputClaim
+```
+
+**Package pins** (update for bidir support):
+
+- `py-tgcalls==2.2.11`
+- `kurigram>=2.2,<3`
+- **`ntgcalls>=2.2.1b2`** — earlier versions have [ntgcalls#44](https://github.com/pytgcalls/ntgcalls/issues/44), a PacedSender bug that silently drops outbound RTP on p2p calls. Our original spike worked on 2.1.0 because file playback hit a different code path; live-frame paths need the fix.
+
+**Gotchas that cost time during this spike**:
+
+1. `ExternalMedia.AUDIO + send_frame` — does NOT work on p2p. Claims success, frames never reach the peer, AND the act of calling `send_frame` suppresses inbound. Appears to be supergroup-only. Don't use.
+2. `MediaStream(fifo_path, ffmpeg_parameters=...)` — hangs in `check_stream()` which runs ffprobe on the FIFO. Use raw `Stream(AudioStream(MediaSource.SHELL, ...))` to skip the probe.
+3. Opening the FIFO `O_WRONLY | O_NONBLOCK` after ffmpeg starts — races with ffmpeg's first read. Use `O_RDWR` before dial and prefill with a chunk of silence.
+4. Writing from an asyncio task — `play()` blocks the event loop during handshake, starving the task. Use a real OS thread; communicate via a thread-safe queue if needed.
+5. `record()` at 24 kHz mono — returns all-zero PCM frames on p2p. Use 48 kHz stereo and resample in Python.
+
+**Why so many false starts**: none of these are documented. Upstream examples all target group voice chats (negative chat IDs). The file-based playback we first tested hides the live-streaming gotchas because it doesn't need a real-time source. The skill pattern here is essentially discovered from source-reading + trial-and-error, not from any canonical example. If upstream adds a p2p live-PCM example we should update this doc.
 
 ## Next steps
 
-1. **✅ Audio quality + latency confirmed** (Mario, post-call): clean tone, no artifacts, stream started effectively immediately after answering. Happy-path characterization complete.
-2. **File a follow-up mini-spike for bidirectional live audio** (T1.10 precondition): a test script that pipes a live PCM stream from Python into the call and reads the peer's audio back out, both as PCM16 chunks. This is the actual bridge to `InputClaim`; the most important API shape to pin down before skill implementation. The one-way pre-recorded-WAV path shown here validates that ntgcalls accepts audio input, but the skill needs frame-level live I/O, not file streaming. Upstream's `capture_mic` + `frame_sending` examples are the reference.
-3. **Re-run the install-only path on the OrangePi5** when hardware arrives, to verify arm64 Linux parity.
-4. **Start T1.10 skill implementation**: `huxley-skill-comms-telegram` package with pinned `kurigram>=2.2,<3` + `py-tgcalls>=2.2.11` + `ntgcalls>=2.1`. Mirrors the skill pattern from `huxley-skill-timers`; adds the Telegram-specific transport code.
+1. **✅ Bidirectional live PCM proven working** (2026-04-19): outbound Mario heard clearly, inbound captured Mario's voice at RMS 314.9 through `record()` + `stream_frame`.
+2. **Re-run the install-only path on the OrangePi5** when hardware arrives, to verify arm64 Linux parity.
+3. **Start T1.10 skill implementation** (in progress): `huxley-skill-comms-telegram` package with pinned `kurigram>=2.2,<3` + `py-tgcalls==2.2.11` + `ntgcalls>=2.2.1b2`. Mirrors the skill pattern from `huxley-skill-timers`; adds the Telegram-specific transport code using the recipe above.
 
 ## Running the spike yourself
 
