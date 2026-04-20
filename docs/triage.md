@@ -2604,3 +2604,114 @@ The correct commands are already documented at the top of CLAUDE.md.
 | N2  | Spanish strings in framework code   | Small   | Next sprint |
 | C2  | Concurrent tool dispatch serializes | Doc now | Next sprint |
 | C3  | Position off-by-one on cancellation | Doc now | Future      |
+
+---
+
+## Field findings — 2026-04-19 grandpa demo
+
+First real session with grandpa today. ~1.5 hours of actual use (22:11 → 23:04 in `/tmp/huxley-server.log`). Findings filed below; each is its own work item with severity tag.
+
+### What worked (no action needed; captured for memory)
+
+- **Spanish recognition is solid.** Whisper handled grandpa's natural speech with all its hesitations: *"Pero que para tu tengo que."*, *"radio, ¿qué? ¿Cómo es que digo?"* — transcribed correctly, model responded sensibly.
+- **Tool dispatch chain works end-to-end.** Across the session: `list_stations`, `play_station`, `stop_radio`, `play_audiobook`, multiple narration follow-ups. Every tool the LLM picked, fired correctly.
+- **Audiobook fuzzy resolve works on real spoken queries.** *"Ponme 100 años de soledad"* → matched `Gabriel García Márquez/100 Años de soledad.m4b` even with case + spelling variation (Soledad vs soledad). Score 0.647.
+- **PTT interrupt is clean.** Multiple mid-stream interrupts (Radio Nacional at 22:32, the Cien años stream at 22:44) — `coord.interrupt` fired, content stream cancelled, next turn started without junk audio bleed-through.
+- **Session auto-reconnect worked once.** At 22:20 the OpenAI session dropped; reconnected within ~1s, conversation continued. (See F2 for when it didn't.)
+
+### F1 — 🔴 Emergency / accident intent has no real handler
+
+**Status**: filed (2026-04-19) · **Effort**: ~1 day for MVP panic skill · **Blocks**: deploying to grandpa as a primary device
+
+**Evidence** (server log line, verbatim transcript):
+
+> 22:34:13  user:       "Tuve un accidente. ¿Usted me puede ayudar?"
+> 22:34:15  assistant:  "Lamento escuchar que tuviste un accidente. Si crees que necesitas atención médica, lo más importante es buscar ayuda profesional rápidamente. Si estás en una situación de emergencia, por favor, llama a servicios de emergencia o a un familiar o amigo que pueda ayudarte..."
+
+**Why this is the worst finding of the demo**: the user is **blind** and **elderly**. He cannot dial a phone. "Llama a servicios de emergencia o a un familiar" is the wrong answer for his physical reality. The framework was literally built so this kind of moment doesn't get a generic LLM-platitude response.
+
+**Solution sketch**: a new `huxley-skill-panic` (or extend `huxley-skill-calls` with outbound) that:
+1. Listens for accident/emergency intent via the LLM (tool dispatch on phrases like "accidente", "ayuda", "no me siento bien", "me caí")
+2. Plays a distinctive, loud earcon at grandpa's end (different from any other sound — unmistakably "the device is doing something serious")
+3. `inject_turn(PREEMPT)` narrates *"Voy a llamar a Mario ahora mismo"* so grandpa knows help is on the way
+4. Fires an outbound HTTP push to **all configured family endpoints** (PWAs registered as receivers) with a high-priority alert payload
+5. Optionally opens a one-way audio stream so grandpa can keep talking even before anyone picks up — the family hears him, can speak back when they answer
+
+The receive-side on the family PWA is an inverse of today's `/call/ring`: instead of the family ringing grandpa, grandpa rings the family. Same `InputClaim` substrate works for the audio relay; only the direction of the trigger changes.
+
+**Why this should jump the queue ahead of T1.8 reminders**: the demo just gave us the user-shaped problem the whole framework exists to solve. Reminders are nice-to-have; emergency response is what justifies the OrangePi5-at-grandpa's-house deployment in the first place.
+
+### F2 — 🔴 Connection failure leaves system in IDLE forever (no retry)
+
+**Status**: filed (2026-04-19) · **Effort**: ~1h · **Blocks**: deploying anywhere with imperfect internet
+
+**Evidence**:
+
+> 23:04:14.473  coord.session_disconnected
+> 23:04:14.474  state_transition CONVERSING → IDLE
+> 23:04:14.474  state_transition IDLE → CONNECTING (auto-attempt)
+> 23:04:14.476  ERROR  connection_failed
+>               socket.gaierror: [Errno 8] nodename nor servname provided, or not known
+> 23:04:14.481  state_transition CONNECTING → IDLE  trigger=failed
+
+DNS resolution to OpenAI failed (transient — your network blip OR an upstream DNS hiccup). The framework attempted ONE reconnect, that failed, and then it sat in IDLE indefinitely. A blind elderly user has no way to know the device is offline; he'd press PTT, hear nothing back, and assume the device is broken.
+
+**Solution**: in the `_on_session_end` / `_enter_connecting` paths, on `connection_failed` retry with exponential backoff (1s / 3s / 10s / 30s, then every 60s indefinitely while still configured to reconnect). After the third failure, fire an audible inject_turn at the device — *"No tengo conexión, intentando otra vez."* So grandpa gets an audio cue that the system is alive and trying.
+
+**Definition of Done**:
+- DNS-failure-then-recovery scenario test (mocked transport that fails N times then succeeds; assert reconnect)
+- Audible inject after 3 failed attempts
+- Indefinite retry afterward (don't give up — the system shouldn't permanently brick on a network blip)
+- Log every attempt with `app.reconnect_attempt` so the timeline is debuggable
+
+### F3 — 🟠 *"¿Cuántos libros tienes?"* doesn't use the catalog
+
+**Status**: filed (2026-04-19) · **Effort**: ~30 min · **Blocks**: nothing (graceful but vague)
+
+**Evidence**:
+
+> 22:42:27  user:      "¿Cuántos libros tienes?"
+> 22:42:31  assistant: "Tengo una colección de varios audiolibros de literatura clásica y contemporánea en español, que incluye títulos de autores latinoamericanos y obras de diversos géneros. Si estás interesado en algún libro en particular o tipo de género, no dudes en decírmelo y estaré encantado de ayudarte a encontrar algo que te guste."
+
+The audiobooks skill ships `list_in_progress` AND a `prompt_context()` that includes the catalog. But the LLM gave a generic "tengo varios" instead of the actual count (19 books). Either:
+
+1. The audiobooks `prompt_context()` is too verbose and the catalog count gets lost in the noise
+2. The persona's system_prompt doesn't direct the LLM to ground answers in `prompt_context` data
+3. Both
+
+**Quick diagnosis**: read what `audiobooks.prompt_context()` actually returns today, plus AbuelOS's system_prompt section about audiobooks. Probably one small change resolves it (lead `prompt_context` with *"Tienes N audiolibros disponibles: ..."* and / or add a system_prompt sentence *"Cuando el usuario pregunte cuántos libros tienes, dale el número exacto del prompt context."*).
+
+### F4 — 🟠 *"¿De dónde puedo pedir comida?"* got generic Rappi/Uber Eats answer
+
+**Status**: filed (2026-04-19) · **Effort**: future skill, ~1-2 days · **Blocks**: nothing
+
+**Evidence**:
+
+> 22:36:19  user:      "Buenas, tengo hambre, es hora de almorzar, ¿de dónde puedo pedir comida?"
+> 22:36:24  assistant: "Para pedir comida, puedes buscar servicios de entrega a domicilio populares como Rappi, Uber Eats o Domicilios..."
+
+A blind elderly user can't open Rappi. Useless answer. Future work: a `huxley-skill-domicilios` (or generic `huxley-skill-favoritos`) with grandpa's actual usual restaurants + their phone numbers — the LLM would say *"¿Quieres que llame a tu pollo asado de siempre?"* and one tool dispatch later, the calls skill rings the restaurant. Same outbound-call substrate F1 needs.
+
+Filed for after F1 — same plumbing, more specific data.
+
+### F5 — 🟡 Radio audio bleeding into mic (echo / hardware concern)
+
+**Status**: filed (2026-04-19) · **Effort**: hardware-side fix · **Blocks**: ESP32 deployment design
+
+**Evidence**:
+
+> 22:31:25.692  transcript role=user text='radio, ¿qué? ¿Cómo es que digo? López Gómez periodista.'
+
+This was Radio Nacional's audio bleeding into grandpa's laptop mic and being transcribed AS IF grandpa said it. Today's symptom is benign (model just confused), but on a higher-volume speaker system (the planned ESP32-driven device) bleed could trigger spurious tool calls — *"...play next station..."* heard from the radio could literally call `play_station` on a different one.
+
+**Mitigation**: when picking the ESP32 hardware (mic + speaker), pick a dev kit with hardware AEC (e.g., `XMOS XVF3000`-class chips, or a dedicated codec like the WM8960). Software AEC in Python is not a winning fight for real-time audio. **Note for the hardware spec doc** (when we write it).
+
+### F6 — 🟡 `session.rx.error code=response_cancel_not_active` noise on every interrupt
+
+**Status**: filed (2026-04-19) · **Effort**: ~30 min · **Blocks**: nothing (we ignore the error)
+
+Every clean interrupt sends a `response.cancel` to a response that's already done. OpenAI returns a `response_cancel_not_active` error; we log it at info and move on. Functionally harmless but it's noise in the log.
+
+**Fix sketch**: track `response_in_flight: bool` in the coordinator (set on `commit_and_request_response` / `request_response`, cleared on `on_response_done` and `on_audio_done`). Skip the cancel send when not in flight. Alternative: drop the OpenAI-side error from log entirely (just stop reporting it at info level).
+
+---
