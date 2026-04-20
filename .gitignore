@@ -4,6 +4,12 @@ packages/core/.env
 .env.local
 .env.*.local
 web/.env.local
+# Telegram app credentials (Mario exports the my.telegram.org/apps
+# page as a plain file in repo root; kept out of git).
+telegram
+telegram.*
+*.session
+*.session-journal
 
 # Python
 __pycache__/
