@@ -60,7 +60,7 @@ class StubTransport:
             raise self.raise_on_place_call
         self.placed_calls.append(user_id)
 
-    def send_pcm(self, pcm: bytes) -> None:
+    async def send_pcm(self, pcm: bytes) -> None:
         self.mic_frames.append(pcm)
 
     async def peer_audio_chunks(self):  # type: ignore[no-untyped-def]

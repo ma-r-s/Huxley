@@ -28,21 +28,30 @@ import re
 import struct
 import threading
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from pathlib import Path
 
 logger = structlog.get_logger()
 
-# Huxley internal audio format — PCM16 mono at 24 kHz. Also what we
-# tell ntgcalls to produce on the outbound path (no resampling needed).
+# Huxley internal audio format — PCM16 mono at 24 kHz.
 HUXLEY_SAMPLE_RATE_HZ = 24_000
 HUXLEY_CHANNELS = 1
 BYTES_PER_SAMPLE = 2
+
+# What ntgcalls expects on the outbound path. Telegram's Opus pipeline
+# runs natively at 48 kHz. Telling ntgcalls 24 kHz mono forces an
+# internal resampler in its audio sink (evidence: both MediaSource.FILE
+# and ExternalMedia+send_frame exhibited the same ~5.5 s outbound
+# latency; the only shared stage is the audio sink / resampler). We
+# feed 48 kHz mono upstream (cheap per-sample duplicate in Python) so
+# ntgcalls's sink is a passthrough.
+OUTBOUND_SAMPLE_RATE_HZ = 48_000
+OUTBOUND_CHANNELS = 1
 
 # What ntgcalls delivers on the inbound path. Requesting 24k mono here
 # returns zero-filled frames (internal resampler bug on p2p). We ask
@@ -69,6 +78,30 @@ def _rms_pcm16(data: bytes) -> float:
     samples = struct.unpack(f"<{n}h", data[: n * 2])
     sq = sum(s * s for s in samples)
     return float((sq / n) ** 0.5)
+
+
+def upsample_24k_mono_to_48k_mono(pcm_24k: bytes) -> bytes:
+    """PCM16 24 kHz mono → 48 kHz mono by sample duplication.
+
+    Each input sample becomes two identical output samples. Cheap
+    (memcpy-shaped); quality is adequate for Opus encoding since
+    Opus's own interpolation smooths the step-duplication artifacts.
+    Doubling the byte count.
+    """
+    if not pcm_24k:
+        return b""
+    n_samples = len(pcm_24k) // 2
+    if n_samples == 0:
+        return b""
+    out = bytearray(n_samples * 4)
+    for i in range(n_samples):
+        b0 = pcm_24k[i * 2]
+        b1 = pcm_24k[i * 2 + 1]
+        out[i * 4] = b0
+        out[i * 4 + 1] = b1
+        out[i * 4 + 2] = b0
+        out[i * 4 + 3] = b1
+    return bytes(out)
 
 
 def downsample_48k_stereo_to_24k_mono(pcm_in: bytes) -> bytes:
@@ -160,6 +193,15 @@ class TelegramTransport:
         self._peer_rms_count = 0
         self._mic_rms_sum = 0.0
         self._mic_rms_count = 0
+        # Latency probe for the outbound pipeline: per-call-to-
+        # `send_frame` wall time. If each call blocks for ms, ntgcalls
+        # is holding the frame in an internal buffer before releasing
+        # it to the encoder. If each call returns in µs, the delay is
+        # downstream of Python (WebRTC encoder, network, peer jitter
+        # buffer). Reset per heartbeat.
+        self._send_frame_ms_sum = 0.0
+        self._send_frame_ms_count = 0
+        self._send_frame_ms_max = 0.0
         self._heartbeat_task: asyncio.Task[None] | None = None
 
         # Incoming audio: downsampled peer PCM enqueued by the
@@ -267,11 +309,17 @@ class TelegramTransport:
         return int(user.id)
 
     async def place_call(self, user_id: int) -> None:
-        """Dial the peer and open the outbound FIFO + writer thread.
+        """Dial the peer with ExternalMedia.AUDIO on the outbound side.
 
         Returns when `play()` returns — at that point the call is
         connected on the WebRTC layer. Peer audio may arrive before
         or after; the handler queues it either way.
+
+        Bypasses `MediaSource.FILE` + FIFO + ThreadedReader because
+        ThreadedReader hard-codes a 1s read-ahead batch with 2x
+        buffering (threaded_reader.cpp:35, `maxBufferSize = 100
+        frames`), causing ~5.5 s outbound latency. ExternalMedia +
+        `send_frame` posts PCM straight into ntgcalls's send queue.
         """
         if self._active_user_id is not None:
             msg = f"place_call: already in a call with user_id={self._active_user_id}"
@@ -279,6 +327,8 @@ class TelegramTransport:
         if self._call_py is None:
             msg = "place_call() before connect()"
             raise TransportError(msg)
+
+        from pathlib import Path
 
         from ntgcalls import MediaSource
         from pytgcalls.types import RecordStream
@@ -289,27 +339,20 @@ class TelegramTransport:
         with contextlib.suppress(FileNotFoundError):
             fifo.unlink()
         os.mkfifo(str(fifo))
-        # O_RDWR avoids the "reader opens, writer races, reader sees
-        # EOF" pitfall that cost us 2 spike rounds — see research doc.
-        # O_NONBLOCK is critical: without it, `os.write` can block
-        # indefinitely in kernel space on macOS when the reader (ffmpeg)
-        # dies abruptly and the kernel hasn't registered the closed
-        # read end yet. The OS thread ends up in uninterruptible wait
-        # state (`ps` shows 'U'); even kill -9 can't stop it. With
-        # O_NONBLOCK, a full pipe raises BlockingIOError and the
-        # writer loop gets a chance to see the stop event.
+        # O_RDWR avoids the reader-opens-before-writer race. O_NONBLOCK
+        # prevents indefinite kernel-wait on FIFO writes (macOS `U`
+        # state processes that even kill -9 can't stop).
         fd = os.open(str(fifo), os.O_RDWR | os.O_NONBLOCK)
-        # Prefill with 80 ms of silence so ffmpeg's first read returns
-        # immediately with valid bytes.
-        silence = b"\x00\x00" * (HUXLEY_SAMPLE_RATE_HZ * 80 // 1000)
+        # Prefill with 80 ms of silence so ntgcalls's FileReader first
+        # read returns bytes immediately rather than blocking on a
+        # newly-created empty FIFO.
+        silence = b"\x00\x00" * (OUTBOUND_SAMPLE_RATE_HZ * 80 // 1000)
         os.write(fd, silence)
         self._mic_fd = fd
         self._mic_fifo = fifo
 
-        # Start the writer thread BEFORE dialing. play() blocks the
-        # event loop for several seconds during WebRTC handshake; if
-        # the writer were an asyncio task it would starve ffmpeg,
-        # which would exit on empty input, which would stall the call.
+        # Start the writer thread BEFORE dialing so ffmpeg / ntgcalls
+        # never see an empty FIFO during setup.
         self._writer_stop.clear()
         thread = threading.Thread(
             target=self._writer_loop,
@@ -320,18 +363,12 @@ class TelegramTransport:
         thread.start()
         self._writer_thread = thread
 
-        # Raw Stream + MediaSource.SHELL — bypasses MediaStream's
-        # check_stream() which would run ffprobe on the FIFO and hang.
-        shell = (
-            f"ffmpeg -f s16le -ar {HUXLEY_SAMPLE_RATE_HZ} -ac {HUXLEY_CHANNELS} "
-            f"-i {fifo} "
-            f"-f s16le -ar {HUXLEY_SAMPLE_RATE_HZ} -ac {HUXLEY_CHANNELS} -v quiet pipe:1"
-        )
+        # Raw Stream + MediaSource.FILE on the FIFO directly.
         out_stream = Stream(
             microphone=AudioStream(
-                MediaSource.SHELL,
-                shell,
-                AudioParameters(HUXLEY_SAMPLE_RATE_HZ, HUXLEY_CHANNELS),
+                MediaSource.FILE,
+                str(fifo),
+                AudioParameters(OUTBOUND_SAMPLE_RATE_HZ, OUTBOUND_CHANNELS),
             ),
         )
 
@@ -363,7 +400,7 @@ class TelegramTransport:
         await logger.ainfo(
             "comms_telegram.transport.call_placed",
             user_id=user_id,
-            fifo=str(fifo),
+            transport="ExternalMedia.AUDIO + send_frame",
         )
 
     async def _heartbeat_loop(self) -> None:
@@ -377,6 +414,11 @@ class TelegramTransport:
                 outbound_backlog = sum(len(c) for c in self._outbound_chunks)
                 dropped = self._outbound_dropped_bytes
                 self._outbound_dropped_bytes = 0
+            sf_mean_ms = (
+                self._send_frame_ms_sum / self._send_frame_ms_count
+                if self._send_frame_ms_count
+                else 0.0
+            )
             await logger.ainfo(
                 "comms_telegram.transport.heartbeat",
                 peer_frames=self._peer_frames_received,
@@ -384,6 +426,8 @@ class TelegramTransport:
                 peer_mean_rms=round(peer_rms, 1),
                 mic_chunks=self._sent_count,
                 mic_mean_rms=round(mic_rms, 1),
+                send_frame_mean_ms=round(sf_mean_ms, 2),
+                send_frame_max_ms=round(self._send_frame_ms_max, 2),
                 outbound_backlog_bytes=outbound_backlog,
                 outbound_dropped_bytes=dropped,
                 inbound_queue_depth=(
@@ -397,32 +441,31 @@ class TelegramTransport:
             self._peer_rms_count = 0
             self._mic_rms_sum = 0.0
             self._mic_rms_count = 0
+            self._send_frame_ms_sum = 0.0
+            self._send_frame_ms_count = 0
+            self._send_frame_ms_max = 0.0
 
-    def send_pcm(self, pcm_24k_mono: bytes) -> None:
-        """Queue a PCM chunk for outbound send. Safe to call from an
-        asyncio coroutine — the actual write happens in the writer
-        thread. Zero-length chunks are ignored.
+    async def send_pcm(self, pcm_24k_mono: bytes) -> None:
+        """Queue a PCM chunk for outbound send via the FIFO writer.
 
-        Caps the queue at ~OUTBOUND_QUEUE_MAX_BYTES (~200 ms of 24 kHz
-        mono PCM). Phone calls prioritize low latency over
-        completeness — if the browser's audio clock drifts faster than
-        our writer's pacing clock, the queue would otherwise grow
-        without bound and Mario ends up hearing grandpa 10 seconds
-        late. Dropping the oldest chunks keeps latency bounded; the
-        user experience is "occasional blip" rather than "laggy call."
+        Upsamples 24 kHz mono (Huxley's internal rate) to 48 kHz mono
+        so ntgcalls can pass-through to the Opus encoder without
+        resampling internally — eliminates the audio-sink resampler
+        buffer that accumulates latency.
         """
-        if not pcm_24k_mono:
+        if not pcm_24k_mono or self._active_user_id is None:
             return
+        pcm_48k_mono = upsample_24k_mono_to_48k_mono(pcm_24k_mono)
         with self._outbound_lock:
             was_first = self._sent_count == 0
-            self._outbound_chunks.append(pcm_24k_mono)
+            self._outbound_chunks.append(pcm_48k_mono)
             self._sent_count += 1
             self._mic_rms_sum += _rms_pcm16(pcm_24k_mono)
             self._mic_rms_count += 1
-            # Drop oldest chunks if the queue has accumulated too much
-            # backlog. Threshold = ~200 ms worth of 24 kHz mono PCM16
-            # (9600 bytes). Writer consumes 960 bytes per 20 ms frame.
-            _max_bytes = HUXLEY_SAMPLE_RATE_HZ * BYTES_PER_SAMPLE // 5
+            # Cap backlog at ~200 ms of PCM to prevent unbounded growth
+            # if browser mic clock drifts past writer pace. At 48 kHz
+            # mono PCM16 that's 96 KB / 5 = 19.2 KB.
+            _max_bytes = OUTBOUND_SAMPLE_RATE_HZ * BYTES_PER_SAMPLE // 5
             total = sum(len(c) for c in self._outbound_chunks)
             dropped = 0
             while total > _max_bytes and self._outbound_chunks:
@@ -432,74 +475,49 @@ class TelegramTransport:
             if dropped:
                 self._outbound_dropped_bytes += dropped
         if was_first:
-            # Fire-and-forget log — can't await from a sync function,
-            # but structlog's sync logger is fine from any thread.
+            # Sync logger from within async context — structlog sync
+            # logging is safe from any thread/context.
             structlog.get_logger().info(
                 "comms_telegram.transport.first_send_pcm",
-                chunk_bytes=len(pcm_24k_mono),
+                chunk_bytes_in=len(pcm_24k_mono),
+                chunk_bytes_out=len(pcm_48k_mono),
             )
 
     def _writer_loop(self, fd: int) -> None:
-        """Pump `_outbound_chunks` to the FIFO at real-time pace.
+        """Pump `_outbound_chunks` to the FIFO, letting cat/ntgcalls
+        set the pace via backpressure.
 
-        Every `FRAME_MS` we write exactly `FRAME_BYTES` of PCM — either
-        drained from `_outbound_chunks` (accumulated from grandpa's mic
-        frames via `send_pcm`) or padded with silence when the producer
-        hasn't supplied enough bytes yet. Pacing matters because the
-        FIFO is O_NONBLOCK: unbounded writes would fill the kernel
-        buffer, raise `BlockingIOError`, and (without this loop's
-        retry) kill the writer thread — which is exactly the bug that
-        silenced the outbound path on the first call attempt.
-
-        Accumulating the tail of a partially consumed chunk into
-        `leftover` preserves every mic sample even though the worklet
-        emits 256-byte chunks on a 5.33 ms cadence and we're writing
-        on a 20 ms cadence.
+        Experimental: no real-time pacing. We write whatever's queued
+        as fast as the kernel FIFO accepts it. When the FIFO fills up
+        (O_NONBLOCK raises BlockingIOError), we sleep briefly and
+        retry. When the queue is empty, we sleep briefly and loop.
+        This lets ntgcalls pull bytes at exactly the rate its encoder
+        wants — ideally no buffer accumulates anywhere.
         """
-        frame_ms = 20
-        frame_bytes = (HUXLEY_SAMPLE_RATE_HZ * frame_ms // 1000) * BYTES_PER_SAMPLE
-        silence_chunk = b"\x00" * frame_bytes
         leftover = bytearray()
-        next_write_at = time.monotonic()
-
         while not self._writer_stop.is_set():
-            # Assemble exactly one frame's worth of bytes.
+            # Drain everything available in outbound_chunks into leftover
+            # so our writes are as big as possible (fewer syscalls).
             with self._outbound_lock:
-                while len(leftover) < frame_bytes and self._outbound_chunks:
+                while self._outbound_chunks:
                     leftover.extend(self._outbound_chunks.pop(0))
-            if len(leftover) >= frame_bytes:
-                chunk = bytes(leftover[:frame_bytes])
-                del leftover[:frame_bytes]
-            else:
-                chunk = silence_chunk
+
+            if not leftover:
+                # Nothing to write — yield briefly.
+                time.sleep(0.005)
+                continue
 
             try:
-                os.write(fd, chunk)
+                written = os.write(fd, bytes(leftover))
+                del leftover[:written]
             except BrokenPipeError:
-                # ffmpeg closed — call ended. Stop cleanly.
                 break
             except BlockingIOError:
-                # Kernel FIFO buffer is full — ffmpeg hasn't drained yet.
-                # Back off half a frame and retry without losing the chunk.
-                time.sleep(frame_ms / 2000)
-                # Put it back on the front of the leftover buffer so we
-                # retry the same bytes next iteration — no drops.
-                leftover[0:0] = chunk
+                # Kernel FIFO buffer full — wait for ntgcalls to drain.
+                time.sleep(0.005)
                 continue
             except OSError:
                 break
-
-            # Pace: sleep until the next frame's deadline. Drift-aware,
-            # so tiny write jitter doesn't accumulate into a growing lag.
-            next_write_at += frame_ms / 1000
-            slack = next_write_at - time.monotonic()
-            if slack > 0:
-                time.sleep(slack)
-            elif slack < -0.1:
-                # We're more than 100ms behind schedule — reset the
-                # clock rather than try to catch up with a burst of
-                # back-to-back writes (would overflow the buffer).
-                next_write_at = time.monotonic()
 
     async def peer_audio_chunks(self) -> AsyncIterator[bytes]:
         """Async iterator yielding 24 kHz mono PCM chunks from the peer.

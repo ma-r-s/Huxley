@@ -225,7 +225,7 @@ class CommsTelegramSkill:
         """Forward PCM from grandpa's mic into the Telegram call."""
         if self._transport is None:
             return
-        self._transport.send_pcm(pcm)
+        await self._transport.send_pcm(pcm)
 
     async def _on_claim_end(self, reason: ClaimEndReason) -> None:
         """Hang up the Telegram call when the claim ends.
