@@ -2650,7 +2650,7 @@ The receive-side on the family PWA is an inverse of today's `/call/ring`: instea
 
 ### F2 — 🔴 Connection failure leaves system in IDLE forever (no retry)
 
-**Status**: filed (2026-04-19) · **Effort**: ~1h · **Blocks**: deploying anywhere with imperfect internet
+**Status**: done (2026-04-19) · **Effort**: ~1h · **Blocks**: deploying anywhere with imperfect internet
 
 **Evidence**:
 
@@ -2663,7 +2663,7 @@ The receive-side on the family PWA is an inverse of today's `/call/ring`: instea
 
 DNS resolution to OpenAI failed (transient — your network blip OR an upstream DNS hiccup). The framework attempted ONE reconnect, that failed, and then it sat in IDLE indefinitely. A blind elderly user has no way to know the device is offline; he'd press PTT, hear nothing back, and assume the device is broken.
 
-**Solution**: in the `_on_session_end` / `_enter_connecting` paths, on `connection_failed` retry with exponential backoff (1s / 3s / 10s / 30s, then every 60s indefinitely while still configured to reconnect). After the third failure, fire an audible inject_turn at the device — _"No tengo conexión, intentando otra vez."_ So grandpa gets an audio cue that the system is alive and trying.
+**Solution**: in the `_on_session_end` / `_enter_connecting` paths, on `connection_failed` retry with exponential backoff (1s / 3s / 10s / 30s, then every 60s indefinitely while still configured to reconnect). After the third failure, fire an audible inject*turn at the device — *"No tengo conexión, intentando otra vez."\_ So grandpa gets an audio cue that the system is alive and trying.
 
 **Definition of Done**:
 
@@ -2671,6 +2671,15 @@ DNS resolution to OpenAI failed (transient — your network blip OR an upstream 
 - Audible inject after 3 failed attempts
 - Indefinite retry afterward (don't give up — the system shouldn't permanently brick on a network blip)
 - Log every attempt with `app.reconnect_attempt` so the timeline is debuggable
+
+**Ship notes (2026-04-19)**:
+
+- Retry loop extracted to `packages/core/src/huxley/reconnect.py` so the backoff policy is testable without an Application graph. Pure `run_reconnect_loop(connect_attempt, announce, should_continue, sleep)` with injected sleep.
+- Backoff: `(1s, 3s, 10s, 30s)` then 60s floor indefinitely. Exits when `should_continue()` flips False (shutdown, user PTT reconnected, or success).
+- Audible cue from attempt 4 onward: synthesized double-beep PCM16 @ 24kHz played via `server.send_audio()` (no persona asset required, no LLM needed — the whole point is that we're offline). 9 unit tests in `test_reconnect.py`.
+- Deviation from spec: the cue is a beep tone, not a spoken "No tengo conexión" inject_turn. `inject_turn` requires a live session; during an outage there isn't one. Proper voiced announcement would need a pre-recorded persona asset or local TTS — filed as a follow-up if Mario wants a voice message instead of a tone.
+- Commit: `<hash>`.
+- Lessons: extract retry policies as pure functions with injected sleep — mocking `asyncio.sleep` globally is a trap; a callable sleep parameter gives deterministic tests in 0.02s.
 
 ### F3 — 🟠 _"¿Cuántos libros tienes?"_ doesn't use the catalog
 
@@ -2687,7 +2696,7 @@ The audiobooks skill ships `list_in_progress` AND a `prompt_context()` that incl
 2. The persona's system_prompt doesn't direct the LLM to ground answers in `prompt_context` data
 3. Both
 
-**Quick diagnosis**: read what `audiobooks.prompt_context()` actually returns today, plus AbuelOS's system_prompt section about audiobooks. Probably one small change resolves it (lead `prompt_context` with _"Tienes N audiolibros disponibles: ..."_ and / or add a system_prompt sentence _"Cuando el usuario pregunte cuántos libros tienes, dale el número exacto del prompt context."_).
+**Quick diagnosis**: read what `audiobooks.prompt_context()` actually returns today, plus AbuelOS's system*prompt section about audiobooks. Probably one small change resolves it (lead `prompt_context` with *"Tienes N audiolibros disponibles: ..."_ and / or add a system_prompt sentence _"Cuando el usuario pregunte cuántos libros tienes, dale el número exacto del prompt context."\_).
 
 ### F4 — 🟠 _"¿De dónde puedo pedir comida?"_ got generic Rappi/Uber Eats answer
 
