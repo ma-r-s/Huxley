@@ -89,6 +89,16 @@ export function createWsStore() {
   // indistinguishable from a broken device.
   let silenceTimer: ReturnType<typeof setTimeout> | null = null;
   let thinkingToneActive = false;
+  // Set to true when pttStart fires while in skill_continuous mode (claim
+  // hangup). pttStop reads + clears this flag to decide whether to start
+  // the silence timer. Two timing scenarios both work:
+  //   Fast server (responds before release): input_mode:assistant_ptt arrives
+  //     before pttStop — cancelSilenceTimer is a no-op, but this flag is still
+  //     true from pttStart, so pttStop skips startSilenceTimer. ✓
+  //   Slow server (responds after release): inputMode is still skill_continuous
+  //     at pttStop — flag is true, no timer started; input_mode:assistant_ptt
+  //     arrives later and cancelSilenceTimer is a belt-and-suspenders no-op. ✓
+  let pttWasClaimHangup = false;
 
   function startSilenceTimer(trigger: string) {
     if (silenceTimer !== null) clearTimeout(silenceTimer);
@@ -345,13 +355,24 @@ export function createWsStore() {
       send({ type: "wake_word" });
     },
     pttStart: () => {
+      // Record whether this press is a claim-hangup so pttStop can skip
+      // the silence timer. Must be captured here (before the server clears
+      // the claim and flips inputMode back to assistant_ptt).
+      pttWasClaimHangup = inputMode === "skill_continuous";
       cancelSilenceTimer("ptt_start");
       send({ type: "ptt_start" });
     },
     pttStop: () => {
       send({ type: "ptt_stop" });
-      // Initial gap: commit → OpenAI → first audio delta. Could be > 400 ms.
-      startSilenceTimer("ptt_stop");
+      if (pttWasClaimHangup) {
+        // This was a claim-hangup press — no listening turn will be created,
+        // so no audio is coming. Skip the silence timer entirely.
+        pttWasClaimHangup = false;
+        sendClientEvent("ptt_hangup_no_silence_timer");
+      } else {
+        // Normal press → commit → OpenAI → first audio delta. Could be > 400ms.
+        startSilenceTimer("ptt_stop");
+      }
     },
     reset: () => {
       cancelSilenceTimer("reset");
