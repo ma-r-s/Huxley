@@ -48,11 +48,19 @@ BYTES_PER_SAMPLE = 2
 OUTBOUND_SAMPLE_RATE_HZ = 24_000
 OUTBOUND_CHANNELS = 1
 
+# Writer pacing: one frame written per tick keeps the macOS kernel FIFO
+# near-empty. Without pacing the kernel pipe buffer (~65 KB) absorbs a
+# burst of ~1.37 s worth of 24kHz mono audio before ntgcalls reads any
+# of it, causing ~1.4 s of structural latency. Pacing to 10 ms/frame
+# keeps the FIFO at most one frame deep → ~100-150 ms total latency.
+_WRITER_FRAME_MS = 10
+_WRITER_FRAME_BYTES = OUTBOUND_SAMPLE_RATE_HZ * BYTES_PER_SAMPLE * _WRITER_FRAME_MS // 1000
+_WRITER_INTERVAL_S = _WRITER_FRAME_MS / 1000.0
+
 # How much silence (bytes) to pre-fill into the FIFO before dialing.
-# This ensures ntgcalls's FileReader first read returns immediately
-# instead of blocking on an empty FIFO.
-_FIFO_PREFILL_MS = 80
-_FIFO_PREFILL_BYTES = OUTBOUND_SAMPLE_RATE_HZ * BYTES_PER_SAMPLE * _FIFO_PREFILL_MS // 1000
+# One writer-frame of silence so ntgcalls's ShellReader first read
+# returns immediately instead of blocking on an empty FIFO.
+_FIFO_PREFILL_BYTES = _WRITER_FRAME_BYTES * 2
 
 # Max outbound backlog before we start dropping frames. ~200 ms of 24kHz
 # mono PCM16 = 24000*2*0.2 = 9600 bytes.
@@ -322,8 +330,11 @@ class TelegramTransport:
         thread.start()
         self._writer_thread = thread
 
+        # Low-latency flags: skip ffmpeg's probe/analysis delay (~200ms saved).
         shell = (
-            f"ffmpeg -f s16le -ar {OUTBOUND_SAMPLE_RATE_HZ} -ac {OUTBOUND_CHANNELS} "
+            f"ffmpeg -fflags nobuffer -flags low_delay -probesize 32 "
+            f"-analyzeduration 0 "
+            f"-f s16le -ar {OUTBOUND_SAMPLE_RATE_HZ} -ac {OUTBOUND_CHANNELS} "
             f"-i {fifo} "
             f"-f s16le -ar {OUTBOUND_SAMPLE_RATE_HZ} -ac {OUTBOUND_CHANNELS} -v quiet pipe:1"
         )
@@ -425,29 +436,49 @@ class TelegramTransport:
             )
 
     def _writer_loop(self, fd: int) -> None:
-        """Drain `_outbound_chunks` into the FIFO.
+        """Write PCM to the FIFO at a strict 10 ms/frame cadence.
 
-        Runs in a dedicated OS thread so asyncio jitter doesn't affect
-        write cadence. Uses O_NONBLOCK + BlockingIOError retry so a
-        full FIFO kernel buffer never hangs the thread indefinitely.
+        The macOS kernel pipe buffer is ~65 KB. At 24 kHz mono PCM16
+        that holds ~1.37 s of audio. If the writer bursts all available
+        data at once the kernel absorbs it and ntgcalls reads it ~1.4 s
+        later — structural latency. Pacing to exactly one
+        _WRITER_FRAME_BYTES chunk per _WRITER_INTERVAL_S keeps the FIFO
+        near-empty so ntgcalls reads frames within ~10 ms of arrival.
         """
         leftover = bytearray()
+        next_tick = time.monotonic() + _WRITER_INTERVAL_S
+
         while not self._writer_stop.is_set():
+            # Drain everything in the queue into leftover.
             with self._outbound_lock:
                 while self._outbound_chunks:
                     leftover.extend(self._outbound_chunks.pop(0))
-            if not leftover:
-                time.sleep(0.005)
-                continue
+
+            # Write exactly one frame if we have enough data; write
+            # silence if the queue ran dry (keeps ntgcalls fed, avoids
+            # a read-stall that would reset the ffmpeg pipe).
+            if len(leftover) >= _WRITER_FRAME_BYTES:
+                frame = bytes(leftover[:_WRITER_FRAME_BYTES])
+                del leftover[:_WRITER_FRAME_BYTES]
+            else:
+                frame = b"\x00" * _WRITER_FRAME_BYTES
+
             try:
-                written = os.write(fd, bytes(leftover))
-                del leftover[:written]
-            except BrokenPipeError:
-                break
+                os.write(fd, frame)
             except BlockingIOError:
-                time.sleep(0.005)
-            except OSError:
+                pass  # FIFO full for one tick — skip, try next tick
+            except (BrokenPipeError, OSError):
                 break
+
+            # Sleep until the next 10 ms boundary.
+            now = time.monotonic()
+            sleep_s = next_tick - now
+            next_tick += _WRITER_INTERVAL_S
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+            else:
+                # Behind schedule — reset clock rather than spinning.
+                next_tick = time.monotonic() + _WRITER_INTERVAL_S
 
     async def peer_audio_chunks(self) -> AsyncIterator[bytes]:
         """Async iterator yielding 24 kHz mono PCM chunks from the peer.
