@@ -478,13 +478,22 @@ class ClaimObserver:
     async def _speaker_pump(self, source: AsyncIterator[bytes]) -> None:
         """Read from the claim's speaker_source and forward to the client.
 
-        Natural end of the iterator does NOT terminate the claim — the
-        skill drives termination explicitly via `ClaimHandle.cancel()`
-        or by the caller hanging up (coordinator-side logic outside
-        this observer). This is intentional: a call's speaker_source
-        (caller's audio) might briefly end with silence mid-call and
-        we don't want to hang up just because the caller paused.
+        When the source iterator exhausts naturally (e.g. the peer hung up a
+        voice call and the transport closed the iterator), the claim is ended
+        with `ClaimEndReason.NATURAL`. The skill's `speaker_source` is
+        responsible for keeping the iterator alive while the session is active
+        — the comms-telegram transport only ends the iterator when
+        `_ended.is_set()`, which only happens on peer hangup or explicit
+        `end_call()`, not on a brief audio pause. Skills that need "don't end
+        on silence" semantics should implement a non-ending iterator.
+
+        Implementation note: `_release_self()` enqueues a Release event to the
+        FM mailbox and returns immediately (queue put is non-blocking on an
+        unbounded queue). By the time the FM actor processes the event and
+        calls `_end()`, this task has already returned and `_speaker_task.done()
+        is True`, so `_end()` skips the cancel-await dance.
         """
+        natural_end = False
         try:
             async for chunk in source:
                 # Lazy FACTORY acquire on the first chunk — same pattern
@@ -494,6 +503,7 @@ class ClaimObserver:
                     await self._speaking_state.acquire(SpeakingOwner.FACTORY)
                     self._owns_speaking = True
                 await self._send_audio(chunk)
+            natural_end = True
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -502,6 +512,18 @@ class ClaimObserver:
                 interface=self._interface_name,
             )
             self.set_end_reason(ClaimEndReason.ERROR)
+
+        # Speaker source ended naturally — end the claim. `_release_self()`
+        # enqueues to the FM mailbox (non-blocking); by the time the actor
+        # delivers NONE to `_end()`, this task is done and `_speaker_task`
+        # is not cancelled (it's already past the `done()` check).
+        if natural_end and not self._ended:
+            await logger.ainfo(
+                "claim.speaker_source_exhausted",
+                interface=self._interface_name,
+            )
+            self.set_end_reason(ClaimEndReason.NATURAL)
+            await self._release_self()
 
     async def _end(self) -> None:
         """NONE delivery: tear down everything and fire the end callbacks.
