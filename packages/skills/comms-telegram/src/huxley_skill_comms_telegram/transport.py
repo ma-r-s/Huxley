@@ -1,17 +1,17 @@
-"""Telegram voice-call transport — encapsulates py-tgcalls.
+"""Telegram voice-call transport -- encapsulates py-tgcalls.
 
 See `docs/research/telegram-voice.md` for the full rationale.
 
-- Outbound: FIFO + MediaSource.SHELL (ffmpeg passthrough). Python writes
-  24 kHz mono PCM16 to a named FIFO from a dedicated OS thread. ntgcalls
-  spawns ffmpeg which reads the FIFO and forwards raw PCM to the WebRTC
-  encoder. ntgcalls handles timing internally (pulls at its own rate),
-  so Python's asyncio jitter never reaches the encoder. ExternalMedia +
-  send_frame was tried but produced a loud artifact on the receiver side;
-  root cause unknown, reverted.
-- Inbound: py-tgcalls' `record()` + `@stream_frame` handler delivers
-  48 kHz stereo PCM16. The transport downsamples to 24 kHz mono via
-  decimation + channel averaging before enqueuing.
+- Outbound: ExternalMedia.AUDIO + dedicated real-time OS thread.
+  Python writes 24 kHz mono PCM16 to a thread-safe deque via send_pcm().
+  A dedicated OS thread runs at a strict 10 ms/frame cadence, upsamples
+  to 48 kHz mono, and calls send_frame() via asyncio.run_coroutine_threadsafe.
+  No ffmpeg, no FIFO, no kernel pipe buffer. This is the same pattern used
+  by production WebRTC bridges (Janus, Asterisk, Twilio): a real-time OS
+  thread owns the sending clock so asyncio jitter never reaches ntgcalls.
+- Inbound: py-tgcalls' record() + @stream_frame handler delivers 48 kHz
+  stereo PCM16. The transport downsamples to 24 kHz mono via decimation +
+  channel averaging before enqueuing.
 
 The transport is split from the skill so skill logic can be unit-tested
 against a stub without real py-tgcalls.
@@ -20,8 +20,8 @@ against a stub without real py-tgcalls.
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
-import os
 import re
 import struct
 import threading
@@ -36,35 +36,23 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
-# Huxley internal audio format — PCM16 mono at 24 kHz.
+# Huxley internal audio format -- PCM16 mono at 24 kHz.
 HUXLEY_SAMPLE_RATE_HZ = 24_000
 HUXLEY_CHANNELS = 1
 BYTES_PER_SAMPLE = 2
 
-# Outbound format fed into the FIFO. ntgcalls/ffmpeg read this and hand
-# it to the WebRTC encoder. 24 kHz mono matches Huxley's internal rate —
-# no upsampling needed, no resampler in the Python layer. ntgcalls's
-# audio sink resamples internally to 48 kHz (Opus native rate).
-OUTBOUND_SAMPLE_RATE_HZ = 24_000
+# Outbound format sent via ExternalMedia. ntgcalls expects 48 kHz mono
+# PCM16 frames of exactly 10 ms each (960 bytes). Python upsamples from
+# Huxley's 24 kHz internal rate in the send thread.
+OUTBOUND_SAMPLE_RATE_HZ = 48_000
 OUTBOUND_CHANNELS = 1
 
-# Writer pacing: one frame written per tick keeps the macOS kernel FIFO
-# near-empty. Without pacing the kernel pipe buffer (~65 KB) absorbs a
-# burst of ~1.37 s worth of 24kHz mono audio before ntgcalls reads any
-# of it, causing ~1.4 s of structural latency. Pacing to 10 ms/frame
-# keeps the FIFO at most one frame deep → ~100-150 ms total latency.
-_WRITER_FRAME_MS = 10
-_WRITER_FRAME_BYTES = OUTBOUND_SAMPLE_RATE_HZ * BYTES_PER_SAMPLE * _WRITER_FRAME_MS // 1000
-_WRITER_INTERVAL_S = _WRITER_FRAME_MS / 1000.0
+# ExternalMedia frame: 48kHz * 2 bytes/sample * 1 ch / 100 frames/s = 960 bytes
+_SEND_FRAME_BYTES = OUTBOUND_SAMPLE_RATE_HZ * BYTES_PER_SAMPLE * OUTBOUND_CHANNELS // 100
+_SEND_INTERVAL_S = 0.010  # 10 ms between frames
 
-# How much silence (bytes) to pre-fill into the FIFO before dialing.
-# One writer-frame of silence so ntgcalls's ShellReader first read
-# returns immediately instead of blocking on an empty FIFO.
-_FIFO_PREFILL_BYTES = _WRITER_FRAME_BYTES * 2
-
-# Max outbound backlog before we start dropping frames. ~200 ms of 24kHz
-# mono PCM16 = 24000*2*0.2 = 9600 bytes.
-_OUTBOUND_MAX_BYTES = OUTBOUND_SAMPLE_RATE_HZ * BYTES_PER_SAMPLE // 5
+# Outbound backlog cap: ~200 ms of 48 kHz mono PCM16 before dropping.
+_OUTBOUND_MAX_BYTES = OUTBOUND_SAMPLE_RATE_HZ * BYTES_PER_SAMPLE * OUTBOUND_CHANNELS // 5
 
 # What ntgcalls delivers on the inbound path. Requesting 24k mono here
 # returns zero-filled frames (internal resampler bug on p2p). We ask
@@ -83,7 +71,7 @@ _SESSION_NAME = "huxley_userbot"
 
 
 def _rms_pcm16(data: bytes) -> float:
-    """RMS of a PCM16 buffer. For diagnostic heartbeats — silence is
+    """RMS of a PCM16 buffer. For diagnostic heartbeats -- silence is
     ~0, voice speech is tens to hundreds. Tolerant of odd lengths."""
     if len(data) < 2:
         return 0.0
@@ -94,10 +82,10 @@ def _rms_pcm16(data: bytes) -> float:
 
 
 def downsample_48k_stereo_to_24k_mono(pcm_in: bytes) -> bytes:
-    """Convert PCM16 48 kHz stereo → 24 kHz mono.
+    """Convert PCM16 48 kHz stereo -> 24 kHz mono.
 
     Decimation by 2 (keep every other sample) combined with channel
-    averaging (L+R)/2. Quality is adequate for voice — we're going
+    averaging (L+R)/2. Quality is adequate for voice -- we're going
     into Whisper / GPT-4o realtime on the Huxley side, both of which
     happily accept 16 kHz-grade speech. Not a general-purpose
     high-fidelity resampler.
@@ -121,6 +109,29 @@ def downsample_48k_stereo_to_24k_mono(pcm_in: bytes) -> bytes:
     return bytes(out)
 
 
+def upsample_24k_mono_to_48k_mono(pcm_in: bytes) -> bytes:
+    """2x linear-interpolation upsample: 24 kHz mono PCM16 -> 48 kHz mono PCM16.
+
+    Each input sample maps to two output samples:
+      out[2i]   = in[i]
+      out[2i+1] = (in[i] + in[i+1]) // 2   for i < n-1
+      out[2n-2] = in[n-1]                   last sample: original
+      out[2n-1] = in[n-1]                   last sample: repeated
+    """
+    n = len(pcm_in) // 2
+    if n == 0:
+        return b""
+    samples = struct.unpack(f"<{n}h", pcm_in[: n * 2])
+    out = bytearray(n * 4)
+    for i in range(n - 1):
+        struct.pack_into("<h", out, i * 4, samples[i])
+        interp = (int(samples[i]) + int(samples[i + 1])) >> 1
+        struct.pack_into("<h", out, i * 4 + 2, interp)
+    struct.pack_into("<h", out, (n - 1) * 4, samples[-1])
+    struct.pack_into("<h", out, (n - 1) * 4 + 2, samples[-1])
+    return bytes(out)
+
+
 class TransportError(Exception):
     """Raised on any transport-level failure (auth, dial, send)."""
 
@@ -141,7 +152,7 @@ class TelegramTransport:
         userbot_phone: str | None = None,
     ) -> None:
         """Create a transport. `userbot_phone` is only consulted on the
-        first-ever auth for this session file — stored in sqlite after,
+        first-ever auth for this session file -- stored in sqlite after,
         skipped on every subsequent startup.
         """
         self._api_id = api_id
@@ -157,17 +168,21 @@ class TelegramTransport:
 
         # Active-call state.
         self._active_user_id: int | None = None
-        self._mic_fd: int | None = None
-        self._mic_fifo: object | None = None  # pathlib.Path
-        self._writer_thread: threading.Thread | None = None
-        self._writer_stop = threading.Event()
-        # Thread-safe outbound queue. Async producer (send_pcm) appends;
-        # writer thread consumes and writes to the FIFO.
-        self._outbound_chunks: list[bytes] = []
-        self._outbound_lock = threading.Lock()
+        # Event loop reference captured in place_call(); needed by the
+        # send thread to submit coroutines via run_coroutine_threadsafe.
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+        # Outbound send thread -- dedicated OS thread at 10 ms cadence.
+        # Drains _send_deque, upsamples to 48 kHz, calls send_frame via
+        # run_coroutine_threadsafe so asyncio jitter never reaches ntgcalls.
+        self._send_thread: threading.Thread | None = None
+        self._send_stop = threading.Event()
+        self._send_deque: collections.deque[bytes] = collections.deque()
+        self._send_lock = threading.Lock()
         self._outbound_dropped_bytes = 0
         self._sent_count = 0
-        # Heartbeat counters — inbound peer-frame arrival and outbound
+
+        # Heartbeat counters -- inbound peer-frame arrival and outbound
         # mic-frame push. Logged every 2s during a call so we can see
         # if the pipe went silent mid-conversation. RMS accumulators
         # track audio energy so we can tell "frames arriving but empty"
@@ -227,7 +242,7 @@ class TelegramTransport:
             if update.direction != Direction.INCOMING:
                 return
             if self._inbound_queue is None:
-                return  # no active call — drop frames
+                return  # no active call -- drop frames
             if not saw_first_frame["value"]:
                 saw_first_frame["value"] = True
                 await logger.ainfo(
@@ -251,7 +266,7 @@ class TelegramTransport:
             ),
         )
         async def on_chat_update(_, update) -> None:  # type: ignore[no-untyped-def]
-            # Peer hung up OR call failed to establish → close the claim
+            # Peer hung up OR call failed to establish -> close the claim
             # so grandpa doesn't sit on a dead-silent line forever.
             # Setting _ended short-circuits the speaker_source iterator.
             await logger.ainfo(
@@ -269,7 +284,7 @@ class TelegramTransport:
         Precondition: the target must exist in the userbot's dialog
         history (sent at least one message) or contacts list. Cold
         lookups by phone fail with `PEER_ID_INVALID` on Telegram's
-        side — see spike docs.
+        side -- see spike docs.
         """
         if self._app is None:
             msg = "resolve_contact() before connect()"
@@ -285,16 +300,17 @@ class TelegramTransport:
         return int(user.id)
 
     async def place_call(self, user_id: int) -> None:
-        """Dial the peer via FIFO + MediaSource.SHELL (ffmpeg passthrough).
+        """Dial the peer via ExternalMedia.AUDIO + dedicated send thread.
 
-        Returns when `play()` returns — at that point the call is
+        Returns when `play()` returns -- at that point the call is
         connected on the WebRTC layer. Peer audio may arrive before
         or after; the handler queues it either way.
 
-        Outbound path: Python writes 24 kHz mono PCM16 to a named FIFO
-        from a dedicated OS thread. ntgcalls spawns ffmpeg which reads
-        the FIFO and forwards raw PCM to the WebRTC encoder. ntgcalls
-        pulls at its own rate so asyncio jitter never reaches the encoder.
+        Outbound path: a dedicated OS thread runs at a strict 10 ms
+        cadence, drains _send_deque (filled by send_pcm()), upsamples
+        24 kHz mono -> 48 kHz mono, and calls send_frame() via
+        run_coroutine_threadsafe so asyncio jitter never reaches the
+        ntgcalls encoder. No FIFO, no ffmpeg, no kernel pipe buffer.
         """
         if self._active_user_id is not None:
             msg = f"place_call: already in a call with user_id={self._active_user_id}"
@@ -303,54 +319,32 @@ class TelegramTransport:
             msg = "place_call() before connect()"
             raise TransportError(msg)
 
-        from pathlib import Path
-
-        from ntgcalls import MediaSource
-        from pytgcalls.types import RecordStream
-        from pytgcalls.types.raw import AudioParameters, AudioStream, Stream
-
-        fifo = Path(f"/tmp/huxley_comms_mic_{os.getpid()}.pcm")
-        with contextlib.suppress(FileNotFoundError):
-            fifo.unlink()
-        os.mkfifo(str(fifo))
-        # O_RDWR avoids reader-opens-before-writer race. O_NONBLOCK
-        # prevents macOS 'U' state if the kernel FIFO buffer fills.
-        fd = os.open(str(fifo), os.O_RDWR | os.O_NONBLOCK)
-        os.write(fd, b"\x00" * _FIFO_PREFILL_BYTES)
-        self._mic_fd = fd
-        self._mic_fifo = fifo
-
-        self._writer_stop.clear()
-        thread = threading.Thread(
-            target=self._writer_loop,
-            args=(fd,),
-            daemon=True,
-            name="comms-telegram-writer",
-        )
-        thread.start()
-        self._writer_thread = thread
-
-        # Low-latency flags: skip ffmpeg's probe/analysis delay (~200ms saved).
-        shell = (
-            f"ffmpeg -fflags nobuffer -flags low_delay -probesize 32 "
-            f"-analyzeduration 0 "
-            f"-f s16le -ar {OUTBOUND_SAMPLE_RATE_HZ} -ac {OUTBOUND_CHANNELS} "
-            f"-i {fifo} "
-            f"-f s16le -ar {OUTBOUND_SAMPLE_RATE_HZ} -ac {OUTBOUND_CHANNELS} -v quiet pipe:1"
-        )
-        out_stream = Stream(
-            microphone=AudioStream(
-                MediaSource.SHELL,
-                shell,
-                AudioParameters(OUTBOUND_SAMPLE_RATE_HZ, OUTBOUND_CHANNELS),
-            ),
-        )
+        from ntgcalls import ExternalMedia
+        from pytgcalls.types import MediaStream, RecordStream
+        from pytgcalls.types.raw import AudioParameters
 
         # Spin up the inbound queue BEFORE recording starts so no frame
         # is dropped between `record()` and the first put_nowait.
         self._inbound_queue = asyncio.Queue(maxsize=500)  # ~5s at 10ms frames
         self._active_user_id = user_id
+        self._loop = asyncio.get_running_loop()
         self._ended.clear()
+
+        # Start the send thread BEFORE play() so send_frame calls can
+        # land immediately after the call connects.
+        self._send_stop.clear()
+        send_thread = threading.Thread(
+            target=self._send_loop_thread,
+            daemon=True,
+            name="comms-telegram-send",
+        )
+        send_thread.start()
+        self._send_thread = send_thread
+
+        out_stream = MediaStream(
+            ExternalMedia.AUDIO,
+            AudioParameters(OUTBOUND_SAMPLE_RATE_HZ, OUTBOUND_CHANNELS),
+        )
 
         try:
             await self._call_py.play(user_id, out_stream)  # type: ignore[attr-defined]
@@ -370,9 +364,75 @@ class TelegramTransport:
         await logger.ainfo(
             "comms_telegram.transport.call_placed",
             user_id=user_id,
-            transport="FIFO+SHELL",
-            fifo=str(fifo),
+            transport="ExternalMedia",
+            sample_rate=OUTBOUND_SAMPLE_RATE_HZ,
+            channels=OUTBOUND_CHANNELS,
         )
+
+    def _send_loop_thread(self) -> None:
+        """Dedicated OS thread: sends audio to ntgcalls at strict 10 ms cadence.
+
+        Drains _send_deque (24 kHz mono PCM16 enqueued by send_pcm()),
+        upsamples to 48 kHz mono, assembles 10 ms frames (960 bytes), and
+        submits send_frame() to the event loop via run_coroutine_threadsafe.
+        Sends silence when the deque runs dry so ntgcalls stays fed between
+        speech turns.
+
+        Owning the clock in an OS thread (not asyncio) is the key: Python's
+        event-loop scheduling jitter never reaches the WebRTC encoder, so
+        frames arrive at exactly 10 ms intervals from ntgcalls' perspective.
+        """
+        from pytgcalls.types import Device, Frame
+
+        accumulator = bytearray()
+        next_tick = time.monotonic() + _SEND_INTERVAL_S
+
+        while not self._send_stop.is_set():
+            # Drain deque into accumulator, upsampling to 48kHz as we go.
+            with self._send_lock:
+                while self._send_deque:
+                    raw = self._send_deque.popleft()
+                    accumulator.extend(upsample_24k_mono_to_48k_mono(raw))
+
+            # Assemble one 10ms frame (960 bytes at 48kHz mono). Send silence
+            # if the deque ran dry -- keeps ntgcalls' jitter buffer stable.
+            if len(accumulator) >= _SEND_FRAME_BYTES:
+                frame = bytes(accumulator[:_SEND_FRAME_BYTES])
+                del accumulator[:_SEND_FRAME_BYTES]
+            else:
+                frame = b"\x00" * _SEND_FRAME_BYTES
+
+            loop = self._loop
+            call_py = self._call_py
+            active_id = self._active_user_id
+            if (
+                call_py is not None
+                and active_id is not None
+                and loop is not None
+                and not loop.is_closed()
+            ):
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        call_py.send_frame(  # type: ignore[attr-defined]
+                            active_id,
+                            Device.MICROPHONE,
+                            frame,
+                            Frame.Info(capture_time=int(time.time() * 1000)),
+                        ),
+                        loop,
+                    )
+                except RuntimeError:
+                    break  # loop is closing
+
+            # Sleep until the next 10 ms boundary.
+            now = time.monotonic()
+            sleep_s = next_tick - now
+            next_tick += _SEND_INTERVAL_S
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+            else:
+                # Behind schedule -- reset clock rather than spinning.
+                next_tick = time.monotonic() + _SEND_INTERVAL_S
 
     async def _heartbeat_loop(self) -> None:
         while not self._ended.is_set():
@@ -381,8 +441,8 @@ class TelegramTransport:
                 return
             peer_rms = self._peer_rms_sum / self._peer_rms_count if self._peer_rms_count else 0.0
             mic_rms = self._mic_rms_sum / self._mic_rms_count if self._mic_rms_count else 0.0
-            with self._outbound_lock:
-                backlog = sum(len(c) for c in self._outbound_chunks)
+            with self._send_lock:
+                backlog = sum(len(c) for c in self._send_deque)
                 dropped = self._outbound_dropped_bytes
                 self._outbound_dropped_bytes = 0
             await logger.ainfo(
@@ -407,24 +467,24 @@ class TelegramTransport:
             self._mic_rms_count = 0
 
     async def send_pcm(self, pcm_24k_mono: bytes) -> None:
-        """Queue a PCM chunk for the FIFO writer thread.
+        """Queue a PCM chunk for the send thread.
 
-        The writer thread drains `_outbound_chunks` into the FIFO at
-        whatever rate the kernel allows. A ~200 ms backlog cap prevents
-        unbounded growth if the writer falls behind.
+        The send thread drains _send_deque, upsamples to 48 kHz, and
+        calls send_frame() at exactly 10 ms intervals. A ~200 ms
+        backlog cap prevents unbounded growth if the thread falls behind.
         """
         if not pcm_24k_mono or self._active_user_id is None:
             return
-        with self._outbound_lock:
+        with self._send_lock:
             was_first = self._sent_count == 0
             self._sent_count += 1
             self._mic_rms_sum += _rms_pcm16(pcm_24k_mono)
             self._mic_rms_count += 1
-            self._outbound_chunks.append(pcm_24k_mono)
-            total = sum(len(c) for c in self._outbound_chunks)
+            self._send_deque.append(pcm_24k_mono)
+            total = sum(len(c) for c in self._send_deque)
             dropped = 0
-            while total > _OUTBOUND_MAX_BYTES and self._outbound_chunks:
-                removed = self._outbound_chunks.pop(0)
+            while total > _OUTBOUND_MAX_BYTES and self._send_deque:
+                removed = self._send_deque.popleft()
                 total -= len(removed)
                 dropped += len(removed)
             if dropped:
@@ -434,51 +494,6 @@ class TelegramTransport:
                 "comms_telegram.transport.first_send_pcm",
                 chunk_bytes=len(pcm_24k_mono),
             )
-
-    def _writer_loop(self, fd: int) -> None:
-        """Write PCM to the FIFO at a strict 10 ms/frame cadence.
-
-        The macOS kernel pipe buffer is ~65 KB. At 24 kHz mono PCM16
-        that holds ~1.37 s of audio. If the writer bursts all available
-        data at once the kernel absorbs it and ntgcalls reads it ~1.4 s
-        later — structural latency. Pacing to exactly one
-        _WRITER_FRAME_BYTES chunk per _WRITER_INTERVAL_S keeps the FIFO
-        near-empty so ntgcalls reads frames within ~10 ms of arrival.
-        """
-        leftover = bytearray()
-        next_tick = time.monotonic() + _WRITER_INTERVAL_S
-
-        while not self._writer_stop.is_set():
-            # Drain everything in the queue into leftover.
-            with self._outbound_lock:
-                while self._outbound_chunks:
-                    leftover.extend(self._outbound_chunks.pop(0))
-
-            # Write exactly one frame if we have enough data; write
-            # silence if the queue ran dry (keeps ntgcalls fed, avoids
-            # a read-stall that would reset the ffmpeg pipe).
-            if len(leftover) >= _WRITER_FRAME_BYTES:
-                frame = bytes(leftover[:_WRITER_FRAME_BYTES])
-                del leftover[:_WRITER_FRAME_BYTES]
-            else:
-                frame = b"\x00" * _WRITER_FRAME_BYTES
-
-            try:
-                os.write(fd, frame)
-            except BlockingIOError:
-                pass  # FIFO full for one tick — skip, try next tick
-            except (BrokenPipeError, OSError):
-                break
-
-            # Sleep until the next 10 ms boundary.
-            now = time.monotonic()
-            sleep_s = next_tick - now
-            next_tick += _WRITER_INTERVAL_S
-            if sleep_s > 0:
-                time.sleep(sleep_s)
-            else:
-                # Behind schedule — reset clock rather than spinning.
-                next_tick = time.monotonic() + _WRITER_INTERVAL_S
 
     async def peer_audio_chunks(self) -> AsyncIterator[bytes]:
         """Async iterator yielding 24 kHz mono PCM chunks from the peer.
@@ -511,10 +526,10 @@ class TelegramTransport:
         )
 
     async def end_call(self) -> None:
-        """Hang up and clean up the outbound FIFO + writer thread.
+        """Hang up and clean up the send thread.
 
         Bounded by hard timeouts so an ntgcalls-side hang (which we've
-        observed — `leave_call` can block indefinitely if the peer
+        observed -- `leave_call` can block indefinitely if the peer
         already hung up or the underlying WebRTC state is inconsistent)
         doesn't wedge the observer-unwind chain that has to fire
         `_observer_on_end` for the mic-mode protocol to flip back.
@@ -543,27 +558,20 @@ class TelegramTransport:
 
     async def _tear_down_call(self) -> None:
         self._ended.set()
-        self._writer_stop.set()
+        self._send_stop.set()
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._heartbeat_task
             self._heartbeat_task = None
-        if self._writer_thread is not None:
-            await asyncio.to_thread(self._writer_thread.join, 2.0)
-            self._writer_thread = None
-        if self._mic_fd is not None:
-            with contextlib.suppress(OSError):
-                os.close(self._mic_fd)
-            self._mic_fd = None
-        if self._mic_fifo is not None:
-            with contextlib.suppress(FileNotFoundError):
-                self._mic_fifo.unlink()  # type: ignore[union-attr]
-            self._mic_fifo = None
+        if self._send_thread is not None:
+            await asyncio.to_thread(self._send_thread.join, 2.0)
+            self._send_thread = None
+        self._loop = None
         self._active_user_id = None
         self._inbound_queue = None
-        with self._outbound_lock:
-            self._outbound_chunks.clear()
+        with self._send_lock:
+            self._send_deque.clear()
             self._sent_count = 0
             self._outbound_dropped_bytes = 0
         self._peer_frames_received = 0
