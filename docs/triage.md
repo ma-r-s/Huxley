@@ -1661,6 +1661,7 @@ chime+defer; grandpa PTTs "¿qué decía?" → LLM narrates. Outbound:
 - Outbound voice-command calling is **shipped** under a different skill name: `huxley-skill-comms-telegram` (commit `4627ee1`). Uses Telegram (userbot + py-tgcalls + ntgcalls) as the transport instead of Twilio, which eliminates the paid infra dependency and keeps all call audio on Mario's family's existing tools. Bidirectional live-PCM on p2p is proven working after 5 iterative spikes; see `docs/research/telegram-voice.md` §"Bidirectional live-PCM on p2p" for the recipe and `docs/skills/comms-telegram.md` for the skill design.
 - **Still open under this ticket**: (a) panic button, (b) incoming-call auto-answer. Panic button is blocked on T1.4 Stage 4 (ClientEvent); auto-answer is blocked only on skill code + a persona config for the whitelist.
 - **Peer-hangup detection shipped** (`43f5e33`, 2026-04-21): three smoke-test bugs fixed together — (1) `ClaimObserver._speaker_pump` now ends the claim with `NATURAL` when the speaker_source exhausts (peer hung up), driving the full teardown chain and sending `input_mode("assistant_ptt")` to the client; (2) on `NATURAL` end, the skill schedules `inject_turn` via `create_task` (NOT `await` — calling synchronously would deadlock on `fm.wait_drained` from inside the FM actor's callback chain) so the LLM narrates "la llamada ha terminado"; (3) `coordinator.on_ptt_start` returns early after `interrupt()` when `active_claim` was True, making PTT a pure hangup gesture — next PTT opens a fresh conversation.
+- **PTT beep bug fixed** (`296919e` + `2ab89da`, 2026-04-22): two-commit fix for the continuous thinking-tone after PTT hangup. Root cause: on a local server the round-trip is <5ms — `audio_clear` + `input_mode:assistant_ptt` arrive before the user lifts their finger, so the cancel calls were no-ops; then `pttStop()` started a fresh silence timer with nothing left to cancel it. Fix: capture `pttWasClaimHangup = (inputMode === "skill_continuous")` at `pttStart()` time and skip `startSilenceTimer` in `pttStop()` when the flag is set. Also moved `end_event.set()` in `_observer_on_end` to after the client notifications (race fix), and guarded the post-`wait_drained` `skill_continuous` notification with `if self._claim_obs is observer` (prevents mis-sequenced mode messages when a fast speaker source exhausts during `wait_drained`).
 - Call-provider question is RESOLVED: Telegram, not Twilio. No monthly cost, integrates natively with how Mario's family already reaches each other. Keep Twilio as a fallback if Telegram policy ever turns unfriendly to userbots.
 
 **Problem.** Two musts surfaced during T1.2 design:
@@ -2153,6 +2154,51 @@ abstraction will be redesigned in light of the actual second provider's shape.
 
 **Revisit when**: a credible second voice provider (local Whisper+Llama+Piper, or
 a different cloud Realtime API) is actually being integrated.
+
+## D5 — Skill UI architecture (huxley-web skill extension system)
+
+**Reason for deferral.** Design explored but nothing implemented. The thinking
+is captured in `docs/research/skill-ui-architecture.md`.
+
+**The problem in one sentence.** Installing a skill today adds voice behavior
+only; the vision is that a skill can optionally ship a UI component that appears
+in huxley-web without rebuilding the app.
+
+**What was decided:**
+
+- **Rejected**: closed widget vocabulary (too limiting — prevents diagrams,
+  contribution maps, custom counters).
+- **Right model**: Apple WidgetKit on the web. huxley-web owns the container
+  system (design tokens, animation, sizing slots, placement). The skill owns
+  everything drawn inside — arbitrary Svelte → vanilla-JS component, no content
+  restriction.
+- **Delivery**: skills ship a `ui/` directory; Huxley Python server serves the
+  bundles as static files; huxley-web dynamically imports at connect time.
+- **Two container types**: live action (small, non-blocking, always visible
+  while a skill is active) + skill view (full panel, navigable, arbitrary rendering).
+- **`hello.skills` manifest**: the `hello` message carries installed skills'
+  UI declarations so huxley-web knows what to load and what `server_event`
+  type triggers each container.
+- **Assumption locked**: huxley-web and Huxley server are always co-located.
+  If that ever changes the delivery mechanism needs rethinking.
+
+**Open problems documented in the research file:**
+
+1. Skills become Python + JS packages — higher authorship bar; needs scaffolding tooling.
+2. Design token versioning must be an explicit contract with semver + deprecation cycles.
+3. Non-web clients (native, e-ink) cannot run JS bundles — skill UI must be
+   progressive enhancement, not a behavioral dependency.
+
+**Small things that can land independently before the full architecture:**
+
+- Server→client `wake_word` mirror (fills the `Wake` orb state gap).
+- `server_event("content.paused")` from audiobooks/radio (fills `Paused` orb state gap).
+- `hello.skills` manifest extension (explicit contract, no JS delivery yet).
+
+**Revisit when**: huxley-web has a stable design language worth committing to as
+a token contract, OR a shipped skill has an obvious UI need that the voice-only
+experience clearly fails (timer countdown, audiobook progress), OR a second
+developer wants to write a skill with custom UI.
 
 ---
 
