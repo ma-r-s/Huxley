@@ -128,6 +128,8 @@ class TurnCoordinator:
         send_input_mode: Callable[..., Awaitable[None]] | None = None,
         send_claim_started: Callable[[str, str], Awaitable[None]] | None = None,
         send_claim_ended: Callable[[str, str], Awaitable[None]] | None = None,
+        send_stream_started: Callable[[str, str | None], Awaitable[None]] | None = None,
+        send_stream_ended: Callable[[str, str], Awaitable[None]] | None = None,
     ) -> None:
         # Client-facing outputs (to the WebSocket audio server).
         self._send_audio = send_audio
@@ -165,6 +167,16 @@ class TurnCoordinator:
         )
         self._send_claim_ended: Callable[[str, str], Awaitable[None]] = (
             send_claim_ended if send_claim_ended is not None else _noop_claim
+        )
+
+        async def _noop_stream_started(_id: str, _label: str | None) -> None:
+            pass
+
+        self._send_stream_started: Callable[[str, str | None], Awaitable[None]] = (
+            send_stream_started if send_stream_started is not None else _noop_stream_started
+        )
+        self._send_stream_ended: Callable[[str, str], Awaitable[None]] = (
+            send_stream_ended if send_stream_ended is not None else _noop_claim
         )
         self._speaking_state = SpeakingState(notify=send_model_speaking)
         self._status = {**self._DEFAULT_STATUS, **(status_messages or {})}
@@ -878,6 +890,7 @@ class TurnCoordinator:
                 interface=interface_name,
                 cancelled=False,
             )
+            await self._send_stream_ended(interface_name, "natural")
             transferred = await self._maybe_fire_completion_prompt(stream, turn_id)
             if transferred:
                 # Ownership moved FACTORY -> COMPLETION; don't release here.
@@ -932,6 +945,7 @@ class TurnCoordinator:
         # FOREGROUND to the observer → spawn the pump task. After this,
         # `obs.task is not None` and the stream is actually running.
         await self._focus_manager.wait_drained()
+        await self._send_stream_started(interface_name, stream.label)
 
     async def _stop_content_stream(self) -> None:
         """Cancel any running content-stream observer. Idempotent.
@@ -955,6 +969,7 @@ class TurnCoordinator:
                 interface=obs.interface_name,
                 cancelled=True,
             )
+            await self._send_stream_ended(obs.interface_name, "interrupted")
         self._content_obs = None
         await self._focus_manager.release(Channel.CONTENT, obs.interface_name)
         await self._focus_manager.wait_drained()

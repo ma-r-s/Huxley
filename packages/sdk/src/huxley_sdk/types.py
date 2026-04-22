@@ -164,6 +164,10 @@ class AudioStream(SideEffect):
     on_complete_prompt: str | None = None
     completion_silence_ms: int = 0
     content_type: ContentType = ContentType.NONMIXABLE
+    # Human-readable label surfaced to the client UI (e.g. "Don Quixote",
+    # "Radio Clasica"). Sent in the `stream_started` wire message so the
+    # client can display what's playing. Leave None for anonymous streams.
+    label: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

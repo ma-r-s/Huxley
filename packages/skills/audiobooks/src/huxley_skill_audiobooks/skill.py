@@ -751,6 +751,7 @@ class AudiobooksSkill:
                 factory=factory,
                 on_complete_prompt=self._on_complete_prompt,
                 completion_silence_ms=self._silence_ms,
+                label=book["title"],
             ),
         )
 
@@ -955,6 +956,7 @@ class AudiobooksSkill:
                         factory=factory,
                         on_complete_prompt=self._on_complete_prompt,
                         completion_silence_ms=self._silence_ms,
+                        label=book["title"],
                     ),
                 )
 
@@ -1040,5 +1042,6 @@ class AudiobooksSkill:
                 factory=factory,
                 on_complete_prompt=self._on_complete_prompt,
                 completion_silence_ms=self._silence_ms,
+                label=book["title"],
             ),
         )
