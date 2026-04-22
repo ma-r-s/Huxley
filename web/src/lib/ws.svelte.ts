@@ -222,6 +222,13 @@ export function createWsStore() {
             pushStatus(
               `Mic mode → ${msg.mode}${msg.reason ? ` (${msg.reason})` : ""}`,
             );
+            // When the server transitions back to assistant_ptt (claim ended,
+            // preempted, or idle) there is no pending listening turn and no
+            // audio will arrive — kill any thinking-tone timer that may have
+            // started from the preceding ptt_stop (PTT-hangup path).
+            if (msg.mode === "assistant_ptt") {
+              cancelSilenceTimer("input_mode_assistant_ptt");
+            }
             _onInputMode?.(msg.mode, msg.claim_id, msg.reason);
             break;
           case "claim_started":

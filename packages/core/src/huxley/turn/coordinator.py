@@ -988,10 +988,9 @@ class TurnCoordinator:
 
         async def _observer_on_end(reason: ClaimEndReason) -> None:
             # Coordinator-side cleanup after observer fires its skill
-            # callback. Scrub local ref + resolve wait_end for any
-            # skill awaiting the handle.
+            # callback. Scrub local ref, send client notifications, then
+            # resolve wait_end so callers see a consistent post-claim state.
             final_reason["reason"] = reason
-            end_event.set()
             if self._claim_obs is observer:
                 self._claim_obs = None
                 self._claim_started_at = None
@@ -1014,6 +1013,12 @@ class TurnCoordinator:
                 # observer's end callback — the claim must still
                 # unwind cleanly server-side.
                 await logger.aexception("coord.claim_end_notify_failed")
+            # Signal after notifications are sent so wait_end() callers
+            # observe a fully notified client state. (end_event.set is
+            # synchronous — no yield — so moving it here is safe and
+            # avoids a race where wait_end() returns before send_input_mode
+            # fires.)
+            end_event.set()
 
         # `release_self` bound to the observer's specific interface_name
         # so the observer can drive its own unwind on error (e.g., mic
@@ -1054,26 +1059,28 @@ class TurnCoordinator:
         # dispatched the tool-call would otherwise also end-claim).
         self._claim_started_at = time.monotonic()
 
-        # Tell the client to switch to continuous mic streaming. Pure
-        # observability events (claim_started) fire first so a
-        # forward-thinking UI can transition visuals before the mic
-        # mode actually flips on the wire. Errors are swallowed —
-        # the claim is fully functional server-side even if the client
-        # never learns about it.
-        try:
-            # Skill name isn't currently plumbed into InputClaim; passing
-            # the interface name is enough for observability today and
-            # the client doesn't use it for behavior (that's input_mode).
-            # Thread a real skill identifier when the dev UI grows a
-            # claim indicator.
-            await self._send_claim_started(interface_name, interface_name)
-            await self._send_input_mode(
-                "skill_continuous",
-                reason="claim_started",
-                claim_id=interface_name,
-            )
-        except Exception:
-            await logger.aexception("coord.claim_start_notify_failed")
+        # Tell the client to switch to continuous mic streaming — only if
+        # the claim is still active. A very fast speaker source (e.g. a
+        # test fixture with a single-chunk iterator) can exhaust and
+        # release the claim entirely within wait_drained() above.
+        # _observer_on_end already sent "assistant_ptt" in that case;
+        # sending "skill_continuous" after the fact would mis-sequence
+        # the client's mode transitions.
+        if self._claim_obs is observer:
+            try:
+                # Skill name isn't currently plumbed into InputClaim; passing
+                # the interface name is enough for observability today and
+                # the client doesn't use it for behavior (that's input_mode).
+                # Thread a real skill identifier when the dev UI grows a
+                # claim indicator.
+                await self._send_claim_started(interface_name, interface_name)
+                await self._send_input_mode(
+                    "skill_continuous",
+                    reason="claim_started",
+                    claim_id=interface_name,
+                )
+            except Exception:
+                await logger.aexception("coord.claim_start_notify_failed")
 
         coord = self
         # Holds a reference to the background cancel task so Python's GC

@@ -790,10 +790,17 @@ class TestSpeakerSourceNaturalEnd:
         handle = await coord.start_input_claim(
             InputClaim(on_mic_frame=AsyncMock(), speaker_source=finite_speaker())
         )
-        send_input_mode.reset_mock()
         await asyncio.wait_for(handle.wait_end(), timeout=1.0)
 
         # The final input_mode call must flip back to assistant_ptt.
-        last_args = send_input_mode.await_args
-        assert last_args is not None
-        assert last_args.args[0] == "assistant_ptt"
+        # Note: for very fast speaker sources the claim can exhaust entirely
+        # within start_input_claim's wait_drained() — in that case
+        # "skill_continuous" is NOT sent (guarded), so "assistant_ptt" may
+        # be the only call. For longer-lived sources the sequence is
+        # ["skill_continuous", "assistant_ptt"]. Either way the LAST call
+        # must be "assistant_ptt".
+        modes_sent = [c.args[0] for c in send_input_mode.await_args_list]
+        assert modes_sent, "send_input_mode was never called"
+        assert modes_sent[-1] == "assistant_ptt", (
+            f"expected last mode=assistant_ptt, got {modes_sent}"
+        )
