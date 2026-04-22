@@ -282,10 +282,11 @@ class TelegramTransport:
         or after; the handler queues it either way.
 
         Outbound path: a dedicated OS thread runs at a strict 10 ms
-        cadence, drains _send_deque (filled by send_pcm()), upsamples
-        24 kHz mono -> 48 kHz mono, and calls send_frame() via
-        run_coroutine_threadsafe so asyncio jitter never reaches the
-        ntgcalls encoder. No FIFO, no ffmpeg, no kernel pipe buffer.
+        cadence, drains _send_deque (filled by send_pcm()), and calls
+        send_frame() via run_coroutine_threadsafe so asyncio jitter
+        never reaches the ntgcalls encoder. AudioParameters(24000, 1)
+        tells ntgcalls the rate; no Python-side resampling. No FIFO,
+        no ffmpeg, no kernel pipe buffer.
         """
         if self._active_user_id is not None:
             msg = f"place_call: already in a call with user_id={self._active_user_id}"
@@ -294,8 +295,7 @@ class TelegramTransport:
             msg = "place_call() before connect()"
             raise TransportError(msg)
 
-        from ntgcalls import ExternalMedia
-        from pytgcalls.types import MediaStream, RecordStream
+        from pytgcalls.types import ExternalMedia, MediaStream, RecordStream
         from pytgcalls.types.raw import AudioParameters
 
         # Spin up the inbound queue BEFORE recording starts so no frame
@@ -385,15 +385,30 @@ class TelegramTransport:
                 and not loop.is_closed()
             ):
                 try:
-                    asyncio.run_coroutine_threadsafe(
-                        call_py.send_frame(  # type: ignore[attr-defined]
-                            active_id,
+                    # Wrap in a plain async def so run_coroutine_threadsafe
+                    # gets a bare coroutine -- send_frame's decorators make
+                    # it unrecognisable as a coroutine when called outside
+                    # the event loop. All loop-local vars are captured as
+                    # defaults to satisfy ruff B023.
+                    _frame = frame
+                    _ts = int(time.time() * 1000)
+                    _cp = call_py
+                    _uid = active_id
+
+                    async def _send(
+                        _f: bytes = _frame,
+                        _t: int = _ts,
+                        _c: object = _cp,
+                        _u: int = _uid,
+                    ) -> None:
+                        await _c.send_frame(  # type: ignore[attr-defined]
+                            _u,
                             Device.MICROPHONE,
-                            frame,
-                            Frame.Info(capture_time=int(time.time() * 1000)),
-                        ),
-                        loop,
-                    )
+                            _f,
+                            Frame.Info(capture_time=_t),
+                        )
+
+                    asyncio.run_coroutine_threadsafe(_send(), loop)
                 except RuntimeError:
                     break  # loop is closing
 
@@ -442,9 +457,10 @@ class TelegramTransport:
     async def send_pcm(self, pcm_24k_mono: bytes) -> None:
         """Queue a PCM chunk for the send thread.
 
-        The send thread drains _send_deque, upsamples to 48 kHz, and
-        calls send_frame() at exactly 10 ms intervals. A ~200 ms
-        backlog cap prevents unbounded growth if the thread falls behind.
+        The send thread drains _send_deque and calls send_frame() at
+        exactly 10 ms intervals. AudioParameters(24000, 1) is declared
+        to ntgcalls -- no Python-side resampling. A ~200 ms backlog cap
+        prevents unbounded growth if the thread falls behind.
         """
         if not pcm_24k_mono or self._active_user_id is None:
             return
