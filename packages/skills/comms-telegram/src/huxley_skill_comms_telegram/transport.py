@@ -2,14 +2,13 @@
 
 See `docs/research/telegram-voice.md` for the full rationale.
 
-- Outbound: `ExternalMedia.AUDIO + send_frame` — Python pushes 48 kHz
-  stereo PCM16 directly into ntgcalls's WebRTC audio sink each 10 ms.
-  No FIFO, no OS-thread writer. Stereo is required: ntgcalls's internal
-  WebRTC pipeline expects 48 kHz stereo; mono causes buffer
-  misinterpretation (distortion + loud artifact). We upsample Huxley's
-  24 kHz mono via sample-duplication (2x rate) + channel-duplication (L=R).
-  Each frame carries a wallclock capture_time so the peer's NetEQ
-  jitter buffer doesn't inflate defensively.
+- Outbound: FIFO + MediaSource.SHELL (ffmpeg passthrough). Python writes
+  24 kHz mono PCM16 to a named FIFO from a dedicated OS thread. ntgcalls
+  spawns ffmpeg which reads the FIFO and forwards raw PCM to the WebRTC
+  encoder. ntgcalls handles timing internally (pulls at its own rate),
+  so Python's asyncio jitter never reaches the encoder. ExternalMedia +
+  send_frame was tried but produced a loud artifact on the receiver side;
+  root cause unknown, reverted.
 - Inbound: py-tgcalls' `record()` + `@stream_frame` handler delivers
   48 kHz stereo PCM16. The transport downsamples to 24 kHz mono via
   decimation + channel averaging before enqueuing.
@@ -22,8 +21,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import re
 import struct
+import threading
 import time
 from typing import TYPE_CHECKING
 
@@ -40,14 +41,22 @@ HUXLEY_SAMPLE_RATE_HZ = 24_000
 HUXLEY_CHANNELS = 1
 BYTES_PER_SAMPLE = 2
 
-# What ntgcalls expects on the outbound path via ExternalMedia.AUDIO +
-# send_frame. ntgcalls's WebRTC audio pipeline (and Telegram's Opus
-# encoder) expect 48 kHz stereo PCM16. Sending mono causes ntgcalls to
-# misinterpret the buffer (loud artifact, wrong timing). We produce
-# stereo from Huxley's 24 kHz mono via sample-duplication (2x rate)
-# and channel-duplication (L=R=mono sample).
-OUTBOUND_SAMPLE_RATE_HZ = 48_000
-OUTBOUND_CHANNELS = 2
+# Outbound format fed into the FIFO. ntgcalls/ffmpeg read this and hand
+# it to the WebRTC encoder. 24 kHz mono matches Huxley's internal rate —
+# no upsampling needed, no resampler in the Python layer. ntgcalls's
+# audio sink resamples internally to 48 kHz (Opus native rate).
+OUTBOUND_SAMPLE_RATE_HZ = 24_000
+OUTBOUND_CHANNELS = 1
+
+# How much silence (bytes) to pre-fill into the FIFO before dialing.
+# This ensures ntgcalls's FileReader first read returns immediately
+# instead of blocking on an empty FIFO.
+_FIFO_PREFILL_MS = 80
+_FIFO_PREFILL_BYTES = OUTBOUND_SAMPLE_RATE_HZ * BYTES_PER_SAMPLE * _FIFO_PREFILL_MS // 1000
+
+# Max outbound backlog before we start dropping frames. ~200 ms of 24kHz
+# mono PCM16 = 24000*2*0.2 = 9600 bytes.
+_OUTBOUND_MAX_BYTES = OUTBOUND_SAMPLE_RATE_HZ * BYTES_PER_SAMPLE // 5
 
 # What ntgcalls delivers on the inbound path. Requesting 24k mono here
 # returns zero-filled frames (internal resampler bug on p2p). We ask
@@ -74,41 +83,6 @@ def _rms_pcm16(data: bytes) -> float:
     samples = struct.unpack(f"<{n}h", data[: n * 2])
     sq = sum(s * s for s in samples)
     return float((sq / n) ** 0.5)
-
-
-def upsample_24k_mono_to_48k_stereo(pcm_24k: bytes) -> bytes:
-    """PCM16 24 kHz mono -> 48 kHz stereo PCM16.
-
-    Each input sample becomes two identical stereo frames (L=R=sample,
-    rate doubled). Output is 4x the input byte count:
-      24 kHz mono  10 ms = 240 samples = 480 bytes
-      48 kHz stereo 10 ms = 480 samples * 2 ch * 2 bytes = 1920 bytes
-
-    ntgcalls's WebRTC audio pipeline expects 48 kHz stereo; mono input
-    causes it to misinterpret the buffer (distortion + loud artifact).
-    """
-    if not pcm_24k:
-        return b""
-    n_samples = len(pcm_24k) // 2
-    if n_samples == 0:
-        return b""
-    # Each mono sample -> 2 stereo frames, each frame = (L, R) = (s, s)
-    out = bytearray(n_samples * 8)
-    for i in range(n_samples):
-        b0 = pcm_24k[i * 2]
-        b1 = pcm_24k[i * 2 + 1]
-        base = i * 8
-        # Frame 0: L=s, R=s
-        out[base] = b0
-        out[base + 1] = b1
-        out[base + 2] = b0
-        out[base + 3] = b1
-        # Frame 1 (duplicate for 2x rate): L=s, R=s
-        out[base + 4] = b0
-        out[base + 5] = b1
-        out[base + 6] = b0
-        out[base + 7] = b1
-    return bytes(out)
 
 
 def downsample_48k_stereo_to_24k_mono(pcm_in: bytes) -> bytes:
@@ -175,6 +149,15 @@ class TelegramTransport:
 
         # Active-call state.
         self._active_user_id: int | None = None
+        self._mic_fd: int | None = None
+        self._mic_fifo: object | None = None  # pathlib.Path
+        self._writer_thread: threading.Thread | None = None
+        self._writer_stop = threading.Event()
+        # Thread-safe outbound queue. Async producer (send_pcm) appends;
+        # writer thread consumes and writes to the FIFO.
+        self._outbound_chunks: list[bytes] = []
+        self._outbound_lock = threading.Lock()
+        self._outbound_dropped_bytes = 0
         self._sent_count = 0
         # Heartbeat counters — inbound peer-frame arrival and outbound
         # mic-frame push. Logged every 2s during a call so we can see
@@ -187,15 +170,6 @@ class TelegramTransport:
         self._peer_rms_count = 0
         self._mic_rms_sum = 0.0
         self._mic_rms_count = 0
-        # Latency probe for the outbound pipeline: per-call-to-
-        # `send_frame` wall time. If each call blocks for ms, ntgcalls
-        # is holding the frame in an internal buffer before releasing
-        # it to the encoder. If each call returns in µs, the delay is
-        # downstream of Python (WebRTC encoder, network, peer jitter
-        # buffer). Reset per heartbeat.
-        self._send_frame_ms_sum = 0.0
-        self._send_frame_ms_count = 0
-        self._send_frame_ms_max = 0.0
         self._heartbeat_task: asyncio.Task[None] | None = None
 
         # Incoming audio: downsampled peer PCM enqueued by the
@@ -303,18 +277,16 @@ class TelegramTransport:
         return int(user.id)
 
     async def place_call(self, user_id: int) -> None:
-        """Dial the peer with ExternalMedia.AUDIO on the outbound side.
+        """Dial the peer via FIFO + MediaSource.SHELL (ffmpeg passthrough).
 
         Returns when `play()` returns — at that point the call is
         connected on the WebRTC layer. Peer audio may arrive before
         or after; the handler queues it either way.
 
-        Uses `ExternalMedia.AUDIO` + `send_frame` (no FIFO, no
-        ThreadedReader). Each frame carries a real wallclock
-        `capture_time` so the peer's NetEQ jitter buffer doesn't
-        inflate defensively (the `capture_time=0` default is the
-        documented cause of receive-side jitter-buffer expansion —
-        all WebRTC bridges set wallclock capture_time).
+        Outbound path: Python writes 24 kHz mono PCM16 to a named FIFO
+        from a dedicated OS thread. ntgcalls spawns ffmpeg which reads
+        the FIFO and forwards raw PCM to the WebRTC encoder. ntgcalls
+        pulls at its own rate so asyncio jitter never reaches the encoder.
         """
         if self._active_user_id is not None:
             msg = f"place_call: already in a call with user_id={self._active_user_id}"
@@ -323,11 +295,45 @@ class TelegramTransport:
             msg = "place_call() before connect()"
             raise TransportError(msg)
 
-        from pytgcalls.types import ExternalMedia, MediaStream, RecordStream
-        from pytgcalls.types.raw import AudioParameters
+        from pathlib import Path
 
-        audio_params = AudioParameters(OUTBOUND_SAMPLE_RATE_HZ, OUTBOUND_CHANNELS)
-        out_stream = MediaStream(ExternalMedia.AUDIO, audio_params)
+        from ntgcalls import MediaSource
+        from pytgcalls.types import RecordStream
+        from pytgcalls.types.raw import AudioParameters, AudioStream, Stream
+
+        fifo = Path(f"/tmp/huxley_comms_mic_{os.getpid()}.pcm")
+        with contextlib.suppress(FileNotFoundError):
+            fifo.unlink()
+        os.mkfifo(str(fifo))
+        # O_RDWR avoids reader-opens-before-writer race. O_NONBLOCK
+        # prevents macOS 'U' state if the kernel FIFO buffer fills.
+        fd = os.open(str(fifo), os.O_RDWR | os.O_NONBLOCK)
+        os.write(fd, b"\x00" * _FIFO_PREFILL_BYTES)
+        self._mic_fd = fd
+        self._mic_fifo = fifo
+
+        self._writer_stop.clear()
+        thread = threading.Thread(
+            target=self._writer_loop,
+            args=(fd,),
+            daemon=True,
+            name="comms-telegram-writer",
+        )
+        thread.start()
+        self._writer_thread = thread
+
+        shell = (
+            f"ffmpeg -f s16le -ar {OUTBOUND_SAMPLE_RATE_HZ} -ac {OUTBOUND_CHANNELS} "
+            f"-i {fifo} "
+            f"-f s16le -ar {OUTBOUND_SAMPLE_RATE_HZ} -ac {OUTBOUND_CHANNELS} -v quiet pipe:1"
+        )
+        out_stream = Stream(
+            microphone=AudioStream(
+                MediaSource.SHELL,
+                shell,
+                AudioParameters(OUTBOUND_SAMPLE_RATE_HZ, OUTBOUND_CHANNELS),
+            ),
+        )
 
         # Spin up the inbound queue BEFORE recording starts so no frame
         # is dropped between `record()` and the first put_nowait.
@@ -345,19 +351,16 @@ class TelegramTransport:
                 ),
             )
         except Exception:
-            # Roll back the mic resources on failure so the skill can retry.
             await self._tear_down_call()
             raise
 
-        # Heartbeat task — logs inbound/outbound frame counts every 2s
-        # so we can tell "call running but went silent" from "call never
-        # had audio." Runs until `_ended` is set by tear-down.
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
         await logger.ainfo(
             "comms_telegram.transport.call_placed",
             user_id=user_id,
-            transport="ExternalMedia.AUDIO + send_frame",
+            transport="FIFO+SHELL",
+            fifo=str(fifo),
         )
 
     async def _heartbeat_loop(self) -> None:
@@ -367,11 +370,10 @@ class TelegramTransport:
                 return
             peer_rms = self._peer_rms_sum / self._peer_rms_count if self._peer_rms_count else 0.0
             mic_rms = self._mic_rms_sum / self._mic_rms_count if self._mic_rms_count else 0.0
-            sf_mean_ms = (
-                self._send_frame_ms_sum / self._send_frame_ms_count
-                if self._send_frame_ms_count
-                else 0.0
-            )
+            with self._outbound_lock:
+                backlog = sum(len(c) for c in self._outbound_chunks)
+                dropped = self._outbound_dropped_bytes
+                self._outbound_dropped_bytes = 0
             await logger.ainfo(
                 "comms_telegram.transport.heartbeat",
                 peer_frames=self._peer_frames_received,
@@ -379,8 +381,8 @@ class TelegramTransport:
                 peer_mean_rms=round(peer_rms, 1),
                 mic_chunks=self._sent_count,
                 mic_mean_rms=round(mic_rms, 1),
-                send_frame_mean_ms=round(sf_mean_ms, 2),
-                send_frame_max_ms=round(self._send_frame_ms_max, 2),
+                outbound_backlog_bytes=backlog,
+                outbound_dropped_bytes=dropped,
                 inbound_queue_depth=(
                     self._inbound_queue.qsize() if self._inbound_queue is not None else 0
                 ),
@@ -392,58 +394,60 @@ class TelegramTransport:
             self._peer_rms_count = 0
             self._mic_rms_sum = 0.0
             self._mic_rms_count = 0
-            self._send_frame_ms_sum = 0.0
-            self._send_frame_ms_count = 0
-            self._send_frame_ms_max = 0.0
 
     async def send_pcm(self, pcm_24k_mono: bytes) -> None:
-        """Forward a PCM chunk to the active call via `send_frame`.
+        """Queue a PCM chunk for the FIFO writer thread.
 
-        Upsamples 24 kHz mono → 48 kHz mono (Telegram's native Opus
-        rate) to bypass ntgcalls's internal resampler, and attaches a
-        real wallclock `capture_time` so the peer's NetEQ jitter
-        buffer doesn't inflate defensively against the default `=0`.
+        The writer thread drains `_outbound_chunks` into the FIFO at
+        whatever rate the kernel allows. A ~200 ms backlog cap prevents
+        unbounded growth if the writer falls behind.
         """
-        if not pcm_24k_mono or self._call_py is None or self._active_user_id is None:
+        if not pcm_24k_mono or self._active_user_id is None:
             return
-        pcm_48k_stereo = upsample_24k_mono_to_48k_stereo(pcm_24k_mono)
-
-        from pytgcalls.types import Device, Frame
-
-        was_first = self._sent_count == 0
-        self._sent_count += 1
-        self._mic_rms_sum += _rms_pcm16(pcm_24k_mono)
-        self._mic_rms_count += 1
-
-        capture_time_ms = int(time.time() * 1000)
-        t0 = time.monotonic()
-        try:
-            await self._call_py.send_frame(  # type: ignore[attr-defined]
-                self._active_user_id,
-                Device.MICROPHONE,
-                pcm_48k_stereo,
-                Frame.Info(capture_time=capture_time_ms),
-            )
-            elapsed_ms = (time.monotonic() - t0) * 1000
-            self._send_frame_ms_sum += elapsed_ms
-            self._send_frame_ms_count += 1
-            if elapsed_ms > self._send_frame_ms_max:
-                self._send_frame_ms_max = elapsed_ms
-        except Exception as exc:
-            # Only log first few errors per call to avoid flooding.
-            if self._sent_count <= 5:
-                await logger.awarning(
-                    "comms_telegram.transport.send_frame_failed",
-                    exc_type=type(exc).__name__,
-                    exc=str(exc),
-                )
+        with self._outbound_lock:
+            was_first = self._sent_count == 0
+            self._sent_count += 1
+            self._mic_rms_sum += _rms_pcm16(pcm_24k_mono)
+            self._mic_rms_count += 1
+            self._outbound_chunks.append(pcm_24k_mono)
+            total = sum(len(c) for c in self._outbound_chunks)
+            dropped = 0
+            while total > _OUTBOUND_MAX_BYTES and self._outbound_chunks:
+                removed = self._outbound_chunks.pop(0)
+                total -= len(removed)
+                dropped += len(removed)
+            if dropped:
+                self._outbound_dropped_bytes += dropped
         if was_first:
             await logger.ainfo(
                 "comms_telegram.transport.first_send_pcm",
-                chunk_bytes_in=len(pcm_24k_mono),
-                chunk_bytes_out=len(pcm_48k_stereo),
-                capture_time_ms=capture_time_ms,
+                chunk_bytes=len(pcm_24k_mono),
             )
+
+    def _writer_loop(self, fd: int) -> None:
+        """Drain `_outbound_chunks` into the FIFO.
+
+        Runs in a dedicated OS thread so asyncio jitter doesn't affect
+        write cadence. Uses O_NONBLOCK + BlockingIOError retry so a
+        full FIFO kernel buffer never hangs the thread indefinitely.
+        """
+        leftover = bytearray()
+        while not self._writer_stop.is_set():
+            with self._outbound_lock:
+                while self._outbound_chunks:
+                    leftover.extend(self._outbound_chunks.pop(0))
+            if not leftover:
+                time.sleep(0.005)
+                continue
+            try:
+                written = os.write(fd, bytes(leftover))
+                del leftover[:written]
+            except BrokenPipeError:
+                break
+            except BlockingIOError:
+                time.sleep(0.005)
+            except OSError:
+                break
 
     async def peer_audio_chunks(self) -> AsyncIterator[bytes]:
         """Async iterator yielding 24 kHz mono PCM chunks from the peer.
@@ -508,14 +512,29 @@ class TelegramTransport:
 
     async def _tear_down_call(self) -> None:
         self._ended.set()
+        self._writer_stop.set()
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._heartbeat_task
             self._heartbeat_task = None
+        if self._writer_thread is not None:
+            await asyncio.to_thread(self._writer_thread.join, 2.0)
+            self._writer_thread = None
+        if self._mic_fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(self._mic_fd)
+            self._mic_fd = None
+        if self._mic_fifo is not None:
+            with contextlib.suppress(FileNotFoundError):
+                self._mic_fifo.unlink()  # type: ignore[union-attr]
+            self._mic_fifo = None
         self._active_user_id = None
         self._inbound_queue = None
-        self._sent_count = 0
+        with self._outbound_lock:
+            self._outbound_chunks.clear()
+            self._sent_count = 0
+            self._outbound_dropped_bytes = 0
         self._peer_frames_received = 0
         self._peer_bytes_received = 0
         self._peer_rms_sum = 0.0
