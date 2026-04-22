@@ -48,6 +48,8 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import Callable
 
+    from huxley_sdk import SkillContext
+
 
 class CommsTelegramSkill:
     """p2p Telegram voice-call skill. One tool: `call_contact`."""
@@ -61,11 +63,15 @@ class CommsTelegramSkill:
         fake that returns a stub transport to avoid importing pyrogram.
         """
         self._logger: SkillLogger | None = None
+        self._ctx: SkillContext | None = None
         self._contacts: dict[str, str] = {}  # lowercased name → normalized phone
         self._transport: TelegramTransport | None = None
         self._transport_factory = transport_factory or TelegramTransport
-        # Holds refs to in-flight hangup tasks spawned by `_on_claim_end`
-        # so GC doesn't eat them mid-hangup. Task removes itself on done.
+        # Name of the contact currently in a call (set in handle(), cleared in
+        # _on_claim_end). Used to narrate "la llamada terminó" to the LLM.
+        self._active_contact_name: str | None = None
+        # Holds refs to in-flight hangup/inject tasks spawned by `_on_claim_end`
+        # so GC doesn't eat them mid-execution. Task removes itself on done.
         self._end_tasks: set[asyncio.Task[None]] = set()
 
     @property
@@ -104,6 +110,7 @@ class CommsTelegramSkill:
 
     async def setup(self, ctx: SkillContext) -> None:
         self._logger = ctx.logger
+        self._ctx = ctx
 
         cfg = ctx.config
         # Env vars take precedence so secrets (api_id/hash/phone) don't have
@@ -200,11 +207,13 @@ class CommsTelegramSkill:
             )
 
         assert self._transport is not None
+        self._active_contact_name = name
         try:
             await self._transport.connect()
             user_id = await self._transport.resolve_contact(phone)
             await self._transport.place_call(user_id)
         except TransportError as exc:
+            self._active_contact_name = None
             await self._logger.aexception("comms_telegram.place_call_failed", name=name)
             return _error_result(
                 f"No pude conectar la llamada a {name}: {exc}. "
@@ -228,29 +237,64 @@ class CommsTelegramSkill:
         await self._transport.send_pcm(pcm)
 
     async def _on_claim_end(self, reason: ClaimEndReason) -> None:
-        """Hang up the Telegram call when the claim ends.
+        """Hang up the Telegram call when the claim ends and update the LLM.
 
-        Any `ClaimEndReason` — grandpa pressed PTT, a medication
-        reminder preempted, the speaker iterator ran dry, or an error
-        — means "we're no longer bridging audio", so end the call.
+        Any `ClaimEndReason` — grandpa pressed PTT, a medication reminder
+        preempted, the speaker iterator ran dry, or an error — means "we're
+        no longer bridging audio", so end the call.
 
-        Fire-and-forget: the observer's unwind chain awaits this, and
-        an ntgcalls-side hang in `end_call` would stall the claim_ended
-        / input_mode notify the client depends on. Spawn the actual
-        hangup as a background task so the observer resolves
+        Fire-and-forget for the hangup: the observer's unwind chain awaits
+        this, and an ntgcalls-side hang in `end_call` would stall the
+        claim_ended / input_mode notify the client depends on. Spawn the
+        actual hangup as a background task so the observer resolves
         immediately; `end_call` has its own internal timeouts.
-        """
-        assert self._logger is not None
-        await self._logger.ainfo("comms_telegram.claim_ended", reason=reason.value)
-        if self._transport is not None:
-            import asyncio
 
+        LLM context update (NATURAL only — peer hung up): inject a turn so
+        the model knows the call ended. This fires as a separate `create_task`
+        (NOT awaited) because `_on_claim_end` runs inside the FocusManager's
+        actor-task callback chain. Calling `inject_turn` synchronously would
+        re-enter the FM (via `fm.acquire` + `fm.wait_drained`) from within
+        `_notify_safe`, which deadlocks on `Queue.join`. Scheduling a task
+        bypasses the FM's current processing tick and runs on the next event-
+        loop iteration when the FM actor is idle.
+
+        For USER_PTT (grandpa tapped to hang up): the coordinator's
+        `on_ptt_start` returns immediately after `interrupt()` without
+        creating a new listening turn — grandpa's next PTT will open a fresh
+        conversation. No inject needed here.
+        """
+        import asyncio
+
+        assert self._logger is not None
+        contact = self._active_contact_name
+        self._active_contact_name = None
+        await self._logger.ainfo(
+            "comms_telegram.claim_ended", reason=reason.value, contact=contact
+        )
+
+        if self._transport is not None:
             transport = self._transport
             # Track the task so Python's GC doesn't collect it mid-hangup.
-            # Cleared when the task completes. See docs/background.md.
+            # Cleared when the task completes.
             task = asyncio.create_task(transport.end_call())
             self._end_tasks.add(task)
             task.add_done_callback(self._end_tasks.discard)
+
+        # When the peer hung up, inject a turn so the LLM knows the call
+        # ended and can narrate this to grandpa naturally. Only for NATURAL
+        # so we don't create a competing inject when grandpa presses PTT
+        # (USER_PTT) or a medication reminder preempts (PREEMPTED).
+        if reason is ClaimEndReason.NATURAL and self._ctx is not None:
+            ctx = self._ctx
+            who = contact or "la persona"
+            prompt = (
+                f"La llamada con {who} ha terminado porque la otra persona colgó. "
+                "Informa brevemente al usuario que la llamada ha concluido."
+            )
+            inject_task = asyncio.create_task(ctx.inject_turn(prompt))
+            self._end_tasks.add(inject_task)
+            inject_task.add_done_callback(self._end_tasks.discard)
+            await self._logger.ainfo("comms_telegram.injecting_call_ended_turn", contact=who)
 
     async def teardown(self) -> None:
         if self._transport is not None:

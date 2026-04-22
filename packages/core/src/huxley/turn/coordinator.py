@@ -282,6 +282,20 @@ class TurnCoordinator:
         if active_turn or active_media or active_claim:
             await self.interrupt()
 
+        # PTT during an active call (claim) = hangup only. The user tapped
+        # to end the call — they did NOT intend to immediately start talking
+        # to the assistant. A second PTT opens a fresh conversation.
+        # Contrast with PTT during media (audiobook/radio): that DOES start
+        # a listening turn because interrupting content is the expected gesture
+        # for "I want to say something now."
+        if active_claim and not active_turn and not active_media:
+            await self._log.ainfo(
+                "coord.ptt_claim_hangup",
+                had_turn=active_turn,
+                had_media=active_media,
+            )
+            return
+
         self.current_turn = self._turn_factory.create(
             source=TurnSource.USER, initial_state=TurnState.LISTENING
         )

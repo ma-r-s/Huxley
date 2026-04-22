@@ -317,7 +317,16 @@ class TestPttClaimDebounce:
         assert coordinator._claim_obs is not None
         assert coordinator.current_turn is None
 
-    async def test_ptt_after_debounce_ends_claim(self, coordinator: TurnCoordinator) -> None:
+    async def test_ptt_after_debounce_ends_claim_no_listening_turn(
+        self, coordinator: TurnCoordinator
+    ) -> None:
+        """PTT during an active call = hangup only (not "start listening").
+
+        The user tapped the button to end the call. They did NOT intend to
+        immediately speak to the assistant — a second PTT opens the fresh
+        conversation. This prevents the common case where grandpa presses
+        once to hang up and accidentally starts a listening turn he didn't ask for.
+        """
         import time
 
         await coordinator.start_input_claim(InputClaim(on_mic_frame=AsyncMock()))
@@ -326,9 +335,10 @@ class TestPttClaimDebounce:
 
         await coordinator.on_ptt_start()
 
-        # Claim ended; a USER turn started listening.
+        # Claim ended — hangup succeeded.
         assert coordinator._claim_obs is None
-        assert coordinator.current_turn is not None
+        # No listening turn: PTT was a hangup gesture, not a "start talking" gesture.
+        assert coordinator.current_turn is None
 
 
 class TestWaitEndBlocksUntilEnd:
@@ -665,3 +675,125 @@ class TestCancelActiveClaim:
         # Second cancel — claim is already ended, returns False cleanly.
         result = await coordinator.cancel_active_claim()
         assert result is False
+
+
+class TestSpeakerSourceNaturalEnd:
+    """When the speaker_source iterator ends naturally (peer hung up a call),
+    the claim ends with NATURAL reason — without requiring the skill to call
+    ClaimHandle.cancel() or coordinator.cancel_active_claim().
+
+    This is the fix for: peer hangs up → web UI stays stuck in 'En llamada'
+    because the claim was never torn down.
+    """
+
+    async def test_natural_speaker_end_fires_on_claim_end_natural(
+        self,
+        coordinator: TurnCoordinator,
+        provider: StubVoiceProvider,
+    ) -> None:
+        """Speaker source exhausted → on_claim_end(NATURAL) fires."""
+        on_end = AsyncMock()
+
+        async def finite_speaker() -> AsyncIterator[bytes]:
+            yield b"\xaa\xbb"
+            yield b"\xcc\xdd"
+            # Iterator ends — simulates peer hanging up.
+
+        claim = InputClaim(
+            on_mic_frame=AsyncMock(),
+            speaker_source=finite_speaker(),
+            on_claim_end=on_end,
+        )
+        handle = await coordinator.start_input_claim(claim)
+        # Let the pump drain the iterator and self-release.
+        reason = await asyncio.wait_for(handle.wait_end(), timeout=1.0)
+
+        assert reason is ClaimEndReason.NATURAL
+        on_end.assert_awaited_once_with(ClaimEndReason.NATURAL)
+
+    async def test_natural_speaker_end_resumes_provider(
+        self,
+        coordinator: TurnCoordinator,
+        provider: StubVoiceProvider,
+    ) -> None:
+        """Provider is resumed after the speaker source ends naturally."""
+
+        async def finite_speaker() -> AsyncIterator[bytes]:
+            yield b"\x01\x02"
+
+        handle = await coordinator.start_input_claim(
+            InputClaim(on_mic_frame=AsyncMock(), speaker_source=finite_speaker())
+        )
+        await asyncio.wait_for(handle.wait_end(), timeout=1.0)
+        assert provider.is_suspended is False
+
+    async def test_natural_speaker_end_scrubs_claim_obs(
+        self,
+        coordinator: TurnCoordinator,
+    ) -> None:
+        """_claim_obs is cleared after natural speaker end."""
+
+        async def finite_speaker() -> AsyncIterator[bytes]:
+            yield b"\x01\x02"
+
+        handle = await coordinator.start_input_claim(
+            InputClaim(on_mic_frame=AsyncMock(), speaker_source=finite_speaker())
+        )
+        await asyncio.wait_for(handle.wait_end(), timeout=1.0)
+        assert coordinator._claim_obs is None
+
+    async def test_natural_speaker_end_restores_mic_router(
+        self,
+        coordinator: TurnCoordinator,
+    ) -> None:
+        """Mic router is released after the speaker source ends naturally."""
+        on_mic = AsyncMock()
+
+        async def finite_speaker() -> AsyncIterator[bytes]:
+            yield b"\xde\xad"
+
+        handle = await coordinator.start_input_claim(
+            InputClaim(on_mic_frame=on_mic, speaker_source=finite_speaker())
+        )
+        await asyncio.wait_for(handle.wait_end(), timeout=1.0)
+
+        # After end, mic frames go back to the default handler, not the skill.
+        await coordinator._mic_router.dispatch(b"\x01\x02")
+        on_mic.assert_not_awaited()
+        assert coordinator._mic_router.is_claimed is False
+
+    async def test_natural_speaker_end_sends_input_mode_assistant_ptt(
+        self,
+        focus_manager: FocusManager,
+        provider: StubVoiceProvider,
+    ) -> None:
+        """Client receives input_mode('assistant_ptt') when peer hangs up
+        — this is the signal that flips the web UI out of 'En llamada'."""
+        send_input_mode = AsyncMock()
+        coord = TurnCoordinator(
+            send_audio=AsyncMock(),
+            send_audio_clear=AsyncMock(),
+            send_status=AsyncMock(),
+            send_model_speaking=AsyncMock(),
+            send_dev_event=AsyncMock(),
+            send_input_mode=send_input_mode,
+            send_claim_started=AsyncMock(),
+            send_claim_ended=AsyncMock(),
+            provider=provider,
+            dispatch_tool=AsyncMock(return_value=ToolResult(output="{}")),
+            focus_manager=focus_manager,
+        )
+
+        async def finite_speaker() -> AsyncIterator[bytes]:
+            yield b"\xbe\xef"
+
+        handle = await coord.start_input_claim(
+            InputClaim(on_mic_frame=AsyncMock(), speaker_source=finite_speaker())
+        )
+        send_input_mode.reset_mock()
+        await asyncio.wait_for(handle.wait_end(), timeout=1.0)
+
+        # The final input_mode call must flip back to assistant_ptt.
+        last_args = send_input_mode.await_args
+        assert last_args is not None
+        assert last_args.args[0] == "assistant_ptt"
