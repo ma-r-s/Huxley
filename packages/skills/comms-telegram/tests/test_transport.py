@@ -25,7 +25,6 @@ from huxley_skill_comms_telegram.transport import (
     TransportError,
     downsample_48k_stereo_to_24k_mono,
     normalize_phone,
-    upsample_24k_mono_to_48k_mono,
 )
 
 
@@ -82,47 +81,6 @@ class TestDownsampler:
         samples = struct.unpack(f"<{len(out) // 2}h", out)
         assert max(samples) > amp * 0.95
         assert min(samples) < -amp * 0.95
-
-
-class TestUpsampler:
-    """The 24 kHz mono -> 48 kHz mono function is PURE -- easy to verify."""
-
-    def test_empty_input_returns_empty(self) -> None:
-        assert upsample_24k_mono_to_48k_mono(b"") == b""
-
-    def test_doubles_the_byte_count(self) -> None:
-        # 1 second of silence at 24 kHz mono = 24000*2 = 48000 bytes.
-        # Upsampled to 48 kHz mono = 96000 bytes.
-        pcm_in = b"\x00" * (24_000 * 2)
-        out = upsample_24k_mono_to_48k_mono(pcm_in)
-        assert len(out) == 24_000 * 4
-
-    def test_single_sample_is_repeated(self) -> None:
-        # One PCM16 sample (value=1000) -> two identical output samples.
-        pcm_in = struct.pack("<h", 1000)
-        out = upsample_24k_mono_to_48k_mono(pcm_in)
-        assert len(out) == 4
-        assert struct.unpack("<2h", out) == (1000, 1000)
-
-    def test_two_samples_interpolated(self) -> None:
-        # in[0]=0, in[1]=1000
-        # out[0]=0, out[1]=(0+1000)//2=500, out[2]=1000, out[3]=1000
-        pcm_in = struct.pack("<2h", 0, 1000)
-        out = upsample_24k_mono_to_48k_mono(pcm_in)
-        assert struct.unpack("<4h", out) == (0, 500, 1000, 1000)
-
-    def test_preserves_silence(self) -> None:
-        pcm_in = b"\x00" * 20
-        out = upsample_24k_mono_to_48k_mono(pcm_in)
-        assert out == b"\x00" * 40
-
-    def test_output_clipped_to_int16_range(self) -> None:
-        # max int16 value + max int16 value: interpolated midpoint stays in range.
-        pcm_in = struct.pack("<2h", 32767, 32767)
-        out = upsample_24k_mono_to_48k_mono(pcm_in)
-        samples = struct.unpack("<4h", out)
-        for s in samples:
-            assert -32768 <= s <= 32767
 
 
 class TestNormalizePhone:

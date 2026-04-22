@@ -4,11 +4,9 @@ See `docs/research/telegram-voice.md` for the full rationale.
 
 - Outbound: ExternalMedia.AUDIO + dedicated real-time OS thread.
   Python writes 24 kHz mono PCM16 to a thread-safe deque via send_pcm().
-  A dedicated OS thread runs at a strict 10 ms/frame cadence, upsamples
-  to 48 kHz mono, and calls send_frame() via asyncio.run_coroutine_threadsafe.
-  No ffmpeg, no FIFO, no kernel pipe buffer. This is the same pattern used
-  by production WebRTC bridges (Janus, Asterisk, Twilio): a real-time OS
-  thread owns the sending clock so asyncio jitter never reaches ntgcalls.
+  A dedicated OS thread runs at a strict 10 ms/frame cadence and calls
+  send_frame() via asyncio.run_coroutine_threadsafe. ntgcalls handles any
+  internal rate conversion. No ffmpeg, no FIFO, no upsampling in Python.
 - Inbound: py-tgcalls' record() + @stream_frame handler delivers 48 kHz
   stereo PCM16. The transport downsamples to 24 kHz mono via decimation +
   channel averaging before enqueuing.
@@ -41,17 +39,17 @@ HUXLEY_SAMPLE_RATE_HZ = 24_000
 HUXLEY_CHANNELS = 1
 BYTES_PER_SAMPLE = 2
 
-# Outbound format sent via ExternalMedia. ntgcalls expects 48 kHz mono
-# PCM16 frames of exactly 10 ms each (960 bytes). Python upsamples from
-# Huxley's 24 kHz internal rate in the send thread.
-OUTBOUND_SAMPLE_RATE_HZ = 48_000
+# Outbound format sent via ExternalMedia. Matches Huxley's internal rate
+# so no Python-side resampling is needed. ntgcalls handles any conversion
+# before the Opus encoder.
+OUTBOUND_SAMPLE_RATE_HZ = 24_000
 OUTBOUND_CHANNELS = 1
 
-# ExternalMedia frame: 48kHz * 2 bytes/sample * 1 ch / 100 frames/s = 960 bytes
+# ExternalMedia frame: 24kHz * 2 bytes/sample * 1 ch / 100 frames/s = 480 bytes
 _SEND_FRAME_BYTES = OUTBOUND_SAMPLE_RATE_HZ * BYTES_PER_SAMPLE * OUTBOUND_CHANNELS // 100
 _SEND_INTERVAL_S = 0.010  # 10 ms between frames
 
-# Outbound backlog cap: ~200 ms of 48 kHz mono PCM16 before dropping.
+# Outbound backlog cap: ~200 ms of 24 kHz mono PCM16 before dropping.
 _OUTBOUND_MAX_BYTES = OUTBOUND_SAMPLE_RATE_HZ * BYTES_PER_SAMPLE * OUTBOUND_CHANNELS // 5
 
 # What ntgcalls delivers on the inbound path. Requesting 24k mono here
@@ -109,29 +107,6 @@ def downsample_48k_stereo_to_24k_mono(pcm_in: bytes) -> bytes:
     return bytes(out)
 
 
-def upsample_24k_mono_to_48k_mono(pcm_in: bytes) -> bytes:
-    """2x linear-interpolation upsample: 24 kHz mono PCM16 -> 48 kHz mono PCM16.
-
-    Each input sample maps to two output samples:
-      out[2i]   = in[i]
-      out[2i+1] = (in[i] + in[i+1]) // 2   for i < n-1
-      out[2n-2] = in[n-1]                   last sample: original
-      out[2n-1] = in[n-1]                   last sample: repeated
-    """
-    n = len(pcm_in) // 2
-    if n == 0:
-        return b""
-    samples = struct.unpack(f"<{n}h", pcm_in[: n * 2])
-    out = bytearray(n * 4)
-    for i in range(n - 1):
-        struct.pack_into("<h", out, i * 4, samples[i])
-        interp = (int(samples[i]) + int(samples[i + 1])) >> 1
-        struct.pack_into("<h", out, i * 4 + 2, interp)
-    struct.pack_into("<h", out, (n - 1) * 4, samples[-1])
-    struct.pack_into("<h", out, (n - 1) * 4 + 2, samples[-1])
-    return bytes(out)
-
-
 class TransportError(Exception):
     """Raised on any transport-level failure (auth, dial, send)."""
 
@@ -173,8 +148,8 @@ class TelegramTransport:
         self._loop: asyncio.AbstractEventLoop | None = None
 
         # Outbound send thread -- dedicated OS thread at 10 ms cadence.
-        # Drains _send_deque, upsamples to 48 kHz, calls send_frame via
-        # run_coroutine_threadsafe so asyncio jitter never reaches ntgcalls.
+        # Drains _send_deque and calls send_frame via run_coroutine_threadsafe
+        # so asyncio jitter never reaches ntgcalls.
         self._send_thread: threading.Thread | None = None
         self._send_stop = threading.Event()
         self._send_deque: collections.deque[bytes] = collections.deque()
@@ -373,10 +348,9 @@ class TelegramTransport:
         """Dedicated OS thread: sends audio to ntgcalls at strict 10 ms cadence.
 
         Drains _send_deque (24 kHz mono PCM16 enqueued by send_pcm()),
-        upsamples to 48 kHz mono, assembles 10 ms frames (960 bytes), and
-        submits send_frame() to the event loop via run_coroutine_threadsafe.
-        Sends silence when the deque runs dry so ntgcalls stays fed between
-        speech turns.
+        assembles 10 ms frames (480 bytes), and submits send_frame() to the
+        event loop via run_coroutine_threadsafe. Sends silence when the deque
+        runs dry so ntgcalls stays fed between speech turns.
 
         Owning the clock in an OS thread (not asyncio) is the key: Python's
         event-loop scheduling jitter never reaches the WebRTC encoder, so
@@ -388,13 +362,12 @@ class TelegramTransport:
         next_tick = time.monotonic() + _SEND_INTERVAL_S
 
         while not self._send_stop.is_set():
-            # Drain deque into accumulator, upsampling to 48kHz as we go.
+            # Drain deque into accumulator.
             with self._send_lock:
                 while self._send_deque:
-                    raw = self._send_deque.popleft()
-                    accumulator.extend(upsample_24k_mono_to_48k_mono(raw))
+                    accumulator.extend(self._send_deque.popleft())
 
-            # Assemble one 10ms frame (960 bytes at 48kHz mono). Send silence
+            # Assemble one 10ms frame (480 bytes at 24kHz mono). Send silence
             # if the deque ran dry -- keeps ntgcalls' jitter buffer stable.
             if len(accumulator) >= _SEND_FRAME_BYTES:
                 frame = bytes(accumulator[:_SEND_FRAME_BYTES])
