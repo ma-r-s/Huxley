@@ -315,11 +315,12 @@ class TelegramTransport:
         connected on the WebRTC layer. Peer audio may arrive before
         or after; the handler queues it either way.
 
-        Bypasses `MediaSource.FILE` + FIFO + ThreadedReader because
-        ThreadedReader hard-codes a 1s read-ahead batch with 2x
-        buffering (threaded_reader.cpp:35, `maxBufferSize = 100
-        frames`), causing ~5.5 s outbound latency. ExternalMedia +
-        `send_frame` posts PCM straight into ntgcalls's send queue.
+        Uses `ExternalMedia.AUDIO` + `send_frame` (no FIFO, no
+        ThreadedReader). Each frame carries a real wallclock
+        `capture_time` so the peer's NetEQ jitter buffer doesn't
+        inflate defensively (the `capture_time=0` default is the
+        documented cause of receive-side jitter-buffer expansion —
+        all WebRTC bridges set wallclock capture_time).
         """
         if self._active_user_id is not None:
             msg = f"place_call: already in a call with user_id={self._active_user_id}"
@@ -328,49 +329,11 @@ class TelegramTransport:
             msg = "place_call() before connect()"
             raise TransportError(msg)
 
-        from pathlib import Path
+        from pytgcalls.types import ExternalMedia, MediaStream, RecordStream
+        from pytgcalls.types.raw import AudioParameters
 
-        from ntgcalls import MediaSource
-        from pytgcalls.types import RecordStream
-        from pytgcalls.types.raw import AudioParameters, AudioStream, Stream
-
-        # FIFO path — deterministic per process so cleanup can find it.
-        fifo = Path(f"/tmp/huxley_comms_mic_{os.getpid()}.pcm")
-        with contextlib.suppress(FileNotFoundError):
-            fifo.unlink()
-        os.mkfifo(str(fifo))
-        # O_RDWR avoids the reader-opens-before-writer race. O_NONBLOCK
-        # prevents indefinite kernel-wait on FIFO writes (macOS `U`
-        # state processes that even kill -9 can't stop).
-        fd = os.open(str(fifo), os.O_RDWR | os.O_NONBLOCK)
-        # Prefill with 80 ms of silence so ntgcalls's FileReader first
-        # read returns bytes immediately rather than blocking on a
-        # newly-created empty FIFO.
-        silence = b"\x00\x00" * (OUTBOUND_SAMPLE_RATE_HZ * 80 // 1000)
-        os.write(fd, silence)
-        self._mic_fd = fd
-        self._mic_fifo = fifo
-
-        # Start the writer thread BEFORE dialing so ffmpeg / ntgcalls
-        # never see an empty FIFO during setup.
-        self._writer_stop.clear()
-        thread = threading.Thread(
-            target=self._writer_loop,
-            args=(fd,),
-            daemon=True,
-            name="comms-telegram-writer",
-        )
-        thread.start()
-        self._writer_thread = thread
-
-        # Raw Stream + MediaSource.FILE on the FIFO directly.
-        out_stream = Stream(
-            microphone=AudioStream(
-                MediaSource.FILE,
-                str(fifo),
-                AudioParameters(OUTBOUND_SAMPLE_RATE_HZ, OUTBOUND_CHANNELS),
-            ),
-        )
+        audio_params = AudioParameters(OUTBOUND_SAMPLE_RATE_HZ, OUTBOUND_CHANNELS)
+        out_stream = MediaStream(ExternalMedia.AUDIO, audio_params)
 
         # Spin up the inbound queue BEFORE recording starts so no frame
         # is dropped between `record()` and the first put_nowait.
@@ -446,41 +409,52 @@ class TelegramTransport:
             self._send_frame_ms_max = 0.0
 
     async def send_pcm(self, pcm_24k_mono: bytes) -> None:
-        """Queue a PCM chunk for outbound send via the FIFO writer.
+        """Forward a PCM chunk to the active call via `send_frame`.
 
-        Upsamples 24 kHz mono (Huxley's internal rate) to 48 kHz mono
-        so ntgcalls can pass-through to the Opus encoder without
-        resampling internally — eliminates the audio-sink resampler
-        buffer that accumulates latency.
+        Upsamples 24 kHz mono → 48 kHz mono (Telegram's native Opus
+        rate) to bypass ntgcalls's internal resampler, and attaches a
+        real wallclock `capture_time` so the peer's NetEQ jitter
+        buffer doesn't inflate defensively against the default `=0`.
         """
-        if not pcm_24k_mono or self._active_user_id is None:
+        if not pcm_24k_mono or self._call_py is None or self._active_user_id is None:
             return
         pcm_48k_mono = upsample_24k_mono_to_48k_mono(pcm_24k_mono)
-        with self._outbound_lock:
-            was_first = self._sent_count == 0
-            self._outbound_chunks.append(pcm_48k_mono)
-            self._sent_count += 1
-            self._mic_rms_sum += _rms_pcm16(pcm_24k_mono)
-            self._mic_rms_count += 1
-            # Cap backlog at ~200 ms of PCM to prevent unbounded growth
-            # if browser mic clock drifts past writer pace. At 48 kHz
-            # mono PCM16 that's 96 KB / 5 = 19.2 KB.
-            _max_bytes = OUTBOUND_SAMPLE_RATE_HZ * BYTES_PER_SAMPLE // 5
-            total = sum(len(c) for c in self._outbound_chunks)
-            dropped = 0
-            while total > _max_bytes and self._outbound_chunks:
-                removed = self._outbound_chunks.pop(0)
-                total -= len(removed)
-                dropped += len(removed)
-            if dropped:
-                self._outbound_dropped_bytes += dropped
+
+        from pytgcalls.types import Device, Frame
+
+        was_first = self._sent_count == 0
+        self._sent_count += 1
+        self._mic_rms_sum += _rms_pcm16(pcm_24k_mono)
+        self._mic_rms_count += 1
+
+        capture_time_ms = int(time.time() * 1000)
+        t0 = time.monotonic()
+        try:
+            await self._call_py.send_frame(  # type: ignore[attr-defined]
+                self._active_user_id,
+                Device.MICROPHONE,
+                pcm_48k_mono,
+                Frame.Info(capture_time=capture_time_ms),
+            )
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            self._send_frame_ms_sum += elapsed_ms
+            self._send_frame_ms_count += 1
+            if elapsed_ms > self._send_frame_ms_max:
+                self._send_frame_ms_max = elapsed_ms
+        except Exception as exc:
+            # Only log first few errors per call to avoid flooding.
+            if self._sent_count <= 5:
+                await logger.awarning(
+                    "comms_telegram.transport.send_frame_failed",
+                    exc_type=type(exc).__name__,
+                    exc=str(exc),
+                )
         if was_first:
-            # Sync logger from within async context — structlog sync
-            # logging is safe from any thread/context.
-            structlog.get_logger().info(
+            await logger.ainfo(
                 "comms_telegram.transport.first_send_pcm",
                 chunk_bytes_in=len(pcm_24k_mono),
                 chunk_bytes_out=len(pcm_48k_mono),
+                capture_time_ms=capture_time_ms,
             )
 
     def _writer_loop(self, fd: int) -> None:
