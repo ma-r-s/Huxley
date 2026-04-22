@@ -1109,9 +1109,9 @@ Both were filed against the now-abandoned "custom PWA as caller" model. Under th
 - Stage 2.2 (voicemail / missed-call inject) — obsolete because the calls skill being torn out is being replaced by `huxley-skill-comms-telegram`, which inherits Telegram's built-in missed-call notification mechanics at no cost.
 - Stage 2.3 (per-caller secrets) — obsolete because Telegram identities replace the shared-secret model entirely. Per-caller routing is Telegram's problem, not ours.
 
-### T1.10 — `huxley-skill-comms-telegram` (queued)
+### T1.10 — `huxley-skill-comms-telegram` ✅ done (`441120c`, 2026-04-22)
 
-**Status**: queued · **Effort**: 1-day spike first, then ~1 week to ship the full skill · **Blocked by**: py-tgcalls verification spike; a Telegram account for the bot (SIM card Mario has).
+**Status**: done · **Effort**: spike + ~1 week implementation across multiple sessions.
 
 Replaces the ripped-out `huxley-skill-calls` with the right shape: a skill that bridges Huxley to Telegram as a transport for both real-time voice calls and async messages. Family members reach the Huxley user via their existing Telegram clients — no Huxley-branded app on their side.
 
@@ -1139,6 +1139,20 @@ Replaces the ripped-out `huxley-skill-calls` with the right shape: a skill that 
 - Output: `docs/research/telegram-voice.md` characterization report + throwaway `spikes/test_telegram_call.py`. If the spike reveals dealbreakers, fall back to Twilio and file that as an alternative T1.10 variant.
 
 **Platform substrate used**: `InputClaim`, `provider.suspend/resume`, `MicRouter` single-claim invariant, `cancel_active_claim`, `inject_turn(PREEMPT)`. All shipped; nothing new needed framework-side.
+
+**Shipped**:
+
+- `huxley-skill-comms-telegram`: full bidirectional voice over Telegram p2p (ExternalMedia outbound + py-tgcalls record inbound).
+- Outbound transport: ExternalMedia.AUDIO + dedicated OS send thread at strict 10 ms cadence; `AudioParameters(24000, 1)`; no FIFO, no ffmpeg, no Python-side resampling.
+- Inbound: 48 kHz stereo PCM16 from py-tgcalls → decimation + channel-average downsample to 24 kHz mono in Python.
+- Diagnostic tool: `tgcalls-diag/call.py` with tone/ext/mic/silence modes for isolating transport vs. audio-source issues.
+
+**Lessons**:
+
+- `ExternalMedia` lives in `pytgcalls.types`, NOT `ntgcalls`. Wrong import causes silent ImportError that kills `place_call` before a single frame is sent. Every prior ExternalMedia attempt was failing for this reason.
+- `send_frame` is decorated (`@statictypes`, `@mtproto_required`); calling it outside the event loop does not produce a coroutine `asyncio.run_coroutine_threadsafe` recognizes. Fix: wrap in a plain `async def _send()` closure.
+- Multiple stale server processes on the same port: when diagnosing "my fix didn't work", check `lsof -i :PORT` first. The browser may be talking to an old process.
+- Heartbeat `mic_chunks_window=375` per 2s window confirms browser AudioContext is genuinely at 24 kHz; `silence_pct=0.0` in steady state confirms WebSocket delivery has no timing issues.
 
 ### Stage 3a — Supervised `background_task` (in-memory) ✅ done (`521f269`, 2026-04-18)
 
