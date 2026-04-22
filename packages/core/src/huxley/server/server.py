@@ -117,8 +117,18 @@ class AudioServer:
 
     async def _handle_connection(self, ws: ServerConnection) -> None:
         if self._client is not None:
-            await ws.close(1008, "Server busy — one client at a time")
-            return
+            # Evict the old client rather than rejecting the new one.
+            # A new connection means either a browser reload or a freshly-
+            # booted device — both should take priority over a stale socket.
+            await logger.ainfo(
+                "client_evicted",
+                old=str(self._client.remote_address),
+                new=str(ws.remote_address),
+            )
+            old = self._client
+            self._client = None
+            with contextlib.suppress(Exception):
+                await old.close(1001, "Replaced by new client")
 
         self._client = ws
         await logger.ainfo("client_connected", remote=str(ws.remote_address))
