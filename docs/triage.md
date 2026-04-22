@@ -807,15 +807,22 @@ per-timer — but a future medication-reminder skill will use
 `dedup_key="med_<schedule_id>_<date>"` to handle re-fires from the
 scheduler.
 
-**Stage 1d.2 — TTL + outcome handle** (~1 day, queued, deferred from
-1d.1). Add `expires_after: timedelta | None` parameter — queued
-requests older than the TTL are dropped silently when reached at
-drain time. Add `InjectedTurnHandle` returned from `inject_turn`
-exposing `.wait_outcome()` resolving to a `TurnOutcome` enum
-(`DELIVERED | EXPIRED | CANCELLED | PREEMPTED`); enables the
-medication-retry pattern where a reminder reschedules itself if
-not delivered. Defer until a real consumer (T1.8 evolved reminder
-skill) needs it — the timers MVP doesn't.
+**Stage 1d.2 — TTL + outcome handle** ~~shelved (2026-04-21)~~.
+Originally speced as `InjectedTurnHandle.wait_outcome()` resolving
+to a `TurnOutcome` enum (`DELIVERED | EXPIRED | CANCELLED | PREEMPTED`).
+
+**Design decision (2026-04-21)**: `.wait_outcome()` is the wrong
+abstraction for the reminder ack problem. The right pattern — used
+by every major AVS-derived skill (Alexa Reminders, Google Assistant
+Routines) — is LLM-driven acknowledgment: the reminder skill exposes
+an `acknowledge_reminder(id)` tool and trusts the LLM to call it when
+the user says "ya me la tomé". The framework does not need to know
+whether a turn was "acknowledged"; that's application-layer semantics.
+`InjectedTurnHandle.cancel()` remains useful and is already
+in-spec via Stage 1d.1. `expires_after` TTL is a reasonable future
+add but has no current consumer. **Do not build `.wait_outcome()` —
+it would create a framework API that leaks skill-level semantics
+upward through the abstraction boundary.**
 
 **Stage 1d.3 — `InjectPriority` enum (two-tier)** ✅ **done** (`bc5a4e2`,
 2026-04-19). Added `InjectPriority = NORMAL | PREEMPT` to
@@ -1544,9 +1551,11 @@ Plus stream mock signatures in `test_skill.py` and `test_coordinator_skill_integ
 commit>`, 2026-04-18) — one-shot timers via `set_timer(seconds,
 message)`, in-memory only, no persistence / ack / retry. Full
 reminders skill remains queued. · **Effort**: ~1 week for the full
-version · **Still blocked by**: Stage 3 (`background_task` for
-persistence + restart) + Stage 1d (`InjectedTurnHandle.wait_outcome`
-for acknowledgment tracking)
+version · **Blocked by**: Stage 3 (`background_task` for persistence
+
+- restart). Stage 1d.2 (`InjectedTurnHandle.wait_outcome`) is
+  **shelved** — ack uses LLM-driven `acknowledge_reminder(id)` tool
+  instead (see Stage 1d.2 note above).
 
 **MVP shipped (2026-04-18)**: `packages/skills/timers/` — proves the
 full inject_turn path works end-to-end. User says "recuérdame en 5
@@ -1570,22 +1579,36 @@ right call.
 
 **Sketch**:
 
-- Persona config declares a reminder list: each has `{id, when, prompt,
-kind, retry}` fields; `kind` in `{medication, appointment, generic}`
-  drives the urgency tier default
-- `setup()`: load reminders from persona data (YAML or SQLite), register a
+- Persona config declares a reminder list in YAML as a **seed** (initial
+  defaults); `{id, when, prompt, kind, retry}` fields. `kind` in
+  `{medication, appointment, generic}` drives the urgency tier default.
+- **Storage pattern (decided 2026-04-21)**: YAML is read-only seed data.
+  All runtime reads and writes go through SQLite — same pattern as the
+  timers skill's `list_settings` / `store_setting` storage primitives.
+  On `setup()`, skill imports YAML seed into SQLite if the table is empty
+  (idempotent), then operates entirely from SQLite. This means reminders
+  survive server restart and user-added reminders (`add_reminder` tool)
+  are persisted without touching the YAML file.
+- `setup()`: import YAML seed → SQLite, register
   `background_task("scheduler", ...)`
 - Scheduler loop: pick next due → sleep until due → fire
-  `inject_turn(prompt, urgency=...)` → on ack (handle's ack callback fires
-  when user PTTs within the default window), mark fired. If no ack within
-  configured retry window and `kind == medication`, re-fire at escalating
-  urgency
-- Tool surface: `add_reminder`, `list_reminders`, `cancel_reminder`
+  `inject_turn(prompt, urgency=...)` → LLM narrates reminder in its
+  response; skill exposes `acknowledge_reminder(id)` tool for the LLM
+  to call when user confirms ("ya me la tomé"). If no ack within configured
+  retry window and `kind == medication`, re-fire at escalating urgency.
+- **Ack pattern (decided 2026-04-21)**: acknowledgment is LLM-driven, not
+  framework-driven. The skill exposes `acknowledge_reminder(id)` as a tool;
+  the LLM calls it when the user's PTT response indicates acknowledgment.
+  `InjectedTurnHandle.wait_outcome()` is **not used** — that abstraction
+  leaks application-layer semantics (what "acknowledged" means) into the
+  framework. See Stage 1d.2 note for the rationale.
+- Tool surface: `add_reminder`, `list_reminders`, `cancel_reminder`,
+  `acknowledge_reminder`
 - Prompt context: list upcoming reminders so the LLM can mention them on
   request
 
 **Framework changes needed**: none. Uses existing `inject_turn` +
-`background_task` + `Catalog` (for reminder list storage + fuzzy lookup).
+`background_task` + skill-owned SQLite storage.
 
 **UX validation**: set a medication reminder for 1 minute in the future;
 verify: the interrupt earcon plays, book (if playing) is cancelled, model
@@ -1597,35 +1620,35 @@ fire at escalating urgency.
 
 ## T1.9 — `huxley-skill-messaging`
 
-**Status**: queued · **Effort**: ~1 week (plus webhook provider integration, not scoped here) · **Blocked by**: T1.4 Stages 1 + 3 (optionally 4 for outbound trigger via `ClientEvent`)
+**Status**: redesigned (2026-04-21) — folded into `huxley-skill-comms-telegram`; no separate skill needed.
 
-**Problem.** Inbound family messages ("Carlos te mandó un mensaje...") are
-the second biggest expected user value after reminders. Outbound messaging
-(send a voice memo to Carlos) is the messaging counterpart; depends on a
-hardware button or voice command trigger.
+**Design decision (2026-04-21)**: The original sketch assumed a generic
+`huxley-skill-messaging` backed by "WhatsApp / Telegram / Twilio — provider
+TBD". Since T1.10 shipped `huxley-skill-comms-telegram` with a working
+Telegram transport (userbot + py-tgcalls), messaging and calling live on
+the same provider and the same skill. Building a second skill for messaging
+would duplicate Telegram client lifecycle management and add a coordination
+problem between two skills that share a Pyrogram session.
 
-**Why it matters.** The `never_say_no` constraint's biggest credibility
-test is "user says 'avísale a Carlos que estoy bien' and the agent can
-actually do it." Without messaging, the constraint is a verbal promise
-without substance.
+**Revised plan**: extend `huxley-skill-comms-telegram` with:
 
-**Sketch (inbound only for first pass)**:
+- `send_message(contact, text)` — outbound Telegram text message via userbot
+- `send_voice_note(contact)` — record and send a voice note (later pass)
+- Inbound message listener: `background_task` that polls/webhooks Telegram
+  for inbound messages from known contacts, fires `inject_turn` at
+  `CHIME_DEFER` with `dedup_key="msg:{contact_id}"`
 
-- Webhook listener (WhatsApp Business API, Telegram, or Twilio — provider
-  choice separate concern) runs as a `background_task`
-- On inbound message: resolve sender via `Catalog` of known contacts,
-  fire `inject_turn` at `CHIME_DEFER` urgency with dedup key
-  `msg:{contact_id}` (coalesces multiple pings from same contact)
-- Tool surface: `send_message(contact, text)` (outbound), `list_messages`
-- Contact list managed by a companion `huxley-skill-contacts` (bundled or
-  separate; TBD)
+**No Stage 4 (`ClientEvent`) dependency**: outbound trigger is voice-command
+only ("mándale un mensaje a Carlos"). The `ClientEvent` hardware-button path
+is still relevant for the panic button (T1.10), not messaging.
 
-**Outbound**: later pass. Could ride on a hardware "mic button for memo"
-via `ClientEvent`, or voice command `"mándale un mensaje a Carlos"`.
+**Blocked by**: Stage 3 (`background_task` for the inbound listener).
+T1.4 Stages 1 + 3 remain prerequisite; Stage 4 is no longer needed.
 
-**UX validation**: webhook delivers a test inbound message; verify
-chime+defer: chime ducks book, message held; grandpa PTTs "¿qué decía?" →
-LLM narrates the message.
+**UX validation** (unchanged from original): inbound message fires
+chime+defer; grandpa PTTs "¿qué decía?" → LLM narrates. Outbound:
+"mándale un mensaje a Carlos, dile que estoy bien" → LLM calls
+`send_message("Carlos", "Estoy bien")` → Telegram message sent.
 
 ---
 
