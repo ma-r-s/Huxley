@@ -155,7 +155,11 @@ class TelegramTransport:
         self._send_deque: collections.deque[bytes] = collections.deque()
         self._send_lock = threading.Lock()
         self._outbound_dropped_bytes = 0
-        self._sent_count = 0
+        self._sent_count = 0  # cumulative; used for first_send_pcm guard
+        self._mic_chunks_window = 0  # per-heartbeat window chunk count
+        # Silence frames sent because the deque was empty at tick time.
+        # A non-zero rate means audio is arriving too slowly / too bursty.
+        self._silence_frames = 0
 
         # Heartbeat counters -- inbound peer-frame arrival and outbound
         # mic-frame push. Logged every 2s during a call so we can see
@@ -306,8 +310,11 @@ class TelegramTransport:
         self._ended.clear()
 
         # Start the send thread BEFORE play() so send_frame calls can
-        # land immediately after the call connects.
+        # land immediately after the call connects. Reset silence counter
+        # here so the first heartbeat window doesn't include pre-call
+        # silence from while the phone was ringing.
         self._send_stop.clear()
+        self._silence_frames = 0
         send_thread = threading.Thread(
             target=self._send_loop_thread,
             daemon=True,
@@ -374,6 +381,7 @@ class TelegramTransport:
                 del accumulator[:_SEND_FRAME_BYTES]
             else:
                 frame = b"\x00" * _SEND_FRAME_BYTES
+                self._silence_frames += 1
 
             loop = self._loop
             call_py = self._call_py
@@ -433,15 +441,23 @@ class TelegramTransport:
                 backlog = sum(len(c) for c in self._send_deque)
                 dropped = self._outbound_dropped_bytes
                 self._outbound_dropped_bytes = 0
+            silence = self._silence_frames
+            self._silence_frames = 0
+            # 2s heartbeat window = 200 send frames at 10ms cadence.
+            # silence_pct = what fraction of frames had no audio in the deque.
+            total_frames_in_window = 200
+            silence_pct = round(100.0 * silence / total_frames_in_window, 1)
             await logger.ainfo(
                 "comms_telegram.transport.heartbeat",
                 peer_frames=self._peer_frames_received,
                 peer_bytes=self._peer_bytes_received,
                 peer_mean_rms=round(peer_rms, 1),
-                mic_chunks=self._sent_count,
+                mic_chunks_window=self._mic_chunks_window,
                 mic_mean_rms=round(mic_rms, 1),
                 outbound_backlog_bytes=backlog,
                 outbound_dropped_bytes=dropped,
+                silence_frames=silence,
+                silence_pct=silence_pct,
                 inbound_queue_depth=(
                     self._inbound_queue.qsize() if self._inbound_queue is not None else 0
                 ),
@@ -453,6 +469,7 @@ class TelegramTransport:
             self._peer_rms_count = 0
             self._mic_rms_sum = 0.0
             self._mic_rms_count = 0
+            self._mic_chunks_window = 0
 
     async def send_pcm(self, pcm_24k_mono: bytes) -> None:
         """Queue a PCM chunk for the send thread.
@@ -467,6 +484,7 @@ class TelegramTransport:
         with self._send_lock:
             was_first = self._sent_count == 0
             self._sent_count += 1
+            self._mic_chunks_window += 1
             self._mic_rms_sum += _rms_pcm16(pcm_24k_mono)
             self._mic_rms_count += 1
             self._send_deque.append(pcm_24k_mono)
@@ -562,6 +580,7 @@ class TelegramTransport:
         with self._send_lock:
             self._send_deque.clear()
             self._sent_count = 0
+            self._mic_chunks_window = 0
             self._outbound_dropped_bytes = 0
         self._peer_frames_received = 0
         self._peer_bytes_received = 0
