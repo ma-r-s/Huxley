@@ -289,6 +289,28 @@ class AudioServer:
         """
         await self._send({"type": "audio_clear"})
 
+    async def send_stream_started(self, stream_id: str, label: str | None) -> None:
+        """Tell the client that a long-form audio stream has begun.
+
+        Triggers the "playing" orb state and waveform visualizer. The
+        `label` (e.g. "Don Quixote", "Radio Clasica") is shown in the
+        status line. `stream_id` correlates with the matching
+        `stream_ended` message.
+        """
+        await logger.ainfo("server.tx.stream_started", stream_id=stream_id, label=label)
+        await self._send({"type": "stream_started", "stream_id": stream_id, "label": label})
+
+    async def send_stream_ended(self, stream_id: str, end_reason: str) -> None:
+        """Tell the client that the long-form audio stream has ended.
+
+        `end_reason`: "natural" (played to completion) or "interrupted"
+        (user PTT, new tool call, or session reset).
+        """
+        await logger.ainfo("server.tx.stream_ended", stream_id=stream_id, end_reason=end_reason)
+        await self._send(
+            {"type": "stream_ended", "stream_id": stream_id, "end_reason": end_reason},
+        )
+
     async def _send(self, msg: dict[str, Any]) -> None:
         if self._client is None:
             return

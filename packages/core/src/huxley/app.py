@@ -139,6 +139,8 @@ class Application:
             send_input_mode=self.server.send_input_mode,
             send_claim_started=self.server.send_claim_started,
             send_claim_ended=self.server.send_claim_ended,
+            send_stream_started=self.server.send_stream_started,
+            send_stream_ended=self.server.send_stream_ended,
             provider=self.provider,
             dispatch_tool=self.skill_registry.dispatch,
             status_messages=persona.ui_strings or None,

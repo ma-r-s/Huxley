@@ -330,6 +330,7 @@ class RadioSkill:
                 "station_name": station["name"],
             },
             factory=factory,
+            label=station["name"],
         )
 
     async def _resume_radio(self) -> ToolResult:
@@ -399,6 +400,7 @@ class RadioSkill:
         *,
         payload: dict[str, Any],
         factory: Callable[[], AsyncIterator[bytes]],
+        label: str | None = None,
     ) -> ToolResult:
         chime = self._sounds.get(self._start_sound_role) if self._start_sound_role else None
         # AudioStream + PlaySound are mutually exclusive on a single
@@ -409,7 +411,7 @@ class RadioSkill:
             factory = self._wrap_with_chime(factory, chime)
         return ToolResult(
             output=json.dumps(payload, ensure_ascii=False),
-            side_effect=AudioStream(factory=factory),
+            side_effect=AudioStream(factory=factory, label=label),
         )
 
     def _wrap_with_chime(
