@@ -1077,6 +1077,11 @@ class TurnCoordinator:
             patience=timedelta(0),
         )
         await self._log.ainfo("coord.claim_starting", interface=interface_name)
+        # Flush any LLM audio still buffered at the client. The claim's speaker
+        # source is about to become the only audio source; queued announcement
+        # audio would play ahead of it, creating an audible delay (especially
+        # on inbound calls where announce → claim start is back-to-back).
+        await self._send_audio_clear()
         await self._focus_manager.acquire(activity)
         # Wait for FOREGROUND to be fully processed so suspend + mic
         # swap are done before the caller's next tick.
