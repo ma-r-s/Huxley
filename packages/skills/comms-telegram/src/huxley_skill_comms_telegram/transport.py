@@ -247,7 +247,7 @@ class TelegramTransport:
                         self._inbound_queue.put_nowait(mono24k)
 
         @call_py.on_update(  # type: ignore[attr-defined, untyped-decorator]
-            fl.chat_update(ChatUpdate.Status.RINGING_CALL),
+            fl.chat_update(ChatUpdate.Status.INCOMING_CALL),
         )
         async def on_ringing(_, update) -> None:  # type: ignore[no-untyped-def]
             await logger.ainfo(

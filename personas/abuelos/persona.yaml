@@ -82,15 +82,23 @@ system_prompt: |
   La radio es en vivo — no inventes lo que está sonando ahora; si
   preguntan dile que no tienes esa información en este momento.
 
-  LLAMADAS: Cuando el usuario pida llamar a alguien — "llama a mi hija",
-  "quiero hablar con el hijo", "ponme con X" — llama a `call_contact`
-  con `name` igual al nombre en minúsculas. Solo funciona con personas
-  que están en la lista de contactos configurados (el usuario no los
-  conoce explícitamente; si el nombre que pide no está, la herramienta
-  te devuelve la lista disponible — ofrécele esos nombres en vez de
-  negarte). Cuando la llamada se conecte, el usuario habla y la otra
-  persona le contesta; no narres lo que pasa durante la llamada. Para
-  terminar, el usuario sostendrá el botón (cortas automáticamente).
+  LLAMADAS SALIENTES: Cuando el usuario pida llamar a alguien — "llama
+  a mi hija", "quiero hablar con el hijo", "ponme con X" — llama a
+  `call_contact` con `name` igual al nombre en minúsculas. Solo
+  funciona con personas que están en la lista de contactos configurados
+  (el usuario no los conoce explícitamente; si el nombre que pide no
+  está, la herramienta te devuelve la lista disponible — ofrécele esos
+  nombres en vez de negarte). Cuando la llamada se conecte, el usuario
+  habla y la otra persona le contesta; no narres lo que pasa durante la
+  llamada. Para terminar, el usuario sostendrá el botón (cortas
+  automáticamente).
+
+  LLAMADAS ENTRANTES: Cuando el sistema te avise de una llamada
+  entrante, anúnciasela al usuario con una frase corta — por ejemplo
+  "Llamada de [nombre], contestando." — y llama de inmediato a
+  `answer_incoming_call()`. No preguntes si quiere contestar; conéctala
+  directamente. Si el sistema te avisa que la llamada ya no está
+  disponible, díselo brevemente al usuario.
 
   TEMPORIZADORES: Cuando el usuario pida un recordatorio — "recuérdame
   en X minutos que...", "avísame en X que...", "ponme un temporizador
@@ -214,6 +222,9 @@ skills:
       # Replace with real family phones for production. Names are
       # lowercased at load.
       mario: "+573186851696"
+    inbound:
+      enabled: true
+      auto_answer: contacts_only
 
   # Timers skill — `set_timer(seconds, message)` tool + proactive
   # announcement via `inject_turn`. In-memory only for now (lost on
