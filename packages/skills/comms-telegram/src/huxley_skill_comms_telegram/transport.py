@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Awaitable, Callable
     from pathlib import Path
 
 logger = structlog.get_logger()
@@ -115,7 +115,7 @@ class TelegramTransport:
     """Owns one userbot client + one active p2p call.
 
     Single-call invariant: the transport handles one call at a time.
-    Attempting `place_call` while a call is active raises.
+    Attempting `place_call` or `accept_call` while a call is active raises.
     """
 
     def __init__(
@@ -125,15 +125,23 @@ class TelegramTransport:
         api_hash: str,
         session_dir: Path,
         userbot_phone: str | None = None,
+        on_incoming_ring: Callable[[int], Awaitable[None]] | None = None,
+        on_ring_cancelled: Callable[[int], Awaitable[None]] | None = None,
     ) -> None:
         """Create a transport. `userbot_phone` is only consulted on the
         first-ever auth for this session file -- stored in sqlite after,
         skipped on every subsequent startup.
+
+        `on_incoming_ring` fires when a RINGING_CALL update arrives.
+        `on_ring_cancelled` fires when DISCARDED_CALL arrives for a call
+        that was never answered (ring expired or peer cancelled).
         """
         self._api_id = api_id
         self._api_hash = api_hash
         self._session_dir = session_dir
         self._userbot_phone = userbot_phone
+        self._on_incoming_ring_cb = on_incoming_ring
+        self._on_ring_cancelled_cb = on_ring_cancelled
 
         # Built lazily in `connect()` so construction is cheap and the
         # transport can be instantiated in tests without triggering
@@ -143,7 +151,7 @@ class TelegramTransport:
 
         # Active-call state.
         self._active_user_id: int | None = None
-        # Event loop reference captured in place_call(); needed by the
+        # Event loop reference captured in _start_call_bridge(); needed by the
         # send thread to submit coroutines via run_coroutine_threadsafe.
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -202,10 +210,9 @@ class TelegramTransport:
         await logger.ainfo("comms_telegram.transport.connected")
 
     def _wire_peer_audio_handler(self, call_py: object) -> None:
-        """Attach the stream_frame filter that pumps peer audio into
-        `_inbound_queue`, plus a chat_update filter that ends the claim
-        when the peer hangs up. Must run before `call_py.start()` per
-        the upstream example pattern.
+        """Attach stream_frame, RINGING_CALL, and chat_update filters.
+
+        Must run before `call_py.start()` per the upstream example pattern.
         """
         from pytgcalls import filters as fl
         from pytgcalls.types import ChatUpdate, Device, Direction
@@ -240,22 +247,34 @@ class TelegramTransport:
                         self._inbound_queue.put_nowait(mono24k)
 
         @call_py.on_update(  # type: ignore[attr-defined, untyped-decorator]
+            fl.chat_update(ChatUpdate.Status.RINGING_CALL),
+        )
+        async def on_ringing(_, update) -> None:  # type: ignore[no-untyped-def]
+            await logger.ainfo(
+                "comms_telegram.transport.incoming_ring",
+                chat_id=update.chat_id,
+            )
+            if self._on_incoming_ring_cb is not None:
+                await self._on_incoming_ring_cb(update.chat_id)
+
+        @call_py.on_update(  # type: ignore[attr-defined, untyped-decorator]
             fl.chat_update(
                 ChatUpdate.Status.DISCARDED_CALL | ChatUpdate.Status.BUSY_CALL,
             ),
         )
         async def on_chat_update(_, update) -> None:  # type: ignore[no-untyped-def]
-            # Peer hung up OR call failed to establish -> close the claim
-            # so grandpa doesn't sit on a dead-silent line forever.
-            # Setting _ended short-circuits the speaker_source iterator.
             await logger.ainfo(
                 "comms_telegram.transport.chat_update",
                 status=str(update.status),
                 chat_id=update.chat_id,
             )
             if update.chat_id == self._active_user_id:
+                # Active call ended -- peer hung up or errored.
                 self._ended.set()
-                saw_first_frame["value"] = False  # reset for next call
+                saw_first_frame["value"] = False
+            elif self._active_user_id is None and self._on_ring_cancelled_cb is not None:
+                # Ring expired or peer cancelled before we answered.
+                await self._on_ring_cancelled_cb(update.chat_id)
 
     async def resolve_contact(self, identifier: str) -> int:
         """Return the Telegram `user_id` for a phone number OR @handle.
@@ -279,26 +298,59 @@ class TelegramTransport:
         return int(user.id)
 
     async def place_call(self, user_id: int) -> None:
-        """Dial the peer via ExternalMedia.AUDIO + dedicated send thread.
-
-        Returns when `play()` returns -- at that point the call is
-        connected on the WebRTC layer. Peer audio may arrive before
-        or after; the handler queues it either way.
-
-        Outbound path: a dedicated OS thread runs at a strict 10 ms
-        cadence, drains _send_deque (filled by send_pcm()), and calls
-        send_frame() via run_coroutine_threadsafe so asyncio jitter
-        never reaches the ntgcalls encoder. AudioParameters(24000, 1)
-        tells ntgcalls the rate; no Python-side resampling. No FIFO,
-        no ffmpeg, no kernel pipe buffer.
-        """
+        """Dial the peer. Returns when the call is connected on the WebRTC layer."""
         if self._active_user_id is not None:
             msg = f"place_call: already in a call with user_id={self._active_user_id}"
             raise TransportError(msg)
         if self._call_py is None:
             msg = "place_call() before connect()"
             raise TransportError(msg)
+        await self._start_call_bridge(user_id)
+        await logger.ainfo(
+            "comms_telegram.transport.call_placed",
+            user_id=user_id,
+            transport="ExternalMedia",
+            sample_rate=OUTBOUND_SAMPLE_RATE_HZ,
+            channels=OUTBOUND_CHANNELS,
+        )
 
+    async def accept_call(self, user_id: int) -> None:
+        """Answer an incoming call. Mirror of place_call() — same bridge setup."""
+        if self._active_user_id is not None:
+            msg = f"accept_call: already in a call with user_id={self._active_user_id}"
+            raise TransportError(msg)
+        if self._call_py is None:
+            msg = "accept_call() before connect()"
+            raise TransportError(msg)
+        await self._start_call_bridge(user_id)
+        await logger.ainfo(
+            "comms_telegram.transport.call_accepted",
+            user_id=user_id,
+            transport="ExternalMedia",
+            sample_rate=OUTBOUND_SAMPLE_RATE_HZ,
+            channels=OUTBOUND_CHANNELS,
+        )
+
+    async def reject_call(self, user_id: int) -> None:
+        """Decline an incoming call without answering."""
+        if self._call_py is None:
+            return
+        from pytgcalls.exceptions import NotInCallError
+
+        with contextlib.suppress(NotInCallError, TimeoutError, Exception):
+            await asyncio.wait_for(
+                self._call_py.leave_call(user_id),  # type: ignore[attr-defined]
+                timeout=2.0,
+            )
+        await logger.ainfo("comms_telegram.transport.call_rejected", user_id=user_id)
+
+    async def _start_call_bridge(self, user_id: int) -> None:
+        """Set up inbound queue, send thread, play+record, heartbeat.
+
+        Shared by place_call() (outbound dial) and accept_call() (inbound
+        answer). The send thread starts BEFORE play() so send_frame calls
+        can land immediately after the call connects on the WebRTC layer.
+        """
         from pytgcalls.types import ExternalMedia, MediaStream, RecordStream
         from pytgcalls.types.raw import AudioParameters
 
@@ -342,14 +394,6 @@ class TelegramTransport:
             raise
 
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
-
-        await logger.ainfo(
-            "comms_telegram.transport.call_placed",
-            user_id=user_id,
-            transport="ExternalMedia",
-            sample_rate=OUTBOUND_SAMPLE_RATE_HZ,
-            channels=OUTBOUND_CHANNELS,
-        )
 
     def _send_loop_thread(self) -> None:
         """Dedicated OS thread: sends audio to ntgcalls at strict 10 ms cadence.
