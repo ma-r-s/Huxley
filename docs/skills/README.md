@@ -345,6 +345,24 @@ if outcome != TurnOutcome.ACKNOWLEDGED:
 
 **Who narrates**: the LLM, in persona voice. Your `prompt` is the instruction (what to say), not the rendered speech. Same pattern as audiobook's `AudioStream.on_complete_prompt`.
 
+### Blocking variant — `ctx.inject_turn_and_wait`
+
+> ℹ️ **Shipped.** Use when you need to announce something and then immediately start audio bridging.
+
+```python
+await self._ctx.inject_turn_and_wait("Llamada de María, contestando.")
+# returns only after the LLM finishes speaking
+await self._ctx.start_input_claim(InputClaim(...))
+```
+
+`inject_turn_and_wait` fires the same injected turn as `inject_turn`, but **blocks until `response_done` fires** (the LLM has finished generating and all PCM has been sent to the client). This eliminates the hardcoded `sleep()` that would otherwise be needed between "announce the event" and "start audio bridging."
+
+**Fallback**: if the coordinator is busy (a turn is already in progress), it falls back to a plain enqueue — same as `inject_turn`. The blocking guarantee only holds when the coordinator is idle. Design accordingly: call it from a background task where you control the timing.
+
+**When to use it**: any skill that must announce an event and then immediately claim the mic or start an audio source. Without the wait, your bridged audio queues behind the announcement PCM still in the client's playback buffer, causing a perceptible delay. The `comms_telegram` inbound-call flow uses this for exactly that reason.
+
+**When not to use it**: routine proactive reminders. `inject_turn` (non-blocking) is correct for timers, news alerts, and anything that doesn't immediately follow up with an audio source.
+
 ## Supervised background tasks — `ctx.background_task`
 
 > ℹ️ **Shipped (T1.4 Stage 3).** Use this instead of

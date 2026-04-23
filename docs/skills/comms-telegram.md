@@ -4,12 +4,16 @@ Places p2p Telegram voice calls to named contacts and bridges the call to grandp
 
 ## What it does
 
-User says "llama a mi hija". The LLM dispatches `call_contact(name="hija")`. The skill looks up the contact in the persona config, resolves the phone number to a Telegram user_id via the userbot, places a p2p call, and returns a `ToolResult` with `side_effect=InputClaim(...)`. The framework latches the mic and speaker to the skill at the turn's terminal barrier. For the duration of the call:
+**Outbound**: User says "llama a mi hija". The LLM dispatches `call_contact(name="hija")`. The skill looks up the contact in the persona config, resolves the phone number to a Telegram user_id via the userbot, places a p2p call, and returns a `ToolResult` with `side_effect=InputClaim(...)`. The framework latches the mic and speaker to the skill at the turn's terminal barrier.
+
+**Inbound**: When a contact calls grandpa's userbot, the skill accepts immediately (any delay degrades WebRTC audio quality), announces the caller via `ctx.inject_turn_and_wait` (blocks until the LLM finishes speaking), then starts the `InputClaim` to bridge audio both ways.
+
+For the duration of either call:
 
 - Every PCM chunk from grandpa's microphone (~50 ms at 24 kHz mono) is forwarded into the Telegram call via a Unix FIFO + `ffmpeg` subprocess.
 - Every peer-audio frame py-tgcalls delivers is downsampled from 48 kHz stereo to 24 kHz mono (via a pure Python helper) and yielded to the framework's speaker queue.
 
-When the claim ends — grandpa presses PTT, a medication reminder preempts, an error fires — the skill hangs up the Telegram call via `on_claim_end`.
+When the claim ends — grandpa presses PTT, a medication reminder preempts, the peer hangs up, an error fires — the skill hangs up the Telegram call via `on_claim_end`. Peer hangup is detected via ntgcalls' `DISCARDED_CALL` event, which causes `peer_audio_chunks()` to exhaust naturally; the speaker pump sees the iterator end and closes the claim with `NATURAL`.
 
 ## Tools
 
@@ -97,8 +101,6 @@ dependencies = [
 
 ## Not yet implemented
 
-- **Incoming-call handler** — family member calls grandpa's userbot → auto-answer + bridge to `InputClaim`. Planned as the second wave of this skill. The `@fl.chat_update(Status.INCOMING_CALL)` hook shape is known from upstream's `p2p_example.py`; the `on_claim_end` lifecycle already exists.
-- **Peer-hangup detection** — if the peer hangs up, ntgcalls fires a `chat_update(DISCARDED_CALL)` event. The skill should listen and close the claim naturally; right now grandpa hears silence until he presses PTT to end the claim.
 - **Multiple concurrent calls** — transport enforces a single-call invariant. Second `call_contact` during an active call would currently fail inside `place_call` with a clean `TransportError`; a better shape would be to end the previous one first (opinion: probably not what grandpa wants either way — he'd get double-billed in mind-space).
 - **Contact disambiguation** — two contacts named "hija" → only the last-loaded wins. Fine for v1 (unlikely with the target user), but might want a "did you mean…" flow later.
 
