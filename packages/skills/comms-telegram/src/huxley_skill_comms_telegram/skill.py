@@ -67,19 +67,15 @@ class CommsTelegramSkill:
         self,
         *,
         transport_factory: Callable[..., TelegramTransport] | None = None,
-        _announcement_settle_s: float = 3.0,
     ) -> None:
-        """`transport_factory` is an injection point for tests.
-        `_announcement_settle_s` controls how long to wait after inject_turn
-        returns before starting the audio bridge — gives the LLM time to finish
-        speaking the announcement. Tests pass 0.0 to keep suite fast.
+        """`transport_factory` is an injection point for tests — pass a
+        fake that returns a stub transport to avoid importing pyrogram.
         """
         self._logger: SkillLogger | None = None
         self._ctx: SkillContext | None = None
         self._contacts: dict[str, str] = {}  # lowercased name -> normalized phone
         self._transport: TelegramTransport | None = None
         self._transport_factory = transport_factory or TelegramTransport
-        self._announcement_settle_s = _announcement_settle_s
 
         # Inbound config
         self._inbound_enabled: bool = False
@@ -329,14 +325,12 @@ class CommsTelegramSkill:
 
         Accepts immediately to preserve pytgcalls WebRTC audio quality --
         delaying accept_call by even ~1s causes near-silent inbound audio
-        from the peer. After accepting, announces the caller via inject_turn,
-        then waits _announcement_settle_s for the LLM to finish speaking
-        before starting the audio bridge. Frames that pile up in the inbound
-        queue during the announcement window are flushed by peer_audio_chunks()
-        so playback starts real-time rather than replaying buffered audio.
+        from the peer. Then announces the caller via inject_turn_and_wait,
+        which blocks until the LLM finishes speaking before returning. At
+        that point start_input_claim is safe: the LLM is done, so provider
+        suspend doesn't cut any speech off. Frames buffered in the inbound
+        queue during the announcement are flushed by peer_audio_chunks().
         """
-        import asyncio
-
         assert self._logger is not None
         assert self._ctx is not None
 
@@ -388,11 +382,10 @@ class CommsTelegramSkill:
             "comms_telegram.inbound.call_accepted", user_id=user_id, name=display
         )
 
-        # Announce the caller. inject_turn returns after request_response() --
-        # the LLM speaks for ~2s after that. Settle wait gives it time to finish
-        # before start_input_claim suspends the provider mid-speech.
-        await self._ctx.inject_turn(f"Llamada de {display}, contestando.")
-        await asyncio.sleep(self._announcement_settle_s)
+        # Announce the caller and wait for the LLM to finish speaking.
+        # inject_turn_and_wait returns only after response_done fires so
+        # start_input_claim never preempts the announcement mid-sentence.
+        await self._ctx.inject_turn_and_wait(f"Llamada de {display}, contestando.")
 
         # Bridge audio. peer_audio_chunks() flushes frames buffered during the
         # announcement window so playback is real-time, not offset by ~3s.

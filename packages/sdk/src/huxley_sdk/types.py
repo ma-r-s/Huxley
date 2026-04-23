@@ -497,6 +497,31 @@ class InjectTurn(Protocol):
     ) -> None: ...
 
 
+class InjectTurnAndWait(Protocol):
+    """Structural signature for `SkillContext.inject_turn_and_wait`.
+
+    Like `InjectTurn` but the call only returns after the LLM has
+    finished generating and delivering the announcement audio. Use this
+    when you need to sequence work AFTER the LLM finishes speaking --
+    e.g., starting an audio bridge right after an inbound-call announcement
+    so `start_input_claim` doesn't preempt the announcement mid-sentence.
+
+    If the coordinator is busy when called (a turn already in progress),
+    falls back to a plain enqueue and returns immediately -- callers
+    must not depend on the wait semantics in that case. For inbound-call
+    flows (where the ring arrives while the system is idle) this is always
+    the fast path.
+    """
+
+    async def __call__(
+        self,
+        prompt: str,
+        /,
+        *,
+        dedup_key: str | None = None,
+    ) -> None: ...
+
+
 class BackgroundTask(Protocol):
     """Structural signature for `SkillContext.background_task`.
 
@@ -529,6 +554,19 @@ async def _noop_inject_turn(
     with the real callable from the `TurnCoordinator`.
     """
     del dedup_key, priority
+    return None
+
+
+async def _noop_inject_turn_and_wait(
+    _prompt: str,
+    /,
+    *,
+    dedup_key: str | None = None,
+) -> None:
+    """Default `inject_turn_and_wait` for `SkillContext` — test fixture no-op.
+    Framework-built contexts replace this with the real coordinator method.
+    """
+    del dedup_key
     return None
 
 
@@ -632,6 +670,12 @@ class SkillContext:
       currently firing. `expires_after` and an outcome-tracking
       handle are deferred to a later stage. See `docs/skills/README.md`
       for usage pattern.
+    - `inject_turn_and_wait(prompt, *, dedup_key=None)`: like
+      `inject_turn` but only returns after the LLM finishes speaking.
+      Use when you need to sequence an action AFTER the announcement —
+      e.g., `start_input_claim` right after an inbound-call announcement
+      so the claim doesn't preempt the LLM mid-sentence. Falls back to
+      a plain enqueue (no wait) if a turn is already in progress.
     - `background_task(name, coro_factory, *, restart_on_crash=True,
       max_restarts_per_hour=10, on_permanent_failure=None) ->
       BackgroundTaskHandle`: spawn a long-running supervised task.
@@ -660,6 +704,7 @@ class SkillContext:
     persona_data_dir: Path
     config: dict[str, Any]
     inject_turn: InjectTurn = _noop_inject_turn
+    inject_turn_and_wait: InjectTurnAndWait = _noop_inject_turn_and_wait
     background_task: BackgroundTask = _default_background_task
     start_input_claim: StartInputClaim = _default_start_input_claim
     cancel_active_claim: CancelActiveClaim = _default_cancel_active_claim

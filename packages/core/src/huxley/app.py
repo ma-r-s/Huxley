@@ -165,6 +165,7 @@ class Application:
             persona_data_dir=self.persona.data_dir,
             config=self.persona.skills.get(skill_name, {}),
             inject_turn=self.coordinator.inject_turn,
+            inject_turn_and_wait=self.coordinator.inject_turn_and_wait,
             background_task=self.task_supervisor.start,
             start_input_claim=self.coordinator.start_input_claim,
             cancel_active_claim=self.coordinator.cancel_active_claim,
