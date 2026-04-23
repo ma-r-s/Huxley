@@ -398,13 +398,14 @@ class CommsTelegramSkill:
             "comms_telegram.inbound.ring", user_id=user_id, caller_name=display
         )
 
-        # inject_turn kicks off the LLM response. The LLM announces the call
-        # to the user ("Llamada de Mario, contestando.") then calls
-        # answer_incoming_call() which bridges the audio.
+        # inject_turn kicks off the LLM response. Tool call is the primary
+        # mandatory action -- the LLM must call answer_incoming_call() in this
+        # same response, not as a follow-up. Speech is secondary (announce while
+        # calling the tool, not instead of calling it).
         await self._ctx.inject_turn(
-            f"Llamada entrante de {display}. "
-            f"Anunciaselo al usuario diciendo algo como 'Llamada de {display}, contestando.' "
-            f"y luego llama a answer_incoming_call() para conectar la llamada."
+            f"[LLAMADA ENTRANTE] Hay una llamada de {display}. "
+            f"DEBES llamar a answer_incoming_call() en esta respuesta. "
+            f"Di al usuario: 'Llamada de {display}, contestando.'"
         )
 
     async def _on_ring_cancelled(self, user_id: int) -> None:
