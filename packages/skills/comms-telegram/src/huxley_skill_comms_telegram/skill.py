@@ -85,8 +85,12 @@ class CommsTelegramSkill:
         self._user_id_to_name: dict[int, str] = {}
 
         # Name of the contact currently in a call (set in handle()/
-        # _answer_incoming_call(), cleared in _on_claim_end). Used to
-        # narrate "la llamada termino" to the LLM.
+        # Guard for the announce-before-accept window in _on_incoming_ring.
+        # Set when a ring arrives; cleared by _on_ring_cancelled (race: caller
+        # hung up during announcement) or after accept_call succeeds.
+        self._pending_incoming: int | None = None
+
+        # Active-call state (set in _call_contact / _on_incoming_ring, cleared in _on_claim_end).
         self._active_contact_name: str | None = None
         # Holds refs to in-flight hangup/inject tasks spawned by `_on_claim_end`
         # so GC doesn't eat them mid-execution. Task removes itself on done.
@@ -318,9 +322,12 @@ class CommsTelegramSkill:
     async def _on_incoming_ring(self, user_id: int) -> None:
         """Called by the transport when an INCOMING_CALL update arrives.
 
-        Accepts the call immediately, announces via inject_turn (so the LLM
-        speaks "Llamada de X, contestando" before the bridge latches), then
-        bridges audio via start_input_claim -- no LLM tool call needed.
+        Announces BEFORE accepting to avoid audio buffering delay: if we
+        accept first, pytgcalls fills the inbound queue during the ~3s the
+        LLM takes to speak the announcement, causing a 3s lag on all peer
+        audio. By announcing first (call still ringing) and accepting only
+        after inject_turn drains, the queue is empty when start_input_claim
+        starts consuming -- zero delay, real-time audio from the first word.
         """
         assert self._logger is not None
         assert self._ctx is not None
@@ -340,13 +347,27 @@ class CommsTelegramSkill:
             return
 
         display = name or "numero desconocido"
-        self._active_contact_name = display
+        self._pending_incoming = user_id
 
         await self._logger.ainfo(
             "comms_telegram.inbound.ring", user_id=user_id, caller_name=display
         )
 
-        # Accept at the transport level first.
+        # Announce while the call is still ringing -- the LLM speaks the
+        # announcement, FM drains, and only then do we accept the call.
+        await self._ctx.inject_turn(f"Llamada de {display}, contestando.")
+
+        # Check if the caller hung up during the announcement window.
+        if self._pending_incoming != user_id:
+            await self._logger.ainfo(
+                "comms_telegram.inbound.ring_expired_during_announce", user_id=user_id
+            )
+            return
+        self._pending_incoming = None
+        self._active_contact_name = display
+
+        # Accept the call now -- inbound queue is empty (no audio buffered
+        # during the announcement), so the bridge is real-time from the start.
         try:
             if self._transport is not None:
                 await self._transport.accept_call(user_id)
@@ -362,11 +383,6 @@ class CommsTelegramSkill:
             "comms_telegram.inbound.call_accepted", user_id=user_id, name=display
         )
 
-        # Announce first -- inject_turn queues the LLM turn; start_input_claim
-        # below waits for the FM to drain, so the LLM speaks the announcement
-        # before the audio bridge latches.
-        await self._ctx.inject_turn(f"Llamada de {display}, contestando.")
-
         # Bridge audio directly -- bypasses the LLM tool-call path entirely.
         assert self._transport is not None
         await self._ctx.start_input_claim(
@@ -378,11 +394,10 @@ class CommsTelegramSkill:
         )
 
     async def _on_ring_cancelled(self, user_id: int) -> None:
-        """Called if the caller hangs up before accept_call completed.
+        """Called if the caller hangs up before we accepted the call.
 
-        This fires only in a small race window -- once accept_call sets
-        _active_user_id on the transport, DISCARDED_CALL is handled as a
-        claim end (on_claim_end) instead.
+        Clears _pending_incoming so _on_incoming_ring aborts after its
+        inject_turn returns (race: caller hung up during the announcement).
         """
         assert self._logger is not None
         assert self._ctx is not None
@@ -391,6 +406,10 @@ class CommsTelegramSkill:
         await self._logger.ainfo(
             "comms_telegram.inbound.ring_cancelled", user_id=user_id, caller_name=name
         )
+
+        if self._pending_incoming == user_id:
+            # Signal _on_incoming_ring to abort -- don't accept a dead call.
+            self._pending_incoming = None
         await self._ctx.inject_turn(
             f"La llamada de {name} ya no esta disponible -- la persona colgo antes de que se contestara."
         )
