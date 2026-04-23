@@ -1,4 +1,4 @@
-"""Skill-level tests — tool dispatch, config parsing, claim wiring.
+"""Skill-level tests -- tool dispatch, config parsing, claim wiring.
 
 Uses a stub transport so no pyrogram imports are needed.
 """
@@ -22,7 +22,7 @@ from huxley_skill_comms_telegram.skill import CommsTelegramSkill
 
 
 class StubTransport:
-    """In-memory stand-in for `TelegramTransport` — records calls,
+    """In-memory stand-in for `TelegramTransport` -- records calls,
     never touches the network. Injected via `transport_factory`.
     """
 
@@ -33,19 +33,28 @@ class StubTransport:
         api_hash: str,
         session_dir: Path,
         userbot_phone: str | None = None,
+        on_incoming_ring: Any = None,
+        on_ring_cancelled: Any = None,
     ) -> None:
         self.api_id = api_id
         self.api_hash = api_hash
         self.session_dir = session_dir
         self.userbot_phone = userbot_phone
+        self.on_incoming_ring = on_incoming_ring
+        self.on_ring_cancelled = on_ring_cancelled
         self.connected = False
         self.placed_calls: list[int] = []
+        self.accepted_calls: list[int] = []
+        self.rejected_calls: list[int] = []
         self.mic_frames: list[bytes] = []
         self.ended_calls: int = 0
         self.disconnected: int = 0
         # Scripted behavior for tests to toggle.
         self.resolve_map: dict[str, int] = {}
         self.raise_on_place_call: Exception | None = None
+        self.raise_on_accept_call: Exception | None = None
+        # Simulate an active call for busy-rejection tests.
+        self._active_user_id: int | None = None
 
     async def connect(self) -> None:
         self.connected = True
@@ -59,6 +68,16 @@ class StubTransport:
         if self.raise_on_place_call is not None:
             raise self.raise_on_place_call
         self.placed_calls.append(user_id)
+        self._active_user_id = user_id
+
+    async def accept_call(self, user_id: int) -> None:
+        if self.raise_on_accept_call is not None:
+            raise self.raise_on_accept_call
+        self.accepted_calls.append(user_id)
+        self._active_user_id = user_id
+
+    async def reject_call(self, user_id: int) -> None:
+        self.rejected_calls.append(user_id)
 
     async def send_pcm(self, pcm: bytes) -> None:
         self.mic_frames.append(pcm)
@@ -70,6 +89,7 @@ class StubTransport:
 
     async def end_call(self) -> None:
         self.ended_calls += 1
+        self._active_user_id = None
 
     async def disconnect(self) -> None:
         self.disconnected += 1
@@ -89,12 +109,20 @@ class FakeStorage:
         return []
 
 
-def _build_ctx(config: dict[str, Any], data_dir: Path) -> tuple[SkillContext, list[StubTransport]]:
+def _build_ctx(
+    config: dict[str, Any],
+    data_dir: Path,
+    *,
+    captured_turns: list[str] | None = None,
+) -> tuple[SkillContext, list[StubTransport]]:
     """Return (ctx, captured_transports). Tests inspect the captured
-    stub after calling `setup()` to verify config was applied."""
+    stub after calling `setup()` to verify config was applied.
+    `captured_turns` receives any inject_turn() calls if provided.
+    """
+    _turns = captured_turns if captured_turns is not None else []
 
     async def inject_turn(prompt: str) -> None:
-        pass
+        _turns.append(prompt)
 
     def background_task(name: str, fn: Any, **kwargs: Any) -> Any:
         raise AssertionError("comms_telegram shouldn't use background_task yet")
@@ -180,7 +208,7 @@ class TestSetup:
 
     @pytest.mark.asyncio
     async def test_empty_contacts_still_sets_up(self, tmp_path: Path) -> None:
-        # Missing contacts is a warning, not a failure — lets someone
+        # Missing contacts is a warning, not a failure -- lets someone
         # deploy with config-first-then-contacts-later without breaking.
         skill = CommsTelegramSkill(transport_factory=StubTransport)
         ctx, _ = _build_ctx(
@@ -194,9 +222,6 @@ class TestSetup:
     async def test_env_vars_override_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Secrets should come from env when set, even if persona.yaml has
-        # placeholder values — so a public repo can commit the skeleton
-        # without leaking api_id/hash.
         monkeypatch.setenv("HUXLEY_TELEGRAM_API_ID", "99999999")
         monkeypatch.setenv("HUXLEY_TELEGRAM_API_HASH", "env_hash_winning")
         monkeypatch.setenv("HUXLEY_TELEGRAM_USERBOT_PHONE", "+19999999999")
@@ -211,7 +236,7 @@ class TestSetup:
         skill = CommsTelegramSkill(transport_factory=factory)
         ctx, _ = _build_ctx(
             {
-                "api_id": 111,  # config value — should be overridden
+                "api_id": 111,
                 "api_hash": "config_hash",
                 "userbot_phone": "+57111",
                 "contacts": {"x": "+1"},
@@ -227,7 +252,6 @@ class TestSetup:
     async def test_env_vars_only_also_work(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Persona.yaml sets NO credentials at all; env provides everything.
         monkeypatch.setenv("HUXLEY_TELEGRAM_API_ID", "77777777")
         monkeypatch.setenv("HUXLEY_TELEGRAM_API_HASH", "envhashonly")
 
@@ -255,8 +279,8 @@ class TestSetup:
                 "api_hash": "abc",
                 "contacts": {
                     "good": "+1234",
-                    "broken": 1234,  # int, not string — dropped
-                    "empty": "",  # falsy — dropped
+                    "broken": 1234,  # int, not string -- dropped
+                    "empty": "",  # falsy -- dropped
                 },
             },
             tmp_path,
@@ -281,9 +305,6 @@ class TestCallContactTool:
         payload = json.loads(result.output)
         assert payload["ok"] is False
         assert "cousin_bob" in payload["error"]
-        # Side effect MUST be None — we don't want to latch the mic for
-        # a failed call setup (would block grandpa from doing anything
-        # else).
         assert result.side_effect is None
 
     @pytest.mark.asyncio
@@ -310,18 +331,15 @@ class TestCallContactTool:
         result = await skill.handle("call_contact", {"name": "hija"})
         transport = captured[0]
 
-        # Transport lifecycle: connected, resolved, dialed.
         assert transport.connected is True
         assert transport.placed_calls == [7392572538]
 
-        # Tool output signals success to the LLM.
         import json
 
         payload = json.loads(result.output)
         assert payload["ok"] is True
         assert payload["contact"] == "hija"
 
-        # Side effect is an InputClaim wired to the transport.
         assert isinstance(result.side_effect, InputClaim)
         claim = result.side_effect
         assert claim.on_mic_frame is not None
@@ -337,7 +355,6 @@ class TestCallContactTool:
         )
         await skill.setup(ctx)
 
-        # Upper-case + whitespace should still match.
         result = await skill.handle("call_contact", {"name": "  HIJA  "})
         import json
 
@@ -406,14 +423,10 @@ class TestCallContactTool:
         transport = captured[0]
         assert transport.ended_calls == 0
 
-        # Simulate the framework firing on_claim_end. The hangup is
-        # fire-and-forget (the skill schedules a task so an ntgcalls
-        # hang doesn't stall the observer unwind) — yield once so the
-        # scheduled end_call task gets to run.
         import asyncio
 
         await result.side_effect.on_claim_end(ClaimEndReason.USER_PTT)
-        await asyncio.sleep(0)  # let the background task fire end_call
+        await asyncio.sleep(0)
         assert transport.ended_calls == 1
 
     @pytest.mark.asyncio
@@ -440,6 +453,307 @@ class TestCallContactTool:
         assert len(transport.mic_frames) == 2
 
 
+class TestInbound:
+    def _inbound_config(self, **extra: Any) -> dict[str, Any]:
+        return {
+            "api_id": 1,
+            "api_hash": "x",
+            "contacts": {"mario": "+573153283397", "hija": "+573186851696"},
+            "inbound": {"enabled": True, "auto_answer": "contacts_only"},
+            **extra,
+        }
+
+    @pytest.mark.asyncio
+    async def test_inbound_disabled_by_default(self, tmp_path: Path) -> None:
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            captured.append(t)
+            return t
+
+        skill = CommsTelegramSkill(transport_factory=factory)
+        ctx, _ = _build_ctx(
+            {"api_id": 1, "api_hash": "x", "contacts": {"hija": "+1"}},
+            tmp_path,
+        )
+        await skill.setup(ctx)
+
+        # No eager connect without inbound.
+        assert captured[0].connected is False
+        # No answer_incoming_call tool.
+        tool_names = [t.name for t in skill.tools]
+        assert "answer_incoming_call" not in tool_names
+
+    @pytest.mark.asyncio
+    async def test_inbound_enabled_connects_eagerly_at_setup(self, tmp_path: Path) -> None:
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            t.resolve_map = {"+573153283397": 111, "+573186851696": 222}
+            captured.append(t)
+            return t
+
+        skill = CommsTelegramSkill(transport_factory=factory)
+        ctx, _ = _build_ctx(self._inbound_config(), tmp_path)
+        await skill.setup(ctx)
+
+        assert captured[0].connected is True
+        # Reverse map built from contacts.
+        assert skill._user_id_to_name == {111: "mario", 222: "hija"}  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_inbound_tool_exposed_when_enabled(self, tmp_path: Path) -> None:
+        skill = CommsTelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(self._inbound_config(), tmp_path)
+        await skill.setup(ctx)
+
+        tool_names = [t.name for t in skill.tools]
+        assert "answer_incoming_call" in tool_names
+
+    @pytest.mark.asyncio
+    async def test_inbound_callbacks_wired_to_transport(self, tmp_path: Path) -> None:
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            captured.append(t)
+            return t
+
+        skill = CommsTelegramSkill(transport_factory=factory)
+        ctx, _ = _build_ctx(self._inbound_config(), tmp_path)
+        await skill.setup(ctx)
+
+        transport = captured[0]
+        assert transport.on_incoming_ring is not None
+        assert transport.on_ring_cancelled is not None
+
+    @pytest.mark.asyncio
+    async def test_ring_known_contact_injects_turn_with_name(self, tmp_path: Path) -> None:
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            t.resolve_map = {"+573153283397": 111, "+573186851696": 222}
+            captured.append(t)
+            return t
+
+        turns: list[str] = []
+        skill = CommsTelegramSkill(transport_factory=factory)
+        ctx, _ = _build_ctx(self._inbound_config(), tmp_path, captured_turns=turns)
+        await skill.setup(ctx)
+
+        # Simulate RINGING_CALL from mario (user_id=111).
+        await skill._on_incoming_ring(111)  # type: ignore[attr-defined]
+
+        assert len(turns) == 1
+        assert "mario" in turns[0].lower()
+        assert skill._pending_incoming == 111  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_ring_unknown_caller_rejected_when_contacts_only(self, tmp_path: Path) -> None:
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            captured.append(t)
+            return t
+
+        turns: list[str] = []
+        skill = CommsTelegramSkill(transport_factory=factory)
+        ctx, _ = _build_ctx(self._inbound_config(), tmp_path, captured_turns=turns)
+        await skill.setup(ctx)
+
+        # Unknown user_id (not in reverse map).
+        await skill._on_incoming_ring(999)  # type: ignore[attr-defined]
+
+        assert captured[0].rejected_calls == [999]
+        assert len(turns) == 0
+        assert skill._pending_incoming is None  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_ring_unknown_accepted_when_auto_answer_all(self, tmp_path: Path) -> None:
+        turns: list[str] = []
+        skill = CommsTelegramSkill(transport_factory=StubTransport)
+        cfg = self._inbound_config()
+        cfg["inbound"]["auto_answer"] = "all"
+        ctx, _ = _build_ctx(cfg, tmp_path, captured_turns=turns)
+        await skill.setup(ctx)
+
+        await skill._on_incoming_ring(999)  # type: ignore[attr-defined]
+
+        # inject_turn fired even for unknown caller.
+        assert len(turns) == 1
+        assert skill._pending_incoming == 999  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_ring_rejected_when_call_already_active(self, tmp_path: Path) -> None:
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            t.resolve_map = {"+573153283397": 111, "+573186851696": 222}
+            t._active_user_id = 222  # simulate active call
+            captured.append(t)
+            return t
+
+        turns: list[str] = []
+        skill = CommsTelegramSkill(transport_factory=factory)
+        ctx, _ = _build_ctx(self._inbound_config(), tmp_path, captured_turns=turns)
+        await skill.setup(ctx)
+
+        await skill._on_incoming_ring(111)  # type: ignore[attr-defined]
+
+        assert captured[0].rejected_calls == [111]
+        assert len(turns) == 0
+
+    @pytest.mark.asyncio
+    async def test_answer_incoming_call_returns_input_claim(self, tmp_path: Path) -> None:
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            t.resolve_map = {"+573153283397": 111, "+573186851696": 222}
+            captured.append(t)
+            return t
+
+        skill = CommsTelegramSkill(transport_factory=factory)
+        ctx, _ = _build_ctx(self._inbound_config(), tmp_path)
+        await skill.setup(ctx)
+
+        # Simulate ring then answer.
+        await skill._on_incoming_ring(111)  # type: ignore[attr-defined]
+        result = await skill.handle("answer_incoming_call", {})
+
+        import json
+
+        payload = json.loads(result.output)
+        assert payload["ok"] is True
+        assert payload["contact"] == "mario"
+        assert payload["direction"] == "inbound"
+        assert captured[0].accepted_calls == [111]
+        assert isinstance(result.side_effect, InputClaim)
+
+    @pytest.mark.asyncio
+    async def test_answer_with_no_pending_returns_error(self, tmp_path: Path) -> None:
+        skill = CommsTelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(self._inbound_config(), tmp_path)
+        await skill.setup(ctx)
+
+        # No ring arrived -- pending is None.
+        result = await skill.handle("answer_incoming_call", {})
+
+        import json
+
+        assert json.loads(result.output)["ok"] is False
+        assert result.side_effect is None
+
+    @pytest.mark.asyncio
+    async def test_ring_cancelled_clears_pending_and_injects(self, tmp_path: Path) -> None:
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            t.resolve_map = {"+573153283397": 111, "+573186851696": 222}
+            captured.append(t)
+            return t
+
+        turns: list[str] = []
+        skill = CommsTelegramSkill(transport_factory=factory)
+        ctx, _ = _build_ctx(self._inbound_config(), tmp_path, captured_turns=turns)
+        await skill.setup(ctx)
+
+        await skill._on_incoming_ring(111)  # type: ignore[attr-defined]
+        assert skill._pending_incoming == 111  # type: ignore[attr-defined]
+        turns.clear()  # reset after ring inject
+
+        await skill._on_ring_cancelled(111)  # type: ignore[attr-defined]
+
+        assert skill._pending_incoming is None  # type: ignore[attr-defined]
+        assert len(turns) == 1
+        assert "mario" in turns[0].lower()
+
+    @pytest.mark.asyncio
+    async def test_ring_cancelled_for_different_user_is_ignored(self, tmp_path: Path) -> None:
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            t.resolve_map = {"+573153283397": 111, "+573186851696": 222}
+            captured.append(t)
+            return t
+
+        turns: list[str] = []
+        skill = CommsTelegramSkill(transport_factory=factory)
+        ctx, _ = _build_ctx(self._inbound_config(), tmp_path, captured_turns=turns)
+        await skill.setup(ctx)
+
+        await skill._on_incoming_ring(111)  # type: ignore[attr-defined]
+        turns.clear()
+
+        # Cancelled for a different user_id -- pending should be untouched.
+        await skill._on_ring_cancelled(999)  # type: ignore[attr-defined]
+
+        assert skill._pending_incoming == 111  # type: ignore[attr-defined]
+        assert len(turns) == 0
+
+    @pytest.mark.asyncio
+    async def test_answer_transport_error_returns_clean_error(self, tmp_path: Path) -> None:
+        from huxley_skill_comms_telegram.transport import TransportError
+
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            t.raise_on_accept_call = TransportError("accept failed")
+            captured.append(t)
+            return t
+
+        skill = CommsTelegramSkill(transport_factory=factory)
+        ctx, _ = _build_ctx(self._inbound_config(), tmp_path)
+        await skill.setup(ctx)
+
+        await skill._on_incoming_ring(999)  # type: ignore[attr-defined]  # unknown but auto_answer=contacts_only would reject...
+        # Use auto_answer=all to get past the contacts_only gate
+        skill._auto_answer = "all"  # type: ignore[attr-defined]
+        skill._pending_incoming = 999  # type: ignore[attr-defined]
+        skill._pending_incoming_name = "desconocido"  # type: ignore[attr-defined]
+
+        result = await skill.handle("answer_incoming_call", {})
+
+        import json
+
+        payload = json.loads(result.output)
+        assert payload["ok"] is False
+        assert "accept failed" in payload["error"]
+        assert result.side_effect is None
+
+    @pytest.mark.asyncio
+    async def test_inbound_reverse_map_soft_fails_unresolvable(self, tmp_path: Path) -> None:
+        from huxley_skill_comms_telegram.transport import TransportError
+
+        fail_count = 0
+
+        class FailingStubTransport(StubTransport):
+            async def resolve_contact(self, identifier: str) -> int:
+                nonlocal fail_count
+                if identifier == "+573153283397":
+                    fail_count += 1
+                    raise TransportError("PEER_ID_INVALID")
+                return 222
+
+        skill = CommsTelegramSkill(transport_factory=FailingStubTransport)
+        ctx, _ = _build_ctx(self._inbound_config(), tmp_path)
+        # Should not raise -- soft-fail per contact.
+        await skill.setup(ctx)
+
+        assert fail_count == 1
+        # hija resolved, mario failed -- only hija in reverse map.
+        assert 222 in skill._user_id_to_name  # type: ignore[attr-defined]
+        assert skill._inbound_enabled is True  # type: ignore[attr-defined]
+
+
 class TestTeardown:
     @pytest.mark.asyncio
     async def test_teardown_disconnects_transport(self, tmp_path: Path) -> None:
@@ -463,7 +777,7 @@ class TestTeardown:
 class TestTools:
     def test_tool_description_lists_contacts(self, tmp_path: Path) -> None:
         skill = CommsTelegramSkill(transport_factory=StubTransport)
-        # Before setup: empty list.
+        # Before setup: empty list, inbound disabled.
         tools = skill.tools
         assert len(tools) == 1
         assert "(ninguno)" in tools[0].description
@@ -485,3 +799,36 @@ class TestTools:
         tools = skill.tools
         assert "hija" in tools[0].description
         assert "hijo" in tools[0].description
+
+    @pytest.mark.asyncio
+    async def test_inbound_enabled_adds_answer_tool(self, tmp_path: Path) -> None:
+        skill = CommsTelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(
+            {
+                "api_id": 1,
+                "api_hash": "x",
+                "contacts": {"hija": "+1"},
+                "inbound": {"enabled": True},
+            },
+            tmp_path,
+        )
+        await skill.setup(ctx)
+        tool_names = [t.name for t in skill.tools]
+        assert "call_contact" in tool_names
+        assert "answer_incoming_call" in tool_names
+
+    @pytest.mark.asyncio
+    async def test_inbound_disabled_no_answer_tool(self, tmp_path: Path) -> None:
+        skill = CommsTelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(
+            {
+                "api_id": 1,
+                "api_hash": "x",
+                "contacts": {"hija": "+1"},
+                "inbound": {"enabled": False},
+            },
+            tmp_path,
+        )
+        await skill.setup(ctx)
+        tool_names = [t.name for t in skill.tools]
+        assert "answer_incoming_call" not in tool_names
