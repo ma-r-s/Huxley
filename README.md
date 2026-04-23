@@ -48,16 +48,143 @@ cd web && bun install && bun dev
 
 ---
 
-## First-party skills
+## Skills
+
+Skills are Python packages. Install one, add it to your `persona.yaml`, done. Shipped skills live in this repo; anything else can be published on PyPI under `huxley-skill-*`.
+
+### Shipped
 
 | Skill                         | What it does                                                                                                                |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `huxley-skill-audiobooks`     | Play `.m4b`/`.mp3` audiobooks from a local library. Pause, resume, rewind, fast-forward. Persists position across restarts. |
 | `huxley-skill-radio`          | Stream HTTP/Icecast radio stations via `ffmpeg`. Buffered playback with proactive reconnect on drop.                        |
-| `huxley-skill-news`           | Weather (Open-Meteo) + headlines (Google News RSS). Cached, narrated in persona voice.                                      |
-| `huxley-skill-timers`         | One-shot and recurring reminders. Fires `inject_turn` at the scheduled time; persisted in SQLite so they survive restarts.  |
+| `huxley-skill-news`           | Weather (Open-Meteo) + top headlines (Google News RSS). Cached, narrated in persona voice.                                  |
+| `huxley-skill-timers`         | One-shot and recurring reminders. Fires proactively at the scheduled time; persisted in SQLite so they survive restarts.    |
 | `huxley-skill-system`         | Volume control, current time.                                                                                               |
-| `huxley-skill-comms-telegram` | Full-duplex p2p Telegram voice calls. Accepts inbound calls, places outbound, bridges mic and speaker through `InputClaim`. |
+| `huxley-skill-comms-telegram` | Full-duplex p2p Telegram voice calls. Accepts inbound calls, places outbound, bridges mic and speaker in real time.         |
+
+### What the skill system can support — and will
+
+The table below is what Huxley is designed to make buildable. Each row is a standalone Python package, no framework changes needed, published on PyPI and enabled with one line in `persona.yaml`.
+
+#### Communication
+
+| Skill                     | What it would do                                                                                                        |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `huxley-skill-sms`        | Read and dictate SMS messages via Twilio. "Read me my messages" / "Reply to Mario: running 10 minutes late."            |
+| `huxley-skill-whatsapp`   | WhatsApp message inbox. Read unread messages aloud, compose and send by voice.                                          |
+| `huxley-skill-email`      | Gmail/IMAP email. Read unread messages with sender + subject, compose and send by dictation, archive, flag.             |
+| `huxley-skill-comms-pstn` | Outbound and inbound phone calls via Twilio SIP. The Telegram skill's architecture, applied to the plain phone network. |
+| `huxley-skill-slack`      | Read unread Slack messages by channel, compose replies, set a status.                                                   |
+| `huxley-skill-signal`     | Signal messages via signal-cli. End-to-end encrypted voice-driven messaging.                                            |
+
+#### Smart home & IoT
+
+| Skill                        | What it would do                                                                                                                                         |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `huxley-skill-hue`           | Control Philips Hue lights. On/off, dim, colour, scenes, rooms. "Dim the living room to 30% and set it warm."                                            |
+| `huxley-skill-homeassistant` | Gateway to a local Home Assistant instance. Exposes every HA entity as a tool — lights, switches, sensors, scenes, scripts. One skill, your entire home. |
+| `huxley-skill-thermostat`    | Nest/Ecobee/Honeywell — read temperature, set target, switch mode. "It's cold — turn it up two degrees."                                                 |
+| `huxley-skill-doorbell`      | Proactive notification when someone rings the doorbell (Frigate/MQTT event → `inject_turn`). "Someone is at the front door."                             |
+| `huxley-skill-tv`            | Control Roku, Apple TV, Chromecast — play, pause, next, open app, search content.                                                                        |
+| `huxley-skill-sonos`         | Play, pause, volume, and queue management on Sonos speakers. Ducks under the agent's voice automatically via `InputClaim`.                               |
+| `huxley-skill-robot-vacuum`  | Start, stop, dock a Roomba or Roborock. Report cleaning status and surface area covered.                                                                 |
+| `huxley-skill-air-quality`   | Read CO₂, VOC, PM2.5 from an Awair/AirGradient sensor. Proactive alert when thresholds are crossed.                                                      |
+| `huxley-skill-appliances`    | Washer/dryer/oven status from smart plugs (TP-Link/Shelly). "Laundry is done" — fired as an `inject_turn` when power draw drops.                         |
+
+#### Podcasts & audio content
+
+| Skill                        | What it would do                                                                                                                            |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `huxley-skill-podcasts`      | Subscribe to podcast RSS feeds. "Play the latest episode of Lex Fridman." Streams via `AudioStream`, remembers position.                    |
+| `huxley-skill-spotify`       | Spotify playback control. Play artist, album, playlist, liked songs. Requires Spotify Connect device on the same network.                   |
+| `huxley-skill-youtube-audio` | Extract and stream audio from YouTube via `yt-dlp`. "Play that interview with Jensen Huang."                                                |
+| `huxley-skill-ambient`       | Stream ambient/focus audio (rain, coffee shop, white noise) as a `MIXABLE AudioStream` — ducks under the agent's voice, resumes underneath. |
+| `huxley-skill-text-to-audio` | Read any text content aloud as a long-form `AudioStream`: articles (via URL), ebooks (EPUB), PDFs, clipboard.                               |
+
+#### Calendars, tasks & productivity
+
+| Skill                        | What it would do                                                                                                           |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `huxley-skill-calendar`      | Google Calendar / CalDAV. Read today's agenda, next event, upcoming week. Add events and reminders by voice.               |
+| `huxley-skill-tasks`         | Todoist / Things / OmniFocus. Add tasks, mark complete, read today's list. "Add 'call the dentist' to my to-do list."      |
+| `huxley-skill-notes`         | Obsidian / Notion / Apple Notes. Create voice notes (transcribed immediately), read back the last note, search by keyword. |
+| `huxley-skill-shopping-list` | Persistent voice-managed grocery list. Add items, read the list, mark bought. Syncs to AnyList / Google Keep.              |
+| `huxley-skill-reminders`     | Apple Reminders / Google Tasks integration. Location-aware reminders ("remind me when I get home"), time-based, recurring. |
+| `huxley-skill-focus`         | Start/stop a Pomodoro timer with audio cues. Log sessions to daily storage. "Focus for 45 minutes, then take a break."     |
+
+#### Information & search
+
+| Skill                     | What it would do                                                                                                                  |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `huxley-skill-search`     | Web search via Brave/Tavily. Fetches and summarises top results in the persona's voice and language.                              |
+| `huxley-skill-wikipedia`  | Wikipedia article summaries. "Who was Ada Lovelace?" — concise, sourced, narrated.                                                |
+| `huxley-skill-translate`  | Real-time translation via DeepL/Google. "How do you say 'where is the pharmacy' in French?"                                       |
+| `huxley-skill-dictionary` | Word definitions, synonyms, etymology (Merriam-Webster). "What does 'sanguine' mean?"                                             |
+| `huxley-skill-wolfram`    | Wolfram Alpha for calculations, conversions, scientific facts, and equation solving.                                              |
+| `huxley-skill-flights`    | Live flight status (AeroAPI). "Is flight AA 245 on time?" Proactive gate-change alerts via `inject_turn`.                         |
+| `huxley-skill-packages`   | Package tracking (EasyPost/17track). "Where's my Amazon order?" Proactive delivery notification.                                  |
+| `huxley-skill-stocks`     | Real-time and historical quotes (Alpaca / Yahoo Finance). Portfolio value by voice. Price-alert `inject_turn` on threshold cross. |
+| `huxley-skill-sports`     | Live scores, standings, next fixtures — any league — via API-Football / ESPN.                                                     |
+| `huxley-skill-traffic`    | Commute time (Google Maps / TomTom). "How long to downtown right now?" Morning briefing on the usual route.                       |
+
+#### Health & care
+
+| Skill                      | What it would do                                                                                                                            |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `huxley-skill-medications` | Per-medication schedule, dose log, refill tracker. Scheduled `inject_turn` reminders. "Did you take your blood pressure pill this morning?" |
+| `huxley-skill-vitals-log`  | Voice-driven health log: blood pressure, blood glucose, weight, pain level. Stores in SQLite, reads trend summaries back.                   |
+| `huxley-skill-hydration`   | Hourly hydration nudges via `inject_turn`. Tracks glass count, adjusts goal based on weather API temperature.                               |
+| `huxley-skill-breathing`   | Guided breathing exercises (4-7-8, box, coherent) played as `AudioStream` with synthesized cue tones.                                       |
+| `huxley-skill-sleep`       | Bedtime wind-down routine: dim lights (via Hue skill), start ambient sound, set a morning alarm.                                            |
+| `huxley-skill-mood`        | Daily mood + symptom check-in. Stored in KV, week summary available on demand. "How have you been feeling this week?"                       |
+| `huxley-skill-emergency`   | One-word SOS: calls a preset contact via PSTN, sends GPS coordinates via SMS, speaks a calm reassurance.                                    |
+
+#### Finance
+
+| Skill                      | What it would do                                                                                        |
+| -------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `huxley-skill-budget`      | Read-only bank balance and recent transactions via Plaid. "What did I spend on groceries this week?"    |
+| `huxley-skill-expense-log` | Voice-driven expense entry. "Logged: lunch, $14.50." Exports to CSV, syncs to Google Sheets.            |
+| `huxley-skill-bills`       | Bill due-date tracker with `inject_turn` reminders 3 days out. "Your electricity bill is due Friday."   |
+| `huxley-skill-crypto`      | Live crypto prices and portfolio value (CoinGecko). Price alert `inject_turn` at configured thresholds. |
+
+#### Vision & documents
+
+| Skill                        | What it would do                                                                                                   |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `huxley-skill-vision`        | Describe what's in front of a connected camera using a vision model. "What does this say?" — OCR + narration.      |
+| `huxley-skill-pdf-reader`    | Read and summarise PDF documents. Drop a file in the persona data dir, ask about it by name.                       |
+| `huxley-skill-scan`          | Trigger a mobile scan via an iPhone shortcut, read the OCR text aloud. Bridge between paper and voice.             |
+| `huxley-skill-face-greeting` | Recognise household members from a camera feed, fire a personalised `inject_turn` greeting when they enter a room. |
+
+#### Developer & infrastructure
+
+| Skill                         | What it would do                                                                                                       |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `huxley-skill-github`         | Read open issues, PRs, and CI status by voice. "What's failing on the main branch?"                                    |
+| `huxley-skill-server-monitor` | Ping a list of hosts/services, report uptime. Proactive `inject_turn` alert on outage.                                 |
+| `huxley-skill-shell`          | Execute pre-approved shell commands by voice (explicit allowlist, no free-form execution). "Deploy the staging build." |
+| `huxley-skill-ntfy`           | Forward any ntfy.sh notification topic as a spoken `inject_turn`. Universal webhook-to-voice bridge.                   |
+
+#### Education & language
+
+| Skill                         | What it would do                                                                                                                         |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `huxley-skill-flashcards`     | Spaced-repetition flashcard drill, entirely by voice. Any deck in CSV/Anki format.                                                       |
+| `huxley-skill-language-tutor` | Vocabulary and pronunciation drills. Detects the user's native language from `persona.yaml`, teaches the target language.                |
+| `huxley-skill-storytime`      | Generates and narrates original bedtime stories via the LLM. Characters and theme by voice. "Tell me a story about a brave little frog." |
+| `huxley-skill-quiz`           | Trivia game — categories, difficulty, score tracking — entirely by voice. Persistent high scores in SQLite.                              |
+
+#### Household & daily life
+
+| Skill                           | What it would do                                                                                                              |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `huxley-skill-recipes`          | Recipe search and step-by-step hands-free cooking guidance. "Read me the next step." Automatically paces through a recipe.    |
+| `huxley-skill-grocery-delivery` | Add to and order from an Instacart/Ocado cart by voice. Confirms order total before submitting.                               |
+| `huxley-skill-food-log`         | Voice-driven nutrition log (Open Food Facts). "Log a banana and a coffee." Daily calorie and macro summary.                   |
+| `huxley-skill-journal`          | Daily voice journaling. Transcribed and stored locally. Weekly prompts generated by the LLM, entries readable back on demand. |
+| `huxley-skill-affirmations`     | Personalised motivational messages at configurable times. Generated by the LLM, tone tuned to the persona's personality.      |
 
 ---
 
