@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 from huxley_sdk import (
     ClaimEndReason,
+    ClaimHandle,
     InputClaim,
     SkillContext,
 )
@@ -114,12 +115,15 @@ def _build_ctx(
     data_dir: Path,
     *,
     captured_turns: list[str] | None = None,
+    captured_claims: list[InputClaim] | None = None,
 ) -> tuple[SkillContext, list[StubTransport]]:
     """Return (ctx, captured_transports). Tests inspect the captured
     stub after calling `setup()` to verify config was applied.
     `captured_turns` receives any inject_turn() calls if provided.
+    `captured_claims` receives any start_input_claim() calls if provided.
     """
     _turns = captured_turns if captured_turns is not None else []
+    _claims = captured_claims if captured_claims is not None else []
 
     async def inject_turn(prompt: str) -> None:
         _turns.append(prompt)
@@ -127,8 +131,13 @@ def _build_ctx(
     def background_task(name: str, fn: Any, **kwargs: Any) -> Any:
         raise AssertionError("comms_telegram shouldn't use background_task yet")
 
-    async def start_input_claim(claim: InputClaim) -> Any:
-        raise AssertionError("skill should use side_effect=InputClaim, not start_input_claim")
+    async def start_input_claim(claim: InputClaim) -> ClaimHandle:
+        _claims.append(claim)
+
+        async def _wait() -> ClaimEndReason:
+            return ClaimEndReason.NATURAL
+
+        return ClaimHandle(_cancel=lambda: None, _wait_end=_wait)
 
     async def cancel_active_claim() -> None:
         pass
@@ -481,9 +490,8 @@ class TestInbound:
 
         # No eager connect without inbound.
         assert captured[0].connected is False
-        # No answer_incoming_call tool.
-        tool_names = [t.name for t in skill.tools]
-        assert "answer_incoming_call" not in tool_names
+        # Only call_contact tool -- no inbound tools.
+        assert [t.name for t in skill.tools] == ["call_contact"]
 
     @pytest.mark.asyncio
     async def test_inbound_enabled_connects_eagerly_at_setup(self, tmp_path: Path) -> None:
@@ -504,15 +512,6 @@ class TestInbound:
         assert skill._user_id_to_name == {111: "mario", 222: "hija"}  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
-    async def test_inbound_tool_exposed_when_enabled(self, tmp_path: Path) -> None:
-        skill = CommsTelegramSkill(transport_factory=StubTransport)
-        ctx, _ = _build_ctx(self._inbound_config(), tmp_path)
-        await skill.setup(ctx)
-
-        tool_names = [t.name for t in skill.tools]
-        assert "answer_incoming_call" in tool_names
-
-    @pytest.mark.asyncio
     async def test_inbound_callbacks_wired_to_transport(self, tmp_path: Path) -> None:
         captured: list[StubTransport] = []
 
@@ -530,7 +529,7 @@ class TestInbound:
         assert transport.on_ring_cancelled is not None
 
     @pytest.mark.asyncio
-    async def test_ring_known_contact_injects_turn_with_name(self, tmp_path: Path) -> None:
+    async def test_ring_known_contact_accepts_and_bridges(self, tmp_path: Path) -> None:
         captured: list[StubTransport] = []
 
         def factory(**kwargs: Any) -> StubTransport:
@@ -540,16 +539,23 @@ class TestInbound:
             return t
 
         turns: list[str] = []
+        claims: list[InputClaim] = []
         skill = CommsTelegramSkill(transport_factory=factory)
-        ctx, _ = _build_ctx(self._inbound_config(), tmp_path, captured_turns=turns)
+        ctx, _ = _build_ctx(
+            self._inbound_config(), tmp_path, captured_turns=turns, captured_claims=claims
+        )
         await skill.setup(ctx)
 
-        # Simulate RINGING_CALL from mario (user_id=111).
         await skill._on_incoming_ring(111)  # type: ignore[attr-defined]
 
+        # Transport accepted the call.
+        assert captured[0].accepted_calls == [111]
+        # Announcement injected with caller name.
         assert len(turns) == 1
         assert "mario" in turns[0].lower()
-        assert skill._pending_incoming == 111  # type: ignore[attr-defined]
+        # Audio bridge started via start_input_claim.
+        assert len(claims) == 1
+        assert isinstance(claims[0], InputClaim)
 
     @pytest.mark.asyncio
     async def test_ring_unknown_caller_rejected_when_contacts_only(self, tmp_path: Path) -> None:
@@ -561,8 +567,11 @@ class TestInbound:
             return t
 
         turns: list[str] = []
+        claims: list[InputClaim] = []
         skill = CommsTelegramSkill(transport_factory=factory)
-        ctx, _ = _build_ctx(self._inbound_config(), tmp_path, captured_turns=turns)
+        ctx, _ = _build_ctx(
+            self._inbound_config(), tmp_path, captured_turns=turns, captured_claims=claims
+        )
         await skill.setup(ctx)
 
         # Unknown user_id (not in reverse map).
@@ -570,22 +579,31 @@ class TestInbound:
 
         assert captured[0].rejected_calls == [999]
         assert len(turns) == 0
-        assert skill._pending_incoming is None  # type: ignore[attr-defined]
+        assert len(claims) == 0
 
     @pytest.mark.asyncio
     async def test_ring_unknown_accepted_when_auto_answer_all(self, tmp_path: Path) -> None:
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            captured.append(t)
+            return t
+
         turns: list[str] = []
-        skill = CommsTelegramSkill(transport_factory=StubTransport)
+        claims: list[InputClaim] = []
         cfg = self._inbound_config()
         cfg["inbound"]["auto_answer"] = "all"
-        ctx, _ = _build_ctx(cfg, tmp_path, captured_turns=turns)
+        skill = CommsTelegramSkill(transport_factory=factory)
+        ctx, _ = _build_ctx(cfg, tmp_path, captured_turns=turns, captured_claims=claims)
         await skill.setup(ctx)
 
         await skill._on_incoming_ring(999)  # type: ignore[attr-defined]
 
-        # inject_turn fired even for unknown caller.
+        # Call accepted and bridged even for unknown caller.
+        assert captured[0].accepted_calls == [999]
         assert len(turns) == 1
-        assert skill._pending_incoming == 999  # type: ignore[attr-defined]
+        assert len(claims) == 1
 
     @pytest.mark.asyncio
     async def test_ring_rejected_when_call_already_active(self, tmp_path: Path) -> None:
@@ -609,48 +627,7 @@ class TestInbound:
         assert len(turns) == 0
 
     @pytest.mark.asyncio
-    async def test_answer_incoming_call_returns_input_claim(self, tmp_path: Path) -> None:
-        captured: list[StubTransport] = []
-
-        def factory(**kwargs: Any) -> StubTransport:
-            t = StubTransport(**kwargs)
-            t.resolve_map = {"+573153283397": 111, "+573186851696": 222}
-            captured.append(t)
-            return t
-
-        skill = CommsTelegramSkill(transport_factory=factory)
-        ctx, _ = _build_ctx(self._inbound_config(), tmp_path)
-        await skill.setup(ctx)
-
-        # Simulate ring then answer.
-        await skill._on_incoming_ring(111)  # type: ignore[attr-defined]
-        result = await skill.handle("answer_incoming_call", {})
-
-        import json
-
-        payload = json.loads(result.output)
-        assert payload["ok"] is True
-        assert payload["contact"] == "mario"
-        assert payload["direction"] == "inbound"
-        assert captured[0].accepted_calls == [111]
-        assert isinstance(result.side_effect, InputClaim)
-
-    @pytest.mark.asyncio
-    async def test_answer_with_no_pending_returns_error(self, tmp_path: Path) -> None:
-        skill = CommsTelegramSkill(transport_factory=StubTransport)
-        ctx, _ = _build_ctx(self._inbound_config(), tmp_path)
-        await skill.setup(ctx)
-
-        # No ring arrived -- pending is None.
-        result = await skill.handle("answer_incoming_call", {})
-
-        import json
-
-        assert json.loads(result.output)["ok"] is False
-        assert result.side_effect is None
-
-    @pytest.mark.asyncio
-    async def test_ring_cancelled_clears_pending_and_injects(self, tmp_path: Path) -> None:
+    async def test_ring_cancelled_injects_turn(self, tmp_path: Path) -> None:
         captured: list[StubTransport] = []
 
         def factory(**kwargs: Any) -> StubTransport:
@@ -664,70 +641,38 @@ class TestInbound:
         ctx, _ = _build_ctx(self._inbound_config(), tmp_path, captured_turns=turns)
         await skill.setup(ctx)
 
-        await skill._on_incoming_ring(111)  # type: ignore[attr-defined]
-        assert skill._pending_incoming == 111  # type: ignore[attr-defined]
-        turns.clear()  # reset after ring inject
-
+        # Simulate ring cancelled (race window: caller hung up before accept completed).
         await skill._on_ring_cancelled(111)  # type: ignore[attr-defined]
 
-        assert skill._pending_incoming is None  # type: ignore[attr-defined]
         assert len(turns) == 1
         assert "mario" in turns[0].lower()
 
     @pytest.mark.asyncio
-    async def test_ring_cancelled_for_different_user_is_ignored(self, tmp_path: Path) -> None:
-        captured: list[StubTransport] = []
-
-        def factory(**kwargs: Any) -> StubTransport:
-            t = StubTransport(**kwargs)
-            t.resolve_map = {"+573153283397": 111, "+573186851696": 222}
-            captured.append(t)
-            return t
-
-        turns: list[str] = []
-        skill = CommsTelegramSkill(transport_factory=factory)
-        ctx, _ = _build_ctx(self._inbound_config(), tmp_path, captured_turns=turns)
-        await skill.setup(ctx)
-
-        await skill._on_incoming_ring(111)  # type: ignore[attr-defined]
-        turns.clear()
-
-        # Cancelled for a different user_id -- pending should be untouched.
-        await skill._on_ring_cancelled(999)  # type: ignore[attr-defined]
-
-        assert skill._pending_incoming == 111  # type: ignore[attr-defined]
-        assert len(turns) == 0
-
-    @pytest.mark.asyncio
-    async def test_answer_transport_error_returns_clean_error(self, tmp_path: Path) -> None:
+    async def test_ring_accept_error_injects_turn_and_no_claim(self, tmp_path: Path) -> None:
         from huxley_skill_comms_telegram.transport import TransportError
 
         captured: list[StubTransport] = []
 
         def factory(**kwargs: Any) -> StubTransport:
             t = StubTransport(**kwargs)
+            t.resolve_map = {"+573153283397": 111}
             t.raise_on_accept_call = TransportError("accept failed")
             captured.append(t)
             return t
 
+        turns: list[str] = []
+        claims: list[InputClaim] = []
+        cfg = self._inbound_config()
         skill = CommsTelegramSkill(transport_factory=factory)
-        ctx, _ = _build_ctx(self._inbound_config(), tmp_path)
+        ctx, _ = _build_ctx(cfg, tmp_path, captured_turns=turns, captured_claims=claims)
         await skill.setup(ctx)
 
-        await skill._on_incoming_ring(999)  # type: ignore[attr-defined]  # unknown but auto_answer=contacts_only would reject...
-        # Use auto_answer=all to get past the contacts_only gate
-        skill._auto_answer = "all"  # type: ignore[attr-defined]
-        skill._pending_incoming = 999  # type: ignore[attr-defined]
-        skill._pending_incoming_name = "desconocido"  # type: ignore[attr-defined]
+        await skill._on_incoming_ring(111)  # type: ignore[attr-defined]
 
-        result = await skill.handle("answer_incoming_call", {})
-
-        import json
-
-        payload = json.loads(result.output)
-        assert payload["ok"] is False
-        assert "accept failed" in payload["error"]
-        assert result.side_effect is None
+        # Error injected, no bridge started.
+        assert len(claims) == 0
+        assert len(turns) == 1
+        assert "fallo" in turns[0].lower()
 
     @pytest.mark.asyncio
     async def test_inbound_reverse_map_soft_fails_unresolvable(self, tmp_path: Path) -> None:
@@ -801,34 +746,19 @@ class TestTools:
         assert "hijo" in tools[0].description
 
     @pytest.mark.asyncio
-    async def test_inbound_enabled_adds_answer_tool(self, tmp_path: Path) -> None:
-        skill = CommsTelegramSkill(transport_factory=StubTransport)
-        ctx, _ = _build_ctx(
-            {
-                "api_id": 1,
-                "api_hash": "x",
-                "contacts": {"hija": "+1"},
-                "inbound": {"enabled": True},
-            },
-            tmp_path,
-        )
-        await skill.setup(ctx)
-        tool_names = [t.name for t in skill.tools]
-        assert "call_contact" in tool_names
-        assert "answer_incoming_call" in tool_names
-
-    @pytest.mark.asyncio
-    async def test_inbound_disabled_no_answer_tool(self, tmp_path: Path) -> None:
-        skill = CommsTelegramSkill(transport_factory=StubTransport)
-        ctx, _ = _build_ctx(
-            {
-                "api_id": 1,
-                "api_hash": "x",
-                "contacts": {"hija": "+1"},
-                "inbound": {"enabled": False},
-            },
-            tmp_path,
-        )
-        await skill.setup(ctx)
-        tool_names = [t.name for t in skill.tools]
-        assert "answer_incoming_call" not in tool_names
+    async def test_only_call_contact_tool_regardless_of_inbound(self, tmp_path: Path) -> None:
+        # Inbound path uses start_input_claim directly -- no LLM tool needed.
+        for inbound_enabled in (True, False):
+            skill = CommsTelegramSkill(transport_factory=StubTransport)
+            ctx, _ = _build_ctx(
+                {
+                    "api_id": 1,
+                    "api_hash": "x",
+                    "contacts": {"hija": "+1"},
+                    "inbound": {"enabled": inbound_enabled},
+                },
+                tmp_path,
+            )
+            await skill.setup(ctx)
+            tool_names = [t.name for t in skill.tools]
+            assert tool_names == ["call_contact"]
