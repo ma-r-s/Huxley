@@ -128,7 +128,7 @@ class TurnCoordinator:
         send_input_mode: Callable[..., Awaitable[None]] | None = None,
         send_claim_started: Callable[[str, str], Awaitable[None]] | None = None,
         send_claim_ended: Callable[[str, str], Awaitable[None]] | None = None,
-        send_stream_started: Callable[[str, str | None], Awaitable[None]] | None = None,
+        send_stream_started: Callable[[str, str | None, int], Awaitable[None]] | None = None,
         send_stream_ended: Callable[[str, str], Awaitable[None]] | None = None,
     ) -> None:
         # Client-facing outputs (to the WebSocket audio server).
@@ -169,10 +169,10 @@ class TurnCoordinator:
             send_claim_ended if send_claim_ended is not None else _noop_claim
         )
 
-        async def _noop_stream_started(_id: str, _label: str | None) -> None:
+        async def _noop_stream_started(_id: str, _label: str | None, _preroll_ms: int = 0) -> None:
             pass
 
-        self._send_stream_started: Callable[[str, str | None], Awaitable[None]] = (
+        self._send_stream_started: Callable[[str, str | None, int], Awaitable[None]] = (
             send_stream_started if send_stream_started is not None else _noop_stream_started
         )
         self._send_stream_ended: Callable[[str, str], Awaitable[None]] = (
@@ -945,7 +945,7 @@ class TurnCoordinator:
         # FOREGROUND to the observer → spawn the pump task. After this,
         # `obs.task is not None` and the stream is actually running.
         await self._focus_manager.wait_drained()
-        await self._send_stream_started(interface_name, stream.label)
+        await self._send_stream_started(interface_name, stream.label, stream.preroll_ms)
 
     async def _stop_content_stream(self) -> None:
         """Cancel any running content-stream observer. Idempotent.

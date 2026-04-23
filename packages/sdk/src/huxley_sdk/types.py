@@ -168,6 +168,11 @@ class AudioStream(SideEffect):
     # "Radio Clasica"). Sent in the `stream_started` wire message so the
     # client can display what's playing. Leave None for anonymous streams.
     label: str | None = None
+    # Duration in ms of any pre-roll audio (earcons, intros) that the stream
+    # factory yields before actual content. The client hides the waveform
+    # visualizer for this many ms after stream_started so the earcon doesn't
+    # appear in the graph.
+    preroll_ms: int = 0
 
 
 @dataclass(frozen=True, slots=True)

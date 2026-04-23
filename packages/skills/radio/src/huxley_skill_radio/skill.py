@@ -411,7 +411,11 @@ class RadioSkill:
             factory = self._wrap_with_chime(factory, chime)
         return ToolResult(
             output=json.dumps(payload, ensure_ascii=False),
-            side_effect=AudioStream(factory=factory, label=label),
+            side_effect=AudioStream(
+                factory=factory,
+                label=label,
+                preroll_ms=len(chime) * 1000 // 48000 if chime else 0,
+            ),
         )
 
     def _wrap_with_chime(

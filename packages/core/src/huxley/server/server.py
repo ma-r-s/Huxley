@@ -289,16 +289,32 @@ class AudioServer:
         """
         await self._send({"type": "audio_clear"})
 
-    async def send_stream_started(self, stream_id: str, label: str | None) -> None:
+    async def send_stream_started(
+        self, stream_id: str, label: str | None, preroll_ms: int = 0
+    ) -> None:
         """Tell the client that a long-form audio stream has begun.
 
         Triggers the "playing" orb state and waveform visualizer. The
         `label` (e.g. "Don Quixote", "Radio Clasica") is shown in the
         status line. `stream_id` correlates with the matching
-        `stream_ended` message.
+        `stream_ended` message. `preroll_ms` is the duration of any
+        earcon/intro the stream factory yields before actual content;
+        the client hides the waveform visualizer for that many ms.
         """
-        await logger.ainfo("server.tx.stream_started", stream_id=stream_id, label=label)
-        await self._send({"type": "stream_started", "stream_id": stream_id, "label": label})
+        await logger.ainfo(
+            "server.tx.stream_started",
+            stream_id=stream_id,
+            label=label,
+            preroll_ms=preroll_ms,
+        )
+        await self._send(
+            {
+                "type": "stream_started",
+                "stream_id": stream_id,
+                "label": label,
+                "preroll_ms": preroll_ms,
+            }
+        )
 
     async def send_stream_ended(self, stream_id: str, end_reason: str) -> None:
         """Tell the client that the long-form audio stream has ended.

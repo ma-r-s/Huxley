@@ -752,6 +752,7 @@ class AudiobooksSkill:
                 on_complete_prompt=self._on_complete_prompt,
                 completion_silence_ms=self._silence_ms,
                 label=book["title"],
+                preroll_ms=len(self._sounds.get("book_start", b"")) * 1000 // BYTES_PER_SECOND,
             ),
         )
 
@@ -957,6 +958,9 @@ class AudiobooksSkill:
                         on_complete_prompt=self._on_complete_prompt,
                         completion_silence_ms=self._silence_ms,
                         label=book["title"],
+                        preroll_ms=len(self._sounds.get("book_start", b""))
+                        * 1000
+                        // BYTES_PER_SECOND,
                     ),
                 )
 
@@ -1043,5 +1047,6 @@ class AudiobooksSkill:
                 on_complete_prompt=self._on_complete_prompt,
                 completion_silence_ms=self._silence_ms,
                 label=book["title"],
+                preroll_ms=len(self._sounds.get("book_start", b"")) * 1000 // BYTES_PER_SECOND,
             ),
         )
