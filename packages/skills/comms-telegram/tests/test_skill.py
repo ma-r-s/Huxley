@@ -529,7 +529,7 @@ class TestInbound:
         assert transport.on_ring_cancelled is not None
 
     @pytest.mark.asyncio
-    async def test_ring_known_contact_announces_then_accepts_and_bridges(
+    async def test_ring_known_contact_accepts_then_announces_and_bridges(
         self, tmp_path: Path
     ) -> None:
         captured: list[StubTransport] = []
@@ -565,7 +565,8 @@ class TestInbound:
             accept_order.append("accept")
             await original_accept(self_t, user_id)
 
-        skill = CommsTelegramSkill(transport_factory=factory)
+        # _announcement_settle_s=0 keeps test fast (no real sleep needed).
+        skill = CommsTelegramSkill(transport_factory=factory, _announcement_settle_s=0.0)
         await skill.setup(ctx)
 
         # Monkey-patch accepted transport to track order.
@@ -574,9 +575,9 @@ class TestInbound:
 
         await skill._on_incoming_ring(111)  # type: ignore[attr-defined]
 
-        # Announcement fires BEFORE accept (announce-before-accept ordering).
-        assert accept_order == ["turn", "accept"], (
-            f"expected turn before accept, got {accept_order}"
+        # Accept fires BEFORE announcement (accept-first ordering preserves WebRTC quality).
+        assert accept_order == ["accept", "turn"], (
+            f"expected accept before turn, got {accept_order}"
         )
         assert transport.accepted_calls == [111]
         assert len(turns) == 1
@@ -622,7 +623,8 @@ class TestInbound:
         claims: list[InputClaim] = []
         cfg = self._inbound_config()
         cfg["inbound"]["auto_answer"] = "all"
-        skill = CommsTelegramSkill(transport_factory=factory)
+        # _announcement_settle_s=0 keeps test fast.
+        skill = CommsTelegramSkill(transport_factory=factory, _announcement_settle_s=0.0)
         ctx, _ = _build_ctx(cfg, tmp_path, captured_turns=turns, captured_claims=claims)
         await skill.setup(ctx)
 
@@ -697,11 +699,10 @@ class TestInbound:
 
         await skill._on_incoming_ring(111)  # type: ignore[attr-defined]
 
-        # Announcement fires first, then error turn -- no bridge started.
+        # Accept fails before announcement -- only the error turn fires, no bridge.
         assert len(claims) == 0
-        assert len(turns) == 2
-        assert "mario" in turns[0].lower()  # announcement
-        assert "fallo" in turns[1].lower()  # error
+        assert len(turns) == 1
+        assert "fallo" in turns[0].lower()  # error
 
     @pytest.mark.asyncio
     async def test_inbound_reverse_map_soft_fails_unresolvable(self, tmp_path: Path) -> None:

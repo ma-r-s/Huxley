@@ -6,8 +6,9 @@ mic/speaker to the live call.
 
 Inbound: when `inbound.enabled` is true the skill connects eagerly at
 setup, builds a user_id->name reverse map, and listens for INCOMING_CALL
-events. On ring it immediately accepts the call, announces via inject_turn,
-then bridges audio via ctx.start_input_claim — no LLM tool call needed.
+events. On ring it accepts immediately (preserves WebRTC audio quality),
+announces via inject_turn, waits for the LLM to finish speaking, then
+bridges audio via ctx.start_input_claim — no LLM tool call needed.
 
 See `docs/skills/comms-telegram.md` for the user-facing flow and
 `docs/research/telegram-voice.md` for why the transport is shaped the
@@ -66,15 +67,19 @@ class CommsTelegramSkill:
         self,
         *,
         transport_factory: Callable[..., TelegramTransport] | None = None,
+        _announcement_settle_s: float = 3.0,
     ) -> None:
-        """`transport_factory` is an injection point for tests — pass a
-        fake that returns a stub transport to avoid importing pyrogram.
+        """`transport_factory` is an injection point for tests.
+        `_announcement_settle_s` controls how long to wait after inject_turn
+        returns before starting the audio bridge — gives the LLM time to finish
+        speaking the announcement. Tests pass 0.0 to keep suite fast.
         """
         self._logger: SkillLogger | None = None
         self._ctx: SkillContext | None = None
         self._contacts: dict[str, str] = {}  # lowercased name -> normalized phone
         self._transport: TelegramTransport | None = None
         self._transport_factory = transport_factory or TelegramTransport
+        self._announcement_settle_s = _announcement_settle_s
 
         # Inbound config
         self._inbound_enabled: bool = False
@@ -322,13 +327,16 @@ class CommsTelegramSkill:
     async def _on_incoming_ring(self, user_id: int) -> None:
         """Called by the transport when an INCOMING_CALL update arrives.
 
-        Announces BEFORE accepting to avoid audio buffering delay: if we
-        accept first, pytgcalls fills the inbound queue during the ~3s the
-        LLM takes to speak the announcement, causing a 3s lag on all peer
-        audio. By announcing first (call still ringing) and accepting only
-        after inject_turn drains, the queue is empty when start_input_claim
-        starts consuming -- zero delay, real-time audio from the first word.
+        Accepts immediately to preserve pytgcalls WebRTC audio quality --
+        delaying accept_call by even ~1s causes near-silent inbound audio
+        from the peer. After accepting, announces the caller via inject_turn,
+        then waits _announcement_settle_s for the LLM to finish speaking
+        before starting the audio bridge. Frames that pile up in the inbound
+        queue during the announcement window are flushed by peer_audio_chunks()
+        so playback starts real-time rather than replaying buffered audio.
         """
+        import asyncio
+
         assert self._logger is not None
         assert self._ctx is not None
 
@@ -353,37 +361,41 @@ class CommsTelegramSkill:
             "comms_telegram.inbound.ring", user_id=user_id, caller_name=display
         )
 
-        # Announce while the call is still ringing -- the LLM speaks the
-        # announcement, FM drains, and only then do we accept the call.
-        await self._ctx.inject_turn(f"Llamada de {display}, contestando.")
-
-        # Check if the caller hung up during the announcement window.
-        if self._pending_incoming != user_id:
-            await self._logger.ainfo(
-                "comms_telegram.inbound.ring_expired_during_announce", user_id=user_id
-            )
-            return
-        self._pending_incoming = None
+        # Accept immediately -- any delay here degrades WebRTC inbound audio quality.
         self._active_contact_name = display
-
-        # Accept the call now -- inbound queue is empty (no audio buffered
-        # during the announcement), so the bridge is real-time from the start.
         try:
             if self._transport is not None:
                 await self._transport.accept_call(user_id)
         except TransportError:
             self._active_contact_name = None
+            self._pending_incoming = None
             await self._logger.aexception("comms_telegram.inbound.accept_failed", user_id=user_id)
             await self._ctx.inject_turn(
                 f"Intente contestar la llamada de {display} pero fallo la conexion."
             )
             return
 
+        # Race: caller hung up in the narrow window before accept_call set
+        # _active_user_id (on_ring_cancelled clears _pending_incoming).
+        if self._pending_incoming != user_id:
+            await self._logger.ainfo(
+                "comms_telegram.inbound.ring_expired_before_accept", user_id=user_id
+            )
+            return
+        self._pending_incoming = None
+
         await self._logger.ainfo(
             "comms_telegram.inbound.call_accepted", user_id=user_id, name=display
         )
 
-        # Bridge audio directly -- bypasses the LLM tool-call path entirely.
+        # Announce the caller. inject_turn returns after request_response() --
+        # the LLM speaks for ~2s after that. Settle wait gives it time to finish
+        # before start_input_claim suspends the provider mid-speech.
+        await self._ctx.inject_turn(f"Llamada de {display}, contestando.")
+        await asyncio.sleep(self._announcement_settle_s)
+
+        # Bridge audio. peer_audio_chunks() flushes frames buffered during the
+        # announcement window so playback is real-time, not offset by ~3s.
         assert self._transport is not None
         await self._ctx.start_input_claim(
             InputClaim(
