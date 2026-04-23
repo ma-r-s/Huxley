@@ -37,7 +37,7 @@ Huxley/                 # repo root
 │       └── README.md
 ├── scripts/
 │   └── migrate-data-to-persona.sh  # one-time move from legacy packages/core/data/
-├── web/                # SvelteKit dev client
+├── web/                # React/Vite dev client
 ├── docs/               # Single source of truth
 │   ├── vision.md       # what Huxley is
 │   ├── concepts.md     # vocabulary (persona, skill, turn, side effect, ...)
@@ -83,7 +83,7 @@ Web dev client (run from `web/`):
 cd web
 bun install
 bun dev                              # http://localhost:5173
-bun run check                        # svelte-check
+bun run check                        # tsc --noEmit
 ```
 
 ## Rules
