@@ -128,6 +128,9 @@ def _build_ctx(
     async def inject_turn(prompt: str) -> None:
         _turns.append(prompt)
 
+    async def inject_turn_and_wait(prompt: str) -> None:
+        _turns.append(prompt)
+
     def background_task(name: str, fn: Any, **kwargs: Any) -> Any:
         raise AssertionError("comms_telegram shouldn't use background_task yet")
 
@@ -148,6 +151,7 @@ def _build_ctx(
         persona_data_dir=data_dir,
         config=config,
         inject_turn=inject_turn,
+        inject_turn_and_wait=inject_turn_and_wait,
         background_task=background_task,  # type: ignore[arg-type]
         start_input_claim=start_input_claim,  # type: ignore[arg-type]
         cancel_active_claim=cancel_active_claim,
@@ -544,20 +548,20 @@ class TestInbound:
         turns: list[str] = []
         claims: list[InputClaim] = []
 
-        # Patch inject_turn to record ordering relative to accept_call.
+        # Patch inject_turn_and_wait to record ordering relative to accept_call.
         base_ctx, _ = _build_ctx(
             self._inbound_config(), tmp_path, captured_turns=turns, captured_claims=claims
         )
 
-        original_inject = base_ctx.inject_turn
+        original_inject_and_wait = base_ctx.inject_turn_and_wait
 
-        async def ordered_inject(prompt: str) -> None:
+        async def ordered_inject_and_wait(prompt: str) -> None:
             accept_order.append("turn")
-            await original_inject(prompt)
+            await original_inject_and_wait(prompt)
 
         import dataclasses
 
-        ctx = dataclasses.replace(base_ctx, inject_turn=ordered_inject)
+        ctx = dataclasses.replace(base_ctx, inject_turn_and_wait=ordered_inject_and_wait)
 
         original_accept = StubTransport.accept_call
 
@@ -565,8 +569,7 @@ class TestInbound:
             accept_order.append("accept")
             await original_accept(self_t, user_id)
 
-        # _announcement_settle_s=0 keeps test fast (no real sleep needed).
-        skill = CommsTelegramSkill(transport_factory=factory, _announcement_settle_s=0.0)
+        skill = CommsTelegramSkill(transport_factory=factory)
         await skill.setup(ctx)
 
         # Monkey-patch accepted transport to track order.
@@ -623,8 +626,7 @@ class TestInbound:
         claims: list[InputClaim] = []
         cfg = self._inbound_config()
         cfg["inbound"]["auto_answer"] = "all"
-        # _announcement_settle_s=0 keeps test fast.
-        skill = CommsTelegramSkill(transport_factory=factory, _announcement_settle_s=0.0)
+        skill = CommsTelegramSkill(transport_factory=factory)
         ctx, _ = _build_ctx(cfg, tmp_path, captured_turns=turns, captured_claims=claims)
         await skill.setup(ctx)
 

@@ -228,6 +228,11 @@ class TurnCoordinator:
         # to drop a re-enqueue with the same key while it's in-flight.
         # Cleared by `_release_dialog`.
         self._current_injected_dedup_key: str | None = None
+        # Set by `_fire_injected_turn` just before `request_response()`;
+        # signalled (set + cleared) when the injected turn completes or is
+        # interrupted. Lets `inject_turn_and_wait` block until the LLM
+        # finishes speaking without a hardcoded sleep.
+        self._injected_turn_done: asyncio.Event | None = None
 
         self.current_turn: Turn | None = None
         self.response_cancelled: bool = False
@@ -617,6 +622,7 @@ class TurnCoordinator:
         self.current_turn = None
         # Defensive invariant — see matching pattern in `interrupt()`.
         self._current_injected_dedup_key = None
+        self._signal_injected_turn_done()
         self._bind_turn()
         await self._send_audio_clear()
 
@@ -688,6 +694,9 @@ class TurnCoordinator:
         # Invariant with `_release_dialog` (called above) but clear defensively
         # in case a future code path interrupts without going through it.
         self._current_injected_dedup_key = None
+        # Unblock any inject_turn_and_wait caller so it doesn't hang forever
+        # after an interrupt.
+        self._signal_injected_turn_done()
         self._bind_turn()
 
     # --- Internal ---
@@ -748,6 +757,10 @@ class TurnCoordinator:
         # turn-clear makes the invariant robust against future code paths
         # that might end a turn without going through _release_dialog).
         self._current_injected_dedup_key = None
+        # Signal any inject_turn_and_wait caller. Grab + clear the ref first
+        # so _dispatch_post_turn (which may fire another injected turn) sees
+        # a clean slot and a fresh event if needed.
+        self._signal_injected_turn_done()
         self._bind_turn()
         await self._send_status(self._status["ready"])
 
@@ -1214,6 +1227,46 @@ class TurnCoordinator:
             return
         await self._fire_injected_turn(prompt, dedup_key)
 
+    def _signal_injected_turn_done(self) -> None:
+        """Set and clear `_injected_turn_done` if one is armed.
+
+        Called from every path that clears `current_turn` (normal end,
+        interrupt, session disconnect) so `inject_turn_and_wait` callers
+        always unblock regardless of how the turn ends.
+        """
+        event = self._injected_turn_done
+        if event is not None:
+            self._injected_turn_done = None
+            event.set()
+
+    async def inject_turn_and_wait(
+        self,
+        prompt: str,
+        *,
+        dedup_key: str | None = None,
+    ) -> None:
+        """Like `inject_turn` but returns only after the LLM finishes speaking.
+
+        If the coordinator is idle (`current_turn is None`), fires the
+        injected turn immediately and awaits the `_injected_turn_done` event,
+        which is signalled when `_apply_side_effects` / `interrupt()` clears
+        the turn. The caller is guaranteed that the LLM audio has been fully
+        generated (and largely delivered to the client) before this returns.
+
+        If a turn is already in progress, falls back to a plain enqueue
+        (same as `inject_turn`) and returns immediately — the caller should
+        not depend on the wait semantics in that case.
+        """
+        if self.current_turn is not None:
+            await self._enqueue_injected(prompt, dedup_key, InjectPriority.NORMAL)
+            return
+        await self._fire_injected_turn(prompt, dedup_key)
+        # _fire_injected_turn sets _injected_turn_done before returning;
+        # capture it now (before any other task can clear it) and wait.
+        done = self._injected_turn_done
+        if done is not None:
+            await done.wait()
+
     async def _enqueue_injected(
         self,
         prompt: str,
@@ -1304,6 +1357,11 @@ class TurnCoordinator:
         # True). force_release is a no-op when owner is already None
         # (inject_turn from idle with no content playing).
         await self._speaking_state.force_release()
+
+        # Arm the completion event BEFORE request_response() so it is
+        # guaranteed to exist when _apply_side_effects tries to signal it.
+        # Any previous event is replaced (shouldn't happen; defensive).
+        self._injected_turn_done = asyncio.Event()
 
         # Send the prompt + ask the model to respond. The model narrates
         # in persona voice; subsequent `on_audio_delta` / `on_audio_done`
