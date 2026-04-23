@@ -551,12 +551,31 @@ class TelegramTransport:
 
         Used by the skill as `InputClaim.speaker_source`. Ends when
         the call ends (`end_call` sets `_ended`).
+
+        Flushes any frames accumulated before this consumer started (e.g.,
+        during the announce + settle window after accept_call). Playing them
+        back sequentially would introduce a lag equal to the buffer depth --
+        discarding them keeps playback real-time from the first word.
         """
         q = self._inbound_queue
         if q is None:
             await logger.awarning("comms_telegram.transport.speaker_source_no_queue")
             return
         await logger.ainfo("comms_telegram.transport.speaker_source_started")
+
+        # Discard frames buffered before the bridge started.
+        flushed = 0
+        while not q.empty():
+            try:
+                q.get_nowait()
+                flushed += 1
+            except asyncio.QueueEmpty:
+                break
+        if flushed:
+            await logger.ainfo(
+                "comms_telegram.transport.speaker_source_flushed_stale", count=flushed
+            )
+
         yielded = 0
         while not self._ended.is_set():
             try:
