@@ -9,7 +9,7 @@
  * browsers allow AudioContext creation and getUserMedia.
  */
 
-// Inline worklet — avoids Vite/SSR complications with ?url imports.
+// Inline worklet — avoids Vite complications with ?url imports.
 const WORKLET_CODE = `
 class MicProcessor extends AudioWorkletProcessor {
   process(inputs) {
@@ -38,6 +38,11 @@ export class MicCapture {
 
   /** Called with a base64-encoded PCM16 chunk whenever active. */
   onFrame: ((base64: string) => void) | null = null;
+
+  /** Expose the raw stream for connecting to a visualisation analyser. */
+  get micStream(): MediaStream | null {
+    return this.stream;
+  }
 
   get initialized(): boolean {
     return this.ctx !== null;
@@ -77,7 +82,7 @@ export class MicCapture {
       this.onFrame(bufferToBase64(e.data));
     };
 
-    // Connect through a silent gain node to keep the audio graph alive
+    // Connect through a silent gain to keep the audio graph alive
     // without routing mic audio to the speakers.
     const silent = this.ctx.createGain();
     silent.gain.value = 0;
@@ -106,7 +111,6 @@ export class MicCapture {
 function bufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
   let binary = "";
-  // Process in chunks to avoid call stack limits on large buffers
   const CHUNK = 1024;
   for (let i = 0; i < bytes.byteLength; i += CHUNK) {
     binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
