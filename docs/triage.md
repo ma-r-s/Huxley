@@ -1160,6 +1160,7 @@ Replaces the ripped-out `huxley-skill-calls` with the right shape: a skill that 
 - `send_frame` is decorated (`@statictypes`, `@mtproto_required`); calling it outside the event loop does not produce a coroutine `asyncio.run_coroutine_threadsafe` recognizes. Fix: wrap in a plain `async def _send()` closure.
 - Multiple stale server processes on the same port: when diagnosing "my fix didn't work", check `lsof -i :PORT` first. The browser may be talking to an old process.
 - Heartbeat `mic_chunks_window=375` per 2s window confirms browser AudioContext is genuinely at 24 kHz; `silence_pct=0.0` in steady state confirms WebSocket delivery has no timing issues.
+- **Inbound audio silence (post-ship fix, `80e8f38`)**: the announce-before-accept ordering caused near-silent inbound audio (peer_mean_rms ~0.1). Root cause: `inject_turn` returns after `request_response()` (~1s), not after the LLM finishes speaking (~3s), so `accept_call` was still delayed ~1s — enough to degrade pytgcalls WebRTC inbound audio quality. Fix: accept immediately (no delay), inject_turn after, sleep 3s to let LLM speak, then start_input_claim. `peer_audio_chunks()` flushes the inbound queue before yielding so the 3s buffered window doesn't replay as a delay.
 
 ### Stage 3a — Supervised `background_task` (in-memory) ✅ done (`521f269`, 2026-04-18)
 
