@@ -5,9 +5,9 @@ to a Telegram user and starts an InputClaim that bridges grandpa's
 mic/speaker to the live call.
 
 Inbound: when `inbound.enabled` is true the skill connects eagerly at
-setup, builds a user_id->name reverse map, and listens for RINGING_CALL
-events. On ring it calls inject_turn so the LLM can announce and then
-call `answer_incoming_call()` to connect the bridge.
+setup, builds a user_id->name reverse map, and listens for INCOMING_CALL
+events. On ring it immediately accepts the call, announces via inject_turn,
+then bridges audio via ctx.start_input_claim — no LLM tool call needed.
 
 See `docs/skills/comms-telegram.md` for the user-facing flow and
 `docs/research/telegram-voice.md` for why the transport is shaped the
@@ -84,12 +84,6 @@ class CommsTelegramSkill:
         # from the contacts dict. Unknown callers stay absent from the map.
         self._user_id_to_name: dict[int, str] = {}
 
-        # Pending incoming call: user_id of a RINGING_CALL that hasn't
-        # been answered yet. Set by _on_incoming_ring, cleared by
-        # _answer_incoming_call or _on_ring_cancelled.
-        self._pending_incoming: int | None = None
-        self._pending_incoming_name: str = ""
-
         # Name of the contact currently in a call (set in handle()/
         # _answer_incoming_call(), cleared in _on_claim_end). Used to
         # narrate "la llamada termino" to the LLM.
@@ -131,18 +125,6 @@ class CommsTelegramSkill:
                 },
             ),
         ]
-        if self._inbound_enabled:
-            tools.append(
-                ToolDefinition(
-                    name="answer_incoming_call",
-                    description=(
-                        "Conecta una llamada entrante que esta sonando. "
-                        "Usalo SOLO cuando se te indique que hay una llamada "
-                        "entrante -- nunca lo llames por iniciativa propia."
-                    ),
-                    parameters={"type": "object", "properties": {}},
-                )
-            )
         return tools
 
     async def setup(self, ctx: SkillContext) -> None:
@@ -280,8 +262,6 @@ class CommsTelegramSkill:
                 if not isinstance(name_raw, str) or not name_raw.strip():
                     return _error_result("call_contact requires a non-empty `name` argument")
                 return await self._call_contact(name_raw.lower().strip())
-            case "answer_incoming_call":
-                return await self._answer_incoming_call()
             case _:
                 await self._logger.awarning("comms_telegram.unknown_tool", tool=tool_name)
                 return _error_result(f"Unknown tool: {tool_name}")
@@ -333,46 +313,15 @@ class CommsTelegramSkill:
             ),
         )
 
-    # --- Inbound tool ---
-
-    async def _answer_incoming_call(self) -> ToolResult:
-        assert self._logger is not None
-
-        if self._transport is None:
-            return _error_result("Las llamadas no estan configuradas.")
-
-        if self._pending_incoming is None:
-            return _error_result("No hay ninguna llamada entrante en espera.")
-
-        user_id = self._pending_incoming
-        name = self._pending_incoming_name or "la persona"
-        self._pending_incoming = None
-        self._pending_incoming_name = ""
-        self._active_contact_name = name
-
-        try:
-            await self._transport.accept_call(user_id)
-        except TransportError as exc:
-            self._active_contact_name = None
-            await self._logger.aexception("comms_telegram.inbound.accept_failed", user_id=user_id)
-            return _error_result(f"No pude conectar la llamada entrante: {exc}")
-
-        await self._logger.ainfo(
-            "comms_telegram.inbound.call_accepted", user_id=user_id, name=name
-        )
-        return ToolResult(
-            output=json.dumps({"ok": True, "contact": name, "direction": "inbound"}),
-            side_effect=InputClaim(
-                on_mic_frame=self._on_mic_frame,
-                speaker_source=self._transport.peer_audio_chunks(),
-                on_claim_end=self._on_claim_end,
-            ),
-        )
-
     # --- Inbound ring callbacks (called by transport) ---
 
     async def _on_incoming_ring(self, user_id: int) -> None:
-        """Called by the transport when a RINGING_CALL update arrives."""
+        """Called by the transport when an INCOMING_CALL update arrives.
+
+        Accepts the call immediately, announces via inject_turn (so the LLM
+        speaks "Llamada de X, contestando" before the bridge latches), then
+        bridges audio via start_input_claim -- no LLM tool call needed.
+        """
         assert self._logger is not None
         assert self._ctx is not None
 
@@ -391,34 +340,54 @@ class CommsTelegramSkill:
             return
 
         display = name or "numero desconocido"
-        self._pending_incoming = user_id
-        self._pending_incoming_name = display
+        self._active_contact_name = display
 
         await self._logger.ainfo(
             "comms_telegram.inbound.ring", user_id=user_id, caller_name=display
         )
 
-        # inject_turn kicks off the LLM response. Tool call is the primary
-        # mandatory action -- the LLM must call answer_incoming_call() in this
-        # same response, not as a follow-up. Speech is secondary (announce while
-        # calling the tool, not instead of calling it).
-        await self._ctx.inject_turn(
-            f"[LLAMADA ENTRANTE] Hay una llamada de {display}. "
-            f"DEBES llamar a answer_incoming_call() en esta respuesta. "
-            f"Di al usuario: 'Llamada de {display}, contestando.'"
+        # Accept at the transport level first.
+        try:
+            if self._transport is not None:
+                await self._transport.accept_call(user_id)
+        except TransportError:
+            self._active_contact_name = None
+            await self._logger.aexception("comms_telegram.inbound.accept_failed", user_id=user_id)
+            await self._ctx.inject_turn(
+                f"Intente contestar la llamada de {display} pero fallo la conexion."
+            )
+            return
+
+        await self._logger.ainfo(
+            "comms_telegram.inbound.call_accepted", user_id=user_id, name=display
+        )
+
+        # Announce first -- inject_turn queues the LLM turn; start_input_claim
+        # below waits for the FM to drain, so the LLM speaks the announcement
+        # before the audio bridge latches.
+        await self._ctx.inject_turn(f"Llamada de {display}, contestando.")
+
+        # Bridge audio directly -- bypasses the LLM tool-call path entirely.
+        assert self._transport is not None
+        await self._ctx.start_input_claim(
+            InputClaim(
+                on_mic_frame=self._on_mic_frame,
+                speaker_source=self._transport.peer_audio_chunks(),
+                on_claim_end=self._on_claim_end,
+            )
         )
 
     async def _on_ring_cancelled(self, user_id: int) -> None:
-        """Called by the transport when a ring expires without being answered."""
-        if self._pending_incoming != user_id:
-            return
+        """Called if the caller hangs up before accept_call completed.
+
+        This fires only in a small race window -- once accept_call sets
+        _active_user_id on the transport, DISCARDED_CALL is handled as a
+        claim end (on_claim_end) instead.
+        """
         assert self._logger is not None
         assert self._ctx is not None
 
-        name = self._pending_incoming_name or "numero desconocido"
-        self._pending_incoming = None
-        self._pending_incoming_name = ""
-
+        name = self._user_id_to_name.get(user_id, "la persona")
         await self._logger.ainfo(
             "comms_telegram.inbound.ring_cancelled", user_id=user_id, caller_name=name
         )
