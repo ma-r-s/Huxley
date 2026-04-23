@@ -529,8 +529,11 @@ class TestInbound:
         assert transport.on_ring_cancelled is not None
 
     @pytest.mark.asyncio
-    async def test_ring_known_contact_accepts_and_bridges(self, tmp_path: Path) -> None:
+    async def test_ring_known_contact_announces_then_accepts_and_bridges(
+        self, tmp_path: Path
+    ) -> None:
         captured: list[StubTransport] = []
+        accept_order: list[str] = []  # tracks interleaving of turns vs accepts
 
         def factory(**kwargs: Any) -> StubTransport:
             t = StubTransport(**kwargs)
@@ -540,17 +543,42 @@ class TestInbound:
 
         turns: list[str] = []
         claims: list[InputClaim] = []
-        skill = CommsTelegramSkill(transport_factory=factory)
-        ctx, _ = _build_ctx(
+
+        # Patch inject_turn to record ordering relative to accept_call.
+        base_ctx, _ = _build_ctx(
             self._inbound_config(), tmp_path, captured_turns=turns, captured_claims=claims
         )
+
+        original_inject = base_ctx.inject_turn
+
+        async def ordered_inject(prompt: str) -> None:
+            accept_order.append("turn")
+            await original_inject(prompt)
+
+        import dataclasses
+
+        ctx = dataclasses.replace(base_ctx, inject_turn=ordered_inject)
+
+        original_accept = StubTransport.accept_call
+
+        async def ordered_accept(self_t: StubTransport, user_id: int) -> None:
+            accept_order.append("accept")
+            await original_accept(self_t, user_id)
+
+        skill = CommsTelegramSkill(transport_factory=factory)
         await skill.setup(ctx)
+
+        # Monkey-patch accepted transport to track order.
+        transport = captured[0]
+        transport.accept_call = lambda uid: ordered_accept(transport, uid)  # type: ignore[method-assign]
 
         await skill._on_incoming_ring(111)  # type: ignore[attr-defined]
 
-        # Transport accepted the call.
-        assert captured[0].accepted_calls == [111]
-        # Announcement injected with caller name.
+        # Announcement fires BEFORE accept (announce-before-accept ordering).
+        assert accept_order == ["turn", "accept"], (
+            f"expected turn before accept, got {accept_order}"
+        )
+        assert transport.accepted_calls == [111]
         assert len(turns) == 1
         assert "mario" in turns[0].lower()
         # Audio bridge started via start_input_claim.
@@ -669,10 +697,11 @@ class TestInbound:
 
         await skill._on_incoming_ring(111)  # type: ignore[attr-defined]
 
-        # Error injected, no bridge started.
+        # Announcement fires first, then error turn -- no bridge started.
         assert len(claims) == 0
-        assert len(turns) == 1
-        assert "fallo" in turns[0].lower()
+        assert len(turns) == 2
+        assert "mario" in turns[0].lower()  # announcement
+        assert "fallo" in turns[1].lower()  # error
 
     @pytest.mark.asyncio
     async def test_inbound_reverse_map_soft_fails_unresolvable(self, tmp_path: Path) -> None:
