@@ -193,18 +193,29 @@ export function useWs() {
   );
 
   // ── Connection ───────────────────────────────────────────────────────────
+  // `language` is appended to the base URL as `?lang=<code>` so the
+  // server can resolve the persona for that language BEFORE the session
+  // is established. The base URL stashed in `activeUrlRef` is WITHOUT
+  // the query string (so a persona switch that keeps the same language
+  // compares cleanly), and the lang is tracked separately so
+  // `setLanguage` can rebuild the full URL without parsing.
+  const activeLanguageRef = useRef<string | null>(null);
   const connect = useCallback(
-    (url?: string) => {
+    (url?: string, language?: string | null) => {
       // An explicit connect() call (initial mount, persona switch, or StrictMode
       // remount) always re-enables auto-reconnect.
       noReconnectRef.current = false;
       activeUrlRef.current =
         url ?? activeUrlRef.current ?? `ws://${window.location.hostname}:8765`;
+      if (language !== undefined) activeLanguageRef.current = language;
       // Don't open a second socket if one is already live or connecting.
       // This prevents StrictMode's second mount from racing the first.
       const rs = socketRef.current?.readyState;
       if (rs === WebSocket.CONNECTING || rs === WebSocket.OPEN) return;
-      const ws = new WebSocket(activeUrlRef.current);
+      const full = activeLanguageRef.current
+        ? `${activeUrlRef.current}${activeUrlRef.current.includes("?") ? "&" : "?"}lang=${encodeURIComponent(activeLanguageRef.current)}`
+        : activeUrlRef.current;
+      const ws = new WebSocket(full);
 
       ws.onopen = () => {
         if (socketRef.current !== ws) return; // stale socket
@@ -361,6 +372,27 @@ export function useWs() {
     [pushStatus, cancelSilenceTimer, setThinkingActiveSync, connect],
   );
 
+  // Language switch — reconnect with the new `?lang=` so the server
+  // drops the current OpenAI session and brings one up in the new
+  // language. Cheaper than an in-session flip because the whole
+  // session.update (tools, instructions, transcription_language) has
+  // to change together. Idempotent: calling with the current language
+  // just re-opens an already-healthy socket.
+  const setLanguage = useCallback(
+    (language: string) => {
+      if (activeLanguageRef.current === language) return;
+      activeLanguageRef.current = language;
+      switchingRef.current = true;
+      pushStatus(`Language \u2192 ${language}\u2026`);
+      if (socketRef.current !== null) socketRef.current.close();
+      setTimeout(() => {
+        switchingRef.current = false;
+        connect(undefined, language);
+      }, 50);
+    },
+    [pushStatus, connect],
+  );
+
   // ── PTT ─────────────────────────────────────────────────────────────────
   const pttStart = useCallback(() => {
     pttWasClaimHangupRef.current = inputModeRef.current === "skill_continuous";
@@ -421,6 +453,7 @@ export function useWs() {
     connect,
     disconnect,
     switchPersona,
+    setLanguage,
     pushStatus,
 
     // Protocol actions

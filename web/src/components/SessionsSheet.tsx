@@ -1,6 +1,8 @@
 // Sessions sheet — shows recent conversations.
 // v1: in-memory only (no server persistence). Sessions disappear on reload.
 
+import { useTranslation } from "react-i18next";
+
 const sheetStyles = {
   sheet: {
     position: "absolute" as const,
@@ -73,12 +75,13 @@ export function SessionsSheet({
   sessions,
   onPick,
 }: SessionsSheetProps) {
+  const { t } = useTranslation();
   return (
     <div style={sheetStyles.sheet} className="hux-sheet">
       <div style={sheetStyles.header}>
-        <span>Recent</span>
+        <span>{t("sessions.recent")}</span>
         <button style={sheetStyles.closeBtn} onClick={onClose}>
-          Close
+          {t("device.close")}
         </button>
       </div>
       <div style={sheetStyles.body}>
@@ -92,7 +95,7 @@ export function SessionsSheet({
             letterSpacing: "-0.01em",
           }}
         >
-          Conversations
+          {t("sessions.title")}
         </h2>
         {sessions.length === 0 && (
           <div
@@ -103,7 +106,7 @@ export function SessionsSheet({
               padding: "20px 0",
             }}
           >
-            Nothing yet \u2014 hold the orb to begin.
+            {t("sessions.empty")}
           </div>
         )}
         {sessions.map((s) => (
@@ -121,11 +124,12 @@ export function SessionsSheet({
                   letterSpacing: "0.04em",
                 }}
               >
-                {s.when} \u00b7 {s.duration} \u00b7 {s.turns} turns
+                {s.when} {"\u00b7"} {s.duration} {"\u00b7"}{" "}
+                {t("sessions.turnsCount", { count: s.turns })}
               </span>
             </span>
             <span style={{ fontSize: 13, color: "var(--hux-fg-dim)" }}>
-              \u2192
+              {"\u2192"}
             </span>
           </button>
         ))}

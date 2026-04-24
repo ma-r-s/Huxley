@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { useWs } from "./lib/useWs.js";
 import { MicCapture } from "./lib/audio/capture.js";
 import { AudioPlayback } from "./lib/audio/playback.js";
@@ -11,6 +12,11 @@ import { TweaksPanel } from "./components/TweaksPanel.js";
 import type { OrbState, Appearance, PersonaEntry, AppState } from "./types.js";
 import type { Tweaks } from "./components/TweaksPanel.js";
 import { DEFAULT_APPEARANCE } from "./types.js";
+import {
+  SUPPORTED_LANGUAGES,
+  type LanguageCode,
+  saveLanguage,
+} from "./i18n/index.js";
 
 // ── Persona list from env ─────────────────────────────────────────────────
 function parsePersonas(): PersonaEntry[] {
@@ -41,19 +47,6 @@ function parsePersonas(): PersonaEntry[] {
 
 const PERSONAS = parsePersonas();
 
-// ── Status labels per orb state ───────────────────────────────────────────
-const STATUS: Record<OrbState, string> = {
-  idle: "Hold to talk",
-  listening: "Listening \u2014 release to send",
-  thinking: "Sent \u2014 awaiting response",
-  speaking: "Responding",
-  live: "Live \u2014 hold to end",
-  playing: "Playing\u2026",
-  error: "Reconnecting\u2026",
-  paused: "Paused",
-  wake: "Connecting",
-};
-
 // ── Appearance persistence ────────────────────────────────────────────────
 const APPEARANCE_KEY = "huxley-appearance";
 function loadAppearance(): Appearance {
@@ -79,6 +72,7 @@ const playback = new AudioPlayback();
 
 export function App() {
   const ws = useWs();
+  const { t, i18n } = useTranslation();
 
   // ── PTT state ────────────────────────────────────────────────────────────
   const [pttHeld, setPttHeld] = useState(false);
@@ -144,30 +138,55 @@ export function App() {
   const currentPersona =
     PERSONAS.find((p) => p.id === selectedPersonaId) ?? PERSONAS[0];
 
+  // ── Language state ───────────────────────────────────────────────────────
+  // i18n.language is initialized from localStorage / navigator on module
+  // import (see `src/i18n/index.ts`). Keep a reactive mirror so the
+  // DeviceSheet's picker re-renders when the user flips languages and
+  // so the WebSocket `?lang=<code>` reflects the current selection on
+  // reconnect. `handleLanguagePick` persists + swaps both sides (client
+  // UI catalog and server persona resolution) in one user action.
+  const [language, setLanguageState] = useState<LanguageCode>(
+    () => (i18n.language as LanguageCode) ?? "es",
+  );
+  const handleLanguagePick = useCallback(
+    (code: LanguageCode) => {
+      if (code === language) return;
+      setLanguageState(code);
+      saveLanguage(code);
+      void i18n.changeLanguage(code);
+      ws.setLanguage(code);
+    },
+    [language, i18n, ws],
+  );
+
   // ── Sessions (in-memory only for v1) ─────────────────────────────────────
-  const [sessions] = useState(() => [
+  // Sample conversations — static demo data. Strings come from the i18n
+  // catalog so they flip with the UI language; the `when` field is a
+  // composed template (today/yesterday + a fixed time) rather than a
+  // real Date to keep the mock deterministic.
+  const sessions = [
     {
       id: "s1",
-      preview: "On the chapter you were reading\u2026",
-      when: "Today, 3:42 PM",
+      preview: t("sessions.sample.1"),
+      when: t("sessions.when.todayAt", { time: "3:42 PM" }),
       duration: "14m",
       turns: 23,
     },
     {
       id: "s2",
-      preview: "Set a timer while making pasta",
-      when: "Today, 1:08 PM",
+      preview: t("sessions.sample.2"),
+      when: t("sessions.when.todayAt", { time: "1:08 PM" }),
       duration: "2m",
       turns: 4,
     },
     {
       id: "s3",
-      preview: "Walked through tomorrow\u2019s schedule",
-      when: "Yesterday",
+      preview: t("sessions.sample.3"),
+      when: t("sessions.when.yesterday"),
       duration: "6m",
       turns: 11,
     },
-  ]);
+  ];
 
   // ── Boot wake animation ───────────────────────────────────────────────────
   useEffect(() => {
@@ -205,8 +224,11 @@ export function App() {
       playback.onceIdle(done);
     });
     mic.onFrame = (data) => ws.sendAudio(data);
-    // Connect to first persona
-    ws.connect(currentPersona?.url);
+    // Connect to first persona with the currently-selected language so
+    // the very first session opens in the right translation. Subsequent
+    // language flips go through `ws.setLanguage()` which drops the
+    // socket and reconnects with `?lang=<code>`.
+    ws.connect(currentPersona?.url, language);
     return () => {
       ws.disconnect();
       mic.destroy();
@@ -246,7 +268,7 @@ export function App() {
           await mic.resume();
           mic.active = true;
         } catch {
-          setMicError("Could not open microphone for the call");
+          setMicError(t("mic.cannotOpen"));
         }
       })();
     } else if (
@@ -294,7 +316,7 @@ export function App() {
       await mic.resume();
       await playback.resume();
     } catch {
-      setMicError("Mic access denied \u2014 check browser permissions");
+      setMicError(t("mic.accessDenied"));
       return;
     }
     playback.stop();
@@ -455,23 +477,23 @@ export function App() {
 
   // ── Status label ─────────────────────────────────────────────────────────
   // "playing" shows the stream's label if the server provided one.
-  // "live" (active claim — call) shows the claim's title if set:
-  // "Hablando con Mario" for a Telegram call to contact `mario`.
+  // "live" (active claim — call) shows the claim's title localized via
+  // `call.talkingWith` — e.g. "Hablando con Mario" / "Talking with Mario".
   const liveLabel =
     effectiveOrbState === "live" && ws.activeClaimTitle
-      ? `Hablando con ${ws.activeClaimTitle}`
+      ? t("call.talkingWith", { who: ws.activeClaimTitle })
       : null;
   const statusLabel =
     liveLabel ??
     (effectiveOrbState === "playing" && ws.activeStream?.label
       ? ws.activeStream.label
-      : (STATUS[effectiveOrbState] ?? ""));
+      : t(`orbStatus.${effectiveOrbState}`));
 
   // ── Connection display ────────────────────────────────────────────────────
   const deviceHost =
     (ws.activeUrl ?? "").replace(/^wss?:\/\//, "").replace(/:\d+$/, "") ||
     "localhost";
-  const connLabel = ws.connected ? deviceHost : "reconnecting\u2026";
+  const connLabel = ws.connected ? deviceHost : t("header.connRetrying");
 
   // ── Persona switch ────────────────────────────────────────────────────────
   const handlePersonaPick = useCallback(
@@ -497,7 +519,7 @@ export function App() {
             className="hux-chip"
             onClick={() => setActiveSheet("sessions")}
           >
-            <span className="hux-chip-dot" /> Sessions
+            <span className="hux-chip-dot" /> {t("header.sessions")}
           </button>
           <div className="hux-brand">
             <div className="hux-wordmark">huxley</div>
@@ -539,9 +561,7 @@ export function App() {
           <div className="hux-status" key={effectiveOrbState}>
             <div className="hux-status-line">{statusLabel}</div>
             {effectiveOrbState === "idle" && booted && (
-              <div className="hux-hint">
-                Press &amp; hold the circle. Or hold space.
-              </div>
+              <div className="hux-hint">{t("orbHint")}</div>
             )}
             {micError && (
               <div
@@ -584,10 +604,13 @@ export function App() {
               skillsCount: 0,
             }}
             onPersonaPick={handlePersonaPick}
+            language={language}
+            supportedLanguages={SUPPORTED_LANGUAGES}
+            onLanguagePick={handleLanguagePick}
             appearance={appearance}
             onAppearance={(patch) => {
               patchAppearance(patch as Partial<Appearance>);
-              setTweaks((t) => ({ ...t, ...patch }));
+              setTweaks((tw) => ({ ...tw, ...patch }));
             }}
             onReload={() => ws.sendClientEvent("ui.reload_skills")}
             onRestart={() => ws.sendClientEvent("ui.restart_server")}

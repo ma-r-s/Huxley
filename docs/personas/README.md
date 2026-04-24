@@ -23,17 +23,64 @@ Run Huxley with `HUXLEY_PERSONA=my_assistant` (the directory name under `./perso
 
 ## Fields
 
-| Field                    | Required | Description                                                                                                                                  |
-| ------------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `version`                | no       | Schema version (default `1`). The loader fails loudly on mismatch.                                                                           |
-| `name`                   | yes      | The agent's name. Used in logs and (optionally) by the model to refer to itself. Lowercased for the SQLite filename (`<name>.db`).           |
-| `voice`                  | yes      | Voice provider voice ID. For OpenAI Realtime: `alloy`, `coral`, `echo`, `shimmer`, etc. Overridable per-run via `HUXLEY_OPENAI_VOICE`.       |
-| `language_code`          | yes      | ISO 639-1 language code (`es`, `en`, `pt`). Reserved for future language-aware behavior; not currently used by the framework.                |
-| `transcription_language` | yes      | Whisper language hint (`es`, `en`). Sent in `input_audio_transcription.language` to eliminate auto-detection drift.                          |
-| `timezone`               | yes      | IANA timezone (`America/Bogota`, `Europe/Madrid`). Consumed by skills that report dates/times.                                               |
-| `system_prompt`          | yes      | Multi-line string. Goes into the OpenAI session prompt verbatim. Write it in the persona's language. Describe tone, register, who's talking. |
-| `constraints`            | no       | List of named behavioral constraints (see below). Snippets are composed and appended to `system_prompt` at connect time.                     |
-| `skills`                 | yes      | Map of skill name → config dict. Skills named here are discovered via `huxley.skills` entry points; missing names fail fast at startup.      |
+| Field                    | Required | Description                                                                                                                                               |
+| ------------------------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`                | no       | Schema version (default `1`). The loader fails loudly on mismatch.                                                                                        |
+| `name`                   | yes      | The agent's name. Used in logs and (optionally) by the model to refer to itself. Lowercased for the SQLite filename (`<name>.db`).                        |
+| `voice`                  | yes      | Voice provider voice ID. For OpenAI Realtime: `alloy`, `coral`, `echo`, `shimmer`, etc. Overridable per-run via `HUXLEY_OPENAI_VOICE`.                    |
+| `language_code`          | yes      | ISO 639-1 language code (`es`, `en`, `fr`). Drives the DEFAULT language the persona serves when no client override is selected.                           |
+| `transcription_language` | yes      | Whisper language hint for the default language (`es`, `en`, `fr`). Sent in `input_audio_transcription.language` to eliminate auto-detection drift.        |
+| `timezone`               | yes      | IANA timezone (`America/Bogota`, `Europe/Madrid`). Consumed by skills that report dates/times.                                                            |
+| `system_prompt`          | yes      | Multi-line string. The DEFAULT-language prompt. Write it in `language_code`. Describe tone, register, who's talking.                                      |
+| `ui_strings`             | no       | Map of 5 UI status keys (`listening`, `too_short`, `sent`, `responding`, `ready`) → localized labels. Sent to clients for their status line.              |
+| `constraints`            | no       | List of named behavioral constraints (see below). Snippets are composed and appended to `system_prompt` at connect time.                                  |
+| `i18n`                   | no       | Map of `<lang>` → `{transcription_language?, system_prompt?, ui_strings?}` for additional languages. See [Multilingual personas](#multilingual-personas). |
+| `skills`                 | yes      | Map of skill name → config dict. Skills named here are discovered via `huxley.skills` entry points; missing names fail fast at startup.                   |
+
+## Multilingual personas
+
+A persona can serve multiple languages from a single YAML file. The top-level `language_code`, `system_prompt`, `transcription_language`, and `ui_strings` define the **default** language. Additional languages live under an `i18n:` block, keyed by ISO 639-1 code:
+
+```yaml
+language_code: es
+transcription_language: es
+system_prompt: |
+  Eres un asistente...
+ui_strings:
+  listening: "Escuchando…"
+  # ...
+
+i18n:
+  en:
+    transcription_language: en
+    system_prompt: |
+      You are an assistant...
+    ui_strings:
+      listening: "Listening…"
+      # ...
+  fr:
+    transcription_language: fr
+    system_prompt: |
+      Tu es un assistant...
+```
+
+Skills that produce user-facing strings accept per-language overrides inside the skill's own config block:
+
+```yaml
+skills:
+  timers:
+    fire_prompt: |
+      Ha sonado un temporizador... {message}
+    i18n:
+      en:
+        fire_prompt: |
+          A timer has gone off... {message}
+      fr:
+        fire_prompt: |
+          Une minuterie a sonné... {message}
+```
+
+At session-connect time the framework calls `PersonaSpec.resolve(<lang>)`, which collapses overrides into a `ResolvedPersona`. Clients select the language by opening the WebSocket with `?lang=<code>` (the web UI's DeviceSheet has a language picker that does this automatically). Unsupported codes fall back to `language_code` silently.
 
 ## Constraints
 

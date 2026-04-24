@@ -23,6 +23,8 @@ skills:
 
 A persona is shareable. You can clone someone else's persona file, install the skills it lists, and have an identical agent. Personas live in the `personas/` directory; Huxley loads one at startup based on config.
 
+Personas can declare multiple languages in a single YAML file via an `i18n:` block (per-language `system_prompt`, `ui_strings`, and skill overrides). Clients pick the language at connect time with a `?lang=<code>` query param on the WebSocket URL; the framework resolves the persona for that language and hands skills a `SkillContext` whose `language` field flips accordingly. See [`personas/README.md#multilingual-personas`](./personas/README.md#multilingual-personas).
+
 How to write one: [`personas/README.md`](./personas/README.md).
 
 ## Skill
