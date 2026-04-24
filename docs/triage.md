@@ -1022,20 +1022,24 @@ each urgency tier. Browser smoke confirms the four decision behaviors.
 
 **Final test count**: 338 core + 72 SDK + 30 timers + 26 calls + 60 audiobooks = **526 unit tests green** across the workspace.
 
-**The conversation interactions matrix** (the original "Alexa-style focus management") is now fully populated in code via FocusManager composition — every cell falls out of the substrate without dedicated if/else logic:
+**The conversation interactions matrix** (the original "Alexa-style focus management") is now fully populated in code via FocusManager composition — every cell falls out of the substrate without dedicated if/else logic. Rows marked ⚙️ were updated after Stage 2b moved InputClaim CONTENT → COMMS (2026-04-24):
 
-| Active             | Incoming             | Outcome                                            | Wired by          |
-| ------------------ | -------------------- | -------------------------------------------------- | ----------------- |
-| Audiobook (NMX)    | User PTT             | Book pauses; user speaks                           | Stage 1a          |
-| Audiobook          | inject_turn(NORMAL)  | Queues; fires at quiet turn-end                    | Stage 1d.1        |
-| Audiobook          | inject_turn(PREEMPT) | Book drops; reminder narrates                      | Stage 1d.3        |
-| Music (MIX)        | inject_turn          | Music ducks to 0.3 gain; voice overlays            | Stage 1b          |
-| User speaking      | inject_turn (any)    | Queues — never barges user                         | Stage 1d.1        |
-| Call (InputClaim)  | User PTT             | Claim ends USER_PTT; "Llamada finalizada"          | Stage 2 commit 3b |
-| Call               | inject_turn(PREEMPT) | Claim ends PREEMPTED; medication reminder narrates | Stage 2 commit 3b |
-| Call               | inject_turn(NORMAL)  | Queues behind call; fires at end                   | Stage 2 commit 3b |
-| Call               | Audiobook tool call  | FM forces single-CONTENT; older claim ends         | FM stage 1 part 1 |
-| Tool latches claim | PREEMPT queued       | Claim dropped pre-start; on_claim_end(PREEMPTED)   | Stage 2 commit 3c |
+| Active             | Incoming                            | Outcome                                                                                                                                       | Wired by                    |
+| ------------------ | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| Audiobook (NMX)    | User PTT                            | Book pauses; user speaks                                                                                                                      | Stage 1a                    |
+| Audiobook          | inject_turn(NORMAL)                 | Queues; fires at quiet turn-end                                                                                                               | Stage 1d.1                  |
+| Audiobook          | inject_turn(BLOCK_BEHIND_COMMS)     | Book parks BACKGROUND (30min patience); alert narrates; book auto-resumes at saved position                                                   | Stage 2b ⚙️ + Stage 5       |
+| Audiobook          | inject_turn(PREEMPT)                | Book parks BACKGROUND (30min patience); reminder narrates; book auto-resumes at saved position                                                | Stage 1d.3 + Stage 2b ⚙️    |
+| Music (MIX)        | inject_turn                         | Music ducks to 0.3 gain; voice overlays                                                                                                       | Stage 1b                    |
+| User speaking      | inject_turn (any)                   | Queues — never barges user                                                                                                                    | Stage 1d.1                  |
+| Call (COMMS)       | User PTT                            | Claim ends USER_PTT; "Llamada finalizada"                                                                                                     | Stage 2 commit 3b + 2b ⚙️   |
+| Call               | inject_turn(NORMAL)                 | Queues behind call; fires at claim-end via next synthetic turn                                                                                | Stage 2b ⚙️ (post-ship fix) |
+| Call               | inject_turn(BLOCK_BEHIND_COMMS)     | Queues behind call; fires at claim-end                                                                                                        | Stage 2b ⚙️ + Stage 5       |
+| Call               | inject_turn(PREEMPT)                | Claim ends PREEMPTED; alert narrates                                                                                                          | Stage 2 commit 3b           |
+| Call               | Concurrent InputClaim               | Second claim raises `ClaimBusyError`; first claim unaffected                                                                                  | Stage 2b ⚙️                 |
+| Call               | Audiobook tool call                 | Book acquires CONTENT on priority 300; call on COMMS (150) wins; book parks BACKGROUND with patience; book resumes on call-end                | Stage 2b ⚙️                 |
+| Any content        | Patience expires while backgrounded | Observer's `on_patience_expired` fires BEFORE terminal NONE — skill narrates eviction (audiobooks says "pausé tu libro por la llamada larga") | Stage 2b ⚙️                 |
+| Tool latches claim | PREEMPT queued                      | Claim dropped pre-start; on_claim_end(PREEMPTED)                                                                                              | Stage 2 commit 3c           |
 
 **Lessons captured**:
 
