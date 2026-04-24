@@ -31,14 +31,26 @@ from huxley.focus.vocabulary import (
 
 
 class RecordingObserver:
-    """Test helper — records each `on_focus_changed` call."""
+    """Test helper — records each `on_focus_changed` call.
+
+    Also records invocations of `on_patience_expired` into
+    `patience_expired_calls` so tests can lock in the ordering
+    (patience hook fires BEFORE the terminal NONE/MUST_STOP).
+    """
 
     def __init__(self, name: str = "") -> None:
         self.name = name
         self.calls: list[tuple[FocusState, MixingBehavior]] = []
+        # Indexes into `calls` at the moment `on_patience_expired`
+        # fired — lets tests assert "patience fired before NONE" via
+        # list lengths rather than wallclock.
+        self.patience_expired_calls: list[int] = []
 
     async def on_focus_changed(self, new_focus: FocusState, behavior: MixingBehavior) -> None:
         self.calls.append((new_focus, behavior))
+
+    async def on_patience_expired(self) -> None:
+        self.patience_expired_calls.append(len(self.calls))
 
 
 class RaisingObserver:
@@ -51,6 +63,9 @@ class RaisingObserver:
         self.call_count += 1
         raise RuntimeError("observer raised")
 
+    async def on_patience_expired(self) -> None:
+        return
+
 
 class SlowObserver:
     """Test helper — sleeps before returning."""
@@ -62,6 +77,9 @@ class SlowObserver:
     async def on_focus_changed(self, new_focus: FocusState, behavior: MixingBehavior) -> None:
         self.calls.append((new_focus, behavior))
         await asyncio.sleep(self.delay_s)
+
+    async def on_patience_expired(self) -> None:
+        return
 
 
 def _make_activity(
@@ -376,6 +394,88 @@ class TestStop:
         # After stop, every observer should have seen MUST_STOP.
         assert obs_a.calls[-1] == (FocusState.NONE, MixingBehavior.MUST_STOP)
         assert obs_b.calls[-1] == (FocusState.NONE, MixingBehavior.MUST_STOP)
+
+
+# --- Patience-expired hook (Stage 2b, 2026-04-23) ---
+
+
+class TestPatienceExpiredHook:
+    """Contract: when an Activity's patience window elapses before a
+    FOREGROUND return, FM calls `observer.on_patience_expired()` BEFORE
+    the terminal `NONE/MUST_STOP` notification so skills can narrate the
+    eviction instead of experiencing silent state loss.
+    """
+
+    async def test_patience_expiry_calls_hook_before_terminal_none(self, fm: FocusManager) -> None:
+        book = RecordingObserver("book")
+        talker = RecordingObserver("talker")
+        # Book on CONTENT with a short patience window so the test
+        # doesn't have to wait. BG-MUST_PAUSE fires first, then the
+        # patience timer elapses, hook fires, then NONE.
+        await fm.acquire(
+            _make_activity(
+                Channel.CONTENT,
+                "book",
+                book,
+                patience=timedelta(milliseconds=50),
+            )
+        )
+        await _drain(fm)
+        await fm.acquire(_make_activity(Channel.DIALOG, "talker", talker))
+        await _drain(fm)
+        # Book should be BG/MUST_PAUSE; talker FG/PRIMARY.
+        assert book.calls == [
+            (FocusState.FOREGROUND, MixingBehavior.PRIMARY),
+            (FocusState.BACKGROUND, MixingBehavior.MUST_PAUSE),
+        ]
+        assert talker.calls == [(FocusState.FOREGROUND, MixingBehavior.PRIMARY)]
+        # Wait for patience to elapse.
+        await asyncio.sleep(0.15)
+        await _drain(fm)
+        # Patience hook fired, then NONE/MUST_STOP.
+        assert book.patience_expired_calls == [2], (
+            "on_patience_expired should fire once, AFTER the initial FG+BG"
+            " calls but BEFORE the terminal NONE"
+        )
+        assert book.calls == [
+            (FocusState.FOREGROUND, MixingBehavior.PRIMARY),
+            (FocusState.BACKGROUND, MixingBehavior.MUST_PAUSE),
+            (FocusState.NONE, MixingBehavior.MUST_STOP),
+        ]
+        # The patience hook index of 2 == len(calls) at invocation time;
+        # the NONE call that brought it to len=3 came AFTER the hook.
+        # Talker unaffected.
+        assert talker.calls == [(FocusState.FOREGROUND, MixingBehavior.PRIMARY)]
+
+    async def test_patience_hook_exception_does_not_skip_terminal_none(
+        self, fm: FocusManager
+    ) -> None:
+        """If the observer's patience hook raises, FM still fires NONE/MUST_STOP.
+        The Activity must not be stuck in BACKGROUND limbo."""
+
+        class PatienceRaiser(RecordingObserver):
+            async def on_patience_expired(self) -> None:
+                self.patience_expired_calls.append(len(self.calls))
+                raise RuntimeError("hook boom")
+
+        raiser = PatienceRaiser("raiser")
+        talker = RecordingObserver("talker")
+        await fm.acquire(
+            _make_activity(
+                Channel.CONTENT,
+                "raiser",
+                raiser,
+                patience=timedelta(milliseconds=50),
+            )
+        )
+        await _drain(fm)
+        await fm.acquire(_make_activity(Channel.DIALOG, "talker", talker))
+        await _drain(fm)
+        await asyncio.sleep(0.15)
+        await _drain(fm)
+        # Hook fired AND NONE still arrived despite the exception.
+        assert raiser.patience_expired_calls == [2]
+        assert raiser.calls[-1] == (FocusState.NONE, MixingBehavior.MUST_STOP)
 
 
 # --- Observer isolation ---

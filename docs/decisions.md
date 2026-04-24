@@ -306,7 +306,6 @@ Activity), not the acquiring one. Documented in `io-plane.md#patience-attributio
   critic gate for Stage 2 should explicitly test composition against all
   three skills, not just inject_turn.
 
-
 ## 2026-04-19 — Skill-owned persistence over a framework primitive
 
 **Context**: T1.4 Stage 3b needed timers that survive a server restart (Mario's elderly blind user cannot be asked to re-set a medication timer after a reboot). The original triage spec called for a framework primitive: a `persist_key: str` argument on `ctx.background_task(...)` that would have the `TaskSupervisor` serialize `(name, coro_factory, kwargs)` to `SkillStorage` and restore them on boot via `Application.run()`. A Gate-2 critic pushed back: `coro_factory` is a Python closure, so either skills must guarantee their factories are config-pure (a significant new contract) or the framework maintains a factory-name registry (complexity cost).
@@ -324,3 +323,27 @@ Timers (the Stage 3b forcing function) writes `timer:<id>` JSON entries via `ctx
 - **Each persistent skill writes its own restore logic.** Today that's fine — timers is the only consumer. When T1.8 reminders lands with recurring medication schedules, and T1.9 messaging lands with inbound thread cursors, the restore shapes will likely NOT look alike (cron-spec evaluation vs. last-seen-seq comparison). If they DO rhyme surprisingly, extract a framework helper; if not, skill-owned keeps being cheap.
 - **Revisit if**: three or more skills end up re-implementing the same restore pattern. The threshold is "rule of three," not "rule of two."
 - **Doesn't close**: Stage 3b's `fired_at` dedup is specific to the medication-reminder worst case (double-dose > missed-dose). A future skill with different safety semantics (a radio scheduler, say) might prefer "re-fire on crash." The policy lives in the skill, which is the right layer for this kind of choice.
+
+## 2026-04-24 — Focus plane completion: COMMS live, `BLOCK_BEHIND_COMMS` priority, pause/resume contract, concurrent-claim rejection, patience-expiry hook, ALERT reserved
+
+**Context**: The 2026-04-23 honest-assessment review surfaced significant drift between the focus-plane story the docs told and the code: `concepts.md` and `io-plane.md` described `COMMS` and `ALERT` channels as roadmap-imminent or partially-wired; in reality neither had any call site. `InputClaim` (Telegram calls) was hardcoded on `CONTENT`, which forced call-during-audiobook to evict the book rather than pause-and-resume. The urgent-reminder tier had no way to say "preempt content but respect active calls" — only `NORMAL` (misses the immediate-narration use case) or `PREEMPT` (drops everything including calls). A Gate-2 critic pass against the straw-man "just rename InputClaim to COMMS" proposal found additional latent bugs: the observer's pump-cancel-then-respawn path did not actually resume audiobook playback (the factory closure captured `start_position` at build time), concurrent-claim handling stacked weirdly because each claim minted a fresh `interface_name`, and patience expiry evicted silently with no user-facing narration path.
+
+**Decision**: Land all four corrections in one commit (Stage 2b + Stage 5 + T2.7 co-landing):
+
+1. **InputClaim migrates CONTENT → COMMS** (priority 150). Single-slot policy: `start_input_claim` uses the literal `interface_name="claim:active"` and raises `ClaimBusyError` on a second concurrent call. Skills catch and reject the peer (Telegram sends `DISCARDED_CALL`). Call-waiting / claim-stacking is explicitly out of scope.
+
+2. **Audiobook factory reads live position on each invocation** rather than capturing `start_position` at build time. The pump-cancel-then-respawn path now correctly resumes from where the prior pump's `finally` block saved. Combined with `AudioStream.patience=timedelta(minutes=30)` on the audiobook Activity, a COMMS claim parks the book in BACKGROUND/MUST_PAUSE and FM promotes it back to FOREGROUND on claim-release.
+
+3. **`ChannelObserver.on_patience_expired()` hook** fires BEFORE the terminal `NONE/MUST_STOP` notification when patience elapses. `ContentStreamObserver` forwards to a new optional `AudioStream.on_patience_expired` callback. Audiobooks wires this to an `inject_turn` acknowledgement so a very long call produces narrated feedback instead of silent state loss — non-negotiable for the blind-user persona.
+
+4. **`InjectPriority.BLOCK_BEHIND_COMMS`** added as the third tier between `NORMAL` and `PREEMPT`. Preempts CONTENT, queues behind COMMS. Timers retrofits its fire path to this tier so a cooking timer pauses the audiobook for narration but waits for a call to end. The originally-scoped `inject_alert` primitive + separate ALERT channel wire-up was collapsed into this enum variant after the critic noted `inject_alert` would narrate through the same LLM DIALOG path anyway; the separate channel is a distinction without a runtime difference when the only consumers are narrated alerts. **ALERT the channel stays defined** (priority 200, full FM arbitration support) but has no callable surface — reserved for a future non-LLM alert-sound skill (siren, alarm) where channel separation is meaningful.
+
+**Consequences**:
+
+- **The four-channel focus model now matches the docs.** `DIALOG` and `CONTENT` were live; `COMMS` is live (holds calls); `ALERT` is honestly documented as reserved with no current consumer.
+- **Call-during-audiobook UX is fixed.** Book auto-resumes from the cancellation position on hangup; no user command needed. Long calls (>30min) narrate an acknowledgement before giving up the book.
+- **Urgent reminders get correct semantics.** A timer / future medication reminder using `BLOCK_BEHIND_COMMS` won't interrupt grandpa's doctor call.
+- **Concurrent claims are a defined failure mode with graceful recovery,** not undefined stacking. The Telegram skill's existing transport-level busy-check is still the first line; coordinator-level `ClaimBusyError` is defense in depth.
+- **Documentation reconciled.** `concepts.md` describes current state; `io-plane.md` gets a stronger historical-artifact disclaimer with pointers to authoritative sources; `skills/README.md` has the three-tier priority guide.
+- **Known follow-up (filed as D7)**: a `BLOCK_BEHIND_COMMS` alert queued behind a 2-hour call fires 2 hours late — safety-adjacent for medication. TTL on queued injects is deferred until a real consumer (reminders skill) ships.
+- **Revisit**: if ALERT stays unused for 6+ months prune it; if a skill needs call-waiting, promote single-slot to a `claim_policy` field; if `BLOCK_BEHIND_COMMS` dominates real usage, consider making it the default — all data-driven, not speculative.

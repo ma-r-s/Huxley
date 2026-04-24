@@ -68,35 +68,15 @@ class ScaleSkill:
 
 **Why this is "undocumented" rather than "supported":** the framework doesn't currently observe whether a skill's background task crashes, restart it, or surface its errors. If your scanner dies silently, the next tool call returns stale data with no audit trail. Add structured logging in your task loop until the SDK formalizes this.
 
-## ❌ Real design gaps
+## ✅ Previously-gap, now shipped
 
-These do not fit the framework as it exists. They require new primitives, not just a new skill.
+### ~~Proactive notifications~~ → `ctx.inject_turn` is live
 
-### 1. Proactive notifications (skill wants to interrupt the user)
+Resolved (T1.4 Stage 1c.3, 2026-04-18). `ctx.inject_turn(prompt, *, dedup_key=?, priority=?)` is the primitive skills use to speak without a user turn. Three priority tiers (`NORMAL` / `BLOCK_BEHIND_COMMS` / `PREEMPT`) let a skill choose how urgently to barge over content or calls. `inject_turn_and_wait` blocks until the LLM finishes speaking for skills that need to time a follow-up (e.g., announce-then-bridge-audio on inbound call). See [`skills/README.md`](./skills/README.md#priority-optional-priority) for the guide.
 
-Every interaction today is **request → response within the same turn**. Nothing in the framework can:
+### ~~Live phone calls through Huxley~~ → `InputClaim` is live on COMMS
 
-- Wake the user at a specific time (_"oye, ya es hora de tomar la pastilla"_)
-- React to an inbound event (_"te llegó un mensaje de Carlos"_)
-- Tell the user something the skill discovered on its own
-
-Why: the `TurnCoordinator` only spawns audio in response to a function call, which is itself a response to the user's mic input. There's no API for "skill wants to start speech now."
-
-What a fix probably looks like: an `ctx.notify(text)` method on the SDK that injects a synthetic system turn through the `SessionManager` ("system: notify the user that X happened") and lets the LLM speak it. Has non-trivial protocol implications — needs a server-initiated `assistant_turn_start` message to the client, careful interaction with PTT-in-progress, and decision logic about whether to interrupt an ongoing audiobook.
-
-**Status:** acknowledged on the roadmap. This is the next major framework beat after persona-loader (stage 4) ships. Should land before any reminders / inbound-message use case is attempted.
-
-### 2. Live phone calls _through_ Huxley (bidirectional voice routing)
-
-"Initiate a Twilio call to Carlos" is fine — that's just an HTTP API call. But "let the user actually talk to Carlos through Huxley" requires:
-
-- Routing the user's mic frames _away_ from OpenAI Realtime to a SIP/Twilio media stream.
-- Routing the remote party's audio _back_ through `server.send_audio` (or an entirely separate audio plane).
-- A control-plane state machine for connect / hangup / mute that's parallel to the conversation state machine.
-
-The current audio architecture is one-OpenAI-session-deep. Splitting that to support arbitrary audio sources/sinks is a major redesign.
-
-**Status:** out of scope. Use Twilio's call recording or SMS instead. If a real use case ever forces this, it's a separate framework version, not a stage in the current refactor.
+Resolved (T1.4 Stage 2, 2026-04-19; and Stage 2b, 2026-04-24). Skills latch the mic + speaker via `InputClaim` or direct `ctx.start_input_claim(claim)`. The Activity lives on `Channel.COMMS` (priority 150); during an active claim the audiobook backgrounds with patience and auto-resumes on claim-release. Single-slot policy — a second claim raises `ClaimBusyError`. `huxley-skill-telegram` is the live consumer: full-duplex p2p voice calls, inbound + outbound, bridged through the framework's mic/speaker plumbing. The architecture-level warning "one-OpenAI-session-deep" was correct at the time; the fix was the focus-plane pivot (AVS-style channel arbitration) rather than a full-system redesign.
 
 ## 🔑 Concerns to address before more skills land
 
@@ -116,12 +96,6 @@ skills:
 
 ## What this means for the framework's "extensible" claim
 
-Of seven typical skill ideas (messaging, search, news, weather, calls, smart-device, trivia):
+Of seven typical skill ideas (messaging, search, news, weather, calls, smart-device, trivia) **every one builds with the primitives shipped today**. Calls are live (`huxley-skill-telegram`). Proactive speech is live (`inject_turn` + three priority tiers). Smart-device background-task pattern is formalized (T1.4 Stage 3). The two "real design gaps" this doc originally called out are both resolved.
 
-- **Six** build cleanly with no framework changes.
-- **One** (smart-device) needs a documented background-task pattern but no protocol change.
-- **One** (live phone calls) is genuinely out of scope and should stay that way.
-
-The single missing primitive that will bite real personas is **proactive notifications** — and that's the gap the roadmap should close before AbuelOS-v∞ (reminders, inbound messages) is attempted.
-
-If a future skill idea doesn't fit any of the patterns above, that's the signal to revisit this doc and either document a new pattern or formalize a new framework primitive.
+If a future skill idea doesn't fit any of the patterns above, that's the signal to revisit this doc and either document a new pattern or formalize a new framework primitive. Likely future asks: LLM-free alert sounds (would land on the currently-reserved `ALERT` channel); TTL on queued `inject_turn` (tracked as D7); claim-stacking / call-waiting (tracked as a revisit trigger in the 2026-04-24 ADR).

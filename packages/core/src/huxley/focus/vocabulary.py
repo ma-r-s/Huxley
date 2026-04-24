@@ -91,6 +91,29 @@ class ChannelObserver(Protocol):
 
     async def on_focus_changed(self, new_focus: FocusState, behavior: MixingBehavior) -> None: ...
 
+    async def on_patience_expired(self) -> None:
+        """Called when this Activity's patience window elapses before
+        its FOREGROUND return. Fires BEFORE the terminal
+        `on_focus_changed(NONE, MUST_STOP)` so the observer can narrate
+        or otherwise surface the expiry to the user — silent state
+        changes are a UX bug for an audio-first agent. Default
+        implementation is a no-op; observers that want to react
+        override this method.
+
+        Contract:
+
+        1. Same quickness budget as `on_focus_changed`. Narration work
+           should `asyncio.create_task` out.
+        2. MUST NOT call `FocusManager.stop()` — re-entrance guard
+           will raise.
+        3. The Activity is still registered on its channel when this
+           fires; the subsequent `NONE/MUST_STOP` notification removes
+           it. An observer that wants to prevent the eviction by
+           re-acquiring must do so synchronously here; a later
+           re-acquire can race the removal.
+        """
+        return
+
 
 @dataclass(frozen=True, slots=True)
 class Activity:

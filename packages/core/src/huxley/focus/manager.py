@@ -293,13 +293,36 @@ class FocusManager:
         if activity is None:
             # Already removed — no-op. Expected when acquire/release raced.
             return
-        self._remove_by_interface(channel, interface_name)
-        self._cancel_patience_timer(channel, interface_name)
         await logger.ainfo(
             "focus.patience_expired",
             channel=channel.value,
             interface=interface_name,
         )
+        # Fire the observer's patience-expired hook BEFORE removal +
+        # terminal NONE/MUST_STOP. Gives the observer a chance to
+        # narrate / surface the eviction to the user — preventing
+        # silent state changes for blind users. The hook is isolated
+        # via the same `_notify_safe` error-containment used for
+        # regular focus transitions.
+        started = time.monotonic()
+        try:
+            await activity.observer.on_patience_expired()
+        except Exception:
+            await logger.aexception(
+                "focus.on_patience_expired_failed",
+                interface=interface_name,
+                channel=channel.value,
+            )
+        elapsed_ms = (time.monotonic() - started) * 1000
+        if elapsed_ms > _SLOW_OBSERVER_MS:
+            await logger.awarning(
+                "focus.on_patience_expired_slow",
+                interface=interface_name,
+                elapsed_ms=int(elapsed_ms),
+            )
+        # Now evict.
+        self._remove_by_interface(channel, interface_name)
+        self._cancel_patience_timer(channel, interface_name)
         await self._notify_safe(activity, FocusState.NONE, MixingBehavior.MUST_STOP)
 
     async def _handle_stop_foreground(self) -> None:

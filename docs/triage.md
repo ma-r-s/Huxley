@@ -1116,6 +1116,120 @@ Both were filed against the now-abandoned "custom PWA as caller" model. Under th
 - Stage 2.2 (voicemail / missed-call inject) — obsolete because the calls skill being torn out is being replaced by `huxley-skill-comms-telegram`, which inherits Telegram's built-in missed-call notification mechanics at no cost.
 - Stage 2.3 (per-caller secrets) — obsolete because Telegram identities replace the shared-secret model entirely. Per-caller routing is Telegram's problem, not ours.
 
+### Stage 2b — Complete the COMMS channel: InputClaim migration + pause/resume contract + concurrent-claim policy + patience notification
+
+**Status**: done (2026-04-24, co-landed with Stage 5 + T2.7) · **Effort**: L — shipped across SDK + core + audiobooks + telegram + tests + docs. 358 core (+6), 61 audiobooks, 42 telegram, 30 timers, 72 SDK all green; ruff + mypy --strict clean. · **Motivation**: finish the four-channel focus model honestly.
+
+**Problem.** `InputClaim` registers on `Channel.CONTENT` (`coordinator.start_input_claim:1073`). Audiobooks also register on CONTENT. Call-during-audiobook evicts the book. `Channel.COMMS` is defined with priority 150 and full FM arbitration support but has zero call sites. Fixing the channel assignment alone is a one-line change but the 2026-04-23 critic pass revealed that the UX it promises — "book pauses, call runs, book resumes where it was" — does not actually work against today's `ContentStreamObserver` + `AudioStream.factory` contract, because the factory closure captures `start_position` at build time and re-calling it after a pump cancellation restarts at the original segment start, not where it was cancelled. Plus two related correctness gaps (concurrent claims, silent patience expiry).
+
+**Why it matters.** Finishing the four-channel model honestly. Shipping only the rename leaves the system documentably-fixed but experientially-broken — the exact "docs lie about the system" pattern that triggered the 2026-04-23 review. If we ship it, it has to actually work.
+
+### Validation (Gate 1)
+
+Verified in code during 2026-04-23 critic pass:
+
+- `coordinator.py:1073` — `InputClaim` Activity hard-coded to `Channel.CONTENT`
+- `coordinator.py:1012-1014` — each `start_input_claim` mints a fresh `interface_name = f"claim:{id}"` from a monotonic counter; FM same-interface replacement will NOT fire across two concurrent claims, they'll stack
+- `coordinator.py:1071` — `self._claim_obs = observer` unconditionally overwrites any prior claim reference
+- `observers.py:155-184` — on `BACKGROUND/MUST_PAUSE`, `_cancel_pump` closes the async generator; on return to `FOREGROUND`, `_spawn_pump_if_idle` calls `self._stream.factory()` again, which creates a fresh iterator via `stream()`, which restarts from the **originally captured** `start_position`. No live-position lookup. Pump-resume does not resume content.
+- `audiobooks/skill.py:605-700` — `_build_factory` closure captures `start_position` at build time; `stream()` uses that captured value on every invocation
+- `focus/manager.py:291-303` — `_handle_patience_expired` emits only `NONE/MUST_STOP` + a log line; no user-visible signal path
+
+### Design (Gate 2 — locked 2026-04-23 post-critic)
+
+Four concerns, one commit-pair:
+
+**(A) Channel migration (the original 1-line change):**
+
+```python
+# coordinator.start_input_claim
+activity = Activity(
+    channel=Channel.COMMS,                        # was CONTENT
+    interface_name="claim:active",                # was f"claim:{id}"; see (C)
+    content_type=ContentType.NONMIXABLE,
+    observer=observer,
+    patience=timedelta(0),                        # COMMS claims don't stack
+)
+```
+
+**(B) Real pause/resume contract:**
+
+Audiobook factory closures change from "capture start position at build time" to "read live position at each invocation." Two-part change:
+
+1. `audiobooks/skill.py _build_factory` — closure takes `book_id` + `path` (+ `speed`) and reads `start_position` from `self._get_live_position(book_id)` at the top of `stream()`, NOT from a captured parameter. First invocation reads the position the user tool-called with (stored into the skill's live-position state on tool call); later invocations (post-pump-cancel-then-respawn) read the last-known position from the `finally`-saved storage row.
+2. `ContentStreamObserver` gets explicit docs (and a contract test) that `_spawn_pump_if_idle` after a prior `_cancel_pump` is a supported transition. Existing implementation already handles this correctly at the observer level — the fix is purely skill-side.
+
+Audiobook `AudioStream` acquires with `patience=timedelta(minutes=30)` (see (D) for the value rationale).
+
+**(C) Concurrent-claim policy: reject the second claim.**
+
+Decision: AbuelOS's user model is one-call-at-a-time; general Huxley power users can adopt call-waiting later if a real need surfaces. Keep it simple:
+
+- Change `interface_name` to the literal `"claim:active"` (single-slot on COMMS) so same-interface-replace is well-defined if reached.
+- `coordinator.start_input_claim` raises `ClaimBusyError` if `self._claim_obs is not None` (before constructing the new Activity). Skill (telegram) catches; Telegram skill sends a `DISCARDED_CALL` / `BUSY` to the peer. A clean protocol-level rejection.
+- Existing `_claim_obs` overwrite (line 1071) moves behind the busy check.
+
+**(D) Patience expiry is a user-visible event, not a silent one.**
+
+New extension point on `ChannelObserver`:
+
+```python
+class ChannelObserver(Protocol):
+    async def on_focus_changed(self, new_focus: FocusState, behavior: MixingBehavior) -> None: ...
+    async def on_patience_expired(self) -> None: ...   # NEW, default no-op
+```
+
+`FocusManager._handle_patience_expired` calls `observer.on_patience_expired()` BEFORE the terminal `NONE/MUST_STOP` notification. `ContentStreamObserver` implements it by invoking a new optional callback on `AudioStream`:
+
+```python
+@dataclass(frozen=True, slots=True)
+class AudioStream(SideEffect):
+    # ... existing fields ...
+    on_patience_expired: Callable[[], Awaitable[None]] | None = None
+```
+
+Audiobooks skill wires it to `ctx.inject_turn("Pausé tu libro porque la llamada fue larga. Dime 'sigue con el libro' cuando quieras retomar.", dedup_key="book_patience_lost")`. User hears the event. No silent state mutation.
+
+Patience value: `timedelta(minutes=30)`. Rationale: covers virtually every realistic call length for AbuelOS; avoids the 2-hour pathological case the critic flagged; bounded so an abandoned book doesn't linger indefinitely. Call ends within 30min → auto-resume; longer → user narrated on expiry and can say "sigue con el libro" any time afterward.
+
+### Critic notes (Gate 2 — ran 2026-04-23)
+
+Full critic report captured in session transcript; findings and resolutions:
+
+- 🔴 **#1 pause/resume doesn't work in code** → **resolved in (B)**: factory reads live position at invocation time.
+- 🔴 **#2 silent patience expiry** → **resolved in (D)**: new observer hook + audiobook narration.
+- 🟠 **#3 concurrent-claim bug** → **resolved in (C)**: single-slot interface_name + busy rejection.
+- 🟠 **#8 existing tests may assert CONTENT for claims** → **locked into DoD below**: grep + update any `_stacks[Channel.CONTENT]` assertions, add a regression test for COMMS-based claim.
+- 🟡 **#7 sequencing — Stage 2b alone makes timers worse** → **addressed by co-landing Stage 5** in the same commit pair.
+
+Critic's verdict: "stop and redesign." Redesigned above; Gate 3 cleared to proceed.
+
+### Definition of Done (locked 2026-04-23)
+
+- [ ] `coordinator.start_input_claim`: busy-check + raise `ClaimBusyError` on second claim; interface_name literal `"claim:active"`; Activity on `Channel.COMMS` with `patience=0`
+- [ ] `ClaimBusyError` added to SDK; telegram skill catches it and sends peer rejection
+- [ ] `AudioStream` gains optional `on_patience_expired` callback field
+- [ ] `ChannelObserver` Protocol gains `on_patience_expired()` method with default no-op
+- [ ] `FocusManager._handle_patience_expired` calls observer hook before terminal NONE/MUST_STOP notification
+- [ ] `ContentStreamObserver` implements `on_patience_expired()` to invoke the AudioStream's callback if set
+- [ ] Audiobooks `_build_factory` closure reads `start_position` from `self._get_live_position(book_id)` at each `stream()` invocation, not from a captured parameter
+- [ ] Audiobooks acquires with `patience=timedelta(minutes=30)` + wires `on_patience_expired` to inject_turn narration
+- [ ] Tests: **regression** test `test_call_hangup_resumes_audiobook_from_saved_position` — start book, start claim at T=3s, release claim at T=6s, assert book resumes from within 5s of position 3s (not back to 0)
+- [ ] Tests: concurrent-claim rejection (two claims → second gets ClaimBusyError, first unaffected)
+- [ ] Tests: patience expiry invokes observer hook then NONE (order locked)
+- [ ] Tests: audit + update any existing tests asserting `_stacks[Channel.CONTENT]` for claim activity
+- [ ] Manual smoke: audiobook + 3s call → book resumes; audiobook + >30min call → narrated + manual resume
+- [ ] ADR `2026-04-XX — Focus plane completion: COMMS live, pause/resume contract, concurrent-claim rejection, patience-expiry hook`
+- [ ] Docs: Stage 2 interactions matrix updated with COMMS rows; `concepts.md` + `architecture.md` updated (covered by T2.7 co-landing)
+
+### Dependencies
+
+- **Co-lands with Stage 5** (same commit pair) to prevent the "timers preempt calls during the gap" regression.
+- **Co-lands with T2.7** docs reconciliation.
+- **Blocks T1.11** (messaging) — messaging UX depends on final focus-plane shape.
+
+---
+
 ### T1.10 — `huxley-skill-comms-telegram` ✅ done (`441120c`, 2026-04-22)
 
 **Status**: done · **Effort**: spike + ~1 week implementation across multiple sessions.
@@ -1293,6 +1407,96 @@ tests green; no test referenced the field by name.
 
 - `docs/protocol.md` — hybrid wire protocol documented (done in this triage pass, dual-purpose client_event + symmetric server_event + capabilities)
 - `docs/skills/README.md` — "using `subscribe_client_event` / `emit_server_event`" sections
+
+### Stage 5 — `InjectPriority.BLOCK_BEHIND_COMMS` (severity tier for urgent reminders that respect active calls)
+
+**Status**: done (2026-04-24, co-landed with Stage 2b + T2.7) · **Effort**: S — `InjectPriority.BLOCK_BEHIND_COMMS` added to SDK, coordinator `_dispatch_post_turn` branches on it, timers retrofitted, 4 new priority tests green. · **Motivation**: urgent-reminder tier that preempts content but respects live calls.
+
+**Problem.** Urgent-but-not-conversational alerts (medication reminders, future doorbell/smoke-alarm narrations) need a severity tier that **preempts CONTENT** (audiobooks stop, book's patience covers it) but **queues behind COMMS** (doesn't interrupt an active call). Today's two-tier `InjectPriority.NORMAL | PREEMPT` has no slot for this: NORMAL queues behind everything including CONTENT (medication reminder waits hours behind an audiobook — filed as PQ-1); PREEMPT drains over CONTENT AND over COMMS (post-Stage-2b, interrupts calls). The timers skill currently uses PREEMPT, which works only because calls live on CONTENT today — as soon as Stage 2b ships, timers would start interrupting calls.
+
+**Why it matters.** Correct severity modeling for the urgent-reminder pattern. Without this tier, Stage 2b's COMMS move introduces a regression (or we keep timers on PREEMPT, which is then semantically wrong). Co-shipping Stage 2b + Stage 5 closes the loop atomically.
+
+### Scope collapse from critic review (2026-04-23)
+
+Original scope proposed an `inject_alert(prompt, dedup_key=...)` SDK primitive with its own Protocol, `SkillContext.inject_alert` field, and Activity on `Channel.ALERT`. Critic finding #6: since `inject_alert` would narrate through the DIALOG LLM path anyway (no LLM-less siren consumer exists today), a separate primitive is a **priority label in Activity-shape clothing**. Equivalent behavior ships as 15 lines via a new `InjectPriority` variant — reuses every existing machinery (queue, dedup, drain, release) and doesn't introduce a new SDK surface that has to be maintained against a speculative future consumer. Builder's rule ("don't add speculative abstractions") applies.
+
+`Channel.ALERT` stays defined in `focus/vocabulary.py` with its priority 200 slot as a **reserved tier** for future non-LLM sirens/alarms. The moment a skill needs ALERT-priority, LLM-free audio (siren pattern, not narration), wire ALERT with its own observer type and SDK surface. Today that consumer does not exist.
+
+### Validation (Gate 1)
+
+- `Channel.ALERT` defined in `focus/vocabulary.py:35`, priority 200 in `CHANNEL_PRIORITY`. Zero call sites anywhere in `packages/` outside the enum definition and priority map. Verified by grep.
+- `InjectPriority` enum lives in `huxley_sdk.types`; two variants today (`NORMAL`, `PREEMPT`). `TurnCoordinator._dispatch_post_turn` branches on priority for drain policy.
+- `huxley-skill-timers` urgent-reminder fire path uses `inject_turn(priority=InjectPriority.PREEMPT)` — per Stage 1d.3 PQ-1 notes. Post-Stage-2b this will preempt calls. Concrete regression.
+
+### Design (Gate 2 — locked 2026-04-23 post-critic)
+
+**New priority variant:**
+
+```python
+# packages/sdk/src/huxley_sdk/types.py
+class InjectPriority(StrEnum):
+    NORMAL = "normal"
+    BLOCK_BEHIND_COMMS = "block_behind_comms"   # NEW — between NORMAL and PREEMPT
+    PREEMPT = "preempt"
+```
+
+**Coordinator semantics** (additive branch in `_dispatch_post_turn`):
+
+| When fired                         | `NORMAL`                     | `BLOCK_BEHIND_COMMS`                            | `PREEMPT`                                     |
+| ---------------------------------- | ---------------------------- | ----------------------------------------------- | --------------------------------------------- |
+| Idle                               | Fires immediately            | Fires immediately                               | Fires immediately                             |
+| Active user turn (DIALOG)          | Queues, fires at turn-end    | Queues, fires at turn-end                       | Queues, fires at turn-end (never barges user) |
+| Active audiobook/radio (CONTENT)   | Queues, fires at content-end | **Preempts content (same as PREEMPT)**          | Preempts content                              |
+| Active call (COMMS, post-Stage-2b) | Queues, fires at claim-end   | **Queues, fires at claim-end (same as NORMAL)** | Preempts claim (claim ends PREEMPTED)         |
+
+`BLOCK_BEHIND_COMMS` = "PREEMPT semantics vs CONTENT, NORMAL semantics vs COMMS." That's the whole behavioral contract.
+
+**Timers retrofit:**
+
+```python
+# packages/skills/timers/src/huxley_skill_timers/skill.py
+# Before:
+await self._ctx.inject_turn(prompt, priority=InjectPriority.PREEMPT)
+# After:
+await self._ctx.inject_turn(prompt, priority=InjectPriority.BLOCK_BEHIND_COMMS)
+```
+
+No new SDK surface, no new Protocol, no new coordinator method. The `InjectTurn` Protocol already accepts `priority` as a keyword arg; just pass the new enum value.
+
+### Critic notes (Gate 2 — ran 2026-04-23)
+
+Full critic report captured in session transcript; findings and resolutions:
+
+- 🟠 **#4 ALERT dedup_key collision across channels** → **obviated**: no separate channel, single DIALOG dedup namespace, same key-space as existing inject_turn. No new collision surface.
+- 🟠 **#5 2-hour queue-behind-call for medication is unsafe** → **deferred but flagged**: the TTL-on-queued-inject feature was shelved in Stage 1d.2. This concern brings it back. NOT in Stage 5 scope; file as separate ticket if medication reminders start shipping with known-long-call households.
+- 🟠 **#6 ALERT channel is overbuilt for current needs** → **accepted and adopted**: this is why the scope collapsed to a priority enum.
+- 🟡 **#7 sequencing** → **co-land with Stage 2b** in the same commit pair.
+
+Critic's verdict "stop and redesign" addressed by this rescoping.
+
+### Definition of Done (locked 2026-04-23)
+
+- [ ] `InjectPriority.BLOCK_BEHIND_COMMS` enum value added to `huxley_sdk.types`
+- [ ] `TurnCoordinator._dispatch_post_turn` (and any priority-branch code) handles the new variant: same as PREEMPT vs CONTENT, same as NORMAL vs COMMS
+- [ ] `huxley-skill-timers` urgent path changed from `PREEMPT` to `BLOCK_BEHIND_COMMS`
+- [ ] Tests: idle-fires, content-preempts, call-queues-and-fires-at-claim-end, dialog-queues-at-turn-end, dedup_key still works
+- [ ] Tests: regression — timers-urgent-during-call no longer ends the claim (was PREEMPT; now BLOCK_BEHIND_COMMS queues)
+- [ ] Docs: `concepts.md` severity-tier section; `skills/README.md` inject_turn priority guide updated with new variant
+- [ ] ADR entry (shared with Stage 2b: "Focus plane completion: COMMS live, BLOCK_BEHIND_COMMS priority tier, ALERT reserved")
+- [ ] `Channel.ALERT` documented in-code and in concepts.md as **reserved for future non-LLM alert sounds (siren, alarm); no current consumer**
+
+### What we're explicitly NOT building
+
+- `inject_alert` as a separate SDK primitive (collapsed into priority; revisit when a non-LLM siren skill materializes)
+- `Channel.ALERT` wire-up (reserved; revisit trigger as above)
+- TTL on queued injects (noted but out-of-scope; file as separate if medication safety case forces it)
+
+### Dependencies
+
+- **Co-lands with Stage 2b** (same commit pair — separately is strictly worse per critic finding #7)
+- **Enables**: timers correct semantics without regression against calls
+
+---
 
 ### Skill-level follow-ons (file as separate triage items, depend on T1.4 stages)
 
@@ -1772,12 +1976,14 @@ Placeholder for sizing:
 
 ### Blocked by
 
-- T1.4 Stage 3 (`background_task` supervision helper) for the inbound listener. Can work around with a raw `asyncio.create_task` in the interim — see `docs/extensibility.md` on the unsupervised pattern — but do it properly.
-- T2.5 is a soft dependency: the messaging tools land without UI; MESSAGE_THREAD + inbox views are a follow-up gate after T2.5 ships.
+- **T1.4 Stage 2b** (complete the COMMS channel — InputClaim migration + pause/resume + concurrent-claim rejection + patience-expiry hook) and **T1.4 Stage 5** (`InjectPriority.BLOCK_BEHIND_COMMS` severity tier). Messaging UX depends on the final focus-plane shape: inbound message announcements inject via `inject_turn(NORMAL)` and need the queue-behind-COMMS-call behavior that Stage 2b establishes; any future urgent-message escalation would use Stage 5's new priority. **Stage 2b and Stage 5 co-land as one commit pair** (Gate 2 decision, 2026-04-23). 2026-04-23 review concluded messaging should land on a complete focus plane.
+- **T1.4 Stage 3** (`background_task` supervision helper) for the inbound listener. Can work around with a raw `asyncio.create_task` in the interim — see `docs/extensibility.md` on the unsupervised pattern — but do it properly.
+- **T2.5** is a soft dependency: the messaging tools land without UI; MESSAGE_THREAD + inbox views are a follow-up gate after T2.5 ships.
 
 ### Depends on / depended on by
 
-- **Depends on** the rename in **T2.6** (cosmetic — work can start pre-rename and absorb the rename in the same commit block if timing lines up).
+- **Depends on** the rename in **T2.6** (already done, 2026-04-23 — `aed1048`).
+- **Depends on** Stage 2b + Stage 5 for correct focus-plane semantics.
 - **Enables** retirement of the "messaging" gap in `docs/extensibility.md`.
 - **Canonical consumer of** MESSAGE_THREAD treatment in T2.5.
 
@@ -2354,6 +2560,53 @@ No new tests. Proof of correctness is the existing 42 passing against the rename
 
 ---
 
+## T2.7 — Focus-plane documentation reconciliation pass
+
+**Status**: done (2026-04-24, co-landed with Stage 2b + Stage 5) · **Task**: — · **Effort**: S — `concepts.md` focus-management section rewritten; `extensibility.md` updated (proactive-notifications + live-calls gaps closed); `skills/README.md` priority guide updated for three-tier model; `io-plane.md` got a stronger historical-artifact disclaimer; ADR 2026-04-24 filed in `decisions.md`.
+
+**Problem.** The 2026-04-23 honest-assessment review surfaced drift between the focus-plane story the docs tell and the state of the code. Specifically: `concepts.md` and `io-plane.md` describe `COMMS` and `ALERT` channels with language that implies they are wired or imminently wired, while in reality no code creates Activities on either channel; `InputClaim` is hardcoded to `CONTENT`; `io-plane.md` is self-labeled "partially superseded" with pre-pivot vocabulary still present. The drift directly caused a false red flag about whether the orchestration system was "ready" (it is), and blocked confident application of the model to messaging-UX questions.
+
+**Why it matters.** The system itself is well-built; the story about the system is out of sync. Trust in the framework depends on the docs and code agreeing. T1.4 Stage 2b + Stage 5 materially change the focus-plane shape: COMMS becomes live with the InputClaim migration; ALERT stays **reserved-not-wired** (Stage 5 rescoped post-critic from a separate `inject_alert` primitive to a `InjectPriority.BLOCK_BEHIND_COMMS` enum variant — see Stage 5 entry). Reconciliation co-lands naturally with that work rather than as a separate chore.
+
+### Validation (Gate 1)
+
+- `docs/concepts.md` Focus Management section: _"Not yet wired: patience-expiry path, ALERT and COMMS channels, InputClaim on DIALOG/mic routing."_ Inaccurate: patience-expiry IS wired (see `_handle_patience_expired`); InputClaim IS wired but on CONTENT, not "DIALOG/mic" as the doc hints.
+- `docs/io-plane.md` — self-labeled "partially superseded" with pre-pivot `Urgency` / `YieldPolicy` / `Arbitrator` vocabulary still present.
+- `docs/architecture.md` Focus Management section — not audited in the 2026-04-23 review; likely has similar drift.
+- Interactions matrix in T1.4 Stage 2 (`docs/triage.md` line ~1025-ish) — describes behavior correctly for CONTENT-based calls; needs rows updated for COMMS-based calls post-Stage-2b and new rows for ALERT post-Stage-5.
+
+### Design (Gate 2 — trivial, skip critic)
+
+Walk three docs line-by-line against actual code:
+
+1. **`docs/concepts.md`** — Focus Management section. Rewrite the "Not yet wired" disclaimer to reflect current state: patience IS live; COMMS is live (holds `InputClaim` claims post-Stage-2b); ALERT is defined + arbitrated by FM but has **no callable surface and no current consumer — reserved for future LLM-free alert sounds (siren, alarm)**.
+2. **`docs/architecture.md`** — Focus Management subsection + any Stage 2/3 prose that references CONTENT-holding-calls.
+3. **`docs/io-plane.md`** — either rewrite to AVS-focus-management vocabulary (substantial) or add a stronger "historical artifact" disclaimer and point readers to `concepts.md` + `architecture.md` as the current truth. Decide at start of work; probably disclaimer-only is the right scope given the pivot ADR already exists.
+4. **`docs/skills/README.md`** — priority-tier guide updated with `InjectPriority.BLOCK_BEHIND_COMMS` (new) and explicit "when to use which" narrative for the now-three-tier severity model.
+
+Plus **one new ADR** in `docs/decisions.md`: "2026-04-XX — Focus plane completion: COMMS live, BLOCK_BEHIND_COMMS priority tier, pause/resume contract, concurrent-claim rejection, patience-expiry hook, ALERT reserved" capturing every load-bearing decision from the Stage 2b + Stage 5 + T2.7 co-land.
+
+### Definition of Done
+
+- [ ] `concepts.md` Focus Management section accurately describes current code state, including **ALERT reserved with no callable surface**
+- [ ] `architecture.md` Focus Management section audited + corrected; Stage 2 prose updated to reflect COMMS-holds-calls
+- [ ] `io-plane.md` either rewritten or explicitly marked historical with current-truth pointers
+- [ ] ADR filed (shared with Stage 2b / Stage 5)
+- [ ] Stage 2 interactions matrix in triage extended with COMMS rows and a note that ALERT rows would fire only if ALERT became wired
+- [ ] `extensibility.md` audited for any claims about unwired channels
+- [ ] `skills/README.md` severity-tier guide rewritten with three-tier story (`NORMAL` / `BLOCK_BEHIND_COMMS` / `PREEMPT`)
+
+### Sequencing
+
+- **Start** alongside Stage 2b + Stage 5 implementation — the code-side changes and doc updates co-land naturally
+- **Must ship** in the same commit pair as Stage 2b/5, not as a separate lagging commit
+
+### Docs touched (Gate 4)
+
+See DoD bullets. No new files beyond the ADR.
+
+---
+
 # Deferred (with revisit trigger)
 
 ## D1 — `never_say_no` enforcement (layered defense)
@@ -2470,6 +2723,25 @@ The "too limiting — prevents diagrams, contribution maps, custom counters" obj
 - Future: WhatsApp / Signal / SMS each get their own skill (`huxley-skill-whatsapp`, etc.) if and when demand shows up. Each ships its own tools, its own auth, its own background listener.
 
 **Revisit trigger specifics**: if/when Huxley has shipped 2+ messenger skills and a _specific_ cross-cutting concern emerges that every one of them re-implements (e.g., a common inbox-dedup policy, a common contact-importance ranking), that's the signal to consider lifting the shared slice into a helper module — NOT a provider-neutral skill. The abstraction, if it ever exists, is a Python helper in `huxley_sdk`, not a skill entry point.
+
+---
+
+## D7 — TTL on queued inject_turn / stale-alert drop
+
+**Was**: deferred at Stage 1d.2 (2026-04-21 — `.wait_outcome()` shelved) · re-raised at Stage 5 critic (2026-04-23 finding #5) · **Revisit when**: first medication / safety-critical reminder skill ships for a user who routinely has multi-hour calls
+
+**Reason for deferral.** An `inject_turn` fired with `InjectPriority.BLOCK_BEHIND_COMMS` (Stage 5) queues behind active COMMS claims. If the claim is a 2-hour phone call with grandpa's doctor, a medication reminder that should have fired at 8:00 AM fires at 10:00 AM — grandpa took his morning pill two hours late, or (worse) already took it without the system knowing and now the reminder tells him to take it again. For medication and similar safety-adjacent reminders, late-fire is worse than no-fire; a TTL with drop-callback lets the skill log "missed dose" and escalate via a different path (call a family member, etc.) instead of firing stale.
+
+**Why it matters (but doesn't block Stage 5).** Huxley today has `huxley-skill-timers` (short cooking timers, not medication) and planned `huxley-skill-reminders` (T1.8, queued). Only T1.8's urgent medication path would hit the TTL case in practice, and T1.8 hasn't started. If it ships with the audiobook-only-strands motivation from PQ-1 and without long-call exposure, there's no urgency. If the skill expands to medication for a user in heavy-call households, TTL becomes safety-critical.
+
+**Sketch if ever picked up**:
+
+- `inject_turn(prompt, ..., ttl: timedelta | None = None, on_dropped: Callable[[], Awaitable[None]] | None = None)`
+- Queue entry stamps an enqueue timestamp; at drain time, if `now - enqueued_at > ttl`, fire `on_dropped()` instead of the LLM turn
+- Drop is logged with a structured event (`coord.inject_turn_dropped_ttl`)
+- Observable via the existing `coord.inject_turn_*` log family — no new protocol surface
+
+**Revisit trigger specifics**: a real reminder skill shipping with a real user whose call patterns expose the gap. Not speculative-future-users; a measurable incident.
 
 ---
 

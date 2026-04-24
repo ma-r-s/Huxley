@@ -84,6 +84,11 @@ class DialogObserver:
             self._stopped = True
             await self._on_stop()
 
+    async def on_patience_expired(self) -> None:
+        """No-op — DIALOG Activities always use patience=0, so this
+        never fires. Present to satisfy the `ChannelObserver` Protocol."""
+        return
+
 
 class ContentStreamObserver:
     """Observer for a CONTENT-channel `AudioStream` side effect.
@@ -163,7 +168,12 @@ class ContentStreamObserver:
             case FocusState.FOREGROUND:
                 # If we were ducked (MAY_DUCK) and come back to FG, ramp
                 # gain back up to 1.0. The spawn-if-idle path handles the
-                # first-time FG (pump not yet started).
+                # first-time FG (pump not yet started) AND the return-
+                # from-MUST_PAUSE case (pump was cancelled on background,
+                # a fresh pump gets spawned here calling factory() again).
+                # The skill's factory closure is responsible for reading
+                # current position state on each invocation so the resume
+                # picks up where the prior pump left off.
                 self._start_ramp(target=1.0)
                 await self._spawn_pump_if_idle()
             case FocusState.BACKGROUND:
@@ -178,12 +188,38 @@ class ContentStreamObserver:
                     self._start_ramp(target=_DUCK_GAIN)
                     # Pump continues — do NOT cancel.
                 else:
-                    # MUST_PAUSE (NONMIXABLE content) — cancel.
+                    # MUST_PAUSE (NONMIXABLE content) — cancel the pump
+                    # but keep the Activity registered. On FOREGROUND
+                    # return, _spawn_pump_if_idle calls factory() again
+                    # for a fresh iterator.
                     await self._cancel_pump()
             case FocusState.NONE:
                 await self._cancel_pump()
                 if self._natural_eof and self._on_natural_completion is not None:
                     await self._on_natural_completion()
+
+    async def on_patience_expired(self) -> None:
+        """Invoked by FocusManager when this Activity's BACKGROUND
+        patience window elapses before a FOREGROUND return (e.g. a
+        long call parked this stream and ended after patience).
+
+        Forwards to the owning `AudioStream.on_patience_expired`
+        callback if the skill supplied one, so the skill can narrate
+        an acknowledgement ("I paused your book because the call was
+        long"). No-op if the skill didn't wire a callback — but the
+        prior `focus.patience_expired` log event still fires from the
+        FM, so the silent-eviction case is observable.
+        """
+        callback = self._stream.on_patience_expired
+        if callback is None:
+            return
+        try:
+            await callback()
+        except Exception:
+            await logger.aexception(
+                "content_stream_patience_callback_failed",
+                interface=self._interface_name,
+            )
 
     def _start_ramp(self, *, target: float) -> None:
         """Begin a linear gain ramp from the current effective gain to
@@ -412,6 +448,11 @@ class ClaimObserver:
                 await self._end()
             case FocusState.NONE:
                 await self._end()
+
+    async def on_patience_expired(self) -> None:
+        """No-op — COMMS claims always use patience=0, so this never
+        fires. Present to satisfy the `ChannelObserver` Protocol."""
+        return
 
     async def _start(self) -> None:
         """FOREGROUND entry: suspend provider, claim mic, start speaker pump."""

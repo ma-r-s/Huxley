@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from huxley_sdk import (
@@ -27,6 +28,7 @@ from huxley_sdk import (
     CancelMedia,
     Catalog,
     Hit,
+    InjectTurn,
     SkillContext,
     SkillLogger,
     SkillStorage,
@@ -77,6 +79,30 @@ CURRENT_SPEED_KEY = "current_speed"
 MIN_SPEED = 0.5
 MAX_SPEED = 2.0
 DEFAULT_SPEED = 1.0
+
+# Patience window applied to the audiobook's CONTENT Activity. When a
+# higher-priority channel (DIALOG/COMMS) preempts the book, the Activity
+# stays parked in BACKGROUND/MUST_PAUSE for this long; if the preemptor
+# releases before the timer fires, FM auto-promotes the book back to
+# FOREGROUND and the pump respawns from the saved position. If the
+# timer fires first, the `on_patience_expired` callback narrates an
+# acknowledgement and the Activity is evicted.
+#
+# 30 minutes: covers nearly every realistic call length without
+# abandoning a forgotten book indefinitely. Revisit if real usage
+# surfaces longer-call patterns.
+BOOK_PATIENCE = timedelta(minutes=30)
+
+# Prompt the LLM narrates when a long call (or other preemptor) exhausts
+# patience and the book's CONTENT Activity is about to be evicted. The
+# skill fires this via `inject_turn` from `on_patience_expired`, so the
+# user hears "hey, I had to let your book go" rather than experiencing
+# silent state loss.
+_PATIENCE_EXPIRED_PROMPT = (
+    "Dile al usuario en español, con tono cálido y breve, que pausaste su libro "
+    "porque la interrupción fue larga; invítalo a decir 'sigue con el libro' "
+    "cuando quiera retomarlo."
+)
 
 
 def _clamp_speed(value: float) -> float:
@@ -164,6 +190,10 @@ class AudiobooksSkill:
         self._player: AudiobookPlayer | None = player
         self._storage: SkillStorage | None = None
         self._logger: SkillLogger | None = None
+        # Held for the `on_patience_expired` callback so a backgrounded-
+        # then-evicted book can narrate "pausé tu libro por la llamada
+        # larga" via inject_turn. None in test fixtures and pre-setup().
+        self._inject_turn: InjectTurn | None = None
         # Personal-content catalog (T1.1). Built at setup() from the library
         # scan; all fuzzy match + prompt-context generation goes through it.
         self._catalog: Catalog | None = None
@@ -387,6 +417,7 @@ class AudiobooksSkill:
             )
         self._storage = ctx.storage
         self._logger = ctx.logger
+        self._inject_turn = ctx.inject_turn
         self._catalog = ctx.catalog()
         for book in self._scan_library(library_path):
             await self._catalog.upsert(
@@ -490,6 +521,27 @@ class AudiobooksSkill:
 
     async def _set_position(self, book_id: str, position: float) -> None:
         await self._storage_req.set_setting(_position_key(book_id), str(position))
+
+    async def _on_book_patience_expired(self) -> None:
+        """Called by the framework when the book's BACKGROUND patience
+        window elapses before a FOREGROUND return (e.g. a COMMS call
+        parked this stream and lasted longer than `BOOK_PATIENCE`).
+
+        Fires BEFORE the terminal NONE/MUST_STOP eviction, so the
+        `inject_turn` here races the Activity removal but reliably
+        enqueues — the framework's `inject_turn` either fires
+        immediately (idle) or queues behind whatever turn is running
+        (call just ended → synthetic call-ended turn in progress →
+        this queues behind it and drains when that turn ends).
+        Either way, the user hears the acknowledgement.
+
+        Silent no-op if `setup()` hasn't completed yet (defensive;
+        shouldn't happen during a normal session).
+        """
+        if self._inject_turn is None or self._logger is None:
+            return
+        await self._logger.ainfo("audiobooks.patience_expired")
+        await self._inject_turn(_PATIENCE_EXPIRED_PROMPT, dedup_key="book_patience_expired")
 
     async def _search(self, query: str) -> ToolResult:
         """Search the catalog by fuzzy matching against title and author.
@@ -606,10 +658,22 @@ class AudiobooksSkill:
         self,
         book_id: str,
         path: str,
-        start_position: float,
         speed: float = DEFAULT_SPEED,
     ) -> Callable[[], AsyncIterator[bytes]]:
         """Build a playback factory for the coordinator's terminal barrier.
+
+        The returned callable can be invoked **multiple times** over a
+        stream's lifetime — `ContentStreamObserver` re-calls it whenever
+        FocusManager re-promotes the Activity to FOREGROUND after a
+        MUST_PAUSE (e.g., a call paused the book and ended). Each call
+        reads the CURRENT saved position from storage via
+        `_get_position(book_id)` so the resumed stream picks up from
+        where the previous pump's `finally` block saved it — NOT from
+        a position captured at build time.
+
+        Callers must write the desired initial position to storage
+        BEFORE returning this factory inside an `AudioStream` side
+        effect. See `_play`, the speed-change path, and the seek path.
 
         `speed` is the tempo applied via ffmpeg's atempo filter (see
         AudiobookPlayer.stream). Position math accounts for it: at
@@ -619,6 +683,7 @@ class AudiobooksSkill:
         player = self._player_req
         logger = self._logger_req
         set_position = self._set_position
+        get_position = self._get_position
         skill = self  # for live-position tracking via get_progress
         book_start_pcm = self._sounds.get("book_start", b"")
         book_end_pcm = self._sounds.get("book_end", b"")
@@ -627,6 +692,12 @@ class AudiobooksSkill:
         # request_response, overlapping with model first-token latency.
 
         async def stream() -> AsyncIterator[bytes]:
+            # Read the CURRENT position from storage at every invocation.
+            # First call: equals whatever the tool handler wrote before
+            # returning this factory. Subsequent calls (post-cancel-and-
+            # re-FOREGROUND): equals the value the prior pump's `finally`
+            # saved, so resume picks up from there.
+            start_position = await get_position(book_id)
             skill._now_playing_id = book_id
             skill._now_playing_start_pos = start_position
             skill._now_playing_start_time = time.monotonic()
@@ -669,7 +740,9 @@ class AudiobooksSkill:
                 output_seconds = bytes_read / BYTES_PER_SECOND
                 book_advance = output_seconds * speed
                 # Natural completion → reset to 0 so next listen starts over.
-                # Interrupted (cancel or error) → save current position to resume.
+                # Interrupted (cancel or error) → save current position so a
+                # subsequent `stream()` invocation (e.g., FG return after a
+                # call paused us) can resume from here.
                 final_pos = 0.0 if completed else start_position + book_advance
                 try:
                     await set_position(book_id, final_pos)
@@ -726,6 +799,12 @@ class AudiobooksSkill:
 
         await self._storage_req.set_setting(LAST_BOOK_KEY, resolved_id)
         speed = await self._get_speed()
+        # Write the initial position to storage BEFORE returning the
+        # factory — the factory's `stream()` reads the current saved
+        # position at each invocation, so the first pump starts here
+        # and later FG-return pumps pick up from the `finally`-saved
+        # advance.
+        await self._set_position(resolved_id, start_position)
         await self._logger_req.ainfo(
             "audiobooks.factory_built",
             book_id=resolved_id,
@@ -733,7 +812,7 @@ class AudiobooksSkill:
             speed=speed,
         )
 
-        factory = self._build_factory(resolved_id, book["path"], start_position, speed=speed)
+        factory = self._build_factory(resolved_id, book["path"], speed=speed)
 
         resuming = start_position > 0
         return ToolResult(
@@ -753,6 +832,8 @@ class AudiobooksSkill:
                 completion_silence_ms=self._silence_ms,
                 label=book["title"],
                 preroll_ms=len(self._sounds.get("book_start", b"")) * 1000 // BYTES_PER_SECOND,
+                patience=BOOK_PATIENCE,
+                on_patience_expired=self._on_book_patience_expired,
             ),
         )
 
@@ -942,7 +1023,14 @@ class AudiobooksSkill:
                         )
                     )
                 speed = await self._get_speed()
-                factory = self._build_factory(book_id, book["path"], new_pos, speed=speed)
+                # Persist the seek target before building the factory so
+                # the factory's first stream() invocation reads the
+                # right position. Outgoing stream's finally-block will
+                # overwrite with its own final_pos on cancel, but the
+                # coordinator cancels the old stream before starting
+                # the new one via CancelMedia-then-AudioStream.
+                await self._set_position(book_id, new_pos)
+                factory = self._build_factory(book_id, book["path"], speed=speed)
                 return ToolResult(
                     output=json.dumps(
                         {
@@ -961,6 +1049,8 @@ class AudiobooksSkill:
                         preroll_ms=len(self._sounds.get("book_start", b""))
                         * 1000
                         // BYTES_PER_SECOND,
+                        patience=BOOK_PATIENCE,
+                        on_patience_expired=self._on_book_patience_expired,
                     ),
                 )
 
@@ -1030,7 +1120,7 @@ class AudiobooksSkill:
                 output=json.dumps({"ok": True, "speed": new_speed, "playing": False})
             )
         await self._set_position(book_id, live_pos)
-        factory = self._build_factory(book_id, book["path"], live_pos, speed=new_speed)
+        factory = self._build_factory(book_id, book["path"], speed=new_speed)
         return ToolResult(
             output=json.dumps(
                 {
@@ -1048,5 +1138,7 @@ class AudiobooksSkill:
                 completion_silence_ms=self._silence_ms,
                 label=book["title"],
                 preroll_ms=len(self._sounds.get("book_start", b"")) * 1000 // BYTES_PER_SECOND,
+                patience=BOOK_PATIENCE,
+                on_patience_expired=self._on_book_patience_expired,
             ),
         )

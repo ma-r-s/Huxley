@@ -39,6 +39,7 @@ import os
 from typing import TYPE_CHECKING, Any
 
 from huxley_sdk import (
+    ClaimBusyError,
     ClaimEndReason,
     InputClaim,
     SkillContext,
@@ -386,13 +387,28 @@ class TelegramSkill:
         # Bridge audio. peer_audio_chunks() flushes frames buffered during the
         # announcement window so playback is real-time, not offset by ~3s.
         assert self._transport is not None
-        await self._ctx.start_input_claim(
-            InputClaim(
-                on_mic_frame=self._on_mic_frame,
-                speaker_source=self._transport.peer_audio_chunks(),
-                on_claim_end=self._on_claim_end,
+        try:
+            await self._ctx.start_input_claim(
+                InputClaim(
+                    on_mic_frame=self._on_mic_frame,
+                    speaker_source=self._transport.peer_audio_chunks(),
+                    on_claim_end=self._on_claim_end,
+                )
             )
-        )
+        except ClaimBusyError:
+            # Coordinator reports another claim is already active on
+            # COMMS. This shouldn't happen given the transport-level
+            # busy-check above, but single-slot policy demands we
+            # reject cleanly rather than stack. Tear down the half-
+            # accepted Telegram call so the peer sees BUSY.
+            await self._logger.awarning("telegram.inbound.rejected_coord_busy", user_id=user_id)
+            try:
+                await self._transport.reject_call(user_id)
+            except TransportError:
+                await self._logger.aexception(
+                    "telegram.inbound.reject_call_failed", user_id=user_id
+                )
+            self._active_contact_name = None
 
     async def _on_ring_cancelled(self, user_id: int) -> None:
         """Called if the caller hangs up before we accepted the call.

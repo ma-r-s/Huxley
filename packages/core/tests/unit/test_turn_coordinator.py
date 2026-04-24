@@ -1907,6 +1907,128 @@ class TestInjectTurnPriority:
         assert coordinator.current_turn.state == TurnState.LISTENING
 
 
+class TestBlockBehindCommsPriority:
+    """Stage 5 (2026-04-23): `InjectPriority.BLOCK_BEHIND_COMMS` is the
+    third severity tier.
+
+    - vs CONTENT: behaves like PREEMPT — drops the pending content
+      stream and fires the alert. Right for urgent reminders against
+      a long audiobook.
+    - vs COMMS (active call / InputClaim): behaves like NORMAL — stays
+      queued, fires at the next quiet moment (typically the synthetic
+      turn the comms skill fires at claim-end). Right because
+      interrupting a live phone call for a cooking timer is wrong UX.
+    - vs user mid-speech: same as NORMAL/PREEMPT — never barges.
+    """
+
+    async def test_block_behind_comms_drops_pending_content_stream(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        """Turn spawned a content stream; BLOCK_BEHIND_COMMS drains
+        and drops the stream — same shape as PREEMPT for CONTENT."""
+        from huxley_sdk import InjectPriority
+
+        factory = _factory(b"book")
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output="{}", side_effect=AudioStream(factory=factory)
+        )
+
+        await _commit_turn(coordinator)
+        await coordinator.inject_turn(
+            "Timer finished.",
+            dedup_key="timer_1",
+            priority=InjectPriority.BLOCK_BEHIND_COMMS,
+        )
+        assert len(coordinator._injected_queue) == 1
+
+        await coordinator.on_tool_call("c1", "play_audiobook", {})
+        await coordinator.on_response_done()
+
+        # Alert fired; content stream NOT running.
+        assert coordinator.current_media_task is None
+        assert coordinator.current_turn is not None
+        assert coordinator.current_turn.source.value == "injected"
+        assert ("send_conversation_message", "Timer finished.") in provider.sent
+        assert coordinator._injected_queue == []
+
+    async def test_block_behind_comms_does_not_barge_user_turn(
+        self,
+        coordinator: TurnCoordinator,
+        provider: StubVoiceProvider,
+    ) -> None:
+        from huxley_sdk import InjectPriority
+
+        await coordinator.on_ptt_start()
+        assert coordinator.current_turn is not None
+        pre_sent_count = len(provider.sent)
+
+        await coordinator.inject_turn("Timer.", priority=InjectPriority.BLOCK_BEHIND_COMMS)
+
+        # Still queued, user turn unaffected.
+        assert len(coordinator._injected_queue) == 1
+        assert coordinator._injected_queue[0].priority is InjectPriority.BLOCK_BEHIND_COMMS
+        assert len(provider.sent) == pre_sent_count
+        assert coordinator.current_turn.state == TurnState.LISTENING
+
+    async def test_block_behind_comms_fires_from_idle(
+        self,
+        coordinator: TurnCoordinator,
+        provider: StubVoiceProvider,
+    ) -> None:
+        from huxley_sdk import InjectPriority
+
+        await coordinator.inject_turn(
+            "Timer finished.", priority=InjectPriority.BLOCK_BEHIND_COMMS
+        )
+        assert coordinator.current_turn is not None
+        assert ("send_conversation_message", "Timer finished.") in provider.sent
+
+    async def test_preempt_beats_block_behind_comms_when_both_queued(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        """If both priorities are queued at turn-end with content
+        pending, PREEMPT wins — it fires first, BLOCK_BEHIND_COMMS
+        stays queued. Maintains PREEMPT's "unconditional urgency"
+        semantics."""
+        from huxley_sdk import InjectPriority
+
+        factory = _factory(b"book")
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output="{}", side_effect=AudioStream(factory=factory)
+        )
+
+        await _commit_turn(coordinator)
+        # Enqueue BLOCK_BEHIND_COMMS first, then PREEMPT.
+        await coordinator.inject_turn(
+            "Timer.",
+            dedup_key="timer",
+            priority=InjectPriority.BLOCK_BEHIND_COMMS,
+        )
+        await coordinator.inject_turn(
+            "Medication.",
+            dedup_key="med",
+            priority=InjectPriority.PREEMPT,
+        )
+        assert len(coordinator._injected_queue) == 2
+
+        await coordinator.on_tool_call("c1", "play_audiobook", {})
+        await coordinator.on_response_done()
+
+        # PREEMPT fired (beat BLOCK_BEHIND_COMMS despite later FIFO
+        # position). BLOCK_BEHIND_COMMS still queued for next quiet
+        # moment.
+        assert ("send_conversation_message", "Medication.") in provider.sent
+        assert ("send_conversation_message", "Timer.") not in provider.sent
+        remaining_prompts = [r.prompt for r in coordinator._injected_queue]
+        assert remaining_prompts == ["Timer."]
+
+
 class TestTurnDataclass:
     """Small sanity checks on the Turn dataclass itself."""
 

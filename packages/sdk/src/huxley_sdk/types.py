@@ -23,6 +23,7 @@ from huxley_sdk.catalog import Catalog
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+    from datetime import timedelta
     from pathlib import Path
 
 
@@ -64,28 +65,36 @@ class ToolDefinition:
 class InjectPriority(Enum):
     """Priority tier for `SkillContext.inject_turn`.
 
-    - `NORMAL` (default) — respectful scheduling. If idle, fires
-      immediately (preempts any content stream, since the framework
-      assumes the skill wouldn't have fired without a reason). If a
-      user or synthetic turn is in progress, queues and drains at the
-      next quiet turn-end (a turn ending WITHOUT a pending content
-      stream). Right for social reminders, routine chatter.
-    - `PREEMPT` — urgent. If idle, fires immediately. If a turn is in
-      progress, still queues (barging in on a user mid-speech is
-      hostile). But at turn-end, PREEMPT fires even if the turn
-      spawned a content stream — the queue doesn't wait for a "quiet
-      moment" that might never come during a long audiobook session.
-      The content stream request is dropped (user has to re-ask).
-      Right for time-critical events: medication reminders, safety
-      alerts, inbound calls you can't miss.
+    Three tiers, in ascending urgency:
 
-    Only two tiers today; the AVS-style 4-tier model
-    (AMBIENT/CHIME_DEFER/INTERRUPT/CRITICAL) from the original
-    io-plane spec was dropped at the focus-management pivot. Stage 1d.2
-    may grow this enum when TTL + outcome handle arrive.
+    - `NORMAL` (default) — respectful scheduling. If idle, fires
+      immediately. If a user or synthetic turn is in progress, queues
+      and drains at the next quiet turn-end (a turn ending WITHOUT a
+      pending content stream). Right for social reminders, routine
+      chatter, inbound-message announcements.
+    - `BLOCK_BEHIND_COMMS` — preempts CONTENT (audiobooks, radio,
+      anything playing-ish) but respects COMMS (live calls). If idle,
+      fires immediately. If a turn is active, queues and fires at
+      turn-end even when the turn spawned a content stream. If a
+      COMMS claim is active (e.g. a phone call), queues and fires at
+      claim-end — never interrupts the call. Right for urgent
+      medication reminders, doorbell announcements, severity-tiered
+      alerts where interrupting the user's phone conversation is a
+      safety-adjacent UX regression.
+    - `PREEMPT` — unconditionally urgent. Preempts CONTENT AND COMMS.
+      If a call is active, the claim ends with `PREEMPTED`; the alert
+      narrates. Still queues behind the user mid-speech (barging
+      in on speech is always hostile). Right for true top-severity
+      events where nothing else matters (e.g. a fire-alarm-tier
+      narration) — use sparingly.
+
+    The mid-tier `BLOCK_BEHIND_COMMS` fell out of the 2026-04-23 focus-
+    plane completion review. Before it existed, skills using `PREEMPT`
+    for urgent reminders would interrupt live calls — wrong UX.
     """
 
     NORMAL = "normal"
+    BLOCK_BEHIND_COMMS = "block_behind_comms"
     PREEMPT = "preempt"
 
 
@@ -173,6 +182,26 @@ class AudioStream(SideEffect):
     # visualizer for this many ms after stream_started so the earcon doesn't
     # appear in the graph.
     preroll_ms: int = 0
+    # Fires when the stream's Activity is evicted via patience expiry
+    # (e.g. a very long COMMS claim parked this stream in BACKGROUND
+    # and the patience window elapsed before the claim ended). Skills
+    # use this to narrate a user-visible acknowledgement — "I paused
+    # your book because the call was long; say 'sigue con el libro'
+    # to resume" — preventing silent state changes. No-op by default;
+    # set only when the skill wants to react. Framework invokes it
+    # BEFORE the terminal NONE/MUST_STOP notification fires, so the
+    # skill can `inject_turn` a message before the Activity is gone.
+    on_patience_expired: Callable[[], Awaitable[None]] | None = None
+    # Optional override for the FocusManager `patience` window on this
+    # stream's Activity. When set, the stream survives preemption as a
+    # BACKGROUND Activity for this long before being evicted — letting
+    # a shorter-than-patience preemption (say, a voice call) pause the
+    # stream and auto-resume on release instead of evicting it. When
+    # None (default), the coordinator derives patience from
+    # `content_type` (0 for NONMIXABLE, 5min for MIXABLE). Audiobooks
+    # set this to 30 minutes so a typical phone call parks the book;
+    # radio (ambient) accepts the 5min MIXABLE default.
+    patience: timedelta | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -423,6 +452,22 @@ class ToolResult:
 
 class InvalidTransitionError(Exception):
     """Raised when a state machine transition is not allowed."""
+
+
+class ClaimBusyError(Exception):
+    """Raised by `SkillContext.start_input_claim` (and the tool-dispatched
+    `InputClaim` side-effect path) when a claim is already active.
+
+    Huxley's current policy is **reject the second claim** — single-slot
+    COMMS, no call-waiting stack. Skills that attempt a claim while another
+    is live should catch this and handle the rejection in a skill-
+    appropriate way (e.g., the Telegram skill sends `DISCARDED_CALL` /
+    `BUSY` to the peer).
+
+    Revisit trigger: if a concrete use case for claim-stacking materializes
+    (call-waiting UX, voice-memo-during-call), the coordinator can be
+    taught to stack and this error removed.
+    """
 
 
 # --- Skill contract ---

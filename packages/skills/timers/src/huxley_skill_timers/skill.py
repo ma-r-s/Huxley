@@ -35,6 +35,8 @@ from typing import TYPE_CHECKING, Any
 
 from huxley_sdk import (
     BackgroundTaskHandle,
+    InjectPriority,
+    InjectTurn,
     SkillContext,
     SkillLogger,
     SkillStorage,
@@ -107,7 +109,7 @@ class TimersSkill:
         sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
         self._logger: SkillLogger | None = None
-        self._inject_turn: Callable[[str], Awaitable[None]] | None = None
+        self._inject_turn: InjectTurn | None = None
         self._background_task: Callable[..., BackgroundTaskHandle] | None = None
         self._storage: SkillStorage | None = None
         # Per-timer handles — held so teardown can pre-shutdown cancel
@@ -274,9 +276,14 @@ class TimersSkill:
             # audiobooks skill, which is imperative and works well.
             prompt = self._fire_prompt.format(message=message)
             try:
-                # The framework wraps this in a DIALOG-channel Activity;
-                # preempts content streams, asks the LLM to narrate.
-                await self._inject_turn(prompt)
+                # `BLOCK_BEHIND_COMMS` (Stage 5, 2026-04-23): preempts
+                # content streams (book pauses, timer narrates, book
+                # resumes on patience-covered return) but queues behind
+                # active calls (doesn't interrupt grandpa's phone
+                # conversation for a cooking timer). Right severity tier
+                # for a user-set reminder whose value is immediate
+                # narration against content but respectful of live calls.
+                await self._inject_turn(prompt, priority=InjectPriority.BLOCK_BEHIND_COMMS)
             except Exception:
                 # Don't let an inject_turn failure propagate out of an asyncio task
                 # and kill the event loop's exception handler. Log and move on.

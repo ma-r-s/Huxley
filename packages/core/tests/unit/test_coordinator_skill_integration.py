@@ -376,3 +376,145 @@ class TestPauseRequestsFollowUp:
         assert ("request_response",) in mocks["provider"].sent
         assert coord.current_turn is not None
         assert coord.current_turn.state == TurnState.AWAITING_NEXT_RESPONSE
+
+
+# ---------------------------------------------------------------------------
+# Stage 2b regression — audiobook survives a COMMS claim via patience
+# window and resumes from its saved position, not the original start.
+
+
+class TestAudiobookSurvivesCall:
+    """The pause/resume contract: when a COMMS `InputClaim` preempts an
+    active audiobook, the book's CONTENT Activity goes to
+    BACKGROUND/MUST_PAUSE (not NONE — patience keeps it parked). When
+    the claim ends, FM promotes CONTENT back to FOREGROUND; the
+    coordinator re-spawns the pump; the factory's `stream()` re-runs
+    and reads the saved position from storage, so playback resumes
+    from where the prior pump stopped — NOT from the original segment
+    start. Verifies the critic-flagged gap from 2026-04-23 is closed.
+    """
+
+    async def test_call_hangup_resumes_audiobook_from_saved_position(
+        self, library_path: Path, storage: Storage, focus_manager: FocusManager
+    ) -> None:
+        import asyncio
+
+        from huxley.focus.vocabulary import Channel
+        from huxley_sdk import InputClaim
+        from huxley_skill_audiobooks.skill import _position_key
+
+        # Build a player that yields indefinitely until cancelled. The
+        # stock `_make_player_with_tracker` yields 3 chunks and ends,
+        # which completes the book BEFORE we can preempt it — no
+        # pause/resume under test in that case. An infinite stream
+        # keeps the pump alive so the claim can genuinely preempt it.
+        player = MagicMock()
+        streaming_positions: list[float] = []
+
+        def stream_impl(
+            _path: Any, start_position: float = 0.0, speed: float = 1.0
+        ) -> AsyncIterator[bytes]:
+            async def gen() -> AsyncIterator[bytes]:
+                streaming_positions.append(start_position)
+                while True:
+                    yield b"\x00" * 48
+                    await asyncio.sleep(0.001)
+
+            return gen()
+
+        player.stream = MagicMock(side_effect=stream_impl)
+
+        async def probe_ok(_path: Any) -> dict[str, Any]:
+            return {"format": {"duration": "1000.0"}}
+
+        player.probe = probe_ok
+
+        skill = AudiobooksSkill(player=player)
+        ctx = make_test_context(
+            storage=NamespacedSkillStorage(storage, "audiobooks"),
+            persona_data_dir=library_path.parent,
+            config={"library": str(library_path)},
+        )
+        await skill.setup(ctx)
+        registry = SkillRegistry()
+        registry.register(skill)
+
+        stub_provider = StubVoiceProvider()
+        stub_provider._connected = True
+        coord = TurnCoordinator(
+            send_audio=AsyncMock(),
+            send_audio_clear=AsyncMock(),
+            send_status=AsyncMock(),
+            send_model_speaking=AsyncMock(),
+            send_dev_event=AsyncMock(),
+            provider=stub_provider,
+            dispatch_tool=registry.dispatch,
+            focus_manager=focus_manager,
+        )
+        book = _book_at(skill, 0)
+
+        # Seed storage so the factory's FIRST invocation reads a non-
+        # zero offset — lets the assertions tell "read saved position"
+        # apart from "read original start=0."
+        await storage.set_setting(f"audiobooks:{_position_key(book['id'])}", "120.0")
+
+        await _commit_turn(coord)
+        await coord.on_tool_call("c1", "play_audiobook", {"book_id": book["id"]})
+        await coord.on_response_done()
+
+        # Let the pump enter the async-for loop.
+        for _ in range(20):
+            await asyncio.sleep(0.001)
+            if player.stream.call_count >= 1:
+                break
+
+        # First invocation: `_play` wrote max(0, 120-20) = 100.0 to
+        # storage before building the factory; the factory's stream()
+        # read that value at entry.
+        assert player.stream.call_count == 1
+        assert streaming_positions[0] == 100.0
+
+        # Let the pump run for a perceptible stretch so its `finally`
+        # block will save a position meaningfully > the start. 50ms of
+        # yielding produces ~50 iterations x 48 bytes = 2400 bytes =
+        # ~0.05s of book advance. Small but measurable.
+        await asyncio.sleep(0.05)
+
+        # COMMS claim preempts the book. Should BACKGROUND, not evict.
+        handle = await coord.start_input_claim(InputClaim(on_mic_frame=AsyncMock()))
+        for _ in range(10):
+            await asyncio.sleep(0.001)
+        # Book Activity still registered (patience=30min).
+        content_stack = focus_manager._stacks[Channel.CONTENT]
+        assert any(a.interface_name.startswith("turn.content.") for a in content_stack), (
+            "book Activity should still be parked in BACKGROUND after COMMS claim"
+            " preempts it, not evicted"
+        )
+
+        # End the claim — FG returns to CONTENT; pump respawns.
+        handle.cancel()
+        await asyncio.wait_for(handle.wait_end(), timeout=1.0)
+        for _ in range(50):
+            await asyncio.sleep(0.005)
+            if player.stream.call_count >= 2:
+                break
+
+        assert player.stream.call_count == 2, (
+            "pump should re-spawn after the COMMS claim released"
+            " and the book returned to FOREGROUND"
+        )
+        # SECOND invocation reads current storage, NOT the value
+        # captured at build time. If the critic-flagged regression
+        # still existed, streaming_positions[1] would equal
+        # streaming_positions[0] exactly (factory closure captured
+        # the original start_position). Since the first pump's
+        # `finally` block saved a post-advance position to storage,
+        # the second pump's read produces a STRICTLY GREATER value.
+        assert streaming_positions[1] > streaming_positions[0], (
+            f"resume must read current storage (which the prior pump's"
+            f" finally-save advanced), not a value captured at build"
+            f" time. got {streaming_positions}"
+        )
+
+        # Clean shutdown so the test doesn't leak the pump task.
+        await coord._stop_content_stream()
