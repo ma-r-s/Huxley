@@ -539,12 +539,12 @@ Integration tests that hit real subprocess (ffmpeg) or real provider APIs live i
 
 ## Distribution — making your skill installable
 
-Built-in skills (audiobooks, calls, news, radio, system, timers) live in `packages/skills/<name>/` in this repo. Community skills are independent Python packages published on PyPI under the convention `huxley-skill-<name>`.
+Built-in skills (audiobooks, news, radio, system, telegram, timers) live in `packages/skills/<name>/` in this repo. Community skills are independent Python packages published on PyPI under the convention `huxley-skill-<name>`.
 
 Skill-specific docs:
 
 - [`audiobooks.md`](audiobooks.md) — long-form spoken audio playback with bookmark resume.
-- [`telegram.md`](telegram.md) — outbound p2p Telegram voice calls via py-tgcalls + FIFO-bridged PCM.
+- [`telegram.md`](telegram.md) — full-duplex p2p Telegram voice calls AND text messages over a single Pyrogram userbot session. Outbound `call_contact` + `send_message`; inbound calls auto-answered, inbound messages debounced + coalesced into proactive announcements.
 - [`news.md`](news.md) — Open-Meteo weather + Google News RSS summarization.
 - [`radio.md`](radio.md) — HTTP/Icecast streams via ffmpeg.
 - [`timers.md`](timers.md) — one-shot reminders via proactive speech, persisted across restart.
