@@ -111,6 +111,19 @@ static void dispatch(hux_app_event_t *ev) {
             free(ev->payload.ws_message.data);
             ev->payload.ws_message.data = NULL;
             break;
+
+        case HUX_APP_EV_BUTTON_K2_PRESSED:
+            /* v0.2.0: log only — PTT semantics land in v0.2 when the
+             * mic pipeline exists. hux_button_log already covers the
+             * "edge detected" line; this entry marks the handoff into
+             * the state machine so future traces can see the press
+             * land at the app boundary. */
+            ESP_LOGI(TAG, "app.ptt.pressed");
+            break;
+
+        case HUX_APP_EV_BUTTON_K2_RELEASED:
+            ESP_LOGI(TAG, "app.ptt.released");
+            break;
     }
 }
 
