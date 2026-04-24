@@ -1,5 +1,11 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { Appearance, PersonaEntry } from "../types.js";
+import {
+  LANGUAGE_NAMES,
+  type LanguageCode,
+  type SUPPORTED_LANGUAGES,
+} from "../i18n/index.js";
 
 const S = {
   sheet: {
@@ -573,6 +579,9 @@ interface DeviceSheetProps {
   onClose: () => void;
   device: DeviceInfo;
   onPersonaPick: (id: string) => void;
+  language: LanguageCode;
+  supportedLanguages: typeof SUPPORTED_LANGUAGES;
+  onLanguagePick: (code: LanguageCode) => void;
   appearance: Appearance;
   onAppearance: (patch: Partial<Appearance>) => void;
   onReload: () => void;
@@ -584,12 +593,16 @@ export function DeviceSheet({
   onClose,
   device,
   onPersonaPick,
+  language,
+  supportedLanguages,
+  onLanguagePick,
   appearance,
   onAppearance,
   onReload,
   onRestart,
   onViewLogs,
 }: DeviceSheetProps) {
+  const { t } = useTranslation();
   const [showKey, setShowKey] = useState(false);
   void showKey; // key management placeholder — no API yet
 
@@ -597,10 +610,10 @@ export function DeviceSheet({
     ACCENTS.find((a) => a.id === appearance.accent)?.name ?? "Custom";
   const themeName =
     appearance.theme === "auto"
-      ? "Auto"
+      ? t("device.appearance.themeAuto")
       : appearance.theme === "dark"
-        ? "Dark"
-        : "Light";
+        ? t("device.appearance.themeDark")
+        : t("device.appearance.themeLight");
   const appearanceSummary = `${accentName} \u00b7 ${themeName}`;
 
   const deviceHost = device.url.replace(/^wss?:\/\//, "").replace(/:\d+$/, "");
@@ -608,9 +621,9 @@ export function DeviceSheet({
   return (
     <div style={S.sheet} className="hux-sheet">
       <div style={S.header}>
-        <span>Device</span>
+        <span>{t("device.title")}</span>
         <button style={S.closeBtn} onClick={onClose}>
-          Close
+          {t("device.close")}
         </button>
       </div>
       <div style={S.body}>
@@ -624,7 +637,7 @@ export function DeviceSheet({
             letterSpacing: "-0.01em",
           }}
         >
-          Your Huxley
+          {t("device.headline")}
         </h2>
 
         <div
@@ -649,14 +662,31 @@ export function DeviceSheet({
               boxShadow: device.connected ? "0 0 12px var(--hux-fg)" : "none",
             }}
           />
-          {device.connected ? "Connected" : "Offline"} \u00b7 {deviceHost}
+          {device.connected ? t("device.connected") : t("device.offline")}{" "}
+          {"\u00b7"} {deviceHost}
         </div>
 
-        <Section label="Appearance" collapsible summary={appearanceSummary}>
+        <Section
+          label={t("device.sections.appearance")}
+          collapsible
+          summary={appearanceSummary}
+        >
           <AppearancePicker appearance={appearance} onChange={onAppearance} />
         </Section>
 
-        <Section label="Persona">
+        <Section
+          label={t("device.sections.language")}
+          collapsible
+          summary={LANGUAGE_NAMES[language]}
+        >
+          <LanguagePicker
+            current={language}
+            supported={supportedLanguages}
+            onPick={onLanguagePick}
+          />
+        </Section>
+
+        <Section label={t("device.sections.persona")}>
           <PersonaPicker
             personas={device.personas}
             current={device.persona}
@@ -664,31 +694,39 @@ export function DeviceSheet({
           />
         </Section>
 
-        <Section label="Health">
-          <Stat label="Storage" value={device.storage} />
-          <Stat label="Last session" value={device.lastSession} />
-          <Stat label="Skills loaded" value={device.skillsCount} />
+        <Section label={t("device.sections.health")}>
+          <Stat label={t("device.health.storage")} value={device.storage} />
           <Stat
-            label="Spend"
-            value={`$${device.spend.toFixed(2)} this cycle`}
+            label={t("device.health.lastSession")}
+            value={device.lastSession}
+          />
+          <Stat
+            label={t("device.health.skillsLoaded")}
+            value={device.skillsCount}
+          />
+          <Stat
+            label={t("device.health.spend")}
+            value={t("device.health.spendValue", {
+              amount: device.spend.toFixed(2),
+            })}
           />
         </Section>
 
-        <Section label="Maintenance">
+        <Section label={t("device.sections.maintenance")}>
           <button style={S.rowBtn} onClick={onReload}>
-            <span>Reload skills</span>
+            <span>{t("device.maintenance.reloadSkills")}</span>
             <span style={{ fontSize: 13, color: "var(--hux-fg-dim)" }}>
               {"\u21bb"}
             </span>
           </button>
           <button style={S.rowBtn} onClick={onRestart}>
-            <span>Restart server</span>
+            <span>{t("device.maintenance.restartServer")}</span>
             <span style={{ fontSize: 13, color: "var(--hux-fg-dim)" }}>
               {"\u21bb"}
             </span>
           </button>
           <button style={S.rowBtn} onClick={onViewLogs}>
-            <span>View logs</span>
+            <span>{t("device.maintenance.viewLogs")}</span>
             <span style={{ fontSize: 13, color: "var(--hux-fg-dim)" }}>
               {"\u2192"}
             </span>
@@ -697,13 +735,74 @@ export function DeviceSheet({
             style={{ ...S.rowBtn, opacity: 0.5 }}
             onClick={() => setShowKey((v) => !v)}
           >
-            <span>API key</span>
+            <span>{t("device.maintenance.apiKey")}</span>
             <span style={{ fontSize: 13, color: "var(--hux-fg-dim)" }}>
               {"\u2192"}
             </span>
           </button>
         </Section>
       </div>
+    </div>
+  );
+}
+
+// ── Language picker ───────────────────────────────────────────────────────
+
+interface LanguagePickerProps {
+  current: LanguageCode;
+  supported: typeof SUPPORTED_LANGUAGES;
+  onPick: (code: LanguageCode) => void;
+}
+
+function LanguagePicker({ current, supported, onPick }: LanguagePickerProps) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+      {supported.map((code) => {
+        const active = code === current;
+        return (
+          <button
+            key={code}
+            onClick={() => onPick(code)}
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              padding: "14px 0",
+              background: "transparent",
+              border: "none",
+              borderBottom: "1px solid var(--hux-fg-line)",
+              color: "var(--hux-fg)",
+              cursor: "pointer",
+              textAlign: "left",
+              fontFamily: "var(--hux-sans)",
+            }}
+          >
+            <span style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontSize: 16 }}>{LANGUAGE_NAMES[code]}</span>
+              <span
+                style={{
+                  fontSize: 12,
+                  color: "var(--hux-fg-dim)",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.08em",
+                }}
+              >
+                {code}
+              </span>
+            </span>
+            <span
+              style={{
+                width: 16,
+                height: 16,
+                borderRadius: 999,
+                border: "1px solid var(--hux-fg)",
+                background: active ? "var(--hux-fg)" : "transparent",
+                transition: "background 0.2s ease",
+              }}
+            />
+          </button>
+        );
+      })}
     </div>
   );
 }
