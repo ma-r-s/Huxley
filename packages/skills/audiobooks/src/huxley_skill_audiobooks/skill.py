@@ -18,6 +18,7 @@ for the skill's behavioral contract.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from datetime import timedelta
@@ -194,6 +195,11 @@ class AudiobooksSkill:
         # then-evicted book can narrate "pausé tu libro por la llamada
         # larga" via inject_turn. None in test fixtures and pre-setup().
         self._inject_turn: InjectTurn | None = None
+        # Live handles to deferred inject tasks fired from
+        # `on_patience_expired`. We must retain a strong reference so
+        # Python's GC doesn't collect the task mid-run; the
+        # done-callback discards the entry once the task completes.
+        self._patience_tasks: set[asyncio.Task[None]] = set()
         # Personal-content catalog (T1.1). Built at setup() from the library
         # scan; all fuzzy match + prompt-context generation goes through it.
         self._catalog: Catalog | None = None
@@ -527,21 +533,48 @@ class AudiobooksSkill:
         window elapses before a FOREGROUND return (e.g. a COMMS call
         parked this stream and lasted longer than `BOOK_PATIENCE`).
 
-        Fires BEFORE the terminal NONE/MUST_STOP eviction, so the
-        `inject_turn` here races the Activity removal but reliably
-        enqueues — the framework's `inject_turn` either fires
-        immediately (idle) or queues behind whatever turn is running
-        (call just ended → synthetic call-ended turn in progress →
-        this queues behind it and drains when that turn ends).
-        Either way, the user hears the acknowledgement.
+        Fires BEFORE the terminal NONE/MUST_STOP eviction, from INSIDE
+        the FocusManager's actor task processing `_handle_patience_expired`.
+        That means we must NOT `await ctx.inject_turn(...)` here — the
+        inject path calls `fm.acquire() + fm.wait_drained()`, and
+        `wait_drained` waits for the `PatienceExpired` event's
+        `task_done()`, which only fires after THIS callback returns.
+        Awaiting inline would deadlock the FM actor. Same pattern the
+        Telegram skill documents in `_on_claim_end` — schedule the
+        inject_turn via `create_task` and return immediately.
 
-        Silent no-op if `setup()` hasn't completed yet (defensive;
-        shouldn't happen during a normal session).
+        Silent no-op with a structured log if `setup()` hasn't completed
+        yet or teardown has already scrubbed our callbacks; the missing
+        narration is itself observable via the log, not just gone.
         """
         if self._inject_turn is None or self._logger is None:
+            # Structured log so the missing narration is diagnosable
+            # from the server log alone (observability rule: every
+            # decision branch leaves a trace).
+            if self._logger is not None:
+                await self._logger.ainfo(
+                    "audiobooks.patience_expired_skipped",
+                    reason="inject_turn_unavailable",
+                )
             return
         await self._logger.ainfo("audiobooks.patience_expired")
-        await self._inject_turn(_PATIENCE_EXPIRED_PROMPT, dedup_key="book_patience_expired")
+        inject = self._inject_turn
+
+        async def _deferred_inject() -> None:
+            assert self._logger is not None
+            try:
+                await inject(_PATIENCE_EXPIRED_PROMPT, dedup_key="book_patience_expired")
+            except Exception:
+                await self._logger.aexception("audiobooks.patience_expired_inject_failed")
+
+        # Fire-and-return: lets the FM actor complete
+        # `_handle_patience_expired` → `task_done` → release the
+        # queue.join so the inject's own acquire can land. Retain a
+        # strong ref in `_patience_tasks` so GC can't collect the task
+        # mid-run; done_callback scrubs on completion.
+        task = asyncio.create_task(_deferred_inject(), name="audiobook_patience_inject")
+        self._patience_tasks.add(task)
+        task.add_done_callback(self._patience_tasks.discard)
 
     async def _search(self, query: str) -> ToolResult:
         """Search the catalog by fuzzy matching against title and author.

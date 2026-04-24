@@ -408,6 +408,93 @@ class TestConcurrentClaimRejection:
         await asyncio.wait_for(h2.wait_end(), timeout=1.0)
 
 
+# --- inject_turn during an active claim (post-ship fix, 2026-04-24) ---
+
+
+class TestInjectTurnDuringActiveClaim:
+    """Post-ship critic found a Stage 2b correctness gap: `inject_turn`
+    from idle (`current_turn is None`) while a COMMS claim is live did
+    NOT honor the `BLOCK_BEHIND_COMMS` / `NORMAL` priority contract —
+    the idle-fire path called `_fire_injected_turn` unconditionally,
+    acquiring DIALOG and yanking the claim. Only PREEMPT should
+    bypass an active claim. These tests lock in the corrected
+    behavior.
+    """
+
+    async def test_normal_during_active_claim_queues_rather_than_preempts(
+        self,
+        coordinator: TurnCoordinator,
+        provider: StubVoiceProvider,
+    ) -> None:
+        on_end = AsyncMock()
+        claim = InputClaim(on_mic_frame=AsyncMock(), on_claim_end=on_end)
+        await coordinator.start_input_claim(claim)
+        assert provider.is_suspended is True
+
+        # NORMAL inject fires from idle (current_turn is None) during
+        # the live claim — must queue, not preempt.
+        await coordinator.inject_turn("Social reminder.", dedup_key="social")
+
+        # Claim still live; no DIALOG turn started; request in queue.
+        assert coordinator._claim_obs is not None
+        assert coordinator.current_turn is None
+        assert len(coordinator._injected_queue) == 1
+        assert coordinator._injected_queue[0].prompt == "Social reminder."
+        assert provider.is_suspended is True  # claim hasn't been preempted
+        on_end.assert_not_awaited()
+
+    async def test_block_behind_comms_during_active_claim_queues(
+        self,
+        coordinator: TurnCoordinator,
+        provider: StubVoiceProvider,
+    ) -> None:
+        from huxley_sdk import InjectPriority
+
+        on_end = AsyncMock()
+        claim = InputClaim(on_mic_frame=AsyncMock(), on_claim_end=on_end)
+        await coordinator.start_input_claim(claim)
+
+        await coordinator.inject_turn(
+            "Tu temporizador terminó.",
+            dedup_key="timer_1",
+            priority=InjectPriority.BLOCK_BEHIND_COMMS,
+        )
+
+        assert coordinator._claim_obs is not None
+        assert coordinator.current_turn is None
+        assert len(coordinator._injected_queue) == 1
+        assert coordinator._injected_queue[0].priority is InjectPriority.BLOCK_BEHIND_COMMS
+        assert provider.is_suspended is True
+        on_end.assert_not_awaited()
+
+    async def test_preempt_during_active_claim_still_barges(
+        self,
+        coordinator: TurnCoordinator,
+        provider: StubVoiceProvider,
+    ) -> None:
+        """PREEMPT's unconditional-urgency contract is unchanged:
+        it still ends a live claim with PREEMPTED and fires the alert.
+        Locks in the distinction between the new (NORMAL /
+        BLOCK_BEHIND_COMMS) and unchanged (PREEMPT) behaviors.
+        """
+        from huxley_sdk import InjectPriority
+
+        on_end = AsyncMock()
+        claim = InputClaim(on_mic_frame=AsyncMock(), on_claim_end=on_end)
+        handle = await coordinator.start_input_claim(claim)
+
+        await coordinator.inject_turn(
+            "¡Alarma!",
+            priority=InjectPriority.PREEMPT,
+        )
+
+        # Claim evicted with PREEMPTED; alert is running as a synthetic turn.
+        reason = await asyncio.wait_for(handle.wait_end(), timeout=1.0)
+        assert reason is ClaimEndReason.PREEMPTED
+        on_end.assert_awaited_once_with(ClaimEndReason.PREEMPTED)
+        assert ("send_conversation_message", "¡Alarma!") in provider.sent
+
+
 # --- Contract: suspend-before-swap ordering ---
 
 

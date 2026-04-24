@@ -1292,6 +1292,19 @@ class TurnCoordinator:
         if self.current_turn is not None:
             await self._enqueue_injected(prompt, dedup_key, priority)
             return
+        # An active COMMS claim (live call, voice memo, etc.) counts as
+        # "busy" for NORMAL and BLOCK_BEHIND_COMMS — respect the live
+        # audio plane by queueing. The queue drains at turn-end, which
+        # reliably follows claim-end (either via the comms skill's own
+        # post-claim inject_turn or via the next user turn). Only
+        # PREEMPT barges through a claim; that's its whole contract.
+        # Without this branch, NORMAL and BLOCK_BEHIND_COMMS would fire
+        # from idle via `_fire_injected_turn`, which acquires DIALOG
+        # and yanks the claim — exactly the bug the 2026-04-24
+        # post-ship critic flagged.
+        if self._claim_obs is not None and priority is not InjectPriority.PREEMPT:
+            await self._enqueue_injected(prompt, dedup_key, priority)
+            return
         await self._fire_injected_turn(prompt, dedup_key)
 
     def _signal_injected_turn_done(self) -> None:
