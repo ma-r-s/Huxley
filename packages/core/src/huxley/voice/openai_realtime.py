@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 import websockets
 
-from huxley.summarize import summarize_transcript
+from huxley.summarize import context_header_for, summarize_transcript
 from huxley.voice.openai_protocol import (
     AudioDeltaEvent,
     ClientEventType,
@@ -75,6 +75,12 @@ class OpenAIRealtimeProvider:
         self._receive_task: asyncio.Task[None] | None = None
         self._timeout_task: asyncio.Task[None] | None = None
         self._transcript_lines: list[str] = []
+        # Active session's resolved persona (language-collapsed). Set on
+        # every connect(); used by disconnect() to pick the localized
+        # summarization prompt so a reconnect fed back the summary in
+        # the right language. Defaults to the persona's default language
+        # so the pre-connect path (none yet) stays well-defined.
+        self._resolved = persona.resolve()
         # Suspend flag — set by `suspend()`, cleared by `resume()`. While
         # True, the receive loop drops content events (audio deltas, tool
         # calls, transcripts) from the LLM and `send_user_audio` discards
@@ -87,8 +93,18 @@ class OpenAIRealtimeProvider:
     def is_connected(self) -> bool:
         return self._ws is not None
 
-    async def connect(self) -> None:
-        """Open WebSocket and configure the session."""
+    async def connect(self, language: str | None = None) -> None:
+        """Open WebSocket and configure the session.
+
+        `language` resolves the persona to a specific translation. `None`
+        (or an unsupported code) falls back to the persona's default
+        language — see `PersonaSpec.resolve`.
+        """
+        # Resolve the persona for this session's language and stash on
+        # self — disconnect() reads `_resolved.language_code` to pick
+        # the summarization prompt.
+        self._resolved = self._persona.resolve(language)
+
         model = self._config.openai_model
         if not self._config.openai_api_key:
             msg = "HUXLEY_OPENAI_API_KEY is required — set it in .env"
@@ -110,23 +126,26 @@ class OpenAIRealtimeProvider:
             raise
 
         # Build instructions from three layers:
-        #   1. the persona system prompt + named constraint snippets
+        #   1. the persona system prompt + named constraint snippets,
+        #      resolved for the active language
         #   2. skill-contributed context (e.g. audiobook catalog) so the LLM
         #      has baseline awareness of available resources without needing
-        #      extra tool calls for _"¿qué libros tienes?"_ style questions
-        #   3. the last conversation summary for continuity across sessions
+        #      extra tool calls for "what books do you have?" style questions
+        #   3. the last conversation summary for continuity across sessions,
+        #      introduced by a language-matched header
         summary = await self._storage.get_latest_summary()
-        instructions = self._persona.system_prompt_with_constraints
+        instructions = self._resolved.system_prompt_with_constraints
 
         skill_context = self._skills.get_prompt_context()
         if skill_context:
             instructions += f"\n\n{skill_context}"
 
         if summary:
-            instructions += f"\n\nContexto de la conversación anterior: {summary}"
+            header = context_header_for(self._resolved.language_code)
+            instructions += f"\n\n{header} {summary}"
 
         # Voice: env-var override wins if set, otherwise the persona decides.
-        voice = self._config.openai_voice or self._persona.voice
+        voice = self._config.openai_voice or self._resolved.voice
 
         await self._send(
             ClientEventType.SESSION_UPDATE,
@@ -143,7 +162,7 @@ class OpenAIRealtimeProvider:
                     # inputs; the hint eliminates the ambiguity.
                     "input_audio_transcription": {
                         "model": "whisper-1",
-                        "language": self._persona.transcription_language,
+                        "language": self._resolved.transcription_language,
                     },
                     # PTT mode — disable server VAD, we commit manually on PTT release
                     "turn_detection": None,
@@ -153,7 +172,11 @@ class OpenAIRealtimeProvider:
 
         self._receive_task = asyncio.create_task(self._receive_loop())
         self._reset_timeout()
-        await logger.ainfo("session_connected", model=model)
+        await logger.ainfo(
+            "session_connected",
+            model=model,
+            language=self._resolved.language_code,
+        )
 
     async def disconnect(self, *, save_summary: bool = True) -> None:
         """Close the WebSocket connection."""
@@ -181,9 +204,12 @@ class OpenAIRealtimeProvider:
             # tail if the call fails or returns nothing — some context
             # beats no context, and the previous behavior was raw-tail
             # only, so the fallback degrades to prior behavior cleanly.
+            # Language pulled from the resolved persona so the summary is
+            # generated in the same language the reconnect will run in.
             summary = await summarize_transcript(
                 self._transcript_lines,
                 self._config.openai_api_key or "",
+                language=self._resolved.language_code,
             )
             if summary is None:
                 summary = "\n".join(self._transcript_lines[-20:])

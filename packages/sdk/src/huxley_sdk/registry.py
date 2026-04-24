@@ -105,6 +105,28 @@ class SkillRegistry:
         for name, skill in self._skills.items():
             await skill.setup(build_context(name))
 
+    async def reconfigure_all(
+        self,
+        build_context: Callable[[str], SkillContext],
+    ) -> None:
+        """Call reconfigure(ctx) on every skill with a fresh context.
+
+        The framework fires this on every session connect with a
+        `build_context` that yields language-resolved configs (per-skill
+        `i18n.<language>` overrides merged in, `language` set to the
+        active code). Skills refresh language-dependent state so the
+        next `tools` property access reflects the active language.
+
+        Uses `getattr` so skills from before `reconfigure` was added to
+        the Protocol continue to work — if absent, it's a silent no-op.
+        Remove the fallback once all first-party skills confirm they
+        inherit the default.
+        """
+        for name, skill in self._skills.items():
+            reconf = getattr(skill, "reconfigure", None)
+            if callable(reconf):
+                await reconf(build_context(name))
+
     async def teardown_all(self) -> None:
         """Call teardown() on all registered skills."""
         for skill in self._skills.values():

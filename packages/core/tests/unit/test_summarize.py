@@ -144,8 +144,26 @@ class TestSummarizeTranscript:
     async def test_includes_system_prompt(self, monkeypatch: pytest.MonkeyPatch) -> None:
         create = _patch_openai(monkeypatch, _mock_openai_response("ok"))
 
-        await summarize_transcript(["x"], api_key="sk-test")
+        await summarize_transcript(["x"], api_key="sk-test", language="es")
 
         messages = create.await_args.kwargs["messages"]
         assert messages[0]["role"] == "system"
         assert "Resúmela en 3 frases" in messages[0]["content"]
+
+    async def test_language_selects_summary_prompt(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        create = _patch_openai(monkeypatch, _mock_openai_response("ok"))
+
+        await summarize_transcript(["x"], api_key="sk-test", language="fr")
+
+        messages = create.await_args.kwargs["messages"]
+        assert "en français" in messages[0]["content"]
+
+    async def test_unknown_language_falls_back_to_english(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        create = _patch_openai(monkeypatch, _mock_openai_response("ok"))
+
+        await summarize_transcript(["x"], api_key="sk-test", language="de")
+
+        messages = create.await_args.kwargs["messages"]
+        assert "concise English sentences" in messages[0]["content"]

@@ -42,17 +42,24 @@ async def _setup_skill(
     storage: SkillStorage | None = None,
     *,
     real_sleep: bool = False,
+    language: str = "es",
 ) -> tuple[TimersSkill, AsyncMock]:
     """Build a TimersSkill wired to a recording `inject_turn` mock.
 
     Tests default to an instant `_sleep` stub so the suite doesn't
     burn wall-clock time. Pass `real_sleep=True` for tests that
     specifically need the sleep duration to matter (there's only one
-    today: the original happy-path end-to-end test).
+    today: the original happy-path end-to-end test). `language`
+    defaults to Spanish because the historic assertions in this suite
+    all target the Spanish fire prompt and prompt_context.
     """
     skill = TimersSkill(sleep=None if real_sleep else _instant_sleep)
     inject_mock = inject_turn or AsyncMock()
-    ctx = make_test_context(config=dict(config) if config else None, storage=storage)
+    ctx = make_test_context(
+        config=dict(config) if config else None,
+        storage=storage,
+        language=language,
+    )
     # `make_test_context` populates a no-op inject_turn; override it with
     # the recording mock so tests can assert on what the timer fired.
     object.__setattr__(ctx, "inject_turn", inject_mock)

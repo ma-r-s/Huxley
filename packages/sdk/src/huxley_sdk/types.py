@@ -708,7 +708,15 @@ class SkillContext:
     - `persona_data_dir`: absolute path to the persona's data directory.
       Resolve your skill's file paths against this, not against CWD.
     - `config`: the per-skill config dict from `persona.yaml`'s
-      `skills.<name>:` section.
+      `skills.<name>:` section. When the persona declares per-language
+      overrides under `skills.<name>.i18n.<lang>`, the framework merges
+      them in before passing this dict — your skill sees a flat,
+      language-resolved view.
+    - `language`: the active language code (ISO 639-1, e.g. `"es"`,
+      `"en"`, `"fr"`). Skills that produce user-facing strings (tool
+      descriptions, inject_turn prompts, narrated errors) should branch
+      on this. The framework calls `reconfigure(ctx)` on each session
+      connect with a fresh context reflecting the client's choice.
     - `inject_turn(prompt, *, dedup_key=None, priority=NORMAL)`:
       speak proactively — framework synthesizes a DIALOG turn that
       narrates `prompt` in the persona's voice. If idle, fires
@@ -756,6 +764,11 @@ class SkillContext:
     storage: SkillStorage
     persona_data_dir: Path
     config: dict[str, Any]
+    # Active language as an ISO 639-1 code. Defaults to "en" so test
+    # fixtures constructing `SkillContext` inline don't need to set it
+    # explicitly; production contexts get the persona's resolved
+    # language at setup() and every subsequent reconfigure().
+    language: str = "en"
     inject_turn: InjectTurn = _noop_inject_turn
     inject_turn_and_wait: InjectTurnAndWait = _noop_inject_turn_and_wait
     background_task: BackgroundTask = _default_background_task
@@ -825,6 +838,22 @@ class Skill(Protocol):
 
     async def setup(self, ctx: SkillContext) -> None:  # pragma: no cover - default no-op
         """Called once at startup with the skill's context. Default no-op."""
+        return None
+
+    async def reconfigure(self, ctx: SkillContext) -> None:  # pragma: no cover - default no-op
+        """Called on every session connect with a context reflecting the
+        active language and resolved per-skill config.
+
+        Skills that produce user-facing strings (tool descriptions,
+        inject_turn prompts, narrated messages) override this to refresh
+        internal state — typically `self._language = ctx.language` and
+        re-reading any language-conditioned config values. The next
+        `tools` property access returns fresh descriptions for the new
+        language.
+
+        Default: no-op. Skills with no language-dependent behavior
+        (static tools, language-agnostic internals) can ignore this.
+        """
         return None
 
     async def teardown(self) -> None:  # pragma: no cover - default no-op

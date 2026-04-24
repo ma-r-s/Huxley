@@ -45,9 +45,35 @@ from huxley_sdk import AppState, InvalidTransitionError, SkillContext, SkillRegi
 
 if TYPE_CHECKING:
     from huxley.config import Settings
-    from huxley.persona import PersonaSpec
+    from huxley.persona import PersonaSpec, ResolvedPersona
 
 logger = structlog.get_logger()
+
+
+# Generic status strings surfaced to the client while the session is
+# still connecting to OpenAI (before the persona can speak). Indexed by
+# language code with English as the final fallback. Kept tiny on
+# purpose — long-form user-facing copy is the persona's job.
+_STATUS_CONNECTING: dict[str, str] = {
+    "es": "Conectando\u2026",
+    "en": "Connecting\u2026",
+    "fr": "Connexion\u2026",
+}
+_STATUS_CONNECTED: dict[str, str] = {
+    "es": "Conectado \u2014 mantén el botón para hablar",
+    "en": "Connected \u2014 hold the button to speak",
+    "fr": "Connecté \u2014 maintenez le bouton pour parler",
+}
+_STATUS_FAILED: dict[str, str] = {
+    "es": "Error al conectar \u2014 intenta de nuevo",
+    "en": "Connection failed \u2014 please try again",
+    "fr": "Échec de connexion \u2014 réessayez",
+}
+_STATUS_WAIT: dict[str, str] = {
+    "es": "Conectando \u2014 espera un segundo",
+    "en": "Connecting \u2014 one moment",
+    "fr": "Connexion \u2014 un instant",
+}
 
 
 class Application:
@@ -60,6 +86,14 @@ class Application:
     def __init__(self, config: Settings, persona: PersonaSpec) -> None:
         self.config = config
         self.persona = persona
+        # Active-session language (ISO 639-1). Set by clients via
+        # `?lang=<code>` in the WebSocket URL; `None` means "use persona
+        # default." `_resolved_persona` caches the language-collapsed
+        # view built at each session connect — the coordinator reads it
+        # for UI strings and the skill-context factory reads its `skills`
+        # dict for per-skill config.
+        self._active_language: str | None = None
+        self._resolved_persona: ResolvedPersona = persona.resolve()
         self.state_machine = StateMachine()
         self.storage = Storage(persona.data_dir / f"{persona.name.lower()}.db")
         self.skill_registry = SkillRegistry()
@@ -72,6 +106,7 @@ class Application:
             on_ptt_stop=self._on_ptt_stop,
             on_audio_frame=self._on_audio_frame,
             on_reset=self._on_reset,
+            on_language_select=self._on_language_select,
         )
 
         # Skill discovery via entry points. The persona names which skills it
@@ -143,7 +178,7 @@ class Application:
             send_stream_ended=self.server.send_stream_ended,
             provider=self.provider,
             dispatch_tool=self.skill_registry.dispatch,
-            status_messages=persona.ui_strings or None,
+            status_messages=self._resolved_persona.ui_strings or None,
             focus_manager=self.focus_manager,
         )
 
@@ -152,18 +187,25 @@ class Application:
         self._reconnect_task: asyncio.Task[None] | None = None
 
     def _build_skill_context(self, skill_name: str) -> SkillContext:
-        """Construct the SkillContext handed to a skill at setup() time.
+        """Construct the SkillContext handed to a skill at setup() / reconfigure().
 
-        Per-skill config comes straight from `persona.yaml`'s `skills.<name>:`
-        block. Storage is a per-skill namespaced view over the framework's
-        `Storage`; `persona_data_dir` is the persona's resolved data
-        directory, so any relative paths in cfg resolve there.
+        Per-skill config comes from the current `ResolvedPersona` — the
+        framework has already merged any `skills.<name>.i18n.<lang>`
+        overrides for the active language and dropped the nested `i18n`
+        block. `language` is the active ISO 639-1 code; skills that need
+        per-language tool descriptions read it from here (or from
+        `config["_language"]`, set to the same value). Storage is a
+        per-skill namespaced view; `persona_data_dir` is the persona's
+        resolved data directory, so any relative paths in cfg resolve
+        there.
         """
+        resolved = self._resolved_persona
         return SkillContext(
             logger=structlog.get_logger().bind(skill=skill_name),
             storage=NamespacedSkillStorage(self.storage, skill_name),
             persona_data_dir=self.persona.data_dir,
-            config=self.persona.skills.get(skill_name, {}),
+            config=resolved.skills.get(skill_name, {}),
+            language=resolved.language_code,
             inject_turn=self.coordinator.inject_turn,
             inject_turn_and_wait=self.coordinator.inject_turn_and_wait,
             background_task=self.task_supervisor.start,
@@ -269,15 +311,48 @@ class Application:
     # --- State machine callbacks ---
 
     async def _enter_connecting(self) -> None:
-        await self.server.send_status("Conectando…")
+        # Resolve the persona for whatever language the active client
+        # requested (or the default, pre-connect). This rebuilds per-skill
+        # configs with i18n overrides merged and localized ui_strings
+        # pushed into the coordinator so status labels match the language
+        # the upcoming OpenAI session will run in.
+        await self._apply_language(self._active_language)
+        await self.server.send_status(
+            _STATUS_CONNECTING.get(self._resolved_persona.language_code, _STATUS_CONNECTING["en"])
+        )
         try:
-            await self.provider.connect()
+            await self.provider.connect(language=self._resolved_persona.language_code)
             await self.state_machine.trigger("connected")
-            await self.server.send_status("Conectado — mantén el botón para hablar")
+            await self.server.send_status(
+                _STATUS_CONNECTED.get(
+                    self._resolved_persona.language_code, _STATUS_CONNECTED["en"]
+                )
+            )
         except Exception:
             await logger.aexception("connection_failed")
             await self.state_machine.trigger("failed")
-            await self.server.send_status("Error al conectar — intenta de nuevo")
+            await self.server.send_status(
+                _STATUS_FAILED.get(self._resolved_persona.language_code, _STATUS_FAILED["en"])
+            )
+
+    async def _apply_language(self, language: str | None) -> None:
+        """Resolve the persona for `language`, push ui_strings to the
+        coordinator, and reconfigure skills so their internal state
+        reflects the active language before the next LLM session opens.
+
+        Idempotent: if the resolved language already matches, the call
+        is a cheap re-resolve + push. Unsupported codes silently fall
+        back to the persona's default (see `PersonaSpec.resolve`).
+        """
+        self._resolved_persona = self.persona.resolve(language)
+        self._active_language = self._resolved_persona.language_code
+        self.coordinator.set_ui_strings(self._resolved_persona.ui_strings or None)
+        await self.skill_registry.reconfigure_all(self._build_skill_context)
+        await logger.ainfo(
+            "app.language_applied",
+            language=self._resolved_persona.language_code,
+            ui_strings=sorted(self._resolved_persona.ui_strings.keys()),
+        )
 
     async def _on_state_transition(self, new_state: AppState) -> None:
         await self.server.send_state(new_state.name)
@@ -379,6 +454,50 @@ class Application:
         # transitions state → IDLE, and schedules a fresh auto-reconnect.
         # Nothing else needed here.
 
+    async def _on_language_select(self, language: str | None) -> None:
+        """Client asked for a specific persona translation on this session.
+
+        Fires right after a client's WebSocket handshake completes (see
+        `AudioServer._handle_connection`), or on an in-session
+        `set_language` message. If the requested language differs from
+        the currently-running session, drop the OpenAI session so
+        auto-reconnect spins up a fresh one in the new language. If it
+        matches (or is `None` meaning "persona default"), this is a cheap
+        no-op — idempotent by design so duplicate client selects don't
+        churn the LLM session.
+        """
+        resolved = self.persona.resolve(language)
+        target = resolved.language_code
+        current = self._resolved_persona.language_code
+        await logger.ainfo(
+            "app.language_select",
+            requested=language,
+            resolved=target,
+            current=current,
+            supported=list(self.persona.supported_languages),
+        )
+        # Always capture the client's preference so the next connect,
+        # even from a different code path (auto-reconnect), uses it.
+        self._active_language = target
+        if target == current and self.provider.is_connected:
+            # Session already on the right language; refresh skill
+            # configs in-place and push localized ui_strings but keep
+            # the LLM session alive. Cheap path for "client reconnected
+            # with the same language."
+            await self._apply_language(target)
+            return
+        if self.provider.is_connected:
+            # Different language — drop the current session; the
+            # provider's `on_session_end` callback flips the state
+            # machine to IDLE, which triggers auto-reconnect via
+            # `_enter_connecting`, which calls `_apply_language` with
+            # the new `_active_language`.
+            await self.provider.disconnect(save_summary=True)
+            return
+        # Not connected yet (startup race or mid-reconnect). Apply now
+        # so the next connect picks it up naturally.
+        await self._apply_language(target)
+
     async def _on_audio_frame(self, pcm: bytes) -> None:
         """Mic frame from client — forward to the coordinator."""
         await self.coordinator.on_user_audio_frame(pcm)
@@ -389,7 +508,9 @@ class Application:
                 "app.ptt_rejected",
                 state=self.state_machine.state.name,
             )
-            await self.server.send_status("Conectando — espera un segundo")
+            await self.server.send_status(
+                _STATUS_WAIT.get(self._resolved_persona.language_code, _STATUS_WAIT["en"])
+            )
             return
         await self.coordinator.on_ptt_start()
 

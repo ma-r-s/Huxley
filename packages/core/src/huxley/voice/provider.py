@@ -72,8 +72,13 @@ class VoiceProvider(Protocol):
         """True iff the transport is open and ready to send/receive."""
         ...
 
-    async def connect(self) -> None:
+    async def connect(self, language: str | None = None) -> None:
         """Open the transport, negotiate the session, start receiving.
+
+        `language` selects a persona translation for the session. `None`
+        uses the persona's default language. Providers resolve the
+        language against the persona internally; unsupported codes fall
+        back to the default silently.
 
         Raises on failure; callers must catch and decide on retry policy.
         """

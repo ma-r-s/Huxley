@@ -41,6 +41,7 @@ import base64
 import contextlib
 import json
 from typing import TYPE_CHECKING, Any
+from urllib.parse import parse_qs, urlparse
 
 import structlog
 import websockets
@@ -55,6 +56,8 @@ websockets.http11.MAX_LINE_LENGTH = 64 * 1024
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+
+    from websockets.http11 import Request
 
 logger = structlog.get_logger()
 
@@ -87,6 +90,7 @@ class AudioServer:
         on_ptt_stop: Callable[[], Awaitable[None]],
         on_audio_frame: Callable[[bytes], Awaitable[None]],
         on_reset: Callable[[], Awaitable[None]],
+        on_language_select: Callable[[str | None], Awaitable[None]] | None = None,
     ) -> None:
         self._host = host
         self._port = port
@@ -95,6 +99,7 @@ class AudioServer:
         self._on_ptt_stop = on_ptt_stop
         self._on_audio_frame = on_audio_frame
         self._on_reset = on_reset
+        self._on_language_select = on_language_select
         self._client: ServerConnection | None = None
         self._state = "IDLE"
         # Last-sent input mode — cached so a new client can be brought
@@ -102,18 +107,59 @@ class AudioServer:
         # because a fresh client has no active claim by definition.
         self._input_mode = INPUT_MODE_ASSISTANT_PTT
         self._active_claim_id: str | None = None
+        # Language the currently-handshaking client requested via
+        # `?lang=<code>` in the WebSocket URL. Captured in
+        # `_process_request` (runs before `_handle_connection`), consumed
+        # in `_handle_connection` to fire `on_language_select`. Single
+        # field is safe because `serve()` runs handshakes serially per
+        # connection and AudioServer allows only one client at a time;
+        # a second concurrent upgrade would race but is architecturally
+        # excluded (we evict old clients, not parallel them).
+        self._pending_language: str | None = None
 
     @property
     def has_client(self) -> bool:
         return self._client is not None
 
     async def run(self) -> None:
-        async with serve(self._handle_connection, self._host, self._port):
+        async with serve(
+            self._handle_connection,
+            self._host,
+            self._port,
+            process_request=self._process_request,
+        ):
             await logger.ainfo(
                 "audio_server_listening",
                 url=f"ws://{self._host}:{self._port}",
             )
             await asyncio.Future()  # run until cancelled
+
+    def _process_request(
+        self,
+        connection: ServerConnection,
+        request: Request,
+    ) -> None:
+        """Intercept the WebSocket upgrade to capture URL query params.
+
+        Clients pass `?lang=<code>` to select the persona's translation
+        for this session. `ServerConnection` uses `__slots__` so we can't
+        attach the parsed value to the connection itself — instead we
+        cache it on the server and consume it in `_handle_connection`,
+        which runs immediately after the handshake completes. Returning
+        `None` lets the handshake proceed normally.
+        """
+        del connection
+        try:
+            parsed = urlparse(request.path)
+            qs = parse_qs(parsed.query)
+            lang_values = qs.get("lang") or qs.get("language")
+            lang = lang_values[0].strip().lower() if lang_values else None
+            self._pending_language = lang or None
+        except Exception:
+            # Never block a handshake over a malformed query string;
+            # fall back to persona default.
+            self._pending_language = None
+        return None
 
     async def _handle_connection(self, ws: ServerConnection) -> None:
         if self._client is not None:
@@ -131,13 +177,31 @@ class AudioServer:
                 await old.close(1001, "Replaced by new client")
 
         self._client = ws
-        await logger.ainfo("client_connected", remote=str(ws.remote_address))
+        # Pull the language the client requested in its URL (captured
+        # during `_process_request`) and hand it to the app. The callback
+        # decides whether to reconnect the LLM session to pick up the
+        # new language (no-op if it matches the current session).
+        selected_language = self._pending_language
+        self._pending_language = None
+        await logger.ainfo(
+            "client_connected",
+            remote=str(ws.remote_address),
+            language=selected_language,
+        )
         try:
             # Handshake: hello first, then current state + input mode
             # sync so a reconnecting client knows whether a claim is
             # already active on the server (if we land mid-call, the
             # client should jump straight to continuous-mic).
-            await ws.send(json.dumps({"type": "hello", "protocol": PROTOCOL_VERSION}))
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "hello",
+                        "protocol": PROTOCOL_VERSION,
+                        "language": selected_language,
+                    }
+                )
+            )
             await ws.send(json.dumps({"type": "state", "value": self._state}))
             await ws.send(
                 json.dumps(
@@ -149,6 +213,15 @@ class AudioServer:
                     },
                 ),
             )
+            # Fire the language-select callback AFTER the handshake so the
+            # app can reconcile the OpenAI session language with what the
+            # client asked for. A reconnect may happen here (dropping the
+            # old session and bringing up a new one in the chosen
+            # language); we let it run to completion before reading any
+            # client messages so the persona stays consistent with the
+            # turns that follow.
+            if self._on_language_select is not None:
+                await self._on_language_select(selected_language)
             async for raw in ws:
                 await self._dispatch(raw)
         except websockets.ConnectionClosed:
@@ -179,6 +252,25 @@ class AudioServer:
             case "reset":
                 await logger.ainfo("server.rx.reset")
                 await self._on_reset()
+            case "set_language":
+                # In-session language switch. The app's callback
+                # typically drops the current OpenAI session and
+                # reconnects with the new language so tools,
+                # system_prompt, and transcription language all
+                # flip together. Browser UIs usually prefer to
+                # reconnect the WebSocket with `?lang=` instead
+                # (cleaner and it forces a fresh state sync), but
+                # this message exists for clients that don't want
+                # to drop the transport.
+                requested = msg.get("language")
+                language = (
+                    str(requested).strip().lower()
+                    if isinstance(requested, str) and requested.strip()
+                    else None
+                )
+                await logger.ainfo("server.rx.set_language", language=language)
+                if self._on_language_select is not None:
+                    await self._on_language_select(language)
             case "client_event":
                 # Pure observability — client telemetry sink. No behavioral
                 # effect on the server. The client emits events that the

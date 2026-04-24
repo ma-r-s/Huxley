@@ -193,6 +193,10 @@ def _build_ctx(
         storage=FakeStorage(),  # type: ignore[arg-type]
         persona_data_dir=data_dir,
         config=config,
+        # Tests assert against the Spanish copy (historic assumption — the
+        # contacts and phrasing are Spanish-first). Override in specific
+        # i18n tests as needed.
+        language="es",
         inject_turn=inject_turn,
         inject_turn_and_wait=inject_turn_and_wait,
         background_task=background_task,  # type: ignore[arg-type]
@@ -749,7 +753,7 @@ class TestInbound:
         # Accept fails before announcement -- only the error turn fires, no bridge.
         assert len(claims) == 0
         assert len(turns) == 1
-        assert "fallo" in turns[0].lower()  # error
+        assert "falló" in turns[0].lower()  # error
 
     @pytest.mark.asyncio
     async def test_inbound_reverse_map_soft_fails_unresolvable(self, tmp_path: Path) -> None:
@@ -801,11 +805,13 @@ class TestTools:
         skill = TelegramSkill(transport_factory=StubTransport)
         # Before setup: empty list, inbound disabled. Both tools are exposed
         # and both should mention the (empty) contact catalog so the LLM can
-        # tell the user nothing is configured.
+        # tell the user nothing is configured. Default language is English
+        # pre-setup (`SkillContext.language` default) so we assert on the
+        # English sentinel; per-language behavior is covered elsewhere.
         tools = {t.name: t for t in skill.tools}
         assert set(tools) == {"call_contact", "send_message"}
         for tool in tools.values():
-            assert "(ninguno)" in tool.description
+            assert "(none)" in tool.description
 
     @pytest.mark.asyncio
     async def test_tool_descriptions_include_contact_names_after_setup(
@@ -917,7 +923,7 @@ class TestSendMessageTool:
 
         payload = json.loads(result.output)
         assert payload["ok"] is False
-        assert "vacio" in payload["error"]
+        assert "vacío" in payload["error"]
         assert captured[0].sent_texts == []
 
     @pytest.mark.asyncio
