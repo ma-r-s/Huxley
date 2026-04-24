@@ -100,7 +100,6 @@ The persona is considered v1-complete when **all** of these work end-to-end via 
 ## Non-goals for AbuelOS v1
 
 - Wake word / always-on listening — PTT only
-- Proactive / unprompted speech — strictly turn-based
 - Multi-user / multi-client (one device, one user)
 - Languages other than Spanish
 - Religious content — explicitly excluded by the persona
@@ -108,3 +107,5 @@ The persona is considered v1-complete when **all** of these work end-to-end via 
 - Offline mode
 - Privacy / no-log mode
 - Error recovery as a P0 concern (handled in v2)
+
+> **Note**: proactive speech is no longer a non-goal — `inject_turn` shipped (Stage 2b/3/5) and is in production for the timers skill (medication reminders) and the telegram skill (inbound-message announcements + post-restart unread backfill). It's PTT-driven for routine conversation but skills can synthesize turns when something happens that the user needs to hear about.
