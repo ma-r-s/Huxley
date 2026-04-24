@@ -38,6 +38,7 @@ Huxley/                 # repo root
 ├── scripts/
 │   └── migrate-data-to-persona.sh  # one-time move from legacy packages/core/data/
 ├── web/                # React/Vite dev client
+├── firmware/           # ESP32-S3 client — prototype before extracting to huxley-firmware repo
 ├── docs/               # Single source of truth
 │   ├── vision.md       # what Huxley is
 │   ├── concepts.md     # vocabulary (persona, skill, turn, side effect, ...)

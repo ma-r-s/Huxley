@@ -1,0 +1,44 @@
+# Huxley firmware — curated build defaults.
+# Checked in so every developer's build produces the same binary.
+# Run `idf.py reconfigure` after editing.
+#
+# Target is set out-of-band via `idf.py set-target esp32s3` (stored in
+# the generated sdkconfig, not here, to avoid collisions with target
+# selection).
+
+# -- Flash + partitioning ------------------------------------------------
+# Board ships with 16 MB flash. Dual-OTA layout reserved from day 1 so
+# adding OTA later is additive, not a reflash migration.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# -- PSRAM (Octal, 8 MB on this board) -----------------------------------
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+# Force small allocations (< 16 KB) to internal SRAM — PSRAM is for large
+# audio ring buffers, not every tiny heap allocation.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+
+# -- Serial / boot -------------------------------------------------------
+# Native USB-CDC so `idf.py monitor` works through the Type-C port without
+# a separate UART bridge.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# -- Logging -------------------------------------------------------------
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=y
+
+# -- FreeRTOS ------------------------------------------------------------
+# 1000 Hz tick so audio frame pacing (20 ms) is a whole number of ticks.
+CONFIG_FREERTOS_HZ=1000
+
+# -- Network / Wi-Fi -----------------------------------------------------
+CONFIG_ESP_WIFI_ENABLE_WPA3_SAE=y
+
+# -- Compiler ------------------------------------------------------------
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_COMPILER_WARN_WRITE_STRINGS=y
