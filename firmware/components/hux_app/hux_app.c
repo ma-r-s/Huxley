@@ -67,32 +67,102 @@ static void transition(app_state_t next) {
 static uint8_t s_b64_buf[1500];
 static char    s_envelope[1700];
 
+/* --- Decoupled audio sender ---------------------------------------
+ *
+ * Evidence from v0.2 testing: calling `hux_net_send_text` directly
+ * from the mic sink (50 Hz, 1.3 KB per send) saturates
+ * esp_websocket_client's internal TX path so badly the connection
+ * drops within milliseconds of `mic.start`. Root cause is that the
+ * prio-8 mic task hogs the socket; the WS client's own pinger + RX
+ * handlers starve, and either side of the TCP socket declares it
+ * dead.
+ *
+ * Fix: mic_sink does a cheap memcpy into a bounded FIFO; a dedicated
+ * sender task (lower prio than mic) drains it, does the expensive
+ * base64 + envelope, and calls `hux_net_send_text`. Capture is
+ * decoupled from send latency entirely; I2S DMA never waits on TCP.
+ *
+ * Overflow policy: drop-oldest isn't worth implementing yet — we log
+ * the drop count and let the newest frame be rejected. A healthy LAN
+ * drains faster than the mic fills; the queue only fills during
+ * hiccups, and a 200 ms hiccup of lost audio is better than the WS
+ * going down for seconds.
+ */
+#define AUDIO_FRAME_SAMPLES 480                 /* 20 ms at 24 kHz — matches hux_audio */
+#define AUDIO_QUEUE_DEPTH   10                  /* 200 ms buffer at 50 Hz */
+#define AUDIO_SENDER_STACK  8192
+#define AUDIO_SENDER_PRIO   6                   /* mic task (8) > this > app (5) */
+
+typedef struct {
+    int16_t pcm[AUDIO_FRAME_SAMPLES];
+} audio_frame_t;
+
+static QueueHandle_t s_audio_q = NULL;
+
+/* Per-PTT counters. mic_sink writes, audio_sender_task writes, app
+ * task reads at release — single-writer per counter, no locks. */
+static uint32_t s_mic_enqueued = 0;
+static uint32_t s_mic_enqueue_dropped = 0;
+static uint32_t s_tx_sent = 0;
+static uint32_t s_tx_failed = 0;
+static uint32_t s_tx_last_stats_tick = 0;
+
 static void mic_sink(const int16_t *pcm, size_t samples) {
-    const size_t pcm_bytes = samples * sizeof(int16_t);
-    size_t b64_len = 0;
-    int rc = mbedtls_base64_encode(s_b64_buf, sizeof(s_b64_buf), &b64_len,
-                                   (const unsigned char *)pcm, pcm_bytes);
-    if (rc != 0) {
-        ESP_LOGW(TAG, "mic.b64_failed rc=-0x%04x pcm_bytes=%u",
-                 -rc, (unsigned)pcm_bytes);
+    if (s_audio_q == NULL || samples != AUDIO_FRAME_SAMPLES) {
         return;
     }
-    /* Hand-format the envelope. base64 output is ASCII-safe so no
-     * JSON escaping is required; cJSON would be 6 allocations per
-     * frame at 50 Hz, which is exactly what the audio seam (v0.1.2)
-     * was built to avoid. */
-    int n = snprintf(s_envelope, sizeof(s_envelope),
-                     "{\"type\":\"audio\",\"data\":\"%.*s\"}",
-                     (int)b64_len, (const char *)s_b64_buf);
-    if (n <= 0 || (size_t)n >= sizeof(s_envelope)) {
-        ESP_LOGW(TAG, "mic.envelope_overflow n=%d", n);
+    audio_frame_t frame;
+    memcpy(frame.pcm, pcm, samples * sizeof(int16_t));
+    if (xQueueSend(s_audio_q, &frame, 0) != pdTRUE) {
+        s_mic_enqueue_dropped++;
         return;
     }
-    if (!hux_net_send_text(s_envelope, (size_t)n)) {
-        /* hux_net logs its own WARN with the incomplete-send reason;
-         * we don't double-log per frame here. A stalled WS drops a
-         * few frames; the server handles the gap. */
-        return;
+    s_mic_enqueued++;
+}
+
+static void audio_sender_task(void *unused) {
+    (void)unused;
+    ESP_LOGI(TAG, "audio_sender_task started depth=%d prio=%d",
+             AUDIO_QUEUE_DEPTH, AUDIO_SENDER_PRIO);
+
+    audio_frame_t frame;
+    for (;;) {
+        if (xQueueReceive(s_audio_q, &frame, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+
+        const size_t pcm_bytes = AUDIO_FRAME_SAMPLES * sizeof(int16_t);
+        size_t b64_len = 0;
+        int rc = mbedtls_base64_encode(s_b64_buf, sizeof(s_b64_buf), &b64_len,
+                                       (const unsigned char *)frame.pcm, pcm_bytes);
+        if (rc != 0) {
+            s_tx_failed++;
+            continue;
+        }
+        int n = snprintf(s_envelope, sizeof(s_envelope),
+                         "{\"type\":\"audio\",\"data\":\"%.*s\"}",
+                         (int)b64_len, (const char *)s_b64_buf);
+        if (n <= 0 || (size_t)n >= sizeof(s_envelope)) {
+            s_tx_failed++;
+            continue;
+        }
+
+        if (hux_net_send_text(s_envelope, (size_t)n)) {
+            s_tx_sent++;
+        } else {
+            s_tx_failed++;
+        }
+
+        /* Emit stats every ~500 ms of wall time — tick-based so a
+         * stalled stream still reports. */
+        uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        if (now - s_tx_last_stats_tick >= 500) {
+            ESP_LOGW(TAG, "mic.tx.stats enq=%u enq_drop=%u tx_ok=%u tx_fail=%u q_waiting=%u",
+                     (unsigned)s_mic_enqueued, (unsigned)s_mic_enqueue_dropped,
+                     (unsigned)s_tx_sent, (unsigned)s_tx_failed,
+                     (unsigned)uxQueueMessagesWaiting(s_audio_q));
+            s_tx_last_stats_tick = now;
+        }
     }
 }
 
@@ -108,6 +178,20 @@ static void enter_ptt(void) {
         ESP_LOGW(TAG, "app.ptt.ignored_press state=%s", state_name(s_state));
         return;
     }
+    /* Reset per-press counters so the stats line is scoped to this
+     * PTT press, not the lifetime of the firmware. */
+    s_mic_enqueued = 0;
+    s_mic_enqueue_dropped = 0;
+    s_tx_sent = 0;
+    s_tx_failed = 0;
+    s_tx_last_stats_tick = 0;
+
+    /* Quiet the log stream during audio streaming so the WS doesn't
+     * have to multiplex 50 Hz audio + arbitrary INFO logs through the
+     * same socket. Level reverts on release. Serial still sees
+     * everything. */
+    hux_log_set_remote_level('E');
+
     /* Order is: announce -> arm mic. The server tolerates a frame or
      * two arriving before `ptt_start` but shouldn't have to. */
     send_control("{\"type\":\"ptt_start\"}");
@@ -119,6 +203,10 @@ static void leave_ptt(void) {
      * The server's PTT-stop handler commits the buffer to OpenAI —
      * late frames would be ignored, but the log noise is worse. */
     hux_audio_mic_stop();
+    hux_log_set_remote_level('I');
+    ESP_LOGI(TAG, "app.ptt.final_stats enq=%u enq_drop=%u tx_ok=%u tx_fail=%u",
+             (unsigned)s_mic_enqueued, (unsigned)s_mic_enqueue_dropped,
+             (unsigned)s_tx_sent, (unsigned)s_tx_failed);
     send_control("{\"type\":\"ptt_stop\"}");
 }
 
@@ -225,6 +313,15 @@ void hux_app_start(void) {
     configASSERT(s_event_q != NULL);
     BaseType_t ok = xTaskCreate(app_task, "hux_app", APP_TASK_STACK, NULL,
                                 APP_TASK_PRIO, NULL);
+    configASSERT(ok == pdPASS);
+
+    /* Audio PCM ring — mic task fills, audio_sender drains. Must
+     * exist before the mic sink is registered so there's never a
+     * window where sink runs with NULL queue. */
+    s_audio_q = xQueueCreate(AUDIO_QUEUE_DEPTH, sizeof(audio_frame_t));
+    configASSERT(s_audio_q != NULL);
+    ok = xTaskCreate(audio_sender_task, "hux_audio_tx", AUDIO_SENDER_STACK,
+                     NULL, AUDIO_SENDER_PRIO, NULL);
     configASSERT(ok == pdPASS);
 
     /* Register the mic sink once — it stays registered for the life
