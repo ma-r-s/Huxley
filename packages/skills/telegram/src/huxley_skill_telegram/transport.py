@@ -24,6 +24,7 @@ import re
 import struct
 import threading
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import structlog
@@ -31,6 +32,27 @@ import structlog
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
     from pathlib import Path
+
+
+@dataclass(frozen=True, slots=True)
+class InboundMessage:
+    """One inbound text message from a private chat.
+
+    Carried into the skill's `on_message` callback. `sender_display` is
+    the best-effort name from Telegram's user record (first name + last
+    name, falling back to username, then phone). The skill resolves it
+    against the contacts whitelist to swap in the configured persona-side
+    name (e.g. "hija") when known.
+    """
+
+    user_id: int
+    sender_display: str
+    text: str
+    # Unix epoch seconds; used by the proactive-inbox backfill to apply
+    # the time window cap and to dedupe against a "last seen" cursor if
+    # the skill ever stores one (not in v1).
+    timestamp: int
+
 
 logger = structlog.get_logger()
 
@@ -127,6 +149,7 @@ class TelegramTransport:
         userbot_phone: str | None = None,
         on_incoming_ring: Callable[[int], Awaitable[None]] | None = None,
         on_ring_cancelled: Callable[[int], Awaitable[None]] | None = None,
+        on_message: Callable[[InboundMessage], Awaitable[None]] | None = None,
     ) -> None:
         """Create a transport. `userbot_phone` is only consulted on the
         first-ever auth for this session file -- stored in sqlite after,
@@ -135,6 +158,8 @@ class TelegramTransport:
         `on_incoming_ring` fires when a RINGING_CALL update arrives.
         `on_ring_cancelled` fires when DISCARDED_CALL arrives for a call
         that was never answered (ring expired or peer cancelled).
+        `on_message` fires for each incoming text message from a private
+        chat (not group, not channel, not the userbot's own outbound).
         """
         self._api_id = api_id
         self._api_hash = api_hash
@@ -142,6 +167,7 @@ class TelegramTransport:
         self._userbot_phone = userbot_phone
         self._on_incoming_ring_cb = on_incoming_ring
         self._on_ring_cancelled_cb = on_ring_cancelled
+        self._on_message_cb = on_message
 
         # Built lazily in `connect()` so construction is cheap and the
         # transport can be instantiated in tests without triggering
@@ -203,17 +229,21 @@ class TelegramTransport:
             phone_number=self._userbot_phone,
         )
         call_py = PyTgCalls(app)
-        self._wire_peer_audio_handler(call_py)
+        self._wire_handlers(call_py, app)
         await call_py.start()
         self._app = app
         self._call_py = call_py
         await logger.ainfo("telegram.transport.connected")
 
-    def _wire_peer_audio_handler(self, call_py: object) -> None:
-        """Attach stream_frame, RINGING_CALL, and chat_update filters.
+    def _wire_handlers(self, call_py: object, app: object) -> None:
+        """Attach all update handlers: peer audio + ring/discard + messages.
 
-        Must run before `call_py.start()` per the upstream example pattern.
+        All registrations must happen BEFORE `call_py.start()` so updates
+        arriving in the first seconds aren't missed -- the upstream
+        pattern for both pyrogram and py-tgcalls.
         """
+        from pyrogram import filters as pyro_filters
+        from pyrogram.handlers import MessageHandler  # type: ignore[attr-defined]
         from pytgcalls import filters as fl
         from pytgcalls.types import ChatUpdate, Device, Direction
 
@@ -275,6 +305,51 @@ class TelegramTransport:
             elif self._active_user_id is None and self._on_ring_cancelled_cb is not None:
                 # Ring expired or peer cancelled before we answered.
                 await self._on_ring_cancelled_cb(update.chat_id)
+
+        # Inbound text messages. The `incoming` filter is critical -- without
+        # it, every send_text() echoes back as an inbound message and triggers
+        # an inject_turn loop. `private` excludes groups/channels (the
+        # userbot is family-only by design). Only registered when a callback
+        # was passed -- skill instances without inbound enabled don't pay
+        # the per-message handler cost.
+        if self._on_message_cb is None:
+            return
+
+        async def on_message(_, message) -> None:  # type: ignore[no-untyped-def]
+            assert self._on_message_cb is not None
+            text = message.text or message.caption
+            if not text:
+                # Sticker / photo / voice note / etc. -- v1 ignores non-text.
+                # Voice notes will land in T1.11.b once the audio shape is decided.
+                return
+            from_user = message.from_user
+            if from_user is None:
+                return
+            inbound = InboundMessage(
+                user_id=int(from_user.id),
+                sender_display=_pyro_user_display(from_user),
+                text=str(text),
+                timestamp=int(message.date.timestamp()) if message.date is not None else 0,
+            )
+            await logger.ainfo(
+                "telegram.transport.inbound_message",
+                user_id=inbound.user_id,
+                sender_display=inbound.sender_display,
+                text_chars=len(inbound.text),
+            )
+            await self._on_message_cb(inbound)
+
+        app.add_handler(  # type: ignore[attr-defined]
+            MessageHandler(on_message, pyro_filters.private & pyro_filters.incoming),
+        )
+
+    @property
+    def is_in_call(self) -> bool:
+        """True between a successful place_call/accept_call and the next
+        end_call. Public surface so the skill doesn't need to reach into
+        `_active_user_id` to gate concurrent-call rejection.
+        """
+        return self._active_user_id is not None
 
     async def resolve_contact(self, identifier: str) -> int:
         """Return the Telegram `user_id` for a phone number OR @handle.
@@ -650,6 +725,112 @@ class TelegramTransport:
         self._mic_rms_sum = 0.0
         self._mic_rms_count = 0
 
+    # --- Messaging ---
+
+    async def send_text(self, user_id: int, text: str) -> None:
+        """Send a text message to a user via the userbot.
+
+        Caller must have validated that `text` is non-empty and within
+        Telegram's 4096-char per-message cap (see TelegramSkill._send_message
+        for the user-facing validation). The transport trusts its only
+        caller and routes any RPCError as TransportError.
+        """
+        if self._app is None:
+            msg = "send_text() before connect()"
+            raise TransportError(msg)
+        from pyrogram.errors import RPCError  # type: ignore[attr-defined]
+
+        try:
+            await self._app.send_message(user_id, text)  # type: ignore[attr-defined]
+        except RPCError as exc:
+            msg = f"send_text failed for user_id={user_id}: {exc}"
+            raise TransportError(msg) from exc
+        await logger.ainfo(
+            "telegram.transport.sent_text",
+            user_id=user_id,
+            chars=len(text),
+        )
+
+    async def fetch_unread(
+        self,
+        whitelist_user_ids: set[int],
+        *,
+        since_seconds: int,
+        max_messages: int,
+    ) -> list[InboundMessage]:
+        """Return unread messages from whitelisted senders within the time window.
+
+        Used by the proactive-inbox backfill on connect. Walks `get_dialogs()`
+        looking for private chats with unread_messages_count > 0 whose
+        peer is in the whitelist; for each, fetches up to `unread_messages_count`
+        recent messages and filters to those newer than `since_seconds` ago,
+        capping the total at `max_messages`.
+
+        Soft-fails per dialog: any exception from a single get_chat_history
+        call is logged and skipped so one bad chat doesn't kill the whole
+        backfill. Cold start with no dialogs returns an empty list.
+        """
+        if self._app is None:
+            msg = "fetch_unread() before connect()"
+            raise TransportError(msg)
+        cutoff_ts = int(time.time()) - since_seconds
+        out: list[InboundMessage] = []
+
+        async for dialog in self._app.get_dialogs():  # type: ignore[attr-defined]
+            chat = getattr(dialog, "chat", None)
+            if chat is None:
+                continue
+            chat_id = int(getattr(chat, "id", 0))
+            unread = int(getattr(dialog, "unread_messages_count", 0) or 0)
+            if unread <= 0 or chat_id not in whitelist_user_ids:
+                continue
+            try:
+                async for message in self._app.get_chat_history(  # type: ignore[attr-defined]
+                    chat_id, limit=min(unread, max_messages)
+                ):
+                    if getattr(message, "outgoing", False):
+                        continue
+                    text = getattr(message, "text", None) or getattr(message, "caption", None)
+                    if not text:
+                        continue
+                    ts = (
+                        int(message.date.timestamp())
+                        if getattr(message, "date", None) is not None
+                        else 0
+                    )
+                    if ts < cutoff_ts:
+                        continue
+                    from_user = getattr(message, "from_user", None)
+                    if from_user is None:
+                        continue
+                    out.append(
+                        InboundMessage(
+                            user_id=int(from_user.id),
+                            sender_display=_pyro_user_display(from_user),
+                            text=str(text),
+                            timestamp=ts,
+                        )
+                    )
+                    if len(out) >= max_messages:
+                        break
+            except Exception:
+                await logger.aexception(
+                    "telegram.transport.fetch_unread_chat_failed",
+                    chat_id=chat_id,
+                )
+            if len(out) >= max_messages:
+                break
+
+        # Oldest-first: backfill announcement reads chronologically per sender.
+        out.sort(key=lambda m: m.timestamp)
+        await logger.ainfo(
+            "telegram.transport.fetch_unread_complete",
+            messages=len(out),
+            since_seconds=since_seconds,
+            max_messages=max_messages,
+        )
+        return out
+
     async def disconnect(self) -> None:
         """Stop pyrogram + PyTgCalls. Hangs up any active call first."""
         if self._active_user_id is not None:
@@ -660,6 +841,25 @@ class TelegramTransport:
             self._app = None
         self._call_py = None
         await logger.ainfo("telegram.transport.disconnected")
+
+
+def _pyro_user_display(user: object) -> str:
+    """Best-effort display name for a pyrogram User. Used as a fallback
+    when the contacts whitelist doesn't have a name for the sender.
+    Order: 'first last' -> first -> @username -> '+phone' -> 'desconocido'.
+    """
+    first = getattr(user, "first_name", None) or ""
+    last = getattr(user, "last_name", None) or ""
+    full = f"{first} {last}".strip()
+    if full:
+        return full
+    username = getattr(user, "username", None)
+    if username:
+        return f"@{username}"
+    phone = getattr(user, "phone_number", None)
+    if phone:
+        return f"+{str(phone).lstrip('+')}"
+    return "desconocido"
 
 
 def normalize_phone(raw: str) -> str:

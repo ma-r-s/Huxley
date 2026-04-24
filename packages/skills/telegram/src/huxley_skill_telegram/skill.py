@@ -1,18 +1,38 @@
-"""Telegram skill — place or receive a p2p Telegram voice call.
+"""Telegram skill -- voice calls + text messages over a single userbot.
 
-Outbound: `call_contact(name)` — resolves a name from the contacts list
-to a Telegram user and starts an InputClaim that bridges the user's
-mic/speaker to the live call.
+The skill exposes Telegram both as a voice transport (live p2p calls)
+and a text transport (send + receive private messages), sharing one
+Pyrogram session, one contacts list, and one whitelist policy.
 
-Inbound: when `inbound.enabled` is true the skill connects eagerly at
-setup, builds a user_id->name reverse map, and listens for INCOMING_CALL
-events. On ring it accepts immediately (preserves WebRTC audio quality),
-announces via inject_turn, waits for the LLM to finish speaking, then
-bridges audio via ctx.start_input_claim — no LLM tool call needed.
+## Calls
+
+Outbound: `call_contact(name)` -- resolves a name from the contacts
+list and starts an InputClaim that bridges grandpa's mic/speaker to
+the live call.
+
+Inbound: when `inbound.enabled` is true the skill connects eagerly,
+listens for INCOMING_CALL events, accepts immediately (preserves
+WebRTC audio quality), announces via inject_turn, then bridges audio.
+
+## Messages
+
+Outbound: `send_message(contact, text)` -- send a text message to a
+named contact via the userbot.
+
+Inbound: with `inbound.enabled`, every private incoming message from
+the contacts whitelist (or unknown sender, surfaced as "numero
+desconocido") is appended to a per-sender debounce buffer. After a
+short pause the buffer fires one coalesced `inject_turn` covering the
+whole burst -- so a chatty sender's "hola/papá/¿estás?" lands as one
+announcement, not three competing ones.
+
+On connect: the skill backfills the last 6 hours of unread messages
+from whitelisted contacts (capped at 50) into a single inject so a
+post-restart user doesn't silently lose pre-restart messages.
 
 See `docs/skills/telegram.md` for the user-facing flow and
-`docs/research/telegram-voice.md` for why the transport is shaped the
-way it is.
+`docs/research/telegram-voice.md` for why the call transport is
+shaped the way it is.
 
 Config (persona.yaml `skills.telegram:` block):
 
@@ -26,6 +46,9 @@ Config (persona.yaml `skills.telegram:` block):
       inbound:
         enabled: true
         auto_answer: contacts_only   # "contacts_only" | "all" | false
+        debounce_seconds: 2.5        # default; per-sender coalesce window
+        backfill_hours: 6            # default; window for unread backfill
+        backfill_max: 50             # default; cap on backfill messages
 
 `userbot_phone` is only consulted on first-run auth; the sqlite
 session file persists across restarts, and the SMS-code prompt only
@@ -34,6 +57,7 @@ fires once per deploy.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from typing import TYPE_CHECKING, Any
@@ -41,21 +65,27 @@ from typing import TYPE_CHECKING, Any
 from huxley_sdk import (
     ClaimBusyError,
     ClaimEndReason,
+    InjectPriority,
     InputClaim,
     SkillContext,
     SkillLogger,
     ToolDefinition,
     ToolResult,
 )
+from huxley_skill_telegram.inbox import (
+    InboxBuffer,
+    build_announcement,
+    build_backfill_announcement,
+)
 from huxley_skill_telegram.transport import (
+    InboundMessage,
     TelegramTransport,
     TransportError,
     normalize_phone,
 )
 
 if TYPE_CHECKING:
-    import asyncio
-    from collections.abc import Callable
+    from collections.abc import Callable, Coroutine
 
     from huxley_sdk import SkillContext
 
@@ -81,10 +111,28 @@ class TelegramSkill:
         # Inbound config
         self._inbound_enabled: bool = False
         self._auto_answer: str = "contacts_only"  # "contacts_only" | "all"
+        # Default-drop unknown-sender messages: symmetric with the
+        # contacts_only call-rejection policy. Spammers exist on Telegram;
+        # silently announcing every unknown number is a DoS vector for an
+        # always-on-audio user. Opt in via inbound.unknown_messages: "announce".
+        self._unknown_messages: str = "drop"  # "drop" | "announce"
+        self._debounce_seconds: float = 2.5
+        self._backfill_hours: int = 6
+        self._backfill_max: int = 50
 
         # Reverse map: user_id -> contact name. Built at connect() time
         # from the contacts dict. Unknown callers stay absent from the map.
         self._user_id_to_name: dict[int, str] = {}
+
+        # Per-sender debounce/coalesce buffer for inbound messages. Built
+        # in setup() once we know the debounce window. None when inbound
+        # is disabled or credentials are missing.
+        self._inbox: InboxBuffer | None = None
+        # Tracks every fire-and-forget task spawned by the skill -- backfill,
+        # hangup, claim-end inject, etc. Teardown awaits all of them so a
+        # message-mid-flight isn't silently dropped. Tasks remove themselves
+        # on done; the set never grows unbounded.
+        self._tasks: set[asyncio.Task[None]] = set()
 
         # Name of the contact currently in a call (set in handle()/
         # Guard for the announce-before-accept window in _on_incoming_ring.
@@ -94,9 +142,6 @@ class TelegramSkill:
 
         # Active-call state (set in _call_contact / _on_incoming_ring, cleared in _on_claim_end).
         self._active_contact_name: str | None = None
-        # Holds refs to in-flight hangup/inject tasks spawned by `_on_claim_end`
-        # so GC doesn't eat them mid-execution. Task removes itself on done.
-        self._end_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def name(self) -> str:
@@ -105,7 +150,7 @@ class TelegramSkill:
     @property
     def tools(self) -> list[ToolDefinition]:
         contacts_list = ", ".join(sorted(self._contacts)) if self._contacts else "(ninguno)"
-        tools = [
+        return [
             ToolDefinition(
                 name="call_contact",
                 description=(
@@ -130,8 +175,35 @@ class TelegramSkill:
                     "required": ["name"],
                 },
             ),
+            ToolDefinition(
+                name="send_message",
+                description=(
+                    "Envía un mensaje de texto por Telegram a una persona de "
+                    "la lista de contactos. Úsalo cuando el usuario quiera "
+                    "mandar un recado escrito -- ej. 'manda un mensaje a mi "
+                    "hija diciéndole que ya almorcé'. El mensaje llega al "
+                    "teléfono de la persona como un texto normal de Telegram. "
+                    f"Contactos disponibles: {contacts_list}."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Nombre (en minúsculas) del contacto destinatario.",
+                        },
+                        "text": {
+                            "type": "string",
+                            "description": (
+                                "Texto del mensaje a enviar. Telegram acepta "
+                                "hasta 4096 caracteres por mensaje."
+                            ),
+                        },
+                    },
+                    "required": ["name", "text"],
+                },
+            ),
         ]
-        return tools
 
     async def setup(self, ctx: SkillContext) -> None:
         self._logger = ctx.logger
@@ -169,6 +241,18 @@ class TelegramSkill:
                 self._inbound_enabled = False
             elif isinstance(auto_raw, str) and auto_raw in ("contacts_only", "all"):
                 self._auto_answer = auto_raw
+            debounce_raw = inbound_cfg.get("debounce_seconds", 2.5)
+            if isinstance(debounce_raw, int | float) and debounce_raw > 0:
+                self._debounce_seconds = float(debounce_raw)
+            backfill_hours_raw = inbound_cfg.get("backfill_hours", 6)
+            if isinstance(backfill_hours_raw, int) and backfill_hours_raw >= 0:
+                self._backfill_hours = backfill_hours_raw
+            backfill_max_raw = inbound_cfg.get("backfill_max", 50)
+            if isinstance(backfill_max_raw, int) and backfill_max_raw >= 0:
+                self._backfill_max = backfill_max_raw
+            unknown_raw = inbound_cfg.get("unknown_messages", "drop")
+            if isinstance(unknown_raw, str) and unknown_raw in ("drop", "announce"):
+                self._unknown_messages = unknown_raw
 
         # Soft-fail when credentials are missing: log loudly, skip the
         # transport build, and let `call_contact` return an LLM-facing
@@ -201,9 +285,14 @@ class TelegramSkill:
             # transport doesn't register unused handlers.
             inbound_kwargs: dict[str, Any] = {}
             if self._inbound_enabled:
+                self._inbox = InboxBuffer(
+                    debounce_seconds=self._debounce_seconds,
+                    on_flush=self._flush_inbox,
+                )
                 inbound_kwargs = {
                     "on_incoming_ring": self._on_incoming_ring,
                     "on_ring_cancelled": self._on_ring_cancelled,
+                    "on_message": self._on_inbound_message,
                 }
             # Session file goes in the persona's data dir, alongside the
             # sqlite DB. Gitignored via personas/*/data/ in .gitignore.
@@ -216,11 +305,16 @@ class TelegramSkill:
             )
 
             if self._inbound_enabled:
-                # Connect eagerly so we're listening for incoming calls from
-                # the moment the persona starts. Outbound-only config stays
-                # lazy (connects on first handle() call).
+                # Connect eagerly so we're listening for incoming calls
+                # AND messages from the moment the persona starts.
+                # Outbound-only config stays lazy (connects on first
+                # handle() call).
                 await self._transport.connect()
                 await self._build_reverse_map()
+                # Fire-and-forget backfill so setup() doesn't block on
+                # a possibly-slow get_dialogs() pass. Errors logged via
+                # the task wrapper; no inject if no unread or no contacts.
+                self._spawn_task(self._run_backfill(), name="telegram-backfill")
 
         await ctx.logger.ainfo(
             "telegram.setup_complete",
@@ -268,6 +362,16 @@ class TelegramSkill:
                 if not isinstance(name_raw, str) or not name_raw.strip():
                     return _error_result("call_contact requires a non-empty `name` argument")
                 return await self._call_contact(name_raw.lower().strip())
+            case "send_message":
+                name_raw = args.get("name")
+                text_raw = args.get("text")
+                if not isinstance(name_raw, str) or not name_raw.strip():
+                    return _error_result("send_message requires a non-empty `name` argument")
+                if not isinstance(text_raw, str) or not text_raw.strip():
+                    return _error_result(
+                        "El mensaje esta vacio. Dime que quieres decirle a esa persona."
+                    )
+                return await self._send_message(name_raw.lower().strip(), text_raw)
             case _:
                 await self._logger.awarning("telegram.unknown_tool", tool=tool_name)
                 return _error_result(f"Unknown tool: {tool_name}")
@@ -320,6 +424,63 @@ class TelegramSkill:
             ),
         )
 
+    async def _send_message(self, name: str, text: str) -> ToolResult:
+        """Send a Telegram text message. Resolves the contact name to a
+        user_id (cached in _user_id_to_name when known, falls back to
+        a fresh resolve_contact() if not).
+        """
+        assert self._logger is not None
+        from datetime import UTC, datetime
+
+        if self._transport is None:
+            await self._logger.awarning("telegram.send_unconfigured", name=name)
+            return _error_result(
+                "Los mensajes de Telegram no están configurados en este dispositivo. "
+                "No puedo enviar nada hasta que alguien configure las credenciales."
+            )
+
+        phone = self._contacts.get(name)
+        if phone is None:
+            await self._logger.ainfo(
+                "telegram.send_contact_not_found", name=name, known=list(self._contacts)
+            )
+            return _error_result(
+                f"No tengo a '{name}' en la lista de contactos para enviarle mensajes. "
+                f"Contactos conocidos: {', '.join(sorted(self._contacts)) or '(ninguno)'}"
+            )
+
+        # Telegram caps at 4096 chars per message. Validate at the skill
+        # layer so the LLM gets a clean Spanish message ("muy largo") rather
+        # than the transport's generic TransportError surface. The transport
+        # trusts its caller; this skill is the only caller.
+        if len(text) > 4096:
+            await self._logger.ainfo("telegram.send_text_too_long", name=name, chars=len(text))
+            return _error_result(
+                f"El mensaje es muy largo ({len(text)} caracteres; Telegram acepta "
+                "máximo 4096). Acórtalo o divídelo en varios mensajes."
+            )
+
+        try:
+            await self._transport.connect()
+            user_id = await self._transport.resolve_contact(phone)
+            await self._transport.send_text(user_id, text)
+        except TransportError as exc:
+            await self._logger.aexception("telegram.send_failed", name=name)
+            return _error_result(
+                f"No pude enviar el mensaje a {name}: {exc}. "
+                "Puede ser que el contacto no tenga Telegram con ese número."
+            )
+
+        sent_at = datetime.now(UTC).isoformat(timespec="seconds")
+        await self._logger.ainfo(
+            "telegram.send_message_ok", name=name, user_id=user_id, chars=len(text)
+        )
+        return ToolResult(
+            output=json.dumps(
+                {"ok": True, "contact": name, "chars": len(text), "sent_at": sent_at}
+            )
+        )
+
     # --- Inbound ring callbacks (called by transport) ---
 
     async def _on_incoming_ring(self, user_id: int) -> None:
@@ -337,7 +498,7 @@ class TelegramSkill:
         assert self._ctx is not None
 
         # Reject immediately if already in a call.
-        if self._transport is not None and self._transport._active_user_id is not None:
+        if self._transport is not None and self._transport.is_in_call:
             await self._logger.ainfo("telegram.inbound.rejected_busy", user_id=user_id)
             await self._transport.reject_call(user_id)
             return
@@ -468,32 +629,208 @@ class TelegramSkill:
         creating a new listening turn -- grandpa's next PTT will open a fresh
         conversation. No inject needed here.
         """
-        import asyncio
-
         assert self._logger is not None
         contact = self._active_contact_name
         self._active_contact_name = None
         await self._logger.ainfo("telegram.claim_ended", reason=reason.value, contact=contact)
 
         if self._transport is not None:
-            transport = self._transport
-            task = asyncio.create_task(transport.end_call())
-            self._end_tasks.add(task)
-            task.add_done_callback(self._end_tasks.discard)
+            self._spawn_task(self._transport.end_call(), name="telegram-hangup")
 
         if reason is ClaimEndReason.NATURAL and self._ctx is not None:
             ctx = self._ctx
             who = contact or "la persona"
             prompt = (
-                f"La llamada con {who} ha terminado porque la otra persona colgo. "
+                f"La llamada con {who} ha terminado porque la otra persona colgó. "
                 "Informa brevemente al usuario que la llamada ha concluido."
             )
-            inject_task = asyncio.create_task(ctx.inject_turn(prompt))
-            self._end_tasks.add(inject_task)
-            inject_task.add_done_callback(self._end_tasks.discard)
+            self._spawn_task(ctx.inject_turn(prompt), name="telegram-claim-end-inject")
             await self._logger.ainfo("telegram.injecting_call_ended_turn", contact=who)
 
+    # --- Inbound message callbacks (called by transport) ---
+
+    async def _on_inbound_message(self, message: InboundMessage) -> None:
+        """Called by the transport for each incoming private text message.
+
+        Resolves the sender against the contacts whitelist:
+        - Known contact: use the configured persona-side name ("hija").
+        - Unknown sender + `unknown_messages=announce`: surface as
+          "un número desconocido" so the user still hears it.
+        - Unknown sender + `unknown_messages=drop` (default): log and
+          drop. Symmetric with the contacts_only call-rejection policy --
+          spammers can't trigger announcements.
+
+        Each accepted message is appended to a per-sender debounce
+        buffer; the buffer fires `_flush_inbox` after the debounce
+        window elapses with no further messages from the same sender,
+        coalescing bursts into a single inject. Avoids the framework's
+        same-key-inject drop-in-flight footgun.
+        """
+        assert self._logger is not None
+        if self._inbox is None:
+            return
+
+        contact_name = self._user_id_to_name.get(message.user_id)
+        if contact_name is None:
+            if self._unknown_messages == "drop":
+                await self._logger.ainfo(
+                    "telegram.inbound.unknown_dropped",
+                    user_id=message.user_id,
+                    sender_display=message.sender_display,
+                    hint=(
+                        "Set inbound.unknown_messages: announce in persona.yaml "
+                        "to surface unknown-sender messages, or add this user_id "
+                        "to skills.telegram.contacts."
+                    ),
+                )
+                return
+            display = "un número desconocido"
+            await self._logger.ainfo(
+                "telegram.inbound.message_from_unknown",
+                user_id=message.user_id,
+                sender_display=message.sender_display,
+            )
+        else:
+            display = contact_name
+
+        await self._logger.ainfo(
+            "telegram.inbound.message_buffered",
+            user_id=message.user_id,
+            display=display,
+            chars=len(message.text),
+        )
+        self._inbox.add(message.user_id, display, message.text)
+
+    async def _flush_inbox(self, user_id: int, display: str, messages: list[str]) -> None:
+        """Called by the inbox buffer when a sender's debounce window elapses.
+
+        Builds the coalesced announcement and fires inject_turn(NORMAL).
+        NORMAL priority queues behind active calls (Stage 2b) so an inbound
+        message during a phone call doesn't interrupt; it'll fire on the
+        next quiet turn-end after the call ends.
+
+        `dedup_key=msg_burst:<user_id>` is defense-in-depth against an
+        accidental double-flush -- the real coalescing happens in the
+        InboxBuffer, but if the buffer ever races we'd rather drop than
+        double-narrate.
+        """
+        assert self._logger is not None
+        if self._ctx is None:
+            return
+        prompt = build_announcement(display, messages)
+        await self._logger.ainfo(
+            "telegram.inbound.flushing",
+            user_id=user_id,
+            display=display,
+            message_count=len(messages),
+        )
+        await self._ctx.inject_turn(
+            prompt,
+            dedup_key=f"msg_burst:{user_id}",
+            priority=InjectPriority.NORMAL,
+        )
+
+    # Wait this long after setup() before firing the backfill inject, so
+    # the OpenAI Realtime session has time to fully connect. Confirmed
+    # 2026-04-24 first smoke test: the backfill was firing within ~300ms
+    # of setup_complete -- BEFORE session_connected -- so coord.inject_turn
+    # logged but no session.tx.conversation_message ever followed and the
+    # inject was effectively lost. The live-message path doesn't have this
+    # problem because messages arrive after the user has been talking
+    # (session is established by then).
+    _BACKFILL_STARTUP_DELAY_S = 5.0
+
+    async def _run_backfill(self) -> None:
+        """Fetch unread messages from whitelisted contacts since the cutoff
+        and fire one summary inject so a post-restart user doesn't silently
+        lose pre-restart messages.
+
+        No-op when:
+        - backfill_hours == 0 or backfill_max == 0 (config opt-out)
+        - no whitelisted contacts resolved (empty reverse map)
+        - no unread messages from whitelisted senders within the window
+
+        Soft-fails on transport errors -- a failed backfill must not block
+        the rest of setup.
+        """
+        assert self._logger is not None
+        if self._transport is None or self._ctx is None:
+            return
+        if self._backfill_hours <= 0 or self._backfill_max <= 0:
+            return
+        if not self._user_id_to_name:
+            await self._logger.ainfo(
+                "telegram.backfill.skipped",
+                reason="no_resolved_contacts",
+            )
+            return
+
+        # Wait for the OpenAI Realtime session to be established before
+        # firing the inject. The fetch_unread Pyrogram round-trip already
+        # takes ~300ms; we add headroom so the inject's conversation_message
+        # actually reaches a live session. If the user PTTs first, their
+        # turn takes priority and the backfill inject queues behind it
+        # (Stage 2b queue-behind-COMMS does the right thing).
+        await asyncio.sleep(self._BACKFILL_STARTUP_DELAY_S)
+        if self._transport is None or self._ctx is None:
+            return  # teardown raced us during the sleep
+
+        whitelist = set(self._user_id_to_name.keys())
+        try:
+            unread = await self._transport.fetch_unread(
+                whitelist,
+                since_seconds=self._backfill_hours * 3600,
+                max_messages=self._backfill_max,
+            )
+        except Exception:
+            await self._logger.aexception("telegram.backfill.fetch_failed")
+            return
+
+        if not unread:
+            await self._logger.ainfo("telegram.backfill.no_unread")
+            return
+
+        per_sender: dict[str, list[str]] = {}
+        for msg in unread:
+            display = self._user_id_to_name.get(msg.user_id, "un número desconocido")
+            per_sender.setdefault(display, []).append(msg.text)
+
+        prompt = build_backfill_announcement(per_sender)
+        await self._logger.ainfo(
+            "telegram.backfill.injecting",
+            total=len(unread),
+            per_sender_counts={k: len(v) for k, v in per_sender.items()},
+        )
+        # No dedup_key: backfill fires once per session, no resend path.
+        await self._ctx.inject_turn(prompt, priority=InjectPriority.NORMAL)
+
+    # --- Task helper ---
+
+    def _spawn_task(self, coro: Coroutine[Any, Any, None], *, name: str) -> None:
+        """Track an asyncio task so GC can't collect it mid-run.
+
+        Used for fire-and-forget work spawned from setup() (backfill) or
+        from sync timer callbacks (none today). Tasks remove themselves
+        from the set on completion.
+        """
+        task = asyncio.create_task(coro, name=name)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
     async def teardown(self) -> None:
+        # Drain pending message bursts so a sender mid-typing at shutdown
+        # doesn't silently lose their last announcement -- the buffer
+        # spawns the flush as a task; we await all in-flight here.
+        if self._inbox is not None:
+            await self._inbox.flush_all()
+
+        # Cancel any other tracked tasks (backfill in flight, etc.).
+        for task in list(self._tasks):
+            task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+            self._tasks.clear()
+
         if self._transport is not None:
             await self._transport.disconnect()
         if self._logger is not None:

@@ -54,14 +54,14 @@ Skills are Python packages. Install one, add it to your `persona.yaml`, done. Sh
 
 ### Shipped
 
-| Skill                     | What it does                                                                                                                |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `huxley-skill-audiobooks` | Play `.m4b`/`.mp3` audiobooks from a local library. Pause, resume, rewind, fast-forward. Persists position across restarts. |
-| `huxley-skill-radio`      | Stream HTTP/Icecast radio stations via `ffmpeg`. Buffered playback with proactive reconnect on drop.                        |
-| `huxley-skill-news`       | Weather (Open-Meteo) + top headlines (Google News RSS). Cached, narrated in persona voice.                                  |
-| `huxley-skill-timers`     | One-shot and recurring reminders. Fires proactively at the scheduled time; persisted in SQLite so they survive restarts.    |
-| `huxley-skill-system`     | Volume control, current time.                                                                                               |
-| `huxley-skill-telegram`   | Full-duplex p2p Telegram voice calls. Accepts inbound calls, places outbound, bridges mic and speaker in real time.         |
+| Skill                     | What it does                                                                                                                                                                                                                                                                                                  |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `huxley-skill-audiobooks` | Play `.m4b`/`.mp3` audiobooks from a local library. Pause, resume, rewind, fast-forward. Persists position across restarts.                                                                                                                                                                                   |
+| `huxley-skill-radio`      | Stream HTTP/Icecast radio stations via `ffmpeg`. Buffered playback with proactive reconnect on drop.                                                                                                                                                                                                          |
+| `huxley-skill-news`       | Weather (Open-Meteo) + top headlines (Google News RSS). Cached, narrated in persona voice.                                                                                                                                                                                                                    |
+| `huxley-skill-timers`     | One-shot and recurring reminders. Fires proactively at the scheduled time; persisted in SQLite so they survive restarts.                                                                                                                                                                                      |
+| `huxley-skill-system`     | Volume control, current time.                                                                                                                                                                                                                                                                                 |
+| `huxley-skill-telegram`   | Full-duplex p2p Telegram voice calls (inbound + outbound) AND text messages: send by voice, hear inbound messages read aloud (per-sender debounce + coalesce so bursts collapse to one announcement), bounded backfill on connect for missed messages. One Pyrogram userbot session shared across both modes. |
 
 ### What the skill system can support — and will
 
@@ -317,12 +317,12 @@ uv run mypy packages/sdk/src packages/core/src
 
 # Tests (594 total)
 uv run --package huxley-sdk pytest packages/sdk/tests/                            # 72
-uv run --package huxley pytest packages/core/tests/                                # 352
+uv run --package huxley pytest packages/core/tests/                                # 370
 uv run --package huxley-skill-audiobooks pytest packages/skills/audiobooks/tests/  # 61
 uv run --package huxley-skill-timers pytest packages/skills/timers/tests/          # 30
 uv run --package huxley-skill-news pytest packages/skills/news/tests/              # 18
 uv run --package huxley-skill-radio pytest packages/skills/radio/tests/            # 19
-uv run --package huxley-skill-telegram pytest packages/skills/telegram/tests/  # 42
+uv run --package huxley-skill-telegram pytest packages/skills/telegram/tests/      # 90
 
 # Dev client
 cd web && bun run check

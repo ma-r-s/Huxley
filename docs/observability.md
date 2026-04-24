@@ -249,6 +249,31 @@ Diagnosing "my timer didn't fire after restart":
 3. If dropped, look for `restore_skipped_*` events with that id — the reason line tells you why.
 4. If restored but `inject_turn` never fired, jump to the [inject_turn queue events](#inject_turn-queue-events--diagnosing-dropped-or-queued-reminders) section — restore just re-enters the normal fire path.
 
+## Telegram messaging events — diagnosing lost or stale messages
+
+The `telegram.*` namespace covers both the call path (existing) and the messaging path (T1.11). Messaging-specific events:
+
+| Event                                      | When it fires                                                                                                                                                   | Key fields                                  |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| `telegram.transport.inbound_message`       | Pyrogram `MessageHandler` matched a private incoming message (echo-filter passed). Always fires; downstream may drop.                                           | `user_id`, `sender_display`, `text_chars`   |
+| `telegram.inbound.message_buffered`        | The skill accepted the message and appended it to the per-sender debounce buffer. Will trigger a flush after `debounce_seconds`.                                | `user_id`, `display`, `chars`               |
+| `telegram.inbound.unknown_dropped`         | Sender's `user_id` isn't in `_user_id_to_name` and `inbound.unknown_messages == "drop"` (default). Includes `hint` field for promoting the contact.             | `user_id`, `sender_display`                 |
+| `telegram.inbound.message_from_unknown`    | Same as above but `unknown_messages == "announce"` is set; the message is buffered as `"un número desconocido"`.                                                | `user_id`, `sender_display`                 |
+| `telegram.inbound.flushing`                | The debounce timer fired and the coalesced burst is about to call `inject_turn`. `message_count` shows how many messages the LLM will hear in one announcement. | `user_id`, `display`, `message_count`       |
+| `telegram.transport.fetch_unread_complete` | Backfill's Pyrogram pass finished walking dialogs.                                                                                                              | `messages`, `since_seconds`, `max_messages` |
+| `telegram.backfill.skipped`                | Backfill no-op (no resolved contacts in reverse map).                                                                                                           | `reason`                                    |
+| `telegram.backfill.no_unread`              | Backfill ran but found nothing within the window.                                                                                                               | (none)                                      |
+| `telegram.backfill.injecting`              | Backfill is about to call `inject_turn` with the coalesced summary.                                                                                             | `total`, `per_sender_counts`                |
+| `telegram.transport.sent_text`             | Outbound `send_message` reached Telegram successfully.                                                                                                          | `user_id`, `chars`                          |
+| `telegram.send_failed`                     | Outbound failed (RPCError, timeout, etc.); LLM-facing Spanish error returned to the user.                                                                       | `name`                                      |
+
+Diagnosing common failures:
+
+1. **"I sent a message and Huxley didn't read it"** — look for `telegram.transport.inbound_message`. If absent, the MessageHandler isn't seeing it (check filter: `private & incoming` — outbound echoes are deliberately filtered out). If present but no `message_buffered` followed, sender was dropped — check for `unknown_dropped`.
+2. **"My message was buffered but I never heard the announcement"** — look for `telegram.inbound.flushing`. If absent, the debounce timer never fired (check the buffer is alive, not closed by teardown). If `flushing` fires but no `coord.inject_turn` follows, the inject is being dropped — see [inject_turn queue events](#inject_turn-queue-events--diagnosing-dropped-or-queued-reminders).
+3. **"Backfill fired but the LLM said 'I have a message' without reading it"** — the prompt wasn't an instruction to the LLM. Verify `text_len` on `session.tx.conversation_message` is large enough to include the message bodies; if it's short (< 100 chars), the prompt may be missing the body content.
+4. **"Backfill on restart didn't fire at all"** — `_run_backfill` waits 5 s after `setup_complete` before injecting, so the OpenAI session has time to connect (otherwise the inject is lost — see the lessons in `docs/triage.md` T1.11). If you see `telegram.setup_complete` but never `telegram.backfill.injecting`, check whether the Pyrogram session re-authenticated mid-flight or the resolver returned no whitelisted user_ids.
+
 ## Skill failures
 
 When a skill's `handle()` raises, the coordinator catches it (see `docs/triage.md` T1.6) and emits two events:

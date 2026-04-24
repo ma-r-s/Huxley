@@ -21,14 +21,14 @@ Everything below is graded against that shape.
 
 These are pure HTTP-API skills or stateful in-memory flows. Each is a single `huxley-skill-<name>` package with its own deps.
 
-| Skill idea               | Pattern                                                                                                                                               |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Telegram outbound        | `send_message(contact, body)` → resolve contact via KV (`contact:carlos` → chat_id) → `httpx.post(...)` → return confirmation in `output`             |
-| Web search               | `search_web(query)` → call Brave/Bing/Tavily → return top results as text in `output`                                                                 |
-| News headlines           | `read_news(topic)` → hit a news API (cache last 5 minutes in KV) → return headlines text                                                              |
-| Weather                  | `get_weather(location)` → call OpenWeather → return short-form text                                                                                   |
-| Outbound call initiation | `call_contact(name)` → trigger a Twilio outbound call → return "llamando a Carlos." Just _initiating_ the call, not voice routing through Huxley.     |
-| Trivia game              | `start_trivia()` / `submit_answer()` — multi-turn flow with state held on `self._current_game`. Skill instance is long-lived; in-memory state is fine |
+| Skill idea                  | Pattern                                                                                                                                                                                                                                                                                                                 |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Telegram (calls + messages) | Lives in `huxley-skill-telegram`: `call_contact` + `send_message` outbound, p2p voice calls via `InputClaim`, inbound text via per-sender debounce/coalesce buffer + `inject_turn`, bounded backfill on connect. Single Pyrogram session shared across both modes. See [`docs/skills/telegram.md`](skills/telegram.md). |
+| Web search                  | `search_web(query)` → call Brave/Bing/Tavily → return top results as text in `output`                                                                                                                                                                                                                                   |
+| News headlines              | `read_news(topic)` → hit a news API (cache last 5 minutes in KV) → return headlines text                                                                                                                                                                                                                                |
+| Weather                     | `get_weather(location)` → call OpenWeather → return short-form text                                                                                                                                                                                                                                                     |
+| Outbound call initiation    | `call_contact(name)` → trigger a Twilio outbound call → return "llamando a Carlos." Just _initiating_ the call, not voice routing through Huxley.                                                                                                                                                                       |
+| Trivia game                 | `start_trivia()` / `submit_answer()` — multi-turn flow with state held on `self._current_game`. Skill instance is long-lived; in-memory state is fine                                                                                                                                                                   |
 
 For all of these:
 

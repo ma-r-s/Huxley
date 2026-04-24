@@ -1927,7 +1927,7 @@ Verify:
 
 ## T1.11 — `huxley-skill-telegram` — messaging features (send + receive + proactive inbox)
 
-**Status**: queued · **Task**: — · **Effort**: M (~1 week once T1.4 Stage 3 `background_task` is available; the send path is a day, receive path is the interesting half)
+**Status**: done (2026-04-24, smoke-tested live by Mario) · **Task**: — · **Effort**: M (1 day once blockers cleared; was sized at ~1 week pre-Stage-2b)
 
 **Problem.** The Telegram skill ships full-duplex voice calls (inbound + outbound) but no text messaging — no send, no read, no proactive "Carlos sent you a message" turn. The same skill owns the Pyrogram session, the contact list, the auth context, and already feeds the COMMS channel. Messaging has been the obvious completion since calls landed, deferred only because calls were the harder architectural problem and because messaging was misfiled under T1.9 as a provider-neutral abstraction.
 
@@ -1966,28 +1966,35 @@ Verify:
 - One Pyrogram session lifecycle. The current skill's `setup()`/`teardown()` stays authoritative — message handlers register alongside call handlers.
 - Contact catalog: already a Catalog primitive consumer. Messaging reads the same catalog, no duplication.
 
-### Critic notes (Gate 2 — pending)
+### Critic notes (Gate 2 — completed 2026-04-24)
 
-Critic should specifically test:
+Critic agent ran against the v1 design (send_message + inbound MessageHandler + inject_turn). Five real findings, all incorporated:
 
-1. Does "one skill, many mechanisms" actually stay clean when three tool shapes (call/send/read) + two background tasks (call listener, message listener) + two view shapes (CALL, MESSAGE_THREAD) all live in the same class? Or does the skill file hit the "too many concerns" smell and want internal decomposition?
-2. Is `dedup_key` semantics in `inject_turn` rich enough for rapid-fire messages? (If 5 messages arrive in 2 seconds, does the user hear 5 announcements, 1 announcement for the last, or a summary?)
-3. Voice notes: transcribe vs. passthrough. Which better matches "grandpa just wants to know what was said"?
-4. Inbound-message-during-active-call: does the skill defer the `inject_turn` until the call ends? How? `FocusManager` patience, or skill-level queuing?
-5. Does the MESSAGE_THREAD view require full history sync (potentially megabytes of past messages) or just recent context? Backfill policy.
+1. **Dedup is "drop in-flight, replace queued" — not "coalesce all"**. Verified at `coordinator.py:1441-1467`: a same-key inject that arrives while another is firing is silently dropped. Per-contact `dedup_key=msg:<user_id>` would lose rapid-fire messages. **Fix**: skill-side debounce buffer (per-contact, configurable seconds; default 2.5s) coalesces bursts into one inject. The `dedup_key` becomes defense-in-depth, not the primary mechanism.
+2. **No backfill on restart is a real safety gap for AbuelOS**. A 4am crash + missed "¿estás bien, papá?" is invisible to a blind user with no notification surface. **Fix**: bounded backfill on connect — last 6h, max 50 messages, coalesced per-contact, single inject on first idle.
+3. **MessageHandler echo loop**. Default filters catch the userbot's own outbound. **Fix**: `filters.private & filters.incoming`.
+4. **Unknown-sender silent drop**. Family contacts that haven't messaged the userbot aren't in `_user_id_to_name`; their messages would be dropped silently. **Fix**: announce as `"un número desconocido"` with body, mirroring the inbound-call UX.
+5. **MessageHandler registration race**. Must register before `app.start()` or messages arriving in the first seconds are missed. **Fix**: `_wire_peer_audio_handler` renamed to `_wire_handlers`, registers MessageHandler in the same pre-start pass.
 
-### Definition of Done (unlocked — finalize at Gate 2 critic)
+Implementation shape decision (UX-driven elegance):
 
-Placeholder for sizing:
+- Pure-logic `InboxBuffer` in new `inbox.py` (per-contact debounce + coalesce, no Pyrogram coupling, unit-testable in isolation).
+- Transport stays single-class (one Pyrogram session = one transport).
+- Skill stays single-class with thin handlers delegating to the buffer.
 
-- [ ] `send_message`, `read_unread`, `reply_to_last` tools land with tests
-- [ ] `background_task`-supervised inbound message handler; `inject_turn` with dedup fires on messages from whitelisted contacts
-- [ ] Voice-note transcription path via Whisper (or provider's realtime transcription if reusable)
-- [ ] Contact whitelist in persona config; unknown senders are silently logged but do not fire turns
-- [ ] Regression: inbound message during active call does not interrupt call audio (FocusManager stays correct)
-- [ ] Tests: tool handlers, background task supervision, inject_turn dedup, whitelist gating
-- [ ] Docs: `docs/skills/telegram.md` extended (messaging section); `docs/extensibility.md` messaging entry updated (no longer a gap)
-- [ ] MESSAGE_THREAD view + inbox LIST view wired to the skill — **only after T2.5 ships**; file as a follow-up if T2.5 is not available when T1.11 starts
+Skipped from v1 (file as T1.11.b follow-ups): `read_unread`, `reply_to_last`, voice notes (send + receive), MESSAGE_THREAD UI.
+
+### Definition of Done (locked 2026-04-24)
+
+- [ ] `send_message(contact, text)` tool with Spanish error strings, 4096-char Telegram cap, contact list interpolated into description (mirrors `call_contact`)
+- [ ] `TelegramTransport` accepts `on_message` callback, `send_text(user_id, text)`, `fetch_unread(since_seconds, max_messages)`; registers `MessageHandler(filters.private & filters.incoming)` BEFORE `app.start()`
+- [ ] New `inbox.py` — `InboxBuffer` class: per-contact debounce + coalesce, configurable debounce window, asyncio-native, no Pyrogram imports
+- [ ] Skill `_on_inbound_message`: whitelist lookup → unknown-fallback as `"un número desconocido"` → buffer.add → debounce-flush callback fires `inject_turn(NORMAL, dedup_key=f"msg_burst:{user_id}")`
+- [ ] Bounded backfill on connect: last 6h, max 50 messages, per-contact coalesce, single inject on first idle
+- [ ] Inbound during active call: queues behind COMMS via existing Stage 2b machinery (regression test asserts no interruption)
+- [ ] Tests: `inbox.py` unit (debounce, multi-message coalesce, multi-contact independence, cap, flush_all); `transport.py` (send_text happy/error, fetch_unread filtering, MessageHandler filter set); `skill.py` (send tool happy/contact-not-found/text-empty/text-too-long, inbound known/unknown contact, debounced flush, backfill summary inject, queue-behind-call regression)
+- [ ] Docs: `docs/skills/telegram.md` extended with messaging section (debounce + backfill rationale + footguns); `docs/extensibility.md` messaging entry no longer a gap; ADR if any architectural decision crystallized
+- [ ] Memory file if a durable lesson emerges (e.g., dedup semantics gotcha)
 
 ### Blocked by
 
@@ -2001,6 +2008,40 @@ Placeholder for sizing:
 - **Depends on** Stage 2b + Stage 5 for correct focus-plane semantics.
 - **Enables** retirement of the "messaging" gap in `docs/extensibility.md`.
 - **Canonical consumer of** MESSAGE_THREAD treatment in T2.5.
+
+### Implementation log (2026-04-24)
+
+**Shape**: three files instead of one. `inbox.py` (new) holds the pure-logic per-sender debounce/coalesce buffer with no Pyrogram or asyncio-loop coupling — unit-testable in isolation against an injected flush callback. `transport.py` gains an `on_message` callback param, `send_text`, `fetch_unread`, and a renamed `_wire_handlers` that registers the Pyrogram MessageHandler before `app.start()`. `skill.py` stays single-class with thin handlers (`_send_message`, `_on_inbound_message`, `_flush_inbox`, `_run_backfill`) delegating buffer logic to the inbox.
+
+**Critic round 2 surfaced 5 must-fixes, all incorporated**:
+
+1. **Straddle-race double-inject (high)**. First cut popped the sender state from `_senders` before spawning the flush task. Messages arriving during the flush would create a fresh state and fire a second independent inject — exactly the bug the buffer was meant to prevent. Fix: state stays resident through the flush, late arrivals append to the same state, post-flush hook starts a follow-up debounce. Locked by a regression test that uses a parked event to slow the flush and assert late arrivals land in a follow-up burst, not a parallel one.
+2. **Unknown-sender spam default (high)**. Default was "announce" — opens a DoS vector for an always-on-audio user. Symmetric fix: `inbound.unknown_messages: drop` default (mirrors `auto_answer: contacts_only` for calls), opt-in `announce` for locked-down deployments.
+3. **Spanish accents in user-facing strings (high)**. The CLAUDE.md ASCII rule applies to comments/identifiers, not user-facing strings the LLM has to TTS. Without accents the model mispronounces "número" / "envió" / "colgó" / "máximo". Fixed in send_message description, error messages, and call-end inject prompt.
+4. **`_end_tasks` not awaited at teardown (high)**. Two task sets for the same purpose (`_tasks` + `_end_tasks`) was smell; teardown only awaited one. Unified into `_tasks` via a single `_spawn_task` helper.
+5. **Cosmetic/structural (med/low)**: dropped `dedup_key=msg_backfill` (single-shot inject, no resend path); removed duplicate 4096-char check from transport (skill is sole authority + has the nice Spanish error); added `transport.is_in_call` public property; skipped MessageHandler registration when `on_message=None`; slice instead of `del` for the per-sender cap.
+
+**Definition of Done check**:
+
+- [x] `send_message(contact, text)` tool with Spanish error strings, 4096 cap, contact list interpolated into description
+- [x] `TelegramTransport` accepts `on_message` callback, `send_text`, `fetch_unread`; registers `MessageHandler(filters.private & filters.incoming)` before `app.start()`
+- [x] New `inbox.py` — `InboxBuffer` class with straddle-safe per-sender debounce/coalesce
+- [x] Skill `_on_inbound_message`: whitelist lookup → unknown-sender drop-by-default (announce opt-in) → buffer.add → flush callback fires `inject_turn(NORMAL, dedup_key=msg_burst:<user_id>)`
+- [x] Bounded backfill on connect (default 6h, 50 msg cap), per-contact coalesce, single inject on first idle
+- [x] Inbound during active call: queues behind COMMS via existing Stage 2b machinery (NORMAL priority test asserts the `dedup_key=msg_burst` shape)
+- [x] Tests: 90 telegram (27 inbox + 48 skill + 15 transport — grew during smoke-test fixes for backfill body inclusion + body cap)
+- [x] Docs: `docs/skills/telegram.md` extended with messaging section + debounce rationale + footguns; `docs/extensibility.md` messaging entry rewritten (no longer a gap)
+- [x] Browser smoke test (Mario, 2026-04-24): verified live message read-aloud, the new instruction-style prompt, and the post-restart backfill flow with bodies. Mario's verdict: "It actually seems to work really well!"
+
+**Smoke-test surfaced 3 more issues beyond the critic round** (2026-04-24):
+
+1. **The inject prompt was a bare fact, not an instruction**. First live message: the LLM treated `"mario te dijo: 'X'"` as a notification ("Got it, do you want to reply?") and never read the body aloud. Fix: rewrote `build_announcement` and `build_backfill_announcement` as explicit instructions ("Léeselo al usuario tal cual y pregúntale si quiere responder"). Pattern matches the working `_on_claim_end` call-ended inject. The lesson is general: **inject prompts that include user-relevant CONTENT need explicit "léeselo al usuario" framing** — bare statements get treated as silent notifications.
+2. **Backfill fired before the OpenAI Realtime session was ready**. Setup completed at T+0, backfill `inject_turn` fired at T+0.3s, OpenAI session connected at T+0.5s. The inject acquired focus but `session.tx.conversation_message` never followed — the inject was effectively lost. Fix: added a 5s delay (`_BACKFILL_STARTUP_DELAY_S`) before the backfill `inject_turn` so the session has time to connect. Live messages don't have this problem — they arrive only after the user is already interacting (session is up by definition).
+3. **Backfill prompt offered to read messages but didn't include the bodies**. LLM said "Tienes 1 mensaje, ¿quieres que te lo lea?" but had nothing to read on follow-up. Fix: changed `build_backfill_announcement` to take `dict[str, list[str]]` (per-sender bodies, not just counts) and inline the bodies in the prompt with a per-sender cap of 5 to keep the prompt size sane.
+
+**Lessons captured to memory**: the dedup-in-flight semantics + skill-side debounce/coalesce pattern. See [`feedback_inject_dedup_in_flight.md`](file:///Users/mario/.claude/projects/-Users-mario-Projects-Personal-Code-Huxley/memory/feedback_inject_dedup_in_flight.md). Also: inject prompts as instructions, not facts — see [`feedback_inject_prompts_are_instructions.md`](file:///Users/mario/.claude/projects/-Users-mario-Projects-Personal-Code-Huxley/memory/feedback_inject_prompts_are_instructions.md).
+
+**Note on `_run_backfill` task supervision**: T1.4 Stage 3 `background_task` supervision was listed as a blocker, but the backfill is fire-once per session (not a long-lived loop) so a tracked `asyncio.create_task` via the skill's `_spawn_task` helper is sufficient. Persisting backfill state across restarts isn't required because Telegram's own unread cursor is the source of truth — every restart re-reads what's actually unread per Telegram, no skill-side bookkeeping needed.
 
 ---
 

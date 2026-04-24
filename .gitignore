@@ -5,9 +5,11 @@ packages/core/.env
 .env.*.local
 web/.env.local
 # Telegram app credentials (Mario exports the my.telegram.org/apps
-# page as a plain file in repo root; kept out of git).
-telegram
-telegram.*
+# page as a plain file in repo root; kept out of git). Leading slash
+# anchors to repo root so we don't accidentally swallow paths like
+# packages/skills/telegram/ or any *.py file named telegram_*.
+/telegram
+/telegram.*
 *.session
 *.session-journal
 
