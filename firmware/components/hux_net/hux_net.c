@@ -26,6 +26,11 @@ static const char *TAG = "hux_net";
  * all under 4 KB). Revisit when inbound audio chunks grow. */
 #define WS_BUFFER_SIZE     8192
 #define WS_RECONNECT_MS    2000
+/* Bounded send timeout — if TCP stalls, the 50 Hz audio sender task
+ * must fail fast, not wedge. Longer than any reasonable flush on a
+ * healthy LAN (~1 ms); short enough that a stall becomes a warning
+ * we can act on before the watchdog does. */
+#define WS_SEND_TIMEOUT_MS 200
 
 static EventGroupHandle_t s_wifi_events = NULL;
 static esp_websocket_client_handle_t s_ws = NULL;
@@ -196,8 +201,17 @@ bool hux_net_send_text(const char *data, size_t len) {
         return false;
     }
     int sent = esp_websocket_client_send_text(s_ws, data, (int)len,
-                                              portMAX_DELAY);
-    return sent == (int)len;
+                                              pdMS_TO_TICKS(WS_SEND_TIMEOUT_MS));
+    if (sent != (int)len) {
+        /* Partial / timed-out send: don't retry here — the caller
+         * (mic task, log drain) decides whether to back off or drop.
+         * Logging is also restrained to WARN not ERROR so a single
+         * flaky Wi-Fi moment doesn't flood the stream. */
+        ESP_LOGW(TAG, "ws.send.incomplete requested=%u sent=%d",
+                 (unsigned)len, sent);
+        return false;
+    }
+    return true;
 }
 
 void hux_net_send_log(const hux_log_entry_t *entry) {
