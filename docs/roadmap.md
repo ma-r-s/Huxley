@@ -36,7 +36,7 @@ Make Huxley what it claims to be in [`vision.md`](./vision.md): a framework anyo
 
 ### Later
 
-- [P1] **Proactive notifications** (`ctx.notify(text)`): the single missing primitive that prevents reminders / inbound-message skills today. SDK gains a method that injects a synthetic system turn through `SessionManager`; protocol gains a server-initiated turn-start message. Should land before AbuelOS-v∞ work begins. See [`extensibility.md`](./extensibility.md) for the gap analysis.
+- ✅ **Proactive notifications** (`ctx.inject_turn` / `ctx.inject_turn_and_wait`) — shipped via the focus-plane completion (T1.4 Stage 2b/3/5). First production consumers are `huxley-skill-timers` (medication reminders) and `huxley-skill-telegram` (inbound-message announcements + post-restart unread backfill).
 - [P1] **Per-skill secret interpolation** in `persona.yaml`: support `${HUXLEY_TELEGRAM_TOKEN}` so personas declare the shape of the secret without storing it. Decide before stage 4 ships.
 - [P2] **Background-task pattern for skills** (BLE, MQTT, polling daemons): formalize the "skill spawns an asyncio task in setup()" convention into an SDK helper so the framework can supervise / restart / log task crashes. Today it works but the framework is blind to failures.
 - **Voice provider abstraction**: extract OpenAI Realtime as one implementation of a `VoiceProvider` interface. Trigger: a credible second provider exists. Not speculative.
@@ -81,17 +81,16 @@ Each is its own `huxley-skill-*` package.
 
 1. ✅ **`huxley-skill-news`** — Open-Meteo + Google News RSS, persona-agnostic. See [`skills/news.md`](./skills/news.md).
 2. ✅ **`huxley-skill-radio`** — curated HTTP/Icecast streams via ffmpeg. See [`skills/radio.md`](./skills/radio.md).
-3. **`huxley-skill-music`** — local music library (separate from radio; library management + search)
-4. **`huxley-skill-messaging`** — outbound text to a contact via WhatsApp or voice memo. **This is the concrete escape hatch that makes the `never_say_no` constraint more than a verbal promise.**
-5. **`huxley-skill-contacts`** — config-driven contact list that messaging depends on
+3. ✅ **`huxley-skill-telegram`** — full-duplex p2p voice calls AND text messages over a single Pyrogram userbot session. See [`skills/telegram.md`](./skills/telegram.md). Provides the concrete escape hatch that makes the `never_say_no` constraint more than a verbal promise (the LLM can _do_ something instead of refusing).
+4. **`huxley-skill-music`** — local music library (separate from radio; library management + search)
 
 ### v∞ — when firmware lands
 
-Blocked on the **Proactive notifications** framework primitive (see Huxley → Later above) — reminders and inbound messages need it. Tracking the gap in [`extensibility.md`](./extensibility.md).
+Proactive notifications primitive shipped (`ctx.inject_turn`); both reminders and inbound messages already have working consumers. The remaining v∞ items below are hardware + persona-shaped, not framework-shaped.
 
 - ESP32 walky-talky client — replaces browser as production client, same WebSocket protocol
 - Physical always-findable button — the only UI element the user touches
-- **Reminders** — meds, appointments
+- **Reminders** — meds, appointments (timers skill ships the primitive; medication-specific UX still needs persona-side work)
 - **Memory / recall** — _"¿de qué hablamos ayer?"_
 - **Companionship mode** — open-ended chat
 
