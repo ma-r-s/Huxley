@@ -1589,6 +1589,115 @@ class TestInjectTurn:
         assert coordinator._dialog_interface_name is not None
 
 
+class TestInjectTurnAndWaitPlaybackDrain:
+    """`inject_turn_and_wait` returns after the CLIENT has finished
+    playing the narration, not just after the server finishes sending
+    it. Regression for the 2026-04-24 Telegram inbound-call smoke test:
+    without the drain wait, a caller chaining `inject_turn_and_wait`
+    → `start_input_claim` would `audio_clear` and guillotine the
+    announcement mid-sentence ("X te está llamando, cone—").
+
+    The drain is computed from `_turn_audio_bytes_sent /
+    _CLIENT_AUDIO_BYTES_PER_SECOND` plus `_PLAYBACK_DRAIN_SAFETY_MS` of
+    headroom; the test forges audio-delta bytes to exercise the
+    computation deterministically.
+    """
+
+    async def test_drain_wait_sleeps_for_audio_duration(
+        self,
+        coordinator: TurnCoordinator,
+    ) -> None:
+        """Feed the coordinator 1 second's worth of audio bytes. The
+        drain wait should sleep for ~1s (plus safety margin), not
+        return immediately.
+        """
+        import asyncio as _asyncio
+        import time as _time
+
+        # 1 second of PCM16 mono @ 24kHz = 48000 bytes.
+        one_second_bytes = 48_000
+        coordinator._turn_audio_first_sent_at = _time.monotonic()
+        coordinator._turn_audio_bytes_sent = one_second_bytes
+
+        started = _time.monotonic()
+        await _asyncio.wait_for(coordinator._wait_for_client_playback_drain(), timeout=2.0)
+        elapsed_ms = (_time.monotonic() - started) * 1000
+
+        # Must sleep at least the audio duration minus a tiny early-exit
+        # tolerance. The safety margin means it'll be slightly longer.
+        assert elapsed_ms >= 950, (
+            f"drain wait returned after only {elapsed_ms:.0f}ms;"
+            f" expected ≥ ~1000ms for 1s of audio"
+        )
+        # But not absurdly longer — should be under 2s.
+        assert elapsed_ms < 1500, (
+            f"drain wait took {elapsed_ms:.0f}ms; safety headroom should be ~80ms, not hundreds"
+        )
+
+    async def test_drain_wait_is_noop_when_no_audio_sent(
+        self,
+        coordinator: TurnCoordinator,
+    ) -> None:
+        """If the injected turn ended with no audio (text-only response,
+        or a cancel before audio_delta), the drain wait returns
+        immediately — don't sleep for phantom bytes."""
+        import time as _time
+
+        assert coordinator._turn_audio_first_sent_at is None
+        assert coordinator._turn_audio_bytes_sent == 0
+
+        started = _time.monotonic()
+        await coordinator._wait_for_client_playback_drain()
+        elapsed_ms = (_time.monotonic() - started) * 1000
+
+        assert elapsed_ms < 20, f"no-audio path should return immediately, took {elapsed_ms:.0f}ms"
+
+    async def test_drain_wait_is_noop_when_drain_time_already_passed(
+        self,
+        coordinator: TurnCoordinator,
+    ) -> None:
+        """Slow servers can finish response_done well after the audio
+        would have played. If `first_sent_at + duration` is already
+        past, sleep 0 — don't sleep negative."""
+        import time as _time
+
+        # 100ms of audio, but "started" 5 seconds ago.
+        coordinator._turn_audio_first_sent_at = _time.monotonic() - 5.0
+        coordinator._turn_audio_bytes_sent = 4_800  # 100ms worth
+
+        started = _time.monotonic()
+        await coordinator._wait_for_client_playback_drain()
+        elapsed_ms = (_time.monotonic() - started) * 1000
+
+        assert elapsed_ms < 20, (
+            f"past-drain path should return immediately, took {elapsed_ms:.0f}ms"
+        )
+
+    async def test_audio_delta_resets_counters_on_fresh_stream(
+        self,
+        coordinator: TurnCoordinator,
+    ) -> None:
+        """When a new audio stream begins (speaking_state transitions
+        to speaking), the byte counters reset — otherwise the drain
+        wait for stream N would include bytes from stream N-1."""
+        import time as _time
+
+        # Simulate turn N-1 having sent some bytes.
+        coordinator._turn_audio_first_sent_at = _time.monotonic() - 10.0
+        coordinator._turn_audio_bytes_sent = 100_000
+
+        # Now on_audio_delta fires for a new stream. speaking_state
+        # was released after the prior turn ended, so is_speaking is
+        # False when this first delta arrives.
+        await coordinator.on_audio_delta(bytes(2400))  # 50ms of PCM
+
+        # Counters reset: first_sent_at is "just now", bytes reflect
+        # only this stream.
+        assert coordinator._turn_audio_bytes_sent == 2400
+        assert coordinator._turn_audio_first_sent_at is not None
+        assert coordinator._turn_audio_first_sent_at > _time.monotonic() - 1.0
+
+
 class TestInjectTurnQueue:
     """Stage 1d: queue + dedup behavior for `inject_turn`.
 

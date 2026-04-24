@@ -15,6 +15,12 @@ For the duration of either call:
 
 When the claim ends — grandpa presses PTT, a medication reminder preempts, the peer hangs up, an error fires — the skill hangs up the Telegram call via `on_claim_end`. Peer hangup is detected via ntgcalls' `DISCARDED_CALL` event, which causes `peer_audio_chunks()` to exhaust naturally; the speaker pump sees the iterator end and closes the claim with `NATURAL`.
 
+**UI surface during a call**: the skill sets `InputClaim.title=<contact_name>` so UI-capable clients can render "Hablando con Mario" as the status (huxley-web does; the ESP32 audio-only client ignores it). The orb on huxley-web also drives its animation from the real peer audio during `live` orb state, so the ring reacts to the other person's voice in real time. See `docs/protocol.md` for the `claim_started` wire payload.
+
+**Single-slot policy**: while a call is active, a second inbound ring raises `ClaimBusyError` at the coordinator. The skill catches it and sends `reject_call` to the peer (they get a BUSY signal). The existing transport-level `_active_user_id` check is still the first line of defense; `ClaimBusyError` is defense in depth.
+
+**Claim-end narration**: on `NATURAL` claim end (peer hangup), the skill fires `inject_turn("la llamada con X terminó")` via `asyncio.create_task` — it cannot await inline because `on_claim_end` runs inside the FocusManager's actor callback chain; awaiting `inject_turn`'s `fm.wait_drained()` from there would deadlock on `Queue.join`. The `create_task` defers the inject to the next event-loop tick when the FM is idle. Fire-through (vs. queue) is guaranteed by the framework's `is_ended`-gated inject check — see [the focus-plane decisions ADR](../decisions.md#2026-04-24--post-smoke-test-fixes-to-the-focus-plane-is_ended-gate-playback-drain-wait-idle-inject-during-claim-claim-title-for-ui).
+
 ## Tools
 
 - **`call_contact(name: str)`** — place a call to the named contact. `name` is lowercased + whitespace-stripped before lookup, so user speech and persona config don't need to match case. Returns `{ok: true, contact: <name>}` on success; otherwise `{ok: false, error: "..."}` with an LLM-facing Spanish message explaining the failure ("no tengo a X en la lista", "no pude conectar la llamada").

@@ -341,6 +341,14 @@ class InputClaim(SideEffect):
     # Exception from this callback is logged but does not propagate.
     on_claim_end: Callable[[ClaimEndReason], Awaitable[None]] | None = None
 
+    # Human-readable label for the claim. Surfaced to UI-capable
+    # clients via the `claim_started` wire message as `title`. Right
+    # for the name of the person on the other end of a call ("Mario"),
+    # the label of a voice memo ("Nota de voz"), or whatever else is
+    # meaningful to show while the claim is active. Leave `None` for
+    # anonymous claims; the client falls back to a generic label.
+    title: str | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class ClaimHandle:

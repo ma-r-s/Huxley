@@ -1232,6 +1232,17 @@ Critic's verdict: "stop and redesign." Redesigned above; Gate 3 cleared to proce
 - **Co-lands with T2.7** docs reconciliation.
 - **Blocks T1.11** (messaging) — messaging UX depends on final focus-plane shape.
 
+### Post-ship smoke-test corrections (2026-04-24)
+
+Gate 5 shipped in commit `32d4be3`; Gate-5 critic follow-ups in `72fa1ad`. Live smoke testing against real Telegram + OpenAI Realtime then surfaced four more issues that the unit tests did not catch. All fixed in the post-smoke-test follow-up commit. Details and rationale captured in [the 2026-04-24 ADR](./decisions.md#2026-04-24--post-smoke-test-fixes-to-the-focus-plane-is_ended-gate-playback-drain-wait-idle-inject-during-claim-claim-title-for-ui):
+
+1. `on_claim_end` skill callbacks firing `inject_turn` queued their own request behind themselves (observer hadn't scrubbed `_claim_obs` yet) — fixed by gating on `observer.is_ended`.
+2. `inject_turn_and_wait` returned at server-side `response_done`, not after client finished playing — announcement got flushed by the subsequent `start_input_claim`'s `audio_clear`. Fixed by computing drain time from cumulative audio bytes and sleeping until playback expected to complete.
+3. `NORMAL`-priority inject from idle during a live claim preempted the claim. Fixed by extending the `_claim_obs`-gate to NORMAL (was only BLOCK_BEHIND_COMMS). Only PREEMPT now barges.
+4. Orb showed "Listening" during an active call and didn't react to the peer's voice. Fixed by adding `InputClaim.title`, plumbing it through `claim_started` wire message, and driving the `live` orb state from the real playback analyser with a `sqrt` boost for Telegram's Opus-compressed peer audio.
+
+**Lesson locked in**: skill callbacks fired from inside FocusManager's actor task (`on_claim_end`, `on_patience_expired`) must schedule any `ctx.inject_turn(...)` via `asyncio.create_task`, not await inline — `inject_turn` internally awaits `fm.wait_drained()`, which waits for `Queue.join` on a mailbox the FM actor is currently processing, deadlocking. Documented in `docs/skills/telegram.md` and captured as a memory entry.
+
 ---
 
 ### T1.10 — `huxley-skill-comms-telegram` ✅ done (`441120c`, 2026-04-22)

@@ -347,3 +347,34 @@ Timers (the Stage 3b forcing function) writes `timer:<id>` JSON entries via `ctx
 - **Documentation reconciled.** `concepts.md` describes current state; `io-plane.md` gets a stronger historical-artifact disclaimer with pointers to authoritative sources; `skills/README.md` has the three-tier priority guide.
 - **Known follow-up (filed as D7)**: a `BLOCK_BEHIND_COMMS` alert queued behind a 2-hour call fires 2 hours late — safety-adjacent for medication. TTL on queued injects is deferred until a real consumer (reminders skill) ships.
 - **Revisit**: if ALERT stays unused for 6+ months prune it; if a skill needs call-waiting, promote single-slot to a `claim_policy` field; if `BLOCK_BEHIND_COMMS` dominates real usage, consider making it the default — all data-driven, not speculative.
+
+## 2026-04-24 — Post-smoke-test fixes to the focus plane: is_ended gate, playback-drain wait, idle-inject-during-claim, claim title for UI
+
+**Context**: Same-day smoke-testing of the 2026-04-24 focus-plane completion (commit `32d4be3` + critic follow-up `72fa1ad`) surfaced four distinct issues that the unit tests did not catch:
+
+1. **"Fighting to tell me the call ended"** — a skill's `on_claim_end` callback firing `ctx.inject_turn("la llamada terminó")` got its request queued behind itself, because the coordinator's own post-callback scrub of `_claim_obs` runs AFTER the skill's callback returns. The `_claim_obs is not None` gate added in commit `72fa1ad` was TOO aggressive — a claim in the middle of ending is functionally over.
+2. **Announcement guillotined by the claim** — `inject_turn_and_wait` returned at server-side `response_done`, which fires when the LLM has finished sending audio but before the client has finished playing it. The next `start_input_claim` emits `audio_clear` (buffer flush) and cut the tail of the announcement mid-sentence. Observed reliably on every inbound Telegram call.
+3. **Idle-NORMAL inject during an active call preempted the call** — the critic's SB-1 from the prior commit had identified `BLOCK_BEHIND_COMMS`; the fix missed that `NORMAL` has the same problem. NORMAL-idle-fire wasn't checking for an active claim.
+4. **Orb had no in-call identity** — during a live Telegram call the status label read "Listening" and the ring animation used synthesized audio, not the peer's actual voice.
+
+**Decision**: Four targeted fixes shipped in a single follow-up commit.
+
+1. **Gate the claim-busy check on `observer.is_ended`.** `ClaimObserver` sets `_ended = True` at the top of `_end()`, BEFORE firing skill callbacks. The coordinator's inject-gate now checks `_claim_obs is not None and not _claim_obs.is_ended`. Skills firing `inject_turn` from `on_claim_end` see the claim as "tearing down, not active" and fire through instead of queueing. New regression test `test_inject_from_on_claim_end_fires_through_not_queued` locks this in.
+
+2. **Wait for client playback to drain in `inject_turn_and_wait`.** Coordinator tracks cumulative audio bytes per response (`_turn_audio_bytes_sent`) and the monotonic time of the first delta (`_turn_audio_first_sent_at`). After `response_done` signals, `_wait_for_client_playback_drain()` sleeps `max(0, first_sent_at + bytes/48000 + 80ms_safety - now)` before returning. `AudioStream.patience` field unrelated — this is a DIALOG-side fix, not a content-side fix. 4 unit tests cover duration, no-audio no-op, past-drain no-op, and counter reset on fresh stream.
+
+3. **Extend the idle-claim gate to all non-PREEMPT priorities.** `NORMAL` now also queues behind an active claim. Only `PREEMPT` (unconditional urgency, e.g. fire alarm) barges through. Symmetry with `BLOCK_BEHIND_COMMS` was the intent from day one; the earlier fix just missed the NORMAL case.
+
+4. **Claim title surfaces to UI.**
+   - SDK: `InputClaim.title: str | None` new field.
+   - Protocol: `claim_started` wire message gains `title` ("Mario", "Nota de voz", etc.).
+   - Telegram skill passes `title=<contact_name>` for outbound + `title=<display>` for inbound.
+   - Web client: status label flips to "Hablando con Mario" during `live` orb state.
+   - Orb: `live` state now drives animation from the real playback analyser (same FFT path `speaking` uses) instead of synth audio. `sqrt(speakLevel)` boost compensates for Telegram's Opus-compressed peer audio being ~3-5× quieter at the analyser than LLM TTS.
+
+**Consequences**:
+
+- **The focus plane is now actually usable in production for Telegram calls.** The smoke-test catch rate confirms the unit tests weren't sufficient here — the behavior that bit (order-of-operations between skill callback and coordinator scrub, client-buffer playback vs. server response_done, non-linear dynamic range in telephony audio) required live audio to surface.
+- **Unit test suite grew by 8 tests** (4 drain-wait, 3 idle-claim-inject, 1 on-claim-end regression). Total core tests: 370 (was 358 at ship of 32d4be3). All existing tests still green.
+- **Known residual edge case**: `inject_turn_and_wait`'s drain computation uses the coordinator-side byte count, not a client acknowledgement. A client that drops behind real-time playback (slow CPU, tab backgrounded) would miss the drain window and the announcement could still be flushed. Acceptable given the 80ms safety margin; revisit if real users hit it.
+- **Revisit**: If Mario's testing exposes more cases, track the per-case velocity — the smoke-test loop is currently paying for itself, so keep running it after any focus-plane change.

@@ -489,7 +489,7 @@ async def handle(self, tool_name: str, args: dict) -> ToolResult:
                 on_mic_frame=writer.write,
                 speaker_source=None,
                 on_claim_end=writer.close,
-                yield_policy=YieldPolicy.YIELD_ABOVE,
+                title="Nota de voz",
             ),
         )
 ```
@@ -499,17 +499,21 @@ async def handle(self, tool_name: str, args: dict) -> ToolResult:
 - Mic PCM frames go to your `on_mic_frame` handler, not the voice provider
 - The voice provider session is suspended (resumes automatically when the claim ends)
 - Optional `speaker_source` async iterator streams bytes to the client speaker (bidirectional I/O for calls)
+- The claim runs on `Channel.COMMS` (priority 150). Content on CONTENT (audiobooks, radio) parks as `BACKGROUND/MUST_PAUSE` under patience and auto-resumes when the claim ends — no user command needed
+- Single-slot policy: a second concurrent `start_input_claim` or side-effect `InputClaim` raises `ClaimBusyError`. Catch it and reject the peer cleanly (see `huxley-skill-telegram` for the reference)
+
+**Claim `title`**: human-readable label for the claim, surfaced to UI-capable clients via the `claim_started` wire message. Set it to the contact name on a call, the file name on a voice memo, whatever is meaningful to show while the claim is active. Audio clients ignore it; the orb on huxley-web uses it as the status label ("Hablando con Mario"). Leave `None` for anonymous claims.
 
 **The claim ends when**:
 
 - Your `speaker_source` iterator exhausts
 - The user PTTs (escape hatch — always available)
 - Your skill cancels via the returned handle
-- A higher-priority `inject_turn` preempts (per your `yield_policy`)
+- An `inject_turn(priority=InjectPriority.PREEMPT)` fires — PREEMPT unconditionally preempts COMMS. `NORMAL` and `BLOCK_BEHIND_COMMS` both queue behind an active claim and drain after it ends
 
 In every case, your `on_claim_end(reason)` callback fires so you can clean up (flush files, close sockets, hang up calls).
 
-**`yield_policy`** — same enum as `AudioStream`. Default `YIELD_CRITICAL` means only `CRITICAL`-urgency injected turns can preempt your claim. A voice-memo skill might use `YIELD_ABOVE` (lets `INTERRUPT`-urgency reminders through); a calls skill uses `YIELD_CRITICAL` (only another critical event interrupts an active call).
+**Preemption tiers** — see [the inject_turn priority guide](#priority-optional-priority). `PREEMPT` is the escape hatch for genuinely top-severity events (fire alarm, evacuation); `NORMAL` and `BLOCK_BEHIND_COMMS` both respect a live claim. Most urgent-reminder skills want `BLOCK_BEHIND_COMMS`, not `PREEMPT`.
 
 ## Logging — make your skill debuggable
 
