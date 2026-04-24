@@ -152,6 +152,50 @@ kilobyte-scale payloads pay the PSRAM tax.
 
 ---
 
+## 2026-04-24 — LWIP TCP send buffer sized for 50 Hz audio bursts
+
+**Decision**: Override the IDF default `CONFIG_LWIP_TCP_SND_BUF_DEFAULT`
+(5760 B) and `CONFIG_LWIP_TCP_WND_DEFAULT` (5760 B) to 32 KB each, and
+enable `CONFIG_LWIP_WND_SCALE` with `CONFIG_LWIP_TCP_RCV_SCALE=4`.
+
+**Why this matters:**
+The mic pipeline emits 1306-byte JSON audio frames at 50 Hz = 65 KB/s.
+The 5760 B LWIP send buffer holds ~4 of these. Under momentary
+ACK lag from the server (OpenAI upload jitter, Python websockets
+scheduling), the buffer fills within ~80 ms. `esp_websocket_client`'s
+write path calls `esp_transport_poll_write(timeout=200ms)`; if the
+socket isn't writable in that window, it returns 0, which the library
+treats as fatal and tears the connection down. Symptom: the WS
+flapped ~500 ms after every PTT press, with exactly 16–25 frames
+received server-side before the drop.
+
+**Diagnosis path** (recorded in
+[`debugging.md`](./debugging.md#diagnosing-ws--tcp-flaps)):
+
+1. Serial capture of board-side logs via `firmware/tools/serial-capture.sh`.
+2. `CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y` in sdkconfig.defaults +
+   `esp_log_level_set("websocket_client", ESP_LOG_DEBUG)` at boot —
+   exposed the exact error line from inside esp_websocket_client.
+3. `sudo firmware/tools/tcpdump-ws.sh` captured the wire-level pattern
+   for cross-reference.
+
+**Gotcha worth writing down**: `sdkconfig.defaults` edits only apply
+on first configure. If the generated `sdkconfig` already exists with
+old values, `idf.py build` keeps them silently. Delete `sdkconfig`
+and run `idf.py reconfigure`, then `grep` the new values to confirm.
+Burnt ~30 minutes on this in the v0.2.2 debug cycle.
+
+**Alternative rejected**: client-side rate limiting / batched frames /
+custom backpressure on top of esp_websocket_client. All fight the
+symptom instead of the root cause and add code. A per-socket
+`setsockopt(SO_SNDBUF)` via an esp_websocket_client hook would also
+work but requires patching the managed component.
+
+**Revisit** if: a future traffic pattern (video frames, larger chunks)
+blows past 32 KB. Bump further — the lwip ceiling is 64 KB.
+
+---
+
 ## 2026-04-24 — Audio data plane bypasses the control-plane queue
 
 **Decision**: Inbound `audio` messages are recognised in `hux_net`

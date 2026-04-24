@@ -148,5 +148,17 @@ void app_main(void) {
      * next to audio frames. */
     hux_log_set_remote_level('I');
 
+    /* WS transport stack stays at default INFO. Uncomment the block
+     * below (and keep `CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y` in
+     * sdkconfig.defaults) to light up per-frame DEBUG logs on
+     * serial — useful for WS / TCP / TLS diagnosis.
+     * See firmware/docs/debugging.md.
+     *
+     *   esp_log_level_set("websocket_client", ESP_LOG_DEBUG);
+     *   esp_log_level_set("transport_ws",     ESP_LOG_DEBUG);
+     *   esp_log_level_set("transport_base",   ESP_LOG_DEBUG);
+     *   esp_log_level_set("esp-tls",          ESP_LOG_DEBUG);
+     */
+
     ESP_LOGI(TAG, "app_main complete — tasks running");
 }

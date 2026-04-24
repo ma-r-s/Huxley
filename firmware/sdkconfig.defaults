@@ -29,8 +29,12 @@ CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
 # -- Logging -------------------------------------------------------------
+# Runtime default stays at INFO. Compile-time ceiling raised to DEBUG so
+# `esp_log_level_set("<tag>", ESP_LOG_DEBUG)` at runtime actually emits
+# — with MAXIMUM=DEFAULT the DEBUG calls are compiled out entirely.
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
-CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=y
+# CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT is not set
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
 
 # -- Core dumps to flash (panic -> dedicated partition) ------------------
 # Decoded on host with `python -m esp_coredump info_corefile` — see
@@ -46,6 +50,19 @@ CONFIG_FREERTOS_HZ=1000
 
 # -- Network / Wi-Fi -----------------------------------------------------
 CONFIG_ESP_WIFI_ENABLE_WPA3_SAE=y
+
+# -- LWIP / TCP ----------------------------------------------------------
+# 50 Hz audio × 1.3 KB/frame = 65 KB/s of outbound burst. The LWIP
+# per-socket send buffer default is ~5760 B — exactly 4 frames —
+# which fills within 80 ms and causes `esp_transport_poll_write(0)`
+# timeout inside esp_websocket_client. The library treats the timeout
+# as fatal and reconnects; symptom is a WS flap ~500 ms after PTT
+# press. Holding ~25 frames of buffer + enabling window scaling gives
+# comfortable headroom for any brief server-side ACK lag.
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=32768
+CONFIG_LWIP_TCP_WND_DEFAULT=32768
+CONFIG_LWIP_WND_SCALE=y
+CONFIG_LWIP_TCP_RCV_SCALE=4
 
 # -- Compiler ------------------------------------------------------------
 CONFIG_COMPILER_OPTIMIZATION_PERF=y

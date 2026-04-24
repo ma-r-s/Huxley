@@ -26,7 +26,10 @@ static const char *TAG = "hux_net";
 /* Network ring buffer sized for the largest single WS text frame we
  * reasonably expect in v0 (hello / state / status / audio deltas are
  * all under 4 KB). Revisit when inbound audio chunks grow. */
-#define WS_BUFFER_SIZE     8192
+/* 32 KB is big enough to buffer ~20 consecutive audio frames (1.3 KB
+ * each) if the TCP window stalls briefly. The old 8 KB ceiling was
+ * exactly at 6 audio frames — one slow ACK and we'd drop sends. */
+#define WS_BUFFER_SIZE     32768
 #define WS_RECONNECT_MS    2000
 /* Bounded send timeout — if TCP stalls, the 50 Hz audio sender task
  * must fail fast, not wedge. Longer than any reasonable flush on a

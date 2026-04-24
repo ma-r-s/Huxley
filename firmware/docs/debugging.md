@@ -155,6 +155,60 @@ If you don't have the ELF (a field device), you need the ELF that
 was flashed — save `build/huxley-firmware.elf` alongside every
 release binary.
 
+## Diagnosing WS / TCP flaps
+
+When the board connects, works briefly, then drops the WS connection,
+the tool-chain below is what isolated the v0.2.2 flap (TCP send buffer
+too small → `esp_transport_poll_write(0)` timeout → `esp_websocket_client`
+reconnect) to a sysconfig bug in <15 minutes.
+
+1. **Start serial capture** in one terminal:
+
+   ```sh
+   firmware/tools/serial-capture.sh
+   tail -f /tmp/huxley-debug/serial-latest.log
+   ```
+
+2. **Start wire capture** in another (needs sudo):
+
+   ```sh
+   sudo firmware/tools/tcpdump-ws.sh
+   ```
+
+3. **Enable DEBUG on the WS transport stack** by uncommenting the
+   `esp_log_level_set("websocket_client", ESP_LOG_DEBUG)` block in
+   `main.c`. Flash and reproduce.
+
+4. **Read serial first** — it names the failure inside the library:
+
+   ```
+   E transport_ws: Error transport_poll_write(0)
+   E websocket_client: esp_transport_write() returned 0 ...errno=0
+   ```
+
+   Means the TCP socket isn't writable within the caller's timeout —
+   typically send buffer full.
+
+5. **Confirm with tcpdump**: open the pcap in Wireshark or read with
+   `tcpdump -r /tmp/huxley-debug/ws-latest.pcap -ttt -n`. Look for:
+   - tiny `win=...` from the board (undersized receive window)
+   - bursts of data ending with no matching ACKs
+   - RSTs or graceful FINs in the window preceding the WS close
+
+6. **sdkconfig gotcha**: edits to `sdkconfig.defaults` **only apply
+   on first configure**. If the generated `sdkconfig` already exists
+   with old values, `idf.py build` keeps the old values. To force a
+   reload:
+
+   ```sh
+   rm sdkconfig
+   idf.py reconfigure
+   grep -E "LWIP_TCP_SND_BUF|LWIP_TCP_WND|LWIP_WND_SCALE" sdkconfig
+   ```
+
+   The grep is mandatory — verify the value you set actually made it
+   into the active config before flashing.
+
 ## Runtime log levels
 
 Default: `INFO`. Bump a single component to `DEBUG` without

@@ -95,10 +95,13 @@ static esp_err_t i2s_bring_up(void) {
     ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_i2s_rx, &std_cfg),
                         TAG, "i2s.init_rx");
 
-    /* Only enable RX for v0.2.1 — TX stays idle until ES8311 is wired
-     * in v0.3. Enabling an unused TX channel would park LRCK/BCLK at
-     * the codec's expected cadence without driving DOUT, which is
-     * fine but unnecessary. */
+    /* Enable both TX and RX even though v0.2.1 only reads. In MASTER
+     * role the controller drives MCLK/BCLK/LRCK from whichever
+     * direction is active; empirically (and per Waveshare's BSP)
+     * enabling just RX leaves ES7210 not locking — symptom is
+     * `esp_codec_dev_read` returning ESP_FAIL. Idle TX pushes
+     * silence out DOUT; harmless until v0.3 wires ES8311. */
+    ESP_RETURN_ON_ERROR(i2s_channel_enable(s_i2s_tx), TAG, "i2s.enable_tx");
     ESP_RETURN_ON_ERROR(i2s_channel_enable(s_i2s_rx), TAG, "i2s.enable_rx");
     return ESP_OK;
 }
