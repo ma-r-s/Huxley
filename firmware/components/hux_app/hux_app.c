@@ -1,5 +1,6 @@
 #include "hux_app.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -7,7 +8,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "mbedtls/base64.h"
 
+#include "hux_audio.h"
+#include "hux_net.h"
 #include "hux_proto.h"
 
 static const char *TAG = "hux_app";
@@ -49,6 +53,75 @@ static void transition(app_state_t next) {
     s_state = next;
 }
 
+/* ------------------------------------------------------------------ */
+/*  PTT + mic streaming glue                                          */
+/* ------------------------------------------------------------------ */
+
+/* Outbound audio-frame sink. Runs on the mic task (prio 8), not here.
+ * Static buffers are safe because the mic task is the only caller —
+ * one-frame-at-a-time. BSS-resident, zero stack impact.
+ *
+ * ~960 B PCM -> ~1280 B base64 -> ~1306 B JSON envelope. Sized
+ * generously so a future frame-size bump (40 ms?) doesn't require a
+ * doc update. */
+static uint8_t s_b64_buf[1500];
+static char    s_envelope[1700];
+
+static void mic_sink(const int16_t *pcm, size_t samples) {
+    const size_t pcm_bytes = samples * sizeof(int16_t);
+    size_t b64_len = 0;
+    int rc = mbedtls_base64_encode(s_b64_buf, sizeof(s_b64_buf), &b64_len,
+                                   (const unsigned char *)pcm, pcm_bytes);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "mic.b64_failed rc=-0x%04x pcm_bytes=%u",
+                 -rc, (unsigned)pcm_bytes);
+        return;
+    }
+    /* Hand-format the envelope. base64 output is ASCII-safe so no
+     * JSON escaping is required; cJSON would be 6 allocations per
+     * frame at 50 Hz, which is exactly what the audio seam (v0.1.2)
+     * was built to avoid. */
+    int n = snprintf(s_envelope, sizeof(s_envelope),
+                     "{\"type\":\"audio\",\"data\":\"%.*s\"}",
+                     (int)b64_len, (const char *)s_b64_buf);
+    if (n <= 0 || (size_t)n >= sizeof(s_envelope)) {
+        ESP_LOGW(TAG, "mic.envelope_overflow n=%d", n);
+        return;
+    }
+    if (!hux_net_send_text(s_envelope, (size_t)n)) {
+        /* hux_net logs its own WARN with the incomplete-send reason;
+         * we don't double-log per frame here. A stalled WS drops a
+         * few frames; the server handles the gap. */
+        return;
+    }
+}
+
+/* Non-heap control-message sender. Used for tiny JSON messages
+ * (ptt_start / ptt_stop / wake_word / reset) where the payload is a
+ * static literal. */
+static void send_control(const char *literal) {
+    (void)hux_net_send_text(literal, strlen(literal));
+}
+
+static void enter_ptt(void) {
+    if (s_state != ST_READY) {
+        ESP_LOGW(TAG, "app.ptt.ignored_press state=%s", state_name(s_state));
+        return;
+    }
+    /* Order is: announce -> arm mic. The server tolerates a frame or
+     * two arriving before `ptt_start` but shouldn't have to. */
+    send_control("{\"type\":\"ptt_start\"}");
+    hux_audio_mic_start();
+}
+
+static void leave_ptt(void) {
+    /* Stop the mic first so no more audio frames race the commit.
+     * The server's PTT-stop handler commits the buffer to OpenAI —
+     * late frames would be ignored, but the log noise is worse. */
+    hux_audio_mic_stop();
+    send_control("{\"type\":\"ptt_stop\"}");
+}
+
 static void handle_ws_message(hux_app_ws_message_t *msg) {
     hux_msg_t parsed;
     if (!hux_proto_parse(msg->data, msg->len, &parsed)) {
@@ -68,6 +141,12 @@ static void handle_ws_message(hux_app_ws_message_t *msg) {
                 return;
             }
             transition(ST_READY);
+            /* Kick the server into CONVERSING so PTT presses work
+             * immediately. `wake_word` is named legacy-style in the
+             * protocol (docs/protocol.md) — it's really a "start
+             * session" signal. Sending it once per connection matches
+             * the web dev client's behaviour. */
+            send_control("{\"type\":\"wake_word\"}");
             break;
 
         default:
@@ -113,16 +192,13 @@ static void dispatch(hux_app_event_t *ev) {
             break;
 
         case HUX_APP_EV_BUTTON_K2_PRESSED:
-            /* v0.2.0: log only — PTT semantics land in v0.2 when the
-             * mic pipeline exists. hux_button_log already covers the
-             * "edge detected" line; this entry marks the handoff into
-             * the state machine so future traces can see the press
-             * land at the app boundary. */
             ESP_LOGI(TAG, "app.ptt.pressed");
+            enter_ptt();
             break;
 
         case HUX_APP_EV_BUTTON_K2_RELEASED:
             ESP_LOGI(TAG, "app.ptt.released");
+            leave_ptt();
             break;
     }
 }
@@ -150,6 +226,14 @@ void hux_app_start(void) {
     BaseType_t ok = xTaskCreate(app_task, "hux_app", APP_TASK_STACK, NULL,
                                 APP_TASK_PRIO, NULL);
     configASSERT(ok == pdPASS);
+
+    /* Register the mic sink once — it stays registered for the life
+     * of the firmware. Gating is via hux_audio_mic_start/stop from
+     * enter_ptt/leave_ptt, not via swapping the sink. Safe to set
+     * before hux_audio_init() runs: hux_audio stores the pointer
+     * atomically, and the mic task only dereferences it after
+     * `hux_audio_mic_start()` is called. */
+    hux_audio_set_mic_sink(mic_sink);
 }
 
 bool hux_app_post_event(const hux_app_event_t *event, bool from_isr) {
