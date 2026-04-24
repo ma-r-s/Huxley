@@ -1,7 +1,7 @@
-"""Comms-Telegram skill — place or receive a p2p Telegram voice call.
+"""Telegram skill — place or receive a p2p Telegram voice call.
 
 Outbound: `call_contact(name)` — resolves a name from the contacts list
-to a Telegram user and starts an InputClaim that bridges grandpa's
+to a Telegram user and starts an InputClaim that bridges the user's
 mic/speaker to the live call.
 
 Inbound: when `inbound.enabled` is true the skill connects eagerly at
@@ -10,13 +10,13 @@ events. On ring it accepts immediately (preserves WebRTC audio quality),
 announces via inject_turn, waits for the LLM to finish speaking, then
 bridges audio via ctx.start_input_claim — no LLM tool call needed.
 
-See `docs/skills/comms-telegram.md` for the user-facing flow and
+See `docs/skills/telegram.md` for the user-facing flow and
 `docs/research/telegram-voice.md` for why the transport is shaped the
 way it is.
 
-Config (persona.yaml `skills.comms_telegram:` block):
+Config (persona.yaml `skills.telegram:` block):
 
-    comms_telegram:
+    telegram:
       api_id: 12345678
       api_hash: "abc..."
       userbot_phone: "+573153283397"
@@ -46,7 +46,7 @@ from huxley_sdk import (
     ToolDefinition,
     ToolResult,
 )
-from huxley_skill_comms_telegram.transport import (
+from huxley_skill_telegram.transport import (
     TelegramTransport,
     TransportError,
     normalize_phone,
@@ -59,7 +59,7 @@ if TYPE_CHECKING:
     from huxley_sdk import SkillContext
 
 
-class CommsTelegramSkill:
+class TelegramSkill:
     """p2p Telegram voice-call skill — outbound via call_contact,
     inbound via answer_incoming_call (when inbound.enabled)."""
 
@@ -99,7 +99,7 @@ class CommsTelegramSkill:
 
     @property
     def name(self) -> str:
-        return "comms_telegram"
+        return "telegram"
 
     @property
     def tools(self) -> list[ToolDefinition]:
@@ -177,7 +177,7 @@ class CommsTelegramSkill:
         # development and demos.
         if not isinstance(api_id, int) or not isinstance(api_hash, str) or not api_hash:
             await ctx.logger.awarning(
-                "comms_telegram.credentials_missing",
+                "telegram.credentials_missing",
                 hint=(
                     "Set HUXLEY_TELEGRAM_API_ID + HUXLEY_TELEGRAM_API_HASH env "
                     "vars (or `api_id` / `api_hash` in persona.yaml); get them "
@@ -190,9 +190,9 @@ class CommsTelegramSkill:
         else:
             if not self._contacts:
                 await ctx.logger.awarning(
-                    "comms_telegram.no_contacts_configured",
+                    "telegram.no_contacts_configured",
                     hint=(
-                        "persona.yaml skills.comms_telegram.contacts is empty -- "
+                        "persona.yaml skills.telegram.contacts is empty -- "
                         "call_contact will always fail. Add at least one name->phone."
                     ),
                 )
@@ -222,7 +222,7 @@ class CommsTelegramSkill:
                 await self._build_reverse_map()
 
         await ctx.logger.ainfo(
-            "comms_telegram.setup_complete",
+            "telegram.setup_complete",
             contacts=list(self._contacts),
             configured=self._transport is not None,
             inbound=self._inbound_enabled,
@@ -248,13 +248,13 @@ class CommsTelegramSkill:
                 resolved += 1
             except Exception:
                 await self._logger.awarning(
-                    "comms_telegram.inbound.resolve_failed",
+                    "telegram.inbound.resolve_failed",
                     name=name,
                     phone=phone,
                     hint="contact won't be recognized on incoming calls",
                 )
         await self._logger.ainfo(
-            "comms_telegram.inbound.reverse_map_built",
+            "telegram.inbound.reverse_map_built",
             total=len(self._contacts),
             resolved=resolved,
         )
@@ -268,7 +268,7 @@ class CommsTelegramSkill:
                     return _error_result("call_contact requires a non-empty `name` argument")
                 return await self._call_contact(name_raw.lower().strip())
             case _:
-                await self._logger.awarning("comms_telegram.unknown_tool", tool=tool_name)
+                await self._logger.awarning("telegram.unknown_tool", tool=tool_name)
                 return _error_result(f"Unknown tool: {tool_name}")
 
     # --- Outbound tool ---
@@ -277,7 +277,7 @@ class CommsTelegramSkill:
         assert self._logger is not None
 
         if self._transport is None:
-            await self._logger.awarning("comms_telegram.called_unconfigured", name=name)
+            await self._logger.awarning("telegram.called_unconfigured", name=name)
             return _error_result(
                 "Las llamadas de Telegram no estan configuradas en este dispositivo. "
                 "No puedo llamar a nadie hasta que alguien configure las credenciales."
@@ -286,7 +286,7 @@ class CommsTelegramSkill:
         phone = self._contacts.get(name)
         if phone is None:
             await self._logger.ainfo(
-                "comms_telegram.contact_not_found",
+                "telegram.contact_not_found",
                 name=name,
                 known=list(self._contacts),
             )
@@ -302,13 +302,13 @@ class CommsTelegramSkill:
             await self._transport.place_call(user_id)
         except TransportError as exc:
             self._active_contact_name = None
-            await self._logger.aexception("comms_telegram.place_call_failed", name=name)
+            await self._logger.aexception("telegram.place_call_failed", name=name)
             return _error_result(
                 f"No pude conectar la llamada a {name}: {exc}. "
                 "Puede ser que el contacto no tenga Telegram con ese numero."
             )
 
-        await self._logger.ainfo("comms_telegram.call_started", name=name, user_id=user_id)
+        await self._logger.ainfo("telegram.call_started", name=name, user_id=user_id)
         return ToolResult(
             output=json.dumps({"ok": True, "contact": name}),
             side_effect=InputClaim(
@@ -336,14 +336,14 @@ class CommsTelegramSkill:
 
         # Reject immediately if already in a call.
         if self._transport is not None and self._transport._active_user_id is not None:
-            await self._logger.ainfo("comms_telegram.inbound.rejected_busy", user_id=user_id)
+            await self._logger.ainfo("telegram.inbound.rejected_busy", user_id=user_id)
             await self._transport.reject_call(user_id)
             return
 
         # Reject unknown callers when auto_answer is contacts_only.
         name = self._user_id_to_name.get(user_id)
         if self._auto_answer == "contacts_only" and name is None:
-            await self._logger.ainfo("comms_telegram.inbound.rejected_unknown", user_id=user_id)
+            await self._logger.ainfo("telegram.inbound.rejected_unknown", user_id=user_id)
             if self._transport is not None:
                 await self._transport.reject_call(user_id)
             return
@@ -351,9 +351,7 @@ class CommsTelegramSkill:
         display = name or "numero desconocido"
         self._pending_incoming = user_id
 
-        await self._logger.ainfo(
-            "comms_telegram.inbound.ring", user_id=user_id, caller_name=display
-        )
+        await self._logger.ainfo("telegram.inbound.ring", user_id=user_id, caller_name=display)
 
         # Accept immediately -- any delay here degrades WebRTC inbound audio quality.
         self._active_contact_name = display
@@ -363,7 +361,7 @@ class CommsTelegramSkill:
         except TransportError:
             self._active_contact_name = None
             self._pending_incoming = None
-            await self._logger.aexception("comms_telegram.inbound.accept_failed", user_id=user_id)
+            await self._logger.aexception("telegram.inbound.accept_failed", user_id=user_id)
             await self._ctx.inject_turn(
                 f"Intente contestar la llamada de {display} pero fallo la conexion."
             )
@@ -373,14 +371,12 @@ class CommsTelegramSkill:
         # _active_user_id (on_ring_cancelled clears _pending_incoming).
         if self._pending_incoming != user_id:
             await self._logger.ainfo(
-                "comms_telegram.inbound.ring_expired_before_accept", user_id=user_id
+                "telegram.inbound.ring_expired_before_accept", user_id=user_id
             )
             return
         self._pending_incoming = None
 
-        await self._logger.ainfo(
-            "comms_telegram.inbound.call_accepted", user_id=user_id, name=display
-        )
+        await self._logger.ainfo("telegram.inbound.call_accepted", user_id=user_id, name=display)
 
         # Announce the caller and wait for the LLM to finish speaking.
         # inject_turn_and_wait returns only after response_done fires so
@@ -409,7 +405,7 @@ class CommsTelegramSkill:
 
         name = self._user_id_to_name.get(user_id, "la persona")
         await self._logger.ainfo(
-            "comms_telegram.inbound.ring_cancelled", user_id=user_id, caller_name=name
+            "telegram.inbound.ring_cancelled", user_id=user_id, caller_name=name
         )
 
         if self._pending_incoming == user_id:
@@ -459,9 +455,7 @@ class CommsTelegramSkill:
         assert self._logger is not None
         contact = self._active_contact_name
         self._active_contact_name = None
-        await self._logger.ainfo(
-            "comms_telegram.claim_ended", reason=reason.value, contact=contact
-        )
+        await self._logger.ainfo("telegram.claim_ended", reason=reason.value, contact=contact)
 
         if self._transport is not None:
             transport = self._transport
@@ -479,13 +473,13 @@ class CommsTelegramSkill:
             inject_task = asyncio.create_task(ctx.inject_turn(prompt))
             self._end_tasks.add(inject_task)
             inject_task.add_done_callback(self._end_tasks.discard)
-            await self._logger.ainfo("comms_telegram.injecting_call_ended_turn", contact=who)
+            await self._logger.ainfo("telegram.injecting_call_ended_turn", contact=who)
 
     async def teardown(self) -> None:
         if self._transport is not None:
             await self._transport.disconnect()
         if self._logger is not None:
-            await self._logger.ainfo("comms_telegram.teardown_complete")
+            await self._logger.ainfo("telegram.teardown_complete")
 
 
 def _error_result(message: str) -> ToolResult:

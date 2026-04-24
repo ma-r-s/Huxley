@@ -1,4 +1,4 @@
-# `huxley-skill-comms-telegram`
+# `huxley-skill-telegram`
 
 Places p2p Telegram voice calls to named contacts and bridges the call to grandpa's mic/speaker through the existing `InputClaim` plumbing. First consumer of `InputClaim` with a non-trivial `speaker_source` — proves out the "skill drives both directions of audio, framework provides the seat at the single microphone/speaker" design.
 
@@ -21,11 +21,11 @@ When the claim ends — grandpa presses PTT, a medication reminder preempts, the
 
 ## Persona config
 
-The `skills.comms_telegram:` block in `persona.yaml`:
+The `skills.telegram:` block in `persona.yaml`:
 
 ```yaml
 skills:
-  comms_telegram:
+  telegram:
     api_id: 12345678 # int, from my.telegram.org/apps
     api_hash: "abcdef..." # 32-char hex
     userbot_phone: "+57…" # first-run auth only; persists in session file

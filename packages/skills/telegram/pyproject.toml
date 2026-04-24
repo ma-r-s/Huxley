@@ -1,7 +1,7 @@
 [project]
-name = "huxley-skill-comms-telegram"
+name = "huxley-skill-telegram"
 version = "0.1.0"
-description = "Telegram voice-call skill for Huxley — bridges grandpa's mic/speaker to a Telegram peer via py-tgcalls."
+description = "Telegram skill for Huxley — p2p voice calls (and, coming, messaging) via py-tgcalls + pyrogram."
 requires-python = ">=3.13"
 dependencies = [
     "huxley-sdk",
@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.entry-points."huxley.skills"]
-comms_telegram = "huxley_skill_comms_telegram:CommsTelegramSkill"
+telegram = "huxley_skill_telegram:TelegramSkill"
 
 [dependency-groups]
 dev = [
@@ -34,7 +34,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/huxley_skill_comms_telegram"]
+packages = ["src/huxley_skill_telegram"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

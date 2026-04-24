@@ -135,7 +135,7 @@ One connection per PWA. On connect, the server sends a `hello` message with the 
 
 ### Comms note (calls, emergency, family)
 
-**This PWA has no calling features. It has no emergency receive. It has no family integration.** If the user's voice agent needs to reach other people (to call family, send an emergency alert, share a voice note), that capability is implemented as a **skill on the server**, using a third-party comms platform (e.g. Telegram via `huxley-skill-comms-telegram`). Family members interact with the user via _their_ regular apps — Telegram, WhatsApp, phone calls — not through this PWA.
+**This PWA has no calling features. It has no emergency receive. It has no family integration.** If the user's voice agent needs to reach other people (to call family, send an emergency alert, share a voice note), that capability is implemented as a **skill on the server**, using a third-party comms platform (e.g. Telegram via `huxley-skill-telegram`). Family members interact with the user via _their_ regular apps — Telegram, WhatsApp, phone calls — not through this PWA.
 
 The PWA talks to the Huxley user. Huxley talks to the world through its skills.
 

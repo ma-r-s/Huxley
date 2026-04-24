@@ -7,10 +7,10 @@ members = [
     "huxley",
     "huxley-sdk",
     "huxley-skill-audiobooks",
-    "huxley-skill-comms-telegram",
     "huxley-skill-news",
     "huxley-skill-radio",
     "huxley-skill-system",
+    "huxley-skill-telegram",
     "huxley-skill-timers",
 ]
 
@@ -458,41 +458,6 @@ dev = [
 ]
 
 [[package]]
-name = "huxley-skill-comms-telegram"
-version = "0.1.0"
-source = { editable = "packages/skills/comms-telegram" }
-dependencies = [
-    { name = "huxley-sdk" },
-    { name = "kurigram" },
-    { name = "ntgcalls" },
-    { name = "py-tgcalls" },
-    { name = "tgcrypto" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "huxley-sdk", editable = "packages/sdk" },
-    { name = "kurigram", specifier = ">=2.2,<3" },
-    { name = "ntgcalls", specifier = ">=2.2.1b2" },
-    { name = "py-tgcalls", specifier = "==2.2.11" },
-    { name = "tgcrypto" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mypy", specifier = ">=1.13" },
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "pytest-asyncio", specifier = ">=0.24" },
-]
-
-[[package]]
 name = "huxley-skill-news"
 version = "0.1.0"
 source = { editable = "packages/skills/news" }
@@ -563,6 +528,41 @@ dev = [
 
 [package.metadata]
 requires-dist = [{ name = "huxley-sdk", editable = "packages/sdk" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=1.13" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
+]
+
+[[package]]
+name = "huxley-skill-telegram"
+version = "0.1.0"
+source = { editable = "packages/skills/telegram" }
+dependencies = [
+    { name = "huxley-sdk" },
+    { name = "kurigram" },
+    { name = "ntgcalls" },
+    { name = "py-tgcalls" },
+    { name = "tgcrypto" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "huxley-sdk", editable = "packages/sdk" },
+    { name = "kurigram", specifier = ">=2.2,<3" },
+    { name = "ntgcalls", specifier = ">=2.2.1b2" },
+    { name = "py-tgcalls", specifier = "==2.2.11" },
+    { name = "tgcrypto" },
+]
 
 [package.metadata.requires-dev]
 dev = [

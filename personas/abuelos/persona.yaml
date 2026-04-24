@@ -200,7 +200,7 @@ skills:
 
   # Telegram voice-call skill — `call_contact(name)` tool. Places a p2p
   # Telegram call and bridges grandpa's mic/speaker through the active
-  # InputClaim. See docs/skills/comms-telegram.md for the architecture.
+  # InputClaim. See docs/skills/telegram.md for the architecture.
   #
   # api_id / api_hash / userbot_phone are secrets — they come from env
   # vars (HUXLEY_TELEGRAM_API_ID, HUXLEY_TELEGRAM_API_HASH,
@@ -213,7 +213,7 @@ skills:
   # stripped). A contact must have messaged the userbot at least once
   # so kurigram can resolve them by phone — cold lookups fail with
   # PEER_ID_INVALID.
-  comms_telegram:
+  telegram:
     contacts:
       # Target phone from spikes/ (Mario's personal Telegram) — lets us
       # end-to-end test the skill by dialing Mario from the userbot.

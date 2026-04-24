@@ -3,7 +3,7 @@ members = [
     "packages/sdk",
     "packages/core",
     "packages/skills/audiobooks",
-    "packages/skills/comms-telegram",
+    "packages/skills/telegram",
     "packages/skills/news",
     "packages/skills/radio",
     "packages/skills/system",
@@ -13,7 +13,7 @@ members = [
 [tool.uv.sources]
 huxley-sdk = { workspace = true }
 huxley-skill-audiobooks = { workspace = true }
-huxley-skill-comms-telegram = { workspace = true }
+huxley-skill-telegram = { workspace = true }
 huxley-skill-news = { workspace = true }
 huxley-skill-radio = { workspace = true }
 huxley-skill-system = { workspace = true }
@@ -50,7 +50,7 @@ known-first-party = [
     "huxley",
     "huxley_sdk",
     "huxley_skill_audiobooks",
-    "huxley_skill_comms_telegram",
+    "huxley_skill_telegram",
     "huxley_skill_news",
     "huxley_skill_radio",
     "huxley_skill_system",

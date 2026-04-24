@@ -207,7 +207,7 @@ class TelegramTransport:
         await call_py.start()
         self._app = app
         self._call_py = call_py
-        await logger.ainfo("comms_telegram.transport.connected")
+        await logger.ainfo("telegram.transport.connected")
 
     def _wire_peer_audio_handler(self, call_py: object) -> None:
         """Attach stream_frame, RINGING_CALL, and chat_update filters.
@@ -232,7 +232,7 @@ class TelegramTransport:
             if not saw_first_frame["value"]:
                 saw_first_frame["value"] = True
                 await logger.ainfo(
-                    "comms_telegram.transport.first_peer_frame",
+                    "telegram.transport.first_peer_frame",
                     frame_count=len(update.frames),
                     first_frame_bytes=len(update.frames[0].frame) if update.frames else 0,
                 )
@@ -251,7 +251,7 @@ class TelegramTransport:
         )
         async def on_ringing(_, update) -> None:  # type: ignore[no-untyped-def]
             await logger.ainfo(
-                "comms_telegram.transport.incoming_ring",
+                "telegram.transport.incoming_ring",
                 chat_id=update.chat_id,
             )
             if self._on_incoming_ring_cb is not None:
@@ -264,7 +264,7 @@ class TelegramTransport:
         )
         async def on_chat_update(_, update) -> None:  # type: ignore[no-untyped-def]
             await logger.ainfo(
-                "comms_telegram.transport.chat_update",
+                "telegram.transport.chat_update",
                 status=str(update.status),
                 chat_id=update.chat_id,
             )
@@ -307,7 +307,7 @@ class TelegramTransport:
             raise TransportError(msg)
         await self._start_call_bridge(user_id)
         await logger.ainfo(
-            "comms_telegram.transport.call_placed",
+            "telegram.transport.call_placed",
             user_id=user_id,
             transport="ExternalMedia",
             sample_rate=OUTBOUND_SAMPLE_RATE_HZ,
@@ -324,7 +324,7 @@ class TelegramTransport:
             raise TransportError(msg)
         await self._start_call_bridge(user_id)
         await logger.ainfo(
-            "comms_telegram.transport.call_accepted",
+            "telegram.transport.call_accepted",
             user_id=user_id,
             transport="ExternalMedia",
             sample_rate=OUTBOUND_SAMPLE_RATE_HZ,
@@ -342,7 +342,7 @@ class TelegramTransport:
                 self._call_py.leave_call(user_id),  # type: ignore[attr-defined]
                 timeout=2.0,
             )
-        await logger.ainfo("comms_telegram.transport.call_rejected", user_id=user_id)
+        await logger.ainfo("telegram.transport.call_rejected", user_id=user_id)
 
     async def _start_call_bridge(self, user_id: int) -> None:
         """Set up inbound queue, send thread, play+record, heartbeat.
@@ -370,7 +370,7 @@ class TelegramTransport:
         send_thread = threading.Thread(
             target=self._send_loop_thread,
             daemon=True,
-            name="comms-telegram-send",
+            name="telegram-send",
         )
         send_thread.start()
         self._send_thread = send_thread
@@ -492,7 +492,7 @@ class TelegramTransport:
             total_frames_in_window = 200
             silence_pct = round(100.0 * silence / total_frames_in_window, 1)
             await logger.ainfo(
-                "comms_telegram.transport.heartbeat",
+                "telegram.transport.heartbeat",
                 peer_frames=self._peer_frames_received,
                 peer_bytes=self._peer_bytes_received,
                 peer_mean_rms=round(peer_rms, 1),
@@ -542,7 +542,7 @@ class TelegramTransport:
                 self._outbound_dropped_bytes += dropped
         if was_first:
             await logger.ainfo(
-                "comms_telegram.transport.first_send_pcm",
+                "telegram.transport.first_send_pcm",
                 chunk_bytes=len(pcm_24k_mono),
             )
 
@@ -559,9 +559,9 @@ class TelegramTransport:
         """
         q = self._inbound_queue
         if q is None:
-            await logger.awarning("comms_telegram.transport.speaker_source_no_queue")
+            await logger.awarning("telegram.transport.speaker_source_no_queue")
             return
-        await logger.ainfo("comms_telegram.transport.speaker_source_started")
+        await logger.ainfo("telegram.transport.speaker_source_started")
 
         # Discard frames buffered before the bridge started.
         flushed = 0
@@ -572,9 +572,7 @@ class TelegramTransport:
             except asyncio.QueueEmpty:
                 break
         if flushed:
-            await logger.ainfo(
-                "comms_telegram.transport.speaker_source_flushed_stale", count=flushed
-            )
+            await logger.ainfo("telegram.transport.speaker_source_flushed_stale", count=flushed)
 
         yielded = 0
         while not self._ended.is_set():
@@ -586,12 +584,12 @@ class TelegramTransport:
                 yielded += 1
                 if yielded == 1:
                     await logger.ainfo(
-                        "comms_telegram.transport.speaker_source_first_yield",
+                        "telegram.transport.speaker_source_first_yield",
                         chunk_bytes=len(chunk),
                     )
                 yield chunk
         await logger.ainfo(
-            "comms_telegram.transport.speaker_source_ended",
+            "telegram.transport.speaker_source_ended",
             yielded_total=yielded,
         )
 
@@ -607,7 +605,7 @@ class TelegramTransport:
         if self._active_user_id is None:
             return
         user_id = self._active_user_id
-        await logger.ainfo("comms_telegram.transport.ending_call", user_id=user_id)
+        await logger.ainfo("telegram.transport.ending_call", user_id=user_id)
 
         from pytgcalls.exceptions import NotInCallError
 
@@ -619,12 +617,12 @@ class TelegramTransport:
                 )
             except (NotInCallError, TimeoutError, Exception) as exc:
                 await logger.awarning(
-                    "comms_telegram.transport.leave_call_swallowed",
+                    "telegram.transport.leave_call_swallowed",
                     exc_type=type(exc).__name__,
                 )
 
         await self._tear_down_call()
-        await logger.ainfo("comms_telegram.transport.ended_call", user_id=user_id)
+        await logger.ainfo("telegram.transport.ended_call", user_id=user_id)
 
     async def _tear_down_call(self) -> None:
         self._ended.set()
@@ -661,7 +659,7 @@ class TelegramTransport:
                 await self._app.stop()  # type: ignore[attr-defined]
             self._app = None
         self._call_py = None
-        await logger.ainfo("comms_telegram.transport.disconnected")
+        await logger.ainfo("telegram.transport.disconnected")
 
 
 def normalize_phone(raw: str) -> str:
