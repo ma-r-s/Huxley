@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cJSON.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -13,6 +14,7 @@
 #include "freertos/task.h"
 
 #include "hux_app.h"
+#include "hux_log.h"
 
 static const char *TAG = "hux_net";
 
@@ -196,4 +198,44 @@ bool hux_net_send_text(const char *data, size_t len) {
     int sent = esp_websocket_client_send_text(s_ws, data, (int)len,
                                               portMAX_DELAY);
     return sent == (int)len;
+}
+
+void hux_net_send_log(const hux_log_entry_t *entry) {
+    if (entry == NULL || s_ws == NULL ||
+        !esp_websocket_client_is_connected(s_ws)) {
+        return; /* Best-effort — serial already has the line. */
+    }
+
+    /* cJSON handles quoting / escaping of anything weird in the log
+     * line (quotes, backslashes, control chars). Hand-rolled JSON
+     * formatting here would silently corrupt messages that contain
+     * those. The alloc cost is tolerable on the drain task — it runs
+     * at low priority and only fires for WARN+ lines. */
+    cJSON *root = cJSON_CreateObject();
+    if (root == NULL) {
+        return;
+    }
+    cJSON *data = cJSON_CreateObject();
+    if (data == NULL) {
+        cJSON_Delete(root);
+        return;
+    }
+    const char level_str[2] = {entry->level, '\0'};
+    cJSON_AddStringToObject(data, "level", level_str);
+    cJSON_AddStringToObject(data, "tag", entry->tag);
+    cJSON_AddStringToObject(data, "line", entry->line);
+    cJSON_AddNumberToObject(data, "ts", (double)entry->ts_ms);
+
+    cJSON_AddStringToObject(root, "type", "client_event");
+    cJSON_AddStringToObject(root, "event", "huxley.firmware_log");
+    cJSON_AddItemToObject(root, "data", data);
+
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (json == NULL) {
+        return;
+    }
+
+    (void)hux_net_send_text(json, strlen(json));
+    cJSON_free(json);
 }

@@ -12,6 +12,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "hux_log.h"
+
 typedef struct {
     const char *wifi_ssid;
     const char *wifi_password;
@@ -32,3 +34,15 @@ void hux_net_start(const hux_net_config_t *cfg);
  * off). Safe to call from any task.
  */
 bool hux_net_send_text(const char *data, size_t len);
+
+/**
+ * Sink callback compatible with `hux_log_set_sink`. Builds a
+ * `client_event` JSON envelope per docs/protocol.md:
+ *
+ *   {"type":"client_event","event":"huxley.firmware_log",
+ *    "data":{"level":"W","tag":"hux_net","line":"...","ts":12345}}
+ *
+ * Drops the entry silently if the WS isn't connected — remote logging
+ * is best-effort; serial already has the line.
+ */
+void hux_net_send_log(const hux_log_entry_t *entry);

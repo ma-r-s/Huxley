@@ -32,6 +32,14 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=y
 
+# -- Core dumps to flash (panic -> dedicated partition) ------------------
+# Decoded on host with `python -m esp_coredump info_corefile` — see
+# firmware/docs/debugging.md.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+CONFIG_ESP_COREDUMP_LOGS=y
+
 # -- FreeRTOS ------------------------------------------------------------
 # 1000 Hz tick so audio frame pacing (20 ms) is a whole number of ticks.
 CONFIG_FREERTOS_HZ=1000
