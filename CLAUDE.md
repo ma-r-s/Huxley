@@ -87,6 +87,20 @@ bun dev                              # http://localhost:5173
 bun run check                        # tsc --noEmit
 ```
 
+Firmware (ESP-IDF must be sourced first):
+
+```bash
+. ~/esp/esp-idf/export.sh
+cd firmware
+idf.py build                                            # compile for ESP32-S3
+idf.py -p /dev/cu.usbmodem2101 flash monitor            # flash + serial
+
+# Tests (see firmware/README.md §Tests for when to run which tier):
+cd firmware/tests && cmake -B build && cmake --build build --target check
+uv run --package huxley pytest packages/core/tests/unit/test_firmware_contract.py
+firmware/tools/smoke.sh                                  # end-to-end boot-to-READY
+```
+
 ## Rules
 
 - Always `uv` for Python, `bun` for web. Never `npm` / `pip` / `yarn`.

@@ -35,13 +35,24 @@ Append-only log of non-obvious calls. Format: date · context · decision · con
 
 **Context**: The server could support N clients with per-client session scoping. Grandpa is a single user and this is a one-user system.
 
-**Decision**: Server rejects a second connection with WebSocket close code `1008`. No per-client scoping anywhere.
+**Decision**: Server accepts at most one active client. When a second
+connection arrives, the server **closes the existing client with code
+`1001 — Replaced by new client`** and accepts the new one. No
+per-client scoping anywhere.
 
 **Consequences**:
 
 - Simpler state. No `client_id` plumbing.
+- Evict-old rather than reject-new is deliberate: the new connection
+  is almost always a browser reload or a re-flashed device, and
+  should win over a stale socket that may or may not be alive.
 - If multi-user ever matters, revisit — it would require refactoring `AudioServer` to track sessions per client and disambiguate server-sent events.
 - The browser dev client and the future ESP32 client cannot both be connected at once. That's fine: dev and prod are different environments.
+
+> Earlier drafts of this ADR (and `protocol.md` through v0.2.3) said the
+> second connection was rejected with `1008`. That was never the
+> implementation; corrected 2026-04-24 after firmware-contract pytest
+> locked down the actual behaviour.
 
 ---
 

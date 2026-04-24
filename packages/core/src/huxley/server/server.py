@@ -77,8 +77,11 @@ class AudioServer:
     """WebSocket server: one audio client at a time.
 
     Clients connect, exchange PCM audio and control events, and disconnect.
-    A second connection attempt while a client is active is rejected with
-    1008 Policy Violation.
+    When a second connection arrives while a client is active, the older
+    client is **evicted** (closed with code `1001 — Replaced by new
+    client`); the new client is accepted. Rationale: a fresh connect is
+    almost always a browser reload or a re-flashed device. See
+    ``docs/decisions.md`` § "One WebSocket client at a time".
     """
 
     def __init__(

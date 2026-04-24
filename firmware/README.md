@@ -76,6 +76,26 @@ If the board doesn't enumerate as `/dev/cu.usbmodem*`, hold **BOOT**,
 tap **RESET**, release BOOT — this puts the S3 into the download-mode
 bootloader.
 
+## Tests
+
+Three tiers, cheapest to most expensive:
+
+```sh
+# 1. Host unit tests — pure-C modules, no hardware needed (~1 s)
+cd firmware/tests && cmake -B build && cmake --build build --target check
+
+# 2. Server-side wire-contract tests — firmware ↔ server message shapes
+uv run --package huxley pytest packages/core/tests/unit/test_firmware_contract.py
+
+# 3. End-to-end smoke — boots the board, waits for READY on serial
+firmware/tools/smoke.sh              # uses currently-flashed firmware
+firmware/tools/smoke.sh --flash      # reflash + smoke
+```
+
+Run (1) and (2) before every commit that changes firmware C or
+server protocol. Run (3) before every commit that changes
+`hux_net`, `hux_app`, `main.c`, or `sdkconfig.defaults`.
+
 ## Server-side note
 
 The Huxley server binds to `localhost` by default. For the firmware to
