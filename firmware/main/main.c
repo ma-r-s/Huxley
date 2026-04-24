@@ -15,6 +15,8 @@
 #include "nvs_flash.h"
 
 #include "hux_app.h"
+#include "hux_board.h"
+#include "hux_button.h"
 #include "hux_log.h"
 #include "hux_net.h"
 #include "secrets.h"
@@ -106,15 +108,25 @@ void app_main(void) {
     }
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    /* App state machine first — net will post events into it as soon
-     * as Wi-Fi associates. */
+    /* App state machine first — net and button both post events into
+     * it, so the queue must exist before they start. */
     hux_app_start();
+
+    /* Shared on-board peripherals (I2C bus + TCA9555). Must run before
+     * any consumer of either — buttons read it, audio will enable the
+     * speaker PA through it. */
+    hux_board_init();
 
     hux_net_start(&(hux_net_config_t){
         .wifi_ssid = HUX_WIFI_SSID,
         .wifi_password = HUX_WIFI_PASSWORD,
         .server_uri = HUX_SERVER_URI,
     });
+
+    /* K2 press/release now drives events into `hux_app`. v0.2 wires
+     * these to the mic pipeline; v0.2.0 just surfaces the edges in
+     * the log so hardware can be verified ahead of audio. */
+    hux_button_start();
 
     /* Plug the log drain into the net layer. From here on, log lines
      * at or above the remote threshold go to serial AND to the server

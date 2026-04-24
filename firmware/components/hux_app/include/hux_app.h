@@ -22,6 +22,10 @@ typedef enum {
     HUX_APP_EV_NET_WS_CONNECTED,
     HUX_APP_EV_NET_WS_DISCONNECTED,
     HUX_APP_EV_NET_WS_MESSAGE,
+    /* Button events. K1/K3 will land as their own kinds when a
+     * consumer appears — see hux_button.c. */
+    HUX_APP_EV_BUTTON_K2_PRESSED,
+    HUX_APP_EV_BUTTON_K2_RELEASED,
 } hux_app_event_kind_t;
 
 typedef struct {
