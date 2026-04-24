@@ -1,6 +1,7 @@
 #include "hux_log.h"
 
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -9,9 +10,18 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
-#define LOG_QUEUE_DEPTH   32
-#define DRAIN_TASK_STACK  4096
-#define DRAIN_TASK_PRIO   2
+#define LOG_QUEUE_DEPTH      32
+#define DRAIN_TASK_STACK     4096
+#define DRAIN_TASK_PRIO      2
+/* vprintf hook runs on the caller's stack — Wi-Fi, LWIP, and ISR
+ * paths have tight stacks (~2–4 KB). 256 B covers typical IDF log
+ * lines (~80–150 B); anything longer is truncated rather than stack-
+ * smashed. */
+#define FORMAT_BUF_BYTES     256
+/* How often the drain task wakes to report dropped-log counts, even
+ * with an empty queue. 5 seconds keeps the counter visible without
+ * spamming. */
+#define DROP_HEARTBEAT_TICKS (5000 / portTICK_PERIOD_MS)
 
 /* Tags whose log lines must NOT stream — otherwise a failing send
  * produces more logs, which get streamed, which may fail again… These
@@ -32,8 +42,15 @@ static const char *const DENY_TAGS[] = {
 static vprintf_like_t s_prev_vprintf = NULL;
 static QueueHandle_t s_queue = NULL;
 static TaskHandle_t s_drain_task = NULL;
-static hux_log_sink_fn s_sink = NULL;
-static char s_remote_level = 'W';
+/* Sink + level are read by log-producing tasks on either CPU core and
+ * written by `app_main` (single writer). `_Atomic` gives aligned
+ * word-sized atomic loads/stores with explicit ordering — prevents a
+ * producer on CPU1 from observing a half-initialised sink pointer. */
+static _Atomic(hux_log_sink_fn) s_sink = NULL;
+static _Atomic char s_remote_level = 'W';
+/* Monotonic drop counter. Bumped from the vprintf hook (any task, any
+ * context) when the ring is full; reported out by the drain task. */
+static _Atomic uint32_t s_dropped = 0;
 
 static int level_rank(char c) {
     switch (c) {
@@ -135,24 +152,34 @@ static bool parse_log_line(const char *s, hux_log_entry_t *out) {
 static int hux_vprintf(const char *fmt, va_list args) {
     /* Hand serial output to the previous handler first — this path
      * has no allocation and no blocking, so it survives early boot,
-     * ISRs, and panics just as the IDF default would. */
+     * ISRs, and panics just as the IDF default would. `va_list` is a
+     * one-shot per spec: we copy before the delegate call, `va_end`
+     * the original after it returns, and consume the copy ourselves. */
     va_list copy;
     va_copy(copy, args);
     int n = s_prev_vprintf != NULL ? s_prev_vprintf(fmt, args) : vprintf(fmt, args);
+    va_end(args);
+
+    /* Snapshot atomic globals with acquire ordering so the values we
+     * inspect are consistent with the corresponding stores on other
+     * cores (notably `hux_log_set_sink` from app_main). */
+    hux_log_sink_fn sink = atomic_load_explicit(&s_sink, memory_order_acquire);
+    char threshold = atomic_load_explicit(&s_remote_level, memory_order_relaxed);
 
     /* Bail out before any queueing work if we don't have a sink yet,
-     * the remote threshold is unreachable, or we're running on the
-     * drain task itself (recursion guard). */
-    if (s_sink == NULL || s_queue == NULL ||
+     * the queue isn't initialised, or we're running on the drain task
+     * itself (recursion guard — send-path logs from the drain task
+     * would otherwise feed themselves back into the queue). */
+    if (sink == NULL || s_queue == NULL ||
         xTaskGetCurrentTaskHandle() == s_drain_task) {
         va_end(copy);
         return n;
     }
 
-    /* Format into a bounded buffer so parse/queue can't outrun RAM
-     * under a log storm. 512 B is comfortably larger than a typical
-     * IDF log line (~80–150 B). */
-    char buf[512];
+    /* Bounded stack buffer — see FORMAT_BUF_BYTES rationale. Lines
+     * longer than this are truncated in the remote stream; serial
+     * sees the full line via the delegate above. */
+    char buf[FORMAT_BUF_BYTES];
     int written = vsnprintf(buf, sizeof(buf), fmt, copy);
     va_end(copy);
     if (written <= 0) {
@@ -163,28 +190,73 @@ static int hux_vprintf(const char *fmt, va_list args) {
     if (!parse_log_line(buf, &entry)) {
         return n;
     }
-    if (level_rank(entry.level) > level_rank(s_remote_level)) {
+    if (level_rank(entry.level) > level_rank(threshold)) {
         return n; /* Below threshold — serial only. */
     }
     if (tag_denied(entry.tag)) {
         return n; /* Send-path recursion blocker. */
     }
 
-    /* Non-blocking send — if the queue is full we drop the line
-     * rather than stall the caller. The drain task will catch up once
-     * the WS recovers. */
-    (void)xQueueSend(s_queue, &entry, 0);
+    /* Non-blocking send — if the queue is full we drop the line and
+     * bump the counter; the drain task publishes the drop count on
+     * its periodic heartbeat. ISR callers (panic path, Wi-Fi driver
+     * ISRs logging errors) need the FromISR variant; `xQueueSend`
+     * from ISR is undefined behaviour on FreeRTOS. */
+    BaseType_t ok;
+    if (xPortInIsrContext()) {
+        BaseType_t hpw = pdFALSE;
+        ok = xQueueSendFromISR(s_queue, &entry, &hpw);
+        if (hpw == pdTRUE) {
+            portYIELD_FROM_ISR();
+        }
+    } else {
+        ok = xQueueSend(s_queue, &entry, 0);
+    }
+    if (ok != pdTRUE) {
+        atomic_fetch_add_explicit(&s_dropped, 1, memory_order_relaxed);
+    }
     return n;
+}
+
+/* Build a synthetic "dropped N logs" entry and hand it directly to
+ * the sink, bypassing the ring. We can't ESP_LOGW about drops —
+ * those would feed through the hook, which might itself drop. */
+static void emit_drop_heartbeat(hux_log_sink_fn sink, uint32_t *last_reported) {
+    uint32_t now = atomic_load_explicit(&s_dropped, memory_order_relaxed);
+    if (now == *last_reported) {
+        return;
+    }
+    uint32_t since = now - *last_reported;
+    *last_reported = now;
+
+    hux_log_entry_t entry = {.level = 'W', .ts_ms = 0};
+    strcpy(entry.tag, "hux_log");
+    snprintf(entry.line, sizeof(entry.line),
+             "log.dropped since_last=%u total=%u",
+             (unsigned)since, (unsigned)now);
+    entry.ts_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    sink(&entry);
 }
 
 static void drain_task(void *arg) {
     (void)arg;
     hux_log_entry_t entry;
+    uint32_t dropped_last_reported = 0;
     for (;;) {
-        if (xQueueReceive(s_queue, &entry, portMAX_DELAY) == pdTRUE) {
-            hux_log_sink_fn sink = s_sink; /* Snapshot — no lock needed for pointer load. */
+        /* Block with a heartbeat timeout so we still surface drop
+         * counts when the queue is quiet. A noisy queue naturally
+         * visits the heartbeat branch often enough via the second
+         * arm below. */
+        if (xQueueReceive(s_queue, &entry, DROP_HEARTBEAT_TICKS) == pdTRUE) {
+            hux_log_sink_fn sink = atomic_load_explicit(&s_sink, memory_order_acquire);
             if (sink != NULL) {
                 sink(&entry);
+                emit_drop_heartbeat(sink, &dropped_last_reported);
+            }
+        } else {
+            hux_log_sink_fn sink = atomic_load_explicit(&s_sink, memory_order_acquire);
+            if (sink != NULL) {
+                emit_drop_heartbeat(sink, &dropped_last_reported);
             }
         }
     }
@@ -207,12 +279,15 @@ void hux_log_init(void) {
 }
 
 void hux_log_set_sink(hux_log_sink_fn sink) {
-    s_sink = sink;
+    /* Release-store pairs with the acquire-load in `hux_vprintf`:
+     * by the time any producer observes `sink != NULL`, all writes
+     * that set up the sink's internal state are visible too. */
+    atomic_store_explicit(&s_sink, sink, memory_order_release);
 }
 
 void hux_log_set_remote_level(char level_char) {
     if (level_rank(level_char) == 0) {
         return;
     }
-    s_remote_level = level_char;
+    atomic_store_explicit(&s_remote_level, level_char, memory_order_relaxed);
 }

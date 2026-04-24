@@ -47,24 +47,26 @@ whichever is wrong in the same commit.
 | `hux_button` _(future)_ | GPIO debounce, press/long-press classification                           | Decides what a press means (that's hux_app)                   |
 
 **The dependency graph flows downward only.** `hux_app` requires
-`hux_proto`; `hux_net` requires `hux_app` + `hux_proto`; `hux_log`
-requires `hux_net` for the sink callback. No cycles. No component
-reaches sideways into another component's internals — only through
-the header.
+`hux_proto`; `hux_net` requires `hux_app` + `hux_proto` + `hux_log`
+(the `hux_log_entry_t` struct that the sink callback takes). `hux_log`
+itself has NO compile-time dependency on `hux_net` — the sink is
+injected at runtime in `main.c` via `hux_log_set_sink(hux_net_send_log)`.
+No cycles. No component reaches sideways into another component's
+internals — only through the header.
 
 ## Tasks and priorities
 
 FreeRTOS tasks, in priority order (higher = more important):
 
-| Task                       | Created by           | Prio | Stack | What it does                                      |
-| -------------------------- | -------------------- | ---- | ----- | ------------------------------------------------- |
-| `hux_app`                  | `hux_app_start`      | 5    | 6 KB  | Dequeues events, runs the state machine           |
-| _esp_wifi_                 | IDF internal         | 23   | —     | Wi-Fi driver                                      |
-| _websocket_client_         | esp_websocket_client | 5    | —     | WS RX + reconnect loop; invokes our event handler |
-| `hux_log_drain` _(future)_ | `hux_log_init`       | 2    | 4 KB  | Pops log ring, calls `hux_net_send_log`           |
-| `hux_audio_mic` _(future)_ | `hux_audio_start`    | 8    | 4 KB  | I2S RX, base64-encode, send `audio` frames        |
-| `hux_audio_spk` _(future)_ | `hux_audio_start`    | 8    | 4 KB  | Pop PCM ring, I2S TX                              |
-| `hux_button` _(future)_    | `hux_button_start`   | 4    | 2 KB  | GPIO debounce + event emit                        |
+| Task                       | Created by           | Prio | Stack | What it does                                               |
+| -------------------------- | -------------------- | ---- | ----- | ---------------------------------------------------------- |
+| `hux_app`                  | `hux_app_start`      | 5    | 6 KB  | Dequeues events, runs the state machine                    |
+| _esp_wifi_                 | IDF internal         | 23   | —     | Wi-Fi driver                                               |
+| _websocket_client_         | esp_websocket_client | 5    | —     | WS RX + reconnect loop; invokes our event handler          |
+| `hux_log_drain`            | `hux_log_init`       | 2    | 4 KB  | Pops log ring, calls registered sink; emits drop heartbeat |
+| `hux_audio_mic` _(future)_ | `hux_audio_start`    | 8    | 4 KB  | I2S RX, base64-encode, send `audio` frames                 |
+| `hux_audio_spk` _(future)_ | `hux_audio_start`    | 8    | 4 KB  | Pop PCM ring, I2S TX                                       |
+| `hux_button` _(future)_    | `hux_button_start`   | 4    | 2 KB  | GPIO debounce + event emit                                 |
 
 **Audio tasks are prio 8 — higher than `app`.** If the state machine
 starves audio we get glitches; if audio starves the state machine we
