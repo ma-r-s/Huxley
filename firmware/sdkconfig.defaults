@@ -20,8 +20,14 @@ CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 # Force small allocations (< 16 KB) to internal SRAM — PSRAM is for large
-# audio ring buffers, not every tiny heap allocation.
+# audio ring buffers, not every tiny heap allocation. Note: this only
+# affects heap allocations; static BSS stays internal unless explicitly
+# marked with `EXT_RAM_BSS_ATTR` (enabled below).
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+# Allow explicit BSS-in-PSRAM via `EXT_RAM_BSS_ATTR` so large static
+# scratch buffers (base64 decode, future playback ring) don't
+# squeeze internal RAM reserved for DMA and FreeRTOS task stacks.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 
 # -- Serial / boot -------------------------------------------------------
 # Native USB-CDC so `idf.py monitor` works through the Type-C port without

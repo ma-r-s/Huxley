@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "cJSON.h"
+#include "esp_attr.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -26,9 +27,13 @@ static const char *TAG = "hux_net";
 /* Network ring buffer sized for the largest single WS text frame we
  * reasonably expect in v0 (hello / state / status / audio deltas are
  * all under 4 KB). Revisit when inbound audio chunks grow. */
-/* 32 KB is big enough to buffer ~20 consecutive audio frames (1.3 KB
- * each) if the TCP window stalls briefly. The old 8 KB ceiling was
- * exactly at 6 audio frames — one slow ACK and we'd drop sends. */
+/* esp_websocket_client's per-message RX/TX buffer. Sets the ceiling
+ * for a single WebSocket *message* size — any inbound message larger
+ * than this arrives fragmented and (today) is dropped by
+ * `forward_ws_text` (see triage F-0004 for the v0.3 reassembly plan).
+ * This is independent of LWIP's TCP-level send buffer — that's
+ * `CONFIG_LWIP_TCP_SND_BUF_DEFAULT` in sdkconfig.defaults, which
+ * governs how many TCP bytes can be queued for transmission. */
 #define WS_BUFFER_SIZE     32768
 #define WS_RECONNECT_MS    2000
 /* Bounded send timeout — if TCP stalls, the 50 Hz audio sender task
@@ -52,9 +57,12 @@ static _Atomic(hux_net_audio_sink_fn) s_audio_sink = NULL;
 /* Decode scratch — single-writer (the WS client task), so no lock is
  * needed. Big enough to hold the PCM of any single WS text frame
  * the server sends today (WS_BUFFER_SIZE base64 bytes decode to at
- * most 3/4 as much PCM). */
+ * most 3/4 as much PCM). Lives in PSRAM via `EXT_RAM_BSS_ATTR`:
+ * ~24 KB is too fat for internal SRAM when v0.3's speaker ring
+ * buffer also wants internal (for DMA). Access latency is a few
+ * hundred ns; negligible against a 20 ms audio frame period. */
 #define AUDIO_SCRATCH_BYTES ((WS_BUFFER_SIZE * 3) / 4 + 32)
-static uint8_t s_audio_scratch[AUDIO_SCRATCH_BYTES];
+EXT_RAM_BSS_ATTR static uint8_t s_audio_scratch[AUDIO_SCRATCH_BYTES];
 
 static void post_app(hux_app_event_kind_t kind) {
     hux_app_event_t ev = {.kind = kind};
