@@ -10,7 +10,7 @@ Any client that implements this protocol is a valid Huxley client. The framework
 - **Default URL**: `ws://localhost:8765`
 - **Audio format**: PCM16, 24 kHz, mono, little-endian
 - **Encoding**: audio bytes are base64-encoded inside JSON message payloads
-- **Concurrency**: one active client at a time. A second connection is rejected with close code `1008 — Server busy`. See [decision: one client at a time](./decisions.md#2026-04-12--one-websocket-client-at-a-time).
+- **Concurrency**: one active client at a time. A second connection **evicts the older client** by closing it with code `1001 — Replaced by new client`, then accepts the new one. Rationale in [decision: one client at a time](./decisions.md#2026-04-12--one-websocket-client-at-a-time) — a fresh connect is almost always a browser reload or a re-flashed device, and should win over a stale socket.
 
 ## Message format
 
@@ -108,13 +108,13 @@ Lifecycle:
 
 ## Error behavior
 
-| Failure                       | Client observes                                                                                    |
-| ----------------------------- | -------------------------------------------------------------------------------------------------- |
-| Protocol version mismatch     | Client closes with code `1002`, reason `"Protocol version mismatch"`, shows status banner          |
-| Server busy (second client)   | Close code `1008`, reason `"Server busy — one client at a time"`                                   |
-| OpenAI connection fails       | `state: CONNECTING` → `state: IDLE` + `status: "Error al conectar — intenta de nuevo"`             |
-| OpenAI disconnect mid-session | `state: CONVERSING` → `state: IDLE` silently; next `ptt_start` outside CONVERSING returns a status |
-| Malformed client message      | Silently ignored (no error response)                                                               |
+| Failure                       | Client observes                                                                                         |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Protocol version mismatch     | Client closes with code `1002`, reason `"Protocol version mismatch"`, shows status banner               |
+| Second client connects        | **Existing client** closed with code `1001`, reason `"Replaced by new client"`. New client is accepted. |
+| OpenAI connection fails       | `state: CONNECTING` → `state: IDLE` + `status: "Error al conectar — intenta de nuevo"`                  |
+| OpenAI disconnect mid-session | `state: CONVERSING` → `state: IDLE` silently; next `ptt_start` outside CONVERSING returns a status      |
+| Malformed client message      | Silently ignored (no error response)                                                                    |
 
 ## Dev observability channel
 
