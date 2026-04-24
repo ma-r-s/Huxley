@@ -42,7 +42,15 @@ type ServerMessage =
       reason: string;
       claim_id: string | null;
     }
-  | { type: "claim_started"; claim_id: string; skill: string }
+  | {
+      type: "claim_started";
+      claim_id: string;
+      skill: string;
+      // Human-readable label for the claim (e.g., contact name on a
+      // call). Null when the skill didn't supply one; UI falls back
+      // to a generic status string.
+      title?: string | null;
+    }
   | { type: "claim_ended"; claim_id: string; end_reason: string }
   | {
       type: "stream_started";
@@ -60,6 +68,10 @@ export function useWs() {
   const [modelSpeaking, setModelSpeaking] = useState(false);
   const [inputMode, setInputMode] = useState<InputMode>("assistant_ptt");
   const [activeClaimId, setActiveClaimId] = useState<string | null>(null);
+  // Human-readable label for the active claim (e.g., contact name on a
+  // call). Null when no claim is active or the skill didn't supply a
+  // title. Drives the "live" orb status label.
+  const [activeClaimTitle, setActiveClaimTitle] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [statusLog, setStatusLog] = useState<StatusEntry[]>([]);
   const [devEvents, setDevEvents] = useState<DevEvent[]>([]);
@@ -207,6 +219,7 @@ export function useWs() {
         cancelSilenceTimer("socket_close");
         setThinkingActiveSync(false);
         setActiveStream(null);
+        setActiveClaimTitle(null);
         if (switchingRef.current || noReconnectRef.current) return;
         pushStatus("Disconnected — retrying in 2s\u2026");
         setTimeout(() => connect(), 2000);
@@ -274,12 +287,15 @@ export function useWs() {
               break;
             }
             case "claim_started":
+              setActiveClaimTitle(msg.title ?? null);
               pushDevEvent("claim_started", {
                 claim_id: msg.claim_id,
                 skill: msg.skill,
+                title: msg.title ?? null,
               });
               break;
             case "claim_ended":
+              setActiveClaimTitle(null);
               pushDevEvent("claim_ended", {
                 claim_id: msg.claim_id,
                 end_reason: msg.end_reason,
@@ -295,6 +311,7 @@ export function useWs() {
               break;
             case "stream_ended":
               setActiveStream(null);
+              setActiveClaimTitle(null);
               break;
             case "dev_event":
               pushDevEvent(msg.kind, msg.payload);
@@ -315,6 +332,7 @@ export function useWs() {
     cancelSilenceTimer("disconnect");
     setThinkingActiveSync(false);
     setActiveStream(null);
+    setActiveClaimTitle(null);
     socketRef.current?.close();
     socketRef.current = null;
     setConnected(false);
@@ -330,6 +348,7 @@ export function useWs() {
       setDevEvents([]);
       setStatusLog((prev) => prev.slice(0, 5));
       setActiveStream(null);
+      setActiveClaimTitle(null);
       cancelSilenceTimer("persona_switch");
       setThinkingActiveSync(false);
       if (socketRef.current !== null) socketRef.current.close();
@@ -373,6 +392,7 @@ export function useWs() {
     cancelSilenceTimer("reset");
     setThinkingActiveSync(false);
     setActiveStream(null);
+    setActiveClaimTitle(null);
     setTranscript([]);
     setDevEvents([]);
     setStatusLog([]);
@@ -388,6 +408,7 @@ export function useWs() {
     activeStream,
     inputMode,
     activeClaimId,
+    activeClaimTitle,
     transcript,
     statusLog,
     devEvents,

@@ -71,8 +71,9 @@ export function Orb({
     if (state === "speaking") orbAudioEngine.startSynth("speak");
     else if (state === "thinking") orbAudioEngine.startSynth("think");
     else if (state === "listening") orbAudioEngine.startSynth("listen");
-    else if (state === "live") orbAudioEngine.startSynth("speak");
-    // "playing" uses real audio from getPlaybackBands — no synth needed
+    // "live" and "playing" both drive the orb from real playback audio
+    // via `getPlaybackBands` — peer voice (during a call) or content
+    // stream (audiobook / radio). No synth needed.
     else orbAudioEngine.stopSynth();
     // Reset bars gate on every state transition; RAF loop re-enables when preroll drains
     barsEnabledRef.current = false;
@@ -209,16 +210,29 @@ export function Orb({
           stroke = 4.6 + speakLevel * 1.5;
           glow = 0.4 + speakLevel * 0.6;
           break;
-        case "live":
-          // Continuous skill claim (active call) — gentle sustained pulse
+        case "live": {
+          // Continuous skill claim (active call) — reacts to the other
+          // person's voice via `speakLevel` (real-playback FFT
+          // analyser). Peer audio flows through the same master gain
+          // as LLM audio so the analyser picks it up automatically.
+          //
+          // Telephony-grade audio (Telegram's Opus compression, your
+          // phone mic's noise gate) is ~3-5x quieter at the analyser
+          // than LLM TTS. Apply a non-linear boost so typical
+          // speaking volume produces visibly-animated output without
+          // making loud audio distort. `pow(x, 0.5) = sqrt` lifts
+          // quiet-but-real values (0.1 → 0.32, 0.2 → 0.45) while
+          // still capping near 1.0 for genuinely loud input.
+          const liveLevel = Math.sqrt(Math.max(0, speakLevel));
           breath = Math.sin(t * 0.8) * 0.02;
-          noiseAmp = (0.025 + level * 0.12) * exp;
-          noiseFreq = 1.0;
-          noiseSpeed = 0.6 + level * 0.5;
-          audioInfluence = level * 0.2;
-          stroke = 4.2 + level * 0.8;
-          glow = 0.25 + Math.sin(t * 0.8) * 0.1 + level * 0.3;
+          noiseAmp = (0.03 + liveLevel * 0.42) * exp;
+          noiseFreq = 1.3;
+          noiseSpeed = 0.9 + liveLevel * 2.0;
+          audioInfluence = liveLevel * 0.55;
+          stroke = 4.2 + liveLevel * 2.6;
+          glow = 0.25 + Math.sin(t * 0.8) * 0.1 + liveLevel * 1.0;
           break;
+        }
         case "playing":
           // Ring morphs toward a flat line (Y-collapse handled below).
           breath = 0;
@@ -301,11 +315,24 @@ export function Orb({
         let aMod = 0;
         if (audioInfluence > 0) {
           const band = (Math.sin(ang * 3 + t * 2) + 1) * 0.5;
-          if (cur === "speaking" && activeBands.length > 0) {
-            // Real FFT deforms the ring with actual voice frequency content
+          // Real-playback FFT deforms the ring with actual voice
+          // frequency content. Used by `speaking` (LLM audio) and
+          // `live` (peer audio on an active call) — both flow
+          // through the same playback analyser. `live` applies a
+          // sqrt boost to compensate for quieter telephony-grade
+          // peer audio; the bias subtraction also drops from 0.3 to
+          // 0.15 because the quiet baseline is already closer to 0.
+          if (
+            (cur === "speaking" || cur === "live") &&
+            activeBands.length > 0
+          ) {
             const bandIdx =
               Math.floor(band * activeBands.length) % activeBands.length;
-            aMod = ((activeBands[bandIdx] ?? 0) - 0.3) * audioInfluence;
+            const rawBand = activeBands[bandIdx] ?? 0;
+            const band01 =
+              cur === "live" ? Math.sqrt(Math.max(0, rawBand)) : rawBand;
+            const bias = cur === "live" ? 0.15 : 0.3;
+            aMod = (band01 - bias) * audioInfluence;
           } else {
             const bandIdx = Math.floor(band * 3) % 3;
             aMod = ((a.bands[bandIdx] ?? 0) - 0.4) * audioInfluence;

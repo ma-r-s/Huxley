@@ -455,10 +455,17 @@ export function App() {
 
   // ── Status label ─────────────────────────────────────────────────────────
   // "playing" shows the stream's label if the server provided one.
+  // "live" (active claim — call) shows the claim's title if set:
+  // "Hablando con Mario" for a Telegram call to contact `mario`.
+  const liveLabel =
+    effectiveOrbState === "live" && ws.activeClaimTitle
+      ? `Hablando con ${ws.activeClaimTitle}`
+      : null;
   const statusLabel =
-    effectiveOrbState === "playing" && ws.activeStream?.label
+    liveLabel ??
+    (effectiveOrbState === "playing" && ws.activeStream?.label
       ? ws.activeStream.label
-      : (STATUS[effectiveOrbState] ?? "");
+      : (STATUS[effectiveOrbState] ?? ""));
 
   // ── Connection display ────────────────────────────────────────────────────
   const deviceHost =

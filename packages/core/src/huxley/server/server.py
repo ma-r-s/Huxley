@@ -260,14 +260,34 @@ class AudioServer:
             },
         )
 
-    async def send_claim_started(self, claim_id: str, skill: str) -> None:
-        """Observability message — pure telemetry for clients that want
-        to render a "call connecting" UI. The behavioral signal is
-        `input_mode=skill_continuous`; this is flavor on top.
+    async def send_claim_started(
+        self, claim_id: str, skill: str, title: str | None = None
+    ) -> None:
+        """Observability + UI message — lets the client render a
+        "call connecting" indicator with a human-readable label.
+
+        `title` carries the skill's display name for the claim (e.g.,
+        the contact's name on a Telegram call). UIs show this instead
+        of a generic status while `input_mode=skill_continuous`. Falls
+        back to `null` when the skill didn't supply one; client
+        renders a generic label in that case.
+
+        The behavioral signal remains `input_mode=skill_continuous`;
+        `title` is presentation-only.
         """
-        await logger.ainfo("server.tx.claim_started", claim_id=claim_id, skill=skill)
+        await logger.ainfo(
+            "server.tx.claim_started",
+            claim_id=claim_id,
+            skill=skill,
+            title=title,
+        )
         await self._send(
-            {"type": "claim_started", "claim_id": claim_id, "skill": skill},
+            {
+                "type": "claim_started",
+                "claim_id": claim_id,
+                "skill": skill,
+                "title": title,
+            },
         )
 
     async def send_claim_ended(self, claim_id: str, end_reason: str) -> None:

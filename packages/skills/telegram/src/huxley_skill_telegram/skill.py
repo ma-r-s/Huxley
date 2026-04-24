@@ -316,6 +316,7 @@ class TelegramSkill:
                 on_mic_frame=self._on_mic_frame,
                 speaker_source=self._transport.peer_audio_chunks(),
                 on_claim_end=self._on_claim_end,
+                title=name,
             ),
         )
 
@@ -393,6 +394,7 @@ class TelegramSkill:
                     on_mic_frame=self._on_mic_frame,
                     speaker_source=self._transport.peer_audio_chunks(),
                     on_claim_end=self._on_claim_end,
+                    title=display,
                 )
             )
         except ClaimBusyError:

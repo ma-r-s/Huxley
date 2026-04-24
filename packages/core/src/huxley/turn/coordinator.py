@@ -126,7 +126,7 @@ class TurnCoordinator:
         status_messages: dict[str, str] | None = None,
         send_set_volume: Callable[[int], Awaitable[None]] | None = None,
         send_input_mode: Callable[..., Awaitable[None]] | None = None,
-        send_claim_started: Callable[[str, str], Awaitable[None]] | None = None,
+        send_claim_started: Callable[[str, str, str | None], Awaitable[None]] | None = None,
         send_claim_ended: Callable[[str, str], Awaitable[None]] | None = None,
         send_stream_started: Callable[[str, str | None, int], Awaitable[None]] | None = None,
         send_stream_ended: Callable[[str, str], Awaitable[None]] | None = None,
@@ -152,6 +152,9 @@ class TurnCoordinator:
         async def _noop_claim(_id: str, _arg: str) -> None:
             pass
 
+        async def _noop_claim_started(_id: str, _skill: str, _title: str | None) -> None:
+            pass
+
         self._send_set_volume: Callable[[int], Awaitable[None]] = (
             send_set_volume if send_set_volume is not None else _noop_volume
         )
@@ -162,8 +165,8 @@ class TurnCoordinator:
         self._send_input_mode: Callable[..., Awaitable[None]] = (
             send_input_mode if send_input_mode is not None else _noop_input_mode
         )
-        self._send_claim_started: Callable[[str, str], Awaitable[None]] = (
-            send_claim_started if send_claim_started is not None else _noop_claim
+        self._send_claim_started: Callable[[str, str, str | None], Awaitable[None]] = (
+            send_claim_started if send_claim_started is not None else _noop_claim_started
         )
         self._send_claim_ended: Callable[[str, str], Awaitable[None]] = (
             send_claim_ended if send_claim_ended is not None else _noop_claim
@@ -233,6 +236,18 @@ class TurnCoordinator:
         # interrupted. Lets `inject_turn_and_wait` block until the LLM
         # finishes speaking without a hardcoded sleep.
         self._injected_turn_done: asyncio.Event | None = None
+        # Monotonic time of the first audio delta the current turn sent
+        # to the client, and the cumulative byte count at 24kHz mono
+        # 16-bit (48 kB/s). Used by `inject_turn_and_wait` to estimate
+        # when the client's playback buffer will drain — `response_done`
+        # fires at server-side audio end, but the client still has
+        # queued PCM to play. Without this wait, a subsequent
+        # `start_input_claim` issues `audio_clear` and flushes the
+        # still-playing announcement tail. Both fields reset on
+        # turn-start; `audio_done` leaves them set so the drain-wait
+        # computation sees the terminal values.
+        self._turn_audio_first_sent_at: float | None = None
+        self._turn_audio_bytes_sent: int = 0
 
         self.current_turn: Turn | None = None
         self.response_cancelled: bool = False
@@ -417,6 +432,12 @@ class TurnCoordinator:
                 state=self.current_turn.state.value if self.current_turn else None,
                 owner=owner.value,
             )
+            # Reset drain counters — this is a fresh audio stream, and the
+            # subsequent inject_turn_and_wait drain computation should see
+            # ONLY this stream's bytes (not leftovers from a prior turn).
+            self._turn_audio_first_sent_at = time.monotonic()
+            self._turn_audio_bytes_sent = 0
+        self._turn_audio_bytes_sent += len(pcm)
         await self._send_audio(pcm)
         await self._log.adebug("coord.audio_fwd", bytes=len(pcm))
 
@@ -1163,12 +1184,17 @@ class TurnCoordinator:
         # the client's mode transitions.
         if self._claim_obs is observer:
             try:
-                # Skill name isn't currently plumbed into InputClaim; passing
-                # the interface name is enough for observability today and
-                # the client doesn't use it for behavior (that's input_mode).
-                # Thread a real skill identifier when the dev UI grows a
-                # claim indicator.
-                await self._send_claim_started(interface_name, interface_name)
+                # Title is the human-readable label for UI clients
+                # (e.g., contact name on a call). Falls back to the
+                # interface name so observability consumers always
+                # see something. Skill name isn't currently plumbed
+                # into InputClaim — passing interface_name as `skill`
+                # keeps wire-format stable while the UI uses `title`.
+                await self._send_claim_started(
+                    interface_name,
+                    interface_name,
+                    claim.title,
+                )
                 await self._send_input_mode(
                     "skill_continuous",
                     reason="claim_started",
@@ -1292,17 +1318,29 @@ class TurnCoordinator:
         if self.current_turn is not None:
             await self._enqueue_injected(prompt, dedup_key, priority)
             return
-        # An active COMMS claim (live call, voice memo, etc.) counts as
+        # A **live** COMMS claim (live call, voice memo, etc.) counts as
         # "busy" for NORMAL and BLOCK_BEHIND_COMMS — respect the live
         # audio plane by queueing. The queue drains at turn-end, which
         # reliably follows claim-end (either via the comms skill's own
         # post-claim inject_turn or via the next user turn). Only
         # PREEMPT barges through a claim; that's its whole contract.
-        # Without this branch, NORMAL and BLOCK_BEHIND_COMMS would fire
-        # from idle via `_fire_injected_turn`, which acquires DIALOG
-        # and yanks the claim — exactly the bug the 2026-04-24
-        # post-ship critic flagged.
-        if self._claim_obs is not None and priority is not InjectPriority.PREEMPT:
+        #
+        # `is_ended` guard is load-bearing: during claim teardown, the
+        # skill's `on_claim_end` callback fires BEFORE the coordinator
+        # gets a chance to scrub `_claim_obs`. A skill that fires an
+        # `inject_turn` from `on_claim_end` (e.g., telegram's "la
+        # llamada terminó" narration) would otherwise queue its own
+        # announcement behind itself — the user hears nothing until
+        # the next unrelated turn ends and drains the queue. Observer's
+        # `_ended` flag is set at the top of `_end()` so by the time
+        # any skill callback runs, `is_ended` is already True and we
+        # correctly fall through to immediate fire.
+        claim_obs = self._claim_obs
+        if (
+            claim_obs is not None
+            and not claim_obs.is_ended
+            and priority is not InjectPriority.PREEMPT
+        ):
             await self._enqueue_injected(prompt, dedup_key, priority)
             return
         await self._fire_injected_turn(prompt, dedup_key)
@@ -1325,17 +1363,25 @@ class TurnCoordinator:
         *,
         dedup_key: str | None = None,
     ) -> None:
-        """Like `inject_turn` but returns only after the LLM finishes speaking.
+        """Like `inject_turn` but returns only after the client has
+        finished PLAYING the narration (not just the server finishing
+        sending it).
 
         If the coordinator is idle (`current_turn is None`), fires the
-        injected turn immediately and awaits the `_injected_turn_done` event,
-        which is signalled when `_apply_side_effects` / `interrupt()` clears
-        the turn. The caller is guaranteed that the LLM audio has been fully
-        generated (and largely delivered to the client) before this returns.
+        injected turn immediately and awaits the `_injected_turn_done`
+        event (signalled when `_apply_side_effects` / `interrupt()`
+        clears the turn). At that moment the server has finished
+        sending audio deltas, but the client is still playing them out
+        of its buffer. We then sleep long enough for the buffer to
+        drain. Without the drain wait, a caller chaining
+        `inject_turn_and_wait` → `start_input_claim` would flush the
+        client buffer (via `audio_clear`) and guillotine the tail of
+        the announcement — the exact behavior the 2026-04-24 smoke
+        test caught on inbound Telegram calls.
 
-        If a turn is already in progress, falls back to a plain enqueue
-        (same as `inject_turn`) and returns immediately — the caller should
-        not depend on the wait semantics in that case.
+        If a turn is already in progress, falls back to a plain
+        enqueue (same as `inject_turn`) and returns immediately — the
+        caller should not depend on the wait semantics in that case.
         """
         if self.current_turn is not None:
             await self._enqueue_injected(prompt, dedup_key, InjectPriority.NORMAL)
@@ -1346,6 +1392,51 @@ class TurnCoordinator:
         done = self._injected_turn_done
         if done is not None:
             await done.wait()
+        await self._wait_for_client_playback_drain()
+
+    # Audio rate for the one audio channel shared with the client:
+    # 24kHz sample rate * 2 bytes/sample (PCM16 mono).
+    _CLIENT_AUDIO_BYTES_PER_SECOND: ClassVar[int] = 24_000 * 2
+
+    # Extra headroom past the computed drain time — covers the client's
+    # Web Audio scheduling floor (`max(now + 0.01, nextTime)`) plus a
+    # small WebSocket / scheduling jitter margin. 80ms is short enough
+    # not to feel laggy and generous enough to absorb real-world
+    # network variance on localhost and typical LANs.
+    _PLAYBACK_DRAIN_SAFETY_MS: ClassVar[int] = 80
+
+    async def _wait_for_client_playback_drain(self) -> None:
+        """Sleep until the client is expected to have finished playing
+        whatever the coordinator sent during the just-ended audio stream.
+
+        Uses the byte counters updated in `on_audio_delta`:
+        `_turn_audio_first_sent_at` (monotonic time of the first delta
+        this response) + `_turn_audio_bytes_sent` / 48000 gives a wall-
+        clock estimate of when the last sample will have been rendered
+        on the client speaker. We add `_PLAYBACK_DRAIN_SAFETY_MS` of
+        headroom to absorb the client's AudioContext scheduling floor
+        and WebSocket jitter.
+
+        No-op when no audio was sent this stream (e.g., the LLM
+        responded with text-only or the request was cancelled before
+        audio) — `_turn_audio_first_sent_at` stays None.
+        """
+        first_sent_at = self._turn_audio_first_sent_at
+        bytes_sent = self._turn_audio_bytes_sent
+        if first_sent_at is None or bytes_sent <= 0:
+            return
+        expected_duration_s = bytes_sent / self._CLIENT_AUDIO_BYTES_PER_SECOND
+        drain_at = first_sent_at + expected_duration_s + self._PLAYBACK_DRAIN_SAFETY_MS / 1000
+        remaining = drain_at - time.monotonic()
+        if remaining <= 0:
+            return
+        await self._log.ainfo(
+            "coord.inject_and_wait_drain_sleep",
+            bytes_sent=bytes_sent,
+            expected_duration_ms=int(expected_duration_s * 1000),
+            remaining_ms=int(remaining * 1000),
+        )
+        await asyncio.sleep(remaining)
 
     async def _enqueue_injected(
         self,

@@ -494,6 +494,57 @@ class TestInjectTurnDuringActiveClaim:
         on_end.assert_awaited_once_with(ClaimEndReason.PREEMPTED)
         assert ("send_conversation_message", "¡Alarma!") in provider.sent
 
+    async def test_inject_from_on_claim_end_fires_through_not_queued(
+        self,
+        coordinator: TurnCoordinator,
+        provider: StubVoiceProvider,
+    ) -> None:
+        """Regression for the 2026-04-24 smoke-test bug: a skill's
+        `on_claim_end` callback firing `inject_turn` would have its
+        request queued behind itself because `_claim_obs` hadn't been
+        scrubbed yet — the scrub happens in the coordinator's own
+        post-skill callback, AFTER the skill's callback returns. The
+        fix is to gate on `observer.is_ended` (which `_end()` sets
+        BEFORE calling skill callbacks) so callbacks see the claim as
+        "ending, not active" and fire through.
+
+        Mirrors the telegram "la llamada con Mario terminó" announcement
+        scenario exactly.
+        """
+        scheduled_tasks: list[asyncio.Task[None]] = []
+
+        async def on_end_callback(reason: ClaimEndReason) -> None:
+            # Mirrors telegram's _on_claim_end pattern — fire an
+            # inject_turn from inside the skill callback to narrate
+            # the end-of-call event. `create_task` defers to the
+            # loop so the observer's teardown can finish first.
+            # Retain a ref via the test-scoped list so RUF006 is
+            # satisfied and the task can't be GC'd mid-run.
+            scheduled_tasks.append(
+                asyncio.create_task(coordinator.inject_turn("la llamada con X terminó"))
+            )
+
+        claim = InputClaim(on_mic_frame=AsyncMock(), on_claim_end=on_end_callback)
+        handle = await coordinator.start_input_claim(claim)
+
+        # End the claim naturally — same path a peer hangup takes.
+        handle.cancel()
+        await asyncio.wait_for(handle.wait_end(), timeout=1.0)
+
+        # Give the scheduled inject task a tick to run.
+        for _ in range(10):
+            await asyncio.sleep(0.005)
+            if ("send_conversation_message", "la llamada con X terminó") in provider.sent:
+                break
+
+        # Announcement FIRED — not queued.
+        assert ("send_conversation_message", "la llamada con X terminó") in provider.sent, (
+            "inject_turn from on_claim_end must fire through, not queue — "
+            "otherwise the 'call ended' narration surfaces N turns later"
+        )
+        # Queue is empty (drained by the fire, not by a later turn).
+        assert coordinator._injected_queue == []
+
 
 # --- Contract: suspend-before-swap ordering ---
 
