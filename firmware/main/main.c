@@ -15,6 +15,7 @@
 #include "nvs_flash.h"
 
 #include "hux_app.h"
+#include "hux_audio.h"
 #include "hux_board.h"
 #include "hux_button.h"
 #include "hux_log.h"
@@ -113,9 +114,15 @@ void app_main(void) {
     hux_app_start();
 
     /* Shared on-board peripherals (I2C bus + TCA9555). Must run before
-     * any consumer of either — buttons read it, audio will enable the
-     * speaker PA through it. */
+     * any consumer of either — buttons read it, audio enables the
+     * speaker PA through it, audio registers ES7210/ES8311 on the
+     * same I2C bus. */
     hux_board_init();
+
+    /* Audio subsystem: I2S1 duplex + ES7210 mic. Task is created but
+     * idle until `hux_audio_mic_start()`. v0.3 extends this to open
+     * ES8311 for playback on the same duplex channel. */
+    hux_audio_init();
 
     hux_net_start(&(hux_net_config_t){
         .wifi_ssid = HUX_WIFI_SSID,
