@@ -115,23 +115,25 @@ Five primitives (all documented in [`io-plane.md`](./io-plane.md)):
 
 **The vocabulary the framework uses to arbitrate who owns the speaker at any moment.**
 
-Channels are named resource scopes on the single speaker: `DIALOG` (conversation with the user), `COMMS` (inbound/outbound calls), `ALERT` (urgent announcements), `CONTENT` (audiobooks, radio, other streams). Lower-numbered channels win against higher-numbered ones (AVS convention).
+Channels are named resource scopes on the single speaker: `DIALOG` (conversation with the user, priority 100), `COMMS` (inbound/outbound calls, priority 150), `ALERT` (urgent announcements, priority 200 — reserved, see below), `CONTENT` (audiobooks, radio, other streams, priority 300). Lower-numbered channels win against higher-numbered ones (AVS convention).
 
 Every `Activity` registered on a channel gets delivered a `(FocusState, MixingBehavior)` pair as the focus picture changes:
 
 - `FocusState` — `FOREGROUND` (I'm the primary speaker), `BACKGROUND` (someone above me is speaking; I may duck or pause), `NONE` (I'm displaced entirely).
 - `MixingBehavior` — `PRIMARY`, `MAY_DUCK`, `MUST_PAUSE`, `MUST_STOP`. Derived from FocusState + the Activity's `ContentType` (`MIXABLE` → `MAY_DUCK` on background; `NONMIXABLE` → `MUST_PAUSE`).
 
-`FocusManager` is the serialized actor that enforces invariants: exactly one FOREGROUND Activity across all channels; same `(channel, interface_name)` replaces its prior Activity; displaced Activities get a configurable `patience` grace period at BACKGROUND before being cleared. Skills never talk to `FocusManager` directly — they either return `SideEffect` side-effects from a tool call (today: `AudioStream`; future: `InputClaim`) or call a `SkillContext` method like `inject_turn(prompt)`, and the framework translates those into focus acquires/releases.
+`FocusManager` is the serialized actor that enforces invariants: exactly one FOREGROUND Activity across all channels; same `(channel, interface_name)` replaces its prior Activity; displaced Activities get a configurable `patience` grace period at BACKGROUND before being cleared. On patience expiry the observer's `on_patience_expired()` hook fires BEFORE the terminal NONE/MUST_STOP — skills can narrate the eviction so state changes are never silent for the user. Skills never talk to `FocusManager` directly — they either return `SideEffect` side-effects from a tool call (`AudioStream`, `InputClaim`) or call a `SkillContext` method like `inject_turn(prompt)`, and the framework translates those into focus acquires/releases.
 
-Today's live paths through `FocusManager`:
+Live paths through `FocusManager`:
 
-- **CONTENT** — any `AudioStream` side-effect returned from a skill's `handle()` gets an Activity on CONTENT; pump runs while FOREGROUND, cancels on BACKGROUND/MUST_PAUSE (NONMIXABLE today) or NONE. On BACKGROUND/MAY_DUCK (for future MIXABLE streams) the pump keeps running with a 100ms ramp to 0.3 gain — classic AVS ducking.
-- **DIALOG** — `ctx.inject_turn(prompt)` creates a synthetic INJECTED turn with a DIALOG Activity. Higher channel priority (100) than CONTENT (300) means CONTENT gets displaced; the LLM narrates the prompt; DIALOG releases when the turn ends.
+- **DIALOG** — `ctx.inject_turn(prompt)` creates a synthetic INJECTED turn with a DIALOG Activity. Highest priority (100). Channel priority means DIALOG preempts every other channel; the LLM narrates the prompt; DIALOG releases when the turn ends.
+- **COMMS** — an `InputClaim` side-effect (or direct `ctx.start_input_claim` call) registers an Activity on COMMS. Priority 150 means COMMS preempts CONTENT but yields to DIALOG. Single-slot by policy: a second claim raises `ClaimBusyError` so the skill rejects the peer cleanly (call-waiting stacking is explicitly out of scope). Telegram calls live here.
+- **CONTENT** — any `AudioStream` side-effect returned from a skill's `handle()` gets an Activity on CONTENT; pump runs while FOREGROUND, cancels on BACKGROUND/MUST_PAUSE (NONMIXABLE) or NONE. On BACKGROUND/MAY_DUCK (MIXABLE streams) the pump keeps running with a 100ms ramp to 0.3 gain — classic AVS ducking. Audiobooks set `patience=30min` so a COMMS claim parks the book in BACKGROUND rather than evicting it; on claim-end, FM promotes CONTENT back to FOREGROUND and the skill's factory re-reads the current position from storage to resume from where it paused.
+- **Patience expiry** — when a backgrounded Activity times out, FM calls its `on_patience_expired()` hook before the final NONE/MUST_STOP so the skill can narrate the eviction (e.g., audiobooks inject_turn a "pausé tu libro por la llamada larga" message).
 
-Not yet wired: patience-expiry path, ALERT and COMMS channels, `InputClaim` on DIALOG/mic routing.
+Reserved (defined in the enum, FM arbitrates it correctly if used, but no callable surface exposed): **ALERT** (priority 200). Sits between COMMS and CONTENT. Intended for future LLM-free alert sounds (sirens, alarms) that overlay content but don't interrupt live calls. No current consumer — the urgent severity tier today is expressed as `InjectPriority.BLOCK_BEHIND_COMMS` on a DIALOG-shaped inject_turn (same effective priority, reuses existing narration machinery). ALERT gets wired when a concrete skill needs non-narrated audio in that tier.
 
-See [`io-plane.md`](./io-plane.md) for the composition vocabulary and [`architecture.md#focus-management`](./architecture.md#focus-management) for the actor model.
+See [`io-plane.md`](./io-plane.md) for the historical composition vocabulary and [`architecture.md#focus-management`](./architecture.md#focus-management) for the actor model.
 
 ## Voice provider
 

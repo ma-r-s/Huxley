@@ -357,10 +357,14 @@ class TestControl:
         assert data["stopped"] is True
         assert not isinstance(result.side_effect, AudioStream)
 
-    async def test_rewind_does_not_eagerly_persist_new_position(
+    async def test_rewind_persists_new_position_for_factory_resume(
         self, audiobooks_skill: AudiobooksSkill, storage: SkillStorage
     ) -> None:
-        """Storage is untouched when `_control` returns; only the factory writes."""
+        """Contract (Stage 2b): tool handler writes the target position to
+        storage BEFORE returning the AudioStream — the factory reads
+        storage at each `stream()` invocation, so the first pump AND any
+        FG-return pump after a pause both need the right value in place.
+        """
         book = _book_at(audiobooks_skill, 0)
         await storage.set_setting(_position_key(book["id"]), "120.0")
         await storage.set_setting(LAST_BOOK_KEY, book["id"])
@@ -369,8 +373,8 @@ class TestControl:
             "audiobook_control", {"action": "rewind", "seconds": 10}
         )
 
-        # Storage still at 120.0 — not updated yet.
-        assert await storage.get_setting(_position_key(book["id"])) == "120.0"
+        # Storage advanced to 110.0 (120 - 10) so the factory starts there.
+        assert await storage.get_setting(_position_key(book["id"])) == "110.0"
         assert isinstance(result.side_effect, AudioStream)
 
     async def test_rewind_factory_streams_from_new_position(

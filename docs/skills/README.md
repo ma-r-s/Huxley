@@ -302,27 +302,35 @@ await self._ctx.inject_turn(
 ```python
 from huxley_sdk import InjectPriority
 
-# Medication reminders: fire even if the user is listening to a book.
+# Social / routine: wait for a quiet moment (default is NORMAL).
 await self._ctx.inject_turn(
-    "Es hora de la pastilla de las nueve.",
-    dedup_key="med_9am",
-    priority=InjectPriority.PREEMPT,
-)
-
-# Social reminders: wait for a quiet moment (default is NORMAL).
-await self._ctx.inject_turn(
-    "Carlos mandó un mensaje.",
+    "Carlos te escribió.",
     dedup_key="msg_12345",
     # priority=InjectPriority.NORMAL — the default
 )
+
+# User-set timer: preempt an audiobook, but wait behind an active call.
+await self._ctx.inject_turn(
+    "Tu temporizador de 10 minutos terminó.",
+    dedup_key="timer_42",
+    priority=InjectPriority.BLOCK_BEHIND_COMMS,
+)
+
+# Unconditional urgent: preempt everything including live calls.
+# Reserved for true top-severity (rare). Interrupts a Telegram call.
+await self._ctx.inject_turn(
+    "¡Alarma de incendios!",
+    priority=InjectPriority.PREEMPT,
+)
 ```
 
-Two tiers today:
+Three tiers, ordered by urgency:
 
-- **`NORMAL`** (default) — queue drains only when a turn ends WITHOUT a pending content stream. If the user starts a book, the reminder waits for the next quiet turn-end (user PTT + any response that doesn't spawn content). Right for events that can wait an indeterminate time — social messages, routine chatter, scheduled greetings.
-- **`PREEMPT`** — queue drains even when a turn ends WITH a pending content stream. The content stream request is dropped (user has to re-ask). Right for events that can't wait hours — medication reminders, safety alerts, inbound calls. Users give up book playback in exchange for the reliable reminder surface.
+- **`NORMAL`** (default) — queues behind everything. Drains when a turn ends WITHOUT a pending content stream AND no active COMMS claim. Right for social reminders, inbound-message announcements, chatter that can wait for the next quiet moment.
+- **`BLOCK_BEHIND_COMMS`** — preempts CONTENT (audiobooks pause via patience and resume after; radio ducks or pauses per `ContentType`), but queues behind COMMS claims (active calls). Fires at claim-end. Right for the vast majority of "urgent enough to interrupt the book" cases — cooking timers, medication reminders, doorbell announcements, severity-tiered notifications. Interrupting a live phone call for these would be wrong UX.
+- **`PREEMPT`** — preempts everything below DIALOG. A live Telegram call gets its claim ended with `PREEMPTED`; the reminder narrates. Use sparingly — reserved for genuinely top-severity events (fire alarm, evacuation, similar). Most skills that reach for this actually want `BLOCK_BEHIND_COMMS`.
 
-Neither tier barges into a user mid-speech. The queue always waits for turn-end; `PREEMPT` only wins against content, not users. If a user is speaking when a `PREEMPT` reminder fires, it queues and drains at the end of whatever turn follows (including any tool-call follow-up rounds).
+None of the tiers barge into a user mid-speech. The queue always waits for turn-end; priority only decides content-vs-queue and claim-vs-queue at that boundary, never the user's right to finish a sentence. If a user is speaking when an alert fires, it queues and drains at the end of whatever turn follows (including any tool-call follow-up rounds).
 
 **What `prompt` should contain**: an instruction for the LLM, not the literal words to speak. The persona prompt + the persona's voice transform your instruction into the actual utterance. For a medication reminder, `"Es hora de la pastilla de las nueve"` is fine — the LLM narrates that verbatim or close to it; for something needing more context, `"Dile al usuario que su hijo Carlos mandó un mensaje que dice '<text>', pregúntale si quiere escucharlo"` works too.
 

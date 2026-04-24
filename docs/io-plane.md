@@ -1,30 +1,37 @@
 # Huxley I/O plane — spec for skill-extensible streams
 
-> ⚠️ **Status: partially superseded (pre-pivot spec)**. This document was
-> written assuming an arbitration-based coordination model
-> (`Urgency` × `YieldPolicy` → `Decision`, with a `MediaTaskManager`
-> executing preempt / duck / hold / drop). During T1.4 Stage 1 we
-> pivoted to AVS-style **focus management** — the same decisions expressed
-> as stacked `Activity` objects per named `Channel`, with priority-map
-> arbitration and observer notifications. See the 2026-04-18 ADR
-> ["Pivot from arbitration model to AVS focus-management"](./decisions.md#2026-04-18--pivot-io-plane-coordination-from-arbitration-to-avs-focus-management)
-> for why.
+> ⚠️ **Status: HISTORICAL ARTIFACT (do not act on this doc).** This
+> document was written as a pre-implementation design spec assuming an
+> arbitration-based coordination model (`Urgency` × `YieldPolicy` →
+> `Decision`, with a `MediaTaskManager` executing preempt / duck /
+> hold / drop). The real implementation pivoted to AVS-style **focus
+> management** (ADR 2026-04-18) and landed in a shape that has
+> substantially diverged from this spec.
 >
-> **What's still accurate in this spec**: the high-level streams model
-> (mic / speaker / events plus turn loop), the five primitives skills
-> get (`AudioStream`, `inject_turn`, `InputClaim`, `ClientEvent`,
-> `background_task`), the shapes of their public APIs (mostly), and
-> the reasoning about skill-extensibility.
+> **Read this doc for**: the high-level streams model (mic / speaker /
+> events plus turn loop), the names of the five primitives (`AudioStream`,
+> `inject_turn`, `InputClaim`, `ClientEvent`, `background_task`), and
+> the framework-extensibility philosophy.
 >
-> **What's superseded**: every reference to `Urgency`, `YieldPolicy`,
-> `arbitrate()`, `Decision`, `DuckingController`, and `MediaTaskManager`.
-> The replacements are `Channel`, `FocusState`, `MixingBehavior`,
-> `FocusManager`, and `ContentStreamObserver`. See
-> [`concepts.md#focus-management`](./concepts.md#focus-management-channel--focusstate--mixingbehavior)
-> and [`architecture.md`](./architecture.md) for the current vocabulary.
+> **Do NOT read this doc for** concrete behavior, vocabulary, or
+> guarantees. Every mention of `Urgency`, `YieldPolicy`, `arbitrate()`,
+> `Decision`, `DuckingController`, `MediaTaskManager`, `RING` /
+> `CHIME_DEFER` / `AMBIENT` / `INTERRUPT` / `CRITICAL` tiers,
+> `PATIENCE_EXPIRED` state names, or any internal type from the
+> original design is superseded. The current vocabulary is
+> `Channel`, `FocusState`, `MixingBehavior`, `FocusManager`, and
+> `ContentStreamObserver`.
 >
-> A full rewrite is queued for after T1.4 Stage 2 direction is locked —
-> see `triage.md` T1.4 for the current status.
+> **Current sources of truth**:
+>
+> - [`concepts.md#focus-management`](./concepts.md#focus-management-channel--focusstate--mixingbehavior) — channel priorities, live paths, ALERT reserved status, inject priority tiers
+> - [`architecture.md`](./architecture.md) — actor model, observer protocol, ordering invariants
+> - [`skills/README.md`](./skills/README.md) — `inject_turn` priority tiers (`NORMAL` / `BLOCK_BEHIND_COMMS` / `PREEMPT`)
+> - [`decisions.md`](./decisions.md) — focus-plane ADRs (2026-04-18 pivot, 2026-04-24 completion)
+>
+> A rewrite of this doc is queued under triage item **T2.7** (focus-
+> plane documentation reconciliation). Until then: read for shape, not
+> for specifics.
 >
 > ---
 >

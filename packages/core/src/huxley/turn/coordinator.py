@@ -36,7 +36,6 @@ with a `StubVoiceProvider` and wire into a concrete
 from __future__ import annotations
 
 import asyncio
-import itertools
 import json
 import time
 from dataclasses import dataclass
@@ -49,6 +48,7 @@ from huxley.focus.vocabulary import Activity, Channel
 from huxley_sdk import (
     AudioStream,
     CancelMedia,
+    ClaimBusyError,
     ClaimEndReason,
     ClaimHandle,
     ContentType,
@@ -202,11 +202,11 @@ class TurnCoordinator:
         # CONTENT channel with `_content_obs` — FocusManager enforces
         # single-occupant, and starting a claim first stops any running
         # content stream (and vice versa). A ref of None means no claim.
+        # Single-slot policy (Stage 2b, 2026-04-23): a second claim gets
+        # `ClaimBusyError`; the interface_name used on FM is the literal
+        # `"claim:active"` so the single-slot semantics are reflected
+        # in focus-manager state too.
         self._claim_obs: ClaimObserver | None = None
-        # Counter for interface_name uniqueness on claims. A per-process
-        # integer is plenty — the interface_name only needs to be unique
-        # within the FocusManager's lifetime, not globally.
-        self._claim_counter: itertools.count[int] = itertools.count(1)
         # Wall clock when the current claim latched. Used by the PTT
         # debounce in `on_ptt_start` — a press within 300ms of a
         # claim-start is treated as a client-side bounce / race of the
@@ -780,23 +780,30 @@ class TurnCoordinator:
            entry and this turn spawned content OR latched a claim, fire
            the PREEMPT and drop both. PREEMPT callers accept the tradeoff
            of dropping user-requested work (audiobook, voice memo,
-           incoming call) to surface a time-critical event (medication,
-           safety). NORMAL entries ahead of it keep their place. A
-           dropped claim fires its own `on_claim_end(PREEMPTED)` so
-           skills see the same lifecycle they would on mid-flight
-           preemption.
-        2. **Claim wins over streams** — a tool that latched the mic
+           incoming call) to surface a time-critical event (fire alarm
+           or equivalent). NORMAL / BLOCK_BEHIND_COMMS entries ahead of
+           it keep their place. A dropped claim fires its own
+           `on_claim_end(PREEMPTED)` so skills see the same lifecycle
+           they would on mid-flight preemption.
+        2. **BLOCK_BEHIND_COMMS over content (only)** — if the queue has
+           a BLOCK_BEHIND_COMMS entry and this turn spawned a content
+           stream but did NOT latch a claim, fire the alert and drop the
+           stream. If a claim is pending, BLOCK_BEHIND_COMMS waits —
+           that's the whole point of the tier, respect live calls.
+        3. **Claim wins over streams** — a tool that latched the mic
            takes priority over a tool that also requested audio playback
            (rare — typically one tool returns one side-effect). Latest
            tool wins anyway, but we'd rather start the claim than play
            audio into a mic the skill wanted captured.
-        3. **Content wins** — no claim, no PREEMPT: start the pending
-           stream.
-        4. **Quiet moment** — nothing pending: drain the head of the
+        4. **Content wins** — no claim, no PREEMPT/BLOCK_BEHIND_COMMS
+           drain: start the pending stream.
+        5. **Quiet moment** — nothing pending: drain the head of the
            queue (FIFO, any priority).
         """
-        preempt_index = self._find_first_preempt_index()
-        has_foreground_work = bool(streams) or claim is not None
+        preempt_index = self._find_first_with_priority(InjectPriority.PREEMPT)
+        has_streams = bool(streams)
+        has_claim = claim is not None
+        has_foreground_work = has_streams or has_claim
         if has_foreground_work and preempt_index is not None:
             request = self._injected_queue.pop(preempt_index)
             await self._log.ainfo(
@@ -819,12 +826,50 @@ class TurnCoordinator:
                     )
             await self._fire_injected_turn(request.prompt, request.dedup_key)
             return
+        # BLOCK_BEHIND_COMMS: preempts streams but respects claims. If
+        # there's a pending claim, the alert stays queued — drains at
+        # the next quiet moment (typically the synthetic turn the
+        # comms skill fires at claim-end, which has no foreground work
+        # of its own and falls through to the FIFO branch below).
+        if has_streams and not has_claim:
+            block_idx = self._find_first_with_priority(InjectPriority.BLOCK_BEHIND_COMMS)
+            if block_idx is not None:
+                request = self._injected_queue.pop(block_idx)
+                await self._log.ainfo(
+                    "coord.inject_turn_preempted_content",
+                    remaining=len(self._injected_queue),
+                    dedup_key=request.dedup_key,
+                    priority=request.priority.value,
+                    dropped_streams=len(streams),
+                    dropped_claim=False,
+                )
+                await self._fire_injected_turn(request.prompt, request.dedup_key)
+                return
         if claim is not None:
             # Claim wins over streams: a mic latch is more authoritative
             # than audio playback in the same turn (rare — most skills
             # return one side-effect — but if a tool somehow returns
             # both, we start the claim and drop the stream silently).
-            await self.start_input_claim(claim)
+            try:
+                await self.start_input_claim(claim)
+            except ClaimBusyError:
+                # Defensive: a prior claim is still active when a new
+                # tool tried to latch one. Skills should guard against
+                # this themselves, but the coordinator cannot let this
+                # propagate and crash the turn. Surface to the skill
+                # via `on_claim_end(ERROR)` so its cleanup runs and the
+                # user sees a coherent outcome.
+                await logger.awarning(
+                    "coord.claim_rejected_busy",
+                    reason="existing_claim_active",
+                )
+                if claim.on_claim_end is not None:
+                    try:
+                        await claim.on_claim_end(ClaimEndReason.ERROR)
+                    except Exception:
+                        await logger.aexception(
+                            "coord.claim_rejected_on_end_raised",
+                        )
             return
         if streams:
             await self._start_content_stream(streams[-1], turn_id)
@@ -839,12 +884,13 @@ class TurnCoordinator:
             )
             await self._fire_injected_turn(request.prompt, request.dedup_key)
 
-    def _find_first_preempt_index(self) -> int | None:
-        """Return the index of the first PREEMPT request in the queue,
-        or None if none exist. Used by the turn-end drain to decide
-        whether to override the "content wins" default."""
+    def _find_first_with_priority(self, priority: InjectPriority) -> int | None:
+        """Return the index of the first queue entry with the given
+        priority, or None if none exist. Used by `_dispatch_post_turn`
+        to decide whether to drain a priority-specific branch
+        (PREEMPT-over-all-foreground, BLOCK_BEHIND_COMMS-over-content)."""
         for i, req in enumerate(self._injected_queue):
-            if req.priority is InjectPriority.PREEMPT:
+            if req.priority is priority:
                 return i
         return None
 
@@ -931,16 +977,19 @@ class TurnCoordinator:
         # preemption (not NONE/MUST_STOP) and the observer's gain
         # envelope ramps down instead of hard-pausing.
         #
-        # `patience` is non-zero for MIXABLE streams so the FM delivers
-        # BACKGROUND (grace window) instead of immediately cutting to
-        # NONE. Without it, any DIALOG acquire kills the stream outright
-        # regardless of content_type — the duck envelope never fires.
-        # 5 minutes is enough for most inject_turn narrations + a little
-        # slack; past that we assume the user meaningfully changed
-        # context and the ambient stream can be dropped.
-        patience = (
-            timedelta(minutes=5) if stream.content_type is ContentType.MIXABLE else timedelta(0)
-        )
+        # Patience: skill override wins; otherwise derive from
+        # content_type. MIXABLE defaults to 5 min so the duck envelope
+        # has room to work; NONMIXABLE defaults to 0 (evict on
+        # preempt). Skills that want pause/resume for their
+        # NONMIXABLE stream (audiobooks: a call parks the book for
+        # ~30 min, then resumes on hangup) set `stream.patience`
+        # explicitly.
+        if stream.patience is not None:
+            patience = stream.patience
+        elif stream.content_type is ContentType.MIXABLE:
+            patience = timedelta(minutes=5)
+        else:
+            patience = timedelta(0)
         activity = Activity(
             channel=Channel.CONTENT,
             interface_name=interface_name,
@@ -990,7 +1039,7 @@ class TurnCoordinator:
     # --- Input claim (T1.4 Stage 2 — mic-capture skills) ---
 
     async def start_input_claim(self, claim: InputClaim) -> ClaimHandle:
-        """Latch the mic to `claim`'s handler via a CONTENT-channel Activity.
+        """Latch the mic to `claim`'s handler via a COMMS-channel Activity.
 
         Direct-entry path — used by skills that start a claim from a
         `background_task` (incoming call, panic button). For claims
@@ -1008,9 +1057,22 @@ class TurnCoordinator:
         Returns a `ClaimHandle` with `cancel()` (skill-initiated end
         with `NATURAL` reason) and `wait_end()` (resolves to the
         `ClaimEndReason` when the claim ends for any reason).
+
+        Single-slot policy: raises `ClaimBusyError` if a claim is
+        already active. Huxley does not stack claims today — the
+        second call gets a clean rejection so the skill can notify
+        its peer (e.g. Telegram sends DISCARDED_CALL). Interface_name
+        is the literal `"claim:active"` so the one-slot semantics
+        are reflected in focus-manager state too (same-interface
+        replacement would be well-defined if ever reached, but the
+        busy check above prevents that path).
         """
-        claim_id = next(self._claim_counter)
-        interface_name = f"claim:{claim_id}"
+        if self._claim_obs is not None:
+            raise ClaimBusyError(
+                "a claim is already active on COMMS; reject or end the "
+                "existing claim before starting a new one"
+            )
+        interface_name = "claim:active"
         end_event = asyncio.Event()
         final_reason: dict[str, ClaimEndReason] = {}
 
@@ -1053,7 +1115,7 @@ class TurnCoordinator:
         # router busy at FOREGROUND time) without holding a FocusManager
         # reference directly.
         async def _release_self() -> None:
-            await self._focus_manager.release(Channel.CONTENT, interface_name)
+            await self._focus_manager.release(Channel.COMMS, interface_name)
 
         observer = ClaimObserver(
             interface_name=interface_name,
@@ -1070,7 +1132,7 @@ class TurnCoordinator:
         # before `wait_drained` returns if the mailbox is busy.
         self._claim_obs = observer
         activity = Activity(
-            channel=Channel.CONTENT,
+            channel=Channel.COMMS,
             interface_name=interface_name,
             content_type=ContentType.NONMIXABLE,
             observer=observer,
@@ -1149,7 +1211,7 @@ class TurnCoordinator:
         NONE to the observer, which fires its cleanup chain."""
         if observer.is_ended:
             return
-        await self._focus_manager.release(Channel.CONTENT, observer.interface_name)
+        await self._focus_manager.release(Channel.COMMS, observer.interface_name)
         await self._focus_manager.wait_drained()
 
     async def cancel_active_claim(

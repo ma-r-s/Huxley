@@ -353,6 +353,61 @@ class TestWaitEndBlocksUntilEnd:
         await handle.wait_end()
 
 
+# --- Concurrent claims: single-slot rejection (Stage 2b, 2026-04-23) ---
+
+
+class TestConcurrentClaimRejection:
+    """Huxley's single-slot COMMS policy: a second `start_input_claim`
+    call while one is active raises `ClaimBusyError` so the calling
+    skill can reject the peer (e.g., Telegram sends `DISCARDED_CALL`).
+    Call-waiting / claim-stacking is not supported today.
+    """
+
+    async def test_second_claim_raises_claim_busy_error(
+        self, coordinator: TurnCoordinator
+    ) -> None:
+        from huxley_sdk import ClaimBusyError
+
+        await coordinator.start_input_claim(InputClaim(on_mic_frame=AsyncMock()))
+        # First claim is live. Second attempt raises.
+        with pytest.raises(ClaimBusyError):
+            await coordinator.start_input_claim(InputClaim(on_mic_frame=AsyncMock()))
+
+    async def test_second_claim_rejection_leaves_first_claim_intact(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider
+    ) -> None:
+        from huxley_sdk import ClaimBusyError
+
+        first_on_mic = AsyncMock()
+        handle = await coordinator.start_input_claim(InputClaim(on_mic_frame=first_on_mic))
+        assert provider.is_suspended is True
+
+        with pytest.raises(ClaimBusyError):
+            await coordinator.start_input_claim(InputClaim(on_mic_frame=AsyncMock()))
+
+        # First claim still owns everything.
+        assert coordinator._claim_obs is not None
+        assert provider.is_suspended is True
+        # Mic still routes to the first skill.
+        await coordinator._mic_router.dispatch(b"\x05")
+        first_on_mic.assert_awaited_once_with(b"\x05")
+        # Ending the first works normally.
+        handle.cancel()
+        await asyncio.wait_for(handle.wait_end(), timeout=1.0)
+        assert coordinator._claim_obs is None
+
+    async def test_claim_after_previous_ended_succeeds(self, coordinator: TurnCoordinator) -> None:
+        """Single-slot, not single-use: once a claim ends, a new one works."""
+        h1 = await coordinator.start_input_claim(InputClaim(on_mic_frame=AsyncMock()))
+        h1.cancel()
+        await asyncio.wait_for(h1.wait_end(), timeout=1.0)
+        # Slot free; new claim succeeds.
+        h2 = await coordinator.start_input_claim(InputClaim(on_mic_frame=AsyncMock()))
+        assert coordinator._claim_obs is not None
+        h2.cancel()
+        await asyncio.wait_for(h2.wait_end(), timeout=1.0)
+
+
 # --- Contract: suspend-before-swap ordering ---
 
 
