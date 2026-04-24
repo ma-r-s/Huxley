@@ -93,7 +93,7 @@ Quick framing:
 
 The ESP32 client for users who want a tactile device in the room — a physical hold-to-talk button, speaker, mic, no screen. Streams PCM over LAN to the framework. Same WebSocket protocol as `web/` and `huxley-web`. Wakeword detection optional (push button is the primary input). Mainly motivated today by the AbuelOS-persona user's accessibility needs (a blind user benefits more from a tactile button than a tablet), but useful for any user who wants always-on voice without keeping an app open.
 
-Out of scope for now; filed for after `huxley-web` is in real use.
+**Prototyping in-repo under [`../firmware/`](../firmware/)** until the architecture is proven end-to-end on a Waveshare ESP32-S3-AUDIO-Board. Once voice works round-trip, the tree is extracted to its own `huxley-firmware` repo (no cross-repo deps beyond [`protocol.md`](./protocol.md)). Keeping the prototype next to the server while the contract is still moving lets protocol + firmware changes land in one commit; separation kicks in when both sides stabilize.
 
 ## Cross-repo discipline
 
