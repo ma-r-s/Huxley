@@ -56,8 +56,20 @@ Unblocked by F-0002.
 
 ## Deferred
 
-Nothing yet. Deferred items get a line here with a one-sentence "why
-not now" so they don't need to be rediscussed every session.
+### F-DEFER-01 — Resolve Waveshare vendor-driver licensing
+
+Waveshare's demo ZIP ships no LICENSE / COPYING / NOTICE. We vendored
+four driver sources under `components/hux_audio/vendor/waveshare/` and
+documented the absence in that directory's README. Internal use for
+prototyping is fine; **before this repo (or the spun-out
+`huxley-firmware` repo) goes public or ships a binary to anyone other
+than Mario's household, contact Waveshare and get explicit permission
+or find drop-in alternatives** (Espressif `esp-bsp`, Arduino cores,
+write-from-scratch against the component datasheets).
+
+**Why not now**: not blocking any v0.x milestone; the right resolution
+depends on what the eventual distribution story looks like, which
+isn't decided. Revisit before the firmware leaves this repo.
 
 ---
 
