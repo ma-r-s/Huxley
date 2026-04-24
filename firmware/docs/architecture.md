@@ -72,33 +72,58 @@ FreeRTOS tasks, in priority order (higher = more important):
 starves audio we get glitches; if audio starves the state machine we
 only get slightly-delayed decisions. Audio wins.
 
-## Event flow (inbound message → UI effect)
+## Data plane vs. control plane
+
+Two classes of inbound message, two paths:
+
+- **Data plane**: `audio` chunks. At 50 Hz each frame is ~2 KB base64,
+  and there are thousands per minute. Going through `hux_app`'s
+  32-entry queue with a full cJSON parse per frame would burn
+  ~250 mallocs/sec and buffer less than a second of speech before
+  dropping. Instead, `hux_net` recognises `audio` messages up front
+  (cheap substring probe), parses the envelope inline, base64-decodes
+  into a pre-allocated scratch, and hands the PCM view to a
+  registered `hux_net_audio_sink_fn`. Zero heap per frame; `hux_app`
+  never sees audio.
+- **Control plane**: everything else (`state`, `status`, `input_mode`,
+  `stream_started`, `claim_started`, …). Low-rate, latency-tolerant,
+  needs the state machine. These flow through `hux_app`'s event
+  queue as before — cheap given the traffic.
+
+## Event flow (control plane)
 
 ```
-  WS DATA (text)  ─▶ hux_net ─▶ forward_ws_text
-                                    │
-                                    │ malloc + copy
-                                    ▼
-                               hux_app_post_event(WS_MESSAGE)
-                                    │
-                                    ▼
-                               hux_app event queue
-                                    │
-                                    ▼
-                               app_task.dispatch
-                                    │
-                                    ├──▶ hux_proto_parse
-                                    │         │
-                                    │         ▼ typed hux_msg_t
-                                    │
-                                    ├──▶ transition(state)    (log)
-                                    │
-                                    └──▶ side effects
-                                           (future: spk ring push,
-                                            state LED update, etc.)
-                                    │
-                                    ▼
-                               free(ws_message.data)
+  WS DATA (text)  ─▶ hux_net ─▶ forward_ws_text ─┬─▶ looks_like_audio? ─▶ yes
+                                                 │                       │
+                                                 │                       ▼
+                                                 │                  dispatch_audio
+                                                 │                  (cJSON parse,
+                                                 │                   base64 decode,
+                                                 │                   sink callback)
+                                                 │
+                                                 └─▶ no ─▶ malloc + copy
+                                                           │
+                                                           ▼
+                                                    hux_app_post_event(WS_MESSAGE)
+                                                           │
+                                                           ▼
+                                                    hux_app event queue
+                                                           │
+                                                           ▼
+                                                    app_task.dispatch
+                                                           │
+                                                           ├──▶ hux_proto_parse
+                                                           │         │
+                                                           │         ▼ typed hux_msg_t
+                                                           │
+                                                           ├──▶ transition(state)    (log)
+                                                           │
+                                                           └──▶ side effects
+                                                                  (future: state LED,
+                                                                   stream label, …)
+                                                           │
+                                                           ▼
+                                                    free(ws_message.data)
 ```
 
 **Ownership invariant**: the producer heap-allocates the message
