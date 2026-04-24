@@ -62,6 +62,10 @@ class RadioSkill:
         self._stations: list[dict[str, str]] = []
         self._stations_by_id: dict[str, dict[str, str]] = {}
         self._default_id: str = ""
+        # Radio has no separate "feed language" — stations are live URLs.
+        # `_language_code` tracks the session's UI language so tool
+        # descriptions and user-facing messages match what the LLM speaks.
+        # Updated on each session connect via `reconfigure()`.
         self._language_code: str = "en"
         self._storage: SkillStorage | None = None
         self._logger: SkillLogger | None = None
@@ -74,8 +78,11 @@ class RadioSkill:
 
     @property
     def tools(self) -> list[ToolDefinition]:
-        if self._language_code.startswith("es"):
+        code = self._language_code.lower()
+        if code.startswith("es"):
             return self._tools_es()
+        if code.startswith("fr"):
+            return self._tools_fr()
         return self._tools_en()
 
     def _station_choices(self) -> str:
@@ -135,6 +142,62 @@ class RadioSkill:
                 description=(
                     "Devuelve la lista de emisoras configuradas. Úsala cuando el "
                     "usuario pregunte 'qué emisoras tengo' o 'qué radios hay'."
+                ),
+                parameters={"type": "object", "properties": {}},
+            ),
+        ]
+
+    def _tools_fr(self) -> list[ToolDefinition]:
+        choices = self._station_choices()
+        return [
+            ToolDefinition(
+                name="play_station",
+                description=(
+                    "Lance une station de radio. AVANT d'appeler, dis brièvement "
+                    "quelque chose comme 'un instant, j'allume la radio' pour "
+                    "que l'utilisateur sache que tu l'as entendu pendant le "
+                    "chargement. "
+                    "Sans argument, lance la station par défaut. "
+                    f"Stations disponibles (id et nom) : {choices}. "
+                    "Passe l'identifiant exact de la station."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "station": {
+                            "type": "string",
+                            "description": (
+                                "Identifiant de la station (pas son nom complet). "
+                                "Si l'utilisateur nomme la station par son nom, "
+                                "trouve-la dans la liste et passe son id. "
+                                "Omets pour utiliser la station par défaut."
+                            ),
+                        },
+                    },
+                },
+            ),
+            ToolDefinition(
+                name="resume_radio",
+                description=(
+                    "Reprend la dernière station écoutée. À utiliser quand "
+                    "l'utilisateur dit 'remets la radio' ou similaire sans "
+                    "nommer de station."
+                ),
+                parameters={"type": "object", "properties": {}},
+            ),
+            ToolDefinition(
+                name="stop_radio",
+                description=(
+                    "Arrête la radio. À utiliser pour 'coupe la radio', 'silence', 'éteins-la'."
+                ),
+                parameters={"type": "object", "properties": {}},
+            ),
+            ToolDefinition(
+                name="list_stations",
+                description=(
+                    "Renvoie la liste des stations configurées. À utiliser "
+                    "quand l'utilisateur demande 'quelles stations j'ai' ou "
+                    "'quelles radios y a-t-il'."
                 ),
                 parameters={"type": "object", "properties": {}},
             ),
@@ -235,7 +298,15 @@ class RadioSkill:
                 f"not found in stations list. Available: {list(self._stations_by_id)}"
             )
 
-        self._language_code = str(cfg.get("language_code", "en")).lower()
+        # Seed the tool-description language from the session context.
+        # `reconfigure()` keeps it in sync across session connects; the
+        # persona's `skills.radio.language_code` is retained as a
+        # fallback for clients that never send a language (back-compat
+        # with the pre-i18n shape).
+        cfg_lang = cfg.get("language_code")
+        self._language_code = str(
+            ctx.language or cfg_lang or "en",
+        ).lower()
 
         if self._player is None:
             self._player = RadioPlayer(ffmpeg_path=str(cfg.get("ffmpeg", "ffmpeg")))
@@ -263,6 +334,11 @@ class RadioSkill:
             default=self._default_id,
             chime=self._start_sound_role if self._sounds else None,
         )
+
+    async def reconfigure(self, ctx: SkillContext) -> None:
+        """Refresh the UI language so tool descriptions match the session."""
+        self._language_code = (ctx.language or self._language_code).lower()
+        await ctx.logger.ainfo("radio.reconfigure", language=self._language_code)
 
     async def teardown(self) -> None:
         """No persistent state to flush — the running stream is owned by the
@@ -342,16 +418,26 @@ class RadioSkill:
                     {
                         "playing": False,
                         "reason": "no_history",
-                        "message": (
-                            "Aún no he reproducido ninguna emisora. ¿Cuál quieres que prenda?"
-                            if self._language_code.startswith("es")
-                            else "I haven't played any station yet. Which one do you want?"
-                        ),
+                        "message": self._no_history_message(),
                     },
                     ensure_ascii=False,
                 )
             )
         return await self._play_station(last_id)
+
+    def _no_history_message(self) -> str:
+        """Localized 'nothing to resume' message surfaced to the LLM.
+
+        The LLM narrates or paraphrases this — it's a content cue rather
+        than a literal line — so the strings can stay short and direct
+        without persona tone baked in.
+        """
+        code = self._language_code.lower()
+        if code.startswith("es"):
+            return "Aún no he reproducido ninguna emisora. ¿Cuál quieres que prenda?"
+        if code.startswith("fr"):
+            return "Je n'ai encore lancé aucune station. Laquelle veux-tu ?"
+        return "I haven't played any station yet. Which one do you want?"
 
     def _stop_radio(self) -> ToolResult:
         return ToolResult(

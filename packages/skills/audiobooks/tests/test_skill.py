@@ -132,10 +132,14 @@ def library_path(tmp_path: Path) -> Path:
     return lib
 
 
-def _make_ctx(library_path: Path) -> SkillContext:
+def _make_ctx(library_path: Path, language: str = "es") -> SkillContext:
+    # Tests assert against Spanish strings throughout because AbuelOS is the
+    # reference persona and its library is Spanish. Pass `language="en"` or
+    # `"fr"` in a test that specifically exercises i18n behavior.
     return make_test_context(
         config={"library": str(library_path)},
         persona_data_dir=library_path.parent,
+        language=language,
     )
 
 

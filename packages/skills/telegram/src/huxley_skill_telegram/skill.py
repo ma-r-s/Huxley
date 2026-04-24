@@ -90,6 +90,217 @@ if TYPE_CHECKING:
     from huxley_sdk import SkillContext
 
 
+def _telegram_lang_bucket(language: str) -> str:
+    code = (language or "en").lower()
+    for key in ("es", "en", "fr"):
+        if code.startswith(key):
+            return key
+    return "en"
+
+
+_TOOL_DESC: dict[str, dict[str, str]] = {
+    "es": {
+        "call_contact": (
+            "Llama por teléfono (Telegram) a una persona de la lista de "
+            "contactos. Úsalo cuando el usuario pida llamar a alguien -- "
+            "ej. 'llama a mi hija', 'quiero hablar con el hijo'. La "
+            "llamada abre el micrófono: el usuario oye a la persona y "
+            "la persona lo oye a él. Contactos disponibles: {contacts}."
+        ),
+        "call_name_param": (
+            "Nombre (en minúsculas) del contacto, tal como aparece en "
+            "la lista de contactos configurados."
+        ),
+        "send_message": (
+            "Envía un mensaje de texto por Telegram a una persona de "
+            "la lista de contactos. Úsalo cuando el usuario quiera "
+            "mandar un recado escrito -- ej. 'manda un mensaje a mi "
+            "hija diciéndole que ya almorcé'. El mensaje llega al "
+            "teléfono de la persona como un texto normal de Telegram. "
+            "Contactos disponibles: {contacts}."
+        ),
+        "send_name_param": "Nombre (en minúsculas) del contacto destinatario.",
+        "send_text_param": (
+            "Texto del mensaje a enviar. Telegram acepta hasta 4096 caracteres por mensaje."
+        ),
+        "contacts_empty": "(ninguno)",
+    },
+    "en": {
+        "call_contact": (
+            "Call a person (Telegram voice call) from the contacts list. "
+            "Use when the user asks to call someone -- e.g. 'call my "
+            "daughter', 'I want to talk to my son'. The call opens the "
+            "microphone: the user hears the person and the person hears "
+            "them. Available contacts: {contacts}."
+        ),
+        "call_name_param": (
+            "Contact name (lowercase), exactly as it appears in the configured contacts list."
+        ),
+        "send_message": (
+            "Send a text message on Telegram to a contact from the list. "
+            "Use when the user wants to send a written note -- e.g. "
+            "'text my daughter that I already had lunch'. The message "
+            "arrives on their phone as a normal Telegram text. "
+            "Available contacts: {contacts}."
+        ),
+        "send_name_param": "Contact name (lowercase) to send the message to.",
+        "send_text_param": ("Body of the message. Telegram accepts up to 4096 characters."),
+        "contacts_empty": "(none)",
+    },
+    "fr": {
+        "call_contact": (
+            "Appelle quelqu'un (appel vocal Telegram) depuis la liste "
+            "des contacts. À utiliser quand l'utilisateur demande "
+            "d'appeler une personne -- ex. 'appelle ma fille'. L'appel "
+            "ouvre le micro : l'utilisateur entend la personne et la "
+            "personne l'entend. Contacts disponibles : {contacts}."
+        ),
+        "call_name_param": (
+            "Nom du contact (en minuscules), tel qu'il apparaît dans la "
+            "liste de contacts configurée."
+        ),
+        "send_message": (
+            "Envoie un message texte sur Telegram à un contact de la "
+            "liste. À utiliser quand l'utilisateur veut envoyer un "
+            "message écrit -- ex. 'envoie un message à ma fille pour "
+            "lui dire que j'ai déjà mangé'. Le message arrive sur son "
+            "téléphone comme un SMS Telegram normal. Contacts "
+            "disponibles : {contacts}."
+        ),
+        "send_name_param": "Nom du contact destinataire (en minuscules).",
+        "send_text_param": ("Corps du message. Telegram accepte jusqu'à 4096 caractères."),
+        "contacts_empty": "(aucun)",
+    },
+}
+
+
+_STRINGS: dict[str, dict[str, str]] = {
+    "es": {
+        "unknown_caller": "número desconocido",
+        "unknown_caller_article": "un número desconocido",
+        "the_caller": "la persona",
+        "empty_message_arg": "El mensaje está vacío. Dime qué quieres decirle a esa persona.",
+        "not_configured_call": (
+            "Las llamadas de Telegram no están configuradas en este dispositivo. "
+            "No puedo llamar a nadie hasta que alguien configure las credenciales."
+        ),
+        "not_configured_send": (
+            "Los mensajes de Telegram no están configurados en este dispositivo. "
+            "No puedo enviar nada hasta que alguien configure las credenciales."
+        ),
+        "contact_missing_call": (
+            "No tengo a '{name}' en la lista de contactos. Contactos conocidos: {known}"
+        ),
+        "contact_missing_send": (
+            "No tengo a '{name}' en la lista de contactos para enviarle mensajes. "
+            "Contactos conocidos: {known}"
+        ),
+        "place_call_failed": (
+            "No pude conectar la llamada a {name}: {exc}. "
+            "Puede ser que el contacto no tenga Telegram con ese número."
+        ),
+        "send_failed": (
+            "No pude enviar el mensaje a {name}: {exc}. "
+            "Puede ser que el contacto no tenga Telegram con ese número."
+        ),
+        "too_long": (
+            "El mensaje es muy largo ({chars} caracteres; Telegram acepta "
+            "máximo 4096). Acórtalo o divídelo en varios mensajes."
+        ),
+        "accept_failed": ("Intente contestar la llamada de {display} pero falló la conexión."),
+        "answering": "Llamada de {display}, contestando.",
+        "call_no_longer_available": (
+            "La llamada de {name} ya no está disponible -- la persona "
+            "colgó antes de que se contestara."
+        ),
+        "contacts_none": "(ninguno)",
+    },
+    "en": {
+        "unknown_caller": "unknown number",
+        "unknown_caller_article": "an unknown number",
+        "the_caller": "the caller",
+        "empty_message_arg": "The message is empty. Tell me what you want to say.",
+        "not_configured_call": (
+            "Telegram calls aren't configured on this device. "
+            "I can't call anyone until someone sets up the credentials."
+        ),
+        "not_configured_send": (
+            "Telegram messaging isn't configured on this device. "
+            "I can't send anything until someone sets up the credentials."
+        ),
+        "contact_missing_call": (
+            "I don't have '{name}' in the contact list. Known contacts: {known}"
+        ),
+        "contact_missing_send": (
+            "I don't have '{name}' in the contact list to message. Known contacts: {known}"
+        ),
+        "place_call_failed": (
+            "I couldn't connect the call to {name}: {exc}. "
+            "Maybe the contact doesn't have Telegram under that number."
+        ),
+        "send_failed": (
+            "I couldn't send the message to {name}: {exc}. "
+            "Maybe the contact doesn't have Telegram under that number."
+        ),
+        "too_long": (
+            "The message is too long ({chars} chars; Telegram accepts up to "
+            "4096). Shorten it or split it into several messages."
+        ),
+        "accept_failed": "I tried to answer the call from {display} but the connection failed.",
+        "answering": "Call from {display}, answering.",
+        "call_no_longer_available": (
+            "The call from {name} is no longer available -- the person "
+            "hung up before it could be answered."
+        ),
+        "contacts_none": "(none)",
+    },
+    "fr": {
+        "unknown_caller": "numéro inconnu",
+        "unknown_caller_article": "un numéro inconnu",
+        "the_caller": "la personne",
+        "empty_message_arg": "Le message est vide. Dis-moi ce que tu veux lui dire.",
+        "not_configured_call": (
+            "Les appels Telegram ne sont pas configurés sur cet appareil. "
+            "Je ne peux appeler personne tant que quelqu'un ne configure "
+            "pas les identifiants."
+        ),
+        "not_configured_send": (
+            "La messagerie Telegram n'est pas configurée sur cet appareil. "
+            "Je ne peux rien envoyer tant que quelqu'un ne configure pas "
+            "les identifiants."
+        ),
+        "contact_missing_call": (
+            "Je n'ai pas '{name}' dans la liste de contacts. Contacts connus : {known}"
+        ),
+        "contact_missing_send": (
+            "Je n'ai pas '{name}' dans la liste de contacts pour lui envoyer "
+            "des messages. Contacts connus : {known}"
+        ),
+        "place_call_failed": (
+            "Je n'ai pas pu établir l'appel vers {name} : {exc}. "
+            "Peut-être que le contact n'est pas sur Telegram avec ce numéro."
+        ),
+        "send_failed": (
+            "Je n'ai pas pu envoyer le message à {name} : {exc}. "
+            "Peut-être que le contact n'est pas sur Telegram avec ce numéro."
+        ),
+        "too_long": (
+            "Le message est trop long ({chars} caractères ; Telegram "
+            "accepte jusqu'à 4096). Raccourcis-le ou divise-le."
+        ),
+        "accept_failed": (
+            "J'ai tenté de répondre à l'appel de {display} mais la connexion a échoué."
+        ),
+        "answering": "Appel de {display}, je réponds.",
+        "call_no_longer_available": (
+            "L'appel de {name} n'est plus disponible -- la personne a "
+            "raccroché avant qu'on ne réponde."
+        ),
+        "contacts_none": "(aucun)",
+    },
+}
+
+
 class TelegramSkill:
     """p2p Telegram voice-call skill — outbound via call_contact,
     inbound via answer_incoming_call (when inbound.enabled)."""
@@ -143,33 +354,38 @@ class TelegramSkill:
         # Active-call state (set in _call_contact / _on_incoming_ring, cleared in _on_claim_end).
         self._active_contact_name: str | None = None
 
+        # Session UI language — drives tool descriptions, error copy,
+        # and the inject_turn prompts this skill builds. Updated every
+        # session via reconfigure().
+        self._language: str = "en"
+
+    def _t(self, key: str, **fmt: Any) -> str:
+        bucket = _telegram_lang_bucket(self._language)
+        table = _STRINGS.get(bucket) or _STRINGS["en"]
+        template = table.get(key) or _STRINGS["en"].get(key) or key
+        return template.format(**fmt) if fmt else template
+
     @property
     def name(self) -> str:
         return "telegram"
 
     @property
     def tools(self) -> list[ToolDefinition]:
-        contacts_list = ", ".join(sorted(self._contacts)) if self._contacts else "(ninguno)"
+        bucket = _telegram_lang_bucket(self._language)
+        td = _TOOL_DESC.get(bucket, _TOOL_DESC["en"])
+        contacts_list = (
+            ", ".join(sorted(self._contacts)) if self._contacts else td["contacts_empty"]
+        )
         return [
             ToolDefinition(
                 name="call_contact",
-                description=(
-                    "Llama por telefono (Telegram) a una persona de la lista de "
-                    "contactos. Usalo cuando el usuario pida llamar a alguien -- "
-                    "ej. 'llama a mi hija', 'quiero hablar con el hijo'. La "
-                    "llamada abre el microfono: el usuario oye a la persona y "
-                    "la persona lo oye a el. Contactos disponibles: "
-                    f"{contacts_list}."
-                ),
+                description=td["call_contact"].format(contacts=contacts_list),
                 parameters={
                     "type": "object",
                     "properties": {
                         "name": {
                             "type": "string",
-                            "description": (
-                                "Nombre (en minusculas) del contacto, tal como "
-                                "aparece en la lista de contactos configurados."
-                            ),
+                            "description": td["call_name_param"],
                         },
                     },
                     "required": ["name"],
@@ -177,27 +393,17 @@ class TelegramSkill:
             ),
             ToolDefinition(
                 name="send_message",
-                description=(
-                    "Envía un mensaje de texto por Telegram a una persona de "
-                    "la lista de contactos. Úsalo cuando el usuario quiera "
-                    "mandar un recado escrito -- ej. 'manda un mensaje a mi "
-                    "hija diciéndole que ya almorcé'. El mensaje llega al "
-                    "teléfono de la persona como un texto normal de Telegram. "
-                    f"Contactos disponibles: {contacts_list}."
-                ),
+                description=td["send_message"].format(contacts=contacts_list),
                 parameters={
                     "type": "object",
                     "properties": {
                         "name": {
                             "type": "string",
-                            "description": "Nombre (en minúsculas) del contacto destinatario.",
+                            "description": td["send_name_param"],
                         },
                         "text": {
                             "type": "string",
-                            "description": (
-                                "Texto del mensaje a enviar. Telegram acepta "
-                                "hasta 4096 caracteres por mensaje."
-                            ),
+                            "description": td["send_text_param"],
                         },
                     },
                     "required": ["name", "text"],
@@ -208,6 +414,7 @@ class TelegramSkill:
     async def setup(self, ctx: SkillContext) -> None:
         self._logger = ctx.logger
         self._ctx = ctx
+        self._language = ctx.language or "en"
 
         cfg = ctx.config
         # Env vars take precedence so secrets (api_id/hash/phone) don't have
@@ -368,9 +575,7 @@ class TelegramSkill:
                 if not isinstance(name_raw, str) or not name_raw.strip():
                     return _error_result("send_message requires a non-empty `name` argument")
                 if not isinstance(text_raw, str) or not text_raw.strip():
-                    return _error_result(
-                        "El mensaje esta vacio. Dime que quieres decirle a esa persona."
-                    )
+                    return _error_result(self._t("empty_message_arg"))
                 return await self._send_message(name_raw.lower().strip(), text_raw)
             case _:
                 await self._logger.awarning("telegram.unknown_tool", tool=tool_name)
@@ -383,10 +588,7 @@ class TelegramSkill:
 
         if self._transport is None:
             await self._logger.awarning("telegram.called_unconfigured", name=name)
-            return _error_result(
-                "Las llamadas de Telegram no estan configuradas en este dispositivo. "
-                "No puedo llamar a nadie hasta que alguien configure las credenciales."
-            )
+            return _error_result(self._t("not_configured_call"))
 
         phone = self._contacts.get(name)
         if phone is None:
@@ -395,10 +597,8 @@ class TelegramSkill:
                 name=name,
                 known=list(self._contacts),
             )
-            return _error_result(
-                f"No tengo a '{name}' en la lista de contactos. "
-                f"Contactos conocidos: {', '.join(sorted(self._contacts)) or '(ninguno)'}"
-            )
+            known = ", ".join(sorted(self._contacts)) or self._t("contacts_none")
+            return _error_result(self._t("contact_missing_call", name=name, known=known))
 
         self._active_contact_name = name
         try:
@@ -408,10 +608,7 @@ class TelegramSkill:
         except TransportError as exc:
             self._active_contact_name = None
             await self._logger.aexception("telegram.place_call_failed", name=name)
-            return _error_result(
-                f"No pude conectar la llamada a {name}: {exc}. "
-                "Puede ser que el contacto no tenga Telegram con ese numero."
-            )
+            return _error_result(self._t("place_call_failed", name=name, exc=str(exc)))
 
         await self._logger.ainfo("telegram.call_started", name=name, user_id=user_id)
         return ToolResult(
@@ -434,31 +631,23 @@ class TelegramSkill:
 
         if self._transport is None:
             await self._logger.awarning("telegram.send_unconfigured", name=name)
-            return _error_result(
-                "Los mensajes de Telegram no están configurados en este dispositivo. "
-                "No puedo enviar nada hasta que alguien configure las credenciales."
-            )
+            return _error_result(self._t("not_configured_send"))
 
         phone = self._contacts.get(name)
         if phone is None:
             await self._logger.ainfo(
                 "telegram.send_contact_not_found", name=name, known=list(self._contacts)
             )
-            return _error_result(
-                f"No tengo a '{name}' en la lista de contactos para enviarle mensajes. "
-                f"Contactos conocidos: {', '.join(sorted(self._contacts)) or '(ninguno)'}"
-            )
+            known = ", ".join(sorted(self._contacts)) or self._t("contacts_none")
+            return _error_result(self._t("contact_missing_send", name=name, known=known))
 
         # Telegram caps at 4096 chars per message. Validate at the skill
-        # layer so the LLM gets a clean Spanish message ("muy largo") rather
-        # than the transport's generic TransportError surface. The transport
-        # trusts its caller; this skill is the only caller.
+        # layer so the LLM gets a clean, localized message ("too long")
+        # rather than the transport's generic TransportError surface.
+        # The transport trusts its caller; this skill is the only caller.
         if len(text) > 4096:
             await self._logger.ainfo("telegram.send_text_too_long", name=name, chars=len(text))
-            return _error_result(
-                f"El mensaje es muy largo ({len(text)} caracteres; Telegram acepta "
-                "máximo 4096). Acórtalo o divídelo en varios mensajes."
-            )
+            return _error_result(self._t("too_long", chars=len(text)))
 
         try:
             await self._transport.connect()
@@ -466,10 +655,7 @@ class TelegramSkill:
             await self._transport.send_text(user_id, text)
         except TransportError as exc:
             await self._logger.aexception("telegram.send_failed", name=name)
-            return _error_result(
-                f"No pude enviar el mensaje a {name}: {exc}. "
-                "Puede ser que el contacto no tenga Telegram con ese número."
-            )
+            return _error_result(self._t("send_failed", name=name, exc=str(exc)))
 
         sent_at = datetime.now(UTC).isoformat(timespec="seconds")
         await self._logger.ainfo(
@@ -511,7 +697,7 @@ class TelegramSkill:
                 await self._transport.reject_call(user_id)
             return
 
-        display = name or "numero desconocido"
+        display = name or self._t("unknown_caller")
         self._pending_incoming = user_id
 
         await self._logger.ainfo("telegram.inbound.ring", user_id=user_id, caller_name=display)
@@ -525,9 +711,7 @@ class TelegramSkill:
             self._active_contact_name = None
             self._pending_incoming = None
             await self._logger.aexception("telegram.inbound.accept_failed", user_id=user_id)
-            await self._ctx.inject_turn(
-                f"Intente contestar la llamada de {display} pero fallo la conexion."
-            )
+            await self._ctx.inject_turn(self._t("accept_failed", display=display))
             return
 
         # Race: caller hung up in the narrow window before accept_call set
@@ -544,7 +728,7 @@ class TelegramSkill:
         # Announce the caller and wait for the LLM to finish speaking.
         # inject_turn_and_wait returns only after response_done fires so
         # start_input_claim never preempts the announcement mid-sentence.
-        await self._ctx.inject_turn_and_wait(f"Llamada de {display}, contestando.")
+        await self._ctx.inject_turn_and_wait(self._t("answering", display=display))
 
         # Bridge audio. peer_audio_chunks() flushes frames buffered during the
         # announcement window so playback is real-time, not offset by ~3s.
@@ -582,7 +766,7 @@ class TelegramSkill:
         assert self._logger is not None
         assert self._ctx is not None
 
-        name = self._user_id_to_name.get(user_id, "la persona")
+        name = self._user_id_to_name.get(user_id, self._t("the_caller"))
         await self._logger.ainfo(
             "telegram.inbound.ring_cancelled", user_id=user_id, caller_name=name
         )
@@ -590,9 +774,7 @@ class TelegramSkill:
         if self._pending_incoming == user_id:
             # Signal _on_incoming_ring to abort -- don't accept a dead call.
             self._pending_incoming = None
-        await self._ctx.inject_turn(
-            f"La llamada de {name} ya no esta disponible -- la persona colgo antes de que se contestara."
-        )
+        await self._ctx.inject_turn(self._t("call_no_longer_available", name=name))
 
     # --- Shared claim callbacks ---
 
@@ -639,13 +821,28 @@ class TelegramSkill:
 
         if reason is ClaimEndReason.NATURAL and self._ctx is not None:
             ctx = self._ctx
-            who = contact or "la persona"
-            prompt = (
+            who = contact or self._t("the_caller")
+            prompt = self._call_ended_prompt(who)
+            self._spawn_task(ctx.inject_turn(prompt), name="telegram-claim-end-inject")
+            await self._logger.ainfo("telegram.injecting_call_ended_turn", contact=who)
+
+    def _call_ended_prompt(self, who: str) -> str:
+        """Localized LLM-instruction prompt for 'the peer hung up'."""
+        bucket = _telegram_lang_bucket(self._language)
+        if bucket == "es":
+            return (
                 f"La llamada con {who} ha terminado porque la otra persona colgó. "
                 "Informa brevemente al usuario que la llamada ha concluido."
             )
-            self._spawn_task(ctx.inject_turn(prompt), name="telegram-claim-end-inject")
-            await self._logger.ainfo("telegram.injecting_call_ended_turn", contact=who)
+        if bucket == "fr":
+            return (
+                f"L'appel avec {who} s'est terminé parce que la personne a "
+                "raccroché. Informe brièvement l'utilisateur que l'appel est fini."
+            )
+        return (
+            f"The call with {who} has ended because the other person hung up. "
+            "Briefly let the user know the call is over."
+        )
 
     # --- Inbound message callbacks (called by transport) ---
 
@@ -684,7 +881,7 @@ class TelegramSkill:
                     ),
                 )
                 return
-            display = "un número desconocido"
+            display = self._t("unknown_caller_article")
             await self._logger.ainfo(
                 "telegram.inbound.message_from_unknown",
                 user_id=message.user_id,
@@ -717,7 +914,7 @@ class TelegramSkill:
         assert self._logger is not None
         if self._ctx is None:
             return
-        prompt = build_announcement(display, messages)
+        prompt = build_announcement(display, messages, language=self._language)
         await self._logger.ainfo(
             "telegram.inbound.flushing",
             user_id=user_id,
@@ -791,11 +988,12 @@ class TelegramSkill:
             return
 
         per_sender: dict[str, list[str]] = {}
+        unknown_display = self._t("unknown_caller_article")
         for msg in unread:
-            display = self._user_id_to_name.get(msg.user_id, "un número desconocido")
+            display = self._user_id_to_name.get(msg.user_id, unknown_display)
             per_sender.setdefault(display, []).append(msg.text)
 
-        prompt = build_backfill_announcement(per_sender)
+        prompt = build_backfill_announcement(per_sender, language=self._language)
         await self._logger.ainfo(
             "telegram.backfill.injecting",
             total=len(unread),
@@ -816,6 +1014,17 @@ class TelegramSkill:
         task = asyncio.create_task(coro, name=name)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    async def reconfigure(self, ctx: SkillContext) -> None:
+        """Refresh language-dependent state for a new session.
+
+        Flips tool descriptions, error copy, and the inject-prompt
+        builders to the session's language. The transport + InboxBuffer
+        + pending backfill task are intentionally preserved — they're
+        persona-scoped, not session-scoped.
+        """
+        self._language = ctx.language or self._language
+        await ctx.logger.ainfo("telegram.reconfigure", language=self._language)
 
     async def teardown(self) -> None:
         # Drain pending message bursts so a sender mid-typing at shutdown

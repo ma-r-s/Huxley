@@ -208,19 +208,43 @@ class InboxBuffer:
                 await asyncio.gather(*self._flush_tasks, return_exceptions=True)
 
 
-def build_announcement(display_name: str, messages: list[str], *, preview_chars: int = 200) -> str:
+def _lang_bucket(language: str) -> str:
+    code = (language or "en").lower()
+    for key in ("es", "en", "fr"):
+        if code.startswith(key):
+            return key
+    return "en"
+
+
+# Sentinel prefix marking the display name as an "unknown sender" — the
+# prefix is picked from the per-language sentinel map so the announcement
+# builder can detect it without hardcoding "un " (Spanish) everywhere.
+_UNKNOWN_PREFIXES: dict[str, str] = {
+    "es": "un ",
+    "en": "an ",
+    "fr": "un ",
+}
+
+
+def build_announcement(
+    display_name: str,
+    messages: list[str],
+    *,
+    preview_chars: int = 200,
+    language: str = "es",
+) -> str:
     """Build the LLM-facing inject prompt for a coalesced burst.
 
     The prompt is an INSTRUCTION to the LLM, not literal speech. Without
-    an explicit "léeselo al usuario" the model treats the inject as a
+    an explicit "read it to the user" the model treats the inject as a
     notification ("acknowledged") and forgets to read the content aloud --
     confirmed bug, 2026-04-24 first smoke test. Pattern matches the
     call-ended inject in skill.py: state the fact, then instruct.
 
-    Known contact: "{name}" appears as the sender ("de hija").
-    Unknown contact: display starts with "un " ("un número desconocido")
-    so the framing shifts to "de un número desconocido" + an extra
-    instruction to flag the unknown origin to the user.
+    Known contact: "{name}" appears as the sender.
+    Unknown contact: `display_name` starts with the language's unknown-
+    prefix (e.g. "un " in Spanish, "an " in English) so the framing
+    shifts appropriately + an extra instruction flags the unknown origin.
 
     Each message body is truncated to `preview_chars` with an ellipsis
     if cut.
@@ -228,6 +252,7 @@ def build_announcement(display_name: str, messages: list[str], *, preview_chars:
     if not messages:
         msg = "build_announcement called with empty messages"
         raise ValueError(msg)
+    bucket = _lang_bucket(language)
 
     def _trim(text: str) -> str:
         text = text.strip()
@@ -235,57 +260,174 @@ def build_announcement(display_name: str, messages: list[str], *, preview_chars:
             return text
         return text[: preview_chars - 1].rstrip() + "…"
 
-    is_named = not display_name.startswith("un ")
-    sender_phrase = f"de {display_name}"
-    unknown_hint = "" if is_named else " Recuerda mencionar que es de un número desconocido."
+    unknown_prefix = _UNKNOWN_PREFIXES.get(bucket, _UNKNOWN_PREFIXES["en"])
+    is_named = not display_name.startswith(unknown_prefix)
 
+    if bucket == "es":
+        sender_phrase = f"de {display_name}"
+        unknown_hint = "" if is_named else " Recuerda mencionar que es de un número desconocido."
+        if len(messages) == 1:
+            body = _trim(messages[0])
+            return (
+                f"Llegó un mensaje de Telegram {sender_phrase}. El mensaje dice: '{body}'. "
+                f"Léeselo al usuario tal cual y pregúntale si quiere responder.{unknown_hint}"
+            )
+        if len(messages) <= 3:
+            quoted = [f"'{_trim(m)}'" for m in messages]
+            joined = ", ".join(quoted[:-1]) + " y " + quoted[-1]
+            return (
+                f"Llegaron {len(messages)} mensajes nuevos de Telegram {sender_phrase}: "
+                f"{joined}. Léeselos al usuario en orden, sin cambiar el contenido, "
+                f"y pregúntale si quiere responder.{unknown_hint}"
+            )
+        last_two = messages[-2:]
+        quoted = [f"'{_trim(m)}'" for m in last_two]
+        return (
+            f"Llegaron {len(messages)} mensajes nuevos de Telegram {sender_phrase}; "
+            f"los más recientes dicen {quoted[0]} y {quoted[1]}. Cuéntale al usuario "
+            f"que llegaron varios mensajes y léele los dos más recientes; ofrécele "
+            f"leerle los anteriores si quiere.{unknown_hint}"
+        )
+
+    if bucket == "fr":
+        sender_phrase = f"de {display_name}"
+        unknown_hint = "" if is_named else " Pense à préciser que c'est un numéro inconnu."
+        if len(messages) == 1:
+            body = _trim(messages[0])
+            return (
+                f"Un message Telegram est arrivé {sender_phrase}. Le message dit : « {body} ». "
+                f"Lis-le à l'utilisateur tel quel et demande-lui s'il veut répondre.{unknown_hint}"
+            )
+        if len(messages) <= 3:
+            quoted = [f"« {_trim(m)} »" for m in messages]
+            joined = ", ".join(quoted[:-1]) + " et " + quoted[-1]
+            return (
+                f"{len(messages)} nouveaux messages Telegram sont arrivés {sender_phrase} : "
+                f"{joined}. Lis-les à l'utilisateur dans l'ordre, sans changer le contenu, "
+                f"et demande-lui s'il veut répondre.{unknown_hint}"
+            )
+        last_two = messages[-2:]
+        quoted = [f"« {_trim(m)} »" for m in last_two]
+        return (
+            f"{len(messages)} nouveaux messages Telegram sont arrivés {sender_phrase} ; "
+            f"les plus récents disent {quoted[0]} et {quoted[1]}. Dis à l'utilisateur "
+            f"qu'il a reçu plusieurs messages et lis-lui les deux plus récents ; "
+            f"propose-lui de lire les précédents s'il le souhaite.{unknown_hint}"
+        )
+
+    # English default.
+    sender_phrase = f"from {display_name}"
+    unknown_hint = "" if is_named else " Remember to mention it's from an unknown number."
     if len(messages) == 1:
         body = _trim(messages[0])
         return (
-            f"Llegó un mensaje de Telegram {sender_phrase}. El mensaje dice: '{body}'. "
-            f"Léeselo al usuario tal cual y pregúntale si quiere responder.{unknown_hint}"
+            f"A Telegram message arrived {sender_phrase}. It says: '{body}'. "
+            f"Read it to the user as-is and ask if they want to reply.{unknown_hint}"
         )
     if len(messages) <= 3:
         quoted = [f"'{_trim(m)}'" for m in messages]
-        joined = ", ".join(quoted[:-1]) + " y " + quoted[-1]
+        joined = ", ".join(quoted[:-1]) + " and " + quoted[-1]
         return (
-            f"Llegaron {len(messages)} mensajes nuevos de Telegram {sender_phrase}: "
-            f"{joined}. Léeselos al usuario en orden, sin cambiar el contenido, "
-            f"y pregúntale si quiere responder.{unknown_hint}"
+            f"{len(messages)} new Telegram messages arrived {sender_phrase}: "
+            f"{joined}. Read them to the user in order, without changing the content, "
+            f"and ask if they want to reply.{unknown_hint}"
         )
     last_two = messages[-2:]
     quoted = [f"'{_trim(m)}'" for m in last_two]
     return (
-        f"Llegaron {len(messages)} mensajes nuevos de Telegram {sender_phrase}; "
-        f"los más recientes dicen {quoted[0]} y {quoted[1]}. Cuéntale al usuario "
-        f"que llegaron varios mensajes y léele los dos más recientes; ofrécele "
-        f"leerle los anteriores si quiere.{unknown_hint}"
+        f"{len(messages)} new Telegram messages arrived {sender_phrase}; "
+        f"the most recent say {quoted[0]} and {quoted[1]}. Tell the user that "
+        f"several messages came in and read the two most recent; offer to read "
+        f"the earlier ones if they want.{unknown_hint}"
     )
 
 
 _BACKFILL_MAX_BODIES_PER_SENDER = 5
 
 
+_BACKFILL_LOCALES: dict[str, dict[str, str]] = {
+    "es": {
+        "quote_open": "'",
+        "quote_close": "'",
+        "and": " y ",
+        "word_one": "mensaje",
+        "word_many": "mensajes",
+        "from_name_truncated": "de {name} llegaron {count} {word} (los más recientes dicen {bodies})",
+        "from_name_one": "de {name}: {bodies}",
+        "from_name_many": "de {name} ({count} mensajes): {bodies}",
+        "separator": "; ",
+        "framing": (
+            "Mientras estabas desconectado, llegaron mensajes nuevos de "
+            "Telegram: {joined}. Cuéntale al usuario que llegaron mensajes "
+            "mientras estaba desconectado, dile de quién, y léeselos en orden "
+            "-- sin cambiar el contenido. Pregúntale si quiere responder a alguno."
+        ),
+    },
+    "en": {
+        "quote_open": "'",
+        "quote_close": "'",
+        "and": " and ",
+        "word_one": "message",
+        "word_many": "messages",
+        "from_name_truncated": ("from {name} {count} {word} arrived (most recent say {bodies})"),
+        "from_name_one": "from {name}: {bodies}",
+        "from_name_many": "from {name} ({count} messages): {bodies}",
+        "separator": "; ",
+        "framing": (
+            "While you were offline, new Telegram messages arrived: {joined}. "
+            "Tell the user that messages came in while they were away, say who "
+            "they're from, and read them in order -- without changing the "
+            "content. Ask if they want to reply to any."
+        ),
+    },
+    "fr": {
+        "quote_open": "« ",
+        "quote_close": " »",
+        "and": " et ",
+        "word_one": "message",
+        "word_many": "messages",
+        "from_name_truncated": (
+            "de {name} {count} {word} sont arrivés (les plus récents disent {bodies})"
+        ),
+        "from_name_one": "de {name} : {bodies}",
+        "from_name_many": "de {name} ({count} messages) : {bodies}",
+        "separator": " ; ",
+        "framing": (
+            "Pendant que tu étais hors ligne, de nouveaux messages Telegram "
+            "sont arrivés : {joined}. Dis à l'utilisateur que des messages "
+            "sont arrivés en son absence, précise de qui, et lis-les dans "
+            "l'ordre -- sans changer le contenu. Demande-lui s'il veut "
+            "répondre à l'un d'eux."
+        ),
+    },
+}
+
+
 def build_backfill_announcement(
-    per_sender: dict[str, list[str]], *, preview_chars: int = 200
+    per_sender: dict[str, list[str]],
+    *,
+    preview_chars: int = 200,
+    language: str = "es",
 ) -> str:
     """Build the single inject for the proactive-inbox backfill on connect.
 
     Same instruction-prompt pattern as `build_announcement`: state the
     fact, then tell the LLM what to communicate -- including the actual
     message bodies, so the LLM can read them when the user says yes.
-    Without bodies, the user hears "tienes mensajes, ¿quieres que te
-    los lea?" but the LLM has nothing to read on follow-up. Confirmed
+    Without bodies, the user hears "you have messages, want me to read
+    them?" but the LLM has nothing to read on follow-up. Confirmed
     failure mode in 2026-04-24 first smoke test.
 
     Per-sender bodies are capped at `_BACKFILL_MAX_BODIES_PER_SENDER`
     (5) -- the persona-config `backfill_max` (50 by default) limits
     total messages, but a single overflowing sender shouldn't blow up
-    the prompt with 50 "hola"s.
+    the prompt with 50 "hi"s.
     """
     if not per_sender:
         msg = "build_backfill_announcement called with empty per_sender"
         raise ValueError(msg)
+
+    locale = _BACKFILL_LOCALES.get(_lang_bucket(language), _BACKFILL_LOCALES["en"])
 
     def _trim(text: str) -> str:
         text = text.strip()
@@ -297,34 +439,33 @@ def build_backfill_announcement(
         cap = _BACKFILL_MAX_BODIES_PER_SENDER
         truncated = len(messages) > cap
         sample = messages[-cap:] if truncated else messages
-        quoted = [f"'{_trim(m)}'" for m in sample]
+        quoted = [f"{locale['quote_open']}{_trim(m)}{locale['quote_close']}" for m in sample]
         if len(quoted) == 1:
             return quoted[0], truncated
-        return ", ".join(quoted[:-1]) + " y " + quoted[-1], truncated
+        return ", ".join(quoted[:-1]) + locale["and"] + quoted[-1], truncated
 
     sender_chunks: list[str] = []
     for name, messages in per_sender.items():
         if not messages:
             continue
         bodies, truncated = _quote_bodies(messages)
-        word = "mensaje" if len(messages) == 1 else "mensajes"
+        word = locale["word_one"] if len(messages) == 1 else locale["word_many"]
         if truncated:
             sender_chunks.append(
-                f"de {name} llegaron {len(messages)} {word} (los más recientes dicen {bodies})"
+                locale["from_name_truncated"].format(
+                    name=name, count=len(messages), word=word, bodies=bodies
+                )
             )
         elif len(messages) == 1:
-            sender_chunks.append(f"de {name}: {bodies}")
+            sender_chunks.append(locale["from_name_one"].format(name=name, bodies=bodies))
         else:
-            sender_chunks.append(f"de {name} ({len(messages)} mensajes): {bodies}")
+            sender_chunks.append(
+                locale["from_name_many"].format(name=name, count=len(messages), bodies=bodies)
+            )
 
     if not sender_chunks:
         msg = "build_backfill_announcement called with empty messages for all senders"
         raise ValueError(msg)
 
-    joined = "; ".join(sender_chunks)
-    return (
-        f"Mientras estabas desconectado, llegaron mensajes nuevos de Telegram: "
-        f"{joined}. Cuéntale al usuario que llegaron mensajes mientras estaba "
-        f"desconectado, dile de quién, y léeselos en orden -- sin cambiar el "
-        f"contenido. Pregúntale si quiere responder a alguno."
-    )
+    joined = locale["separator"].join(sender_chunks)
+    return locale["framing"].format(joined=joined)

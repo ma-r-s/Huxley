@@ -69,23 +69,115 @@ _ENTRY_VERSION = 1
 # in their persona.yaml.
 _DEFAULT_STALE_RESTORE_THRESHOLD = timedelta(hours=1)
 
-# Default fire prompt — Spanish, AbuelOS-toned. A persona can override
-# via the `fire_prompt` config key in `persona.yaml`'s `timers:` block.
-# `{message}` is substituted at fire time via `str.format`; additional
-# placeholders fail with a clear error.
-#
-# This default is opinionated (assumes Spanish, warm-friend register)
-# because AbuelOS is the 99%-case consumer today. Non-Spanish or
-# non-warm personas MUST override; they get a broken narration
-# otherwise (LLM sees Spanish instruction in an English-system-prompt
-# context and either translates weirdly or overfits the phrasing).
-_DEFAULT_FIRE_PROMPT = (
-    "Ha sonado un temporizador que el usuario programó. "
-    "Avísale con tono amable y natural sobre: {message}. "
-    "Empieza la frase como si se lo estuvieras recordando a un "
-    "amigo (por ejemplo 'oye, recuerda que...' o 'ya es hora "
-    "de...'). Usa una o dos frases cortas."
-)
+# Per-language default fire-prompt templates. The persona can still
+# override via `skills.timers.fire_prompt` (global) or
+# `skills.timers.i18n.<lang>.fire_prompt` (per-language). `{message}` is
+# substituted at fire time via `str.format`; other placeholders raise.
+_DEFAULT_FIRE_PROMPTS: dict[str, str] = {
+    "es": (
+        "Ha sonado un temporizador que el usuario programó. "
+        "Avísale con tono amable y natural sobre: {message}. "
+        "Empieza la frase como si se lo estuvieras recordando a un "
+        "amigo (por ejemplo 'oye, recuerda que...' o 'ya es hora "
+        "de...'). Usa una o dos frases cortas."
+    ),
+    "en": (
+        "A timer the user set has gone off. Let them know warmly and "
+        "naturally about: {message}. Start the phrase as if you were "
+        "reminding a friend (for example 'hey, remember that...' or "
+        "'it's time to...'). Use one or two short sentences."
+    ),
+    "fr": (
+        "Une minuterie que l'utilisateur a réglée vient de sonner. "
+        "Préviens-le chaleureusement et naturellement au sujet de : "
+        "{message}. Commence la phrase comme si tu le rappelais à un "
+        "ami (par exemple 'tiens, rappelle-toi que...' ou 'c'est "
+        "l'heure de...'). Utilise une ou deux phrases courtes."
+    ),
+}
+
+
+# Per-language tool descriptions (set_timer). The LLM dispatches based on
+# this copy; matching the session language keeps phrasing consistent.
+_TOOL_DESC: dict[str, dict[str, str]] = {
+    "es": {
+        "set_timer": (
+            "Programa un recordatorio que se anuncia después de X segundos. "
+            "El mensaje se lee al usuario cuando el temporizador vence; "
+            "puede interrumpir un libro que esté sonando. "
+            "Ejemplos: 'recuérdame en 5 minutos que saque la ropa' → "
+            "set_timer(seconds=300, message='sacar la ropa de la lavadora')."
+        ),
+        "seconds_param": (
+            "Segundos hasta que suene el recordatorio. "
+            f"Rango válido: {_MIN_SECONDS}-{_MAX_SECONDS}."
+        ),
+        "message_param": (
+            "Qué decirle al usuario cuando suene — una instrucción "
+            "para el modelo, no las palabras literales. "
+            "Ej: 'sacar la ropa de la lavadora'."
+        ),
+    },
+    "en": {
+        "set_timer": (
+            "Schedule a reminder announced after X seconds. The message is "
+            "read to the user when the timer fires; it can interrupt a "
+            "book that's playing. Examples: 'remind me in 5 minutes to "
+            "take out the laundry' → set_timer(seconds=300, "
+            "message='take the laundry out of the washer')."
+        ),
+        "seconds_param": (
+            f"Seconds until the reminder fires. Valid range: {_MIN_SECONDS}-{_MAX_SECONDS}."
+        ),
+        "message_param": (
+            "What to tell the user when it fires — an instruction for the "
+            "model, not the literal words. Example: 'take the laundry out "
+            "of the washer'."
+        ),
+    },
+    "fr": {
+        "set_timer": (
+            "Programme un rappel annoncé après X secondes. Le message est "
+            "lu à l'utilisateur quand la minuterie sonne ; il peut "
+            "interrompre un livre en cours de lecture. Exemples : "
+            "'rappelle-moi dans 5 minutes de sortir le linge' → "
+            "set_timer(seconds=300, message='sortir le linge de la machine')."
+        ),
+        "seconds_param": (
+            f"Secondes avant le rappel. Plage valide : {_MIN_SECONDS}-{_MAX_SECONDS}."
+        ),
+        "message_param": (
+            "Ce qu'il faut dire à l'utilisateur quand ça sonne — une "
+            "instruction pour le modèle, pas les mots littéraux. "
+            "Exemple : 'sortir le linge de la machine'."
+        ),
+    },
+}
+
+# Per-language prompt_context templates — tells the LLM how many active
+# timers are waiting. Supports `{count}` substitution.
+_ACTIVE_COUNT_PROMPTS: dict[str, tuple[str, str]] = {
+    "es": (
+        "Tienes {count} temporizador activo esperando a sonar.",
+        "Tienes {count} temporizadores activos esperando a sonar.",
+    ),
+    "en": (
+        "You have {count} active timer waiting to fire.",
+        "You have {count} active timers waiting to fire.",
+    ),
+    "fr": (
+        "Tu as {count} minuterie active en attente.",
+        "Tu as {count} minuteries actives en attente.",
+    ),
+}
+
+
+def _timers_lang_bucket(language: str) -> str:
+    code = (language or "en").lower()
+    for key in ("es", "en", "fr"):
+        if code.startswith(key):
+            return key
+    return "en"
 
 
 def _utcnow() -> datetime:
@@ -117,10 +209,14 @@ class TimersSkill:
         # by id without going through the supervisor's name lookup).
         self._handles: dict[int, BackgroundTaskHandle] = {}
         self._next_id: int = 1
-        # Fire-prompt template — persona-configurable so non-AbuelOS
-        # personas don't inherit the Spanish/warm-friend default.
-        # Populated in `setup()` from `ctx.config.get("fire_prompt")`.
-        self._fire_prompt: str = _DEFAULT_FIRE_PROMPT
+        # Active language — seeds tool descriptions, the default fire
+        # prompt, and `prompt_context` copy. Updated on every session via
+        # `reconfigure()`.
+        self._language: str = "en"
+        # Fire-prompt template — persona-configurable (both globally and
+        # per-language via `i18n.<lang>.fire_prompt`). If the persona
+        # doesn't override, falls back to `_DEFAULT_FIRE_PROMPTS[lang]`.
+        self._fire_prompt: str = _DEFAULT_FIRE_PROMPTS["en"]
         # How stale a pending entry can be on restore before we drop it
         # instead of firing immediately. Default 1 h (matches the skill's
         # own `_MAX_SECONDS`); personas that extend the max duration
@@ -140,16 +236,12 @@ class TimersSkill:
 
     @property
     def tools(self) -> list[ToolDefinition]:
+        bucket = _timers_lang_bucket(self._language)
+        td = _TOOL_DESC.get(bucket, _TOOL_DESC["en"])
         return [
             ToolDefinition(
                 name="set_timer",
-                description=(
-                    "Programa un recordatorio que se anuncia después de X segundos. "
-                    "El mensaje se lee al usuario cuando el temporizador vence; "
-                    "puede interrumpir un libro que esté sonando. "
-                    "Ejemplos: 'recuérdame en 5 minutos que saque la ropa' → "
-                    "set_timer(seconds=300, message='sacar la ropa de la lavadora')."
-                ),
+                description=td["set_timer"],
                 parameters={
                     "type": "object",
                     "properties": {
@@ -157,18 +249,11 @@ class TimersSkill:
                             "type": "integer",
                             "minimum": _MIN_SECONDS,
                             "maximum": _MAX_SECONDS,
-                            "description": (
-                                "Segundos hasta que suene el recordatorio. "
-                                f"Rango valido: {_MIN_SECONDS}-{_MAX_SECONDS}."
-                            ),
+                            "description": td["seconds_param"],
                         },
                         "message": {
                             "type": "string",
-                            "description": (
-                                "Qué decirle al usuario cuando suene — una instrucción "
-                                "para el modelo, no las palabras literales. "
-                                "Ej: 'sacar la ropa de la lavadora'."
-                            ),
+                            "description": td["message_param"],
                         },
                     },
                     "required": ["seconds", "message"],
@@ -304,17 +389,8 @@ class TimersSkill:
         self._inject_turn = ctx.inject_turn
         self._background_task = ctx.background_task
         self._storage = ctx.storage
-        # Persona override for the fire prompt, if provided. Falls back
-        # to the Spanish/AbuelOS-toned default defined above.
-        configured = ctx.config.get("fire_prompt")
-        if isinstance(configured, str) and configured:
-            if "{message}" not in configured:
-                await ctx.logger.awarning(
-                    "timers.fire_prompt_missing_placeholder",
-                    hint="persona 'fire_prompt' must contain '{message}'",
-                )
-            else:
-                self._fire_prompt = configured
+        self._language = ctx.language or "en"
+        self._fire_prompt = await self._resolve_fire_prompt(ctx)
         # Persona override for the stale-restore threshold. An int or
         # float in seconds; non-numeric values get a warning + default.
         threshold_raw = ctx.config.get("stale_restore_threshold_s")
@@ -329,11 +405,43 @@ class TimersSkill:
         restored, dropped = await self._restore_pending()
         await ctx.logger.ainfo(
             "timers.setup_complete",
-            fire_prompt_source="persona_override" if configured else "default",
+            language=self._language,
             stale_threshold_s=self._stale_threshold.total_seconds(),
             restored=restored,
             dropped=dropped,
         )
+
+    async def reconfigure(self, ctx: SkillContext) -> None:
+        """Refresh language-dependent state when the session language flips.
+
+        Picks up the new ctx.language and re-resolves the fire prompt so
+        the persona's per-language `i18n.<lang>.fire_prompt` override
+        kicks in without restarting the skill.
+        """
+        self._language = ctx.language or self._language
+        self._fire_prompt = await self._resolve_fire_prompt(ctx)
+        await ctx.logger.ainfo("timers.reconfigure", language=self._language)
+
+    async def _resolve_fire_prompt(self, ctx: SkillContext) -> str:
+        """Pick the LLM-facing fire prompt for the active language.
+
+        Preference order:
+        1. `skills.timers.fire_prompt` in persona config (or its
+           `i18n.<lang>` override merged in by the framework).
+        2. Built-in default for the active language.
+        3. English built-in default.
+        """
+        configured = ctx.config.get("fire_prompt")
+        if isinstance(configured, str) and configured:
+            if "{message}" not in configured:
+                await ctx.logger.awarning(
+                    "timers.fire_prompt_missing_placeholder",
+                    hint="persona 'fire_prompt' must contain '{message}'",
+                )
+            else:
+                return configured
+        bucket = _timers_lang_bucket(self._language)
+        return _DEFAULT_FIRE_PROMPTS.get(bucket, _DEFAULT_FIRE_PROMPTS["en"])
 
     async def _restore_pending(self) -> tuple[int, int]:
         """Rebuild `_handles` from persisted entries on boot.
@@ -488,13 +596,14 @@ class TimersSkill:
         """Give the LLM awareness of any active timers.
 
         Empty when no timers are pending — avoids polluting the system
-        prompt on fresh sessions.
+        prompt on fresh sessions. Phrasing picks the active-language
+        table from `_ACTIVE_COUNT_PROMPTS`, which already handles the
+        singular/plural forms each language needs.
         """
         if not self._handles:
             return ""
         count = len(self._handles)
-        # Singular / plural Spanish — the AbuelOS persona is the only user
-        # today; a future multilingual persona can override prompt_context
-        # via a different skill class or accept the mismatch.
-        noun = "temporizador" if count == 1 else "temporizadores"
-        return f"Tienes {count} {noun} activo{'s' if count != 1 else ''} esperando a sonar."
+        bucket = _timers_lang_bucket(self._language)
+        one, many = _ACTIVE_COUNT_PROMPTS.get(bucket, _ACTIVE_COUNT_PROMPTS["en"])
+        template = one if count == 1 else many
+        return template.format(count=count)

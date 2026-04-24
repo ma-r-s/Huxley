@@ -67,7 +67,17 @@ class NewsSkill:
         self._news: NewsFetcher | None = None
         self._logger: SkillLogger | None = None
         self._location_name: str = ""
-        self._language_code: str = "en"
+        # `_feed_language_code` — the language passed to the news feed
+        # provider (Google News RSS `hl`/`ceid`). Comes from persona
+        # `skills.news.language_code` and stays stable across UI language
+        # switches: an AbuelOS persona serving Colombian Spanish news
+        # to an English-UI caller still queries the Spanish feed.
+        self._feed_language_code: str = "en"
+        # `_ui_language_code` — the language for LLM-facing tool
+        # descriptions. Tracks the session's language so the LLM's
+        # pre-call phrasing ("one moment" / "un momento" / "un instant")
+        # matches how it speaks to the user.
+        self._ui_language_code: str = "en"
         self._units: str = "metric"
         self._max_items: int = 8
         self._max_age_hours: int = 24
@@ -86,10 +96,14 @@ class NewsSkill:
 
     @property
     def tools(self) -> list[ToolDefinition]:
-        # The descriptions guide LLM dispatch — keep them in the configured
-        # language so the persona's voice picks the right tool naturally.
-        if self._language_code.startswith("es"):
+        # The descriptions guide LLM dispatch — keep them in the session's
+        # UI language so the LLM's pre-call phrasing matches how it
+        # speaks to the user.
+        code = self._ui_language_code.lower()
+        if code.startswith("es"):
             return self._tools_es()
+        if code.startswith("fr"):
+            return self._tools_fr()
         return self._tools_en()
 
     def _tools_es(self) -> list[ToolDefinition]:
@@ -136,6 +150,55 @@ class NewsSkill:
                 description=(
                     f"Obtiene el clima actual y el pronóstico de hoy para {loc}. "
                     "Úsala cuando el usuario pregunte específicamente por el clima."
+                ),
+                parameters={"type": "object", "properties": {}},
+            ),
+        ]
+
+    def _tools_fr(self) -> list[ToolDefinition]:
+        loc = self._location_name
+        interests = ", ".join(self._interests) if self._interests else "général"
+        return [
+            ToolDefinition(
+                name="get_news",
+                description=(
+                    f"Récupère les actualités et la météo actuelles pour {loc}. "
+                    "AVANT d'appeler cet outil, dis brièvement quelque chose "
+                    "comme 'un instant' ou 'voyons voir' pour que l'utilisateur "
+                    "sache que tu l'as entendu pendant le chargement. "
+                    "Sans arguments : renvoie les titres du pays. "
+                    "Avec `query` : recherche les actualités sur ce sujet. "
+                    "Avec `category` : filtre par thème "
+                    "(local, national, world, sports, tech, business, science, "
+                    "entertainment, health). "
+                    f"Centres d'intérêt configurés pour cet utilisateur : {interests}."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": (
+                                "Recherche d'actualités par mots-clés (facultatif). "
+                                "Exemple : 'réforme fiscale', 'résultats Apple'."
+                            ),
+                        },
+                        "category": {
+                            "type": "string",
+                            "enum": list(_VALID_CATEGORIES),
+                            "description": (
+                                "Catégorie thématique (facultatif). Sans catégorie, "
+                                "renvoie les titres principaux mélangés."
+                            ),
+                        },
+                    },
+                },
+            ),
+            ToolDefinition(
+                name="get_weather",
+                description=(
+                    f"Récupère la météo actuelle et les prévisions du jour pour {loc}. "
+                    "À utiliser quand l'utilisateur demande spécifiquement la météo."
                 ),
                 parameters={"type": "object", "properties": {}},
             ),
@@ -200,7 +263,7 @@ class NewsSkill:
             latitude = float(cfg["latitude"])
             longitude = float(cfg["longitude"])
             country_code = str(cfg["country_code"]).upper()
-            self._language_code = str(cfg["language_code"]).lower()
+            self._feed_language_code = str(cfg["language_code"]).lower()
         except KeyError as exc:
             raise ValueError(
                 f"news skill: missing required config key {exc.args[0]!r}. "
@@ -244,16 +307,41 @@ class NewsSkill:
         self._news = NewsFetcher(
             http=self._http,
             country_code=country_code,
-            language_code=self._language_code,
+            language_code=self._feed_language_code,
         )
+
+        # Initial UI language from the setup-time context. The framework
+        # calls `reconfigure(ctx)` on every session connect, so this seeds
+        # the first tool-description language before a client's choice
+        # flows through.
+        self._ui_language_code = ctx.language
 
         await ctx.logger.ainfo(
             "news.setup_complete",
             location=self._location_name,
             country=country_code,
-            language=self._language_code,
+            feed_language=self._feed_language_code,
+            ui_language=self._ui_language_code,
             interests=self._interests,
             chime=self._start_sound_role if self._sounds else None,
+        )
+
+    async def reconfigure(self, ctx: SkillContext) -> None:
+        """Pick up the session's UI language on each connect.
+
+        The news feed's language (`self._feed_language_code`) is fixed at
+        setup time by persona config — it's a source-selection choice,
+        not a UI choice. What flips per session is
+        `self._ui_language_code`, which controls the language of tool
+        descriptions the LLM reads. Tool descriptions are computed every
+        `tools` access so the next query sees the new language with no
+        cache to bust.
+        """
+        self._ui_language_code = ctx.language
+        await ctx.logger.ainfo(
+            "news.reconfigure",
+            ui_language=self._ui_language_code,
+            feed_language=self._feed_language_code,
         )
 
     async def teardown(self) -> None:

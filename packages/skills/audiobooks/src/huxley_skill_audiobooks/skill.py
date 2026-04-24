@@ -47,15 +47,26 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
     from pathlib import Path
 
-# Default prompt sent to the LLM when a book ends naturally (not interrupted).
-# Personas override via `skills.audiobooks.on_complete_prompt` in persona.yaml —
-# the default is Spanish because AbuelOS is the only persona today; localize it
-# from the persona for any other language.
-_DEFAULT_ON_COMPLETE_PROMPT = (
-    "El libro ha llegado a su fin. "
-    "Felicita al usuario por haber terminado el libro y preguntale "
-    "si quiere que busque otro."
-)
+# Per-language default prompts sent to the LLM when a book ends naturally
+# (not interrupted). Personas can still override any single language via
+# `skills.audiobooks.on_complete_prompt` (default language) or
+# `skills.audiobooks.i18n.<lang>.on_complete_prompt` (per-language) in
+# persona.yaml. Unknown languages fall back to English.
+_DEFAULT_ON_COMPLETE_PROMPTS: dict[str, str] = {
+    "es": (
+        "El libro ha llegado a su fin. Felicita al usuario por haber "
+        "terminado el libro y pregúntale si quiere que busque otro."
+    ),
+    "en": (
+        "The book has just finished. Congratulate the user on finishing "
+        "it and ask if they'd like you to find another one."
+    ),
+    "fr": (
+        "Le livre vient de se terminer. Félicite l'utilisateur d'avoir "
+        "terminé le livre et demande-lui s'il veut que tu lui en trouves "
+        "un autre."
+    ),
+}
 
 
 _AUDIOBOOK_EXTENSIONS = {".mp3", ".m4a", ".m4b", ".ogg", ".opus", ".flac", ".wav"}
@@ -94,32 +105,355 @@ DEFAULT_SPEED = 1.0
 # surfaces longer-call patterns.
 BOOK_PATIENCE = timedelta(minutes=30)
 
-# Prompt the LLM narrates when a long call (or other preemptor) exhausts
-# patience and the book's CONTENT Activity is about to be evicted. The
-# skill fires this via `inject_turn` from `on_patience_expired`, so the
-# user hears "hey, I had to let your book go" rather than experiencing
-# silent state loss.
-_PATIENCE_EXPIRED_PROMPT = (
-    "Dile al usuario en español, con tono cálido y breve, que pausaste su libro "
-    "porque la interrupción fue larga; invítalo a decir 'sigue con el libro' "
-    "cuando quiera retomarlo."
-)
+# Per-language prompts narrated when a long preemptor exhausts patience
+# and the book's CONTENT Activity is about to be evicted. The skill
+# fires one of these via `inject_turn` from `on_patience_expired`, so
+# the user hears "hey, I had to let your book go" rather than
+# experiencing silent state loss.
+_PATIENCE_EXPIRED_PROMPTS: dict[str, str] = {
+    "es": (
+        "Dile al usuario con tono cálido y breve, en español, que pausaste "
+        "su libro porque la interrupción fue larga; invítalo a decir 'sigue "
+        "con el libro' cuando quiera retomarlo."
+    ),
+    "en": (
+        "Tell the user warmly and briefly, in English, that you paused their "
+        "book because the interruption ran long; invite them to say 'keep "
+        "going with the book' whenever they want to resume."
+    ),
+    "fr": (
+        "Dis à l'utilisateur d'un ton chaleureux et bref, en français, que "
+        "tu as mis son livre en pause parce que l'interruption a été longue; "
+        "invite-le à dire 'reprends le livre' quand il veut le reprendre."
+    ),
+}
+
+
+# --- Per-language string catalog -------------------------------------------
+
+_STRINGS: dict[str, dict[str, str]] = {
+    "es": {
+        "unknown_author": "Desconocido",
+        "library_header": "Biblioteca de audiolibros disponibles",
+        "book_line": '- "{title}" por {author}',
+        "library_empty": "La biblioteca está vacía.",
+        "list_preview_msg": "Éstos son los libros que tengo.",
+        "search_no_match": ("No encontré nada con esas palabras. ¿Quiere que le diga qué tengo?"),
+        "search_match_msg": "Encontré estos libros.",
+        "not_found": "No encuentro '{query}'. ¿Quiere que le diga qué libros tengo?",
+        "probe_failed": "No pude abrir ese libro. Déjeme intentarlo otra vez.",
+        "no_resume": "No tiene ningún libro a medias. ¿Busco algo?",
+        "no_active_book": "No hay ningún libro activo. ¿Quiere que busque uno?",
+        "missing_book": "No encuentro ese libro en la biblioteca.",
+        "no_in_progress": "No tiene ningún libro empezado. ¿Quiere que le busque uno?",
+        "nothing_to_resume": "No hay ningún libro para reanudar.",
+        "no_active_to_seek": "No hay ningún libro activo para mover.",
+        "cant_resolve_seek": "No encuentro ese libro.",
+        "action_unclear": "No entendí la acción.",
+        "need_speed": "Indícame la velocidad. Por ejemplo, 0.85 para más lento.",
+        "position_start": "el inicio",
+        "unit_hour_one": "hora",
+        "unit_hour_many": "horas",
+        "unit_minute_one": "minuto",
+        "unit_minute_many": "minutos",
+        "unit_second_one": "segundo",
+        "unit_second_many": "segundos",
+        "and_join": " y ",
+    },
+    "en": {
+        "unknown_author": "Unknown",
+        "library_header": "Audiobooks available in the library",
+        "book_line": '- "{title}" by {author}',
+        "library_empty": "The library is empty.",
+        "list_preview_msg": "These are the books I have.",
+        "search_no_match": (
+            "I couldn't find anything matching those words. Want me to list what I have?"
+        ),
+        "search_match_msg": "I found these books.",
+        "not_found": "I can't find '{query}'. Want me to list what I have?",
+        "probe_failed": "I couldn't open that book. Let me try again.",
+        "no_resume": "You don't have any book in progress. Want me to find one?",
+        "no_active_book": "There's no active book. Would you like me to find one?",
+        "missing_book": "I can't find that book in the library.",
+        "no_in_progress": "You haven't started any book. Want me to find one?",
+        "nothing_to_resume": "There's no book to resume.",
+        "no_active_to_seek": "No active book to move.",
+        "cant_resolve_seek": "I can't find that book.",
+        "action_unclear": "I didn't catch the action.",
+        "need_speed": "Tell me the speed. For example, 0.85 for a bit slower.",
+        "position_start": "the beginning",
+        "unit_hour_one": "hour",
+        "unit_hour_many": "hours",
+        "unit_minute_one": "minute",
+        "unit_minute_many": "minutes",
+        "unit_second_one": "second",
+        "unit_second_many": "seconds",
+        "and_join": " and ",
+    },
+    "fr": {
+        "unknown_author": "Inconnu",
+        "library_header": "Livres audio disponibles dans la bibliothèque",
+        "book_line": "- « {title} » de {author}",
+        "library_empty": "La bibliothèque est vide.",
+        "list_preview_msg": "Voici les livres que j'ai.",
+        "search_no_match": (
+            "Je n'ai rien trouvé avec ces mots. Veux-tu que je te dise ce que j'ai ?"
+        ),
+        "search_match_msg": "J'ai trouvé ces livres.",
+        "not_found": "Je ne trouve pas « {query} ». Veux-tu que je te dise ce que j'ai ?",
+        "probe_failed": "Je n'ai pas pu ouvrir ce livre. Laisse-moi réessayer.",
+        "no_resume": "Tu n'as aucun livre en cours. Veux-tu que j'en cherche un ?",
+        "no_active_book": "Aucun livre actif. Veux-tu que je t'en trouve un ?",
+        "missing_book": "Je ne trouve pas ce livre dans la bibliothèque.",
+        "no_in_progress": "Tu n'as commencé aucun livre. Veux-tu que j'en cherche un ?",
+        "nothing_to_resume": "Aucun livre à reprendre.",
+        "no_active_to_seek": "Aucun livre actif à déplacer.",
+        "cant_resolve_seek": "Je ne trouve pas ce livre.",
+        "action_unclear": "Je n'ai pas compris l'action.",
+        "need_speed": "Dis-moi la vitesse. Par exemple, 0.85 pour un peu plus lent.",
+        "position_start": "le début",
+        "unit_hour_one": "heure",
+        "unit_hour_many": "heures",
+        "unit_minute_one": "minute",
+        "unit_minute_many": "minutes",
+        "unit_second_one": "seconde",
+        "unit_second_many": "secondes",
+        "and_join": " et ",
+    },
+}
+
+
+# --- Per-language tool descriptions ----------------------------------------
+
+_TOOL_DESC: dict[str, dict[str, str]] = {
+    "es": {
+        "search_audiobooks": (
+            "Busca audiolibros en la biblioteca local del usuario. "
+            "Devuelve una lista de libros que coinciden con la búsqueda."
+        ),
+        "search_query_param": "Texto de búsqueda (título, autor, o parte del nombre)",
+        "play_audiobook": (
+            "Reproduce un audiolibro. Puedes pasarle el ID exacto (de "
+            "search_audiobooks), o simplemente el título o el autor — la "
+            "skill hace coincidencia aproximada. Reanuda desde la última "
+            "posición guardada a menos que se especifique lo contrario. "
+            "Si el usuario dice 'desde el principio', 'desde el inicio', "
+            "'empieza de nuevo', 'vuelve al inicio', 'empieza de cero' o "
+            "algo parecido, pasa `from_beginning: true`. "
+            "Antes de reproducir, acusa recibo brevemente al usuario "
+            "(por ejemplo: 'Ahí le pongo {título}.'). Nunca empieces el "
+            "libro en silencio."
+        ),
+        "play_book_id": (
+            "ID, título o autor del libro. La skill acepta coincidencias "
+            "aproximadas — no necesitas pasar el ID exacto."
+        ),
+        "play_from_beginning": (
+            "Pasa `true` cuando el usuario pida explícitamente empezar de "
+            "cero ('desde el principio', 'desde el inicio', 'empieza de "
+            "nuevo', 'vuelve al inicio'). Por defecto `false` — reanuda "
+            "donde se quedó."
+        ),
+        "resume_last": (
+            "Reanuda el audiolibro que el usuario escuchó por última vez, "
+            "desde donde lo dejó. Úsalo cuando el usuario diga 'sigue con "
+            "el libro', 'el libro de anoche', 'continúa el libro' y "
+            "similares, sin mencionar un título específico. Antes de "
+            "reanudar, acusa recibo brevemente ('Sigo con {título} donde "
+            "lo dejó.')."
+        ),
+        "audiobook_control": (
+            "Controla la reproducción del audiolibro actual: pausar, "
+            "reanudar, retroceder, adelantar, detener, o cambiar la "
+            "velocidad. Antes de llamar esta herramienta, acusa recibo "
+            "brevemente al usuario (por ejemplo: 'Listo, retrocedo 30 "
+            "segundos.'). Nunca ejecutes la acción en silencio. Para "
+            "retroceder/adelantar, el valor por defecto es 30 segundos. "
+            "Para `set_speed`, usa `speed` entre 0.5 (mitad de velocidad) "
+            "y 2.0 (doble); 1.0 es la velocidad normal. Sugerencias: "
+            "0.85 para 'un poco más lento', 0.7 para 'mucho más lento', "
+            "1.15 para 'un poco más rápido'."
+        ),
+        "control_action": "Acción a realizar",
+        "control_seconds": "Segundos para retroceder/adelantar (default: 30)",
+        "control_speed": (
+            "Velocidad de reproducción para `set_speed`. Rango 0.5 a 2.0; 1.0 es normal."
+        ),
+        "get_progress": (
+            "Devuelve el progreso del libro que se está escuchando (o el "
+            "último reproducido): posición actual, duración total y tiempo "
+            "restante. Úsalo cuando el usuario pregunte '¿cuánto llevo?', "
+            "'¿cuánto me queda?', '¿en qué parte voy?' y similares."
+        ),
+        "list_in_progress": (
+            "Lista todos los audiolibros que tienen una posición guardada — "
+            "es decir, los que el usuario ha empezado y no ha terminado. "
+            "Úsalo cuando el usuario pregunte '¿qué libros tengo empezados?', "
+            "'¿cuáles tengo a medias?', '¿qué estaba escuchando?' y similares."
+        ),
+    },
+    "en": {
+        "search_audiobooks": (
+            "Search the user's local audiobook library. "
+            "Returns a list of books matching the query."
+        ),
+        "search_query_param": "Search text (title, author, or part of the name)",
+        "play_audiobook": (
+            "Play an audiobook. Pass the exact id (from search_audiobooks) "
+            "or just the title or author — the skill fuzzy-matches. "
+            "Resumes from the last saved position unless `from_beginning` "
+            "is set. If the user says 'from the start', 'start over', "
+            "'begin again' or similar, pass `from_beginning: true`. "
+            "Before playback, briefly acknowledge the user (e.g. 'Playing "
+            "{title} for you.'). Never start the book silently."
+        ),
+        "play_book_id": (
+            "Book id, title, or author. The skill accepts fuzzy matches — "
+            "you don't need the exact id."
+        ),
+        "play_from_beginning": (
+            "Pass `true` when the user explicitly asks to start from the "
+            "beginning ('from the start', 'start over', 'begin again'). "
+            "Default `false` — resumes where they left off."
+        ),
+        "resume_last": (
+            "Resume the audiobook the user was last listening to, from "
+            "where they left off. Use when the user says 'keep going with "
+            "the book', 'continue my book' and similar without naming a "
+            "title. Before resuming, briefly acknowledge (e.g. 'Resuming "
+            "{title} where you left off.')."
+        ),
+        "audiobook_control": (
+            "Control current audiobook playback: pause, resume, rewind, "
+            "forward, stop, or change speed. Before calling this tool, "
+            "briefly acknowledge the user (e.g. 'Going back 30 seconds.'). "
+            "Never perform the action silently. Rewind/forward defaults to "
+            "30 seconds. For `set_speed`, use `speed` between 0.5 (half) "
+            "and 2.0 (double); 1.0 is normal speed. Suggestions: 0.85 for "
+            "'a bit slower', 0.7 for 'much slower', 1.15 for 'a bit faster'."
+        ),
+        "control_action": "Action to perform",
+        "control_seconds": "Seconds to rewind/forward (default: 30)",
+        "control_speed": "Playback speed for `set_speed`. Range 0.5 to 2.0; 1.0 is normal.",
+        "get_progress": (
+            "Return progress on the book currently playing (or the last "
+            "one played): current position, total duration, remaining "
+            "time. Use when the user asks 'how far am I?', 'how much is "
+            "left?', 'where am I in the book?' and similar."
+        ),
+        "list_in_progress": (
+            "List every audiobook with a saved position — books the user "
+            "has started but not finished. Use when the user asks 'which "
+            "books have I started?', 'what was I listening to?' and similar."
+        ),
+    },
+    "fr": {
+        "search_audiobooks": (
+            "Recherche des livres audio dans la bibliothèque locale de "
+            "l'utilisateur. Renvoie une liste de livres correspondant à "
+            "la recherche."
+        ),
+        "search_query_param": "Texte de recherche (titre, auteur, ou partie du nom)",
+        "play_audiobook": (
+            "Lit un livre audio. Passe l'identifiant exact (de "
+            "search_audiobooks) ou simplement le titre ou l'auteur — la "
+            "compétence fait une correspondance approximative. Reprend "
+            "depuis la dernière position sauvegardée sauf indication "
+            "contraire. Si l'utilisateur dit 'depuis le début', "
+            "'recommence', 'reprends au début', passe "
+            "`from_beginning: true`. Avant de lancer, accuse brièvement "
+            "réception (par exemple : 'Je te mets {title}.'). Ne commence "
+            "jamais le livre en silence."
+        ),
+        "play_book_id": (
+            "Identifiant, titre ou auteur du livre. La compétence accepte "
+            "les correspondances approximatives — pas besoin de l'id exact."
+        ),
+        "play_from_beginning": (
+            "Passe `true` quand l'utilisateur demande explicitement de "
+            "recommencer ('depuis le début', 'recommence', 'reprends au "
+            "début'). Par défaut `false` — reprend où il s'est arrêté."
+        ),
+        "resume_last": (
+            "Reprend le livre audio que l'utilisateur écoutait en dernier, "
+            "là où il s'est arrêté. À utiliser quand l'utilisateur dit "
+            "'reprends le livre', 'continue le livre' et similaires sans "
+            "mentionner de titre. Avant de reprendre, accuse brièvement "
+            "réception ('Je reprends {title} où tu t'es arrêté.')."
+        ),
+        "audiobook_control": (
+            "Contrôle la lecture du livre audio en cours : pause, reprise, "
+            "retour en arrière, avance, arrêt, ou changement de vitesse. "
+            "Avant d'appeler cet outil, accuse brièvement réception (par "
+            "exemple : 'Je reviens 30 secondes en arrière.'). N'exécute "
+            "jamais l'action en silence. Pour reculer/avancer, la valeur "
+            "par défaut est 30 secondes. Pour `set_speed`, utilise `speed` "
+            "entre 0.5 (moitié) et 2.0 (double) ; 1.0 est la vitesse "
+            "normale. Suggestions : 0.85 pour 'un peu plus lent', 0.7 pour "
+            "'beaucoup plus lent', 1.15 pour 'un peu plus rapide'."
+        ),
+        "control_action": "Action à effectuer",
+        "control_seconds": "Secondes pour reculer/avancer (défaut : 30)",
+        "control_speed": (
+            "Vitesse de lecture pour `set_speed`. Plage 0.5 à 2.0 ; 1.0 est normale."
+        ),
+        "get_progress": (
+            "Renvoie la progression du livre en cours d'écoute (ou du "
+            "dernier écouté) : position actuelle, durée totale et temps "
+            "restant. À utiliser quand l'utilisateur demande 'où j'en "
+            "suis ?', 'combien il me reste ?' et similaires."
+        ),
+        "list_in_progress": (
+            "Liste tous les livres audio avec une position sauvegardée — "
+            "ceux que l'utilisateur a commencés sans les finir. À utiliser "
+            "quand l'utilisateur demande 'quels livres j'ai commencés ?', "
+            "'qu'est-ce que j'écoutais ?' et similaires."
+        ),
+    },
+}
+
+
+def _lang_bucket(language: str) -> str:
+    code = (language or "en").lower()
+    for key in ("es", "en", "fr"):
+        if code.startswith(key):
+            return key
+    return "en"
 
 
 def _clamp_speed(value: float) -> float:
     return max(MIN_SPEED, min(MAX_SPEED, value))
 
 
-def _fmt_duration(seconds: float) -> str:
-    """Format a duration in seconds to a natural Spanish string."""
+def _fmt_duration(seconds: float, language: str = "es") -> str:
+    """Format a duration in seconds to a natural language string.
+
+    Uses the `_STRINGS[lang]` unit words + the "and" connector so a
+    single implementation works for ES/EN/FR (and trivially extends).
+    """
+    bucket = _lang_bucket(language)
+    s_table = _STRINGS[bucket]
     total = int(seconds)
     h, rem = divmod(total, 3600)
     m, s = divmod(rem, 60)
+
+    def plural(count: int, one: str, many: str) -> str:
+        return f"{count} {one if count == 1 else many}"
+
+    joiner = s_table["and_join"]
     if h:
-        return f"{h} hora{'s' if h != 1 else ''} y {m} minuto{'s' if m != 1 else ''}"
+        return (
+            plural(h, s_table["unit_hour_one"], s_table["unit_hour_many"])
+            + joiner
+            + plural(m, s_table["unit_minute_one"], s_table["unit_minute_many"])
+        )
     if m:
-        return f"{m} minuto{'s' if m != 1 else ''} y {s} segundo{'s' if s != 1 else ''}"
-    return f"{s} segundo{'s' if s != 1 else ''}"
+        return (
+            plural(m, s_table["unit_minute_one"], s_table["unit_minute_many"])
+            + joiner
+            + plural(s, s_table["unit_second_one"], s_table["unit_second_many"])
+        )
+    return plural(s, s_table["unit_second_one"], s_table["unit_second_many"])
 
 
 def _position_key(book_id: str) -> str:
@@ -208,9 +542,15 @@ class AudiobooksSkill:
         self._sounds: dict[str, bytes] = {}
         # Trailing silence injected after book_end earcon to buffer model latency.
         self._silence_ms: int = 500
-        # Prompt the LLM narrates when a book ends naturally. Resolved from
-        # persona config in setup() with the Spanish default as fallback.
-        self._on_complete_prompt: str = _DEFAULT_ON_COMPLETE_PROMPT
+        # Active UI language — drives tool descriptions, localized
+        # default prompts, and `_fmt_duration` output. Set by setup()
+        # from the initial context and refreshed on every reconfigure().
+        self._language: str = "en"
+        # Prompt the LLM narrates when a book ends naturally. Persona
+        # override wins; otherwise falls back to the per-language default.
+        # Refreshed inside reconfigure() whenever the session language
+        # or merged skill config changes.
+        self._on_complete_prompt: str = _DEFAULT_ON_COMPLETE_PROMPTS["en"]
         # Live-playback tracking — set at stream start, cleared in finally.
         # Used by get_progress to estimate current position without storage round-trip.
         self._now_playing_id: str | None = None
@@ -250,21 +590,30 @@ class AudiobooksSkill:
     def name(self) -> str:
         return "audiobooks"
 
+    def _td(self) -> dict[str, str]:
+        """Per-session tool description pack for the active language."""
+        return _TOOL_DESC.get(_lang_bucket(self._language), _TOOL_DESC["en"])
+
+    def _t(self, key: str, **fmt: str) -> str:
+        """Look up a localized skill string for the active language."""
+        bucket = _lang_bucket(self._language)
+        table = _STRINGS.get(bucket) or _STRINGS["en"]
+        template = table.get(key) or _STRINGS["en"].get(key) or key
+        return template.format(**fmt) if fmt else template
+
     @property
     def tools(self) -> list[ToolDefinition]:
+        td = self._td()
         return [
             ToolDefinition(
                 name="search_audiobooks",
-                description=(
-                    "Busca audiolibros en la biblioteca local del usuario. "
-                    "Devuelve una lista de libros que coinciden con la búsqueda."
-                ),
+                description=td["search_audiobooks"],
                 parameters={
                     "type": "object",
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "Texto de búsqueda (título, autor, o parte del nombre)",
+                            "description": td["search_query_param"],
                         }
                     },
                     "required": ["query"],
@@ -272,36 +621,17 @@ class AudiobooksSkill:
             ),
             ToolDefinition(
                 name="play_audiobook",
-                description=(
-                    "Reproduce un audiolibro. Puedes pasarle el ID exacto (de "
-                    "search_audiobooks), o simplemente el título o el autor — la "
-                    "skill hace coincidencia aproximada. Reanuda desde la última "
-                    "posición guardada a menos que se especifique lo contrario. "
-                    "Si el usuario dice 'desde el principio', 'desde el inicio', "
-                    "'empieza de nuevo', 'vuelve al inicio', 'empieza de cero' "
-                    "o algo parecido, pasa `from_beginning: true`. "
-                    "Antes de reproducir, acusa recibo brevemente al usuario "
-                    "(por ejemplo: 'Ahí le pongo {título}, don.'). Nunca empieces "
-                    "el libro en silencio."
-                ),
+                description=td["play_audiobook"],
                 parameters={
                     "type": "object",
                     "properties": {
                         "book_id": {
                             "type": "string",
-                            "description": (
-                                "ID, título o autor del libro. La skill acepta "
-                                "coincidencias aproximadas — no necesitas pasar el ID exacto."
-                            ),
+                            "description": td["play_book_id"],
                         },
                         "from_beginning": {
                             "type": "boolean",
-                            "description": (
-                                "Pasa `true` cuando el usuario pida explícitamente "
-                                "empezar de cero ('desde el principio', 'desde el "
-                                "inicio', 'empieza de nuevo', 'vuelve al inicio'). "
-                                "Por defecto `false` — reanuda donde se quedó."
-                            ),
+                            "description": td["play_from_beginning"],
                         },
                     },
                     "required": ["book_id"],
@@ -309,29 +639,12 @@ class AudiobooksSkill:
             ),
             ToolDefinition(
                 name="resume_last",
-                description=(
-                    "Reanuda el audiolibro que el usuario escuchó por última vez, "
-                    "desde donde lo dejó. Úsalo cuando el usuario diga 'sigue con "
-                    "el libro', 'el libro de anoche', 'continúa el libro' y similares, "
-                    "sin mencionar un título específico. Antes de reanudar, acusa "
-                    "recibo brevemente ('Sigo con {título} donde lo dejó, don.')."
-                ),
+                description=td["resume_last"],
                 parameters={"type": "object", "properties": {}},
             ),
             ToolDefinition(
                 name="audiobook_control",
-                description=(
-                    "Controla la reproducción del audiolibro actual: pausar, "
-                    "reanudar, retroceder, adelantar, detener, o cambiar la "
-                    "velocidad. Antes de llamar esta herramienta, acusa recibo "
-                    "brevemente al usuario (por ejemplo: 'Listo, retrocedo 30 "
-                    "segundos, don.'). Nunca ejecutes la acción en silencio. "
-                    "Para retroceder/adelantar, el valor por defecto es 30 "
-                    "segundos. Para `set_speed`, usa `speed` entre 0.5 (mitad "
-                    "de velocidad) y 2.0 (doble); 1.0 es la velocidad normal. "
-                    "Sugerencias: 0.85 para 'un poco más lento', 0.7 para "
-                    "'mucho más lento', 1.15 para 'un poco más rápido'."
-                ),
+                description=td["audiobook_control"],
                 parameters={
                     "type": "object",
                     "properties": {
@@ -345,18 +658,15 @@ class AudiobooksSkill:
                                 "stop",
                                 "set_speed",
                             ],
-                            "description": "Acción a realizar",
+                            "description": td["control_action"],
                         },
                         "seconds": {
                             "type": "number",
-                            "description": "Segundos para retroceder/adelantar (default: 30)",
+                            "description": td["control_seconds"],
                         },
                         "speed": {
                             "type": "number",
-                            "description": (
-                                "Velocidad de reproducción para `set_speed`. "
-                                "Rango 0.5 a 2.0; 1.0 es normal."
-                            ),
+                            "description": td["control_speed"],
                         },
                     },
                     "required": ["action"],
@@ -364,22 +674,12 @@ class AudiobooksSkill:
             ),
             ToolDefinition(
                 name="get_progress",
-                description=(
-                    "Devuelve el progreso del libro que se está escuchando (o el último "
-                    "reproducido): posición actual, duración total y tiempo restante. "
-                    "Úsalo cuando el usuario pregunte '¿cuánto llevo?', '¿cuánto me "
-                    "queda?', '¿en qué parte voy?' y similares."
-                ),
+                description=td["get_progress"],
                 parameters={"type": "object", "properties": {}},
             ),
             ToolDefinition(
                 name="list_in_progress",
-                description=(
-                    "Lista todos los audiolibros que tienen una posición guardada — "
-                    "es decir, los que el usuario ha empezado y no ha terminado. "
-                    "Úsalo cuando el usuario pregunte '¿qué libros tengo empezados?', "
-                    "'¿cuáles tengo a medias?', '¿qué estaba escuchando?' y similares."
-                ),
+                description=td["list_in_progress"],
                 parameters={"type": "object", "properties": {}},
             ),
         ]
@@ -424,6 +724,10 @@ class AudiobooksSkill:
         self._storage = ctx.storage
         self._logger = ctx.logger
         self._inject_turn = ctx.inject_turn
+        # Seed language BEFORE scanning the library — `_scan_library`
+        # uses `self._t("unknown_author")` for root-level books without
+        # a parent directory, and reads the active language via `self._t`.
+        self._language = ctx.language or "en"
         self._catalog = ctx.catalog()
         for book in self._scan_library(library_path):
             await self._catalog.upsert(
@@ -441,7 +745,7 @@ class AudiobooksSkill:
         )
         self._sounds = load_pcm_palette(sounds_dir, _KNOWN_SOUND_ROLES) if sounds_enabled else {}
         self._silence_ms = int(cfg.get("silence_ms", 500)) if sounds_enabled else 0
-        self._on_complete_prompt = str(cfg.get("on_complete_prompt", _DEFAULT_ON_COMPLETE_PROMPT))
+        self._on_complete_prompt = self._resolve_complete_prompt(cfg)
 
         if sounds_enabled and sounds_dir.exists() and not self._sounds:
             await ctx.logger.awarning(
@@ -465,22 +769,56 @@ class AudiobooksSkill:
             sounds=list(self._sounds.keys()),
         )
 
+    def _resolve_complete_prompt(self, cfg: dict[str, Any]) -> str:
+        """Pick the on_complete_prompt the LLM will narrate when a book ends.
+
+        Preference order:
+        1. `skills.audiobooks.on_complete_prompt` in persona config
+           (persona authors override by writing the prompt out), also
+           picks up the per-language merge from
+           `skills.audiobooks.i18n.<lang>.on_complete_prompt`.
+        2. Built-in per-language default for the active language.
+        3. English built-in default.
+        """
+        override = cfg.get("on_complete_prompt")
+        if isinstance(override, str) and override.strip():
+            return override
+        bucket = _lang_bucket(self._language)
+        return _DEFAULT_ON_COMPLETE_PROMPTS.get(bucket, _DEFAULT_ON_COMPLETE_PROMPTS["en"])
+
+    async def reconfigure(self, ctx: SkillContext) -> None:
+        """Refresh language + per-language prompts on every session."""
+        self._language = ctx.language or self._language
+        self._on_complete_prompt = self._resolve_complete_prompt(ctx.config)
+        await ctx.logger.ainfo(
+            "audiobooks.reconfigure",
+            language=self._language,
+            complete_prompt_source=(
+                "persona" if ctx.config.get("on_complete_prompt") else "builtin"
+            ),
+        )
+
     async def teardown(self) -> None:
         """No teardown state — the running factory saves its own position on cancel."""
 
     def prompt_context(self) -> str:
         """Text injected into the session prompt so the LLM knows what's available.
 
-        Capped at 50 books via Catalog (T1.1). Output is byte-identical to
-        the pre-refactor format so the LLM's first-connect behavior is
-        preserved.
+        Capped at 50 books via Catalog (T1.1). The header + line format
+        follow the active session language; book titles and authors
+        themselves are untranslated (they're proper content, not framework
+        copy).
         """
         if self._catalog is None or len(self._catalog) == 0:
             return ""
+        line_tmpl = self._t("book_line")
         return self._catalog.as_prompt_lines(
             limit=50,
-            header="Biblioteca de audiolibros disponibles",
-            line=lambda h: f'- "{h.fields["title"]}" por {h.fields["author"]}',
+            header=self._t("library_header"),
+            line=lambda h: line_tmpl.format(
+                title=h.fields.get("title", ""),
+                author=h.fields.get("author", self._t("unknown_author")),
+            ),
         )
 
     def _scan_library(self, library_path: Path) -> list[dict[str, str]]:
@@ -501,7 +839,10 @@ class AudiobooksSkill:
                 author = parts[0]
                 title = path.stem
             else:
-                author = "Desconocido"
+                # Author unknown in the filesystem; surface a localized
+                # label so the LLM and any UI read it naturally. Using
+                # `_t` means the label flips with the session language.
+                author = self._t("unknown_author")
                 title = path.stem
 
             book_id = str(relative)
@@ -563,7 +904,11 @@ class AudiobooksSkill:
         async def _deferred_inject() -> None:
             assert self._logger is not None
             try:
-                await inject(_PATIENCE_EXPIRED_PROMPT, dedup_key="book_patience_expired")
+                prompt = _PATIENCE_EXPIRED_PROMPTS.get(
+                    _lang_bucket(self._language),
+                    _PATIENCE_EXPIRED_PROMPTS["en"],
+                )
+                await inject(prompt, dedup_key="book_patience_expired")
             except Exception:
                 await self._logger.aexception("audiobooks.patience_expired_inject_failed")
 
@@ -580,7 +925,7 @@ class AudiobooksSkill:
         """Search the catalog by fuzzy matching against title and author.
 
         Refactored onto Catalog (T1.1). Behavior preserved:
-        - Empty catalog → "biblioteca vacía"
+        - Empty catalog → localized "empty library" message
         - Query < 2 chars → return first 20 books in insertion order
         - Otherwise: catalog.search with `_SEARCH_THRESHOLD` filter,
           top 5 results
@@ -589,7 +934,10 @@ class AudiobooksSkill:
         total = len(catalog)
         if total == 0:
             return ToolResult(
-                output=json.dumps({"results": [], "message": "La biblioteca está vacía."})
+                output=json.dumps(
+                    {"results": [], "message": self._t("library_empty")},
+                    ensure_ascii=False,
+                )
             )
 
         query_stripped = query.strip()
@@ -601,8 +949,9 @@ class AudiobooksSkill:
                         "results": [_hit_summary(h) for h in preview],
                         "count": len(preview),
                         "total": total,
-                        "message": "Éstos son los libros que tengo.",
-                    }
+                        "message": self._t("list_preview_msg"),
+                    },
+                    ensure_ascii=False,
                 )
             )
 
@@ -618,11 +967,9 @@ class AudiobooksSkill:
                         "results": [],
                         "count": 0,
                         "total": total,
-                        "message": (
-                            "No encontré nada con esas palabras, don. "
-                            "¿Quiere que le diga qué tengo?"
-                        ),
-                    }
+                        "message": self._t("search_no_match"),
+                    },
+                    ensure_ascii=False,
                 )
             )
 
@@ -631,8 +978,9 @@ class AudiobooksSkill:
                 {
                     "results": [_hit_summary(h) for h in results],
                     "count": len(results),
-                    "message": "Encontré estos libros.",
-                }
+                    "message": self._t("search_match_msg"),
+                },
+                ensure_ascii=False,
             )
         )
 
@@ -801,10 +1149,9 @@ class AudiobooksSkill:
                 output=json.dumps(
                     {
                         "playing": False,
-                        "message": (
-                            f"No encuentro '{book_id}'. ¿Quiere que le diga qué libros tengo?"
-                        ),
-                    }
+                        "message": self._t("not_found", query=book_id),
+                    },
+                    ensure_ascii=False,
                 )
             )
 
@@ -825,8 +1172,9 @@ class AudiobooksSkill:
                 output=json.dumps(
                     {
                         "playing": False,
-                        "message": "No pude abrir ese libro. Déjeme intentarlo otra vez.",
-                    }
+                        "message": self._t("probe_failed"),
+                    },
+                    ensure_ascii=False,
                 )
             )
 
@@ -855,9 +1203,14 @@ class AudiobooksSkill:
                     "title": book["title"],
                     "author": book["author"],
                     "position_seconds": start_position,
-                    "position_label": _fmt_duration(start_position) if resuming else "el inicio",
+                    "position_label": (
+                        _fmt_duration(start_position, self._language)
+                        if resuming
+                        else self._t("position_start")
+                    ),
                     "resuming": resuming,
-                }
+                },
+                ensure_ascii=False,
             ),
             side_effect=AudioStream(
                 factory=factory,
@@ -878,8 +1231,9 @@ class AudiobooksSkill:
                 output=json.dumps(
                     {
                         "resumed": False,
-                        "message": "No tiene ningún libro a medias. ¿Busco algo?",
-                    }
+                        "message": self._t("no_resume"),
+                    },
+                    ensure_ascii=False,
                 )
             )
         return await self._play(last_id, from_beginning=False)
@@ -919,9 +1273,7 @@ class AudiobooksSkill:
             book_id = await self._storage_req.get_setting(LAST_BOOK_KEY)
             if not book_id:
                 return ToolResult(
-                    output=json.dumps(
-                        {"message": "No hay ningún libro activo. ¿Quiere que busque uno?"}
-                    )
+                    output=json.dumps({"message": self._t("no_active_book")}, ensure_ascii=False)
                 )
             current_pos = await self._get_position(book_id)
             is_live = False
@@ -929,7 +1281,7 @@ class AudiobooksSkill:
         book = await self._resolve_book(book_id)
         if book is None:
             return ToolResult(
-                output=json.dumps({"message": "No encuentro ese libro en la biblioteca."})
+                output=json.dumps({"message": self._t("missing_book")}, ensure_ascii=False)
             )
 
         # Probe for total duration. Fail gracefully if ffprobe is unavailable.
@@ -946,17 +1298,17 @@ class AudiobooksSkill:
             "title": book["title"],
             "author": book["author"],
             "position_seconds": round(current_pos, 1),
-            "position_label": _fmt_duration(current_pos),
+            "position_label": _fmt_duration(current_pos, self._language),
             "playing": is_live,
         }
         if total_duration:
             remaining = max(0.0, total_duration - current_pos)
             result["total_seconds"] = round(total_duration, 1)
             result["remaining_seconds"] = round(remaining, 1)
-            result["remaining_label"] = _fmt_duration(remaining)
+            result["remaining_label"] = _fmt_duration(remaining, self._language)
             result["percent"] = min(100, int(current_pos / total_duration * 100))
 
-        return ToolResult(output=json.dumps(result))
+        return ToolResult(output=json.dumps(result, ensure_ascii=False))
 
     async def _list_in_progress(self) -> ToolResult:
         """Return all books that have a non-zero saved position."""
@@ -970,15 +1322,13 @@ class AudiobooksSkill:
                         "title": hit.fields.get("title", ""),
                         "author": hit.fields.get("author", ""),
                         "position_seconds": round(pos, 1),
-                        "position_label": _fmt_duration(pos),
+                        "position_label": _fmt_duration(pos, self._language),
                     }
                 )
 
         if not in_progress:
             return ToolResult(
-                output=json.dumps(
-                    {"message": "No tiene ningún libro empezado. ¿Quiere que le busque uno?"}
-                )
+                output=json.dumps({"message": self._t("no_in_progress")}, ensure_ascii=False)
             )
 
         return ToolResult(
@@ -986,7 +1336,8 @@ class AudiobooksSkill:
                 {
                     "count": len(in_progress),
                     "books": in_progress,
-                }
+                },
+                ensure_ascii=False,
             )
         )
 
@@ -1017,8 +1368,9 @@ class AudiobooksSkill:
                         output=json.dumps(
                             {
                                 "resumed": False,
-                                "message": "No hay ningún libro para reanudar.",
-                            }
+                                "message": self._t("nothing_to_resume"),
+                            },
+                            ensure_ascii=False,
                         )
                     )
                 return await self._play(book_id, from_beginning=False)
@@ -1030,8 +1382,9 @@ class AudiobooksSkill:
                         output=json.dumps(
                             {
                                 "ok": False,
-                                "message": "No hay ningún libro activo para mover.",
-                            }
+                                "message": self._t("no_active_to_seek"),
+                            },
+                            ensure_ascii=False,
                         )
                     )
                 saved = await self._get_position(book_id)
@@ -1051,8 +1404,9 @@ class AudiobooksSkill:
                         output=json.dumps(
                             {
                                 "ok": False,
-                                "message": "No encuentro ese libro, don.",
-                            }
+                                "message": self._t("cant_resolve_seek"),
+                            },
+                            ensure_ascii=False,
                         )
                     )
                 speed = await self._get_speed()
@@ -1071,8 +1425,9 @@ class AudiobooksSkill:
                             "title": book["title"],
                             "author": book["author"],
                             "position_seconds": new_pos,
-                            "position_label": _fmt_duration(new_pos),
-                        }
+                            "position_label": _fmt_duration(new_pos, self._language),
+                        },
+                        ensure_ascii=False,
                     ),
                     side_effect=AudioStream(
                         factory=factory,
@@ -1092,7 +1447,10 @@ class AudiobooksSkill:
 
             case _:
                 return ToolResult(
-                    output=json.dumps({"ok": False, "message": "No entendí la acción."})
+                    output=json.dumps(
+                        {"ok": False, "message": self._t("action_unclear")},
+                        ensure_ascii=False,
+                    )
                 )
 
     async def _set_speed(self, speed: float | None) -> ToolResult:
@@ -1113,8 +1471,9 @@ class AudiobooksSkill:
                 output=json.dumps(
                     {
                         "ok": False,
-                        "message": "Indícame la velocidad. Por ejemplo, 0.85 para más lento.",
-                    }
+                        "message": self._t("need_speed"),
+                    },
+                    ensure_ascii=False,
                 )
             )
         new_speed = _clamp_speed(float(speed))
@@ -1162,8 +1521,9 @@ class AudiobooksSkill:
                     "playing": True,
                     "title": book["title"],
                     "position_seconds": round(live_pos, 1),
-                    "position_label": _fmt_duration(live_pos),
-                }
+                    "position_label": _fmt_duration(live_pos, self._language),
+                },
+                ensure_ascii=False,
             ),
             side_effect=AudioStream(
                 factory=factory,

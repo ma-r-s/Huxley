@@ -69,9 +69,9 @@ class StubVoiceProvider:
     def is_connected(self) -> bool:
         return self._connected
 
-    async def connect(self) -> None:
+    async def connect(self, language: str | None = None) -> None:
         self._connected = True
-        self.sent.append(("connect",))
+        self.sent.append(("connect", language) if language else ("connect",))
 
     async def disconnect(self, *, save_summary: bool = False) -> None:
         self._connected = False

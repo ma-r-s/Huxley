@@ -183,6 +183,10 @@ class TurnCoordinator:
         )
         self._speaking_state = SpeakingState(notify=send_model_speaking)
         self._status = {**self._DEFAULT_STATUS, **(status_messages or {})}
+        # Baseline status messages retained so `set_ui_strings` can replay
+        # the framework defaults underneath a new per-session override
+        # without stacking stale persona strings across language changes.
+        self._status_baseline: dict[str, str] = dict(self._DEFAULT_STATUS)
         # Provider — outgoing verbs (send_user_audio, send_tool_output,
         # commit_and_request_response, cancel_current_response,
         # request_response) are called directly. Incoming events arrive as
@@ -265,6 +269,17 @@ class TurnCoordinator:
         """True iff a content stream is currently playing (pump task live)."""
         obs = self._content_obs
         return obs is not None and obs.task is not None and not obs.task.done()
+
+    def set_ui_strings(self, ui_strings: dict[str, str] | None) -> None:
+        """Swap the persona-provided status labels at session start.
+
+        `set_ui_strings` overlays the given mapping on top of the framework's
+        English defaults, so missing keys fall through safely. Passing
+        `None` resets to defaults (used when a persona has no ui_strings).
+        Called by the Application on every session connect after the
+        persona is resolved for the client's selected language.
+        """
+        self._status = {**self._status_baseline, **(ui_strings or {})}
 
     def _tid(self) -> str | None:
         """Short turn ID for explicit passing (factory tasks, etc.)."""

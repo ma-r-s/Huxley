@@ -44,6 +44,7 @@ def make_test_context(
     config: dict[str, Any] | None = None,
     persona_data_dir: Path | None = None,
     storage: SkillStorage | None = None,
+    language: str | None = None,
 ) -> SkillContext:
     """Build a SkillContext for unit-testing a skill's setup() and handle().
 
@@ -52,6 +53,9 @@ def make_test_context(
     - `storage`: an in-memory `_NoopSkillStorage` (overrideable)
     - `persona_data_dir`: `/tmp` (override for path-resolution tests)
     - `config`: `{}` (override per skill's expected keys)
+    - `language`: derived from `config["_language"]` or
+      `config["language_code"]` if present, else `"en"`. Override to test
+      i18n-specific paths without touching skill config.
 
     Use `storage=` to inject a populated mock for tests that read pre-existing
     state. Use `config=` to inject the keys your skill expects from
@@ -60,11 +64,16 @@ def make_test_context(
     logger = MagicMock()
     for method in ("ainfo", "adebug", "awarning", "aerror", "aexception"):
         setattr(logger, method, AsyncMock())
+    cfg = config or {}
+    if language is None:
+        hint = cfg.get("_language") or cfg.get("language_code")
+        language = str(hint).lower() if isinstance(hint, str) and hint else "en"
     return SkillContext(
         logger=logger,
         storage=storage if storage is not None else _NoopSkillStorage(),
         persona_data_dir=persona_data_dir or Path("/tmp"),
-        config=config or {},
+        config=cfg,
+        language=language,
     )
 
 

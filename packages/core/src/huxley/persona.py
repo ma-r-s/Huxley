@@ -7,13 +7,23 @@ one is present). Parses it into a `PersonaSpec` and uses it to drive
 the system prompt, voice, skill list, per-skill config, and storage
 location.
 
-Keep this file small: schema definition + file loader + prompt
-composition. Anything richer (multi-language constraints, persona
-inheritance) waits for a second real persona to force the design.
+A persona may declare translations via an `i18n:` block keyed by ISO
+language code (e.g. `en`, `fr`). Each entry overrides `system_prompt`,
+`transcription_language`, and/or `ui_strings` for that language. Per-
+skill config supports the same pattern via a nested `i18n:` block. At
+session-connect time the client selects a language; the framework calls
+`PersonaSpec.resolve(language)` to collapse overrides into a frozen
+`ResolvedPersona` with the language-specific fields the rest of the
+framework consumes.
+
+Keep this file focused on: schema definition + file loader + language
+resolution. Anything richer (constraint translations, cross-persona
+inheritance) waits for a real use case to force the design.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +37,21 @@ class PersonaError(Exception):
     """Raised when a persona.yaml can't be loaded or parsed."""
 
 
+class LanguageOverride(BaseModel):
+    """Per-language overrides inside the persona's `i18n:` block.
+
+    All fields optional — omit a field to inherit from the persona's
+    default (top-level) value. `ui_strings` is merged key-by-key onto the
+    default dict (missing keys fall through).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    transcription_language: str | None = None
+    system_prompt: str | None = None
+    ui_strings: dict[str, str] = Field(default_factory=dict)
+
+
 class PersonaSpec(BaseModel):
     """Parsed `persona.yaml`.
 
@@ -34,6 +59,11 @@ class PersonaSpec(BaseModel):
     personas fail loudly instead of silently drifting. Path fields in
     `skills.<name>` config are resolved relative to `data_dir` by the
     framework at context-build time.
+
+    The top-level `language_code`, `system_prompt`, `transcription_language`,
+    and `ui_strings` define the DEFAULT language. The optional `i18n` block
+    adds translations keyed by language code. Use `resolve(language)` to
+    collapse overrides into a `ResolvedPersona`.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -47,10 +77,16 @@ class PersonaSpec(BaseModel):
     system_prompt: str
     constraints: list[str] = Field(default_factory=list)
     skills: dict[str, dict[str, Any]] = Field(default_factory=dict)
-    # UI status strings sent to the client over WebSocket. Keys: listening,
-    # too_short, sent, responding, ready. Defaults to English if omitted so
-    # the framework boots without persona config in tests.
+    # UI status strings sent to the client over WebSocket for the default
+    # language. Keys: listening, too_short, sent, responding, ready.
+    # Defaults to empty (framework falls back to English) so tests can boot
+    # without persona config. Per-language variants live in `i18n`.
     ui_strings: dict[str, str] = Field(default_factory=dict)
+
+    # Optional per-language overrides. Key = language code (e.g. "en",
+    # "fr"). The default language (`self.language_code`) is NOT a valid
+    # key here — its fields live at the top level.
+    i18n: dict[str, LanguageOverride] = Field(default_factory=dict)
 
     # Populated by `load_persona` from the persona file's parent directory.
     # Not user-settable in YAML (the loader injects it); tests constructing
@@ -58,11 +94,119 @@ class PersonaSpec(BaseModel):
     data_dir: Path
 
     @property
+    def supported_languages(self) -> list[str]:
+        """All language codes this persona supports, default first."""
+        return [self.language_code, *self.i18n.keys()]
+
+    @property
+    def system_prompt_with_constraints(self) -> str:
+        """Default-language prompt + composed constraint snippets.
+
+        Shortcut for callers (tests, diagnostics) that just want the
+        default system prompt. Per-session rendering should go through
+        `resolve(language).system_prompt_with_constraints` so the active
+        language wins.
+        """
+        return self.resolve().system_prompt_with_constraints
+
+    def resolve(self, language: str | None = None) -> ResolvedPersona:
+        """Collapse persona + per-language overrides for `language`.
+
+        `language=None` or a language the persona does not support falls
+        back to the default (`self.language_code`). Callers should check
+        `supported_languages` first if they need to reject unsupported
+        codes instead of falling back.
+        """
+        requested = (language or self.language_code).lower()
+        if requested == self.language_code.lower():
+            active = self.language_code
+            override: LanguageOverride | None = None
+        elif requested in self.i18n:
+            active = requested
+            override = self.i18n[requested]
+        else:
+            # Unsupported language — fall back to default silently. The
+            # caller is expected to validate via `supported_languages` if
+            # it wants stricter behavior.
+            active = self.language_code
+            override = None
+
+        if override is None:
+            system_prompt = self.system_prompt
+            transcription_language = self.transcription_language
+            ui_strings = dict(self.ui_strings)
+        else:
+            system_prompt = override.system_prompt or self.system_prompt
+            transcription_language = override.transcription_language or active
+            ui_strings = {**self.ui_strings, **override.ui_strings}
+
+        resolved_skills = _resolve_skills(self.skills, active)
+
+        return ResolvedPersona(
+            name=self.name,
+            voice=self.voice,
+            language_code=active,
+            transcription_language=transcription_language,
+            timezone=self.timezone,
+            system_prompt=system_prompt,
+            constraints=tuple(self.constraints),
+            skills=resolved_skills,
+            ui_strings=ui_strings,
+            data_dir=self.data_dir,
+            supported_languages=tuple(self.supported_languages),
+        )
+
+
+def _resolve_skills(raw: dict[str, dict[str, Any]], language: str) -> dict[str, dict[str, Any]]:
+    """Merge per-skill `i18n:<lang>` overrides into each skill's config.
+
+    The framework strips the nested `i18n` block before handing the config
+    to the skill. Language-aware keys inside `i18n.<language>` are merged
+    shallowly on top. A `_language` sentinel is injected so a skill that
+    never explicitly reads ``ctx.language`` can still discover the active
+    language from its config if it wants to. Keys outside `i18n` pass
+    through unchanged.
+    """
+    resolved: dict[str, dict[str, Any]] = {}
+    for name, cfg in raw.items():
+        merged: dict[str, Any] = {k: v for k, v in cfg.items() if k != "i18n"}
+        i18n_block = cfg.get("i18n")
+        if isinstance(i18n_block, dict):
+            override = i18n_block.get(language)
+            if isinstance(override, dict):
+                merged.update(override)
+        merged.setdefault("_language", language)
+        resolved[name] = merged
+    return resolved
+
+
+@dataclass(frozen=True)
+class ResolvedPersona:
+    """Persona view with i18n overrides collapsed for a specific language.
+
+    Built by `PersonaSpec.resolve(language)` at session-connect time. The
+    framework (provider, coordinator) consumes this rather than the raw
+    `PersonaSpec` so every language-dependent field is already decided.
+    """
+
+    name: str
+    voice: str
+    language_code: str
+    transcription_language: str
+    timezone: str
+    system_prompt: str
+    constraints: tuple[str, ...]
+    skills: dict[str, dict[str, Any]]
+    ui_strings: dict[str, str]
+    data_dir: Path
+    supported_languages: tuple[str, ...]
+
+    @property
     def system_prompt_with_constraints(self) -> str:
         """Prompt body + composed constraint snippets, joined with blank lines."""
         if not self.constraints:
             return self.system_prompt
-        return f"{self.system_prompt}\n\n{compose_constraints(self.constraints)}"
+        return f"{self.system_prompt}\n\n{compose_constraints(list(self.constraints))}"
 
 
 SUPPORTED_VERSION = 1
@@ -186,9 +330,12 @@ def load_persona(path: Path | None = None) -> PersonaSpec:
         msg = f"Invalid persona spec in {yaml_path}: {exc}"
         raise PersonaError(msg) from exc
 
-    # Eagerly validate constraint names so typos fail at load, not at connect.
+    # Eagerly validate constraint names + every declared language resolves
+    # cleanly so typos fail at load, not at session connect.
     try:
-        _ = spec.system_prompt_with_constraints
+        _ = spec.resolve().system_prompt_with_constraints
+        for lang in spec.i18n:
+            _ = spec.resolve(lang).system_prompt_with_constraints
     except Exception as exc:
         msg = f"Invalid persona spec in {yaml_path}: {exc}"
         raise PersonaError(msg) from exc
