@@ -119,10 +119,16 @@ monitor` during every session.
   only to serial. Network logs don't replace serial — they
   supplement it for the 99% case when the WS is healthy.
 
-Levels above INFO stream by default; INFO/DEBUG stay serial-only to
-keep bandwidth bounded during reconnect storms. Threshold is
-runtime-tunable via `hux_log_set_remote_level()` (exposed over the
-wire later when a `server_event` path opens up).
+Default threshold in the component is WARN. The dev build overrides
+to INFO in `main.c` via `hux_log_set_remote_level('I')` so every
+firmware event lands in the server log during development. Prod
+default is WARN — flip back in `main.c` when the firmware is no
+longer a prototype. DEBUG always stays serial-only (the vprintf
+hook's tag-specific DENY_TAGS keeps recursion-prone tags off the
+wire regardless of threshold; see `hux_log.c`).
+
+Threshold is runtime-tunable via `hux_log_set_remote_level()` (will
+be exposed over the wire once a `server_event` path opens up).
 
 See [`debugging.md`](./debugging.md) for how to read the stream.
 

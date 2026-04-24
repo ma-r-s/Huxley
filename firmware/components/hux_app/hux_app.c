@@ -186,12 +186,6 @@ static void enter_ptt(void) {
     s_tx_failed = 0;
     s_tx_last_stats_tick = 0;
 
-    /* Quiet the log stream during audio streaming so the WS doesn't
-     * have to multiplex 50 Hz audio + arbitrary INFO logs through the
-     * same socket. Level reverts on release. Serial still sees
-     * everything. */
-    hux_log_set_remote_level('E');
-
     /* Order is: announce -> arm mic. The server tolerates a frame or
      * two arriving before `ptt_start` but shouldn't have to. */
     send_control("{\"type\":\"ptt_start\"}");
@@ -203,7 +197,6 @@ static void leave_ptt(void) {
      * The server's PTT-stop handler commits the buffer to OpenAI —
      * late frames would be ignored, but the log noise is worse. */
     hux_audio_mic_stop();
-    hux_log_set_remote_level('I');
     ESP_LOGI(TAG, "app.ptt.final_stats enq=%u enq_drop=%u tx_ok=%u tx_fail=%u",
              (unsigned)s_mic_enqueued, (unsigned)s_mic_enqueue_dropped,
              (unsigned)s_tx_sent, (unsigned)s_tx_failed);
