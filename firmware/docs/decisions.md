@@ -152,6 +152,39 @@ kilobyte-scale payloads pay the PSRAM tax.
 
 ---
 
+## 2026-04-24 — Audio data plane bypasses the control-plane queue
+
+**Decision**: Inbound `audio` messages are recognised in `hux_net`
+and dispatched to a registered `hux_net_audio_sink_fn` without ever
+touching `hux_app`'s event queue. Only lifecycle messages (`state`,
+`status`, `input_mode`, `stream_*`, `claim_*`, `transcript`,
+`set_volume`, `model_speaking`, `dev_event`) flow through the
+control plane.
+
+**Alternative rejected**: route everything through `hux_app`'s
+queue and let it dispatch. Symmetric, tidy — and does not survive
+a 50 Hz audio feed. Rough math: 2 KB base64 per frame × 50 Hz =
+250 KB/s of heap-copied, cJSON-parsed churn through a 32-entry
+queue that would buffer < 640 ms of speech. A single `app_task`
+stall drops words.
+
+**Why the seam matters**: `hux_net`'s WS RX task already has the
+raw bytes — decoding on the spot and handing a scratch-buffer view
+to the sink is zero-copy and zero-malloc per frame. The sink
+(owned by `hux_audio` in v0.3) writes straight into its PSRAM
+speaker ring. The data plane never touches the control plane.
+
+**Implementation sketch**: `looks_like_audio()` does a cheap
+substring probe on the first ~64 bytes of the JSON envelope —
+fast path for the common case. If the probe misses (server starts
+sorting keys, unlikely), the message falls through to the control
+plane and is logged as `ws.rx.audio (unhandled in v0)` — correct
+but slow, visible in the stream.
+
+See [`architecture.md`](./architecture.md#data-plane-vs-control-plane).
+
+---
+
 ## 2026-04-24 — `K2` = PTT, `K1`/`K3` reserved
 
 **Decision**: The middle button (`K2`) is the push-to-talk trigger.

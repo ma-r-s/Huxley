@@ -46,3 +46,29 @@ bool hux_net_send_text(const char *data, size_t len);
  * is best-effort; serial already has the line.
  */
 void hux_net_send_log(const hux_log_entry_t *entry);
+
+/**
+ * Callback invoked for every inbound `audio` message, with the message's
+ * base64-decoded PCM16 bytes. The `pcm` pointer is only valid for the
+ * duration of the call — the sink MUST copy into its own buffer (a
+ * speaker ring, a file writer, etc.) or drop; retaining the pointer is
+ * a bug.
+ *
+ * Runs on the WebSocket client task. Keep it tight: no blocking I/O,
+ * no heap allocation, no logging above DEBUG. A slow sink stalls every
+ * subsequent WS message.
+ */
+typedef void (*hux_net_audio_sink_fn)(const uint8_t *pcm, size_t len);
+
+/**
+ * Register the audio sink. Pass NULL to unregister (inbound audio will
+ * then drop silently). The pointer update is a release-store —
+ * whoever observes the new sink also sees the sink's fully-constructed
+ * internal state (ring buffers, ES8311 handle, etc.).
+ *
+ * This is the seam that keeps the audio hot path OUT of
+ * `hux_app`'s event queue — at 50 Hz the app task couldn't keep up
+ * with per-frame JSON parses and heap copies. See
+ * firmware/docs/architecture.md §"Data plane vs control plane".
+ */
+void hux_net_set_audio_sink(hux_net_audio_sink_fn sink);

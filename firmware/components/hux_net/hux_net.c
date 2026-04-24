@@ -1,5 +1,6 @@
 #include "hux_net.h"
 
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -12,6 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
+#include "mbedtls/base64.h"
 
 #include "hux_app.h"
 #include "hux_log.h"
@@ -36,6 +38,20 @@ static EventGroupHandle_t s_wifi_events = NULL;
 static esp_websocket_client_handle_t s_ws = NULL;
 static int s_wifi_retries = 0;
 static char s_server_uri[128] = {0};
+
+/* Audio data-plane seam — see firmware/docs/architecture.md §"Data
+ * plane vs control plane". Inbound `audio` messages bypass
+ * hux_app's queue entirely; at 50 Hz the control-plane queue cannot
+ * keep up with per-frame JSON parses + heap copies. Sink pointer
+ * reads cross CPU cores (set from app_main, called on the WS client
+ * task) so it's atomic. */
+static _Atomic(hux_net_audio_sink_fn) s_audio_sink = NULL;
+/* Decode scratch — single-writer (the WS client task), so no lock is
+ * needed. Big enough to hold the PCM of any single WS text frame
+ * the server sends today (WS_BUFFER_SIZE base64 bytes decode to at
+ * most 3/4 as much PCM). */
+#define AUDIO_SCRATCH_BYTES ((WS_BUFFER_SIZE * 3) / 4 + 32)
+static uint8_t s_audio_scratch[AUDIO_SCRATCH_BYTES];
 
 static void post_app(hux_app_event_kind_t kind) {
     hux_app_event_t ev = {.kind = kind};
@@ -103,11 +119,64 @@ static void wifi_init_sta(const char *ssid, const char *password) {
 /*  WebSocket                                                          */
 /* ------------------------------------------------------------------ */
 
-/* Handles a WS DATA event. Single-frame text messages are delivered to
- * the app queue; fragmented or binary frames are warn-logged (not
- * reached today — server sends single-frame text JSON per protocol).
- * When real fragmentation appears we accumulate per-op_code into a
- * scratch buffer; until then the simpler path is correct and smaller. */
+/* Cheap probe: is this message an `audio` type? Avoids parsing the
+ * whole JSON on the hot path. Relies on the server always serialising
+ * `"type"` as the first key; if that ever changes, the check falls
+ * through and the message takes the control-plane path. Correct but
+ * slow — a belt-and-braces fallback. */
+static bool looks_like_audio(const char *json, size_t len) {
+    if (len < 16) {
+        return false;
+    }
+    /* Bound the scan — the `"type":"audio"` pattern, if present,
+     * lives in the first ~40 bytes. */
+    size_t probe = len < 64 ? len : 64;
+    const char *p = json;
+    for (size_t i = 0; i + 14 <= probe; i++) {
+        if (memcmp(p + i, "\"type\":\"audio\"", 14) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Full audio path. Parses the envelope, extracts `data`, decodes
+ * base64 into `s_audio_scratch`, hands the view to the registered
+ * sink. Runs on the WS client task; the sink must not block. */
+static void dispatch_audio(const char *json, size_t len) {
+    hux_net_audio_sink_fn sink =
+        atomic_load_explicit(&s_audio_sink, memory_order_acquire);
+    if (sink == NULL) {
+        return; /* No consumer yet — drop silently. Expected in v0.1.x. */
+    }
+
+    cJSON *root = cJSON_ParseWithLength(json, len);
+    if (root == NULL) {
+        ESP_LOGW(TAG, "ws.rx.audio.parse_failed len=%u", (unsigned)len);
+        return;
+    }
+    const cJSON *b64 = cJSON_GetObjectItemCaseSensitive(root, "data");
+    if (!cJSON_IsString(b64) || b64->valuestring == NULL) {
+        cJSON_Delete(root);
+        ESP_LOGW(TAG, "ws.rx.audio.no_data");
+        return;
+    }
+
+    size_t pcm_len = 0;
+    int rc = mbedtls_base64_decode(s_audio_scratch, sizeof(s_audio_scratch),
+                                   &pcm_len, (const unsigned char *)b64->valuestring,
+                                   strlen(b64->valuestring));
+    cJSON_Delete(root);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "ws.rx.audio.b64_decode_failed rc=-0x%04x", -rc);
+        return;
+    }
+    sink(s_audio_scratch, pcm_len);
+}
+
+/* Handles a WS DATA event. Audio messages take the zero-copy data-
+ * plane path straight to the registered sink; everything else is
+ * copied onto the heap and posted to hux_app's control queue. */
 static void forward_ws_text(const esp_websocket_event_data_t *data) {
     if (data->op_code != 0x01 /* TEXT */) {
         /* PING (0x9) / PONG (0xA) / CLOSE (0x8) are WS control frames
@@ -122,6 +191,11 @@ static void forward_ws_text(const esp_websocket_event_data_t *data) {
     if (data->payload_offset != 0 || data->data_len != data->payload_len) {
         ESP_LOGW(TAG, "ws.rx.fragmented off=%d len=%d/%d — dropped",
                  data->payload_offset, data->data_len, data->payload_len);
+        return;
+    }
+
+    if (looks_like_audio(data->data_ptr, (size_t)data->data_len)) {
+        dispatch_audio(data->data_ptr, (size_t)data->data_len);
         return;
     }
 
@@ -212,6 +286,12 @@ bool hux_net_send_text(const char *data, size_t len) {
         return false;
     }
     return true;
+}
+
+void hux_net_set_audio_sink(hux_net_audio_sink_fn sink) {
+    /* Release-store pairs with the acquire-load in `dispatch_audio`
+     * on the WS client task. */
+    atomic_store_explicit(&s_audio_sink, sink, memory_order_release);
 }
 
 void hux_net_send_log(const hux_log_entry_t *entry) {
