@@ -18,6 +18,7 @@
 
 #include "hux_app.h"
 #include "hux_log.h"
+#include "hux_ws_frag.h"
 
 static const char *TAG = "hux_net";
 
@@ -63,6 +64,19 @@ static _Atomic(hux_net_audio_sink_fn) s_audio_sink = NULL;
  * hundred ns; negligible against a 20 ms audio frame period. */
 #define AUDIO_SCRATCH_BYTES ((WS_BUFFER_SIZE * 3) / 4 + 32)
 EXT_RAM_BSS_ATTR static uint8_t s_audio_scratch[AUDIO_SCRATCH_BYTES];
+
+/* WebSocket fragment reassembly scratch — see firmware/docs/triage.md
+ * F-0003 for the motivation. Server responses (OpenAI audio deltas
+ * in particular) can exceed WS_BUFFER_SIZE, arriving as multiple
+ * fragments with increasing payload_offset. We accumulate into this
+ * PSRAM buffer; the reassembler owns the state.
+ *
+ * 128 KB holds ~3x the largest message observed in testing (41 KB).
+ * Single-writer (WS client RX task), so the reassembler is
+ * lock-free. Unit-tested in firmware/tests/test_hux_ws_frag.c. */
+#define WS_FRAG_BUFFER_BYTES (128 * 1024)
+EXT_RAM_BSS_ATTR static char s_frag_buf[WS_FRAG_BUFFER_BYTES];
+static hux_ws_reassembler_t s_reassembler;
 
 static void post_app(hux_app_event_kind_t kind) {
     hux_app_event_t ev = {.kind = kind};
@@ -185,46 +199,70 @@ static void dispatch_audio(const char *json, size_t len) {
     sink(s_audio_scratch, pcm_len);
 }
 
-/* Handles a WS DATA event. Audio messages take the zero-copy data-
- * plane path straight to the registered sink; everything else is
- * copied onto the heap and posted to hux_app's control queue. */
-static void forward_ws_text(const esp_websocket_event_data_t *data) {
-    if (data->op_code != 0x01 /* TEXT */) {
-        /* PING (0x9) / PONG (0xA) / CLOSE (0x8) are WS control frames
-         * handled by esp_websocket_client internally — silent skip.
-         * Binary (0x2) would be real but the protocol is JSON-only, so
-         * log it loud if it ever shows up. */
-        if (data->op_code == 0x02) {
-            ESP_LOGW(TAG, "ws.rx.binary len=%d (unexpected)", data->data_len);
-        }
-        return;
-    }
-    if (data->payload_offset != 0 || data->data_len != data->payload_len) {
-        ESP_LOGW(TAG, "ws.rx.fragmented off=%d len=%d/%d — dropped",
-                 data->payload_offset, data->data_len, data->payload_len);
+/* Dispatch a complete (reassembled or single-frame) message. Audio
+ * goes to the zero-copy data-plane sink; everything else gets copied
+ * onto the heap and posted to hux_app's control queue. */
+static void dispatch_complete_message(const char *msg, size_t msg_len) {
+    if (looks_like_audio(msg, msg_len)) {
+        dispatch_audio(msg, msg_len);
         return;
     }
 
-    if (looks_like_audio(data->data_ptr, (size_t)data->data_len)) {
-        dispatch_audio(data->data_ptr, (size_t)data->data_len);
-        return;
-    }
-
-    char *copy = malloc(data->data_len + 1);
+    char *copy = malloc(msg_len + 1);
     if (copy == NULL) {
-        ESP_LOGE(TAG, "ws.rx.oom len=%d", data->data_len);
+        ESP_LOGE(TAG, "ws.rx.oom len=%u", (unsigned)msg_len);
         return;
     }
-    memcpy(copy, data->data_ptr, data->data_len);
-    copy[data->data_len] = '\0';
+    memcpy(copy, msg, msg_len);
+    copy[msg_len] = '\0';
 
     hux_app_event_t ev = {
         .kind = HUX_APP_EV_NET_WS_MESSAGE,
-        .payload.ws_message = {.data = copy, .len = (size_t)data->data_len},
+        .payload.ws_message = {.data = copy, .len = msg_len},
     };
     if (!hux_app_post_event(&ev, false)) {
         /* Post failed; own the memory we just allocated. */
         free(copy);
+    }
+}
+
+/* Handle a single WS DATA event. Ignores control frames, runs text
+ * fragments through the reassembler, and dispatches on the first
+ * `HUX_FRAG_READY`. Binary frames are flagged loud — protocol is
+ * JSON-only. */
+static void forward_ws_text(const esp_websocket_event_data_t *data) {
+    if (data->op_code != 0x01 /* TEXT */) {
+        if (data->op_code == 0x02) {
+            ESP_LOGW(TAG, "ws.rx.binary len=%d (unexpected)", data->data_len);
+        }
+        /* Control frames (PING/PONG/CLOSE) and stray binary are handled
+         * by esp_websocket_client internally; the reassembler doesn't
+         * see them (we skip the call entirely). */
+        return;
+    }
+
+    const char *msg = NULL;
+    size_t msg_len = 0;
+    hux_frag_result_t rc = hux_ws_reassemble(
+        &s_reassembler,
+        data->op_code,
+        data->payload_offset,
+        data->data_len,
+        data->payload_len,
+        data->data_ptr,
+        &msg, &msg_len);
+
+    switch (rc) {
+        case HUX_FRAG_READY:
+            dispatch_complete_message(msg, msg_len);
+            break;
+        case HUX_FRAG_NEED_MORE:
+            /* Silent common case on multi-fragment messages. */
+            break;
+        case HUX_FRAG_DROPPED:
+            ESP_LOGW(TAG, "ws.rx.frag.dropped off=%d len=%d/%d",
+                     data->payload_offset, data->data_len, data->payload_len);
+            break;
     }
 }
 
@@ -238,6 +276,9 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
             break;
         case WEBSOCKET_EVENT_DISCONNECTED:
             ESP_LOGW(TAG, "ws.disconnected");
+            /* Any half-received message is now unrecoverable; the
+             * server will resend from scratch after reconnect. */
+            hux_ws_reassembler_reset(&s_reassembler);
             post_app(HUX_APP_EV_NET_WS_DISCONNECTED);
             break;
         case WEBSOCKET_EVENT_DATA:
@@ -274,6 +315,7 @@ static void ws_start(const char *uri) {
 void hux_net_start(const hux_net_config_t *cfg) {
     configASSERT(cfg != NULL && cfg->wifi_ssid != NULL &&
                  cfg->wifi_password != NULL && cfg->server_uri != NULL);
+    hux_ws_reassembler_init(&s_reassembler, s_frag_buf, sizeof(s_frag_buf));
     wifi_init_sta(cfg->wifi_ssid, cfg->wifi_password);
     /* WS client auto-connects once Wi-Fi has an IP (esp_websocket_client
      * retries internally until DNS + TCP succeed). Starting it here keeps
