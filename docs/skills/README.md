@@ -359,7 +359,7 @@ await self._ctx.start_input_claim(InputClaim(...))
 
 **Fallback**: if the coordinator is busy (a turn is already in progress), it falls back to a plain enqueue — same as `inject_turn`. The blocking guarantee only holds when the coordinator is idle. Design accordingly: call it from a background task where you control the timing.
 
-**When to use it**: any skill that must announce an event and then immediately claim the mic or start an audio source. Without the wait, your bridged audio queues behind the announcement PCM still in the client's playback buffer, causing a perceptible delay. The `comms_telegram` inbound-call flow uses this for exactly that reason.
+**When to use it**: any skill that must announce an event and then immediately claim the mic or start an audio source. Without the wait, your bridged audio queues behind the announcement PCM still in the client's playback buffer, causing a perceptible delay. The `telegram` inbound-call flow uses this for exactly that reason.
 
 **When not to use it**: routine proactive reminders. `inject_turn` (non-blocking) is correct for timers, news alerts, and anything that doesn't immediately follow up with an audio source.
 
@@ -532,7 +532,7 @@ Built-in skills (audiobooks, calls, news, radio, system, timers) live in `packag
 Skill-specific docs:
 
 - [`audiobooks.md`](audiobooks.md) — long-form spoken audio playback with bookmark resume.
-- [`comms-telegram.md`](comms-telegram.md) — outbound p2p Telegram voice calls via py-tgcalls + FIFO-bridged PCM.
+- [`telegram.md`](telegram.md) — outbound p2p Telegram voice calls via py-tgcalls + FIFO-bridged PCM.
 - [`news.md`](news.md) — Open-Meteo weather + Google News RSS summarization.
 - [`radio.md`](radio.md) — HTTP/Icecast streams via ffmpeg.
 - [`timers.md`](timers.md) — one-shot reminders via proactive speech, persisted across restart.

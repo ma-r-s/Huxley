@@ -54,14 +54,14 @@ Skills are Python packages. Install one, add it to your `persona.yaml`, done. Sh
 
 ### Shipped
 
-| Skill                         | What it does                                                                                                                |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `huxley-skill-audiobooks`     | Play `.m4b`/`.mp3` audiobooks from a local library. Pause, resume, rewind, fast-forward. Persists position across restarts. |
-| `huxley-skill-radio`          | Stream HTTP/Icecast radio stations via `ffmpeg`. Buffered playback with proactive reconnect on drop.                        |
-| `huxley-skill-news`           | Weather (Open-Meteo) + top headlines (Google News RSS). Cached, narrated in persona voice.                                  |
-| `huxley-skill-timers`         | One-shot and recurring reminders. Fires proactively at the scheduled time; persisted in SQLite so they survive restarts.    |
-| `huxley-skill-system`         | Volume control, current time.                                                                                               |
-| `huxley-skill-comms-telegram` | Full-duplex p2p Telegram voice calls. Accepts inbound calls, places outbound, bridges mic and speaker in real time.         |
+| Skill                     | What it does                                                                                                                |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `huxley-skill-audiobooks` | Play `.m4b`/`.mp3` audiobooks from a local library. Pause, resume, rewind, fast-forward. Persists position across restarts. |
+| `huxley-skill-radio`      | Stream HTTP/Icecast radio stations via `ffmpeg`. Buffered playback with proactive reconnect on drop.                        |
+| `huxley-skill-news`       | Weather (Open-Meteo) + top headlines (Google News RSS). Cached, narrated in persona voice.                                  |
+| `huxley-skill-timers`     | One-shot and recurring reminders. Fires proactively at the scheduled time; persisted in SQLite so they survive restarts.    |
+| `huxley-skill-system`     | Volume control, current time.                                                                                               |
+| `huxley-skill-telegram`   | Full-duplex p2p Telegram voice calls. Accepts inbound calls, places outbound, bridges mic and speaker in real time.         |
 
 ### What the skill system can support — and will
 
@@ -322,7 +322,7 @@ uv run --package huxley-skill-audiobooks pytest packages/skills/audiobooks/tests
 uv run --package huxley-skill-timers pytest packages/skills/timers/tests/          # 30
 uv run --package huxley-skill-news pytest packages/skills/news/tests/              # 18
 uv run --package huxley-skill-radio pytest packages/skills/radio/tests/            # 19
-uv run --package huxley-skill-comms-telegram pytest packages/skills/comms-telegram/tests/  # 42
+uv run --package huxley-skill-telegram pytest packages/skills/telegram/tests/  # 42
 
 # Dev client
 cd web && bun run check

@@ -247,7 +247,7 @@ Device/time basics.
 - A volume slider (already protocol-exposed; `set_volume` server→client message fires).
 - No UI for `get_current_time` — it's informational.
 
-### (planned) `huxley-skill-comms-telegram` — T1.10
+### `huxley-skill-telegram` — T1.10 / T1.11
 
 Outbound Telegram calls / voice messages / text via the maintained `py-tgcalls` + `kurigram` stack. See [`telegram-voice.md`](./telegram-voice.md).
 

@@ -482,7 +482,7 @@ class ClaimObserver:
         voice call and the transport closed the iterator), the claim is ended
         with `ClaimEndReason.NATURAL`. The skill's `speaker_source` is
         responsible for keeping the iterator alive while the session is active
-        — the comms-telegram transport only ends the iterator when
+        — the telegram transport only ends the iterator when
         `_ended.is_set()`, which only happens on peer hangup or explicit
         `end_call()`, not on a brief audio pause. Skills that need "don't end
         on silence" semantics should implement a non-ending iterator.

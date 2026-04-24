@@ -20,7 +20,7 @@ import pytest
 if TYPE_CHECKING:
     from pathlib import Path
 
-from huxley_skill_comms_telegram.transport import (
+from huxley_skill_telegram.transport import (
     TelegramTransport,
     TransportError,
     downsample_48k_stereo_to_24k_mono,

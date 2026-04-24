@@ -66,7 +66,7 @@ Planned additions:
 - **`ClientEvent`** / `server_event` wire protocol (T1.4 Stage 4) for typed bidirectional app↔skill messaging. Lets skills surface their own UI widgets in the PWA (see `huxley-web-brief.md` Tier 3) and receive structured input from the client beyond raw audio.
 - **Capability handshake** so the framework can adapt behavior based on the client (a PWA can render full transcripts; an ESP32 can't).
 
-**Inter-user communication is not a framework protocol concern.** If a Huxley user's voice agent needs to reach other people (call a family member, send a voice message, fire an emergency alert), that happens inside a skill that bridges to a third-party service (Telegram, Twilio, WhatsApp, etc.). The skill is responsible for its own transport; the framework just exposes `InputClaim` + `inject_turn` + `background_task` primitives that the skill uses. See `huxley-skill-comms-telegram` (planned) for the first concrete example.
+**Inter-user communication is not a framework protocol concern.** If a Huxley user's voice agent needs to reach other people (call a family member, send a voice message, fire an emergency alert), that happens inside a skill that bridges to a third-party service (Telegram, Twilio, WhatsApp, etc.). The skill is responsible for its own transport; the framework just exposes `InputClaim` + `inject_turn` + `background_task` primitives that the skill uses. See `huxley-skill-telegram` for the first concrete example.
 
 A client is in good standing if it speaks the documented protocol correctly. It doesn't need to know about Python, focus management, or skill internals.
 

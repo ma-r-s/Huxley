@@ -19,7 +19,7 @@ from huxley_sdk import (
     InputClaim,
     SkillContext,
 )
-from huxley_skill_comms_telegram.skill import CommsTelegramSkill
+from huxley_skill_telegram.skill import TelegramSkill
 
 
 class StubTransport:
@@ -132,7 +132,7 @@ def _build_ctx(
         _turns.append(prompt)
 
     def background_task(name: str, fn: Any, **kwargs: Any) -> Any:
-        raise AssertionError("comms_telegram shouldn't use background_task yet")
+        raise AssertionError("telegram shouldn't use background_task yet")
 
     async def start_input_claim(claim: InputClaim) -> ClaimHandle:
         _claims.append(claim)
@@ -146,7 +146,7 @@ def _build_ctx(
         pass
 
     return SkillContext(  # type: ignore[call-arg]
-        logger=structlog.get_logger().bind(skill="comms_telegram"),
+        logger=structlog.get_logger().bind(skill="telegram"),
         storage=FakeStorage(),  # type: ignore[arg-type]
         persona_data_dir=data_dir,
         config=config,
@@ -168,7 +168,7 @@ class TestSetup:
             captured.append(t)
             return t
 
-        skill = CommsTelegramSkill(transport_factory=factory)
+        skill = TelegramSkill(transport_factory=factory)
         ctx, _ = _build_ctx(
             {
                 "api_id": 12345678,
@@ -201,7 +201,7 @@ class TestSetup:
         monkeypatch.delenv("HUXLEY_TELEGRAM_API_ID", raising=False)
         monkeypatch.delenv("HUXLEY_TELEGRAM_API_HASH", raising=False)
 
-        skill = CommsTelegramSkill(transport_factory=StubTransport)
+        skill = TelegramSkill(transport_factory=StubTransport)
         ctx, _ = _build_ctx(
             {"api_hash": "abc", "contacts": {"x": "+1"}},
             tmp_path,
@@ -223,7 +223,7 @@ class TestSetup:
     async def test_empty_contacts_still_sets_up(self, tmp_path: Path) -> None:
         # Missing contacts is a warning, not a failure -- lets someone
         # deploy with config-first-then-contacts-later without breaking.
-        skill = CommsTelegramSkill(transport_factory=StubTransport)
+        skill = TelegramSkill(transport_factory=StubTransport)
         ctx, _ = _build_ctx(
             {"api_id": 12345, "api_hash": "abc"},
             tmp_path,
@@ -246,7 +246,7 @@ class TestSetup:
             captured.append(t)
             return t
 
-        skill = CommsTelegramSkill(transport_factory=factory)
+        skill = TelegramSkill(transport_factory=factory)
         ctx, _ = _build_ctx(
             {
                 "api_id": 111,
@@ -275,7 +275,7 @@ class TestSetup:
             captured.append(t)
             return t
 
-        skill = CommsTelegramSkill(transport_factory=factory)
+        skill = TelegramSkill(transport_factory=factory)
         ctx, _ = _build_ctx(
             {"contacts": {"x": "+1"}},
             tmp_path,
@@ -285,7 +285,7 @@ class TestSetup:
 
     @pytest.mark.asyncio
     async def test_non_string_phone_values_dropped(self, tmp_path: Path) -> None:
-        skill = CommsTelegramSkill(transport_factory=StubTransport)
+        skill = TelegramSkill(transport_factory=StubTransport)
         ctx, _ = _build_ctx(
             {
                 "api_id": 12345,
@@ -305,7 +305,7 @@ class TestSetup:
 class TestCallContactTool:
     @pytest.mark.asyncio
     async def test_unknown_contact_returns_error(self, tmp_path: Path) -> None:
-        skill = CommsTelegramSkill(transport_factory=StubTransport)
+        skill = TelegramSkill(transport_factory=StubTransport)
         ctx, _ = _build_ctx(
             {"api_id": 1, "api_hash": "x", "contacts": {"hija": "+1"}},
             tmp_path,
@@ -330,7 +330,7 @@ class TestCallContactTool:
             captured.append(t)
             return t
 
-        skill = CommsTelegramSkill(transport_factory=factory)
+        skill = TelegramSkill(transport_factory=factory)
         ctx, _ = _build_ctx(
             {
                 "api_id": 1,
@@ -361,7 +361,7 @@ class TestCallContactTool:
 
     @pytest.mark.asyncio
     async def test_case_insensitive_name_match(self, tmp_path: Path) -> None:
-        skill = CommsTelegramSkill(transport_factory=StubTransport)
+        skill = TelegramSkill(transport_factory=StubTransport)
         ctx, _ = _build_ctx(
             {"api_id": 1, "api_hash": "x", "contacts": {"hija": "+1"}},
             tmp_path,
@@ -375,7 +375,7 @@ class TestCallContactTool:
 
     @pytest.mark.asyncio
     async def test_transport_error_returns_clean_error_to_llm(self, tmp_path: Path) -> None:
-        from huxley_skill_comms_telegram.transport import TransportError
+        from huxley_skill_telegram.transport import TransportError
 
         captured: list[StubTransport] = []
 
@@ -385,7 +385,7 @@ class TestCallContactTool:
             captured.append(t)
             return t
 
-        skill = CommsTelegramSkill(transport_factory=factory)
+        skill = TelegramSkill(transport_factory=factory)
         ctx, _ = _build_ctx(
             {"api_id": 1, "api_hash": "x", "contacts": {"hija": "+1"}},
             tmp_path,
@@ -402,7 +402,7 @@ class TestCallContactTool:
 
     @pytest.mark.asyncio
     async def test_empty_name_returns_error(self, tmp_path: Path) -> None:
-        skill = CommsTelegramSkill(transport_factory=StubTransport)
+        skill = TelegramSkill(transport_factory=StubTransport)
         ctx, _ = _build_ctx(
             {"api_id": 1, "api_hash": "x", "contacts": {"hija": "+1"}},
             tmp_path,
@@ -424,7 +424,7 @@ class TestCallContactTool:
             captured.append(t)
             return t
 
-        skill = CommsTelegramSkill(transport_factory=factory)
+        skill = TelegramSkill(transport_factory=factory)
         ctx, _ = _build_ctx(
             {"api_id": 1, "api_hash": "x", "contacts": {"hija": "+1"}},
             tmp_path,
@@ -451,7 +451,7 @@ class TestCallContactTool:
             captured.append(t)
             return t
 
-        skill = CommsTelegramSkill(transport_factory=factory)
+        skill = TelegramSkill(transport_factory=factory)
         ctx, _ = _build_ctx(
             {"api_id": 1, "api_hash": "x", "contacts": {"hija": "+1"}},
             tmp_path,
@@ -485,7 +485,7 @@ class TestInbound:
             captured.append(t)
             return t
 
-        skill = CommsTelegramSkill(transport_factory=factory)
+        skill = TelegramSkill(transport_factory=factory)
         ctx, _ = _build_ctx(
             {"api_id": 1, "api_hash": "x", "contacts": {"hija": "+1"}},
             tmp_path,
@@ -507,7 +507,7 @@ class TestInbound:
             captured.append(t)
             return t
 
-        skill = CommsTelegramSkill(transport_factory=factory)
+        skill = TelegramSkill(transport_factory=factory)
         ctx, _ = _build_ctx(self._inbound_config(), tmp_path)
         await skill.setup(ctx)
 
@@ -524,7 +524,7 @@ class TestInbound:
             captured.append(t)
             return t
 
-        skill = CommsTelegramSkill(transport_factory=factory)
+        skill = TelegramSkill(transport_factory=factory)
         ctx, _ = _build_ctx(self._inbound_config(), tmp_path)
         await skill.setup(ctx)
 
@@ -569,7 +569,7 @@ class TestInbound:
             accept_order.append("accept")
             await original_accept(self_t, user_id)
 
-        skill = CommsTelegramSkill(transport_factory=factory)
+        skill = TelegramSkill(transport_factory=factory)
         await skill.setup(ctx)
 
         # Monkey-patch accepted transport to track order.
@@ -600,7 +600,7 @@ class TestInbound:
 
         turns: list[str] = []
         claims: list[InputClaim] = []
-        skill = CommsTelegramSkill(transport_factory=factory)
+        skill = TelegramSkill(transport_factory=factory)
         ctx, _ = _build_ctx(
             self._inbound_config(), tmp_path, captured_turns=turns, captured_claims=claims
         )
@@ -626,7 +626,7 @@ class TestInbound:
         claims: list[InputClaim] = []
         cfg = self._inbound_config()
         cfg["inbound"]["auto_answer"] = "all"
-        skill = CommsTelegramSkill(transport_factory=factory)
+        skill = TelegramSkill(transport_factory=factory)
         ctx, _ = _build_ctx(cfg, tmp_path, captured_turns=turns, captured_claims=claims)
         await skill.setup(ctx)
 
@@ -649,7 +649,7 @@ class TestInbound:
             return t
 
         turns: list[str] = []
-        skill = CommsTelegramSkill(transport_factory=factory)
+        skill = TelegramSkill(transport_factory=factory)
         ctx, _ = _build_ctx(self._inbound_config(), tmp_path, captured_turns=turns)
         await skill.setup(ctx)
 
@@ -669,7 +669,7 @@ class TestInbound:
             return t
 
         turns: list[str] = []
-        skill = CommsTelegramSkill(transport_factory=factory)
+        skill = TelegramSkill(transport_factory=factory)
         ctx, _ = _build_ctx(self._inbound_config(), tmp_path, captured_turns=turns)
         await skill.setup(ctx)
 
@@ -681,7 +681,7 @@ class TestInbound:
 
     @pytest.mark.asyncio
     async def test_ring_accept_error_injects_turn_and_no_claim(self, tmp_path: Path) -> None:
-        from huxley_skill_comms_telegram.transport import TransportError
+        from huxley_skill_telegram.transport import TransportError
 
         captured: list[StubTransport] = []
 
@@ -695,7 +695,7 @@ class TestInbound:
         turns: list[str] = []
         claims: list[InputClaim] = []
         cfg = self._inbound_config()
-        skill = CommsTelegramSkill(transport_factory=factory)
+        skill = TelegramSkill(transport_factory=factory)
         ctx, _ = _build_ctx(cfg, tmp_path, captured_turns=turns, captured_claims=claims)
         await skill.setup(ctx)
 
@@ -708,7 +708,7 @@ class TestInbound:
 
     @pytest.mark.asyncio
     async def test_inbound_reverse_map_soft_fails_unresolvable(self, tmp_path: Path) -> None:
-        from huxley_skill_comms_telegram.transport import TransportError
+        from huxley_skill_telegram.transport import TransportError
 
         fail_count = 0
 
@@ -720,7 +720,7 @@ class TestInbound:
                     raise TransportError("PEER_ID_INVALID")
                 return 222
 
-        skill = CommsTelegramSkill(transport_factory=FailingStubTransport)
+        skill = TelegramSkill(transport_factory=FailingStubTransport)
         ctx, _ = _build_ctx(self._inbound_config(), tmp_path)
         # Should not raise -- soft-fail per contact.
         await skill.setup(ctx)
@@ -741,7 +741,7 @@ class TestTeardown:
             captured.append(t)
             return t
 
-        skill = CommsTelegramSkill(transport_factory=factory)
+        skill = TelegramSkill(transport_factory=factory)
         ctx, _ = _build_ctx(
             {"api_id": 1, "api_hash": "x", "contacts": {"x": "+1"}},
             tmp_path,
@@ -753,7 +753,7 @@ class TestTeardown:
 
 class TestTools:
     def test_tool_description_lists_contacts(self, tmp_path: Path) -> None:
-        skill = CommsTelegramSkill(transport_factory=StubTransport)
+        skill = TelegramSkill(transport_factory=StubTransport)
         # Before setup: empty list, inbound disabled.
         tools = skill.tools
         assert len(tools) == 1
@@ -763,7 +763,7 @@ class TestTools:
     async def test_tool_description_includes_contact_names_after_setup(
         self, tmp_path: Path
     ) -> None:
-        skill = CommsTelegramSkill(transport_factory=StubTransport)
+        skill = TelegramSkill(transport_factory=StubTransport)
         ctx, _ = _build_ctx(
             {
                 "api_id": 1,
@@ -781,7 +781,7 @@ class TestTools:
     async def test_only_call_contact_tool_regardless_of_inbound(self, tmp_path: Path) -> None:
         # Inbound path uses start_input_claim directly -- no LLM tool needed.
         for inbound_enabled in (True, False):
-            skill = CommsTelegramSkill(transport_factory=StubTransport)
+            skill = TelegramSkill(transport_factory=StubTransport)
             ctx, _ = _build_ctx(
                 {
                     "api_id": 1,

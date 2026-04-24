@@ -1619,37 +1619,9 @@ fire at escalating urgency.
 
 ---
 
-## T1.9 — `huxley-skill-messaging`
+## T1.9 — `huxley-skill-messaging` _(retired 2026-04-23)_
 
-**Status**: redesigned (2026-04-21) — folded into `huxley-skill-comms-telegram`; no separate skill needed.
-
-**Design decision (2026-04-21)**: The original sketch assumed a generic
-`huxley-skill-messaging` backed by "WhatsApp / Telegram / Twilio — provider
-TBD". Since T1.10 shipped `huxley-skill-comms-telegram` with a working
-Telegram transport (userbot + py-tgcalls), messaging and calling live on
-the same provider and the same skill. Building a second skill for messaging
-would duplicate Telegram client lifecycle management and add a coordination
-problem between two skills that share a Pyrogram session.
-
-**Revised plan**: extend `huxley-skill-comms-telegram` with:
-
-- `send_message(contact, text)` — outbound Telegram text message via userbot
-- `send_voice_note(contact)` — record and send a voice note (later pass)
-- Inbound message listener: `background_task` that polls/webhooks Telegram
-  for inbound messages from known contacts, fires `inject_turn` at
-  `CHIME_DEFER` with `dedup_key="msg:{contact_id}"`
-
-**No Stage 4 (`ClientEvent`) dependency**: outbound trigger is voice-command
-only ("mándale un mensaje a Carlos"). The `ClientEvent` hardware-button path
-is still relevant for the panic button (T1.10), not messaging.
-
-**Blocked by**: Stage 3 (`background_task` for the inbound listener).
-T1.4 Stages 1 + 3 remain prerequisite; Stage 4 is no longer needed.
-
-**UX validation** (unchanged from original): inbound message fires
-chime+defer; grandpa PTTs "¿qué decía?" → LLM narrates. Outbound:
-"mándale un mensaje a Carlos, dile que estoy bien" → LLM calls
-`send_message("Carlos", "Estoy bien")` → Telegram message sent.
+**Status**: retired → moved to Deferred as **D6**. The generic "messaging-as-abstraction-over-providers" framing was wrong; Huxley is per-provider-skill-shaped. Superseded by **T1.11** (telegram messaging features inside `huxley-skill-telegram`). See D6 for revisit trigger.
 
 ---
 
@@ -1659,7 +1631,7 @@ chime+defer; grandpa PTTs "¿qué decía?" → LLM narrates. Outbound:
 
 **Progress note (2026-04-19)**:
 
-- Outbound voice-command calling is **shipped** under a different skill name: `huxley-skill-comms-telegram` (commit `4627ee1`). Uses Telegram (userbot + py-tgcalls + ntgcalls) as the transport instead of Twilio, which eliminates the paid infra dependency and keeps all call audio on Mario's family's existing tools. Bidirectional live-PCM on p2p is proven working after 5 iterative spikes; see `docs/research/telegram-voice.md` §"Bidirectional live-PCM on p2p" for the recipe and `docs/skills/comms-telegram.md` for the skill design.
+- Outbound voice-command calling is **shipped** under a different skill name: `huxley-skill-comms-telegram` (commit `4627ee1`). Uses Telegram (userbot + py-tgcalls + ntgcalls) as the transport instead of Twilio, which eliminates the paid infra dependency and keeps all call audio on Mario's family's existing tools. Bidirectional live-PCM on p2p is proven working after 5 iterative spikes; see `docs/research/telegram-voice.md` §"Bidirectional live-PCM on p2p" for the recipe and `docs/skills/telegram.md` (renamed from `comms-telegram.md` under T2.6, 2026-04-23) for the skill design.
 - **Still open under this ticket**: (a) panic button, (b) incoming-call auto-answer. Panic button is blocked on T1.4 Stage 4 (ClientEvent); auto-answer is blocked only on skill code + a persona config for the whitelist.
 - **Peer-hangup detection shipped** (`43f5e33`, 2026-04-21): three smoke-test bugs fixed together — (1) `ClaimObserver._speaker_pump` now ends the claim with `NATURAL` when the speaker_source exhausts (peer hung up), driving the full teardown chain and sending `input_mode("assistant_ptt")` to the client; (2) on `NATURAL` end, the skill schedules `inject_turn` via `create_task` (NOT `await` — calling synchronously would deadlock on `fm.wait_drained` from inside the FM actor's callback chain) so the LLM narrates "la llamada ha terminado"; (3) `coordinator.on_ptt_start` returns early after `interrupt()` when `active_claim` was True, making PTT a pure hangup gesture — next PTT opens a fresh conversation.
 - **PTT beep bug fixed** (`296919e` + `2ab89da`, 2026-04-22): two-commit fix for the continuous thinking-tone after PTT hangup. Root cause: on a local server the round-trip is <5ms — `audio_clear` + `input_mode:assistant_ptt` arrive before the user lifts their finger, so the cancel calls were no-ops; then `pttStop()` started a fresh silence timer with nothing left to cancel it. Fix: capture `pttWasClaimHangup = (inputMode === "skill_continuous")` at `pttStart()` time and skip `startSilenceTimer` in `pttStop()` when the flag is set. Also moved `end_event.set()` in `_observer_on_end` to after the client notifications (race fix), and guarded the post-`wait_drained` `skill_continuous` notification with `if self._claim_obs is observer` (prevents mis-sequenced mode messages when a fast speaker source exhausts during `wait_drained`).
@@ -1731,6 +1703,83 @@ Verify:
 - Whitelist semantics (per-contact auto-answer flag? quiet hours
   override? priority ordering for panic-button dialing sequence?)
 - Hardware button specification for ESP32 firmware
+
+---
+
+## T1.11 — `huxley-skill-telegram` — messaging features (send + receive + proactive inbox)
+
+**Status**: queued · **Task**: — · **Effort**: M (~1 week once T1.4 Stage 3 `background_task` is available; the send path is a day, receive path is the interesting half)
+
+**Problem.** The Telegram skill ships full-duplex voice calls (inbound + outbound) but no text messaging — no send, no read, no proactive "Carlos sent you a message" turn. The same skill owns the Pyrogram session, the contact list, the auth context, and already feeds the COMMS channel. Messaging has been the obvious completion since calls landed, deferred only because calls were the harder architectural problem and because messaging was misfiled under T1.9 as a provider-neutral abstraction.
+
+**Why it matters.** Completes the first canonical communications skill as a worked example of "one skill, many mechanisms" composing cleanly on the I/O plane. Also the proactive-inbox half is a concrete stress-test for `inject_turn` with dedup semantics — the first real consumer of proactive turns outside timers. And it's the canonical consumer of the `MESSAGE_THREAD` treatment in T2.5 (skill UI plane).
+
+### Validation (Gate 1)
+
+- `huxley-skill-telegram` (renamed from `huxley-skill-comms-telegram` under T2.6) exists, ships, has 42 tests, handles calls in production. Pyrogram session is live; contact resolution works for calls; adding message tools reuses all of that.
+- `inject_turn` + `inject_turn_and_wait` just shipped (commits `579e44a`, `ea032e0` — 2026-04-22). Proactive inbound-message announcements were the use case the primitive was designed for but hasn't been built against yet.
+- T1.9's 2026-04-21 redesign note already concluded "fold messaging into comms-telegram." That decision stands; T1.11 is just the work ticket that acts on it.
+- MESSAGE_THREAD treatment is in the T2.5 v1 treatments list without a concrete consumer — this item is the consumer that validates the treatment's design.
+
+### Design (Gate 2 — sketch; lock before Gate 3)
+
+**Tools (voice-driven):**
+
+- `send_message(contact, text)` — outbound text via Pyrogram userbot. Contact resolution reuses the skill's existing catalog (same fuzzy matcher calls already use).
+- `read_unread(from=None)` — read unread messages; optional contact filter. Returns message bodies as narration-ready text.
+- `reply_to_last(text)` — contextual reply to the most recently-referenced contact in the current conversation. LLM-side context tracking, no new server state.
+- `send_voice_note(contact)` — record + send as voice message. Deferred to Gate-2-+1 pass (needs mic-claim coordination with existing InputClaim plumbing).
+
+**Proactive inbox (background_task):**
+
+- Pyrogram `add_handler` for `MessageHandler` filters inbound from known contacts (whitelist from persona config).
+- On inbound message, fire `ctx.inject_turn(prompt=f"Anuncia que {contact} te envió un mensaje: {preview}")` with `dedup_key=f"msg:{contact_id}"` so rapid-fire messages from the same sender don't stack turns.
+- Voice notes on inbound: two options — (a) transcribe server-side via Whisper and narrate the text; (b) route audio via InputClaim for passthrough listening. Lock choice at Gate 2 critic. Default to (a) — transcription is simpler, narration is on-brand, and grandpa can still ask "repite" to hear it again.
+
+**UI surface (requires T2.5 shipped):**
+
+- `MESSAGE_THREAD` view per active conversation. Skill emits `ctx.update_view("thread:{contact_id}")` on send + receive.
+- Inbox-level `LIST` view of unread-by-contact, tap-to-open-thread.
+- Outbound from UI: `Action(tool="send_message", args=...)` from a compose input → same tool path as voice dispatch.
+
+**Shared with calls:**
+
+- One Pyrogram session lifecycle. The current skill's `setup()`/`teardown()` stays authoritative — message handlers register alongside call handlers.
+- Contact catalog: already a Catalog primitive consumer. Messaging reads the same catalog, no duplication.
+
+### Critic notes (Gate 2 — pending)
+
+Critic should specifically test:
+
+1. Does "one skill, many mechanisms" actually stay clean when three tool shapes (call/send/read) + two background tasks (call listener, message listener) + two view shapes (CALL, MESSAGE_THREAD) all live in the same class? Or does the skill file hit the "too many concerns" smell and want internal decomposition?
+2. Is `dedup_key` semantics in `inject_turn` rich enough for rapid-fire messages? (If 5 messages arrive in 2 seconds, does the user hear 5 announcements, 1 announcement for the last, or a summary?)
+3. Voice notes: transcribe vs. passthrough. Which better matches "grandpa just wants to know what was said"?
+4. Inbound-message-during-active-call: does the skill defer the `inject_turn` until the call ends? How? `FocusManager` patience, or skill-level queuing?
+5. Does the MESSAGE_THREAD view require full history sync (potentially megabytes of past messages) or just recent context? Backfill policy.
+
+### Definition of Done (unlocked — finalize at Gate 2 critic)
+
+Placeholder for sizing:
+
+- [ ] `send_message`, `read_unread`, `reply_to_last` tools land with tests
+- [ ] `background_task`-supervised inbound message handler; `inject_turn` with dedup fires on messages from whitelisted contacts
+- [ ] Voice-note transcription path via Whisper (or provider's realtime transcription if reusable)
+- [ ] Contact whitelist in persona config; unknown senders are silently logged but do not fire turns
+- [ ] Regression: inbound message during active call does not interrupt call audio (FocusManager stays correct)
+- [ ] Tests: tool handlers, background task supervision, inject_turn dedup, whitelist gating
+- [ ] Docs: `docs/skills/telegram.md` extended (messaging section); `docs/extensibility.md` messaging entry updated (no longer a gap)
+- [ ] MESSAGE_THREAD view + inbox LIST view wired to the skill — **only after T2.5 ships**; file as a follow-up if T2.5 is not available when T1.11 starts
+
+### Blocked by
+
+- T1.4 Stage 3 (`background_task` supervision helper) for the inbound listener. Can work around with a raw `asyncio.create_task` in the interim — see `docs/extensibility.md` on the unsupervised pattern — but do it properly.
+- T2.5 is a soft dependency: the messaging tools land without UI; MESSAGE_THREAD + inbox views are a follow-up gate after T2.5 ships.
+
+### Depends on / depended on by
+
+- **Depends on** the rename in **T2.6** (cosmetic — work can start pre-rename and absorb the rename in the same commit block if timing lines up).
+- **Enables** retirement of the "messaging" gap in `docs/extensibility.md`.
+- **Canonical consumer of** MESSAGE_THREAD treatment in T2.5.
 
 ---
 
@@ -2085,6 +2134,226 @@ Decided NOT to (this round):
 
 ---
 
+## T2.5 — Skill UI plane (treatments model + capability-based clients)
+
+**Status**: queued (low priority) · **Task**: — · **Effort**: L (~4–6 weeks; do not start until T1.4 stages complete and skill APIs have stabilized)
+
+**Problem.** Skills today are voice-only. Huxley-web is framed as a dev tool. The framework has no vocabulary for a skill to declare UI that renders on UI-capable clients and is absent on audio-only clients (ESP32). Without this layer, huxley-web stays a debug surface, and the "install a skill, get the full skill" story the README promises is half-finished — a skill installs its Python package and voice tools but cannot install its UI at the same time.
+
+**Why it matters.** Parallel to the I/O plane, but for visual output. Completes the per-skill distribution story. Load-bearing constraint: whatever lands must work for voice-only clients (ESP32) without skill authors having to think about it, and must not drag a TypeScript toolchain onto Python skill authors.
+
+### Validation (Gate 1)
+
+Shape of the gap, confirmed in a design conversation (2026-04-23) walking audiobooks, radio, news, and timers through a hypothetical UI layer. Each surfaces distinct requirements:
+
+- **Audiobooks**: browseable library + now-playing with scrub
+- **Radio**: station list + live-stream player without scrub
+- **News**: at-a-glance weather card + persistent headlines list + per-item non-tool actions (open source URL)
+- **Timers**: multi-instance live countdowns + proactive firing event (voice + visual + ephemeral toast)
+
+Identified that a primitives-based declarative model (Text/Button/List at HTML-atom altitude) reproduces APL's complexity without value. Treatment-based model — interaction archetypes (`CATALOG`, `MEDIA_PLAYER`, `TIMER_BOARD`, etc.) — matches the altitude Huxley already uses for FocusManager channels and I/O plane primitives.
+
+Existing skills have visible UI pressure already: audiobooks has no way to show what's playing, timers has no way to show live countdowns, news has no way to persist headlines past narration. Adding these one-off to huxley-web would entrench it as a debug surface and fork skill implementations.
+
+### Design (Gate 2 — sketch locked 2026-04-23; critic review pending before work starts)
+
+**Locked premises** (product answers, Mario 2026-04-23):
+
+1. **huxley-web target user**: general power users who want a customizable assistant. Not elderly-specific; caregiver/grandpa UX is a persona-level concern, not a product default. Information density is OK; literate, sighted, engaged user assumed.
+2. **One client at a time**: server keeps the `1008` second-connection rejection. "Dashboard while another client is active" is explicitly out of scope. Revisit trigger: first concrete multi-client use case.
+3. **Audio + UI split via capability handshake**: protocol uses capability-based handshake (`{"capabilities": ["audio", "ui"]}`); huxley-web ships with both capabilities; ESP32 advertises only `["audio"]`. Splitting huxley-web into separate audio-only and ui-only builds deferred until a real use case forces it.
+
+**Core model — four concepts, each doing one job:**
+
+1. **Treatments** — a curated library of interaction archetypes owned by huxley-web. Each treatment is a rich React component with its own behavior (live countdown, scrub interpolation, artwork). Adding a treatment is an ADR-level decision, same cadence as adding a FocusManager channel.
+
+   v1 set:
+
+   | Treatment        | Cardinality                | Interaction shape                                                           |
+   | ---------------- | -------------------------- | --------------------------------------------------------------------------- |
+   | `CATALOG`        | 1 view contains N items    | Browseable library with now-playing state                                   |
+   | `MEDIA_PLAYER`   | 1 per view                 | Now-playing card: artwork, title, scrub (or live badge), transport controls |
+   | `LIST`           | 1 view contains N items    | Flat items with optional check/progress state                               |
+   | `DASHBOARD_CARD` | 1 per view                 | At-a-glance read: focal datum + supporting lines + freshness                |
+   | `TIMER_BOARD`    | 1 view contains N timers   | Running countdowns with per-timer controls                                  |
+   | `CALL`           | 1 per view                 | In-call state with mute/hangup and partner identity                         |
+   | `MESSAGE_THREAD` | 1 view contains N messages | Chronological message list with compose affordance                          |
+
+2. **Views** — stateful surfaces a skill declares. Each view renders one treatment instance. Skill calls `ctx.update_view(view_id)` after state changes; framework diffs and pushes to subscribed clients.
+
+3. **Actions** — two kinds. `Action(tool=..., args=...)` dispatches a tool call (same path as LLM). `Action(kind="open_url" | "copy" | ...)` is client-local. Full client-local kind vocabulary locked at Gate 2.
+
+4. **Notifications** — ephemeral events. Not views. `ctx.notify(Notification(...))` fires a toast; stacks with auto-dismiss. Sibling to `PlaySound` (one-shot) vs `AudioStream` (stateful view). Separation load-bearing because views are replaceable state and notifications are stacking events with auto-dismiss — different lifecycles.
+
+**Protocol additions** (five new messages, zero existing changes):
+
+- `view.render` (server → client): full treatment tree for a view
+- `view.update` (server → client): partial patch
+- `view.action` (client → server): UI tap → tool dispatch or client-local action
+- `notification` (server → client): ephemeral alert
+- `notification.ack` (client → server): user dismissed
+
+**SDK additions:**
+
+- `ViewDefinition`, `View`, `Action`, `Notification` types
+- `Treatment` enum (fixed in v1; dynamic treatments explicitly disallowed — forces intentionality)
+- `ctx.update_view(view_id)` and `ctx.notify(notification)` on `SkillContext`
+- `Skill.views` property + `Skill.render_view(view_id)` method (symmetric with existing `tools` + `handle`)
+
+**Worked example (audiobooks):**
+
+```python
+@property
+def views(self) -> list[ViewDefinition]:
+    return [
+        ViewDefinition(id="library", treatment="CATALOG", title="Biblioteca"),
+        ViewDefinition(id="player",  treatment="MEDIA_PLAYER"),
+    ]
+
+async def render_view(self, view_id: str) -> View:
+    if view_id == "library":
+        return Catalog(items=[
+            Item(id=b.id, title=b.title, subtitle=b.author,
+                 badge="En curso" if b.id == self._now_playing else None,
+                 action=Action(tool="play_book", args={"id": b.id}))
+            for b in self._catalog
+        ])
+    if view_id == "player":
+        ...  # MediaPlayer instance or MediaPlayer.idle()
+
+# After tool-handler state change:
+await self._ctx.update_view("library")
+await self._ctx.update_view("player")
+```
+
+Tool-handler actions dispatched from UI buttons go through the same path as LLM-dispatched tools (symmetric). Live ticking (countdown, scrub) is local to the treatment component on the web side — `expires_at` pushed once, clock arithmetic in the browser.
+
+### Open questions (belong in the entry; resolve at Gate 2 critic or during implementation)
+
+- **Action kind vocabulary** — full v1 set beyond `tool`, `open_url`. Candidates: `copy`, `share`, `dismiss`, `notification_ack`. Lock before SDK types ship.
+- **View lifecycle** — does `MediaPlayer` render idle when nothing plays, or hide? Skill-decides or web-decides? Surface at first retrofit.
+- **Treatment versioning** — loose-JSON contract (unknown fields ignored, missing fields defaulted), document explicitly so skill and web-client versions can drift independently.
+- **I18n** — all display strings are skill-provided; treatments own zero copy (no built-in "No items" fallbacks — skill passes `empty_text`). Same treatment works for AbuelOS (es) and BasicOS (en).
+- **Authentication** — making huxley-web a product client exposes views over the network. Currently `:8765` accepts any connection. Out of scope for this item, but named as a blocker for any public-network deployment.
+- **Accessibility** — best-effort screen-reader support, not a design driver (premise #1 above).
+- **Mobile/responsive** — treatments responsive; skills provide content not layout. Web-client implementation concern, not SDK.
+- **Escape hatch (custom web components, HA-style)** — explicitly deferred. Revisit trigger: a real skill hits a wall the v1 treatment set cannot model.
+
+### Critic notes (Gate 2 — pending)
+
+Critic must run **before** Gate 3 begins. Prompt should specifically test:
+
+1. Is seven treatments enough for the v2 skill roadmap (podcasts, Spotify, hue, calendar, tasks, messaging, telegram `CALL`)? If any requires a new treatment, the initial count is wrong.
+2. Does "view renders one treatment instance" hold universally, or does a real skill need multiple treatments composed in one view? (News uses two views, one treatment each — does that generalize?)
+3. Is the tool-call vs client-local action split clean, or does it create two parallel dispatch paths that will desync?
+4. Is the "notifications are not views" separation load-bearing, or a distinction without a difference that adds API surface?
+5. What assumption does the design make about network reliability? View subscriptions over WebSocket have no retry/catch-up story yet.
+6. Is the one-client-at-a-time constraint (premise #2) actively helping, or just kicking the can? What breaks when it's eventually lifted?
+7. Does "Treatment enum fixed in v1" prevent legitimate experimentation by skill authors, or is the friction the point?
+
+### Definition of Done (unlocked — finalize at Gate 2 critic)
+
+Placeholder DoD for sizing; critic will refine:
+
+- [ ] Capability handshake in protocol; server gates message delivery by advertised capability
+- [ ] Five new WebSocket message types defined and documented in `docs/protocol.md`
+- [ ] SDK types: `ViewDefinition`, `View`, `Action`, `Notification`, `Treatment` enum, per-treatment data classes
+- [ ] `ctx.update_view()` and `ctx.notify()` on `SkillContext`
+- [ ] Treatments implemented in huxley-web for v1 retrofits: `CATALOG`, `MEDIA_PLAYER`, `LIST`, `DASHBOARD_CARD`, `TIMER_BOARD`
+- [ ] Three skill retrofits: audiobooks (`CATALOG` + `MEDIA_PLAYER`), news (`DASHBOARD_CARD` + `LIST`), timers (`TIMER_BOARD` + `Notification`)
+- [ ] ESP32-shape test client that advertises only `["audio"]`; verifies no UI traffic reaches it
+- [ ] Tests: SDK contract tests for view types; per-skill view-render tests; protocol capability-gating tests; web-client treatment rendering from fixture view trees
+- [ ] Docs: new `docs/ui-plane.md`; updates to `concepts.md`, `architecture.md`, `protocol.md`, `skills/README.md`, `clients.md`; new ADR for treatments-vs-primitives
+- [ ] huxley-web reframed as a product client (kills "web UI is a dev tool, not a product" framing in `CLAUDE.md` and `docs/`)
+
+### Tests (Gate 3 — seeds; fill after DoD locked)
+
+- **SDK**: view type construction, action kind validation, treatment enum coverage, notification envelope validation
+- **Protocol**: capability handshake happy path + unknown-capability rejection; message-gating by capability (UI msg to audio-only client is a bug); handshake schema round-trip
+- **Per-skill**: `render_view` returns correct shape for each internal state; `update_view` emits after tool-call state changes; notification fires on timer expiry
+- **Web-client**: treatment rendering from fixture view trees; action dispatch from tap; local-tick correctness (timer countdown, media scrub); empty-state rendering for every treatment
+
+### Docs touched (Gate 4 — likely set; confirm at ship)
+
+- `docs/ui-plane.md` — new spec
+- `docs/concepts.md` — treatment / view / action / notification vocabulary
+- `docs/architecture.md` — UI plane alongside I/O plane
+- `docs/protocol.md` — five new message types + capability handshake
+- `docs/skills/README.md` — skill-author guide for declaring views
+- `docs/clients.md` — reframe huxley-web as product client, document capability model
+- `docs/decisions.md` — ADR for treatments-vs-primitives decision and one-client-at-a-time premise
+- `docs/extensibility.md` — update "real design gaps" list; UI layer no longer a gap
+- `CLAUDE.md` — remove "web UI is a dev tool, not a product" framing
+- `README.md` — mention UI story alongside the skill distribution model
+
+### Ship (Gate 5 — open)
+
+Sized at ~4–6 weeks of focused work. **Do not start until** T1.4 stages complete and the skill APIs of audiobooks, news, and timers have stabilized — retrofitting UI onto still-moving skill internals would be wasted effort. Filing at low priority; this is an ecosystem-completeness item, not a blocker for current personas.
+
+**Cross-reference**: `MESSAGE_THREAD` treatment's canonical consumer is **T1.11** (Telegram messaging). Land T1.11 with the UI gate intentionally stubbed out and wire MESSAGE_THREAD + inbox views as T2.5 ships.
+
+---
+
+## T2.6 — Rename `huxley-skill-comms-telegram` → `huxley-skill-telegram`
+
+**Status**: done (2026-04-23) · **Task**: — · **Effort**: S — shipped in a single atomic commit. 42 telegram + 352 core + web typecheck all green post-rename.
+
+**Problem.** The `comms-` prefix was a placeholder from an earlier framing where "comms" was going to be a category of skills with provider-specific submodules. Huxley doesn't work that way — skills are flat installable units, not plugin-of-plugins. With messaging landing (T1.11) alongside calls in the same skill, the name should just be the service: `huxley-skill-telegram`.
+
+**Why it matters.** Before a third-party skill author sees the Telegram skill as the worked example, the name should match the pattern Huxley is actually advertising (`huxley-skill-<service>`). Renames get harder once the package ships to PyPI and lands in external personas; cheaper now.
+
+### Validation (Gate 1)
+
+- README skill table uses `huxley-skill-comms-telegram` in the shipped list. No external personas depend on the old name yet.
+- The `comms-` prefix has no counterpart elsewhere in the repo — there is no other `huxley-skill-comms-*` skill and none planned. The prefix is a vestige, not a namespace.
+- Retirement of T1.9 (generic-messaging abstraction) removes the last rationale for keeping `comms-` as a category marker.
+
+### Design (Gate 2 — trivial, skip critic)
+
+Mechanical rename across:
+
+- `packages/skills/comms-telegram/` → `packages/skills/telegram/`
+- `huxley_skill_comms_telegram` import path → `huxley_skill_telegram`
+- `pyproject.toml` package name, entry point, test target, workspace manifest
+- `personas/*/persona.yaml` skill keys (`comms-telegram:` → `telegram:`)
+- Docs: `docs/skills/comms-telegram.md` → `docs/skills/telegram.md`; references in `docs/roadmap.md`, `README.md`, `CLAUDE.md`, other triage entries
+- Memory files if any reference the old name
+- Git log references in prior triage entries get a **rename note**, not a history rewrite (history stays as-is)
+
+No behavioral change. All 42 tests should remain green; if they don't, the rename was done wrong.
+
+### Definition of Done
+
+- [ ] Package directory renamed; import path updated throughout `packages/`
+- [ ] `pyproject.toml` + workspace manifest + entry points updated
+- [ ] All personas updated (`personas/abuelos/persona.yaml`, `personas/basicos/persona.yaml` if referenced)
+- [ ] All docs updated (skill doc file moved; all references throughout `docs/` and `README.md` updated)
+- [ ] `CLAUDE.md` project-level references updated if any
+- [ ] `uv run ruff check` + `uv run mypy packages/sdk/src packages/core/src` green
+- [ ] `uv run --package huxley-skill-telegram pytest` green (all 42 tests)
+- [ ] End-to-end smoke: start server, call to a whitelist contact works (existing regression)
+- [ ] Single commit (mechanical rename should be atomic)
+
+### Tests (Gate 3)
+
+No new tests. Proof of correctness is the existing 42 passing against the renamed package.
+
+### Docs touched (Gate 4 — expected)
+
+- `packages/skills/telegram/` (rename from `comms-telegram`)
+- `docs/skills/telegram.md` (rename from `comms-telegram.md`)
+- `docs/roadmap.md` — shipped skill table
+- `docs/triage.md` — T1.10, T1.11, any other cross-references
+- `README.md` — skill table entry
+- `CLAUDE.md` — if referenced
+
+### Cross-refs
+
+- Enables T1.11 to land under the new name (or T1.11 absorbs the rename into its first commit if timing lines up).
+- Superseded T1.9's "generic messaging abstraction" framing confirmed — per-provider skills named after the service.
+
+---
+
 # Deferred (with revisit trigger)
 
 ## D1 — `never_say_no` enforcement (layered defense)
@@ -2156,50 +2425,51 @@ abstraction will be redesigned in light of the actual second provider's shape.
 **Revisit when**: a credible second voice provider (local Whisper+Llama+Piper, or
 a different cloud Realtime API) is actually being integrated.
 
-## D5 — Skill UI architecture (huxley-web skill extension system)
+## D5 — Skill UI architecture (huxley-web skill extension system) _(superseded 2026-04-23)_
 
-**Reason for deferral.** Design explored but nothing implemented. The thinking
-is captured in `docs/research/skill-ui-architecture.md`.
+**Status**: superseded by **T2.5** (skill UI plane — treatments model + capability-based clients). This entry preserved for historical context; **the design it describes is not the current direction**. The backing research note at `docs/research/skill-ui-architecture.md` reflects the superseded design and should be read as a historical artifact, not as a spec.
 
-**The problem in one sentence.** Installing a skill today adds voice behavior
-only; the vision is that a skill can optionally ship a UI component that appears
-in huxley-web without rebuilding the app.
+**Why superseded.** D5's conclusion was "skills ship arbitrary Svelte/JS bundles, huxley-web dynamically imports them (WidgetKit-on-the-web model)." A fresh design pass on 2026-04-23, triggered by walking audiobooks / radio / news / timers through the hypothetical UI layer, landed on the opposite answer: a curated **treatments** library (interaction archetypes like `CATALOG`, `MEDIA_PLAYER`, `TIMER_BOARD`) owned by huxley-web, with skills emitting declarative view data only.
 
-**What was decided:**
+The arbitrary-bundle model was rejected this time on three grounds D5 itself flagged as open problems:
 
-- **Rejected**: closed widget vocabulary (too limiting — prevents diagrams,
-  contribution maps, custom counters).
-- **Right model**: Apple WidgetKit on the web. huxley-web owns the container
-  system (design tokens, animation, sizing slots, placement). The skill owns
-  everything drawn inside — arbitrary Svelte → vanilla-JS component, no content
-  restriction.
-- **Delivery**: skills ship a `ui/` directory; Huxley Python server serves the
-  bundles as static files; huxley-web dynamically imports at connect time.
-- **Two container types**: live action (small, non-blocking, always visible
-  while a skill is active) + skill view (full panel, navigable, arbitrary rendering).
-- **`hello.skills` manifest**: the `hello` message carries installed skills'
-  UI declarations so huxley-web knows what to load and what `server_event`
-  type triggers each container.
-- **Assumption locked**: huxley-web and Huxley server are always co-located.
-  If that ever changes the delivery mechanism needs rethinking.
+1. **Authorship bar**: Python skill authors are Python people. Forcing a JS toolchain on every skill contradicts Huxley's "install one thing" premise.
+2. **Design token versioning**: D5 openly admits this needs "an explicit contract with semver + deprecation cycles" — a multi-year commitment huxley-web can't credibly make pre-1.0.
+3. **Non-web clients**: D5 says skill UI "must be progressive enhancement, not a behavioral dependency" — which is exactly the problem treatments-with-capability-handshake solves natively.
 
-**Open problems documented in the research file:**
+The "too limiting — prevents diagrams, contribution maps, custom counters" objection to closed vocabularies was correct at the _primitive-atom_ altitude (Text + Button + List). T2.5 operates at the _interaction-archetype_ altitude (CATALOG, MEDIA_PLAYER, TIMER_BOARD), which is categorically different: you don't build a timer out of primitives, you declare "I am a timer board" and pass data. Custom renderings become a future escape-hatch concern (explicitly deferred in T2.5), not a v1 requirement.
 
-1. Skills become Python + JS packages — higher authorship bar; needs scaffolding tooling.
-2. Design token versioning must be an explicit contract with semver + deprecation cycles.
-3. Non-web clients (native, e-ink) cannot run JS bundles — skill UI must be
-   progressive enhancement, not a behavioral dependency.
+**What to read instead**: T2.5 for the current design. `docs/research/skill-ui-architecture.md` remains on disk as a record of what was rejected and why — do not act on it.
 
-**Small things that can land independently before the full architecture:**
+**Salvageable bits worth carrying forward** (from D5's "small things that can land independently"):
 
-- Server→client `wake_word` mirror (fills the `Wake` orb state gap).
-- `server_event("content.paused")` from audiobooks/radio (fills `Paused` orb state gap).
-- `hello.skills` manifest extension (explicit contract, no JS delivery yet).
+- `server_event("content.paused")` from audiobooks/radio — orthogonal to the UI plane choice, useful regardless.
+- `hello.skills` manifest extension — replaced by T2.5's capability handshake + `view.render` / `view.update` message types, same idea different shape.
+- Server→client `wake_word` mirror — orthogonal.
 
-**Revisit when**: huxley-web has a stable design language worth committing to as
-a token contract, OR a shipped skill has an obvious UI need that the voice-only
-experience clearly fails (timer countdown, audiobook progress), OR a second
-developer wants to write a skill with custom UI.
+**Revisit trigger**: if a shipped skill genuinely cannot be expressed in the T2.5 treatment set, that's the signal to revisit the arbitrary-bundle escape hatch (T2.5's explicitly deferred follow-up). Not before.
+
+---
+
+## D6 — `huxley-skill-messaging` (provider-neutral messaging abstraction)
+
+**Was**: T1.9 · **Retired**: 2026-04-23 · **Revisit when**: a second messenger provider skill ships (WhatsApp, Signal, SMS via Twilio, etc.) AND a common abstraction emerges naturally from real duplication across skills — not before.
+
+**Reason for retirement.** The original framing sketched `huxley-skill-messaging` as a provider-neutral layer over "WhatsApp / Telegram / Twilio / Signal — provider TBD." A 2026-04-21 redesign already acknowledged this was wrong by folding messaging into `huxley-skill-comms-telegram`. The 2026-04-23 design conversation made that conclusion permanent and generalized it: **Huxley is per-provider-skill-shaped, not multi-provider-abstraction-shaped.**
+
+**Why the abstraction is wrong**:
+
+- Each messenger has different contact models, auth, rate limits, media support. Unified = lowest common denominator.
+- Alexa, Siri, Google Assistant don't unify these either. Each provider is its own integration.
+- The LLM routes user intent ("text Carlos") to the right tool (`send_telegram_message` or `send_whatsapp_message`) — no framework-level abstraction needed.
+- Per-provider skills keep auth, contacts, and session lifecycle co-located. Splitting per-function across providers would duplicate all three.
+
+**What replaced it**:
+
+- **T1.11** — `huxley-skill-telegram` gains messaging features (send, read, proactive inbox) inside the same skill that owns calls.
+- Future: WhatsApp / Signal / SMS each get their own skill (`huxley-skill-whatsapp`, etc.) if and when demand shows up. Each ships its own tools, its own auth, its own background listener.
+
+**Revisit trigger specifics**: if/when Huxley has shipped 2+ messenger skills and a _specific_ cross-cutting concern emerges that every one of them re-implements (e.g., a common inbox-dedup policy, a common contact-importance ranking), that's the signal to consider lifting the shared slice into a helper module — NOT a provider-neutral skill. The abstraction, if it ever exists, is a Python helper in `huxley_sdk`, not a skill entry point.
 
 ---
 

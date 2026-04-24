@@ -112,7 +112,7 @@ Not yet tested but needed for the full skill:
 
 ## Bidirectional live-PCM on p2p — the working recipe (added 2026-04-19)
 
-This is the pattern `huxley-skill-comms-telegram` must use. Five spikes worth of learning compressed into one working sequence in [`spikes/test_telegram_mediastream_fifo.py`](../../spikes/test_telegram_mediastream_fifo.py).
+This is the pattern `huxley-skill-telegram` must use. Five spikes worth of learning compressed into one working sequence in [`spikes/test_telegram_mediastream_fifo.py`](../../spikes/test_telegram_mediastream_fifo.py).
 
 **Outbound (Huxley → peer)**:
 
