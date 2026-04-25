@@ -141,6 +141,12 @@ void app_main(void) {
      * dropped silently when the WS is down). */
     hux_log_set_sink(hux_net_send_log);
 
+    /* Route inbound audio messages straight to the speaker ring.
+     * `hux_net` reassembles fragments + base64-decodes the payload,
+     * then calls this sink with raw PCM bytes. hux_audio's consumer
+     * task pulls from the ring and feeds I2S TX via ES8311. */
+    hux_net_set_audio_sink(hux_audio_spk_push);
+
     /* Threshold = INFO for dev: the server log becomes a full record
      * of what the board did. WARN/ERROR is the prod default once this
      * stops being a prototype; bump down then.
