@@ -67,6 +67,26 @@ void hux_audio_mic_stop(void);
 /** `true` if the mic is actively producing frames. */
 bool hux_audio_mic_is_running(void);
 
+/* -- Speaker (playback) path ---------------------------------------- */
+
+/**
+ * Push a PCM16 mono chunk at 24 kHz into the speaker ring buffer.
+ * Safe to call from any task; designed to be the target of
+ * `hux_net_set_audio_sink`. Non-blocking — on ring overflow (consumer
+ * falling behind producer) the tail is dropped and a WARN is logged.
+ *
+ * `pcm` points to a caller-owned buffer; the push copies into the
+ * ring, so `pcm` can be freed / reused immediately after return.
+ */
+void hux_audio_spk_push(const uint8_t *pcm, size_t len);
+
+/**
+ * Drop everything currently in the speaker ring. Called on
+ * `audio_clear` (v0.3.2) and on `stream_ended (interrupted)` to cut
+ * playback immediately rather than finishing the buffered tail.
+ */
+void hux_audio_spk_clear(void);
+
 #ifdef __cplusplus
 }
 #endif
