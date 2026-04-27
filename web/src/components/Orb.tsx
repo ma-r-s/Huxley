@@ -478,11 +478,12 @@ export function Orb({
         cursor: onPointerDown ? "pointer" : "default",
         userSelect: "none",
         WebkitUserSelect: "none",
+        WebkitTouchCallout: "none",
+        WebkitTapHighlightColor: "transparent",
         touchAction: "none",
       }}
       onPointerDown={onPointerDown}
       onPointerUp={onPointerUp}
-      onPointerLeave={onPointerUp}
       onPointerCancel={onPointerUp}
     >
       <canvas

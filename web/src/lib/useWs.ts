@@ -21,6 +21,15 @@ let _id = 0;
 const nextId = () => _id++;
 const nowTs = () => new Date().toLocaleTimeString("en", { hour12: false });
 
+// Same-origin WebSocket URL — uses wss when the page is HTTPS (Tailscale Serve,
+// prod) and ws when on plain HTTP (localhost dev). Vite dev proxies /ws to the
+// Python server; Tailscale Serve forwards /ws through Vite transparently.
+export function defaultWsUrl(): string {
+  if (typeof window === "undefined") return "ws://localhost:8765/ws";
+  const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+  return `${scheme}://${window.location.host}/ws`;
+}
+
 export interface ActiveStream {
   streamId: string;
   label: string | null;
@@ -205,8 +214,7 @@ export function useWs() {
       // An explicit connect() call (initial mount, persona switch, or StrictMode
       // remount) always re-enables auto-reconnect.
       noReconnectRef.current = false;
-      activeUrlRef.current =
-        url ?? activeUrlRef.current ?? `ws://${window.location.hostname}:8765`;
+      activeUrlRef.current = url ?? activeUrlRef.current ?? defaultWsUrl();
       if (language !== undefined) activeLanguageRef.current = language;
       // Don't open a second socket if one is already live or connecting.
       // This prevents StrictMode's second mount from racing the first.

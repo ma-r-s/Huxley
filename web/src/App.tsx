@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { useWs } from "./lib/useWs.js";
+import { useWs, defaultWsUrl } from "./lib/useWs.js";
 import { MicCapture } from "./lib/audio/capture.js";
 import { AudioPlayback } from "./lib/audio/playback.js";
 import { deriveOrbState } from "./lib/orbState.js";
@@ -26,7 +26,7 @@ function parsePersonas(): PersonaEntry[] {
     {
       id: "abuelos",
       name: "abuelos",
-      url: `ws://${typeof window === "undefined" ? "localhost" : window.location.hostname}:8765`,
+      url: defaultWsUrl(),
     },
   ];
   if (!raw.trim()) return fallback;
@@ -375,6 +375,21 @@ export function App() {
     [releasePtt],
   );
 
+  // Window-level pointer release fallback. iOS Safari (especially in PWA
+  // standalone) occasionally drops pointer capture mid-press — if that
+  // happens, the orb's own onPointerUp won't fire when the user lifts their
+  // finger. Listening on the window while PTT is engaged guarantees release.
+  useEffect(() => {
+    if (!pttHeld && !pttPendingStart) return;
+    const release = () => releasePtt();
+    window.addEventListener("pointerup", release);
+    window.addEventListener("pointercancel", release);
+    return () => {
+      window.removeEventListener("pointerup", release);
+      window.removeEventListener("pointercancel", release);
+    };
+  }, [pttHeld, pttPendingStart, releasePtt]);
+
   // Spacebar
   useEffect(() => {
     const isFormEl = (t: EventTarget | null) => {
@@ -453,7 +468,7 @@ export function App() {
     }
   })();
 
-  const cssVars: React.CSSProperties & Record<string, string> = {
+  const cssVars: Record<string, string> = {
     "--hux-bg": bgCss,
     "--hux-fg": fgCss,
     "--hux-fg-dim": "color-mix(in oklab, var(--hux-fg) 65%, transparent)",
@@ -463,6 +478,14 @@ export function App() {
     "--hux-sans": fonts.sans,
     "--hux-mono": '"JetBrains Mono", "SF Mono", monospace',
   };
+  // Apply the theme vars to :root so html itself can paint the background —
+  // `position: fixed` on .hux-root gets clipped out of the iOS PWA safe-area
+  // strip, so painting from html guarantees the gradient reaches under the
+  // Dynamic Island / notch.
+  useEffect(() => {
+    const el = document.documentElement;
+    for (const [k, v] of Object.entries(cssVars)) el.style.setProperty(k, v);
+  }, [cssVars]);
 
   // ── Clock ─────────────────────────────────────────────────────────────────
   const [now, setNow] = useState(() => new Date());
@@ -490,9 +513,16 @@ export function App() {
       : t(`orbStatus.${effectiveOrbState}`));
 
   // ── Connection display ────────────────────────────────────────────────────
-  const deviceHost =
-    (ws.activeUrl ?? "").replace(/^wss?:\/\//, "").replace(/:\d+$/, "") ||
-    "localhost";
+  const deviceHost = (() => {
+    const raw =
+      (ws.activeUrl ?? "")
+        .replace(/^wss?:\/\//, "")
+        .replace(/\/.*$/, "")
+        .replace(/:\d+$/, "") || "localhost";
+    // Show the first DNS label only; full URL is in the tooltip/device sheet.
+    const first = raw.split(".")[0];
+    return first || raw;
+  })();
   const connLabel = ws.connected ? deviceHost : t("header.connRetrying");
 
   // ── Persona switch ────────────────────────────────────────────────────────
@@ -511,7 +541,7 @@ export function App() {
   const orbScale = transcriptOpen ? 0.62 : 1;
 
   return (
-    <div className="hux-root" style={cssVars as React.CSSProperties}>
+    <div className="hux-root">
       <div className="hux-stage">
         {/* Top chrome */}
         <header className="hux-topbar">
@@ -523,18 +553,18 @@ export function App() {
           </button>
           <div className="hux-brand">
             <div className="hux-wordmark">huxley</div>
-            <div className="hux-connchip" title={ws.activeUrl ?? undefined}>
-              <span className={`hux-conn-dot ${ws.connected ? "on" : "off"}`} />
-              {connLabel}
-              <span className="hux-conn-sep">\u00b7</span>
-              <span className="hux-conn-time">{timeStr}</span>
-            </div>
           </div>
           <button className="hux-chip" onClick={() => setActiveSheet("device")}>
             {currentPersona?.name ?? "huxley"}
             <span className="hux-chip-arrow">{"\u203a"}</span>
           </button>
         </header>
+        <div className="hux-subbar" title={ws.activeUrl ?? undefined}>
+          <span className={`hux-conn-dot ${ws.connected ? "on" : "off"}`} />
+          <span className="hux-conn-host">{connLabel}</span>
+          <span className="hux-conn-sep">{"\u00b7"}</span>
+          <span className="hux-conn-time">{timeStr}</span>
+        </div>
 
         {/* Orb hero */}
         <main className="hux-hero">

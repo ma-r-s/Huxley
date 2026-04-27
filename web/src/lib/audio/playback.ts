@@ -41,6 +41,20 @@ export class AudioPlayback {
   async init(): Promise<void> {
     if (this.ctx) return;
     this.ctx = new AudioContext({ sampleRate: 24000 });
+    // Tell iOS this is media playback — without this, WebAudio output is
+    // routed through the ringer volume bus, which tops out well below the
+    // media volume the user actually has cranked up. Safari 16.4+; the
+    // feature-detect keeps other browsers happy.
+    try {
+      const session = (
+        navigator as Navigator & {
+          audioSession?: { type: string };
+        }
+      ).audioSession;
+      if (session) session.type = "playback";
+    } catch {
+      /* unsupported — fall back to default routing */
+    }
     this.masterGain = this.ctx.createGain();
     this.masterGain.connect(this.ctx.destination);
     // Branch the master output to an analyser for the waveform visualizer.
