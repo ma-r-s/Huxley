@@ -85,11 +85,19 @@ static char    s_envelope[1700];
  * Overflow policy: drop-oldest isn't worth implementing yet — we log
  * the drop count and let the newest frame be rejected. A healthy LAN
  * drains faster than the mic fills; the queue only fills during
- * hiccups, and a 200 ms hiccup of lost audio is better than the WS
+ * hiccups, and a brief hiccup of lost audio is better than the WS
  * going down for seconds.
+ *
+ * Depth bumped from 10 (200 ms) to 50 (1 sec) in v0.3.2 after a WS
+ * stall ate 95 of 130 frames in a 2-second window — losing most of
+ * a user utterance. 50 frames × 960 B/frame = 48 KB of internal RAM,
+ * negligible. Beyond ~1 sec we'd be sending stale audio to OpenAI
+ * after the network recovers, which is its own problem; if the WS
+ * is dead longer than that the keep-alive fires and the queue gets
+ * reset on reconnect.
  */
 #define AUDIO_FRAME_SAMPLES 480                 /* 20 ms at 24 kHz — matches hux_audio */
-#define AUDIO_QUEUE_DEPTH   10                  /* 200 ms buffer at 50 Hz */
+#define AUDIO_QUEUE_DEPTH   50                  /* 1 sec buffer at 50 Hz */
 #define AUDIO_SENDER_STACK  8192
 #define AUDIO_SENDER_PRIO   6                   /* mic task (8) > this > app (5) */
 
@@ -154,13 +162,23 @@ static void audio_sender_task(void *unused) {
         }
 
         /* Emit stats every ~500 ms of wall time — tick-based so a
-         * stalled stream still reports. */
+         * stalled stream still reports. Promoted to WARN level only
+         * when something has actually gone wrong (frames dropped at
+         * enqueue or a send failed); steady-state happy-path logs at
+         * INFO so the console isn't a wall of yellow during normal
+         * PTT. */
         uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
         if (now - s_tx_last_stats_tick >= 500) {
-            ESP_LOGW(TAG, "mic.tx.stats enq=%u enq_drop=%u tx_ok=%u tx_fail=%u q_waiting=%u",
-                     (unsigned)s_mic_enqueued, (unsigned)s_mic_enqueue_dropped,
-                     (unsigned)s_tx_sent, (unsigned)s_tx_failed,
-                     (unsigned)uxQueueMessagesWaiting(s_audio_q));
+            esp_log_level_t lvl =
+                (s_mic_enqueue_dropped > 0 || s_tx_failed > 0)
+                    ? ESP_LOG_WARN
+                    : ESP_LOG_INFO;
+            ESP_LOG_LEVEL(lvl, TAG,
+                          "mic.tx.stats enq=%u enq_drop=%u tx_ok=%u tx_fail=%u q_waiting=%u",
+                          (unsigned)s_mic_enqueued,
+                          (unsigned)s_mic_enqueue_dropped,
+                          (unsigned)s_tx_sent, (unsigned)s_tx_failed,
+                          (unsigned)uxQueueMessagesWaiting(s_audio_q));
             s_tx_last_stats_tick = now;
         }
     }
@@ -185,6 +203,19 @@ static void enter_ptt(void) {
     s_tx_sent = 0;
     s_tx_failed = 0;
     s_tx_last_stats_tick = 0;
+
+    /* Barge-in: drain any buffered model speech immediately so the
+     * user hears their own input, not the previous reply finishing
+     * out of the ring. The server will also receive `ptt_start` and
+     * stop emitting new audio, but it can't recall what's already
+     * sitting in our PSRAM ring (up to ~10 sec at 24 kHz mono). Without
+     * this clear, pressing K2 mid-reply leaves Huxley audibly talking
+     * over the user's question — exactly what we don't want.
+     *
+     * Order: clear ring FIRST so the next spk_task iteration sees an
+     * empty buffer and falls through to silence; THEN announce PTT to
+     * the server; THEN arm the mic. */
+    hux_audio_spk_clear();
 
     /* Order is: announce -> arm mic. The server tolerates a frame or
      * two arriving before `ptt_start` but shouldn't have to. */

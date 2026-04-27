@@ -73,7 +73,14 @@ static const char *TAG = "hux_audio";
 #define SPK_CHUNK_MS          20
 #define SPK_CHUNK_SAMPLES     (SPK_SAMPLE_RATE_HZ * SPK_CHUNK_MS / 1000) /* 480 */
 #define SPK_CHUNK_BYTES       (SPK_CHUNK_SAMPLES * sizeof(int16_t))      /* 960 */
-#define SPK_RING_BYTES        (32 * 1024)
+/* OpenAI Realtime generates the FULL response in 1-3 sec of compute
+ * then streams the buffered audio to the server, which forwards it
+ * to the firmware as fast as the WS will accept. A 10-second reply
+ * arrives in ~3 sec wall time. spk_task plays at strict real-time
+ * (48 KB/s); difference fills the ring. 512 KB = 10.6 seconds of
+ * audio holds the longest realistic single-utterance reply.
+ * PSRAM-backed via xStreamBufferCreateWithCaps. */
+#define SPK_RING_BYTES        (512 * 1024)
 #define SPK_TASK_STACK        6144
 #define SPK_TASK_PRIO         8
 #define SPK_VOLUME_DEFAULT    70  /* 0..100, ES8311 output gain */
@@ -307,6 +314,19 @@ static void spk_task(void *unused) {
     static int16_t mono16[SPK_CHUNK_SAMPLES];
     static int32_t stereo32[SPK_CHUNK_SAMPLES * 2];
 
+    /* Heartbeat counters. Iters tick every loop pass; silence/audio
+     * count which branch was taken. If iters stops advancing while
+     * the ring still has bytes (`ring_used > 0`) and `audio` is not
+     * climbing, spk_task is wedged inside `esp_codec_dev_write`. If
+     * iters keeps advancing but audio doesn't, the ring isn't being
+     * fed (upstream WS / decode problem). One log line per second
+     * (50 iters at 20 ms/chunk) is plenty for diagnosis without
+     * flooding the console. */
+    uint32_t iters = 0;
+    uint32_t silence_chunks = 0;
+    uint32_t audio_chunks = 0;
+    uint32_t write_errs = 0;
+
     for (;;) {
         size_t got_bytes = xStreamBufferReceive(
             s_spk_ring, mono16, sizeof(mono16), pdMS_TO_TICKS(SPK_CHUNK_MS));
@@ -318,6 +338,7 @@ static void spk_task(void *unused) {
              * paces the loop at ~20 ms. */
             memset(stereo32, 0, sizeof(stereo32));
             got_samples = SPK_CHUNK_SAMPLES;
+            silence_chunks++;
         } else {
             /* Mono PCM16 -> stereo PCM32. Pad the tail with silence
              * if we got a short read so the codec writes whole
@@ -332,14 +353,30 @@ static void spk_task(void *unused) {
                 stereo32[2 * i + 1] = 0;
             }
             got_samples = SPK_CHUNK_SAMPLES;
+            audio_chunks++;
         }
 
         esp_err_t err = esp_codec_dev_write(
             s_spk_dev, stereo32, got_samples * 2 * sizeof(int32_t));
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "spk.write_failed err=%s", esp_err_to_name(err));
+            write_errs++;
             /* Don't spin: throttle so a broken codec doesn't burn CPU. */
             vTaskDelay(pdMS_TO_TICKS(50));
+        }
+
+        /* Heartbeat every 5 sec (250 iters × 20 ms). Sampling iters
+         * AFTER the write means a wedged write produces NO log line —
+         * exactly what we want: a missing heartbeat is the signal.
+         * Counters keep climbing so a long absence is recoverable
+         * from the next line ("we missed N seconds, here's the new
+         * audio_chunks delta"). */
+        if ((++iters % 250) == 0) {
+            size_t ring_used = SPK_RING_BYTES - xStreamBufferSpacesAvailable(s_spk_ring);
+            ESP_LOGI(TAG, "spk.alive iters=%u audio=%u silence=%u errs=%u ring_used=%u",
+                     (unsigned)iters, (unsigned)audio_chunks,
+                     (unsigned)silence_chunks, (unsigned)write_errs,
+                     (unsigned)ring_used);
         }
     }
 }
@@ -354,8 +391,9 @@ void hux_audio_spk_push(const uint8_t *pcm, size_t len) {
      * pattern. */
     size_t sent = xStreamBufferSend(s_spk_ring, pcm, len, 0);
     if (sent < len) {
-        ESP_LOGW(TAG, "spk.ring.overflow dropped=%u of=%u",
-                 (unsigned)(len - sent), (unsigned)len);
+        ESP_LOGW(TAG, "spk.ring.overflow dropped=%u of=%u ring_used=%u",
+                 (unsigned)(len - sent), (unsigned)len,
+                 (unsigned)(SPK_RING_BYTES - xStreamBufferSpacesAvailable(s_spk_ring)));
     }
 }
 
@@ -421,10 +459,14 @@ void hux_audio_init(void) {
     if (es8311_bring_up() != ESP_OK) {
         ESP_LOGE(TAG, "es8311.bring_up_failed (playback disabled)");
     } else {
-        /* 32 KB PSRAM-backed stream buffer. Trigger level 1 so the
-         * consumer wakes as soon as any PCM arrives rather than
-         * waiting for a larger batch. */
-        s_spk_ring = xStreamBufferCreate(SPK_RING_BYTES, 1);
+        /* PSRAM-backed stream buffer. `xStreamBufferCreate` would use
+         * the default allocator, which doesn't auto-route large
+         * blocks to PSRAM and panics out of internal heap at 192 KB.
+         * `WithCaps(MALLOC_CAP_SPIRAM)` is the IDF extension that
+         * pins both control struct and storage in PSRAM. Trigger
+         * level 1 so the consumer wakes on any byte. */
+        s_spk_ring = xStreamBufferCreateWithCaps(SPK_RING_BYTES, 1,
+                                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         configASSERT(s_spk_ring != NULL);
 
         /* PA on. Per the Waveshare factsheet: assert before the
@@ -438,26 +480,10 @@ void hux_audio_init(void) {
         ok = xTaskCreate(spk_task, "hux_spk", SPK_TASK_STACK,
                          NULL, SPK_TASK_PRIO, NULL);
         configASSERT(ok == pdPASS);
-
-        /* Speaker self-test: push 250 ms of 1 kHz square wave into
-         * the ring at boot. Mario hears a short buzz right after
-         * READY → speaker / I2S / PA chain is healthy and any
-         * subsequent silence is upstream (WS, server response).
-         * Mario hears nothing → debug here.
-         *
-         * Square wave (not sine) avoids needing libm; also more
-         * audible at low volume. ~50% amplitude so it's not
-         * piercingly loud. Remove this block once round-trip audio
-         * is working in v0.3 — see triage F-0011. */
-        static int16_t self_test[6000]; /* 250 ms @ 24 kHz */
-        const int period_samples = SPK_SAMPLE_RATE_HZ / 1000; /* 1 kHz */
-        const int half = period_samples / 2;
-        for (int i = 0; i < (int)(sizeof(self_test) / sizeof(self_test[0])); i++) {
-            self_test[i] = ((i / half) & 1) ? +12000 : -12000;
-        }
-        hux_audio_spk_push((const uint8_t *)self_test, sizeof(self_test));
-        ESP_LOGI(TAG, "spk.self_test pushed=%uB tone=1kHz dur=250ms",
-                 (unsigned)sizeof(self_test));
+        /* Boot self-test buzz removed in v0.3.2 (F-0011 closed) — the
+         * speaker chain is verified by round-trip audio working. The
+         * heartbeat in spk_task is the new "is the speaker alive"
+         * signal. */
     }
 
     ESP_LOGI(TAG, "audio.init sr=%d mic=ES7210(RMNM:ch1) spk=ES8311 vol=%d",

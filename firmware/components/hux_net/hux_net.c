@@ -56,25 +56,39 @@ static char s_server_uri[128] = {0};
  * task) so it's atomic. */
 static _Atomic(hux_net_audio_sink_fn) s_audio_sink = NULL;
 /* Decode scratch — single-writer (the WS client task), so no lock is
- * needed. Big enough to hold the PCM of any single WS text frame
- * the server sends today (WS_BUFFER_SIZE base64 bytes decode to at
- * most 3/4 as much PCM). Lives in PSRAM via `EXT_RAM_BSS_ATTR`:
- * ~24 KB is too fat for internal SRAM when v0.3's speaker ring
- * buffer also wants internal (for DMA). Access latency is a few
- * hundred ns; negligible against a 20 ms audio frame period. */
-#define AUDIO_SCRATCH_BYTES ((WS_BUFFER_SIZE * 3) / 4 + 32)
+ * needed. Sized to fit the decoded PCM of the largest message we
+ * accept: WS_FRAG_BUFFER_BYTES (384 KB JSON+base64) decodes to about
+ * 287 KB PCM (base64 expansion is 4/3, plus JSON envelope overhead).
+ * Round up to 288 KB.
+ *
+ * Why this big: OpenAI Realtime occasionally bursts a buffered audio
+ * delta of ~3 sec of speech in a single message (137 KB PCM = 183 KB
+ * envelope was observed in v0.3.1 testing). The previous 96 KB ceiling
+ * caused every such burst to fail base64 decode and disappear, taking
+ * 2-3 sec of speech with it (firmware/docs/triage.md F-0012).
+ *
+ * PSRAM-resident; access latency is a few hundred ns per byte,
+ * negligible against the 20 ms audio frame period. */
+#define AUDIO_SCRATCH_BYTES (288 * 1024)
 EXT_RAM_BSS_ATTR static uint8_t s_audio_scratch[AUDIO_SCRATCH_BYTES];
 
 /* WebSocket fragment reassembly scratch — see firmware/docs/triage.md
- * F-0003 for the motivation. Server responses (OpenAI audio deltas
- * in particular) can exceed WS_BUFFER_SIZE, arriving as multiple
- * fragments with increasing payload_offset. We accumulate into this
- * PSRAM buffer; the reassembler owns the state.
+ * F-0003 for the original motivation, F-0012 for the v0.3.2 bump.
+ * Server responses (OpenAI audio deltas in particular) can exceed
+ * WS_BUFFER_SIZE, arriving as multiple fragments with increasing
+ * payload_offset. We accumulate into this PSRAM buffer; the
+ * reassembler owns the state.
  *
- * 128 KB holds ~3x the largest message observed in testing (41 KB).
+ * 384 KB sized for the largest realistic single OpenAI Realtime
+ * audio burst: ~3 sec of speech ≈ 137 KB PCM ≈ 183 KB JSON envelope.
+ * Doubled for headroom and rounded to 384 KB. Anything bigger than
+ * this and the server is misbehaving (no single message should
+ * encode more than a few seconds of audio — that's a server-side
+ * pacing bug, not a firmware problem to absorb).
+ *
  * Single-writer (WS client RX task), so the reassembler is
  * lock-free. Unit-tested in firmware/tests/test_hux_ws_frag.c. */
-#define WS_FRAG_BUFFER_BYTES (128 * 1024)
+#define WS_FRAG_BUFFER_BYTES (384 * 1024)
 EXT_RAM_BSS_ATTR static char s_frag_buf[WS_FRAG_BUFFER_BYTES];
 static hux_ws_reassembler_t s_reassembler;
 
@@ -137,7 +151,20 @@ static void wifi_init_sta(const char *ssid, const char *password) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_LOGI(TAG, "wifi.init ssid=\"%s\"", ssid);
+
+    /* Mains-powered audio device — battery life is irrelevant.
+     * Default `WIFI_PS_MIN_MODEM` parks the radio between AP beacons
+     * (typically 100 ms intervals) and the first packet after an
+     * idle period waits for the next wake, blowing through the
+     * 200 ms WS write timeout when two beacons stack unfavourably.
+     * Symptom (firmware/docs/triage.md F-0013): after ~10 sec of
+     * conversational silence, the next outbound mic frame trips
+     * `transport_poll_write(0)` and the WS lock starves.
+     * `WIFI_PS_NONE` keeps the radio always-awake — first-packet
+     * latency drops from ~50-150 ms to <5 ms. Power cost on
+     * mains-powered hardware is irrelevant. */
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+    ESP_LOGI(TAG, "wifi.init ssid=\"%s\" ps=NONE", ssid);
 }
 
 /* ------------------------------------------------------------------ */
@@ -146,19 +173,46 @@ static void wifi_init_sta(const char *ssid, const char *password) {
 
 /* Cheap probe: is this message an `audio` type? Avoids parsing the
  * whole JSON on the hot path. Relies on the server always serialising
- * `"type"` as the first key; if that ever changes, the check falls
- * through and the message takes the control-plane path. Correct but
- * slow — a belt-and-braces fallback. */
+ * `"type"` early in the document. Tolerates whitespace around the
+ * colon and inside the value pair so it works regardless of whether
+ * the server side uses `json.dumps({"type":"audio"})` (no spaces)
+ * or `json.dumps(d)` with default separators (space after `:`).
+ * If this ever misses, the message falls through to the control
+ * plane and is logged as `ws.rx.audio (unhandled)` — correct but
+ * slow. */
 static bool looks_like_audio(const char *json, size_t len) {
     if (len < 16) {
         return false;
     }
-    /* Bound the scan — the `"type":"audio"` pattern, if present,
-     * lives in the first ~40 bytes. */
-    size_t probe = len < 64 ? len : 64;
-    const char *p = json;
-    for (size_t i = 0; i + 14 <= probe; i++) {
-        if (memcmp(p + i, "\"type\":\"audio\"", 14) == 0) {
+    /* Bound the scan — the `"type"` key lives in the first ~50 bytes
+     * for any envelope shape we're likely to see. */
+    size_t probe = len < 100 ? len : 100;
+    static const char key[] = "\"type\"";
+    static const size_t key_len = sizeof(key) - 1; /* 6 */
+    static const char value[] = "\"audio\"";
+    static const size_t value_len = sizeof(value) - 1; /* 7 */
+
+    for (size_t i = 0; i + key_len <= probe; i++) {
+        if (memcmp(json + i, key, key_len) != 0) {
+            continue;
+        }
+        size_t j = i + key_len;
+        /* Skip whitespace before colon. */
+        while (j < probe && (json[j] == ' ' || json[j] == '\t')) {
+            j++;
+        }
+        if (j >= probe || json[j] != ':') {
+            continue;
+        }
+        j++;
+        /* Skip whitespace before value. */
+        while (j < probe && (json[j] == ' ' || json[j] == '\t')) {
+            j++;
+        }
+        if (j + value_len > probe) {
+            continue;
+        }
+        if (memcmp(json + j, value, value_len) == 0) {
             return true;
         }
     }
@@ -298,7 +352,42 @@ static void ws_start(const char *uri) {
         .uri = s_server_uri,
         .buffer_size = WS_BUFFER_SIZE,
         .reconnect_timeout_ms = WS_RECONNECT_MS,
-        .network_timeout_ms = 10000,
+        /* Used as `timeout_ms` for `esp_transport_poll_write` inside
+         * the library. Default (10s) is too short under bidirectional
+         * audio: a transient TCP-window stall trips the timeout and
+         * (pre-v1.5) closes the socket. With separate TX/RX locks
+         * (v1.5+, enabled via CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK)
+         * 30s gives the library + lwIP comfortable headroom. Per
+         * Espressif maintainer guidance in
+         * espressif/esp-protocols issue #964. */
+        .network_timeout_ms = 30000,
+
+        /* TCP-level keep-alive — detect dead connections fast so the
+         * library can fire `WEBSOCKET_EVENT_DISCONNECTED` and trigger
+         * the auto-reconnect path. Without this, a NAT/router that
+         * silently dropped the conntrack entry produces a zombie
+         * socket where every write times out but no disconnect
+         * fires (firmware/docs/triage.md F-0013).
+         *
+         * Tightened in v0.3.2 from 5/5/3 (~20s) to 3/2/3 (~9s) after
+         * empirically observing the WS wedge recover 20-something
+         * seconds after onset — long enough that user-facing audio
+         * has clearly broken. 9s is right at the edge of "user
+         * notices" without being so aggressive that a transient
+         * AP/STA hiccup trips a false reconnect. */
+        .keep_alive_enable = true,
+        .keep_alive_idle = 3,
+        .keep_alive_interval = 2,
+        .keep_alive_count = 3,
+
+        /* WS-level application PING. Cuts through application-layer
+         * stalls (e.g. server hung but TCP healthy). 10s default is
+         * fine; making it explicit so a future tweak doesn't have
+         * to read the library source to know it. With
+         * `disable_pingpong_discon=false` (default), missing PONG
+         * for `pingpong_timeout_sec` (default 120s) auto-closes the
+         * socket — combines with auto-reconnect to clear zombies. */
+        .ping_interval_sec = 10,
     };
     s_ws = esp_websocket_client_init(&cfg);
     configASSERT(s_ws != NULL);

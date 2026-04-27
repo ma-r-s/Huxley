@@ -290,8 +290,37 @@ class AudioServer:
 
     # --- Server → client ---
 
+    # Maximum PCM bytes per outbound `audio` message. Larger inputs
+    # (most often: a buffered OpenAI Realtime audio delta of 1-3 seconds
+    # of speech) get split into multiple WS messages.
+    #
+    # Why: a single `await ws.send(huge_payload)` keeps this connection's
+    # asyncio task busy for the duration of the write — it cannot
+    # interleave with the recv loop that processes mic frames from the
+    # firmware. Big chunks were causing the ESP32 client to wedge on
+    # outbound writes during long replies because the server stopped
+    # acking inbound TCP for ~hundreds of ms while it pumped a 130 KB
+    # base64-encoded audio chunk. They were also blowing the firmware's
+    # WS fragment reassembler ceiling (firmware/docs/triage.md F-0012).
+    #
+    # 12 KB PCM ≈ 250 ms of 24 kHz mono — comfortably below the firmware's
+    # decode scratch and below typical WS buffer sizes on every client.
+    # Smaller would mean more JSON/base64 overhead per byte; larger
+    # restarts the bursts-too-big problem. A single `asyncio.sleep(0)`
+    # between chunks yields the event loop so the recv side gets a
+    # chance to run, even when the chunks would otherwise queue
+    # back-to-back inside the websockets library.
+    _AUDIO_CHUNK_BYTES = 12 * 1024
+
     async def send_audio(self, pcm: bytes) -> None:
-        await self._send({"type": "audio", "data": base64.b64encode(pcm).decode()})
+        if not pcm:
+            return
+        for offset in range(0, len(pcm), self._AUDIO_CHUNK_BYTES):
+            chunk = pcm[offset : offset + self._AUDIO_CHUNK_BYTES]
+            await self._send({"type": "audio", "data": base64.b64encode(chunk).decode()})
+            # Yield so the recv loop and any other tasks can interleave
+            # — keeps the WS bidirectional even mid-burst.
+            await asyncio.sleep(0)
 
     async def send_state(self, state: str) -> None:
         self._state = state

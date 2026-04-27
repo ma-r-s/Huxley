@@ -59,18 +59,27 @@ CONFIG_ESP_WIFI_ENABLE_WPA3_SAE=y
 
 # -- LWIP / TCP ----------------------------------------------------------
 # 50 Hz audio × 1.3 KB/frame = 65 KB/s of outbound burst, plus
-# inbound audio chunks during model speech. The LWIP per-socket send
-# buffer default is ~5760 B — exactly 4 frames — which fills within
-# 80 ms and causes `esp_transport_poll_write(0)` timeout inside
-# esp_websocket_client. The library treats the timeout as fatal and
-# reconnects; symptom is a WS flap ~500 ms after PTT press. v0.2.2
-# bumped to 32 KB; v0.3.1 found that insufficient on a slower network
-# (different access point, higher RTT). Going to 64 KB — practical
-# lwip ceiling — buys >50 frames of headroom for ACK lag.
+# inbound audio chunks during model speech. Tuned for sustained
+# bidirectional WS audio load.
 CONFIG_LWIP_TCP_SND_BUF_DEFAULT=65535
 CONFIG_LWIP_TCP_WND_DEFAULT=65535
 CONFIG_LWIP_WND_SCALE=y
 CONFIG_LWIP_TCP_RCV_SCALE=4
+# `LWIP_TCPIP_CORE_LOCKING` lets the lwIP TCP/IP thread share its
+# critical-section work with calling tasks instead of marshalling
+# every API call through a mailbox. Big throughput / latency win for
+# our 50 Hz send pattern. Espressif's lwIP perf guide recommends
+# this for sustained-traffic apps.
+CONFIG_LWIP_TCPIP_CORE_LOCKING=y
+
+# -- esp_websocket_client (managed component) ---------------------------
+# Separate TX/RX locks (added in component v1.5.0 via
+# espressif/esp-protocols PR #704). Without it, the writer serialises
+# against the receive task even when the TCP send window is open,
+# producing the `transport_poll_write(0)` close-on-timeout we hit in
+# v0.3.1. With it, send and receive proceed independently — required
+# for any bidirectional audio workload over WS.
+CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK=y
 
 # -- Compiler ------------------------------------------------------------
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
