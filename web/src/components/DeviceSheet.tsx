@@ -42,7 +42,12 @@ const S = {
     textTransform: "uppercase" as const,
     cursor: "pointer",
   },
-  body: { flex: 1, overflowY: "auto" as const, padding: "8px 24px 32px" },
+  body: {
+    flex: 1,
+    overflowY: "auto" as const,
+    overscrollBehavior: "contain" as const,
+    padding: "8px 24px 32px",
+  },
   rowBtn: {
     width: "100%",
     textAlign: "left" as const,

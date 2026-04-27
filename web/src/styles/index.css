@@ -8,50 +8,61 @@ body,
 #root {
   height: 100%;
   margin: 0;
-}
-body {
-  font-family: var(--hux-sans, system-ui);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  background: #0e0a09;
-  color: #fff;
+  /* Lock the page — no document-level scroll or iOS rubber-band bounce.
+     Scrollable UI panels (transcript, sheets) opt in individually with
+     overflow-y: auto + overscroll-behavior: contain. */
   overflow: hidden;
+  overscroll-behavior: none;
 }
 
-/* ── Root surface ──────────────────────────────────────────────────────── */
-.hux-root {
+/* ── Ambient surface ───────────────────────────────────────────────────────
+   The coral gradient + film grain + vignette live on html so they paint
+   the ENTIRE screen, including under the iOS Dynamic Island / notch. CSS
+   custom properties are set on :root at runtime by App.tsx; the fallbacks
+   below match the light theme so first paint (before React mounts) already
+   has a valid gradient — otherwise html falls back to transparent and iOS
+   shows the webview's default white in the safe area. */
+:root {
+  --hux-bg: oklch(0.67 0.18 29);
+  --hux-fg: oklch(0.985 0.005 50);
+  --hux-fg-dim: color-mix(in oklab, var(--hux-fg) 65%, transparent);
+  --hux-fg-line: color-mix(in oklab, var(--hux-fg) 22%, transparent);
+  --hux-fg-faint: color-mix(in oklab, var(--hux-fg) 10%, transparent);
+  --hux-serif: "Instrument Serif", Georgia, serif;
+  --hux-sans: "Inter Tight", system-ui, sans-serif;
+  --hux-mono: "JetBrains Mono", "SF Mono", monospace;
   --hux-radial: radial-gradient(
     ellipse at 50% 30%,
     color-mix(in oklab, var(--hux-fg) 5%, var(--hux-bg)) 0%,
     var(--hux-bg) 55%,
     color-mix(in oklab, var(--hux-bg) 88%, black) 100%
   );
-  position: fixed;
-  inset: 0;
-  background: var(--hux-radial);
-  color: var(--hux-fg);
-  display: flex;
-  align-items: stretch;
-  justify-content: center;
-  overflow: hidden;
-  transition: background 600ms ease;
 }
-
-/* Subtle film grain overlay for warmth */
-.hux-root::before {
+/* Paint the gradient on html with background-attachment: fixed so it's
+   anchored to the viewport (including ALL safe areas — top, bottom, sides),
+   not the element's box. The min-height compensates for the downward shift
+   that viewport-fit=cover introduces, otherwise the document ends short of
+   the bottom safe area and iOS exposes the webview's default white there.
+   Source: https://dev.to/karmasakshi/make-your-pwas-look-handsome-on-ios */
+html {
+  min-height: calc(100% + env(safe-area-inset-top));
+  background: var(--hux-radial);
+  background-attachment: fixed;
+}
+body::before {
   content: "";
-  position: absolute;
+  position: fixed;
   inset: 0;
   pointer-events: none;
   opacity: 0.06;
   mix-blend-mode: overlay;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.55 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  z-index: 0;
 }
-
-/* Vignette + warm bloom from below */
-.hux-root::after {
+/* Vignette + warm bloom from below. */
+body::after {
   content: "";
-  position: absolute;
+  position: fixed;
   inset: 0;
   pointer-events: none;
   background:
@@ -65,6 +76,43 @@ body {
       transparent 60%,
       color-mix(in oklab, black 35%, transparent) 100%
     );
+  z-index: 0;
+}
+body {
+  font-family: var(--hux-sans, system-ui);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Also paint the gradient on body with the same attachment trick —
+     belt-and-suspenders for the status-bar area which iOS propagates from
+     body's bg under black-translucent. Both layers resolve to the same
+     viewport-anchored gradient, so there's no seam. */
+  background: var(--hux-radial);
+  background-attachment: fixed;
+  color: var(--hux-fg);
+  overflow: hidden;
+  transition: background 600ms ease;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ── Root (layout only — body owns the background) ─────────────────────── */
+.hux-root {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  /* 100lvh = largest possible viewport height. In iOS PWA standalone this is
+     the full screen (no browser chrome to retract). Using lvh instead of
+     inset:0 prevents iOS from clipping the root to the visual viewport that
+     excludes the home-indicator safe area. */
+  height: 100lvh;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  overflow: hidden;
+  z-index: 1;
 }
 
 /* ── Stage (mobile-first, fluid up) ────────────────────────────────────── */
@@ -89,7 +137,10 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 20px 12px;
+  gap: 10px;
+  padding: max(18px, env(safe-area-inset-top))
+    max(20px, env(safe-area-inset-right)) 12px
+    max(20px, env(safe-area-inset-left));
   flex-shrink: 0;
   z-index: 10;
 }
@@ -113,17 +164,30 @@ body {
   align-items: center;
   gap: 6px;
   pointer-events: none;
+  min-width: 0;
+  flex: 1 1 auto;
 }
-.hux-connchip {
-  display: inline-flex;
+.hux-subbar {
+  display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
+  padding: 0 max(20px, env(safe-area-inset-right)) 8px
+    max(20px, env(safe-area-inset-left));
   font-family: var(--hux-sans);
   font-size: 10px;
   letter-spacing: 0.1em;
   text-transform: lowercase;
   color: var(--hux-fg-dim);
   opacity: 0.75;
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.hux-conn-host {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60vw;
 }
 .hux-conn-dot {
   width: 5px;
@@ -164,6 +228,8 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  flex: 0 0 auto;
+  white-space: nowrap;
   background: transparent;
   color: var(--hux-fg);
   border: 1px solid var(--hux-fg-line);
@@ -287,7 +353,8 @@ body {
   z-index: 5;
   background: color-mix(in oklab, var(--hux-bg) 92%, black);
   border-top: 1px solid var(--hux-fg-line);
-  height: 72px;
+  height: calc(48px + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
   transition: height 600ms cubic-bezier(0.22, 0.9, 0.27, 1);
   display: flex;
   flex-direction: column;
@@ -295,14 +362,19 @@ body {
   backdrop-filter: blur(4px);
 }
 .hux-transcript.expanded {
-  height: 58vh;
+  height: calc(58vh + env(safe-area-inset-bottom));
+}
+/* Hide the transcript content entirely when collapsed — only the handle
+   shows. Prevents the empty-state / message ghosts from bleeding through. */
+.hux-transcript:not(.expanded) .hux-transcript-scroll {
+  display: none;
 }
 @media (min-width: 900px) {
   .hux-transcript {
-    height: 80px;
+    height: calc(56px + env(safe-area-inset-bottom));
   }
   .hux-transcript.expanded {
-    height: 50vh;
+    height: calc(50vh + env(safe-area-inset-bottom));
   }
 }
 .hux-transcript-handle {
@@ -342,6 +414,7 @@ body {
 .hux-transcript-scroll {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 8px 24px 24px;
   scroll-behavior: smooth;
   display: flex;
@@ -434,6 +507,13 @@ body {
 /* ── Sheets ─────────────────────────────────────────────────────────────── */
 .hux-sheet {
   animation: hux-sheet-in 500ms cubic-bezier(0.22, 0.9, 0.27, 1);
+  /* All full-screen sheets respect device safe areas — Dynamic Island /
+     notch at top, home indicator at bottom, rounded-corner insets in
+     landscape. Individual sheets don't need to re-implement this. */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 @keyframes hux-sheet-in {
   from {

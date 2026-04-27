@@ -6,5 +6,12 @@ export default defineConfig({
   server: {
     host: true,
     port: 5174,
+    allowedHosts: [".ts.net"],
+    proxy: {
+      "/ws": {
+        target: "ws://localhost:8765",
+        ws: true,
+      },
+    },
   },
 });
