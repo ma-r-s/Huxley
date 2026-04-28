@@ -111,7 +111,7 @@ el libro").
 ## File layout
 
 ```
-packages/skills/news/
+server/skills/news/
 ├── pyproject.toml                   # huxley-skill-news; depends on huxley-sdk + httpx
 ├── src/huxley_skill_news/
 │   ├── __init__.py                  # exports NewsSkill

@@ -1,6 +1,6 @@
 # Turn-based Audio Coordination
 
-> **Status**: **implemented** — landed across 6 staged commits on 2026-04-14 (steps 1–6). The Turn Coordinator is a Huxley framework component (persona-agnostic, skill-agnostic). Spec history: v1 was under-specified (first critic round caught it); v2 over-engineered the audio layer with a named-channel abstraction that had no v1 consumer (self-review caught it after two critic rounds); v3 cuts the channels and ships. Same root-cause fix, ~40% less ceremony than v2. See [ADR — 2026-04-13 — Turn-based coordinator for voice tool calls](./decisions.md#2026-04-13--turn-based-coordinator-for-voice-tool-calls), and the source: [`packages/core/src/huxley/turn/coordinator.py`](../packages/core/src/huxley/turn/coordinator.py).
+> **Status**: **implemented** — landed across 6 staged commits on 2026-04-14 (steps 1–6). The Turn Coordinator is a Huxley framework component (persona-agnostic, skill-agnostic). Spec history: v1 was under-specified (first critic round caught it); v2 over-engineered the audio layer with a named-channel abstraction that had no v1 consumer (self-review caught it after two critic rounds); v3 cuts the channels and ships. Same root-cause fix, ~40% less ceremony than v2. See [ADR — 2026-04-13 — Turn-based coordinator for voice tool calls](./decisions.md#2026-04-13--turn-based-coordinator-for-voice-tool-calls), and the source: [`server/runtime/src/huxley/turn/coordinator.py`](../server/runtime/src/huxley/turn/coordinator.py).
 
 ## Purpose
 
@@ -304,9 +304,9 @@ server/src/abuel_os/
 
 ### Unchanged files
 
-- **`web/src/lib/audio/playback.ts`** — stays as-is, modulo the new `playThinkingTone()` method. No per-channel queues. No `play(channel, data)` signature change.
-- **`web/src/lib/ws.svelte.ts`** — modulo adding the silence-detection timer for the thinking tone, no changes. No channel-field routing.
-- **`web/src/routes/+page.svelte`** — zero changes from the one-button refactor.
+- **`clients/pwa/src/lib/audio/playback.ts`** — stays as-is, modulo the new `playThinkingTone()` method. No per-channel queues. No `play(channel, data)` signature change.
+- **`clients/pwa/src/lib/ws.svelte.ts`** — modulo adding the silence-detection timer for the thinking tone, no changes. No channel-field routing.
+- **`clients/pwa/src/routes/+page.svelte`** — zero changes from the one-button refactor.
 - **Protocol message handlers** — `audio` and `audio_clear` on both sides stay as they are.
 
 ### Net LOC
@@ -317,7 +317,7 @@ server/src/abuel_os/
 
 ## Migration plan — **6 steps**
 
-> **Historical** — all six steps shipped 2026-04-14. Field names below reflect the v3-spec naming used during migration; the field landed as `side_effect: SideEffect | None` with `AudioStream(factory=...)` as the first kind, NOT as a top-level `audio_factory`. Read the current `packages/sdk/src/huxley_sdk/types.py` for the actual surface; this section is preserved as a record of the rollout.
+> **Historical** — all six steps shipped 2026-04-14. Field names below reflect the v3-spec naming used during migration; the field landed as `side_effect: SideEffect | None` with `AudioStream(factory=...)` as the first kind, NOT as a top-level `audio_factory`. Read the current `server/sdk/src/huxley_sdk/types.py` for the actual surface; this section is preserved as a record of the rollout.
 
 Down from v2's 8. Steps for "implement channel queue" and "client per-channel state" disappear because there are no channels.
 
@@ -361,8 +361,8 @@ Down from v2's 8. Steps for "implement channel queue" and "client per-channel st
 
 ### Step 6 — Client thinking tone + docs polish
 
-- `web/src/lib/audio/playback.ts`: add `playThinkingTone()` method
-- `web/src/lib/ws.svelte.ts`: silence-detection timer hooked to `ptt_stop` (sent) and `model_speaking: false` (received)
+- `clients/pwa/src/lib/audio/playback.ts`: add `playThinkingTone()` method
+- `clients/pwa/src/lib/ws.svelte.ts`: silence-detection timer hooked to `ptt_stop` (sent) and `model_speaking: false` (received)
 - Update `docs/turns.md` status from "spec v3, not yet implemented" to "implemented"
 - Update `docs/architecture.md`: replace the "design in flight" note with the actual coordinator section
 - Update `docs/skills/README.md`: new `ToolResult.audio_factory` documentation for skill authors
@@ -378,7 +378,7 @@ Unchanged from v2. For a blind user, silence longer than ~400 ms is indistinguis
 
 ### Where it lives
 
-**Entirely client-side.** Implemented in `web/src/lib/audio/playback.ts` as a new method `playThinkingTone()`. No server-side tone production, no new WebSocket message.
+**Entirely client-side.** Implemented in `clients/pwa/src/lib/audio/playback.ts` as a new method `playThinkingTone()`. No server-side tone production, no new WebSocket message.
 
 ### When it starts
 
@@ -433,11 +433,11 @@ Deferred explicitly, with reason:
 
 | Concept                                                  | File                                                               |
 | -------------------------------------------------------- | ------------------------------------------------------------------ |
-| `Turn`, `TurnState`, `TurnCoordinator`, interrupt method | `packages/core/src/huxley/turn/coordinator.py`                     |
-| `ToolResult.side_effect`, `SideEffect`, `AudioStream`    | `packages/sdk/src/huxley_sdk/types.py`                             |
-| `AudiobookPlayer.stream()` factory                       | `packages/skills/audiobooks/src/huxley_skill_audiobooks/player.py` |
-| Thinking tone (client)                                   | `web/src/lib/audio/playback.ts` (`playThinkingTone()`)             |
-| Silence-detection timer (client)                         | `web/src/lib/ws.svelte.ts`                                         |
+| `Turn`, `TurnState`, `TurnCoordinator`, interrupt method | `server/runtime/src/huxley/turn/coordinator.py`                     |
+| `ToolResult.side_effect`, `SideEffect`, `AudioStream`    | `server/sdk/src/huxley_sdk/types.py`                             |
+| `AudiobookPlayer.stream()` factory                       | `server/skills/audiobooks/src/huxley_skill_audiobooks/player.py` |
+| Thinking tone (client)                                   | `clients/pwa/src/lib/audio/playback.ts` (`playThinkingTone()`)             |
+| Silence-detection timer (client)                         | `clients/pwa/src/lib/ws.svelte.ts`                                         |
 | Protocol delta                                           | `docs/protocol.md`                                                 |
 
 (File paths reflect the post-stage-1 workspace layout. Sections of this doc that describe the migration steps themselves still reference `server/src/abuel_os/...` — those are historical and intentionally left as-is.)

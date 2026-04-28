@@ -12,7 +12,7 @@ Huxley follows the same shape:
 
 - **Huxley** = the framework (this repo). Runtime, persona loader, skill registry, focus management, audio plumbing. Defines the protocol via [`docs/protocol.md`](./protocol.md).
 - **`huxley-web`** (separate repo, planned) = the consumer-facing PWA. The **Huxley user** installs it on their phone / tablet / laptop to talk to their own Huxley instance, see transcripts, and admin the device. One user, one Huxley, one PWA install.
-- **`web/` in this repo** = the developer workbench. Quick PTT button + status display, used during framework development. Not the production client; not end-user-facing.
+- **`clients/pwa/` in this repo** = the developer workbench. Quick PTT button + status display, used during framework development. Not the production client; not end-user-facing.
 - **`huxley-firmware`** (separate repo, future) = the ESP32 hardware client. A physical button + speaker + mic for users who want a tactile device in the room with them instead of (or alongside) the PWA.
 
 The framework + the clients share branding ("Huxley") because that's the platform name. Context tells you which is meant: a developer reading `docs/` thinks "Huxley = the framework"; a user tapping the install icon thinks "Huxley = the app on my phone." Same name, different surfaces — exactly like Claude.
@@ -24,13 +24,13 @@ To keep "what is Huxley" unambiguous in commits, conversations, and design docs:
 | Term                 | Meaning                                                                                                                                                                                                                                                                                                                                                                       |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Huxley**           | The platform. Refers to either the framework or any of its clients depending on context. When a user installs the PWA, it's branded "Huxley." When a developer runs `uv run huxley`, that's also Huxley.                                                                                                                                                                      |
-| **AbuelOS**          | One example **persona** that ships with Huxley. A YAML file under `personas/abuelos/` plus its data dir. Spanish, elderly, warm-toned, enables audiobooks + radio + news + timers skills. **Not a product name.** Other personas (BasicOS) ship in this repo as counter-examples; future personas may ship as separate packages. Any user of Huxley runs exactly one persona. |
+| **AbuelOS**          | One example **persona** that ships with Huxley. A YAML file under `server/personas/abuelos/` plus its data dir. Spanish, elderly, warm-toned, enables audiobooks + radio + news + timers skills. **Not a product name.** Other personas (BasicOS) ship in this repo as counter-examples; future personas may ship as separate packages. Any user of Huxley runs exactly one persona. |
 | **`huxley`**         | The Python runtime package (PyPI). What `uv run huxley` invokes.                                                                                                                                                                                                                                                                                                              |
 | **`huxley-sdk`**     | The skill-author surface (PyPI). What a skill package depends on.                                                                                                                                                                                                                                                                                                             |
 | **`huxley-skill-*`** | Skill packages (PyPI). One per discrete capability; loaded via the `huxley.skills` entry point.                                                                                                                                                                                                                                                                               |
 | **`huxley-web`**     | The PWA repo + npm package. The Huxley user's client for interacting with their own Huxley instance. **Lives in its own repo**, not under this one.                                                                                                                                                                                                                           |
-| **`web/`**           | The developer workbench in this repo. Useful while building / debugging the framework.                                                                                                                                                                                                                                                                                        |
-| **persona**          | A YAML config + assets that determines who Huxley is for a given user. Lives under `personas/<name>/`.                                                                                                                                                                                                                                                                        |
+| **`clients/pwa/`**           | The developer workbench in this repo. Useful while building / debugging the framework.                                                                                                                                                                                                                                                                                        |
+| **persona**          | A YAML config + assets that determines who Huxley is for a given user. Lives under `server/personas/<name>/`.                                                                                                                                                                                                                                                                        |
 | **skill**            | A Python package providing one or more tools the LLM can call. Persona-agnostic; opts into persona behavioral constraints. Skills can bridge Huxley to third-party services (Telegram, Twilio, etc.) — that's how inter-user communication happens, not via Huxley clients.                                                                                                   |
 | **user**             | The human interacting with a Huxley instance through a client. Always exactly one human per Huxley instance. If a user wants other people to reach them, that's handled by skills bridging to external comms apps (Telegram, WhatsApp, phone), not by Huxley-to-Huxley communication.                                                                                         |
 
@@ -57,7 +57,7 @@ When all three are separate repos, the **only** API between them is the document
 
 Today the protocol covers:
 
-- **Primary WebSocket** at `ws://<host>:<port>/` — the user's conversation channel. The dev `web/` client speaks it today; `huxley-web` and `huxley-firmware` will speak the same contract.
+- **Primary WebSocket** at `ws://<host>:<port>/` — the user's conversation channel. The dev `clients/pwa/` client speaks it today; `huxley-web` and `huxley-firmware` will speak the same contract.
   - Client → server: PTT events, audio frames (PCM16 mono @ 24 kHz), wake word, reset, `client_event` (pure telemetry).
   - Server → client: `hello` + protocol version, state machine transitions, status strings, transcript lines, audio chunks, `audio_clear`, `model_speaking` indicator, volume hints, `dev_event`.
 
@@ -70,11 +70,11 @@ Planned additions:
 
 A client is in good standing if it speaks the documented protocol correctly. It doesn't need to know about Python, focus management, or skill internals.
 
-## What today's `web/` is
+## What today's `clients/pwa/` is
 
 The dev workbench. One PTT button, status display, persona switcher, transcript log. Useful while building the framework or debugging a skill. Today it doubles as the de facto user-facing client while `huxley-web` is under construction.
 
-It will keep existing as long as it's useful for development. Once `huxley-web` can do everything `web/` does and an ESP32 firmware exists for users who want hardware, `web/` can be deprecated. Until then, all three surfaces have a job.
+It will keep existing as long as it's useful for development. Once `huxley-web` can do everything `clients/pwa/` does and an ESP32 firmware exists for users who want hardware, `clients/pwa/` can be deprecated. Until then, all three surfaces have a job.
 
 ## What `huxley-web` is
 
@@ -91,7 +91,7 @@ Quick framing:
 
 ## What `huxley-firmware` will be
 
-The ESP32 client for users who want a tactile device in the room — a physical hold-to-talk button, speaker, mic, no screen. Streams PCM over LAN to the framework. Same WebSocket protocol as `web/` and `huxley-web`. Wakeword detection optional (push button is the primary input). Mainly motivated today by the AbuelOS-persona user's accessibility needs (a blind user benefits more from a tactile button than a tablet), but useful for any user who wants always-on voice without keeping an app open.
+The ESP32 client for users who want a tactile device in the room — a physical hold-to-talk button, speaker, mic, no screen. Streams PCM over LAN to the framework. Same WebSocket protocol as `clients/pwa/` and `huxley-web`. Wakeword detection optional (push button is the primary input). Mainly motivated today by the AbuelOS-persona user's accessibility needs (a blind user benefits more from a tactile button than a tablet), but useful for any user who wants always-on voice without keeping an app open.
 
 **Prototyping in-repo under [`../firmware/`](../firmware/)** until the architecture is proven end-to-end on a Waveshare ESP32-S3-AUDIO-Board. Once voice works round-trip, the tree is extracted to its own `huxley-firmware` repo (no cross-repo deps beyond [`protocol.md`](./protocol.md)). Keeping the prototype next to the server while the contract is still moving lets protocol + firmware changes land in one commit; separation kicks in when both sides stabilize.
 

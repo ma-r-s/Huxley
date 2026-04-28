@@ -56,7 +56,7 @@ The extraction pipeline in `scripts/extract_sounds.py` produces WAV files. The s
 
 ## Sound palette
 
-The AbuelOS persona sound palette lives in `personas/abuelos/sounds/`. Sounds are WAV files in the format above. Raw extractions (with silence gaps) live in `sounds/raw/`; the curated production sounds live at `sounds/<name>.wav`.
+The AbuelOS persona sound palette lives in `server/personas/abuelos/sounds/`. Sounds are WAV files in the format above. Raw extractions (with silence gaps) live in `sounds/raw/`; the curated production sounds live at `sounds/<name>.wav`.
 
 ### Catalog: extracted BIOS sounds
 
@@ -66,7 +66,7 @@ Extracted from `All Wii BIOS Sounds.aiff` (83.5s compilation) by `scripts/extrac
 2. Each non-silent segment + `0.5s` of tail padding (capped at half the following gap so it can't bleed into the next sound's onset).
 3. Convert to PCM16 / 24kHz / mono. **No level normalization** — earlier `dynaudnorm` pass artificially boosted what little reverb survived the aggressive cut.
 
-To re-run: `python3 scripts/extract_sounds.py`. Files land in `personas/abuelos/sounds/raw/` (gitignored). Sequential names (`s00.wav`, `s01.wav`, …); no semantic naming until you've listened.
+To re-run: `python3 scripts/extract_sounds.py`. Files land in `server/personas/abuelos/sounds/raw/` (gitignored). Sequential names (`s00.wav`, `s01.wav`, …); no semantic naming until you've listened.
 
 | File   | Src window   | Out dur | Peak     |
 | ------ | ------------ | ------- | -------- |
@@ -92,11 +92,11 @@ To re-run: `python3 scripts/extract_sounds.py`. Files land in `personas/abuelos/
 
 37 segments total. `extract_sounds.py` prints the full per-file table on each run (it's auto-detected, so the source-of-truth catalog is the script's stdout, not this doc).
 
-**To finalize**: `afplay personas/abuelos/sounds/raw/*.wav` to audition. The Wii startup chime is most likely in the early sounds (s01 through s09 range — durations 1.3–5.5s with -4 to -8dB peaks fit a "welcome" chime profile). Pick two and copy:
+**To finalize**: `afplay server/personas/abuelos/sounds/raw/*.wav` to audition. The Wii startup chime is most likely in the early sounds (s01 through s09 range — durations 1.3–5.5s with -4 to -8dB peaks fit a "welcome" chime profile). Pick two and copy:
 
 ```bash
-cp personas/abuelos/sounds/raw/sNN.wav personas/abuelos/sounds/book_start.wav
-cp personas/abuelos/sounds/raw/sMM.wav personas/abuelos/sounds/book_end.wav
+cp server/personas/abuelos/sounds/raw/sNN.wav server/personas/abuelos/sounds/book_start.wav
+cp server/personas/abuelos/sounds/raw/sMM.wav server/personas/abuelos/sounds/book_end.wav
 ```
 
 Skill picks them up on next server start.
@@ -201,7 +201,7 @@ class AudioStream(SideEffect):
 When the stream ends naturally (not cancelled), the coordinator sends `on_complete_prompt` as a user-role conversation item and triggers a model response. The coordinator must (a) skip the prompt if a PTT-induced cancel raced the trailing silence, and (b) create a synthetic IN_RESPONSE turn so the incoming model reply (deltas, tool calls, response_done) is handled by the existing turn-aware paths instead of being silently dropped:
 
 ```python
-# packages/core/src/huxley/turn/coordinator.py
+# server/runtime/src/huxley/turn/coordinator.py
 
 async def _consume_audio_stream(self, stream: AudioStream, turn_id: str | None) -> None:
     try:
@@ -237,7 +237,7 @@ For the synthetic turn to work, `_apply_side_effects` must clear `current_turn =
 ### The `send_conversation_message` provider method
 
 ```python
-# packages/core/src/huxley/voice/openai_realtime.py
+# server/runtime/src/huxley/voice/openai_realtime.py
 
 async def send_conversation_message(self, text: str) -> None:
     """Inject a user-role message into the conversation without audio input."""
@@ -361,7 +361,7 @@ Session-connect chime, disconnect tone, "thinking" audio. These aren't tied to a
 
 ## Client-side thinking tone (Stage D)
 
-The current thinking tone (`web/src/routes/+page.svelte`) generates a 440Hz sine wave on the client. For AbuelOS:
+The current thinking tone (`clients/pwa/src/routes/+page.svelte`) generates a 440Hz sine wave on the client. For AbuelOS:
 
 1. **Frequency**: 440Hz sits in the 200Hz–4kHz vocal band. Correct target: below 200Hz (a low drone, like an old telephone hold tone — non-intrusive, clearly non-speech).
 2. **Silence timeout**: currently 400ms. For an elderly blind user expecting responses, 1500ms is a better threshold before the tone starts — long enough that normal LLM latency doesn't trigger it, short enough that actual silence gets flagged.
@@ -378,7 +378,7 @@ These are client changes only. They do not affect the server or the WebSocket pr
 - [x] `scripts/extract_sounds.py` auto-detects silence boundaries at `-55dB` (with `0.5s` minimum gap) and extracts each non-silent segment + `0.5s` of tail padding so reverb decays naturally
 - [x] 37 segments produced as PCM16 / 24kHz / mono WAV (`s00.wav` … `s36.wav`)
 - [x] Catalog table + per-file durations/peak levels generated (this document; full table printed by the script on each run)
-- [ ] Listen to candidates and copy winners to `personas/abuelos/sounds/{book_start,book_end}.wav`. Until done, the skill loads an empty palette and runs without earcons (warning logged at startup). Sounds in the s01–s09 range are the most likely Wii startup-chime candidates (longer durations, healthy peak levels).
+- [ ] Listen to candidates and copy winners to `server/personas/abuelos/sounds/{book_start,book_end}.wav`. Until done, the skill loads an empty palette and runs without earcons (warning logged at startup). Sounds in the s01–s09 range are the most likely Wii startup-chime candidates (longer durations, healthy peak levels).
 
 **Caveat**: candidates derive from copyrighted Nintendo audio. Personal-use only — replace with CC0 / generated chimes before distributing the AbuelOS persona publicly.
 
@@ -406,10 +406,10 @@ These are client changes only. They do not affect the server or the WebSocket pr
 
 ### Stage D — Client-side thinking tone ✅
 
-- [x] `web/src/lib/audio/playback.ts`: thinking tone frequency 440Hz → 120Hz (below the 200Hz–4kHz vocal band so it can't mask incoming speech)
-- [x] `web/src/lib/ws.svelte.ts`: `SILENCE_TIMEOUT_MS` 400ms → 1500ms (was over-triggering on every normal model first-token gap, teaching the user to ignore it)
-- [x] `web/src/lib/audio/playback.ts`: new `playErrorTone()` — descending 660Hz → 330Hz two-tone chime (~280ms total). Falling intervals universally read as "negative outcome" (Brewster).
-- [x] `web/src/routes/+page.svelte`: `$effect` watches state transitions; `(CONNECTING|CONVERSING) → IDLE` plays the error chime so a session drop is audibly distinguishable from a normal end.
+- [x] `clients/pwa/src/lib/audio/playback.ts`: thinking tone frequency 440Hz → 120Hz (below the 200Hz–4kHz vocal band so it can't mask incoming speech)
+- [x] `clients/pwa/src/lib/ws.svelte.ts`: `SILENCE_TIMEOUT_MS` 400ms → 1500ms (was over-triggering on every normal model first-token gap, teaching the user to ignore it)
+- [x] `clients/pwa/src/lib/audio/playback.ts`: new `playErrorTone()` — descending 660Hz → 330Hz two-tone chime (~280ms total). Falling intervals universally read as "negative outcome" (Brewster).
+- [x] `clients/pwa/src/routes/+page.svelte`: `$effect` watches state transitions; `(CONNECTING|CONVERSING) → IDLE` plays the error chime so a session drop is audibly distinguishable from a normal end.
 
 `bun run check` clean. Browser-tested: hold PTT with no audio → 1.5s of silence → low drone fills until model speaks; kill the server mid-session → descending error chime fires.
 
@@ -426,15 +426,15 @@ Quick sanity check for any `.wav` file in the sounds directory:
 
 ```bash
 # Play through system speaker (macOS) — audition all extracted candidates
-afplay personas/abuelos/sounds/raw/s01.wav
+afplay server/personas/abuelos/sounds/raw/s01.wav
 
 # Convert to PCM bytes and check size
 ffprobe -v error -show_entries format=duration \
   -of default=noprint_wrappers=1:nokey=1 \
-  personas/abuelos/sounds/book_start.wav
+  server/personas/abuelos/sounds/book_start.wav
 
 # Verify it's correct format (PCM16, 24kHz, mono)
-ffprobe -v error -show_streams personas/abuelos/sounds/book_start.wav 2>&1 | \
+ffprobe -v error -show_streams server/personas/abuelos/sounds/book_start.wav 2>&1 | \
   grep -E "codec_name|sample_rate|channels"
 ```
 

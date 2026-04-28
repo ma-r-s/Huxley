@@ -81,7 +81,7 @@ skills:
   system: {}
 ```
 
-The live file is at [`personas/abuelos/persona.yaml`](../../personas/abuelos/persona.yaml). A real deployment customizes the `system_prompt` block with the user's actual name, location, and any other context that helps the agent feel personal.
+The live file is at [`server/personas/abuelos/persona.yaml`](../../personas/abuelos/persona.yaml). A real deployment customizes the `system_prompt` block with the user's actual name, location, and any other context that helps the agent feel personal.
 
 The sound UX architecture (earcons, completion-prompt mechanism, persona overrides) is documented in [`../sounds.md`](../sounds.md).
 

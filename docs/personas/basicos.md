@@ -13,7 +13,7 @@ skill returns structured data; the persona shapes how the LLM speaks it.
 That claim is testable. If the news skill bakes in "warm tone" or "always
 plays a chime," you can't write a persona that consumes it tersely without
 chimes. BasicOS is the counter-test: a deliberately plain, terse persona
-sharing the same machinery as AbuelOS. Anything in `packages/skills/*/`
+sharing the same machinery as AbuelOS. Anything in `server/skills/*/`
 that fights it has leaked persona assumptions where they don't belong.
 
 ## Target user (notional)
@@ -39,7 +39,7 @@ audio-only constraints.
 
 ## persona.yaml (the actual file)
 
-Lives at [`personas/basicos/persona.yaml`](../../personas/basicos/persona.yaml).
+Lives at [`server/personas/basicos/persona.yaml`](../../personas/basicos/persona.yaml).
 Notable bits versus AbuelOS:
 
 ```yaml
@@ -80,7 +80,7 @@ because of the persona's `system_prompt` + the absence of `start_sound`.
 ## Run BasicOS
 
 ```bash
-cd packages/core
+cd server/runtime
 HUXLEY_PERSONA=basicos HUXLEY_SERVER_PORT=8766 uv run huxley
 ```
 
@@ -89,13 +89,13 @@ dropdown](../../web/.env.local.example):
 
 ```bash
 # Terminal 1 — AbuelOS on default port
-cd packages/core && uv run huxley
+cd server/runtime && uv run huxley
 
 # Terminal 2 — BasicOS on port 8766
-cd packages/core && HUXLEY_PERSONA=basicos HUXLEY_SERVER_PORT=8766 uv run huxley
+cd server/runtime && HUXLEY_PERSONA=basicos HUXLEY_SERVER_PORT=8766 uv run huxley
 
 # Terminal 3 — web client; the dropdown reads VITE_HUXLEY_PERSONAS
-cd web && cp .env.local.example .env.local && bun dev
+cd clients/pwa && cp .env.local.example .env.local && bun dev
 ```
 
 Open `http://localhost:5173` — the header shows a `personas:` dropdown

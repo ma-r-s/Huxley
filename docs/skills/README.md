@@ -4,7 +4,7 @@ A Huxley skill is a Python package that teaches the agent to do something new �
 
 For the conceptual model, see [`../concepts.md`](../concepts.md). For a full worked example, see [`audiobooks.md`](./audiobooks.md). For an honest map of which skill ideas fit the framework today and where the real limits are, see [`../extensibility.md`](../extensibility.md).
 
-> **SDK status**: the Huxley SDK (`huxley_sdk`) lives at `packages/sdk/`. Skill authors import from it: `from huxley_sdk import Skill, ToolDefinition, ToolResult, SkillContext`. The two first-party skills (`audiobooks`, `system`) live under `packages/skills/<name>/` and are loaded via `huxley.skills` entry points exactly like a third-party skill would be. Their layout is the canonical reference for the structure described below.
+> **SDK status**: the Huxley SDK (`huxley_sdk`) lives at `server/sdk/`. Skill authors import from it: `from huxley_sdk import Skill, ToolDefinition, ToolResult, SkillContext`. First-party skills live under `server/skills/<name>/` and are loaded via `huxley.skills` entry points exactly like a third-party skill would be. Their layout is the canonical reference for the structure described below.
 
 ## The Skill protocol
 
@@ -533,13 +533,13 @@ The convention: `<skill_name>.<event>`. The framework auto-injects the `turn` ID
 
 Skills must have unit tests. Mock the infrastructure (`Storage`, any external clients), assert on `ToolResult.output` and — for side-effect tools — check `isinstance(result.side_effect, AudioStream)` and invoke `result.side_effect.factory()` to verify the underlying stream call.
 
-For end-to-end coverage of how your skill behaves inside the framework (factory latching, mid-chain interrupts, follow-up rounds), see the integration test pattern in [`test_coordinator_skill_integration.py`](../../packages/core/tests/unit/test_coordinator_skill_integration.py) — it wires a real `TurnCoordinator` to a real skill with a mocked infrastructure.
+For end-to-end coverage of how your skill behaves inside the framework (factory latching, mid-chain interrupts, follow-up rounds), see the integration test pattern in [`test_coordinator_skill_integration.py`](../../server/runtime/tests/unit/test_coordinator_skill_integration.py) — it wires a real `TurnCoordinator` to a real skill with a mocked infrastructure.
 
-Integration tests that hit real subprocess (ffmpeg) or real provider APIs live in `packages/core/tests/integration/` and are marked `@pytest.mark.integration`. Skipped by default.
+Integration tests that hit real subprocess (ffmpeg) or real provider APIs live in `server/runtime/tests/integration/` and are marked `@pytest.mark.integration`. Skipped by default.
 
 ## Distribution — making your skill installable
 
-Built-in skills (audiobooks, news, radio, system, telegram, timers) live in `packages/skills/<name>/` in this repo. Community skills are independent Python packages published on PyPI under the convention `huxley-skill-<name>`.
+Built-in skills (audiobooks, news, radio, system, telegram, timers) live in `server/skills/<name>/` in this repo. Community skills are independent Python packages published on PyPI under the convention `huxley-skill-<name>`.
 
 Skill-specific docs:
 
@@ -572,4 +572,4 @@ huxley-skill-my-thing/
     └── test_my_skill.py
 ```
 
-The two first-party skills (`audiobooks`, `system`) live under `packages/skills/<name>/` and are loaded via `huxley.skills` entry points exactly like a third-party skill would be. Their layout is the canonical reference for the structure above.
+The two first-party skills (`audiobooks`, `system`) live under `server/skills/<name>/` and are loaded via `huxley.skills` entry points exactly like a third-party skill would be. Their layout is the canonical reference for the structure above.

@@ -6,10 +6,10 @@ Huxley is a Python server. You give it a **persona** (a YAML file: name, voice, 
 
 ```bash
 git clone <repo> huxley && cd huxley
-echo "HUXLEY_OPENAI_API_KEY=sk-..." > packages/core/.env
+echo "HUXLEY_OPENAI_API_KEY=sk-..." > server/runtime/.env
 uv sync && uv run huxley
 # In another terminal:
-cd web && bun install && bun dev
+cd clients/pwa && bun install && bun dev
 # Open http://localhost:5173, hold the button, speak.
 ```
 
@@ -203,8 +203,8 @@ The canonical persona in the repo is **AbuelOS**: a Spanish-language companion f
              │
              ▼
 ┌────────────────────────────┐
-│  Huxley framework          │   WebSocket server, session manager,
-│  (packages/core)           │   turn coordinator, focus manager,
+│  Huxley runtime            │   WebSocket server, session manager,
+│  (server/runtime)          │   turn coordinator, focus manager,
 │                            │   skill registry, storage
 └────┬──────────┬────────────┘
      │          │          │
@@ -270,7 +270,7 @@ Full guide: [`docs/skills/README.md`](./docs/skills/README.md)
 ## Writing a persona
 
 ```yaml
-# personas/myagent/persona.yaml
+# server/personas/myagent/persona.yaml
 version: 1
 name: MyAgent
 voice: alloy
@@ -312,20 +312,20 @@ Full guide: [`docs/personas/README.md`](./docs/personas/README.md)
 uv sync --all-packages             # install workspace
 
 # Lint + typecheck
-uv run ruff check packages/
-uv run mypy packages/sdk/src packages/core/src
+uv run ruff check server/
+uv run mypy server/sdk/src server/runtime/src
 
 # Tests (594 total)
-uv run --package huxley-sdk pytest packages/sdk/tests/                            # 72
-uv run --package huxley pytest packages/core/tests/                                # 370
-uv run --package huxley-skill-audiobooks pytest packages/skills/audiobooks/tests/  # 61
-uv run --package huxley-skill-timers pytest packages/skills/timers/tests/          # 30
-uv run --package huxley-skill-news pytest packages/skills/news/tests/              # 18
-uv run --package huxley-skill-radio pytest packages/skills/radio/tests/            # 19
-uv run --package huxley-skill-telegram pytest packages/skills/telegram/tests/      # 90
+uv run --package huxley-sdk pytest server/sdk/tests/                            # 72
+uv run --package huxley pytest server/runtime/tests/                                # 370
+uv run --package huxley-skill-audiobooks pytest server/skills/audiobooks/tests/  # 61
+uv run --package huxley-skill-timers pytest server/skills/timers/tests/          # 30
+uv run --package huxley-skill-news pytest server/skills/news/tests/              # 18
+uv run --package huxley-skill-radio pytest server/skills/radio/tests/            # 19
+uv run --package huxley-skill-telegram pytest server/skills/telegram/tests/      # 90
 
 # Dev client
-cd web && bun run check
+cd clients/pwa && bun run check
 ```
 
 ---

@@ -1,8 +1,8 @@
 # Architecture
 
-This is the architecture of **Huxley the framework** — the parts that are persona-agnostic and skill-agnostic. Persona spec lives in [`personas/`](./personas/), skill spec in [`skills/`](./skills/). Diagrams use the AbuelOS persona as the worked example because it's the canonical one, but the architecture is identical for any persona.
+This is the architecture of **Huxley the framework** — the parts that are persona-agnostic and skill-agnostic. Persona spec lives in [`server/personas/`](./personas/), skill spec in [`skills/`](./skills/). Diagrams use the AbuelOS persona as the worked example because it's the canonical one, but the architecture is identical for any persona.
 
-> **Refactor in progress**: stage 1 (rename + workspace + SDK extraction) shipped on 2026-04-16. The Python namespaces are now `huxley` (framework runtime, in `packages/core/`) and `huxley_sdk` (skill author surface, in `packages/sdk/`). Stages 2–5 add entry-point-loaded skill packages, persona YAML loading, and the persona-data move; until they land, the two skills (`audiobooks`, `system`) still live inside `packages/core/src/huxley/skills/` and are constructed inline in `app.py`. The plan lives in `~/.claude/plans/proud-conjuring-papert.md`.
+> **Layout**: the Python source lives under `server/`. Runtime is `server/runtime/` (the `huxley` package), SDK is `server/sdk/` (the `huxley_sdk` package), each first-party skill is its own workspace member under `server/skills/<name>/`. Personas live alongside under `server/personas/<name>/`. Clients (PWA, firmware) are at `clients/<name>/`; the marketing site is at `site/`.
 
 ## System overview
 
@@ -270,7 +270,7 @@ flowchart TD
     Coord[turn/coordinator.py]
     Loader[loader.py<br/>entry-point discovery]
     Registry[huxley_sdk/registry.py<br/>SkillRegistry]
-    Skills[packages/skills/*]
+    Skills[server/skills/*]
     State[state/machine.py]
     Storage[storage/db.py]
     NSStorage[storage/skill.py<br/>NamespacedSkillStorage]
@@ -300,38 +300,38 @@ Dependencies flow **downward**. `huxley_sdk/types.py` is the universal leaf — 
 
 ## Where to look in code
 
-| Concern                           | File                                                               |
-| --------------------------------- | ------------------------------------------------------------------ |
-| Orchestrator / all wiring         | `packages/core/src/huxley/app.py`                                  |
-| WebSocket audio server            | `packages/core/src/huxley/server/server.py`                        |
-| State machine + transitions       | `packages/core/src/huxley/state/machine.py`                        |
-| Turn coordinator + factory fire   | `packages/core/src/huxley/turn/coordinator.py`                     |
-| Turn vocabulary (`Turn`, states)  | `packages/core/src/huxley/turn/state.py`                           |
-| `TurnFactory`                     | `packages/core/src/huxley/turn/factory.py`                         |
-| `MicRouter` (mic-frame dispatch)  | `packages/core/src/huxley/turn/mic_router.py`                      |
-| `SpeakingState` (speaker owner)   | `packages/core/src/huxley/turn/speaking_state.py`                  |
-| Turn observers (Dialog, Content)  | `packages/core/src/huxley/turn/observers.py`                       |
-| `FocusManager` + actor loop       | `packages/core/src/huxley/focus/manager.py`                        |
-| Focus vocabulary (Channel, State) | `packages/core/src/huxley/focus/vocabulary.py`                     |
-| VoiceProvider protocol            | `packages/core/src/huxley/voice/provider.py`                       |
-| OpenAI Realtime implementation    | `packages/core/src/huxley/voice/openai_realtime.py`                |
-| OpenAI event schemas              | `packages/core/src/huxley/voice/openai_protocol.py`                |
-| StubVoiceProvider (for tests)     | `packages/core/src/huxley/voice/stub.py`                           |
-| Skill protocol + ToolResult       | `packages/sdk/src/huxley_sdk/types.py`                             |
-| Skill registry + dispatch         | `packages/sdk/src/huxley_sdk/registry.py`                          |
-| SkillContext + SkillStorage       | `packages/sdk/src/huxley_sdk/types.py`                             |
-| FakeSkill (test helper)           | `packages/sdk/src/huxley_sdk/testing.py`                           |
-| Skill loader (entry points)       | `packages/core/src/huxley/loader.py`                               |
-| Audiobooks skill                  | `packages/skills/audiobooks/src/huxley_skill_audiobooks/skill.py`  |
-| Audiobook ffmpeg stream generator | `packages/skills/audiobooks/src/huxley_skill_audiobooks/player.py` |
-| System skill                      | `packages/skills/system/src/huxley_skill_system/skill.py`          |
-| SQLite wrapper                    | `packages/core/src/huxley/storage/db.py`                           |
-| Per-skill namespaced KV adapter   | `packages/core/src/huxley/storage/skill.py`                        |
-| Config (env-driven settings)      | `packages/core/src/huxley/config.py`                               |
+| Concern                           | File                                                             |
+| --------------------------------- | ---------------------------------------------------------------- |
+| Orchestrator / all wiring         | `server/runtime/src/huxley/app.py`                               |
+| WebSocket audio server            | `server/runtime/src/huxley/server/server.py`                     |
+| State machine + transitions       | `server/runtime/src/huxley/state/machine.py`                     |
+| Turn coordinator + factory fire   | `server/runtime/src/huxley/turn/coordinator.py`                  |
+| Turn vocabulary (`Turn`, states)  | `server/runtime/src/huxley/turn/state.py`                        |
+| `TurnFactory`                     | `server/runtime/src/huxley/turn/factory.py`                      |
+| `MicRouter` (mic-frame dispatch)  | `server/runtime/src/huxley/turn/mic_router.py`                   |
+| `SpeakingState` (speaker owner)   | `server/runtime/src/huxley/turn/speaking_state.py`               |
+| Turn observers (Dialog, Content)  | `server/runtime/src/huxley/turn/observers.py`                    |
+| `FocusManager` + actor loop       | `server/runtime/src/huxley/focus/manager.py`                     |
+| Focus vocabulary (Channel, State) | `server/runtime/src/huxley/focus/vocabulary.py`                  |
+| VoiceProvider protocol            | `server/runtime/src/huxley/voice/provider.py`                    |
+| OpenAI Realtime implementation    | `server/runtime/src/huxley/voice/openai_realtime.py`             |
+| OpenAI event schemas              | `server/runtime/src/huxley/voice/openai_protocol.py`             |
+| StubVoiceProvider (for tests)     | `server/runtime/src/huxley/voice/stub.py`                        |
+| Skill protocol + ToolResult       | `server/sdk/src/huxley_sdk/types.py`                             |
+| Skill registry + dispatch         | `server/sdk/src/huxley_sdk/registry.py`                          |
+| SkillContext + SkillStorage       | `server/sdk/src/huxley_sdk/types.py`                             |
+| FakeSkill (test helper)           | `server/sdk/src/huxley_sdk/testing.py`                           |
+| Skill loader (entry points)       | `server/runtime/src/huxley/loader.py`                            |
+| Audiobooks skill                  | `server/skills/audiobooks/src/huxley_skill_audiobooks/skill.py`  |
+| Audiobook ffmpeg stream generator | `server/skills/audiobooks/src/huxley_skill_audiobooks/player.py` |
+| System skill                      | `server/skills/system/src/huxley_skill_system/skill.py`          |
+| SQLite wrapper                    | `server/runtime/src/huxley/storage/db.py`                        |
+| Per-skill namespaced KV adapter   | `server/runtime/src/huxley/storage/skill.py`                     |
+| Config (env-driven settings)      | `server/runtime/src/huxley/config.py`                            |
 
 After stage 4 lands, persona-driven configuration takes over:
 
 ```
-personas/abuelos/persona.yaml   # the AbuelOS persona spec
-personas/abuelos/data/          # audiobooks library + sqlite db
+server/personas/abuelos/persona.yaml   # the AbuelOS persona spec
+server/personas/abuelos/data/          # audiobooks library + sqlite db
 ```

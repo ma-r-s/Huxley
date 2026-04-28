@@ -78,11 +78,11 @@ server/data/audiobooks/
     └── María.m4b
 ```
 
-Configured in the persona's `skills.audiobooks` block (see [`personas/abuelos/persona.yaml`](../../personas/abuelos/persona.yaml)): `library` is a path relative to the persona's `data/` directory (default `audiobooks`). `ffmpeg` / `ffprobe` let a persona pin specific binaries if the PATH defaults aren't right.
+Configured in the persona's `skills.audiobooks` block (see [`server/personas/abuelos/persona.yaml`](../../personas/abuelos/persona.yaml)): `library` is a path relative to the persona's `data/` directory (default `audiobooks`). `ffmpeg` / `ffprobe` let a persona pin specific binaries if the PATH defaults aren't right.
 
 ## Current state
 
-The skill lives in [`packages/skills/audiobooks/src/huxley_skill_audiobooks/skill.py`](../../packages/skills/audiobooks/src/huxley_skill_audiobooks/skill.py). It's loaded via the `huxley.skills` entry point declared in its `pyproject.toml`. Backed by [`AudiobookPlayer`](../../packages/skills/audiobooks/src/huxley_skill_audiobooks/player.py), a stateless ffmpeg wrapper exposing `probe()` + `stream(path, start_position)`. The skill returns playback as a `ToolResult(side_effect=AudioStream(factory=...))` that the [`TurnCoordinator`](../turns.md) invokes after the model finishes speaking — book audio is forwarded through the same `server.send_audio` channel as OpenAI model audio. Honest audit:
+The skill lives in [`server/skills/audiobooks/src/huxley_skill_audiobooks/skill.py`](../../server/skills/audiobooks/src/huxley_skill_audiobooks/skill.py). It's loaded via the `huxley.skills` entry point declared in its `pyproject.toml`. Backed by [`AudiobookPlayer`](../../server/skills/audiobooks/src/huxley_skill_audiobooks/player.py), a stateless ffmpeg wrapper exposing `probe()` + `stream(path, start_position)`. The skill returns playback as a `ToolResult(side_effect=AudioStream(factory=...))` that the [`TurnCoordinator`](../turns.md) invokes after the model finishes speaking — book audio is forwarded through the same `server.send_audio` channel as OpenAI model audio. Honest audit:
 
 | Capability                                                                               | Status                                                                                                            |
 | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
@@ -103,7 +103,7 @@ The skill lives in [`packages/skills/audiobooks/src/huxley_skill_audiobooks/skil
 | Human-readable `position_label` in play/seek responses (e.g. "23 minutos y 40 segundos") | ✅                                                                                                                |
 | `get_progress` tool — current position, total duration, remaining time, % complete       | ✅ (estimates live position without storage round-trip while playing)                                             |
 | `list_in_progress` tool — all books with a saved position > 0                            | ✅                                                                                                                |
-| **`book_start` earcon** before book audio begins                                         | ✅ leading PCM bytes yielded by factory; loaded from `personas/<name>/sounds/book_start.wav`                      |
+| **`book_start` earcon** before book audio begins                                         | ✅ leading PCM bytes yielded by factory; loaded from `server/personas/<name>/sounds/book_start.wav`                      |
 | **`book_end` earcon** after natural completion                                           | ✅ trailing PCM bytes yielded by factory before `completed = True`; PTT during chime still records book as done   |
 | **`on_complete_prompt` triggers LLM-narrated end-of-book announcement**                  | ✅ persona-overridable text; coordinator creates synthetic IN_RESPONSE turn and calls `request_response`          |
 | **Completion silence buffer overlaps with model first-token latency**                    | ✅ `completion_silence_ms` on `AudioStream`; coordinator sends silence AFTER firing `request_response`            |
@@ -216,7 +216,7 @@ Every tool return path must include a `message` field written for the LLM narrat
 ## Gaps / TODO
 
 - [x] **End-of-book announcement** — earcon (`book_end.wav`) plays via the stream factory; coordinator then injects `on_complete_prompt` into the conversation and the LLM narrates "el libro terminó, ¿busco otro?" in the persona's tone. Full architecture in [`../sounds.md`](../sounds.md).
-- [x] **Sound UX (earcons + completion silence buffer)** — `book_start` plays before book audio; `book_end` plays after natural completion; coordinator sends `completion_silence_ms` of silence concurrently with model first-token latency. All configurable via `personas/<name>/persona.yaml`.
+- [x] **Sound UX (earcons + completion silence buffer)** — `book_start` plays before book audio; `book_end` plays after natural completion; coordinator sends `completion_silence_ms` of silence concurrently with model first-token latency. All configurable via `server/personas/<name>/persona.yaml`.
 - [ ] Playback speed control — elderly users may benefit from 0.8x. ffmpeg `atempo` filter; stored per-session.
 - [ ] M4B embedded-metadata reader (surface `ffprobe`'s `format.tags` into the catalog)
 - [ ] Chapter awareness via `ffprobe`'s `chapters` array + `seek_chapter` action

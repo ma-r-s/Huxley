@@ -27,7 +27,7 @@
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/mario/Projects/Personal/Code/Huxley/packages/core</string>
+    <string>/Users/mario/Projects/Personal/Code/Huxley/server/runtime</string>
 
     <key>EnvironmentVariables</key>
     <dict>
