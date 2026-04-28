@@ -40,6 +40,19 @@ export function Install() {
           <br />
           <em style={{ fontStyle: "italic" }}>{t("install.titleB")}</em>
         </h2>
+        <p
+          style={{
+            fontFamily: "var(--hux-serif)",
+            fontStyle: "italic",
+            fontSize: 16,
+            lineHeight: 1.5,
+            opacity: 0.78,
+            margin: "0 auto 28px",
+            maxWidth: 560,
+          }}
+        >
+          {t("install.cost")}
+        </p>
         <pre
           style={{
             margin: "0 auto",
@@ -56,10 +69,10 @@ export function Install() {
             maxWidth: 640,
           }}
         >
-          {`$ git clone huxley && cd huxley
-$ echo "HUXLEY_OPENAI_API_KEY=sk-..." > .env
-$ uv sync && cd server/runtime && uv run huxley
-$ cd ../../clients/pwa && bun install && bun dev
+          {`$ git clone https://github.com/ma-r-s/Huxley.git && cd Huxley
+$ echo "HUXLEY_OPENAI_API_KEY=sk-..." > server/runtime/.env
+$ uv sync && cd server/runtime && uv run huxley   # terminal 1
+$ cd clients/pwa && bun install && bun dev         # terminal 2
 $ open http://localhost:5174   # hold the button, speak.`}
         </pre>
         <div
@@ -92,32 +105,72 @@ $ open http://localhost:5174   # hold the button, speak.`}
 export function Footer() {
   const { t } = useTranslation();
   const { isMobile } = useViewport();
+  const linkStyle = {
+    color: "inherit",
+    textDecoration: "none",
+    opacity: 0.85,
+  } as const;
   return (
     <footer
       style={{
         position: "relative",
         zIndex: 2,
-        padding: isMobile ? "32px 24px 40px" : "40px 64px 56px",
+        padding: isMobile ? "40px 24px 48px" : "48px 64px 56px",
         borderTop: "1px solid var(--hux-fg-line)",
         display: "flex",
-        flexDirection: isMobile ? "column" : "row",
-        justifyContent: "space-between",
-        alignItems: "center",
-        gap: isMobile ? 16 : 0,
+        flexDirection: "column",
+        gap: isMobile ? 24 : 28,
         fontFamily: "var(--hux-mono)",
         fontSize: 11,
         letterSpacing: "0.12em",
         textTransform: "uppercase",
-        opacity: 0.6,
+        opacity: 0.7,
       }}
     >
-      <Wordmark size={22} />
+      <div
+        style={{
+          display: "flex",
+          flexDirection: isMobile ? "column" : "row",
+          justifyContent: "space-between",
+          alignItems: isMobile ? "flex-start" : "center",
+          gap: isMobile ? 20 : 0,
+        }}
+      >
+        <Wordmark size={22} />
+        <div
+          style={{
+            display: "flex",
+            gap: isMobile ? 16 : 22,
+            flexWrap: "wrap",
+          }}
+        >
+          <a style={linkStyle} href="https://github.com/ma-r-s/Huxley">
+            {t("footer.linkRepo")}
+          </a>
+          <a style={linkStyle} href="https://github.com/ma-r-s/Huxley/issues">
+            {t("footer.linkIssues")}
+          </a>
+          <a
+            style={linkStyle}
+            href="https://github.com/ma-r-s/Huxley/discussions"
+          >
+            {t("footer.linkDiscussions")}
+          </a>
+          <a
+            style={linkStyle}
+            href="https://github.com/ma-r-s/Huxley/tree/main/docs"
+          >
+            {t("footer.linkDocs")}
+          </a>
+        </div>
+      </div>
       <div
         style={{
           display: "flex",
           gap: isMobile ? 12 : 24,
           flexWrap: "wrap",
-          justifyContent: "center",
+          justifyContent: isMobile ? "flex-start" : "center",
+          opacity: 0.75,
         }}
       >
         <span>{t("footer.license")}</span>

@@ -39,20 +39,20 @@
       "architecture": "§ 02 · Core",
       "timeline": "§ 03 · Turns",
       "skills": "§ 04 · Skills",
-      "grows": "§ 05 · Grows",
-      "today": "§ 06 · Today",
+      "today": "§ 05 · Today",
+      "grows": "§ 06 · Direction",
       "personas": "§ 07 · Personas",
       "install": "§ 08 · Install"
     }
   },
   "hero": {
-    "pill": "Open-source · MIT · Python 3.13",
+    "pill": "Voice-agent framework · Self-hosted Python · MIT",
     "titleLine1": "A voice you can",
     "titleLine2": "actually own.",
     "subtitle": "Huxley is a Python framework for real-time voice agents. You bring a persona and skills — it handles turn coordination, interrupts, proactive speech, audio bridging.",
     "ctaInstall": "Install Huxley",
     "ctaSeeHow": "See how it works",
-    "installSnippet": "git clone huxley && uv run huxley",
+    "installSnippet": "git clone github.com/ma-r-s/Huxley && uv run huxley",
     "status": {
       "idle": { "line": "Held, listening for the hold.", "sub": "AT REST" },
       "listening": {
@@ -67,7 +67,7 @@
         "line": "Dimmed the living room to 30%.",
         "sub": "SPEAKING"
       },
-      "interrupt": { "line": "Wait — cancel that.", "sub": "INTERRUPTED" }
+      "interrupt": { "line": "Cancelling.", "sub": "INTERRUPT" }
     }
   },
   "problem": {
@@ -101,7 +101,8 @@
         "name": "Huxley",
         "good1": "Opinionated on turn sequencing and audio flow",
         "good2": "Open for skills, personas, and clients",
-        "good3": "Self-hosted Python — your box, your keys"
+        "good3": "Self-hosted Python — your box, your keys",
+        "good4": "Behavioral constraints in YAML (never_say_no, child_safe)"
       }
     }
   },
@@ -110,8 +111,22 @@
     "titleA": "One coordinator.",
     "titleB": "One audio channel.",
     "subtitle": "The framework sequences every turn through a single speaker. Model voice, tool audio, and skill-claimed bridges never collide.",
-    "footerLeft": "wss://huxley.local:8443",
+    "footerLeft": "ws://localhost:8765",
     "footerRight": "entry-points / huxley.skills",
+    "mobileSummary": {
+      "title": "How the pieces fit",
+      "intro": "On a phone the diagram below collapses to a list — the relationships are easier to read than the SVG.",
+      "rows": [
+        {
+          "k": "persona.yaml",
+          "v": "Identity + skill list, loaded at startup"
+        },
+        { "k": "Voice provider", "v": "OpenAI Realtime ⟷ Huxley core" },
+        { "k": "Huxley core", "v": "Coordinator · Focus · Skill registry" },
+        { "k": "Skills", "v": "Python packages discovered via entry-points" },
+        { "k": "Client", "v": "Browser today · ESP32 next · phone via the PWA" }
+      ]
+    },
     "cards": {
       "turnCoord": {
         "k": "Turn coordination",
@@ -174,6 +189,24 @@
       "t2Body": "Model finishes its sentence before the chime plays.",
       "t3Title": "T = 5.3s",
       "t3Body": "Proactive inject waits for the previous turn to drain."
+    },
+    "mobileSummary": {
+      "title": "An 8-second scenario, plain text",
+      "rows": [
+        {
+          "k": "0.0 – 1.5s",
+          "v": "User holds the button: \"Set a timer for 25 minutes.\""
+        },
+        { "k": "2.2 – 4.0s", "v": "Model speaks: \"Setting timer…\"" },
+        {
+          "k": "4.2 – 5.0s",
+          "v": "Tool chime plays — only after model speech drains."
+        },
+        {
+          "k": "5.3 – 7.0s",
+          "v": "Proactive inject (later): \"Timer's up.\" Holds until the channel is free."
+        }
+      ]
     }
   },
   "skills": {
@@ -192,10 +225,10 @@
     "writingBody": "Declare tools. Handle calls. Return a ToolResult — optionally with an AudioStream, a PlaySound, or an InputClaim for full-duplex audio. The framework sequences the rest."
   },
   "grows": {
-    "eyebrow": "§ 05 — Huxley-market + Huxley-grows",
-    "titleA": "You ask.",
-    "titleB": "It finds, or builds.",
-    "subtitle": "First it checks huxley-market — a registry of free, open-source skills built by other users. If nothing fits, huxley-grows writes one from scratch. Either way, no terminal. Install from voice, or tap it through the Huxley-web app on your phone.",
+    "eyebrow": "§ 06 — The shape we're building toward",
+    "titleA": "Where this is going.",
+    "titleB": "Not where it is yet.",
+    "subtitle": "The architecture leaves room for two things that don't ship today: a community registry of open-source skills (huxley-market), and a build agent that writes a new skill from a voice prompt (huxley-grows). The transcript below is what those would feel like in use — neither is implemented.",
     "liveTurn": "live turn",
     "tabs": {
       "found": "Found it",
@@ -236,7 +269,7 @@
     }
   },
   "today": {
-    "eyebrow": "§ 06 — Today",
+    "eyebrow": "§ 05 — Today",
     "titleA": "Built today,",
     "titleB": "building tomorrow.",
     "subtitle": "Real numbers from the current commit. The framework is small, opinionated, and tested.",
@@ -248,7 +281,7 @@
       "adrs": "ADRs filed",
       "license": "license"
     },
-    "roadmapEyebrow": "§ 06.1 — What's next",
+    "roadmapEyebrow": "§ 05.1 — What's next",
     "roadmapTitle": "Curated, not exhaustive.",
     "roadmapSubtitle": "The full plan lives in docs/roadmap.md. These four are the next visible moves.",
     "roadmap": {
@@ -274,8 +307,9 @@
     "eyebrow": "§ 07 — Personas",
     "titleA": "One framework.",
     "titleB": "Every voice you need.",
-    "subtitle": "A persona is a YAML file. Pick the voice, the language, the skills, the guardrails. Huxley adapts — the person you’re building for shouldn’t have to.",
+    "subtitle": "A persona is a YAML file: voice, language, skills, guardrails. AbuelOS is in production today; the others are design examples that show how far the same framework stretches.",
     "personaLabel": "persona",
+    "shipsTag": "ships today",
     "facetKeys": {
       "voice": "Voice",
       "language": "Language",
@@ -288,12 +322,17 @@
     "eyebrow": "§ 08 — Get started",
     "titleA": "Five lines.",
     "titleB": "A voice of your own.",
+    "cost": "Runs on OpenAI Realtime: roughly $0.06/min listening, $0.24/min speaking. You pay OpenAI directly — Huxley adds no markup. Idle is free.",
     "ctaGitHub": "GitHub ↗",
     "ctaDocs": "Read the docs"
   },
   "footer": {
     "license": "MIT licensed",
     "version": "Pre-1.0",
-    "personasCount": "Two personas shipped"
+    "personasCount": "Two personas shipped",
+    "linkRepo": "GitHub",
+    "linkIssues": "Issues",
+    "linkDiscussions": "Discussions",
+    "linkDocs": "Docs"
   }
 }

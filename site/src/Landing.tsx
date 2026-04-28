@@ -37,8 +37,8 @@ export function Landing() {
       <Architecture />
       <TurnTimeline />
       <Skills />
-      <HuxleyGrows />
       <Today />
+      <HuxleyGrows />
       <Personas />
       <Install />
       <Footer />
@@ -73,12 +73,12 @@ function VoiceThreadBar() {
       label: t("voiceThread.chapters.skills"),
       position: 0.56,
     },
-    { id: "grows", label: t("voiceThread.chapters.grows"), position: 0.66 },
     {
       id: "today",
       label: t("voiceThread.chapters.today"),
-      position: 0.77,
+      position: 0.66,
     },
+    { id: "grows", label: t("voiceThread.chapters.grows"), position: 0.77 },
     {
       id: "persona",
       label: t("voiceThread.chapters.personas"),

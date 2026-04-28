@@ -25,7 +25,7 @@ const ROWS: Row[] = [
     id: "huxley",
     hero: true,
     badKeys: [],
-    goodKeys: ["good1", "good2", "good3"],
+    goodKeys: ["good1", "good2", "good3", "good4"],
   },
 ];
 

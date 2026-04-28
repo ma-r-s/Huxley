@@ -49,7 +49,7 @@ const V_FOUND: Variant = {
     {
       t: 3400,
       kind: "model",
-      text: "Found one — hacker-news by @merrill, 4.8★. Queued; I’ll ping you when it’s in.",
+      text: "Found a hacker-news skill in the registry. Queued the install — I’ll ping you when it’s in.",
     },
     { t: 5200, kind: "gap", text: "— a few seconds later —" },
     { t: 6400, kind: "job", phase: "installing" },
@@ -132,7 +132,7 @@ const V_NEEDSCONFIG: Variant = {
     {
       t: 3100,
       kind: "model",
-      text: "Found spotify by @lena. Queued; I’ll let you know.",
+      text: "Found a spotify skill in the registry. Queued the install — I’ll let you know.",
     },
     { t: 4800, kind: "gap", text: "— a few seconds later —" },
     { t: 5400, kind: "job", phase: "installing" },
@@ -219,7 +219,7 @@ interface Phase {
 const JOB_PHASES: Record<PhaseKey, Phase> = {
   searching: {
     label: "searching huxley-market",
-    detail: "1,247 skills · semantic + tag query",
+    detail: "registry · semantic + tag query",
     pct: 0.18,
     channel: "market",
   },

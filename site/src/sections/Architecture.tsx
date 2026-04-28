@@ -165,144 +165,148 @@ export function Architecture() {
         subtitle={tt("architecture.subtitle")}
       />
 
-      <Reveal delay={350} y={36} duration={800}>
-        <div
-          style={{
-            marginTop: 64,
-            position: "relative",
-            background: "rgba(0,0,0,0.18)",
-            border: "1px solid var(--hux-fg-line)",
-            borderRadius: 20,
-            padding: 24,
-            overflow: "hidden",
-          }}
-        >
-          <svg
-            viewBox="0 0 960 570"
-            style={{ width: "100%", height: "auto", display: "block" }}
+      {isMobile ? (
+        <MobileSummary />
+      ) : (
+        <Reveal delay={350} y={36} duration={800}>
+          <div
+            style={{
+              marginTop: 64,
+              position: "relative",
+              background: "rgba(0,0,0,0.18)",
+              border: "1px solid var(--hux-fg-line)",
+              borderRadius: 20,
+              padding: 24,
+              overflow: "hidden",
+            }}
           >
-            {EDGES.map(([a, b], i) => {
-              const [ax, ay] = center(a);
-              const [bx, by] = center(b);
-              return (
-                <line
-                  key={i}
-                  x1={ax}
-                  y1={ay}
-                  x2={bx}
-                  y2={by}
-                  stroke="currentColor"
-                  strokeWidth="1"
-                  opacity="0.25"
-                  strokeDasharray="3 4"
-                />
-              );
-            })}
+            <svg
+              viewBox="0 0 960 570"
+              style={{ width: "100%", height: "auto", display: "block" }}
+            >
+              {EDGES.map(([a, b], i) => {
+                const [ax, ay] = center(a);
+                const [bx, by] = center(b);
+                return (
+                  <line
+                    key={i}
+                    x1={ax}
+                    y1={ay}
+                    x2={bx}
+                    y2={by}
+                    stroke="currentColor"
+                    strokeWidth="1"
+                    opacity="0.25"
+                    strokeDasharray="3 4"
+                  />
+                );
+              })}
 
-            {Object.entries(N).map(([id, n]) => (
-              <g key={id}>
-                <rect
-                  x={n.x}
-                  y={n.y}
-                  width={n.w}
-                  height={n.h}
-                  rx="12"
-                  fill={n.big ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.2)"}
-                  stroke="currentColor"
-                  strokeWidth={n.big ? 1.4 : 1}
-                  opacity={n.big ? 1 : 0.9}
-                />
-                <text
-                  x={n.x + 18}
-                  y={n.y + 26}
-                  style={{
-                    fontFamily: "var(--hux-serif)",
-                    fontSize: n.big ? 22 : 16,
-                    fontStyle: n.big ? "italic" : "normal",
-                  }}
-                  fill="currentColor"
-                >
-                  {n.label}
-                </text>
-                <text
-                  x={n.x + 18}
-                  y={n.y + 46}
-                  style={{
-                    fontFamily: "var(--hux-mono)",
-                    fontSize: 10,
-                    letterSpacing: "0.1em",
-                    textTransform: "uppercase",
-                  }}
-                  fill="currentColor"
-                  opacity="0.55"
-                >
-                  {n.sub}
-                </text>
-              </g>
-            ))}
-
-            {FLOWS.map((f, i) => {
-              const p = getPacketPos(f);
-              if (!p) return null;
-              return (
-                <g key={i}>
-                  <circle
-                    cx={p.x}
-                    cy={p.y}
-                    r="6"
-                    fill="var(--hux-fg)"
-                    opacity={p.opacity * 0.9}
-                    style={{ filter: "drop-shadow(0 0 6px var(--hux-fg))" }}
+              {Object.entries(N).map(([id, n]) => (
+                <g key={id}>
+                  <rect
+                    x={n.x}
+                    y={n.y}
+                    width={n.w}
+                    height={n.h}
+                    rx="12"
+                    fill={n.big ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.2)"}
+                    stroke="currentColor"
+                    strokeWidth={n.big ? 1.4 : 1}
+                    opacity={n.big ? 1 : 0.9}
                   />
                   <text
-                    x={p.x + 10}
-                    y={p.y - 8}
+                    x={n.x + 18}
+                    y={n.y + 26}
                     style={{
-                      fontFamily: "var(--hux-mono)",
-                      fontSize: 9,
-                      letterSpacing: "0.1em",
+                      fontFamily: "var(--hux-serif)",
+                      fontSize: n.big ? 22 : 16,
+                      fontStyle: n.big ? "italic" : "normal",
                     }}
                     fill="currentColor"
-                    opacity={p.opacity * 0.7}
                   >
-                    {f.label}
+                    {n.label}
+                  </text>
+                  <text
+                    x={n.x + 18}
+                    y={n.y + 46}
+                    style={{
+                      fontFamily: "var(--hux-mono)",
+                      fontSize: 10,
+                      letterSpacing: "0.1em",
+                      textTransform: "uppercase",
+                    }}
+                    fill="currentColor"
+                    opacity="0.55"
+                  >
+                    {n.sub}
                   </text>
                 </g>
-              );
-            })}
+              ))}
 
-            <text
-              x="20"
-              y="30"
-              style={{
-                fontFamily: "var(--hux-mono)",
-                fontSize: 10,
-                letterSpacing: "0.2em",
-                textTransform: "uppercase",
-              }}
-              fill="currentColor"
-              opacity="0.4"
-            >
-              wss://huxley.local:8443
-            </text>
-            <text
-              x="940"
-              y="30"
-              textAnchor="end"
-              style={{
-                fontFamily: "var(--hux-mono)",
-                fontSize: 10,
-                letterSpacing: "0.2em",
-                textTransform: "uppercase",
-              }}
-              fill="currentColor"
-              opacity="0.4"
-            >
-              entry-points / huxley.skills
-            </text>
-          </svg>
-        </div>
-      </Reveal>
+              {FLOWS.map((f, i) => {
+                const p = getPacketPos(f);
+                if (!p) return null;
+                return (
+                  <g key={i}>
+                    <circle
+                      cx={p.x}
+                      cy={p.y}
+                      r="6"
+                      fill="var(--hux-fg)"
+                      opacity={p.opacity * 0.9}
+                      style={{ filter: "drop-shadow(0 0 6px var(--hux-fg))" }}
+                    />
+                    <text
+                      x={p.x + 10}
+                      y={p.y - 8}
+                      style={{
+                        fontFamily: "var(--hux-mono)",
+                        fontSize: 9,
+                        letterSpacing: "0.1em",
+                      }}
+                      fill="currentColor"
+                      opacity={p.opacity * 0.7}
+                    >
+                      {f.label}
+                    </text>
+                  </g>
+                );
+              })}
+
+              <text
+                x="20"
+                y="30"
+                style={{
+                  fontFamily: "var(--hux-mono)",
+                  fontSize: 10,
+                  letterSpacing: "0.2em",
+                  textTransform: "uppercase",
+                }}
+                fill="currentColor"
+                opacity="0.4"
+              >
+                {tt("architecture.footerLeft")}
+              </text>
+              <text
+                x="940"
+                y="30"
+                textAnchor="end"
+                style={{
+                  fontFamily: "var(--hux-mono)",
+                  fontSize: 10,
+                  letterSpacing: "0.2em",
+                  textTransform: "uppercase",
+                }}
+                fill="currentColor"
+                opacity="0.4"
+              >
+                {tt("architecture.footerRight")}
+              </text>
+            </svg>
+          </div>
+        </Reveal>
+      )}
 
       <div
         style={{
@@ -349,5 +353,85 @@ export function Architecture() {
         ))}
       </div>
     </section>
+  );
+}
+
+// Mobile-only fallback. The 960×570 SVG diagram becomes unreadable on a
+// 340px-wide phone (10pt mono text scales to ~3pt). On mobile we render the
+// same architectural relationships as a stacked list — same content, legible.
+interface SummaryRow {
+  k: string;
+  v: string;
+}
+
+function MobileSummary() {
+  const { t: tt } = useTranslation();
+  const rows = tt("architecture.mobileSummary.rows", {
+    returnObjects: true,
+  }) as SummaryRow[];
+  return (
+    <div
+      style={{
+        marginTop: 40,
+        background: "rgba(0,0,0,0.18)",
+        border: "1px solid var(--hux-fg-line)",
+        borderRadius: 16,
+        padding: 20,
+      }}
+    >
+      <div
+        className="eyebrow"
+        style={{ opacity: 0.6, marginBottom: 6, fontSize: 10 }}
+      >
+        {tt("architecture.mobileSummary.title")}
+      </div>
+      <p
+        style={{
+          fontFamily: "var(--hux-serif)",
+          fontStyle: "italic",
+          fontSize: 14,
+          lineHeight: 1.45,
+          opacity: 0.78,
+          margin: "0 0 16px",
+        }}
+      >
+        {tt("architecture.mobileSummary.intro")}
+      </p>
+      <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+        {rows.map((r, i) => (
+          <div
+            key={i}
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr",
+              gap: 4,
+              padding: "12px 0",
+              borderTop: i === 0 ? "none" : "1px solid var(--hux-fg-line)",
+            }}
+          >
+            <div
+              className="mono"
+              style={{
+                fontSize: 10,
+                letterSpacing: "0.14em",
+                textTransform: "uppercase",
+                opacity: 0.65,
+              }}
+            >
+              {r.k}
+            </div>
+            <div
+              style={{
+                fontFamily: "var(--hux-sans)",
+                fontSize: 14,
+                lineHeight: 1.45,
+              }}
+            >
+              {r.v}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
