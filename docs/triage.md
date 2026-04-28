@@ -2661,6 +2661,97 @@ Plus **one new ADR** in `docs/decisions.md`: "2026-04-XX — Focus plane complet
 
 See DoD bullets. No new files beyond the ADR.
 
+## T2.8 — Move telegram MTProto creds out of repo root
+
+**Status**: queued · **Task**: — · **Effort**: S (~1 hour)
+
+**Problem.** The telegram skill loads MTProto credentials from two files at the
+repo root: `telegram` (api_id + api_hash + bot token, exported from
+`my.telegram.org/apps`) and `telegram.phones` (per-contact phone numbers).
+Both are gitignored, but their presence at repo root makes the tree look
+like it contains leaked secrets to anyone skimming, and conflates "framework
+state" with "user-and-persona-specific config." After the
+2026-04-28 server/clients/site restructure this is the last
+pollution at the repo root.
+
+**Why it matters.** Repo root readability — a clean top level should only
+have the architectural buckets (`server/`, `clients/`, `site/`, `docs/`,
+`scripts/`) plus standard meta. Per-persona secrets belong with the persona
+that uses them. Also: the current layout silently couples "where the server
+runs from" to "where the telegram skill finds its creds." Decoupling means
+the skill can be loaded by any persona that has the right files in its
+data dir, not just one that runs from a particular cwd.
+
+### Validation (Gate 1)
+
+- `server/skills/telegram/src/huxley_skill_telegram/skill.py` line 422
+  comment: _"in `.env` at packages/core/; dev/test can put them directly in
+  the…"_ (path is even stale — references the pre-restructure location).
+- `.gitignore` lines 11–12: `/telegram` and `/telegram.*` anchored to
+  repo root with the comment _"Mario exports the my.telegram.org/apps
+  page as a plain file in repo root; kept out of git"_.
+- `ls /Users/mario/Projects/Personal/Code/Huxley/` shows `telegram` and
+  `telegram.phones` at root today.
+
+### Design (Gate 2 — trivial, skip critic)
+
+1. Introduce a `secrets_dir: str` field on the telegram skill's persona
+   config block (`server/personas/abuelos/persona.yaml`). Default:
+   `${persona.data_dir}/secrets/telegram/` (resolved at load time via the
+   existing `SkillContext` data-dir API).
+2. Skill reads `<secrets_dir>/telegram` (api_id/api_hash/bot token) and
+   `<secrets_dir>/contacts.phones` (renamed from `telegram.phones` to drop
+   the redundant prefix once it lives under a telegram-named dir).
+3. Move the two files locally:
+   `mv telegram server/personas/abuelos/data/secrets/telegram/telegram`
+   `mv telegram.phones server/personas/abuelos/data/secrets/telegram/contacts.phones`
+4. Update `.gitignore`: drop the root-anchored `/telegram` entries; the
+   per-persona data dir is already gitignored via
+   `server/personas/*/data/`, so the new location is automatically covered.
+5. Update the comment in `skill.py` to point at the new location.
+6. Skill regression test: existing tests load creds via a fixture; update
+   the fixture to point at a temp `secrets_dir` and verify the loader
+   honors it.
+
+### Definition of Done
+
+- [ ] `secrets_dir` field added to telegram skill config (with sensible
+      default under `${persona.data_dir}/secrets/telegram/`)
+- [ ] Skill reads from `secrets_dir`, not cwd
+- [ ] Files moved out of repo root on Mario's laptop (mechanical mv, no
+      git change since they're gitignored)
+- [ ] `.gitignore` cleaned: root-anchored `/telegram` patterns removed
+- [ ] `skill.py` location-comment updated
+- [ ] Existing telegram test suite still green (90 tests); fixture
+      updated to use temp `secrets_dir`
+- [ ] One regression test asserting the loader respects `secrets_dir`
+- [ ] `server/personas/abuelos/persona.yaml` documents the field
+- [ ] `docs/skills/README.md` mentions per-skill secrets convention
+- [ ] After ship: `ls Huxley/` shows zero `telegram*` entries
+
+### Tests (Gate 3)
+
+- Regression: `test_loads_creds_from_configured_secrets_dir` — set
+  `secrets_dir=tmp_path`, drop `telegram` + `contacts.phones` files
+  there, assert the skill reads them and doesn't touch cwd.
+
+### Docs touched (Gate 4)
+
+- `docs/skills/README.md` — note the per-skill-secrets pattern
+- `docs/skills/<telegram skill doc>` — document the new config field
+- `CLAUDE.md` — drop the "telegram creds at root" footnote once it's no
+  longer true
+- `.gitignore` — drop the `/telegram*` block, leave the explanatory
+  comment at the new location (or delete it entirely)
+
+### Why deferred
+
+Bundled with the 2026-04-28 restructure proposal but explicitly held back
+because (a) it requires a small skill code change, not just file moves, and
+(b) keeping that restructure layout-only made the diff easier to review.
+Trigger to revisit: any session that's already touching the telegram skill
+for an unrelated reason — fold this in then.
+
 ---
 
 # Deferred (with revisit trigger)
