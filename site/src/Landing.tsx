@@ -3,6 +3,7 @@
 //   nav → sticky voice thread → hero → problem → architecture → timeline →
 //   skills → grows → personas → install → footer.
 
+import { useTranslation } from "react-i18next";
 import { BalancedBackdrop, BalNav } from "./components/Chrome.js";
 import { VoiceThread } from "./components/VoiceThread.js";
 import { useVoiceState } from "./lib/voiceThread.js";
@@ -46,16 +47,41 @@ export function Landing() {
 // Sticky voice-thread bar — sits just under the nav. Section IDs MUST match
 // the strings each section passes to useRegisterSection().
 function VoiceThreadBar() {
+  const { t } = useTranslation();
   const { isMobile } = useViewport();
   const sections = [
-    { id: "hero", label: "Hero", position: 0.02 },
-    { id: "problem", label: "§ 01 · Why", position: 0.14 },
-    { id: "architecture", label: "§ 02 · Core", position: 0.28 },
-    { id: "timeline", label: "§ 03 · Turns", position: 0.42 },
-    { id: "skills", label: "§ 04 · Skills", position: 0.56 },
-    { id: "grows", label: "§ 05 · Grows", position: 0.7 },
-    { id: "persona", label: "§ 06 · Personas", position: 0.83 },
-    { id: "install", label: "§ 07 · Install", position: 0.95 },
+    { id: "hero", label: t("voiceThread.chapters.hero"), position: 0.02 },
+    {
+      id: "problem",
+      label: t("voiceThread.chapters.problem"),
+      position: 0.14,
+    },
+    {
+      id: "architecture",
+      label: t("voiceThread.chapters.architecture"),
+      position: 0.28,
+    },
+    {
+      id: "timeline",
+      label: t("voiceThread.chapters.timeline"),
+      position: 0.42,
+    },
+    {
+      id: "skills",
+      label: t("voiceThread.chapters.skills"),
+      position: 0.56,
+    },
+    { id: "grows", label: t("voiceThread.chapters.grows"), position: 0.7 },
+    {
+      id: "persona",
+      label: t("voiceThread.chapters.personas"),
+      position: 0.83,
+    },
+    {
+      id: "install",
+      label: t("voiceThread.chapters.install"),
+      position: 0.95,
+    },
   ];
 
   return (
@@ -80,27 +106,12 @@ function VoiceThreadBar() {
 
 // Status line above the waveform — names what Huxley is "doing" as you read.
 function VoiceThreadHeader() {
+  const { t } = useTranslation();
   const { state, id } = useVoiceState();
-  const LABELS: Record<string, { tag: string; sub: string }> = {
-    idle: { tag: "Idle", sub: "Held, listening for the hold." },
-    listening: {
-      tag: "Listening",
-      sub: "Capturing audio — waiting for release.",
-    },
-    thinking: {
-      tag: "Thinking",
-      sub: "Routing through coordinator and skills.",
-    },
-    speaking: {
-      tag: "Speaking",
-      sub: "Draining the audio channel to one voice.",
-    },
-    interrupt: {
-      tag: "Interrupt",
-      sub: "Atomic drop. Queue cleared. Channel flushed.",
-    },
+  const cur = {
+    tag: t(`voiceThread.states.${state}.tag`),
+    sub: t(`voiceThread.states.${state}.sub`),
   };
-  const cur = LABELS[state] ?? LABELS.idle!;
   const { isMobile } = useViewport();
   return (
     <div
@@ -132,7 +143,7 @@ function VoiceThreadHeader() {
               opacity: 0.55,
             }}
           >
-            state
+            {t("voiceThread.labelState")}
           </span>
         )}
         <span
@@ -172,7 +183,7 @@ function VoiceThreadHeader() {
           whiteSpace: "nowrap",
         }}
       >
-        turn · {id}
+        {t("voiceThread.turnPrefix")} · {id}
       </span>
     </div>
   );

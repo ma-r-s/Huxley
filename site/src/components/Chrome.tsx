@@ -2,8 +2,9 @@
 // Stays in one place so sections don't redefine the same primitives.
 
 import type { CSSProperties, ReactNode } from "react";
-import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useViewport } from "../lib/useViewport.js";
+import { LANG_LABEL, SUPPORTED_LANGS, type LangCode } from "../i18n/index.js";
 import { Reveal } from "./Reveal.js";
 import { Wordmark } from "./Wordmark.js";
 
@@ -41,7 +42,7 @@ export function BalancedBackdrop() {
 
 // ── Nav bar ────────────────────────────────────────────────────────────
 export function BalNav() {
-  const [lang, setLang] = useState<"EN" | "ES" | "FR">("EN");
+  const { t } = useTranslation();
   const { isMobile, isTablet } = useViewport();
   const showLinks = !isMobile && !isTablet;
   return (
@@ -59,7 +60,7 @@ export function BalNav() {
     >
       <Wordmark
         size={isMobile ? 26 : 32}
-        subtle={isMobile ? undefined : "v0.9 · pre-1.0"}
+        subtle={isMobile ? undefined : t("nav.wordmarkSubtle")}
       />
       {showLinks && (
         <div
@@ -72,22 +73,22 @@ export function BalNav() {
           }}
         >
           <a style={navA} href="#problem">
-            Why
+            {t("nav.why")}
           </a>
           <a style={navA} href="#architecture">
-            Architecture
+            {t("nav.architecture")}
           </a>
           <a style={navA} href="#skills">
-            Skills
+            {t("nav.skills")}
           </a>
           <a style={navA} href="#grows">
-            Grows
+            {t("nav.grows")}
           </a>
           <a style={navA} href="#persona">
-            Personas
+            {t("nav.personas")}
           </a>
           <a style={navA} href="#install">
-            Install
+            {t("nav.install")}
           </a>
         </div>
       )}
@@ -98,14 +99,14 @@ export function BalNav() {
           gap: isMobile ? 8 : 12,
         }}
       >
-        <LangToggle lang={lang} setLang={setLang} />
+        <LangToggle />
         {!isMobile && (
           <a style={chipGhost} href="#">
-            Docs
+            {t("nav.docs")}
           </a>
         )}
-        <a style={chipSolid} href="#">
-          GitHub {!isMobile && "↗"}
+        <a style={chipSolid} href="https://github.com/ma-r-s/Huxley">
+          {t("nav.github")} {!isMobile && "↗"}
         </a>
       </div>
     </nav>
@@ -118,15 +119,12 @@ const navA: CSSProperties = {
   fontFamily: "var(--hux-sans)",
 };
 
-// Segmented language picker — placeholder only, doesn't actually translate.
-function LangToggle({
-  lang,
-  setLang,
-}: {
-  lang: string;
-  setLang: (l: "EN" | "ES" | "FR") => void;
-}) {
-  const langs: Array<"EN" | "ES" | "FR"> = ["EN", "ES", "FR"];
+// Segmented language picker — drives i18next + persists to localStorage
+// (the i18next LanguageDetector handles the persistence; we just call
+// changeLanguage and React re-renders via the t() hook).
+function LangToggle() {
+  const { i18n } = useTranslation();
+  const current = (i18n.resolvedLanguage as LangCode) || "en";
   return (
     <div
       role="group"
@@ -140,12 +138,12 @@ function LangToggle({
         fontFamily: "var(--hux-mono)",
       }}
     >
-      {langs.map((l) => {
-        const active = lang === l;
+      {SUPPORTED_LANGS.map((code) => {
+        const active = current === code;
         return (
           <button
-            key={l}
-            onClick={() => setLang(l)}
+            key={code}
+            onClick={() => i18n.changeLanguage(code)}
             aria-pressed={active}
             style={{
               appearance: "none",
@@ -164,7 +162,7 @@ function LangToggle({
                 "background 160ms ease, color 160ms ease, opacity 160ms ease",
             }}
           >
-            {l}
+            {LANG_LABEL[code]}
           </button>
         );
       })}

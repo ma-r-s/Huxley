@@ -3,6 +3,7 @@
 // a code example showing what a skill looks like in Python.
 
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useRegisterSection, useInView } from "../lib/voiceThread.js";
 import { useViewport } from "../lib/useViewport.js";
 import { SectionHead } from "../components/Chrome.js";
@@ -99,14 +100,19 @@ const ALL_SKILLS: Skill[] = [
 ];
 
 export function Skills() {
+  const { t } = useTranslation();
   const sectionRef = useRegisterSection<HTMLElement>("skills", "speaking");
   // Separate sentinel: useInView attaches its own ref to a small div near the
   // top of the section. We don't try to share a ref with sectionRef because
   // each hook needs its own element to observe.
   const [sentinelRef, inView] = useInView<HTMLDivElement>(0.15);
   const { isMobile } = useViewport();
-  const [filter, setFilter] = useState("All");
-  const cats = ["All", ...Array.from(new Set(ALL_SKILLS.map((s) => s.cat)))];
+  const ALL_LABEL = t("skills.filterAll");
+  const [filter, setFilter] = useState(ALL_LABEL);
+  const cats = [
+    ALL_LABEL,
+    ...Array.from(new Set(ALL_SKILLS.map((s) => s.cat))),
+  ];
 
   // Stagger the tiles in once the section enters view.
   const [count, setCount] = useState(0);
@@ -122,7 +128,9 @@ export function Skills() {
   }, [inView]);
 
   const visible =
-    filter === "All" ? ALL_SKILLS : ALL_SKILLS.filter((s) => s.cat === filter);
+    filter === ALL_LABEL
+      ? ALL_SKILLS
+      : ALL_SKILLS.filter((s) => s.cat === filter);
   const shipped = ALL_SKILLS.filter((s) => s.shipped).length;
 
   return (
@@ -137,15 +145,15 @@ export function Skills() {
       }}
     >
       <SectionHead
-        eyebrow="§ 04 — Skill system"
+        eyebrow={t("skills.eyebrow")}
         title={
           <>
-            Anything that speaks Python
+            {t("skills.titleA")}
             <br />
-            <em style={{ fontStyle: "italic" }}>is a skill.</em>
+            <em style={{ fontStyle: "italic" }}>{t("skills.titleB")}</em>
           </>
         }
-        subtitle="Skills register via Python entry-points. Add a line to persona.yaml, restart — the framework never changes."
+        subtitle={t("skills.subtitle")}
       />
 
       {/* Invisible sentinel — gates the tile stagger animation */}
@@ -194,18 +202,20 @@ export function Skills() {
           }}
         >
           <span>
-            <b style={{ color: "var(--hux-fg)" }}>{shipped}</b> shipped
+            <b style={{ color: "var(--hux-fg)" }}>{shipped}</b>{" "}
+            {t("skills.stats.shipped")}
           </span>
           <span style={{ opacity: 0.5 }}>·</span>
           <span>
             <b style={{ color: "var(--hux-fg)" }}>
               {ALL_SKILLS.length - shipped}
             </b>{" "}
-            designed for
+            {t("skills.stats.designed")}
           </span>
           <span style={{ opacity: 0.5 }}>·</span>
           <span>
-            <b style={{ color: "var(--hux-fg)" }}>∞</b> possible
+            <b style={{ color: "var(--hux-fg)" }}>∞</b>{" "}
+            {t("skills.stats.possible")}
           </span>
         </div>
       </div>
@@ -222,7 +232,7 @@ export function Skills() {
       >
         {visible.map((s, i) => {
           const showing = inView && i < count;
-          const matches = filter === "All" || s.cat === filter;
+          const matches = filter === ALL_LABEL || s.cat === filter;
           return (
             <div
               key={s.id}
@@ -305,7 +315,7 @@ export function Skills() {
       >
         <div>
           <div className="eyebrow" style={{ opacity: 0.6, marginBottom: 16 }}>
-            § 04.1 — Writing one
+            {t("skills.writingEyebrow")}
           </div>
           <h3
             style={{
@@ -317,7 +327,7 @@ export function Skills() {
               margin: "0 0 16px",
             }}
           >
-            A skill is a Python package.
+            {t("skills.writingTitle")}
           </h3>
           <p
             style={{
@@ -329,9 +339,7 @@ export function Skills() {
               maxWidth: 460,
             }}
           >
-            Declare tools. Handle calls. Return a ToolResult — optionally with
-            an AudioStream, a PlaySound, or an InputClaim for full-duplex audio.
-            The framework sequences the rest.
+            {t("skills.writingBody")}
           </p>
         </div>
         <pre

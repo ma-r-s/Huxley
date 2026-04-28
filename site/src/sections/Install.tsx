@@ -1,11 +1,13 @@
 // Install + footer. Centered, calm close. Five-line install snippet.
 
+import { useTranslation } from "react-i18next";
 import { useRegisterSection } from "../lib/voiceThread.js";
 import { useViewport } from "../lib/useViewport.js";
 import { chipGhost, chipSolid } from "../components/Chrome.js";
 import { Wordmark } from "../components/Wordmark.js";
 
 export function Install() {
+  const { t } = useTranslation();
   const sectionRef = useRegisterSection<HTMLElement>("install", "idle");
   const { isMobile } = useViewport();
   return (
@@ -22,7 +24,7 @@ export function Install() {
     >
       <div style={{ maxWidth: 800, margin: "0 auto" }}>
         <div className="eyebrow" style={{ opacity: 0.6, marginBottom: 20 }}>
-          § 07 — Get started
+          {t("install.eyebrow")}
         </div>
         <h2
           style={{
@@ -34,9 +36,9 @@ export function Install() {
             margin: "0 0 32px",
           }}
         >
-          Five lines.
+          {t("install.titleA")}
           <br />
-          <em style={{ fontStyle: "italic" }}>A voice of your own.</em>
+          <em style={{ fontStyle: "italic" }}>{t("install.titleB")}</em>
         </h2>
         <pre
           style={{
@@ -73,13 +75,13 @@ $ open http://localhost:5174   # hold the button, speak.`}
             style={{ ...chipSolid, padding: "14px 24px", fontSize: 13 }}
             href="https://github.com/ma-r-s/Huxley"
           >
-            GitHub ↗
+            {t("install.ctaGitHub")}
           </a>
           <a
             style={{ ...chipGhost, padding: "14px 24px", fontSize: 13 }}
             href="#"
           >
-            Read the docs
+            {t("install.ctaDocs")}
           </a>
         </div>
       </div>
@@ -88,6 +90,7 @@ $ open http://localhost:5174   # hold the button, speak.`}
 }
 
 export function Footer() {
+  const { t } = useTranslation();
   const { isMobile } = useViewport();
   return (
     <footer
@@ -117,11 +120,11 @@ export function Footer() {
           justifyContent: "center",
         }}
       >
-        <span>MIT licensed</span>
+        <span>{t("footer.license")}</span>
         <span>·</span>
-        <span>Pre-1.0</span>
+        <span>{t("footer.version")}</span>
         <span>·</span>
-        <span>Two personas shipped</span>
+        <span>{t("footer.personasCount")}</span>
       </div>
     </footer>
   );

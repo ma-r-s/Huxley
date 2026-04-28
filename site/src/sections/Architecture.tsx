@@ -3,6 +3,7 @@
 // drawn edges). Bottom row of three small concept blocks.
 
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useRegisterSection } from "../lib/voiceThread.js";
 import { useViewport } from "../lib/useViewport.js";
 import { SectionHead } from "../components/Chrome.js";
@@ -112,6 +113,7 @@ const EDGES: Array<[string, string]> = [
 ];
 
 export function Architecture() {
+  const { t: tt } = useTranslation();
   const sectionRef = useRegisterSection<HTMLElement>(
     "architecture",
     "thinking",
@@ -153,14 +155,14 @@ export function Architecture() {
       }}
     >
       <SectionHead
-        eyebrow="§ 02 — How it works"
+        eyebrow={tt("architecture.eyebrow")}
         title={
           <>
-            One coordinator.{" "}
-            <em style={{ fontStyle: "italic" }}>One audio channel.</em>
+            {tt("architecture.titleA")}{" "}
+            <em style={{ fontStyle: "italic" }}>{tt("architecture.titleB")}</em>
           </>
         }
-        subtitle="The framework sequences every turn through a single speaker. Model voice, tool audio, and skill-claimed bridges never collide."
+        subtitle={tt("architecture.subtitle")}
       />
 
       <Reveal delay={350} y={36} duration={800}>
@@ -312,33 +314,17 @@ export function Architecture() {
           gap: isMobile ? 24 : 32,
         }}
       >
-        {[
-          {
-            k: "Turn coordination",
-            v: "Model speech always finishes before tool audio. Interrupts are atomic — drop flag, clear queue, flush, cancel.",
-          },
-          {
-            k: "Skill dispatch",
-            v: "Python packages registered via entry-points. Typed context, namespaced storage, no framework internals leaked.",
-          },
-          {
-            k: "Proactive speech",
-            v: "Skills call ctx.inject_turn() and Huxley speaks first — without waiting for the user. Timers, alerts, doorbells, inbound messages.",
-          },
-          {
-            k: "Audio bridging",
-            v: "Skills can claim the mic and speaker for full-duplex audio (calls, voice memos). The focus manager prevents collisions with model speech.",
-          },
-          {
-            k: "Behavioral constraints",
-            v: "never_say_no, confirm_destructive, child_safe — declared in persona.yaml and enforced system-wide. Build for vulnerable users without special code.",
-          },
-          {
-            k: "Voice provider",
-            v: "OpenAI Realtime today; the architecture leaves room for other providers, but Huxley itself doesn't train or serve models.",
-          },
-        ].map((x, i) => (
-          <Reveal key={x.k} delay={i * 120} y={20} duration={650}>
+        {(
+          [
+            "turnCoord",
+            "skillDispatch",
+            "proactive",
+            "bridging",
+            "constraints",
+            "provider",
+          ] as const
+        ).map((cardKey, i) => (
+          <Reveal key={cardKey} delay={i * 120} y={20} duration={650}>
             <div
               style={{
                 borderTop: "1px solid var(--hux-fg-line)",
@@ -353,10 +339,10 @@ export function Architecture() {
                   marginBottom: 8,
                 }}
               >
-                {x.k}
+                {tt(`architecture.cards.${cardKey}.k`)}
               </div>
               <div style={{ fontSize: 14, lineHeight: 1.5, opacity: 0.78 }}>
-                {x.v}
+                {tt(`architecture.cards.${cardKey}.v`)}
               </div>
             </div>
           </Reveal>

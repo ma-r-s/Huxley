@@ -3,54 +3,34 @@
 // Reinforces the argument visually as you read it.
 
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useRegisterSection, useVoiceState } from "../lib/voiceThread.js";
 import { useViewport } from "../lib/useViewport.js";
 import { SectionHead } from "../components/Chrome.js";
 
 interface Row {
-  name: string;
-  bad: string[];
-  good: string[];
+  /** translation key under problem.rows.<id> */
+  id: "alexa" | "openai" | "pipecat" | "diy" | "huxley";
+  badKeys: string[];
+  goodKeys: string[];
   hero?: boolean;
 }
 
 const ROWS: Row[] = [
+  { id: "alexa", badKeys: ["bad1", "bad2", "bad3"], goodKeys: [] },
+  { id: "openai", badKeys: ["bad1", "bad2", "bad3"], goodKeys: [] },
+  { id: "pipecat", badKeys: ["bad1", "bad2"], goodKeys: [] },
+  { id: "diy", badKeys: ["bad1"], goodKeys: [] },
   {
-    name: "Alexa / Google Home",
-    bad: ["Walled garden", "Cloud-only", "Certification fees"],
-    good: [],
-  },
-  {
-    name: "OpenAI voice mode",
-    bad: ["One voice, one brain", "No self-hosting", "No custom skills"],
-    good: [],
-  },
-  {
-    name: "Pipecat / LiveKit",
-    bad: [
-      "Blank-slate pipelines",
-      "You solve turns, interrupts, audio collisions",
-    ],
-    good: [],
-  },
-  {
-    name: "Build it yourself",
-    bad: ["Six months of plumbing before the first feature"],
-    good: [],
-  },
-  {
-    name: "Huxley",
+    id: "huxley",
     hero: true,
-    bad: [],
-    good: [
-      "Opinionated on turn sequencing and audio flow",
-      "Open for skills, personas, and clients",
-      "Self-hosted Python — your box, your keys",
-    ],
+    badKeys: [],
+    goodKeys: ["good1", "good2", "good3"],
   },
 ];
 
 export function Problem() {
+  const { t } = useTranslation();
   const sectionRef = useRegisterSection<HTMLElement>("problem", "listening");
   const { id: activeSection, scrollProgress } = useVoiceState();
   const { isMobile, isTablet } = useViewport();
@@ -76,17 +56,15 @@ export function Problem() {
       }}
     >
       <SectionHead
-        eyebrow="§ 01 — The problem"
+        eyebrow={t("problem.eyebrow")}
         title={
           <>
-            Every voice platform asks you to
+            {t("problem.titleLine1")}
             <br />
-            <em style={{ fontStyle: "italic" }}>
-              give up something essential.
-            </em>
+            <em style={{ fontStyle: "italic" }}>{t("problem.titleLine2")}</em>
           </>
         }
-        subtitle="Ownership. Extensibility. Or the first six months of your life."
+        subtitle={t("problem.subtitle")}
       />
       <div
         style={{
@@ -116,7 +94,7 @@ export function Problem() {
 
           return (
             <div
-              key={r.name}
+              key={r.id}
               style={{
                 borderRight: "1px solid var(--hux-fg-line)",
                 borderBottom: "1px solid var(--hux-fg-line)",
@@ -153,7 +131,7 @@ export function Problem() {
                   transition: "text-shadow 500ms ease",
                 }}
               >
-                {r.name}
+                {t(`problem.rows.${r.id}.name`)}
               </div>
               <div
                 style={{
@@ -162,9 +140,9 @@ export function Problem() {
                   gap: 10,
                 }}
               >
-                {r.bad.map((b) => (
+                {r.badKeys.map((bKey) => (
                   <div
-                    key={b}
+                    key={bKey}
                     style={{
                       display: "flex",
                       gap: 10,
@@ -183,12 +161,12 @@ export function Problem() {
                         opacity: 0.4,
                       }}
                     />
-                    <span>{b}</span>
+                    <span>{t(`problem.rows.${r.id}.${bKey}`)}</span>
                   </div>
                 ))}
-                {r.good.map((g) => (
+                {r.goodKeys.map((gKey) => (
                   <div
-                    key={g}
+                    key={gKey}
                     style={{
                       display: "flex",
                       gap: 10,
@@ -207,7 +185,7 @@ export function Problem() {
                         boxShadow: `0 0 ${8 + heroLift * 12}px var(--hux-fg)`,
                       }}
                     />
-                    <span>{g}</span>
+                    <span>{t(`problem.rows.${r.id}.${gKey}`)}</span>
                   </div>
                 ))}
               </div>
