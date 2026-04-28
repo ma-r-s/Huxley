@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { useRegisterSection, useInView } from "../lib/voiceThread.js";
+import { useViewport } from "../lib/useViewport.js";
 import { SectionHead } from "../components/Chrome.js";
 
 interface Skill {
@@ -103,6 +104,7 @@ export function Skills() {
   // top of the section. We don't try to share a ref with sectionRef because
   // each hook needs its own element to observe.
   const [sentinelRef, inView] = useInView<HTMLDivElement>(0.15);
+  const { isMobile } = useViewport();
   const [filter, setFilter] = useState("All");
   const cats = ["All", ...Array.from(new Set(ALL_SKILLS.map((s) => s.cat)))];
 
@@ -130,7 +132,7 @@ export function Skills() {
       style={{
         position: "relative",
         zIndex: 2,
-        padding: "120px 64px",
+        padding: isMobile ? "72px 24px" : "120px 64px",
         borderTop: "1px solid var(--hux-fg-line)",
       }}
     >
@@ -296,7 +298,7 @@ export function Skills() {
         style={{
           marginTop: 56,
           display: "grid",
-          gridTemplateColumns: "1fr 1fr",
+          gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr",
           gap: 32,
           alignItems: "start",
         }}

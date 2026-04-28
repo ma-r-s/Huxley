@@ -6,6 +6,7 @@
 import { BalancedBackdrop, BalNav } from "./components/Chrome.js";
 import { VoiceThread } from "./components/VoiceThread.js";
 import { useVoiceState } from "./lib/voiceThread.js";
+import { useViewport } from "./lib/useViewport.js";
 import { Hero } from "./sections/Hero.js";
 import { Problem } from "./sections/Problem.js";
 import { Architecture } from "./sections/Architecture.js";
@@ -45,6 +46,7 @@ export function Landing() {
 // Sticky voice-thread bar — sits just under the nav. Section IDs MUST match
 // the strings each section passes to useRegisterSection().
 function VoiceThreadBar() {
+  const { isMobile } = useViewport();
   const sections = [
     { id: "hero", label: "Hero", position: 0.02 },
     { id: "problem", label: "§ 01 · Why", position: 0.14 },
@@ -62,7 +64,7 @@ function VoiceThreadBar() {
         position: "sticky",
         top: 0,
         zIndex: 40,
-        padding: "6px 48px 10px",
+        padding: isMobile ? "6px 16px 10px" : "6px 48px 10px",
         background: "color-mix(in oklab, var(--hux-coral) 82%, black)",
         backdropFilter: "blur(10px) saturate(140%)",
         WebkitBackdropFilter: "blur(10px) saturate(140%)",
@@ -71,7 +73,7 @@ function VoiceThreadBar() {
       }}
     >
       <VoiceThreadHeader />
-      <VoiceThread sections={sections} height={44} />
+      <VoiceThread sections={sections} height={isMobile ? 32 : 44} />
     </div>
   );
 }
@@ -99,6 +101,7 @@ function VoiceThreadHeader() {
     },
   };
   const cur = LABELS[state] ?? LABELS.idle!;
+  const { isMobile } = useViewport();
   return (
     <div
       style={{
@@ -107,24 +110,35 @@ function VoiceThreadHeader() {
         justifyContent: "space-between",
         paddingBottom: 6,
         color: "var(--hux-fg)",
+        gap: 8,
+        overflow: "hidden",
       }}
     >
-      <div style={{ display: "flex", alignItems: "baseline", gap: 14 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: isMobile ? 8 : 14,
+          minWidth: 0,
+        }}
+      >
+        {!isMobile && (
+          <span
+            style={{
+              fontFamily: "var(--hux-mono)",
+              fontSize: 10,
+              letterSpacing: "0.22em",
+              textTransform: "uppercase",
+              opacity: 0.55,
+            }}
+          >
+            state
+          </span>
+        )}
         <span
           style={{
             fontFamily: "var(--hux-mono)",
-            fontSize: 10,
-            letterSpacing: "0.22em",
-            textTransform: "uppercase",
-            opacity: 0.55,
-          }}
-        >
-          state
-        </span>
-        <span
-          style={{
-            fontFamily: "var(--hux-mono)",
-            fontSize: 11,
+            fontSize: isMobile ? 9 : 11,
             letterSpacing: "0.16em",
             textTransform: "uppercase",
             opacity: 0.95,
@@ -132,24 +146,30 @@ function VoiceThreadHeader() {
         >
           {cur.tag}
         </span>
-        <span
-          style={{
-            fontFamily: "var(--hux-serif)",
-            fontStyle: "italic",
-            fontSize: 14,
-            opacity: 0.72,
-          }}
-        >
-          {cur.sub}
-        </span>
+        {!isMobile && (
+          <span
+            style={{
+              fontFamily: "var(--hux-serif)",
+              fontStyle: "italic",
+              fontSize: 14,
+              opacity: 0.72,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {cur.sub}
+          </span>
+        )}
       </div>
       <span
         style={{
           fontFamily: "var(--hux-mono)",
-          fontSize: 10,
+          fontSize: isMobile ? 8 : 10,
           letterSpacing: "0.18em",
           textTransform: "uppercase",
           opacity: 0.45,
+          whiteSpace: "nowrap",
         }}
       >
         turn · {id}

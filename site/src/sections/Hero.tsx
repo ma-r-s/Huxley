@@ -2,6 +2,7 @@
 // state, so as you read down it literally narrates each section.
 
 import { useRegisterSection, useVoiceState } from "../lib/voiceThread.js";
+import { useViewport } from "../lib/useViewport.js";
 import { Orb, type OrbState } from "../components/Orb.js";
 import { chipGhost, chipSolid } from "../components/Chrome.js";
 
@@ -19,10 +20,12 @@ const STATUS: Record<string, { line: string; sub: string }> = {
 export function Hero() {
   const heroRef = useRegisterSection<HTMLElement>("hero", "idle");
   const { state: activeState } = useVoiceState();
+  const { isMobile, isTablet } = useViewport();
   const s = STATUS[activeState] ?? STATUS.idle!;
   // The orb has no "interrupt" state — fall back to listening for that one beat.
   const orbState: OrbState =
     activeState === "interrupt" ? "listening" : (activeState as OrbState);
+  const orbSize = isMobile ? 220 : isTablet ? 280 : 360;
 
   return (
     <section
@@ -30,15 +33,15 @@ export function Hero() {
       style={{
         position: "relative",
         zIndex: 2,
-        minHeight: 720,
+        minHeight: isMobile ? "auto" : 720,
         display: "grid",
-        gridTemplateColumns: "1.2fr 1fr",
+        gridTemplateColumns: isMobile || isTablet ? "1fr" : "1.2fr 1fr",
         alignItems: "center",
-        gap: 64,
-        padding: "64px 64px 96px",
+        gap: isMobile ? 32 : 64,
+        padding: isMobile ? "32px 24px 56px" : "64px 64px 96px",
       }}
     >
-      <div>
+      <div style={{ order: isMobile ? 2 : 1 }}>
         <div
           style={{
             display: "inline-flex",
@@ -139,10 +142,11 @@ export function Hero() {
           alignItems: "center",
           justifyContent: "center",
           position: "relative",
+          order: isMobile ? 1 : 2,
         }}
       >
         <Orb
-          size={360}
+          size={orbSize}
           state={orbState}
           color="var(--hux-fg)"
           expressiveness={1.1}

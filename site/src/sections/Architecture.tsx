@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { useRegisterSection } from "../lib/voiceThread.js";
+import { useViewport } from "../lib/useViewport.js";
 import { SectionHead } from "../components/Chrome.js";
 import { Reveal } from "../components/Reveal.js";
 
@@ -115,6 +116,7 @@ export function Architecture() {
     "architecture",
     "thinking",
   );
+  const { isMobile } = useViewport();
   const [t, setT] = useState(0);
   useEffect(() => {
     let raf = 0;
@@ -146,7 +148,7 @@ export function Architecture() {
       style={{
         position: "relative",
         zIndex: 2,
-        padding: "120px 64px",
+        padding: isMobile ? "72px 24px" : "120px 64px",
         borderTop: "1px solid var(--hux-fg-line)",
       }}
     >
@@ -304,8 +306,10 @@ export function Architecture() {
         style={{
           marginTop: 40,
           display: "grid",
-          gridTemplateColumns: "repeat(3, 1fr)",
-          gap: 32,
+          gridTemplateColumns: isMobile
+            ? "1fr"
+            : "repeat(auto-fit, minmax(220px, 1fr))",
+          gap: isMobile ? 24 : 32,
         }}
       >
         {[
@@ -319,7 +323,19 @@ export function Architecture() {
           },
           {
             k: "Proactive speech",
-            v: "Skills inject turns without prompting. Timer fires. Call arrives. Doorbell rings. Huxley speaks first.",
+            v: "Skills call ctx.inject_turn() and Huxley speaks first — without waiting for the user. Timers, alerts, doorbells, inbound messages.",
+          },
+          {
+            k: "Audio bridging",
+            v: "Skills can claim the mic and speaker for full-duplex audio (calls, voice memos). The focus manager prevents collisions with model speech.",
+          },
+          {
+            k: "Behavioral constraints",
+            v: "never_say_no, confirm_destructive, child_safe — declared in persona.yaml and enforced system-wide. Build for vulnerable users without special code.",
+          },
+          {
+            k: "Voice provider",
+            v: "OpenAI Realtime today; the architecture leaves room for other providers, but Huxley itself doesn't train or serve models.",
           },
         ].map((x, i) => (
           <Reveal key={x.k} delay={i * 120} y={20} duration={650}>

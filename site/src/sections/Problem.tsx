@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { useRegisterSection, useVoiceState } from "../lib/voiceThread.js";
+import { useViewport } from "../lib/useViewport.js";
 import { SectionHead } from "../components/Chrome.js";
 
 interface Row {
@@ -42,9 +43,9 @@ const ROWS: Row[] = [
     hero: true,
     bad: [],
     good: [
-      "Opinionated where hard",
-      "Open where it matters",
-      "Your persona, your skills, your hardware",
+      "Opinionated on turn sequencing and audio flow",
+      "Open for skills, personas, and clients",
+      "Self-hosted Python — your box, your keys",
     ],
   },
 ];
@@ -52,6 +53,7 @@ const ROWS: Row[] = [
 export function Problem() {
   const sectionRef = useRegisterSection<HTMLElement>("problem", "listening");
   const { id: activeSection, scrollProgress } = useVoiceState();
+  const { isMobile, isTablet } = useViewport();
 
   // Re-derive a per-section reveal ramp 0..1 from scroll progress while this
   // section is the active one. We freeze it once we leave so the row state
@@ -68,7 +70,7 @@ export function Problem() {
       style={{
         position: "relative",
         zIndex: 2,
-        padding: "120px 64px",
+        padding: isMobile ? "72px 24px" : "120px 64px",
         borderTop: "1px solid var(--hux-fg-line)",
         background: "color-mix(in oklab, var(--hux-coral) 92%, black)",
       }}
@@ -88,9 +90,13 @@ export function Problem() {
       />
       <div
         style={{
-          marginTop: 72,
+          marginTop: isMobile ? 40 : 72,
           display: "grid",
-          gridTemplateColumns: "repeat(5, 1fr)",
+          gridTemplateColumns: isMobile
+            ? "1fr"
+            : isTablet
+              ? "repeat(2, 1fr)"
+              : "repeat(5, 1fr)",
           gap: 0,
           borderTop: "1px solid var(--hux-fg-line)",
           borderLeft: "1px solid var(--hux-fg-line)",

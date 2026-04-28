@@ -3,6 +3,7 @@
 
 import type { CSSProperties, ReactNode } from "react";
 import { useState } from "react";
+import { useViewport } from "../lib/useViewport.js";
 import { Reveal } from "./Reveal.js";
 import { Wordmark } from "./Wordmark.js";
 
@@ -41,6 +42,8 @@ export function BalancedBackdrop() {
 // ── Nav bar ────────────────────────────────────────────────────────────
 export function BalNav() {
   const [lang, setLang] = useState<"EN" | "ES" | "FR">("EN");
+  const { isMobile, isTablet } = useViewport();
+  const showLinks = !isMobile && !isTablet;
   return (
     <nav
       style={{
@@ -49,46 +52,60 @@ export function BalNav() {
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
-        padding: "28px 48px",
+        gap: 16,
+        padding: isMobile ? "20px 24px" : "28px 48px",
         background: "var(--hux-coral)",
       }}
     >
-      <Wordmark size={32} subtle="v0.9 · pre-1.0" />
+      <Wordmark
+        size={isMobile ? 26 : 32}
+        subtle={isMobile ? undefined : "v0.9 · pre-1.0"}
+      />
+      {showLinks && (
+        <div
+          style={{
+            display: "flex",
+            gap: 32,
+            fontSize: 13,
+            letterSpacing: "0.02em",
+            opacity: 0.85,
+          }}
+        >
+          <a style={navA} href="#problem">
+            Why
+          </a>
+          <a style={navA} href="#architecture">
+            Architecture
+          </a>
+          <a style={navA} href="#skills">
+            Skills
+          </a>
+          <a style={navA} href="#grows">
+            Grows
+          </a>
+          <a style={navA} href="#persona">
+            Personas
+          </a>
+          <a style={navA} href="#install">
+            Install
+          </a>
+        </div>
+      )}
       <div
         style={{
           display: "flex",
-          gap: 32,
-          fontSize: 13,
-          letterSpacing: "0.02em",
-          opacity: 0.85,
+          alignItems: "center",
+          gap: isMobile ? 8 : 12,
         }}
       >
-        <a style={navA} href="#problem">
-          Why
-        </a>
-        <a style={navA} href="#architecture">
-          Architecture
-        </a>
-        <a style={navA} href="#skills">
-          Skills
-        </a>
-        <a style={navA} href="#grows">
-          Grows
-        </a>
-        <a style={navA} href="#persona">
-          Personas
-        </a>
-        <a style={navA} href="#install">
-          Install
-        </a>
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <LangToggle lang={lang} setLang={setLang} />
-        <a style={chipGhost} href="#">
-          Docs
-        </a>
+        {!isMobile && (
+          <a style={chipGhost} href="#">
+            Docs
+          </a>
+        )}
         <a style={chipSolid} href="#">
-          GitHub ↗
+          GitHub {!isMobile && "↗"}
         </a>
       </div>
     </nav>
