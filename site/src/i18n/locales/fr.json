@@ -1,0 +1,259 @@
+{
+  "nav": {
+    "wordmarkSubtle": "v0.9 · pré-1.0",
+    "why": "Pourquoi",
+    "architecture": "Architecture",
+    "skills": "Skills",
+    "grows": "Grandit",
+    "personas": "Personas",
+    "install": "Installer",
+    "docs": "Docs",
+    "github": "GitHub"
+  },
+  "voiceThread": {
+    "labelState": "état",
+    "states": {
+      "idle": { "tag": "Au repos", "sub": "Maintien attendu pour parler." },
+      "listening": {
+        "tag": "À l’écoute",
+        "sub": "Capture audio — en attente du relâchement."
+      },
+      "thinking": {
+        "tag": "Réflexion",
+        "sub": "Routage par le coordinateur et les skills."
+      },
+      "speaking": {
+        "tag": "Parole",
+        "sub": "Le canal audio se vide pour une seule voix."
+      },
+      "interrupt": {
+        "tag": "Interruption",
+        "sub": "Drop atomique. File vidée. Canal nettoyé."
+      }
+    },
+    "turnPrefix": "tour",
+    "chapters": {
+      "hero": "Accueil",
+      "problem": "§ 01 · Pourquoi",
+      "architecture": "§ 02 · Cœur",
+      "timeline": "§ 03 · Tours",
+      "skills": "§ 04 · Skills",
+      "grows": "§ 05 · Grandit",
+      "personas": "§ 06 · Personas",
+      "install": "§ 07 · Installer"
+    }
+  },
+  "hero": {
+    "pill": "Open source · MIT · Python 3.13",
+    "titleLine1": "Une voix qui",
+    "titleLine2": "vous appartient vraiment.",
+    "subtitle": "Huxley est un framework Python pour agents vocaux temps réel. Vous apportez la persona et les skills — il gère la coordination des tours, les interruptions, la parole proactive et le pont audio.",
+    "ctaInstall": "Installer Huxley",
+    "ctaSeeHow": "Comment ça marche",
+    "installSnippet": "git clone huxley && uv run huxley",
+    "status": {
+      "idle": { "line": "Maintien attendu pour parler.", "sub": "AU REPOS" },
+      "listening": {
+        "line": "« Hey Huxley — baisse les lumières. »",
+        "sub": "CAPTURE"
+      },
+      "thinking": {
+        "line": "Routage vers le skill maison…",
+        "sub": "COORDINATION"
+      },
+      "speaking": { "line": "Salon à 30 %.", "sub": "PAROLE" },
+      "interrupt": { "line": "Attends — annule.", "sub": "INTERROMPU" }
+    }
+  },
+  "problem": {
+    "eyebrow": "§ 01 — Le problème",
+    "titleLine1": "Toute plateforme vocale vous demande",
+    "titleLine2": "de renoncer à quelque chose d’essentiel.",
+    "subtitle": "La propriété. L’extensibilité. Ou les six premiers mois de votre vie.",
+    "rows": {
+      "alexa": {
+        "name": "Alexa / Google Home",
+        "bad1": "Jardin clos",
+        "bad2": "Cloud uniquement",
+        "bad3": "Frais de certification"
+      },
+      "openai": {
+        "name": "OpenAI voice mode",
+        "bad1": "Une voix, un cerveau",
+        "bad2": "Pas d’auto-hébergement",
+        "bad3": "Pas de skills personnalisés"
+      },
+      "pipecat": {
+        "name": "Pipecat / LiveKit",
+        "bad1": "Pipelines à la main",
+        "bad2": "À vous de gérer tours, interruptions et collisions audio"
+      },
+      "diy": {
+        "name": "Faites-le vous-même",
+        "bad1": "Six mois de plomberie avant la première fonction"
+      },
+      "huxley": {
+        "name": "Huxley",
+        "good1": "Opinionné sur le séquencement des tours et le flux audio",
+        "good2": "Ouvert aux skills, personas et clients",
+        "good3": "Python auto-hébergé — votre machine, vos clés"
+      }
+    }
+  },
+  "architecture": {
+    "eyebrow": "§ 02 — Comment ça marche",
+    "titleA": "Un coordinateur.",
+    "titleB": "Un canal audio.",
+    "subtitle": "Le framework séquence chaque tour à travers un seul haut-parleur. La voix du modèle, l’audio des outils et les ponts revendiqués par les skills n’entrent jamais en collision.",
+    "footerLeft": "wss://huxley.local:8443",
+    "footerRight": "entry-points / huxley.skills",
+    "cards": {
+      "turnCoord": {
+        "k": "Coordination des tours",
+        "v": "La parole du modèle finit toujours avant l’audio des outils. Les interruptions sont atomiques — drapeau levé, file vidée, drainage, annulation."
+      },
+      "skillDispatch": {
+        "k": "Dispatch des skills",
+        "v": "Paquets Python enregistrés via entry-points. Contexte typé, stockage namespacé, aucun rouage du framework qui fuit."
+      },
+      "proactive": {
+        "k": "Parole proactive",
+        "v": "Les skills appellent ctx.inject_turn() et Huxley parle en premier — sans attendre l’utilisateur. Minuteurs, alertes, sonnettes, messages entrants."
+      },
+      "bridging": {
+        "k": "Pont audio",
+        "v": "Les skills peuvent réclamer le micro et le haut-parleur pour de l’audio bidirectionnel (appels, mémos vocaux). Le focus manager empêche toute collision avec la voix du modèle."
+      },
+      "constraints": {
+        "k": "Contraintes comportementales",
+        "v": "never_say_no, confirm_destructive, child_safe — déclarées dans persona.yaml et appliquées partout. Construisez pour des utilisateurs vulnérables sans code spécial."
+      },
+      "provider": {
+        "k": "Fournisseur vocal",
+        "v": "OpenAI Realtime aujourd’hui ; l’architecture laisse la place à d’autres fournisseurs, mais Huxley n’entraîne ni ne sert lui-même de modèles."
+      }
+    },
+    "nodes": {
+      "personaSub": "identité + skills",
+      "coreSub": "coordinateur · focus · registre",
+      "voice": "Fournisseur vocal",
+      "voiceSub": "OpenAI Realtime",
+      "skill": "Skill",
+      "skillSub": "paquet Python",
+      "skill2Sub": "lumières · hue",
+      "skill3Sub": "minuteurs",
+      "client": "Client",
+      "clientSub": "navigateur · ESP32 · mobile"
+    }
+  },
+  "timeline": {
+    "eyebrow": "§ 03 — Séquencement des tours",
+    "titleA": "Vous n’entendez jamais",
+    "titleB": "deux voix en même temps.",
+    "subtitle": "Le coordinateur draine la parole du modèle avant que l’audio des outils ne commence, retient les tours proactifs jusqu’à ce que le canal soit libre, et rend chaque interruption atomique.",
+    "tracks": {
+      "user": "Utilisateur",
+      "model": "Modèle",
+      "tool": "Audio outil"
+    },
+    "segments": {
+      "userAsk": "« Mets un minuteur de 25 minutes »",
+      "modelSetting": "Parole · « Minuteur en cours… »",
+      "modelProactive": "Proactif · « Le minuteur a sonné. »",
+      "chime": "carillon"
+    },
+    "callouts": {
+      "t1Title": "T = 1.5s",
+      "t1Body": "L’utilisateur relâche. La capture s’arrête proprement.",
+      "t2Title": "T = 4.2s",
+      "t2Body": "Le modèle finit sa phrase avant que le carillon retentisse.",
+      "t3Title": "T = 5.3s",
+      "t3Body": "L’injection proactive attend que le tour précédent se vide."
+    }
+  },
+  "skills": {
+    "eyebrow": "§ 04 — Système de skills",
+    "titleA": "Tout ce qui parle Python",
+    "titleB": "est un skill.",
+    "subtitle": "Les skills s’enregistrent via les entry-points Python. Ajoutez une ligne à persona.yaml, redémarrez — le framework ne change jamais.",
+    "filterAll": "Tous",
+    "stats": {
+      "shipped": "publiés",
+      "designed": "conçus",
+      "possible": "possibles"
+    },
+    "writingEyebrow": "§ 04.1 — En écrire un",
+    "writingTitle": "Un skill est un paquet Python.",
+    "writingBody": "Déclarez des outils. Gérez les appels. Renvoyez un ToolResult — éventuellement avec un AudioStream, un PlaySound ou un InputClaim pour de l’audio bidirectionnel. Le framework séquence le reste."
+  },
+  "grows": {
+    "eyebrow": "§ 05 — Huxley-market + Huxley-grows",
+    "titleA": "Vous demandez.",
+    "titleB": "Il trouve, ou construit.",
+    "subtitle": "Il regarde d’abord huxley-market — un registre de skills libres et open source créés par d’autres utilisateurs. Si rien ne convient, huxley-grows en écrit un de zéro. Dans tous les cas, sans terminal. Installez à la voix, ou tapez-le dans l’app huxley-web sur votre téléphone.",
+    "liveTurn": "tour en direct",
+    "tabs": {
+      "found": "Trouvé",
+      "built": "Construit",
+      "needsconfig": "À configurer",
+      "noapi": "Pas d’API"
+    },
+    "you": "vous",
+    "huxley": "huxley",
+    "proactive": "proactif",
+    "replay": "↻ rejouer",
+    "claims": {
+      "ceremony": {
+        "k": "Trouver ou construire — même cérémonie",
+        "v": "Installation depuis le market et construction depuis zéro se terminent pareillement : un nouveau skill sur votre machine, même API, même modèle de permissions, même commande vocale."
+      },
+      "noTerminal": {
+        "k": "Sans terminal, jamais",
+        "v": "Installez à la voix, ou via huxley-web sur votre téléphone. Le CLI fonctionne toujours — vous n’avez juste plus besoin d’y toucher."
+      },
+      "failure": {
+        "k": "L’échec est une feature",
+        "v": "Si aucun chemin ne marche — pas de match au market et pas de forme constructible — Huxley le dit, précisément, et s’arrête. Aucune capacité hallucinée."
+      }
+    },
+    "jobCard": {
+      "marketTitle": "huxley-market · requête",
+      "growsTitle": "huxley-grows · tâche en arrière-plan",
+      "originMarket": "origine · huxley-market",
+      "originGrows": "origine · clawbot@local",
+      "statusReady": "rechargé",
+      "statusNeedsConfig": "en attente de connexion",
+      "statusFailed": "arrêté",
+      "statusIdle": "en attente",
+      "statusMarket": "interrogation",
+      "statusGrows": "construction",
+      "handoff": "→ passage à huxley-grows…"
+    }
+  },
+  "personas": {
+    "eyebrow": "§ 06 — Personas",
+    "titleA": "Un seul framework.",
+    "titleB": "Chaque voix dont vous avez besoin.",
+    "subtitle": "Une persona est un fichier YAML. Choisissez la voix, la langue, les skills, les garde-fous. Huxley s’adapte — la personne pour qui vous construisez n’a pas à le faire.",
+    "personaLabel": "persona",
+    "facetKeys": {
+      "voice": "Voix",
+      "language": "Langue",
+      "skills": "Skills",
+      "hardware": "Matériel",
+      "rule": "Règle"
+    }
+  },
+  "install": {
+    "eyebrow": "§ 07 — Démarrer",
+    "titleA": "Cinq lignes.",
+    "titleB": "Votre propre voix.",
+    "ctaGitHub": "GitHub ↗",
+    "ctaDocs": "Lire les docs"
+  },
+  "footer": {
+    "license": "Licence MIT",
+    "version": "Pré-1.0",
+    "personasCount": "Deux personas publiées"
+  }
+}

@@ -1,0 +1,262 @@
+{
+  "nav": {
+    "wordmarkSubtle": "v0.9 · pre-1.0",
+    "why": "Por qué",
+    "architecture": "Arquitectura",
+    "skills": "Skills",
+    "grows": "Crece",
+    "personas": "Personas",
+    "install": "Instalar",
+    "docs": "Docs",
+    "github": "GitHub"
+  },
+  "voiceThread": {
+    "labelState": "estado",
+    "states": {
+      "idle": { "tag": "En reposo", "sub": "Esperando que mantengas pulsado." },
+      "listening": {
+        "tag": "Escuchando",
+        "sub": "Capturando audio — esperando que sueltes."
+      },
+      "thinking": {
+        "tag": "Pensando",
+        "sub": "Pasando por el coordinador y los skills."
+      },
+      "speaking": {
+        "tag": "Hablando",
+        "sub": "Drenando el canal de audio a una sola voz."
+      },
+      "interrupt": {
+        "tag": "Interrumpido",
+        "sub": "Drop atómico. Cola limpia. Canal vaciado."
+      }
+    },
+    "turnPrefix": "turno",
+    "chapters": {
+      "hero": "Inicio",
+      "problem": "§ 01 · Por qué",
+      "architecture": "§ 02 · Núcleo",
+      "timeline": "§ 03 · Turnos",
+      "skills": "§ 04 · Skills",
+      "grows": "§ 05 · Crece",
+      "personas": "§ 06 · Personas",
+      "install": "§ 07 · Instalar"
+    }
+  },
+  "hero": {
+    "pill": "Open-source · MIT · Python 3.13",
+    "titleLine1": "Una voz que",
+    "titleLine2": "es realmente tuya.",
+    "subtitle": "Huxley es un framework de Python para agentes de voz en tiempo real. Tú aportas la persona y los skills — él se encarga de la coordinación de turnos, las interrupciones, el habla proactiva y el puente de audio.",
+    "ctaInstall": "Instalar Huxley",
+    "ctaSeeHow": "Cómo funciona",
+    "installSnippet": "git clone huxley && uv run huxley",
+    "status": {
+      "idle": {
+        "line": "Esperando que mantengas pulsado.",
+        "sub": "EN REPOSO"
+      },
+      "listening": {
+        "line": "“Hey Huxley — baja las luces.”",
+        "sub": "CAPTURANDO"
+      },
+      "thinking": {
+        "line": "Enrutando al skill del hogar…",
+        "sub": "COORDINANDO"
+      },
+      "speaking": { "line": "Salón al 30%.", "sub": "HABLANDO" },
+      "interrupt": { "line": "Espera — cancela eso.", "sub": "INTERRUMPIDO" }
+    }
+  },
+  "problem": {
+    "eyebrow": "§ 01 — El problema",
+    "titleLine1": "Toda plataforma de voz te pide",
+    "titleLine2": "renunciar a algo esencial.",
+    "subtitle": "Tu propiedad. La extensibilidad. O los primeros seis meses de tu vida.",
+    "rows": {
+      "alexa": {
+        "name": "Alexa / Google Home",
+        "bad1": "Jardín cerrado",
+        "bad2": "Solo en la nube",
+        "bad3": "Tarifas de certificación"
+      },
+      "openai": {
+        "name": "OpenAI voice mode",
+        "bad1": "Una voz, un cerebro",
+        "bad2": "No se puede auto-alojar",
+        "bad3": "Sin skills propios"
+      },
+      "pipecat": {
+        "name": "Pipecat / LiveKit",
+        "bad1": "Pipelines en blanco",
+        "bad2": "Tú resuelves turnos, interrupciones y colisiones de audio"
+      },
+      "diy": {
+        "name": "Hazlo tú mismo",
+        "bad1": "Seis meses de fontanería antes de la primera función"
+      },
+      "huxley": {
+        "name": "Huxley",
+        "good1": "Opinionado en la secuencia de turnos y el flujo de audio",
+        "good2": "Abierto a skills, personas y clientes",
+        "good3": "Python auto-alojado — tu equipo, tus claves"
+      }
+    }
+  },
+  "architecture": {
+    "eyebrow": "§ 02 — Cómo funciona",
+    "titleA": "Un coordinador.",
+    "titleB": "Un canal de audio.",
+    "subtitle": "El framework secuencia cada turno por un único hablante. La voz del modelo, el audio de las herramientas y los puentes reclamados por skills nunca colisionan.",
+    "footerLeft": "wss://huxley.local:8443",
+    "footerRight": "entry-points / huxley.skills",
+    "cards": {
+      "turnCoord": {
+        "k": "Coordinación de turnos",
+        "v": "El habla del modelo siempre termina antes que el audio de las herramientas. Las interrupciones son atómicas — bandera, cola limpia, drenaje, cancelación."
+      },
+      "skillDispatch": {
+        "k": "Despacho de skills",
+        "v": "Paquetes de Python registrados vía entry-points. Contexto tipado, almacenamiento con namespace, sin filtraciones del framework."
+      },
+      "proactive": {
+        "k": "Habla proactiva",
+        "v": "Los skills llaman a ctx.inject_turn() y Huxley habla primero — sin esperar al usuario. Temporizadores, alertas, timbres, mensajes entrantes."
+      },
+      "bridging": {
+        "k": "Puente de audio",
+        "v": "Los skills pueden reclamar el micrófono y el altavoz para audio dúplex (llamadas, notas de voz). El focus manager evita colisiones con la voz del modelo."
+      },
+      "constraints": {
+        "k": "Restricciones de comportamiento",
+        "v": "never_say_no, confirm_destructive, child_safe — declaradas en persona.yaml y aplicadas en todo el sistema. Construye para usuarios vulnerables sin código especial."
+      },
+      "provider": {
+        "k": "Proveedor de voz",
+        "v": "Hoy OpenAI Realtime; la arquitectura deja sitio a otros proveedores, pero Huxley en sí no entrena ni sirve modelos."
+      }
+    },
+    "nodes": {
+      "personaSub": "identidad + skills",
+      "coreSub": "coordinador · focus · registro",
+      "voice": "Proveedor de voz",
+      "voiceSub": "OpenAI Realtime",
+      "skill": "Skill",
+      "skillSub": "paquete Python",
+      "skill2Sub": "luces · hue",
+      "skill3Sub": "temporizadores",
+      "client": "Cliente",
+      "clientSub": "navegador · ESP32 · móvil"
+    }
+  },
+  "timeline": {
+    "eyebrow": "§ 03 — Secuenciado de turnos",
+    "titleA": "Nunca oirás",
+    "titleB": "dos voces a la vez.",
+    "subtitle": "El coordinador drena el habla del modelo antes de que comience el audio de las herramientas, retiene los turnos proactivos hasta que el canal está libre y hace que cada interrupción sea atómica.",
+    "tracks": {
+      "user": "Usuario",
+      "model": "Modelo",
+      "tool": "Audio de herramienta"
+    },
+    "segments": {
+      "userAsk": "\"Pon un temporizador de 25 minutos\"",
+      "modelSetting": "Hablando · \"Configurando temporizador…\"",
+      "modelProactive": "Proactivo · “Se acabó el tiempo.”",
+      "chime": "campanita"
+    },
+    "callouts": {
+      "t1Title": "T = 1.5s",
+      "t1Body": "El usuario suelta. La captura para limpiamente.",
+      "t2Title": "T = 4.2s",
+      "t2Body": "El modelo termina la frase antes de que suene la campanita.",
+      "t3Title": "T = 5.3s",
+      "t3Body": "El turno proactivo espera a que el anterior se vacíe."
+    }
+  },
+  "skills": {
+    "eyebrow": "§ 04 — Sistema de skills",
+    "titleA": "Cualquier cosa que hable Python",
+    "titleB": "es un skill.",
+    "subtitle": "Los skills se registran vía entry-points de Python. Añade una línea a persona.yaml, reinicia — el framework no cambia.",
+    "filterAll": "Todos",
+    "stats": {
+      "shipped": "publicados",
+      "designed": "diseñados",
+      "possible": "posibles"
+    },
+    "writingEyebrow": "§ 04.1 — Escribir uno",
+    "writingTitle": "Un skill es un paquete de Python.",
+    "writingBody": "Declara herramientas. Maneja llamadas. Devuelve un ToolResult — opcionalmente con un AudioStream, un PlaySound o un InputClaim para audio dúplex. El framework secuencia el resto."
+  },
+  "grows": {
+    "eyebrow": "§ 05 — Huxley-market + Huxley-grows",
+    "titleA": "Tú pides.",
+    "titleB": "Lo encuentra, o lo construye.",
+    "subtitle": "Primero busca en huxley-market — un registro de skills libres y de código abierto creados por otros usuarios. Si nada encaja, huxley-grows escribe uno desde cero. En cualquier caso, sin terminal. Instala por voz o tócalo en la app huxley-web del móvil.",
+    "liveTurn": "turno en vivo",
+    "tabs": {
+      "found": "Encontrado",
+      "built": "Construido",
+      "needsconfig": "Necesita config",
+      "noapi": "Sin API"
+    },
+    "you": "tú",
+    "huxley": "huxley",
+    "proactive": "proactivo",
+    "replay": "↻ repetir",
+    "claims": {
+      "ceremony": {
+        "k": "Encontrar o construir — la misma ceremonia",
+        "v": "La instalación desde el market y la construcción desde cero acaban igual: un nuevo skill en tu equipo, misma API, mismo modelo de permisos, mismo comando de voz."
+      },
+      "noTerminal": {
+        "k": "Sin terminal, nunca",
+        "v": "Instala por voz, o desde huxley-web en tu móvil. El CLI sigue funcionando — simplemente no tienes que tocarlo."
+      },
+      "failure": {
+        "k": "El fallo es una feature",
+        "v": "Si ninguno de los caminos funciona — sin coincidencia en el market y sin forma construible — Huxley lo dice, con precisión, y para. Sin capacidad inventada."
+      }
+    },
+    "jobCard": {
+      "marketTitle": "huxley-market · consulta",
+      "growsTitle": "huxley-grows · trabajo en segundo plano",
+      "originMarket": "origen · huxley-market",
+      "originGrows": "origen · clawbot@local",
+      "statusReady": "recargado",
+      "statusNeedsConfig": "esperando inicio de sesión",
+      "statusFailed": "detenido",
+      "statusIdle": "esperando",
+      "statusMarket": "consultando",
+      "statusGrows": "construyendo",
+      "handoff": "→ pasando a huxley-grows…"
+    }
+  },
+  "personas": {
+    "eyebrow": "§ 06 — Personas",
+    "titleA": "Un solo framework.",
+    "titleB": "Cada voz que necesites.",
+    "subtitle": "Una persona es un archivo YAML. Elige la voz, el idioma, los skills, las restricciones. Huxley se adapta — la persona para la que construyes no debería tener que hacerlo.",
+    "personaLabel": "persona",
+    "facetKeys": {
+      "voice": "Voz",
+      "language": "Idioma",
+      "skills": "Skills",
+      "hardware": "Hardware",
+      "rule": "Regla"
+    }
+  },
+  "install": {
+    "eyebrow": "§ 07 — Empezar",
+    "titleA": "Cinco líneas.",
+    "titleB": "Una voz para ti.",
+    "ctaGitHub": "GitHub ↗",
+    "ctaDocs": "Leer los docs"
+  },
+  "footer": {
+    "license": "Licencia MIT",
+    "version": "Pre-1.0",
+    "personasCount": "Dos personas publicadas"
+  }
+}

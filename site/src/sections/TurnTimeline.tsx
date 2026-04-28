@@ -3,6 +3,7 @@
 // overflow the segment box) and a moving playhead.
 
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useRegisterSection } from "../lib/voiceThread.js";
 import { useViewport } from "../lib/useViewport.js";
 import { SectionHead } from "../components/Chrome.js";
@@ -11,11 +12,13 @@ import { Reveal } from "../components/Reveal.js";
 interface Segment {
   start: number;
   end: number;
-  label: string;
+  /** translation key under timeline.segments */
+  labelKey: string;
 }
 
 interface Track {
-  name: string;
+  /** translation key under timeline.tracks */
+  nameKey: string;
   color: string;
   y: number;
   segs: Segment[];
@@ -23,25 +26,25 @@ interface Track {
 
 const TRACKS: Track[] = [
   {
-    name: "User",
+    nameKey: "user",
     color: "#fff",
     y: 50,
-    segs: [{ start: 0.0, end: 0.19, label: '"Set a timer for 25 minutes"' }],
+    segs: [{ start: 0.0, end: 0.19, labelKey: "userAsk" }],
   },
   {
-    name: "Model",
+    nameKey: "model",
     color: "oklch(0.85 0.15 55)",
     y: 115,
     segs: [
-      { start: 0.28, end: 0.5, label: 'Speaking · "Setting timer…"' },
-      { start: 0.66, end: 0.88, label: "Proactive · “Timer’s up.”" },
+      { start: 0.28, end: 0.5, labelKey: "modelSetting" },
+      { start: 0.66, end: 0.88, labelKey: "modelProactive" },
     ],
   },
   {
-    name: "Tool audio",
+    nameKey: "tool",
     color: "oklch(0.75 0.18 140)",
     y: 180,
-    segs: [{ start: 0.525, end: 0.625, label: "chime" }],
+    segs: [{ start: 0.525, end: 0.625, labelKey: "chime" }],
   },
 ];
 
@@ -52,6 +55,7 @@ const R = 40;
 const usableW = W - L - R;
 
 export function TurnTimeline() {
+  const { t } = useTranslation();
   const sectionRef = useRegisterSection<HTMLElement>("timeline", "speaking");
   const { isMobile } = useViewport();
   const [phase, setPhase] = useState(0);
@@ -78,15 +82,15 @@ export function TurnTimeline() {
       }}
     >
       <SectionHead
-        eyebrow="§ 03 — Turn sequencing"
+        eyebrow={t("timeline.eyebrow")}
         title={
           <>
-            You never hear
+            {t("timeline.titleA")}
             <br />
-            <em style={{ fontStyle: "italic" }}>two voices at once.</em>
+            <em style={{ fontStyle: "italic" }}>{t("timeline.titleB")}</em>
           </>
         }
-        subtitle="The coordinator drains model speech before tool audio starts, holds proactive turns until the channel is free, and makes every interrupt atomic."
+        subtitle={t("timeline.subtitle")}
       />
 
       <Reveal delay={350} y={36} duration={800}>
@@ -157,7 +161,7 @@ export function TurnTimeline() {
                   fill="currentColor"
                   opacity="0.6"
                 >
-                  {track.name}
+                  {t(`timeline.tracks.${track.nameKey}`)}
                 </text>
                 <line
                   x1={L}
@@ -200,7 +204,7 @@ export function TurnTimeline() {
                         fill="currentColor"
                         opacity={active ? 0.95 : 0.55}
                       >
-                        {s.label}
+                        {t(`timeline.segments.${s.labelKey}`)}
                       </text>
                     </g>
                   );
@@ -235,48 +239,43 @@ export function TurnTimeline() {
           gap: 24,
         }}
       >
-        {(
-          [
-            ["T = 1.5s", "User releases. Capture stops cleanly."],
-            ["T = 4.2s", "Model finishes its sentence before the chime plays."],
-            [
-              "T = 5.3s",
-              "Proactive inject waits for the previous turn to drain.",
-            ],
-          ] as Array<[string, string]>
-        ).map(([k, v], i) => (
-          <Reveal key={k} delay={i * 110} y={20} duration={650}>
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 6,
-              }}
-            >
-              <div
-                className="mono"
-                style={{
-                  fontSize: 10,
-                  letterSpacing: "0.16em",
-                  textTransform: "uppercase",
-                  opacity: 0.55,
-                }}
-              >
-                {k}
-              </div>
+        {(["t1", "t2", "t3"] as const).map((calloutKey, i) => {
+          const k = t(`timeline.callouts.${calloutKey}Title`);
+          const v = t(`timeline.callouts.${calloutKey}Body`);
+          return (
+            <Reveal key={k} delay={i * 110} y={20} duration={650}>
               <div
                 style={{
-                  fontFamily: "var(--hux-serif)",
-                  fontSize: 20,
-                  fontStyle: "italic",
-                  lineHeight: 1.3,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 6,
                 }}
               >
-                {v}
+                <div
+                  className="mono"
+                  style={{
+                    fontSize: 10,
+                    letterSpacing: "0.16em",
+                    textTransform: "uppercase",
+                    opacity: 0.55,
+                  }}
+                >
+                  {k}
+                </div>
+                <div
+                  style={{
+                    fontFamily: "var(--hux-serif)",
+                    fontSize: 20,
+                    fontStyle: "italic",
+                    lineHeight: 1.3,
+                  }}
+                >
+                  {v}
+                </div>
               </div>
-            </div>
-          </Reveal>
-        ))}
+            </Reveal>
+          );
+        })}
       </div>
     </section>
   );

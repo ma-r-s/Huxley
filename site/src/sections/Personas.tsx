@@ -2,6 +2,7 @@
 // click a cell to swap the description + YAML. Cells stagger in.
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useRegisterSection, useInView } from "../lib/voiceThread.js";
 import { useViewport } from "../lib/useViewport.js";
 import { SectionHead } from "../components/Chrome.js";
@@ -196,6 +197,7 @@ function PersonaCell({
   x: Persona;
   onClick: () => void;
 }) {
+  const { t } = useTranslation();
   const [ref, seen] = useInView<HTMLButtonElement>(0.2);
   const delay = idx * 70;
   return (
@@ -246,7 +248,7 @@ function PersonaCell({
             boxShadow: isActive ? "0 0 8px var(--hux-fg)" : "none",
           }}
         />
-        persona
+        {t("personas.personaLabel")}
       </div>
       <div
         style={{
@@ -267,6 +269,7 @@ function PersonaCell({
 }
 
 export function Personas() {
+  const { t } = useTranslation();
   const sectionRef = useRegisterSection<HTMLElement>("persona", "thinking");
   const { isMobile, isTablet } = useViewport();
   const [active, setActive] = useState(PERSONAS[0]!.id);
@@ -284,15 +287,15 @@ export function Personas() {
       }}
     >
       <SectionHead
-        eyebrow="§ 06 — Personas"
+        eyebrow={t("personas.eyebrow")}
         title={
           <>
-            One framework.
+            {t("personas.titleA")}
             <br />
-            <em style={{ fontStyle: "italic" }}>Every voice you need.</em>
+            <em style={{ fontStyle: "italic" }}>{t("personas.titleB")}</em>
           </>
         }
-        subtitle="A persona is a YAML file. Pick the voice, the language, the skills, the guardrails. Huxley adapts — the person you’re building for shouldn’t have to."
+        subtitle={t("personas.subtitle")}
       />
 
       <div
@@ -345,39 +348,53 @@ export function Personas() {
             {p.desc}
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-            {p.facets.map(([k, v]) => (
-              <div
-                key={k}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "110px 1fr",
-                  gap: 16,
-                  padding: "12px 0",
-                  borderTop: "1px solid var(--hux-fg-line)",
-                }}
-              >
+            {p.facets.map(([k, v]) => {
+              // The persona data stores facet keys as English labels; map to
+              // i18n keys when we recognise them, otherwise fall back to the
+              // raw label (so unknown future facets still render).
+              const keyLookup: Record<string, string> = {
+                Voice: "voice",
+                Language: "language",
+                Skills: "skills",
+                Hardware: "hardware",
+                Rule: "rule",
+              };
+              const i18nKey = keyLookup[k];
+              const label = i18nKey ? t(`personas.facetKeys.${i18nKey}`) : k;
+              return (
                 <div
-                  className="mono"
+                  key={k}
                   style={{
-                    fontSize: 10,
-                    letterSpacing: "0.14em",
-                    textTransform: "uppercase",
-                    opacity: 0.6,
+                    display: "grid",
+                    gridTemplateColumns: "110px 1fr",
+                    gap: 16,
+                    padding: "12px 0",
+                    borderTop: "1px solid var(--hux-fg-line)",
                   }}
                 >
-                  {k}
+                  <div
+                    className="mono"
+                    style={{
+                      fontSize: 10,
+                      letterSpacing: "0.14em",
+                      textTransform: "uppercase",
+                      opacity: 0.6,
+                    }}
+                  >
+                    {label}
+                  </div>
+                  <div
+                    style={{
+                      fontFamily: "var(--hux-sans)",
+                      fontSize: 14,
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    {v}
+                  </div>
                 </div>
-                <div
-                  style={{
-                    fontFamily: "var(--hux-sans)",
-                    fontSize: 14,
-                    lineHeight: 1.45,
-                  }}
-                >
-                  {v}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 

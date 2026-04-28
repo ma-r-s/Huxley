@@ -1,31 +1,29 @@
 // Hero — orb + headline + install chip. The orb follows the active scroll
 // state, so as you read down it literally narrates each section.
 
+import { useTranslation } from "react-i18next";
 import { useRegisterSection, useVoiceState } from "../lib/voiceThread.js";
 import { useViewport } from "../lib/useViewport.js";
 import { Orb, type OrbState } from "../components/Orb.js";
 import { chipGhost, chipSolid } from "../components/Chrome.js";
 
-const STATUS: Record<string, { line: string; sub: string }> = {
-  idle: { line: "Held, listening for the hold.", sub: "AT REST" },
-  listening: {
-    line: "“Hey Huxley — dim the lights?”",
-    sub: "CAPTURING",
-  },
-  thinking: { line: "Routing to the home skill…", sub: "COORDINATING" },
-  speaking: { line: "Dimmed the living room to 30%.", sub: "SPEAKING" },
-  interrupt: { line: "Wait — cancel that.", sub: "INTERRUPTED" },
-};
-
 export function Hero() {
+  const { t } = useTranslation();
   const heroRef = useRegisterSection<HTMLElement>("hero", "idle");
   const { state: activeState } = useVoiceState();
   const { isMobile, isTablet } = useViewport();
-  const s = STATUS[activeState] ?? STATUS.idle!;
   // The orb has no "interrupt" state — fall back to listening for that one beat.
   const orbState: OrbState =
     activeState === "interrupt" ? "listening" : (activeState as OrbState);
   const orbSize = isMobile ? 220 : isTablet ? 280 : 360;
+  const statusKey = activeState as
+    | "idle"
+    | "listening"
+    | "thinking"
+    | "speaking"
+    | "interrupt";
+  const statusLine = t(`hero.status.${statusKey}.line`);
+  const statusSub = t(`hero.status.${statusKey}.sub`);
 
   return (
     <section
@@ -65,7 +63,7 @@ export function Hero() {
               boxShadow: "0 0 8px var(--hux-fg)",
             }}
           />
-          Open-source · MIT · Python 3.13
+          {t("hero.pill")}
         </div>
         <h1
           style={{
@@ -78,9 +76,9 @@ export function Hero() {
             textWrap: "balance",
           }}
         >
-          A voice you can
+          {t("hero.titleLine1")}
           <br />
-          <em style={{ fontStyle: "italic" }}>actually own.</em>
+          <em style={{ fontStyle: "italic" }}>{t("hero.titleLine2")}</em>
         </h1>
         <p
           style={{
@@ -94,9 +92,7 @@ export function Hero() {
             textWrap: "pretty",
           }}
         >
-          Huxley is a Python framework for real-time voice agents. You bring a
-          persona and skills — it handles turn coordination, interrupts,
-          proactive speech, audio bridging.
+          {t("hero.subtitle")}
         </p>
         <div
           style={{
@@ -110,13 +106,13 @@ export function Hero() {
             style={{ ...chipSolid, padding: "12px 20px", fontSize: 13 }}
             href="#install"
           >
-            Install Huxley
+            {t("hero.ctaInstall")}
           </a>
           <a
             style={{ ...chipGhost, padding: "12px 20px", fontSize: 13 }}
             href="#architecture"
           >
-            See how it works
+            {t("hero.ctaSeeHow")}
           </a>
           <code
             style={{
@@ -130,7 +126,7 @@ export function Hero() {
               border: "1px solid var(--hux-fg-line)",
             }}
           >
-            git clone huxley && uv run huxley
+            {t("hero.installSnippet")}
           </code>
         </div>
       </div>
@@ -164,7 +160,7 @@ export function Hero() {
             transition: "opacity 300ms ease",
           }}
         >
-          {s!.line}
+          {statusLine}
         </div>
         <div
           style={{
@@ -176,7 +172,7 @@ export function Hero() {
             opacity: 0.55,
           }}
         >
-          {s!.sub} · {activeState}
+          {statusSub} · {activeState}
         </div>
       </div>
     </section>

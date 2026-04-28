@@ -5,6 +5,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { useRegisterSection } from "../lib/voiceThread.js";
 import { useViewport } from "../lib/useViewport.js";
 import { SectionHead } from "../components/Chrome.js";
@@ -285,6 +286,7 @@ const JOB_PHASES: Record<PhaseKey, Phase> = {
 };
 
 export function HuxleyGrows() {
+  const { t } = useTranslation();
   const sectionRef = useRegisterSection<HTMLElement>("grows", "thinking");
   const { isMobile } = useViewport();
   const [variant, setVariant] = useState<VariantKey>("built");
@@ -359,15 +361,15 @@ export function HuxleyGrows() {
       }}
     >
       <SectionHead
-        eyebrow="§ 05 — Huxley-market + Huxley-grows"
+        eyebrow={t("grows.eyebrow")}
         title={
           <>
-            You ask.
+            {t("grows.titleA")}
             <br />
-            <em style={{ fontStyle: "italic" }}>It finds, or builds.</em>
+            <em style={{ fontStyle: "italic" }}>{t("grows.titleB")}</em>
           </>
         }
-        subtitle="First it checks huxley-market — a registry of free, open-source skills built by other users. If nothing fits, huxley-grows writes one from scratch. Either way, no terminal. Install from voice, or tap it through the Huxley-web app on your phone."
+        subtitle={t("grows.subtitle")}
       />
 
       <div
@@ -421,7 +423,7 @@ export function HuxleyGrows() {
                     opacity: 0.7,
                   }}
                 >
-                  live turn
+                  {t("grows.liveTurn")}
                 </span>
               </div>
               <div style={{ display: "flex", gap: 2 }}>
@@ -429,25 +431,25 @@ export function HuxleyGrows() {
                   active={variant === "found"}
                   onClick={() => setVariant("found")}
                 >
-                  Found it
+                  {t("grows.tabs.found")}
                 </VariantTab>
                 <VariantTab
                   active={variant === "built"}
                   onClick={() => setVariant("built")}
                 >
-                  Built it
+                  {t("grows.tabs.built")}
                 </VariantTab>
                 <VariantTab
                   active={variant === "needsconfig"}
                   onClick={() => setVariant("needsconfig")}
                 >
-                  Needs config
+                  {t("grows.tabs.needsconfig")}
                 </VariantTab>
                 <VariantTab
                   active={variant === "noapi"}
                   onClick={() => setVariant("noapi")}
                 >
-                  No API
+                  {t("grows.tabs.noapi")}
                 </VariantTab>
               </div>
             </div>
@@ -501,7 +503,7 @@ export function HuxleyGrows() {
                   cursor: "pointer",
                 }}
               >
-                ↻ replay
+                {t("grows.replay")}
               </button>
             </div>
           </div>
@@ -530,40 +532,8 @@ export function HuxleyGrows() {
           gap: isMobile ? 24 : 40,
         }}
       >
-        {(
-          [
-            {
-              k: "Find or build — same ceremony",
-              v: (
-                <>
-                  Market install and build-from-scratch end the same way: a new
-                  skill on your box, same API, same permissions model, same
-                  voice command.
-                </>
-              ),
-            },
-            {
-              k: "No terminal, ever",
-              v: (
-                <>
-                  Install from voice, or tap it through huxley-web on your
-                  phone. The CLI still works — you just never have to touch it.
-                </>
-              ),
-            },
-            {
-              k: "Failure is a feature",
-              v: (
-                <>
-                  If neither path works — no market hit and no buildable shape —
-                  Huxley says so, precisely, and stops. No hallucinated
-                  capability.
-                </>
-              ),
-            },
-          ] as Array<{ k: string; v: ReactNode }>
-        ).map((x, i) => (
-          <Reveal key={x.k} delay={i * 110} y={18} duration={650}>
+        {(["ceremony", "noTerminal", "failure"] as const).map((claimKey, i) => (
+          <Reveal key={claimKey} delay={i * 110} y={18} duration={650}>
             <div>
               <div
                 style={{
@@ -574,7 +544,7 @@ export function HuxleyGrows() {
                   marginBottom: 10,
                 }}
               >
-                {x.k}
+                {t(`grows.claims.${claimKey}.k`)}
               </div>
               <div
                 style={{
@@ -585,7 +555,7 @@ export function HuxleyGrows() {
                   textWrap: "pretty",
                 }}
               >
-                {x.v}
+                {t(`grows.claims.${claimKey}.v`)}
               </div>
             </div>
           </Reveal>
