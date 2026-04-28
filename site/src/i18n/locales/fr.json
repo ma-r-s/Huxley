@@ -5,6 +5,7 @@
     "architecture": "Architecture",
     "skills": "Skills",
     "grows": "Grandit",
+    "today": "Aujourd’hui",
     "personas": "Personas",
     "install": "Installer",
     "docs": "Docs",
@@ -39,8 +40,9 @@
       "timeline": "§ 03 · Tours",
       "skills": "§ 04 · Skills",
       "grows": "§ 05 · Grandit",
-      "personas": "§ 06 · Personas",
-      "install": "§ 07 · Installer"
+      "today": "§ 06 · Aujourd’hui",
+      "personas": "§ 07 · Personas",
+      "install": "§ 08 · Installer"
     }
   },
   "hero": {
@@ -230,8 +232,43 @@
       "handoff": "→ passage à huxley-grows…"
     }
   },
+  "today": {
+    "eyebrow": "§ 06 — Aujourd’hui",
+    "titleA": "Construit aujourd’hui,",
+    "titleB": "construit demain.",
+    "subtitle": "Chiffres réels du commit actuel. Le framework est petit, opinionné, testé.",
+    "metrics": {
+      "tests": "tests qui passent",
+      "loc": "LOC Python",
+      "skills": "skills officiels",
+      "personas": "personas publiées",
+      "adrs": "ADR consignés",
+      "license": "licence"
+    },
+    "roadmapEyebrow": "§ 06.1 — La suite",
+    "roadmapTitle": "Sélection, pas exhaustif.",
+    "roadmapSubtitle": "Le plan complet est dans docs/roadmap.md. Voici les quatre prochaines étapes visibles.",
+    "roadmap": {
+      "cookbook": {
+        "k": "Cookbook du SDK skills",
+        "v": "Un auteur tiers devrait écrire un skill fonctionnel en moins de 30 minutes sans connaître les rouages internes de Huxley."
+      },
+      "secrets": {
+        "k": "Interpolation de secrets par skill",
+        "v": "${HUXLEY_TELEGRAM_TOKEN} dans persona.yaml — déclarer la forme du secret sans le stocker. Avant l’étape 4."
+      },
+      "providerAbstraction": {
+        "k": "Abstraction du fournisseur vocal",
+        "v": "Extraire OpenAI Realtime comme une implémentation d’une interface VoiceProvider. Déclenché quand un second fournisseur crédible existe."
+      },
+      "esp32": {
+        "k": "Client walky-talky ESP32",
+        "v": "Remplace le navigateur comme client de production pour AbuelOS. Même protocole WebSocket ; le firmware vit dans clients/firmware/."
+      }
+    }
+  },
   "personas": {
-    "eyebrow": "§ 06 — Personas",
+    "eyebrow": "§ 07 — Personas",
     "titleA": "Un seul framework.",
     "titleB": "Chaque voix dont vous avez besoin.",
     "subtitle": "Une persona est un fichier YAML. Choisissez la voix, la langue, les skills, les garde-fous. Huxley s’adapte — la personne pour qui vous construisez n’a pas à le faire.",
@@ -245,7 +282,7 @@
     }
   },
   "install": {
-    "eyebrow": "§ 07 — Démarrer",
+    "eyebrow": "§ 08 — Démarrer",
     "titleA": "Cinq lignes.",
     "titleB": "Votre propre voix.",
     "ctaGitHub": "GitHub ↗",

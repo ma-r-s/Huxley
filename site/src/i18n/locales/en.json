@@ -5,6 +5,7 @@
     "architecture": "Architecture",
     "skills": "Skills",
     "grows": "Grows",
+    "today": "Today",
     "personas": "Personas",
     "install": "Install",
     "docs": "Docs",
@@ -39,8 +40,9 @@
       "timeline": "§ 03 · Turns",
       "skills": "§ 04 · Skills",
       "grows": "§ 05 · Grows",
-      "personas": "§ 06 · Personas",
-      "install": "§ 07 · Install"
+      "today": "§ 06 · Today",
+      "personas": "§ 07 · Personas",
+      "install": "§ 08 · Install"
     }
   },
   "hero": {
@@ -233,8 +235,43 @@
       "handoff": "→ handing off to huxley-grows…"
     }
   },
+  "today": {
+    "eyebrow": "§ 06 — Today",
+    "titleA": "Built today,",
+    "titleB": "building tomorrow.",
+    "subtitle": "Real numbers from the current commit. The framework is small, opinionated, and tested.",
+    "metrics": {
+      "tests": "tests passing",
+      "loc": "Python LOC",
+      "skills": "first-party skills",
+      "personas": "personas shipped",
+      "adrs": "ADRs filed",
+      "license": "license"
+    },
+    "roadmapEyebrow": "§ 06.1 — What's next",
+    "roadmapTitle": "Curated, not exhaustive.",
+    "roadmapSubtitle": "The full plan lives in docs/roadmap.md. These four are the next visible moves.",
+    "roadmap": {
+      "cookbook": {
+        "k": "Skill SDK cookbook",
+        "v": "A third-party author should write a working skill in under 30 minutes with no Huxley-internals knowledge."
+      },
+      "secrets": {
+        "k": "Per-skill secret interpolation",
+        "v": "${HUXLEY_TELEGRAM_TOKEN} in persona.yaml — declare the shape of the secret without storing it. Lands before stage 4."
+      },
+      "providerAbstraction": {
+        "k": "Voice provider abstraction",
+        "v": "Extract OpenAI Realtime as one implementation of a VoiceProvider interface. Triggered when a credible second provider exists."
+      },
+      "esp32": {
+        "k": "ESP32 walky-talky client",
+        "v": "Replaces the browser as the production client for AbuelOS. Same WebSocket protocol; firmware lives at clients/firmware/."
+      }
+    }
+  },
   "personas": {
-    "eyebrow": "§ 06 — Personas",
+    "eyebrow": "§ 07 — Personas",
     "titleA": "One framework.",
     "titleB": "Every voice you need.",
     "subtitle": "A persona is a YAML file. Pick the voice, the language, the skills, the guardrails. Huxley adapts — the person you’re building for shouldn’t have to.",
@@ -248,7 +285,7 @@
     }
   },
   "install": {
-    "eyebrow": "§ 07 — Get started",
+    "eyebrow": "§ 08 — Get started",
     "titleA": "Five lines.",
     "titleB": "A voice of your own.",
     "ctaGitHub": "GitHub ↗",
