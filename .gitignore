@@ -55,3 +55,9 @@ wii-system-soundtrack-flac/
 web/node_modules/
 web/dist/
 web/build/
+
+# Huxley landing (product website)
+huxley-landing/.env.local
+huxley-landing/node_modules/
+huxley-landing/dist/
+huxley-landing/build/
