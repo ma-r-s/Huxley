@@ -97,6 +97,15 @@ interface OrbProps {
   expressiveness?: number;
 }
 
+// Canvas APIs (strokeStyle/fillStyle/shadowColor) don't resolve CSS variables —
+// passing "var(--hux-fg)" silently falls back to black. Resolve it once here.
+function resolveColor(input: string, ref: HTMLElement | null): string {
+  if (!input.startsWith("var(") || !ref) return input;
+  const name = input.slice(4, -1).trim();
+  const computed = getComputedStyle(ref).getPropertyValue(name).trim();
+  return computed || "#fff";
+}
+
 export function Orb({
   size = 240,
   state = "idle",
@@ -118,6 +127,7 @@ export function Orb({
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const drawColor = resolveColor(color, canvas);
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     canvas.width = size * dpr;
     canvas.height = size * dpr;
@@ -252,16 +262,16 @@ export function Orb({
 
       ctx.lineJoin = "round";
       ctx.lineCap = "round";
-      ctx.strokeStyle = color;
+      ctx.strokeStyle = drawColor;
       ctx.lineWidth = stroke;
-      ctx.shadowColor = color;
+      ctx.shadowColor = drawColor;
       ctx.shadowBlur = 8 + glow * 12;
       ctx.stroke();
       ctx.shadowBlur = 0;
 
       if (cur === "thinking") {
         const pulseR = 3 + Math.sin(t * 3) * 1.2;
-        ctx.fillStyle = color;
+        ctx.fillStyle = drawColor;
         ctx.globalAlpha = 0.6;
         ctx.beginPath();
         ctx.arc(px, py, pulseR, 0, Math.PI * 2);
