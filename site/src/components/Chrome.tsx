@@ -81,11 +81,11 @@ export function BalNav() {
           <a style={navA} href="#skills">
             {t("nav.skills")}
           </a>
-          <a style={navA} href="#grows">
-            {t("nav.grows")}
-          </a>
           <a style={navA} href="#today">
             {t("nav.today")}
+          </a>
+          <a style={navA} href="#grows">
+            {t("nav.grows")}
           </a>
           <a style={navA} href="#persona">
             {t("nav.personas")}

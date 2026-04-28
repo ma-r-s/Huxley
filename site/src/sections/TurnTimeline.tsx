@@ -73,6 +73,7 @@ export function TurnTimeline() {
   return (
     <section
       ref={sectionRef}
+      id="timeline"
       style={{
         position: "relative",
         zIndex: 2,
@@ -93,143 +94,147 @@ export function TurnTimeline() {
         subtitle={t("timeline.subtitle")}
       />
 
-      <Reveal delay={350} y={36} duration={800}>
-        <div
-          style={{
-            marginTop: 56,
-            background: "rgba(0,0,0,0.22)",
-            border: "1px solid var(--hux-fg-line)",
-            borderRadius: 20,
-            padding: 24,
-            overflow: "hidden",
-          }}
-        >
-          <svg
-            viewBox={`0 0 ${W} ${H}`}
-            style={{ width: "100%", height: "auto", display: "block" }}
+      {isMobile ? (
+        <TimelineMobileSummary />
+      ) : (
+        <Reveal delay={350} y={36} duration={800}>
+          <div
+            style={{
+              marginTop: 56,
+              background: "rgba(0,0,0,0.22)",
+              border: "1px solid var(--hux-fg-line)",
+              borderRadius: 20,
+              padding: 24,
+              overflow: "hidden",
+            }}
           >
-            <line
-              x1={L}
-              y1={H - 38}
-              x2={W - R}
-              y2={H - 38}
-              stroke="currentColor"
-              opacity="0.35"
-            />
-            {Array.from({ length: 9 }).map((_, i) => {
-              const x = L + (i / 8) * usableW;
-              return (
-                <g key={i}>
-                  <line
-                    x1={x}
-                    y1={H - 38}
-                    x2={x}
-                    y2={H - 32}
-                    stroke="currentColor"
-                    opacity="0.45"
-                  />
+            <svg
+              viewBox={`0 0 ${W} ${H}`}
+              style={{ width: "100%", height: "auto", display: "block" }}
+            >
+              <line
+                x1={L}
+                y1={H - 38}
+                x2={W - R}
+                y2={H - 38}
+                stroke="currentColor"
+                opacity="0.35"
+              />
+              {Array.from({ length: 9 }).map((_, i) => {
+                const x = L + (i / 8) * usableW;
+                return (
+                  <g key={i}>
+                    <line
+                      x1={x}
+                      y1={H - 38}
+                      x2={x}
+                      y2={H - 32}
+                      stroke="currentColor"
+                      opacity="0.45"
+                    />
+                    <text
+                      x={x}
+                      y={H - 18}
+                      textAnchor="middle"
+                      style={{
+                        fontFamily: "var(--hux-mono)",
+                        fontSize: 9,
+                        letterSpacing: "0.1em",
+                      }}
+                      fill="currentColor"
+                      opacity="0.55"
+                    >
+                      {i}s
+                    </text>
+                  </g>
+                );
+              })}
+
+              {TRACKS.map((track, ti) => (
+                <g key={ti}>
                   <text
-                    x={x}
-                    y={H - 18}
-                    textAnchor="middle"
+                    x={L - 14}
+                    y={track.y + 5}
+                    textAnchor="end"
                     style={{
                       fontFamily: "var(--hux-mono)",
-                      fontSize: 9,
-                      letterSpacing: "0.1em",
+                      fontSize: 10,
+                      letterSpacing: "0.12em",
+                      textTransform: "uppercase",
                     }}
                     fill="currentColor"
-                    opacity="0.55"
+                    opacity="0.6"
                   >
-                    {i}s
+                    {t(`timeline.tracks.${track.nameKey}`)}
                   </text>
+                  <line
+                    x1={L}
+                    y1={track.y}
+                    x2={W - R}
+                    y2={track.y}
+                    stroke="currentColor"
+                    opacity="0.12"
+                    strokeDasharray="2 3"
+                  />
+                  {track.segs.map((s, si) => {
+                    const x0 = L + s.start * usableW;
+                    const x1 = L + s.end * usableW;
+                    const active = phase >= s.start && phase <= s.end;
+                    return (
+                      <g key={si}>
+                        <rect
+                          x={x0}
+                          y={track.y - 9}
+                          width={x1 - x0}
+                          height={18}
+                          rx="5"
+                          fill={track.color}
+                          opacity={active ? 1 : 0.45}
+                          style={{
+                            transition: "opacity 160ms ease",
+                            filter: active
+                              ? `drop-shadow(0 0 10px ${track.color})`
+                              : "none",
+                          }}
+                        />
+                        <text
+                          x={x0}
+                          y={track.y - 16}
+                          style={{
+                            fontFamily: "var(--hux-mono)",
+                            fontSize: 10,
+                            letterSpacing: "0.04em",
+                          }}
+                          fill="currentColor"
+                          opacity={active ? 0.95 : 0.55}
+                        >
+                          {t(`timeline.segments.${s.labelKey}`)}
+                        </text>
+                      </g>
+                    );
+                  })}
                 </g>
-              );
-            })}
+              ))}
 
-            {TRACKS.map((track, ti) => (
-              <g key={ti}>
-                <text
-                  x={L - 14}
-                  y={track.y + 5}
-                  textAnchor="end"
-                  style={{
-                    fontFamily: "var(--hux-mono)",
-                    fontSize: 10,
-                    letterSpacing: "0.12em",
-                    textTransform: "uppercase",
-                  }}
-                  fill="currentColor"
-                  opacity="0.6"
-                >
-                  {t(`timeline.tracks.${track.nameKey}`)}
-                </text>
-                <line
-                  x1={L}
-                  y1={track.y}
-                  x2={W - R}
-                  y2={track.y}
-                  stroke="currentColor"
-                  opacity="0.12"
-                  strokeDasharray="2 3"
-                />
-                {track.segs.map((s, si) => {
-                  const x0 = L + s.start * usableW;
-                  const x1 = L + s.end * usableW;
-                  const active = phase >= s.start && phase <= s.end;
-                  return (
-                    <g key={si}>
-                      <rect
-                        x={x0}
-                        y={track.y - 9}
-                        width={x1 - x0}
-                        height={18}
-                        rx="5"
-                        fill={track.color}
-                        opacity={active ? 1 : 0.45}
-                        style={{
-                          transition: "opacity 160ms ease",
-                          filter: active
-                            ? `drop-shadow(0 0 10px ${track.color})`
-                            : "none",
-                        }}
-                      />
-                      <text
-                        x={x0}
-                        y={track.y - 16}
-                        style={{
-                          fontFamily: "var(--hux-mono)",
-                          fontSize: 10,
-                          letterSpacing: "0.04em",
-                        }}
-                        fill="currentColor"
-                        opacity={active ? 0.95 : 0.55}
-                      >
-                        {t(`timeline.segments.${s.labelKey}`)}
-                      </text>
-                    </g>
-                  );
-                })}
-              </g>
-            ))}
-
-            <line
-              x1={L + phase * usableW}
-              y1={10}
-              x2={L + phase * usableW}
-              y2={H - 30}
-              stroke="var(--hux-fg)"
-              strokeWidth="1.5"
-              opacity="0.85"
-            />
-            <circle
-              cx={L + phase * usableW}
-              cy={12}
-              r="4"
-              fill="var(--hux-fg)"
-            />
-          </svg>
-        </div>
-      </Reveal>
+              <line
+                x1={L + phase * usableW}
+                y1={10}
+                x2={L + phase * usableW}
+                y2={H - 30}
+                stroke="var(--hux-fg)"
+                strokeWidth="1.5"
+                opacity="0.85"
+              />
+              <circle
+                cx={L + phase * usableW}
+                cy={12}
+                r="4"
+                fill="var(--hux-fg)"
+              />
+            </svg>
+          </div>
+        </Reveal>
+      )}
 
       <div
         style={{
@@ -278,5 +283,72 @@ export function TurnTimeline() {
         })}
       </div>
     </section>
+  );
+}
+
+// Mobile-only fallback. The 960×260 SVG timeline becomes unreadable on a
+// narrow phone (10pt text shrinks to ~3pt). On mobile we render the same
+// 8-second scenario as a stacked time-stamped list.
+interface TLRow {
+  k: string;
+  v: string;
+}
+
+function TimelineMobileSummary() {
+  const { t } = useTranslation();
+  const rows = t("timeline.mobileSummary.rows", {
+    returnObjects: true,
+  }) as TLRow[];
+  return (
+    <div
+      style={{
+        marginTop: 40,
+        background: "rgba(0,0,0,0.22)",
+        border: "1px solid var(--hux-fg-line)",
+        borderRadius: 16,
+        padding: 20,
+      }}
+    >
+      <div
+        className="eyebrow"
+        style={{ opacity: 0.6, marginBottom: 12, fontSize: 10 }}
+      >
+        {t("timeline.mobileSummary.title")}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+        {rows.map((r, i) => (
+          <div
+            key={i}
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr",
+              gap: 4,
+              padding: "12px 0",
+              borderTop: i === 0 ? "none" : "1px solid var(--hux-fg-line)",
+            }}
+          >
+            <div
+              className="mono"
+              style={{
+                fontSize: 10,
+                letterSpacing: "0.14em",
+                opacity: 0.65,
+              }}
+            >
+              {r.k}
+            </div>
+            <div
+              style={{
+                fontFamily: "var(--hux-sans)",
+                fontSize: 14,
+                lineHeight: 1.45,
+              }}
+            >
+              {r.v}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }

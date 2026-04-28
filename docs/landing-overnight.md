@@ -128,6 +128,178 @@ If you want any of these translated I can do another pass.
   `site/index.html`. For HN, the link unfurl on mastodon/twitter
   uses this. Worth a quick mockup before launch.
 
-## Critic findings (summary will land here when it returns)
+## Critic findings + how I responded
 
-_pending — section to be filled in after critic agent completes_
+The critic (a fresh-context agent reading the landing as a first-time HN
+visitor) returned a 3.0/5 average score and a "would not upvote in current
+state" verdict. Full report at `docs/landing-critic.md`. I worked through
+all four P0s and most of the P1/P2s. Below is what I addressed and what's
+still open for you.
+
+### P0 — addressed
+
+- **P0-2 install snippet was broken.** `git clone huxley` isn't a real
+  command; the .env path didn't match the cd; port was wrong in the
+  comment. Replaced with a working 5-line block in `site/src/sections/
+Install.tsx`. The hero's micro-snippet (`hero.installSnippet`) was the
+  same bug — fixed in all three locales.
+
+- **P0-3 Huxley-grows section reframed and reordered.**
+  - Reordered so Today (real metrics) comes BEFORE Grows (aspirational
+    vision). New section order: Skills → Today → Grows → Personas →
+    Install. Critic's argument: the reader should see proof before
+    speculation.
+  - Reframed copy from present-tense ("You ask. / It finds, or builds. /
+    First it checks huxley-market…") to future-tense ("Where this is
+    going. / Not where it is yet. / The architecture leaves room for two
+    things that don't ship today: a community registry of open-source
+    skills (huxley-market), and a build agent that writes a new skill
+    from a voice prompt (huxley-grows). The transcript below is what
+    those would feel like in use — neither is implemented.").
+  - **No "coming soon" banner** — per your Q2 directive. The
+    reframing is a copy edit, not a badge. **If you'd rather restore
+    the original present-tense framing, revert by editing `grows.eyebrow`,
+    `grows.titleA/B`, `grows.subtitle` in the three locale files.**
+  - Section eyebrow was § 05; now § 06. Today is now § 05. Personas + Install
+    stay § 07 + § 08. Voice-thread chapter labels + nav links updated to match.
+
+- **P0-4 invented stats removed from Grows transcript.**
+  - "1,247 skills · semantic + tag query" → "registry · semantic + tag query"
+  - "hacker-news by @merrill, 4.8★" → "Found a hacker-news skill in the
+    registry."
+  - "Found spotify by @lena" → "Found a spotify skill in the registry."
+
+- **P0-1 GitHub repo 404** — flagged as Q1 follow-up. CTAs already point
+  at `https://github.com/ma-r-s/Huxley`; will start working when you
+  flip the repo to public. **No action from me.**
+
+### P1 — addressed
+
+- **P1-1 hero pitch buried.** The hero pill was "Open-source · MIT ·
+  Python 3.13" (credentials). Now reads "Voice-agent framework ·
+  Self-hosted Python · MIT" (category first). Reader sees the noun
+  "voice-agent framework" within the first second.
+
+- **P1-3 voice-thread chapter ticks now clickable.** Each chapter
+  marker is now an `<a>` that scroll-snaps to its section. The
+  decoration earned its real estate.
+
+- **P1-4 persona honesty.** Subtitle now reads "AbuelOS is in
+  production today; the others are design examples that show how far
+  the same framework stretches." A small "ships today" mono pill
+  appears under the AbuelOS persona cell only. The other 5 stay in
+  the grid (per your Q2 logic for aspirational examples).
+
+- **P1-5 mobile fallback for SVG diagrams.** On mobile (<640px), the
+  Architecture and Timeline SVGs are replaced with stacked text
+  summaries. Same content, legible at phone widths. The `mobileSummary`
+  i18n keys live under `architecture` and `timeline` namespaces in all
+  three locales.
+
+- **P1-6 behavioral constraints promoted.** Added a fourth Huxley-row
+  bullet to the Problem comparison: "Behavioral constraints in YAML
+  (never_say_no, child_safe)." The Architecture cards already have a
+  full constraints card from the earlier audit pass.
+
+- **P1-7 cost transparency.** New italic line above the install
+  snippet: "Runs on OpenAI Realtime: roughly $0.06/min listening,
+  $0.24/min speaking. You pay OpenAI directly — Huxley adds no markup.
+  Idle is free." Translated for ES/FR.
+
+- **P1-8 Clinic HIPAA claim softened.** Was "HIPAA-aware. Transcripts
+  stay local." Now: "Transcripts stay on the local machine; the persona
+  pattern shows how to keep PHI out of cloud logs (regulatory compliance
+  is the operator's responsibility)." More honest, doesn't make a
+  regulatory claim the project can't back.
+
+- **P1-10 footer now has links.** Wordmark + four links (GitHub /
+  Issues / Discussions / Docs) on one row, MIT/Pre-1.0/Two-personas
+  meta on a row below. All four point at the eventual public repo URL.
+
+### P2 — addressed
+
+- **P2-1 softened the hero "interrupt" copy.** Was "Wait — cancel
+  that." → "Cancelling." (The critic's bigger concern about
+  voiceThread.states.interrupt.sub showing in scroll was actually
+  unreachable in practice — no section registers as `interrupt` —
+  so I left that defensive string alone.)
+
+- **P2-6 fixed the architecture diagram's WS URL.** The corner label
+  was `wss://huxley.local:8443`; the actual default per CLAUDE.md is
+  `ws://localhost:8765`. Fixed in all three locales.
+
+### Critic findings I deliberately did NOT action — your call
+
+These are good observations that I either lack context for, or that
+change scope/voice in ways you should sign off on:
+
+- **P1-2 — no audio demo.** The single most powerful thing for a voice
+  product. Needs you to record 15-25s of the AbuelOS scenario the
+  Timeline section illustrates. Once you have an mp3, dropping it into
+  `site/public/demo.mp3` and adding a `<button>` to the Hero is a small
+  patch — flag if you want me to scaffold the player.
+
+- **P1-9 — Skills filter row categorical labels not translated.** The
+  category labels (`Audio`, `Comms`, `Home`, etc.) and the skill names
+  (`Audiobooks`, `Spotify`) are rendered from English-literal strings
+  in `ALL_SKILLS`. Translating them is real work (extends i18n JSON by
+  ~80 keys). The critic's alternative — a small inline note saying
+  "skill names are package identifiers and stay in English" — is also
+  fine. Tell me which.
+
+- **P2-2 — orb expressiveness 1.1 felt overtuned.** Subjective. Try
+  changing the prop in `site/src/sections/Hero.tsx:148` from `1.1` to
+  `0.7`; HMR will reflect immediately.
+
+- **P2-3 — "15K Python LOC" weak.** I picked it because it's verifiable.
+  Critic suggests "132 framework tests · zero runtime deps beyond
+  OpenAI SDK" — that's actually a stronger metric pair. We have 678
+  passing tests across all packages and the runtime depends on
+  `openai`, `websockets`, `pydantic`, `structlog`, `pyyaml`. Worth
+  swapping if you agree.
+
+- **P2-4 — roadmap items too dev-internal.** All four are infra-ish.
+  Add one user-facing entry like "Real Telegram inbound pipeline" or
+  "First community skill on PyPI" if you want.
+
+- **P2-5 — italic-em pattern overused.** The "First line / _italic
+  second line._" treatment appears in every section title. Critic
+  suggests varying — maybe Today is the section that drops the italic
+  flourish to feel grounded. Cosmetic; you decide.
+
+- **P2-7 — surface the entry-points block more.** The
+  `[project.entry-points."huxley.skills"]` line is the punchline of
+  the architecture but it's at the bottom of a code block. A pull-out
+  callout would amplify it. Two-paragraph rewrite of the Skills
+  section's right-hand panel.
+
+- **P2-8 — replay button can desync** in the Grows transcript edge
+  case. Hard to repro without manual play. Worth a once-over before
+  launch but not blocking.
+
+- **What's missing list (10 items):** audio demo (above), AbuelOS
+  origin story ("this exists because my grandfather can't see the
+  screen anymore"), worked latency number ("~480ms p50 user-stop to
+  first audio byte"), LiveKit Agents row in the Problem comparison,
+  "used in production today by my abuelo", a Discord/Discussions
+  channel, telemetry/data-flow diagram, second voice provider
+  commitment, Huxley name origin. **All of these need your voice or
+  decision.** Worth adding before launch — they're the difference
+  between "shipped a beautiful page" and "top-3 launch."
+
+### Critic's final verdict
+
+> "Once P0-1 through P0-4 are fixed — yes, I'd upvote and probably
+> comment." (P0-1 was the GitHub link, which is your Q1; the other
+> three are addressed.)
+
+> "Final blunt note: this landing is doing too much. Cut 30% of the
+> animation budget, add the audio demo, and you have a top-3 launch."
+
+The animation budget critique is fair. I left all the animations
+intact tonight because cutting them is an aesthetic call and the
+visual identity is a real asset. If you want a "less animation"
+pass tomorrow, the candidates are: (a) the voice-thread waveform
+canvas loop, (b) the architecture packet animation (always running),
+(c) the timeline phase animation. All three render in
+requestAnimationFrame and consume battery on mobile.

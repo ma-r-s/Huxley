@@ -244,9 +244,23 @@ function ChapterLayer({ sections }: { sections: ChapterMeta[] }) {
     >
       {sections.map((s) => {
         const active = s.id === activeSection;
+        // Earn the bar's vertical real estate: chapter markers are clickable
+        // anchors that scroll-to-section, not pure decoration. Per critic P1-3.
+        const onClick = (e: React.MouseEvent) => {
+          e.preventDefault();
+          if (s.id === "hero") {
+            window.scrollTo({ top: 0, behavior: "smooth" });
+            return;
+          }
+          const el = document.getElementById(s.id);
+          if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+        };
         return (
-          <div
+          <a
             key={s.id}
+            href={s.id === "hero" ? "#" : `#${s.id}`}
+            onClick={onClick}
+            aria-label={s.label}
             style={{
               position: "absolute",
               left: `${s.position * 100}%`,
@@ -258,6 +272,11 @@ function ChapterLayer({ sections }: { sections: ChapterMeta[] }) {
               alignItems: "center",
               justifyContent: "space-between",
               padding: "4px 0",
+              minWidth: isMobile ? 28 : 0,
+              pointerEvents: "auto",
+              cursor: "pointer",
+              textDecoration: "none",
+              color: "inherit",
             }}
           >
             <span
@@ -295,7 +314,7 @@ function ChapterLayer({ sections }: { sections: ChapterMeta[] }) {
                 transition: "opacity 300ms ease",
               }}
             />
-          </div>
+          </a>
         );
       })}
     </div>
