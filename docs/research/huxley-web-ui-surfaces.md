@@ -152,7 +152,7 @@ For the PWA, plan for an admin screen that exposes:
 
 | Field                                 | Scope   | Where it lives today                 |
 | ------------------------------------- | ------- | ------------------------------------ |
-| `HUXLEY_OPENAI_API_KEY`               | Device  | `packages/core/.env`                 |
+| `HUXLEY_OPENAI_API_KEY`               | Device  | `server/runtime/.env`                 |
 | `HUXLEY_PERSONA` (which persona runs) | Device  | env var                              |
 | Voice provider model                  | Device  | `HUXLEY_OPENAI_MODEL` env var        |
 | Persona voice (e.g. `coral`, `alloy`) | Persona | `persona.yaml` → `voice`             |
@@ -161,7 +161,7 @@ For the PWA, plan for an admin screen that exposes:
 | Persona behavioral constraints        | Persona | `persona.yaml` → `constraints`       |
 | Enabled skills                        | Persona | `persona.yaml` → `skills:` map       |
 | Per-skill config (below)              | Skill   | Each skill's block in `persona.yaml` |
-| Device data dir path                  | Device  | implicit (`personas/<name>/data/`)   |
+| Device data dir path                  | Device  | implicit (`server/personas/<name>/data/`)   |
 
 The admin UI can surface all of these. V1 probably only exposes API-key + persona picker; the rest is Phase 2 when an edit-and-save protocol message exists.
 
@@ -287,7 +287,7 @@ The persona YAML exposes several fields the PWA can surface directly:
 | `timezone`               | Formatting for timestamps in the transcript / timers UI                |
 | `ui_strings`             | Persona-configurable localized strings (e.g. `listening:`, `ready:`)   |
 
-The `ui_strings` block (see `personas/abuelos/persona.yaml`) is deliberately client-agnostic and meant for clients like the PWA to use. Currently the `web/` dev client respects these; `huxley-web` should too.
+The `ui_strings` block (see `server/personas/abuelos/persona.yaml`) is deliberately client-agnostic and meant for clients like the PWA to use. Currently the `clients/pwa/` dev client respects these; `huxley-web` should too.
 
 ---
 

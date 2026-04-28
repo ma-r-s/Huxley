@@ -1,13 +1,13 @@
 [tool.uv.workspace]
 members = [
-    "packages/sdk",
-    "packages/core",
-    "packages/skills/audiobooks",
-    "packages/skills/telegram",
-    "packages/skills/news",
-    "packages/skills/radio",
-    "packages/skills/system",
-    "packages/skills/timers",
+    "server/sdk",
+    "server/runtime",
+    "server/skills/audiobooks",
+    "server/skills/telegram",
+    "server/skills/news",
+    "server/skills/radio",
+    "server/skills/system",
+    "server/skills/timers",
 ]
 
 [tool.uv.sources]

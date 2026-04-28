@@ -141,7 +141,7 @@ A single generic message type (`dev_event`) carries everything the dev UI might 
 1. Emit from wherever the signal originates, via an `on_dev_event` callback passed through `SessionManager` (or directly from `Application`).
 2. Wire it to `AudioServer.send_dev_event(kind, payload)`.
 3. Add the `kind` to the table above with its payload shape.
-4. Add a `case` to the dev UI's switch in `web/src/routes/+page.svelte`.
+4. Add a `case` to the dev UI's switch in `clients/pwa/src/routes/+page.svelte`.
 
 No new message types. No new plumbing. Observability scales without touching the production contract.
 
@@ -153,4 +153,4 @@ No new message types. No new plumbing. Observability scales without touching the
 
 ## Source of truth
 
-The Python implementation in [`packages/core/src/huxley/server/server.py`](../packages/core/src/huxley/server/server.py) is the canonical implementation. This doc must match. If they diverge, fix whichever is wrong in the same commit.
+The Python implementation in [`server/runtime/src/huxley/server/server.py`](../server/runtime/src/huxley/server/server.py) is the canonical implementation. This doc must match. If they diverge, fix whichever is wrong in the same commit.

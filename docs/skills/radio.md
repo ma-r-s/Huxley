@@ -46,7 +46,7 @@ Persona's `skills.radio` block:
 | `start_sound`   | no       | _none_   | Sound palette role (e.g. `radio_start`); omit for no chime           |
 | `sounds_path`   | no       | `sounds` | Sound palette directory (relative to persona `data_dir` or absolute) |
 
-Example (excerpted from `personas/abuelos/persona.yaml`):
+Example (excerpted from `server/personas/abuelos/persona.yaml`):
 
 ```yaml
 radio:
@@ -122,7 +122,7 @@ just like it fabricated news headlines until we forbade it.
 ## File layout
 
 ```
-packages/skills/radio/
+server/skills/radio/
 ├── pyproject.toml                   # huxley-skill-radio; depends on huxley-sdk
 ├── src/huxley_skill_radio/
 │   ├── __init__.py                  # exports RadioSkill

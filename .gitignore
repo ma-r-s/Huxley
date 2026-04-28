@@ -1,13 +1,14 @@
 # Secrets / local config
-packages/core/.env
+server/runtime/.env
 .env
 .env.local
 .env.*.local
-web/.env.local
+clients/pwa/.env.local
+site/.env.local
 # Telegram app credentials (Mario exports the my.telegram.org/apps
 # page as a plain file in repo root; kept out of git). Leading slash
 # anchors to repo root so we don't accidentally swallow paths like
-# packages/skills/telegram/ or any *.py file named telegram_*.
+# server/skills/telegram/ or any *.py file named telegram_*.
 /telegram
 /telegram.*
 *.session
@@ -33,31 +34,26 @@ htmlcov/
 *.db
 *.db-shm
 *.db-wal
-packages/core/logs/
+server/runtime/logs/
 logs/
 
 # Persona-local data (audiobook library, sqlite DB) — large, user-provided
-personas/*/data/
-packages/core/models/
-# Local audiobook staging at repo root — not the canonical library path
-# (that's personas/abuelos/data/audiobooks/). Keep out of git regardless
-# of where the .m4b files land.
-/Audiobooks/
+server/personas/*/data/
+server/runtime/models/
 
 # Sound assets — raw extraction workspace; only curated *.wav belong in git
-personas/*/sounds/raw/
+server/personas/*/sounds/raw/
 wii-system-soundtrack-flac/
 
 # macOS
 .DS_Store
 
-# Web
-web/node_modules/
-web/dist/
-web/build/
+# PWA client (clients/pwa)
+clients/pwa/node_modules/
+clients/pwa/dist/
+clients/pwa/build/
 
-# Huxley landing (product website)
-huxley-landing/.env.local
-huxley-landing/node_modules/
-huxley-landing/dist/
-huxley-landing/build/
+# Marketing site (site/)
+site/node_modules/
+site/dist/
+site/build/

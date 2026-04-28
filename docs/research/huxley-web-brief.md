@@ -184,7 +184,7 @@ The PWA talks to the Huxley user. Huxley talks to the world through its skills.
 
 Pick the framework with your design tool. Suggested defaults:
 
-- **Svelte / SvelteKit** or **React / Next.js** both work cleanly. The in-tree dev client `web/` is Svelte, so there's precedent; not required.
+- **Svelte / SvelteKit** or **React / Next.js** both work cleanly. The in-tree dev client `clients/pwa/` is Svelte, so there's precedent; not required.
 - **Tailwind** for styling.
 - **Workbox** for service-worker scaffolding.
 - **AudioWorklet** for mic capture (no library hides this well; custom processor in ~50 lines).

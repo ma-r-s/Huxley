@@ -14,7 +14,7 @@ Server starts immediately, logs to `~/Library/Logs/Huxley/huxley.log`.
 
 The plist hardcodes:
 
-- Working directory: `/Users/mario/Projects/Personal/Code/Huxley/packages/core`
+- Working directory: `/Users/mario/Projects/Personal/Code/Huxley/server/runtime`
 - Path to `uv`: `/Users/mario/.local/bin/uv`
 
 If your install paths differ, edit `com.huxley.server.plist` before running install.

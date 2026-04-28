@@ -88,4 +88,4 @@ uv run python spikes/realtime_suspend.py      # all 4 experiments (~3 minutes wa
 uv run python spikes/realtime_suspend.py 2    # just experiment 2 (the critical one)
 ```
 
-The script loads `HUXLEY_OPENAI_API_KEY` from `packages/core/.env`. Each experiment opens a fresh WebSocket so state doesn't leak between them.
+The script loads `HUXLEY_OPENAI_API_KEY` from `server/runtime/.env`. Each experiment opens a fresh WebSocket so state doesn't leak between them.

@@ -140,10 +140,10 @@ The reason "test with users" remains the answer despite all of the above: every 
 
 What already exists in the codebase (as of 2026-04-17):
 
-- **Ready-to-talk tone** — `AudioPlayback.playTone(880Hz, 90ms)` in `web/src/lib/audio/playback.ts`. Fires on PTT press to confirm mic is hot. 880Hz is above the vocal band. **Framework-compliant.**
+- **Ready-to-talk tone** — `AudioPlayback.playTone(880Hz, 90ms)` in `clients/pwa/src/lib/audio/playback.ts`. Fires on PTT press to confirm mic is hot. 880Hz is above the vocal band. **Framework-compliant.**
 - **Thinking tone** — `AudioPlayback.playThinkingTone()` same file. 440Hz sine pulse at 150ms on / 250ms off. **Violates framework rules 7 and 11:** 440Hz is inside the vocal band (200Hz–4kHz), so it masks/gets-masked by TTS; and it's a melodic pulse rather than a drone bed.
 - **Error tone** — does not exist. Failures surface only as spoken text or silent drops. Violates framework rule 8.
-- **Silence threshold** — `SILENCE_TIMEOUT_MS = 400` in `web/src/lib/ws.svelte.ts`. **Violates framework rule 6:** should be ~1500 ms. The 400 ms value was chosen before this research to match "dead air reads as broken device" intuition — the research says that intuition over-triggers the tone.
+- **Silence threshold** — `SILENCE_TIMEOUT_MS = 400` in `clients/pwa/src/lib/ws.svelte.ts`. **Violates framework rule 6:** should be ~1500 ms. The 400 ms value was chosen before this research to match "dead air reads as broken device" intuition — the research says that intuition over-triggers the tone.
 
 Concrete deltas when this work is picked up again:
 

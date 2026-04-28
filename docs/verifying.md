@@ -29,14 +29,14 @@ echo "HUXLEY_OPENAI_API_KEY=sk-..." > .env
 Run from the repo root:
 
 ```bash
-uv run ruff check packages/
-uv run ruff format --check packages/
-uv run mypy packages/sdk/src packages/core/src \
-            packages/skills/audiobooks/src packages/skills/system/src
-uv run --directory packages/sdk pytest -q                      # 10 passed
-uv run --directory packages/core pytest -q                     # 94 passed
-uv run --directory packages/skills/audiobooks pytest -q        # 40 passed
-cd web && bun install && bun run check && cd ..                # 0 errors
+uv run ruff check server/
+uv run ruff format --check server/
+uv run mypy server/sdk/src server/runtime/src \
+            server/skills/audiobooks/src server/skills/system/src
+uv run --directory server/sdk pytest -q                        # 10 passed
+uv run --directory server/runtime pytest -q                    # 94 passed
+uv run --directory server/skills/audiobooks pytest -q          # 40 passed
+cd clients/pwa && bun install && bun run check && cd ..        # 0 errors
 ```
 
 Confirm entry-point discovery:
@@ -68,14 +68,14 @@ state_transition   from_state=CONNECTING   to_state=CONVERSING   trigger=connect
 
 If you see `connection_failed` with `invalid_request_error.invalid_api_key`, your `HUXLEY_OPENAI_API_KEY` doesn't have Realtime access.
 
-`catalog_loaded count=0` on a fresh clone is expected — the persona's audiobook dir is gitignored. Drop some `.m4b` files into `personas/abuelos/data/audiobooks/` (optionally in `Author/Title.m4b` subfolders) and restart to populate.
+`catalog_loaded count=0` on a fresh clone is expected — the persona's audiobook dir is gitignored. Drop some `.m4b` files into `server/personas/abuelos/data/audiobooks/` (optionally in `Author/Title.m4b` subfolders) and restart to populate.
 
 ## Boot the web client
 
 In another terminal:
 
 ```bash
-cd web && bun dev
+cd clients/pwa && bun dev
 ```
 
 Open `http://localhost:5173`. You should see:
@@ -104,7 +104,7 @@ Two `response_done` events confirm the chained-round behavior: first round calls
 
 ## Smoke test 2 — side-effect tool path (audiobook playback)
 
-Requires at least one `.m4b`/`.mp3` in `personas/abuelos/data/audiobooks/`.
+Requires at least one `.m4b`/`.mp3` in `server/personas/abuelos/data/audiobooks/`.
 
 1. Hold, say _"reproduce [title or author]"_ or _"sigue con el libro"_, release.
 2. Expected: the agent says something brief (_"Ahí le pongo el libro."_), then the book audio starts playing.

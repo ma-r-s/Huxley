@@ -21,11 +21,11 @@ skills:
   - system: {}
 ```
 
-A persona is shareable. You can clone someone else's persona file, install the skills it lists, and have an identical agent. Personas live in the `personas/` directory; Huxley loads one at startup based on config.
+A persona is shareable. You can clone someone else's persona file, install the skills it lists, and have an identical agent. Personas live in the `server/personas/` directory; Huxley loads one at startup based on config.
 
-Personas can declare multiple languages in a single YAML file via an `i18n:` block (per-language `system_prompt`, `ui_strings`, and skill overrides). Clients pick the language at connect time with a `?lang=<code>` query param on the WebSocket URL; the framework resolves the persona for that language and hands skills a `SkillContext` whose `language` field flips accordingly. See [`personas/README.md#multilingual-personas`](./personas/README.md#multilingual-personas).
+Personas can declare multiple languages in a single YAML file via an `i18n:` block (per-language `system_prompt`, `ui_strings`, and skill overrides). Clients pick the language at connect time with a `?lang=<code>` query param on the WebSocket URL; the framework resolves the persona for that language and hands skills a `SkillContext` whose `language` field flips accordingly. See [`server/personas/README.md#multilingual-personas`](./personas/README.md#multilingual-personas).
 
-How to write one: [`personas/README.md`](./personas/README.md).
+How to write one: [`server/personas/README.md`](./personas/README.md).
 
 ## Skill
 
@@ -35,7 +35,7 @@ A skill is a Python package. It declares one or more **tools** (function definit
 
 A skill never imports framework internals. It uses the Huxley SDK, which gives it a typed context (storage, config, logger) and the types it needs. This contract is what keeps skills portable — a skill works against any persona that enables it.
 
-A skill is `pip install`-able. Built-in skills live in `packages/skills/`; community skills are published on PyPI under the `huxley-skill-*` prefix.
+A skill is `pip install`-able. Built-in skills live in `server/skills/`; community skills are published on PyPI under the `huxley-skill-*` prefix.
 
 How to write one: [`skills/README.md`](./skills/README.md).
 
@@ -160,13 +160,13 @@ Personas don't rewrite the system prompt from scratch — they compose it from t
 | `echo_short_input`     | When the user says only one or two words, the agent echoes what it understood before acting — prevents acting on a mishear.                                                              |
 | `confirm_if_unclear`   | Before calling any tool, the agent evaluates whether it understood the request. If the audio was cut or the intent ambiguous, it asks one short clarifying question instead of guessing. |
 
-Constraint definitions live in `packages/core/src/huxley/constraints/`. Adding one is a one-file PR.
+Constraint definitions live in `server/runtime/src/huxley/constraints/`. Adding one is a one-file PR.
 
 ## Client
 
 **What the user talks to.**
 
-Huxley is headless — it listens on a WebSocket and speaks to whoever connects. Clients own audio hardware (mic, speaker). The browser dev client (in `web/`) is the MVP client; an ESP32 walky-talky is the eventual production client.
+Huxley is headless — it listens on a WebSocket and speaks to whoever connects. Clients own audio hardware (mic, speaker). The browser dev client (in `clients/pwa/`) is the MVP client; an ESP32 walky-talky is the eventual production client.
 
 The protocol between Huxley and its clients is in [`protocol.md`](./protocol.md). Any hardware or software that implements it is a valid client.
 

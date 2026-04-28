@@ -1,6 +1,6 @@
 # Writing a Persona
 
-A persona declares **who your agent is**. It's a YAML file in `personas/<name>/persona.yaml`. Huxley loads it at startup, builds the system prompt, registers the listed skills with their config, opens the voice session — and you have an agent.
+A persona declares **who your agent is**. It's a YAML file in `server/personas/<name>/persona.yaml`. Huxley loads it at startup, builds the system prompt, registers the listed skills with their config, opens the voice session — and you have an agent.
 
 For the conceptual model, see [`../concepts.md`](../concepts.md). For a full worked example, see [`abuelos.md`](./abuelos.md) — the canonical Spanish-language persona for an elderly blind user.
 
@@ -93,7 +93,7 @@ Constraints are reusable behavioral rules that get composed into the system prom
 | `child_safe`           | Filters profanity and adult topics from skill outputs.                                                                                    |
 | `no_religious_content` | Avoids initiating or engaging deeply with religious topics.                                                                               |
 
-Constraint definitions live in `packages/core/src/huxley/constraints/`. Adding a new one is a one-file PR.
+Constraint definitions live in `server/runtime/src/huxley/constraints/`. Adding a new one is a one-file PR.
 
 ## Skills
 
@@ -109,16 +109,16 @@ skills:
     units: metric
 ```
 
-The skill name (`audiobooks`, `system`, `weather`) matches the entry-point key registered by `huxley-skill-<name>`'s `pyproject.toml`. The config dict is whatever the skill's docs say it accepts. Relative paths in config values resolve against `personas/<name>/data/`.
+The skill name (`audiobooks`, `system`, `weather`) matches the entry-point key registered by `huxley-skill-<name>`'s `pyproject.toml`. The config dict is whatever the skill's docs say it accepts. Relative paths in config values resolve against `server/personas/<name>/data/`.
 
 If a listed skill isn't installed, Huxley fails fast at startup with a clear error pointing you at `pip install huxley-skill-<name>`.
 
 ## Where personas live
 
-Personas are first-class citizens of the repo. They live under `personas/<name>/` and may include:
+Personas are first-class citizens of the repo. They live under `server/personas/<name>/` and may include:
 
 ```
-personas/
+server/personas/
 └── abuelos/
     ├── persona.yaml          # the config
     ├── data/                 # persona-owned data (audiobook library, etc.)
@@ -126,7 +126,7 @@ personas/
     └── README.md             # optional: notes for whoever maintains this persona
 ```
 
-Data inside `personas/<name>/data/` is referenced by skill configs using paths relative to the persona file. The framework doesn't care what's in there; it's whatever the listed skills need.
+Data inside `server/personas/<name>/data/` is referenced by skill configs using paths relative to the persona file. The framework doesn't care what's in there; it's whatever the listed skills need.
 
 ## Selecting which persona to run
 
@@ -136,7 +136,7 @@ Set the `HUXLEY_PERSONA` environment variable to the persona's directory name (u
 HUXLEY_PERSONA=abuelos uv run python -m huxley
 ```
 
-Unset defaults to `personas/abuelos`. Framework fails fast if the directory has no `persona.yaml`.
+Unset defaults to `server/personas/abuelos`. Framework fails fast if the directory has no `persona.yaml`.
 
 ## Sharing a persona
 

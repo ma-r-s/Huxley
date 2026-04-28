@@ -10,50 +10,55 @@ This file is the quick-start for contributors and AI collaborators. For _why_, _
 
 ## Repo layout
 
+Top-level reads as the architecture: **server** (what runs) → **clients** (what
+connects to it) → **site** (what markets it) + meta (docs, scripts).
+
 ```
-Huxley/                 # repo root
-├── pyproject.toml      # uv workspace root
-├── packages/
-│   ├── sdk/            # huxley-sdk: skill author surface
-│   │   └── src/huxley_sdk/   # Skill, Tool*, SkillContext, SideEffect/AudioStream/PlaySound, audio.load_pcm_palette, SkillRegistry
-│   ├── core/           # huxley: framework runtime
-│   │   ├── src/huxley/       # app, session, turn, server, persona, constraints, loader, storage
+Huxley/                              # repo root
+├── pyproject.toml                   # uv workspace root
+├── server/                          # The Huxley backend — Python, what runs
+│   ├── runtime/                     # huxley package — the engine
+│   │   ├── src/huxley/              #   app, session, turn, server, persona, constraints, loader, storage
 │   │   ├── tests/
-│   │   └── .env              # gitignored; HUXLEY_OPENAI_API_KEY etc
-│   └── skills/
-│       ├── audiobooks/       # huxley-skill-audiobooks (entry-point loaded)
-│       ├── news/             # huxley-skill-news (Open-Meteo + Google News RSS)
-│       ├── radio/            # huxley-skill-radio (HTTP/Icecast streams via ffmpeg)
-│       ├── system/           # huxley-skill-system (volume, time)
-│       └── timers/           # huxley-skill-timers (proactive reminders via inject_turn)
-├── personas/
-│   ├── abuelos/              # canonical persona — slow, warm, audio-only target
-│   │   ├── persona.yaml      # version, name, voice, language, system_prompt, constraints, skills
-│   │   ├── data/             # gitignored: audiobook library + abuelos.db
-│   │   ├── sounds/           # earcons (book_start.wav, book_end.wav, news_start.wav)
-│   │   └── README.md
-│   └── basicos/              # terse counter-persona — proves skills are persona-agnostic
-│       ├── persona.yaml
-│       └── README.md
-├── scripts/
-│   └── migrate-data-to-persona.sh  # one-time move from legacy packages/core/data/
-├── web/                # React/Vite dev client
-├── firmware/           # ESP32-S3 client — prototype before extracting to huxley-firmware repo
-├── docs/               # Single source of truth
-│   ├── vision.md       # what Huxley is
-│   ├── concepts.md     # vocabulary (persona, skill, turn, side effect, ...)
-│   ├── architecture.md # framework internals
-│   ├── extensibility.md # what skills fit, where the design gaps are
-│   ├── observability.md # logging conventions + debugging workflow
-│   ├── protocol.md     # WebSocket contract for clients
-│   ├── turns.md        # turn coordinator spec
-│   ├── decisions.md    # ADR log
-│   ├── roadmap.md      # framework + persona roadmaps
+│   │   └── .env                     #   gitignored; HUXLEY_OPENAI_API_KEY etc
+│   ├── sdk/                         # huxley-sdk — public skill contract
+│   │   └── src/huxley_sdk/          #   Skill, Tool*, SkillContext, SideEffect/AudioStream/PlaySound, audio.load_pcm_palette, SkillRegistry
+│   ├── skills/                      # First-party plug-ins (entry-point loaded)
+│   │   ├── audiobooks/              #   huxley-skill-audiobooks
+│   │   ├── news/                    #   huxley-skill-news (Open-Meteo + Google News RSS)
+│   │   ├── radio/                   #   huxley-skill-radio (HTTP/Icecast via ffmpeg)
+│   │   ├── system/                  #   huxley-skill-system (volume, time)
+│   │   ├── telegram/                #   huxley-skill-telegram (MTProto comms)
+│   │   └── timers/                  #   huxley-skill-timers (proactive reminders)
+│   └── personas/                    # Persona configs + assets the runtime loads
+│       ├── abuelos/                 #   canonical — slow, warm, audio-only target
+│       │   ├── persona.yaml         #     version, name, voice, language, system_prompt, constraints, skills
+│       │   ├── data/                #     gitignored: audiobook library + abuelos.db
+│       │   ├── sounds/              #     earcons (book_start.wav, book_end.wav, news_start.wav)
+│       │   └── README.md
+│       └── basicos/                 #   terse counter-persona — proves skills are persona-agnostic
+│           ├── persona.yaml
+│           └── README.md
+├── clients/                         # Things that connect to the server
+│   ├── pwa/                         # React/Vite dev client (Progressive Web App)
+│   └── firmware/                    # ESP32-S3 client (will extract to huxley-firmware)
+├── site/                            # Product landing site (React/Vite)
+├── docs/                            # Single source of truth
+│   ├── vision.md                    # what Huxley is
+│   ├── concepts.md                  # vocabulary (persona, skill, turn, side effect, ...)
+│   ├── architecture.md              # framework internals
+│   ├── extensibility.md             # what skills fit, where the design gaps are
+│   ├── observability.md             # logging conventions + debugging workflow
+│   ├── protocol.md                  # WebSocket contract for clients
+│   ├── turns.md                     # turn coordinator spec
+│   ├── decisions.md                 # ADR log
+│   ├── roadmap.md                   # framework + persona roadmaps
 │   ├── personas/{README,abuelos,basicos}.md
 │   ├── skills/{README,audiobooks,news,radio,timers}.md
-│   ├── sounds.md       # sound UX architecture (PlaySound, AudioStream, earcons)
+│   ├── sounds.md                    # sound UX architecture (PlaySound, AudioStream, earcons)
 │   └── research/sonic-ux.md
-└── CLAUDE.md           # this file
+├── scripts/                         # One-off ops + launchd plist
+└── CLAUDE.md                        # this file
 ```
 
 All five refactor stages have shipped — framework / SDK / skills / personas / constraints / entry-point loading are all in place. See [`docs/roadmap.md`](./docs/roadmap.md) for what's next.
@@ -63,42 +68,51 @@ All five refactor stages have shipped — framework / SDK / skills / personas / 
 Python (uv workspace; lint/typecheck/test work from repo root):
 
 ```bash
-uv sync                                                    # install all workspace packages
-uv run ruff check packages/                                # lint
-uv run ruff format packages/                               # format
-uv run mypy packages/sdk/src packages/core/src             # strict type check
-uv run --package huxley-sdk pytest packages/sdk/tests                              # SDK tests (19)
-uv run --package huxley pytest packages/core/tests                                 # framework tests (113)
-uv run --package huxley-skill-audiobooks pytest packages/skills/audiobooks/tests   # audiobooks skill (61)
-uv run --package huxley-skill-news pytest packages/skills/news/tests               # news skill (18)
-uv run --package huxley-skill-radio pytest packages/skills/radio/tests             # radio skill (19)
-uv run --package huxley-skill-timers pytest packages/skills/timers/tests           # timers skill (13)
-cd packages/core && uv run huxley                                                  # run the server (loads .env from packages/core)
+uv sync                                                                          # install all workspace packages
+uv run ruff check server/                                                        # lint
+uv run ruff format server/                                                       # format
+uv run mypy server/sdk/src server/runtime/src                                    # strict type check
+uv run --package huxley-sdk pytest server/sdk/tests                              # SDK tests
+uv run --package huxley pytest server/runtime/tests                              # runtime tests
+uv run --package huxley-skill-audiobooks pytest server/skills/audiobooks/tests   # audiobooks skill
+uv run --package huxley-skill-news pytest server/skills/news/tests               # news skill
+uv run --package huxley-skill-radio pytest server/skills/radio/tests             # radio skill
+uv run --package huxley-skill-timers pytest server/skills/timers/tests           # timers skill
+cd server/runtime && uv run huxley                                               # run the server (loads .env from server/runtime/)
 # Run BasicOS in parallel for persona A/B testing:
-cd packages/core && HUXLEY_PERSONA=basicos HUXLEY_SERVER_PORT=8766 uv run huxley
+cd server/runtime && HUXLEY_PERSONA=basicos HUXLEY_SERVER_PORT=8766 uv run huxley
 ```
 
-Web dev client (run from `web/`):
+PWA dev client (run from `clients/pwa/`):
 
 ```bash
-cd web
+cd clients/pwa
 bun install
-bun dev                              # http://localhost:5173
+bun dev                              # http://localhost:5174
 bun run check                        # tsc --noEmit
+```
+
+Landing site (run from `site/`):
+
+```bash
+cd site
+bun install
+bun dev                              # http://localhost:5175
+bun run build                        # tsc + vite build
 ```
 
 Firmware (ESP-IDF must be sourced first):
 
 ```bash
 . ~/esp/esp-idf/export.sh
-cd firmware
-idf.py build                                            # compile for ESP32-S3
-idf.py -p /dev/cu.usbmodem2101 flash monitor            # flash + serial
+cd clients/firmware
+idf.py build                                              # compile for ESP32-S3
+idf.py -p /dev/cu.usbmodem2101 flash monitor              # flash + serial
 
-# Tests (see firmware/README.md §Tests for when to run which tier):
-cd firmware/tests && cmake -B build && cmake --build build --target check
-uv run --package huxley pytest packages/core/tests/unit/test_firmware_contract.py
-firmware/tools/smoke.sh                                  # end-to-end boot-to-READY
+# Tests (see clients/firmware/README.md §Tests for when to run which tier):
+cd clients/firmware/tests && cmake -B build && cmake --build build --target check
+uv run --package huxley pytest server/runtime/tests/unit/test_firmware_contract.py
+clients/firmware/tools/smoke.sh                           # end-to-end boot-to-READY
 ```
 
 ## Rules
@@ -107,7 +121,7 @@ firmware/tools/smoke.sh                                  # end-to-end boot-to-RE
 - `ruff` for lint+format; `mypy --strict` must pass.
 - Skills implement the Skill protocol from `types.py`. Skills opt in to behavioral constraints (`never_say_no`, etc.) per the persona that runs them — see [`docs/skills/README.md`](./docs/skills/README.md#persona-constraints--what-your-skill-should-respect).
 - No circular imports — dependencies flow downward; see [`docs/architecture.md`](./docs/architecture.md#dependency-flow-no-cycles).
-- Config defaults assume the server runs from `packages/core/` (loads `.env` from that directory).
+- Config defaults assume the server runs from `server/runtime/` (loads `.env` from that directory).
 - **Any code change that invalidates a doc must update the doc in the same commit.** No stale docs.
 - **Every new event handler / decision point gets a structured log line.** See [`docs/observability.md`](./docs/observability.md) for the convention. If a future bug isn't diagnosable from the log, the fix is also adding the log line that would have caught it.
 
@@ -119,7 +133,7 @@ Global `~/.claude/CLAUDE.md` is the baseline. This section concretizes it for Hu
 
 **Plan mode** (propose → confirm → execute):
 
-- WebSocket protocol changes — they ripple across `server/` and `web/`
+- WebSocket protocol changes — they ripple across `server/` and `clients/pwa/`
 - Session lifecycle, turn coordinator, or skill dispatch changes
 - Anything that crosses framework / SDK / skill boundaries
 - New skill or new persona (their spec doc is part of the plan)
@@ -131,8 +145,8 @@ Global `~/.claude/CLAUDE.md` is the baseline. This section concretizes it for Hu
 
 Before presenting work as done:
 
-- **Python**: `uv run ruff check packages/ && uv run mypy packages/sdk/src packages/core/src && uv run --package huxley pytest packages/core/tests` — all green.
-- **Web**: `cd web && bun run check` — green.
+- **Python**: `uv run ruff check server/ && uv run mypy server/sdk/src server/runtime/src && uv run --package huxley pytest server/runtime/tests` — all green.
+- **Web**: `cd clients/pwa && bun run check` — green.
 - **Protocol or audio-path changes**: above + manual browser smoke test (`bun dev`, hold PTT, speak, verify transcript + audio playback).
 - **Server changes that affect runtime behavior**: the running server must be on the new code (kill the old process and restart). Don't claim a change is deployed if you haven't verified the running pid is from the latest commit.
 - **Docs**: if the change affects behavior described in `docs/`, the doc is updated in the same commit.
@@ -158,7 +172,7 @@ A session that ends with "I had to ask what you did because the log didn't show 
 
 ### Integration tests
 
-Tests hitting the OpenAI Realtime API or real `ffmpeg` live in `packages/core/tests/integration/`, marked `@pytest.mark.integration`. Skipped by default; run with `uv run --package huxley pytest -m integration` (requires `HUXLEY_OPENAI_API_KEY`).
+Tests hitting the OpenAI Realtime API or real `ffmpeg` live in `server/runtime/tests/integration/`, marked `@pytest.mark.integration`. Skipped by default; run with `uv run --package huxley pytest -m integration` (requires `HUXLEY_OPENAI_API_KEY`).
 
 ### Session start for this repo
 
@@ -189,7 +203,7 @@ Huxley has a clear vision: a **voice agent framework** that ships with **AbuelOS
 Before shipping any non-trivial commit, re-read [`docs/vision.md`](./docs/vision.md) and [`docs/concepts.md`](./docs/concepts.md) with fresh eyes and ask:
 
 1. **Am I adding framework scope or persona scope?** Framework scope requires stable surface area, skill-author ergonomics, persona-agnostic semantics. Persona scope (AbuelOS's prompt, its skill list, its constraints) can iterate freely. If a commit mixes both, split it.
-2. **Am I naming a mechanism or a use case?** Framework code should not contain words like "call," "reminder," "emergency," "audiobook" — those are skill-level concepts. If you wrote one of those words in `packages/core` or `packages/sdk`, something's in the wrong layer.
+2. **Am I naming a mechanism or a use case?** Framework code should not contain words like "call," "reminder," "emergency," "audiobook" — those are skill-level concepts. If you wrote one of those words in `server/runtime` or `server/sdk`, something's in the wrong layer.
 3. **Is this for "grandpa" or for the framework?** AbuelOS-specific UX (slow speech, Spanish, warm tone, no dialect assumptions) lives in the persona. The framework stays neutral.
 4. **Is this solving a real problem today, or a speculative one?** If speculative, cut it. See Simplicity below.
 

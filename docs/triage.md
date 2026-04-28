@@ -64,7 +64,7 @@ Trivial items skip this gate.
 2. **Write the regression test that proves the symptom is gone** alongside (or
    before) the fix. The test is the proof Gate 1's problem is solved.
 3. Write contract tests for any new abstraction surface (unit + integration).
-4. `uv run ruff check packages/` + `uv run mypy packages/sdk/src packages/core/src` +
+4. `uv run ruff check server/` + `uv run mypy server/sdk/src server/runtime/src` +
    per-package `pytest` all green.
 5. For audio/protocol changes: manual browser smoke per
    [`docs/verifying.md`](./verifying.md). Audio regressions don't show up in
@@ -75,7 +75,7 @@ Trivial items skip this gate.
 For every item, walk this checklist explicitly. The act of checking is the work
 — not just "I think nothing changed."
 
-- [ ] Affected `docs/*.md` (architecture, protocol, `skills/*`, `personas/*`,
+- [ ] Affected `docs/*.md` (architecture, protocol, `skills/*`, `server/personas/*`,
       `extensibility.md`, `concepts.md`, `observability.md`)
 - [ ] [`docs/decisions.md`](./decisions.md) ADR — if any architectural decision
       was made or reaffirmed
@@ -199,9 +199,9 @@ re-imports fuzzy-match.
 
 Code paths reinventing the same pattern, all confirmed:
 
-- `packages/skills/audiobooks/src/huxley_skill_audiobooks/skill.py` — `_fuzzy_score` (SequenceMatcher), `_resolve_book` (fuzzy iter over `_catalog`), `prompt_context()` (manual dump of `_catalog[:50]` as Spanish lines)
-- `packages/skills/radio/src/huxley_skill_radio/skill.py` — `_station_choices()` (manual prompt dump), case-insensitive station name iter
-- `packages/skills/news/src/huxley_skill_news/skill.py` — `dict[str, tuple[float, dict]]` cache layer with manual TTL/key composition
+- `server/skills/audiobooks/src/huxley_skill_audiobooks/skill.py` — `_fuzzy_score` (SequenceMatcher), `_resolve_book` (fuzzy iter over `_catalog`), `prompt_context()` (manual dump of `_catalog[:50]` as Spanish lines)
+- `server/skills/radio/src/huxley_skill_radio/skill.py` — `_station_choices()` (manual prompt dump), case-insensitive station name iter
+- `server/skills/news/src/huxley_skill_news/skill.py` — `dict[str, tuple[float, dict]]` cache layer with manual TTL/key composition
 - Future, per `docs/roadmap.md` v2: contacts (messaging), music library, recipes — all need fuzzy search + prompt awareness
 
 The repeated pattern across 3 shipped skills + 3 planned skills is the validation.
@@ -250,10 +250,10 @@ prompt_text = catalog.as_prompt_lines(limit=50)
 
 **Module layout**:
 
-- `packages/sdk/src/huxley_sdk/catalog.py` — public `Catalog` class + `Hit` dataclass + `_fold` accent-stripper
-- `packages/sdk/src/huxley_sdk/types.py` — extend `SkillContext` with `catalog(name) -> Catalog` factory method (returns a fresh in-memory Catalog per name; framework doesn't share state across skills)
-- `packages/sdk/src/huxley_sdk/__init__.py` — export `Catalog`, `Hit`
-- `packages/sdk/tests/test_catalog.py` — primitive tests (insert, search, fold, prompt format, tool def)
+- `server/sdk/src/huxley_sdk/catalog.py` — public `Catalog` class + `Hit` dataclass + `_fold` accent-stripper
+- `server/sdk/src/huxley_sdk/types.py` — extend `SkillContext` with `catalog(name) -> Catalog` factory method (returns a fresh in-memory Catalog per name; framework doesn't share state across skills)
+- `server/sdk/src/huxley_sdk/__init__.py` — export `Catalog`, `Hit`
+- `server/sdk/tests/test_catalog.py` — primitive tests (insert, search, fold, prompt format, tool def)
 
 **Scoring**: SequenceMatcher ratio per field, max across fields. Preserves the
 current audiobooks behavior (which we know works on the live library) exactly —
@@ -326,7 +326,7 @@ Plus the critic's 5 specific test asserts locked into the DoD test list below.
 
 ### Tests (Gate 3 — to be filled after impl)
 
-To be added in `packages/sdk/tests/test_catalog.py`:
+To be added in `server/sdk/tests/test_catalog.py`:
 
 - `TestCatalogInsert` — basic upsert, dup id replaces, payload preserved
 - `TestCatalogSearch` — exact match, fuzzy, multi-field, accent-folded, empty query
@@ -1439,7 +1439,7 @@ Original scope proposed an `inject_alert(prompt, dedup_key=...)` SDK primitive w
 
 ### Validation (Gate 1)
 
-- `Channel.ALERT` defined in `focus/vocabulary.py:35`, priority 200 in `CHANNEL_PRIORITY`. Zero call sites anywhere in `packages/` outside the enum definition and priority map. Verified by grep.
+- `Channel.ALERT` defined in `focus/vocabulary.py:35`, priority 200 in `CHANNEL_PRIORITY`. Zero call sites anywhere in `server/` outside the enum definition and priority map. Verified by grep.
 - `InjectPriority` enum lives in `huxley_sdk.types`; two variants today (`NORMAL`, `PREEMPT`). `TurnCoordinator._dispatch_post_turn` branches on priority for drain policy.
 - `huxley-skill-timers` urgent-reminder fire path uses `inject_turn(priority=InjectPriority.PREEMPT)` — per Stage 1d.3 PQ-1 notes. Post-Stage-2b this will preempt calls. Concrete regression.
 
@@ -1448,7 +1448,7 @@ Original scope proposed an `inject_alert(prompt, dedup_key=...)` SDK primitive w
 **New priority variant:**
 
 ```python
-# packages/sdk/src/huxley_sdk/types.py
+# server/sdk/src/huxley_sdk/types.py
 class InjectPriority(StrEnum):
     NORMAL = "normal"
     BLOCK_BEHIND_COMMS = "block_behind_comms"   # NEW — between NORMAL and PREEMPT
@@ -1469,7 +1469,7 @@ class InjectPriority(StrEnum):
 **Timers retrofit:**
 
 ```python
-# packages/skills/timers/src/huxley_skill_timers/skill.py
+# server/skills/timers/src/huxley_skill_timers/skill.py
 # Before:
 await self._ctx.inject_turn(prompt, priority=InjectPriority.PREEMPT)
 # After:
@@ -1596,7 +1596,7 @@ Decided NOT to:
 
 ### Tests (Gate 3)
 
-`packages/core/tests/unit/test_summarize.py` (10 tests, AsyncOpenAI mocked at module level):
+`server/runtime/tests/unit/test_summarize.py` (10 tests, AsyncOpenAI mocked at module level):
 
 - `test_returns_summary_text_on_success`
 - `test_strips_whitespace_from_summary`
@@ -1667,7 +1667,7 @@ Decided NOT to:
 
 ### Tests (Gate 3)
 
-`packages/core/tests/unit/test_turn_coordinator.py` → `TestToolErrorEnvelope`:
+`server/runtime/tests/unit/test_turn_coordinator.py` → `TestToolErrorEnvelope`:
 
 - `test_skill_exception_does_not_propagate`
 - `test_skill_exception_sends_error_tool_output`
@@ -1736,7 +1736,7 @@ Decided NOT to:
 
 ### Tests (Gate 3)
 
-`packages/skills/audiobooks/tests/test_skill.py` → `TestSpeedControl`:
+`server/skills/audiobooks/tests/test_skill.py` → `TestSpeedControl`:
 
 - `test_set_speed_with_no_value_returns_friendly_message` — defense vs missing arg
 - `test_set_speed_persists_when_no_book_playing` — ack path, persisted, no side effect
@@ -1752,7 +1752,7 @@ Plus stream mock signatures in `test_skill.py` and `test_coordinator_skill_integ
 ### Docs touched (Gate 4)
 
 - `docs/triage.md` — this entry
-- `personas/abuelos/persona.yaml` — AUDIOLIBROS section restructured + new VELOCIDAD section
+- `server/personas/abuelos/persona.yaml` — AUDIOLIBROS section restructured + new VELOCIDAD section
 - `docs/skills/audiobooks.md` — out of scope tonight; the user-facing tool spec lives in the tool description string itself, which is what the LLM reads
 
 ### Ship (Gate 5)
@@ -1777,7 +1777,7 @@ version · **Blocked by**: Stage 3 (`background_task` for persistence
   **shelved** — ack uses LLM-driven `acknowledge_reminder(id)` tool
   instead (see Stage 1d.2 note above).
 
-**MVP shipped (2026-04-18)**: `packages/skills/timers/` — proves the
+**MVP shipped (2026-04-18)**: `server/skills/timers/` — proves the
 full inject_turn path works end-to-end. User says "recuérdame en 5
 minutos X" → LLM calls `set_timer` → skill spawns asyncio task → 5min
 later `ctx.inject_turn` fires → framework preempts any content
@@ -2108,14 +2108,14 @@ Decided NOT to:
 
 ### Tests (Gate 3)
 
-`packages/core/tests/unit/test_storage.py` → `TestWalAndSchemaVersion`:
+`server/runtime/tests/unit/test_storage.py` → `TestWalAndSchemaVersion`:
 
 - `test_journal_mode_is_wal`
 - `test_schema_version_recorded_on_fresh_db`
 - `test_schema_version_idempotent_on_reinit`
 - `test_schema_version_mismatch_logged_not_crashed`
 
-`packages/core/tests/unit/test_storage_backup.py` → `TestEnsureDailySnapshot`:
+`server/runtime/tests/unit/test_storage_backup.py` → `TestEnsureDailySnapshot`:
 
 - `test_returns_none_when_source_db_missing`
 - `test_creates_snapshot_with_dated_filename`
@@ -2214,7 +2214,7 @@ Decided NOT to:
 
 ### Tests (Gate 3)
 
-`packages/core/tests/unit/test_cost.py`:
+`server/runtime/tests/unit/test_cost.py`:
 
 `TestComputeCostUsd` (8 tests):
 
@@ -2355,7 +2355,7 @@ Decided NOT to (this round):
 
 ### Tests (Gate 3)
 
-`packages/core/tests/unit/test_openai_realtime_event_handler.py`:
+`server/runtime/tests/unit/test_openai_realtime_event_handler.py`:
 
 - `TestHandleAudioDelta` — base64 decode + dispatch
 - `TestHandleFunctionCall` — args parse + malformed-JSON fallback
@@ -2365,7 +2365,7 @@ Decided NOT to (this round):
   usage + cost-tracker exception isolation
 - `TestHandleUnknownEvents` — unknown event types are silent no-ops
 
-`packages/core/tests/integration/test_session_replay.py`:
+`server/runtime/tests/integration/test_session_replay.py`:
 
 - `TestAudiobookPlayBasic` — full callback sequence + cost recording
 - `TestLoaderHandlesCommentsAndBlankLines` — JSONL parser robustness
@@ -2574,10 +2574,10 @@ Sized at ~4–6 weeks of focused work. **Do not start until** T1.4 stages comple
 
 Mechanical rename across:
 
-- `packages/skills/comms-telegram/` → `packages/skills/telegram/`
+- `server/skills/comms-telegram/` → `server/skills/telegram/`
 - `huxley_skill_comms_telegram` import path → `huxley_skill_telegram`
 - `pyproject.toml` package name, entry point, test target, workspace manifest
-- `personas/*/persona.yaml` skill keys (`comms-telegram:` → `telegram:`)
+- `server/personas/*/persona.yaml` skill keys (`comms-telegram:` → `telegram:`)
 - Docs: `docs/skills/comms-telegram.md` → `docs/skills/telegram.md`; references in `docs/roadmap.md`, `README.md`, `CLAUDE.md`, other triage entries
 - Memory files if any reference the old name
 - Git log references in prior triage entries get a **rename note**, not a history rewrite (history stays as-is)
@@ -2586,12 +2586,12 @@ No behavioral change. All 42 tests should remain green; if they don't, the renam
 
 ### Definition of Done
 
-- [ ] Package directory renamed; import path updated throughout `packages/`
+- [ ] Package directory renamed; import path updated throughout `server/`
 - [ ] `pyproject.toml` + workspace manifest + entry points updated
-- [ ] All personas updated (`personas/abuelos/persona.yaml`, `personas/basicos/persona.yaml` if referenced)
+- [ ] All personas updated (`server/personas/abuelos/persona.yaml`, `server/personas/basicos/persona.yaml` if referenced)
 - [ ] All docs updated (skill doc file moved; all references throughout `docs/` and `README.md` updated)
 - [ ] `CLAUDE.md` project-level references updated if any
-- [ ] `uv run ruff check` + `uv run mypy packages/sdk/src packages/core/src` green
+- [ ] `uv run ruff check` + `uv run mypy server/sdk/src server/runtime/src` green
 - [ ] `uv run --package huxley-skill-telegram pytest` green (all 42 tests)
 - [ ] End-to-end smoke: start server, call to a whitelist contact works (existing regression)
 - [ ] Single commit (mechanical rename should be atomic)
@@ -2602,7 +2602,7 @@ No new tests. Proof of correctness is the existing 42 passing against the rename
 
 ### Docs touched (Gate 4 — expected)
 
-- `packages/skills/telegram/` (rename from `comms-telegram`)
+- `server/skills/telegram/` (rename from `comms-telegram`)
 - `docs/skills/telegram.md` (rename from `comms-telegram.md`)
 - `docs/roadmap.md` — shipped skill table
 - `docs/triage.md` — T1.10, T1.11, any other cross-references
@@ -2716,7 +2716,7 @@ AbuelOS today (one user, one operator, no upgrade-pain incidents yet). Ship
 when (a) the first non-Mario user shows up wanting to try Huxley, OR (b) a
 dependency upgrade burns 30+ minutes of Pi-vs-Mac debugging, OR (c) a
 contributor explicitly asks for it. Container would: pin Python 3.13 + uv +
-ffmpeg, expose port 8765, bind-mount `personas/<name>/data/` for the
+ffmpeg, expose port 8765, bind-mount `server/personas/<name>/data/` for the
 audiobook library + DB, bind-mount `.env` for the API key. Multi-arch build
 (amd64 + arm64) via buildx. Don't deprecate the bare-metal path when this
 ships — keep both supported.
@@ -2820,7 +2820,7 @@ nitpicks last.
 ### B1 — `pause` and `stop` do not cancel playback
 
 **Status**: presumed done (CancelMedia SideEffect shipped in stage 3 — commit
-`20407f0`). Verify in `packages/sdk/src/huxley_sdk/types.py`.
+`20407f0`). Verify in `server/sdk/src/huxley_sdk/types.py`.
 
 **Symptom.** `audiobook_control(action="pause")` and `audiobook_control(action="stop")`
 return a `ToolResult` with no side effect. The coordinator sees a plain result,
@@ -2889,7 +2889,7 @@ test is updated; one new test added.
 
 ### B2 — Log file handle has no `atexit` registration
 
-**Status**: presumed done unless re-flagged. Verify in `packages/core/src/huxley/logging.py`.
+**Status**: presumed done unless re-flagged. Verify in `server/runtime/src/huxley/logging.py`.
 
 **Symptom.** If the process is killed (SIGKILL, kernel OOM, hard power-off), any
 lines buffered in `_file_handle` but not yet written to disk are lost. Since the
@@ -2939,7 +2939,7 @@ This also prevents handle leaks if `setup_logging` is called more than once
 
 ### C1 — `openai_api_key` defaults to `""` instead of `None`
 
-**Status**: presumed done unless re-flagged. Verify in `packages/core/src/huxley/config.py`.
+**Status**: presumed done unless re-flagged. Verify in `server/runtime/src/huxley/config.py`.
 
 **Symptom.** A developer who sets `HUXLEY_OPENAI_API_KEY=` (explicitly empty) in
 their shell gets past the `__main__.py` guard (which checks `if not config.openai_api_key`)
@@ -3054,7 +3054,7 @@ the delivered-bytes count is exact.
 
 ### C4 — `SkillStorage` protocol missing the `default` parameter
 
-**Status**: presumed done unless re-flagged. Verify in `packages/sdk/src/huxley_sdk/types.py` + `packages/core/src/huxley/storage/skill.py`.
+**Status**: presumed done unless re-flagged. Verify in `server/sdk/src/huxley_sdk/types.py` + `server/runtime/src/huxley/storage/skill.py`.
 
 **Symptom.** Skills cannot use `await ctx.storage.get_setting("key", default="x")`
 even though the underlying `Storage.get_setting` supports it. Skill authors who
@@ -3086,7 +3086,7 @@ async def get_setting(self, key: str, default: str | None = None) -> str | None:
 
 ### C5 — `FakeSkill` ignores `tool_name`; all tools return the same result
 
-**Status**: presumed done unless re-flagged. Verify in `packages/sdk/src/huxley_sdk/testing.py`.
+**Status**: presumed done unless re-flagged. Verify in `server/sdk/src/huxley_sdk/testing.py`.
 
 **Symptom.** `FakeSkill(name="x", result=ToolResult(...))` returns the same
 `ToolResult` no matter which tool is called. Tests that register a multi-tool skill
@@ -3126,7 +3126,7 @@ can pass `result={"play": ToolResult(...), "pause": ToolResult(...)}`.
 
 ### C6 — `flush()` on every log line causes syscall pressure at DEBUG
 
-**Status**: presumed done unless re-flagged. Verify in `packages/core/src/huxley/logging.py`.
+**Status**: presumed done unless re-flagged. Verify in `server/runtime/src/huxley/logging.py`.
 
 **Symptom.** At `HUXLEY_LOG_LEVEL=DEBUG`, every audio delta frame and every chunk
 forwarded to `send_audio` generates a structlog event. Each event calls
@@ -3156,9 +3156,9 @@ not lost on normal exit.
 
 ### N1 — `assert` as runtime guards in skill code
 
-**Status**: open / unknown. Verify with `grep -rn "assert " packages/skills/`.
+**Status**: open / unknown. Verify with `grep -rn "assert " server/skills/`.
 
-**Symptom.** `packages/skills/audiobooks/src/huxley_skill_audiobooks/skill.py`
+**Symptom.** `server/skills/audiobooks/src/huxley_skill_audiobooks/skill.py`
 contains 11 guards of the form `assert self._storage is not None`. Python strips
 `assert` statements when running with `python -O` (optimized mode), so these guards
 disappear in production builds.
@@ -3225,7 +3225,7 @@ different strings.
 
 ### N3 — `Turn.response_ids` field is never populated
 
-**Status**: presumed done unless re-flagged. Verify in `packages/core/src/huxley/turn/coordinator.py`.
+**Status**: presumed done unless re-flagged. Verify in `server/runtime/src/huxley/turn/coordinator.py`.
 
 **Symptom.** `coordinator.py` line 71: `response_ids: list[str] = field(default_factory=list)`.
 No code anywhere appends to this list. It is initialized empty and stays empty for
@@ -3245,7 +3245,7 @@ reasonably use it).
 
 ### N4 — `import copy` inside a hot `__call__` path
 
-**Status**: presumed done unless re-flagged. Verify in `packages/core/src/huxley/logging.py`.
+**Status**: presumed done unless re-flagged. Verify in `server/runtime/src/huxley/logging.py`.
 
 **Symptom.** `logging.py` line 141: `import copy` is inside `_TeeProcessor.__call__`.
 Python caches imports after the first call so there is no measurable overhead, but
@@ -3363,7 +3363,7 @@ DNS resolution to OpenAI failed (transient — your network blip OR an upstream 
 
 **Ship notes (2026-04-19)**:
 
-- Retry loop extracted to `packages/core/src/huxley/reconnect.py` so the backoff policy is testable without an Application graph. Pure `run_reconnect_loop(connect_attempt, announce, should_continue, sleep)` with injected sleep.
+- Retry loop extracted to `server/runtime/src/huxley/reconnect.py` so the backoff policy is testable without an Application graph. Pure `run_reconnect_loop(connect_attempt, announce, should_continue, sleep)` with injected sleep.
 - Backoff: `(1s, 3s, 10s, 30s)` then 60s floor indefinitely. Exits when `should_continue()` flips False (shutdown, user PTT reconnected, or success).
 - Audible cue from attempt 4 onward: synthesized double-beep PCM16 @ 24kHz played via `server.send_audio()` (no persona asset required, no LLM needed — the whole point is that we're offline). 9 unit tests in `test_reconnect.py`.
 - Deviation from spec: the cue is a beep tone, not a spoken "No tengo conexión" inject_turn. `inject_turn` requires a live session; during an outage there isn't one. Proper voiced announcement would need a pre-recorded persona asset or local TTS — filed as a follow-up if Mario wants a voice message instead of a tone.

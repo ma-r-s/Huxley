@@ -58,14 +58,14 @@ per-client scoping anywhere.
 
 ## 2026-04-12 — Monorepo
 
-**Context**: Considered splitting `server/` and `web/` into separate git repos to isolate concerns.
+**Context**: Considered splitting `server/` and `clients/pwa/` into separate git repos to isolate concerns.
 
 **Decision**: One git at the repo root. The two halves are tightly coupled via the WebSocket protocol — every protocol change touches both sides and must ship as one atomic commit.
 
 **Consequences**:
 
-- Root holds `.git/`, `.gitignore`, `.claude/`, `CLAUDE.md`, plus `server/`, `web/`, and `docs/`.
-- Future `firmware/` slots in as another sibling without further restructuring.
+- Root holds `.git/`, `.gitignore`, `.claude/`, `CLAUDE.md`, plus `server/`, `clients/pwa/`, and `docs/`.
+- Future `clients/firmware/` slots in as another sibling without further restructuring.
 - Protocol changes don't require cross-repo coordination — one PR, one reviewer.
 
 ---
@@ -79,7 +79,7 @@ per-client scoping anywhere.
 **Consequences**:
 
 - Config defaults are clean relative paths (`data/audiobooks`, `data/abuel_os.db`) when running from `server/`.
-- Repo root stays minimal (`server/`, `web/`, `docs/`, `CLAUDE.md`).
+- Repo root stays minimal (`server/`, `clients/pwa/`, `docs/`, `CLAUDE.md`).
 - If a second component ever needs to read audiobooks, promote back to root — unlikely by design.
 
 ---
@@ -140,7 +140,7 @@ per-client scoping anywhere.
 
 ## 2026-04-13 — Turn-based coordinator for voice tool calls
 
-> **Naming follow-up (2026-04-15)**: this ADR refers to the field as `audio_factory` because that was the v3 spec name at decision time. It shipped as `side_effect: SideEffect | None` with `AudioStream(factory=...)` as the first kind — see [`packages/sdk/src/huxley_sdk/types.py`](../packages/sdk/src/huxley_sdk/types.py) for the canonical surface. The decision is unchanged; only the field name was generalized to admit future side-effect kinds (e.g. `PlaySound`, `Notification`).
+> **Naming follow-up (2026-04-15)**: this ADR refers to the field as `audio_factory` because that was the v3 spec name at decision time. It shipped as `side_effect: SideEffect | None` with `AudioStream(factory=...)` as the first kind — see [`server/sdk/src/huxley_sdk/types.py`](../server/sdk/src/huxley_sdk/types.py) for the canonical surface. The decision is unchanged; only the field name was generalized to admit future side-effect kinds (e.g. `PlaySound`, `Notification`).
 
 **Context**: Five production bugs in rapid succession — _book jumps in without ack_, _double ack on play_, _seek stream fights model speech_, _interrupt leaves queued audio playing_, _tool instruction text leaks into speech_ — all turned out to be symptoms of one missing abstraction. We were manually coordinating _"the model's speech stream"_ and _"the tool's side-effect audio stream"_ at three different layers (session manager, application orchestrator, audiobooks skill), with a different hand-rolled mechanism in each. Every bug fix added another flag (`_pending_tool_action`, `_response_cancelled`, `_assistant_speaking`, `paused=True`, `on_audio_clear`, deferred `create_task` for the tool action, etc.) until the defer/dispatch logic in `_handle_function_call` was load-bearing in ways no single reader could hold in their head. The next skill with an audio side effect (music, news) would hit the same class of bugs and require another round of tweaks.
 
@@ -172,7 +172,7 @@ per-client scoping anywhere.
 
 **Context**: The project started as "AbuelOS" — an assistant targeting an elderly blind Spanish-speaking user. The skill system, the WebSocket protocol, the turn coordinator, the audio path are all generic — none are AbuelOS-specific. Continuing to call the framework "AbuelOS" conflates two things (the framework and the canonical instance of it), confuses anyone discovering the project, and fights against the goal of making it open-source-and-extensible. Mario's vision: "anyone with a chatbot need can build a voice agent on this; the AbuelOS use case is one persona among many."
 
-**Decision**: Rename the project to **Huxley** — the voice agent framework. The original assistant becomes a **persona** named **AbuelOS** that lives at [`personas/abuelos/`](./personas/abuelos.md). The vocabulary becomes:
+**Decision**: Rename the project to **Huxley** — the voice agent framework. The original assistant becomes a **persona** named **AbuelOS** that lives at [`server/personas/abuelos/`](./personas/abuelos.md). The vocabulary becomes:
 
 - **Persona** = who the agent is (config: name, voice, language, personality, constraints, list of skills). YAML.
 - **Skill** = what the agent can do (Python package, exports a class implementing the SDK protocol). Installable via PyPI under `huxley-skill-*` convention.
@@ -183,10 +183,10 @@ The Python namespace (`abuel_os/`) and repo path (`AbuelOS/`) are renamed as par
 
 **Consequences**:
 
-- **Documentation reorganized**: `vision.md` describes Huxley the framework; `personas/abuelos.md` is the AbuelOS persona spec (what was in vision.md before). New: `concepts.md` (vocabulary), `personas/README.md` (how to write a persona), `observability.md` (logging/debugging workflow).
+- **Documentation reorganized**: `vision.md` describes Huxley the framework; `server/personas/abuelos.md` is the AbuelOS persona spec (what was in vision.md before). New: `concepts.md` (vocabulary), `server/personas/README.md` (how to write a persona), `observability.md` (logging/debugging workflow).
 - **Skill author surface area becomes stable**: skills depend on `huxley_sdk`, never on framework internals. Persona authors are non-developers writing YAML.
 - **The `never_say_no` rule is opt-in per persona**, not framework-mandated. AbuelOS keeps it; other personas (a child's tutor, a developer's assistant) may not need it.
-- **The repo grows a workspace structure**: `packages/sdk/`, `packages/core/`, `packages/skills/audiobooks/`, `packages/skills/system/`, `personas/abuelos/`. uv workspaces handle the multi-package layout.
+- **The repo grows a workspace structure**: `packages/sdk/`, `packages/core/`, `server/skills/audiobooks/`, `server/skills/system/`, `server/personas/abuelos/`. uv workspaces handle the multi-package layout.
 - **Historical ADRs preserved verbatim**. They reference "AbuelOS" because that was the project's name at the time. The naming note at the top of this file flags this for new readers.
 - **What does NOT change for v1**: the 3-state session machine, the turn coordinator, the audio path, the WebSocket protocol, the OpenAI Realtime integration. Those are framework, and they were already persona-agnostic by accident — the rename just makes the role explicit.
 

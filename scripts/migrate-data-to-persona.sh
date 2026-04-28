@@ -1,23 +1,19 @@
 #!/usr/bin/env bash
-# Migrate data/ from the pre-stage-4 location (packages/core/data/) into the
-# AbuelOS persona directory. Idempotent — safe to run more than once.
+# Historical: migrate data/ from the pre-stage-4 location (the original was at
+# packages/core/data/, which existed before personas got their own data dirs and
+# before the packages/→server/ restructure) into the AbuelOS persona directory.
+# Idempotent. Safe to delete this script if you've already migrated; kept here
+# as a reference for anyone restoring an ancient install.
 #
-# What it does, in order:
-#   1. Moves packages/core/data/abuel_os.db → personas/abuelos/data/abuelos.db
-#      (renames the file; audiobook positions and conversation summaries follow).
-#   2. Moves packages/core/data/audiobooks/* → personas/abuelos/data/audiobooks/
-#      (m4b/mp3 files; subdirectories by author).
-#   3. Removes now-empty packages/core/data/audiobooks and packages/core/data.
-#
-# Nothing in git changes — packages/core/data/ was .gitignored. This script
-# only moves local-only assets.
+# Source path is the legacy location (does not exist in the current tree).
+# Destination is the current persona-local data dir under server/personas/.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 SRC_DIR="packages/core/data"
-DST_DIR="personas/abuelos/data"
+DST_DIR="server/personas/abuelos/data"
 
 mkdir -p "$DST_DIR/audiobooks"
 

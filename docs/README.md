@@ -40,7 +40,7 @@ Any code change that invalidates a doc must update the doc in the same commit. N
 - `docs/` — product + architecture + protocol (this folder)
 - `/README.md` — repo entry point: what Huxley is, install, run, link to docs
 - `/CLAUDE.md` — methodology and conventions for contributors and AI collaborators
-- `packages/` — implementation; the _how_ lives here
-- `web/` — dev client (browser mic + speaker over WebSocket)
+- `server/` — implementation; the _how_ lives here
+- `clients/pwa/` — dev client (browser mic + speaker over WebSocket)
 
 When in doubt about where something belongs: **product or architectural _why_ → `docs/`. Repo-wide methodology → `CLAUDE.md`. Implementation detail → code comments.**

@@ -20,7 +20,7 @@ The items below are known rough edges. None are secrets; all are called out some
 
 _Previously_: `TurnCoordinator` was tested, skill logic was tested up to the factory closure, but the actual PCM-bytes path had no coverage.
 
-_Now closed_: [`tests/unit/test_end_to_end_with_stub.py`](../packages/core/tests/unit/test_end_to_end_with_stub.py) drives four full scenarios through the coordinator via `StubVoiceProvider` — info tool round-trip, side-effect tool with `AudioStream` draining to `send_audio`, mid-stream interrupt, and the full provider-verb coverage sweep. The PCM bytes themselves are assertions on what landed on `send_audio`.
+_Now closed_: [`tests/unit/test_end_to_end_with_stub.py`](../server/runtime/tests/unit/test_end_to_end_with_stub.py) drives four full scenarios through the coordinator via `StubVoiceProvider` — info tool round-trip, side-effect tool with `AudioStream` draining to `send_audio`, mid-stream interrupt, and the full provider-verb coverage sweep. The PCM bytes themselves are assertions on what landed on `send_audio`.
 
 ### 2. Thinking tone violates the sonic-UX framework we documented
 
@@ -40,7 +40,7 @@ Not every OpenAI account has Realtime beta access. A reviewer without it can ver
 
 ### 4. Gitignored audiobook library
 
-`personas/abuelos/data/` is gitignored (user-owned media, large files). A fresh clone loads `audiobooks.catalog_loaded count=0`. Reviewers must drop a sample `.m4b`/`.mp3` into `personas/abuelos/data/audiobooks/` to exercise the playback path. Documented in both `README.md` and `verifying.md`.
+`server/personas/abuelos/data/` is gitignored (user-owned media, large files). A fresh clone loads `audiobooks.catalog_loaded count=0`. Reviewers must drop a sample `.m4b`/`.mp3` into `server/personas/abuelos/data/audiobooks/` to exercise the playback path. Documented in both `README.md` and `verifying.md`.
 
 ### 5. Spanish-first canonical persona
 
@@ -52,7 +52,7 @@ The bundled persona is AbuelOS — Spanish-language, targeting an elderly blind 
 
 ## Non-issues that look like issues
 
-### `personas/abuelos/data/` referenced in `persona.yaml` but empty in git
+### `server/personas/abuelos/data/` referenced in `persona.yaml` but empty in git
 
 Correct. The YAML points at a directory for user data; the directory is gitignored because it holds per-user audiobooks + a SQLite DB. The runtime handles a missing/empty library gracefully (`count=0` log, skill still registers).
 
