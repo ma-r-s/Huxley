@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useRegisterSection } from "../lib/voiceThread.js";
+import { useViewport } from "../lib/useViewport.js";
 import { SectionHead } from "../components/Chrome.js";
 import { Reveal } from "../components/Reveal.js";
 
@@ -285,6 +286,7 @@ const JOB_PHASES: Record<PhaseKey, Phase> = {
 
 export function HuxleyGrows() {
   const sectionRef = useRegisterSection<HTMLElement>("grows", "thinking");
+  const { isMobile } = useViewport();
   const [variant, setVariant] = useState<VariantKey>("built");
   const spec = VARIANTS[variant];
 
@@ -351,7 +353,7 @@ export function HuxleyGrows() {
       style={{
         position: "relative",
         zIndex: 2,
-        padding: "120px 64px",
+        padding: isMobile ? "72px 24px" : "120px 64px",
         borderTop: "1px solid var(--hux-fg-line)",
         background: "color-mix(in oklab, var(--hux-coral) 94%, black)",
       }}
@@ -370,10 +372,10 @@ export function HuxleyGrows() {
 
       <div
         style={{
-          marginTop: 64,
+          marginTop: isMobile ? 40 : 64,
           display: "grid",
-          gridTemplateColumns: "1.15fr 0.85fr",
-          gap: 32,
+          gridTemplateColumns: isMobile ? "1fr" : "1.15fr 0.85fr",
+          gap: isMobile ? 24 : 32,
           alignItems: "start",
         }}
       >
@@ -520,12 +522,12 @@ export function HuxleyGrows() {
 
       <div
         style={{
-          marginTop: 96,
+          marginTop: isMobile ? 56 : 96,
           paddingTop: 32,
           borderTop: "1px solid var(--hux-fg-line)",
           display: "grid",
-          gridTemplateColumns: "repeat(3, 1fr)",
-          gap: 40,
+          gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)",
+          gap: isMobile ? 24 : 40,
         }}
       >
         {(

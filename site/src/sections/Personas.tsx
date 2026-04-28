@@ -3,6 +3,7 @@
 
 import { useState } from "react";
 import { useRegisterSection, useInView } from "../lib/voiceThread.js";
+import { useViewport } from "../lib/useViewport.js";
 import { SectionHead } from "../components/Chrome.js";
 
 interface Persona {
@@ -267,6 +268,7 @@ function PersonaCell({
 
 export function Personas() {
   const sectionRef = useRegisterSection<HTMLElement>("persona", "thinking");
+  const { isMobile, isTablet } = useViewport();
   const [active, setActive] = useState(PERSONAS[0]!.id);
   const p = PERSONAS.find((x) => x.id === active) || PERSONAS[0]!;
   return (
@@ -276,7 +278,7 @@ export function Personas() {
       style={{
         position: "relative",
         zIndex: 2,
-        padding: "120px 64px",
+        padding: isMobile ? "72px 24px" : "120px 64px",
         borderTop: "1px solid var(--hux-fg-line)",
         background: "color-mix(in oklab, var(--hux-coral) 90%, black)",
       }}
@@ -295,9 +297,13 @@ export function Personas() {
 
       <div
         style={{
-          marginTop: 56,
+          marginTop: isMobile ? 32 : 56,
           display: "grid",
-          gridTemplateColumns: `repeat(${PERSONAS.length}, 1fr)`,
+          gridTemplateColumns: isMobile
+            ? "repeat(2, 1fr)"
+            : isTablet
+              ? "repeat(3, 1fr)"
+              : `repeat(${PERSONAS.length}, 1fr)`,
           gap: 0,
           borderTop: "1px solid var(--hux-fg-line)",
           borderLeft: "1px solid var(--hux-fg-line)",
@@ -318,8 +324,8 @@ export function Personas() {
         style={{
           marginTop: 40,
           display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: 48,
+          gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr",
+          gap: isMobile ? 32 : 48,
           alignItems: "start",
         }}
       >

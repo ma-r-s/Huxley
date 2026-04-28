@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { useRegisterSection } from "../lib/voiceThread.js";
+import { useViewport } from "../lib/useViewport.js";
 import { SectionHead } from "../components/Chrome.js";
 import { Reveal } from "../components/Reveal.js";
 
@@ -52,6 +53,7 @@ const usableW = W - L - R;
 
 export function TurnTimeline() {
   const sectionRef = useRegisterSection<HTMLElement>("timeline", "speaking");
+  const { isMobile } = useViewport();
   const [phase, setPhase] = useState(0);
   useEffect(() => {
     let raf = 0;
@@ -70,7 +72,7 @@ export function TurnTimeline() {
       style={{
         position: "relative",
         zIndex: 2,
-        padding: "120px 64px",
+        padding: isMobile ? "72px 24px" : "120px 64px",
         borderTop: "1px solid var(--hux-fg-line)",
         background: "color-mix(in oklab, var(--hux-coral) 92%, black)",
       }}
@@ -229,7 +231,7 @@ export function TurnTimeline() {
         style={{
           marginTop: 32,
           display: "grid",
-          gridTemplateColumns: "repeat(3, 1fr)",
+          gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)",
           gap: 24,
         }}
       >

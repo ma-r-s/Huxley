@@ -5,6 +5,7 @@
 
 import { useEffect, useRef } from "react";
 import { useVoiceState, type VoiceState } from "../lib/voiceThread.js";
+import { useViewport } from "../lib/useViewport.js";
 
 interface ChapterMeta {
   id: string;
@@ -231,6 +232,7 @@ export function VoiceThread({ sections, height = 58 }: VoiceThreadProps) {
 
 function ChapterLayer({ sections }: { sections: ChapterMeta[] }) {
   const { id: activeSection } = useVoiceState();
+  const { isMobile } = useViewport();
   if (!sections || !sections.length) return null;
   return (
     <div
@@ -267,21 +269,23 @@ function ChapterLayer({ sections }: { sections: ChapterMeta[] }) {
                 transition: "opacity 300ms ease",
               }}
             />
-            <span
-              style={{
-                fontFamily: "var(--hux-mono)",
-                fontSize: 9,
-                letterSpacing: "0.14em",
-                textTransform: "uppercase",
-                color: "var(--hux-fg)",
-                opacity: active ? 0.95 : 0.4,
-                whiteSpace: "nowrap",
-                transition: "opacity 300ms ease, transform 300ms ease",
-                transform: active ? "translateY(-1px)" : "translateY(0)",
-              }}
-            >
-              {s.label}
-            </span>
+            {!isMobile && (
+              <span
+                style={{
+                  fontFamily: "var(--hux-mono)",
+                  fontSize: 9,
+                  letterSpacing: "0.14em",
+                  textTransform: "uppercase",
+                  color: "var(--hux-fg)",
+                  opacity: active ? 0.95 : 0.4,
+                  whiteSpace: "nowrap",
+                  transition: "opacity 300ms ease, transform 300ms ease",
+                  transform: active ? "translateY(-1px)" : "translateY(0)",
+                }}
+              >
+                {s.label}
+              </span>
+            )}
             <span
               style={{
                 width: 1,

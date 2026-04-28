@@ -1,11 +1,13 @@
 // Install + footer. Centered, calm close. Five-line install snippet.
 
 import { useRegisterSection } from "../lib/voiceThread.js";
+import { useViewport } from "../lib/useViewport.js";
 import { chipGhost, chipSolid } from "../components/Chrome.js";
 import { Wordmark } from "../components/Wordmark.js";
 
 export function Install() {
   const sectionRef = useRegisterSection<HTMLElement>("install", "idle");
+  const { isMobile } = useViewport();
   return (
     <section
       ref={sectionRef}
@@ -13,7 +15,7 @@ export function Install() {
       style={{
         position: "relative",
         zIndex: 2,
-        padding: "120px 64px 64px",
+        padding: isMobile ? "72px 24px 48px" : "120px 64px 64px",
         borderTop: "1px solid var(--hux-fg-line)",
         textAlign: "center",
       }}
@@ -26,7 +28,7 @@ export function Install() {
           style={{
             fontFamily: "var(--hux-serif)",
             fontWeight: 400,
-            fontSize: "clamp(48px, 6vw, 88px)",
+            fontSize: "clamp(40px, 6vw, 88px)",
             lineHeight: 1,
             letterSpacing: "-0.015em",
             margin: "0 0 32px",
@@ -39,12 +41,12 @@ export function Install() {
         <pre
           style={{
             margin: "0 auto",
-            padding: 28,
+            padding: isMobile ? 18 : 28,
             borderRadius: 16,
             background: "rgba(0,0,0,0.35)",
             border: "1px solid var(--hux-fg-line)",
             fontFamily: "var(--hux-mono)",
-            fontSize: 13,
+            fontSize: isMobile ? 11 : 13,
             lineHeight: 1.8,
             color: "var(--hux-fg)",
             overflow: "auto",
@@ -54,9 +56,9 @@ export function Install() {
         >
           {`$ git clone huxley && cd huxley
 $ echo "HUXLEY_OPENAI_API_KEY=sk-..." > .env
-$ uv sync && uv run huxley
-$ cd web && bun install && bun dev
-$ open http://localhost:5173   # hold the button, speak.`}
+$ uv sync && cd server/runtime && uv run huxley
+$ cd ../../clients/pwa && bun install && bun dev
+$ open http://localhost:5174   # hold the button, speak.`}
         </pre>
         <div
           style={{
@@ -86,16 +88,19 @@ $ open http://localhost:5173   # hold the button, speak.`}
 }
 
 export function Footer() {
+  const { isMobile } = useViewport();
   return (
     <footer
       style={{
         position: "relative",
         zIndex: 2,
-        padding: "40px 64px 56px",
+        padding: isMobile ? "32px 24px 40px" : "40px 64px 56px",
         borderTop: "1px solid var(--hux-fg-line)",
         display: "flex",
+        flexDirection: isMobile ? "column" : "row",
         justifyContent: "space-between",
         alignItems: "center",
+        gap: isMobile ? 16 : 0,
         fontFamily: "var(--hux-mono)",
         fontSize: 11,
         letterSpacing: "0.12em",
@@ -104,12 +109,19 @@ export function Footer() {
       }}
     >
       <Wordmark size={22} />
-      <div style={{ display: "flex", gap: 24 }}>
+      <div
+        style={{
+          display: "flex",
+          gap: isMobile ? 12 : 24,
+          flexWrap: "wrap",
+          justifyContent: "center",
+        }}
+      >
         <span>MIT licensed</span>
         <span>·</span>
         <span>Pre-1.0</span>
         <span>·</span>
-        <span>Six personas in the wild</span>
+        <span>Two personas shipped</span>
       </div>
     </footer>
   );
