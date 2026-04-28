@@ -14,6 +14,7 @@ import { Architecture } from "./sections/Architecture.js";
 import { TurnTimeline } from "./sections/TurnTimeline.js";
 import { Skills } from "./sections/Skills.js";
 import { HuxleyGrows } from "./sections/HuxleyGrows.js";
+import { Today } from "./sections/Today.js";
 import { Personas } from "./sections/Personas.js";
 import { Install, Footer } from "./sections/Install.js";
 
@@ -37,6 +38,7 @@ export function Landing() {
       <TurnTimeline />
       <Skills />
       <HuxleyGrows />
+      <Today />
       <Personas />
       <Install />
       <Footer />
@@ -71,16 +73,21 @@ function VoiceThreadBar() {
       label: t("voiceThread.chapters.skills"),
       position: 0.56,
     },
-    { id: "grows", label: t("voiceThread.chapters.grows"), position: 0.7 },
+    { id: "grows", label: t("voiceThread.chapters.grows"), position: 0.66 },
+    {
+      id: "today",
+      label: t("voiceThread.chapters.today"),
+      position: 0.77,
+    },
     {
       id: "persona",
       label: t("voiceThread.chapters.personas"),
-      position: 0.83,
+      position: 0.87,
     },
     {
       id: "install",
       label: t("voiceThread.chapters.install"),
-      position: 0.95,
+      position: 0.96,
     },
   ];
 

@@ -5,6 +5,7 @@
     "architecture": "Arquitectura",
     "skills": "Skills",
     "grows": "Crece",
+    "today": "Hoy",
     "personas": "Personas",
     "install": "Instalar",
     "docs": "Docs",
@@ -39,8 +40,9 @@
       "timeline": "§ 03 · Turnos",
       "skills": "§ 04 · Skills",
       "grows": "§ 05 · Crece",
-      "personas": "§ 06 · Personas",
-      "install": "§ 07 · Instalar"
+      "today": "§ 06 · Hoy",
+      "personas": "§ 07 · Personas",
+      "install": "§ 08 · Instalar"
     }
   },
   "hero": {
@@ -233,8 +235,43 @@
       "handoff": "→ pasando a huxley-grows…"
     }
   },
+  "today": {
+    "eyebrow": "§ 06 — Hoy",
+    "titleA": "Hecho hoy,",
+    "titleB": "construyendo mañana.",
+    "subtitle": "Números reales del commit actual. El framework es pequeño, opinionado y probado.",
+    "metrics": {
+      "tests": "tests pasando",
+      "loc": "LOC de Python",
+      "skills": "skills oficiales",
+      "personas": "personas publicadas",
+      "adrs": "ADRs registrados",
+      "license": "licencia"
+    },
+    "roadmapEyebrow": "§ 06.1 — Lo que viene",
+    "roadmapTitle": "Curado, no exhaustivo.",
+    "roadmapSubtitle": "El plan completo vive en docs/roadmap.md. Estos cuatro son los próximos pasos visibles.",
+    "roadmap": {
+      "cookbook": {
+        "k": "Cookbook del SDK de skills",
+        "v": "Un autor externo debería escribir un skill funcional en menos de 30 minutos sin saber nada de los entresijos de Huxley."
+      },
+      "secrets": {
+        "k": "Interpolación de secretos por skill",
+        "v": "${HUXLEY_TELEGRAM_TOKEN} en persona.yaml — declara la forma del secreto sin almacenarlo. Aterriza antes de la etapa 4."
+      },
+      "providerAbstraction": {
+        "k": "Abstracción del proveedor de voz",
+        "v": "Extraer OpenAI Realtime como una implementación de una interfaz VoiceProvider. Se activa cuando exista un segundo proveedor creíble."
+      },
+      "esp32": {
+        "k": "Cliente walky-talky ESP32",
+        "v": "Reemplaza el navegador como cliente de producción de AbuelOS. Mismo protocolo WebSocket; el firmware vive en clients/firmware/."
+      }
+    }
+  },
   "personas": {
-    "eyebrow": "§ 06 — Personas",
+    "eyebrow": "§ 07 — Personas",
     "titleA": "Un solo framework.",
     "titleB": "Cada voz que necesites.",
     "subtitle": "Una persona es un archivo YAML. Elige la voz, el idioma, los skills, las restricciones. Huxley se adapta — la persona para la que construyes no debería tener que hacerlo.",
@@ -248,7 +285,7 @@
     }
   },
   "install": {
-    "eyebrow": "§ 07 — Empezar",
+    "eyebrow": "§ 08 — Empezar",
     "titleA": "Cinco líneas.",
     "titleB": "Una voz para ti.",
     "ctaGitHub": "GitHub ↗",
