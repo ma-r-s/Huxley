@@ -1,0 +1,12 @@
+{
+  "title": "Cookbook",
+  "icon": "BookOpen",
+  "pages": [
+    "index",
+    "rss-feeds",
+    "audio-streaming",
+    "timers-and-reminders",
+    "notifications",
+    "persistent-state"
+  ]
+}

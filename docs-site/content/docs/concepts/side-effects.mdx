@@ -1,0 +1,259 @@
+---
+title: Side Effects
+description: What a tool does after it returns text. Five kinds, each a clear job.
+---
+
+A tool's `output` is text the model narrates. A tool's `side_effect` is what *happens* — sound, audio streams, volume changes, channel claims. It's the part that makes a voice agent feel alive instead of just chatty.
+
+Five kinds, each with a single clear job:
+
+| Kind            | What it does                                              | Use for                                |
+|-----------------|-----------------------------------------------------------|----------------------------------------|
+| `None`          | Model narrates `output`. That's the whole response.       | Pure info tools (time, weather text)   |
+| `PlaySound`     | One-shot PCM blob plays *immediately*, before model audio | Earcons, "got it" chimes               |
+| `AudioStream`   | Long-form audio via async iterator, after model finishes  | Audiobooks, radio, music, podcasts     |
+| `CancelMedia`   | Cancel any active media task                              | "Stop the book"                        |
+| `SetVolume`     | Push a volume change to the client                        | "Turn it up"                           |
+| `InputClaim`    | Replace mic + speaker with skill-controlled streams       | Phone calls, intercom, voice tutoring  |
+
+## `None` — the silent side effect
+
+If your tool has no special behavior beyond returning data, return `ToolResult(output=...)` with no `side_effect`. The framework treats this as an **info tool**: it asks OpenAI to compose a follow-up response that narrates the output.
+
+```python
+async def handle(self, tool_name, args):
+    if tool_name == "get_news":
+        headlines = await self._fetch_news()
+        return ToolResult(
+            output=json.dumps({"headlines": headlines}),
+        )
+```
+
+The model receives `{"headlines": [...]}` and speaks something like "Aquí tienes las noticias de hoy. Primera..." in the persona's voice.
+
+The state machine: IN_RESPONSE → AWAITING_NEXT_RESPONSE → IN_RESPONSE → IDLE. One extra round trip to OpenAI; usually fine.
+
+## `PlaySound` — instant chime
+
+```python
+PlaySound(pcm: bytes)
+```
+
+Drop a PCM16 24kHz mono blob into the audio channel **before** the model speaks. Use for earcons, acknowledgement tones, "thinking..." cues.
+
+```python
+async def setup(self, ctx: SkillContext) -> None:
+    palette = load_pcm_palette(ctx.persona_data_dir / "sounds", roles=["news_start"])
+    self._chime = palette.get("news_start")
+
+async def handle(self, tool_name, args):
+    if tool_name == "get_news":
+        headlines = await self._fetch_news()
+        return ToolResult(
+            output=json.dumps({"headlines": headlines}),
+            side_effect=PlaySound(pcm=self._chime),
+        )
+```
+
+The flow:
+
+1. Tool returns. Framework sees `PlaySound`.
+2. Framework asks OpenAI to compose a response narrating the output.
+3. *Before* the model audio arrives, framework injects the chime PCM into the WebSocket.
+4. The chime hits the browser first.
+5. Model audio follows seamlessly.
+
+Result: the user hears "*ding*... Primera noticia: ..." with no awkward silence while the model thinks.
+
+<Callout type="info">
+The `huxley_sdk.audio.load_pcm_palette` helper can load a directory of WAV files into a dict for you. Used by the audiobooks and news skills.
+</Callout>
+
+## `AudioStream` — long-form playback
+
+This is the workhorse for audiobooks, radio, music, podcasts.
+
+```python
+@dataclass
+class AudioStream(SideEffect):
+    factory: Callable[[], AsyncIterator[bytes]]
+    on_complete_prompt: str | None = None
+    completion_silence_ms: int = 0
+    content_type: ContentType = ContentType.NONMIXABLE
+    label: str | None = None
+    preroll_ms: int = 0
+    on_patience_expired: Callable[[], Awaitable[None]] | None = None
+    patience: timedelta | None = None
+```
+
+The crucial field is `factory` — a callable that **returns** an async iterator of PCM chunks. The skill doesn't invoke the factory; the framework does, at the terminal barrier (after the model finishes speaking).
+
+### Anatomy of a factory
+
+```python
+def make_factory(book_id, path, start_position):
+    async def stream():
+        bytes_read = 0
+        completed = False
+        try:
+            # Earcon at the start.
+            yield self._sounds["book_start"]
+
+            # Real content from ffmpeg.
+            async for chunk in self._player.stream(path, start_position=start_position):
+                bytes_read += len(chunk)
+                yield chunk
+            completed = True
+
+            # Earcon at the end.
+            yield self._sounds["book_end"]
+        finally:
+            # Persist position whether completed or interrupted.
+            elapsed = bytes_read / BYTES_PER_SECOND
+            final_pos = 0.0 if completed else start_position + elapsed
+            await self._storage.save_position(book_id, final_pos)
+
+    return stream
+```
+
+Three things to internalize:
+
+1. **The factory is a closure.** It captures `start_position` lexically. If the user asks to "skip this chapter," your skill returns a *new* factory with a *new* start position. The framework cancels the old, runs the new — never confused, never racing.
+
+2. **`try / finally` is mandatory.** Your factory may complete naturally, or be cancelled mid-stream by an interrupt. Either way, `finally` runs. Use it for bookmarks, cleanup, log flushing.
+
+3. **You don't yield raw audio**. The chunks must be PCM16 24kHz mono. ffmpeg is the standard way to convert anything else into that format. The audiobooks skill ships an `AudioPlayer` helper that wraps ffmpeg.
+
+### Other AudioStream fields
+
+- `on_complete_prompt`: a string passed to the LLM after the stream completes naturally (not after interrupt). Used to narrate "the book is finished" in the persona's voice. Write it as an instruction to the model, not a literal sentence — e.g. "Anuncia que el libro terminó y pregunta si quiere otro" so the persona shapes the prose.
+- `completion_silence_ms`: milliseconds of silence the framework sends *after* firing the completion-prompt request, so the silence overlaps with model first-token latency. The user hears: book ending → silence → model voice, with minimal dead air. (Not a pre-prompt pause — see the `huxley_sdk.types.AudioStream` docstring for the exact ordering.)
+- `content_type`: `MIXABLE` (music can duck under a higher-priority claim) vs `NONMIXABLE` (audiobook gets paused, not ducked). Default `NONMIXABLE`.
+- `label`: human-readable name shown in dev UI and logs.
+- `patience` and `on_patience_expired`: control how long this stream waits when preempted before being formally evicted, and what to narrate when it expires. Used by audiobooks to say "lo dejé donde íbamos" before yielding to a phone call.
+
+## `CancelMedia` — stop whatever is playing
+
+```python
+CancelMedia()
+```
+
+Returned from tools like `audiobook_control(action="stop")` or `radio_control(action="off")`. The framework cancels the current AudioStream task immediately. No audio interrupt — the stop is graceful, like the stream completed naturally.
+
+```python
+async def handle(self, tool_name, args):
+    if tool_name == "audiobook_control" and args["action"] == "stop":
+        return ToolResult(
+            output=json.dumps({"stopped": True}),
+            side_effect=CancelMedia(),
+        )
+```
+
+## `SetVolume` — control the client speaker
+
+```python
+SetVolume(level: int)  # 0 to 100
+```
+
+Forwards a volume command to the client. The browser PWA changes its `<audio>` gain; firmware clients change their hardware volume. The skill doesn't care which — the framework abstracts it.
+
+```python
+return ToolResult(
+    output=json.dumps({"volume": level}),
+    side_effect=SetVolume(level=level),
+)
+```
+
+## `InputClaim` — take over the conversation
+
+The most powerful side effect. Used for phone calls, where the skill becomes the conversation: mic frames go *to the skill*, not to the LLM, and audio comes *from the skill*, not from the LLM.
+
+```python
+@dataclass
+class InputClaim(SideEffect):
+    on_mic_frame: Callable[[bytes], Awaitable[None]]
+    speaker_source: AsyncIterator[bytes] | None = None
+    on_claim_end: Callable[[ClaimEndReason], Awaitable[None]] | None = None
+    title: str | None = None
+```
+
+When you return an `InputClaim`, the framework moves to the **COMMS** focus channel:
+
+- Mic frames stop going to OpenAI Realtime, start going to your `on_mic_frame` callback.
+- Your `speaker_source` iterator (typically the remote party's audio) becomes the speaker output.
+- The PTT button on the client now means "hang up" instead of "talk to the model."
+- When the call ends, `on_claim_end` is called with a `ClaimEndReason` (`NATURAL`, `USER_PTT`, `PREEMPTED`, `ERROR`).
+
+Used by the **telegram** skill for incoming and outgoing voice calls. We cover this in detail in [Cookbook: Phone calls](/docs/cookbook/audio-streaming) — there's a lot of subtlety around announcing the call before bridging audio.
+
+## Choosing the right side effect
+
+When you write a tool, ask:
+
+<Steps>
+
+<Step>
+
+### Does the tool need to *play sound*?
+
+If no — just return `output` and let the model narrate. `side_effect=None`.
+
+</Step>
+
+<Step>
+
+### Does the sound need to come *before* the model speaks?
+
+A chime, an earcon, a "got it" cue — that's `PlaySound`. It lands in the audio channel before the model audio.
+
+</Step>
+
+<Step>
+
+### Does the sound *replace* the model's speech?
+
+Long-form content (book, song, podcast) — that's `AudioStream`. The model narrates a brief intro ("Comenzando..."), then the stream takes over.
+
+</Step>
+
+<Step>
+
+### Does the tool *control* the audio system without producing audio?
+
+Volume change → `SetVolume`. Stop the current stream → `CancelMedia`.
+
+</Step>
+
+<Step>
+
+### Does the tool *take over* the conversation?
+
+Two-way audio (phone call, intercom) — that's `InputClaim`. The model steps aside until the claim ends.
+
+</Step>
+
+</Steps>
+
+## Combining: it's one per tool
+
+A `ToolResult` has *at most one* `side_effect`. There's no list. If you need a chime *and* a stream, use the stream's earcon mechanism (`yield self._sounds["start"]` as the first chunk of the factory). If you need a chime *and* a volume change, that's two tool calls.
+
+## Next
+
+<Cards>
+  <Card
+    href="/docs/concepts/focus"
+    title="Focus & channels"
+    description="What happens when two side effects want the speaker at once."
+  />
+  <Card
+    href="/docs/concepts/turns"
+    title="Turns"
+    description="When side effects fire, in the lifecycle of a turn."
+  />
+  <Card
+    href="/docs/build-skill/speaking-back"
+    title="Hands-on: speaking back"
+    description="Build a skill that uses each side effect."
+  />
+</Cards>

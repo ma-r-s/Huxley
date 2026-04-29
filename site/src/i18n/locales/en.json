@@ -1,60 +1,22 @@
 {
   "nav": {
     "wordmarkSubtle": "v0.9 · pre-1.0",
-    "why": "Why",
-    "architecture": "Architecture",
-    "skills": "Skills",
-    "grows": "Grows",
-    "today": "Today",
-    "personas": "Personas",
-    "install": "Install",
     "docs": "Docs",
     "github": "GitHub"
   },
-  "voiceThread": {
-    "labelState": "state",
-    "states": {
-      "idle": { "tag": "Idle", "sub": "Held, listening for the hold." },
-      "listening": {
-        "tag": "Listening",
-        "sub": "Capturing audio — waiting for release."
-      },
-      "thinking": {
-        "tag": "Thinking",
-        "sub": "Routing through coordinator and skills."
-      },
-      "speaking": {
-        "tag": "Speaking",
-        "sub": "Draining the audio channel to one voice."
-      },
-      "interrupt": {
-        "tag": "Interrupt",
-        "sub": "Atomic drop. Queue cleared. Channel flushed."
-      }
-    },
-    "turnPrefix": "turn",
-    "chapters": {
-      "hero": "Hero",
-      "problem": "§ 01 · Why",
-      "architecture": "§ 02 · Core",
-      "timeline": "§ 03 · Turns",
-      "skills": "§ 04 · Skills",
-      "today": "§ 05 · Today",
-      "grows": "§ 06 · Direction",
-      "personas": "§ 07 · Personas",
-      "install": "§ 08 · Install"
-    }
-  },
   "hero": {
-    "pill": "Voice-agent framework · Self-hosted Python · MIT",
-    "titleLine1": "A voice you can",
-    "titleLine2": "actually own.",
-    "subtitle": "Huxley is a Python framework for real-time voice agents. You bring a persona and skills — it handles turn coordination, interrupts, proactive speech, audio bridging.",
+    "pill": "Personal voice assistants · Self-hosted Python · MIT",
+    "titleLine1": "An open-source framework",
+    "titleLine2": "for personal voice assistants.",
+    "subtitle": "Compose yours in Python. Personas in YAML, skills as `pip`-installable packages. Real-time audio, self-hosted.",
     "ctaInstall": "Install Huxley",
     "ctaSeeHow": "See how it works",
     "installSnippet": "git clone github.com/ma-r-s/Huxley && uv run huxley",
     "status": {
-      "idle": { "line": "Held, listening for the hold.", "sub": "AT REST" },
+      "idle": {
+        "line": "Held, listening for the hold.",
+        "sub": "AT REST"
+      },
       "listening": {
         "line": "“Hey Huxley — dim the lights?”",
         "sub": "CAPTURING"
@@ -67,7 +29,26 @@
         "line": "Dimmed the living room to 30%.",
         "sub": "SPEAKING"
       },
-      "interrupt": { "line": "Cancelling.", "sub": "INTERRUPT" }
+      "interrupt": {
+        "line": "Cancelling.",
+        "sub": "INTERRUPT"
+      },
+      "gaze": {
+        "line": "Following the conversation.",
+        "sub": "ATTENTIVE"
+      },
+      "slosh": {
+        "line": "Easing back to idle.",
+        "sub": "AT EASE"
+      },
+      "spiky": {
+        "line": "On guard.",
+        "sub": "ALERT"
+      },
+      "mitosis": {
+        "line": "Bridging two voices.",
+        "sub": "ON CALL"
+      }
     }
   },
   "problem": {
@@ -107,7 +88,7 @@
     }
   },
   "architecture": {
-    "eyebrow": "§ 02 — How it works",
+    "eyebrow": "How it works",
     "titleA": "One coordinator.",
     "titleB": "One audio channel.",
     "subtitle": "The framework sequences every turn through a single speaker. Model voice, tool audio, and skill-claimed bridges never collide.",
@@ -121,10 +102,22 @@
           "k": "persona.yaml",
           "v": "Identity + skill list, loaded at startup"
         },
-        { "k": "Voice provider", "v": "OpenAI Realtime ⟷ Huxley core" },
-        { "k": "Huxley core", "v": "Coordinator · Focus · Skill registry" },
-        { "k": "Skills", "v": "Python packages discovered via entry-points" },
-        { "k": "Client", "v": "Browser today · ESP32 next · phone via the PWA" }
+        {
+          "k": "Voice provider",
+          "v": "OpenAI Realtime ⟷ Huxley core"
+        },
+        {
+          "k": "Huxley core",
+          "v": "Coordinator · Focus · Skill registry"
+        },
+        {
+          "k": "Skills",
+          "v": "Python packages discovered via entry-points"
+        },
+        {
+          "k": "Client",
+          "v": "Browser today · ESP32 next · phone via the PWA"
+        }
       ]
     },
     "cards": {
@@ -167,7 +160,7 @@
     }
   },
   "timeline": {
-    "eyebrow": "§ 03 — Turn sequencing",
+    "eyebrow": "Turn sequencing",
     "titleA": "You never hear",
     "titleB": "two voices at once.",
     "subtitle": "The coordinator drains model speech before tool audio starts, holds proactive turns until the channel is free, and makes every interrupt atomic.",
@@ -197,7 +190,10 @@
           "k": "0.0 – 1.5s",
           "v": "User holds the button: \"Set a timer for 25 minutes.\""
         },
-        { "k": "2.2 – 4.0s", "v": "Model speaks: \"Setting timer…\"" },
+        {
+          "k": "2.2 – 4.0s",
+          "v": "Model speaks: \"Setting timer…\""
+        },
         {
           "k": "4.2 – 5.0s",
           "v": "Tool chime plays — only after model speech drains."
@@ -214,7 +210,6 @@
     "titleA": "Anything that speaks Python",
     "titleB": "is a skill.",
     "subtitle": "Skills register via Python entry-points. Add a line to persona.yaml, restart — the framework never changes.",
-    "filterAll": "All",
     "stats": {
       "shipped": "shipped",
       "designed": "designed for",
@@ -224,52 +219,8 @@
     "writingTitle": "A skill is a Python package.",
     "writingBody": "Declare tools. Handle calls. Return a ToolResult — optionally with an AudioStream, a PlaySound, or an InputClaim for full-duplex audio. The framework sequences the rest."
   },
-  "grows": {
-    "eyebrow": "§ 06 — The shape we're building toward",
-    "titleA": "Where this is going.",
-    "titleB": "Not where it is yet.",
-    "subtitle": "The architecture leaves room for two things that don't ship today: a community registry of open-source skills (huxley-market), and a build agent that writes a new skill from a voice prompt (huxley-grows). The transcript below is what those would feel like in use — neither is implemented.",
-    "liveTurn": "live turn",
-    "tabs": {
-      "found": "Found it",
-      "built": "Built it",
-      "needsconfig": "Needs config",
-      "noapi": "No API"
-    },
-    "you": "you",
-    "huxley": "huxley",
-    "proactive": "proactive",
-    "replay": "↻ replay",
-    "claims": {
-      "ceremony": {
-        "k": "Find or build — same ceremony",
-        "v": "Market install and build-from-scratch end the same way: a new skill on your box, same API, same permissions model, same voice command."
-      },
-      "noTerminal": {
-        "k": "No terminal, ever",
-        "v": "Install from voice, or tap it through huxley-web on your phone. The CLI still works — you just never have to touch it."
-      },
-      "failure": {
-        "k": "Failure is a feature",
-        "v": "If neither path works — no market hit and no buildable shape — Huxley says so, precisely, and stops. No hallucinated capability."
-      }
-    },
-    "jobCard": {
-      "marketTitle": "huxley-market · query",
-      "growsTitle": "huxley-grows · background job",
-      "originMarket": "origin · huxley-market",
-      "originGrows": "origin · clawbot@local",
-      "statusReady": "reloaded",
-      "statusNeedsConfig": "awaiting sign-in",
-      "statusFailed": "halted",
-      "statusIdle": "waiting",
-      "statusMarket": "querying",
-      "statusGrows": "building",
-      "handoff": "→ handing off to huxley-grows…"
-    }
-  },
   "today": {
-    "eyebrow": "§ 05 — Today",
+    "eyebrow": "Today",
     "titleA": "Built today,",
     "titleB": "building tomorrow.",
     "subtitle": "Real numbers from the current commit. The framework is small, opinionated, and tested.",
@@ -281,7 +232,7 @@
       "adrs": "ADRs filed",
       "license": "license"
     },
-    "roadmapEyebrow": "§ 05.1 — What's next",
+    "roadmapEyebrow": "What's next",
     "roadmapTitle": "Curated, not exhaustive.",
     "roadmapSubtitle": "The full plan lives in docs/roadmap.md. These four are the next visible moves.",
     "roadmap": {
@@ -304,7 +255,7 @@
     }
   },
   "personas": {
-    "eyebrow": "§ 07 — Personas",
+    "eyebrow": "Personas",
     "titleA": "One framework.",
     "titleB": "Every voice you need.",
     "subtitle": "A persona is a YAML file: voice, language, skills, guardrails. AbuelOS is in production today; the others are design examples that show how far the same framework stretches.",
@@ -319,7 +270,7 @@
     }
   },
   "install": {
-    "eyebrow": "§ 08 — Get started",
+    "eyebrow": "Get started",
     "titleA": "Five lines.",
     "titleB": "A voice of your own.",
     "cost": "Runs on OpenAI Realtime: roughly $0.06/min listening, $0.24/min speaking. You pay OpenAI directly — Huxley adds no markup. Idle is free.",
@@ -327,8 +278,8 @@
     "ctaDocs": "Read the docs"
   },
   "footer": {
+    "builtBy": "Built by",
     "license": "MIT licensed",
-    "version": "Pre-1.0",
     "personasCount": "Two personas shipped",
     "linkRepo": "GitHub",
     "linkIssues": "Issues",

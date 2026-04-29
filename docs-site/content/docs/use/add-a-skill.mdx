@@ -1,0 +1,182 @@
+---
+title: Add a Skill
+description: Install a skill, configure it, see it work.
+---
+
+A skill is a Python package. Installing one means: add it to your dependencies, list it in your persona, restart the server. That's the whole loop.
+
+## The first-party skills
+
+Huxley ships with seven skills. You don't install them separately — they're part of the workspace and `uv sync` brings them in:
+
+| Skill                  | Provides                                                  |
+|------------------------|-----------------------------------------------------------|
+| `huxley-skill-audiobooks` | Library search, playback, bookmarks, resume          |
+| `huxley-skill-news`    | Weather (Open-Meteo) + headlines (Google News RSS)       |
+| `huxley-skill-radio`   | HTTP/Icecast streaming via ffmpeg                         |
+| `huxley-skill-system`  | Volume, current time                                      |
+| `huxley-skill-telegram`| Voice calls + text messages via MTProto                  |
+| `huxley-skill-timers`  | One-shot reminders, persistent across restart             |
+| `huxley-skill-search`  | Web search                                                |
+
+To use one in a persona, list it under `skills:`:
+
+```yaml title="persona.yaml"
+skills:
+  audiobooks:
+    library: audiobooks         # relative to data/
+    sounds_path: sounds
+    sounds_enabled: true
+  news:
+    location: "Bogotá"
+    latitude: 4.71
+    longitude: -74.07
+    country_code: "CO"
+    language_code: "es"
+  system: {}
+  timers: {}
+```
+
+Each skill defines what config keys it accepts. Read the skill's README, or see the [Cookbook](/docs/cookbook) for examples.
+
+## Installing a third-party skill
+
+Third-party skills come from PyPI, GitHub, or any other Python package source. Install with `uv add` from the workspace root:
+
+```bash
+uv add huxley-skill-spotify              # from PyPI
+uv add git+https://github.com/foo/huxley-skill-bar.git  # from git
+```
+
+`uv add` updates `pyproject.toml` and `uv.lock`. The skill becomes available to all personas in this workspace.
+
+To use it, list it in `persona.yaml`:
+
+```yaml
+skills:
+  spotify:
+    client_id: ${SPOTIFY_CLIENT_ID}
+    library_path: spotify/
+```
+
+Then restart the server. Huxley discovers skills at startup via Python entry points — the new skill registers itself automatically when it's pip-installed.
+
+## What does a skill's config look like?
+
+That depends on the skill. There's no schema enforced by the framework — a skill takes whatever config dict the persona gives it.
+
+Conventions you'll see across well-written skills:
+
+- **Paths are relative to `data/`.** `library: audiobooks` resolves to `server/personas/<name>/data/audiobooks/`.
+- **Secrets reference env vars.** `${SPOTIFY_CLIENT_ID}` reads `SPOTIFY_CLIENT_ID` from the environment at startup. (This is not yet shipped as of v0.x — it's on the roadmap as Stage 4 secret interpolation. For now, hardcode or use `os.environ` reads inside the skill.)
+- **Per-language overrides go in `i18n`.**
+  ```yaml
+  audiobooks:
+    library: audiobooks
+    i18n:
+      en:
+        on_complete_prompt: "The book is finished. Tell the user warmly."
+      es:
+        on_complete_prompt: "El libro terminó. Anúncialo con calidez."
+  ```
+
+## Removing a skill
+
+Remove it from the persona:
+
+```yaml
+skills:
+  audiobooks:
+    ...
+  # delete the lines for the skill you no longer want
+```
+
+Restart. The skill stops loading. Its data on disk (the SQLite rows it owns) stays — you can add it back later and resume.
+
+To remove the package entirely:
+
+```bash
+uv remove huxley-skill-foo
+```
+
+Make sure no remaining persona references it; otherwise startup fails.
+
+## Conflicts and collisions
+
+Each loaded skill must have a unique `name`. If two skills both call themselves `news`, the framework refuses to start. This is intentional — silent shadowing would be a debugging nightmare.
+
+Tool names must also be unique across loaded skills. Two skills both exposing a `play()` tool will fail. Conventionally, skills prefix tools with their domain: `play_book`, `play_radio`, `play_song`.
+
+## Where to find skills
+
+There's no central registry yet. Today, skills live:
+
+- In the Huxley monorepo (the seven first-party ones).
+- In Mario's personal Huxley extensions repo (eventually).
+- On PyPI under names starting with `huxley-skill-`.
+
+If you write one and want it indexed, file an issue on the [Huxley repo](https://github.com/ma-r-s/Huxley) — we'll link it.
+
+## A real example
+
+Here's a persona that loads four skills, each with its own configuration:
+
+```yaml title="server/personas/example/persona.yaml"
+version: 1
+name: example
+voice: coral
+language_code: es
+transcription_language: es
+timezone: America/Bogota
+system_prompt: |
+  Eres un asistente cálido. Responde corto. Nunca digas que no — ofrece
+  alternativas.
+constraints:
+  - never_say_no
+skills:
+  audiobooks:
+    library: audiobooks
+    sounds_path: sounds
+    sounds_enabled: true
+    i18n:
+      es:
+        on_complete_prompt: "El libro terminó. Anúncialo con calidez."
+
+  news:
+    location: "Bogotá"
+    latitude: 4.71
+    longitude: -74.07
+    country_code: "CO"
+    language_code: "es"
+    interests: [politica, local]
+    max_items: 8
+    sounds_path: sounds
+    start_sound: news_start
+
+  timers: {}
+
+  system: {}
+```
+
+Run it:
+
+```bash
+HUXLEY_PERSONA=example uv run huxley
+```
+
+You now have an agent that plays audiobooks, reads news, sets timers, and tells the time — in Spanish, with a warm voice, never refusing requests.
+
+## Next
+
+<Cards>
+  <Card
+    href="/docs/build-skill"
+    title="Build a skill"
+    description="Now you've used skills. Time to write one."
+  />
+  <Card
+    href="/docs/build-persona"
+    title="Build a persona"
+    description="Make the persona that wraps your agent in your voice."
+  />
+</Cards>

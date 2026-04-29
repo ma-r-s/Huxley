@@ -41,10 +41,12 @@ export function BalancedBackdrop() {
 }
 
 // ── Nav bar ────────────────────────────────────────────────────────────
+// Wordmark on the left, language picker + external links on the right.
+// In-page section links were removed — they were just scrolling within
+// the same page, not leading anywhere useful.
 export function BalNav() {
   const { t } = useTranslation();
-  const { isMobile, isTablet } = useViewport();
-  const showLinks = !isMobile && !isTablet;
+  const { isMobile } = useViewport();
   return (
     <nav
       style={{
@@ -62,39 +64,6 @@ export function BalNav() {
         size={isMobile ? 26 : 32}
         subtle={isMobile ? undefined : t("nav.wordmarkSubtle")}
       />
-      {showLinks && (
-        <div
-          style={{
-            display: "flex",
-            gap: 32,
-            fontSize: 13,
-            letterSpacing: "0.02em",
-            opacity: 0.85,
-          }}
-        >
-          <a style={navA} href="#problem">
-            {t("nav.why")}
-          </a>
-          <a style={navA} href="#architecture">
-            {t("nav.architecture")}
-          </a>
-          <a style={navA} href="#skills">
-            {t("nav.skills")}
-          </a>
-          <a style={navA} href="#today">
-            {t("nav.today")}
-          </a>
-          <a style={navA} href="#grows">
-            {t("nav.grows")}
-          </a>
-          <a style={navA} href="#persona">
-            {t("nav.personas")}
-          </a>
-          <a style={navA} href="#install">
-            {t("nav.install")}
-          </a>
-        </div>
-      )}
       <div
         style={{
           display: "flex",
@@ -115,12 +84,6 @@ export function BalNav() {
     </nav>
   );
 }
-
-const navA: CSSProperties = {
-  color: "inherit",
-  textDecoration: "none",
-  fontFamily: "var(--hux-sans)",
-};
 
 // Segmented language picker — drives i18next + persists to localStorage
 // (the i18next LanguageDetector handles the persistence; we just call
@@ -172,6 +135,45 @@ function LangToggle() {
     </div>
   );
 }
+
+// ── Section surface helpers ─────────────────────────────────────────────
+// Atmospheric inner gradients — give each surface depth so it reads as
+// a "place" instead of a flat block. Three layers per surface: a raking
+// highlight from the upper-left, a deep vignette in the lower-right,
+// and a horizon shadow at the bottom edge that grounds the section
+// against the next one. Opacities pushed high enough to actually read
+// (the previous 6%/10% mixes were below the JND on saturated coral).
+const ATMOSPHERE_DARK = `
+  radial-gradient(ellipse 70% 50% at 15% 0%, color-mix(in oklab, white 18%, transparent), transparent 65%),
+  radial-gradient(ellipse 90% 70% at 85% 100%, color-mix(in oklab, black 50%, transparent), transparent 65%),
+  linear-gradient(to bottom, transparent 70%, color-mix(in oklab, black 22%, transparent) 100%)
+`;
+const ATMOSPHERE_PAPER = `
+  radial-gradient(ellipse 60% 45% at 20% 0%, color-mix(in oklab, white 55%, transparent), transparent 70%),
+  radial-gradient(ellipse 90% 70% at 80% 100%, color-mix(in oklab, var(--hux-coral) 28%, transparent), transparent 65%),
+  linear-gradient(to bottom, transparent 75%, color-mix(in oklab, var(--hux-ink) 14%, transparent) 100%)
+`;
+
+// CSS-variable overrides for paper (light) sections. Spread into the
+// section root's style and any descendant reading --hux-fg / --hux-fg-line
+// / --hux-fg-faint automatically picks up the inverted dark variants.
+// No per-element color rewriting needed.
+export const paperSection: CSSProperties = {
+  background: `${ATMOSPHERE_PAPER}, var(--hux-paper)`,
+  color: "var(--hux-ink)",
+  ["--hux-fg" as string]: "var(--hux-ink)",
+  ["--hux-fg-dim" as string]: "var(--hux-ink-dim)",
+  ["--hux-fg-line" as string]: "var(--hux-ink-line)",
+  ["--hux-fg-faint" as string]: "var(--hux-ink-faint)",
+} as CSSProperties;
+
+export const deepSection: CSSProperties = {
+  background: `${ATMOSPHERE_DARK}, var(--hux-coral-xdk)`,
+};
+
+export const coralSection: CSSProperties = {
+  background: `${ATMOSPHERE_DARK}, var(--hux-coral)`,
+};
 
 export const chipGhost: CSSProperties = {
   display: "inline-flex",

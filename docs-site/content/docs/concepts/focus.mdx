@@ -1,0 +1,179 @@
+---
+title: Focus & Channels
+description: Who's allowed to make sound right now, and what happens when two things want to.
+---
+
+A real assistant deals with constant audio collisions: the user wants to hear the news while a timer fires. A book is playing when a phone call comes in. A song is on when the user asks "what time is it?" Each scenario needs different behavior.
+
+Huxley solves this with **focus channels** — an arbitration layer borrowed from Amazon's AVS (Alexa Voice Service) design. Every audio source declares which channel it belongs to. Channels have priorities. Higher priority preempts lower. The arbitration is centralized, predictable, and (this matters) unsurprising.
+
+## The four channels
+
+| Channel  | Priority | Used by                                        |
+|----------|----------|------------------------------------------------|
+| DIALOG   | 100      | The model's voice (highest — never preempted) |
+| COMMS    | 150      | Live phone calls, intercom (`InputClaim`)     |
+| ALERT    | 200      | Sirens, urgent announcements (rarely used)    |
+| CONTENT  | 300      | Audiobooks, music, podcasts (`AudioStream`)   |
+
+**Lower number = higher priority.** DIALOG (100) wins over CONTENT (300). The numbers come from AVS; we kept the convention because focus literature uses it.
+
+## What "preempt" means
+
+When a higher-priority channel claims the speaker, the lower-priority claim is told to **stop** or **duck** (volume-attenuate). The behavior depends on the claim's content type:
+
+- `NONMIXABLE` (default): the lower-priority claim **stops cleanly** and the framework saves position so it can resume later. Audiobooks are NONMIXABLE — you don't want a book to play *behind* a phone call.
+- `MIXABLE`: the lower-priority claim **ducks** to a lower volume and continues. Background music is MIXABLE — you can hear the model speak over a soft musical bed.
+
+(Ducking is scaffolded but not fully implemented today. NONMIXABLE works.)
+
+## Three real scenarios
+
+### Scenario 1: A book is playing, a timer fires
+
+<Mermaid chart={`sequenceDiagram
+  participant U as User
+  participant T as Timers skill
+  participant F as FocusManager
+  participant A as Audiobook stream
+  participant L as LLM (DIALOG)
+
+  Note over A: Playing on CONTENT (300)
+  T->>F: inject_turn(priority=BLOCK_BEHIND_COMMS)
+  F->>A: pause_with_patience(5s)
+  A->>F: paused, position saved
+  F->>L: acquire DIALOG
+  L-->>U: "Te toca la pastilla"
+  L->>F: release DIALOG
+  F->>A: resume from saved position
+`} />
+
+The timer fires. The framework requests DIALOG (priority 100). The book on CONTENT (300) is told to pause with a 5-second patience. The book yields, the model speaks the reminder, the model finishes, the framework hands focus back, the book resumes.
+
+The user hears: book audio... reminder... book audio. No glitch, no overlap.
+
+### Scenario 2: A book is playing, an incoming call
+
+```text
+audiobook (CONTENT 300, NONMIXABLE)  ← currently playing
+        ↓
+phone call comes in
+        ↓
+telegram skill claims COMMS (150) via InputClaim
+        ↓
+audiobook gets pause_with_patience
+        ↓
+model says "Llamada de María, contestando" on DIALOG (100)
+        ↓
+COMMS bridge starts; mic + speaker now belong to phone call
+```
+
+Audiobook → paused. Model → speaks the announcement. Phone call → live. When the call ends, DIALOG is briefly used again ("La llamada terminó"), and the book resumes.
+
+### Scenario 3: User PTT during a book
+
+```text
+audiobook (CONTENT 300)
+        ↓
+user holds PTT
+        ↓
+DIALOG (100) is requested by the new turn
+        ↓
+audiobook → atomic interrupt (no patience, immediate)
+        ↓
+LLM listens, responds
+```
+
+User PTT is the one case that doesn't grant patience to the lower-priority stream. The user is asking *right now*; we don't make them wait 5 seconds.
+
+## Patience: a grace period before eviction
+
+When a higher-priority claim wants the speaker, the framework doesn't immediately kill the current stream. It calls `pause_with_patience(timeout)` — telling the stream "you have N seconds to wrap up gracefully."
+
+This is what lets the audiobook skill say "*lo dejé donde íbamos*" before yielding to a phone call. The skill registers an `on_patience_expired` callback. When patience times out (or when the higher-priority claim is finally ready), the callback fires:
+
+```python
+AudioStream(
+    factory=play_book,
+    patience=timedelta(seconds=5),
+    on_patience_expired=self._announce_pause,
+)
+```
+
+```python
+async def _announce_pause(self):
+    await self._ctx.inject_turn(
+        "Lo dejé donde íbamos. Continúo cuando regreses.",
+        priority=InjectPriority.BLOCK_BEHIND_COMMS,
+    )
+```
+
+The narration plays before the book is fully evicted, the book then yields, and the higher-priority claim takes over.
+
+## Inject priorities — three tiers
+
+When a skill calls `ctx.inject_turn`, it picks one of three priorities:
+
+| Priority                    | Behavior                                                            |
+|-----------------------------|---------------------------------------------------------------------|
+| `NORMAL`                    | Drains when nothing else is happening. No preemption.              |
+| `BLOCK_BEHIND_COMMS`        | Preempts CONTENT, but waits for COMMS. Used by timers, reminders.  |
+| `PREEMPT`                   | Preempts everything, including active phone calls. Emergency only. |
+
+Pick the right tier:
+
+- **NORMAL** — fine for a doorbell announcement that can wait if the user is on a call.
+- **BLOCK_BEHIND_COMMS** — the right default for most proactive skills. Don't interrupt phone calls (rude), but do interrupt music/books (expected).
+- **PREEMPT** — fire alarm, security breach, anything truly urgent. Will break a phone call.
+
+## The single-claim rule
+
+Within COMMS, only **one claim at a time**. Two skills can't both have an active phone call. The second `start_input_claim` raises `ClaimBusyError`.
+
+This is enforced for safety: if two skills both grabbed the mic, neither would behave correctly. Skills should check before claiming:
+
+```python
+try:
+    claim_handle = await ctx.start_input_claim(claim)
+except ClaimBusyError:
+    # Another skill is already in a call. Try again later or abort.
+    await ctx.logger.awarning("call_blocked", reason="comms_busy")
+    return ToolResult(output="Otra llamada está activa.")
+```
+
+## Why this design
+
+The simpler approach — a free-for-all where any skill can write to the speaker — falls apart fast. Two skills speaking over each other is a glitch. A timer firing during a phone call is rude. A book playing over the model's voice is a bug.
+
+The original design (before the April 2026 pivot) tried to solve this with per-skill arbitration — an `Urgency` enum, a `YieldPolicy` enum, lots of small decisions everywhere. It was hard to reason about because the policies didn't compose.
+
+AVS-style channels solve it because the **channel is the policy**. A claim says "I'm CONTENT" or "I'm COMMS" — and the arbitration falls out automatically from the priority numbers. New channels (a hypothetical NOTIFICATION channel for chimes-without-speech) slot in cleanly.
+
+The implementation lives in `server/runtime/src/huxley/focus/manager.py`. The `FocusManager` is a serialized actor — every focus operation goes through one event loop, no race conditions, no concurrent state mutation. That's where the predictability comes from.
+
+## When you, as a skill author, need to think about this
+
+Most of the time: **never**. Pick the right side effect kind, and the framework handles arbitration.
+
+The cases where you'll think about focus:
+
+1. **Writing a long-form streamer** (audiobook-like). Decide MIXABLE vs NONMIXABLE. Implement `on_patience_expired`. Configure `patience`.
+2. **Writing a proactive skill** (timers, reminders). Pick the right `InjectPriority`. Default to `BLOCK_BEHIND_COMMS`.
+3. **Writing a comms skill** (phone, intercom). Use `InputClaim`. Handle `ClaimEndReason` correctly. Check for `ClaimBusyError`.
+
+That's it. The framework is opinionated so you don't have to be.
+
+## Next
+
+<Cards>
+  <Card
+    href="/docs/concepts/constraints"
+    title="Constraints"
+    description="Persona-level behavioral rules that skills opt into."
+  />
+  <Card
+    href="/docs/build-skill/proactive"
+    title="Build a proactive skill"
+    description="Hands-on with inject_turn and the priority tiers."
+  />
+</Cards>

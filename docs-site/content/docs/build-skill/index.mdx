@@ -1,0 +1,84 @@
+---
+title: Build a Skill
+description: Five tutorials, in order, that take you from zero to publishing a real skill.
+---
+
+A skill is the unit of capability. If you want Huxley to do something it currently can't — talk to your home automation, narrate a podcast feed, dictate emails, control your bike trainer — you write a skill.
+
+This section is hands-on. Each page builds on the previous one, and by the end you'll have a real, working, publishable skill.
+
+<Cards>
+  <Card
+    href="/docs/build-skill/first-skill"
+    title="Your first skill"
+    description="A complete, working skill in fifty lines of Python. The tools, the handle method, the persona wiring."
+  />
+  <Card
+    href="/docs/build-skill/tools"
+    title="Tools and parameters"
+    description="Designing tool descriptions the LLM can use well. JSON Schema for arguments. Common shapes."
+  />
+  <Card
+    href="/docs/build-skill/speaking-back"
+    title="Speaking back"
+    description="The five side effects in practice — chimes, audio streams, volume, claims."
+  />
+  <Card
+    href="/docs/build-skill/proactive"
+    title="Proactive skills"
+    description="Speaking first. Timers, alerts, notifications. The three priority tiers."
+  />
+  <Card
+    href="/docs/build-skill/publishing"
+    title="Publishing your skill"
+    description="Entry points, packaging, ship to PyPI."
+  />
+</Cards>
+
+## Before you start
+
+You should be comfortable with:
+
+- Python's async/await (skills are async).
+- Python packaging — `pyproject.toml`, entry points.
+- Reading [Concepts: Skills](/docs/concepts/skills) and [Concepts: Side Effects](/docs/concepts/side-effects).
+
+That's it. You don't need to know anything about WebSockets, audio formats, or OpenAI APIs. The framework abstracts all of that.
+
+## The smallest possible skill
+
+For reference, this is what you're building toward — a complete skill in 30 lines:
+
+```python title="huxley_skill_hello/__init__.py"
+import json
+from huxley_sdk import Skill, ToolDefinition, ToolResult, SkillContext
+
+
+class HelloSkill:
+    name = "hello"
+
+    @property
+    def tools(self) -> list[ToolDefinition]:
+        return [
+            ToolDefinition(
+                name="say_hello",
+                description="Greet the user warmly.",
+                parameters={"type": "object", "properties": {}},
+            ),
+        ]
+
+    async def setup(self, ctx: SkillContext) -> None:
+        self._language = ctx.language
+
+    async def handle(self, tool_name: str, args: dict) -> ToolResult:
+        if tool_name == "say_hello":
+            greeting = "Hola" if self._language == "es" else "Hello"
+            return ToolResult(output=json.dumps({"greeting": greeting}))
+
+    async def teardown(self) -> None:
+        pass
+```
+
+That's a real, runnable skill. Pair it with a persona that lists `hello: {}` in its skills, restart the server, hold the button, say "say hello." The model calls the tool, gets `{"greeting": "Hola"}`, and narrates it.
+
+We'll build that and more in [Your first skill →](/docs/build-skill/first-skill).

@@ -1,0 +1,118 @@
+---
+title: Why Huxley
+description: What this is, why it exists, and the choices that shaped it.
+---
+
+Huxley is a Python framework for real-time voice agents. The framework is generic; the first persona shipped on it is **AbuelOS** — a Spanish-language assistant for a 90-year-old blind user.
+
+This page explains *why* it's shaped the way it is.
+
+## The problem
+
+Voice assistants today are walled gardens. Alexa, Google Home, Siri — you get what they ship. Want a Spanish-speaking, never-says-no assistant for an elderly user? You can't. Want voice access to your own audiobook library, your family's Telegram, your home automation? You're at the mercy of an integration partnership, a marketplace approval, a third-party app behind glass.
+
+The infrastructure exists — OpenAI Realtime can hold a real conversation, Whisper can transcribe in three languages, ffmpeg can stream any audio format. The pieces are open. The product isn't.
+
+Huxley is the product layer.
+
+## The shape
+
+Two ideas, in tension, kept the design honest.
+
+### Idea 1: a framework, not a chatbot
+
+Huxley names mechanisms, not use cases. Words like *call*, *reminder*, *audiobook*, *emergency*, *grandpa* don't appear in the framework. They live in the skills and personas built on it.
+
+The framework gives you:
+
+- **Turn coordination** — push-to-talk lifecycle, atomic interrupts, terminal barriers between model speech and tool audio.
+- **Skill dispatch** — the protocol every capability conforms to.
+- **Side-effect routing** — the five primitives (PlaySound, AudioStream, etc.) that make voice feel alive.
+- **Focus channels** — DIALOG, COMMS, ALERT, CONTENT, with priority arbitration.
+- **Constraints** — behavioral rules a persona can declare and skills can opt into.
+
+Anything specific to a use case (an elderly user, a Spanish speaker, audiobook playback, accessibility-driven UX) belongs in a persona or a skill, never in the framework.
+
+### Idea 2: a persona is the product
+
+A framework is plumbing. People don't talk to plumbing. **AbuelOS** is the first thing built on Huxley — a real, opinionated, deployable assistant for one specific person. It exercises every framework primitive: long-form audio, proactive messages, persistent state, multilingual prompts, accessibility-driven design, never-say-no behavior.
+
+AbuelOS is the existence proof: the framework is generic enough to support real products. It's also the regression test: every change to the framework gets tested against AbuelOS.
+
+## What Huxley is *not*
+
+- **Not a chatbot.** The interaction model is real-time conversation with interruption, not turn-taking text exchange.
+- **Not a model provider.** OpenAI Realtime today; the architecture leaves room for other providers, but Huxley itself doesn't train or serve models.
+- **Not multi-user.** One person, one device, one persona at a time. (Multiple personas on multiple devices, sure — but each instance serves one person.)
+- **Not a voice cloning system.** It uses OpenAI's voices. Custom voices come from the model provider, not from us.
+- **Not a wake-word system.** Push-to-talk is the default. The framework doesn't implement always-listening with VAD or wake words. (Could be a skill someday.)
+- **Not Alexa with a Python SDK.** Alexa-style skill stores require approval, marketplace placement, certification. Huxley skills are pip packages. Anyone can write one. Anyone can install one.
+
+## Decisions that matter
+
+A few choices shaped everything downstream:
+
+**The Python server doesn't own audio hardware.** Clients (browsers, ESP32, eventually phones) own the mic and speaker. The server is a WebSocket relay. This means the server runs anywhere — your laptop, a Raspberry Pi, a $5 cloud VM. The client and server are physically separable.
+
+**One audio pipe out.** Model speech and tool audio share the same channel, the same format (PCM16 24kHz mono), the same path on the client. Client doesn't know whether what's coming through the speaker is the model or an audiobook. This makes interrupts atomic: kill the pipe, and everything stops.
+
+**Turn coordinator is the single authority.** State machine, audio sequencing, interrupts, focus arbitration — one component owns it. Skills don't make sequencing decisions. The "speech before factories" guarantee falls out automatically because there's only one place that knows what's playing when.
+
+**Idle sessions are free.** OpenAI bills per Response, not per connected session. We keep Realtime sessions open during media playback so the user has continuous conversational context, and the cost is zero. (Verified — see [the cost model memory](/docs/use/run-the-server) section on cost.)
+
+**Skills opt into constraints.** Personas declare rules; skills decide whether to respect each. This makes constraints composable without coupling skills to specific personas.
+
+**The framework grows slowly.** Stable surface area for skill authors matters more than feature count. New abstractions get added only when a real use case forces them — never speculatively.
+
+## What it's optimized for
+
+- **Conversation feel.** Sub-second model response. Atomic interrupts. Sound that arrives when you'd expect it.
+- **Skill author ergonomics.** A skill is a Python class with five members. Tools are JSON Schema. Side effects are dataclasses. No subclassing, no DSL, no framework-specific compiler.
+- **Audio reliability.** Every event has an audible trail. No silent failures. Earcons for state changes. Failures spoken in the persona's voice.
+- **Self-ownership.** Run on your hardware, your OpenAI key, your skills, your data. No cloud middleman owns your assistant.
+
+## What it's not optimized for
+
+- **Massive scale.** One client per server. If you need a thousand users, run a thousand servers. The model isn't horizontal scaling.
+- **Visual interfaces.** The PWA is a dev tool. Production clients are intentionally minimal — buttons, LEDs, audio. The framework is voice-first.
+- **No-code authoring.** Writing a skill requires Python. Writing a persona requires editing YAML. There's no GUI builder.
+- **Closed-source skills.** Possible but not idiomatic. Skills are Python packages — distribute them however you distribute Python.
+
+## The roadmap, briefly
+
+The framework is approaching 1.0. Five refactor stages have shipped (turn coordinator, focus management, supervised background tasks, persona loader, sounds UX). Open work:
+
+- **Per-skill secret interpolation** — `${ENV_VAR}` in persona.yaml.
+- **More clients** — iOS, Android, more firmware variants.
+- **More providers** — alternative voice providers behind the same interface.
+- **A skill registry** — a place to find third-party skills.
+- **A skill marketplace?** — uncertain. Maybe just good package discovery is enough.
+
+Decisions get logged in the repo's `docs/decisions.md`.
+
+## What's next
+
+If you've made it this far:
+
+<Cards>
+  <Card
+    href="/docs/getting-started/quickstart"
+    title="Try it"
+    description="Five minutes, you're talking to an agent."
+  />
+  <Card
+    href="/docs/build-skill"
+    title="Extend it"
+    description="Write a skill. The fun part."
+  />
+  <Card
+    href="/docs/build-persona"
+    title="Make it yours"
+    description="Build a persona that fits how you actually want to use it."
+  />
+  <Card
+    href="https://github.com/ma-r-s/Huxley"
+    title="Read the source"
+    description="Issues, discussions, decisions log. Open source, self-hosted, MIT-licensed."
+  />
+</Cards>

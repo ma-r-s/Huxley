@@ -1,0 +1,185 @@
+---
+title: Environment Variables
+description: Every HUXLEY_* and OpenAI variable the server reads.
+---
+
+The server reads its configuration from environment variables and from `server/runtime/.env` (loaded automatically). This page is the flat reference.
+
+## Required
+
+### `HUXLEY_OPENAI_API_KEY`
+
+Your OpenAI API key. Must have Realtime API access — most paid OpenAI accounts do; free accounts don't. Format: `sk-proj-...` or `sk-...`.
+
+**Required.** The server refuses to start without it.
+
+```bash
+HUXLEY_OPENAI_API_KEY=sk-proj-...
+```
+
+## Common overrides
+
+### `HUXLEY_PERSONA`
+
+Which persona directory to load.
+
+- **No default.** If your `server/personas/` has exactly one persona, the loader picks it automatically. With two or more (the repo ships `abuelos` and `basicos`), you must set this explicitly or startup fails with a clear error.
+- Resolves to `server/personas/<value>/persona.yaml`.
+
+```bash
+HUXLEY_PERSONA=abuelos
+```
+
+### `HUXLEY_SERVER_PORT`
+
+WebSocket port the server listens on.
+
+- Default: `8765`
+
+```bash
+HUXLEY_SERVER_PORT=8766
+```
+
+### `HUXLEY_OPENAI_MODEL`
+
+Override the model the server requests from OpenAI Realtime.
+
+- Default: `gpt-4o-mini-realtime-preview`
+- Supported: any model name OpenAI Realtime accepts at the time you run.
+
+```bash
+HUXLEY_OPENAI_MODEL=gpt-4o-realtime-preview-2024-10-01
+```
+
+The default is *deliberately* the smaller, cheaper model. The mini variant is enough for tool-dispatch in fixed skill sets — the work the model does is mostly "decide which tool to call" and "narrate the result," both of which the smaller model handles well.
+
+### `HUXLEY_OPENAI_VOICE`
+
+Override the voice declared in `persona.yaml`. Useful for A/B testing without editing the persona.
+
+- Default: from `persona.yaml`
+- Supported: any OpenAI Realtime voice (`alloy`, `coral`, `echo`, `shimmer`, etc.)
+
+```bash
+HUXLEY_OPENAI_VOICE=verse
+```
+
+### `HUXLEY_LOG_JSON`
+
+Emit logs as one JSON object per line (jsonl), instead of human-readable pretty format.
+
+- Default: `false` (pretty format)
+- Set to `true` for production / log aggregation
+
+```bash
+HUXLEY_LOG_JSON=true
+```
+
+The structured fields (`turn`, `skill`, `event`, etc.) make queries easy with `jq`.
+
+## Less common
+
+### `HUXLEY_LOG_LEVEL`
+
+Minimum log level to emit.
+
+- Default: `INFO`
+- Supported: `DEBUG`, `INFO`, `WARNING`, `ERROR`
+
+```bash
+HUXLEY_LOG_LEVEL=DEBUG
+```
+
+`DEBUG` is verbose — useful when iterating on a skill, overwhelming for normal use.
+
+### `HUXLEY_LOG_FILE`
+
+If set, also write logs to this path (in addition to stdout).
+
+```bash
+HUXLEY_LOG_FILE=/var/log/huxley/server.jsonl
+```
+
+## Skill-specific
+
+Skills can read their own environment variables. By convention they're prefixed with `HUXLEY_<SKILL>_`. As of now (pre-secret-interpolation Stage 4), skills typically read:
+
+- `HUXLEY_TELEGRAM_API_ID`, `HUXLEY_TELEGRAM_API_HASH`, `HUXLEY_TELEGRAM_USERBOT_PHONE` — for the telegram skill.
+- Others — see each skill's README.
+
+Once Stage 4 ships, skills will reference secrets via `${VAR}` in `persona.yaml` (`api_key: ${MY_SKILL_API_KEY}`), and skills won't read env vars directly.
+
+## Loading from `.env`
+
+The server loads `server/runtime/.env` at startup. Format:
+
+```bash title="server/runtime/.env"
+HUXLEY_OPENAI_API_KEY=sk-proj-...
+HUXLEY_PERSONA=abuelos
+HUXLEY_LOG_JSON=true
+HUXLEY_TELEGRAM_API_ID=12345
+HUXLEY_TELEGRAM_API_HASH=...
+HUXLEY_TELEGRAM_USERBOT_PHONE=+57...
+```
+
+Environment variables take precedence over `.env` values, so you can override per-shell:
+
+```bash
+HUXLEY_PERSONA=basicos uv run huxley     # one-off
+```
+
+## A complete production-ish example
+
+```bash title="server/runtime/.env"
+# OpenAI
+HUXLEY_OPENAI_API_KEY=sk-proj-...
+HUXLEY_OPENAI_MODEL=gpt-4o-mini-realtime-preview
+HUXLEY_OPENAI_VOICE=coral
+
+# Persona
+HUXLEY_PERSONA=abuelos
+HUXLEY_SERVER_PORT=8765
+
+# Logging
+HUXLEY_LOG_JSON=true
+HUXLEY_LOG_LEVEL=info
+
+# Telegram skill
+HUXLEY_TELEGRAM_API_ID=12345
+HUXLEY_TELEGRAM_API_HASH=...
+HUXLEY_TELEGRAM_USERBOT_PHONE=+57...
+```
+
+Don't commit `.env` to git. Add it to `.gitignore` (the Huxley repo does this).
+
+## Order of precedence
+
+When the server resolves a value:
+
+1. Process environment variable (`HUXLEY_FOO=bar uv run huxley`).
+2. `.env` file in `server/runtime/`.
+3. Built-in default.
+
+Settings in `persona.yaml` are not overridable by environment variables, with one exception: `HUXLEY_OPENAI_VOICE` overrides `voice` in `persona.yaml`. This is for A/B testing without persona edits.
+
+## Production checklist
+
+For a real deployment:
+
+- [ ] `HUXLEY_OPENAI_API_KEY` set in the environment, never committed.
+- [ ] `HUXLEY_PERSONA` set explicitly (don't rely on default).
+- [ ] `HUXLEY_LOG_JSON=true` for structured logs.
+- [ ] `HUXLEY_LOG_LEVEL=info` (or `warning` for very quiet).
+- [ ] Skill-specific env vars set (Telegram API IDs, etc.).
+- [ ] `.env` is in `.gitignore`.
+- [ ] Logs going somewhere (file + log aggregator, not stdout-to-void).
+
+## Next
+
+<Cards>
+  <Card
+    href="/docs/use/run-the-server"
+    title="Run the server"
+    description="Practical guide: dev loop, systemd, launchd."
+  />
+</Cards>

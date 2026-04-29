@@ -1,0 +1,274 @@
+---
+title: Skill Cheat Sheet
+description: Every SDK primitive a skill author touches. One page, look up fast.
+---
+
+This page is a quick reference. Each primitive has a one-line description and a representative usage. For full explanations, follow the links into Concepts and Build pages.
+
+## Imports
+
+```python
+from huxley_sdk import (
+    # Core protocols (you implement Skill)
+    Skill,
+    SkillContext,
+
+    # Tool definitions
+    ToolDefinition,
+    ToolResult,
+
+    # Side effects
+    AudioStream,
+    PlaySound,
+    CancelMedia,
+    SetVolume,
+    InputClaim,
+    ClaimEndReason,
+
+    # Focus / proactive
+    InjectPriority,
+
+    # Content type for AudioStream
+    ContentType,
+
+    # Errors
+    ClaimBusyError,
+)
+from huxley_sdk.audio import load_pcm_palette
+```
+
+```python
+# load_pcm_palette is sync and takes the role names you want to load.
+# It returns a {role: pcm_bytes} dict; missing roles are silently skipped.
+palette = load_pcm_palette(
+    ctx.persona_data_dir / "sounds",
+    roles=["news_start", "book_start", "book_end"],
+)
+```
+
+## The skill protocol
+
+```python
+class MySkill:
+    name = "my_skill"  # required, must be unique
+
+    @property
+    def tools(self) -> list[ToolDefinition]:
+        return [...]
+
+    async def setup(self, ctx: SkillContext) -> None: ...
+    async def handle(self, tool_name: str, args: dict) -> ToolResult: ...
+    async def teardown(self) -> None: ...
+```
+
+[Concepts: Skills](/docs/concepts/skills) · [Build: First skill](/docs/build-skill/first-skill)
+
+## ToolDefinition
+
+```python
+ToolDefinition(
+    name="search_audiobooks",
+    description="Search the user's library by title or author.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "..."},
+        },
+        "required": ["query"],
+    },
+)
+```
+
+[Build: Tools and parameters](/docs/build-skill/tools)
+
+## ToolResult
+
+```python
+return ToolResult(
+    output=json.dumps({"matches": [...]}),  # text the model narrates
+    side_effect=PlaySound(pcm=...),          # optional
+)
+```
+
+`output` is a string. JSON is conventional but not required. `side_effect` is optional and at most one per ToolResult.
+
+## Side effects
+
+| Class             | Use for                          | Argument                                              |
+|-------------------|----------------------------------|-------------------------------------------------------|
+| `PlaySound`       | One-shot chime before model audio| `pcm: bytes`                                          |
+| `AudioStream`     | Long-form playback after model   | See full signature below                              |
+| `CancelMedia`     | Stop current AudioStream         | `()` — no args                                        |
+| `SetVolume`       | Push volume change to client     | `level: int (0–100)`                                  |
+| `InputClaim`      | Take over mic + speaker          | See full signature below                              |
+
+### AudioStream
+
+```python
+AudioStream(
+    factory: Callable[[], AsyncIterator[bytes]],   # required
+    on_complete_prompt: str | None = None,         # narrate on natural end
+    completion_silence_ms: int = 0,                # silence before prompt
+    content_type: ContentType = ContentType.NONMIXABLE,
+    label: str | None = None,                      # shown in dev UI
+    preroll_ms: int = 0,
+    on_patience_expired: Callable[[], Awaitable[None]] | None = None,
+    patience: timedelta | None = None,
+)
+```
+
+[Concepts: Side effects](/docs/concepts/side-effects) · [Cookbook: Audio streaming](/docs/cookbook/audio-streaming)
+
+### InputClaim
+
+```python
+InputClaim(
+    on_mic_frame: Callable[[bytes], Awaitable[None]],  # mic now goes here
+    speaker_source: AsyncIterator[bytes] | None = None, # speaker reads from here
+    on_claim_end: Callable[[ClaimEndReason], Awaitable[None]] | None = None,
+    title: str | None = None,
+)
+```
+
+`ClaimEndReason` values: `NATURAL`, `USER_PTT`, `PREEMPTED`, `ERROR`.
+
+## SkillContext
+
+Available in `setup` and stored for use in handlers.
+
+| Attribute / method                          | What it gives you                                |
+|---------------------------------------------|--------------------------------------------------|
+| `ctx.language`                              | Persona's resolved language code (`"es"`, etc.)  |
+| `ctx.persona_data_dir`                      | `Path` to `server/personas/<persona>/data/`      |
+| `ctx.config`                                | Persona's skill config dict (your block)         |
+| `ctx.logger`                                | `SkillLogger` (see below)                        |
+| `ctx.storage`                               | `SkillStorage` (see below)                       |
+| `ctx.catalog()`                             | Returns a `Catalog` for fuzzy-matched search     |
+| `await ctx.inject_turn(prompt, ...)`        | Make the persona speak proactively               |
+| `await ctx.inject_turn_and_wait(prompt, ...)` | Like `inject_turn`, but blocks until the model finishes (falls back to plain enqueue if the coordinator is busy) |
+| `await ctx.start_input_claim(claim)`        | Activate an `InputClaim`                         |
+| `await ctx.cancel_active_claim(reason=...)` | End the current claim                            |
+| `ctx.background_task(name, factory, ...)`   | Spawn a supervised async task                    |
+
+<Callout type="info">
+  Some fields you might expect aren't there yet — `ctx.name`, `ctx.timezone`, `ctx.constraints`. For now: read your skill's name from `self.name`, get timezone from your persona config, and treat constraints as prompt-only (see [Concepts: Constraints](/docs/concepts/constraints)).
+</Callout>
+
+## inject_turn
+
+```python
+await ctx.inject_turn(
+    "Tell the user: time for medication.",       # prompt — LLM instruction
+    dedup_key="med_2026-04-29",                  # prevents duplicate queue
+    priority=InjectPriority.BLOCK_BEHIND_COMMS,  # see priorities
+)
+```
+
+`InjectPriority` values:
+
+- `NORMAL` — fires immediately if idle; otherwise queues until the next quiet turn-end (no pending content stream).
+- `BLOCK_BEHIND_COMMS` — preempts CONTENT, yields to COMMS. Default for timers/reminders.
+- `PREEMPT` — preempts everything, including phone calls. Emergency only.
+
+Prompts that should be *spoken* must say so: "Tell the user: ...". Bare statements may be treated as silent notifications.
+
+## SkillStorage
+
+```python
+await ctx.storage.set_setting(key: str, value: str) -> None
+await ctx.storage.get_setting(key: str, default: str | None = None) -> str | None
+await ctx.storage.list_settings(prefix: str = "") -> list[tuple[str, str]]
+await ctx.storage.delete_setting(key: str) -> None
+```
+
+Per-skill namespace. Per-persona database. Strings only — JSON-encode structured values.
+
+## SkillLogger
+
+```python
+await ctx.logger.adebug(event: str, **kwargs)
+await ctx.logger.ainfo(event: str, **kwargs)
+await ctx.logger.awarning(event: str, **kwargs)
+await ctx.logger.aerror(event: str, **kwargs)
+await ctx.logger.aexception(event: str, **kwargs)  # captures traceback
+```
+
+Auto-namespaces under your skill name. Auto-includes turn ID. Use this; never `print` or stdlib `logging`.
+
+## background_task
+
+```python
+handle = ctx.background_task(
+    name="my_listener",
+    coro_factory=self._listen,            # callable returning a coroutine
+    restart_on_crash=True,
+    max_restarts_per_hour=10,
+    on_permanent_failure=self._on_dead,
+)
+```
+
+For long-lived listeners (`restart_on_crash=True`), one-shot waiters (`restart_on_crash=False`).
+
+## Catalog
+
+For personal-content skills (libraries, contacts, recipes):
+
+```python
+catalog = ctx.catalog()
+await catalog.upsert(
+    id="el_principito",
+    fields={"title": "El Principito", "author": "Saint-Exupéry"},
+    payload={"path": "/data/audiobooks/el_principito.m4b"},
+)
+hits = await catalog.search("principito", limit=5)
+prompt_text = catalog.as_prompt_lines(
+    limit=20,
+    line=lambda h: f"- {h.fields['title']} ({h.fields['author']})",
+)
+```
+
+Returns `Hit(id, fields, payload, score)`.
+
+## Audio helpers
+
+```python
+from huxley_sdk.audio import load_pcm_palette
+
+# Load all WAVs in a directory as PCM blobs.
+sounds = load_pcm_palette(ctx.persona_data_dir / "sounds")
+chime = sounds["news_start"]  # bytes, ready for PlaySound
+```
+
+PCM format throughout: 16-bit little-endian, 24kHz, mono.
+
+## Errors you might raise/catch
+
+```python
+from huxley_sdk import ClaimBusyError
+
+try:
+    handle = await ctx.start_input_claim(claim)
+except ClaimBusyError:
+    # Another skill has an active claim on COMMS.
+    ...
+```
+
+## What you don't import
+
+- Anything from `huxley` (the runtime). Stick to `huxley_sdk`. The wall is intentional.
+- Anything that mentions `coordinator`, `app`, `session` — those are framework-internal.
+
+## Next
+
+<Cards>
+  <Card
+    href="/docs/reference/persona-schema"
+    title="persona.yaml schema"
+    description="Every field, in one place."
+  />
+  <Card
+    href="/docs/reference/environment-variables"
+    title="Environment variables"
+    description="HUXLEY_* and the OpenAI ones."
+  />
+</Cards>

@@ -1,38 +1,47 @@
-// Cycles the orb through its expressive states on a timer so the hero
-// shows off the full repertoire instead of sitting in idle. Ported from
-// the design prototype's `useOrbDemoState` (shared.jsx) — the timings
-// here match what the original artboard used.
+// Cycles the hero orb through every expressive state on a timer so the
+// landing showcases its full repertoire — the four core voice states
+// (idle / listening / thinking / speaking) plus the expressive ones
+// (gaze / slosh / spiky / mitosis).
 
 import { useEffect, useState } from "react";
 import type { OrbState } from "../components/Orb.js";
 
-interface Timings {
-  idle: number;
-  listening: number;
-  thinking: number;
-  speaking: number;
-}
-
-const DEFAULT: Timings = {
+// Per-state dwell times (ms). Mitosis runs one full internal split-talk-
+// merge cycle (~10s) so the demo exits at the merged moment and the next
+// state can take over without a visual jump.
+const TIMINGS: Record<OrbState, number> = {
   idle: 2200,
   listening: 3000,
-  thinking: 2000,
+  thinking: 2200,
   speaking: 3400,
+  gaze: 5000,
+  slosh: 4200,
+  spiky: 3600,
+  mitosis: 10000,
 };
 
-export function useOrbDemoState(overrides: Partial<Timings> = {}): OrbState {
+const SEQ: readonly OrbState[] = [
+  "idle",
+  "listening",
+  "thinking",
+  "speaking",
+  "gaze",
+  "slosh",
+  "spiky",
+  "mitosis",
+];
+
+export function useOrbDemoState(): OrbState {
   const [state, setState] = useState<OrbState>("idle");
   useEffect(() => {
-    const t = { ...DEFAULT, ...overrides };
-    const seq: OrbState[] = ["idle", "listening", "thinking", "speaking"];
     let cancelled = false;
     let i = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const step = () => {
       if (cancelled) return;
-      const name = seq[i % seq.length]!;
+      const name = SEQ[i % SEQ.length]!;
       setState(name);
-      timer = setTimeout(step, t[name]);
+      timer = setTimeout(step, TIMINGS[name]);
       i += 1;
     };
     step();
@@ -40,10 +49,6 @@ export function useOrbDemoState(overrides: Partial<Timings> = {}): OrbState {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-    // overrides intentionally not in deps — timing changes after mount
-    // would restart the cycle, which is jarring. Update the constant
-    // instead if you want different defaults.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return state;
 }

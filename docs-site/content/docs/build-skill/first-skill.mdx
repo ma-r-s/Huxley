@@ -1,0 +1,291 @@
+---
+title: Your First Skill
+description: A complete, working skill from scratch. About thirty minutes, fifty lines of Python.
+---
+
+In this tutorial you'll build a real skill — `bike-trainer` — that exposes two tools to the LLM: one to start a workout, one to report current stats. By the end, your persona can hold a conversation about your training.
+
+We're not building anything fancy. The point is to walk every step of the loop: package layout, code, persona wiring, restart, talk.
+
+<Callout type="info">
+The full source for this tutorial lives at `examples/huxley-skill-bike-trainer/` in the Huxley repo. If you get stuck, peek at it.
+</Callout>
+
+## The shape of a skill package
+
+Every skill is a Python package. Mark this layout in your head — it doesn't change:
+
+<Files>
+  <Folder name="huxley-skill-bike-trainer" defaultOpen>
+    <File name="pyproject.toml" />
+    <Folder name="huxley_skill_bike_trainer">
+      <File name="__init__.py" />
+    </Folder>
+    <Folder name="tests">
+      <File name="test_bike_trainer.py" />
+    </Folder>
+  </Folder>
+</Files>
+
+The package directory uses **underscores**. The PyPI/repo name uses **hyphens**. Both conventions exist; both are fine; pick a side and stay consistent. We'll use the underscore convention internally and the hyphen one externally.
+
+## Step 1: scaffold the package
+
+From the Huxley repo root, create the skill alongside the others:
+
+```bash
+mkdir -p server/skills/bike_trainer/{huxley_skill_bike_trainer,tests}
+cd server/skills/bike_trainer
+```
+
+Create `pyproject.toml`:
+
+```toml title="pyproject.toml"
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "huxley-skill-bike-trainer"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = ["huxley-sdk"]
+
+[project.entry-points."huxley.skills"]
+bike_trainer = "huxley_skill_bike_trainer:BikeTrainerSkill"
+
+[tool.uv.sources]
+huxley-sdk = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["huxley_skill_bike_trainer"]
+```
+
+The crucial line is the entry point:
+
+```toml
+[project.entry-points."huxley.skills"]
+bike_trainer = "huxley_skill_bike_trainer:BikeTrainerSkill"
+```
+
+The key (`bike_trainer`) is what your persona will reference. The value (`huxley_skill_bike_trainer:BikeTrainerSkill`) is the import path Huxley uses to load it.
+
+Add the new package to the workspace's root `pyproject.toml` so `uv sync` picks it up:
+
+```toml title="pyproject.toml (root)"
+[tool.uv.workspace]
+members = [
+    "server/runtime",
+    "server/sdk",
+    "server/skills/audiobooks",
+    # ...
+    "server/skills/bike_trainer",  # add this
+]
+```
+
+Then `uv sync`. The skill is now installed in the workspace and discoverable via entry points.
+
+## Step 2: write the skill
+
+Write the actual skill class:
+
+```python title="huxley_skill_bike_trainer/__init__.py"
+import json
+import time
+from huxley_sdk import (
+    Skill,
+    ToolDefinition,
+    ToolResult,
+    SkillContext,
+)
+
+
+class BikeTrainerSkill:
+    name = "bike_trainer"
+
+    def __init__(self) -> None:
+        self._workout_started_at: float | None = None
+        self._distance_km: float = 0.0
+
+    @property
+    def tools(self) -> list[ToolDefinition]:
+        return [
+            ToolDefinition(
+                name="start_workout",
+                description=(
+                    "Begin a new bike trainer session. Call this when the user "
+                    "says they're starting to ride or wants to begin a workout."
+                ),
+                parameters={"type": "object", "properties": {}},
+            ),
+            ToolDefinition(
+                name="get_workout_stats",
+                description=(
+                    "Report current workout stats: elapsed time and approximate "
+                    "distance. Only meaningful if a workout has been started."
+                ),
+                parameters={"type": "object", "properties": {}},
+            ),
+        ]
+
+    async def setup(self, ctx: SkillContext) -> None:
+        self._ctx = ctx
+        self._logger = ctx.logger
+        await self._logger.ainfo("setup", language=ctx.language)
+
+    async def handle(self, tool_name: str, args: dict) -> ToolResult:
+        if tool_name == "start_workout":
+            self._workout_started_at = time.time()
+            self._distance_km = 0.0
+            await self._logger.ainfo("workout_started")
+            return ToolResult(output=json.dumps({"started": True}))
+
+        if tool_name == "get_workout_stats":
+            if self._workout_started_at is None:
+                return ToolResult(output=json.dumps({
+                    "active": False,
+                    "message": "No workout in progress.",
+                }))
+            elapsed_s = time.time() - self._workout_started_at
+            # Stub: pretend distance is 25 km/h
+            self._distance_km = (elapsed_s / 3600) * 25
+            return ToolResult(output=json.dumps({
+                "active": True,
+                "elapsed_minutes": round(elapsed_s / 60, 1),
+                "distance_km": round(self._distance_km, 2),
+            }))
+
+        return ToolResult(output=json.dumps({"error": "unknown tool"}))
+
+    async def teardown(self) -> None:
+        await self._logger.ainfo("teardown")
+```
+
+Five things worth noticing:
+
+1. **`name` is a class attribute.** Not a property. Not a method. The framework reads it before instantiating sometimes; making it a property would force needless construction.
+
+2. **`tools` is a property.** Read fresh on each load — useful if your tool list depends on persona language or config.
+
+3. **State lives on the instance.** `_workout_started_at` is just a Python attribute. The framework keeps your skill instance alive for the duration of the server process.
+
+4. **Every `handle` branch returns a `ToolResult`.** Even errors. The model treats the return as data to narrate; if you return malformed shapes, the model gets confused.
+
+5. **`ctx.logger` for everything.** Don't use `print` or the standard `logging` module — `ctx.logger` injects turn IDs, namespaces events under your skill name (`bike_trainer.workout_started`), and integrates with the framework's structured log. We cover this in [Cookbook: Observability](/docs/cookbook/persistent-state).
+
+## Step 3: add it to a persona
+
+Open or create a persona file:
+
+```yaml title="server/personas/abuelos/persona.yaml"
+# ... other config ...
+skills:
+  audiobooks:
+    library: audiobooks
+  bike_trainer: {}     # add this line
+  system: {}
+```
+
+The empty `{}` means "no config." Skills read whatever config dict the persona gives them; if there's nothing to configure, an empty dict is fine.
+
+You'll also want to update the system prompt so the model knows when to call your tools. Add a sentence:
+
+```yaml
+system_prompt: |
+  ...other instructions...
+  When the user says they're going to ride, starts a bike workout, or
+  asks about their stats, use the bike_trainer skill's tools.
+```
+
+The model is good at picking tools by description, but a persona prompt nudge helps especially for new tools that don't match common patterns.
+
+## Step 4: restart and try it
+
+```bash
+cd server/runtime
+uv run huxley
+```
+
+Look for `bike_trainer.setup` in the startup logs. If you see it, the skill is loaded.
+
+In the PWA, hold the button and say:
+
+> Voy a salir a montar.
+
+The model should call `start_workout`, get `{"started": true}` back, and narrate something like "¡Perfecto, comencé el entrenamiento!"
+
+A few minutes later, hold and ask:
+
+> ¿Cómo va el entreno?
+
+It should call `get_workout_stats` and narrate the elapsed time and distance.
+
+## Step 5: write a test
+
+Tests are easy because skills are just classes. Mock the `SkillContext` and call `handle` directly:
+
+```python title="tests/test_bike_trainer.py"
+import json
+import pytest
+from unittest.mock import AsyncMock
+
+from huxley_skill_bike_trainer import BikeTrainerSkill
+
+
+@pytest.mark.asyncio
+async def test_start_workout_returns_started():
+    skill = BikeTrainerSkill()
+    ctx = AsyncMock()
+    ctx.language = "es"
+    await skill.setup(ctx)
+
+    result = await skill.handle("start_workout", {})
+
+    assert json.loads(result.output) == {"started": True}
+    assert skill._workout_started_at is not None
+
+
+@pytest.mark.asyncio
+async def test_stats_when_no_workout_says_inactive():
+    skill = BikeTrainerSkill()
+    ctx = AsyncMock()
+    ctx.language = "es"
+    await skill.setup(ctx)
+
+    result = await skill.handle("get_workout_stats", {})
+
+    payload = json.loads(result.output)
+    assert payload["active"] is False
+```
+
+Run with:
+
+```bash
+uv run --package huxley-skill-bike-trainer pytest server/skills/bike_trainer/tests
+```
+
+Tests against the framework (turn coordinator, focus manager) live in `server/runtime/tests/`. Tests against your skill's pure logic live in your skill's `tests/` directory.
+
+## What you have now
+
+A real, working, tested skill. It's small — two tools, no side effects, no persistence. But it's real: the model can call it, the turn coordinator dispatches it, the persona narrates the result.
+
+Next, you'll layer in:
+
+- Better tool design (parameters, descriptions that the model picks well).
+- Side effects (chimes, audio streams, volume control).
+- Proactive turns (the skill speaks first when something happens).
+- Publishing it so others can use it.
+
+<Cards>
+  <Card
+    href="/docs/build-skill/tools"
+    title="Tools and parameters"
+    description="The art of writing tool descriptions the model uses correctly."
+  />
+  <Card
+    href="/docs/build-skill/speaking-back"
+    title="Speaking back"
+    description="Add chimes, audio streams, and volume control."
+  />
+</Cards>

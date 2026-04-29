@@ -1,0 +1,238 @@
+---
+title: persona.yaml Schema
+description: Every field a persona file accepts. One page, look up fast.
+---
+
+For tutorials, see [Build a Persona](/docs/build-persona). This page is a flat reference.
+
+## Top-level fields
+
+```yaml
+version: 1                                    # required
+name: string                                  # required
+voice: string                                 # required
+language_code: string                         # required (ISO 639-1)
+transcription_language: string                # required (ISO 639-1)
+timezone: string                              # required (IANA)
+system_prompt: string                         # required (multi-line)
+constraints: [string, ...]                    # optional
+ui_strings:                                   # optional
+  listening: string
+  too_short: string
+  sent: string
+  responding: string
+  ready: string
+i18n:                                         # optional
+  <lang_code>:                                # ISO 639-1 keys
+    transcription_language: string            # optional override
+    system_prompt: string                     # optional override
+    ui_strings: { ... }                       # optional override
+skills:                                       # required
+  <skill_name>:                               # entry-point name
+    <skill_specific_config>: any
+    i18n:                                     # optional, skill-level
+      <lang_code>:
+        <skill_specific_overrides>: any
+```
+
+## Field details
+
+### `version`
+
+```yaml
+version: 1
+```
+
+Schema version. Must be `1`. Future-compatibility hook.
+
+### `name`
+
+```yaml
+name: kitchenhelper
+```
+
+The persona identifier. Lowercase, no spaces. Must match the directory under `server/personas/`. Used in logs, database file names, and as the value of `HUXLEY_PERSONA`.
+
+### `voice`
+
+```yaml
+voice: coral
+```
+
+OpenAI Realtime voice. Common options: `alloy`, `coral`, `echo`, `shimmer`, `verse`, `sage`. Override at runtime: `HUXLEY_OPENAI_VOICE=verse`.
+
+### `language_code`
+
+```yaml
+language_code: es
+```
+
+ISO 639-1 (two-letter). The persona's primary language. Affects default tool descriptions, default system prompt, and default UI strings.
+
+### `transcription_language`
+
+```yaml
+transcription_language: es
+```
+
+ISO 639-1 hint to OpenAI's Whisper. Often equals `language_code`. May differ for translation personas.
+
+### `timezone`
+
+```yaml
+timezone: America/Bogota
+```
+
+IANA timezone string. Used by skills like `system.get_current_time`. List at [iana.org/time-zones](https://www.iana.org/time-zones).
+
+### `system_prompt`
+
+```yaml
+system_prompt: |
+  You are a warm, slow-spoken assistant for Don Carlos, a 90-year-old in
+  Bogotá. He can't see — everything is audio. Reply in one or two short
+  sentences. Never refuse — offer alternatives.
+```
+
+Multi-line. In the persona's `language_code`. The framework appends:
+
+- The available tool schema (from loaded skills).
+- The constraint reminders.
+- The current time and timezone.
+
+You don't write any of those yourself.
+
+### `constraints`
+
+```yaml
+constraints:
+  - never_say_no
+  - confirm_destructive
+  - child_safe
+  - no_religious_content
+  - echo_short_input
+  - confirm_if_unclear
+```
+
+List of behavioral rules. See [Concepts: Constraints](/docs/concepts/constraints) for the registry. Default: empty.
+
+### `ui_strings`
+
+```yaml
+ui_strings:
+  listening: "Escuchando..."
+  too_short: "Muy corto, intenta otra vez."
+  sent: "Listo."
+  responding: "Pensando..."
+  ready: "Listo."
+```
+
+Localized labels for the dev client. The PWA reads them. Firmware uses earcons instead of strings, so it ignores this block.
+
+If omitted, English defaults apply.
+
+### `i18n`
+
+```yaml
+i18n:
+  en:
+    transcription_language: en
+    system_prompt: |
+      You're a warm, patient assistant...
+    ui_strings:
+      listening: "Listening..."
+  fr:
+    transcription_language: fr
+    system_prompt: |
+      Tu es un assistant chaleureux...
+```
+
+Per-language overrides. Each top-level key is an ISO 639-1 code. The value is a partial persona — only fields you want different.
+
+When a client connects with `?lang=fr`, the framework merges the primary persona with the `fr` overrides.
+
+Fields you can override per language:
+
+- `transcription_language`
+- `system_prompt`
+- `ui_strings`
+- `skills.<name>.i18n.<lang>` (per-skill overrides — see below)
+
+### `skills`
+
+```yaml
+skills:
+  audiobooks:
+    library: audiobooks
+    sounds_path: sounds
+    sounds_enabled: true
+    i18n:
+      es:
+        on_complete_prompt: "El libro terminó."
+      en:
+        on_complete_prompt: "The book is finished."
+  news:
+    location: "Bogotá"
+    latitude: 4.71
+    longitude: -74.07
+    country_code: "CO"
+    language_code: "es"
+  system: {}
+```
+
+Map of skill name → config dict. Each key matches a skill's entry-point name (the key in `[project.entry-points."huxley.skills"]`).
+
+Skill config:
+
+- Empty config: `{}`. Most skills accept this.
+- Relative paths: resolve against `server/personas/<name>/data/`.
+- `i18n.<lang>`: per-language overrides for that skill. Skill must explicitly support these (most do).
+
+If a listed skill isn't installed, startup fails. Refusing to load a missing skill is intentional — silent skipping leads to confusing debugging.
+
+## Resolution at runtime
+
+When a client connects with `?lang=<code>`:
+
+1. Framework loads the persona's primary fields.
+2. If `i18n.<code>` exists, merge those fields over the primary.
+3. For each skill, if `skills.<name>.i18n.<code>` exists, the skill resolves its overrides on its own (the framework hands `ctx.config["i18n"][code]` to the skill).
+4. The resolved persona is what the LLM session uses.
+
+Fields not in `i18n` (like `voice`, `constraints`, `skills` list) stay the same across all languages.
+
+## Validation
+
+The framework validates at startup:
+
+- Required fields present and non-empty.
+- `version` equals `1`.
+- `language_code` and `transcription_language` are valid ISO 639-1 codes.
+- `timezone` is a valid IANA string.
+- Each listed skill is installed and discoverable.
+- Each `i18n` block is structurally valid.
+
+Errors include the path to the bad field and a short reason. Most failures are typos in field names, missing skills, or YAML indentation problems.
+
+## File location
+
+```text
+server/personas/<name>/
+  persona.yaml      ← required
+  data/             ← skill data (gitignored)
+    <name>.db
+    audiobooks/
+    contacts.json
+  README.md         ← optional, for humans
+```
+
+Earcon WAVs (book_start, news_start, etc.) are usually shared across personas — they live at `server/personas/_shared/sounds/` and skills point to them via `sounds_path: ../../_shared/sounds`. A persona can override with its own per-persona sounds folder if needed, but sharing keeps the audio identity consistent.
+
+The `name` in `persona.yaml` should match the directory name. The framework reads from the directory specified by `HUXLEY_PERSONA`.
+
+## Examples
+
+For complete real-world examples:
+
+- AbuelOS: [Build: AbuelOS walkthrough](/docs/build-persona/abuelos-walkthrough)
+- The minimal one: [Build: Anatomy](/docs/build-persona/anatomy)

@@ -14,6 +14,12 @@
   --hux-fg-faint: color-mix(in oklab, var(--hux-fg) 10%, transparent);
   --hux-bg: var(--hux-coral);
 
+  /* Inverted-foreground tokens — used by paper sections via CSS-variable
+     override on the section root. Children that read --hux-fg / --hux-fg-line
+     pick these up automatically through the cascade. */
+  --hux-ink-line: color-mix(in oklab, var(--hux-ink) 22%, transparent);
+  --hux-ink-faint: color-mix(in oklab, var(--hux-ink) 10%, transparent);
+
   --hux-serif: "Instrument Serif", Georgia, serif;
   --hux-sans: "Inter Tight", system-ui, sans-serif;
   --hux-mono: "JetBrains Mono", "SF Mono", monospace;

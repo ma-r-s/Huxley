@@ -1,0 +1,236 @@
+---
+title: Timers and Reminders
+description: Schedule, persist, restore on restart. The pattern from the timers skill.
+---
+
+A timer fires at a specific time. A reminder fires at a specific time. A "ping me when X happens" pattern fires when X happens. All three share a shape:
+
+1. The user (or another skill) schedules an event.
+2. The skill persists it.
+3. A background task waits for the time.
+4. When time arrives, `inject_turn` fires.
+5. The skill cleans up.
+
+And — critical — on server restart, every pending timer must restore.
+
+## The smallest version
+
+```python title="huxley_skill_timers/__init__.py"
+import asyncio
+import json
+import uuid
+from datetime import datetime, timedelta
+from huxley_sdk import (
+    Skill, ToolDefinition, ToolResult, SkillContext, InjectPriority,
+)
+
+
+class TimersSkill:
+    name = "timers"
+
+    @property
+    def tools(self) -> list[ToolDefinition]:
+        return [
+            ToolDefinition(
+                name="set_timer",
+                description=(
+                    "Schedule a one-shot reminder. Use when the user asks for "
+                    "a timer, alert, alarm, reminder."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "seconds": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Seconds from now to fire.",
+                        },
+                        "message": {
+                            "type": "string",
+                            "description": "What to say when the timer fires.",
+                        },
+                    },
+                    "required": ["seconds", "message"],
+                },
+            ),
+        ]
+
+    async def setup(self, ctx: SkillContext) -> None:
+        self._ctx = ctx
+        self._logger = ctx.logger
+
+        # Restore any pending timers from disk.
+        for key, value in await ctx.storage.list_settings("timer:"):
+            try:
+                entry = json.loads(value)
+                await self._restore(key, entry)
+            except (json.JSONDecodeError, KeyError) as e:
+                await self._logger.aexception(
+                    "restore_failed", key=key, error=str(e),
+                )
+                await ctx.storage.delete_setting(key)
+
+    async def _restore(self, key: str, entry: dict):
+        fire_at = datetime.fromisoformat(entry["fire_at"])
+        now = datetime.now()
+
+        # Skip stale: should have fired more than 1 hour ago.
+        if (now - fire_at).total_seconds() > 3600:
+            await self._logger.awarning(
+                "restore_skipped_stale",
+                key=key,
+                fire_at=entry["fire_at"],
+            )
+            await self._ctx.storage.delete_setting(key)
+            return
+
+        await self._logger.ainfo("restored", key=key, fires_in_seconds=(fire_at - now).total_seconds())
+        self._spawn_fire_task(entry)
+
+    async def handle(self, tool_name: str, args: dict) -> ToolResult:
+        if tool_name == "set_timer":
+            timer_id = uuid.uuid4().hex[:8]
+            fire_at = datetime.now() + timedelta(seconds=args["seconds"])
+            entry = {
+                "id": timer_id,
+                "fire_at": fire_at.isoformat(),
+                "message": args["message"],
+            }
+            await self._ctx.storage.set_setting(
+                f"timer:{timer_id}",
+                json.dumps(entry),
+            )
+            self._spawn_fire_task(entry)
+            await self._logger.ainfo(
+                "scheduled",
+                timer_id=timer_id,
+                fire_at=fire_at.isoformat(),
+            )
+            return ToolResult(output=json.dumps({
+                "scheduled": True,
+                "fires_in_seconds": args["seconds"],
+            }))
+
+        return ToolResult(output=json.dumps({"error": "unknown_tool"}))
+
+    def _spawn_fire_task(self, entry: dict):
+        timer_id = entry["id"]
+        fire_at = datetime.fromisoformat(entry["fire_at"])
+
+        async def fire():
+            delay = (fire_at - datetime.now()).total_seconds()
+            if delay > 0:
+                await asyncio.sleep(delay)
+
+            await self._logger.ainfo("fired", timer_id=timer_id)
+            await self._ctx.inject_turn(
+                f"Tell the user: {entry['message']}",
+                dedup_key=f"timer_{timer_id}",
+                priority=InjectPriority.BLOCK_BEHIND_COMMS,
+            )
+            await self._ctx.storage.delete_setting(f"timer:{timer_id}")
+
+        self._ctx.background_task(
+            name=f"timer_{timer_id}",
+            coro_factory=fire,
+            restart_on_crash=False,  # one-shot
+        )
+
+    async def teardown(self) -> None:
+        pass
+```
+
+## Recipes inside
+
+### Persist *before* spawning the task
+
+The order in `set_timer` is:
+
+```python
+await self._ctx.storage.set_setting(...)  # 1: persist
+self._spawn_fire_task(entry)              # 2: spawn task
+```
+
+Not the other way around. If the server crashes between steps, on restart we restore from storage — so step 1 must complete first.
+
+### `restart_on_crash=False` for one-shots
+
+Timers are one-shot — fire once, delete. If the fire task crashes, restarting it doesn't help (we'd just crash again). Set `restart_on_crash=False`.
+
+For long-lived listeners (Telegram, MQTT subscribers), use `restart_on_crash=True` with a sensible `max_restarts_per_hour`.
+
+### Dedup with the timer ID
+
+```python
+await self._ctx.inject_turn(
+    f"Tell the user: {entry['message']}",
+    dedup_key=f"timer_{timer_id}",
+    priority=InjectPriority.BLOCK_BEHIND_COMMS,
+)
+```
+
+If the fire task somehow gets called twice (race during restore?), the dedup key prevents firing the same timer twice in a row. Cheap insurance.
+
+### `BLOCK_BEHIND_COMMS` is the right default
+
+A timer firing during a phone call would be rude. `BLOCK_BEHIND_COMMS` waits for the call to end, then fires. During music or audiobook, it preempts and the framework resumes after.
+
+### Skip stale timers on restore
+
+If the server was off for two days, every timer scheduled for "in 30 minutes" two days ago would fire instantly on startup. Bad UX. Skip anything that should have fired more than an hour ago:
+
+```python
+if (now - fire_at).total_seconds() > 3600:
+    await self._logger.awarning("restore_skipped_stale", ...)
+    await self._ctx.storage.delete_setting(key)
+    return
+```
+
+The threshold (1 hour) is a heuristic. Tune for your skill — a "remind me to take pills" timer might be relevant for 6 hours; a "remind me to call mom" timer probably isn't.
+
+### Inject prompts are LLM instructions
+
+The fire task uses:
+
+```python
+await self._ctx.inject_turn(
+    f"Tell the user: {entry['message']}",
+    ...
+)
+```
+
+Note the `Tell the user:` prefix. Without it, some personas (especially terse ones with "be quiet unless asked" prompts) treat the inject as a *silent notification* and don't speak.
+
+The fix: every inject that should be narrated includes an explicit instruction to narrate it. We learned this from a bug where AbuelOS wouldn't speak some inject_turns.
+
+## A reminder skill that listens for events
+
+The same shape works for "ping me when X happens." Replace the `asyncio.sleep(delay)` with whatever event source you have:
+
+```python
+async def fire():
+    await self._wait_for_event(entry["event_id"])  # blocks on real event
+    await self._ctx.inject_turn(
+        f"Tell the user: {entry['message']}",
+        dedup_key=entry["event_id"],
+        priority=InjectPriority.NORMAL,
+    )
+```
+
+Pattern works for:
+
+- Webhook receivers ("when GitHub PR merges, ping me").
+- File watchers ("when this download finishes").
+- Calendar events ("when my next meeting starts").
+
+The persistence + restore + inject pattern is the same.
+
+## Next
+
+<Cards>
+  <Card
+    href="/docs/cookbook/notifications"
+    title="Notifications"
+    description="Bursty inbound events with debounce + coalesce. Telegram pattern."
+  />
+</Cards>

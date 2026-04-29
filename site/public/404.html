@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#E2484D" />
+    <meta name="robots" content="noindex" />
+    <title>Not found — Huxley</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" sizes="any" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter+Tight:wght@300;400&family=JetBrains+Mono:wght@400&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --hux-coral: oklch(0.62 0.19 23);
+        --hux-paper: oklch(0.96 0.015 60);
+        --hux-fg: var(--hux-paper);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+      }
+      body {
+        background: var(--hux-coral);
+        color: var(--hux-fg);
+        font-family: "Inter Tight", system-ui, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 32px;
+        padding: 32px;
+        text-align: center;
+        background-image:
+          radial-gradient(
+            ellipse 70% 50% at 15% 0%,
+            color-mix(in oklab, white 18%, transparent),
+            transparent 65%
+          ),
+          radial-gradient(
+            ellipse 90% 70% at 85% 100%,
+            color-mix(in oklab, black 50%, transparent),
+            transparent 65%
+          );
+      }
+      .mark {
+        font-family: "Instrument Serif", Georgia, serif;
+        font-style: italic;
+        font-size: clamp(120px, 22vw, 240px);
+        line-height: 0.95;
+        letter-spacing: -0.02em;
+        margin: 0;
+      }
+      .eyebrow {
+        font-family: "JetBrains Mono", "SF Mono", monospace;
+        font-size: 11px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        opacity: 0.7;
+      }
+      h1 {
+        font-family: "Instrument Serif", Georgia, serif;
+        font-weight: 400;
+        font-size: clamp(32px, 4vw, 48px);
+        line-height: 1.1;
+        margin: 0;
+        max-width: 28ch;
+      }
+      p {
+        font-family: "Instrument Serif", Georgia, serif;
+        font-style: italic;
+        font-size: clamp(16px, 1.4vw, 18px);
+        opacity: 0.85;
+        margin: 0;
+        max-width: 42ch;
+      }
+      a.home {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 12px 22px;
+        margin-top: 8px;
+        border-radius: 999px;
+        background: var(--hux-fg);
+        color: var(--hux-coral);
+        text-decoration: none;
+        font-family: "Inter Tight", system-ui, sans-serif;
+        font-size: 13px;
+        font-weight: 500;
+        letter-spacing: 0.04em;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="eyebrow">404 — not found</div>
+    <p class="mark">huxley</p>
+    <h1>This page isn't part of the world.</h1>
+    <p>
+      You followed a link to a page that doesn't exist — or one that used to.
+      The voice is still here. Just not at this address.
+    </p>
+    <a class="home" href="/">← Back to the page</a>
+  </body>
+</html>

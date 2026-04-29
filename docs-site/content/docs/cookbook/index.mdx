@@ -1,0 +1,45 @@
+---
+title: Cookbook
+description: Real patterns from the first-party skills. Copy-paste-ready.
+---
+
+This section is recipes — small, focused patterns lifted from skills that ship with Huxley. Each one solves a specific problem and shows the actual code behind it.
+
+<Cards>
+  <Card
+    href="/docs/cookbook/rss-feeds"
+    title="RSS feeds and HTTP APIs"
+    description="Fetch news, weather, scores, transit. Cache responses. Filter by constraints. Pattern from the news skill."
+  />
+  <Card
+    href="/docs/cookbook/audio-streaming"
+    title="Audio streaming"
+    description="Long-form playback via factory + ffmpeg. Pattern from audiobooks and radio."
+  />
+  <Card
+    href="/docs/cookbook/timers-and-reminders"
+    title="Timers and reminders"
+    description="Schedule, persist, restore on restart. Pattern from the timers skill."
+  />
+  <Card
+    href="/docs/cookbook/notifications"
+    title="Notifications and proactive turns"
+    description="Inbound messages with debounce + coalesce. Pattern from the telegram skill."
+  />
+  <Card
+    href="/docs/cookbook/persistent-state"
+    title="Persistent state"
+    description="Per-skill storage, structured logs, restore-on-setup. The patterns every skill uses."
+  />
+</Cards>
+
+## How to read these
+
+Each recipe:
+
+1. States the problem.
+2. Shows the smallest working version.
+3. Walks the gotchas — what we learned the hard way.
+4. Points to the source skill so you can see the production version.
+
+The recipes assume you've read the relevant Concepts pages. They don't re-explain `inject_turn` or `AudioStream`; they show how to *use* them well.

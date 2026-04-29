@@ -1,0 +1,247 @@
+---
+title: Skills
+description: What the agent can do. A Python class with tools, reusable across personas.
+---
+
+A **skill** is a Python class that exposes tools — functions the LLM can call — and an `async handle` method that runs when one of those tools is called. It's the unit of capability.
+
+Skills are persona-agnostic. The same `audiobooks` skill works for AbuelOS (warm Spanish narration of Spanish-language books) and for a hypothetical English persona (terse English narration of English books). Personas configure skills; skills don't know about personas.
+
+## The contract, in one screen
+
+Every skill conforms to this protocol:
+
+```python title="huxley_sdk/types.py (excerpt)"
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class Skill(Protocol):
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def tools(self) -> list[ToolDefinition]: ...
+
+    async def handle(self, tool_name: str, args: dict[str, Any]) -> ToolResult: ...
+
+    async def setup(self, ctx: SkillContext) -> None: ...
+
+    async def teardown(self) -> None: ...
+```
+
+Five members. That's the entire surface a skill has to implement.
+
+## A complete, real skill
+
+Here's the **system** skill from the first-party set, simplified slightly. It does two things: tell the time, and set the volume.
+
+```python title="huxley_skill_system/__init__.py"
+import json
+from datetime import datetime
+from huxley_sdk import (
+    Skill,
+    ToolDefinition,
+    ToolResult,
+    SkillContext,
+    SetVolume,
+)
+
+class SystemSkill:
+    name = "system"
+
+    @property
+    def tools(self) -> list[ToolDefinition]:
+        return [
+            ToolDefinition(
+                name="get_current_time",
+                description="Get the current local time.",
+                parameters={"type": "object", "properties": {}},
+            ),
+            ToolDefinition(
+                name="set_volume",
+                description="Set the speaker volume from 0 (silent) to 100 (max).",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "level": {"type": "integer", "minimum": 0, "maximum": 100},
+                    },
+                    "required": ["level"],
+                },
+            ),
+        ]
+
+    async def setup(self, ctx: SkillContext) -> None:
+        # Timezone comes from the persona, made available via config or
+        # the system skill — ctx itself doesn't expose it directly today.
+        from zoneinfo import ZoneInfo
+        self._tz = ZoneInfo(ctx.config.get("timezone", "UTC"))
+        self._logger = ctx.logger
+
+    async def handle(self, tool_name: str, args: dict) -> ToolResult:
+        if tool_name == "get_current_time":
+            now = datetime.now(self._tz)
+            return ToolResult(
+                output=json.dumps({"display": now.strftime("%H:%M")}),
+            )
+        elif tool_name == "set_volume":
+            level = max(0, min(100, int(args["level"])))
+            return ToolResult(
+                output=json.dumps({"volume": level}),
+                side_effect=SetVolume(level),
+            )
+
+    async def teardown(self) -> None:
+        pass
+```
+
+Stuff worth noticing:
+
+- The class has no base class. The `Skill` protocol is **structural** — match the shape, you're a skill.
+- `name` is a class attribute, not a method. It must be unique across loaded skills (collision fails fast at startup).
+- `setup` runs once when the persona loads. Stash anything you need from the context — timezone, logger, storage handle, language.
+- `handle` is the dispatch. The framework gives you `tool_name` and `args` (already parsed JSON); you return a `ToolResult`.
+- `ToolResult.output` is JSON the model narrates. `side_effect` is optional; here we use it to actually push a volume change to the client.
+- `teardown` is for cleanup — kill background tasks, close files. Most skills don't need anything here.
+
+## Tools and the LLM
+
+The `tools` list gets injected into the OpenAI Realtime session as the function-calling schema. Each `ToolDefinition` is turned into:
+
+```json
+{
+  "type": "function",
+  "name": "set_volume",
+  "description": "Set the speaker volume from 0 (silent) to 100 (max).",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "level": {"type": "integer", "minimum": 0, "maximum": 100}
+    },
+    "required": ["level"]
+  }
+}
+```
+
+The model sees the description and decides when to call. Two practical implications:
+
+<Callout type="warn">
+**Write descriptions in the persona's language.** If your persona speaks Spanish, the model gets better tool-selection if descriptions are in Spanish. Most skills handle this via the `i18n` block in persona.yaml — the persona overrides the skill's default descriptions per language.
+</Callout>
+
+<Callout type="info">
+**Tool descriptions are LLM instructions, not user-facing prose.** "Get the current local time" is fine. "Tells the user what time it is" is worse — the model already knows it's relaying to the user. Be terse and behavioral.
+</Callout>
+
+## Returning useful results
+
+`ToolResult.output` is whatever the LLM should know in order to narrate. JSON is conventional but not required — return a string if you'd rather. The model treats the output as text to summarize, not raw data to dump.
+
+Examples that work:
+
+```python
+# Plain string — the model paraphrases.
+ToolResult(output="It's 3:42 PM.")
+
+# JSON — the model still paraphrases, but more structured data is easier
+# to handle when the user asks follow-ups.
+ToolResult(output=json.dumps({
+    "headlines": [
+        {"title": "Heat wave breaks records", "source": "AP"},
+        {"title": "Local elections preview", "source": "NYT"},
+    ],
+}))
+
+# Empty output — sometimes the side effect IS the response.
+ToolResult(output="", side_effect=AudioStream(factory=play_song))
+```
+
+## Where the real work happens
+
+Most non-trivial skills end up doing one of three patterns:
+
+| Pattern               | Side effect       | Examples                                  |
+|-----------------------|-------------------|-------------------------------------------|
+| Pure info             | None              | `get_current_time`, `get_news`, `search`  |
+| Info + immediate cue  | `PlaySound`       | News (chime before model narrates), search results |
+| Long-form audio       | `AudioStream`     | Audiobooks, radio, podcasts, music        |
+| Replace the speaker   | `InputClaim`      | Phone calls, intercom                     |
+| Side-channel control  | `SetVolume`, `CancelMedia` | System skill, "stop the book" |
+
+We cover each in [Side Effects](/docs/concepts/side-effects).
+
+## Proactive skills
+
+Some skills don't wait to be called — they speak first. A timer fires when its time comes. A doorbell announces itself. An incoming Telegram call interrupts.
+
+These use `ctx.inject_turn(message, priority=...)`. From the framework's perspective, the skill is acting like a virtual user: it provides a prompt, and the LLM responds (in the persona's voice, narrated through the same audio path).
+
+```python
+# In a background task spawned during setup
+await ctx.inject_turn(
+    "Tell the user: it's time for their medication.",
+    dedup_key=f"medication_{date.today()}",
+    priority=InjectPriority.BLOCK_BEHIND_COMMS,
+)
+```
+
+We cover this fully in [Build a Skill: Proactive skills](/docs/build-skill/proactive).
+
+## Persistence
+
+Each skill gets a per-persona key-value store via `ctx.storage`:
+
+```python
+await ctx.storage.set_setting("last_book_id", book_id)
+last = await ctx.storage.get_setting("last_book_id", default=None)
+
+# Bulk read, for restoring state on setup:
+for key, value in await ctx.storage.list_settings("timer:"):
+    timer = json.loads(value)
+    self._scheduler.add(timer)
+```
+
+The store is namespaced — your skill only sees its own keys. Storage is shared per persona (so all skills loaded by AbuelOS write to the same database) but isolated by key prefix.
+
+## Discovery: entry points
+
+Skills register themselves with Python's standard entry-point mechanism, in `pyproject.toml`:
+
+```toml title="huxley-skill-system/pyproject.toml"
+[project]
+name = "huxley-skill-system"
+version = "0.1.0"
+dependencies = ["huxley-sdk"]
+
+[project.entry-points."huxley.skills"]
+system = "huxley_skill_system:SystemSkill"
+```
+
+The key (`system`) must match what the persona puts in its `skills:` map. The value is the import path. When the framework loads a persona, it resolves each listed skill against the entry-point registry; missing skills fail fast at startup.
+
+This means skills are normal Python packages. They can be published to PyPI. They can live in private repos. They can be vendored into a monorepo. Huxley doesn't care.
+
+## What a skill *isn't*
+
+A skill is **not** a chatbot. It doesn't compose prose. The model handles language; the skill returns data and side effects.
+
+A skill is **not** allowed to import from `huxley` (the runtime). It only imports from `huxley_sdk`. This wall is enforced — the runtime depends on skills, never the other way around. We cover the discipline in [Build a Skill: Publishing](/docs/build-skill/publishing).
+
+## Next
+
+<Cards>
+  <Card
+    href="/docs/concepts/turns"
+    title="Turns"
+    description="The atomic unit of conversation. Skills run inside turns."
+  />
+  <Card
+    href="/docs/concepts/side-effects"
+    title="Side effects"
+    description="The real interesting part of what skills do."
+  />
+  <Card
+    href="/docs/build-skill/first-skill"
+    title="Build a skill — hands on"
+    description="Stop reading, start writing."
+  />
+</Cards>

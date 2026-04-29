@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useRegisterSection, useInView } from "../lib/voiceThread.js";
 import { useViewport } from "../lib/useViewport.js";
-import { SectionHead } from "../components/Chrome.js";
+import { SectionHead, deepSection } from "../components/Chrome.js";
 
 interface Skill {
   id: string;
@@ -22,6 +22,12 @@ const ALL_SKILLS: Skill[] = [
   { id: "timers", cat: "System", name: "Timers", shipped: true },
   { id: "system", cat: "System", name: "System", shipped: true },
   { id: "comms-telegram", cat: "Comms", name: "Telegram Calls", shipped: true },
+
+  { id: "battery", cat: "System", name: "Battery" },
+  { id: "wifi", cat: "System", name: "Wi-Fi" },
+  { id: "bluetooth", cat: "System", name: "Bluetooth" },
+  { id: "brightness", cat: "System", name: "Brightness" },
+  { id: "updates", cat: "System", name: "Updates" },
 
   { id: "sms", cat: "Comms", name: "SMS" },
   { id: "whatsapp", cat: "Comms", name: "WhatsApp" },
@@ -99,6 +105,11 @@ const ALL_SKILLS: Skill[] = [
   { id: "affirmations", cat: "Daily", name: "Affirmations" },
 ];
 
+// Categories derived from skill data, in source order. Used as the
+// filter pills above the grid — there's no "All" option, so the user
+// is always looking at a single category instead of seventy tiles at once.
+const CATS = Array.from(new Set(ALL_SKILLS.map((s) => s.cat)));
+
 export function Skills() {
   const { t } = useTranslation();
   const sectionRef = useRegisterSection<HTMLElement>("skills", "speaking");
@@ -107,12 +118,7 @@ export function Skills() {
   // each hook needs its own element to observe.
   const [sentinelRef, inView] = useInView<HTMLDivElement>(0.15);
   const { isMobile } = useViewport();
-  const ALL_LABEL = t("skills.filterAll");
-  const [filter, setFilter] = useState(ALL_LABEL);
-  const cats = [
-    ALL_LABEL,
-    ...Array.from(new Set(ALL_SKILLS.map((s) => s.cat))),
-  ];
+  const [filter, setFilter] = useState<string>(CATS[0]!);
 
   // Stagger the tiles in once the section enters view.
   const [count, setCount] = useState(0);
@@ -127,10 +133,7 @@ export function Skills() {
     return () => clearInterval(id);
   }, [inView]);
 
-  const visible =
-    filter === ALL_LABEL
-      ? ALL_SKILLS
-      : ALL_SKILLS.filter((s) => s.cat === filter);
+  const visible = ALL_SKILLS.filter((s) => s.cat === filter);
   const shipped = ALL_SKILLS.filter((s) => s.shipped).length;
 
   return (
@@ -138,10 +141,10 @@ export function Skills() {
       id="skills"
       ref={sectionRef}
       style={{
+        ...deepSection,
         position: "relative",
         zIndex: 2,
         padding: isMobile ? "72px 24px" : "120px 64px",
-        borderTop: "1px solid var(--hux-fg-line)",
       }}
     >
       <SectionHead
@@ -168,7 +171,7 @@ export function Skills() {
           flexWrap: "wrap",
         }}
       >
-        {cats.map((c) => (
+        {CATS.map((c) => (
           <button
             key={c}
             onClick={() => setFilter(c)}
@@ -237,7 +240,6 @@ export function Skills() {
       >
         {visible.map((s, i) => {
           const showing = inView && i < count;
-          const matches = filter === ALL_LABEL || s.cat === filter;
           return (
             <div
               key={s.id}
@@ -252,9 +254,8 @@ export function Skills() {
                 background: s.shipped
                   ? "color-mix(in oklab, var(--hux-fg) 7%, transparent)"
                   : "transparent",
-                opacity: showing && matches ? 1 : 0,
-                transform:
-                  showing && matches ? "translateY(0)" : "translateY(8px)",
+                opacity: showing ? 1 : 0,
+                transform: showing ? "translateY(0)" : "translateY(8px)",
                 transition: `opacity 500ms cubic-bezier(.22,.9,.27,1) ${i * 15}ms, transform 500ms cubic-bezier(.22,.9,.27,1) ${i * 15}ms`,
               }}
             >

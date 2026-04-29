@@ -7,7 +7,7 @@
 import { useTranslation } from "react-i18next";
 import { useRegisterSection } from "../lib/voiceThread.js";
 import { useViewport } from "../lib/useViewport.js";
-import { SectionHead } from "../components/Chrome.js";
+import { SectionHead, paperSection } from "../components/Chrome.js";
 import { Reveal } from "../components/Reveal.js";
 
 interface Metric {
@@ -49,10 +49,10 @@ export function Today() {
       ref={sectionRef}
       id="today"
       style={{
+        ...paperSection,
         position: "relative",
         zIndex: 2,
         padding: isMobile ? "72px 24px" : "120px 64px",
-        borderTop: "1px solid var(--hux-fg-line)",
       }}
     >
       <SectionHead

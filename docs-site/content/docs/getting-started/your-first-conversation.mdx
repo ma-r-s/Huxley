@@ -1,0 +1,147 @@
+---
+title: Your First Conversation
+description: What to try, what to expect, and how to read what's happening.
+---
+
+You have AbuelOS running. This page walks you through the conversations that exercise every primitive in the framework, so you can feel what Huxley is doing as you do it.
+
+<Callout type="info">
+  This page assumes the [Quickstart](/docs/getting-started/quickstart) is complete and AbuelOS is responding. If not, start there.
+</Callout>
+
+## Try these, in order
+
+Each prompt below exercises a different part of the framework. Watching the server logs while you do them is the fastest way to develop intuition.
+
+### 1. An info question
+
+> ¿Qué hora es?
+
+This routes to the **system** skill's `get_current_time` tool. The skill returns the time as JSON; the model narrates it back in Spanish in AbuelOS's voice. This is the simplest possible round trip — one turn, one tool call, no audio side effects, no proactive behavior.
+
+In your server log you'll see something like:
+
+```text title="terminal 1"
+coord.ptt_start turn=t-7f3
+coord.tool_dispatch tool=get_current_time skill=system
+coord.audio_done turn=t-7f3 duration_ms=1840
+```
+
+### 2. An info question with a "thinking" chime
+
+> Cuéntame las noticias.
+
+The **news** skill fetches headlines from Google News RSS and weather from Open-Meteo. It also returns a `PlaySound` side effect: a short chime that plays *immediately*, while the LLM is still composing its narration.
+
+The chime is the framework's way of saying "I heard you, working on it." It's the simplest version of the audio side effect mechanism — a single PCM blob the framework drops into the audio channel before the model speaks.
+
+### 3. A long-form audio stream
+
+> Quiero escuchar un libro.
+
+Now you're hitting the **audiobooks** skill. This is the framework's hardest primitive in action.
+
+What happens:
+
+<Steps>
+
+<Step>
+
+### AbuelOS asks which book
+
+The model calls `search_audiobooks` (a search tool) and narrates the matches. You hear "Tengo dos libros: ..."
+
+</Step>
+
+<Step>
+
+### You pick one
+
+> El primero, por favor.
+
+</Step>
+
+<Step>
+
+### AbuelOS announces it's starting
+
+"Comenzando..." — model audio.
+
+</Step>
+
+<Step>
+
+### The book starts playing
+
+A small chime plays first (the `book_start` earcon). Then the audiobook itself — pumped through ffmpeg, chunked into PCM, streamed through the same WebSocket as the model's voice. Same audio channel, same playback path on the browser.
+
+</Step>
+
+<Step>
+
+### You can interrupt
+
+Hold the PTT button. The book stops *atomically* — within 30ms, audio cleared, ffmpeg killed, model interrupted. Your bookmark saves automatically. Resume any time with "Sigue donde íbamos."
+
+</Step>
+
+</Steps>
+
+This is the **factory pattern** at work. The skill didn't return audio bytes — it returned an `AudioStream(factory=...)` side effect. The framework holds onto that factory, waits for the model to finish speaking ("Comenzando..."), then invokes it. That's why the announcement always plays *before* the book, never overlapping it.
+
+### 4. A proactive interruption
+
+This one's harder to demo on a fresh install, but you can simulate it:
+
+> Pon un timer en 10 segundos: "te toca la pastilla".
+
+The **timers** skill schedules a timer. Wait 10 seconds. AbuelOS speaks **without you holding the button**:
+
+> "Te toca la pastilla."
+
+This is **`inject_turn`** — a skill making the model speak first. Internally, the timer fired, called `ctx.inject_turn(message, priority=BLOCK_BEHIND_COMMS)`, and the framework decided when to surface it (immediately, since nothing else was speaking).
+
+If you'd been listening to a book, the timer would have *paused the book*, spoken the reminder, then *resumed* the book. That's the focus channel system arbitrating between CONTENT (the book) and BLOCK_BEHIND_COMMS (the timer).
+
+## Reading the logs
+
+Every event Huxley emits has a `turn` ID — a short UUID for the current conversation round. Tail the server log and grep by turn ID to reconstruct exactly what happened:
+
+```bash title="terminal 3"
+tail -f logs/server.jsonl | grep t-7f3
+```
+
+The most useful events:
+
+| Event                    | What it tells you                                    |
+|--------------------------|------------------------------------------------------|
+| `coord.ptt_start`        | User pressed the button                              |
+| `coord.ptt_stop`         | User released; audio committed to OpenAI             |
+| `coord.tool_dispatch`    | Model called a tool                                  |
+| `coord.audio_done`       | Model finished speaking                              |
+| `coord.interrupted`      | Atomic interrupt — drop everything, drain quickly    |
+| `focus.acquire`          | Some channel just took control of the speaker        |
+| `focus.patience_expired` | A claim sat pending too long; getting evicted        |
+| `<skill>.*`              | Skill-emitted events (audiobooks.resolve, news.fetched, etc.) |
+
+Logs aren't decoration — they're the only way to debug a real-time voice system. We use them in the docs as a teaching tool too.
+
+## What to read next
+
+<Cards>
+  <Card
+    href="/docs/concepts"
+    title="Core concepts"
+    description="Now that you've felt what each primitive does, learn the names and the model behind them."
+  />
+  <Card
+    href="/docs/use/run-the-server"
+    title="Run Huxley as a real assistant"
+    description="Move past the dev loop — daemonize the server, change personas, persist data."
+  />
+  <Card
+    href="/docs/build-skill"
+    title="Build a skill"
+    description="The fun part. Teach Huxley to do something nobody else can."
+  />
+</Cards>

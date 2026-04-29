@@ -1,0 +1,98 @@
+---
+title: Constraints
+description: Behavioral rules a persona declares — never_say_no, confirm_destructive — that skills opt into.
+---
+
+A **constraint** is a named behavioral rule that a persona enables and skills opt into. Constraints are how you make AbuelOS warm without rewriting the audiobook skill, and how you make a kid-safe persona without rewriting every search skill.
+
+The framework ships with a small registry of well-known constraints. Personas can enable any subset. Skills decide whether to respect each one.
+
+## The shape of a constraint
+
+A constraint is just a string in the persona file:
+
+```yaml
+constraints:
+  - never_say_no
+  - confirm_destructive
+  - child_safe
+  - no_religious_content
+  - echo_short_input
+  - confirm_if_unclear
+```
+
+When the framework loads the persona, it injects each constraint as a small instruction into the system prompt — for example:
+
+> Nunca rechaces una solicitud. Si no puedes hacer lo que se pide, ofrece la alternativa más cercana.
+
+This is a prompting tactic. The model receives the rule, internalizes it, and behaves accordingly. There's no runtime enforcement — if the model decides to refuse anyway, it refuses. Constraints are nudges, not contracts.
+
+<Callout type="warn">
+  **Today's constraint snippets are Spanish-only** — the constraint registry was authored alongside AbuelOS. Personas in other languages still get the rule injected, just in Spanish text. A future change will localize the snippets per persona language; until then, English/French personas may see slightly less effective enforcement of these rules.
+</Callout>
+
+## The shipped constraints
+
+| Constraint              | What it tells the model                                              | When to use                          |
+|-------------------------|----------------------------------------------------------------------|--------------------------------------|
+| `never_say_no`          | Refusal is never the answer. Always offer an alternative.            | Personas for users who shouldn't get stuck (kids, elderly, accessibility-driven) |
+| `confirm_destructive`   | Before deleting, sending, or calling, ask "are you sure?"            | Any persona that touches the real world |
+| `child_safe`            | Filter profanity, adult content, age-inappropriate topics.           | Personas for kids                    |
+| `no_religious_content`  | Avoid religious commentary, prayers, scripture references.           | Secular workplaces, public-facing assistants |
+| `echo_short_input`      | When the user's audio was very short, repeat back what you heard.    | Hard-of-hearing users, noisy environments |
+| `confirm_if_unclear`    | If you're under 80% confident in the request, ask one clarifying question. | Cooking, home automation, anything where guessing wrong is costly |
+
+The list is short on purpose. Each one earns its keep — solves a real problem someone hit, in a way that prompt-engineering alone would have repeated across every skill.
+
+## How skills relate to constraints (today vs. future)
+
+<Callout type="warn">
+  **Today, constraints are prompt-only.** The `SkillContext` does not expose a `ctx.constraints` field — skills cannot programmatically check which constraints are enabled. The model receives the constraint instructions and is responsible for honoring them when narrating tool results.
+</Callout>
+
+This works well for behavioral nudges that are purely linguistic: `never_say_no`, `echo_short_input`, `confirm_if_unclear`, `no_religious_content`. The model reads the rule and adjusts its prose.
+
+It works less well for behaviors that ideally would also affect the *data* a skill returns. For example, a `play_book` tool that gets "book not found" could ideally return a list of alternatives to satisfy `never_say_no`. Today the model has to hint at alternatives without skill cooperation.
+
+**A future framework version will expose `ctx.constraints` to skills**, so well-written skills can adjust returned data based on which rules are active. For now: write your skills to *always* return useful structured data (alternatives lists, error reasons, confirmation requests), and let the model decide how to use it for the persona's voice.
+
+## Writing your own constraint?
+
+The framework doesn't enforce a fixed registry — you can put anything in the persona's `constraints:` list. But there's a discipline: a custom constraint should solve a problem at the *persona* level, not at the *skill* level.
+
+Bad constraint: `audiobook_resume_warmly` — that's specific to one skill's behavior. Just configure the audiobooks skill differently.
+
+Good constraint: `formal_address` — affects every skill's narration. Ask the model to use formal pronouns (Spanish *usted*, French *vous*) consistently.
+
+If you do add a custom constraint, document it next to your persona so future-you remembers what it does.
+
+## Why constraints, instead of just "edit the prompt"
+
+Two reasons:
+
+1. **Composition.** A persona can enable five constraints at once. The framework concatenates them. Doing this manually in every system prompt would mean hand-editing every persona every time a constraint changed.
+
+2. **Skill awareness (future).** Once `ctx.constraints` ships, skills will be able to read which rules are active and cooperate. Today this is on the roadmap; for now, the model is the sole interpreter.
+
+## What constraints aren't
+
+Constraints **are not security**. They're prompt-level guidance, not enforcement. A motivated user (or jailbroken model) can bypass any constraint. Don't use constraints for "this skill cannot delete files." Use Python (don't expose a destructive tool) or persona-level skill omission (don't load that skill in this persona).
+
+Constraints **are not feature flags**. Don't use them for "enable beta search." That's a skill config option (`{"beta": true}` in the persona's skill block).
+
+Constraints **are not localization**. The constraint registry is language-agnostic. The skill is responsible for adapting its `output` text to the persona's language.
+
+## Next
+
+<Cards>
+  <Card
+    href="/docs/build-persona"
+    title="Build a persona"
+    description="Hands-on: pick the constraints, write the prompt, ship the YAML."
+  />
+  <Card
+    href="/docs/build-skill/first-skill"
+    title="Build a skill"
+    description="Now that you know the model, write your first skill."
+  />
+</Cards>

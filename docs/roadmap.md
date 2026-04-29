@@ -44,15 +44,35 @@ Make Huxley what it claims to be in [`vision.md`](./vision.md): a framework anyo
 - **Skill discovery aids**: `huxley list-installed-skills`, `huxley enable foo` CLIs that mutate `persona.yaml`. Polish, not blocking anything.
 - **MCP compatibility shim**: optional adapter so existing MCP servers can be loaded as Huxley skills. Whole separate project; only if the ecosystem wants it.
 
+### Speculative shapes — not committed work
+
+Two ideas the architecture leaves room for but that aren't being built. Captured here so they don't get lost; both appeared in early landing copy and were cut when the landing was tightened.
+
+#### `huxley-market` — community skill registry
+
+A registry of community-published `huxley-skill-*` packages, browsable from a voice command or a web UI. Today skills are distributed via PyPI and discovered by name (`pip install huxley-skill-foo` + add `foo: {}` to `persona.yaml`). The market would replace that ceremony with: search by voice or via `huxley-web`, install with one tap or one phrase, no terminal needed.
+
+The framework already supports the underlying primitive — entry-point loading via `huxley.skills`. The missing pieces are a PyPI-fronted curation layer (reviews, security signals), a web UI for browsing, and a voice install flow (e.g. an `install_skill(name)` tool that mutates `persona.yaml` and reloads).
+
+**Not shipping because:** distribution via PyPI is enough today. **Trigger to start:** enough community-authored `huxley-skill-*` packages exist on PyPI that discovery becomes real friction.
+
+#### `huxley-grows` — build agent that writes new skills from voice
+
+A higher-tier skill that takes a request like _"make me a skill that reads my Notion inbox,"_ runs an LLM build agent against the Huxley SDK, generates a candidate `huxley-skill-notion` package, lints/tests it, and offers to install. Failure modes are first-class: if the build can't be done (no API, ambiguous spec, broken auth), the agent says so precisely instead of producing a hallucinated capability.
+
+This sits on top of the SDK and `huxley-market` — the build agent's output is just another `huxley-skill-*` package, and install goes through the same registry. From the user's perspective, find-or-build is the same ceremony: a new skill on your box, same API, same permissions, same voice command.
+
+**Not shipping because:** needs `huxley-market` first, and the quality bar is high (a hallucinated skill that _almost_ works is worse than a refusal). **Trigger to start:** market exists with enough surface area that find-misses are common, and a separate experiment shows agentic skill generation can hit a usable success rate against the SDK.
+
 ### Excluded from Huxley framework
 
-| Feature                        | Why                                                              |
-| ------------------------------ | ---------------------------------------------------------------- |
-| Multi-tenant / SaaS            | Different product. One person → one agent.                       |
-| Wake-word as framework feature | Persona-level concern; framework supports any client input model |
-| Cross-language skill authoring | Python-only for v1. MCP shim handles cross-language someday.     |
-| Marketplace / registry         | Open-source, distributed via PyPI. Registry is way later.        |
-| Multi-user voice               | One person at a time. Multi-voice = different system entirely.   |
+| Feature                        | Why                                                                           |
+| ------------------------------ | ----------------------------------------------------------------------------- |
+| Multi-tenant / SaaS            | Different product. One person → one agent.                                    |
+| Wake-word as framework feature | Persona-level concern; framework supports any client input model              |
+| Cross-language skill authoring | Python-only for v1. MCP shim handles cross-language someday.                  |
+| Marketplace / registry         | Open-source, distributed via PyPI. Registry is `huxley-market` (speculative). |
+| Multi-user voice               | One person at a time. Multi-voice = different system entirely.                |
 
 ## AbuelOS persona
 

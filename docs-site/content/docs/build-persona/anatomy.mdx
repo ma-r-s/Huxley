@@ -1,0 +1,261 @@
+---
+title: Anatomy of persona.yaml
+description: Every field, top to bottom. With examples.
+---
+
+A persona is one YAML file at `server/personas/<name>/persona.yaml`. This page walks every field in the order they typically appear, with a short example for each.
+
+## The minimal persona
+
+The smallest valid persona:
+
+```yaml title="server/personas/example/persona.yaml"
+version: 1
+name: example
+voice: alloy
+language_code: en
+transcription_language: en
+timezone: America/New_York
+system_prompt: |
+  You are a helpful assistant. Speak in short, plain sentences.
+skills:
+  system: {}
+```
+
+That's seven required fields and a one-skill list. A real persona has more, but the structure is the same.
+
+## Required fields, top to bottom
+
+### `version`
+
+```yaml
+version: 1
+```
+
+The schema version. Always `1` today. Future-compatibility hook for if the schema ever changes meaningfully.
+
+### `name`
+
+```yaml
+name: kitchenhelper
+```
+
+The persona's identifier. Used:
+
+- As the directory name (`server/personas/kitchenhelper/`).
+- As the database name (`server/personas/kitchenhelper/data/kitchenhelper.db`).
+- In log events (every event tagged with `persona=kitchenhelper`).
+- As the `HUXLEY_PERSONA` env var value.
+
+Use lowercase, no spaces, no special characters. Match the directory name.
+
+### `voice`
+
+```yaml
+voice: coral
+```
+
+Which OpenAI Realtime voice the model uses. Common choices:
+
+| Voice     | Character                            |
+|-----------|--------------------------------------|
+| `alloy`   | Neutral, balanced, default-feeling   |
+| `coral`   | Warm, conversational, slightly slow  |
+| `echo`    | More formal, clipped                 |
+| `shimmer` | Light, bright                        |
+| `verse`   | Stylized, expressive                 |
+| `sage`    | Calm, measured                       |
+
+OpenAI ships more — try them in their playground before committing. Voice is overridable at runtime via `HUXLEY_OPENAI_VOICE=foo`, useful for A/B testing.
+
+### `language_code`
+
+```yaml
+language_code: en
+```
+
+ISO 639-1 (two letters). The persona's primary language. Used for:
+
+- Default tool descriptions (skills should write descriptions in this language).
+- Default system prompt (the `system_prompt` field below should be in this language).
+- Constraint instruction text (the framework injects constraint reminders in this language).
+
+If the persona is multilingual, set this to the *primary* language; per-language overrides go in `i18n`.
+
+### `transcription_language`
+
+```yaml
+transcription_language: en
+```
+
+A hint to OpenAI's Whisper transcription. Often the same as `language_code`, but can differ:
+
+- A persona that speaks English to the user but transcribes user speech as Spanish (the user speaks Spanish, the persona narrates English translations).
+- A persona that's bilingual — set to whichever language the user is *most likely* to speak.
+
+If you're not sure, match `language_code`.
+
+### `timezone`
+
+```yaml
+timezone: America/Bogota
+```
+
+IANA timezone string. Used by skills like `system.get_current_time` to speak local time correctly. List at [iana.org/time-zones](https://www.iana.org/time-zones).
+
+### `system_prompt`
+
+```yaml
+system_prompt: |
+  You are an enthusiastic cooking assistant. The user has their hands
+  in ingredients, so keep replies under three sentences. Never ask
+  clarifying questions before answering — give your best guess.
+  When the user asks for a measurement and you're not sure of the
+  exact amount, give a confident estimate and tell them it's approximate.
+```
+
+Multi-line. In the persona's `language_code`. This is where personality lives.
+
+The framework injects three things into this prompt automatically — you don't write them yourself:
+
+1. **Available tools** — the LLM gets the function-calling schema for every skill's tools.
+2. **Constraint reminders** — for each constraint enabled, an instruction is appended.
+3. **Time context** — current time and timezone, so "what time is it" works.
+
+Practical guidance:
+
+- **Be specific.** "Be helpful" is useless. "Reply in under three sentences" is actionable.
+- **Establish character.** Personality the user can feel — warmth, dryness, formality.
+- **List quirks.** Things this persona does that others don't. "Always responds 'Hola, mijo' when the user says 'Hey Huxley.'"
+- **Don't list tools.** The framework does that.
+- **Don't list constraint rules verbatim.** Use `constraints:` and let the framework inject them.
+
+We cover prompt-craft more in [Voice and language](/docs/build-persona/voice-and-language).
+
+### `skills`
+
+```yaml
+skills:
+  audiobooks:
+    library: audiobooks
+    sounds_path: sounds
+    sounds_enabled: true
+  news:
+    location: "Bogotá"
+    latitude: 4.71
+    longitude: -74.07
+    country_code: "CO"
+    language_code: "es"
+  system: {}
+  timers: {}
+```
+
+A map of skill name → config dict. Each key must match a skill's entry-point name in `pyproject.toml`.
+
+Empty config = `{}`. The skill must accept that (most do).
+
+Relative paths in skill config resolve against `server/personas/<name>/data/`. So `library: audiobooks` resolves to `server/personas/<name>/data/audiobooks/`.
+
+Listed but not installed → startup fails. The framework refuses to silently ignore a missing skill.
+
+## Optional fields
+
+### `constraints`
+
+```yaml
+constraints:
+  - never_say_no
+  - confirm_destructive
+```
+
+A list of behavioral rules. See [Concepts: Constraints](/docs/concepts/constraints) for the registry. Personas pick which to enable; skills opt into respecting them.
+
+Default: empty list (no constraints).
+
+### `ui_strings`
+
+```yaml
+ui_strings:
+  listening: "Escuchando..."
+  too_short: "Muy corto, intenta de nuevo."
+  sent: "Listo."
+  responding: "Pensando..."
+  ready: "Listo."
+```
+
+Localized strings the dev client UI displays. The browser PWA reads these to label its states. The firmware client uses earcons instead of text, so it ignores these strings.
+
+If omitted, the framework uses English defaults.
+
+### `i18n`
+
+```yaml
+i18n:
+  en:
+    transcription_language: en
+    system_prompt: |
+      You're a warm assistant. Speak in short sentences.
+    ui_strings:
+      listening: "Listening..."
+      ready: "Ready."
+  fr:
+    transcription_language: fr
+    system_prompt: |
+      Tu es un assistant chaleureux. Parle lentement.
+    ui_strings:
+      listening: "J'écoute..."
+```
+
+Per-language overrides. Each top-level key is an ISO 639-1 language code. The value is a partial persona — you only override the fields you want different.
+
+When a client connects with `?lang=fr`, the framework merges the persona's primary language config with the `fr` overrides. Skills (and their tool descriptions, completion prompts, etc.) can also be overridden via `i18n` inside their skill block:
+
+```yaml
+skills:
+  audiobooks:
+    library: audiobooks
+    i18n:
+      en:
+        on_complete_prompt: "The book is finished. Tell the user warmly."
+      es:
+        on_complete_prompt: "El libro terminó. Anúncialo con calidez."
+```
+
+We cover the full multilingual pattern in [Multilingual personas](/docs/build-persona/multilingual).
+
+## Field order
+
+The framework doesn't care about field order — YAML is a map, order is for humans. But there's a convention that makes personas easier to scan:
+
+1. Identity: `version`, `name`
+2. Voice and locale: `voice`, `language_code`, `transcription_language`, `timezone`
+3. Behavior: `system_prompt`, `constraints`, `ui_strings`
+4. Multilingual: `i18n`
+5. Capability: `skills`
+
+Identity at the top, behavior in the middle, big stuff (skills, i18n blocks) at the bottom where you scroll through them.
+
+## Validation
+
+The framework validates personas at startup. Common failures:
+
+- **Missing required field.** Error names the field. Fix it and restart.
+- **Skill not installed.** Error names the skill. `uv add huxley-skill-<name>` and restart.
+- **YAML syntax error.** Error gives line and column. Fix indentation.
+- **Invalid timezone.** Error names the bad value. Check IANA list.
+- **Invalid voice.** OpenAI rejects on first session creation, not at startup. You'll see it in the first turn.
+
+## Next
+
+<Cards>
+  <Card
+    href="/docs/build-persona/voice-and-language"
+    title="Voice and language"
+    description="Choosing the voice. Crafting the system prompt."
+  />
+  <Card
+    href="/docs/build-persona/abuelos-walkthrough"
+    title="Walkthrough: AbuelOS"
+    description="See every field used in a real persona."
+  />
+</Cards>

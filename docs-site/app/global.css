@@ -1,0 +1,100 @@
+@import "tailwindcss";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+
+/* Fumadocs needs to scan its own JS bundles for Tailwind classes. */
+@source "../node_modules/fumadocs-ui/dist/**/*.js";
+
+/*
+  Brand palette — mirrored exactly from site/src/styles/index.css so the
+  docs feel continuous with the marketing landing. OKLCH values are the
+  canonical source of truth across the project.
+*/
+:root {
+  --hux-coral: oklch(0.62 0.19 23);
+  --hux-coral-dk: oklch(0.42 0.14 22);
+  --hux-coral-xdk: oklch(0.2 0.06 22);
+  --hux-paper: oklch(0.96 0.015 60);
+  --hux-ink: oklch(0.16 0.04 25);
+}
+
+/*
+  Light mode — paper background, ink text, coral accents. Fumadocs maps
+  these via CSS variable overrides; the rest of its UI follows.
+*/
+:root {
+  --color-fd-background: var(--hux-paper);
+  --color-fd-foreground: var(--hux-ink);
+  --color-fd-card: oklch(0.98 0.01 60);
+  --color-fd-card-foreground: var(--hux-ink);
+  --color-fd-popover: oklch(0.98 0.01 60);
+  --color-fd-popover-foreground: var(--hux-ink);
+  --color-fd-primary: var(--hux-coral);
+  --color-fd-primary-foreground: var(--hux-paper);
+  --color-fd-secondary: oklch(0.92 0.02 50);
+  --color-fd-secondary-foreground: var(--hux-ink);
+  --color-fd-muted: oklch(0.93 0.015 55);
+  --color-fd-muted-foreground: oklch(0.45 0.03 30);
+  --color-fd-accent: oklch(0.93 0.04 30);
+  --color-fd-accent-foreground: var(--hux-ink);
+  --color-fd-border: oklch(0.88 0.02 35);
+  --color-fd-ring: var(--hux-coral);
+}
+
+/*
+  Dark mode — dark coral background, paper text. The same coral primary
+  reads warmer/glowier on dark, which keeps the brand voice consistent
+  rather than the typical "dark mode = cool blue" inversion.
+*/
+.dark {
+  --color-fd-background: var(--hux-coral-xdk);
+  --color-fd-foreground: var(--hux-paper);
+  --color-fd-card: oklch(0.24 0.07 22);
+  --color-fd-card-foreground: var(--hux-paper);
+  --color-fd-popover: oklch(0.24 0.07 22);
+  --color-fd-popover-foreground: var(--hux-paper);
+  --color-fd-primary: oklch(0.72 0.18 25);
+  --color-fd-primary-foreground: var(--hux-coral-xdk);
+  --color-fd-secondary: oklch(0.3 0.08 25);
+  --color-fd-secondary-foreground: var(--hux-paper);
+  --color-fd-muted: oklch(0.28 0.06 25);
+  --color-fd-muted-foreground: oklch(0.7 0.04 35);
+  --color-fd-accent: oklch(0.32 0.1 28);
+  --color-fd-accent-foreground: var(--hux-paper);
+  --color-fd-border: oklch(0.32 0.07 25);
+  --color-fd-ring: oklch(0.72 0.18 25);
+}
+
+/*
+  Typography — Inter Tight for body, JetBrains Mono for code, Instrument
+  Serif (italic) reserved for hero/landing-of-section moments.
+*/
+body {
+  font-family: var(--font-inter-tight), system-ui, sans-serif;
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--font-jetbrains-mono), "SF Mono", monospace;
+}
+
+/*
+  Section eyebrow + serif hero treatment matching the landing site. Used
+  by the docs index page and the "section landing" pages.
+*/
+.hux-eyebrow {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-fd-muted-foreground);
+}
+
+.hux-serif {
+  font-family: var(--font-instrument-serif), Georgia, serif;
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: -0.015em;
+  line-height: 1;
+}

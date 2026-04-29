@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useRegisterSection } from "../lib/voiceThread.js";
 import { useViewport } from "../lib/useViewport.js";
-import { SectionHead } from "../components/Chrome.js";
+import { SectionHead, coralSection } from "../components/Chrome.js";
 import { Reveal } from "../components/Reveal.js";
 
 interface Segment {
@@ -75,11 +75,10 @@ export function TurnTimeline() {
       ref={sectionRef}
       id="timeline"
       style={{
+        ...coralSection,
         position: "relative",
         zIndex: 2,
         padding: isMobile ? "72px 24px" : "120px 64px",
-        borderTop: "1px solid var(--hux-fg-line)",
-        background: "color-mix(in oklab, var(--hux-coral) 92%, black)",
       }}
     >
       <SectionHead

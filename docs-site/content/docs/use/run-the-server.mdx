@@ -1,0 +1,177 @@
+---
+title: Run the Server
+description: From dev loop to a real assistant on a real machine.
+---
+
+The server is one Python process. You can run it from a checkout, daemonize it on Linux, run it on a Mac under launchd, or wrap it in a systemd unit on a Raspberry Pi. This page covers the common shapes.
+
+## Dev loop
+
+The fastest way:
+
+```bash
+cd server/runtime
+uv run huxley
+```
+
+This loads `.env` from the current directory, reads `HUXLEY_PERSONA`, and listens on `:8765`. With multiple personas in `server/personas/` (the repo ships `abuelos` and `basicos`), set `HUXLEY_PERSONA` explicitly. Restart between code changes — there's no hot reload for the server (skills hold state; reloads would lose it).
+
+For development with a different persona running side by side:
+
+```bash
+HUXLEY_PERSONA=basicos HUXLEY_SERVER_PORT=8766 uv run huxley
+```
+
+You can A/B-test two personas by pointing two PWA tabs at the two ports.
+
+## Environment variables
+
+The server reads a small set of env vars. The full list lives in [Reference: Environment Variables](/docs/reference/environment-variables); the ones you'll touch most:
+
+| Variable                     | Default              | Purpose                                    |
+|------------------------------|----------------------|--------------------------------------------|
+| `HUXLEY_OPENAI_API_KEY`      | (required)           | Your OpenAI key with Realtime access       |
+| `HUXLEY_PERSONA`             | (no default)         | Which persona to load (required if 2+ personas exist) |
+| `HUXLEY_SERVER_PORT`         | `8765`               | WebSocket port                             |
+| `HUXLEY_OPENAI_MODEL`        | `gpt-4o-mini-realtime-preview` | Override the default model       |
+| `HUXLEY_OPENAI_VOICE`        | (from persona.yaml)  | Override the persona's voice               |
+| `HUXLEY_LOG_JSON`            | `false`              | Set to `true` for JSONL logs               |
+
+Set them in `server/runtime/.env`:
+
+```bash title="server/runtime/.env"
+HUXLEY_OPENAI_API_KEY=sk-proj-...
+HUXLEY_PERSONA=abuelos
+HUXLEY_LOG_JSON=true
+```
+
+## On a Linux server (systemd)
+
+For a real always-on deployment, use systemd. Create a unit:
+
+```ini title="/etc/systemd/system/huxley.service"
+[Unit]
+Description=Huxley voice agent server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=huxley
+WorkingDirectory=/opt/huxley/server/runtime
+EnvironmentFile=/opt/huxley/server/runtime/.env
+ExecStart=/home/huxley/.local/bin/uv run huxley
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/huxley/server.log
+StandardError=append:/var/log/huxley/server.log
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now huxley
+sudo systemctl status huxley
+```
+
+If `HUXLEY_LOG_JSON=true` is set, `/var/log/huxley/server.log` becomes structured — use `jq` to query it.
+
+## On a Mac (launchd)
+
+The repo includes a launchd plist template at `scripts/launchd/com.huxley.server.plist`. Copy it to `~/Library/LaunchAgents/`, edit paths if needed, then:
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.huxley.server.plist
+launchctl start com.huxley.server
+```
+
+Logs land at `~/Library/Logs/Huxley/server.log` by default.
+
+## On a Raspberry Pi
+
+A Pi 4 or 5 runs Huxley fine. The bottleneck is OpenAI Realtime latency, not local compute. A few tips:
+
+- **Use a wired network if you can.** Audio jitter shows up over flaky Wi-Fi.
+- **Run as a systemd unit, not in a tmux session.** Reboots happen; you want it back up automatically.
+- **Use a USB sound card** for any client running on the Pi. The on-board Pi audio is bad. (This is a *client* concern, not a server concern — the server has no audio hardware.)
+
+## Persistence
+
+The server keeps three kinds of state:
+
+| Kind                  | Where it lives                                | Persists across restart? |
+|-----------------------|-----------------------------------------------|--------------------------|
+| OpenAI session        | OpenAI's side, tied to a session ID           | No — new session each restart |
+| Skill data            | `server/personas/<persona>/data/<persona>.db` | Yes (SQLite)            |
+| Logs                  | `logs/server.jsonl` or syslog                 | Yes                     |
+
+The OpenAI session ephemerality is fine — Huxley reconnects automatically on the first incoming PTT after a restart, and idle sessions cost nothing.
+
+The skill database survives restarts. A timer scheduled before a restart will fire after — the timers skill restores from storage on `setup`.
+
+## Health checks
+
+Huxley doesn't expose an HTTP health endpoint — the WebSocket *is* the API. To check liveness, attempt a WebSocket handshake:
+
+```bash
+# Returns "HTTP/1.1 101 Switching Protocols" on success
+curl -i -N -H "Connection: Upgrade" -H "Upgrade: websocket" \
+  -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+  -H "Sec-WebSocket-Version: 13" \
+  http://localhost:8765/
+```
+
+For systemd-style health, the process being alive (`systemctl is-active huxley`) is usually sufficient. If the server crashed, systemd restarts it. If it's hung, `Restart=on-failure` plus a timeout works.
+
+## Logs and debugging
+
+By default the server logs to stdout in pretty format. For real deployments, use `HUXLEY_LOG_JSON=true` and route to a file:
+
+```bash
+tail -f logs/server.jsonl | jq -c 'select(.level=="error" or .level=="warning")'
+```
+
+Every event has a turn ID. Grep by turn to reconstruct what happened in a single conversation:
+
+```bash
+tail -f logs/server.jsonl | jq 'select(.turn=="t-7f3a")'
+```
+
+The full observability convention lives in `docs/observability.md` in the repo. Skill events are namespaced (`audiobooks.*`, `news.*`, etc.) and inherit the turn ID automatically.
+
+## Updating
+
+Pull the new code, restart the server:
+
+```bash
+git pull
+uv sync                        # picks up dependency changes
+sudo systemctl restart huxley  # or your equivalent
+```
+
+Persona files change rarely. Skill code changes more often. If a skill updates its database schema, it's responsible for migrating on `setup` — the framework doesn't run migrations.
+
+## Two servers, one machine
+
+A common dev pattern: AbuelOS on `:8765`, BasicOS on `:8766`, both running, both pointed at the same data dir or separate ones. They're independent processes, they don't coordinate. Run them in two terminals, or as two systemd units with different `Environment=` lines.
+
+If you do this, make sure their database paths don't collide — by default each persona has its own (`server/personas/abuelos/data/`, `server/personas/basicos/data/`).
+
+## Next
+
+<Cards>
+  <Card
+    href="/docs/use/connect-a-client"
+    title="Connect a client"
+    description="The PWA, the firmware, and what it takes to write a new one."
+  />
+  <Card
+    href="/docs/use/switch-personas"
+    title="Switch personas"
+    description="Run a different persona, or several at once."
+  />
+</Cards>

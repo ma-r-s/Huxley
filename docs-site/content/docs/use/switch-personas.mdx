@@ -1,0 +1,107 @@
+---
+title: Switch Personas
+description: Same server, different agent. One env var.
+---
+
+A persona is just a YAML file plus a directory. The server picks one at startup; switching is one env var and a restart.
+
+## Pick at startup
+
+```bash
+HUXLEY_PERSONA=basicos uv run huxley
+```
+
+There's no default. When more than one persona exists under `server/personas/`, set `HUXLEY_PERSONA` explicitly. Any directory there with a valid `persona.yaml` is a candidate.
+
+## What changes when you switch
+
+- **Voice and language** — the audio sounds completely different.
+- **System prompt** — the agent's personality changes.
+- **Skill list** — a different set of skills loads.
+- **Constraints** — different behavioral rules apply.
+- **Database** — each persona has its own SQLite file at `server/personas/<name>/data/<name>.db`. Switching personas swaps databases.
+- **UI strings** — the dev client's "listening...", "ready", etc. labels change.
+
+The user-visible result: same hardware, same WebSocket connection, completely different agent.
+
+## Two personas, same machine
+
+Run them on different ports:
+
+```bash
+# terminal 1
+HUXLEY_PERSONA=abuelos HUXLEY_SERVER_PORT=8765 uv run huxley
+
+# terminal 2
+HUXLEY_PERSONA=basicos HUXLEY_SERVER_PORT=8766 uv run huxley
+```
+
+The PWA's `VITE_HUXLEY_PERSONAS` env var is a comma-separated `name:url` registry — e.g. `VITE_HUXLEY_PERSONAS=abuelos:ws://localhost:8765,basicos:ws://localhost:8766` — and the in-app picker switches between them. Useful for A/B-testing prompt changes side by side.
+
+## Family-of-personas patterns
+
+A common shape: one *body* of skills (audiobooks, news, timers), several *faces* (one per family member). The personas share most of their config but differ in:
+
+- The system prompt (warm grandparent vs. terse teenager).
+- The voice (`coral` vs. `alloy`).
+- The skill subset (no Telegram for the kids' room).
+- The constraints (`child_safe` only for the kids' room).
+
+Each persona has its own data directory, so timers, message history, and bookmarks are independent.
+
+## Hot-reloading personas
+
+There isn't any. Personas load at server startup. Editing `persona.yaml` does nothing until you restart.
+
+If you're iterating on a persona, the loop is:
+
+1. Edit `persona.yaml`.
+2. Restart the server (`Ctrl-C` and `uv run huxley`).
+3. Hold the button, listen.
+
+Skill code also requires restart. The good news: server boot is fast — a few seconds to load the persona, validate the schema, register skills, and listen.
+
+## Validating a persona without running it
+
+Huxley validates persona files at startup; an invalid one fails fast with a structured error. The fastest way to validate today: run the server with the persona; if the YAML or skill list is bad, the error message is immediate and structured.
+
+```bash
+HUXLEY_PERSONA=basicos uv run huxley
+```
+
+A dedicated `--check` flag is on the roadmap; for now the boot path is the validator.
+
+## What if a skill listed in `persona.yaml` isn't installed?
+
+Hard fail at startup. The framework refuses to silently ignore a missing skill — that path leads to "why doesn't my agent know how to play music?" debugging sessions.
+
+If you remove a skill from your persona, also remove it from `pyproject.toml` (or vice versa). The two need to agree.
+
+## A persona checklist
+
+When you create a new persona or modify an existing one:
+
+- [ ] `version: 1`
+- [ ] `name` matches the directory name
+- [ ] `language_code` and `transcription_language` match
+- [ ] `voice` is one OpenAI Realtime supports
+- [ ] `system_prompt` is in the persona's primary language
+- [ ] Every listed skill is installed (`uv run pip list | grep huxley-skill`)
+- [ ] Skill config paths (audiobook libraries, sound files) exist on disk
+- [ ] Constraints are spelled correctly
+- [ ] If multilingual, every supported `i18n` language has a complete `system_prompt`
+
+## Next
+
+<Cards>
+  <Card
+    href="/docs/use/add-a-skill"
+    title="Add a skill"
+    description="Install one of the first-party skills, or one from a third party."
+  />
+  <Card
+    href="/docs/build-persona"
+    title="Build a persona"
+    description="Walk through making a brand-new persona, end to end."
+  />
+</Cards>
