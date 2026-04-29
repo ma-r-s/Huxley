@@ -38,20 +38,20 @@ when the user asks for the same slice twice in quick succession.
 
 Persona's `skills.news` block:
 
-| Key                 | Required | Default  | Notes                                                                |
-| ------------------- | -------- | -------- | -------------------------------------------------------------------- |
-| `location`          | yes      | —        | Human-readable location name; appears in narration prompts           |
-| `latitude`          | yes      | —        | For Open-Meteo                                                       |
-| `longitude`         | yes      | —        | For Open-Meteo                                                       |
-| `country_code`      | yes      | —        | ISO 3166-1 alpha-2 (`CO`, `US`, `ES`, …) for Google News             |
-| `language_code`     | yes      | —        | ISO 639-1 (`es`, `en`, …) for Google News + tool descriptions        |
-| `units`             | no       | `metric` | `metric` or `imperial`                                               |
-| `max_items`         | no       | `8`      | Headlines per fetch                                                  |
-| `max_age_hours`     | no       | `24`     | Skip items older than this                                           |
-| `interests`         | no       | `[]`     | List of strings; appears in tool description as a hint to the LLM    |
-| `cache_ttl_seconds` | no       | `300`    | In-memory cache TTL                                                  |
-| `start_sound`       | no       | _none_   | Sound palette role (e.g. `news_start`); omit for no chime            |
-| `sounds_path`       | no       | `sounds` | Sound palette directory (relative to persona `data_dir` or absolute) |
+| Key                 | Required | Default  | Notes                                                                                                                                                                                                   |
+| ------------------- | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `location`          | yes      | —        | Human-readable location name; appears in narration prompts                                                                                                                                              |
+| `latitude`          | yes      | —        | For Open-Meteo                                                                                                                                                                                          |
+| `longitude`         | yes      | —        | For Open-Meteo                                                                                                                                                                                          |
+| `country_code`      | yes      | —        | ISO 3166-1 alpha-2 (`CO`, `US`, `ES`, …) for Google News                                                                                                                                                |
+| `language_code`     | yes      | —        | ISO 639-1 (`es`, `en`, …) for Google News + tool descriptions                                                                                                                                           |
+| `units`             | no       | `metric` | `metric` or `imperial`                                                                                                                                                                                  |
+| `max_items`         | no       | `8`      | Headlines per fetch                                                                                                                                                                                     |
+| `max_age_hours`     | no       | `24`     | Skip items older than this                                                                                                                                                                              |
+| `interests`         | no       | `[]`     | List of strings; appears in tool description as a hint to the LLM                                                                                                                                       |
+| `cache_ttl_seconds` | no       | `300`    | In-memory cache TTL                                                                                                                                                                                     |
+| `start_sound`       | no       | _none_   | Sound palette role (e.g. `news_start`); omit for no chime                                                                                                                                               |
+| `sounds_path`       | no       | `sounds` | Sound palette directory (relative to persona `data_dir` or absolute). Personas typically point this at `../../_shared/sounds` to use the framework-shared palette — see [`../sounds.md`](../sounds.md). |
 
 ## How personas consume it differently
 

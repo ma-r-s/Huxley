@@ -71,7 +71,7 @@ constraints:
 skills:
   audiobooks:
     library: audiobooks
-    sounds_path: ../sounds # earcon palette (book_start.wav, book_end.wav)
+    sounds_path: ../../_shared/sounds # framework-shared earcon palette
     sounds_enabled: true # master toggle for all earcons + completion silence
     silence_ms: 500 # silence sent AFTER request_response to mask model latency
     on_complete_prompt:

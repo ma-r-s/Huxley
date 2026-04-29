@@ -37,14 +37,14 @@ follow-up. Out of scope for v1.
 
 Persona's `skills.radio` block:
 
-| Key             | Required | Default  | Notes                                                                |
-| --------------- | -------- | -------- | -------------------------------------------------------------------- |
-| `stations`      | yes      | —        | List of `{id, name, url, description?}`                              |
-| `default`       | yes      | —        | Station id played when `play_station` is called with no argument     |
-| `language_code` | no       | `en`     | Switches tool descriptions between Spanish and English               |
-| `ffmpeg`        | no       | `ffmpeg` | Path to ffmpeg binary                                                |
-| `start_sound`   | no       | _none_   | Sound palette role (e.g. `radio_start`); omit for no chime           |
-| `sounds_path`   | no       | `sounds` | Sound palette directory (relative to persona `data_dir` or absolute) |
+| Key             | Required | Default  | Notes                                                                                                                                                                                                   |
+| --------------- | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stations`      | yes      | —        | List of `{id, name, url, description?}`                                                                                                                                                                 |
+| `default`       | yes      | —        | Station id played when `play_station` is called with no argument                                                                                                                                        |
+| `language_code` | no       | `en`     | Switches tool descriptions between Spanish and English                                                                                                                                                  |
+| `ffmpeg`        | no       | `ffmpeg` | Path to ffmpeg binary                                                                                                                                                                                   |
+| `start_sound`   | no       | _none_   | Sound palette role (e.g. `radio_start`); omit for no chime                                                                                                                                              |
+| `sounds_path`   | no       | `sounds` | Sound palette directory (relative to persona `data_dir` or absolute). Personas typically point this at `../../_shared/sounds` to use the framework-shared palette — see [`../sounds.md`](../sounds.md). |
 
 Example (excerpted from `server/personas/abuelos/persona.yaml`):
 
@@ -61,7 +61,7 @@ radio:
       name: "Blu Radio"
       url: "https://playerservices.streamtheworld.com/api/livestream-redirect/BLURADIO.mp3"
     # ...
-  sounds_path: ../sounds
+  sounds_path: ../../_shared/sounds
   start_sound: radio_start
 ```
 
