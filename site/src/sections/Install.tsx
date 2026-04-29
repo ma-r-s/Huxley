@@ -56,20 +56,32 @@ export function Install() {
         <pre
           style={{
             margin: "0 auto",
-            padding: isMobile ? 18 : 28,
+            padding: isMobile ? 16 : 28,
             borderRadius: 16,
             background: "rgba(0,0,0,0.35)",
             border: "1px solid var(--hux-fg-line)",
             fontFamily: "var(--hux-mono)",
-            fontSize: isMobile ? 11 : 13,
+            fontSize: isMobile ? 10 : 13,
             lineHeight: 1.8,
             color: "var(--hux-fg)",
-            overflow: "auto",
+            overflowX: "auto",
+            // pre-wrap lets long words like the GitHub URL wrap on mobile so
+            // nothing clips. Desktop keeps the original block layout.
+            whiteSpace: isMobile ? "pre-wrap" : "pre",
+            wordBreak: isMobile ? "break-all" : "normal",
             textAlign: "left",
             maxWidth: 640,
           }}
         >
-          {`$ git clone https://github.com/ma-r-s/Huxley.git && cd Huxley
+          {isMobile
+            ? `$ git clone github.com/ma-r-s/Huxley && cd Huxley
+$ echo "OPENAI_KEY=sk-..." > server/runtime/.env
+# terminal 1
+$ uv sync && cd server/runtime && uv run huxley
+# terminal 2
+$ cd clients/pwa && bun install && bun dev
+$ open http://localhost:5174`
+            : `$ git clone https://github.com/ma-r-s/Huxley.git && cd Huxley
 $ echo "HUXLEY_OPENAI_API_KEY=sk-..." > server/runtime/.env
 $ uv sync && cd server/runtime && uv run huxley   # terminal 1
 $ cd clients/pwa && bun install && bun dev         # terminal 2

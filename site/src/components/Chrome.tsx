@@ -239,7 +239,9 @@ export function SectionHead({ eyebrow, title, subtitle }: SectionHeadProps) {
               fontStyle: "italic",
               fontSize: 22,
               lineHeight: 1.4,
-              opacity: 0.78,
+              // Was 0.78 — too faint on the dark-coral section backgrounds,
+              // especially on mobile where everything is more compact.
+              opacity: 0.92,
               maxWidth: 640,
             }}
           >

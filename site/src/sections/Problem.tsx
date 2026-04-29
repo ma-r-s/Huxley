@@ -106,7 +106,7 @@ export function Problem() {
                   isHero && heroLift > 0
                     ? `inset 0 0 0 1px color-mix(in oklab, var(--hux-fg) ${heroLift * 40}%, transparent)`
                     : "none",
-                minHeight: 280,
+                minHeight: isMobile ? 0 : 280,
                 display: "flex",
                 flexDirection: "column",
                 gap: 16,
