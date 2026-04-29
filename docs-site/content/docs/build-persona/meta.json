@@ -1,0 +1,11 @@
+{
+  "title": "Build a Persona",
+  "icon": "User",
+  "pages": [
+    "index",
+    "anatomy",
+    "voice-and-language",
+    "multilingual",
+    "abuelos-walkthrough"
+  ]
+}

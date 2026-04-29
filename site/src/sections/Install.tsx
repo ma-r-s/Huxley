@@ -3,7 +3,7 @@
 import { useTranslation } from "react-i18next";
 import { useRegisterSection } from "../lib/voiceThread.js";
 import { useViewport } from "../lib/useViewport.js";
-import { chipGhost, chipSolid } from "../components/Chrome.js";
+import { chipGhost, chipSolid, deepSection } from "../components/Chrome.js";
 import { Wordmark } from "../components/Wordmark.js";
 
 export function Install() {
@@ -15,10 +15,10 @@ export function Install() {
       ref={sectionRef}
       id="install"
       style={{
+        ...deepSection,
         position: "relative",
         zIndex: 2,
         padding: isMobile ? "72px 24px 48px" : "120px 64px 64px",
-        borderTop: "1px solid var(--hux-fg-line)",
         textAlign: "center",
       }}
     >
@@ -125,10 +125,10 @@ export function Footer() {
   return (
     <footer
       style={{
+        ...deepSection,
         position: "relative",
         zIndex: 2,
         padding: isMobile ? "40px 24px 48px" : "48px 64px 56px",
-        borderTop: "1px solid var(--hux-fg-line)",
         display: "flex",
         flexDirection: "column",
         gap: isMobile ? 24 : 28,
@@ -185,9 +185,23 @@ export function Footer() {
           opacity: 0.75,
         }}
       >
+        {/* Personal name + GitHub handle stay outside i18n — proper nouns
+            don't translate, and a missing key in es.json/fr.json shouldn't
+            ever silently drop attribution. */}
+        <span>
+          {t("footer.builtBy")}{" "}
+          <a style={linkStyle} href="https://ma-r-s.com">
+            Mario Ruiz
+          </a>
+        </span>
+        <span>·</span>
         <span>{t("footer.license")}</span>
         <span>·</span>
-        <span>{t("footer.version")}</span>
+        <span>
+          <a style={linkStyle} href="https://github.com/ma-r-s">
+            @ma-r-s
+          </a>
+        </span>
         <span>·</span>
         <span>{t("footer.personasCount")}</span>
       </div>

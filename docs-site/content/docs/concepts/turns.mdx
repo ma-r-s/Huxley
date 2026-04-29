@@ -1,0 +1,222 @@
+---
+title: Turns
+description: The atomic unit of conversation. From button-press to silence, with everything in between.
+---
+
+A **turn** is one round of conversation. It begins when something requests speech (you press the PTT button, or a skill calls `inject_turn`) and ends when the agent goes quiet again. Turns are the framework's clock — every event has a turn ID, every skill dispatch happens inside a turn, every interrupt drops a turn.
+
+Understanding turns is the difference between writing a skill that *kind of works* and writing one that handles interruption, latency, and proactive speech correctly.
+
+## The state machine
+
+Every turn walks through this sequence:
+
+<Mermaid chart={`flowchart TD
+  IDLE([IDLE])
+  LISTENING(LISTENING)
+  COMMITTING(COMMITTING)
+  IN_RESPONSE(IN_RESPONSE)
+  AWAITING_NEXT(AWAITING_NEXT_RESPONSE)
+  APPLYING(APPLYING_FACTORIES)
+  INTERRUPTED([INTERRUPTED])
+
+  IDLE -->|ptt_start or inject_turn| LISTENING
+  LISTENING -->|ptt_stop, frames>=25| COMMITTING
+  LISTENING -->|ptt_stop, frames<25| IDLE
+  COMMITTING --> IN_RESPONSE
+  IN_RESPONSE -->|tool needs follow-up| AWAITING_NEXT
+  AWAITING_NEXT --> IN_RESPONSE
+  IN_RESPONSE -->|response.done, no factories pending| IDLE
+  IN_RESPONSE -->|response.done, factories pending| APPLYING
+  APPLYING --> IDLE
+  COMMITTING -->|user PTT| INTERRUPTED
+  IN_RESPONSE -->|user PTT| INTERRUPTED
+  AWAITING_NEXT -->|user PTT| INTERRUPTED
+  APPLYING -->|user PTT| INTERRUPTED
+  INTERRUPTED --> IDLE
+`} />
+
+Seven states. Five edges that matter to skill authors. The coordinator (`server/runtime/src/huxley/turn/coordinator.py`) is the sole authority — it owns the state, owns the transitions, and owns the audio sequencing.
+
+## What each state means
+
+<Accordions>
+
+<Accordion title="IDLE — nothing is happening">
+The default state. The model is silent, no audio is playing, the speaker is free. The framework can accept a new turn.
+</Accordion>
+
+<Accordion title="LISTENING — recording user audio">
+The user is holding the PTT button. Audio frames flow from the browser through the WebSocket to the OpenAI Realtime session. If the model was speaking when PTT started, this state was reached *via* INTERRUPTED — the prior turn was killed first.
+</Accordion>
+
+<Accordion title="COMMITTING — audio captured, waiting for response">
+The user released the button. The framework checks the duration: under 25 frames (~133ms) is treated as an accidental tap and the turn aborts with "muy corto" (or whatever the persona's `too_short` UI string says). Otherwise the audio buffer is committed to OpenAI and the turn moves to IN_RESPONSE.
+</Accordion>
+
+<Accordion title="IN_RESPONSE — model is replying">
+OpenAI is streaming audio deltas back. The framework forwards them to the browser. If the model decides to call a tool, the framework dispatches it (still inside this state), gets back a `ToolResult`, and feeds the output back to OpenAI for narration.
+</Accordion>
+
+<Accordion title="AWAITING_NEXT_RESPONSE — info tool, model needs to narrate the result">
+A subtle one. When a tool returns `side_effect=None`, the model needs to *speak* the result — but the current `response.done` event signals the end of *this* response, not the whole turn. The framework requests another response from OpenAI ("here's what the tool returned, narrate it") and waits.
+
+Tools that return audio side effects don't go through this state — the audio side effect IS the response.
+</Accordion>
+
+<Accordion title="APPLYING_FACTORIES — model done, audio side effects firing">
+This is the **terminal barrier**. If any tool returned an `AudioStream`, the framework waited until the model finished speaking, then invoked the stored factories one by one. Audio plays through the same WebSocket channel as the model — same format, same path on the browser.
+
+This is also where the "speech before factories" guarantee is enforced. The model always finishes its sentence before audiobook playback or radio streaming begins.
+</Accordion>
+
+<Accordion title="INTERRUPTED — atomic stop">
+Triggered by a user PTT during model speech, by a skill calling `cancel_active_claim`, or by a higher-priority focus claim preempting. The interrupt is **atomic**: drop flag → clear pending factories → stop the audio producer → flush the client → cancel the OpenAI response → mark INTERRUPTED. This six-step sequence is exactly the order that makes the system feel snappy. The order matters.
+</Accordion>
+
+</Accordions>
+
+## "Speech before factories" — the guarantee that matters
+
+If a tool returns an `AudioStream` side effect, the framework **does not** play the audio immediately. It latches the factory and waits.
+
+When does it fire? At the **terminal barrier**: after `response.done`, after no tool needs follow-up, after the model has stopped emitting audio chunks. Only then does the framework call the factory and start streaming.
+
+Why? Because the model's narration of *what's about to happen* must finish before the thing happens. Imagine:
+
+> "Comenzando el primer libro..." [book audio starts]
+
+vs.
+
+> [book audio starts] "Comenzando el primer libro..." [overlapping]
+
+The first is conversation. The second is a glitch. The framework's job is to make the first cheap and the second impossible.
+
+## Interruption, atomically
+
+The interrupt path is the most carefully engineered piece of the framework. When you press PTT during model speech (or while a book is playing, or during a tool call):
+
+<Steps>
+
+<Step>
+
+### Drop flag set
+
+Any in-flight audio is marked dropped. Anything mid-write to the client gets discarded. The flag is checked before *every* outbound chunk, so the producer can't race the interrupt.
+
+</Step>
+
+<Step>
+
+### Pending factories cleared
+
+If audio side effects were latched but hadn't fired yet, they're discarded. The book that *would have started playing* doesn't.
+
+</Step>
+
+<Step>
+
+### Audio producer stopped
+
+If a stream was running (audiobook, radio, claim speaker source), it's cancelled. The asyncio task wrapping the factory gets `cancel()`. ffmpeg subprocesses get terminated.
+
+</Step>
+
+<Step>
+
+### Client buffer flushed
+
+A `clear` message is sent to the browser. The browser drops everything it had queued. You hear silence within ~30ms of releasing the button.
+
+</Step>
+
+<Step>
+
+### OpenAI response cancelled
+
+A `response.cancel` is sent to the Realtime session. OpenAI stops generating tokens. We don't pay for what we don't hear.
+
+</Step>
+
+<Step>
+
+### State marked INTERRUPTED, then IDLE
+
+The turn is logged as interrupted (so analytics know what happened), state returns to IDLE, and the new PTT can begin.
+
+</Step>
+
+</Steps>
+
+This is six steps in a fixed order, and each step is independently safe to skip if its precondition is false (no producer running → step 3 is a noop). The result: interruption *just works* in every state from COMMITTING onward.
+
+## Skill author implications
+
+Three things follow from how turns work, that you need internalized:
+
+### 1. Your factory may run, may not, may be cancelled mid-stream
+
+A skill that returns `AudioStream(factory=play_book)` is making a *promise*: "here's how to produce audio, you (the framework) decide when." The framework may invoke the factory, or it may discard it (if the user interrupted before the model finished narrating). The factory may run to completion, or it may get cancelled mid-stream.
+
+Your factory must be safe in all three cases. Use `try / finally` for cleanup:
+
+```python
+async def stream():
+    bytes_written = 0
+    completed = False
+    try:
+        async for chunk in audio_source():
+            bytes_written += len(chunk)
+            yield chunk
+        completed = True
+    finally:
+        # Save bookmark whether we finished or got cancelled mid-way.
+        position = 0.0 if completed else start_position + bytes_written / BPS
+        await self._storage.save_position(book_id, position)
+```
+
+### 2. Your factory captures position via closure
+
+Don't store "current position" eagerly. The user might tell the model "skip this chapter" — that creates a new turn, the model calls a control tool, the tool returns a *new* `AudioStream` factory pointing at a new position. The framework cancels the old factory and runs the new one. If positions were stored eagerly, the cancellation race would corrupt them.
+
+```python
+def play_book(book_id: str, start: float):
+    async def stream():
+        async for chunk in self._player.stream(book_id, start_position=start):
+            yield chunk
+    return stream
+```
+
+The closure captures `start`. The skill object's state never gets out of sync with what's actually playing.
+
+### 3. inject_turn enters the same state machine
+
+When a skill calls `ctx.inject_turn(...)`, the framework injects a new turn into the same coordinator. The injected turn races for the speaker against any user PTT. The priority you pass (`NORMAL`, `BLOCK_BEHIND_COMMS`, `PREEMPT`) controls *how* it races. We cover the priorities in [Focus & Channels](/docs/concepts/focus).
+
+## Turn IDs and observability
+
+Every turn has a short UUID. Every log event the framework emits inside a turn carries that ID:
+
+```text
+coord.ptt_start turn=t-7f3a state=LISTENING
+coord.tool_dispatch turn=t-7f3a tool=play_book skill=audiobooks
+coord.audio_done turn=t-7f3a duration_ms=1340
+audiobooks.stream_started turn=t-7f3a book_id=el_principito
+```
+
+When something goes wrong, grep by turn ID. The whole story is reconstructable. The framework's full logging convention lives in `docs/observability.md` in the repo; the short version is: every event you emit from a skill should also include implicit turn context, which `ctx.logger` injects for you.
+
+## Next
+
+<Cards>
+  <Card
+    href="/docs/concepts/side-effects"
+    title="Side effects"
+    description="What ToolResult.side_effect actually does."
+  />
+  <Card
+    href="/docs/concepts/focus"
+    title="Focus & channels"
+    description="The arbitration layer that decides who's speaking."
+  />
+</Cards>

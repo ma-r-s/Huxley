@@ -1,0 +1,198 @@
+---
+title: RSS Feeds and HTTP APIs
+description: Fetch live data, cache responses, filter by constraints. Pattern from the news skill.
+---
+
+Many skills are wrappers around HTTP APIs — news from RSS, weather from Open-Meteo, scores from a sports API, transit from a city's data feed. They fetch, parse, cache, and return text the model narrates.
+
+This recipe shows the pattern that the **news** skill uses, generalized.
+
+## The shape
+
+```python title="huxley_skill_news/__init__.py"
+import httpx
+import json
+from datetime import datetime, timedelta
+from huxley_sdk import (
+    Skill, ToolDefinition, ToolResult, SkillContext, PlaySound,
+)
+from huxley_sdk.audio import load_pcm_palette
+
+
+class NewsSkill:
+    name = "news"
+
+    def __init__(self) -> None:
+        self._cache: dict[str, dict] = {}
+        self._sounds: dict[str, bytes] = {}
+
+    @property
+    def tools(self) -> list[ToolDefinition]:
+        return [
+            ToolDefinition(
+                name="get_news",
+                description=(
+                    "Fetch the latest news headlines. Use when the user asks "
+                    "for news, current events, today's top stories."
+                ),
+                parameters={"type": "object", "properties": {}},
+            ),
+            ToolDefinition(
+                name="get_weather",
+                description=(
+                    "Fetch the current weather for the configured location. "
+                    "Use when the user asks about temperature, weather, "
+                    "forecast, rain."
+                ),
+                parameters={"type": "object", "properties": {}},
+            ),
+        ]
+
+    async def setup(self, ctx: SkillContext) -> None:
+        self._ctx = ctx
+        self._logger = ctx.logger
+        self._cache_ttl = timedelta(seconds=300)
+        self._location = ctx.config["location"]
+        self._latitude = ctx.config["latitude"]
+        self._longitude = ctx.config["longitude"]
+        self._language_code = ctx.config["language_code"]
+
+        sound_dir = ctx.persona_data_dir / ctx.config.get("sounds_path", "sounds")
+        self._sounds = load_pcm_palette(sound_dir, roles=["news_start"])
+
+    async def handle(self, tool_name: str, args: dict) -> ToolResult:
+        if tool_name == "get_news":
+            data = await self._cached_or_fetch("news", self._fetch_news)
+            return ToolResult(
+                output=json.dumps(data),
+                side_effect=PlaySound(self._sounds["news_start"])
+                if "news_start" in self._sounds else None,
+            )
+
+        if tool_name == "get_weather":
+            data = await self._cached_or_fetch("weather", self._fetch_weather)
+            return ToolResult(output=json.dumps(data))
+
+        return ToolResult(output=json.dumps({"error": "unknown tool"}))
+
+    async def _cached_or_fetch(self, key, fetch):
+        entry = self._cache.get(key)
+        now = datetime.now()
+        if entry and (now - entry["at"]) < self._cache_ttl:
+            await self._logger.adebug("cache_hit", key=key)
+            return entry["data"]
+        await self._logger.ainfo("fetching", key=key)
+        data = await fetch()
+        self._cache[key] = {"at": now, "data": data}
+        return data
+
+    async def _fetch_news(self):
+        url = f"https://news.google.com/rss?hl={self._language_code}"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(url)
+            r.raise_for_status()
+        return self._parse_rss(r.text)
+
+    async def _fetch_weather(self):
+        # Open-Meteo URL using self._latitude / self._longitude
+        ...
+
+    async def teardown(self) -> None:
+        pass
+```
+
+## Recipes inside the recipe
+
+### Cache aggressively
+
+External APIs are slow, sometimes flaky, and often rate-limited. A 5-minute cache means:
+
+- Fast tool dispatch (cache hits return in microseconds).
+- Resilience to transient API failures.
+- Polite behavior — you're not hammering the third-party API.
+
+The cache is per-skill-instance, lives in memory, and resets on server restart. That's fine for most use cases. For longer caches that survive restarts, write to `ctx.storage` with timestamps and check freshness on read.
+
+### Future: filter results by constraint
+
+When `ctx.constraints` ships (see [Concepts: Constraints](/docs/concepts/constraints)), skills will be able to filter content based on persona rules — e.g., dropping adult headlines when the persona has `child_safe` enabled. Today, constraints are prompt-only; the model handles filtering at narration time. Structure your skill so a filtering step is easy to add later.
+
+### Handle API failures gracefully
+
+```python
+async def _fetch_news(self):
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(url)
+            r.raise_for_status()
+        return self._parse(r.text)
+    except (httpx.HTTPError, httpx.TimeoutException) as e:
+        await self._logger.aexception("fetch_failed", url=url, error=str(e))
+        return {"error": "unavailable", "headlines": []}
+```
+
+The model gets `{"error": "unavailable"}` and can narrate something useful ("I couldn't reach the news right now — let's try again in a few minutes"). If the persona has `never_say_no`, the model will offer alternatives instead of failing.
+
+Returning a useful error is better than raising an exception. The framework would catch it, but the model would get a generic error message and have to improvise.
+
+### Locale-aware fetching
+
+Read `ctx.language` and adapt:
+
+```python
+async def setup(self, ctx: SkillContext) -> None:
+    # The persona declares language_code/country_code explicitly.
+    # Skills should *read* them rather than guessing from ctx.language.
+    self._language_code = ctx.config["language_code"]
+    self._country_code = ctx.config["country_code"]
+```
+
+Persona-level config wins (set explicitly in `persona.yaml`). Otherwise fall back to a reasonable default per language.
+
+### Add a chime for instant feedback
+
+Information tools have a built-in latency: tool runs, model gets output, model composes narration, model speaks. That's 1-3 seconds of silence after the user releases the PTT button.
+
+A `PlaySound` chime fills that gap:
+
+```python
+return ToolResult(
+    output=json.dumps(data),
+    side_effect=PlaySound(self._sounds["news_start"]),
+)
+```
+
+The chime hits the WebSocket immediately. The user hears it within ~150ms of release. The model audio follows seamlessly.
+
+## What you'd add for a real production skill
+
+The shipped news skill is a few hundred lines. The differences from the shape above:
+
+- A real RSS parser (this one stubs `_parse_rss`).
+- A geocoder for the weather location string → lat/lon.
+- Per-language headline filtering (Spanish-speaking persona reads Colombian news, not American).
+- Bigger cache + retry logic.
+- Tests against fake feeds.
+
+Read `server/skills/news/` for the real version.
+
+## What this teaches generally
+
+The pattern (fetch → cache → filter → narrate → chime) shows up in every API-wrapping skill:
+
+- Sports scores → score_check.
+- Transit → trip_planner.
+- Stock prices → portfolio_check.
+- Calendar → upcoming_events.
+
+The shape is the same. The data is different.
+
+## Next
+
+<Cards>
+  <Card
+    href="/docs/cookbook/audio-streaming"
+    title="Audio streaming"
+    description="The harder pattern: factories, ffmpeg, interrupts."
+  />
+</Cards>

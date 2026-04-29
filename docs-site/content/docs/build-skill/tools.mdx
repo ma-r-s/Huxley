@@ -1,0 +1,288 @@
+---
+title: Tools and Parameters
+description: How to design tool descriptions and JSON Schema parameters the model picks correctly.
+---
+
+The model decides when to call your tool based on its **name**, **description**, and **parameter schema**. Get these right and the model uses your skill naturally; get them wrong and you'll see the model make obvious mistakes (calling tools at the wrong time, passing weird arguments, ignoring tools that should fire).
+
+This page is the practical art of tool design.
+
+## A tool definition, in full
+
+```python
+ToolDefinition(
+    name="play_audiobook",
+    description=(
+        "Start playing an audiobook by ID. Use this AFTER calling "
+        "search_audiobooks — never invent IDs."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "book_id": {
+                "type": "string",
+                "description": "The book's ID, returned by search_audiobooks.",
+            },
+            "start_position": {
+                "type": "number",
+                "description": "Seconds from start. Default 0 (begin from start) or last bookmark if known.",
+            },
+        },
+        "required": ["book_id"],
+    },
+)
+```
+
+Three fields. Each does specific work.
+
+## Naming tools
+
+Conventions that pay off:
+
+- **`verb_noun`** — `play_book`, `set_volume`, `get_news`, `start_workout`. Reads like English.
+- **Avoid generic verbs.** `do_thing`, `handle_request`, `run` — too vague for the model to map.
+- **Prefix by domain when collisions are possible.** Two skills both wanting a `play()` tool should ship `play_book` and `play_radio`. Tool names are global within a loaded persona; collisions fail fast.
+- **Match the persona's mental model.** If your persona says "leer un libro" instead of "play book," the user might say "léeme un libro" — your tool name doesn't need to be in Spanish, but the *description* should be.
+
+## Writing descriptions
+
+The description is for the model, not for the user. The model uses it to decide *when to call*. Three rules:
+
+### Rule 1: state the trigger
+
+Open with a clear "use this when..." or "call this when...":
+
+> "Start playing an audiobook by ID. Use this after the user picks one from a search result."
+
+vs the much weaker:
+
+> "Plays an audiobook."
+
+The first tells the model *when* to fire. The second tells it *what the function does*, which it can guess from the name.
+
+### Rule 2: rule out ambiguity
+
+If your tool has a similar name to another tool, disambiguate explicitly:
+
+> "Set the speaker volume from 0 (silent) to 100 (max). Do NOT use this for music playback volume — use control_radio for that."
+
+The model gets confused when two tools have overlapping use cases. Spell it out.
+
+### Rule 3: write it in the persona's language
+
+If your persona speaks Spanish, the model picks tools much better when descriptions are in Spanish. The shape:
+
+```yaml title="persona.yaml"
+skills:
+  audiobooks:
+    i18n:
+      es:
+        tools:
+          play_audiobook:
+            description: |
+              Reproduce un audiolibro por ID. Úsalo SOLO después de llamar
+              search_audiobooks; nunca inventes IDs.
+      en:
+        tools:
+          play_audiobook:
+            description: |
+              Start playing an audiobook by ID. Use this AFTER calling
+              search_audiobooks — never invent IDs.
+```
+
+Skills can read these overrides at setup and use them in their `tools` property. The audiobooks skill is the canonical example — read it for the pattern.
+
+## Parameters: JSON Schema
+
+Tool parameters are a JSON Schema object. The framework passes the schema directly to OpenAI Realtime, which uses it to validate (and shape) the model's tool calls.
+
+Common shapes:
+
+### No parameters
+
+```python
+parameters={"type": "object", "properties": {}}
+```
+
+Used for tools like `get_current_time` or `pause_music`. Even with no params, the `parameters` key is required — leave the properties dict empty.
+
+### One required string
+
+```python
+parameters={
+    "type": "object",
+    "properties": {
+        "query": {
+            "type": "string",
+            "description": "What to search for.",
+        },
+    },
+    "required": ["query"],
+}
+```
+
+Always describe each property. The model uses the description to decide what to put there.
+
+### Enum-like fields
+
+```python
+parameters={
+    "type": "object",
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": ["pause", "resume", "stop", "skip_forward", "skip_backward"],
+            "description": "The control action to take.",
+        },
+    },
+    "required": ["action"],
+}
+```
+
+Use `enum` whenever the field has a fixed set of values. The model does much better with enums than with free-form strings.
+
+### Numbers with bounds
+
+```python
+parameters={
+    "type": "object",
+    "properties": {
+        "level": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Volume from 0 to 100.",
+        },
+    },
+    "required": ["level"],
+}
+```
+
+The model respects `minimum` and `maximum`. The framework also enforces them — out-of-range calls get rejected before reaching your skill.
+
+### Optional with default behavior
+
+```python
+parameters={
+    "type": "object",
+    "properties": {
+        "book_id": {"type": "string", "description": "Book to play."},
+        "start_position": {
+            "type": "number",
+            "description": "Seconds from start. Defaults to last bookmark or 0.",
+        },
+    },
+    "required": ["book_id"],
+}
+```
+
+Don't list optional fields in `required`. Document the default in the description; the model will sometimes provide values, sometimes not.
+
+## How the model "sees" your tools
+
+Each `ToolDefinition` becomes part of the system context OpenAI Realtime gets:
+
+```text
+You have these tools available:
+
+  search_audiobooks(query: string) — Search the user's library by title or author.
+  play_audiobook(book_id: string, start_position?: number) — Start playing.
+  audiobook_control(action: pause|resume|stop|skip_forward|skip_backward) — Control playback.
+  ...
+```
+
+The model uses this list at every turn. It picks tools based on:
+
+1. The user's request (what they said).
+2. The tool's name (does it sound like the right action?).
+3. The tool's description (does the trigger phrase match?).
+4. The conversation context (what's already been called this turn?).
+
+The art is making 1-3 line up cleanly so the model picks correctly without reasoning.
+
+## Common pitfalls
+
+<Accordions>
+
+<Accordion title="Tool fires when it shouldn't">
+Description is too generic. "Plays content" matches anything. Tighten: "Plays an audiobook from the user's library. NOT for music or radio."
+</Accordion>
+
+<Accordion title="Tool doesn't fire when it should">
+Description doesn't include the user's natural phrasing. If users say "throw on a book," but your description says "begin playback," the model may not connect them. Add the user's words: "Use when the user wants to listen to a book — phrases like 'put on a book,' 'read me a book,' 'play a book.'"
+</Accordion>
+
+<Accordion title="Model invents arguments">
+Parameter description is too vague. The model fills in plausible-sounding values. Tighten: "Use ONLY IDs returned by search_audiobooks. Never invent IDs from the user's words."
+</Accordion>
+
+<Accordion title="Model calls the same tool twice in a row">
+Often a sign the first call's output didn't give the model enough to narrate. Make sure your `output` JSON has the data the model needs — if it returned `{"ok": true}` but the user wanted to know the title, the model may retry to get something to say.
+</Accordion>
+
+<Accordion title="Multilingual confusion">
+Descriptions are in English, persona is Spanish, the model speaks Spanish but picks tools poorly. Solution: localize descriptions through the persona's `i18n` block. We cover the pattern in [Build a Persona: Multilingual personas](/docs/build-persona/multilingual).
+</Accordion>
+
+</Accordions>
+
+## Iterating on tool design
+
+The fastest loop:
+
+<Steps>
+
+<Step>
+
+### Make the change
+
+Edit your tool's name, description, or schema.
+
+</Step>
+
+<Step>
+
+### Restart the server
+
+```bash
+# Ctrl-C the running server, then
+uv run huxley
+```
+
+Skills don't hot-reload. Restarts are fast (~2 seconds).
+
+</Step>
+
+<Step>
+
+### Try the conversation
+
+Hold the PTT button. Say what a real user would say. See if the right tool fires.
+
+</Step>
+
+<Step>
+
+### Read the dispatch log
+
+```text
+coord.tool_dispatch turn=t-7f3 tool=play_audiobook skill=audiobooks args={"book_id":"el_principito"}
+```
+
+This is what the model decided. If it picked the wrong tool, the description is misleading. If the args are weird, the schema is misleading.
+
+</Step>
+
+</Steps>
+
+After ~10 iterations on a new tool, you'll have a feel for what the model needs. Tool design is the most prompt-engineering-flavored part of skill authoring — don't be surprised that it takes some tuning.
+
+## Next
+
+<Cards>
+  <Card
+    href="/docs/build-skill/speaking-back"
+    title="Speaking back"
+    description="Side effects: chimes, audio streams, volume changes."
+  />
+</Cards>

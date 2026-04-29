@@ -1,0 +1,5 @@
+{
+  "title": "Reference",
+  "icon": "FileText",
+  "pages": ["skill-cheat-sheet", "persona-schema", "environment-variables"]
+}

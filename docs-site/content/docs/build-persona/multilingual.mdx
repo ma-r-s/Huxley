@@ -1,0 +1,187 @@
+---
+title: Multilingual Personas
+description: Same persona, multiple languages. The i18n block end to end.
+---
+
+A multilingual persona has a primary language plus per-language overrides. The agent's *behavior* stays consistent — same skills, same constraints, same character — but the *language* it operates in adapts to whichever locale the client connects with.
+
+This page walks the full pattern.
+
+## The pieces that vary by language
+
+Almost everything language-y can be overridden:
+
+- The system prompt (language-specific instructions to the model).
+- The transcription language (Whisper hint).
+- The UI strings (PWA's "listening...", "ready", etc.).
+- Per-skill overrides (tool descriptions, completion prompts, narration text).
+
+What stays the same:
+
+- The voice (one voice per persona — usually).
+- The skill list (you don't load *audiobooks* in Spanish but not English; load it once, override the language strings).
+- The constraints (behavioral rules apply in every language).
+
+## The basic shape
+
+```yaml title="server/personas/kitchen/persona.yaml"
+version: 1
+name: kitchen
+voice: shimmer
+timezone: America/Los_Angeles
+
+# Primary language
+language_code: en
+transcription_language: en
+system_prompt: |
+  You're an enthusiastic cooking assistant. Reply in two short sentences.
+  Never ask clarifying questions — guess and offer to refine.
+ui_strings:
+  listening: "Listening..."
+  ready: "Ready."
+
+# Per-language overrides
+i18n:
+  es:
+    transcription_language: es
+    system_prompt: |
+      Eres un asistente entusiasta de cocina. Responde en dos oraciones
+      cortas. Nunca pidas aclaraciones — adivina y ofrece refinar.
+    ui_strings:
+      listening: "Escuchando..."
+      ready: "Listo."
+  fr:
+    transcription_language: fr
+    system_prompt: |
+      Tu es un assistant cuisine enthousiaste. Réponds en deux phrases
+      courtes. Ne demande jamais de clarification — devine et propose
+      de préciser.
+    ui_strings:
+      listening: "J'écoute..."
+      ready: "Prêt."
+
+skills:
+  system: {}
+  timers: {}
+```
+
+The primary language (`en`) gets the top-level fields. Each `i18n.<lang>` block overrides the fields that change. Fields you don't list are inherited from the primary.
+
+## How clients pick a language
+
+The PWA client has a language picker — three buttons (EN/ES/FR) at the top right. When the user clicks one, the client reconnects with `?lang=fr` (or whichever). The server reads the query parameter, resolves the persona's overrides, and serves that language's flavor.
+
+The firmware client connects with a fixed language at compile time (whatever the persona it's pointed at supports). For a multi-language home, you'd flash different firmware per device.
+
+## Per-skill overrides
+
+Skills can also vary by language. The pattern:
+
+```yaml
+skills:
+  audiobooks:
+    library: audiobooks
+    sounds_path: sounds
+    sounds_enabled: true
+    i18n:
+      en:
+        on_complete_prompt: "The book is finished. Tell the user warmly."
+      es:
+        on_complete_prompt: "El libro terminó. Anúncialo con calidez."
+      fr:
+        on_complete_prompt: "Le livre est terminé. Annonce-le chaleureusement."
+```
+
+Skills opt into reading these by checking `ctx.config.get("i18n", {}).get(ctx.language, {})`. Well-written skills do this automatically; check each skill's README to see what it supports.
+
+A useful audiobooks-skill pattern:
+
+```yaml
+skills:
+  audiobooks:
+    library: audiobooks
+    i18n:
+      es:
+        on_complete_prompt: "El libro terminó. Pregunta si quiere otro."
+      en:
+        on_complete_prompt: "The book is finished. Ask if they want another."
+```
+
+The `on_complete_prompt` string gets injected at the end of natural playback completion. The model speaks it in the persona's voice. Localization keeps the warmth.
+
+## Designing the prompts
+
+Two anti-patterns to avoid:
+
+### Don't translate-then-call-it-done
+
+Run the English prompt through Google Translate, paste the Spanish into the `es` block, ship. Result: a stilted, awkward Spanish persona that the model still kind of speaks but feels off. Spanish speakers who interact with it will notice immediately.
+
+The fix: write each language's prompt *natively*. Get a fluent speaker to review. The behaviors should match across languages, but the prose shouldn't be a transliteration.
+
+### Don't add behaviors in one language only
+
+If your English prompt says "be brief" and your Spanish prompt also says it, fine. But if the Spanish prompt adds "and use Spanish idioms," and the English doesn't add the equivalent — the personas behave differently in different languages.
+
+This matters because the *user* expects consistent behavior. If they're bilingual and switch the toggle mid-conversation, the agent shouldn't suddenly become a different agent. Match instructions across all language overrides.
+
+## Testing across languages
+
+The fastest way:
+
+```bash
+# Terminal 1
+HUXLEY_PERSONA=kitchen uv run huxley
+```
+
+Browser:
+
+1. Open PWA, set language to EN, talk.
+2. Click ES, refresh, talk.
+3. Click FR, refresh, talk.
+
+The conversation behavior should be identical. Only the language changes.
+
+If a behavior happens in one language and not another, the prompts have drifted. Edit until they match.
+
+## Multilingual constraints
+
+Constraints are language-agnostic — they apply regardless of which language the persona is speaking. The framework injects constraint reminders in each language automatically:
+
+- `never_say_no` becomes "Never refuse a request..." in English, "Nunca rechaces una solicitud..." in Spanish, "Ne refuse jamais..." in French.
+
+You don't have to translate constraint reminders yourself. Pick the constraints once, in the top-level `constraints:` block, and they apply everywhere.
+
+## What if a language is missing?
+
+If a client connects with `?lang=de` and the persona has no `de` overrides, the framework falls back to the primary `language_code`. The persona will speak in its primary language even though the client requested German.
+
+For a strict multilingual deployment, decide:
+
+- Which languages the persona officially supports (have overrides for them).
+- What happens for unsupported languages (fall back to primary, or reject the connection — the latter requires custom server logic, not standard).
+
+Most personas just fall back gracefully. AbuelOS supports `es`, `en`, `fr`. A request for `de` gets Spanish.
+
+## Mixed-language conversations
+
+Don't try to have the persona speak two languages mid-conversation. The model can do it (Realtime is multilingual), but the *user* will be confused — and so will skills that read `ctx.language` to pick the right strings.
+
+If you genuinely need multi-language behavior in one session (a tutor that translates), that's a single persona with `language_code: en` and a system prompt that says "respond in Spanish when the user uses Spanish; otherwise English." The skill code reads `ctx.language="en"` and behaves accordingly.
+
+This is rare. Most personas are pinned to one user-facing language.
+
+## Next
+
+<Cards>
+  <Card
+    href="/docs/build-persona/abuelos-walkthrough"
+    title="Walkthrough: AbuelOS"
+    description="A real multilingual persona, every choice explained."
+  />
+  <Card
+    href="/docs/cookbook"
+    title="Cookbook"
+    description="Real patterns from the first-party skills."
+  />
+</Cards>

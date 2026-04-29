@@ -1,0 +1,111 @@
+---
+title: Concepts
+description: The vocabulary that makes everything else click.
+---
+
+Everything Huxley does sits on six concepts. Once you have these, the rest of the docs (and the framework's source code) will read like English.
+
+<Cards>
+  <Card
+    href="/docs/concepts/personas"
+    title="Persona"
+    description="Who the agent is. Voice, language, system prompt, constraints, list of skills. One YAML file."
+  />
+  <Card
+    href="/docs/concepts/skills"
+    title="Skill"
+    description="What the agent can do. A Python class with tools the LLM can call. Reusable across personas."
+  />
+  <Card
+    href="/docs/concepts/turns"
+    title="Turn"
+    description="One round of conversation, from button-press to silence. The framework's atomic unit."
+  />
+  <Card
+    href="/docs/concepts/side-effects"
+    title="Side effect"
+    description="What a tool does after it returns text — play audio, drop a chime, claim the speaker."
+  />
+  <Card
+    href="/docs/concepts/focus"
+    title="Focus & channels"
+    description="Who's allowed to make sound right now, and what happens when two things want to."
+  />
+  <Card
+    href="/docs/concepts/constraints"
+    title="Constraint"
+    description="Behavioral rules a persona declares — never_say_no, confirm_destructive — that skills opt into."
+  />
+</Cards>
+
+## How they fit together
+
+A **persona** declares which **skills** to load, what voice to use, and how to behave (its **constraints**). When you press the button, the framework starts a **turn**. The model decides what to say or which tool to call. Tools return **side effects** — a chime, a long-form audio stream, a claim on the speaker — that the framework arbitrates through **focus channels**.
+
+That's the whole thing.
+
+## A worked example, end-to-end
+
+Take a single sentence: *"Put on some music."*
+
+<Steps>
+
+<Step>
+
+### The persona shapes the prompt
+
+Before any audio leaves your microphone, Huxley sent OpenAI a system prompt declared by the persona. That prompt establishes the voice ("warm, slow, Spanish"), the personality ("never refuse a request — offer alternatives"), and the available tools (drawn from each loaded skill).
+
+</Step>
+
+<Step>
+
+### A turn begins
+
+You press the button. The framework starts a `Turn` with a unique ID. Audio flows from your mic through the WebSocket to OpenAI Realtime.
+
+</Step>
+
+<Step>
+
+### The model decides
+
+OpenAI hears "put on some music," looks at the available tools, and calls `play_station(id="rock_clasico")` — a tool exposed by the **radio** skill.
+
+</Step>
+
+<Step>
+
+### The skill responds with a side effect
+
+The radio skill returns a `ToolResult` whose `output` is `"Reproduciendo Rock Clásico"` (so the model can narrate it) and whose `side_effect` is an `AudioStream` (a factory that, when invoked, will pump radio audio through the WebSocket).
+
+</Step>
+
+<Step>
+
+### Focus arbitrates
+
+Until now, the speaker was on the **DIALOG** channel — the model was about to speak. The audio stream side effect requests the **CONTENT** channel (priority 300, lower than DIALOG). The framework lets the model finish narrating ("Reproduciendo Rock Clásico"), then hands the speaker to the radio stream.
+
+</Step>
+
+<Step>
+
+### The constraint check, in the prompt
+
+Because the persona declared `never_say_no`, even if the radio station were unreachable, the skill (well-written) returns alternatives in the `output` text and the model narrates *those* — never a flat "I can't do that."
+
+</Step>
+
+</Steps>
+
+That's six concepts working together for one sentence. Now learn each one properly.
+
+<Cards>
+  <Card
+    href="/docs/concepts/personas"
+    title="Start with personas →"
+    description="The most user-facing concept, and the one most people change first."
+  />
+</Cards>

@@ -547,6 +547,7 @@ Skill-specific docs:
 - [`telegram.md`](telegram.md) — full-duplex p2p Telegram voice calls AND text messages over a single Pyrogram userbot session. Outbound `call_contact` + `send_message`; inbound calls auto-answered, inbound messages debounced + coalesced into proactive announcements.
 - [`news.md`](news.md) — Open-Meteo weather + Google News RSS summarization.
 - [`radio.md`](radio.md) — HTTP/Icecast streams via ffmpeg.
+- [`search.md`](search.md) — open-web search via DuckDuckGo (no API key); for current/live info the LLM doesn't already know.
 - [`timers.md`](timers.md) — one-shot reminders via proactive speech, persisted across restart.
 
 A persona enables a skill by listing it in `persona.yaml`:

@@ -1,0 +1,107 @@
+---
+title: Welcome
+description: Build voice agents you own. Bring a persona and skills — Huxley handles the rest.
+---
+
+Huxley is a Python framework for **real-time voice agents you actually own**. You bring two things: a **persona** (who the agent is) and a set of **skills** (what it can do). Huxley handles everything in between — turn coordination, interruption, proactive speech, audio bridging, focus arbitration.
+
+The result: an agent that listens, thinks, and speaks with the warmth and quickness of a real conversation, not the robotic dispatch of a chatbot reading off a screen.
+
+<Cards>
+  <Card
+    href="/docs/getting-started/quickstart"
+    title="Quickstart"
+    description="Five minutes from git clone to talking with your agent."
+  />
+  <Card
+    href="/docs/concepts"
+    title="Concepts"
+    description="The vocabulary that makes everything else click — persona, skill, turn, side effect."
+  />
+  <Card
+    href="/docs/build-skill/first-skill"
+    title="Build a skill"
+    description="Teach Huxley to do something new in under fifty lines of Python."
+  />
+  <Card
+    href="/docs/build-persona"
+    title="Build a persona"
+    description="Shape the voice, language, and personality of your agent through one YAML file."
+  />
+</Cards>
+
+## What you can build with Huxley
+
+Skills are just Python packages. Anything Python can do, your agent can do — out loud, on demand, in conversation.
+
+<Cards>
+  <Card
+    title="Personal content"
+    description="Audiobooks, music libraries, family photo descriptions, recipes — all retrievable by voice with fuzzy matching built in."
+  />
+  <Card
+    title="Live information"
+    description="News, weather, calendars, transit, scores. Cache responses, narrate them in your persona's voice."
+  />
+  <Card
+    title="Communication"
+    description="Telegram and similar — make calls, send messages, receive announcements that interrupt politely."
+  />
+  <Card
+    title="Reminders & alerts"
+    description="Timers and proactive messages that survive server restarts and respect when the user is busy."
+  />
+  <Card
+    title="Smart home"
+    description="Anything with a Python API or HTTP endpoint. Lights, thermostats, robot vacuums."
+  />
+  <Card
+    title="Whatever you can imagine"
+    description="The skill protocol is intentionally tiny. If you can write the Python, Huxley can speak it."
+  />
+</Cards>
+
+## Why people pick Huxley
+
+<Callout type="info">
+  Huxley is opinionated. The opinions matter.
+</Callout>
+
+**You own the agent.** Huxley runs on your hardware. The OpenAI Realtime API call is yours, billed to your key. Skills run in your Python process. No cloud middleman owns your assistant.
+
+**The framework names mechanisms, not use cases.** Words like *call*, *reminder*, *audiobook*, *emergency* don't appear in the framework — they belong to the skills that implement them. The framework gives you turns, side effects, focus channels, and constraints. You compose products from those primitives.
+
+**Audio-first.** Every event has an audible trail. Earcons mark beginnings and endings. Failures are spoken, never silent. The target user can be blind and never miss what the agent is doing.
+
+**The simplest version of every primitive.** A skill is a Python class with a `name`, a `tools` list, and a `handle` method. A persona is a YAML file. A side effect is a dataclass. There are no abstractions for hypothetical future problems.
+
+## Pick your path
+
+<Cards>
+  <Card
+    href="/docs/getting-started/quickstart"
+    title="Just want to try it"
+    description="Five-minute install, talk to AbuelOS, see what the framework feels like."
+  />
+  <Card
+    href="/docs/use/run-the-server"
+    title="Want to run it as my own assistant"
+    description="Pick a persona, configure it, deploy it on a Raspberry Pi or a laptop or wherever."
+  />
+  <Card
+    href="/docs/build-skill"
+    title="Want to extend it with a new skill"
+    description="Write a Python package, register it via entry points, ship it to the world."
+  />
+  <Card
+    href="/docs/build-persona"
+    title="Want to make it mine"
+    description="Different voice, different language, different personality. One YAML file."
+  />
+</Cards>
+
+## A word on AbuelOS
+
+Throughout the docs you'll see references to **AbuelOS** — the canonical persona Huxley ships with, designed for a 90-year-old blind Spanish-speaking user. AbuelOS is **not** the framework. It's one persona, the same way Vercel's example apps aren't Next.js. We use AbuelOS as the running example because it exercises every primitive: long-form audio playback, proactive messages, accessibility-driven design, multilingual prompts, persona-shaped behavior.
+
+If you build a persona that's nothing like AbuelOS — a tutor, a DJ, a kitchen helper, a cycling coach — that's exactly the point.

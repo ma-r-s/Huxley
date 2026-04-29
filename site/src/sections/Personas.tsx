@@ -5,7 +5,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useRegisterSection, useInView } from "../lib/voiceThread.js";
 import { useViewport } from "../lib/useViewport.js";
-import { SectionHead } from "../components/Chrome.js";
+import { SectionHead, coralSection } from "../components/Chrome.js";
 
 interface Persona {
   id: string;
@@ -301,11 +301,10 @@ export function Personas() {
       ref={sectionRef}
       id="persona"
       style={{
+        ...coralSection,
         position: "relative",
         zIndex: 2,
         padding: isMobile ? "72px 24px" : "120px 64px",
-        borderTop: "1px solid var(--hux-fg-line)",
-        background: "color-mix(in oklab, var(--hux-coral) 90%, black)",
       }}
     >
       <SectionHead

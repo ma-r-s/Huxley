@@ -1,0 +1,203 @@
+---
+title: Connect a Client
+description: The PWA, the firmware, and what it takes to write your own.
+---
+
+The Huxley server doesn't own audio hardware. Clients do. A client opens a WebSocket to the server, captures microphone audio, plays back speaker audio, and forwards a few lifecycle events. That's it.
+
+This page covers the two clients that ship with Huxley and the contract you'd implement to write a new one.
+
+## The PWA — the dev client
+
+The progressive web app at `clients/pwa/` is the canonical client. It's a small Vite + React app:
+
+- One big push-to-talk button.
+- An animated orb (visual feedback: dim/listening/thinking/speaking).
+- A debug panel showing current state and event stream.
+
+Run it with:
+
+```bash
+cd clients/pwa
+bun install
+bun dev
+```
+
+Opens at `http://localhost:5174`. The PWA reads its server list from the `VITE_HUXLEY_PERSONAS` env var — a comma-separated list of `name:url` pairs (e.g. `abuelos:ws://localhost:8765,basicos:ws://localhost:8766`). The in-app picker switches between them.
+
+Use the PWA whenever you're developing a skill or persona. The debug panel shows tool dispatches, side effects firing, focus transitions — everything the server is doing. It's the fastest feedback loop in the project.
+
+## The firmware — the production client
+
+The firmware at `clients/firmware/` runs on an ESP32-S3. It's the target client for AbuelOS — a small device with one button, a speaker, a mic, and Wi-Fi. Hold the button, speak. That's it.
+
+Build and flash:
+
+```bash
+. ~/esp/esp-idf/export.sh
+cd clients/firmware
+idf.py build
+idf.py -p /dev/cu.usbmodem2101 flash monitor
+```
+
+The firmware is roughly the same logic as the PWA but in C/IDF, with hardware-specific audio capture and playback. It speaks the same WebSocket protocol — same gating rules, same event names — so a skill developed against the PWA works against the firmware unchanged.
+
+## The protocol, in one screen
+
+If you want to write a new client (Android app, iOS app, voice-controlled lamp), you implement this small set of messages.
+
+All messages are JSON objects with a `type` field plus the message-specific keys.
+
+### Client → Server
+
+| `type`         | Other keys                              | When to send                                   |
+|----------------|------------------------------------------|------------------------------------------------|
+| `wake_word`    | —                                        | First connection — starts a session            |
+| `ptt_start`    | —                                        | User pressed the button                        |
+| `audio`        | `data: <base64 PCM16>`                   | Streamed during PTT                            |
+| `ptt_stop`     | —                                        | User released the button                       |
+| `client_event` | `event: string, data?: object`           | Skill-specific or framework events from client |
+| `reset`        | —                                        | Dev-only: drop session, reconnect fresh        |
+
+### Server → Client
+
+| `type`             | Other keys                              | What to do                          |
+|--------------------|------------------------------------------|--------------------------------------|
+| `hello`            | `protocol: number`                       | Capability handshake (version 2 today) |
+| `audio`            | `data: <base64 PCM16>`                   | Play this PCM through the speaker    |
+| `state`            | `value: "IDLE" \| "CONNECTING" \| "CONVERSING"` | Update UI                     |
+| `status`           | `message: string`                        | Human-readable status string         |
+| `transcript`       | `role: "user" \| "assistant", text: string` | Show transcript (dev UI)        |
+| `model_speaking`   | `value: bool`                            | Update UI (orb glow, etc.)           |
+| `set_volume`       | `level: 0–100`                           | Adjust speaker volume                |
+| `input_mode`       | `mode: "assistant_ptt" \| "skill_continuous"` | Routing policy (PTT vs always-on) |
+| `claim_started`    | `claim_id, skill, title?`                | Show "in a call with X" UI           |
+| `claim_ended`      | `claim_id, end_reason`                   | Return to normal UI                  |
+| `stream_started`   | `stream_id, label?, content_type`        | Show "playing X" UI                  |
+| `stream_ended`     | `stream_id, end_reason`                  | Hide playing UI                      |
+| `dev_event`        | `kind, ...`                              | Dev-only observability (tool calls, etc.) |
+
+<Callout type="info">
+  Message shapes are subject to change pre-1.0. The canonical reference is `server/runtime/src/huxley/server/server.py` — read the docstring at the top of that file for the up-to-date list.
+</Callout>
+
+### Audio format
+
+PCM16, 24kHz, mono. Always. Both directions. No compression, no negotiation, no codec switching. This is the simplest format that the OpenAI Realtime API speaks natively, and the framework leans on its simplicity for predictable latency.
+
+A 1-second audio frame is 24,000 samples × 2 bytes = 48 KB. Typical PTT bursts are 1-3 seconds. The numbers are small enough that you don't need streaming compression for any reasonable client.
+
+### Gating rules (the server enforces these)
+
+Send all the audio you want — the server gates what it forwards:
+
+1. Audio is only forwarded to OpenAI when `ptt_active=true` AND the session is connected AND the model isn't speaking.
+2. PTT bursts under 25 frames (~133ms) get rejected with `too_short`.
+3. PTT during model speech triggers an interrupt. The server cancels the in-flight response and starts listening.
+4. PTT during an `InputClaim` (a phone call) ends the claim with `USER_PTT` (the button doubles as a hangup).
+
+You don't need to implement these on the client side. The server handles them. The client just sends events and audio.
+
+## Writing your own client
+
+The minimum viable client is ~150 lines of code:
+
+<Steps>
+
+<Step>
+
+### Open the WebSocket
+
+```javascript
+const ws = new WebSocket("ws://localhost:8765/");
+ws.onopen = () => ws.send(JSON.stringify({ type: "wake_word" }));
+```
+
+</Step>
+
+<Step>
+
+### Capture mic, encode PCM16, send while PTT is held
+
+```javascript
+button.addEventListener("pointerdown", () => {
+  ws.send(JSON.stringify({ type: "ptt_start" }));
+  startMicCapture(); // your audio context worklet, sends "audio" frames
+});
+
+button.addEventListener("pointerup", () => {
+  stopMicCapture();
+  ws.send(JSON.stringify({ type: "ptt_stop" }));
+});
+```
+
+</Step>
+
+<Step>
+
+### Receive audio frames, queue to AudioContext
+
+```javascript
+ws.onmessage = (e) => {
+  const msg = JSON.parse(e.data);
+  if (msg.type === "audio") {
+    const pcm = base64ToPCM(msg.data);
+    queuePCMToSpeaker(pcm);
+  }
+};
+```
+
+</Step>
+
+<Step>
+
+### Handle a few state messages for UI
+
+```javascript
+ws.onmessage = (e) => {
+  const msg = JSON.parse(e.data);
+  if (msg.type === "model_speaking") setOrbState(msg.value ? "speaking" : "idle");
+  if (msg.type === "state") setConnectionState(msg.value);
+};
+```
+
+</Step>
+
+</Steps>
+
+The PWA is ~500 lines of TypeScript total. Read it as the reference. Most of the extra code is UI polish — the orb animation, the debug panel, the language picker. The actual protocol implementation is small.
+
+## What clients don't need to do
+
+- **Don't gate audio yourself.** Always send mic frames while PTT is held; the server filters.
+- **Don't implement VAD or wake words.** The server's design assumes push-to-talk (or always-on for skill-continuous mode). VAD belongs to a future skill, not the client.
+- **Don't speak directly to OpenAI.** All upstream traffic goes through Huxley. Your API key never leaves the server.
+- **Don't try to play audio "smartly."** Just queue what arrives and play in order. The server handles ordering, interrupts, and ducking.
+
+## What clients *should* do
+
+- **Show clear listening/thinking/speaking states.** Users need to know what's happening, especially when audio is silent.
+- **Forward `client_event` messages for telemetry.** Things like "user double-tapped PTT" or "screen woke up" — useful for skills to know about, even if the framework doesn't act on them directly.
+- **Recover gracefully from disconnects.** WebSockets drop. Reconnect, reconnect, reconnect.
+- **Handle the `set_volume` message.** When the model says "turning it up," the volume change comes via WebSocket. If your client ignores it, the user wonders what just happened.
+
+## A note on accessibility
+
+The PWA is a dev client. The firmware is the production client for AbuelOS. The asymmetry is intentional: the dev client is rich (transcripts, debug panels, animation) for development; the production client is minimal (one button, one LED, audio in, audio out) for accessibility.
+
+If you're building a production client, follow the firmware's lead. The fewer screens, settings, and visual elements, the better — for elderly users, blind users, or anyone who'd rather use voice than tap.
+
+## Next
+
+<Cards>
+  <Card
+    href="/docs/use/switch-personas"
+    title="Switch personas"
+    description="Same server, different agent."
+  />
+  <Card
+    href="/docs/use/add-a-skill"
+    title="Add a skill"
+    description="Install a third-party skill, configure it, ship it."
+  />
+</Cards>

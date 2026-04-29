@@ -1,0 +1,12 @@
+{
+  "title": "Build a Skill",
+  "icon": "Wrench",
+  "pages": [
+    "index",
+    "first-skill",
+    "tools",
+    "speaking-back",
+    "proactive",
+    "publishing"
+  ]
+}

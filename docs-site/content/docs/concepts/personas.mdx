@@ -1,0 +1,207 @@
+---
+title: Personas
+description: Who the agent is. One YAML file — voice, language, prompt, constraints, skills.
+---
+
+A **persona** is a YAML file that declares everything user-facing about your agent: its name, its voice, the language it speaks, the system prompt that shapes its personality, the behavioral rules it follows, and which skills it loads.
+
+Personas are the most-touched part of Huxley. Skill authors don't usually need to think about them. End users may build several — one for the kitchen, one for the kids' room, one for the workshop.
+
+## Anatomy
+
+Here's a minimal persona:
+
+```yaml title="server/personas/example/persona.yaml"
+version: 1
+name: example
+voice: alloy
+language_code: en
+transcription_language: en
+timezone: America/New_York
+system_prompt: |
+  You are a friendly assistant. Speak in short, plain sentences.
+  When the user asks for the time, use the get_current_time tool.
+skills:
+  system: {}
+```
+
+That's a real, runnable persona. Drop it at `server/personas/example/persona.yaml`, run `HUXLEY_PERSONA=example uv run huxley`, and you have a different agent.
+
+Every field is meaningful:
+
+<TypeTable
+  type={{
+    version: {
+      description: "Schema version. Always 1 today.",
+      type: "1",
+      required: true,
+    },
+    name: {
+      description: "Persona identifier. Used in logs and as the database namespace.",
+      type: "string",
+      required: true,
+    },
+    voice: {
+      description: "OpenAI Realtime voice — alloy, coral, echo, shimmer, etc. Overridable at runtime via HUXLEY_OPENAI_VOICE.",
+      type: "string",
+      required: true,
+    },
+    language_code: {
+      description: "ISO 639-1 default language (es, en, fr, …). The persona speaks this unless the client asks for another.",
+      type: "string",
+      required: true,
+    },
+    transcription_language: {
+      description: "Whisper hint for what the user is likely speaking. Often matches language_code, but can differ.",
+      type: "string",
+      required: true,
+    },
+    timezone: {
+      description: "IANA timezone name. Used by skills like system.get_current_time so it speaks the right local time.",
+      type: "string",
+      required: true,
+    },
+    system_prompt: {
+      description: "The instructions that establish personality. Multi-line. Written in the language_code.",
+      type: "string",
+      required: true,
+    },
+    constraints: {
+      description: "Behavioral rules the persona enables. Skills opt into them.",
+      type: "string[]",
+      required: false,
+    },
+    ui_strings: {
+      description: "Localized UI labels (listening, too_short, sent, responding, ready) for the dev client.",
+      type: "object",
+      required: false,
+    },
+    i18n: {
+      description: "Per-language overrides. Keys are language codes; values are partial persona definitions.",
+      type: "object",
+      required: false,
+    },
+    skills: {
+      description: "Map of skill_name → config_dict. Each skill installed via entry points can be referenced here.",
+      type: "object",
+      required: true,
+    },
+  }}
+/>
+
+## The system prompt
+
+This is where the persona's voice — in the literary sense — actually lives. It's a free-form string. Write it like you'd write character notes for an actor.
+
+A short prompt for a kitchen helper:
+
+```yaml
+system_prompt: |
+  You're an enthusiastic cooking assistant. The user is hands-deep in
+  ingredients, so keep responses under three sentences. When you don't
+  know an exact measurement, give a confident estimate and tell them
+  it's approximate. Never ask clarifying questions before answering —
+  give your best guess immediately.
+```
+
+The framework injects three things into this prompt at runtime: the **available tools** (with their descriptions and parameters), the **constraint reminders** (e.g. "never refuse — offer alternatives"), and the **current time and timezone**. Your prompt should *not* list tools manually — Huxley does that for you.
+
+<Callout type="info">
+  Prompt-shaping is the hardest part of persona authoring. Expect to iterate. The fastest way: make a change, restart the server, hold the button, listen. Logs help, but speech is the ground truth.
+</Callout>
+
+## Skills as configuration
+
+A persona doesn't import skills — it lists them. Each skill installed in the Python environment (via `pyproject.toml` entry points) becomes available; the persona picks which to load and how to configure them:
+
+```yaml
+skills:
+  audiobooks:
+    library: audiobooks        # relative to server/personas/example/data/
+    sounds_path: sounds
+    sounds_enabled: true
+  news:
+    location: "New York"
+    latitude: 40.71
+    longitude: -74.0
+    country_code: "US"
+    language_code: "en"
+  system: {}                          # no config needed
+```
+
+Relative paths in skill config resolve against `server/personas/<name>/data/`, so each persona can ship its own audiobooks library, station list, family contact directory, etc.
+
+## Multilingual personas
+
+A persona can declare overrides for additional languages:
+
+```yaml
+language_code: es        # primary language
+i18n:
+  en:
+    transcription_language: en
+    system_prompt: |
+      You're a warm, slow assistant for an elderly user. Speak in short
+      sentences. Never refuse — offer alternatives.
+    ui_strings:
+      listening: "Listening..."
+  fr:
+    transcription_language: fr
+    system_prompt: |
+      Tu es un assistant chaleureux pour une personne âgée. Parle
+      lentement, en phrases courtes.
+```
+
+When a client connects with `?lang=en`, Huxley loads the English overrides. The skill list and constraints stay the same — only the prompt and UI strings change. Skills can also declare per-language overrides:
+
+```yaml
+skills:
+  audiobooks:
+    i18n:
+      en:
+        on_complete_prompt: |
+          The book has finished. Tell the user warmly.
+      fr:
+        on_complete_prompt: |
+          Le livre est terminé. Annonce-le chaleureusement.
+```
+
+## Storage and data
+
+Each persona has its own SQLite database at `server/personas/<name>/data/<name>.db`. Skills write to it through the `ctx.storage` API — bookmarks, timer state, message history. Switching personas switches databases, so two personas on the same machine don't see each other's data.
+
+The framework creates the database on first run. You don't need to do anything.
+
+## Picking voices
+
+The `voice` field accepts anything OpenAI Realtime supports. As of writing: `alloy`, `coral`, `echo`, `shimmer`, `verse`, `sage`, and a few others. Match the voice to the persona's character — `coral` is warm and conversational; `alloy` is neutral; `echo` is more formal. Try them all in the OpenAI playground first; the cost of a mistake is one server restart.
+
+## Two personas ship by default
+
+| Persona  | Use case                                           |
+|----------|---------------------------------------------------|
+| `abuelos`| Spanish-speaking elderly user. Warm, slow, never says no. Loads audiobooks, news, radio, system, telegram, timers. The canonical example. |
+| `basicos`| Terse counter-persona. Two skills, no warmth. Useful for A/B testing skill behavior in different prompt registers. |
+
+You'll mostly write your own. See [Build a Persona](/docs/build-persona) for a walkthrough.
+
+## What it isn't
+
+A persona is **not** a profile of a specific user. It's the *agent's* identity, not the user's. If you want different behavior for different family members, that's a multi-persona setup — one per person — not a single "user-aware" persona.
+
+A persona is **not** a replacement for skill behavior. If a skill behaves wrong in your persona's voice, the fix is in the *skill*, often via a constraint (see [Constraints](/docs/concepts/constraints)).
+
+## Next
+
+<Cards>
+  <Card
+    href="/docs/concepts/skills"
+    title="Skills"
+    description="The other half of an agent — what it can do."
+  />
+  <Card
+    href="/docs/build-persona"
+    title="Walkthrough: build a persona"
+    description="Hands-on tutorial. Build, run, iterate."
+  />
+</Cards>

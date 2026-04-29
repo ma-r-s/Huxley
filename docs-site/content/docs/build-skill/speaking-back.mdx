@@ -1,0 +1,252 @@
+---
+title: Speaking Back
+description: Add side effects to your skill — chimes, audio streams, volume control. Each kind, with code that runs.
+---
+
+[Concepts: Side Effects](/docs/concepts/side-effects) introduced the five side-effect kinds. This page is the hands-on companion: real code, real skills, real audio coming out of your speakers.
+
+## Setup: a skill that needs side effects
+
+We'll extend the `bike_trainer` skill from [Your First Skill](/docs/build-skill/first-skill). It currently has two tools (`start_workout`, `get_workout_stats`) that return data and let the model narrate.
+
+Now we'll add:
+
+- A *chime* when the workout starts (PlaySound).
+- An *announcement playlist* the user can request mid-ride (AudioStream).
+- *Volume control* as a tool so the user can ask for less volume mid-effort (SetVolume).
+
+## A chime when the workout starts
+
+Find a short PCM16 24kHz mono WAV (~1 second) and drop it in `data/sounds/`:
+
+<Files>
+  <Folder name="server/personas/abuelos/data" defaultOpen>
+    <Folder name="sounds">
+      <File name="workout_start.wav" />
+    </Folder>
+  </Folder>
+</Files>
+
+Update the skill to load it on `setup` and play it on `start_workout`:
+
+```python title="huxley_skill_bike_trainer/__init__.py"
+from huxley_sdk import (
+    Skill, ToolDefinition, ToolResult, SkillContext,
+    PlaySound, SetVolume,
+)
+from huxley_sdk.audio import load_pcm_palette
+
+
+class BikeTrainerSkill:
+    name = "bike_trainer"
+
+    def __init__(self) -> None:
+        self._workout_started_at = None
+        self._sounds: dict[str, bytes] = {}
+
+    async def setup(self, ctx: SkillContext) -> None:
+        self._ctx = ctx
+        self._logger = ctx.logger
+        # Load named PCM blobs from data/sounds/. The helper expects an
+        # explicit list of role names; missing files are silently skipped.
+        sound_dir = ctx.persona_data_dir / "sounds"
+        self._sounds = load_pcm_palette(sound_dir, roles=["workout_start"])
+        await self._logger.ainfo("setup", sounds_loaded=list(self._sounds.keys()))
+
+    async def handle(self, tool_name: str, args: dict) -> ToolResult:
+        if tool_name == "start_workout":
+            self._workout_started_at = time.time()
+            chime = self._sounds.get("workout_start")
+            return ToolResult(
+                output=json.dumps({"started": True}),
+                side_effect=PlaySound(pcm=chime) if chime else None,
+            )
+        # ... other branches
+```
+
+Key things:
+
+- `load_pcm_palette` takes the *role names* you want to load and looks for `<role>.wav` in the directory. Missing files are silently skipped — the returned dict only contains roles that loaded successfully.
+- The chime is optional — if the WAV doesn't exist, we skip the side effect rather than crashing.
+- `PlaySound` plays *before* the model speaks, so the user hears: *ding*, then "¡Comencé el entrenamiento!"
+
+## An audio stream the user can request
+
+Now the harder one. The user can ask for a "warmup playlist" — a few minutes of motivational audio that plays through the same channel as the model.
+
+Add a tool:
+
+```python
+ToolDefinition(
+    name="play_warmup",
+    description=(
+        "Start a 5-minute warmup audio segment. Use this when the user "
+        "asks for a warmup playlist or wants something to ride to before "
+        "the main workout."
+    ),
+    parameters={"type": "object", "properties": {}},
+),
+```
+
+And a handler:
+
+```python
+from huxley_sdk import AudioStream
+
+async def handle(self, tool_name: str, args: dict) -> ToolResult:
+    # ...
+    if tool_name == "play_warmup":
+        warmup_path = self._ctx.persona_data_dir / "warmup.wav"
+        if not warmup_path.exists():
+            return ToolResult(output=json.dumps({"error": "no_warmup_loaded"}))
+
+        factory = self._build_warmup_factory(warmup_path)
+        return ToolResult(
+            output="",  # nothing for the model to narrate
+            side_effect=AudioStream(
+                factory=factory,
+                label="Warmup playlist",
+                on_complete_prompt=(
+                    "El warmup terminó. Pregúntale al usuario si está listo "
+                    "para comenzar el entrenamiento."
+                ),
+            ),
+        )
+```
+
+The factory:
+
+```python
+import wave
+
+def _build_warmup_factory(self, path):
+    async def stream():
+        try:
+            # Use wave.open instead of stripping a fixed 44-byte header.
+            # Re-encoded WAVs often have non-standard LIST/INFO chunks that
+            # break a hand-counted offset. The huxley_sdk.audio helpers do
+            # this correctly; copy that pattern here.
+            with wave.open(str(path), "rb") as wf:
+                while True:
+                    pcm = wf.readframes(2400)  # 100ms at 24kHz mono
+                    if not pcm:
+                        return
+                    yield pcm
+        finally:
+            await self._logger.ainfo("warmup_finished")
+
+    return stream
+```
+
+Three things to internalize:
+
+1. **The factory captures the path via closure.** If the user asks "play a different warmup," the next call returns a new factory pointing at a different file. The framework cancels the old factory and runs the new one.
+
+2. **`try / finally` is mandatory.** Whether the stream completes or gets cancelled mid-playback, the `finally` runs. Use it for cleanup, persistence, log flushes.
+
+3. **`output=""` and `on_complete_prompt`.** Empty output because the audio *is* the response. `on_complete_prompt` triggers a follow-up turn when the audio finishes naturally — the model speaks the prompt in the persona's voice. Cancelled streams don't trigger the prompt.
+
+Now when the user says "play a warmup," the model:
+
+1. Briefly narrates "comenzando warmup..." (in the persona's voice).
+2. Stops speaking.
+3. The audio stream takes over the speaker for 5 minutes.
+4. Naturally ends.
+5. The framework triggers the `on_complete_prompt`.
+6. The model says "el warmup terminó. ¿Listo para empezar?"
+
+## Volume control as a tool
+
+Add a `set_volume` tool:
+
+```python
+ToolDefinition(
+    name="set_volume",
+    description=(
+        "Adjust the speaker volume from 0 (silent) to 100 (max). Use when "
+        "the user asks to make it louder, quieter, turn it up, turn it down."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "level": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100,
+                "description": "Target volume from 0 to 100.",
+            },
+        },
+        "required": ["level"],
+    },
+),
+```
+
+Handler:
+
+```python
+if tool_name == "set_volume":
+    level = max(0, min(100, int(args["level"])))
+    return ToolResult(
+        output=json.dumps({"volume": level}),
+        side_effect=SetVolume(level=level),
+    )
+```
+
+The `SetVolume` side effect is forwarded to the connected client. The browser PWA changes its `<audio>` gain. The firmware client changes its hardware volume. The skill doesn't care — the framework abstracts it.
+
+<Callout type="info">
+Most personas already include the **system** skill, which exposes its own `set_volume`. You'd typically not duplicate it in your skill. We're showing the pattern; in practice, lean on the system skill for global controls and reserve skill-specific tools for skill-specific behavior.
+</Callout>
+
+## Cancelling a stream
+
+If the user says "stop the warmup" mid-stream, you'd want a tool that cancels:
+
+```python
+ToolDefinition(
+    name="stop_warmup",
+    description="Stop the warmup playlist. Use when the user says stop, cancel, enough.",
+    parameters={"type": "object", "properties": {}},
+),
+```
+
+```python
+from huxley_sdk import CancelMedia
+
+if tool_name == "stop_warmup":
+    return ToolResult(
+        output=json.dumps({"stopped": True}),
+        side_effect=CancelMedia(),
+    )
+```
+
+`CancelMedia` cancels whatever's currently playing on the CONTENT channel. Graceful — no audio interrupt, just a clean stop. The model narrates "warmup detenido" after.
+
+For *user-initiated* interrupts (PTT during playback), you don't need anything — the framework handles them automatically. `CancelMedia` is for *model-initiated* stops.
+
+## When to pick which side effect
+
+| Situation                                                            | Side effect      |
+|----------------------------------------------------------------------|------------------|
+| Tool returns information; model narrates it                          | `None`           |
+| Tool returns information; play a chime first so the user knows you heard | `PlaySound`  |
+| Tool produces audio that should replace the model's speech           | `AudioStream`    |
+| Tool cancels currently-playing audio                                 | `CancelMedia`    |
+| Tool changes the speaker volume                                      | `SetVolume`      |
+| Tool starts a phone call or two-way audio session                    | `InputClaim`     |
+
+The hardest call is between `None` and `AudioStream`. Rule of thumb: if your audio is a few seconds (chime, sound effect, very short cue), use `PlaySound`. If it's many seconds or open-ended (a song, a book, a podcast), use `AudioStream`.
+
+## What we did not cover here
+
+`InputClaim` deserves its own treatment. It's significantly more complex (mic and speaker both rerouted), and the most common use case (phone calls) involves authentication, peer protocols, and real coordination work. We cover it in [Cookbook: Audio streaming](/docs/cookbook/audio-streaming).
+
+## Next
+
+<Cards>
+  <Card
+    href="/docs/build-skill/proactive"
+    title="Proactive skills"
+    description="Skills that speak first — timers, alerts, notifications."
+  />
+</Cards>

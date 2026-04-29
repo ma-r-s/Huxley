@@ -1,0 +1,205 @@
+---
+title: Quickstart
+description: From git clone to your first conversation in five minutes.
+---
+
+This page gets you from zero to a working voice agent on your laptop. By the end you'll be holding a button in your browser, speaking to AbuelOS, and hearing it speak back.
+
+## Prerequisites
+
+You need three things on your machine:
+
+<Files>
+  <File name="uv" icon={null} />
+  <File name="bun" icon={null} />
+  <File name="An OpenAI API key with Realtime access" icon={null} />
+</Files>
+
+If you don't have `uv` yet: `curl -LsSf https://astral.sh/uv/install.sh | sh`. If you don't have `bun`: `curl -fsSL https://bun.sh/install | bash`. The OpenAI key needs the Realtime API enabled — most paid accounts have it.
+
+<Callout type="warn">
+  Huxley does not run a free-tier model. The OpenAI Realtime API charges per minute of listening and speaking. Idle sessions are free. For typical hobby use, expect a few cents per conversation.
+</Callout>
+
+## Five steps
+
+<Steps>
+
+<Step>
+
+### Clone the repo
+
+```bash
+git clone https://github.com/ma-r-s/Huxley.git
+cd Huxley
+```
+
+</Step>
+
+<Step>
+
+### Drop your API key into `.env`
+
+```bash
+echo "HUXLEY_OPENAI_API_KEY=sk-..." > server/runtime/.env
+```
+
+The server loads this file at startup. Pick a persona by adding `HUXLEY_PERSONA=abuelos` (or `basicos`) to the `.env` — the repo ships both, and the loader requires you to choose explicitly when more than one is available.
+
+</Step>
+
+<Step>
+
+### Install Python and JavaScript dependencies
+
+```bash
+uv sync                         # installs the Python workspace
+cd clients/pwa && bun install   # installs the dev client
+cd ../..
+```
+
+`uv sync` installs the framework, the SDK, and every first-party skill in one shot. The PWA client is a small Vite + React app — it's the dev tool you talk to.
+
+</Step>
+
+<Step>
+
+### Start the server (terminal 1)
+
+```bash
+cd server/runtime
+uv run huxley
+```
+
+You should see `app.starting`, `persona.loaded name=abuelos`, and `server.listening port=8765`. Leave this running.
+
+</Step>
+
+<Step>
+
+### Start the client (terminal 2)
+
+```bash
+cd clients/pwa
+bun dev
+```
+
+Open the URL it prints (usually `http://localhost:5174`). You'll see a one-button page with an animated orb in the middle. The orb is your agent.
+
+</Step>
+
+</Steps>
+
+## Your first conversation
+
+Hold the button in the middle of the page. Speak in Spanish — AbuelOS is Spanish by default. Try one of these:
+
+> ¿Qué hora es?
+
+> Cuéntame las noticias.
+
+> Quiero escuchar un libro.
+
+Release the button. AbuelOS listens, decides what to do, then speaks back through your speakers. The orb pulses while it thinks, glows while it speaks, and dims when it's listening.
+
+<Callout type="info">
+  AbuelOS speaks Spanish by default because that's what its persona declares. The framework doesn't know or care about Spanish — switch the persona, and the same agent speaks English, French, or anything else OpenAI supports.
+</Callout>
+
+## What just happened?
+
+<Steps>
+
+<Step>
+
+### The browser captured your audio
+
+The PWA client opened a microphone, captured 24kHz PCM, and streamed it over a WebSocket to the server while you held the button.
+
+</Step>
+
+<Step>
+
+### The server forwarded it to OpenAI Realtime
+
+Huxley's turn coordinator gated the audio (only forwarded while you were holding the button), then pushed it to OpenAI Realtime over its own WebSocket.
+
+</Step>
+
+<Step>
+
+### OpenAI decided how to respond
+
+Either it answered directly (for "what time is it?") or it called one of AbuelOS's tools (for "tell me the news"). The persona's system prompt — written in Spanish, with AbuelOS's voice — shaped how it responded.
+
+</Step>
+
+<Step>
+
+### Huxley dispatched the tool call
+
+If a tool was called, the framework routed it to the right skill, awaited the result, and sent the result back to OpenAI for narration.
+
+</Step>
+
+<Step>
+
+### OpenAI streamed audio back
+
+24kHz PCM, chunked, flowing through Huxley back to the browser. The browser played it through your speakers. The whole round trip is usually under a second.
+
+</Step>
+
+</Steps>
+
+If a tool returned a long-form **side effect** — like an audiobook stream — Huxley would have queued it to play after the model finished speaking, and routed the audio through the same WebSocket channel. We'll get to that soon.
+
+## What to read next
+
+You're up. Now learn how it works.
+
+<Cards>
+  <Card
+    href="/docs/getting-started/your-first-conversation"
+    title="Your first conversation"
+    description="What to expect, what to try, how to know it's working."
+  />
+  <Card
+    href="/docs/concepts"
+    title="Core concepts"
+    description="Persona, skill, turn, side effect — the vocabulary that makes everything else click."
+  />
+</Cards>
+
+## Troubleshooting
+
+<Accordions>
+  <Accordion title="The server logs persona.load_failed">
+    The persona file at `server/personas/abuelos/persona.yaml` is missing
+    or invalid. If you cloned cleanly, this shouldn't happen — file an
+    issue. If you've been editing it, check for YAML indentation problems.
+  </Accordion>
+  <Accordion title="The browser shows 'Connecting...' and never moves">
+    The server isn't reachable. Check terminal 1 — does it say
+    `server.listening port=8765`? If not, look for `app.startup_failed`
+    above. Most often: missing `HUXLEY_OPENAI_API_KEY` in `server/runtime/.env`.
+  </Accordion>
+  <Accordion title="The orb pulses but I never hear anything">
+    Speaker permissions. The browser may have blocked audio playback —
+    look for a small icon in the address bar. Also check that your
+    OpenAI key has Realtime API access enabled (the dashboard calls it
+    "gpt-4o realtime preview").
+  </Accordion>
+  <Accordion title="It hears me but answers in English instead of Spanish">
+    The persona's `transcription_language` was probably ignored, which
+    happens when audio is too quiet or noisy. Speak louder, closer to
+    the mic, and try again. If the persona is consistently picking the
+    wrong language, set `transcription_language` explicitly in
+    `persona.yaml`.
+  </Accordion>
+  <Accordion title="I get 'PTT too short' errors">
+    Push-to-talk frames under 25 (about 133ms of audio) are treated as
+    accidental taps. Hold the button longer, or speak immediately when
+    you press it.
+  </Accordion>
+</Accordions>

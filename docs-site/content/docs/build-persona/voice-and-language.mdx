@@ -1,0 +1,262 @@
+---
+title: Voice and Language
+description: Choosing the voice. Setting the language. Writing the system prompt.
+---
+
+The voice and the system prompt are the two fields that make the biggest user-facing difference. Get them right and the persona feels alive. Get them wrong and you've wired up an indistinguishable chatbot.
+
+## Picking a voice
+
+The OpenAI Realtime API ships several voices. As of writing:
+
+- `alloy` — neutral, balanced. Fine for default-feeling agents.
+- `coral` — warm, slightly slow. Excellent for elderly-facing or accessibility-driven personas.
+- `echo` — formal, clipped. Good for business contexts.
+- `shimmer` — light, quick. Good for energetic, kid-friendly personas.
+- `verse` — expressive, stylized. Polarizing — try before you commit.
+- `sage` — calm, measured. Good for meditative or therapeutic apps.
+
+Try them all in [OpenAI's playground](https://platform.openai.com/playground) before picking. Listen to each one say a sentence in your persona's language. The voice has more impact than the prompt.
+
+A few practical notes:
+
+- **Spanish, Portuguese, Italian** — `coral` is widely loved. `alloy` works.
+- **English** — every voice works; pick by character.
+- **French, German, Japanese, etc.** — quality varies; `alloy` is the safest starting point. Test before committing.
+
+You can override the persona's voice at runtime:
+
+```bash
+HUXLEY_OPENAI_VOICE=verse uv run huxley
+```
+
+Useful for A/B testing. Once you've decided, set it in `persona.yaml` permanently.
+
+## Language: the three-field problem
+
+Three fields shape language behavior:
+
+- `language_code` — the persona's primary language. Affects default tool descriptions, default prompt, default UI strings.
+- `transcription_language` — what Whisper expects the user to speak.
+- `i18n` — per-language overrides for everything above.
+
+The interplay is subtle. Some shapes:
+
+### Shape 1: monolingual
+
+```yaml
+language_code: es
+transcription_language: es
+```
+
+Persona speaks Spanish. User speaks Spanish. Skills return Spanish-narrated data. The `i18n` block is empty — no other languages.
+
+### Shape 2: bilingual, user-driven
+
+```yaml
+language_code: es                 # primary
+transcription_language: es        # default Whisper hint
+i18n:
+  en:
+    transcription_language: en    # client connecting with ?lang=en gets English Whisper
+    system_prompt: |              # ...and an English system prompt
+      You're a warm assistant for an elderly user...
+```
+
+User picks language at the client. Browser PWA has a language toggle; firmware client connects with a fixed language. The persona switches behavior to match.
+
+### Shape 3: translation
+
+```yaml
+language_code: es                 # persona speaks Spanish
+transcription_language: en        # but user speaks English
+system_prompt: |
+  El usuario te habla en inglés. Tú respondes en español, pero entiendes
+  inglés perfectamente. Traduce mentalmente y responde en español.
+```
+
+User speaks English; agent responds in Spanish. Useful for language tutoring. Less common but supported.
+
+## Crafting the system prompt
+
+This is the highest-leverage thing you'll write. A good prompt makes the persona feel like a person; a bad one makes it feel like a function.
+
+### Open with character
+
+The first sentence sets the tone. Compare:
+
+> You are a helpful assistant.
+
+vs.
+
+> You're a warm, slow-spoken assistant for Don Carlos, a 90-year-old in Bogotá. He's blind. Audio is everything.
+
+The second tells the model who it's talking to and constrains every choice that follows.
+
+### Make instructions actionable
+
+Each rule should be something the model can check itself against. Vague:
+
+> Be helpful and friendly.
+
+Actionable:
+
+> Reply in two sentences or less. Never ask the user to clarify before answering — give your best guess and offer to refine.
+
+### List the persona's quirks
+
+Specific behaviors the user expects:
+
+> When the user pauses for more than three seconds, never ask "are you still there?" — assume they're thinking.
+>
+> If the user mentions their grandkids, ask their names; remember and reference them later.
+>
+> When playing audiobooks, announce the title once at the start. Don't repeat it on resume.
+
+### Don't list tools
+
+The framework injects the tool schema. Your prompt shouldn't say:
+
+> When the user wants to play a book, call `play_audiobook` with the book ID.
+
+The model already knows the tool exists. What you can usefully say:
+
+> When the user asks for a book, ALWAYS call `search_audiobooks` first to get an ID. Never invent IDs.
+
+That's a behavioral nudge, not a tool announcement.
+
+### Don't list constraint rules
+
+If you've enabled `never_say_no`, don't also write:
+
+> Never refuse a request. Always offer alternatives.
+
+The framework injects that. Listing it twice doubles the prompt budget without helping.
+
+### Bilingual prompt patterns
+
+If your persona is bilingual via `i18n`, the *content* of the prompts should match — same instructions, in each language. Differences should be linguistic, not behavioral:
+
+```yaml
+language_code: es
+system_prompt: |
+  Eres un asistente cálido. Responde en una o dos oraciones. Nunca digas
+  que no — ofrece alternativas.
+
+i18n:
+  en:
+    system_prompt: |
+      You're a warm assistant. Reply in one or two sentences. Never refuse —
+      offer alternatives.
+```
+
+Different prose, same intent. Don't accidentally add behavior in one that's missing in the other.
+
+## A real, full example
+
+Here's a complete kitchen-helper persona:
+
+```yaml title="server/personas/kitchen/persona.yaml"
+version: 1
+name: kitchen
+voice: shimmer
+language_code: en
+transcription_language: en
+timezone: America/Los_Angeles
+
+system_prompt: |
+  You're an enthusiastic cooking assistant. The user is mid-recipe with
+  their hands in ingredients, so:
+
+  - Reply in two short sentences max.
+  - Never ask clarifying questions — give your best guess immediately.
+  - When you don't know an exact measurement, give a confident
+    approximation and tell them it's approximate.
+  - When asked to convert units (cups to grams, tablespoons to mL),
+    just convert. Don't explain the math unless asked.
+  - When asked about timing ("how long should I sear this?"), give a
+    range and the doneness signal: "60-90 seconds, until it lifts cleanly."
+  - If the user asks "what next?" mid-recipe, you don't know what recipe
+    they're following — ask once, then remember.
+
+constraints:
+  - never_say_no
+
+ui_strings:
+  listening: "Listening..."
+  too_short: "Didn't catch that — try again."
+  ready: "Ready."
+
+skills:
+  system: {}
+  timers: {}
+```
+
+A persona doesn't have to be elaborate. This one is short, opinionated, has clear behavior, and uses two skills. Drop it in, restart, hold the button: "How long do I sear chicken thighs?" → fast, useful answer, no fluff.
+
+## Iteration loop
+
+The fastest way to develop a prompt:
+
+<Steps>
+
+<Step>
+
+### Make a change
+
+Edit `system_prompt`. Don't try to perfect on first pass.
+
+</Step>
+
+<Step>
+
+### Restart
+
+```bash
+HUXLEY_PERSONA=kitchen uv run huxley
+```
+
+</Step>
+
+<Step>
+
+### Try one of the persona's intended use cases
+
+Hold button: "How much salt for two pounds of chicken?"
+
+</Step>
+
+<Step>
+
+### Note what felt off
+
+Too long? Too vague? Asked a clarifying question when it shouldn't have? Wrote it down — don't try to remember.
+
+</Step>
+
+<Step>
+
+### Edit and repeat
+
+Five minutes per iteration. After ten iterations the persona feels right.
+
+</Step>
+
+</Steps>
+
+Personas are easier to iterate on than skills. Don't be precious — make changes and restart. The cost of a bad iteration is one server restart.
+
+## Next
+
+<Cards>
+  <Card
+    href="/docs/build-persona/multilingual"
+    title="Multilingual personas"
+    description="Same persona, multiple languages, the i18n block."
+  />
+  <Card
+    href="/docs/build-persona/abuelos-walkthrough"
+    title="Walkthrough: AbuelOS"
+    description="A complete real persona, every field explained."
+  />
+</Cards>

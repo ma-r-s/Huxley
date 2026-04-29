@@ -1,0 +1,117 @@
+---
+title: Build a Persona
+description: One YAML file — voice, language, prompt, constraints, skills. Make the agent yours.
+---
+
+A persona is the most user-facing piece of Huxley. It's what makes your assistant *yours*. Different voice, different language, different personality, different skill set, different rules. One YAML file, restart the server, and you have a different agent entirely.
+
+This section walks you through building a persona end to end.
+
+<Cards>
+  <Card
+    href="/docs/build-persona/anatomy"
+    title="Anatomy of persona.yaml"
+    description="Every field, what it does, when to set it."
+  />
+  <Card
+    href="/docs/build-persona/voice-and-language"
+    title="Voice and language"
+    description="Picking the OpenAI voice. Setting the language. Writing the prompt."
+  />
+  <Card
+    href="/docs/build-persona/multilingual"
+    title="Multilingual personas"
+    description="Same agent, three languages. The i18n block."
+  />
+  <Card
+    href="/docs/build-persona/abuelos-walkthrough"
+    title="Walkthrough: AbuelOS"
+    description="Read the canonical persona end to end. See every choice in context."
+  />
+</Cards>
+
+## How long does it take?
+
+A first-pass persona — voice, language, basic prompt, two skills — is about 15 minutes:
+
+<Steps>
+
+<Step>
+
+### Create the directory
+
+```bash
+mkdir -p server/personas/<name>/data
+```
+
+</Step>
+
+<Step>
+
+### Write the YAML
+
+Copy from another persona and edit. Don't write from scratch on day one.
+
+</Step>
+
+<Step>
+
+### Restart the server
+
+```bash
+HUXLEY_PERSONA=<name> uv run huxley
+```
+
+</Step>
+
+<Step>
+
+### Hold the button. Listen.
+
+Iterate on the prompt based on what you hear.
+
+</Step>
+
+</Steps>
+
+The 15 minutes gets you something runnable. Polishing — getting the voice exactly right, the prompt exactly right, the constraints tuned — takes longer. Most personas are still being adjusted weeks later. That's fine; the iteration loop is short.
+
+## What you do *not* need to do
+
+- **Write any Python.** Persona authoring is pure YAML.
+- **Touch any skill code.** You configure existing skills via the persona; you don't reach into them.
+- **Recompile or rebuild anything.** Just edit, restart, listen.
+
+## What you *will* iterate on
+
+- The system prompt (you'll rewrite this several times).
+- The constraint list (turning some off, adding others).
+- Skill configuration (paths, defaults, per-language strings).
+- Voice — until you find one that fits the personality.
+
+## Read first
+
+If you haven't read these:
+
+<Cards>
+  <Card
+    href="/docs/concepts/personas"
+    title="Concepts: Personas"
+    description="The vocabulary. Five minutes; saves you fifteen later."
+  />
+  <Card
+    href="/docs/concepts/constraints"
+    title="Concepts: Constraints"
+    description="What constraints are, which ones ship, when to use each."
+  />
+</Cards>
+
+## Then start with anatomy
+
+<Cards>
+  <Card
+    href="/docs/build-persona/anatomy"
+    title="Anatomy of persona.yaml →"
+    description="Every field, top to bottom."
+  />
+</Cards>

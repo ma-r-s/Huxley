@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useRegisterSection, useVoiceState } from "../lib/voiceThread.js";
 import { useViewport } from "../lib/useViewport.js";
-import { SectionHead } from "../components/Chrome.js";
+import { SectionHead, paperSection } from "../components/Chrome.js";
 
 interface Row {
   /** translation key under problem.rows.<id> */
@@ -48,11 +48,10 @@ export function Problem() {
       ref={sectionRef}
       id="problem"
       style={{
+        ...paperSection,
         position: "relative",
         zIndex: 2,
         padding: isMobile ? "72px 24px" : "120px 64px",
-        borderTop: "1px solid var(--hux-fg-line)",
-        background: "color-mix(in oklab, var(--hux-coral) 92%, black)",
       }}
     >
       <SectionHead

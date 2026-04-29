@@ -1,0 +1,243 @@
+---
+title: Publishing Your Skill
+description: From "works on my machine" to "anyone can install it."
+---
+
+A skill is a Python package. Publishing it is just Python publishing. Nothing about Huxley changes the process — but a few conventions make your skill easier to find and easier to use.
+
+## Package naming
+
+Use `huxley-skill-<thing>` on PyPI. The `huxley-skill-` prefix lets:
+
+- `pip search` (and successors) surface the ecosystem.
+- Users guess names: "is there an `huxley-skill-spotify`?"
+- Tools like `pip show` group skills together.
+
+The Python package directory uses underscores: `huxley_skill_<thing>`. Both conventions are standard Python; pick the right one for the right surface.
+
+## A complete skill `pyproject.toml`
+
+```toml title="pyproject.toml"
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "huxley-skill-bike-trainer"
+version = "0.1.0"
+description = "A bike trainer skill for Huxley voice agents."
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+  {name = "Your Name", email = "you@example.com"},
+]
+requires-python = ">=3.13"
+dependencies = [
+  "huxley-sdk",
+]
+keywords = ["huxley", "voice-agent", "bike-trainer", "fitness"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.13",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourname/huxley-skill-bike-trainer"
+Issues = "https://github.com/yourname/huxley-skill-bike-trainer/issues"
+
+[project.entry-points."huxley.skills"]
+bike_trainer = "huxley_skill_bike_trainer:BikeTrainerSkill"
+
+[tool.hatch.build.targets.wheel]
+packages = ["huxley_skill_bike_trainer"]
+```
+
+Crucial bits:
+
+- **`[project.entry-points."huxley.skills"]`** — this is what makes Huxley find your skill. The key is what the persona references. The value is the import path.
+- **`dependencies = ["huxley-sdk"]`** — depend only on the SDK, never on `huxley` (the runtime). This is the architectural wall.
+- **`requires-python = ">=3.13"`** — Huxley targets Python 3.13. Match it.
+
+## Project structure
+
+A typical published skill looks like this:
+
+<Files>
+  <Folder name="huxley-skill-bike-trainer" defaultOpen>
+    <File name="pyproject.toml" />
+    <File name="README.md" />
+    <File name="LICENSE" />
+    <File name=".gitignore" />
+    <Folder name="huxley_skill_bike_trainer">
+      <File name="__init__.py" />
+      <File name="player.py" />
+      <File name="storage.py" />
+    </Folder>
+    <Folder name="tests">
+      <File name="__init__.py" />
+      <File name="test_skill.py" />
+      <File name="test_storage.py" />
+    </Folder>
+  </Folder>
+</Files>
+
+A skill can be one file (`__init__.py` only) or many. Larger skills tend to extract:
+
+- A `player.py` for audio production.
+- A `storage.py` wrapping `ctx.storage` calls.
+- A `client.py` for any external API.
+- An `i18n.py` for language-specific strings.
+
+Read the `audiobooks` skill's source for the canonical multi-file shape.
+
+## Writing the README
+
+Three things every skill README needs:
+
+### 1. The skills section snippet
+
+What does the user paste into their `persona.yaml`? Show it:
+
+````markdown title="README.md"
+## Usage
+
+Add this to your persona's `skills:` block:
+
+```yaml
+skills:
+  bike_trainer:
+    units: metric  # or "imperial"
+```
+
+Then restart the server.
+````
+
+### 2. The tools list
+
+What tools does the model see? List them with descriptions:
+
+```markdown
+## Tools
+
+- `start_workout` — Begin a workout session.
+- `get_workout_stats` — Report elapsed time and distance.
+- `play_warmup` — Start a 5-minute warmup playlist.
+- `stop_warmup` — Cancel the warmup mid-playback.
+```
+
+### 3. The configuration schema
+
+What can the user configure? With defaults:
+
+```markdown
+## Configuration
+
+| Key            | Default      | Description                              |
+|----------------|--------------|------------------------------------------|
+| `units`        | `"metric"`   | `"metric"` (km, kg) or `"imperial"`      |
+| `library_path` | `"warmups/"` | Where to find warmup audio (relative to data/) |
+| `sounds`       | `{}`         | Optional: chime overrides (key → path)   |
+```
+
+## Per-language overrides
+
+If your skill cares about the persona's language (most do), document the overrides users can set:
+
+````markdown
+## Per-language overrides
+
+```yaml
+skills:
+  bike_trainer:
+    i18n:
+      en:
+        on_warmup_complete: "Warmup done. Ready for the workout?"
+      es:
+        on_warmup_complete: "Warmup terminado. ¿Listo para empezar?"
+```
+````
+
+Don't hardcode prompts in your skill if they vary by language. Read them from `ctx.config["i18n"][ctx.language]` with a sensible default.
+
+## Testing across personas
+
+Run your skill against both AbuelOS and BasicOS to check it behaves well in different prompt registers. The same `play_warmup` tool, fired by AbuelOS, should produce a warm Spanish narration; fired by BasicOS, a terse one. If it doesn't — if your skill's `output` text is so opinionated that personas can't shape it — that's a smell.
+
+Rule of thumb: skills return *data*; personas shape *prose*.
+
+## Versioning
+
+Use semver. Bump:
+
+- **Patch** for bug fixes (`0.1.1`).
+- **Minor** for new tools or new optional config (`0.2.0`).
+- **Major** for breaking changes — removing tools, renaming config keys, changing tool signatures (`1.0.0`).
+
+The framework doesn't yet pin skill versions in personas. If you ship a breaking change, communicate it loudly in the README and changelog. Pre-1.0 versions are expected to break occasionally; post-1.0, treat your tool surface as a public API.
+
+## Publishing to PyPI
+
+```bash
+uv build         # produces dist/huxley_skill_bike_trainer-0.1.0-*.whl
+uv publish       # uploads to PyPI (you'll need an API token)
+```
+
+Once published, anyone can:
+
+```bash
+uv add huxley-skill-bike-trainer
+```
+
+And reference it in their persona.
+
+## Publishing without PyPI
+
+PyPI is convention, not requirement. Skills can come from:
+
+- A git repo: `uv add git+https://github.com/you/huxley-skill-bike-trainer.git`.
+- A path: `uv add /path/to/skill` (useful for local dev and monorepos).
+- A private PyPI mirror.
+- A wheel file: `uv add huxley_skill_bike_trainer-0.1.0-py3-none-any.whl`.
+
+All of these end up the same way: the entry point gets registered, Huxley discovers the skill, your persona can use it.
+
+## What not to do in a published skill
+
+- **Don't import from `huxley`.** Only import from `huxley_sdk`. The runtime is internal — relying on its internals locks your skill to a specific framework version and breaks the layering.
+- **Don't assume a persona's language.** Read `ctx.language` and adapt.
+- **Don't hardcode paths.** Use `ctx.persona_data_dir` so the persona controls layout.
+- **Don't print or use `logging` directly.** Use `ctx.logger`.
+- **Don't block the event loop.** All I/O must be async. Subprocess calls must use `asyncio.subprocess`. File reads must use `aiofiles` (or be very small and synchronous).
+- **Don't catch and swallow errors silently.** Log them. The framework's error path *includes a structured log line* — don't break the chain.
+- **Don't depend on global state from the runtime.** No imports from `huxley.app`, no `huxley.coordinator.singleton`. The SDK is the only contract.
+
+## What you've earned
+
+If you've followed this section start to finish, you have:
+
+- A skill package with a clean structure.
+- Tools that the model picks well.
+- Side effects that produce real audio.
+- Proactive behavior that fires when something happens.
+- A `pyproject.toml` ready to ship to PyPI.
+- A README that helps strangers use your skill.
+
+Ship it.
+
+## Next
+
+<Cards>
+  <Card
+    href="/docs/build-persona"
+    title="Build a persona"
+    description="Now wrap your skill in a persona that uses it well."
+  />
+  <Card
+    href="/docs/cookbook"
+    title="Cookbook"
+    description="Real patterns from the first-party skills."
+  />
+</Cards>

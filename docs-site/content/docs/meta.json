@@ -1,0 +1,20 @@
+{
+  "title": "Documentation",
+  "pages": [
+    "welcome",
+    "---Get Started---",
+    "getting-started",
+    "---Understand---",
+    "concepts",
+    "---Use Huxley---",
+    "use",
+    "---Extend Huxley---",
+    "build-skill",
+    "build-persona",
+    "---Reference---",
+    "cookbook",
+    "reference",
+    "---Project---",
+    "vision"
+  ]
+}

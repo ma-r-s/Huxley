@@ -14,5 +14,15 @@
         }
       ]
     }
+  ],
+  "rewrites": [
+    {
+      "source": "/docs",
+      "destination": "https://huxley-docs.vercel.app/docs"
+    },
+    {
+      "source": "/docs/:path*",
+      "destination": "https://huxley-docs.vercel.app/docs/:path*"
+    }
   ]
 }

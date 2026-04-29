@@ -22,6 +22,10 @@ export function Wordmark({
           letterSpacing: "-0.015em",
           lineHeight: 1,
           color,
+          // The brand mark is always lowercase. Defend against parents
+          // that apply text-transform (e.g. the footer's uppercase mono
+          // styling) — without this, "huxley" became "HUXLEY" there.
+          textTransform: "none",
         }}
       >
         huxley

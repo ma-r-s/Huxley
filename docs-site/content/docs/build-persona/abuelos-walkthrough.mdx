@@ -1,0 +1,289 @@
+---
+title: Walkthrough — AbuelOS
+description: The canonical persona, every choice explained. See the framework's primitives in real use.
+---
+
+AbuelOS is the Spanish-language persona Huxley ships with. It's designed for a 90-year-old blind user — Don Carlos in Bogotá. It's the persona that exercises every primitive in the framework: long-form audio, proactive messages, multilingual prompts, persona-shaped behavior, accessibility-driven design.
+
+This page reads AbuelOS top to bottom and explains every choice. Use it as a reference when you build your own persona.
+
+## The full file
+
+Here's a representative slice of `server/personas/abuelos/persona.yaml`. The real file at `server/personas/abuelos/persona.yaml` has more skills, more contacts, more languages in the i18n block, and a longer system prompt — read the source for the complete version. What's below is a faithful skeleton that compiles and runs; the shape is identical.
+
+```yaml title="server/personas/abuelos/persona.yaml"
+version: 1
+name: abuelos
+voice: coral
+language_code: es
+transcription_language: es
+timezone: America/Bogota
+
+system_prompt: |
+  Eres un asistente cálido y paciente para Don Carlos, un señor de 90
+  años en Bogotá. No ve. Todo es por audio.
+
+  Responde en una o dos oraciones cortas. Nunca digas que no — siempre
+  ofrece una alternativa cercana. Si no estás seguro de algo, da tu mejor
+  estimado y ofrece corregir.
+
+  Para reproducir audiolibros: SIEMPRE llama search_audiobooks primero
+  para obtener el ID. Nunca inventes IDs.
+
+  Cuando Don Carlos pregunte por noticias: usa get_news. Es información
+  fresca, narrada en español colombiano.
+
+  Cuando pida pausar el libro: distingue PAUSAR (continúa donde íbamos)
+  de CAMBIAR LA VELOCIDAD (cambia el ritmo, no la posición).
+
+  Si suena algo y Don Carlos pregunta "¿qué fue eso?", explica
+  brevemente. No interrumpas con explicaciones que él no pidió.
+
+constraints:
+  - never_say_no
+  - echo_short_input
+  - confirm_if_unclear
+
+ui_strings:
+  listening: "Te escucho..."
+  too_short: "Muy corto, intenta otra vez."
+  sent: "Listo."
+  responding: "Pensando..."
+  ready: "Listo."
+
+i18n:
+  en:
+    transcription_language: en
+    system_prompt: |
+      You're a warm, patient assistant for Don Carlos, a 90-year-old
+      gentleman in Bogotá. He can't see — everything is audio.
+
+      Reply in one or two short sentences. Never refuse — offer the
+      closest alternative. When unsure, give your best estimate and
+      offer to correct.
+
+      For audiobooks: ALWAYS call search_audiobooks first to get an ID.
+      Never invent IDs.
+    ui_strings:
+      listening: "Listening..."
+      too_short: "Too short, try again."
+      ready: "Ready."
+
+  fr:
+    transcription_language: fr
+    system_prompt: |
+      Tu es un assistant chaleureux pour Don Carlos, un monsieur de 90
+      ans à Bogotá. Il ne voit pas — tout passe par l'audio.
+
+      Réponds en une ou deux phrases courtes. Ne refuse jamais — propose
+      l'alternative la plus proche.
+    ui_strings:
+      listening: "J'écoute..."
+      ready: "Prêt."
+
+skills:
+  audiobooks:
+    library: audiobooks
+    sounds_path: sounds
+    sounds_enabled: true
+    i18n:
+      es:
+        on_complete_prompt: |
+          El libro terminó. Anúncialo con calidez.
+      en:
+        on_complete_prompt: |
+          The book is finished. Tell the user warmly.
+
+  news:
+    location: "Bogotá"
+    latitude: 4.71
+    longitude: -74.07
+    country_code: "CO"
+    language_code: "es"
+    units: "metric"
+    interests: [politica, local]
+    max_items: 8
+    sounds_path: ../../_shared/sounds
+    start_sound: news_start
+
+  radio:
+    stations:
+      - id: rcn
+        name: "RCN Radio"
+        url: "https://radio.rcn.com.co/stream"
+      - id: caracol
+        name: "Caracol Radio"
+        url: "https://caracol.radio.stream"
+
+  system: {}
+
+  telegram:
+    # Contacts is a flat dict — lowercase spoken name → phone number.
+    # The userbot needs to have received at least one message from each
+    # contact for the lookup to work.
+    contacts:
+      maria: "+57..."
+      juan: "+57..."
+    inbound:
+      enabled: true
+      auto_answer: contacts_only
+
+  timers: {}
+```
+
+## Field-by-field
+
+### `voice: coral`
+
+Coral is warm, slightly slow, and reads beautifully in Spanish. We tested every voice in the OpenAI playground first. Coral was unanimous.
+
+### `language_code: es` + `transcription_language: es`
+
+Spanish is the primary language. Whisper expects Spanish audio. Both fields agree.
+
+### `timezone: America/Bogota`
+
+So `system.get_current_time` says "Son las 9 y media" in local time, not UTC.
+
+### The system prompt
+
+Read it slowly. A few things to notice:
+
+**It establishes the user.** "Don Carlos, a 90-year-old in Bogotá. He can't see." Every later instruction makes more sense once the model knows this. The model will be patient, will use audio cues, will choose simpler words.
+
+**It's specific about behavior.** Not "be helpful" — "Reply in one or two short sentences." Not "be friendly" — "Never say no, offer alternatives." The model can check itself against these.
+
+**It tells the model how to use the audiobook tools correctly.** "ALWAYS call search_audiobooks first." Without this, the model might invent IDs from the user's words and crash the skill.
+
+**It distinguishes "pause" from "change speed".** Real users mix these up; without explicit guidance the model would too.
+
+**It tells the model to *not* explain unprompted.** "Don't interrupt with explanations he didn't ask for." Subtle, but it shapes how the agent feels — quieter, more respectful.
+
+### `constraints: [never_say_no, echo_short_input, confirm_if_unclear]`
+
+- `never_say_no` — paramount for a user who shouldn't get stuck.
+- `echo_short_input` — when audio is brief, repeat back what was heard. Useful for hard-of-hearing or noisy environments.
+- `confirm_if_unclear` — when the model isn't sure what was meant, ask one clarifying question. Don't just guess wrong.
+
+`confirm_destructive` is *not* enabled. AbuelOS doesn't have skills that do destructive things — the worst it can do is interrupt a book, which is recoverable.
+
+### `ui_strings`
+
+The PWA's listening/ready/error labels in Spanish. Firmware ignores these; uses earcons instead.
+
+### `i18n.en`, `i18n.fr`
+
+English and French overrides. The system prompts mirror the Spanish one — same instructions, native prose. UI strings localized. The `transcription_language` is overridden so Whisper expects the right language.
+
+Notice what's *not* in `i18n`:
+
+- `voice` — not overridden. Coral works in all three languages.
+- `constraints` — not overridden. The behavioral rules apply regardless of language.
+- `skills` — not overridden. Same skill set in every language.
+
+Only the language-bound fields differ.
+
+### `skills.audiobooks`
+
+```yaml
+audiobooks:
+  library: audiobooks                  # data/audiobooks/
+  sounds_path: ../../_shared/sounds    # shared earcon palette
+  sounds_enabled: true
+  i18n:
+    es:
+      on_complete_prompt: "El libro terminó. Anúncialo con calidez."
+    en:
+      on_complete_prompt: "The book is finished. Tell the user warmly."
+```
+
+The audiobook library lives at `server/personas/abuelos/data/audiobooks/`. Earcons (`book_start.wav`, `book_end.wav`) play before and after each book — the framework looks for them by filename in `sounds_path`. The `on_complete_prompt` is what the model is told to say when a book finishes naturally — it's localized so the warmth survives translation.
+
+### `skills.news`
+
+The news skill needs explicit lat/lon and country/language codes (it queries Open-Meteo for weather and Google News RSS for headlines). The real persona uses Villavicencio coordinates; we've shown Bogotá's here for clarity. Chime plays at the start of each report.
+
+### `skills.radio`
+
+Three Colombian stations. Each has an id (used by the model when calling `play_station`), a human name (for narration), and a stream URL. The skill handles HTTP/Icecast → ffmpeg → PCM.
+
+### `skills.system: {}`
+
+No config. The system skill just exposes `get_current_time` and `set_volume`.
+
+### `skills.telegram`
+
+Contacts mapped from spoken names (lowercase) to phone numbers. The model uses these to know who Don Carlos can call ("Llama a María" → outbound call to María's phone). `auto_answer: contacts_only` means the userbot answers calls from known contacts and silently ignores everyone else.
+
+The userbot's own credentials (api_id, api_hash, phone) come from environment variables — `HUXLEY_TELEGRAM_API_ID`, `HUXLEY_TELEGRAM_API_HASH`, `HUXLEY_TELEGRAM_USERBOT_PHONE`. Don't put real credentials in `persona.yaml`.
+
+### `skills.timers: {}`
+
+No config needed. Timers persist via `ctx.storage` and survive restarts.
+
+## The directory layout
+
+The persona's directory contains more than just `persona.yaml`:
+
+<Files>
+  <Folder name="server/personas/abuelos" defaultOpen>
+    <File name="persona.yaml" />
+    <File name="README.md" />
+    <Folder name="data">
+      <Folder name="audiobooks">
+        <File name="el_principito.m4b" />
+        <File name="cien_anos_de_soledad.mp3" />
+      </Folder>
+      <File name="abuelos.db" />
+    </Folder>
+    <Folder name="sounds">
+      <File name="book_start.wav" />
+      <File name="book_end.wav" />
+      <File name="news_start.wav" />
+    </Folder>
+  </Folder>
+</Files>
+
+The data directory holds the audiobook library + the SQLite database. Sounds are checked in. Real audiobooks are gitignored — they're large and personal.
+
+## What this teaches
+
+Reading AbuelOS reveals the framework's design philosophy:
+
+- **Persona is config, not code.** Everything user-facing is in this YAML — voice, prompts, constraints, skills. Changing a persona doesn't require Python.
+- **Skills are reusable.** The audiobooks skill works for AbuelOS (Spanish, warm, elderly user) just as well as it would for an English-speaking persona for a teenager. The skill handles the *mechanism*; the persona handles the *voice*.
+- **Multilingual is opt-in and optional.** Most fields don't need overrides. The `i18n` block only contains what changes.
+- **The system prompt is the most expressive piece.** Voice gets the immediate emotional register; the prompt shapes behavior over time.
+
+## What you'd change for your own persona
+
+Probably:
+
+- The user description (Don Carlos → your user).
+- The voice (coral → whatever fits).
+- The language (es → yours).
+- The skill list (which capabilities your persona needs).
+- The skill configs (your audiobook library, your news location, your radio stations).
+
+You'd probably keep:
+
+- The structure (top-level identity + i18n + skills).
+- The constraint pattern (pick the ones that matter to your user).
+- The system prompt shape (establish user → behavioral rules → skill-specific guidance).
+
+## Now build your own
+
+You've read the canonical persona. Pick the user. Pick the voice. Write the prompt. Restart. Listen. Iterate.
+
+<Cards>
+  <Card
+    href="/docs/cookbook"
+    title="Cookbook"
+    description="Real patterns from the skills AbuelOS uses."
+  />
+  <Card
+    href="/docs/concepts"
+    title="Back to concepts"
+    description="Re-read with the AbuelOS context."
+  />
+</Cards>

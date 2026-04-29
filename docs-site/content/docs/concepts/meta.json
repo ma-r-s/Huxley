@@ -1,0 +1,13 @@
+{
+  "title": "Concepts",
+  "icon": "Compass",
+  "pages": [
+    "index",
+    "personas",
+    "skills",
+    "turns",
+    "side-effects",
+    "focus",
+    "constraints"
+  ]
+}

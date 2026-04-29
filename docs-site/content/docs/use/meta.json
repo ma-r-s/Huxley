@@ -1,0 +1,10 @@
+{
+  "title": "Use Huxley",
+  "icon": "Play",
+  "pages": [
+    "run-the-server",
+    "connect-a-client",
+    "switch-personas",
+    "add-a-skill"
+  ]
+}
