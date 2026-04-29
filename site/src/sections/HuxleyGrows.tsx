@@ -376,7 +376,13 @@ export function HuxleyGrows() {
         style={{
           marginTop: isMobile ? 40 : 64,
           display: "grid",
-          gridTemplateColumns: isMobile ? "1fr" : "1.15fr 0.85fr",
+          // minmax(0, …) instead of bare "1fr" so the columns can shrink
+          // below their content's intrinsic min-width. Without this, a long
+          // unwrappable line inside the transcript card pushes the column
+          // (and the card with it) past the section's mobile width.
+          gridTemplateColumns: isMobile
+            ? "minmax(0, 1fr)"
+            : "minmax(0, 1.15fr) minmax(0, 0.85fr)",
           gap: isMobile ? 24 : 32,
           alignItems: "start",
         }}
@@ -388,16 +394,25 @@ export function HuxleyGrows() {
               borderRadius: 18,
               border: "1px solid var(--hux-fg-line)",
               background: "rgba(0,0,0,0.28)",
-              padding: "22px 26px 64px",
-              minHeight: 560,
+              padding: isMobile ? "18px 16px 60px" : "22px 26px 64px",
+              minHeight: isMobile ? 380 : 560,
+              // Constrain to grid cell width on mobile — without these the
+              // card's flex children (header + tabs row) expand it to their
+              // own intrinsic width, blowing past the viewport.
+              width: "100%",
+              maxWidth: "100%",
+              minWidth: 0,
+              boxSizing: "border-box",
               overflow: "hidden",
             }}
           >
             <div
               style={{
                 display: "flex",
-                alignItems: "center",
+                flexDirection: isMobile ? "column" : "row",
+                alignItems: isMobile ? "flex-start" : "center",
                 justifyContent: "space-between",
+                gap: isMobile ? 10 : 0,
                 paddingBottom: 14,
                 marginBottom: 18,
                 borderBottom: "1px solid var(--hux-fg-line)",
@@ -426,7 +441,21 @@ export function HuxleyGrows() {
                   {t("grows.liveTurn")}
                 </span>
               </div>
-              <div style={{ display: "flex", gap: 2 }}>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 2,
+                  overflowX: "auto",
+                  // alignSelf:stretch + minWidth:0 + width:100% on mobile
+                  // makes the tabs row honor the parent's flex column width
+                  // instead of expanding past it. The overflowX scrolls the
+                  // tabs horizontally inside that constrained width.
+                  alignSelf: isMobile ? "stretch" : "auto",
+                  width: isMobile ? "100%" : "auto",
+                  minWidth: 0,
+                  WebkitOverflowScrolling: "touch",
+                }}
+              >
                 <VariantTab
                   active={variant === "found"}
                   onClick={() => setVariant("found")}

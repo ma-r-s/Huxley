@@ -224,7 +224,12 @@ export function Skills() {
         style={{
           marginTop: 32,
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+          // Mobile: 2 cols + tighter cells. Cuts the wall of 70 single-row
+          // tiles in half and drops the package caption (visible only on
+          // tablet/desktop).
+          gridTemplateColumns: isMobile
+            ? "repeat(2, 1fr)"
+            : "repeat(auto-fill, minmax(200px, 1fr))",
           gap: 0,
           borderTop: "1px solid var(--hux-fg-line)",
           borderLeft: "1px solid var(--hux-fg-line)",
@@ -239,8 +244,8 @@ export function Skills() {
               style={{
                 borderRight: "1px solid var(--hux-fg-line)",
                 borderBottom: "1px solid var(--hux-fg-line)",
-                padding: "16px 18px",
-                minHeight: 84,
+                padding: isMobile ? "10px 12px" : "16px 18px",
+                minHeight: isMobile ? 60 : 84,
                 display: "flex",
                 flexDirection: "column",
                 justifyContent: "space-between",
@@ -260,7 +265,7 @@ export function Skills() {
                   letterSpacing: "0.18em",
                   textTransform: "uppercase",
                   opacity: 0.55,
-                  marginBottom: 6,
+                  marginBottom: isMobile ? 2 : 6,
                 }}
               >
                 {s.cat}
@@ -281,24 +286,26 @@ export function Skills() {
                 <span
                   style={{
                     fontFamily: "var(--hux-serif)",
-                    fontSize: 18,
+                    fontSize: isMobile ? 15 : 18,
                     lineHeight: 1.2,
                   }}
                 >
                   {s.name}
                 </span>
               </div>
-              <div
-                style={{
-                  fontFamily: "var(--hux-mono)",
-                  fontSize: 9,
-                  letterSpacing: "0.1em",
-                  opacity: 0.4,
-                  marginTop: 4,
-                }}
-              >
-                huxley-skill-{s.id}
-              </div>
+              {!isMobile && (
+                <div
+                  style={{
+                    fontFamily: "var(--hux-mono)",
+                    fontSize: 9,
+                    letterSpacing: "0.1em",
+                    opacity: 0.4,
+                    marginTop: 4,
+                  }}
+                >
+                  huxley-skill-{s.id}
+                </div>
+              )}
             </div>
           );
         })}
