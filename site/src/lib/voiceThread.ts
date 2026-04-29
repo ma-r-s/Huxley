@@ -68,6 +68,18 @@ const VoiceStore = (() => {
       rec.ratio = ratio;
       recompute();
     },
+    // Update a section's voice state in place. Used by the hero orb cycler
+    // so the sticky waveform bar reflects the current orb state instead of
+    // staying frozen on the section's static "idle" registration.
+    setSectionState(id: string, state: VoiceState) {
+      const rec = sections.get(id);
+      if (!rec) return;
+      rec.state = state;
+      if (active.id === id && active.state !== state) {
+        active = { id, state };
+        notify();
+      }
+    },
     setScrollProgress(p: number) {
       scrollProgress = p;
       notify();
@@ -88,6 +100,13 @@ export function useVoiceState(): ActiveSnapshot {
   const [snap, setSnap] = useState(() => VoiceStore.get());
   useEffect(() => VoiceStore.subscribe(() => setSnap(VoiceStore.get())), []);
   return snap;
+}
+
+// Imperative setter — call from a section that wants to override its
+// registered state at runtime (e.g. the hero cycling its orb through
+// every state on a timer).
+export function setSectionVoiceState(id: string, state: VoiceState): void {
+  VoiceStore.setSectionState(id, state);
 }
 
 // Find the nearest scrollable ancestor — used as the IntersectionObserver

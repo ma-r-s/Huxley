@@ -1,22 +1,52 @@
 // Hero — orb + headline + install chip. The orb follows the active scroll
 // state, so as you read down it literally narrates each section.
 
+import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { useRegisterSection, useVoiceState } from "../lib/voiceThread.js";
+import {
+  useRegisterSection,
+  useVoiceState,
+  setSectionVoiceState,
+} from "../lib/voiceThread.js";
 import { useViewport } from "../lib/useViewport.js";
+import { useOrbDemoState } from "../lib/useOrbDemoState.js";
 import { Orb, type OrbState } from "../components/Orb.js";
 import { chipGhost, chipSolid } from "../components/Chrome.js";
 
 export function Hero() {
   const { t } = useTranslation();
   const heroRef = useRegisterSection<HTMLElement>("hero", "idle");
-  const { state: activeState } = useVoiceState();
+  const { state: activeState, id: activeSection } = useVoiceState();
   const { isMobile, isTablet } = useViewport();
-  // The orb has no "interrupt" state — fall back to listening for that one beat.
+
+  // Two state sources for the hero orb:
+  //   - demoState cycles idle → listening → thinking → speaking on a timer
+  //     (showcases the orb's full repertoire while the hero is on screen)
+  //   - activeState reflects the voice-thread scroll position
+  // While the hero is the active section we use the demo cycle so the orb
+  // is alive at first paint. Once the user scrolls past hero, fall back to
+  // the scroll state — by then the orb is off-screen anyway, but if anyone
+  // scrolls back up the cycle resumes.
+  const demoState = useOrbDemoState();
+  const heroIsActive = activeSection === "hero";
+  const liveState: OrbState | "interrupt" = heroIsActive
+    ? demoState
+    : activeState;
   const orbState: OrbState =
-    activeState === "interrupt" ? "listening" : (activeState as OrbState);
+    liveState === "interrupt" ? "listening" : (liveState as OrbState);
   const orbSize = isMobile ? 220 : isTablet ? 280 : 360;
-  const statusKey = activeState as
+
+  // Push the cycling state into the global voice store so the sticky
+  // waveform bar above matches the orb's current state instead of staying
+  // frozen on "idle". Only when the hero is the active section.
+  useEffect(() => {
+    if (heroIsActive) setSectionVoiceState("hero", demoState);
+  }, [heroIsActive, demoState]);
+
+  // Status line + sub mirror the same source so the copy under the orb
+  // changes in lockstep with the visual state — tells a tiny narrated
+  // story instead of one frozen tagline.
+  const statusKey = liveState as
     | "idle"
     | "listening"
     | "thinking"
@@ -172,7 +202,7 @@ export function Hero() {
             opacity: 0.55,
           }}
         >
-          {statusSub} · {activeState}
+          {statusSub} · {liveState}
         </div>
       </div>
     </section>
