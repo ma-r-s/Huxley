@@ -34,6 +34,13 @@ dev = [
     "pytest-cov>=6.0",
     "mypy>=1.13",
 ]
+# Build-time deps for scripts/synth_sounds.py — render the earcon palette.
+# Never imported at runtime; the rendered WAVs are committed to git.
+synth = [
+    "numpy>=2.0",
+    "scipy>=1.13",
+    "pedalboard>=0.9",
+]
 
 [build-system]
 requires = ["hatchling"]
