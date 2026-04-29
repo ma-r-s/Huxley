@@ -27,14 +27,16 @@ Huxley/                              # repo root
 │   │   ├── audiobooks/              #   huxley-skill-audiobooks
 │   │   ├── news/                    #   huxley-skill-news (Open-Meteo + Google News RSS)
 │   │   ├── radio/                   #   huxley-skill-radio (HTTP/Icecast via ffmpeg)
+│   │   ├── search/                  #   huxley-skill-search (DuckDuckGo via ddgs, no API key)
 │   │   ├── system/                  #   huxley-skill-system (volume, time)
 │   │   ├── telegram/                #   huxley-skill-telegram (MTProto comms)
 │   │   └── timers/                  #   huxley-skill-timers (proactive reminders)
 │   └── personas/                    # Persona configs + assets the runtime loads
+│       ├── _shared/                 #   Framework-shared assets (palette of all personas)
+│       │   └── sounds/              #     Earcons rendered by scripts/synth_sounds.py — book_start, book_end, news_start, radio_start, search_start
 │       ├── abuelos/                 #   canonical — slow, warm, audio-only target
 │       │   ├── persona.yaml         #     version, name, voice, language, system_prompt, constraints, skills
 │       │   ├── data/                #     gitignored: audiobook library + abuelos.db
-│       │   ├── sounds/              #     earcons (book_start.wav, book_end.wav, news_start.wav)
 │       │   └── README.md
 │       └── basicos/                 #   terse counter-persona — proves skills are persona-agnostic
 │           ├── persona.yaml
@@ -54,10 +56,10 @@ Huxley/                              # repo root
 │   ├── decisions.md                 # ADR log
 │   ├── roadmap.md                   # framework + persona roadmaps
 │   ├── personas/{README,abuelos,basicos}.md
-│   ├── skills/{README,audiobooks,news,radio,timers}.md
-│   ├── sounds.md                    # sound UX architecture (PlaySound, AudioStream, earcons)
+│   ├── skills/{README,audiobooks,news,radio,search,timers}.md
+│   ├── sounds.md                    # sound UX architecture (PlaySound, AudioStream, synthesis pipeline)
 │   └── research/sonic-ux.md
-├── scripts/                         # One-off ops + launchd plist
+├── scripts/                         # One-off ops + synth_sounds.py (renders the earcon palette) + launchd plist
 └── CLAUDE.md                        # this file
 ```
 
@@ -77,10 +79,13 @@ uv run --package huxley pytest server/runtime/tests                             
 uv run --package huxley-skill-audiobooks pytest server/skills/audiobooks/tests   # audiobooks skill
 uv run --package huxley-skill-news pytest server/skills/news/tests               # news skill
 uv run --package huxley-skill-radio pytest server/skills/radio/tests             # radio skill
+uv run --package huxley-skill-search pytest server/skills/search/tests           # search skill
 uv run --package huxley-skill-timers pytest server/skills/timers/tests           # timers skill
 cd server/runtime && uv run huxley                                               # run the server (loads .env from server/runtime/)
 # Run BasicOS in parallel for persona A/B testing:
 cd server/runtime && HUXLEY_PERSONA=basicos HUXLEY_SERVER_PORT=8766 uv run huxley
+# Re-render the shared earcon palette (writes server/personas/_shared/sounds/*.wav):
+uv run --package huxley --group synth python scripts/synth_sounds.py
 ```
 
 PWA dev client (run from `clients/pwa/`):
