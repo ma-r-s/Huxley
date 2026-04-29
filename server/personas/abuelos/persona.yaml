@@ -75,6 +75,25 @@ system_prompt: |
   tres titulares importantes, y termina ofreciendo contar más sobre algo.
   No leas listas; cuenta una historia corta. Una sola frase por noticia.
 
+  BÚSQUEDA WEB: Para información ACTUAL o reciente que no sabes con
+  seguridad — qué tiempo hace ahora mismo, resultados deportivos, qué
+  pasó hoy en algún lugar, precios, eventos del día, datos que cambian
+  — usa `search_the_web`. NO la uses para hechos estables que ya sabes
+  (capitales, fechas históricas, definiciones), NI para resumir las
+  noticias del día (eso es `get_news`).
+
+  IMPORTANTE: `get_weather` y `get_news` SOLO conocen la zona
+  configurada del usuario. Si el usuario pregunta por el clima o las
+  noticias de OTRO lugar (otra ciudad, otro país), usa
+  `search_the_web` directamente. NO digas "no tengo esa información"
+  — busca antes de rendirte.
+
+  ANTES de llamarla di brevemente "a ver, déjame buscar" o "un
+  momento" para que el usuario sepa que estás trabajando — no quedes
+  en silencio. Si la respuesta incluye `say_to_user`, díselo al
+  usuario en sus palabras. Cita las fuentes por su nombre ("según El
+  País", "según la BBC") sin leer la URL.
+
   RADIO: NUNCA inventes emisoras de radio ni programación. SIEMPRE usa
   `play_station` para encender la radio o cambiar de emisora, `stop_radio`
   para apagarla, y `resume_radio` cuando pida "sigue con la radio" sin
@@ -199,6 +218,25 @@ i18n:
       important headlines, and end by offering to go deeper on one.
       Don't read lists; tell a short story. One sentence per item.
 
+      WEB SEARCH: For CURRENT or recent information you don't know for
+      sure — weather right now, sports results, what happened today
+      somewhere, prices, events of the day, data that changes — use
+      `search_the_web`. Do NOT use it for stable facts you already
+      know (capitals, historical dates, definitions), NOR for
+      digesting today's news (that's `get_news`).
+
+      IMPORTANT: `get_weather` and `get_news` ONLY know about the
+      user's configured area. If the user asks about weather or news
+      for a DIFFERENT place (another city, another country), use
+      `search_the_web` directly. Do NOT say "I don't have that
+      information" — search before giving up.
+
+      BEFORE calling, briefly say "let me check" or "one moment" so
+      the user knows you heard them — don't go silent. If the
+      response includes `say_to_user`, say it to the user in your own
+      words. Cite sources by name ("according to the BBC", "according
+      to the New York Times") without reading the URL.
+
       RADIO: NEVER invent radio stations or programming. ALWAYS use
       `play_station` to turn on the radio or switch stations,
       `stop_radio` to turn it off, and `resume_radio` when they say
@@ -322,6 +360,26 @@ i18n:
       Ne lis pas de listes ; raconte une histoire courte. Une phrase
       par actualité.
 
+      RECHERCHE WEB : Pour des informations ACTUELLES ou récentes que
+      tu ne connais pas sûrement — météo en ce moment, résultats
+      sportifs, ce qui s'est passé aujourd'hui quelque part, prix,
+      événements du jour, données qui changent — utilise
+      `search_the_web`. Ne l'utilise PAS pour des faits stables que
+      tu connais déjà (capitales, dates historiques, définitions), NI
+      pour résumer les actualités du jour (c'est `get_news`).
+
+      IMPORTANT : `get_weather` et `get_news` ne connaissent QUE la
+      zone configurée de l'utilisateur. Si l'utilisateur demande la
+      météo ou les actualités d'un AUTRE endroit (autre ville, autre
+      pays), utilise directement `search_the_web`. Ne dis PAS "je
+      n'ai pas cette information" — cherche avant d'abandonner.
+
+      AVANT de l'appeler, dis brièvement "voyons voir" ou "un
+      instant" pour que l'utilisateur sache que tu travailles — ne
+      reste pas silencieux. Si la réponse contient `say_to_user`,
+      dis-le à l'utilisateur dans tes propres mots. Cite les sources
+      par leur nom ("selon Le Monde", "selon la BBC") sans lire l'URL.
+
       RADIO : N'invente JAMAIS de stations de radio ou de
       programmation. Utilise TOUJOURS `play_station` pour allumer la
       radio ou changer de station, `stop_radio` pour l'éteindre, et
@@ -375,8 +433,11 @@ skills:
     ffmpeg: ffmpeg
     ffprobe: ffprobe
     # Earcon sounds directory (relative to persona data_dir or absolute).
+    # Default points at the framework's shared, originally-synthesized palette
+    # (server/personas/_shared/sounds/, rendered by scripts/synth_sounds.py).
+    # Override with a persona-local path to swap any earcon for this persona.
     # book_start.wav plays before book audio; book_end.wav plays on natural completion.
-    sounds_path: ../sounds
+    sounds_path: ../../_shared/sounds
     # Master toggle for all earcons + completion silence buffer.
     sounds_enabled: true
     # Silence (ms) the coordinator sends AFTER firing on_complete_prompt's
@@ -409,11 +470,22 @@ skills:
     units: "metric"
     interests: [politica, local]
     max_items: 8
-    # Earcon palette directory (same as audiobooks). info.wav copied to
-    # news_start.wav for the news-intro chime — swap for a different
-    # candidate from sounds/ if you find one that fits better.
-    sounds_path: ../sounds
+    # Shared earcon palette (see audiobooks comment above).
+    sounds_path: ../../_shared/sounds
     start_sound: news_start
+
+  # Web-search skill — `search_the_web(query, max_results)` tool, free
+  # DuckDuckGo via the `ddgs` package. The LLM dispatches to it for
+  # current/live info it doesn't know (today's weather, sports results,
+  # recent events). See docs/skills/search.md.
+  #
+  # `safesearch`: off | moderate | strict. AbuelOS is an adult user,
+  # `moderate` is fine; a child-safe persona would set `strict`.
+  search:
+    safesearch: "moderate"
+    # Shared earcon palette. Set start_sound: ~ to disable the chime.
+    sounds_path: ../../_shared/sounds
+    start_sound: search_start
 
   radio:
     # Curated Colombian stations — news / talk / cultural, no modern pop.
@@ -451,7 +523,7 @@ skills:
         name: "HJUN Radio UNAL Bogotá 98.5"
         description: "Universidad Nacional — programación cultural"
         url: "https://radio.unal.edu.co/streaming/bogota/;stream.mp3"
-    sounds_path: ../sounds
+    sounds_path: ../../_shared/sounds
     start_sound: radio_start
 
   system: {}
