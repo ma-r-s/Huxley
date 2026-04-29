@@ -18,11 +18,11 @@
   "rewrites": [
     {
       "source": "/docs",
-      "destination": "https://huxley-docs.vercel.app/docs"
+      "destination": "https://docs-site-dun-delta.vercel.app/docs"
     },
     {
       "source": "/docs/:path*",
-      "destination": "https://huxley-docs.vercel.app/docs/:path*"
+      "destination": "https://docs-site-dun-delta.vercel.app/docs/:path*"
     }
   ]
 }
