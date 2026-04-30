@@ -75,6 +75,17 @@ class OpenAIRealtimeProvider:
         self._receive_task: asyncio.Task[None] | None = None
         self._timeout_task: asyncio.Task[None] | None = None
         self._transcript_lines: list[str] = []
+        # Computed by `disconnect(save_summary=True)` BEFORE the
+        # receive task is cancelled; consumed by the receive task's
+        # `finally` so `on_session_end(summary)` carries the freshly-
+        # generated summary. Pre-T1.12 the provider wrote the summary
+        # to storage directly AFTER firing on_session_end, creating a
+        # race where the framework's `_on_session_end` saw the
+        # previous session's summary. The locked design moves storage
+        # writes to the framework: it calls `Storage.end_session(
+        # session_id, summary)` from `_on_session_end` — a fresh
+        # summary comes through the callback every time.
+        self._pending_summary: str | None = None
         # Active session's resolved persona (language-collapsed). Set on
         # every connect(); used by disconnect() to pick the localized
         # summarization prompt so a reconnect fed back the summary in
@@ -179,7 +190,18 @@ class OpenAIRealtimeProvider:
         )
 
     async def disconnect(self, *, save_summary: bool = True) -> None:
-        """Close the WebSocket connection."""
+        """Close the WebSocket connection.
+
+        When `save_summary=True` and the session has any transcript
+        content, computes the LLM-backed summary BEFORE cancelling the
+        receive task. The receive task's `finally` reads
+        `self._pending_summary` and passes it to
+        `on_session_end(summary)` so the framework attributes the
+        summary to the right session row in storage. Pre-T1.12 the
+        summary was written to storage directly here AFTER the
+        callback fired — a race where the framework's
+        `_on_session_end` read the previous session's summary.
+        """
         # Capture refs and clear instance attrs synchronously before any
         # awaits. connect() may be scheduled (via on_session_end → auto-
         # reconnect) and run during the awaits below; clearing first ensures
@@ -193,11 +215,6 @@ class OpenAIRealtimeProvider:
 
         if timeout_task:
             timeout_task.cancel()
-
-        if receive_task:
-            receive_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await receive_task
 
         if save_summary and self._transcript_lines:
             # Try LLM-backed summarization first (T1.5). Falls back to raw
@@ -213,7 +230,12 @@ class OpenAIRealtimeProvider:
             )
             if summary is None:
                 summary = "\n".join(self._transcript_lines[-20:])
-            await self._storage.save_summary(summary)
+            self._pending_summary = summary
+
+        if receive_task:
+            receive_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await receive_task
 
         if ws:
             await ws.close()
@@ -472,7 +494,14 @@ class OpenAIRealtimeProvider:
         except Exception:
             await logger.aexception("session_receive_error")
         finally:
-            await self._cb.on_session_end()
+            # Read AND clear the pending summary so a subsequent natural
+            # close (e.g. a quick auto-reconnect that immediately exits
+            # again) doesn't carry the previous session's summary into a
+            # new row. None passes through cleanly when no summary was
+            # generated — the storage row's `summary` stays null.
+            summary = self._pending_summary
+            self._pending_summary = None
+            await self._cb.on_session_end(summary)
 
     def _reset_timeout(self) -> None:
         """Reset the silence/max-session timeout."""

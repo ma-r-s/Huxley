@@ -188,6 +188,13 @@ class Application:
         self._shutdown_event = asyncio.Event()
         self._shutting_down = False
         self._reconnect_task: asyncio.Task[None] | None = None
+        # Active session row in `sessions` table, lazily created on the
+        # first transcript. None means "no row yet"; `_on_transcript`
+        # creates one (via `Storage.start_or_resume_session` which
+        # collapses fragmenting reconnects into one logical
+        # conversation per the 30-minute idle window). Cleared when
+        # `_on_session_end` finalizes the row. T1.12.
+        self._active_session_id: int | None = None
 
     def _build_skill_context(self, skill_name: str) -> SkillContext:
         """Construct the SkillContext handed to a skill at setup() / reconfigure().
@@ -414,8 +421,30 @@ class Application:
         if self.provider.is_connected:
             await self.provider.disconnect(save_summary=True)
 
-    async def _on_session_end(self) -> None:
-        """OpenAI session receive loop exited — clean up + schedule reconnect."""
+    async def _on_session_end(self, summary: str | None) -> None:
+        """OpenAI session receive loop exited — clean up + schedule reconnect.
+
+        `summary` is the LLM-generated conversation summary the
+        provider produced on its way out (None if `disconnect` was
+        called with `save_summary=False` or the WS died unexpectedly
+        before a summary could be computed). The framework owns the
+        storage write — calling `Storage.end_session(session_id,
+        summary)` here, with the active session id captured in
+        `_on_transcript`, eliminates the race where the provider's
+        post-callback `save_summary` was attributed to the next
+        session's row (T1.12 critic finding).
+        """
+        # Finalize the active session row before any other teardown so
+        # the storage write happens against the right id even if a
+        # reconnect races into a new session below.
+        if self._active_session_id is not None:
+            sid = self._active_session_id
+            self._active_session_id = None
+            try:
+                await self.storage.end_session(sid, summary)
+            except Exception:
+                await logger.aexception("session_end_persist_failed", session_id=sid)
+
         await self.coordinator.on_session_disconnected()
         if self.state_machine.state == AppState.CONVERSING:
             await self.state_machine.trigger("disconnect")
@@ -471,6 +500,26 @@ class Application:
         )
 
     async def _on_transcript(self, role: str, text: str) -> None:
+        # Lazily start (or resume) the session row on the first
+        # transcript. The 30-minute resume window collapses
+        # fragmenting reconnects (auto-reconnect, language switch,
+        # cost kill, browser refresh) into one user-visible
+        # conversation. Storage handles the resume vs. new-session
+        # decision; we just hold the active id.
+        if self._active_session_id is None:
+            try:
+                self._active_session_id = await self.storage.start_or_resume_session()
+            except Exception:
+                await logger.aexception("session_start_failed")
+        if self._active_session_id is not None:
+            try:
+                await self.storage.record_turn(self._active_session_id, role, text)
+            except Exception:
+                await logger.aexception(
+                    "session_record_turn_failed",
+                    session_id=self._active_session_id,
+                    role=role,
+                )
         await self.server.send_transcript(role, text)
 
     # --- Client callbacks ---

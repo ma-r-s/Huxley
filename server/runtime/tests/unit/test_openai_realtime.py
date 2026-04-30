@@ -164,22 +164,49 @@ class TestCancelCurrentResponse:
         ]
 
 
-class TestTranscript:
-    async def test_disconnect_saves_summary(self, provider_deps: dict[str, Any]) -> None:
+class TestSessionEndSummary:
+    """T1.12: the provider stashes the LLM-generated summary on
+    `_pending_summary` BEFORE cancelling the receive task; the receive
+    loop's `finally` reads it and passes it to `on_session_end(summary)`.
+    Storage is no longer written by the provider — the framework's
+    `_on_session_end` calls `Storage.end_session(id, summary)` against
+    the active session id captured in `_on_transcript`.
+
+    These tests narrow on the disconnect-side contract (compute + stash);
+    the receive-loop firing path is exercised by the integration tests
+    (e.g. `test_session_replay`) where a real receive task runs."""
+
+    async def test_disconnect_with_save_stashes_summary(
+        self, provider_deps: dict[str, Any]
+    ) -> None:
         storage = provider_deps["storage"]
         await storage.init()
 
         provider = OpenAIRealtimeProvider(**provider_deps)
-        provider._transcript_lines = ["Hola", "Quiero leer un libro", "El de García Márquez"]
+        provider._transcript_lines = [
+            "Hola",
+            "Quiero leer un libro",
+            "El de García Márquez",
+        ]
 
         await provider.disconnect(save_summary=True)
 
-        summary = await storage.get_latest_summary()
-        assert summary is not None
-        assert "García Márquez" in summary
+        # When the LLM summarization call fails (test-key is bogus), the
+        # provider falls back to the raw transcript tail — which still
+        # contains the named-entity content the caller cares about.
+        assert provider._pending_summary is not None
+        assert "García Márquez" in provider._pending_summary
+
+        # Storage is NOT written by the provider any more — that's the
+        # framework's job in `_on_session_end`. The receive loop's
+        # finally fires on_session_end which the framework wires to
+        # `Storage.end_session(active_id, summary)`.
+        assert await storage.get_latest_summary() is None
         await storage.close()
 
-    async def test_disconnect_without_save(self, provider_deps: dict[str, Any]) -> None:
+    async def test_disconnect_without_save_leaves_pending_summary_none(
+        self, provider_deps: dict[str, Any]
+    ) -> None:
         storage = provider_deps["storage"]
         await storage.init()
 
@@ -188,8 +215,8 @@ class TestTranscript:
 
         await provider.disconnect(save_summary=False)
 
-        summary = await storage.get_latest_summary()
-        assert summary is None
+        assert provider._pending_summary is None
+        assert await storage.get_latest_summary() is None
         await storage.close()
 
 

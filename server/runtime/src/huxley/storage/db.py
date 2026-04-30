@@ -206,7 +206,10 @@ class Storage:
         cursor = await self._conn.execute(
             "SELECT summary, created_at FROM conversation_summaries ORDER BY id"
         )
-        rows = await cursor.fetchall()
+        # `fetchall()` is typed as `Iterable[Row]` by aiosqlite even though
+        # the runtime always returns a list — materialize so `len(rows)`
+        # below is type-clean and we don't iterate twice on a generator.
+        rows = list(await cursor.fetchall())
         for summary, created_at in rows:
             await self._conn.execute(
                 "INSERT INTO sessions "
