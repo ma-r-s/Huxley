@@ -2474,6 +2474,134 @@ Skipped from v1 (file as T1.11.b follow-ups): `read_unread`, `reply_to_last`, vo
 
 **Note on `_run_backfill` task supervision**: T1.4 Stage 3 `background_task` supervision was listed as a blocker, but the backfill is fire-once per session (not a long-lived loop) so a tracked `asyncio.create_task` via the skill's `_spawn_task` helper is sufficient. Persisting backfill state across restarts isn't required because Telegram's own unread cursor is the source of truth — every restart re-reads what's actually unread per Telegram, no skill-side bookkeeping needed.
 
+## T1.12 — Session history persistence + retrieval
+
+**Status**: in_progress (2026-04-29) · **Effort**: ~½ day server, ~½ day PWA
+
+**Problem.** The PWA's `SessionsSheet` displays three hardcoded sample conversations. The server has no notion of a "session" beyond a single `conversation_summary` row that gets overwritten on every disconnect. Users cannot browse what they talked about previously, even though the UI clearly promises they can.
+
+**Why it matters.** Once Huxley is used regularly, looking back at past conversations is a core product expectation — particularly for the AbuelOS persona, where a caregiver may want to review what the elderly user discussed (medication reminders heard, news topics covered, calls placed). The current UI is a lie; the gap is one of the four flagged in the 2026-04-29 PWA-vs-server audit (Phase A/B of which shipped in commit `1ec47ab3`).
+
+### Validation (Gate 1)
+
+`clients/pwa/src/components/SessionsSheet.tsx` consumes a `sessions: Session[]` prop. `clients/pwa/src/App.tsx:163-189` populates that prop with a hardcoded array sourced from i18n samples. There is no WebSocket message in either direction to list or fetch sessions — verified via `grep "session" server/runtime/src/huxley/server/server.py` and the protocol table in `docs/protocol.md`. Storage today persists only `conversation_summaries` (single-row-overwrite-on-disconnect), used to inject context on warm reconnect — not a browsable history.
+
+### Design (Gate 2 — locked 2026-04-29 after critic round)
+
+**Schema v2** in `server/runtime/src/huxley/storage/db.py`:
+
+```sql
+CREATE TABLE sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    ended_at     TEXT,
+    last_turn_at TEXT,                  -- updated on each record_turn; for resume-window check
+    turn_count   INTEGER NOT NULL DEFAULT 0,
+    preview      TEXT,                   -- first user-role turn, truncated; null until a user turn lands
+    summary      TEXT
+);
+CREATE TABLE session_turns (
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    idx        INTEGER NOT NULL,
+    role       TEXT NOT NULL CHECK(role IN ('user','assistant')),
+    text       TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (session_id, idx)
+);
+CREATE INDEX idx_session_turns_session ON session_turns(session_id);
+```
+
+Migration: every row in `conversation_summaries` becomes a synthetic `sessions` row with `summary` set, `started_at = created_at`, `ended_at = created_at`, `turn_count = 0`. Drop `conversation_summaries`. Migration is inline in `_init_schema_version` keyed off `schema_version < 2` — first migration shipped, no generic runner yet (see deferred T2.1 follow-up).
+
+**Conversation continuity via resume window.** New storage method `start_or_resume_session(idle_window_min: int = 30) -> int`:
+
+- If the most recent session has `last_turn_at >= now - idle_window`, return its id (resume).
+- Else, INSERT a new row.
+
+This collapses fragmenting WS reconnects (auto-reconnect, language switch, cost kill, browser refresh) into one user-visible conversation. WS-connect/disconnect remains the technical lifecycle; the user-visible "conversation" is a separate logical unit grouped by idle gap.
+
+**Storage API** (added to `Storage` class):
+
+- `start_or_resume_session(idle_window_min: int = 30) -> int`
+- `record_turn(session_id, role, text)` — appends, updates `last_turn_at`, increments `turn_count`, sets `preview` lazily on first user turn
+- `end_session(session_id, summary: str | None)` — sets `ended_at` + `summary`; idempotent across reconnects (each end overwrites)
+- `list_sessions(limit: int = 50) -> list[SessionMeta]` — DESC by id, all sessions (including any "live" one — UI handles)
+- `get_session_turns(session_id: int) -> list[Turn]` — turns in idx order
+- `delete_session(session_id: int)` — removes row + cascades turns (privacy floor)
+- `get_latest_summary()` — repointed: `SELECT summary FROM sessions WHERE summary IS NOT NULL ORDER BY id DESC LIMIT 1`
+- `clear_summaries()` — `UPDATE sessions SET summary = NULL` (preserves session metadata, breaks LLM context chain). Used by `_on_reset` dev tool.
+- Drop: `save_summary` (provider stops calling it; replaced by app-owned `end_session`).
+
+**Capture pipeline** at `app.py`. Tap point is `_on_transcript(role, text)` (line 454):
+
+```python
+async def _on_transcript(self, role, text):
+    if self._active_session_id is None:
+        self._active_session_id = await self.storage.start_or_resume_session()
+    await self.storage.record_turn(self._active_session_id, role, text)
+    await self.server.send_transcript(role, text)
+```
+
+`_on_session_end` finalizes:
+
+```python
+async def _on_session_end(self, summary: str | None):  # NEW: summary param
+    if self._active_session_id is not None:
+        await self.storage.end_session(self._active_session_id, summary)
+        self._active_session_id = None
+    await self.coordinator.on_session_disconnected()
+    ...
+```
+
+**Critical: provider callback signature changes.** `voice/provider.py` `on_session_end: Callable[[], Awaitable[None]]` → `Callable[[str | None], Awaitable[None]]`. The OpenAI provider already generates the summary in `disconnect()`; pass it through the callback instead of round-tripping via storage. Provider stops calling `_storage.save_summary(summary)` — that path is replaced by app-owned `end_session(session_id, summary)`. Fixes a race where `_on_session_end` (firing from receive-loop `finally`) read the previous session's summary and attached it to the new row.
+
+**Protocol additions — additive, no version bump.** Stays at protocol 2. ESP32 has zero use for sessions; bumping forces lockstep cost across every client for a PWA-only feature. Old clients ignore unknown types (already documented in `docs/protocol.md`).
+
+- Client→server: `list_sessions` (no payload), `get_session { id }`, `delete_session { id }`
+- Server→client: `sessions_list { sessions: [SessionMeta] }`, `session_detail { id, turns: [Turn] }`, `session_deleted { id }`
+
+`SessionMeta` shape: `{ id, started_at, ended_at, last_turn_at, turn_count, preview, summary }` (raw ISO strings — client formats relative time).
+
+**PWA wiring**: `useWs` adds `sessionsList` + `sessionDetail` state and `listSessions()` / `getSession(id)` / `deleteSession(id)` methods. `SessionsSheet` consumes `ws.sessionsList`; replaces hardcoded array. Click → triggers `getSession(id)` → opens new `SessionDetailSheet` showing read-only transcript with a "Delete" button.
+
+### Critic Notes
+
+Critic round 2026-04-29 (general-purpose agent, fresh context, full design + file refs). Verdict was strong: design ships a feature that works in a demo and falls apart in real usage. Findings + dispositions:
+
+- **Auto-reconnect fragmentation** — WS-connect = session is wrong; auto-reconnect/language-switch/cost-kill creates many tiny rows for one logical conversation. **Incorporated**: `start_or_resume_session(idle_window=30min)`.
+- **Summary attribution race** — `_on_session_end` fires from receive-loop `finally`, BEFORE provider's `disconnect()` writes the new summary. As designed, every row would have the previous session's summary. **Incorporated**: changed `on_session_end` callback signature to pass `summary: str | None` directly; app owns the write.
+- **Schema over-normalized** — argued JSON-blob would be simpler since we don't query inside transcripts. **Rejected**: blob means transcripts persist only on disconnect; a 90-min conversation that crashes mid-flight loses everything. Separate `session_turns` table writes incrementally → per-turn durability. Worth the join.
+- **Protocol bump unnecessary** — ESP32 doesn't need sessions; bump forces lockstep across clients. **Incorporated**: stays at protocol 2; additive types only.
+- **Lazy start breaks proactive turns** — first transcript may be `role=assistant` (proactive turn before user engages); `preview = first user turn` invariant violated. **Incorporated**: `preview` set lazily only on first user turn; null until then. Session row still created on first transcript (any role), so proactive turns are captured.
+- **Privacy/retention** — caregiver-review use case stores PII unencrypted with no delete UI. **Incorporated** (floor): `delete_session(id)` + `clear_summaries()` from day one; PWA delete button on detail sheet. **Deferred** (documented in `docs/decisions.md`): retention window, encryption-at-rest, multilingual columns on `session_turns`, transcript-accuracy disclaimer.
+- **Telegram calls / messages aren't captured** — caregivers reviewing the day will see no record of a 4-min Telegram call. **Deferred**: out of scope; tracked under T1.10/T1.11. Schema is extensible (could add `kind` column later).
+
+### Definition of Done (locked)
+
+- [ ] Schema v2 ships; v1 DBs migrate cleanly on startup with no data loss in `conversation_summaries`.
+- [ ] **Gold integration test passes** (the test the critic flagged as the "single regression catch-all"): connect → 2 user turns → disconnect → reconnect within idle window → 1 more user turn → disconnect. Assert: `list_sessions` returns ONE row, transcript contains all 3 user turns in order, `summary` is the one written on the second disconnect.
+- [ ] Storage unit tests for every new method including `start_or_resume_session` (resume-within-window AND new-session-after-window cases) and the migration step.
+- [ ] `provider.on_session_end` signature change: `() → (str | None)`. All call sites and tests updated.
+- [ ] Reset (`_on_reset`) preserves session list, nullifies summaries (verified: subsequent `get_latest_summary` returns None until next disconnect populates one).
+- [ ] `delete_session(id)` removes the row + cascades its turns. PWA delete button works end-to-end.
+- [ ] Proactive turn (assistant-initiated, no user reply) captures the session row with `preview = NULL`; PWA renders a fallback ("Started by {persona}").
+- [ ] PWA: `EXPECTED_PROTOCOL` stays at 2. `SessionsSheet` consumes `ws.sessionsList` (no hardcoded samples). Click opens `SessionDetailSheet` with the actual transcript. `bun run check` green.
+- [ ] `ruff check server/` + `mypy server/sdk/src server/runtime/src` + per-package pytest all green.
+- [ ] `docs/protocol.md` updated with the six new message types (additive section, no version bump).
+- [ ] `docs/decisions.md` ADR added documenting: (a) WS-connect vs logical-conversation boundary choice and the resume-window heuristic; (b) deferred items (retention, encryption, multilingual, transcript-accuracy, Telegram-call capture).
+- [ ] Mario browser smoke: open SessionsSheet → see real list (or empty state) → after a real conversation, refresh → new entry appears → click → transcript shows → delete → entry vanishes.
+
+### Implementation order
+
+1. Write the gold integration test first (red).
+2. Storage schema v2 + migration + new methods + storage tests (green for storage layer).
+3. Provider `on_session_end` callback signature change + callsite updates + provider tests.
+4. App layer wiring (`_on_transcript` lazy create, `_on_session_end` finalize).
+5. Server protocol handlers (six new message types).
+6. PWA: useWs + SessionsSheet + SessionDetailSheet.
+7. Docs: `protocol.md` + `decisions.md`.
+8. Mario smoke + close gate.
+
 ---
 
 # Active — Tier 2 (pre-ship hardening)
@@ -3206,7 +3334,7 @@ If first-user sessions show frequent refusals, this jumps to Tier 1.
 | ---- | ----------------------------------------------------- | -------- | ------------------- |
 | #96  | Add `prompt_context()` to Skill Protocol with default | 30 min   | **done 2026-04-18** |
 | #97  | Auto-namespace tool names (`<skill>.<tool>`)          | ~50 LOC  | queued              |
-| #98  | Strip remaining `Abuelo` hardcoded refs              | 30 min   | **done 2026-04-18** |
+| #98  | Strip remaining `Abuelo` hardcoded refs               | 30 min   | **done 2026-04-18** |
 | #99  | Allow second WS client as monitor in dev              | ~4 hours | queued              |
 | #101 | systemd unit + install script for Linux deployment    | ~30 min  | queued              |
 | #102 | `Dockerfile` + `docker-compose.yml`                   | ~2 hours | deferred            |
