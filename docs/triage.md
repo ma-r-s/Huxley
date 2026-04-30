@@ -2510,7 +2510,18 @@ Skipped from v1 (file as T1.11.b follow-ups): `read_unread`, `reply_to_last`, vo
 
 ## T1.12 — Session history persistence + retrieval
 
-**Status**: in_progress (2026-04-29) · **Effort**: ~½ day server, ~½ day PWA
+**Status**: done (2026-04-30; pending Mario browser smoke as the final DoD gate) · **Commits**: `3e52bff7` (entry filed) → `77394c6c` (storage v2 + gold test) → `4d92d94d` (provider→app handoff race fix) → `2588057e` (server protocol + docs/protocol.md) → `96865ef2` (PWA + docs/decisions.md ADRs) · **Effort actual**: ~1 day across server + PWA, larger than the ~½+½ estimate (the critic round expanded scope: resume-window logic, callback-signature refactor, privacy-floor delete path).
+
+### Lessons
+
+- **The critic round paid for itself, again.** Three of the four locked design changes came from the critic, not the original sketch. Auto-reconnect fragmentation alone would have shipped a feature that demoed cleanly and degraded into nonsense in week one of real use. Do not skip Gate 2 on design-shaped items — the cost is one agent call.
+- **Boundary semantics ≠ technical lifecycle.** WS-connect/disconnect was the obvious "session" definition; it was wrong. The user's mental model is one of conversation continuity across reconnects. Whenever the data model surfaces to a user, ask: is the technical boundary the same as the user-visible boundary? If not, name them separately. (Logged as the 2026-04-30 ADR in `docs/decisions.md`.)
+- **`_pending_summary` was a cleaner fix than guards-and-flags.** Original instinct was to add `_end_fired` flags and gate both the receive-loop's finally and `disconnect()` against double-firing. The cleaner pattern Mario wrote: compute summary BEFORE cancelling the receive task, stash on `self._pending_summary`, finally reads + clears. Single firing path, no flag race. Worth remembering when teardown sequencing comes up again.
+- **Test-first paid more than usual.** The gold integration test (the critic's "single regression catch-all") was written red BEFORE any storage code. Watching it fail with `AttributeError: 'Storage' object has no attribute 'start_or_resume_session'` made the API contract concrete. The test stayed unchanged through implementation; nothing drifted.
+- **Parallel collaboration with Mario worked well.** I did storage + protocol + tests; Mario did the app-layer wiring + provider race fix in parallel. Coordination via the locked DoD bullets and the triage entry — both of us could see the same contract. No churn.
+- **Mid-task collaboration risk to watch:** I almost overwrote Mario's in-flight `app.py` edits when I read working-tree state and saw 4 files I didn't touch. The instinct to commit ALL pending changes is wrong when there are two collaborators. Default to `git add <specific-file>` not `git add -A`.
+
+**Effort**: in_progress (2026-04-29) → done (2026-04-30) · ~1 day actual
 
 **Problem.** The PWA's `SessionsSheet` displays three hardcoded sample conversations. The server has no notion of a "session" beyond a single `conversation_summary` row that gets overwritten on every disconnect. Users cannot browse what they talked about previously, even though the UI clearly promises they can.
 
