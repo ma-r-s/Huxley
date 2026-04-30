@@ -1767,10 +1767,12 @@ Plus stream mock signatures in `test_skill.py` and `test_coordinator_skill_integ
 
 ## T1.8 — `huxley-skill-reminders` (full medication/appointment UX)
 
-**Status**: done (`a4beba69`, 2026-04-29) · **Effort**: ~1 session
-(matched the ~1-week estimate budgeted for design + critic + impl +
-docs). Zero framework changes — composes existing `inject_turn` +
-`background_task` + skill-owned SQLite storage.
+**Status**: done (`a4beba69`, 2026-04-29; review-fix follow-up
+`9d0ccff5`, 2026-04-29) · **Effort**: ~1 session for impl + ~1
+session for the post-ship review fixes (matched the ~1-week
+estimate budgeted for design + critic + impl + docs). Zero framework
+changes — composes existing `inject_turn` + `background_task` +
+skill-owned SQLite storage.
 
 **MVP shipped (2026-04-18)**: `server/skills/timers/` — proves the
 full inject_turn path works end-to-end. User says "recuérdame en 5
@@ -1985,14 +1987,36 @@ skill needs non-narrated audio in that tier" — reminders does not).
 
 ### Ship (Gate 5 — done 2026-04-29)
 
-**Commit**: `a4beba69` · **Effort actual**: ~1 session, matches the
-1-week estimate (estimate budgeted for design + critic + impl +
-docs; design + critic happened first, leaving focused
-implementation).
+**Commits**:
+
+- `a4beba69` — initial implementation (skill code, tests, persona
+  wiring, docs).
+- `9d0ccff5` — post-ship review fixes (commit-before-inject for
+  medication safety, recurrence idempotency, drop dead
+  `_STATE_SURFACED`, `asyncio.Lock` on `_allocate_id`, persona-
+  prompt exception so ack phrases bypass `echo_short_input`).
+  Adds 10 regression tests pinning the fixes.
+
+**Effort actual**: ~1 session for impl + ~1 session for review-fix
+follow-up. Total matches the 1-week estimate (estimate budgeted for
+design + critic + impl + docs; design + critic happened first,
+leaving focused implementation; the post-ship review surfaced four
+correctness bugs and one prompt issue that the original critic pass
+hadn't anticipated).
 
 **Lessons**:
 
-1. **`_allocate_id` defensive scan caught a real bug.** The original
+1. **The post-ship review caught what the design critic couldn't.**
+   The Gate-2 critic correctly steered scope down (declined the
+   ALERT-channel design); it did not catch correctness bugs in the
+   shipped state-machine code. Different review modes catch
+   different bugs: the design critic prevents over-building; the
+   post-ship code review catches semantic-vs-implementation drift.
+   Both passes were necessary. The fix-commit ratio (4 correctness
+   bugs found in a 1 600-LOC skill on first review) is a useful
+   prior — assume future skills of similar scope will need the same
+   second pass.
+2. **`_allocate_id` defensive scan caught a real bug.** The original
    code read `_meta:next_id` with default `"1"` if absent, and
    `_reconcile_on_boot` set the meta key only AFTER processing
    entries. A `_schedule_next_recurrence` call inside that loop
@@ -2000,25 +2024,49 @@ implementation).
    transition hadn't been written yet. Fix: scan-on-missing-or-stale
    in `_allocate_id` PLUS prime the meta key before the loop. Both
    landed because either alone would have been fragile in the test
-   path that bypasses `setup()`.
-2. **Critic was right to say "ship the smaller version."** The
+   path that bypasses `setup()`. The follow-up review surfaced a
+   second related bug — concurrent `_allocate_id` callers can race
+   on real (I/O-yielding) storage; fixed with `asyncio.Lock`.
+3. **Commit-before-inject is not optional for medication safety.**
+   The original implementation narrated first then saved state. A
+   crash mid-narration on next boot meant re-narration: double
+   dose. The fix mirrors the timers skill's well-trodden pattern.
+   Generalizable rule: **any skill whose `inject_turn` represents
+   an action with safety-relevant cost (medication, money, "send
+   message") must persist the post-action state BEFORE inviting the
+   action.** Document this in `docs/skills/README.md` whenever a
+   future skill in this category is added.
+4. **Recurrence creation must be idempotent.** Boot reconciliation
+   is the canonical "called multiple times for the same input"
+   path, so any side effect inside it (creating new rows, emitting
+   inject_turn, etc.) needs an idempotency key. The original code
+   had none and would have produced N duplicate rows after N
+   restarts. Cheap to fix once known (one storage scan), expensive
+   in production data integrity if missed.
+5. **Critic was right to say "ship the smaller version."** The
    ALERT-channel / `dismiss_on_ptt` design would have added 80 LOC
    to the SDK + a coordinator branch + risked re-opening the
    2026-04-24 PTT race bugs. The shipped version composes existing
-   primitives only and total skill code (skill + tests) is ~1 600
-   LOC self-contained.
-3. **Single-loop scheduler over per-task scheduler was the right
-   call.** Timers uses one task per timer with `restart_on_crash=False`;
-   reminders uses one supervised loop over storage with
-   `restart_on_crash=True`. The state machine carries the truth, so
-   a crashed scheduler is recoverable by re-reading rows on the next
-   loop iteration. Scales better as the reminder count grows
-   (audiobooks-style background loop, not fan-out).
-4. **`prompt_context()` cache pattern**. The Skill protocol's
+   primitives only and total skill code (skill + tests) is ~2 200
+   LOC self-contained after the review fixes.
+6. **Single-loop scheduler over per-task scheduler was the right
+   call.** Timers uses one task per timer with
+   `restart_on_crash=False`; reminders uses one supervised loop
+   over storage with `restart_on_crash=True`. The state machine
+   carries the truth, so a crashed scheduler is recoverable by
+   re-reading rows on the next loop iteration.
+7. **`prompt_context()` cache pattern**. The Skill protocol's
    `prompt_context` is sync, so the missed-surface cache must be
-   refreshed by writers (`_save_entry`, `_load_all_entries`). Pulling
-   that into a helper kept the two refresh paths consistent and
-   avoided per-turn storage round-trips.
+   refreshed by writers (`_save_entry`, `_load_all_entries`).
+   Pulling that into a helper kept the two refresh paths consistent
+   and avoided per-turn storage round-trips. The follow-up review
+   noted that an aspirational `_STATE_SURFACED` transition was
+   added to compensate for prompt_context being sync — that turned
+   into a dead state because the transition path was never wired.
+   **Drop unreachable states from the model**; if you can't actually
+   transition into a state, don't define the state. The current
+   model accepts that missed reminders surface until the LLM
+   explicitly clears them via ack/cancel — simpler and correct.
 
 ---
 
