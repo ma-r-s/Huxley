@@ -50,6 +50,13 @@ const en = {
         yesterday: "Yesterday",
       },
     },
+    logs: {
+      title: "Logs",
+      recent: "Current session",
+      empty: "No events yet — start a turn or send a client_event.",
+      clear: "Clear",
+      statusTag: "status",
+    },
     device: {
       title: "Device",
       headline: "Your Huxley",
@@ -60,7 +67,6 @@ const en = {
         appearance: "Appearance",
         language: "Language",
         persona: "Persona",
-        health: "Health",
         maintenance: "Maintenance",
       },
       appearance: {
@@ -94,18 +100,10 @@ const en = {
           moss: "Moss",
         },
       },
-      health: {
-        storage: "Storage",
-        lastSession: "Last session",
-        skillsLoaded: "Skills loaded",
-        spend: "Spend",
-        spendValue: "${{amount}} this cycle",
-      },
       maintenance: {
         reloadSkills: "Reload skills",
         restartServer: "Restart server",
         viewLogs: "View logs",
-        apiKey: "API key",
       },
     },
   },

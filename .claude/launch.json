@@ -9,6 +9,15 @@
         "cd /Users/mario/Projects/Personal/Code/Huxley/web && bun run dev"
       ],
       "port": 5176
+    },
+    {
+      "name": "pwa",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/mario/Projects/Personal/Code/Huxley/clients/pwa && bun dev"
+      ],
+      "port": 5174
     }
   ]
 }
