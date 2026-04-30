@@ -185,9 +185,14 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "no las palabras literales. Ej: 'tomar la pastilla del corazón'."
         ),
         "when_iso_param": (
-            "Hora exacta del recordatorio en formato ISO 8601 con offset, "
-            "p.ej. '2026-04-30T08:00:00-05:00'. La calculas a partir de la "
-            "hora actual y la zona horaria del usuario que están en el contexto."
+            "Hora exacta del PRIMER aviso del recordatorio en formato ISO "
+            "8601 con offset, p.ej. '2026-04-30T08:00:00-05:00'. La "
+            "calculas a partir de la hora actual y la zona horaria del "
+            "usuario que están en el contexto. Si el recordatorio se "
+            "repite (`recurrence_rule`), `when_iso` es la PRIMERA "
+            "ocurrencia que el usuario quiere — no necesariamente hoy. "
+            "Ejemplo: 'recuérdame todos los lunes a las 9' un martes → "
+            "`when_iso` es el PRÓXIMO lunes a las 9, no hoy."
         ),
         "kind_param": (
             "Tipo de recordatorio. 'medication' = medicamento (insiste hasta "
@@ -235,9 +240,13 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "not the literal words. Example: 'take the heart pill'."
         ),
         "when_iso_param": (
-            "Exact reminder time in ISO 8601 with offset, e.g. "
-            "'2026-04-30T08:00:00-05:00'. Compute from the user's "
-            "current time and timezone shown in context."
+            "Exact time of the reminder's FIRST fire in ISO 8601 with "
+            "offset, e.g. '2026-04-30T08:00:00-05:00'. Compute from the "
+            "user's current time and timezone shown in context. If the "
+            "reminder repeats (`recurrence_rule`), `when_iso` is the "
+            "FIRST occurrence the user wants — not necessarily today. "
+            "Example: 'remind me every Monday at 9' on a Tuesday → "
+            "`when_iso` is NEXT Monday at 9, not today."
         ),
         "kind_param": (
             "Reminder kind. 'medication' = medication (insists until ack); "
@@ -286,9 +295,14 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "littéraux. Par ex. : 'prendre la pilule pour le cœur'."
         ),
         "when_iso_param": (
-            "Heure exacte du rappel en ISO 8601 avec offset, par ex. "
-            "'2026-04-30T08:00:00-05:00'. Calcule depuis l'heure actuelle "
-            "et le fuseau horaire de l'utilisateur dans le contexte."
+            "Heure exacte du PREMIER rappel en ISO 8601 avec offset, par "
+            "ex. '2026-04-30T08:00:00-05:00'. Calcule depuis l'heure "
+            "actuelle et le fuseau horaire de l'utilisateur dans le "
+            "contexte. Si le rappel se répète (`recurrence_rule`), "
+            "`when_iso` est la PREMIÈRE occurrence que l'utilisateur "
+            "veut — pas nécessairement aujourd'hui. Exemple : "
+            "'rappelle-moi tous les lundis à 9h' un mardi → `when_iso` "
+            "est LUNDI prochain à 9h, pas aujourd'hui."
         ),
         "kind_param": (
             "Type de rappel. 'medication' = médicament (insiste jusqu'à "
@@ -392,18 +406,55 @@ def _next_recurrence(
 
 
 def _validate_rrule(recurrence_rule: str, tz: ZoneInfo) -> str | None:
-    """Return None if the rule is parseable, else a short error reason.
+    """Return None if the rule is parseable AND has future occurrences,
+    else a short error reason.
 
     The LLM occasionally emits invalid RRULE strings ("FREQ=DAILY;EVERY=1",
     raw "daily", etc.). We catch parsing errors at `add_reminder` time
     so the user gets an immediate "I couldn't parse that" rather than
-    a scheduler crash hours later. Validation requires a tz-aware
-    dtstart — we use `now()` in the persona tz which is throwaway.
+    a scheduler crash hours later. The dtstart we pass here is throwaway
+    — rule construction is what we're testing — but it MUST be tz-aware.
+
+    Two extra checks beyond plain parseability:
+
+    1. **Reject embedded `DTSTART:`.** A multiline rule like
+       `DTSTART:20300101T080000Z\\nRRULE:FREQ=DAILY` parses fine in
+       `dateutil.rrulestr` but **silently shadows** the `dtstart=`
+       kwarg we pass when the rule is later evaluated by
+       `_next_recurrence`. The skill already carries `series_start`
+       (set from `when_iso`) as the canonical dtstart anchor; an
+       embedded one is at best redundant and at worst (verified)
+       jumps next-fire dates by years. Reject loudly.
+
+    2. **Reject rules with no future occurrences.** A rule like
+       `FREQ=DAILY;UNTIL=20200101T000000Z` parses fine but is already
+       exhausted before the user's first fire. The skill would still
+       fire once at `when_iso` then close out — surprising, no LLM
+       feedback. Better to reject at add time so the LLM sees the
+       error and self-corrects (most likely the LLM mixed up date
+       components). We test future occurrences against `now+1s`
+       so a rule that becomes valid at any future second is accepted
+       (the boundary case we care about is "already past," not "starts
+       in N microseconds").
     """
+    if "DTSTART" in recurrence_rule.upper():
+        return (
+            "embedded DTSTART is not allowed in recurrence_rule; "
+            "the reminder's first occurrence is set by `when_iso`, "
+            "the rule should describe only repetition (e.g. 'FREQ=DAILY')"
+        )
+    now = datetime.now(tz)
     try:
-        rrulestr(recurrence_rule, dtstart=datetime.now(tz))
+        rrule = rrulestr(recurrence_rule, dtstart=now)
     except (ValueError, TypeError) as exc:
         return str(exc)
+    # Probe one second past now so a rule with `UNTIL` exactly equal
+    # to the current second still validates as having a future fire.
+    if rrule.after(now + timedelta(seconds=1), inc=False) is None:
+        return (
+            "rule has no future occurrences (UNTIL or COUNT already exhausted); "
+            "check the date components in the rule"
+        )
     return None
 
 
@@ -1341,12 +1392,18 @@ class RemindersSkill:
         if entry.state in (_STATE_ACKED, _STATE_CANCELLED):
             raise _SkillBadInputError(f"reminder {rid} is already terminal ({entry.state})")
         entry.next_fire_at = _utcnow() + timedelta(minutes=minutes)
-        # A snooze on a `fired` medication resets retry: we explicitly
-        # accepted "give me five more minutes" so don't keep escalating
-        # until the snooze expires. If the snooze itself elapses without
-        # ack, the medication ladder resumes at fired_count = 1.
+        # A snooze on a `fired` medication resets the retry ladder:
+        # the user explicitly said "give me X more" so don't keep
+        # escalating during the snooze window. If the snooze itself
+        # elapses without ack, the next fire counts as fire #1 again
+        # — full 5/10/30 budget restored. Both `fired_count` and
+        # `last_fired_at` reset; otherwise the next `_fire` would
+        # increment to 2 and use the 10-minute interval (review F3,
+        # 2026-04-29).
         if entry.state == _STATE_FIRED:
             entry.state = _STATE_PENDING
+            entry.fired_count = 0
+            entry.last_fired_at = None
         await self._save_entry(entry)
         self._wakeup.set()
         await self._logger.ainfo(

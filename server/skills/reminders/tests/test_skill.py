@@ -7,6 +7,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -1437,3 +1438,213 @@ class TestInjectPriorityIsBlockBehindComms:
         inject_mock.assert_awaited_once()
         kwargs = inject_mock.await_args.kwargs
         assert kwargs.get("priority") == InjectPriority.BLOCK_BEHIND_COMMS
+
+
+# -------------------------------------------- post-RRULE-review regressions
+
+
+class TestRruleValidationDeeperChecks:
+    """Validation rejects rule strings whose acceptance would silently
+    mis-fire a medication reminder. Caught by the second post-ship
+    review (2026-04-29) — `dateutil.rrulestr` accepts rules that the
+    skill's `_next_recurrence` logic can't safely evaluate."""
+
+    async def test_compound_dtstart_in_rule_rejected(self) -> None:
+        # An LLM that knows iCal might produce a multiline rule with
+        # an embedded DTSTART. dateutil silently shadows the kwarg
+        # `dtstart=series_start` we pass downstream, jumping the
+        # next-fire date by years. Reject at add time.
+        skill, _, _ = await _make_skill()
+        rule = "DTSTART:20300101T080000Z\nRRULE:FREQ=DAILY"
+        result = await skill.handle(
+            "add_reminder",
+            {
+                "message": "x",
+                "when_iso": _future_iso(),
+                "recurrence_rule": rule,
+            },
+        )
+        payload = json.loads(result.output)
+        assert "error" in payload
+        assert "DTSTART" in payload["error"]
+        await skill.teardown()
+
+    async def test_until_in_past_rejected(self) -> None:
+        # FREQ=DAILY;UNTIL=<a long time ago> parses fine but has zero
+        # future occurrences — accepting it produces a one-shot
+        # reminder with no LLM feedback. Reject so the LLM self-
+        # corrects (most likely a date-component mistake).
+        skill, _, _ = await _make_skill()
+        rule = "FREQ=DAILY;UNTIL=20200101T000000Z"
+        result = await skill.handle(
+            "add_reminder",
+            {
+                "message": "x",
+                "when_iso": _future_iso(),
+                "recurrence_rule": rule,
+            },
+        )
+        payload = json.loads(result.output)
+        assert "error" in payload
+        assert "future" in payload["error"].lower()
+        await skill.teardown()
+
+    async def test_count_zero_rejected(self) -> None:
+        # FREQ=DAILY;COUNT=0 — degenerate but well-formed. Same
+        # rejection path as UNTIL-past.
+        skill, _, _ = await _make_skill()
+        rule = "FREQ=DAILY;COUNT=0"
+        result = await skill.handle(
+            "add_reminder",
+            {
+                "message": "x",
+                "when_iso": _future_iso(),
+                "recurrence_rule": rule,
+            },
+        )
+        payload = json.loads(result.output)
+        assert "error" in payload
+        await skill.teardown()
+
+
+class TestSnoozeResetsRetryLadder:
+    """Code comment claims `fired_count` resets to 0 on snooze of a
+    fired medication so the next fire counts as #1. Pre-fix the code
+    only flipped state — leaving fired_count=1 burned through the
+    rest of the ladder fast. Lock it in."""
+
+    async def test_snooze_clears_fired_count_and_last_fired_at(self) -> None:
+        skill, _, storage = await _make_skill(start_scheduler=False)
+        last_fired = datetime.now(UTC) - timedelta(minutes=5)
+        entry = _Entry(
+            id=1,
+            message="pill",
+            kind="medication",
+            scheduled_for=datetime.now(UTC) - timedelta(minutes=10),
+            next_fire_at=datetime.now(UTC) + timedelta(minutes=5),
+            recurrence_rule=None,
+            state=_STATE_FIRED,
+            fired_count=2,
+            last_fired_at=last_fired,
+        )
+        await storage.set_setting("reminder:1", entry.to_json())
+        await skill.handle("snooze_reminder", {"id": 1, "minutes": 10})
+        raw = await storage.get_setting("reminder:1")
+        assert raw is not None
+        snoozed = _Entry.from_json(raw)
+        # Per the code comment: full 5/10/30 budget restored.
+        assert snoozed.state == _STATE_PENDING
+        assert snoozed.fired_count == 0
+        assert snoozed.last_fired_at is None
+
+
+class TestDstGap:
+    """A reminder anchored at 02:30 in `America/New_York` falls in the
+    spring-forward gap. dateutil emits the pre-transition offset, so
+    the wall-clock fire-time on the DST day is 03:30 EDT (one hour
+    late). Subsequent days resume at 02:30. We do not detect or
+    correct for this; this test documents the existing behavior so a
+    regression is loud."""
+
+    async def test_daily_at_2_30am_during_spring_forward_fires_at_3_30_local(
+        self,
+    ) -> None:
+        from huxley_skill_reminders.skill import _next_recurrence
+
+        ny = ZoneInfo("America/New_York")
+        # Saturday 2026-03-07 02:30 EST = 07:30 UTC.
+        scheduled = datetime(2026, 3, 7, 2, 30, tzinfo=ny).astimezone(UTC)
+        nxt = _next_recurrence(scheduled, scheduled, "FREQ=DAILY", ny)
+        assert nxt is not None
+        local = nxt.astimezone(ny)
+        # Sunday 2026-03-08 — DST starts at 02:00 → 03:00. The 02:30
+        # wall-clock time doesn't exist; dateutil produces the
+        # pre-transition offset which falls inside the missing hour
+        # and resolves to 03:30 EDT.
+        assert local.day == 8
+        assert local.hour == 3
+        assert local.minute == 30
+
+    async def test_daily_at_1_30am_across_fall_back_fires_once_in_edt(
+        self,
+    ) -> None:
+        # Fall-back: 01:30 happens twice (once EDT, once EST). dateutil
+        # produces a single occurrence in the pre-transition (EDT)
+        # offset; the second 01:30 is skipped. No double-fire.
+        from huxley_skill_reminders.skill import _next_recurrence
+
+        ny = ZoneInfo("America/New_York")
+        # Saturday 2026-10-31 01:30 EDT = 05:30 UTC.
+        scheduled = datetime(2026, 10, 31, 1, 30, tzinfo=ny).astimezone(UTC)
+        nxt = _next_recurrence(scheduled, scheduled, "FREQ=DAILY", ny)
+        assert nxt is not None
+        local = nxt.astimezone(ny)
+        assert local.day == 1
+        assert local.month == 11
+        assert local.hour == 1
+        assert local.minute == 30
+        # Confirm we didn't get the second (EST) 01:30 — that would
+        # be 06:30 UTC. EDT 01:30 is 05:30 UTC.
+        assert nxt.hour == 5  # UTC
+
+    async def test_no_double_fire_after_dst_fall_back(self) -> None:
+        # Stronger version: ask for next-after-the-DST-day's fire,
+        # confirm the second 01:30 doesn't appear.
+        from huxley_skill_reminders.skill import _next_recurrence
+
+        ny = ZoneInfo("America/New_York")
+        scheduled = datetime(2026, 10, 31, 1, 30, tzinfo=ny).astimezone(UTC)
+        first = _next_recurrence(scheduled, scheduled, "FREQ=DAILY", ny)
+        assert first is not None
+        second = _next_recurrence(scheduled, first, "FREQ=DAILY", ny)
+        assert second is not None
+        # Second fire should be Mon 2026-11-02 01:30 EST, not the
+        # second 01:30 on Sunday.
+        local2 = second.astimezone(ny)
+        assert local2.day == 2
+        assert local2.month == 11
+
+
+class TestV1MidRetryMigration:
+    """A v1 storage row in `state=fired` (medication mid-retry) at the
+    moment of the schema bump. Migration translates the `recurrence`
+    enum to RRULE on read; reconcile then resumes the retry. Locks
+    in that the field-rename + reconcile compose correctly."""
+
+    async def test_v1_fired_medication_resumes_after_migration(self) -> None:
+        storage = _NoopSkillStorage()
+        last_fired = datetime.now(UTC) - timedelta(minutes=2)
+        # Hand-crafted v1 storage shape: `recurrence` enum, no
+        # `recurrence_rule`, no `series_start`.
+        legacy_payload = {
+            "v": 1,
+            "id": 1,
+            "message": "pill",
+            "kind": "medication",
+            "scheduled_for": (last_fired - timedelta(minutes=2)).isoformat(),
+            "next_fire_at": (last_fired + _MEDICATION_RETRY_INTERVALS[0]).isoformat(),
+            "recurrence": "daily",
+            "state": _STATE_FIRED,
+            "fired_count": 1,
+            "last_fired_at": last_fired.isoformat(),
+            "acked_at": None,
+            "cancelled_at": None,
+            "missed_at": None,
+        }
+        await storage.set_setting("reminder:1", json.dumps(legacy_payload))
+        skill, inject_mock, _ = await _make_skill(storage=storage, start_scheduler=False)
+        await skill._reconcile_on_boot()
+        # Boot reconcile must NOT fire (re-narration risk).
+        inject_mock.assert_not_awaited()
+        raw = await storage.get_setting("reminder:1")
+        assert raw is not None
+        after = _Entry.from_json(raw)
+        # Resumed back to pending so the scheduler picks up the retry.
+        assert after.state == _STATE_PENDING
+        # Field migration happened.
+        assert after.recurrence_rule == "FREQ=DAILY"
+        # series_start absent — `effective_series_start` falls back to
+        # scheduled_for. For an indefinite FREQ=DAILY this is
+        # semantically identical to having series_start populated.
+        assert after.series_start is None
+        assert after.effective_series_start == after.scheduled_for
