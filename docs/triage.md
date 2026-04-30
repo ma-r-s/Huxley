@@ -1768,11 +1768,12 @@ Plus stream mock signatures in `test_skill.py` and `test_coordinator_skill_integ
 ## T1.8 — `huxley-skill-reminders` (full medication/appointment UX)
 
 **Status**: done (`a4beba69`, 2026-04-29; review-fix follow-up
-`9d0ccff5`, 2026-04-29) · **Effort**: ~1 session for impl + ~1
-session for the post-ship review fixes (matched the ~1-week
-estimate budgeted for design + critic + impl + docs). Zero framework
-changes — composes existing `inject_turn` + `background_task` +
-skill-owned SQLite storage.
+`9d0ccff5`, 2026-04-29; RRULE migration `d45cce88`, 2026-04-29) ·
+**Effort**: ~1 session for impl + ~1 session for the post-ship
+review fixes + ~1 session for the recurrence-model upgrade
+(matched the ~1-week estimate budgeted for design + critic + impl +
+docs). Zero framework changes — composes existing `inject_turn` +
+`background_task` + skill-owned SQLite storage.
 
 **MVP shipped (2026-04-18)**: `server/skills/timers/` — proves the
 full inject_turn path works end-to-end. User says "recuérdame en 5
@@ -1996,6 +1997,18 @@ skill needs non-narrated audio in that tier" — reminders does not).
   `_STATE_SURFACED`, `asyncio.Lock` on `_allocate_id`, persona-
   prompt exception so ack phrases bypass `echo_short_input`).
   Adds 10 regression tests pinning the fixes.
+- `d45cce88` — recurrence model upgrade: enum → RFC 5545 RRULE
+  via `python-dateutil`. Mario's call ("do the correct thing, not
+  the patch") after the review flagged DST handling as a latent
+  bug for non-Bogota personas. Schema bump v1 → v2 with
+  transparent on-read migration. Adds `series_start` so COUNT/UNTIL
+  rules terminate correctly across the recurring-row chain.
+  Persona prompts (es/en/fr) gain RRULE pattern examples; tool
+  description teaches the LLM to compose the strings. 13 new
+  regression tests covering DST in `America/New_York` (both spring-
+  forward and fall-back), weekday-only / biweekly / monthly-by-day
+  / COUNT-exhaustion patterns, v1→v2 migration, invalid-rule
+  rejection, tz fallback.
 
 **Effort actual**: ~1 session for impl + ~1 session for review-fix
 follow-up. Total matches the 1-week estimate (estimate budgeted for
@@ -2067,6 +2080,24 @@ hadn't anticipated).
    transition into a state, don't define the state. The current
    model accepts that missed reminders surface until the LLM
    explicitly clears them via ack/cancel — simpler and correct.
+8. **Reach for the standard format, not a special-case enum.**
+   The original `recurrence: 'daily' | 'weekly'` enum was solving a
+   problem (recurrence) that already has an industry-standard
+   format (RFC 5545 RRULE). The enum let DST drift silently AND
+   failed to express patterns the LLM could trivially produce
+   ("every weekday", "every 2 weeks", "for 7 days"). The migration
+   to RRULE was ~30 LOC + 1 dependency + a schema bump and turned
+   "future feature requests" into "the LLM already knows how to do
+   that." Generalizable rule: if a domain (recurrence, time zones,
+   calendar events, etc.) has a standard, use it — even if today's
+   ask is a subset. The enum is the speculative-special-case
+   anti-pattern; the standard is the one that ages well.
+9. **Schema versioning, even at v1, pays for itself.** Bumping
+   `_ENTRY_VERSION` 1 → 2 with a lazy on-read migration cost ~10
+   LOC and made the RRULE swap painless on storage that already had
+   v1 rows from development testing. Every future schema change can
+   reuse the same pattern; the alternative ("there are no v1 rows
+   yet, just rename the field") would have set the wrong precedent.
 
 ---
 
