@@ -55,7 +55,7 @@ Required: `message: str`, `when_iso: str`. Optional: `kind: 'medication' | 'appo
 
 ### `list_reminders`
 
-Returns `{ok, reminders: [...]}` with all `pending` / `fired` / `missed` rows in `next_fire_at` order. Terminal rows (`acked`, `cancelled`, `surfaced`) are excluded so the list stays focused on what's actionable.
+Returns `{ok, reminders: [...]}` with all `pending` / `fired` / `missed` rows in `next_fire_at` order. Terminal rows (`acked`, `cancelled`) are excluded so the list stays focused on what's actionable.
 
 ### `cancel_reminder`
 

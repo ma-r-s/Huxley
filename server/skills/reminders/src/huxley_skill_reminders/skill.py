@@ -405,55 +405,69 @@ def _next_recurrence(
     return nxt.astimezone(UTC) if nxt is not None else None
 
 
-def _validate_rrule(recurrence_rule: str, tz: ZoneInfo) -> str | None:
-    """Return None if the rule is parseable AND has future occurrences,
-    else a short error reason.
+def _validate_rrule(recurrence_rule: str, tz: ZoneInfo, when: datetime) -> str | None:
+    """Return None if the rule is parseable AND has future occurrences
+    relative to the user's first fire `when`, else a short error
+    reason.
 
     The LLM occasionally emits invalid RRULE strings ("FREQ=DAILY;EVERY=1",
     raw "daily", etc.). We catch parsing errors at `add_reminder` time
     so the user gets an immediate "I couldn't parse that" rather than
-    a scheduler crash hours later. The dtstart we pass here is throwaway
-    — rule construction is what we're testing — but it MUST be tz-aware.
+    a scheduler crash hours later.
 
-    Two extra checks beyond plain parseability:
+    Three checks beyond plain parseability:
 
-    1. **Reject embedded `DTSTART:`.** A multiline rule like
-       `DTSTART:20300101T080000Z\\nRRULE:FREQ=DAILY` parses fine in
-       `dateutil.rrulestr` but **silently shadows** the `dtstart=`
+    1. **Reject compound iCal extras.** Multiline rules like
+       `DTSTART:20300101T080000Z\\nRRULE:FREQ=DAILY` parse fine in
+       `dateutil.rrulestr` but **silently shadow** the `dtstart=`
        kwarg we pass when the rule is later evaluated by
-       `_next_recurrence`. The skill already carries `series_start`
-       (set from `when_iso`) as the canonical dtstart anchor; an
-       embedded one is at best redundant and at worst (verified)
-       jumps next-fire dates by years. Reject loudly.
+       `_next_recurrence`. `EXDATE:` lines silently exclude
+       individual occurrences from the chain — including the user's
+       first fire. `RDATE:` adds extra fires. The skill's contract
+       is "RRULE only; the first fire is `when_iso` and subsequent
+       fires come from the rule" — anchoring and exclusions are not
+       part of that contract. Reject loudly. (Round 2 caught
+       DTSTART; Round 3 added RDATE / EXDATE after EXDATE was found
+       to silently drop the user's first fire on dose 2 onward.)
 
-    2. **Reject rules with no future occurrences.** A rule like
-       `FREQ=DAILY;UNTIL=20200101T000000Z` parses fine but is already
-       exhausted before the user's first fire. The skill would still
-       fire once at `when_iso` then close out — surprising, no LLM
-       feedback. Better to reject at add time so the LLM sees the
-       error and self-corrects (most likely the LLM mixed up date
-       components). We test future occurrences against `now+1s`
-       so a rule that becomes valid at any future second is accepted
-       (the boundary case we care about is "already past," not "starts
-       in N microseconds").
+    2. **Reject rules with no occurrences at-or-after `when`.** A
+       rule like `FREQ=DAILY;UNTIL=20200101T000000Z` parses fine but
+       is already exhausted before the user's first fire. We probe
+       with `dtstart=when` and ask `.before(when, inc=True) is not None`
+       (i.e., does at least one occurrence land on or after `when`?).
+       Anchoring on `when` rather than `now` means `FREQ=DAILY;COUNT=1`
+       — a perfectly valid one-shot — passes validation: the single
+       occurrence at `when` itself counts. (Round 3 caught the
+       `now`-anchored probe rejecting COUNT=1 as "no future
+       occurrences.")
     """
-    if "DTSTART" in recurrence_rule.upper():
+    if any(token in recurrence_rule.upper() for token in ("DTSTART", "RDATE", "EXDATE")):
         return (
-            "embedded DTSTART is not allowed in recurrence_rule; "
-            "the reminder's first occurrence is set by `when_iso`, "
-            "the rule should describe only repetition (e.g. 'FREQ=DAILY')"
+            "compound iCal fields (DTSTART, RDATE, EXDATE) are not "
+            "allowed in recurrence_rule; anchoring is set by `when_iso` "
+            "and the rule should describe only repetition "
+            "(e.g. 'FREQ=DAILY', 'FREQ=WEEKLY;BYDAY=MO,WE,FR')"
         )
-    now = datetime.now(tz)
+    when_local = when.astimezone(tz)
     try:
-        rrule = rrulestr(recurrence_rule, dtstart=now)
+        rrule = rrulestr(recurrence_rule, dtstart=when_local)
     except (ValueError, TypeError) as exc:
         return str(exc)
-    # Probe one second past now so a rule with `UNTIL` exactly equal
-    # to the current second still validates as having a future fire.
-    if rrule.after(now + timedelta(seconds=1), inc=False) is None:
+    # `next(iter(rrule), None)` lazily produces the first occurrence in
+    # the series (which equals `when_local` truncated to whole seconds
+    # for any sane rule, since `when` is the dtstart anchor). Returns
+    # `None` only for an empty series — a `UNTIL` cutoff before `when`,
+    # or `COUNT=0`. We deliberately avoid `rrule.after(when, inc=True)`
+    # because rrulestr truncates the dtstart to whole seconds, and a
+    # `when` carrying microseconds (the common case) compares strictly
+    # greater than the truncated occurrence — `after` then incorrectly
+    # returns None for valid `COUNT=1` rules. Iter doesn't compare; it
+    # just yields whatever the rule produces.
+    if next(iter(rrule), None) is None:
         return (
-            "rule has no future occurrences (UNTIL or COUNT already exhausted); "
-            "check the date components in the rule"
+            "rule has no occurrences at or after when_iso "
+            "(UNTIL or COUNT already exhausted); check the rule's "
+            "date components"
         )
     return None
 
@@ -807,7 +821,7 @@ class RemindersSkill:
 
         Cases (in order checked, per row):
 
-        - Already terminal (`acked` / `cancelled` / `surfaced`): leave alone.
+        - Already terminal (`acked` / `cancelled`): leave alone.
           They're useful for `list_reminders` until the user prunes them.
         - `missed` (from a previous boot, never surfaced): if recurrence
           is set and the next-instance is in the future, spawn it.
@@ -1059,7 +1073,7 @@ class RemindersSkill:
                         )
                     recurrence_rule = _LEGACY_RECURRENCE_TO_RRULE[legacy_recurrence]
                 if recurrence_rule is not None:
-                    err = _validate_rrule(recurrence_rule, self._tz)
+                    err = _validate_rrule(recurrence_rule, self._tz, when)
                     if err is not None:
                         raise ValueError(f"invalid recurrence_rule {recurrence_rule!r}: {err}")
             except (KeyError, ValueError, TypeError) as exc:
@@ -1283,16 +1297,20 @@ class RemindersSkill:
                     "use `recurrence_rule` with an RFC 5545 RRULE string"
                 )
             recurrence_rule = _LEGACY_RECURRENCE_TO_RRULE[legacy_recurrence]
-        if recurrence_rule is not None:
-            if not isinstance(recurrence_rule, str):
-                raise _SkillBadInputError("recurrence_rule must be a string")
-            err = _validate_rrule(recurrence_rule, self._tz)
-            if err is not None:
-                raise _SkillBadInputError(f"invalid recurrence_rule {recurrence_rule!r}: {err}")
+        # Parse `when_iso` before rule validation: `_validate_rrule`
+        # probes occurrences against `when` as the dtstart anchor, so
+        # `FREQ=DAILY;COUNT=1` (a valid one-shot anchored at when) is
+        # correctly accepted.
         try:
             when = _parse_iso(when_iso)
         except ValueError as exc:
             raise _SkillBadInputError(f"could not parse when_iso: {exc}") from exc
+        if recurrence_rule is not None:
+            if not isinstance(recurrence_rule, str):
+                raise _SkillBadInputError("recurrence_rule must be a string")
+            err = _validate_rrule(recurrence_rule, self._tz, when)
+            if err is not None:
+                raise _SkillBadInputError(f"invalid recurrence_rule {recurrence_rule!r}: {err}")
         now = _utcnow()
         if when <= now:
             # Refusing to schedule reminders in the past keeps the LLM
@@ -1391,6 +1409,17 @@ class RemindersSkill:
             raise _SkillBadInputError(f"no reminder with id {rid}")
         if entry.state in (_STATE_ACKED, _STATE_CANCELLED):
             raise _SkillBadInputError(f"reminder {rid} is already terminal ({entry.state})")
+        if entry.state == _STATE_MISSED:
+            # A `missed` row's purpose is to surface in `prompt_context`
+            # until the LLM clears it via ack/cancel — snoozing wouldn't
+            # re-fire (`_next_due_entry` filters state == PENDING) and
+            # the row would keep surfacing as missed. Telling the LLM
+            # "ok, snoozed" while doing nothing is worse than refusing.
+            # The persona prompt instructs the LLM to ack or cancel a
+            # missed reminder, not snooze it. Round-3 review (R3-F1).
+            raise _SkillBadInputError(
+                f"reminder {rid} is missed; ack or cancel it instead of snoozing"
+            )
         entry.next_fire_at = _utcnow() + timedelta(minutes=minutes)
         # A snooze on a `fired` medication resets the retry ladder:
         # the user explicitly said "give me X more" so don't keep
