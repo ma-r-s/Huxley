@@ -44,6 +44,9 @@ from huxley.voice.provider import VoiceProviderCallbacks
 from huxley_sdk import AppState, InvalidTransitionError, SkillContext, SkillRegistry
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+    from typing import Any
+
     from huxley.config import Settings
     from huxley.persona import PersonaSpec, ResolvedPersona
 
@@ -200,6 +203,16 @@ class Application:
         there.
         """
         resolved = self._resolved_persona
+
+        # Skill-named subscribe wrapper. The skill_name capture lets
+        # `unregister_client_event_subscribers` (called at shutdown
+        # before teardown_all) remove all of this skill's subs cheaply.
+        # Type-erased to satisfy the Protocol's positional-only shape.
+        def _subscribe_client_event(
+            key: str, handler: Callable[[dict[str, Any]], Awaitable[None]], /
+        ) -> None:
+            self.server.register_client_event_subscriber(skill_name, key, handler)
+
         return SkillContext(
             logger=structlog.get_logger().bind(skill=skill_name),
             storage=NamespacedSkillStorage(self.storage, skill_name),
@@ -211,6 +224,8 @@ class Application:
             background_task=self.task_supervisor.start,
             start_input_claim=self.coordinator.start_input_claim,
             cancel_active_claim=self.coordinator.cancel_active_claim,
+            subscribe_client_event=_subscribe_client_event,
+            emit_server_event=self.server.send_server_event,
         )
 
     async def run(self) -> None:
@@ -298,6 +313,14 @@ class Application:
         # remaining Activities. Safe to call here — skills have torn down
         # by now; no new acquires arrive.
         await self.focus_manager.stop()
+        # Unregister every skill's client_event subscriptions BEFORE
+        # teardown_all runs. Otherwise a buggy teardown could trigger
+        # a handler we're about to dismantle, or — worse — a client
+        # message racing the shutdown could fire a handler whose
+        # backing skill is already half-destructed. Cheap because the
+        # registry is a single dict.
+        for name in self.skill_registry.skill_names:
+            self.server.unregister_client_event_subscribers(name)
         await self.skill_registry.teardown_all()
         # Cancel any background tasks the skills had supervised. Skills
         # got first crack at clean cancellation via their own teardown

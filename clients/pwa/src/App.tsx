@@ -8,6 +8,7 @@ import { Orb } from "./components/Orb.js";
 import { TranscriptDrawer } from "./components/TranscriptDrawer.js";
 import { SessionsSheet } from "./components/SessionsSheet.js";
 import { DeviceSheet } from "./components/DeviceSheet.js";
+import { ClientEventPanel } from "./components/ClientEventPanel.js";
 import { TweaksPanel } from "./components/TweaksPanel.js";
 import type { OrbState, Appearance, PersonaEntry, AppState } from "./types.js";
 import type { Tweaks } from "./components/TweaksPanel.js";
@@ -105,6 +106,11 @@ export function App() {
       typeof window !== "undefined" &&
       new URLSearchParams(window.location.search).has("tweaks"),
   );
+
+  // ── Client-event panel (dev) — fire arbitrary `client_event` from the
+  // PWA for testing skill subscriptions registered via
+  // `ctx.subscribe_client_event`. Bound to Shift+E (locked Stage-4 DoD).
+  const [eventPanelOpen, setEventPanelOpen] = useState(false);
   const [tweaks, setTweaks] = useState<Tweaks>({
     redHue: appearance.redHue,
     redChroma: appearance.redChroma,
@@ -289,6 +295,37 @@ export function App() {
     return () => window.removeEventListener("keydown", h);
   }, []);
 
+  // ── Keyb shortcut: Shift+E toggles the client-event dev panel ────────────
+  // Looser binding than Ctrl+Shift+T (no Ctrl) because the panel is
+  // explicitly aimed at quick testing during development. The PTT
+  // keyboard handler at the bottom of this file ignores keypresses
+  // when a panel is open, so opening this panel doesn't accidentally
+  // fire PTT.
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      // Ignore if focus is in a typeable element — let the user type
+      // capital E into existing inputs without launching the panel.
+      const target = e.target as HTMLElement | null;
+      const isInput =
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.isContentEditable;
+      if (isInput) return;
+      if (
+        e.shiftKey &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        e.key === "E"
+      ) {
+        e.preventDefault();
+        setEventPanelOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
+
   // ── PTT logic ─────────────────────────────────────────────────────────────
   const activatePtt = useCallback(() => {
     setPttPendingStart(false);
@@ -358,13 +395,13 @@ export function App() {
   // Pointer events (orb touch/click)
   const handlePointerDown = useCallback(
     (e: React.PointerEvent) => {
-      if (activeSheet || tweaksOpen) return;
+      if (activeSheet || tweaksOpen || eventPanelOpen) return;
       if (!booted) return;
       e.preventDefault();
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       void pressPtt();
     },
-    [activeSheet, tweaksOpen, booted, pressPtt],
+    [activeSheet, tweaksOpen, eventPanelOpen, booted, pressPtt],
   );
 
   const handlePointerUp = useCallback(
@@ -401,7 +438,7 @@ export function App() {
     };
     const down = (e: KeyboardEvent) => {
       if (e.code !== "Space" || e.repeat || isFormEl(e.target)) return;
-      if (activeSheet || tweaksOpen) return;
+      if (activeSheet || tweaksOpen || eventPanelOpen) return;
       e.preventDefault();
       void pressPtt();
     };
@@ -416,7 +453,7 @@ export function App() {
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
     };
-  }, [activeSheet, tweaksOpen, pressPtt, releasePtt]);
+  }, [activeSheet, tweaksOpen, eventPanelOpen, pressPtt, releasePtt]);
 
   // ── Orb state derivation ──────────────────────────────────────────────────
   const liveOrbState: OrbState = booted
@@ -628,10 +665,6 @@ export function App() {
               url: ws.activeUrl ?? "localhost:8765",
               persona: selectedPersonaId,
               personas: PERSONAS,
-              spend: 0,
-              storage: "\u2014",
-              lastSession: "\u2014",
-              skillsCount: 0,
             }}
             onPersonaPick={handlePersonaPick}
             language={language}
@@ -655,6 +688,21 @@ export function App() {
           tweaks={tweaks}
           onChange={(patch) => setTweaks((t) => ({ ...t, ...patch }))}
           onClose={() => setTweaksOpen(false)}
+        />
+      )}
+
+      {/* Client-event dev panel (Shift+E). Fires arbitrary
+          client_event messages — useful for testing skill subscriptions
+          registered via ctx.subscribe_client_event. Incoming server_event
+          messages already surface in the existing dev-event log via
+          useWs.ts's `server_event:<key>` push. */}
+      {eventPanelOpen && (
+        <ClientEventPanel
+          onClose={() => setEventPanelOpen(false)}
+          onSend={(event, data) => {
+            ws.sendClientEvent(event, data);
+            setEventPanelOpen(false);
+          }}
         />
       )}
     </div>

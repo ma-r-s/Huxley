@@ -433,36 +433,33 @@ ctx.background_task(
 
 ## Client events — `ctx.subscribe_client_event`
 
-> ⚠️ **Planned — not yet shipped.** The `client_event` protocol message
-> already reaches the server (`AudioServer` logs it), but the skill-side
-> `subscribe_client_event` / `emit_server_event` SDK surface is T1.4
-> Stage 4 work. API below is the target shape.
-
-Hardware buttons, sensor data, client-side state transitions — anything the client wants the server to know about beyond audio. Clients emit `{"type": "client_event", "event": "<namespaced-key>", "payload": {...}}`. Skills subscribe by key.
+Hardware buttons, sensor data, client-side state transitions — anything the client wants the server to know about beyond audio. Clients emit `{"type": "client_event", "event": "<namespaced-key>", "data": {...}}`. Skills subscribe by key.
 
 ```python
 async def setup(self, ctx: SkillContext) -> None:
     ctx.subscribe_client_event("calls.panic_button", self._on_panic)
 
-async def _on_panic(self, payload: dict) -> None:
+async def _on_panic(self, data: dict[str, Any]) -> None:
     await self._ctx.inject_turn(
-        "Llamando a Mario", urgency=Urgency.CRITICAL
+        "Llamando a Mario", priority=InjectPriority.PREEMPT,
     )
-    # ... dial out via call provider ...
+    # ... dial out via the telegram skill or whatever transport ...
 ```
 
-**Namespace your keys as `<skill-name>.<event>`.** The framework reserves `huxley.*` for its own telemetry. Multiple skills can subscribe to the same key; all subscribers are called.
+**Namespace your keys as `<skill-name>.<event>`.** The framework reserves `huxley.*` for its own telemetry; skills shouldn't subscribe to those. Multiple skills can subscribe to the same key — all run **concurrently** via `asyncio.gather` and are **exception-isolated**: a handler raising doesn't block other handlers, and the failure is logged at `client_event.handler_failed` without disrupting the message-dispatch loop.
 
-**Unsubscribing**: automatic on skill teardown. Don't track subscriptions yourself.
+**Subscriptions persist across reconnects.** Skills don't tear down on a transient WS drop — only on full shutdown — so you don't need to re-subscribe when the user reloads the PWA mid-session. The registry lives on `AudioServer` (process lifetime).
+
+**Unsubscribing**: automatic on skill `teardown()`. Don't track subscriptions yourself.
 
 **Not for PTT or audio** — those are framework-owned fixed message types. `client_event` is for everything else.
 
-**Pushing events back to the client** — use `ctx.emit_server_event(key, payload)`. Symmetric to `client_event` but server-to-client. No-op (with debug log) if the client's capabilities array doesn't include `server_event`. If your skill's flow depends on a specific capability, check first:
+**Pushing events back to the client** — use `await ctx.emit_server_event(key, data)`. Symmetric to `client_event`: same wire shape (`{type: server_event, event, data}`). No-op (with debug log) if no client is currently connected. Old clients that don't recognize `server_event` log-and-ignore on their side, so emit is safe to call without checking what the connected client supports — the worst case is the recipient drops the message.
 
 ```python
-if not self._ctx.client_has_capability("calls.led_red"):
-    # Degrade gracefully — audio-only confirmation instead
-    ...
+await self._ctx.emit_server_event(
+    "my_skill.led_red", {"on": True, "blink_ms": 250},
+)
 ```
 
 ## Taking over the mic — `InputClaim`

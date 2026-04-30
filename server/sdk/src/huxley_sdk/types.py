@@ -19,10 +19,12 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol, runtime_checkable
 
+from collections.abc import Awaitable, Callable
+
 from huxley_sdk.catalog import Catalog
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+    from collections.abc import AsyncIterator, Coroutine
     from datetime import timedelta
     from pathlib import Path
 
@@ -595,6 +597,62 @@ class BackgroundTask(Protocol):
     ) -> BackgroundTaskHandle: ...
 
 
+ClientEventHandler = Callable[[dict[str, Any]], Awaitable[None]]
+"""Signature for handlers passed to `SkillContext.subscribe_client_event`.
+
+The dict argument is the client_event message's `data` field — the
+client-supplied payload — already parsed to a dict. An empty `{}` is
+passed when the client omitted `data` or sent a non-dict value.
+"""
+
+
+class SubscribeClientEvent(Protocol):
+    """Structural signature for `SkillContext.subscribe_client_event`.
+
+    Skills register a handler for a specific event key. The framework
+    invokes the handler whenever the connected client emits a matching
+    `client_event`. Multiple skills can subscribe to the same key —
+    all handlers run concurrently, exception-isolated (one raising
+    handler does not block the others or the existing
+    `client.<event>` telemetry log).
+
+    Subscriptions auto-remove at skill `teardown()`. They persist
+    across WebSocket reconnects (skills don't tear down on a transient
+    disconnect; only on shutdown).
+    """
+
+    def __call__(self, key: str, handler: ClientEventHandler, /) -> None: ...
+
+
+class EmitServerEvent(Protocol):
+    """Structural signature for `SkillContext.emit_server_event`.
+
+    Push a generic event to the connected client. Symmetric to
+    inbound `client_event`: same shape on the wire (`{type:
+    server_event, event, data}`). No-op (with debug log) if no
+    client is currently connected. Old clients that don't recognize
+    `server_event` log-and-ignore on their side.
+    """
+
+    async def __call__(self, event: str, data: dict[str, Any] | None = None, /) -> None: ...
+
+
+def _default_subscribe_client_event(_key: str, _handler: ClientEventHandler, /) -> None:
+    """Default `subscribe_client_event` for test fixtures — registers
+    nothing. Production contexts wire this to the framework's
+    subscription registry on `AudioServer` via `_build_skill_context`.
+    """
+    return None
+
+
+async def _default_emit_server_event(_event: str, _data: dict[str, Any] | None = None, /) -> None:
+    """Default `emit_server_event` for test fixtures — drops the
+    event. Production contexts wire this to
+    `AudioServer.send_server_event`.
+    """
+    return None
+
+
 async def _noop_inject_turn(
     _prompt: str,
     /,
@@ -758,6 +816,19 @@ class SkillContext:
       don't return a `ClaimHandle` to the skill. Returns True if a
       claim was active; False if there was nothing to cancel.
       Idempotent.
+    - `subscribe_client_event(key, handler) -> None`: register a
+      handler for inbound `client_event` messages with a matching
+      `event` key. The handler receives the message's `data` dict
+      (already parsed; empty dict if absent or non-dict). Multiple
+      skills can subscribe to the same key — all handlers run
+      concurrently, exception-isolated. Subscriptions persist across
+      WebSocket reconnects and auto-remove at skill teardown.
+    - `emit_server_event(event, data=None) -> None`: push a
+      `server_event` to the connected client. Symmetric to inbound
+      `client_event`. No-op (with debug log) if no client is
+      connected. Old clients that don't recognize `server_event`
+      log-and-ignore on their side, so emit is safe to call even
+      without per-client capability checks.
     """
 
     logger: SkillLogger
@@ -774,6 +845,12 @@ class SkillContext:
     background_task: BackgroundTask = _default_background_task
     start_input_claim: StartInputClaim = _default_start_input_claim
     cancel_active_claim: CancelActiveClaim = _default_cancel_active_claim
+    # Generic event channel between skills and the connected client.
+    # See `subscribe_client_event` / `emit_server_event` Protocol docs.
+    # Production contexts wire these to AudioServer's subscription
+    # registry; test fixtures keep the no-op defaults.
+    subscribe_client_event: SubscribeClientEvent = _default_subscribe_client_event
+    emit_server_event: EmitServerEvent = _default_emit_server_event
 
     def catalog(self, name: str = "default") -> Catalog:
         """Construct a fresh `Catalog` for this skill's personal-content data.
