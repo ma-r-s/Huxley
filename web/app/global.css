@@ -135,16 +135,6 @@ body,
   padding: 0;
   min-height: 100%;
 }
-html {
-  background: var(--hux-coral);
-}
-body {
-  font-family: var(--hux-sans);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  background: var(--hux-coral);
-  color: var(--hux-fg);
-}
 
 /* Utility classes used inline by section components */
 .mono {
