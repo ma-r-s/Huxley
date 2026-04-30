@@ -299,3 +299,303 @@ class TestWalAndSchemaVersion:
         # Must not raise — older code proceeds, just logs the drift.
         await s2.init()
         await s2.close()
+
+
+class TestSessions:
+    """T1.12 — session history: persistence + retrieval.
+
+    Boundary semantics: WS-connect/disconnect is the technical lifecycle;
+    one user-visible "conversation" can span multiple connects so long as
+    consecutive turns fall within `idle_window_min` of each other. See
+    docs/triage.md T1.12 for the design + critic notes.
+    """
+
+    async def test_start_creates_new_session_when_no_history(self, storage: Storage) -> None:
+        sid = await storage.start_or_resume_session()
+        assert sid >= 1
+        sessions = await storage.list_sessions()
+        assert len(sessions) == 1
+        assert sessions[0].id == sid
+
+    async def test_resume_returns_same_id_within_window(self, storage: Storage) -> None:
+        first = await storage.start_or_resume_session()
+        await storage.record_turn(first, "user", "hola")
+        # No DB-time manipulation: the turn was just recorded, so a follow-up
+        # call within the default 30-min window must return the same row.
+        second = await storage.start_or_resume_session()
+        assert second == first
+
+    async def test_new_session_after_idle_window_expires(self, storage: Storage) -> None:
+        first = await storage.start_or_resume_session()
+        await storage.record_turn(first, "user", "hola")
+        # Backdate the last turn beyond the window directly in the DB.
+        await storage._conn.execute(
+            "UPDATE sessions SET last_turn_at = datetime('now', '-2 hours') WHERE id = ?",
+            (first,),
+        )
+        await storage._conn.commit()
+        second = await storage.start_or_resume_session(idle_window_min=30)
+        assert second != first
+
+    async def test_resume_clears_ended_at(self, storage: Storage) -> None:
+        # End the session, then resume within the window: ended_at should
+        # be cleared so the row reads as "live again" until the next end.
+        sid = await storage.start_or_resume_session()
+        await storage.record_turn(sid, "user", "hola")
+        await storage.end_session(sid, summary="first")
+        resumed = await storage.start_or_resume_session()
+        assert resumed == sid
+        cursor = await storage._conn.execute("SELECT ended_at FROM sessions WHERE id = ?", (sid,))
+        row = await cursor.fetchone()
+        assert row is not None
+        assert row[0] is None
+
+    async def test_record_turn_appends_in_order(self, storage: Storage) -> None:
+        sid = await storage.start_or_resume_session()
+        await storage.record_turn(sid, "user", "primero")
+        await storage.record_turn(sid, "assistant", "respuesta")
+        await storage.record_turn(sid, "user", "tercero")
+        turns = await storage.get_session_turns(sid)
+        assert [t.idx for t in turns] == [0, 1, 2]
+        assert [t.role for t in turns] == ["user", "assistant", "user"]
+        assert [t.text for t in turns] == ["primero", "respuesta", "tercero"]
+
+    async def test_turn_count_increments(self, storage: Storage) -> None:
+        sid = await storage.start_or_resume_session()
+        await storage.record_turn(sid, "user", "a")
+        await storage.record_turn(sid, "assistant", "b")
+        sessions = await storage.list_sessions()
+        match = next(s for s in sessions if s.id == sid)
+        assert match.turn_count == 2
+
+    async def test_preview_set_only_on_first_user_turn(self, storage: Storage) -> None:
+        # Proactive turn lands first (assistant). preview must stay null
+        # until a user turn arrives.
+        sid = await storage.start_or_resume_session()
+        await storage.record_turn(sid, "assistant", "Hora de tu medicina")
+        sessions = await storage.list_sessions()
+        assert next(s for s in sessions if s.id == sid).preview is None
+
+        await storage.record_turn(sid, "user", "ya la tomé")
+        sessions = await storage.list_sessions()
+        assert next(s for s in sessions if s.id == sid).preview == "ya la tomé"
+
+        # Subsequent user turns don't overwrite the preview.
+        await storage.record_turn(sid, "user", "qué mas?")
+        sessions = await storage.list_sessions()
+        assert next(s for s in sessions if s.id == sid).preview == "ya la tomé"
+
+    async def test_end_session_sets_ended_at_and_summary(self, storage: Storage) -> None:
+        sid = await storage.start_or_resume_session()
+        await storage.record_turn(sid, "user", "hola")
+        await storage.end_session(sid, summary="conversó sobre saludos")
+        cursor = await storage._conn.execute(
+            "SELECT ended_at, summary FROM sessions WHERE id = ?", (sid,)
+        )
+        row = await cursor.fetchone()
+        assert row is not None
+        ended_at, summary = row
+        assert ended_at is not None
+        assert summary == "conversó sobre saludos"
+
+    async def test_end_session_with_null_summary_is_allowed(self, storage: Storage) -> None:
+        # Provider may not generate a summary (e.g. session ended with no
+        # transcript). end_session must accept summary=None gracefully.
+        sid = await storage.start_or_resume_session()
+        await storage.end_session(sid, summary=None)
+        cursor = await storage._conn.execute("SELECT summary FROM sessions WHERE id = ?", (sid,))
+        row = await cursor.fetchone()
+        assert row is not None
+        assert row[0] is None
+
+    async def test_list_sessions_descending_by_id(self, storage: Storage) -> None:
+        s1 = await storage.start_or_resume_session()
+        await storage.record_turn(s1, "user", "a")
+        # Force expiry so the next call creates a new row.
+        await storage._conn.execute(
+            "UPDATE sessions SET last_turn_at = datetime('now', '-2 hours') WHERE id = ?",
+            (s1,),
+        )
+        await storage._conn.commit()
+        s2 = await storage.start_or_resume_session()
+        sessions = await storage.list_sessions()
+        ids = [s.id for s in sessions]
+        assert ids == [s2, s1]
+
+    async def test_list_sessions_respects_limit(self, storage: Storage) -> None:
+        for _ in range(5):
+            sid = await storage.start_or_resume_session()
+            await storage.record_turn(sid, "user", "x")
+            await storage._conn.execute(
+                "UPDATE sessions SET last_turn_at = datetime('now', '-2 hours') WHERE id = ?",
+                (sid,),
+            )
+            await storage._conn.commit()
+        sessions = await storage.list_sessions(limit=3)
+        assert len(sessions) == 3
+
+    async def test_get_session_turns_empty_for_nonexistent(self, storage: Storage) -> None:
+        assert await storage.get_session_turns(99999) == []
+
+    async def test_delete_session_cascades_to_turns(self, storage: Storage) -> None:
+        sid = await storage.start_or_resume_session()
+        await storage.record_turn(sid, "user", "a")
+        await storage.record_turn(sid, "assistant", "b")
+        await storage.delete_session(sid)
+        sessions = await storage.list_sessions()
+        assert all(s.id != sid for s in sessions)
+        assert await storage.get_session_turns(sid) == []
+
+    async def test_clear_summaries_nullifies_preserves_rows(self, storage: Storage) -> None:
+        sid = await storage.start_or_resume_session()
+        await storage.record_turn(sid, "user", "a")
+        await storage.end_session(sid, summary="some summary")
+        await storage.clear_summaries()
+        # Row still present.
+        sessions = await storage.list_sessions()
+        assert any(s.id == sid for s in sessions)
+        # Summary nulled.
+        cursor = await storage._conn.execute("SELECT summary FROM sessions WHERE id = ?", (sid,))
+        row = await cursor.fetchone()
+        assert row is not None
+        assert row[0] is None
+
+    async def test_get_latest_summary_skips_null_summaries(self, storage: Storage) -> None:
+        # Two sessions; only the older one has a summary.
+        s1 = await storage.start_or_resume_session()
+        await storage.record_turn(s1, "user", "a")
+        await storage.end_session(s1, summary="older summary")
+        await storage._conn.execute(
+            "UPDATE sessions SET last_turn_at = datetime('now', '-2 hours') WHERE id = ?",
+            (s1,),
+        )
+        await storage._conn.commit()
+        s2 = await storage.start_or_resume_session()
+        await storage.record_turn(s2, "user", "b")
+        # s2 not finalized; summary IS NULL. get_latest_summary must
+        # walk past the NULL row and return s1's summary.
+        latest = await storage.get_latest_summary()
+        assert latest == "older summary"
+
+    async def test_get_latest_summary_returns_none_when_all_null(self, storage: Storage) -> None:
+        sid = await storage.start_or_resume_session()
+        await storage.record_turn(sid, "user", "x")
+        await storage.end_session(sid, summary="only summary")
+        await storage.clear_summaries()
+        # After reset, no summary should be loadable.
+        assert await storage.get_latest_summary() is None
+
+    # ── The gold test (per critic, the "single regression catch-all") ──
+    async def test_gold_resume_within_window_is_one_logical_session(
+        self, storage: Storage
+    ) -> None:
+        """Connect → 2 user turns → disconnect → reconnect within window
+        → 1 more user turn → disconnect.
+
+        Asserts: list_sessions returns ONE row, transcript contains all 3
+        user turns in order, summary is the one written on the SECOND
+        disconnect.
+        """
+        # First "connect"
+        sid1 = await storage.start_or_resume_session()
+        await storage.record_turn(sid1, "user", "hola")
+        await storage.record_turn(sid1, "user", "qué tal")
+        await storage.end_session(sid1, summary="primera ronda")
+
+        # Second "connect" — within idle window (no backdating).
+        sid2 = await storage.start_or_resume_session()
+        assert sid2 == sid1, "reconnect within idle window must resume the same session row"
+        await storage.record_turn(sid2, "user", "y de comida?")
+        await storage.end_session(sid2, summary="segunda ronda")
+
+        sessions = await storage.list_sessions()
+        assert len(sessions) == 1, f"expected one logical conversation, got {len(sessions)} rows"
+
+        turns = await storage.get_session_turns(sid1)
+        user_turns = [t.text for t in turns if t.role == "user"]
+        assert user_turns == ["hola", "qué tal", "y de comida?"]
+
+        # Final summary is the SECOND disconnect's summary.
+        cursor = await storage._conn.execute("SELECT summary FROM sessions WHERE id = ?", (sid1,))
+        row = await cursor.fetchone()
+        assert row is not None
+        assert row[0] == "segunda ronda"
+
+
+class TestSessionsMigrationFromV1:
+    """T1.12 — schema v1 (conversation_summaries) → v2 (sessions) migration.
+
+    Existing summaries become synthetic sessions rows so warm-reconnect
+    context still loads after the upgrade.
+    """
+
+    async def test_v1_summary_migrates_into_synthetic_session(self, tmp_db_path: Path) -> None:
+        # Manually construct a v1 DB with one summary row, then open it
+        # with the new code.
+        import aiosqlite
+
+        async with aiosqlite.connect(tmp_db_path) as legacy:
+            await legacy.executescript(
+                """
+                CREATE TABLE conversation_summaries (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    summary    TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                CREATE TABLE schema_meta (
+                    key TEXT PRIMARY KEY, value TEXT NOT NULL
+                );
+                INSERT INTO schema_meta(key, value) VALUES('schema_version', '1');
+                INSERT INTO conversation_summaries(summary)
+                VALUES('legacy summary text');
+                """
+            )
+            await legacy.commit()
+
+        s = Storage(tmp_db_path)
+        await s.init()
+        try:
+            # Migration ran on init; latest summary still loadable.
+            assert await s.get_latest_summary() == "legacy summary text"
+            # And it's now a row in the new sessions table.
+            sessions = await s.list_sessions()
+            assert len(sessions) == 1
+            cursor = await s._conn.execute(
+                "SELECT summary FROM sessions WHERE id = ?", (sessions[0].id,)
+            )
+            row = await cursor.fetchone()
+            assert row is not None
+            assert row[0] == "legacy summary text"
+        finally:
+            await s.close()
+
+    async def test_old_table_dropped_after_migration(self, tmp_db_path: Path) -> None:
+        import aiosqlite
+
+        async with aiosqlite.connect(tmp_db_path) as legacy:
+            await legacy.executescript(
+                """
+                CREATE TABLE conversation_summaries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    summary TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                CREATE TABLE schema_meta (
+                    key TEXT PRIMARY KEY, value TEXT NOT NULL
+                );
+                INSERT INTO schema_meta(key, value) VALUES('schema_version', '1');
+                """
+            )
+            await legacy.commit()
+
+        s = Storage(tmp_db_path)
+        await s.init()
+        try:
+            cursor = await s._conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='conversation_summaries'"
+            )
+            row = await cursor.fetchone()
+            assert row is None, "conversation_summaries should be dropped after migration"
+        finally:
+            await s.close()
