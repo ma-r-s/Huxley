@@ -539,7 +539,7 @@ Integration tests that hit real subprocess (ffmpeg) or real provider APIs live i
 
 ## Distribution — making your skill installable
 
-Built-in skills (audiobooks, news, radio, system, telegram, timers) live in `server/skills/<name>/` in this repo. Community skills are independent Python packages published on PyPI under the convention `huxley-skill-<name>`.
+Built-in skills (audiobooks, news, radio, reminders, system, telegram, timers) live in `server/skills/<name>/` in this repo. Community skills are independent Python packages published on PyPI under the convention `huxley-skill-<name>`.
 
 Skill-specific docs:
 
@@ -548,7 +548,8 @@ Skill-specific docs:
 - [`news.md`](news.md) — Open-Meteo weather + Google News RSS summarization.
 - [`radio.md`](radio.md) — HTTP/Icecast streams via ffmpeg.
 - [`search.md`](search.md) — open-web search via DuckDuckGo (no API key); for current/live info the LLM doesn't already know.
-- [`timers.md`](timers.md) — one-shot reminders via proactive speech, persisted across restart.
+- [`timers.md`](timers.md) — one-shot relative reminders ("recuérdame en 5 minutos") via proactive speech, persisted across restart.
+- [`reminders.md`](reminders.md) — scheduled reminders for specific times ("recuérdame mañana a las 8") with kind-aware retry escalation, daily/weekly recurrence, and missed-reminder catch-up.
 
 A persona enables a skill by listing it in `persona.yaml`:
 

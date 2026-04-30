@@ -13,6 +13,7 @@ members = [
     "huxley-skill-audiobooks",
     "huxley-skill-news",
     "huxley-skill-radio",
+    "huxley-skill-reminders",
     "huxley-skill-search",
     "huxley-skill-system",
     "huxley-skill-telegram",
@@ -531,6 +532,31 @@ dev = [
 name = "huxley-skill-radio"
 version = "0.1.0"
 source = { editable = "server/skills/radio" }
+dependencies = [
+    { name = "huxley-sdk" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "huxley-sdk", editable = "server/sdk" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=1.13" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
+]
+
+[[package]]
+name = "huxley-skill-reminders"
+version = "0.1.0"
+source = { editable = "server/skills/reminders" }
 dependencies = [
     { name = "huxley-sdk" },
 ]
