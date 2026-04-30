@@ -1,0 +1,223 @@
+---
+title: Walkthrough — BasicOS
+description: A minimal, terse persona — every field explained. A clear template for your own persona.
+---
+
+BasicOS is the terse counter-persona that ships alongside Huxley. It does less than a full persona on purpose — two skills, a short prompt, and a clean i18n block. That makes it a better teaching example than a complex persona: every field pulls its weight, nothing is hidden in warmth.
+
+This page reads BasicOS top to bottom and explains every choice. Use it as a starting point when you build your own persona.
+
+## The full file
+
+Here's `server/personas/basicos/persona.yaml`. Unlike a complex persona, this one is short enough to read in full:
+
+```yaml title="server/personas/basicos/persona.yaml"
+version: 1
+name: BasicOS
+voice: alloy
+language_code: es
+transcription_language: es
+timezone: America/Bogota
+
+system_prompt: |
+  Asistente personal directo. Sin saludos, sin rodeos, sin títulos.
+  Responde con la mínima palabra necesaria.
+
+  ESTILO:
+  - Frases cortas y directas. Ve al punto.
+  - Para listas usa viñetas habladas: "uno, ..., dos, ..., tres, ...".
+  - Para noticias máximo cinco puntos. Cada uno una sola frase.
+  - Para la hora di solo la hora. Sin "ahora son las".
+  - No te disculpes. No expliques de más. No ofrezcas cosas que no
+    pidieron.
+
+  IDIOMA: Responde siempre en español neutro.
+
+  NOTICIAS: NUNCA inventes noticias ni clima. SIEMPRE llama a get_news o
+  get_weather antes de responder.
+
+constraints:
+  - confirm_destructive
+
+ui_strings:
+  listening: "Escuchando…"
+  too_short: "Muy corto"
+  sent: "Enviado"
+  responding: "Respondiendo…"
+  ready: "Listo"
+
+i18n:
+  en:
+    transcription_language: en
+    system_prompt: |
+      Direct personal assistant. No greetings, no fluff, no titles.
+      Reply with the fewest words needed.
+
+      STYLE:
+      - Short direct sentences. Get to the point.
+      - For lists use spoken bullets: "one, ..., two, ..., three, ...".
+      - For news, at most five points. Each one a single sentence.
+      - For the time, say only the time. No "it is now".
+      - Don't apologize. Don't over-explain. Don't offer things that
+        weren't asked for.
+
+      LANGUAGE: Always respond in neutral English.
+
+      NEWS: NEVER invent news or weather. ALWAYS call get_news or
+      get_weather before responding.
+    ui_strings:
+      listening: "Listening…"
+      too_short: "Too short"
+      sent: "Sent"
+      responding: "Responding…"
+      ready: "Ready"
+
+  fr:
+    transcription_language: fr
+    system_prompt: |
+      Assistant personnel direct. Pas de salutations, pas de détours,
+      pas de titres. Réponds avec le strict minimum de mots.
+
+      STYLE :
+      - Phrases courtes et directes. Va droit au but.
+      - Pour les listes, utilise des puces parlées.
+      - Pour les actualités, cinq points maximum. Une phrase par point.
+      - Pour l'heure, dis juste l'heure.
+      - Ne t'excuse pas. Ne t'étends pas.
+
+      LANGUE : Réponds toujours en français neutre.
+
+      ACTUALITÉS : N'invente JAMAIS d'actualités ni de météo. Appelle
+      TOUJOURS get_news ou get_weather avant de répondre.
+    ui_strings:
+      listening: "À l'écoute…"
+      too_short: "Trop court"
+      sent: "Envoyé"
+      responding: "Je réponds…"
+      ready: "Prêt"
+
+skills:
+  news:
+    location: "Villavicencio"
+    latitude: 4.142
+    longitude: -73.626
+    country_code: "CO"
+    language_code: "es"
+    units: "metric"
+    interests: []
+    max_items: 5
+  system: {}
+```
+
+## Field-by-field
+
+### `voice: alloy`
+
+Alloy is OpenAI's neutral, clear voice. No warmth, no flourishes — exactly matching BasicOS's tone. A warm persona would use `coral` or `shimmer`; a formal one might try `echo`. Choose by feel in the OpenAI playground first.
+
+### `language_code: es` + `transcription_language: es`
+
+Spanish is the primary language. Whisper expects Spanish audio from the user. The `i18n` block overrides both when the client connects with `?lang=en` or `?lang=fr`.
+
+### `timezone: America/Bogota`
+
+So `system.get_current_time` returns the correct local time. Set this to wherever your user actually is — it flows through to the system skill automatically.
+
+### The system prompt
+
+Read it as instructions to an actor, not as documentation. A few things worth noticing:
+
+**It establishes the register first.** "No greetings, no fluff, no titles." The model now knows the entire interaction style before reading any specific rules.
+
+**The style rules are behavioral, not aesthetic.** "For news, at most five points. Each one a single sentence." The model can check itself against this. "Be concise" is vague; "five points max, one sentence each" is not.
+
+**It tells the model what NOT to do.** "Don't apologize. Don't over-explain. Don't offer things that weren't asked for." This is where most prompts are weak — they say what the model should do but not what to resist.
+
+**Tool-use instructions are mandatory for data sources.** "NEVER invent news or weather. ALWAYS call get_news or get_weather first." Without this, the model will sometimes invent plausible-sounding headlines from training data. The NEVER/ALWAYS emphasis is deliberate.
+
+### `constraints: [confirm_destructive]`
+
+BasicOS only declares one constraint: `confirm_destructive`. Before deleting, sending, or irreversibly calling something, the model asks "are you sure?" This is a good default for any persona that connects to the real world.
+
+`never_say_no` is not enabled — BasicOS is for developers who want to see the framework's unmodified behavior. A refusal is a data point, not a failure.
+
+`echo_short_input` and `confirm_if_unclear` aren't needed here — this persona is designed for direct, unambiguous interaction.
+
+### `ui_strings`
+
+The PWA shows these as status indicators while listening, thinking, and responding. Each string is short — it's read by the browser, not spoken by the model. Localize them in `i18n` if you support multiple languages.
+
+### `i18n.en`, `i18n.fr`
+
+Override only what changes per language: `transcription_language`, `system_prompt`, and `ui_strings`. Notice what's **not** overridden:
+
+- `voice` — Alloy handles all three languages well enough.
+- `constraints` — behavioral rules are language-independent.
+- `skills` — same skill set in every language.
+
+The English and French prompts aren't translations of the Spanish one — they're rewrites in each language's natural register. This is the right approach: a literal translation from Spanish to English often produces stilted English. Write each prompt natively.
+
+### `skills.news`
+
+The news skill needs explicit coordinates and country/language codes to fetch weather from Open-Meteo and headlines from Google News RSS. `max_items: 5` matches the five-point limit in the system prompt — the two reinforce each other. No `start_sound` — a terse persona doesn't need a chime before every news brief.
+
+### `skills.system: {}`
+
+No config. The system skill exposes `get_current_time` and `set_volume`. It reads timezone from the persona automatically.
+
+## The directory layout
+
+BasicOS is intentionally minimal:
+
+<Files>
+  <Folder name="server/personas/basicos" defaultOpen>
+    <File name="persona.yaml" />
+    <File name="README.md" />
+    <Folder name="data">
+      <File name="basicos.db" />
+    </Folder>
+  </Folder>
+</Files>
+
+No sounds directory, no media library — just the database the framework creates on first run. This is the minimum viable persona directory.
+
+## What this teaches
+
+Reading BasicOS reveals the key design lever in Huxley personas:
+
+- **The system prompt is your primary tool.** Voice and constraints shape the register; the prompt shapes behavior. A two-sentence prompt and a detailed one both work — but the detailed one wins when the user does something unexpected.
+- **Minimal skills, focused behavior.** Two skills, two tools each. The model can't get confused about what it's supposed to do. Add skills one at a time and test.
+- **Multilingual is opt-in.** You only need `i18n` if you actually support multiple languages. A single-language persona doesn't need it at all.
+- **Constraints compose.** BasicOS uses one; a more capable persona might use three or four. Each adds a behavioral guarantee without touching the skill code.
+
+## What you'd change for your own persona
+
+From this template:
+
+- **The user description** — BasicOS has none (it's persona-for-developers). Yours should establish who the user is, right at the top of the prompt.
+- **The voice** — match it to your user's expectations. `alloy` is neutral; other voices carry more personality.
+- **The language** — swap `es` for your user's language. The `i18n` block is optional if you only need one.
+- **The skill list** — add skills for everything your user actually needs. Remove `news` if they don't need headlines. Add `timers` if they need reminders.
+- **The constraints** — add `never_say_no` if your user shouldn't get stuck. Add `confirm_if_unclear` if guessing wrong is costly.
+
+The structure (identity → constraints → ui_strings → i18n → skills) stays the same.
+
+## Now build your own
+
+<Cards>
+  <Card
+    href="/docs/build-persona/anatomy"
+    title="Persona anatomy"
+    description="Every field in the persona schema, with defaults and validation rules."
+  />
+  <Card
+    href="/docs/build-persona/voice-and-language"
+    title="Voice and language"
+    description="Picking the right voice and configuring multilingual personas."
+  />
+  <Card
+    href="/docs/concepts/constraints"
+    title="Constraints"
+    description="Behavioral rules your persona can enable."
+  />
+</Cards>
