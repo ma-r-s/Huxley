@@ -1,6 +1,6 @@
 # Sonic UX for Voice Agents — research notes
 
-Working notes from research into sonic UI / auditory feedback design for voice agents, focused on what's codified vs. trade-craft. Synthesized into a concrete framework for the AbuelOS persona at the bottom.
+Working notes from research into sonic UI / auditory feedback design for voice agents, focused on what's codified vs. trade-craft. Synthesized into a concrete framework for the Abuelo persona at the bottom.
 
 This is reference material, not framework documentation — it informs design decisions when the time comes to add an audio-cue layer on top of the LLM voice.
 
@@ -40,7 +40,7 @@ About **60% of this field is codified, 40% is trade-craft oral tradition.**
 
 **"Sound design for AI agents" as a published 2026 discipline does not really exist yet.** Most current writing is about _vocal_ design (cloning, prosody). The non-verbal layer is wide open. Slightly ahead of the curve.
 
-The richer literature for AbuelOS specifically is **accessibility research for blind users** (minimal feedback to avoid masking natural sounds, spatial audio for information density), not voice-AI design blogs.
+The richer literature for Abuelo specifically is **accessibility research for blind users** (minimal feedback to avoid masking natural sounds, spatial audio for information density), not voice-AI design blogs.
 
 ## The codified rules worth knowing
 
@@ -113,7 +113,7 @@ Surprisingly thin. The major ones converged on (observable, not documented):
 
 Google's one load-bearing rule: **"If you have to teach users what an earcon means, don't use one."**
 
-## Synthesized framework for AbuelOS
+## Synthesized framework for Abuelo
 
 Translating the above for a Spanish-speaking elderly blind user. The constraint that drives everything: **his only modality is sound, so every sound either carries information or steals from speech.** No visual fallback for a misfired tone, no quiet ambient channel — every cue plays into the same channel that carries his agent's voice.
 
@@ -131,7 +131,7 @@ Rules in order of confidence:
 10. **Duck the thinking bed by 12dB the moment speech begins, attack ≤50ms.** Standard NPR/Wwise number. He must never strain to hear the persona over an earcon.
 11. **Earcons must not occupy the 200Hz–4kHz vocal band.** Either below 200Hz (sub-pad) or above 4kHz (chime) — anything in the speech band masks or gets masked by his TTS voice.
 12. **Same earcon = same meaning, forever.** Brewster/Google consistency rule. Never seasonal, never contextual variants. Three sounds learned in a week if stable; zero if they drift.
-13. **If a session ever ends with "I didn't know what was happening," the answer is more _spoken_ feedback, not more earcons.** AbuelOS-specific corollary to the logging-first principle: failures get _language_, not tones.
+13. **If a session ever ends with "I didn't know what was happening," the answer is more _spoken_ feedback, not more earcons.** Abuelo-specific corollary to the logging-first principle: failures get _language_, not tones.
 14. **Test exactly one variant at a time, with the actual user.** Sonic-branding research universally fails to predict elderly-blind-user reception. The frameworks narrow the search space from "infinite" to "three earcons in specific frequency bands at specific moments." User testing picks the survivor.
 
 The reason "test with users" remains the answer despite all of the above: every framework cited assumes a sighted, attentive, headphone-wearing adult — none have data on a 90-year-old blind Spanish speaker in a noisy room with a smart speaker. The frameworks narrow the search space; user testing picks the survivor.
@@ -187,7 +187,7 @@ Download them as WAV. Stop there. Don't wire them up; just bring them and we'll 
 
 ### When you come back
 
-Re-read the "Synthesized framework for AbuelOS" section above, then the "Current state vs. target framework" section. Those two together tell you exactly what to change in the code.
+Re-read the "Synthesized framework for Abuelo" section above, then the "Current state vs. target framework" section. Those two together tell you exactly what to change in the code.
 
 ## Practical implementation
 

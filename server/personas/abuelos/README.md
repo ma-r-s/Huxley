@@ -1,4 +1,4 @@
-# AbuelOS persona
+# Abuelo persona
 
 Canonical Huxley persona: a Spanish-language voice assistant targeting an elderly blind user. Defines the voice, language, timezone, system prompt, named constraints, and enabled skills with their config.
 

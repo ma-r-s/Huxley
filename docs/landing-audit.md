@@ -26,10 +26,10 @@
 **Reality:**  
 - Only 2 personas shipped in the codebase: `abuelos` and `basicos` (server/personas/)
 - No evidence of 6 personas deployed externally
-- README.md credits AbuelOS as "the first persona shipped on Huxley" (line 38)
+- README.md credits Abuelo as "the first persona shipped on Huxley" (line 38)
 
 **Recommendation:**  
-Update to "Two personas in the codebase" or "AbuelOS deployed" to match shipped reality. If external personas exist, document them in a personas registry before claiming "in the wild."
+Update to "Two personas in the codebase" or "Abuelo deployed" to match shipped reality. If external personas exist, document them in a personas registry before claiming "in the wild."
 
 **File:Line:** `site/src/sections/Install.tsx:112`
 
@@ -172,10 +172,10 @@ Add to Architecture diagram or as a callout:
 ### Finding C4: Personas section shows 6 personas in code but only 2 ship
 
 **Landing text:**  
-Personas section displays 6 persona cards: AbuelOS, Studio, Household, Ops, Tutor, Clinic (Personas.tsx:17-184)
+Personas section displays 6 persona cards: Abuelo, Studio, Household, Ops, Tutor, Clinic (Personas.tsx:17-184)
 
 **Reality:**  
-- Only AbuelOS and Basicos are in `server/personas/`
+- Only Abuelo and Basicos are in `server/personas/`
 - The other four (Studio, Household, Ops, Tutor, Clinic) are designed-for examples in the landing, not shipped
 - The YAML in each card is aspirational — these personas don't exist as runnable config
 
@@ -183,7 +183,7 @@ Personas section displays 6 persona cards: AbuelOS, Studio, Household, Ops, Tuto
 This is not *wrong* (the examples are labeled correctly in the grid), but it reinforces the "six personas" myth. A reader will assume all six are downloadable and ready to run.
 
 **Recommendation:**  
-Option A: Keep 6 but add a small note: "AbuelOS and Basicos are shipped. Others are designed-for examples."  
+Option A: Keep 6 but add a small note: "Abuelo and Basicos are shipped. Others are designed-for examples."  
 Option B: Show only the 2 shipped personas and a "Design your own" prompt.  
 Option C: Keep all 6 but visually distinguish shipped vs. examples (highlight, badge, different row).
 

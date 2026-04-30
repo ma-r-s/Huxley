@@ -400,7 +400,7 @@ class SearchSkill:
         )
         await self._logger.adebug("search.dispatch_full", query=query)
 
-        # Short queries deserve a log signal but no filter — AbuelOS
+        # Short queries deserve a log signal but no filter — Abuelo
         # users mumble; "Madrid?" is a real query and the LLM can ask
         # for clarification through `confirm_if_unclear` if needed.
         if len(query) < 3:

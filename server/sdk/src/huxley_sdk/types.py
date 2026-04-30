@@ -271,7 +271,7 @@ class ClaimEndReason(Enum):
 
     # The user pressed / held PTT during the claim. For a call skill
     # this means "grandpa wants to end the call"; for a voice-memo skill
-    # this means "grandpa wants to interact with AbuelOS instead."
+    # this means "grandpa wants to interact with Abuelo instead."
     # Framework translates PTT-during-claim into this end reason and
     # resumes the normal conversation flow after cleanup.
     USER_PTT = "user_ptt"

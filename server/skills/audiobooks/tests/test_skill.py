@@ -133,7 +133,7 @@ def library_path(tmp_path: Path) -> Path:
 
 
 def _make_ctx(library_path: Path, language: str = "es") -> SkillContext:
-    # Tests assert against Spanish strings throughout because AbuelOS is the
+    # Tests assert against Spanish strings throughout because Abuelo is the
     # reference persona and its library is Spanish. Pass `language="en"` or
     # `"fr"` in a test that specifically exercises i18n behavior.
     return make_test_context(

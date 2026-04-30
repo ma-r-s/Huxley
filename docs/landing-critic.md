@@ -22,7 +22,7 @@ What I want from a project like this, in order: (1) a one-line answer to "what i
 | 2   | Differentiation       | **4** | The 5-column comparison table is genuinely strong and answers the "why not pipecat / OpenAI / Alexa" question better than 90% of frameworks ever do.                                                                                                                                                                 |
 | 3   | Proof                 | **2** | "678 tests · 15K LOC · MIT" is good, but the GitHub link 404s, the install snippet isn't a runnable command, and the splashy "Found it / Built it" tabs are obviously prospective demos with no "this is what we'd love to ship" framing.                                                                            |
 | 4   | Technical credibility | **4** | The architecture diagram, the entry-points snippet, the explicit "OpenAI Realtime today" disclosure, and the turn-sequencing timeline read as written by someone who has actually shipped this.                                                                                                                      |
-| 5   | Emotional hook        | **3** | The orb + waveform + AbuelOS persona description are quietly moving, but the page doesn't open with the human story; you have to scroll seven sections to find out who this was actually built for.                                                                                                                  |
+| 5   | Emotional hook        | **3** | The orb + waveform + Abuelo persona description are quietly moving, but the page doesn't open with the human story; you have to scroll seven sections to find out who this was actually built for.                                                                                                                  |
 | 6   | HN tone fit           | **3** | Aesthetically beautiful, but tilts into "designy product launch" rather than "engineer's notebook"; HN responds better to dense, slightly ugly, code-forward pages. The §-numbered sections and italic serif headlines feel like a Stripe blog post, not a hacker tool.                                              |
 | 7   | Mobile (iPhone 390px) | **2** | Will load and not crash, but the architecture SVG and the timeline SVG are both designed at 960px viewBox with 10–11px text — they'll scale to ~340px wide and become unreadable. The sticky voice-thread bar steals 32px of vertical screen. The 70-tile skills grid + animated transcript will hammer the battery. |
 | 8   | Missing context       | n/a   | See "what's missing" — the #1 question I'd ask in the comments is "how much does this cost to run per hour?" and the page never says.                                                                                                                                                                                |
@@ -89,7 +89,7 @@ The hero snippet (`hero.installSnippet`: `git clone huxley && uv run huxley`) ha
 ### P1-2. No demo audio / no demo video
 
 **Where:** Hero (the orb is a CSS animation, not actual audio).
-**Problem:** This is a voice product. The single most powerful thing you could show on the page is 15 seconds of actual audio — the user holding the button, AbuelOS responding in Spanish, a timer firing proactively. The orb pretending to listen isn't proof; it's vibes. Every voice-agent post on HN that goes viral has either an embedded audio demo or a Twitter video link in the comments.
+**Problem:** This is a voice product. The single most powerful thing you could show on the page is 15 seconds of actual audio — the user holding the button, Abuelo responding in Spanish, a timer firing proactively. The orb pretending to listen isn't proof; it's vibes. Every voice-agent post on HN that goes viral has either an embedded audio demo or a Twitter video link in the comments.
 **Fix:** Add a Play-Demo button to the hero that triggers a 15–25 second pre-recorded clip — the same scenario the timeline section illustrates. Bonus: make the orb actually react to the playing waveform.
 
 ### P1-3. The animated voice-thread bar is a tax, not a feature
@@ -101,8 +101,8 @@ The hero snippet (`hero.installSnippet`: `git clone huxley && uv run huxley`) ha
 ### P1-4. Personas section overpromises with five fictional ones
 
 **Where:** `site/src/sections/Personas.tsx:46-187` — Studio, Household, Ops, Tutor, Clinic.
-**Problem:** Only AbuelOS and BasicOS ship today (the Today section says "personas: 2"). The Personas section presents six personas with fully realised YAML configs, hardware targets, and constraint sets. To a reader who hasn't yet noticed the "2 personas" stat, this implies a mature persona library. To one who _has_, it reads as 4× more padding than is warranted. The YAMLs are also persuasive enough that someone could try to run `HUXLEY_PERSONA=studio uv run huxley` and get an error.
-**Fix:** Either (a) add a header to the persona grid that says "AbuelOS ships today; the rest are designs" (and visually demote the 5 unshipped ones with a subtler tile treatment), or (b) cut to AbuelOS + BasicOS + 2 designed-for personas instead of 6, with explicit framing. The framing applies the same logic you already use in the Skills section ("6 shipped · 60+ designed for · ∞ possible") — extend that honesty to personas.
+**Problem:** Only Abuelo and Basic ship today (the Today section says "personas: 2"). The Personas section presents six personas with fully realised YAML configs, hardware targets, and constraint sets. To a reader who hasn't yet noticed the "2 personas" stat, this implies a mature persona library. To one who _has_, it reads as 4× more padding than is warranted. The YAMLs are also persuasive enough that someone could try to run `HUXLEY_PERSONA=studio uv run huxley` and get an error.
+**Fix:** Either (a) add a header to the persona grid that says "Abuelo ships today; the rest are designs" (and visually demote the 5 unshipped ones with a subtler tile treatment), or (b) cut to Abuelo + Basic + 2 designed-for personas instead of 6, with explicit framing. The framing applies the same logic you already use in the Skills section ("6 shipped · 60+ designed for · ∞ possible") — extend that honesty to personas.
 
 ### P1-5. The architecture diagram on mobile is unreadable
 
@@ -114,13 +114,13 @@ The hero snippet (`hero.installSnippet`: `git clone huxley && uv run huxley`) ha
 
 **Where:** `site/src/sections/Architecture.tsx:317-326` (one of six bottom cards) and `Personas.tsx` facets.
 **Problem:** `never_say_no` is the most distinctive thing about this project. It's a behavioral guarantee enforced framework-wide, declared in YAML, that no other voice framework offers. Right now it's a bullet in a 6-up grid and a line in a YAML snippet. The project's vision doc spends paragraphs on it; the landing barely mentions it.
-**Fix:** Promote constraints to a first-class section between Skills and Today, or fold it into the Problem comparison as a fifth Huxley row ("Behavioral constraints declared in YAML, enforced framework-wide"). At minimum, the AbuelOS persona description should foreground "never says no" — that single phrase is more memorable than anything else on the page.
+**Fix:** Promote constraints to a first-class section between Skills and Today, or fold it into the Problem comparison as a fifth Huxley row ("Behavioral constraints declared in YAML, enforced framework-wide"). At minimum, the Abuelo persona description should foreground "never says no" — that single phrase is more memorable than anything else on the page.
 
 ### P1-7. No mention of cost / no per-hour pricing
 
 **Where:** Nowhere on the page.
 **Problem:** OpenAI Realtime API costs roughly $0.06/min input + $0.24/min output (commonly known to HN). Anyone evaluating self-hosting will immediately ask "what does this cost me to run?" and the page doesn't engage. This is the #1 question I'd ask in the comments.
-**Fix:** Add a one-line cost note near the install snippet — "Runs on OpenAI Realtime: ~$0.06/min listening, ~$0.24/min speaking. Roughly $X/day for the AbuelOS reference deployment." or link to a /pricing or to a cost section in the README. Honesty about cost is a credibility signal on HN.
+**Fix:** Add a one-line cost note near the install snippet — "Runs on OpenAI Realtime: ~$0.06/min listening, ~$0.24/min speaking. Roughly $X/day for the Abuelo reference deployment." or link to a /pricing or to a cost section in the README. Honesty about cost is a credibility signal on HN.
 
 ### P1-8. No license/security/privacy posture beyond "MIT"
 
@@ -186,11 +186,11 @@ Worth checking. HN previews render the OG image if present; no preview = lower C
 
 Things I wished were on the page that aren't. (Per the constraint, "coming soon" markers for the Huxley-grows section are intentionally excluded.)
 
-1. **Audio demo.** This is a voice product. Even a 10-second "play this" link to an mp3 of AbuelOS reading the news in Spanish would do more than the entire animated skills grid. Currently the page asserts that voice agents are great; it never proves Huxley sounds good.
+1. **Audio demo.** This is a voice product. Even a 10-second "play this" link to an mp3 of Abuelo reading the news in Spanish would do more than the entire animated skills grid. Currently the page asserts that voice agents are great; it never proves Huxley sounds good.
 
 2. **Cost transparency.** $/hour to run, or at least the raw OpenAI Realtime per-minute numbers with a "we don't markup, you pay OpenAI directly" reassurance. The HN audience cares about this more than almost any other thing, and the absence reads as evasive.
 
-3. **The AbuelOS story.** The vision doc has a moving paragraph: "the first persona shipped on Huxley is AbuelOS — a Spanish-language assistant for an elderly blind user." That story — that this exists because someone built it for a real human, not as a framework exercise — is the emotional hook. Right now AbuelOS is a tile in a 6-up grid; it should be a full-bleed sub-section near the hero. ("This started because my abuelo can't see the screen anymore" — that's a top-comment story.)
+3. **The Abuelo story.** The vision doc has a moving paragraph: "the first persona shipped on Huxley is Abuelo — a Spanish-language assistant for an elderly blind user." That story — that this exists because someone built it for a real human, not as a framework exercise — is the emotional hook. Right now Abuelo is a tile in a 6-up grid; it should be a full-bleed sub-section near the hero. ("This started because my abuelo can't see the screen anymore" — that's a top-comment story.)
 
 4. **Why "Huxley" the name.** A two-line aside near the footer. HN loves naming origin stories; one missed opportunity.
 

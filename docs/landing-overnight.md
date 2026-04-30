@@ -74,7 +74,7 @@ your call before launch are flagged in **bold**.
    - 678 tests passing (376 runtime + 72 sdk + 230 across 6 skill packages)
    - 15K Python LOC server-side
    - 6 first-party skills shipped
-   - 2 personas shipped (AbuelOS, Basicos)
+   - 2 personas shipped (Abuelo, Basicos)
    - 17 ADRs filed in `docs/decisions.md`
    - MIT license
      Plus a "What's next" panel pulling 4 curated items from
@@ -184,10 +184,10 @@ Install.tsx`. The hero's micro-snippet (`hero.installSnippet`) was the
   marker is now an `<a>` that scroll-snaps to its section. The
   decoration earned its real estate.
 
-- **P1-4 persona honesty.** Subtitle now reads "AbuelOS is in
+- **P1-4 persona honesty.** Subtitle now reads "Abuelo is in
   production today; the others are design examples that show how far
   the same framework stretches." A small "ships today" mono pill
-  appears under the AbuelOS persona cell only. The other 5 stay in
+  appears under the Abuelo persona cell only. The other 5 stay in
   the grid (per your Q2 logic for aspirational examples).
 
 - **P1-5 mobile fallback for SVG diagrams.** On mobile (<640px), the
@@ -234,7 +234,7 @@ These are good observations that I either lack context for, or that
 change scope/voice in ways you should sign off on:
 
 - **P1-2 — no audio demo.** The single most powerful thing for a voice
-  product. Needs you to record 15-25s of the AbuelOS scenario the
+  product. Needs you to record 15-25s of the Abuelo scenario the
   Timeline section illustrates. Once you have an mp3, dropping it into
   `site/public/demo.mp3` and adding a `<button>` to the Hero is a small
   patch — flag if you want me to scaffold the player.
@@ -277,7 +277,7 @@ change scope/voice in ways you should sign off on:
   case. Hard to repro without manual play. Worth a once-over before
   launch but not blocking.
 
-- **What's missing list (10 items):** audio demo (above), AbuelOS
+- **What's missing list (10 items):** audio demo (above), Abuelo
   origin story ("this exists because my grandfather can't see the
   screen anymore"), worked latency number ("~480ms p50 user-stop to
   first audio byte"), LiveKit Agents row in the Problem comparison,

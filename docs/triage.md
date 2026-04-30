@@ -215,7 +215,7 @@ differentiator; building a real primitive matches that thesis. A thin helper
 the full primitive lands.
 
 **Decision 2 — Persistence: in-memory rebuilt at `setup()`, with FTS5 upgrade
-path baked into the API.** All current and near-future AbuelOS skills have small
+path baked into the API.** All current and near-future Abuelo skills have small
 catalogs (19 books, 7 stations, ~100 contacts) where rebuild-from-source-of-truth
 is fast (sub-second) and avoids the staleness problem that persistent indexes
 have. The `Catalog` interface stays stable; backend swaps to FTS5 later when a
@@ -318,7 +318,7 @@ Plus the critic's 5 specific test asserts locked into the DoD test list below.
 
 **Critic-flagged regression asserts (locked into Gate 3 test list):**
 
-- [ ] **Regression parity**: `test_catalog_matches_legacy_audiobooks_resolution` — load full AbuelOS-style audiobook fixture, run 10 queries the old `_resolve_book` handled correctly + 3 misspelling cases. Top-1 must match. _This is the "drop-in refactor" proof; without it, "65 tests pass" means nothing because those tests mock the fuzzy layer._
+- [ ] **Regression parity**: `test_catalog_matches_legacy_audiobooks_resolution` — load full Abuelo-style audiobook fixture, run 10 queries the old `_resolve_book` handled correctly + 3 misspelling cases. Top-1 must match. _This is the "drop-in refactor" proof; without it, "65 tests pass" means nothing because those tests mock the fuzzy layer._
 - [ ] **Misspelling tolerance**: query "naufrago" (no accent, missing g) → top hit "Relato de un náufrago"
 - [ ] **Stopword noise**: query "el" against 5 "El X" titles → no result scores above a low threshold
 - [ ] **Determinism**: same fixture + same query → byte-identical top-10 across 100 runs
@@ -359,7 +359,7 @@ Three commits; final state:
 
 **Lessons**:
 
-- The original `as_search_tool` cut from v1 (after critic + Mario's scoping) was the right call. Building it would have added ~50 LOC of code + tests with zero current callers; AbuelOS's max-100-item catalogs always fit in prompt context.
+- The original `as_search_tool` cut from v1 (after critic + Mario's scoping) was the right call. Building it would have added ~50 LOC of code + tests with zero current callers; Abuelo's max-100-item catalogs always fit in prompt context.
 - The Gate 2 critic spawn paid for itself in ONE finding (#1: Jaccard scoring would have regressed audiobooks ranking on the live library). Switching the backend to SequenceMatcher made the refactor a true drop-in instead of a behavior change.
 - `Catalog.get(id)` and `__iter__` were needed by the audiobooks refactor and weren't in the original API. Adding them mid-refactor was cheap because the API didn't ship yet — caught at exactly the right moment. If the Catalog had shipped without them and audiobooks tried to refactor later, we'd have either bent existing methods or added them in a follow-up. The "build the primitive AND its first real consumer in the same change" pattern is what surfaced this.
 - The radio decision (skip refactor) is itself a finding — not every "personal-content skill" wants `as_prompt_lines`-style bullet output. Inline-comma format is a real shape too. The Catalog primitive serves the audiobooks-shape; future skills should evaluate per-shape rather than assuming the primitive applies.
@@ -920,7 +920,7 @@ here. Three tiers of finding:
 **🟠 PQ — product questions that needed Mario's call**:
 
 - **PQ-1 — audiobook-strands-medication.** During a 10-hour audiobook the Stage-1d.1 queue policy ("content always wins at turn-end") means a medication reminder queued mid-book never fires. Mario's call: ship two-tier `InjectPriority` (NORMAL default preserves content; PREEMPT drains over content). ✅ **shipped in `bc5a4e2`** (Stage 1d.3).
-- **PQ-2 — timers fire_prompt hard-coded for AbuelOS.** Default was Spanish / warm-friend register embedded in the skill; non-Spanish personas inherit broken narration. Mario's call: persona-config override (`timers.fire_prompt` in persona.yaml with `{message}` substitution; empty/missing-placeholder falls back to default with a warning log). ✅ **shipped in `c6bd19e`**.
+- **PQ-2 — timers fire_prompt hard-coded for Abuelo.** Default was Spanish / warm-friend register embedded in the skill; non-Spanish personas inherit broken narration. Mario's call: persona-config override (`timers.fire_prompt` in persona.yaml with `{message}` substitution; empty/missing-placeholder falls back to default with a warning log). ✅ **shipped in `c6bd19e`**.
 - **PQ-3 — Stage 3 "done" hid persistence gap.** Original Stage 3 entry marked itself done without acknowledging tasks die on restart — a real gap for medication reminders. Mario's call: relabel Stage 3 → Stage 3a (in-memory), file Stage 3b (persistence) as queued. ✅ **shipped in `c6bd19e`**. Stage 3c (PermanentFailure elapsed_s semantics) also filed.
 
 **🟡 Pre-Stage-2 cleanup** — queued tiny items, see next section.
@@ -1012,8 +1012,8 @@ each urgency tier. Browser smoke confirms the four decision behaviors.
 - ✅ **Commit 3b** (`6d5450a`) — `ClaimObserver` on the CONTENT channel (per critic — not DIALOG, to avoid same-channel stacking conflicts with PREEMPT injects). `coordinator.start_input_claim` direct-entry method with proper `ClaimHandle` (`cancel()` + `wait_end()`). All four `ClaimEndReason` exit paths wired: NATURAL via handle.cancel, USER_PTT via interrupt, PREEMPTED via FocusManager NONE delivery default, ERROR via mic-router-busy or handler exception. 14 tests including the matrix-defining `test_preempt_inject_ends_claim_with_preempted`.
 - ✅ **Commit 3c** (`38b695e`) — tool-dispatched path. `ToolResult.side_effect = InputClaim(...)` latches on `Turn.pending_input_claim`; terminal barrier starts via `_dispatch_post_turn` (claim wins over content stream; PREEMPT inject still wins over both). Pre-barrier-PREEMPT drop fires `on_claim_end(PREEMPTED)` so skills see the lifecycle even when the claim never started. 5 new tests.
 - ✅ **Commit 4** (`5a26448`) — AudioServer routes. `GET /call/ring` (HTTP, header auth, returns 200/401/409/503) + `WS /call?secret=` (path-based routing, query-param auth). Both go through `process_request` on the existing port — no new dep, AudioServer remains "all connections from outside the server." 9 tests against real `serve()`.
-- ✅ **Commit 5** (`89f62c2`) — `huxley-skill-calls` package. `answer_call` / `reject_call` / `end_call` tools; `on_ring(params) -> bool` and `on_caller_connected(ws)` framework hooks; PCM relay via `InputClaim.on_mic_frame` (grandpa→caller) and `speaker_source` async iterator backed by `asyncio.Queue` (caller→grandpa); persona-overridable Spanish/AbuelOS-toned prompts for ring + four end reasons; secret precedence `HUXLEY_CALLS_SECRET` env > persona config. 26 unit tests with a `FakeWS` stand-in.
-- ✅ **Commit 6** (`14204d1`) — Application wiring. New `_wire_call_hooks_if_any()` runs after `setup_all`, duck-types skills for `(secret, on_ring, on_caller_connected)` shape, calls new `AudioServer.set_call_hooks(...)` setter. Framework stays skill-agnostic — duck-type instead of importing calls. `start_input_claim` wired into `SkillContext` from `coordinator.start_input_claim`. AbuelOS persona.yaml gets `calls:` block.
+- ✅ **Commit 5** (`89f62c2`) — `huxley-skill-calls` package. `answer_call` / `reject_call` / `end_call` tools; `on_ring(params) -> bool` and `on_caller_connected(ws)` framework hooks; PCM relay via `InputClaim.on_mic_frame` (grandpa→caller) and `speaker_source` async iterator backed by `asyncio.Queue` (caller→grandpa); persona-overridable Spanish/Abuelo-toned prompts for ring + four end reasons; secret precedence `HUXLEY_CALLS_SECRET` env > persona config. 26 unit tests with a `FakeWS` stand-in.
+- ✅ **Commit 6** (`14204d1`) — Application wiring. New `_wire_call_hooks_if_any()` runs after `setup_all`, duck-types skills for `(secret, on_ring, on_caller_connected)` shape, calls new `AudioServer.set_call_hooks(...)` setter. Framework stays skill-agnostic — duck-type instead of importing calls. `start_input_claim` wired into `SkillContext` from `coordinator.start_input_claim`. Abuelo persona.yaml gets `calls:` block.
 
 **Live verification on the running server** (2026-04-19, post-commit-6):
 
@@ -1167,7 +1167,7 @@ Audiobook `AudioStream` acquires with `patience=timedelta(minutes=30)` (see (D) 
 
 **(C) Concurrent-claim policy: reject the second claim.**
 
-Decision: AbuelOS's user model is one-call-at-a-time; general Huxley power users can adopt call-waiting later if a real need surfaces. Keep it simple:
+Decision: Abuelo's user model is one-call-at-a-time; general Huxley power users can adopt call-waiting later if a real need surfaces. Keep it simple:
 
 - Change `interface_name` to the literal `"claim:active"` (single-slot on COMMS) so same-interface-replace is well-defined if reached.
 - `coordinator.start_input_claim` raises `ClaimBusyError` if `self._claim_obs is not None` (before constructing the new Activity). Skill (telegram) catches; Telegram skill sends a `DISCARDED_CALL` / `BUSY` to the peer. A clean protocol-level rejection.
@@ -1194,7 +1194,7 @@ class AudioStream(SideEffect):
 
 Audiobooks skill wires it to `ctx.inject_turn("Pausé tu libro porque la llamada fue larga. Dime 'sigue con el libro' cuando quieras retomar.", dedup_key="book_patience_lost")`. User hears the event. No silent state mutation.
 
-Patience value: `timedelta(minutes=30)`. Rationale: covers virtually every realistic call length for AbuelOS; avoids the 2-hour pathological case the critic flagged; bounded so an abandoned book doesn't linger indefinitely. Call ends within 30min → auto-resume; longer → user narrated on expiry and can say "sigue con el libro" any time afterward.
+Patience value: `timedelta(minutes=30)`. Rationale: covers virtually every realistic call length for Abuelo; avoids the 2-hour pathological case the critic flagged; bounded so an abandoned book doesn't linger indefinitely. Call ends within 30min → auto-resume; longer → user narrated on expiry and can say "sigue con el libro" any time afterward.
 
 ### Critic notes (Gate 2 — ran 2026-04-23)
 
@@ -1374,7 +1374,7 @@ robustness).
 
 **Decisions deferred to first real user**:
 
-- Clock skew mitigation beyond the stale-threshold guard. UTC wall clock on a fixed device is fine for AbuelOS; revisit if timers get deployed somewhere with unstable NTP.
+- Clock skew mitigation beyond the stale-threshold guard. UTC wall clock on a fixed device is fine for Abuelo; revisit if timers get deployed somewhere with unstable NTP.
 - Schema version migration. Every entry carries `"v": 1`; the first real schema change writes the migration code.
 - `cancel_timer` / `list_timers` tools (still out of scope — no user flow needs them yet, but now a one-liner each).
 
@@ -1896,7 +1896,7 @@ docs). Zero framework changes — composes existing `inject_turn` +
 full inject_turn path works end-to-end. User says "recuérdame en 5
 minutos X" → LLM calls `set_timer` → skill spawns asyncio task → 5min
 later `ctx.inject_turn` fires → framework preempts any content
-stream, narrates the reminder. AbuelOS persona system prompt gained
+stream, narrates the reminder. Abuelo persona system prompt gained
 a TEMPORIZADORES section. 13 skill tests + workspace integration.
 Known gaps (see `docs/skills/timers.md` for detail): no persistence
 across restart; no list/cancel tools; no ack/retry semantics; seconds
@@ -2015,7 +2015,7 @@ The earlier 2026-04-21 decisions stand:
 - [ ] `prompt_context()` surfaces missed reminders since last
       session start so the LLM weaves them into the next reply,
       then transitions `missed` → `surfaced`.
-- [ ] AbuelOS persona system prompt gains a RECORDATORIOS section
+- [ ] Abuelo persona system prompt gains a RECORDATORIOS section
       (es/en/fr) and a `skills.reminders` block (timezone, language
       i18n templates, optional seed).
 - [ ] Tests: happy path, restart-catch-up (within window), restart-
@@ -2024,7 +2024,7 @@ The earlier 2026-04-21 decisions stand:
       ack, missed-with-recurrence still schedules next, malformed
       entries skipped, prompt_context lists missed.
 - [ ] Docs: `docs/skills/reminders.md`, `docs/skills/README.md`
-      index entry, `docs/personas/abuelos.md` mention, AbuelOS
+      index entry, `docs/personas/abuelos.md` mention, Abuelo
       `persona.yaml` change.
 - [ ] `uv run ruff check server/`, `uv run mypy server/sdk/src
 server/runtime/src server/skills/reminders/src`, and
@@ -2402,7 +2402,7 @@ Verify:
 Critic agent ran against the v1 design (send_message + inbound MessageHandler + inject_turn). Five real findings, all incorporated:
 
 1. **Dedup is "drop in-flight, replace queued" — not "coalesce all"**. Verified at `coordinator.py:1441-1467`: a same-key inject that arrives while another is firing is silently dropped. Per-contact `dedup_key=msg:<user_id>` would lose rapid-fire messages. **Fix**: skill-side debounce buffer (per-contact, configurable seconds; default 2.5s) coalesces bursts into one inject. The `dedup_key` becomes defense-in-depth, not the primary mechanism.
-2. **No backfill on restart is a real safety gap for AbuelOS**. A 4am crash + missed "¿estás bien, papá?" is invisible to a blind user with no notification surface. **Fix**: bounded backfill on connect — last 6h, max 50 messages, coalesced per-contact, single inject on first idle.
+2. **No backfill on restart is a real safety gap for Abuelo**. A 4am crash + missed "¿estás bien, papá?" is invisible to a blind user with no notification surface. **Fix**: bounded backfill on connect — last 6h, max 50 messages, coalesced per-contact, single inject on first idle.
 3. **MessageHandler echo loop**. Default filters catch the userbot's own outbound. **Fix**: `filters.private & filters.incoming`.
 4. **Unknown-sender silent drop**. Family contacts that haven't messaged the userbot aren't in `_user_id_to_name`; their messages would be dropped silently. **Fix**: announce as `"un número desconocido"` with body, mirroring the inbound-call UX.
 5. **MessageHandler registration race**. Must register before `app.start()` or messages arriving in the first seconds are missed. **Fix**: `_wire_peer_audio_handler` renamed to `_wire_handlers`, registers MessageHandler in the same pre-start pass.
@@ -2628,7 +2628,7 @@ Decided NOT to:
   client doesn't display cost today; can be added later by reading the
   `cost:*` settings keys directly.
 - Make thresholds persona-configurable. Default thresholds work for the
-  AbuelOS daily-driver pattern; per-persona override can be added when a
+  Abuelo daily-driver pattern; per-persona override can be added when a
   persona legitimately needs higher ceilings.
 - Break out per-session cost (only daily). Daily is the load-bearing
   granularity for "is something wrong?"
@@ -2926,7 +2926,7 @@ Tool-handler actions dispatched from UI buttons go through the same path as LLM-
 - **Action kind vocabulary** — full v1 set beyond `tool`, `open_url`. Candidates: `copy`, `share`, `dismiss`, `notification_ack`. Lock before SDK types ship.
 - **View lifecycle** — does `MediaPlayer` render idle when nothing plays, or hide? Skill-decides or web-decides? Surface at first retrofit.
 - **Treatment versioning** — loose-JSON contract (unknown fields ignored, missing fields defaulted), document explicitly so skill and web-client versions can drift independently.
-- **I18n** — all display strings are skill-provided; treatments own zero copy (no built-in "No items" fallbacks — skill passes `empty_text`). Same treatment works for AbuelOS (es) and BasicOS (en).
+- **I18n** — all display strings are skill-provided; treatments own zero copy (no built-in "No items" fallbacks — skill passes `empty_text`). Same treatment works for Abuelo (es) and Basic (en).
 - **Authentication** — making huxley-web a product client exposes views over the network. Currently `:8765` accepts any connection. Out of scope for this item, but named as a blocker for any public-network deployment.
 - **Accessibility** — best-effort screen-reader support, not a design driver (premise #1 above).
 - **Mobile/responsive** — treatments responsive; skills provide content not layout. Web-client implementation concern, not SDK.
@@ -3206,7 +3206,7 @@ If first-user sessions show frequent refusals, this jumps to Tier 1.
 | ---- | ----------------------------------------------------- | -------- | ------------------- |
 | #96  | Add `prompt_context()` to Skill Protocol with default | 30 min   | **done 2026-04-18** |
 | #97  | Auto-namespace tool names (`<skill>.<tool>`)          | ~50 LOC  | queued              |
-| #98  | Strip remaining `AbuelOS` hardcoded refs              | 30 min   | **done 2026-04-18** |
+| #98  | Strip remaining `Abuelo` hardcoded refs              | 30 min   | **done 2026-04-18** |
 | #99  | Allow second WS client as monitor in dev              | ~4 hours | queued              |
 | #101 | systemd unit + install script for Linux deployment    | ~30 min  | queued              |
 | #102 | `Dockerfile` + `docker-compose.yml`                   | ~2 hours | deferred            |
@@ -3234,7 +3234,7 @@ cross-platform (T2.1 fires from `Application.start()` — no cron needed).
 
 Deferred per the cost/benefit analysis 2026-04-18: Docker is genuinely useful
 for the framework's "anyone can install Huxley" story, but premature for
-AbuelOS today (one user, one operator, no upgrade-pain incidents yet). Ship
+Abuelo today (one user, one operator, no upgrade-pain incidents yet). Ship
 when (a) the first non-Mario user shows up wanting to try Huxley, OR (b) a
 dependency upgrade burns 30+ minutes of Pi-vs-Mac debugging, OR (c) a
 contributor explicitly asks for it. Container would: pin Python 3.13 + uv +
@@ -3511,7 +3511,7 @@ second tool call cannot start until `on_tool_call` for the first one returns.
 Realtime API sends tool call results one at a time, and the model can't generate the
 next response until all tool outputs for the current response are submitted. So
 serializing tool dispatch is observable only when two tools are in the same response
-and the first tool is slow. AbuelOS's tools are fast (time query: DB read; audiobook:
+and the first tool is slow. Abuelo's tools are fast (time query: DB read; audiobook:
 DB read + ffprobe), so the serialization is invisible in practice.
 
 **Proposed solution.** Document it explicitly rather than fix it now. The correct
@@ -3722,7 +3722,7 @@ mientras hablas"`, `"Listo — mantén el botón para responder"`). These are se
 the web client for display. They are in the `TurnCoordinator` — framework code that
 is supposed to be persona-agnostic.
 
-**Root cause.** The strings were written when AbuelOS was the only persona and
+**Root cause.** The strings were written when Abuelo was the only persona and
 extracted from app logic without being lifted out of the framework layer.
 
 **Discussion.** There are two design choices here:
@@ -3907,7 +3907,7 @@ The audiobooks skill ships `list_in_progress` AND a `prompt_context()` that incl
 2. The persona's system_prompt doesn't direct the LLM to ground answers in `prompt_context` data
 3. Both
 
-**Quick diagnosis**: read what `audiobooks.prompt_context()` actually returns today, plus AbuelOS's system*prompt section about audiobooks. Probably one small change resolves it (lead `prompt_context` with *"Tienes N audiolibros disponibles: ..."_ and / or add a system_prompt sentence _"Cuando el usuario pregunte cuántos libros tienes, dale el número exacto del prompt context."\_).
+**Quick diagnosis**: read what `audiobooks.prompt_context()` actually returns today, plus Abuelo's system*prompt section about audiobooks. Probably one small change resolves it (lead `prompt_context` with *"Tienes N audiolibros disponibles: ..."_ and / or add a system_prompt sentence _"Cuando el usuario pregunte cuántos libros tienes, dale el número exacto del prompt context."\_).
 
 ### F4 — 🟠 _"¿De dónde puedo pedir comida?"_ got generic Rappi/Uber Eats answer
 

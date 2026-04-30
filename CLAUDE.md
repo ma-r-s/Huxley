@@ -1,12 +1,12 @@
 # Huxley
 
-A voice agent framework. You give it a persona (who the agent is) and a set of skills (what it can do); it does the rest. The first persona shipped on it is **AbuelOS**, a Spanish-language assistant for an elderly blind user.
+A voice agent framework. You give it a persona (who the agent is) and a set of skills (what it can do); it does the rest. The first persona shipped on it is **Abuelo**, a Spanish-language assistant for an elderly blind user.
 
 **📖 Full product + architecture docs: [`docs/`](./docs/)**. Start with [`docs/vision.md`](./docs/vision.md) and [`docs/concepts.md`](./docs/concepts.md). New visitors should read [`README.md`](./README.md) first.
 
 This file is the quick-start for contributors and AI collaborators. For _why_, _what_, and _how_, read the docs.
 
-> _AbuelOS_ is the canonical persona, never the framework. Framework code is `huxley`, SDK is `huxley_sdk`.
+> _Abuelo_ is the canonical persona, never the framework. Framework code is `huxley`, SDK is `huxley_sdk`.
 
 ## Repo layout
 
@@ -84,7 +84,7 @@ uv run --package huxley-skill-search pytest server/skills/search/tests          
 uv run --package huxley-skill-timers pytest server/skills/timers/tests           # timers skill
 uv run --package huxley-skill-reminders pytest server/skills/reminders/tests     # reminders skill
 cd server/runtime && uv run huxley                                               # run the server (loads .env from server/runtime/)
-# Run BasicOS in parallel for persona A/B testing:
+# Run Basic in parallel for persona A/B testing:
 cd server/runtime && HUXLEY_PERSONA=basicos HUXLEY_SERVER_PORT=8766 uv run huxley
 # Re-render the shared earcon palette (writes server/personas/_shared/sounds/*.wav):
 uv run --package huxley --group synth python scripts/synth_sounds.py
@@ -205,13 +205,13 @@ Trivial items (< 1 day, mechanical) collapse Gates 1–2 into a few minutes and 
 
 ### Dream check — does this match what Huxley is trying to be?
 
-Huxley has a clear vision: a **voice agent framework** that ships with **AbuelOS** as its first persona. The framework names mechanisms, not use cases. Personas name the product.
+Huxley has a clear vision: a **voice agent framework** that ships with **Abuelo** as its first persona. The framework names mechanisms, not use cases. Personas name the product.
 
 Before shipping any non-trivial commit, re-read [`docs/vision.md`](./docs/vision.md) and [`docs/concepts.md`](./docs/concepts.md) with fresh eyes and ask:
 
-1. **Am I adding framework scope or persona scope?** Framework scope requires stable surface area, skill-author ergonomics, persona-agnostic semantics. Persona scope (AbuelOS's prompt, its skill list, its constraints) can iterate freely. If a commit mixes both, split it.
+1. **Am I adding framework scope or persona scope?** Framework scope requires stable surface area, skill-author ergonomics, persona-agnostic semantics. Persona scope (Abuelo's prompt, its skill list, its constraints) can iterate freely. If a commit mixes both, split it.
 2. **Am I naming a mechanism or a use case?** Framework code should not contain words like "call," "reminder," "emergency," "audiobook" — those are skill-level concepts. If you wrote one of those words in `server/runtime` or `server/sdk`, something's in the wrong layer.
-3. **Is this for "grandpa" or for the framework?** AbuelOS-specific UX (slow speech, Spanish, warm tone, no dialect assumptions) lives in the persona. The framework stays neutral.
+3. **Is this for "grandpa" or for the framework?** Abuelo-specific UX (slow speech, Spanish, warm tone, no dialect assumptions) lives in the persona. The framework stays neutral.
 4. **Is this solving a real problem today, or a speculative one?** If speculative, cut it. See Simplicity below.
 
 If the commit drifts from any of these, flag it in the commit message and escalate as a behavioral question — that's Mario's lane, not yours.
@@ -221,10 +221,10 @@ If the commit drifts from any of these, flag it in the commit message and escala
 - The web UI is a dev tool, not a product. No features beyond what's needed to exercise the server.
 - No ESP32 scaffolding until firmware work actually starts.
 - **The framework grows slowly.** Stable surface area for skill authors matters more than feature count. New abstractions added only when a real use case forces them — never speculatively.
-- **Personas can experiment freely.** Persona-level changes (the AbuelOS persona's prompt, its skill list, its constraints) are cheap. Try things; iterate.
-- **Skills opt into persona constraints, not the other way around.** A skill targeting AbuelOS should respect `never_say_no`. A skill targeting a different persona may not need to.
-- For the AbuelOS persona specifically: every user-facing failure must have an audio surface. The target user is blind — visual-only failure modes don't exist for them.
+- **Personas can experiment freely.** Persona-level changes (the Abuelo persona's prompt, its skill list, its constraints) are cheap. Try things; iterate.
+- **Skills opt into persona constraints, not the other way around.** A skill targeting Abuelo should respect `never_say_no`. A skill targeting a different persona may not need to.
+- For the Abuelo persona specifically: every user-facing failure must have an audio surface. The target user is blind — visual-only failure modes don't exist for them.
 
 ## Decisions
 
-See [`docs/decisions.md`](./docs/decisions.md) for the full architectural decision log. The 2026-04-16 entry documents the framework / persona / skill split and the rename from AbuelOS-the-project to Huxley.
+See [`docs/decisions.md`](./docs/decisions.md) for the full architectural decision log. The 2026-04-16 entry documents the framework / persona / skill split and the rename from Abuelo-the-project to Huxley.

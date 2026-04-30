@@ -35,4 +35,4 @@ Three audiences, three different journeys:
 
 Huxley is pre-1.0. The framework runs end-to-end against a browser dev client. ESP32 hardware support is planned. Skills are being extracted into their own installable packages; the persona YAML loader and constraint registry are next. See [`roadmap.md`](./roadmap.md) for what works today, what's in flight, and what's deferred.
 
-The first persona shipped on Huxley is **AbuelOS** — a Spanish-language assistant for an elderly blind user, built around a "never say no" behavioral constraint. Its spec lives in [`server/personas/abuelos.md`](./personas/abuelos.md) and serves as the worked example for everything in this repo.
+The first persona shipped on Huxley is **Abuelo** — a Spanish-language assistant for an elderly blind user, built around a "never say no" behavioral constraint. Its spec lives in [`server/personas/abuelos.md`](./personas/abuelos.md) and serves as the worked example for everything in this repo.

@@ -3,7 +3,7 @@
 Persona-agnostic news + weather skill. Returns structured JSON; the LLM
 narrates per its persona's tone (slow/warm vs terse/bullets). Same skill,
 same JSON, totally different audio depending on which persona consumes it
-— see [BasicOS](../personas/basicos.md) as the proof of that abstraction.
+— see [Basic](../personas/basicos.md) as the proof of that abstraction.
 
 ## What it does
 
@@ -55,20 +55,20 @@ Persona's `skills.news` block:
 
 ## How personas consume it differently
 
-**[AbuelOS](../personas/abuelos.md)** uses it as a slow, warm digest with a
+**[Abuelo](../personas/abuelos.md)** uses it as a slow, warm digest with a
 chime intro. The persona's `system_prompt` tells the LLM to "narrate news
 like you're telling a friend what happened today." Combined with
 `never_say_no` and `start_sound: news_start`, the user hears: pre-narration
 ("a ver, le cuento") → chime → ~60s narrated digest → "¿quiere que le
 cuente más?".
 
-**[BasicOS](../personas/basicos.md)** uses it as a terse 5-bullet briefing.
+**[Basic](../personas/basicos.md)** uses it as a terse 5-bullet briefing.
 Same skill, same JSON, no chime, no `never_say_no`. The persona's
 `system_prompt` says "máximo cinco puntos, cada uno una sola frase." User
 hears: pre-narration ("un momento") → 5 short bullets, period.
 
 If the news skill ever assumes "warm tone" or "always plays a chime,"
-BasicOS surfaces it. The split is enforced by the architecture, not by
+Basic surfaces it. The split is enforced by the architecture, not by
 discipline.
 
 ## The chime mechanism (PlaySound)
@@ -96,7 +96,7 @@ el libro").
 ## Honest limitations
 
 - **No hyperlocal news.** Google News indexes by country + language +
-  topic, not by city. So `category: "local"` for an AbuelOS configured
+  topic, not by city. So `category: "local"` for an Abuelo configured
   for Villavicencio = "Colombian national news," not "what happened in
   Villavicencio yesterday." Real city-level coverage would need RSS
   feeds from local outlets — additive future work via a `local_feeds:

@@ -34,7 +34,7 @@ The `state` enum + `model_speaking` boolean + presence of audio chunks in the la
 
 Parallel to `state`, the server sends short human-readable `status` strings (Spanish, configurable per persona). These are meant to appear in a persistent status strip somewhere in the UI — not a toast / not a banner, a steady-state label the user can glance at.
 
-Vocabulary (AbuelOS persona, as shipped):
+Vocabulary (Abuelo persona, as shipped):
 
 - `"Escuchando… (suelta para enviar)"` — while listening
 - `"Muy corto — mantén el botón mientras hablas"` — input too short
@@ -280,9 +280,9 @@ The persona YAML exposes several fields the PWA can surface directly:
 
 | Field                    | UI use                                                                 |
 | ------------------------ | ---------------------------------------------------------------------- |
-| `name`                   | Display the running persona's name (e.g. "AbuelOS") in an admin header |
+| `name`                   | Display the running persona's name (e.g. "Abuelo") in an admin header |
 | `voice`                  | Voice ID (read-only display; change requires server restart for v1)    |
-| `language_code`          | Page language for UI strings (Spanish for AbuelOS; English for Basic)  |
+| `language_code`          | Page language for UI strings (Spanish for Abuelo; English for Basic)  |
 | `transcription_language` | Same                                                                   |
 | `timezone`               | Formatting for timestamps in the transcript / timers UI                |
 | `ui_strings`             | Persona-configurable localized strings (e.g. `listening:`, `ready:`)   |

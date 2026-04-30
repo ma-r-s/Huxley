@@ -72,7 +72,7 @@ PRICES: dict[str, ModelPricing] = {
 class CostThresholds:
     """Daily-total USD ceilings for warnings + kill switch.
 
-    Defaults assume the AbuelOS daily-driver pattern: a few conversations
+    Defaults assume the Abuelo daily-driver pattern: a few conversations
     a day plus passive listening. Adjust per persona if usage profile
     differs (a heavy multi-tool persona could legitimately exceed
     `warn_usd` without being broken).

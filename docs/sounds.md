@@ -6,11 +6,11 @@ For the research foundation (Brewster's rules, earcon design principles, the "ne
 
 ---
 
-## Why sounds matter for AbuelOS
+## Why sounds matter for Abuelo
 
 Don Grandpa is blind. When a book ends, he doesn't see a progress bar stop. He hears silence — and silence for a blind user means one of three things: the book ended, the device crashed, or the network dropped. There is no visual affordance to disambiguate.
 
-The "dead air is a bug" rule from the AbuelOS persona spec (`never_say_no` constraint #4) applies here too. Every state transition that matters must produce audio. The two most critical:
+The "dead air is a bug" rule from the Abuelo persona spec (`never_say_no` constraint #4) applies here too. Every state transition that matters must produce audio. The two most critical:
 
 1. **Book starts** — signal that playback is beginning, so he doesn't wonder if his command was understood.
 2. **Book ends** — signal that the book finished (not crashed), and offer what to do next.
@@ -306,7 +306,7 @@ The coordinator is already in the correct state after stream completion — it's
 
 ## Persona config interface
 
-Each skill that uses sounds reads its palette directory from a per-skill `sounds_path` config key. AbuelOS points all four sound-using skills (`audiobooks`, `news`, `radio`, `search`) at the shared palette:
+Each skill that uses sounds reads its palette directory from a per-skill `sounds_path` config key. Abuelo points all four sound-using skills (`audiobooks`, `news`, `radio`, `search`) at the shared palette:
 
 ```yaml
 skills:
@@ -325,7 +325,7 @@ skills:
     start_sound: news_start # role name; matches `<role>.wav` in sounds_path
 ```
 
-`sounds_path` is resolved relative to the persona's `data_dir` (so `../../_shared/sounds` from AbuelOS lands at `server/personas/_shared/sounds/`). Absolute paths are honored as-is. To override the shared palette for a single persona, point `sounds_path` at a per-persona directory and drop your own `<role>.wav` files there — the SDK loader takes one directory at a time, so an override replaces the whole palette for that skill (no per-sound overlay yet).
+`sounds_path` is resolved relative to the persona's `data_dir` (so `../../_shared/sounds` from Abuelo lands at `server/personas/_shared/sounds/`). Absolute paths are honored as-is. To override the shared palette for a single persona, point `sounds_path` at a per-persona directory and drop your own `<role>.wav` files there — the SDK loader takes one directory at a time, so an override replaces the whole palette for that skill (no per-sound overlay yet).
 
 If `sounds_enabled: false` (audiobooks only), the skill loads no palette and `silence_ms` is forced to 0 — the persona behaves as if no sounds were configured.
 
@@ -376,7 +376,7 @@ Session-connect chime, disconnect tone, "thinking" audio. These aren't tied to a
 
 ## Client-side thinking tone (Stage D)
 
-The current thinking tone (`clients/pwa/src/routes/+page.svelte`) generates a 440Hz sine wave on the client. For AbuelOS:
+The current thinking tone (`clients/pwa/src/routes/+page.svelte`) generates a 440Hz sine wave on the client. For Abuelo:
 
 1. **Frequency**: 440Hz sits in the 200Hz–4kHz vocal band. Correct target: below 200Hz (a low drone, like an old telephone hold tone — non-intrusive, clearly non-speech).
 2. **Silence timeout**: currently 400ms. For an elderly blind user expecting responses, 1500ms is a better threshold before the tone starts — long enough that normal LLM latency doesn't trigger it, short enough that actual silence gets flagged.
@@ -392,7 +392,7 @@ These are client changes only. They do not affect the server or the WebSocket pr
 
 - [x] [`scripts/synth_sounds.py`](../scripts/synth_sounds.py) renders the full palette from layered Risset additive bells + Chowning FM bells through a hall reverb chain.
 - [x] 5 earcons produced (book_start, book_end, news_start, radio_start, search_start) at PCM16 / 24 kHz / mono, peak −3 dBFS.
-- [x] Palette lives at `server/personas/_shared/sounds/`; AbuelOS picks them up via `sounds_path: ../../_shared/sounds`.
+- [x] Palette lives at `server/personas/_shared/sounds/`; Abuelo picks them up via `sounds_path: ../../_shared/sounds`.
 - [x] Synthesis is deterministic and original — no third-party audio, no licensing concerns. The script is committed alongside the WAVs so any sound is reproducible from source.
 - [x] Optional `synth` dependency group in `server/runtime/pyproject.toml` (`numpy`, `scipy`, `pedalboard`) — the runtime never imports them; the rendered WAVs are committed and shipped as-is.
 

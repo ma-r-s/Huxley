@@ -12,11 +12,11 @@ User says "recuérdame en 5 minutos que saque la ropa". The LLM translates this 
 
 ## Persona config
 
-- **`fire_prompt`** _(optional)_ — template for the prompt `inject_turn` sends to the LLM when a timer fires. Must contain `{message}`, which is substituted with the user's reminder text. Defaults to a Spanish / AbuelOS-toned template (warm-friend register, "oye, recuerda que…"). Non-Spanish or non-warm personas should override; the default assumes Spanish and a warm tone, so a terse English persona gets a broken narration otherwise. If the configured value is missing the `{message}` placeholder the skill logs `timers.fire_prompt_missing_placeholder` and falls back to the default; empty strings are ignored.
+- **`fire_prompt`** _(optional)_ — template for the prompt `inject_turn` sends to the LLM when a timer fires. Must contain `{message}`, which is substituted with the user's reminder text. Defaults to a Spanish / Abuelo-toned template (warm-friend register, "oye, recuerda que…"). Non-Spanish or non-warm personas should override; the default assumes Spanish and a warm tone, so a terse English persona gets a broken narration otherwise. If the configured value is missing the `{message}` placeholder the skill logs `timers.fire_prompt_missing_placeholder` and falls back to the default; empty strings are ignored.
 
 - **`stale_restore_threshold_s`** _(optional, positive int/float)_ — how many seconds a pending entry can be past its `fire_at` before `setup()` drops it instead of firing late. Defaults to `3600` (1 h), matching the skill's `_MAX_SECONDS`. Personas that want a more forgiving or stricter latency tolerance override here. Non-numeric or non-positive values log `timers.stale_threshold_invalid` and keep the default.
 
-Example (BasicOS-style terse English, plus a shorter stale window for a high-stakes reminder flow):
+Example (Basic-style terse English, plus a shorter stale window for a high-stakes reminder flow):
 
 ```yaml
 skills:
@@ -54,7 +54,7 @@ Timers survive a server restart. The skill writes each pending timer to its name
 
 `set_timer` writes the entry _before_ scheduling the supervised task. `_fire_after` stamps `fired_at` **after** the sleep completes but **before** awaiting `inject_turn`, so a crash during narration still flips the entry into dedup territory. The entry is deleted only when firing ran to the point of committing (`fired = True`); cancellation during the sleep (e.g., `teardown()` at server shutdown) preserves the entry untouched so the next boot can restore it.
 
-**Wall-clock caveat**: `fire_at` is UTC wall clock. An NTP jump or manual clock change makes timers fire earlier / later by the skew. Fixed-device deployments (AbuelOS is one) rarely see this, and the stale-threshold guard catches the only dangerous shape (clock jumps days forward). Logs `timers.restore_skipped_stale` with `age_s` so "why didn't my timer fire" is diagnosable.
+**Wall-clock caveat**: `fire_at` is UTC wall clock. An NTP jump or manual clock change makes timers fire earlier / later by the skew. Fixed-device deployments (Abuelo is one) rarely see this, and the stale-threshold guard catches the only dangerous shape (clock jumps days forward). Logs `timers.restore_skipped_stale` with `age_s` so "why didn't my timer fire" is diagnosable.
 
 ## Scope limits
 

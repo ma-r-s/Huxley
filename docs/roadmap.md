@@ -1,6 +1,6 @@
 # Roadmap
 
-Two roadmaps live here: **Huxley** (the framework) and **AbuelOS** (the first persona). Each evolves at its own pace; the framework moves slower (stable surface area for skill authors) than personas (config tweaks ship continuously).
+Two roadmaps live here: **Huxley** (the framework) and **Abuelo** (the first persona). Each evolves at its own pace; the framework moves slower (stable surface area for skill authors) than personas (config tweaks ship continuously).
 
 ## Huxley framework
 
@@ -26,11 +26,11 @@ Make Huxley what it claims to be in [`vision.md`](./vision.md): a framework anyo
 - ✅ **Generic side effects**: `ToolResult.side_effect: SideEffect | None` with `AudioStream` as the first kind. Coordinator dispatches by `isinstance`.
 - ✅ **Persona loader**: `server/personas/<name>/persona.yaml` parsed at startup (version, name, voice, language, timezone, system_prompt, constraints, skills). Resolution order: `HUXLEY_PERSONA` env var > default `server/personas/abuelos`. Data lives under `server/personas/<name>/data/`.
 - ✅ **Constraint registry**: `never_say_no`, `confirm_destructive`, `child_safe`, `no_religious_content` defined in `huxley.constraints`; persona composes them into the system prompt at connect time. Unknown names fail at load.
-- ✅ **Rename / namespace cleanup**: repo path and Python namespace both on `huxley`; _AbuelOS_ is the persona.
+- ✅ **Rename / namespace cleanup**: repo path and Python namespace both on `huxley`; _Abuelo_ is the persona.
 - ✅ **Sound UX layer (server-side)** — `AudioStream` carries `on_complete_prompt` + `completion_silence_ms`; coordinator creates a synthetic IN_RESPONSE turn for the LLM-narrated end-of-content announcement, fires `request_response` BEFORE the silence buffer so model latency overlaps with silence playback. Skill loads sound palette via `wave.open()`. Persona owns `sounds_path` / `sounds_enabled` / `silence_ms` / `on_complete_prompt`. Full design + critic-list state in [`sounds.md`](./sounds.md).
 - ✅ **Sound UX layer (client-side)** — thinking tone at 120Hz (out of vocal band, can't mask speech); silence threshold raised to 1500ms (was 400ms — over-triggered constantly); descending 660→330Hz error chime fires on session drop so a blind user can distinguish "device crashed" from "still working." Stage D in [`sounds.md`](./sounds.md).
 - ✅ **`PlaySound` SideEffect primitive + shared `huxley_sdk.audio` helper** — info tools can emit a one-shot chime that lands on the WebSocket ahead of the model's response audio (FIFO). Audiobooks + news both use it; news skill (`get_news`) is the canonical example.
-- ✅ **Second first-party skill (`huxley-skill-news`)** — proves the persona-agnostic abstraction. Same skill, totally different audio for AbuelOS (slow + chime) vs BasicOS (terse + no chime). See [`skills/news.md`](./skills/news.md) and [`server/personas/basicos.md`](./personas/basicos.md).
+- ✅ **Second first-party skill (`huxley-skill-news`)** — proves the persona-agnostic abstraction. Same skill, totally different audio for Abuelo (slow + chime) vs Basic (terse + no chime). See [`skills/news.md`](./skills/news.md) and [`server/personas/basicos.md`](./personas/basicos.md).
 - ✅ **Web UI persona dropdown** — `clients/pwa/.env.local`'s `VITE_HUXLEY_PERSONAS` lists `name:url` pairs; the header dropdown switches the active WebSocket connection cleanly.
 - [P1] **Skill SDK README + cookbook**: a third-party skill author can write a working skill in under 30 minutes with no Huxley-internals knowledge.
 
@@ -74,11 +74,11 @@ This sits on top of the SDK and `huxley-market` — the build agent's output is 
 | Marketplace / registry         | Open-source, distributed via PyPI. Registry is `huxley-market` (speculative). |
 | Multi-user voice               | One person at a time. Multi-voice = different system entirely.                |
 
-## AbuelOS persona
+## Abuelo persona
 
 The first persona Huxley runs in production. Spec lives at [`server/personas/abuelos.md`](./personas/abuelos.md).
 
-### v1 — the AbuelOS deployment bar
+### v1 — the Abuelo deployment bar
 
 > _"The moment I can speak to the assistant and it helps me find a book, listen to it, and move forward, backwards, stop and resume another time — that's v1 done."_
 
@@ -114,7 +114,7 @@ Proactive notifications primitive shipped (`ctx.inject_turn`); both reminders an
 - **Memory / recall** — _"¿de qué hablamos ayer?"_
 - **Companionship mode** — open-ended chat
 
-### Excluded from AbuelOS
+### Excluded from Abuelo
 
 | Feature                      | Why                                                                 |
 | ---------------------------- | ------------------------------------------------------------------- |
@@ -124,4 +124,4 @@ Proactive notifications primitive shipped (`ctx.inject_turn`); both reminders an
 | Offline operation            | Not worth the complexity for v1                                     |
 | Languages other than Spanish | This persona is Spanish-only; other personas can do other languages |
 
-(These are _AbuelOS persona_ exclusions. Other personas built on Huxley may include any of them.)
+(These are _Abuelo persona_ exclusions. Other personas built on Huxley may include any of them.)
