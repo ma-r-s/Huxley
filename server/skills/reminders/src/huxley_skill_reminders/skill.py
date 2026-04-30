@@ -92,9 +92,10 @@ _DEFAULT_LATE_WINDOWS: dict[str, timedelta] = {
     "generic": timedelta(hours=1),
 }
 
-# Medication-only retry escalation. Re-fire at +5min, +15min (10min after
-# the first retry), +45min (30min after the second). After 3 unacked
-# fires, mark `missed`. Generic and appointment reminders never re-fire.
+# Medication-only retry escalation. Gaps BETWEEN successive fires:
+# 5 minutes after the first fire, 10 minutes after the second, 30
+# minutes after the third. After 3 unacked fires, mark `missed`.
+# Generic and appointment reminders never re-fire.
 _MEDICATION_RETRY_INTERVALS = (
     timedelta(minutes=5),
     timedelta(minutes=10),
@@ -1226,17 +1227,17 @@ class RemindersSkill:
         now_local = _utcnow()  # framework's clock; LLM does the offset math
         if bucket == "es":
             lines.append(
-                f"Hora actual (UTC): {now_local.isoformat(timespec='seconds')}. "
+                f"Hora actual (UTC): {now_local.isoformat(timespec='minutes')}. "
                 f"Zona horaria del usuario: {self._timezone_label}."
             )
         elif bucket == "fr":
             lines.append(
-                f"Heure actuelle (UTC) : {now_local.isoformat(timespec='seconds')}. "
+                f"Heure actuelle (UTC) : {now_local.isoformat(timespec='minutes')}. "
                 f"Fuseau horaire de l'utilisateur : {self._timezone_label}."
             )
         else:
             lines.append(
-                f"Current time (UTC): {now_local.isoformat(timespec='seconds')}. "
+                f"Current time (UTC): {now_local.isoformat(timespec='minutes')}. "
                 f"User timezone: {self._timezone_label}."
             )
         if self._missed_cache:
@@ -1260,7 +1261,7 @@ class RemindersSkill:
             for entry in self._missed_cache:
                 lines.append(
                     f"  - id={entry.id} kind={entry.kind} "
-                    f"scheduled_for={entry.scheduled_for.isoformat(timespec='seconds')} "
+                    f"scheduled_for={entry.scheduled_for.isoformat(timespec='minutes')} "
                     f"message={entry.message!r}"
                 )
         return "\n".join(lines)
