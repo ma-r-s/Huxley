@@ -9,20 +9,20 @@ The voice and the system prompt are the two fields that make the biggest user-fa
 
 The OpenAI Realtime API ships several voices. As of writing:
 
-- `alloy` — neutral, balanced. Fine for default-feeling agents.
-- `coral` — warm, slightly slow. Excellent for elderly-facing or accessibility-driven personas.
-- `echo` — formal, clipped. Good for business contexts.
-- `shimmer` — light, quick. Good for energetic, kid-friendly personas.
-- `verse` — expressive, stylized. Polarizing — try before you commit.
-- `sage` — calm, measured. Good for meditative or therapeutic apps.
+- `alloy` — neutral, balanced. A reasonable starting point for most personas.
+- `coral` — warm, slightly slow. Works well for elderly-facing or accessibility-driven personas.
+- `echo` — formal, clipped. Worth trying for business or professional contexts.
+- `shimmer` — light, quick. Works well for energetic, kid-friendly personas.
+- `verse` — expressive, stylized. Polarizing — listen before committing.
+- `sage` — calm, measured. Worth trying for meditative or therapeutic personas.
 
-Try them all in [OpenAI's playground](https://platform.openai.com/playground) before picking. Listen to each one say a sentence in your persona's language. The voice has more impact than the prompt.
+These are observations, not rules. Try them all in [OpenAI's playground](https://platform.openai.com/playground) before picking. Listen to each one say a sentence in your persona's language. The voice has more impact than the prompt.
 
-A few practical notes:
+A few patterns we've found, with caveats — your language and persona may differ:
 
-- **Spanish, Portuguese, Italian** — `coral` is widely loved. `alloy` works.
-- **English** — every voice works; pick by character.
-- **French, German, Japanese, etc.** — quality varies; `alloy` is the safest starting point. Test before committing.
+- **Spanish, Portuguese, Italian** — `coral` tends to feel warm and natural. `alloy` is a solid fallback.
+- **English** — every voice performs well; pick by character.
+- **French, German, Japanese, etc.** — quality varies across providers. `alloy` is a safer starting point, but test before committing.
 
 You can override the persona's voice at runtime:
 

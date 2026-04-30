@@ -31,9 +31,9 @@ The server reads a small set of env vars. The full list lives in [Reference: Env
 | Variable                     | Default              | Purpose                                    |
 |------------------------------|----------------------|--------------------------------------------|
 | `HUXLEY_OPENAI_API_KEY`      | (required)           | Your OpenAI key with Realtime access       |
-| `HUXLEY_PERSONA`             | (no default)         | Which persona to load (required if 2+ personas exist) |
+| `HUXLEY_PERSONA`             | auto-detected        | Which persona to load. Auto-selected when only one persona directory exists; required when multiple exist. |
 | `HUXLEY_SERVER_PORT`         | `8765`               | WebSocket port                             |
-| `HUXLEY_OPENAI_MODEL`        | `gpt-4o-mini-realtime-preview` | Override the default model       |
+| `HUXLEY_OPENAI_MODEL`        | `gpt-4o-mini-realtime-preview` | Override the Realtime model. Must be an OpenAI Realtime model — standard chat models will not work. Check OpenAI docs for current model names. |
 | `HUXLEY_OPENAI_VOICE`        | (from persona.yaml)  | Override the persona's voice               |
 | `HUXLEY_LOG_JSON`            | `false`              | Set to `true` for JSONL logs               |
 

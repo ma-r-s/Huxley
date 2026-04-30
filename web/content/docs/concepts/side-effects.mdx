@@ -5,7 +5,7 @@ description: What a tool does after it returns text. Five kinds, each a clear jo
 
 A tool's `output` is text the model narrates. A tool's `side_effect` is what *happens* — sound, audio streams, volume changes, channel claims. It's the part that makes a voice agent feel alive instead of just chatty.
 
-Five kinds, each with a single clear job:
+Five side-effect types, plus the null case (`None`) when no special audio behavior is needed:
 
 | Kind            | What it does                                              | Use for                                |
 |-----------------|-----------------------------------------------------------|----------------------------------------|
@@ -16,7 +16,7 @@ Five kinds, each with a single clear job:
 | `SetVolume`     | Push a volume change to the client                        | "Turn it up"                           |
 | `InputClaim`    | Replace mic + speaker with skill-controlled streams       | Phone calls, intercom, voice tutoring  |
 
-## `None` — the silent side effect
+## `None` — the default: model narrates the output
 
 If your tool has no special behavior beyond returning data, return `ToolResult(output=...)` with no `side_effect`. The framework treats this as an **info tool**: it asks OpenAI to compose a follow-up response that narrates the output.
 

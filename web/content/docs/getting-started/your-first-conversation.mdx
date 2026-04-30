@@ -105,11 +105,17 @@ If you'd been listening to a book, the timer would have *paused the book*, spoke
 
 ## Reading the logs
 
-Every event Huxley emits has a `turn` ID — a short UUID for the current conversation round. Tail the server log and grep by turn ID to reconstruct exactly what happened:
+Every event Huxley emits has a `turn` ID — a short UUID for the current conversation round. Structured JSONL logs are opt-in — set `HUXLEY_LOG_JSON=true` in your `.env` file first, then tail and filter by turn ID:
+
+```bash title="server/runtime/.env"
+HUXLEY_LOG_JSON=true
+```
 
 ```bash title="terminal 3"
-tail -f logs/server.jsonl | grep t-7f3
+tail -f logs/server.jsonl | jq 'select(.turn=="t-7f3")'
 ```
+
+Without `HUXLEY_LOG_JSON`, logs appear as human-readable text in stdout — still useful for interactive debugging, but not grep-friendly by turn ID.
 
 The most useful events:
 

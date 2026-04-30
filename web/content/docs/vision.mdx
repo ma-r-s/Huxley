@@ -58,7 +58,7 @@ A few choices shaped everything downstream:
 
 **Turn coordinator is the single authority.** State machine, audio sequencing, interrupts, focus arbitration — one component owns it. Skills don't make sequencing decisions. The "speech before factories" guarantee falls out automatically because there's only one place that knows what's playing when.
 
-**Idle sessions are free.** OpenAI bills per Response, not per connected session. We keep Realtime sessions open during media playback so the user has continuous conversational context, and the cost is zero. (Verified — see [the cost model memory](/docs/use/run-the-server) section on cost.)
+**Idle sessions are free.** OpenAI bills per Response, not per connected session. We keep Realtime sessions open during media playback so the user has continuous conversational context, and the cost is zero. (Verified — see the [cost model section](/docs/use/run-the-server).)
 
 **Skills opt into constraints.** Personas declare rules; skills decide whether to respect each. This makes constraints composable without coupling skills to specific personas.
 
@@ -86,7 +86,6 @@ The framework is approaching 1.0. Five refactor stages have shipped (turn coordi
 - **More clients** — iOS, Android, more firmware variants.
 - **More providers** — alternative voice providers behind the same interface.
 - **A skill registry** — a place to find third-party skills.
-- **A skill marketplace?** — uncertain. Maybe just good package discovery is enough.
 
 Decisions get logged in the repo's `docs/decisions.md`.
 

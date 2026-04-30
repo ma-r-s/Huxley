@@ -114,11 +114,12 @@ async def handle(self, tool_name: str, args: dict) -> ToolResult:
         )
 ```
 
-The factory:
+The factory (a method on `BikeTrainerSkill`):
 
 ```python
 import wave
 
+# Instance method on BikeTrainerSkill — has access to self._logger.
 def _build_warmup_factory(self, path):
     async def stream():
         try:

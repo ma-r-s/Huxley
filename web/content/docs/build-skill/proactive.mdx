@@ -276,9 +276,9 @@ async def test_timer_fires_inject():
 
     await asyncio.sleep(0.3)
 
-    # Assert inject_turn was called.
+    # Assert inject_turn was called with the right instruction prefix.
     ctx.inject_turn.assert_called_once_with(
-        "test",
+        "Tell the user: test",
         dedup_key=ANY,
         priority=InjectPriority.BLOCK_BEHIND_COMMS,
     )

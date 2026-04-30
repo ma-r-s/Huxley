@@ -25,7 +25,9 @@ When a higher-priority channel claims the speaker, the lower-priority claim is t
 - `NONMIXABLE` (default): the lower-priority claim **stops cleanly** and the framework saves position so it can resume later. Audiobooks are NONMIXABLE — you don't want a book to play *behind* a phone call.
 - `MIXABLE`: the lower-priority claim **ducks** to a lower volume and continues. Background music is MIXABLE — you can hear the model speak over a soft musical bed.
 
-(Ducking is scaffolded but not fully implemented today. NONMIXABLE works.)
+<Callout type="warn">
+  **MIXABLE ducking is not yet implemented.** `ContentType.MIXABLE` is a valid declaration, but the framework currently treats it identically to `NONMIXABLE` — the stream pauses rather than ducking. Use `NONMIXABLE` for all content streams until this is implemented. The scaffolding is in place; ducking will arrive in a future release.
+</Callout>
 
 ## Three real scenarios
 
@@ -145,7 +147,7 @@ except ClaimBusyError:
 
 The simpler approach — a free-for-all where any skill can write to the speaker — falls apart fast. Two skills speaking over each other is a glitch. A timer firing during a phone call is rude. A book playing over the model's voice is a bug.
 
-The original design (before the April 2026 pivot) tried to solve this with per-skill arbitration — an `Urgency` enum, a `YieldPolicy` enum, lots of small decisions everywhere. It was hard to reason about because the policies didn't compose.
+The original design tried to solve this with per-skill arbitration — an `Urgency` enum, a `YieldPolicy` enum, lots of small decisions everywhere. It was hard to reason about because the policies didn't compose.
 
 AVS-style channels solve it because the **channel is the policy**. A claim says "I'm CONTENT" or "I'm COMMS" — and the arbitration falls out automatically from the priority numbers. New channels (a hypothetical NOTIFICATION channel for chimes-without-speech) slot in cleanly.
 
