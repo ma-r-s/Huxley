@@ -44,7 +44,7 @@ Huxley/                              # repo root
 ├── clients/                         # Things that connect to the server
 │   ├── pwa/                         # React/Vite dev client (Progressive Web App)
 │   └── firmware/                    # ESP32-S3 client (will extract to huxley-firmware)
-├── site/                            # Product landing site (React/Vite)
+├── web/                             # Web app — landing (/) + docs (/docs/*) — Next.js/Fumadocs
 ├── docs/                            # Single source of truth
 │   ├── vision.md                    # what Huxley is
 │   ├── concepts.md                  # vocabulary (persona, skill, turn, side effect, ...)
@@ -97,13 +97,13 @@ bun dev                              # http://localhost:5174
 bun run check                        # tsc --noEmit
 ```
 
-Landing site (run from `site/`):
+Web app — landing + docs (run from `web/`):
 
 ```bash
-cd site
+cd web
 bun install
-bun dev                              # http://localhost:5175
-bun run build                        # tsc + vite build
+bun run dev                          # http://localhost:3000 (/ = landing, /docs/* = docs)
+bun run build                        # production build
 ```
 
 Firmware (ESP-IDF must be sourced first):
