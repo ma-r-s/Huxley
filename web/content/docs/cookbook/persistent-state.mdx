@@ -51,7 +51,7 @@ state = json.loads(raw) if raw else None
 
 **Don't store binary blobs.** Storage is for small key-value state. Big files (audiobooks, images, audio caches) go on the filesystem under `ctx.persona_data_dir`.
 
-**Storage is per-persona.** AbuelOS and BasicOS have separate databases. Switching personas doesn't share state.
+**Storage is per-persona.** Two personas on the same machine have separate databases. Switching personas doesn't share state.
 
 ### Restore on setup
 

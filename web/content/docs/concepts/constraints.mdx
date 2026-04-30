@@ -3,7 +3,7 @@ title: Constraints
 description: Behavioral rules a persona declares — never_say_no, confirm_destructive — that skills opt into.
 ---
 
-A **constraint** is a named behavioral rule that a persona enables and skills opt into. Constraints are how you make AbuelOS warm without rewriting the audiobook skill, and how you make a kid-safe persona without rewriting every search skill.
+A **constraint** is a named behavioral rule that a persona enables and skills opt into. Constraints are how you make one persona warm and another kid-safe without rewriting any skill.
 
 The framework ships with a small registry of well-known constraints. Personas can enable any subset. Skills decide whether to respect each one.
 
@@ -28,7 +28,7 @@ When the framework loads the persona, it injects each constraint as a small inst
 This is a prompting tactic. The model receives the rule, internalizes it, and behaves accordingly. There's no runtime enforcement — if the model decides to refuse anyway, it refuses. Constraints are nudges, not contracts.
 
 <Callout type="warn">
-  **Do not rely on constraints alone in non-Spanish personas.** The constraint snippets were written alongside AbuelOS — they're injected in Spanish regardless of your persona's language. A future version will localize them; until then, English/French/other personas may see inconsistent enforcement.
+  **Do not rely on constraints alone in non-Spanish personas.** The constraint snippets were written for a Spanish-speaking persona — they're injected in Spanish regardless of your persona's language. A future version will localize them; until then, English/French/other personas may see inconsistent enforcement.
 
   **Workaround (required for non-Spanish personas):** Add the constraint intent directly to your system prompt in your persona's language alongside the `constraints:` declaration. For example, for an English persona: `"Never refuse a request. If you can't do exactly what's asked, offer the closest alternative."` This is fully effective.
 </Callout>

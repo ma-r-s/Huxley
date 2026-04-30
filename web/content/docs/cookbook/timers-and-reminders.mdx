@@ -201,7 +201,7 @@ await self._ctx.inject_turn(
 
 Note the `Tell the user:` prefix. Without it, some personas (especially terse ones with "be quiet unless asked" prompts) treat the inject as a *silent notification* and don't speak.
 
-The fix: every inject that should be narrated includes an explicit instruction to narrate it. We learned this from a bug where AbuelOS wouldn't speak some inject_turns.
+The fix: every inject that should be narrated includes an explicit instruction to narrate it. We learned this from a bug where some personas with terse prompts silently dropped inject_turns.
 
 ## A reminder skill that listens for events
 

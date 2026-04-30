@@ -157,7 +157,7 @@ For a strict multilingual deployment, decide:
 - Which languages the persona officially supports (have overrides for them).
 - What happens for unsupported languages (fall back to primary, or reject the connection — the latter requires custom server logic, not standard).
 
-Most personas just fall back gracefully. AbuelOS supports `es`, `en`, `fr`. A request for `de` gets Spanish.
+Most personas just fall back gracefully. A request for `de` on a persona that only defines `es`, `en`, and `fr` overrides gets the primary language.
 
 ## Mixed-language conversations
 
@@ -171,9 +171,9 @@ This is rare. Most personas are pinned to one user-facing language.
 
 <Cards>
   <Card
-    href="/docs/build-persona/abuelos-walkthrough"
-    title="Walkthrough: AbuelOS"
-    description="A real multilingual persona, every choice explained."
+    href="/docs/build-persona/basicos-walkthrough"
+    title="Walkthrough: BasicOS"
+    description="A real persona, every choice explained."
   />
   <Card
     href="/docs/cookbook"

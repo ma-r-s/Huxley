@@ -1396,32 +1396,155 @@ tests green; no test referenced the field by name.
 
 ### Stage 4 — `ClientEvent` + `server_event` + capabilities handshake
 
-**Effort**: ~3 days. **Depends on**: `AudioServer` accepts new message types; `hello` message extended.
+**Status**: in_progress (2026-04-29) · **Effort**: ~3.5 days (3
+framework + ~½ firmware) · **Depends on**: nothing — design locked,
+firmware architecture pre-built for additive extension.
 
-**Deliverables**:
+**Scope expansion (2026-04-29)**: original spec was framework-only
+(server + SDK + browser dev client). After reviewing the firmware
+state at `clients/firmware/` we discovered: K1 / K3 buttons are
+physically wired through TCA9555 with a comment in
+`hux_button.c:33` literally saying _"K1, K3 reserved — add entries
+here when a consumer lands"_; the protocol parser is built for
+additive extension; `HUX_PROTOCOL_VERSION 2` is already validated
+strictly. Bundling a small firmware update (~50 LOC C) makes Stage
+4 ship with a real-hardware consumer of the new primitive — K1 /
+K3 become available to any future skill via a single subscriber.
+Without this, Stage 4 is framework-only and end-to-end validation
+is PWA-only.
 
-- Wire protocol additions: `{"type": "client_event", ...}` (C→S) and `{"type": "server_event", ...}` (S→C)
-- `hello` message gains `capabilities: list[str]` array; old clients (no field) treated as `capabilities=[]`
-- `AudioServer` dispatches inbound `client_event` messages through a subscription registry
-- `SkillContext.subscribe_client_event(key, handler)` — unsubscribe automatic at teardown
-- `SkillContext.emit_server_event(key, payload)` — no-op with debug log if client capabilities don't include `server_event`
-- Namespace convention documented: `huxley.*` reserved; skills use `<skill-name>.*`; no framework-side validation
+#### Deliverables — framework side
 
-**Tests**:
+- **Wire protocol additions** (`docs/protocol.md`):
+  - `{"type": "client_event", "event": "<key>", "payload": {...}}` (C→S)
+  - `{"type": "server_event", "event": "<key>", "payload": {...}}` (S→C)
+  - **NEW**: `{"type": "client_hello", "capabilities": ["client_event", "server_event", ...]}` (C→S, sent immediately on WebSocket connect, before server's `hello`). Replaces the
+    original spec's "hello carries capabilities" — that was
+    server→client, which doesn't actually let the server know the
+    client's capabilities. Two-step handshake: client sends
+    `client_hello` first, server records per-connection
+    capabilities, server sends its `hello` back.
+  - Server's existing `hello` unchanged in shape (still server→client,
+    `protocol: 2`).
+- `AudioServer` tracks per-connection capabilities (default `[]` if
+  no `client_hello` arrives within 500ms or before the first
+  non-handshake message — old-client fallback).
+- `AudioServer` dispatches inbound `client_event` through a
+  subscription registry (skill-name → key → handler list).
+- `SkillContext.subscribe_client_event(key, handler)` —
+  unsubscribe automatic at skill teardown.
+- `SkillContext.emit_server_event(key, payload)` — no-op with debug
+  log if connected client's capabilities don't include
+  `server_event`.
+- `SkillContext.client_has_capability(key) -> bool`.
+- **Namespace conventions** documented:
+  - `huxley.*` reserved (framework events; none emitted in this
+    commit, but the namespace is locked).
+  - `hardware.*` reserved (client-emitted hardware events: buttons,
+    knobs, sensors). Avoids collision with skill-emitted keys.
+  - Skills use `<skill-name>.*` for their own events.
+  - Convention-only — no runtime enforcement.
+- Multi-subscriber error handling: if one handler raises, log via
+  `logger.aexception("client_event.handler_failed", ...)` and
+  continue invoking the others.
+- No wildcard / pattern matching in `subscribe_client_event` —
+  exact key match only. Add patterns when a real consumer needs
+  them (rule of three).
 
-- Single subscriber: handler called with payload
-- Multiple subscribers to same key: all called
-- Unsubscription on teardown: handler no longer called after skill stops
-- Unknown key: logs at debug
-- `emit_server_event` skipped with debug log when capability absent
-- Capabilities fallback (old client without field → treated as empty capabilities)
+#### Deliverables — firmware side
 
-**UX validation**: browser dev client dev panel (or Shift+E) fires a `hello.ping` client event → toy skill subscribed calls `inject_turn("pong")`. Separately, toy skill emits `hello.pong` server event → browser dev client logs receipt. Both directions covered.
+- `hux_proto.c` / `hux_proto.h` extensions:
+  - Add `HUX_MSG_SERVER_EVENT` to the kind enum.
+  - Add `hux_msg_server_event_t` struct (key string, raw payload
+    JSON string for the app layer to parse if it cares).
+  - Add `hux_proto_build_client_hello(caps[], n, out_buf, out_len)`
+    builder.
+  - Add `hux_proto_build_client_event(key, payload_json, out_buf,
+out_len)` builder.
+- `hux_app.c` extensions:
+  - Send `client_hello` with capabilities `["client_event",
+"server_event"]` on `HUX_APP_EV_NET_WS_CONNECTED`, before the
+    existing `wake_word` send.
+  - Add `HUX_APP_EV_BUTTON_K1_PRESSED/RELEASED` and `K3_*` to the
+    event-kind enum.
+  - K1 / K3 dispatch handlers: emit `client_event` with key
+    `hardware.button.k1` / `hardware.button.k3` and payload
+    `{"pressed": true|false}`.
+- `hux_button.c`: add K1 and K3 to the buttons table (the comment
+  at `hux_button.c:33` invites this addition).
+- Firmware host-tests cover: build_client_hello, build_client_event,
+  parse server_event.
 
-**Docs touched**:
+#### Tests — framework side
 
-- `docs/protocol.md` — hybrid wire protocol documented (done in this triage pass, dual-purpose client_event + symmetric server_event + capabilities)
-- `docs/skills/README.md` — "using `subscribe_client_event` / `emit_server_event`" sections
+- Single subscriber: handler called with payload.
+- Multiple subscribers to same key: all called even if one raises.
+- Unsubscription on teardown: handler no longer called after skill
+  stops.
+- Unknown key with no subscribers: logs at debug, no error.
+- `emit_server_event` skipped (with debug log) when capability
+  absent.
+- `client_hello` arrives → capabilities recorded.
+- `client_hello` doesn't arrive within 500ms (timeout fallback) →
+  capabilities default to `[]`.
+- `client_hello` arrives AFTER first non-handshake message → ignored,
+  warning logged ("late client_hello").
+
+#### Tests — firmware side
+
+- Host unit tests in `clients/firmware/tests/`:
+  - `hux_proto_build_client_hello` produces well-formed JSON for
+    the documented capabilities array.
+  - `hux_proto_build_client_event` round-trips key + payload.
+  - `hux_proto_parse` recognizes `server_event` kind and exposes
+    key + raw payload.
+- Server-side wire-contract tests (`server/runtime/tests/unit/test_firmware_contract.py`):
+  - K1 press → `hardware.button.k1` event reaches a registered
+    subscriber with payload `{"pressed": true}`.
+  - K3 release → `hardware.button.k3` event with `{"pressed": false}`.
+  - `client_hello` is the first message after WS connect, before
+    `wake_word`.
+
+#### UX validation
+
+- **Browser dev client**: dev panel (Shift+E) fires arbitrary
+  `client_event` with key + JSON payload; sidebar logs incoming
+  `server_event`. Toy skill in `dev_event_handler` echoes
+  `hello.ping` as `inject_turn("pong")`; toy skill emits
+  `hello.pong` server event; dev client logs both directions.
+- **Firmware end-to-end smoke** (`clients/firmware/tools/smoke.sh`):
+  - Boot → READY → press K2 → PTT events flow (regression).
+  - Press K1 → `hardware.button.k1` event reaches a registered toy
+    subscriber on the server.
+  - Press K3 → `hardware.button.k3` event reaches the same.
+
+#### Docs touched
+
+- `docs/protocol.md` — full Stage 4 wire-protocol section:
+  `client_hello` shape, `client_event` / `server_event` shape,
+  capabilities handshake, namespace conventions (`huxley.*`,
+  `hardware.*`, `<skill-name>.*`).
+- `docs/skills/README.md` — "using `subscribe_client_event` /
+  `emit_server_event`" sections with worked examples.
+- `docs/extensibility.md` — flip the "no client→server signals
+  beyond audio" gap to closed; list the new patterns this enables
+  (hardware buttons, smart-home, wearables).
+- `clients/firmware/README.md` — "What works today" gains
+  `client_event` + `server_event` + K1 / K3 button events.
+- `docs/io-plane.md` — already a historical artifact; no further
+  staleness.
+
+#### Out of scope (deferred)
+
+- Hardware skills built on top (panic, hass, wearables, presence)
+  — separate triage entries.
+- Wildcard / pattern matching in subscriptions.
+- Mid-session capability re-handshake.
+- Framework-emitted `huxley.*` events — namespace is reserved but
+  no concrete consumer yet.
+- `${ENV_VAR}` interpolation in `persona.yaml` — separate commit if
+  shipped at all.
+- F6 (`response_cancel_not_active` log noise) — separate commit.
 
 ### Stage 5 — `InjectPriority.BLOCK_BEHIND_COMMS` (severity tier for urgent reminders that respect active calls)
 
