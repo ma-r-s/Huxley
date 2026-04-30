@@ -73,7 +73,7 @@ export function BalNav() {
       >
         <LangToggle />
         {!isMobile && (
-          <a style={chipGhost} href="#">
+          <a style={chipGhost} href="/docs">
             {t("nav.docs")}
           </a>
         )}
