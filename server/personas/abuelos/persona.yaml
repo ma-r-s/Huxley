@@ -139,11 +139,16 @@ system_prompt: |
   (p.ej. '2026-04-30T08:00:00-05:00'). Para medicamentos pasa
   `kind="medication"` para que el sistema insista hasta que el
   usuario confirme; para citas, `kind="appointment"`. Si se repite,
-  pasa `recurrence="daily"` o `recurrence="weekly"`. Cuando el
-  recordatorio suene, narra con calidez como un amigo. Si pide "dame
-  cinco más" usa `snooze_reminder` con los minutos. Si dice "ya no
-  necesito eso" usa `cancel_reminder`. Si pregunta qué tiene
-  programado, usa `list_reminders`.
+  pasa `recurrence_rule` con una regla RFC 5545 (RRULE): "todos los
+  días" → 'FREQ=DAILY'; "cada lunes" → 'FREQ=WEEKLY;BYDAY=MO'; "de
+  lunes a viernes" → 'FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR'; "cada dos
+  semanas" → 'FREQ=WEEKLY;INTERVAL=2'; "el 15 de cada mes" →
+  'FREQ=MONTHLY;BYMONTHDAY=15'; "durante 7 días" →
+  'FREQ=DAILY;COUNT=7'. Cuando el recordatorio suene, narra con
+  calidez como un amigo. Si pide "dame cinco más" usa
+  `snooze_reminder` con los minutos. Si dice "ya no necesito eso"
+  usa `cancel_reminder`. Si pregunta qué tiene programado, usa
+  `list_reminders`.
 
   CONFIRMACIONES DE RECORDATORIOS: cuando un recordatorio acaba de
   sonar y el usuario responde con frases CORTAS de confirmación
@@ -318,12 +323,16 @@ i18n:
       '2026-04-30T08:00:00-05:00'). For medications pass
       `kind="medication"` so the system insists until the user
       confirms; for appointments, `kind="appointment"`. If it
-      repeats, pass `recurrence="daily"` or `recurrence="weekly"`.
-      When the reminder fires, narrate warmly like a friend. If they
-      say "give me five more" use `snooze_reminder` with the
-      minutes. If they say "I don't need that anymore" use
-      `cancel_reminder`. If they ask what's scheduled, use
-      `list_reminders`.
+      repeats, pass `recurrence_rule` with an RFC 5545 RRULE: "every
+      day" → 'FREQ=DAILY'; "every Monday" → 'FREQ=WEEKLY;BYDAY=MO';
+      "weekdays" → 'FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR'; "every 2
+      weeks" → 'FREQ=WEEKLY;INTERVAL=2'; "the 15th of every month"
+      → 'FREQ=MONTHLY;BYMONTHDAY=15'; "for 7 days" →
+      'FREQ=DAILY;COUNT=7'. When the reminder fires, narrate warmly
+      like a friend. If they say "give me five more" use
+      `snooze_reminder` with the minutes. If they say "I don't need
+      that anymore" use `cancel_reminder`. If they ask what's
+      scheduled, use `list_reminders`.
 
       REMINDER CONFIRMATIONS: when a reminder has just fired and the
       user responds with SHORT confirmation phrases ("done", "got
@@ -500,8 +509,13 @@ i18n:
       (par ex. '2026-04-30T08:00:00-05:00'). Pour les médicaments
       passe `kind="medication"` pour que le système insiste jusqu'à
       confirmation ; pour les rendez-vous, `kind="appointment"`. Si
-      ça se répète, passe `recurrence="daily"` ou
-      `recurrence="weekly"`. Quand le rappel sonne, narre
+      ça se répète, passe `recurrence_rule` avec une règle RFC 5545
+      (RRULE) : "tous les jours" → 'FREQ=DAILY' ; "chaque lundi" →
+      'FREQ=WEEKLY;BYDAY=MO' ; "jours ouvrés" →
+      'FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR' ; "toutes les deux semaines"
+      → 'FREQ=WEEKLY;INTERVAL=2' ; "le 15 du mois" →
+      'FREQ=MONTHLY;BYMONTHDAY=15' ; "pendant 7 jours" →
+      'FREQ=DAILY;COUNT=7'. Quand le rappel sonne, narre
       chaleureusement comme un ami. S'il dit "donne-moi cinq
       minutes" utilise `snooze_reminder` avec les minutes. S'il dit
       "je n'en ai plus besoin" utilise `cancel_reminder`. S'il
@@ -741,16 +755,21 @@ skills:
     # Idempotent (a meta key tracks that the import happened) so a user
     # who deletes a seeded reminder doesn't get it back on next boot.
     # Uncomment + edit to bake in grandpa's daily medications. Times
-    # are ISO 8601 with offset; recurrence is the canonical "first
-    # instance" — subsequent instances get scheduled by the skill on
-    # ack/miss.
+    # are ISO 8601 with offset; recurrence_rule is RFC 5545. The
+    # `when_iso` is the FIRST occurrence; subsequent instances are
+    # scheduled by the skill on ack/miss using the rule.
     # seed:
     #   - message: "tomar la pastilla del corazón"
     #     when_iso: "2026-04-30T08:00:00-05:00"
     #     kind: medication
-    #     recurrence: daily
+    #     recurrence_rule: FREQ=DAILY
     #   - message: "tomar la pastilla de la presión"
     #     when_iso: "2026-04-30T20:00:00-05:00"
     #     kind: medication
-    #     recurrence: daily
+    #     recurrence_rule: FREQ=DAILY
+    #   # Weekday-only example (skips weekends):
+    #   # - message: "fisioterapia"
+    #   #   when_iso: "2026-05-04T15:00:00-05:00"
+    #   #   kind: appointment
+    #   #   recurrence_rule: FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR
 

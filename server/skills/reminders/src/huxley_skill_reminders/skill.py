@@ -1,7 +1,7 @@
 """Reminders skill — scheduled, persistent, with retry escalation.
 
 User says "recuérdame mañana a las 8 que tome la pastilla del corazón"; the LLM
-calls `add_reminder(message=..., when_iso=..., kind="medication", recurrence="daily")`;
+calls `add_reminder(message=..., when_iso=..., kind="medication", recurrence_rule="FREQ=DAILY")`;
 the skill stores it in `SkillStorage`, runs a single supervised scheduler
 background task, and at fire time calls `ctx.inject_turn(prompt,
 priority=BLOCK_BEHIND_COMMS)` so the framework preempts content (audiobook
@@ -43,6 +43,9 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from dateutil.rrule import rrulestr
 
 from huxley_sdk import (
     BackgroundTaskHandle,
@@ -79,7 +82,15 @@ _STATE_CANCELLED = "cancelled"
 # during boot reconcile (review F4, 2026-04-29). Removed.
 
 _VALID_KINDS = ("medication", "appointment", "generic")
-_VALID_RECURRENCE = ("daily", "weekly")
+
+# Legacy recurrence enum values from v1 storage entries. Translated to
+# RRULE strings on read in `_Entry.from_json`. Not accepted as input
+# from new tool calls — the tool description teaches the LLM to emit
+# RRULE strings directly.
+_LEGACY_RECURRENCE_TO_RRULE = {
+    "daily": "FREQ=DAILY",
+    "weekly": "FREQ=WEEKLY",
+}
 
 # How late we'll deliver a reminder whose fire time was during a server-down
 # window. The medication value is deliberately tight — narrating "es hora de
@@ -110,7 +121,12 @@ _STORAGE_META_NEXT_ID = "_meta:next_id"
 # a user manually deletes them.
 _STORAGE_META_SEED_DONE = "_meta:seed_imported"
 
-_ENTRY_VERSION = 1
+# Schema versions for `_Entry`:
+#   v1 — `recurrence: 'daily' | 'weekly' | None` enum
+#   v2 — `recurrence_rule: <RRULE string> | None` (RFC 5545)
+# `_Entry.from_json` reads any version and upgrades v1 → v2 on the fly;
+# the next `_save_entry` writes v2.
+_ENTRY_VERSION = 2
 
 # When the scheduler has nothing to do (no pending reminders), it polls
 # this often so a freshly-added reminder gets picked up promptly without
@@ -161,8 +177,8 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "El sistema te dirá la zona horaria y la hora actual; calcula "
             "`when_iso` en formato ISO con offset (p.ej. '2026-04-30T08:00:00-05:00'). "
             'Si es un medicamento usa `kind="medication"` para que insista '
-            "hasta que el usuario confirme. Si se repite a diario o "
-            "semanalmente usa `recurrence`."
+            "hasta que el usuario confirme. Si se repite, pasa "
+            "`recurrence_rule` con una regla RFC 5545 (RRULE)."
         ),
         "message_param": (
             "Qué recordarle al usuario — instrucción para el modelo, "
@@ -177,9 +193,17 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "Tipo de recordatorio. 'medication' = medicamento (insiste hasta "
             "ack); 'appointment' = cita; 'generic' = otro. Por defecto 'generic'."
         ),
-        "recurrence_param": (
-            "Repetición. 'daily' = todos los días a la misma hora; "
-            "'weekly' = el mismo día de la semana. Omite si es solo una vez."
+        "recurrence_rule_param": (
+            "Regla RFC 5545 (RRULE) que describe cómo se repite. "
+            "Ejemplos comunes: "
+            "'FREQ=DAILY' (todos los días a la misma hora) · "
+            "'FREQ=WEEKLY' (cada semana el mismo día) · "
+            "'FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR' (lunes a viernes) · "
+            "'FREQ=WEEKLY;BYDAY=MO,WE,FR' (lunes, miércoles y viernes) · "
+            "'FREQ=WEEKLY;INTERVAL=2' (cada dos semanas) · "
+            "'FREQ=MONTHLY;BYMONTHDAY=15' (el 15 de cada mes) · "
+            "'FREQ=DAILY;COUNT=7' (durante 7 días). "
+            "Omite si es solo una vez."
         ),
         "list_reminders": ("Lista los recordatorios pendientes y los recientemente perdidos."),
         "cancel_reminder": "Cancela un recordatorio por su id (ya no sonará).",
@@ -204,7 +228,7 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "context; compute `when_iso` as ISO 8601 with offset "
             "(e.g. '2026-04-30T08:00:00-05:00'). If it's a medication use "
             '`kind="medication"` so it insists until the user confirms. '
-            "If it repeats daily or weekly use `recurrence`."
+            "If it repeats, pass `recurrence_rule` with an RFC 5545 RRULE."
         ),
         "message_param": (
             "What to remind the user about — instruction for the model, "
@@ -219,9 +243,17 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "Reminder kind. 'medication' = medication (insists until ack); "
             "'appointment' = appointment; 'generic' = other. Default 'generic'."
         ),
-        "recurrence_param": (
-            "Recurrence. 'daily' = every day at the same time; "
-            "'weekly' = same weekday. Omit for one-shot."
+        "recurrence_rule_param": (
+            "RFC 5545 RRULE string describing how the reminder repeats. "
+            "Common examples: "
+            "'FREQ=DAILY' (every day at the same time) · "
+            "'FREQ=WEEKLY' (every week on the same weekday) · "
+            "'FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR' (weekdays only) · "
+            "'FREQ=WEEKLY;BYDAY=MO,WE,FR' (Monday, Wednesday, Friday) · "
+            "'FREQ=WEEKLY;INTERVAL=2' (every two weeks) · "
+            "'FREQ=MONTHLY;BYMONTHDAY=15' (15th of every month) · "
+            "'FREQ=DAILY;COUNT=7' (for 7 days). "
+            "Omit for a one-shot reminder."
         ),
         "list_reminders": "List pending and recently missed reminders.",
         "cancel_reminder": "Cancel a reminder by id (it will not fire).",
@@ -246,8 +278,8 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "dans le contexte ; calcule `when_iso` en ISO 8601 avec "
             "offset (par ex. '2026-04-30T08:00:00-05:00'). Si c'est un "
             'médicament utilise `kind="medication"` pour qu\'il insiste '
-            "jusqu'à confirmation. S'il se répète chaque jour ou chaque "
-            "semaine, utilise `recurrence`."
+            "jusqu'à confirmation. S'il se répète, passe une règle "
+            "`recurrence_rule` au format RFC 5545 (RRULE)."
         ),
         "message_param": (
             "De quoi rappeler — instruction pour le modèle, pas les mots "
@@ -263,9 +295,17 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "ack) ; 'appointment' = rendez-vous ; 'generic' = autre. "
             "Par défaut 'generic'."
         ),
-        "recurrence_param": (
-            "Récurrence. 'daily' = chaque jour à la même heure ; "
-            "'weekly' = même jour de la semaine. Omet pour ponctuel."
+        "recurrence_rule_param": (
+            "Règle RFC 5545 (RRULE) décrivant la récurrence. "
+            "Exemples courants : "
+            "'FREQ=DAILY' (chaque jour à la même heure) · "
+            "'FREQ=WEEKLY' (chaque semaine le même jour) · "
+            "'FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR' (jours ouvrés) · "
+            "'FREQ=WEEKLY;BYDAY=MO,WE,FR' (lundi, mercredi, vendredi) · "
+            "'FREQ=WEEKLY;INTERVAL=2' (toutes les deux semaines) · "
+            "'FREQ=MONTHLY;BYMONTHDAY=15' (le 15 du mois) · "
+            "'FREQ=DAILY;COUNT=7' (pendant 7 jours). "
+            "Omet pour un rappel ponctuel."
         ),
         "list_reminders": "Liste les rappels en attente et récemment manqués.",
         "cancel_reminder": "Annule un rappel par son id (il ne sonnera pas).",
@@ -311,18 +351,60 @@ def _parse_iso(value: str) -> datetime:
     return parsed.astimezone(UTC)
 
 
-def _next_recurrence(scheduled_for: datetime, recurrence: str) -> datetime:
-    """Compute the next instance for a recurring reminder.
+def _next_recurrence(
+    series_start: datetime,
+    after: datetime,
+    recurrence_rule: str,
+    tz: ZoneInfo,
+) -> datetime | None:
+    """Compute the next instance after `after` in a recurring series.
 
-    `daily` advances by 24h, `weekly` by 7d. We anchor on the original
-    `scheduled_for` rather than `now` so a reminder set for 8am that
-    fires (or misses) doesn't drift to whatever time the ack happened.
+    Uses RFC 5545 RRULE semantics via `dateutil.rrule.rrulestr`. The
+    rule is evaluated with a tz-aware `dtstart=series_start` in the
+    persona's timezone, then queried for "first occurrence after
+    `after`". Two timestamps because:
+
+    - `series_start` anchors the recurrence — it's the FIRST
+      occurrence of the series, never changes across the chain.
+      Required so `COUNT` / `UNTIL` semantics work: a
+      `FREQ=DAILY;COUNT=3` series with series_start=May 1 produces
+      exactly May 1, May 2, May 3 — independent of which row is
+      currently asking. Re-anchoring on each successor would reset
+      the count and the series would never terminate.
+    - `after` is the exact instant whose successor we want
+      (typically the current row's `scheduled_for`).
+
+    DST: handled natively by `dateutil.rrule` when `series_start` is
+    tz-aware. A daily 8 AM rule in `America/New_York` produces 8 AM
+    EST in winter and 8 AM EDT in summer — the wall-clock hour is
+    preserved, the UTC instant shifts. Naive `+timedelta(days=1)` UTC
+    arithmetic would produce 9 AM EDT after spring-forward. Wrong.
+
+    Returns `None` when the rule has no further occurrences after
+    `after` (COUNT exhausted, UNTIL past). Callers treat None as
+    "the recurring series is complete; close out the row, don't
+    schedule a successor."
     """
-    if recurrence == "daily":
-        return scheduled_for + timedelta(days=1)
-    if recurrence == "weekly":
-        return scheduled_for + timedelta(weeks=1)
-    raise ValueError(f"unknown recurrence: {recurrence!r}")
+    dtstart = series_start.astimezone(tz)
+    rrule = rrulestr(recurrence_rule, dtstart=dtstart)
+    nxt = rrule.after(after.astimezone(tz), inc=False)
+    return nxt.astimezone(UTC) if nxt is not None else None
+
+
+def _validate_rrule(recurrence_rule: str, tz: ZoneInfo) -> str | None:
+    """Return None if the rule is parseable, else a short error reason.
+
+    The LLM occasionally emits invalid RRULE strings ("FREQ=DAILY;EVERY=1",
+    raw "daily", etc.). We catch parsing errors at `add_reminder` time
+    so the user gets an immediate "I couldn't parse that" rather than
+    a scheduler crash hours later. Validation requires a tz-aware
+    dtstart — we use `now()` in the persona tz which is throwaway.
+    """
+    try:
+        rrulestr(recurrence_rule, dtstart=datetime.now(tz))
+    except (ValueError, TypeError) as exc:
+        return str(exc)
+    return None
 
 
 @dataclass
@@ -337,17 +419,42 @@ class _Entry:
     id: int
     message: str
     kind: Literal["medication", "appointment", "generic"]
-    scheduled_for: datetime  # UTC; the original target time (anchor for recurrence)
-    next_fire_at: (
-        datetime  # UTC; what the scheduler actually waits on (= scheduled_for, or +retry)
-    )
-    recurrence: str | None  # 'daily' | 'weekly' | None
+    # UTC; THIS row's target time (anchor for retry math, never changes
+    # within a row).
+    scheduled_for: datetime
+    # UTC; what the scheduler actually waits on. Equals `scheduled_for`
+    # for the first fire; advances to `now + retry_interval` for
+    # medication retries; advances on snooze.
+    next_fire_at: datetime
+    # RFC 5545 RRULE string ("FREQ=DAILY", "FREQ=WEEKLY;BYDAY=MO,WE,FR",
+    # etc.) or None for one-shot. v1 entries persisted with `recurrence`
+    # ('daily' / 'weekly' enum) are upgraded on read by `from_json`.
+    recurrence_rule: str | None
     state: str  # _STATE_*
+    # UTC; the FIRST occurrence of the recurring series (= `scheduled_for`
+    # for the very first row, inherited unchanged by every successor in
+    # the chain). Used as `dtstart` when evaluating the RRULE so COUNT
+    # / UNTIL semantics work across the chain. None for one-shot rows
+    # or v1 rows that didn't track this; readers fall back to
+    # `scheduled_for` in that case.
+    series_start: datetime | None = None
     fired_count: int = 0
     last_fired_at: datetime | None = None
     acked_at: datetime | None = None
     cancelled_at: datetime | None = None
     missed_at: datetime | None = None
+
+    @property
+    def effective_series_start(self) -> datetime:
+        """`series_start` if present, else fall back to `scheduled_for`.
+
+        Old (v1) rows didn't track series_start; treating
+        `scheduled_for` as the dtstart on those rows is the correct
+        upgrade — for an indefinite recurrence (no COUNT/UNTIL) the
+        result is identical, and v1 didn't support COUNT/UNTIL so no
+        information is lost.
+        """
+        return self.series_start or self.scheduled_for
 
     def to_json(self) -> str:
         return json.dumps(
@@ -358,7 +465,8 @@ class _Entry:
                 "kind": self.kind,
                 "scheduled_for": self.scheduled_for.isoformat(),
                 "next_fire_at": self.next_fire_at.isoformat(),
-                "recurrence": self.recurrence,
+                "recurrence_rule": self.recurrence_rule,
+                "series_start": self.series_start.isoformat() if self.series_start else None,
                 "state": self.state,
                 "fired_count": self.fired_count,
                 "last_fired_at": self.last_fired_at.isoformat() if self.last_fired_at else None,
@@ -374,13 +482,28 @@ class _Entry:
         kind = payload["kind"]
         if kind not in _VALID_KINDS:
             raise ValueError(f"invalid kind: {kind!r}")
+        # v1 → v2 migration: legacy `recurrence` enum → RRULE string.
+        # `version` field is informational; we read both shapes and
+        # take whichever exists. The migrated value is written back
+        # in v2 shape on the next `_save_entry`.
+        recurrence_rule = payload.get("recurrence_rule")
+        if recurrence_rule is None:
+            legacy = payload.get("recurrence")
+            if legacy is not None:
+                if legacy in _LEGACY_RECURRENCE_TO_RRULE:
+                    recurrence_rule = _LEGACY_RECURRENCE_TO_RRULE[legacy]
+                else:
+                    raise ValueError(f"unknown legacy recurrence: {legacy!r}")
         return cls(
             id=int(payload["id"]),
             message=str(payload["message"]),
             kind=kind,
             scheduled_for=_parse_iso(payload["scheduled_for"]),
             next_fire_at=_parse_iso(payload["next_fire_at"]),
-            recurrence=payload.get("recurrence"),
+            recurrence_rule=recurrence_rule,
+            series_start=(
+                _parse_iso(payload["series_start"]) if payload.get("series_start") else None
+            ),
             state=str(payload["state"]),
             fired_count=int(payload.get("fired_count", 0)),
             last_fired_at=(
@@ -411,7 +534,13 @@ class RemindersSkill:
         # so it doesn't have to wait out its current sleep before noticing.
         self._wakeup: asyncio.Event = asyncio.Event()
         self._language: str = "en"
-        self._timezone_label: str = "UTC"  # display only — narration is UTC-internal
+        self._timezone_label: str = "UTC"  # surfaced to LLM via prompt_context
+        # Resolved tz used for RRULE evaluation. `_next_recurrence`
+        # needs a tz-aware dtstart so DST transitions don't drift the
+        # local fire time. Defaults to UTC; `setup()` overrides from
+        # `ctx.config["timezone"]` (a TZ Database name like
+        # "America/Bogota").
+        self._tz: ZoneInfo = ZoneInfo("UTC")
         self._fire_prompt: str = _DEFAULT_FIRE_PROMPTS["en"]
         # Persona-overrideable; resolved in setup() and reconfigure().
         self._late_windows: dict[str, timedelta] = dict(_DEFAULT_LATE_WINDOWS)
@@ -459,10 +588,9 @@ class RemindersSkill:
                             "enum": list(_VALID_KINDS),
                             "description": td["kind_param"],
                         },
-                        "recurrence": {
+                        "recurrence_rule": {
                             "type": "string",
-                            "enum": list(_VALID_RECURRENCE),
-                            "description": td["recurrence_param"],
+                            "description": td["recurrence_rule_param"],
                         },
                     },
                     "required": ["message", "when_iso"],
@@ -523,6 +651,7 @@ class RemindersSkill:
         self._storage = ctx.storage
         self._language = ctx.language or "en"
         self._timezone_label = self._resolve_timezone_label(ctx)
+        self._tz = await self._resolve_tz(ctx)
         self._fire_prompt = await self._resolve_fire_prompt(ctx)
         self._late_windows = self._resolve_late_windows(ctx)
         await self._reconcile_on_boot()
@@ -536,6 +665,7 @@ class RemindersSkill:
             "reminders.setup_complete",
             language=self._language,
             timezone=self._timezone_label,
+            tz=str(self._tz),
             late_windows={k: v.total_seconds() for k, v in self._late_windows.items()},
         )
 
@@ -548,9 +678,31 @@ class RemindersSkill:
         """
         self._language = ctx.language or self._language
         self._timezone_label = self._resolve_timezone_label(ctx)
+        self._tz = await self._resolve_tz(ctx)
         self._fire_prompt = await self._resolve_fire_prompt(ctx)
         self._late_windows = self._resolve_late_windows(ctx)
         await ctx.logger.ainfo("reminders.reconfigure", language=self._language)
+
+    async def _resolve_tz(self, ctx: SkillContext) -> ZoneInfo:
+        """Parse the persona's timezone string into a ZoneInfo.
+
+        Falls back to UTC with a warning on an unknown TZDB name. Used
+        to evaluate RRULEs and compute prompt_context's wall-clock
+        time. The display label (`_timezone_label`) and the actual tz
+        are always the same string in production but resolved
+        independently so a typo or platform-missing zone doesn't
+        block startup.
+        """
+        label = self._timezone_label
+        try:
+            return ZoneInfo(label)
+        except ZoneInfoNotFoundError:
+            await ctx.logger.awarning(
+                "reminders.tz_invalid",
+                label=label,
+                hint="persona 'timezone' must be a TZ Database name (e.g. 'America/Bogota')",
+            )
+            return ZoneInfo("UTC")
 
     @staticmethod
     def _resolve_timezone_label(ctx: SkillContext) -> str:
@@ -642,7 +794,7 @@ class RemindersSkill:
                 # Already missed; surfacing is on the next prompt_context.
                 # Recurrence rolls forward anyway so today's miss doesn't
                 # cancel tomorrow's reminder.
-                if entry.recurrence:
+                if entry.recurrence_rule:
                     await self._schedule_next_recurrence(entry)
                 continue
             if entry.state == _STATE_FIRED:
@@ -723,7 +875,7 @@ class RemindersSkill:
         entry.state = _STATE_ACKED  # close out the row
         entry.acked_at = now
         await self._save_entry(entry)
-        if entry.recurrence:
+        if entry.recurrence_rule:
             await self._schedule_next_recurrence(entry)
 
     async def _mark_missed(self, entry: _Entry, *, reason: str, now: datetime) -> None:
@@ -740,7 +892,7 @@ class RemindersSkill:
             scheduled_for=entry.scheduled_for.isoformat(),
             fired_count=entry.fired_count,
         )
-        if entry.recurrence:
+        if entry.recurrence_rule:
             await self._schedule_next_recurrence(entry)
 
     async def _schedule_next_recurrence(self, entry: _Entry) -> None:
@@ -759,16 +911,31 @@ class RemindersSkill:
         """
         assert self._logger is not None
         assert self._storage is not None
-        if not entry.recurrence:
+        if not entry.recurrence_rule:
             return
-        next_when = _next_recurrence(entry.scheduled_for, entry.recurrence)
+        next_when = _next_recurrence(
+            entry.effective_series_start,
+            entry.scheduled_for,
+            entry.recurrence_rule,
+            self._tz,
+        )
+        if next_when is None:
+            # RRULE has no further occurrences (e.g. COUNT exhausted,
+            # UNTIL past). The original row is the last instance —
+            # don't schedule a successor.
+            await self._logger.ainfo(
+                "reminders.recurrence_complete",
+                id=entry.id,
+                rule=entry.recurrence_rule,
+            )
+            return
         # Idempotency check — see docstring. Costs one storage scan per
         # call; called O(reminders * restarts), so still cheap.
         existing = await self._load_all_entries()
         for other in existing:
             if (
                 other.id != entry.id
-                and other.recurrence == entry.recurrence
+                and other.recurrence_rule == entry.recurrence_rule
                 and other.message == entry.message
                 and other.kind == entry.kind
                 and other.state in (_STATE_PENDING, _STATE_FIRED)
@@ -788,7 +955,10 @@ class RemindersSkill:
             kind=entry.kind,
             scheduled_for=next_when,
             next_fire_at=next_when,
-            recurrence=entry.recurrence,
+            recurrence_rule=entry.recurrence_rule,
+            # Successors carry the original series anchor unchanged so
+            # COUNT/UNTIL semantics work across the chain.
+            series_start=entry.effective_series_start,
             state=_STATE_PENDING,
         )
         await self._save_entry(new_entry)
@@ -825,9 +995,22 @@ class RemindersSkill:
                 kind = raw.get("kind", "generic")
                 if kind not in _VALID_KINDS:
                     raise ValueError(f"invalid kind: {kind!r}")
-                recurrence = raw.get("recurrence")
-                if recurrence is not None and recurrence not in _VALID_RECURRENCE:
-                    raise ValueError(f"invalid recurrence: {recurrence!r}")
+                # Seed accepts EITHER `recurrence_rule` (preferred,
+                # RRULE) OR a legacy `recurrence` enum ('daily',
+                # 'weekly') — translated on import. Mixed seeds across
+                # personas are tolerated.
+                recurrence_rule = raw.get("recurrence_rule")
+                legacy_recurrence = raw.get("recurrence")
+                if recurrence_rule is None and legacy_recurrence is not None:
+                    if legacy_recurrence not in _LEGACY_RECURRENCE_TO_RRULE:
+                        raise ValueError(
+                            f"invalid legacy recurrence in seed: {legacy_recurrence!r}"
+                        )
+                    recurrence_rule = _LEGACY_RECURRENCE_TO_RRULE[legacy_recurrence]
+                if recurrence_rule is not None:
+                    err = _validate_rrule(recurrence_rule, self._tz)
+                    if err is not None:
+                        raise ValueError(f"invalid recurrence_rule {recurrence_rule!r}: {err}")
             except (KeyError, ValueError, TypeError) as exc:
                 await self._logger.awarning(
                     "reminders.seed_skipped_invalid", raw=raw, error=str(exc)
@@ -840,7 +1023,11 @@ class RemindersSkill:
                 kind=kind,
                 scheduled_for=when,
                 next_fire_at=when,
-                recurrence=recurrence,
+                recurrence_rule=recurrence_rule,
+                # First row in a recurring series; series_start =
+                # scheduled_for. None for one-shot rows preserves
+                # storage size on the common case.
+                series_start=when if recurrence_rule else None,
                 state=_STATE_PENDING,
             )
             await self._save_entry(entry)
@@ -942,7 +1129,7 @@ class RemindersSkill:
             if entry.fired_count >= _MEDICATION_MAX_RETRIES:
                 entry.state = _STATE_MISSED
                 entry.missed_at = now
-                advance_recurrence = bool(entry.recurrence)
+                advance_recurrence = bool(entry.recurrence_rule)
             else:
                 # 1-based: index 0 is the wait BEFORE retry #2 (after
                 # the first fire). Pairs with first-fire-then-wait-5min.
@@ -952,7 +1139,7 @@ class RemindersSkill:
         else:
             entry.state = _STATE_ACKED
             entry.acked_at = now
-            advance_recurrence = bool(entry.recurrence)
+            advance_recurrence = bool(entry.recurrence_rule)
 
         await self._save_entry(entry)
         if advance_recurrence:
@@ -1026,17 +1213,31 @@ class RemindersSkill:
         message = args.get("message")
         when_iso = args.get("when_iso")
         kind = args.get("kind", "generic")
-        recurrence = args.get("recurrence")
+        # Tool param is `recurrence_rule` (RFC 5545 string). We also
+        # accept the legacy `recurrence` enum so an already-trained
+        # session that emits `recurrence="daily"` keeps working — it
+        # gets translated to the equivalent RRULE on the way in.
+        recurrence_rule = args.get("recurrence_rule")
+        legacy_recurrence = args.get("recurrence")
         if not isinstance(message, str) or not message:
             raise _SkillBadInputError("add_reminder requires a non-empty `message`")
         if not isinstance(when_iso, str) or not when_iso:
             raise _SkillBadInputError("add_reminder requires `when_iso` (ISO 8601 with offset)")
         if kind not in _VALID_KINDS:
             raise _SkillBadInputError(f"invalid kind: {kind!r}; must be one of {_VALID_KINDS}")
-        if recurrence is not None and recurrence not in _VALID_RECURRENCE:
-            raise _SkillBadInputError(
-                f"invalid recurrence: {recurrence!r}; must be one of {_VALID_RECURRENCE}"
-            )
+        if recurrence_rule is None and legacy_recurrence is not None:
+            if legacy_recurrence not in _LEGACY_RECURRENCE_TO_RRULE:
+                raise _SkillBadInputError(
+                    f"invalid legacy recurrence: {legacy_recurrence!r}; "
+                    "use `recurrence_rule` with an RFC 5545 RRULE string"
+                )
+            recurrence_rule = _LEGACY_RECURRENCE_TO_RRULE[legacy_recurrence]
+        if recurrence_rule is not None:
+            if not isinstance(recurrence_rule, str):
+                raise _SkillBadInputError("recurrence_rule must be a string")
+            err = _validate_rrule(recurrence_rule, self._tz)
+            if err is not None:
+                raise _SkillBadInputError(f"invalid recurrence_rule {recurrence_rule!r}: {err}")
         try:
             when = _parse_iso(when_iso)
         except ValueError as exc:
@@ -1057,7 +1258,11 @@ class RemindersSkill:
             kind=kind,
             scheduled_for=when,
             next_fire_at=when,
-            recurrence=recurrence,
+            recurrence_rule=recurrence_rule,
+            # First row in a (potentially) recurring series — series_start
+            # is the user-requested time. None for one-shot keeps storage
+            # tidy on the common case.
+            series_start=when if recurrence_rule else None,
             state=_STATE_PENDING,
         )
         await self._save_entry(entry)
@@ -1068,7 +1273,7 @@ class RemindersSkill:
             "reminders.added",
             id=new_id,
             kind=kind,
-            recurrence=recurrence,
+            recurrence_rule=recurrence_rule,
             scheduled_for=when.isoformat(),
             message=message,
         )
@@ -1079,7 +1284,7 @@ class RemindersSkill:
                     "id": new_id,
                     "scheduled_for": when.isoformat(),
                     "kind": kind,
-                    "recurrence": recurrence,
+                    "recurrence_rule": recurrence_rule,
                 }
             )
         )
@@ -1096,7 +1301,7 @@ class RemindersSkill:
                 "kind": e.kind,
                 "scheduled_for": e.scheduled_for.isoformat(),
                 "next_fire_at": e.next_fire_at.isoformat(),
-                "recurrence": e.recurrence,
+                "recurrence_rule": e.recurrence_rule,
                 "state": e.state,
                 "fired_count": e.fired_count,
             }
@@ -1176,7 +1381,7 @@ class RemindersSkill:
         # so it doesn't sleep on a retry timer that's no longer needed.
         self._wakeup.set()
         await self._logger.ainfo("reminders.acked", id=rid, kind=entry.kind)
-        if entry.recurrence:
+        if entry.recurrence_rule:
             await self._schedule_next_recurrence(entry)
         return ToolResult(output=json.dumps({"ok": True, "id": rid}))
 

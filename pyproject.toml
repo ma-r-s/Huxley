@@ -78,5 +78,6 @@ module = [
     "pyrogram.*",
     "pytgcalls.*",
     "ntgcalls.*",
+    "dateutil.*",
 ]
 ignore_missing_imports = true
