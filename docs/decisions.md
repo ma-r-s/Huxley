@@ -389,3 +389,62 @@ Timers (the Stage 3b forcing function) writes `timer:<id>` JSON entries via `ctx
 - **Unit test suite grew by 8 tests** (4 drain-wait, 3 idle-claim-inject, 1 on-claim-end regression). Total core tests: 370 (was 358 at ship of 32d4be3). All existing tests still green.
 - **Known residual edge case**: `inject_turn_and_wait`'s drain computation uses the coordinator-side byte count, not a client acknowledgement. A client that drops behind real-time playback (slow CPU, tab backgrounded) would miss the drain window and the announcement could still be flushed. Acceptable given the 80ms safety margin; revisit if real users hit it.
 - **Revisit**: If Mario's testing exposes more cases, track the per-case velocity — the smoke-test loop is currently paying for itself, so keep running it after any focus-plane change.
+
+---
+
+## 2026-04-30 — Session boundary is logical, not technical (T1.12)
+
+**Context**: T1.12 ships browsable session history. The original sketch defined a "session" as one WebSocket connect/disconnect cycle. The Gate-2 critic round flagged that this would fragment the user's mental model on every common usage shape: auto-reconnect after idle, language switch, cost-kill, browser refresh, network blip — each currently triggers a fresh `provider.connect()` and would each create a new row. A user who talks for two hours through a 60-minute Realtime session timeout would get two rows; a caregiver reviewing their day would see twelve rows for what felt like three conversations.
+
+**Decision**: WS-connect/disconnect remains the technical lifecycle, but the user-visible "conversation" is a separate logical unit grouped by idle gap.
+
+- New storage method `start_or_resume_session(idle_window_min: int = 30)`: returns the most recent session's id if its `last_turn_at` falls within the window; otherwise inserts a new row. Resume clears `ended_at` so the row reads as live again.
+- The 30-minute default is a guess based on casual-conversation cadence. Tunable in storage; may move to a persona-level config if usage data shows different gap distributions per use case.
+- `_on_transcript` lazily calls `start_or_resume_session` on the first turn after a connect, so empty sessions (connected, never spoke) never hit storage.
+
+**Consequences**:
+
+- A WS reconnect that lands within the window writes turns onto the same row as before — the caregiver sees one conversation, not two. Same for language switches and cost-kill restarts.
+- `end_session(id, summary)` is idempotent across reconnects: each disconnect overwrites `ended_at` + `summary`. The row's final summary is whatever the LATEST disconnect computed; the gold integration test pins this.
+- The OpenAI Realtime provider's existing summary-chain (each new session loads `get_latest_summary` to inject context) continues to work — the warm-reconnect text is now read from `sessions.summary` instead of the retired `conversation_summaries` table.
+- Threshold drift: if 30 minutes proves wrong (too high → unrelated conversations merge; too low → fragmentation returns), it's a single constant in `storage/db.py`. Track via support reports or smoke-test feedback.
+
+---
+
+## 2026-04-30 — Session capture: provider→app callback handoff, not provider→storage (T1.12)
+
+**Context**: Pre-T1.12, the OpenAI Realtime provider wrote the session summary directly via `storage.save_summary(text)` from inside `disconnect()`. The `on_session_end()` callback fired from the receive-loop's `finally` clause, which runs BEFORE `disconnect()`'s post-receive-task body computes the new summary. Result: the framework's `_on_session_end` was reading `storage.get_latest_summary()` and attributing the **previous** session's summary to the **current** session's row. Critic flagged this as "every row gets the wrong summary in production."
+
+**Decision**: Provider stops touching storage. The `on_session_end` callback signature changes from `() → None` to `(summary: str | None) → None`. Provider computes the summary BEFORE cancelling the receive task and stashes it on `_pending_summary`; the receive loop's `finally` reads + clears it and passes to `on_session_end(summary)`. App layer owns the storage write via `storage.end_session(active_session_id, summary)` against the session id captured in `_on_transcript`.
+
+**Consequences**:
+
+- Layering win: provider is now purely a transport + summary generator. Storage of session-level state is the framework's responsibility, attributed to the right id from the same code path that opened the session.
+- The race is gone: summary, session id, and `end_session` write all happen in one place (app's `_on_session_end`).
+- A late transcript line arriving between summary computation and receive-task cancellation is dropped — accepted (microsecond window, transient OpenAI tail-events, no production impact).
+- Stub provider matches the new signature so end-to-end tests don't drift.
+
+---
+
+## 2026-04-30 — Session protocol additions: additive, no version bump (T1.12)
+
+**Context**: T1.12 needed three new client→server message types (`list_sessions`, `get_session`, `delete_session`) and three server→client replies (`sessions_list`, `session_detail`, `session_deleted`). The original sketch bumped `EXPECTED_PROTOCOL` from 2 → 3 to force a hard handshake mismatch on stale clients. Critic flagged that the ESP32 firmware client has zero use for browsable session history (no screen, no UI to render the list); bumping the version forces lockstep maintenance cost across every client for a PWA-only feature.
+
+**Decision**: Stay at protocol version 2. The new types are additive — old clients ignore unknown message types via the existing log-and-skip default in their dispatch loops (already documented for `dev_event` and `server_event`). New clients talking to old servers degrade silently to "empty list" rather than crashing.
+
+**Consequences**:
+
+- ESP32 firmware doesn't need to add session-handling code or bump its `EXPECTED_PROTOCOL`. Future PWA-only protocol additions follow this pattern.
+- Forward compat: a version bump remains the right move when, say, a future change to `claim_started` adds a new required field. We are not relaxing the bump rule, just clarifying its scope — bumps are for breaking changes, additions are free.
+
+---
+
+## 2026-04-30 — Deferred items on the session-history feature (T1.12)
+
+T1.12 ships with a privacy floor (`delete_session` + `clear_summaries`) but explicitly defers several real concerns. Documenting them so they don't get rediscovered as "we forgot":
+
+- **Retention policy**: no automatic expiry. Sessions accumulate forever until manually deleted. Acceptable for the canonical AbuelOS-persona use case today (one user, one device, finite storage). Revisit when (a) any persona ships to multiple users, or (b) a session count exceeds ~10k rows on a single device.
+- **Encryption at rest**: SQLite file is plaintext. The DB lives on a personal device the user owns; the OS-level disk encryption is the floor. Revisit if Huxley personas ship into shared infrastructure.
+- **Multilingual sessions**: a single session that switches `es-CO` → `en` mid-conversation has turns in two languages but no `language` column on `session_turns`. Caregiver UI can't filter or render per-language. Revisit if mid-conversation language switch becomes a documented user pattern.
+- **Transcript accuracy**: OpenAI Whisper is unreliable on dialect-heavy Spanish (a known pain point per Mario's user research). The caregiver-review use case implies the elderly user is being judged by transcripts that may misquote them. No UI affordance currently flags this. Revisit when the caregiver workflow is real (today it's hypothetical product framing).
+- **Telegram call/message capture**: a 4-minute Telegram call that landed inside a session does not appear in the transcript — the call's audio/text path bypasses the framework's transcript pipeline. Caregivers reviewing the day will see a gap. Tracked under T1.10 / T1.11; the schema is extensible (could add a `kind` column to `session_turns`) but that design work belongs with whatever ships richer Telegram audit.
