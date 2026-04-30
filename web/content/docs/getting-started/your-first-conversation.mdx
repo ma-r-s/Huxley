@@ -15,9 +15,13 @@ Each prompt below exercises a different part of the framework. Watching the serv
 
 ### 1. An info question
 
-> What time is it?
+> ¿Qué hora es?
 
 This routes to the **system** skill's `get_current_time` tool. The skill returns the time as JSON; the model narrates it back in the persona's voice. This is the simplest possible round trip — one turn, one tool call, no audio side effects, no proactive behavior.
+
+<Callout type="info">
+  BasicOS defaults to Spanish (`language_code: es` in `persona.yaml`). If you'd prefer English responses, change `language_code` and `transcription_language` to `en` and restart.
+</Callout>
 
 In your server log you'll see something like:
 
@@ -29,7 +33,7 @@ coord.audio_done turn=t-7f3 duration_ms=1840
 
 ### 2. An info question with a "thinking" chime
 
-> What's in the news?
+> ¿Qué hay de noticias?
 
 The **news** skill fetches headlines from Google News RSS and weather from Open-Meteo. It also returns a `PlaySound` side effect: a short chime that plays *immediately*, while the LLM is still composing its narration.
 
@@ -37,7 +41,15 @@ The chime is the framework's way of saying "I heard you, working on it." It's th
 
 ### 3. A long-form audio stream
 
-This exercise requires the **audiobooks** skill in your persona. Add `audiobooks: {}` to your `persona.yaml`'s `skills:` block, point it at a directory of audio files, and restart the server.
+This exercise requires the **audiobooks** skill. Add the following to your `persona.yaml`'s `skills:` block, populate `server/personas/<name>/data/audiobooks/` with audio files, and restart:
+
+```yaml
+skills:
+  audiobooks:
+    library: audiobooks        # relative to server/personas/<name>/data/
+    sounds_path: sounds
+    sounds_enabled: true
+```
 
 > Play something.
 
@@ -83,7 +95,7 @@ A small chime plays first (the `book_start` earcon). Then the audiobook itself �
 
 ### You can interrupt
 
-Hold the PTT button. The book stops *atomically* — within 30ms, audio cleared, ffmpeg killed, model interrupted. Your bookmark saves automatically. Resume any time with "Continue where we left off."
+Hold the PTT button. The book stops *atomically* — within 30ms, audio cleared, ffmpeg killed, model interrupted. Your bookmark saves automatically. Resume any time by asking the agent to continue.
 
 </Step>
 
@@ -95,11 +107,11 @@ This is the **factory pattern** at work. The skill didn't return audio bytes —
 
 This exercise requires the **timers** skill. Add `timers: {}` to your `persona.yaml`'s `skills:` block and restart.
 
-> Set a timer for 10 seconds.
+> Pon un timer de 10 segundos.
 
 The **timers** skill schedules a timer. Wait 10 seconds. The agent speaks **without you holding the button**:
 
-> "Time."
+> "Listo. Pasaron 10 segundos."
 
 This is **`inject_turn`** — a skill making the model speak first. Internally, the timer fired, called `ctx.inject_turn(message, priority=BLOCK_BEHIND_COMMS)`, and the framework decided when to surface it (immediately, since nothing else was speaking).
 
