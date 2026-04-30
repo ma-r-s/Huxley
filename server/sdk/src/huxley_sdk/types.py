@@ -15,11 +15,10 @@ them structurally.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol, runtime_checkable
-
-from collections.abc import Awaitable, Callable
 
 from huxley_sdk.catalog import Catalog
 

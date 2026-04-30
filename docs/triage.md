@@ -1396,14 +1396,48 @@ tests green; no test referenced the field by name.
 
 ### Stage 4 — `ClientEvent` skill subscription + `server_event` outbound
 
-**Status**: done (`<this commit>`, 2026-04-29) · **Effort actual**:
-~1 session, well below the 1.5–2 day estimate. The simplification
-relative to the original spec (no capability handshake, no protocol
-version bump, no firmware bundle, no `hardware.*` namespace)
-collapsed scope dramatically — a critic round before code is
-cheaper than a critic round after. **Closes the I/O plane.** All
+**Status**: done (`718547bc`, 2026-04-29; review-fix follow-up
+`<this commit>`, 2026-04-29) · **Effort actual**: ~1 session for
+impl + ~30 min for review fixes — well below the original 1.5–2
+day estimate. The pre-impl critic round collapsed scope (no
+capability handshake, no protocol version bump, no firmware bundle,
+no `hardware.*` namespace); the post-impl critic round caught two
+🔴 + four 🟠 (see Lessons below). **Closes the I/O plane.** All
 five primitives (`AudioStream`, `inject_turn`, `InputClaim`,
 `background_task`, `client_event` / `server_event`) are now live.
+
+**Review-fix follow-up** (commit `<this commit>`, 2026-04-29): the
+post-ship critic on `718547bc` found two correctness bugs
+(re-entrant subscribe crashes recv loop via `zip(strict=True)`
+ValueError; `ClientEventPanel.tsx` referenced CSS variables that
+weren't defined anywhere → silent pretend-theming) and four
+edge-case concerns. All fixed:
+
+- `_dispatch_client_event` snapshots the subs list before iterating
+  (`subs = list(self._client_event_subs.get(event, ()))`). Closes
+  the re-entrant-subscribe crash.
+- `AudioServer.disable_client_event_dispatch()` flips a gate at the
+  start of `Application._shutdown()`, BEFORE the unregister loop
+  and BEFORE `teardown_all`. Late-arriving `client_event` no longer
+  fires handlers through a half-stopped FocusManager / coordinator.
+- `SkillRegistry.teardown_all()` now takes an optional `on_error`
+  callback and is resilient to individual failures: one skill's
+  teardown raising never blocks the rest. Framework-side passes a
+  structlog `aexception` callback (SDK stays log-impl-agnostic).
+- `ClientEventPanel.tsx` drops the `var(--bg, ...)` indirection —
+  uses literal hex (slate-800 background, slate-700 inputs, blue-500
+  accent) so the dev panel reads OK regardless of host page theme.
+  Adds Escape-to-close (modal-dialog standard).
+- 5 new regression tests pin the fixes:
+  `test_handler_self_subscribing_does_not_crash_dispatch`,
+  `test_dispatch_uses_snapshot_not_live_reference`,
+  `test_disable_blocks_dispatch_to_skills`,
+  `test_disable_is_idempotent`,
+  `test_handler_persists_across_eviction`.
+
+The 🟡 critic items (auto-close UX, `var()` consistency with future
+PWA theming, `target.tagName` fallthrough cases, etc.) were noted
+but not landed in the fix commit — they're cleanup, not correctness.
 
 **Scope** (locked 2026-04-29 after critic round 1 → v2): the
 original spec called for a capability-handshake (`client_hello`

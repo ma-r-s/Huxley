@@ -14,18 +14,55 @@
  * Not for end users. Intentionally undocumented in user-facing surfaces;
  * mirrors the pattern of Ctrl+Shift+T (TweaksPanel) which is also a dev
  * affordance with no public-doc home.
+ *
+ * Styling: literal hex colors, no `var(--*)` indirection. The earlier
+ * version referenced theme tokens (`--bg`, `--fg`, `--accent`, ...) that
+ * weren't defined anywhere else in the PWA — pretend-theming that fell
+ * through to the inline fallbacks. Round-3 review (2026-04-29) caught
+ * this. Fix: drop the var() calls, use neutrals that read OK in both
+ * light and dark host pages. The panel is a dev-only modal; if/when
+ * the PWA grows a real theme system this component opts in then.
  */
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 type Props = {
   onClose: () => void;
   onSend: (event: string, data: Record<string, unknown>) => void;
 };
 
+// Color palette — neutral, contrast-safe against either light or dark
+// page backgrounds (the modal renders on top of a 45% black scrim).
+const COLORS = {
+  background: "#1f2937", // slate-800
+  text: "#f3f4f6", // gray-100
+  inputBackground: "#374151", // slate-700
+  border: "#4b5563", // gray-600
+  accent: "#3b82f6", // blue-500
+  accentText: "#ffffff",
+  errorText: "#fca5a5", // red-300
+  errorBackground: "rgba(220, 38, 38, 0.18)",
+  mono: "ui-monospace, SFMono-Regular, Menlo, Monaco, monospace",
+} as const;
+
 export function ClientEventPanel({ onClose, onSend }: Props) {
   const [eventKey, setEventKey] = useState("demo.ping");
   const [dataJson, setDataJson] = useState('{\n  "hello": "world"\n}');
   const [error, setError] = useState<string | null>(null);
+
+  // Escape-to-close — modal-dialog standard. The backdrop click handler
+  // catches mouse dismissals; this catches keyboard. Window-level
+  // listener so the panel doesn't have to be focused (the input or
+  // textarea typically holds focus).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
   const handleSend = useCallback(() => {
     let parsed: Record<string, unknown> = {};
@@ -74,13 +111,13 @@ export function ClientEventPanel({ onClose, onSend }: Props) {
         // Click inside doesn't dismiss.
         onClick={(e) => e.stopPropagation()}
         style={{
-          background: "var(--bg, #fff)",
-          color: "var(--fg, #111)",
+          background: COLORS.background,
+          color: COLORS.text,
           padding: "1rem 1.25rem",
           borderRadius: 8,
           minWidth: 380,
           maxWidth: 520,
-          fontFamily: "var(--mono, monospace)",
+          fontFamily: COLORS.mono,
           fontSize: 13,
           boxShadow: "0 8px 32px rgba(0,0,0,0.35)",
         }}
@@ -125,9 +162,9 @@ export function ClientEventPanel({ onClose, onSend }: Props) {
               padding: 6,
               fontFamily: "inherit",
               fontSize: "inherit",
-              background: "var(--input-bg, #f4f4f5)",
+              background: COLORS.inputBackground,
               color: "inherit",
-              border: "1px solid var(--border, #ddd)",
+              border: `1px solid ${COLORS.border}`,
               borderRadius: 4,
             }}
             placeholder="my-skill.event_name"
@@ -148,9 +185,9 @@ export function ClientEventPanel({ onClose, onSend }: Props) {
               padding: 6,
               fontFamily: "inherit",
               fontSize: "inherit",
-              background: "var(--input-bg, #f4f4f5)",
+              background: COLORS.inputBackground,
               color: "inherit",
-              border: "1px solid var(--border, #ddd)",
+              border: `1px solid ${COLORS.border}`,
               borderRadius: 4,
               resize: "vertical",
             }}
@@ -160,10 +197,10 @@ export function ClientEventPanel({ onClose, onSend }: Props) {
           <div
             role="alert"
             style={{
-              color: "#c0392b",
+              color: COLORS.errorText,
               marginBottom: 8,
               padding: 6,
-              background: "rgba(192,57,43,0.08)",
+              background: COLORS.errorBackground,
               borderRadius: 4,
             }}
           >
@@ -179,7 +216,7 @@ export function ClientEventPanel({ onClose, onSend }: Props) {
               cursor: "pointer",
               background: "transparent",
               color: "inherit",
-              border: "1px solid var(--border, #ddd)",
+              border: `1px solid ${COLORS.border}`,
               borderRadius: 4,
             }}
           >
@@ -191,8 +228,8 @@ export function ClientEventPanel({ onClose, onSend }: Props) {
             style={{
               padding: "6px 12px",
               cursor: "pointer",
-              background: "var(--accent, #2563eb)",
-              color: "var(--accent-fg, #fff)",
+              background: COLORS.accent,
+              color: COLORS.accentText,
               border: "none",
               borderRadius: 4,
             }}

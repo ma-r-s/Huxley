@@ -132,6 +132,12 @@ class AudioServer:
         self._client_event_subs: dict[
             str, list[tuple[str, Callable[[dict[str, Any]], Awaitable[None]]]]
         ] = {}
+        # Gate for `_dispatch_client_event`. Flipped to False by
+        # `disable_client_event_dispatch()` at the start of shutdown so
+        # late-arriving messages can't trigger handlers that would
+        # route through a half-stopped framework. Default-on so steady
+        # state is unaffected.
+        self._dispatching_enabled: bool = True
 
     @property
     def has_client(self) -> bool:
@@ -417,6 +423,19 @@ class AudioServer:
             else:
                 del self._client_event_subs[key]
 
+    def disable_client_event_dispatch(self) -> None:
+        """Stop dispatching inbound `client_event` to skill subscribers.
+
+        Called at the start of shutdown — BEFORE the per-skill
+        unregister loop and BEFORE `teardown_all` — so a `client_event`
+        arriving mid-shutdown can't fire a still-registered handler
+        whose backing skill (or shared focus_manager / coordinator)
+        is mid-stop. Inbound messages still receive the existing
+        `client.<event>` telemetry log; only the skill-dispatch fan-out
+        is gated. Idempotent.
+        """
+        self._dispatching_enabled = False
+
     async def _dispatch_client_event(self, event: str, data: dict[str, Any]) -> None:
         """Invoke every registered handler for `event` concurrently.
 
@@ -425,8 +444,30 @@ class AudioServer:
         `asyncio.gather(return_exceptions=True)` so all results
         materialize, then walk results to log failures via
         `aexception` (preserving the traceback).
+
+        **Snapshot before iterating.** A handler that calls
+        `ctx.subscribe_client_event(<same key>, ...)` from inside its
+        body would otherwise mutate the live list we're iterating —
+        `setdefault(key, []).append(...)` returns the existing list
+        when the key already exists. Without a snapshot the post-gather
+        `zip(subs, results, strict=True)` raises ValueError because
+        `len(subs) > len(results)`, that propagates up through
+        `_dispatch` into the recv loop (which only catches
+        `ConnectionClosed`), the recv loop dies, and the client gets
+        evicted with no diagnostic. Snapshotting via `list(...)` is a
+        ~5ns tuple copy that closes the entire class. (Round-3 review,
+        2026-04-29.)
+
+        **Gated by `_dispatching_enabled`.** During shutdown the
+        framework flips this off BEFORE the per-skill unregister loop
+        starts, so a `client_event` arriving mid-shutdown can't trigger
+        a still-registered handler that would route through a
+        half-stopped FocusManager / coordinator. Empty fast-path so the
+        gate is free in steady state.
         """
-        subs = self._client_event_subs.get(event)
+        if not self._dispatching_enabled:
+            return
+        subs = list(self._client_event_subs.get(event, ()))
         if not subs:
             return
         results = await asyncio.gather(
