@@ -364,3 +364,129 @@ class TestSubscriptionPersistsAcrossReconnect:
                     if count >= 2:
                         break
             assert count == 2
+
+    @pytest.mark.asyncio
+    async def test_handler_persists_across_eviction(self) -> None:
+        # The realistic "reconnect" pattern: ws2 connects while ws1 is
+        # still alive, server evicts ws1 (close 1001 "Replaced by new
+        # client", per server.py:181-193), ws2 takes over. Round-3
+        # review (R3-F6) flagged that the prior reconnect test
+        # cleanly closed ws1 first — never exercised the eviction
+        # code path. Subscriptions should survive eviction by
+        # construction (registry lives on AudioServer, not on the
+        # connection); this test pins that.
+        async with _server_on_ephemeral_port() as (url, server):
+            count = 0
+
+            async def on_event(_data: dict[str, Any]) -> None:
+                nonlocal count
+                count += 1
+
+            server.register_client_event_subscriber("toy", "demo.tick", on_event)
+
+            ws1 = await connect(url).__aenter__()
+            try:
+                await _drain_until(ws1, lambda m: m["type"] == "hello")
+                # ws2 connects while ws1 is still open → server evicts ws1.
+                async with connect(url) as ws2:
+                    await _drain_until(ws2, lambda m: m["type"] == "hello")
+                    await ws2.send(json.dumps({"type": "client_event", "event": "demo.tick"}))
+                    for _ in range(20):
+                        await asyncio.sleep(0.02)
+                        if count >= 1:
+                            break
+                    assert count == 1, "subscription must survive WS eviction"
+            finally:
+                # ws1 was forcibly closed by the server; this is just
+                # cleanup so the asyncio context manager doesn't complain.
+                with contextlib.suppress(Exception):
+                    await ws1.close()
+
+
+class TestReentrantSubscribeDoesNotCrashRecvLoop:
+    """R3-F1: a handler that calls `subscribe_client_event` from inside
+    its body for the SAME key it was just dispatched on used to mutate
+    the live `subs` list mid-iteration — `setdefault(key, []).append(...)`
+    appends to the SAME list `_dispatch_client_event` was holding.
+    After the gather await, `len(subs) > len(results)` and
+    `zip(strict=True)` raised ValueError, propagating up through
+    `_dispatch` into the recv loop (which only catches
+    `ConnectionClosed`). Result: recv loop dies, client gets evicted,
+    no diagnostic. Fix: snapshot `subs` before iterating.
+
+    No first-party skill self-subscribes today, but the panic / hass /
+    knob skills the I/O plane is supposed to unblock are likely to.
+    Lock the snapshot semantics now."""
+
+    @pytest.mark.asyncio
+    async def test_handler_self_subscribing_does_not_crash_dispatch(self) -> None:
+        server = _make_server()
+
+        async def first_handler(_data: dict[str, Any]) -> None:
+            # Re-enter the registry from inside a handler. With the
+            # pre-fix code this mutates the live `subs` list and the
+            # post-gather zip(strict=True) raises ValueError.
+            server.register_client_event_subscriber("late", "k", AsyncMock())
+
+        server.register_client_event_subscriber("first", "k", first_handler)
+        # Pre-fix: this raises ValueError. Post-fix: completes cleanly.
+        await server._dispatch_client_event("k", {})
+        # The newly-registered handler is in the registry but not
+        # invoked on THIS dispatch (snapshot was taken before the
+        # mutation). Fire again to confirm it's now reachable.
+        snapshot_after = list(server._client_event_subs.get("k", ()))
+        assert len(snapshot_after) == 2
+
+    @pytest.mark.asyncio
+    async def test_dispatch_uses_snapshot_not_live_reference(self) -> None:
+        # Stronger version: the snapshot also has to survive a removal
+        # mid-dispatch (a handler that unsubscribes another handler).
+        # If `_dispatch` walked the live list, after the unregister the
+        # `zip(strict=True)` would fail with len(subs) < len(results).
+        server = _make_server()
+        other = AsyncMock()
+
+        async def removes_other(_data: dict[str, Any]) -> None:
+            server.unregister_client_event_subscribers("other_skill")
+
+        server.register_client_event_subscriber("remover", "k", removes_other)
+        server.register_client_event_subscriber("other_skill", "k", other)
+        # Both handlers fire on this dispatch (snapshot was taken
+        # before `removes_other` mutated the registry). The unregister
+        # only takes effect for SUBSEQUENT dispatches.
+        await server._dispatch_client_event("k", {})
+        other.assert_awaited_once()
+        # Confirm the registry actually reflects the removal post-dispatch.
+        assert "other_skill" not in {sk for sk, _ in server._client_event_subs.get("k", ())}
+
+
+class TestDispatchGatedDuringShutdown:
+    """R3-F2: between `unregister_client_event_subscribers(...)` for the
+    first skill and `teardown_all` finishing, a `client_event` arriving
+    could fire a still-registered handler that routes through a
+    half-stopped FocusManager / coordinator. `disable_client_event_dispatch`
+    is the framework's first shutdown step; once flipped, dispatch
+    silently drops. The telemetry log keeps running."""
+
+    @pytest.mark.asyncio
+    async def test_disable_blocks_dispatch_to_skills(self) -> None:
+        server = _make_server()
+        h = AsyncMock()
+        server.register_client_event_subscriber("toy", "k", h)
+
+        # Pre-disable: handler fires.
+        await server._dispatch_client_event("k", {"v": 1})
+        h.assert_awaited_once_with({"v": 1})
+
+        # Disable, then fire again: handler must not run.
+        h.reset_mock()
+        server.disable_client_event_dispatch()
+        await server._dispatch_client_event("k", {"v": 2})
+        h.assert_not_awaited()
+
+    def test_disable_is_idempotent(self) -> None:
+        server = _make_server()
+        server.disable_client_event_dispatch()
+        server.disable_client_event_dispatch()
+        # Just confirms no exception.
+        assert server._dispatching_enabled is False

@@ -297,6 +297,15 @@ class Application:
         """Tear down all subsystems in reverse order."""
         await logger.ainfo("huxley_shutting_down")
         self._shutting_down = True
+        # First: stop dispatching client_event to skills. A handler
+        # firing mid-shutdown could route through a coordinator /
+        # FocusManager we're about to stop. Inbound messages still
+        # log telemetry; only the skill-dispatch fan-out is gated.
+        # Round-3 review (2026-04-29) found a window between this
+        # method's per-skill unregister loop and the actual shutdown
+        # of FocusManager / coordinator where a freshly-arrived event
+        # could land in a half-stopped graph.
+        self.server.disable_client_event_dispatch()
 
         if self._reconnect_task is not None and not self._reconnect_task.done():
             self._reconnect_task.cancel()
@@ -321,7 +330,17 @@ class Application:
         # registry is a single dict.
         for name in self.skill_registry.skill_names:
             self.server.unregister_client_event_subscribers(name)
-        await self.skill_registry.teardown_all()
+
+        async def _on_teardown_error(skill_name: str, exc: BaseException) -> None:
+            # SDK can't depend on structlog; framework supplies the
+            # logging callback so a buggy skill's teardown is loud
+            # without blocking the rest. Round-3 review (2026-04-29):
+            # before this, an unguarded `for x: await x.teardown()`
+            # let one raising skill leave B+C up with live background
+            # tasks until task_supervisor.stop() cancelled them.
+            await logger.aexception("skill.teardown_failed", skill=skill_name, exc_info=exc)
+
+        await self.skill_registry.teardown_all(on_error=_on_teardown_error)
         # Cancel any background tasks the skills had supervised. Skills
         # got first crack at clean cancellation via their own teardown
         # (which can call `handle.cancel()` for tasks they want to stop

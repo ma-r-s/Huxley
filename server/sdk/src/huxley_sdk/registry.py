@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from huxley_sdk.types import Skill, SkillContext, ToolResult
 
@@ -127,10 +127,35 @@ class SkillRegistry:
             if callable(reconf):
                 await reconf(build_context(name))
 
-    async def teardown_all(self) -> None:
-        """Call teardown() on all registered skills."""
-        for skill in self._skills.values():
-            await skill.teardown()
+    async def teardown_all(
+        self,
+        on_error: Callable[[str, BaseException], Awaitable[None]] | None = None,
+    ) -> None:
+        """Call `teardown()` on every registered skill, resilient to
+        individual failures.
+
+        One skill's teardown raising must NEVER block the rest — that's
+        the difference between a single buggy skill and a half-torn-
+        down framework where some background tasks survive shutdown
+        and some don't. The optional `on_error` callback receives
+        `(skill_name, exception)` for each failure so the framework can
+        log via its preferred channel (the SDK can't depend on
+        structlog).
+
+        If `on_error` is None, failures are silently swallowed — the
+        framework should always pass a handler. Made optional only so
+        a test fixture without a logger doesn't have to wire one.
+        Round-3 review (2026-04-29) noted the previous unguarded loop
+        could leave skills B+C up while A's teardown threw, with their
+        background tasks still running until `task_supervisor.stop()`
+        cancelled them later in the shutdown — silent inconsistency.
+        """
+        for name, skill in self._skills.items():
+            try:
+                await skill.teardown()
+            except Exception as exc:
+                if on_error is not None:
+                    await on_error(name, exc)
 
     @property
     def skill_names(self) -> list[str]:
