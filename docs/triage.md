@@ -1767,10 +1767,10 @@ Plus stream mock signatures in `test_skill.py` and `test_coordinator_skill_integ
 
 ## T1.8 — `huxley-skill-reminders` (full medication/appointment UX)
 
-**Status**: in_progress (2026-04-29) · **Effort**: ~1 week ·
-**Blockers**: cleared (Stage 3b persistence shipped; Stage 5
-`BLOCK_BEHIND_COMMS` shipped; LLM-driven ack pattern locked
-2026-04-21). No framework changes needed.
+**Status**: done (`a4beba69`, 2026-04-29) · **Effort**: ~1 session
+(matched the ~1-week estimate budgeted for design + critic + impl +
+docs). Zero framework changes — composes existing `inject_turn` +
+`background_task` + skill-owned SQLite storage.
 
 **MVP shipped (2026-04-18)**: `server/skills/timers/` — proves the
 full inject_turn path works end-to-end. User says "recuérdame en 5
@@ -1907,7 +1907,7 @@ The earlier 2026-04-21 decisions stand:
       index entry, `docs/personas/abuelos.md` mention, AbuelOS
       `persona.yaml` change.
 - [ ] `uv run ruff check server/`, `uv run mypy server/sdk/src
-  server/runtime/src server/skills/reminders/src`, and
+server/runtime/src server/skills/reminders/src`, and
       `uv run --package huxley-skill-reminders pytest` all green.
 - [ ] Workspace `huxley` runtime tests still green.
 
