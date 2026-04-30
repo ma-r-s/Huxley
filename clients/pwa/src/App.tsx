@@ -8,6 +8,7 @@ import { Orb } from "./components/Orb.js";
 import { TranscriptDrawer } from "./components/TranscriptDrawer.js";
 import { SessionsSheet } from "./components/SessionsSheet.js";
 import { DeviceSheet } from "./components/DeviceSheet.js";
+import { LogsSheet } from "./components/LogsSheet.js";
 import { ClientEventPanel } from "./components/ClientEventPanel.js";
 import { TweaksPanel } from "./components/TweaksPanel.js";
 import type { OrbState, Appearance, PersonaEntry, AppState } from "./types.js";
@@ -84,9 +85,9 @@ export function App() {
 
   // ── UI state ─────────────────────────────────────────────────────────────
   const [transcriptOpen, setTranscriptOpen] = useState(false);
-  const [activeSheet, setActiveSheet] = useState<"sessions" | "device" | null>(
-    null,
-  );
+  const [activeSheet, setActiveSheet] = useState<
+    "sessions" | "device" | "logs" | null
+  >(null);
   const [booted, setBooted] = useState(false);
   const [bootOrbState, setBootOrbState] = useState<OrbState>("wake");
 
@@ -677,7 +678,15 @@ export function App() {
             }}
             onReload={() => ws.sendClientEvent("ui.reload_skills")}
             onRestart={() => ws.sendClientEvent("ui.restart_server")}
-            onViewLogs={() => setActiveSheet(null)}
+            onViewLogs={() => setActiveSheet("logs")}
+          />
+        )}
+        {activeSheet === "logs" && (
+          <LogsSheet
+            onClose={() => setActiveSheet(null)}
+            statusLog={ws.statusLog}
+            devEvents={ws.devEvents}
+            onClear={ws.clearLog}
           />
         )}
       </div>

@@ -41,6 +41,13 @@ const fr = {
         yesterday: "Hier",
       },
     },
+    logs: {
+      title: "Journaux",
+      recent: "Session en cours",
+      empty: "Aucun événement — démarrez un tour ou envoyez un client_event.",
+      clear: "Effacer",
+      statusTag: "statut",
+    },
     device: {
       title: "Appareil",
       headline: "Ton Huxley",
@@ -51,7 +58,6 @@ const fr = {
         appearance: "Apparence",
         language: "Langue",
         persona: "Persona",
-        health: "État",
         maintenance: "Maintenance",
       },
       appearance: {
@@ -85,18 +91,10 @@ const fr = {
           moss: "Mousse",
         },
       },
-      health: {
-        storage: "Stockage",
-        lastSession: "Dernière session",
-        skillsLoaded: "Skills chargées",
-        spend: "Dépenses",
-        spendValue: "{{amount}} $ ce cycle",
-      },
       maintenance: {
         reloadSkills: "Recharger les skills",
         restartServer: "Redémarrer le serveur",
         viewLogs: "Voir les logs",
-        apiKey: "Clé API",
       },
     },
   },

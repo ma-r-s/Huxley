@@ -448,6 +448,13 @@ export function useWs() {
     sendRaw({ type: "reset" });
   }, [cancelSilenceTimer, setThinkingActiveSync, sendRaw]);
 
+  // Clears the in-memory log buffers (status + dev events). Local-only —
+  // does not touch the server session. Used by LogsSheet's "Clear" button.
+  const clearLog = useCallback(() => {
+    setStatusLog([]);
+    setDevEvents([]);
+  }, []);
+
   // ── Public API ───────────────────────────────────────────────────────────
   return {
     // State
@@ -478,6 +485,7 @@ export function useWs() {
     pttStop,
     wakeWord,
     reset,
+    clearLog,
     sendAudio: (data: string) => sendRaw({ type: "audio", data }),
     sendClientEvent,
 

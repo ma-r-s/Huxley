@@ -41,6 +41,13 @@ const es = {
         yesterday: "Ayer",
       },
     },
+    logs: {
+      title: "Registros",
+      recent: "Sesión actual",
+      empty: "Aún no hay eventos — inicia un turno o envía un client_event.",
+      clear: "Limpiar",
+      statusTag: "estado",
+    },
     device: {
       title: "Dispositivo",
       headline: "Tu Huxley",
@@ -51,7 +58,6 @@ const es = {
         appearance: "Apariencia",
         language: "Idioma",
         persona: "Persona",
-        health: "Estado",
         maintenance: "Mantenimiento",
       },
       appearance: {
@@ -85,18 +91,10 @@ const es = {
           moss: "Musgo",
         },
       },
-      health: {
-        storage: "Almacenamiento",
-        lastSession: "Última sesión",
-        skillsLoaded: "Skills cargadas",
-        spend: "Gasto",
-        spendValue: "${{amount}} este ciclo",
-      },
       maintenance: {
         reloadSkills: "Recargar skills",
         restartServer: "Reiniciar servidor",
         viewLogs: "Ver logs",
-        apiKey: "Clave API",
       },
     },
   },

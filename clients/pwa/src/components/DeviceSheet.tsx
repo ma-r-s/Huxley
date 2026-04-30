@@ -178,25 +178,6 @@ function Section({
   );
 }
 
-function Stat({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "baseline",
-        padding: "12px 0",
-        borderBottom: "1px solid var(--hux-fg-line)",
-        fontFamily: "var(--hux-sans)",
-        fontSize: 14,
-      }}
-    >
-      <span style={{ color: "var(--hux-fg-dim)" }}>{label}</span>
-      <span>{value}</span>
-    </div>
-  );
-}
-
 // ── Appearance picker ─────────────────────────────────────────────────────
 const ACCENTS = [
   { id: "coral", name: "Coral", l: 0.62, c: 0.19, h: 23 },
@@ -574,10 +555,6 @@ export interface DeviceInfo {
   url: string;
   persona: string;
   personas: PersonaEntry[];
-  spend: number;
-  storage: string;
-  lastSession: string;
-  skillsCount: number;
 }
 
 interface DeviceSheetProps {
@@ -608,8 +585,6 @@ export function DeviceSheet({
   onViewLogs,
 }: DeviceSheetProps) {
   const { t } = useTranslation();
-  const [showKey, setShowKey] = useState(false);
-  void showKey; // key management placeholder — no API yet
 
   const accentName =
     ACCENTS.find((a) => a.id === appearance.accent)?.name ?? "Custom";
@@ -699,24 +674,6 @@ export function DeviceSheet({
           />
         </Section>
 
-        <Section label={t("device.sections.health")}>
-          <Stat label={t("device.health.storage")} value={device.storage} />
-          <Stat
-            label={t("device.health.lastSession")}
-            value={device.lastSession}
-          />
-          <Stat
-            label={t("device.health.skillsLoaded")}
-            value={device.skillsCount}
-          />
-          <Stat
-            label={t("device.health.spend")}
-            value={t("device.health.spendValue", {
-              amount: device.spend.toFixed(2),
-            })}
-          />
-        </Section>
-
         <Section label={t("device.sections.maintenance")}>
           <button style={S.rowBtn} onClick={onReload}>
             <span>{t("device.maintenance.reloadSkills")}</span>
@@ -732,15 +689,6 @@ export function DeviceSheet({
           </button>
           <button style={S.rowBtn} onClick={onViewLogs}>
             <span>{t("device.maintenance.viewLogs")}</span>
-            <span style={{ fontSize: 13, color: "var(--hux-fg-dim)" }}>
-              {"\u2192"}
-            </span>
-          </button>
-          <button
-            style={{ ...S.rowBtn, opacity: 0.5 }}
-            onClick={() => setShowKey((v) => !v)}
-          >
-            <span>{t("device.maintenance.apiKey")}</span>
             <span style={{ fontSize: 13, color: "var(--hux-fg-dim)" }}>
               {"\u2192"}
             </span>
