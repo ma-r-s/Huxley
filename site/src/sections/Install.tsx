@@ -104,7 +104,7 @@ $ open http://localhost:5174   # hold the button, speak.`}
           </a>
           <a
             style={{ ...chipGhost, padding: "14px 24px", fontSize: 13 }}
-            href="#"
+            href="/docs"
           >
             {t("install.ctaDocs")}
           </a>
@@ -168,10 +168,7 @@ export function Footer() {
           >
             {t("footer.linkDiscussions")}
           </a>
-          <a
-            style={linkStyle}
-            href="https://github.com/ma-r-s/Huxley/tree/main/docs"
-          >
+          <a style={linkStyle} href="/docs">
             {t("footer.linkDocs")}
           </a>
         </div>
