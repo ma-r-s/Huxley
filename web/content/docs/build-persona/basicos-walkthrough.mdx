@@ -9,7 +9,7 @@ This page reads BasicOS top to bottom and explains every choice. Use it as a sta
 
 ## The full file
 
-Here's `server/personas/basicos/persona.yaml`. Unlike a complex persona, this one is short enough to read in full:
+Here's a representative version of `server/personas/basicos/persona.yaml`, abbreviated slightly for readability (inline comments and some system prompt detail omitted). The actual file at `server/personas/basicos/persona.yaml` is the source of truth.
 
 ```yaml title="server/personas/basicos/persona.yaml"
 version: 1
@@ -179,7 +179,7 @@ BasicOS is intentionally minimal:
   </Folder>
 </Files>
 
-No sounds directory, no media library — just the database the framework creates on first run. This is the minimum viable persona directory.
+No sounds directory, no media library. The `data/basicos.db` file doesn't exist in a fresh clone — the framework creates it on first run. This is the minimum viable persona directory.
 
 ## What this teaches
 
@@ -197,7 +197,7 @@ From this template:
 - **The user description** — BasicOS has none (it's persona-for-developers). Yours should establish who the user is, right at the top of the prompt.
 - **The voice** — match it to your user's expectations. `alloy` is neutral; other voices carry more personality.
 - **The language** — swap `es` for your user's language. The `i18n` block is optional if you only need one.
-- **The skill list** — add skills for everything your user actually needs. Remove `news` if they don't need headlines. Add `timers` if they need reminders.
+- **The skill list** — add skills for everything your user actually needs. Remove `news` if they don't need headlines. Add `timers` for one-shot countdowns ("timer de 5 minutos"). Add `reminders` for scheduled or recurring prompts ("recuérdame tomar la pastilla todos los días a las 9").
 - **The constraints** — add `never_say_no` if your user shouldn't get stuck. Add `confirm_if_unclear` if guessing wrong is costly.
 
 The structure (identity → constraints → ui_strings → i18n → skills) stays the same.

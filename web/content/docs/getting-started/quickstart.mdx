@@ -41,10 +41,13 @@ cd Huxley
 ### Drop your API key into `.env`
 
 ```bash
-echo "HUXLEY_OPENAI_API_KEY=sk-..." > server/runtime/.env
+cat > server/runtime/.env << 'EOF'
+HUXLEY_OPENAI_API_KEY=sk-...
+HUXLEY_PERSONA=basicos
+EOF
 ```
 
-The server loads this file at startup. Pick a persona by adding `HUXLEY_PERSONA=basicos` to the `.env` — the repo ships two personas (`abuelos` and `basicos`), and the loader requires you to choose explicitly when more than one is available.
+The server loads this file at startup. Both variables are required: the repo ships two personas (`abuelos` and `basicos`), and the loader requires you to choose explicitly when more than one is available.
 
 </Step>
 
@@ -94,16 +97,14 @@ Open the URL it prints (usually `http://localhost:5174`). You'll see a one-butto
 
 Hold the button in the middle of the page and speak. Try one of these:
 
-> What time is it?
+> ¿Qué hora es?
 
-> What's in the news?
-
-> Set a timer for five minutes.
+> ¿Qué hay de noticias?
 
 Release the button. The agent listens, decides what to do, then speaks back through your speakers. The orb pulses while it thinks, glows while it speaks, and dims when it's listening.
 
 <Callout type="info">
-  The persona determines what language the agent speaks, what tools it has, and how it responds. Switch the persona file and everything changes — the framework itself has no preferred language or personality.
+  **The persona controls the language.** BasicOS defaults to Spanish — that's what `language_code: es` in `persona.yaml` declares. To switch to English, open `persona.yaml` and change `language_code` and `transcription_language` to `en`. The framework itself has no preferred language; swap the persona and everything changes.
 </Callout>
 
 ## What just happened?
@@ -175,9 +176,10 @@ You're up. Now learn how it works.
 
 <Accordions>
   <Accordion title="The server logs persona.load_failed">
-    The persona file at `server/personas/basicos/persona.yaml` is missing
-    or invalid. If you cloned cleanly, this shouldn't happen — file an
-    issue. If you've been editing it, check for YAML indentation problems.
+    The persona file at `server/personas/<your-persona>/persona.yaml` is
+    missing or invalid. If you cloned cleanly and haven't edited it, file
+    an issue. If you've been editing it, check for YAML indentation
+    problems.
   </Accordion>
   <Accordion title="The browser shows 'Connecting...' and never moves">
     The server isn't reachable. Check terminal 1 — does it say
