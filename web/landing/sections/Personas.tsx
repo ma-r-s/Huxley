@@ -1,5 +1,5 @@
 "use client";
-// Personas grid + active-persona detail. Six personas (Abuelo one of them);
+// Personas grid + active-persona detail. Five real shipped personas;
 // click a cell to swap the description + YAML. Cells stagger in.
 
 import { useState } from "react";
@@ -24,166 +24,131 @@ const PERSONAS: Persona[] = [
     tag: "Elderly companion · Español",
     desc: "Slow warm voice for an elderly blind user. Audiobooks, radio, Telegram calls. Never says no.",
     facets: [
-      ["Voice", 'OpenAI Realtime · "alloy" at 0.85×'],
-      ["Language", "es-ES · slow · warm"],
-      ["Skills", "audiobooks · radio · news · timers · comms-telegram"],
+      ["Voice", 'OpenAI Realtime · "coral" · warm'],
+      ["Language", "es · slow · warm"],
+      ["Skills", "audiobooks · radio · news · search · timers · reminders · telegram"],
       ["Hardware", "WebSocket client, mic + speaker"],
       ["Rule", "never_say_no"],
     ],
     yaml: `name: Abuelo
-voice: alloy
+voice: coral
 language_code: es
 system_prompt: |
-  Eres Abuelo. Hablas despacio, con calma.
-  Nunca dices "no puedo". Siempre intentas ayudar.
-constraints: [never_say_no, confirm_destructive]
+  Eres un asistente de voz para una persona mayor ciega.
+  Hablas despacio, con calma. Nunca dices "no puedo".
+  Frases cortas. Palabras sencillas.
+constraints: [never_say_no, echo_short_input, confirm_if_unclear]
 skills:
-  audiobooks: { library: /media/audiolibros }
+  audiobooks: { library: audiobooks }
   radio: {}
-  news: { location: Madrid, ES }
+  news: { location: Villavicencio, CO }
+  search: { safesearch: moderate }
   timers: {}
-  comms-telegram: { api_id: ..., api_hash: ... }`,
+  reminders: { timezone: America/Bogota }
+  telegram: { contacts: { ... } }`,
   },
   {
-    id: "studio",
-    name: "Studio",
-    tag: "Writer’s desk companion",
-    desc: "Quiet, precise. Captures thoughts mid-sentence, keeps a running journal, never interrupts.",
+    id: "basicos",
+    name: "Basic",
+    tag: "Developer reference · English",
+    desc: "Minimal, terse English assistant. Two skills, a short prompt. The reference implementation for building your own persona.",
     facets: [
-      ["Voice", "Neutral · terse · observational"],
-      ["Language", "en-US · normal cadence"],
-      ["Skills", "journal · notes · dictionary · translate · focus"],
-      ["Hardware", "Desktop browser · push-to-talk"],
-      ["Rule", "speak_only_when_asked"],
+      ["Voice", 'OpenAI Realtime · "alloy" · neutral'],
+      ["Language", "en · terse · neutral"],
+      ["Skills", "news · system"],
+      ["Hardware", "WebSocket client, any browser"],
+      ["Rule", "confirm_destructive"],
     ],
-    yaml: `name: Studio
-voice: echo
-language_code: en
-system_prompt: |
-  You are a quiet writing companion.
-  Never interrupt. Speak only when asked.
-  Keep answers to one sentence unless expanded.
-constraints: [speak_only_when_asked, no_small_talk]
-skills:
-  journal: { path: ~/Documents/journal }
-  notes: {}
-  dictionary: {}
-  translate: {}
-  focus: { default: 25m }`,
-  },
-  {
-    id: "household",
-    name: "Household",
-    tag: "Family kitchen counter",
-    desc: "Shared by a family of five. Lists, schedules, who-picks-up-who, the timer that saved the roast.",
-    facets: [
-      ["Voice", "Bright · efficient · bilingual"],
-      ["Language", "en-US / es-MX auto-switch"],
-      [
-        "Skills",
-        "shopping-list · calendar · reminders · hue · recipes · timers",
-      ],
-      ["Hardware", "ESP32 countertop puck"],
-      ["Rule", "multi_user_voice_id"],
-    ],
-    yaml: `name: Household
-voice: nova
-language_code: auto
-system_prompt: |
-  Shared family assistant. Confirm who is asking
-  when tasks are personal. Keep answers brief.
-constraints: [multi_user_voice_id, confirm_purchases]
-skills:
-  shopping-list: { shared: true }
-  calendar: { provider: google }
-  reminders: {}
-  hue: { bridge: 10.0.1.4 }
-  recipes: {}
-  timers: {}`,
-  },
-  {
-    id: "devops",
-    name: "Ops",
-    tag: "On-call SRE",
-    desc: "Wakes you at 3am. Reads the alert, pages the runbook, can restart the service if you say the word.",
-    facets: [
-      ["Voice", "Flat · urgent · no filler"],
-      ["Language", "en-US · technical"],
-      ["Skills", "server-monitor · github · shell · ntfy · pagerduty"],
-      ["Hardware", "Phone app · Bluetooth headset"],
-      ["Rule", "confirm_destructive_twice"],
-    ],
-    yaml: `name: Ops
-voice: echo
-language_code: en
-system_prompt: |
-  On-call SRE assistant. Lead with severity.
-  Read the alert, then the runbook. Never act
-  on prod without double confirmation.
-constraints: [confirm_destructive_twice, audit_log]
-skills:
-  server-monitor: { targets: [api, web, db] }
-  github: { org: acme }
-  shell: { allow: [kubectl, systemctl] }
-  ntfy: {}
-  pagerduty: {}`,
-  },
-  {
-    id: "tutor",
-    name: "Tutor",
-    tag: "After-school reading coach",
-    desc: "For a 9-year-old learning to read in French. Patient. Repeats. Celebrates small wins.",
-    facets: [
-      ["Voice", "Cheerful · clear · encouraging"],
-      ["Language", "fr-FR · slow"],
-      [
-        "Skills",
-        "storytime · flashcards · quiz · language-tutor · affirmations",
-      ],
-      ["Hardware", "Tablet · touch-to-talk"],
-      ["Rule", "positive_only"],
-    ],
-    yaml: `name: Tutor
-voice: shimmer
-language_code: fr
-system_prompt: |
-  Tu es un tuteur de lecture pour un enfant.
-  Parle lentement. Félicite les essais.
-  Jamais de correction négative.
-constraints: [positive_only, session_cap_20m]
-skills:
-  storytime: { library: /media/livres }
-  flashcards: { deck: cp }
-  quiz: {}
-  language-tutor: { level: a1 }
-  affirmations: {}`,
-  },
-  {
-    id: "clinic",
-    name: "Clinic",
-    tag: "Solo practitioner front desk",
-    desc: "Books, reschedules, reads back charts. Transcripts stay on the local machine; the persona pattern shows how to keep PHI out of cloud logs (regulatory compliance is the operator's responsibility).",
-    facets: [
-      ["Voice", "Professional · calm · clinical"],
-      ["Language", "en-US · medical"],
-      ["Skills", "calendar · medications · vitals-log · email · pdf-reader"],
-      ["Hardware", "Desk microphone · local server"],
-      ["Rule", "no_cloud_storage"],
-    ],
-    yaml: `name: Clinic
+    yaml: `name: Basic
 voice: alloy
 language_code: en
 system_prompt: |
-  Front-desk assistant for a solo clinic.
-  Never discuss PHI outside an active session.
-  All transcripts stay on this machine.
-constraints: [no_cloud_storage, redact_pii_in_logs]
+  Direct personal assistant. No greetings, no fluff.
+  Reply with the fewest words needed.
+  NEVER invent news — call get_news first.
+constraints: [confirm_destructive]
 skills:
-  calendar: { provider: local }
-  medications: {}
-  vitals-log: {}
-  email: { provider: imap }
-  pdf-reader: {}`,
+  news: { location: New York, US, max_items: 5 }
+  system: {}`,
+  },
+  {
+    id: "chief",
+    name: "Chief",
+    tag: "Executive assistant · English",
+    desc: "Action-oriented EA. Tracks tasks, searches facts, sets reminders. Gets things done without filler.",
+    facets: [
+      ["Voice", 'OpenAI Realtime · "echo" · professional'],
+      ["Language", "en · direct · efficient"],
+      ["Skills", "system · news · search · timers · reminders"],
+      ["Hardware", "WebSocket client, any browser"],
+      ["Rule", "confirm_destructive"],
+    ],
+    yaml: `name: Chief
+voice: echo
+language_code: en
+system_prompt: |
+  Executive assistant. Action-oriented, terse, reliable.
+  Lead with what matters. Never invent facts.
+  Confirm before any irreversible action.
+constraints: [confirm_destructive]
+skills:
+  system: {}
+  news: { location: New York, max_items: 3 }
+  search: { safesearch: moderate }
+  timers: {}
+  reminders: { timezone: America/New_York }`,
+  },
+  {
+    id: "librarian",
+    name: "Librarian",
+    tag: "Research authority · English",
+    desc: "Quiet, precise. Retrieves from audiobooks, search, and news. Cites sources. Never invents.",
+    facets: [
+      ["Voice", 'OpenAI Realtime · "sage" · measured'],
+      ["Language", "en · precise · complete sentences"],
+      ["Skills", "audiobooks · search · news · system"],
+      ["Hardware", "WebSocket client, any browser"],
+      ["Rule", "confirm_destructive"],
+    ],
+    yaml: `name: Librarian
+voice: sage
+language_code: en
+system_prompt: |
+  Research librarian. Precise, authoritative.
+  Retrieve and synthesize — never invent.
+  Attribute the source when you know it.
+constraints: [confirm_destructive]
+skills:
+  audiobooks: { library: audiobooks }
+  search: { safesearch: moderate }
+  news: { location: New York, max_items: 5 }
+  system: {}`,
+  },
+  {
+    id: "buddy",
+    name: "Buddy",
+    tag: "Kids companion · English",
+    desc: "Friendly companion for kids. Simple words, cheerful tone, age-appropriate content. Never refuses — always finds a way.",
+    facets: [
+      ["Voice", 'OpenAI Realtime · "shimmer" · warm'],
+      ["Language", "en · simple · cheerful"],
+      ["Skills", "system · news · search · timers"],
+      ["Hardware", "WebSocket client, tablet or phone"],
+      ["Rule", "never_say_no · child_safe"],
+    ],
+    yaml: `name: Buddy
+voice: shimmer
+language_code: en
+system_prompt: |
+  Friendly companion for kids. Simple words,
+  cheerful tone. Never refuse — always find
+  a way to help. Age-appropriate content only.
+constraints: [never_say_no, child_safe, echo_short_input]
+skills:
+  system: {}
+  news: { location: New York, max_items: 3 }
+  search: { safesearch: strict }
+  timers: {}`,
   },
 ];
 

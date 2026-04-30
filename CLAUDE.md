@@ -39,9 +39,15 @@ Huxley/                              # repo root
 │       │   ├── persona.yaml         #     version, name, voice, language, system_prompt, constraints, skills
 │       │   ├── data/                #     gitignored: audiobook library + abuelos.db
 │       │   └── README.md
-│       └── basicos/                 #   terse counter-persona — proves skills are persona-agnostic
-│           ├── persona.yaml
-│           └── README.md
+│       ├── basicos/                 #   terse counter-persona — proves skills are persona-agnostic
+│       │   ├── persona.yaml
+│       │   └── README.md
+│       ├── chief/                   #   action-oriented executive assistant (en)
+│       │   └── persona.yaml
+│       ├── librarian/               #   quiet research authority (en, audiobooks + search)
+│       │   └── persona.yaml
+│       └── buddy/                   #   friendly kids companion (en, never_say_no, child_safe)
+│           └── persona.yaml
 ├── clients/                         # Things that connect to the server
 │   ├── pwa/                         # React/Vite dev client (Progressive Web App)
 │   └── firmware/                    # ESP32-S3 client (will extract to huxley-firmware)
@@ -56,7 +62,7 @@ Huxley/                              # repo root
 │   ├── turns.md                     # turn coordinator spec
 │   ├── decisions.md                 # ADR log
 │   ├── roadmap.md                   # framework + persona roadmaps
-│   ├── personas/{README,abuelos,basicos}.md
+│   ├── personas/{README,abuelos,basicos,chief,librarian,buddy}.md
 │   ├── skills/{README,audiobooks,news,radio,search,timers}.md
 │   ├── sounds.md                    # sound UX architecture (PlaySound, AudioStream, synthesis pipeline)
 │   └── research/sonic-ux.md

@@ -176,12 +176,15 @@ The framework creates the database on first run. You don't need to do anything.
 
 The `voice` field accepts anything OpenAI Realtime supports. As of writing: `alloy`, `coral`, `echo`, `shimmer`, `verse`, `sage`, and a few others. Match the voice to the persona's character — `coral` is warm and conversational; `alloy` is neutral; `echo` is more formal. Try them all in the OpenAI playground first; the cost of a mistake is one server restart.
 
-## Two personas ship by default
+## Five personas ship by default
 
-| Persona  | Use case                                           |
-|----------|---------------------------------------------------|
-| `abuelos`| Spanish-speaking elderly user. Warm, slow, never says no. Loads audiobooks, news, radio, system, telegram, timers. |
-| `basicos`| Terse English counter-persona. Spanish and French available via `i18n` overrides. Two skills, minimal prompt. Good starting point for your own persona. |
+| Persona     | Role                  | Skills                                          |
+|-------------|----------------------|-------------------------------------------------|
+| `abuelos`   | Elderly companion    | audiobooks, radio, news, search, timers, reminders, telegram |
+| `basicos`   | Developer reference  | news, system                                    |
+| `chief`     | Executive assistant  | system, news, search, timers, reminders         |
+| `librarian` | Research authority   | audiobooks, search, news, system                |
+| `buddy`     | Kids companion       | system, news, search, timers                    |
 
 You'll mostly write your own. See [Build a Persona](/docs/build-persona) for a walkthrough.
 
