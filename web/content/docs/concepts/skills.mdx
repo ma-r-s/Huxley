@@ -5,7 +5,7 @@ description: What the agent can do. A Python class with tools, reusable across p
 
 A **skill** is a Python class that exposes tools — functions the LLM can call — and an `async handle` method that runs when one of those tools is called. It's the unit of capability.
 
-Skills are persona-agnostic. The same `audiobooks` skill works for AbuelOS (warm Spanish narration of Spanish-language books) and for a hypothetical English persona (terse English narration of English books). Personas configure skills; skills don't know about personas.
+Skills are persona-agnostic. The same `audiobooks` skill works for a warm Spanish-speaking persona and for a terse English one — the persona configures language and tone; the skill just plays the book. Skills don't know about personas.
 
 ## The contract, in one screen
 
@@ -200,7 +200,7 @@ for key, value in await ctx.storage.list_settings("timer:"):
     self._scheduler.add(timer)
 ```
 
-The store is namespaced — your skill only sees its own keys. Storage is shared per persona (so all skills loaded by AbuelOS write to the same database) but isolated by key prefix.
+The store is namespaced — your skill only sees its own keys. Storage is shared per persona (all skills loaded by the same persona write to the same database) but isolated by key prefix.
 
 ## Discovery: entry points
 

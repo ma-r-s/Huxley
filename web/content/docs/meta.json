@@ -2,19 +2,14 @@
   "title": "Documentation",
   "pages": [
     "welcome",
-    "---Get Started---",
+    "vision",
     "getting-started",
-    "---Understand---",
     "concepts",
-    "---Deploy---",
     "use",
-    "---Extend Huxley---",
+    "---Build---",
     "build-skill",
     "build-persona",
-    "---Reference---",
     "cookbook",
-    "reference",
-    "---Project---",
-    "vision"
+    "reference"
   ]
 }
