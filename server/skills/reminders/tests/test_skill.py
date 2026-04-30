@@ -19,7 +19,6 @@ from huxley_skill_reminders.skill import (
     _STATE_FIRED,
     _STATE_MISSED,
     _STATE_PENDING,
-    _STATE_SURFACED,
     _STORAGE_PREFIX,
     RemindersSkill,
     _Entry,
@@ -386,7 +385,7 @@ class TestPromptContext:
 
     async def test_does_not_list_acked_or_cancelled(self) -> None:
         skill, _, storage = await _make_skill(start_scheduler=False)
-        for state in (_STATE_ACKED, _STATE_CANCELLED, _STATE_SURFACED):
+        for state in (_STATE_ACKED, _STATE_CANCELLED):
             entry = _Entry(
                 id=1,
                 message=f"{state}-msg",
@@ -867,3 +866,317 @@ async def test_prompt_context_localized(language: str, expected_substring: str) 
     skill, _, _ = await _make_skill(language=language, start_scheduler=False)
     ctx = skill.prompt_context()
     assert expected_substring in ctx
+
+
+# ---------------------------------------------------------- regressions (post-review)
+
+
+class TestRecurrenceIdempotency:
+    """F1 / F2 / F14: `_schedule_next_recurrence` must not create
+    duplicate successors when called multiple times for the same
+    original row (boot loop on a missed recurring reminder)."""
+
+    async def test_repeated_boot_does_not_fan_out_successors(self) -> None:
+        # Set up a missed daily medication that's older than its
+        # late-window. Each `_reconcile_on_boot` call would otherwise
+        # create another successor — without the idempotency guard
+        # we'd end up with N successors after N restarts.
+        storage = _NoopSkillStorage()
+        past = datetime.now(UTC) - timedelta(hours=4)
+        entry = _Entry(
+            id=1,
+            message="pill",
+            kind="medication",
+            scheduled_for=past,
+            next_fire_at=past,
+            recurrence="daily",
+            state=_STATE_PENDING,
+        )
+        await storage.set_setting("reminder:1", entry.to_json())
+
+        # Three consecutive boots.
+        for _ in range(3):
+            skill, _, _ = await _make_skill(storage=storage, start_scheduler=False)
+            await skill._reconcile_on_boot()
+
+        rows = await storage.list_settings(_STORAGE_PREFIX)
+        entries = [
+            _Entry.from_json(v)
+            for k, v in rows
+            if not k.removeprefix(_STORAGE_PREFIX).startswith("_meta:")
+        ]
+        # Exactly two rows: the original (now missed) + one successor
+        # for tomorrow. NOT three or four.
+        assert len(entries) == 2, f"expected 2 entries, got {len(entries)}: {entries}"
+        states = {e.state for e in entries}
+        assert states == {_STATE_MISSED, _STATE_PENDING}
+
+    async def test_idempotency_matches_on_kind_recurrence_message(self) -> None:
+        # Two different recurring reminders with same kind+recurrence
+        # but different messages must each get their own successor.
+        skill, _, storage = await _make_skill(start_scheduler=False)
+        when = datetime.now(UTC) + timedelta(hours=1)
+        e1 = _Entry(
+            id=1,
+            message="pill A",
+            kind="medication",
+            scheduled_for=when,
+            next_fire_at=when,
+            recurrence="daily",
+            state=_STATE_PENDING,
+        )
+        e2 = _Entry(
+            id=2,
+            message="pill B",
+            kind="medication",
+            scheduled_for=when,
+            next_fire_at=when,
+            recurrence="daily",
+            state=_STATE_PENDING,
+        )
+        await storage.set_setting("reminder:1", e1.to_json())
+        await storage.set_setting("reminder:2", e2.to_json())
+        await skill._schedule_next_recurrence(e1)
+        await skill._schedule_next_recurrence(e2)
+        rows = await storage.list_settings(_STORAGE_PREFIX)
+        entries = [
+            _Entry.from_json(v)
+            for k, v in rows
+            if not k.removeprefix(_STORAGE_PREFIX).startswith("_meta:")
+        ]
+        # Originals + two distinct successors = 4.
+        assert len(entries) == 4
+        next_pending_messages = sorted(e.message for e in entries if e.scheduled_for > when)
+        assert next_pending_messages == ["pill A", "pill B"]
+
+
+class TestCommitBeforeInject:
+    """F31: state must be persisted BEFORE inject_turn runs so a
+    process crash during narration doesn't cause re-narration on the
+    next boot. Mirrors the timers skill's `fired_at` pattern."""
+
+    async def test_state_saved_before_inject_for_medication(self) -> None:
+        # Use a recording inject_turn that captures storage state at
+        # the moment of the call, so we can assert the row is already
+        # advanced when narration begins.
+        skill, _, storage = await _make_skill(start_scheduler=False)
+        captured_state: dict[str, str] = {}
+
+        async def capturing_inject(prompt: str, **kwargs: object) -> None:
+            raw = await storage.get_setting("reminder:1")
+            assert raw is not None
+            captured_state["state"] = _Entry.from_json(raw).state
+            captured_state["fired_count"] = str(_Entry.from_json(raw).fired_count)
+
+        skill._inject_turn = capturing_inject  # type: ignore[assignment]
+        entry = _Entry(
+            id=1,
+            message="pill",
+            kind="medication",
+            scheduled_for=datetime.now(UTC),
+            next_fire_at=datetime.now(UTC),
+            recurrence=None,
+            state=_STATE_PENDING,
+        )
+        await storage.set_setting("reminder:1", entry.to_json())
+        await skill._fire(entry)
+        # When `inject_turn` ran, the row was already at fired/1.
+        assert captured_state == {"state": _STATE_FIRED, "fired_count": "1"}
+
+    async def test_state_saved_before_inject_for_one_shot(self) -> None:
+        skill, _, storage = await _make_skill(start_scheduler=False)
+        captured_state: dict[str, str] = {}
+
+        async def capturing_inject(prompt: str, **kwargs: object) -> None:
+            raw = await storage.get_setting("reminder:1")
+            assert raw is not None
+            captured_state["state"] = _Entry.from_json(raw).state
+
+        skill._inject_turn = capturing_inject  # type: ignore[assignment]
+        entry = _Entry(
+            id=1,
+            message="appt",
+            kind="appointment",
+            scheduled_for=datetime.now(UTC),
+            next_fire_at=datetime.now(UTC),
+            recurrence=None,
+            state=_STATE_PENDING,
+        )
+        await storage.set_setting("reminder:1", entry.to_json())
+        await skill._fire(entry)
+        assert captured_state == {"state": _STATE_ACKED}
+
+    async def test_inject_failure_does_not_revert_state(self) -> None:
+        # If inject_turn raises, state stays advanced — by design.
+        # Silent miss > double dose for medication. The row will end
+        # up missed after retry budget exhausts; operator sees the
+        # `reminders.fire_failed` log line.
+        skill, _, storage = await _make_skill(start_scheduler=False)
+
+        async def failing_inject(prompt: str, **kwargs: object) -> None:
+            raise RuntimeError("Realtime API down")
+
+        skill._inject_turn = failing_inject  # type: ignore[assignment]
+        entry = _Entry(
+            id=1,
+            message="pill",
+            kind="medication",
+            scheduled_for=datetime.now(UTC),
+            next_fire_at=datetime.now(UTC),
+            recurrence=None,
+            state=_STATE_PENDING,
+        )
+        await storage.set_setting("reminder:1", entry.to_json())
+        # Should NOT raise — the skill swallows inject failures.
+        await skill._fire(entry)
+        raw = await storage.get_setting("reminder:1")
+        assert raw is not None
+        after = _Entry.from_json(raw)
+        assert after.state == _STATE_FIRED
+        assert after.fired_count == 1
+
+
+class TestMidFireCrashRecovery:
+    """F37: simulate a process crash AFTER state save but BEFORE the
+    next boot. The reconcile path must not re-narrate."""
+
+    async def test_recovered_fired_medication_within_window_resumes_pending(
+        self,
+    ) -> None:
+        # `_fire` ran, persisted state=FIRED with next_fire_at=+5min,
+        # then the process died. On boot we see a fired row whose
+        # last_fired_at is recent. Boot reconcile should resume.
+        storage = _NoopSkillStorage()
+        last_fired = datetime.now(UTC) - timedelta(minutes=2)
+        entry = _Entry(
+            id=1,
+            message="pill",
+            kind="medication",
+            scheduled_for=last_fired - timedelta(minutes=2),
+            next_fire_at=last_fired + _MEDICATION_RETRY_INTERVALS[0],
+            recurrence=None,
+            state=_STATE_FIRED,
+            fired_count=1,
+            last_fired_at=last_fired,
+        )
+        await storage.set_setting("reminder:1", entry.to_json())
+        skill, inject_mock, _ = await _make_skill(storage=storage, start_scheduler=False)
+        await skill._reconcile_on_boot()
+        # Boot reconcile must NOT call inject_turn — that would be a
+        # re-narration of the dose grandpa already heard.
+        inject_mock.assert_not_awaited()
+        raw = await storage.get_setting("reminder:1")
+        assert raw is not None
+        # Resumed back to pending so the scheduler picks up the retry.
+        assert _Entry.from_json(raw).state == _STATE_PENDING
+
+
+class TestAckOnFiredMedication:
+    """F35: a medication that's mid-retry (state=fired) and the user
+    acks via the LLM should transition to acked, schedule recurrence
+    if any, and stop retrying."""
+
+    async def test_ack_on_fired_medication_transitions_to_acked(self) -> None:
+        skill, _, storage = await _make_skill(start_scheduler=False)
+        entry = _Entry(
+            id=1,
+            message="pill",
+            kind="medication",
+            scheduled_for=datetime.now(UTC) - timedelta(minutes=10),
+            next_fire_at=datetime.now(UTC) + timedelta(minutes=5),
+            recurrence=None,
+            state=_STATE_FIRED,
+            fired_count=1,
+        )
+        await storage.set_setting("reminder:1", entry.to_json())
+        await skill.handle("acknowledge_reminder", {"id": 1})
+        raw = await storage.get_setting("reminder:1")
+        assert raw is not None
+        after = _Entry.from_json(raw)
+        assert after.state == _STATE_ACKED
+        assert after.acked_at is not None
+
+    async def test_ack_on_fired_with_recurrence_schedules_next(self) -> None:
+        # Same shape but recurrence="daily" — successor must exist
+        # for tomorrow, exactly once (no duplicate from the in-flight
+        # retry path).
+        skill, _, storage = await _make_skill(start_scheduler=False)
+        when = datetime.now(UTC) - timedelta(hours=1)
+        entry = _Entry(
+            id=1,
+            message="pill",
+            kind="medication",
+            scheduled_for=when,
+            next_fire_at=datetime.now(UTC) + timedelta(minutes=5),
+            recurrence="daily",
+            state=_STATE_FIRED,
+            fired_count=1,
+        )
+        await storage.set_setting("reminder:1", entry.to_json())
+        await skill.handle("acknowledge_reminder", {"id": 1})
+        rows = await storage.list_settings(_STORAGE_PREFIX)
+        entries = [
+            _Entry.from_json(v)
+            for k, v in rows
+            if not k.removeprefix(_STORAGE_PREFIX).startswith("_meta:")
+        ]
+        states = sorted(e.state for e in entries)
+        assert states == [_STATE_ACKED, _STATE_PENDING]
+        next_pending = next(e for e in entries if e.state == _STATE_PENDING)
+        expected = when + timedelta(days=1)
+        assert abs((next_pending.scheduled_for - expected).total_seconds()) < 2
+
+
+class TestWeeklyRecurrence:
+    """F8: weekly math wasn't tested before this commit."""
+
+    async def test_weekly_advances_by_seven_days(self) -> None:
+        skill, _, storage = await _make_skill(start_scheduler=False)
+        when = datetime.now(UTC) + timedelta(hours=1)
+        entry = _Entry(
+            id=1,
+            message="weekly checkup",
+            kind="generic",
+            scheduled_for=when,
+            next_fire_at=when,
+            recurrence="weekly",
+            state=_STATE_PENDING,
+        )
+        await storage.set_setting("reminder:1", entry.to_json())
+        await skill._fire(entry)
+        rows = await storage.list_settings(_STORAGE_PREFIX)
+        entries = [
+            _Entry.from_json(v)
+            for k, v in rows
+            if not k.removeprefix(_STORAGE_PREFIX).startswith("_meta:")
+        ]
+        next_pending = next(e for e in entries if e.state == _STATE_PENDING)
+        expected = when + timedelta(weeks=1)
+        assert abs((next_pending.scheduled_for - expected).total_seconds()) < 2
+
+
+class TestInjectPriorityIsBlockBehindComms:
+    """F40: assert the priority kwarg passed to inject_turn is the
+    `BLOCK_BEHIND_COMMS` tier, not e.g. `NORMAL` or `PREEMPT`. Locks
+    in the focus-plane semantic claim made by the skill doc."""
+
+    async def test_fire_uses_block_behind_comms(self) -> None:
+        from huxley_sdk import InjectPriority
+
+        skill, inject_mock, storage = await _make_skill(start_scheduler=False)
+        entry = _Entry(
+            id=1,
+            message="x",
+            kind="generic",
+            scheduled_for=datetime.now(UTC),
+            next_fire_at=datetime.now(UTC),
+            recurrence=None,
+            state=_STATE_PENDING,
+        )
+        await storage.set_setting("reminder:1", entry.to_json())
+        await skill._fire(entry)
+        # AsyncMock records call kwargs; the second positional arg or
+        # `priority=` kwarg must be BLOCK_BEHIND_COMMS.
+        inject_mock.assert_awaited_once()
+        kwargs = inject_mock.await_args.kwargs
+        assert kwargs.get("priority") == InjectPriority.BLOCK_BEHIND_COMMS
