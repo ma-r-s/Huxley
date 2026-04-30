@@ -15,7 +15,7 @@ Protocol — client → server
     {"type": "ptt_stop"}
     {"type": "wake_word"}
     {"type": "reset"}                     # dev: disconnect + fresh OpenAI session
-    {"type": "client_event", "event": "<name>", "data": {...}}  # telemetry only
+    {"type": "client_event", "event": "<name>", "data": {...}}  # telemetry + skill dispatch
 
 Protocol — server → client
     {"type": "hello",          "protocol": PROTOCOL_VERSION}  # first message
@@ -32,6 +32,7 @@ Protocol — server → client
     {"type": "claim_started",  "claim_id": str, "skill": str}  # observability
     {"type": "claim_ended",    "claim_id": str, "end_reason": str}
     {"type": "dev_event",      "kind": "...", "payload": {...}}
+    {"type": "server_event",   "event": "<name>", "data": {...}}  # generic skill→client
 """
 
 from __future__ import annotations
@@ -119,6 +120,18 @@ class AudioServer:
         # a second concurrent upgrade would race but is architecturally
         # excluded (we evict old clients, not parallel them).
         self._pending_language: str | None = None
+        # `client_event` subscription registry: event_key → list of
+        # (skill_name, handler) pairs. Skills register via
+        # `register_client_event_subscriber`; the connection-handling
+        # loop dispatches on each inbound `client_event`. Persisted on
+        # the AudioServer (process-lifetime) so subscriptions survive
+        # transient WebSocket disconnects without skills having to
+        # re-subscribe. The (skill_name, handler) tuple lets
+        # `unregister_client_event_subscribers` remove all of one
+        # skill's subs at teardown without scanning every entry.
+        self._client_event_subs: dict[
+            str, list[tuple[str, Callable[[dict[str, Any]], Awaitable[None]]]]
+        ] = {}
 
     @property
     def has_client(self) -> bool:
@@ -275,16 +288,26 @@ class AudioServer:
                 if self._on_language_select is not None:
                     await self._on_language_select(language)
             case "client_event":
-                # Pure observability — client telemetry sink. No behavioral
-                # effect on the server. The client emits events that the
-                # server log can't otherwise see (UI state, audio queue,
-                # silence timer, thinking tone). Logged as client.<event>
-                # so the dev workflow's "describe symptom → read log" loop
-                # works for client-side bugs too.
+                # Two consumers in parallel:
+                # 1. Telemetry sink — every client_event is logged as
+                #    `client.<event>` so the dev workflow's
+                #    "describe symptom → read log" loop works for
+                #    client-side bugs (UI state, audio queue, silence
+                #    timer, thinking tone events that the server log
+                #    can't otherwise see).
+                # 2. Skill dispatch — any skill that registered a
+                #    handler via `ctx.subscribe_client_event(key, ...)`
+                #    receives the parsed `data` dict. Multiple skills
+                #    can subscribe to the same key; all run concurrently,
+                #    exception-isolated.
+                # Both happen unconditionally, regardless of whether
+                # any skill is subscribed; the telemetry log is
+                # cheap and useful even for events with no listener.
                 event = str(msg.get("event", "unknown"))
                 raw_data = msg.get("data")
                 data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
                 await logger.ainfo(f"client.{event}", **data)
+                await self._dispatch_client_event(event, data)
             case other:
                 await logger.awarning("server.rx.unknown", msg_type=other)
 
@@ -345,6 +368,79 @@ class AudioServer:
         (ESP32) ignore unknown message types. See docs/protocol.md.
         """
         await self._send({"type": "dev_event", "kind": kind, "payload": payload})
+
+    async def send_server_event(self, event: str, data: dict[str, Any] | None = None, /) -> None:
+        """Push a generic `server_event` to the connected client.
+
+        Symmetric counterpart to inbound `client_event`: same shape on
+        the wire (`{type: server_event, event, data}`). No-op (with
+        debug log) if no client is connected. Clients that don't
+        recognize `server_event` log-and-ignore on their side, so emit
+        is safe to call even without a per-client capability check —
+        the worst case is a recipient that drops the message.
+        """
+        if self._client is None:
+            await logger.adebug("server.tx.server_event.no_client", event_name=event)
+            return
+        await self._send(
+            {"type": "server_event", "event": event, "data": data if data is not None else {}}
+        )
+
+    # --- client_event subscription registry ---
+
+    def register_client_event_subscriber(
+        self,
+        skill_name: str,
+        key: str,
+        handler: Callable[[dict[str, Any]], Awaitable[None]],
+    ) -> None:
+        """Register a skill's handler for a given `client_event` key.
+
+        Called from `SkillContext.subscribe_client_event`. The
+        registry is process-lifetime so subscriptions survive
+        transient WebSocket disconnects (a skill subscribed at startup
+        is still subscribed when the user reloads the PWA mid-session).
+        """
+        self._client_event_subs.setdefault(key, []).append((skill_name, handler))
+
+    def unregister_client_event_subscribers(self, skill_name: str) -> None:
+        """Remove every subscription owned by `skill_name`.
+
+        Called from the framework's shutdown path immediately before
+        `skill.teardown()` so a buggy teardown can't fire handlers
+        that are about to be torn down. Idempotent.
+        """
+        for key in list(self._client_event_subs.keys()):
+            kept = [(sk, h) for (sk, h) in self._client_event_subs[key] if sk != skill_name]
+            if kept:
+                self._client_event_subs[key] = kept
+            else:
+                del self._client_event_subs[key]
+
+    async def _dispatch_client_event(self, event: str, data: dict[str, Any]) -> None:
+        """Invoke every registered handler for `event` concurrently.
+
+        Exception isolation: a handler raising must not block other
+        handlers or affect the inbound message-dispatch loop. We use
+        `asyncio.gather(return_exceptions=True)` so all results
+        materialize, then walk results to log failures via
+        `aexception` (preserving the traceback).
+        """
+        subs = self._client_event_subs.get(event)
+        if not subs:
+            return
+        results = await asyncio.gather(
+            *(handler(data) for (_, handler) in subs),
+            return_exceptions=True,
+        )
+        for (skill_name, _), result in zip(subs, results, strict=True):
+            if isinstance(result, BaseException):
+                await logger.aexception(
+                    "client_event.handler_failed",
+                    event_name=event,
+                    skill=skill_name,
+                    exc_info=result,
+                )
 
     async def send_set_volume(self, level: int) -> None:
         await logger.ainfo("server.tx.set_volume", level=level)

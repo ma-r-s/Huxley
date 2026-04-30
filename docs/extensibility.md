@@ -78,6 +78,12 @@ Resolved (T1.4 Stage 1c.3, 2026-04-18). `ctx.inject_turn(prompt, *, dedup_key=?,
 
 Resolved (T1.4 Stage 2, 2026-04-19; and Stage 2b, 2026-04-24). Skills latch the mic + speaker via `InputClaim` or direct `ctx.start_input_claim(claim)`. The Activity lives on `Channel.COMMS` (priority 150); during an active claim the audiobook backgrounds with patience and auto-resumes on claim-release. Single-slot policy — a second claim raises `ClaimBusyError`. `huxley-skill-telegram` is the live consumer: full-duplex p2p voice calls, inbound + outbound, bridged through the framework's mic/speaker plumbing. The architecture-level warning "one-OpenAI-session-deep" was correct at the time; the fix was the focus-plane pivot (AVS-style channel arbitration) rather than a full-system redesign.
 
+### ~~Non-audio client → server signals~~ → `client_event` skill subscription is live
+
+Resolved (T1.4 Stage 4, 2026-04-29). Clients emit `{"type": "client_event", "event": "<key>", "data": {...}}` over the existing WebSocket; skills register handlers via `ctx.subscribe_client_event(key, handler)`. The framework dispatches concurrently with exception isolation; subscriptions persist across reconnects and auto-clear at skill teardown. Symmetric `ctx.emit_server_event(key, data)` pushes back to the connected client (same wire shape, `server_event` type — old clients log-and-ignore unknown types). See [`skills/README.md`](./skills/README.md#client-events--ctxsubscribe_client_event) for the guide.
+
+This unblocks the whole class of "skill that reacts to a client-side signal that isn't audio": hardware buttons (one PR away from a panic skill once K1/K3 firmware ships), smart-home announcers (PWA forwards a Home Assistant webhook → skill narrates the door), wearable health alerts (Apple Watch → PWA → skill check-in), and any non-PTT client signal a future skill author wants. None of these require further framework changes.
+
 ## 🔑 Concerns to address before more skills land
 
 ### Per-skill secrets
@@ -96,6 +102,6 @@ skills:
 
 ## What this means for the framework's "extensible" claim
 
-Of seven typical skill ideas (messaging, search, news, weather, calls, smart-device, trivia) **every one builds with the primitives shipped today**. Calls are live (`huxley-skill-telegram`). Proactive speech is live (`inject_turn` + three priority tiers). Smart-device background-task pattern is formalized (T1.4 Stage 3). The two "real design gaps" this doc originally called out are both resolved.
+Of seven typical skill ideas (messaging, search, news, weather, calls, smart-device, trivia) **every one builds with the primitives shipped today**. Calls are live (`huxley-skill-telegram`). Proactive speech is live (`inject_turn` + three priority tiers). Smart-device background-task pattern is formalized (T1.4 Stage 3). Generic non-audio C↔S signaling is live (T1.4 Stage 4 — `client_event` skill subscription + `server_event` outbound). The "real design gaps" this doc originally called out are all resolved.
 
 If a future skill idea doesn't fit any of the patterns above, that's the signal to revisit this doc and either document a new pattern or formalize a new framework primitive. Likely future asks: LLM-free alert sounds (would land on the currently-reserved `ALERT` channel); TTL on queued `inject_turn` (tracked as D7); claim-stacking / call-waiting (tracked as a revisit trigger in the 2026-04-24 ADR).

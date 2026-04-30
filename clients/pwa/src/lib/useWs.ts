@@ -68,7 +68,8 @@ type ServerMessage =
       preroll_ms: number;
     }
   | { type: "stream_ended"; stream_id: string; end_reason: string }
-  | { type: "dev_event"; kind: string; payload: Record<string, unknown> };
+  | { type: "dev_event"; kind: string; payload: Record<string, unknown> }
+  | { type: "server_event"; event: string; data: Record<string, unknown> };
 
 export function useWs() {
   // ── Render state ────────────────────────────────────────────────────────
@@ -334,6 +335,14 @@ export function useWs() {
               break;
             case "dev_event":
               pushDevEvent(msg.kind, msg.payload);
+              break;
+            case "server_event":
+              // Surface generic skill→client events in the same dev-event
+              // log so they're visible in the existing dev surface
+              // alongside `dev_event` and `claim_started`/`claim_ended`.
+              // The kind is prefixed `server_event:<key>` so log readers
+              // can grep them apart from internal dev events.
+              pushDevEvent(`server_event:${msg.event}`, msg.data);
               break;
           }
         } catch {
