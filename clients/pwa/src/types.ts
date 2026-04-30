@@ -46,6 +46,26 @@ export interface PersonaEntry {
   desc?: string;
 }
 
+// Session history (T1.12). Field shape mirrors the wire shape from
+// docs/protocol.md (snake_case) so we don't have to maintain a
+// camelCase mapping in the parser. `started_at` etc. are raw ISO
+// strings — components format relative time client-side.
+export interface SessionMeta {
+  id: number;
+  started_at: string;
+  ended_at: string | null;
+  last_turn_at: string | null;
+  turn_count: number;
+  preview: string | null;
+  summary: string | null;
+}
+
+export interface SessionTurn {
+  idx: number;
+  role: "user" | "assistant";
+  text: string;
+}
+
 // Appearance preferences — persisted in localStorage.
 export interface Appearance {
   accent: string;

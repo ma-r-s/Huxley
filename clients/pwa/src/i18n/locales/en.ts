@@ -37,18 +37,27 @@ const en = {
       title: "Conversations",
       recent: "Recent",
       empty: "Nothing yet — hold the orb to begin.",
+      loading: "Loading…",
+      live: "live",
+      noTranscript: "(no transcript)",
       // pluralized via i18next: _one vs default
       turnsCount_one: "{{count}} turn",
       turnsCount_other: "{{count}} turns",
-      sample: {
-        1: "On the chapter you were reading…",
-        2: "Set a timer while making pasta",
-        3: "Walked through tomorrow's schedule",
-      },
       when: {
         todayAt: "Today, {{time}}",
         yesterday: "Yesterday",
       },
+    },
+    sessionDetail: {
+      title: "Transcript",
+      recent: "Conversation",
+      back: "Back",
+      loading: "Loading…",
+      empty: "No turns recorded.",
+      user: "User",
+      assistant: "Assistant",
+      delete: "Delete",
+      confirmDelete: "Delete this conversation? This cannot be undone.",
     },
     logs: {
       title: "Logs",

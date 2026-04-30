@@ -9,6 +9,8 @@ import type {
   TranscriptEntry,
   StatusEntry,
   DevEvent,
+  SessionMeta,
+  SessionTurn,
 } from "../types.js";
 
 const EXPECTED_PROTOCOL = 2;
@@ -69,7 +71,10 @@ type ServerMessage =
     }
   | { type: "stream_ended"; stream_id: string; end_reason: string }
   | { type: "dev_event"; kind: string; payload: Record<string, unknown> }
-  | { type: "server_event"; event: string; data: Record<string, unknown> };
+  | { type: "server_event"; event: string; data: Record<string, unknown> }
+  | { type: "sessions_list"; sessions: SessionMeta[] }
+  | { type: "session_detail"; id: number; turns: SessionTurn[] }
+  | { type: "session_deleted"; id: number };
 
 export function useWs() {
   // ── Render state ────────────────────────────────────────────────────────
@@ -93,6 +98,15 @@ export function useWs() {
   // cleared by stream_ended or socket close. Drives the "playing" orb state
   // and waveform visualizer. Null = no stream in progress.
   const [activeStream, setActiveStream] = useState<ActiveStream | null>(null);
+  // Session history (T1.12). `sessionsList` is null until the first
+  // `list_sessions` reply arrives — distinguishes "loading" from
+  // "loaded and empty." `sessionDetail` holds the most recently
+  // fetched single-session transcript.
+  const [sessionsList, setSessionsList] = useState<SessionMeta[] | null>(null);
+  const [sessionDetail, setSessionDetail] = useState<{
+    id: number;
+    turns: SessionTurn[];
+  } | null>(null);
 
   // ── Refs (callback-readable without stale closures) ─────────────────────
   const socketRef = useRef<WebSocket | null>(null);
@@ -344,6 +358,23 @@ export function useWs() {
               // can grep them apart from internal dev events.
               pushDevEvent(`server_event:${msg.event}`, msg.data);
               break;
+            case "sessions_list":
+              // T1.12 — reply to listSessions(). Whole array replaced
+              // each time; the server is the source of truth.
+              setSessionsList(msg.sessions);
+              break;
+            case "session_detail":
+              setSessionDetail({ id: msg.id, turns: msg.turns });
+              break;
+            case "session_deleted":
+              // Drop the row from the cached list; clear the active
+              // detail if it was for the deleted session so the
+              // SessionDetailSheet can react via its prop.
+              setSessionsList((prev) =>
+                prev ? prev.filter((s) => s.id !== msg.id) : prev,
+              );
+              setSessionDetail((prev) => (prev?.id === msg.id ? null : prev));
+              break;
           }
         } catch {
           // ignore malformed messages
@@ -455,6 +486,25 @@ export function useWs() {
     setDevEvents([]);
   }, []);
 
+  // ── Sessions (T1.12) ────────────────────────────────────────────────────
+  const listSessions = useCallback(() => {
+    sendRaw({ type: "list_sessions" });
+  }, [sendRaw]);
+
+  const getSession = useCallback(
+    (id: number) => {
+      sendRaw({ type: "get_session", id });
+    },
+    [sendRaw],
+  );
+
+  const deleteSession = useCallback(
+    (id: number) => {
+      sendRaw({ type: "delete_session", id });
+    },
+    [sendRaw],
+  );
+
   // ── Public API ───────────────────────────────────────────────────────────
   return {
     // State
@@ -469,6 +519,8 @@ export function useWs() {
     statusLog,
     devEvents,
     thinkingActive,
+    sessionsList,
+    sessionDetail,
     get activeUrl() {
       return activeUrlRef.current;
     },
@@ -486,6 +538,9 @@ export function useWs() {
     wakeWord,
     reset,
     clearLog,
+    listSessions,
+    getSession,
+    deleteSession,
     sendAudio: (data: string) => sendRaw({ type: "audio", data }),
     sendClientEvent,
 

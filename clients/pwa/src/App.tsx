@@ -7,6 +7,7 @@ import { deriveOrbState } from "./lib/orbState.js";
 import { Orb } from "./components/Orb.js";
 import { TranscriptDrawer } from "./components/TranscriptDrawer.js";
 import { SessionsSheet } from "./components/SessionsSheet.js";
+import { SessionDetailSheet } from "./components/SessionDetailSheet.js";
 import { DeviceSheet } from "./components/DeviceSheet.js";
 import { LogsSheet } from "./components/LogsSheet.js";
 import { ClientEventPanel } from "./components/ClientEventPanel.js";
@@ -86,7 +87,7 @@ export function App() {
   // ── UI state ─────────────────────────────────────────────────────────────
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [activeSheet, setActiveSheet] = useState<
-    "sessions" | "device" | "logs" | null
+    "sessions" | "session-detail" | "device" | "logs" | null
   >(null);
   const [booted, setBooted] = useState(false);
   const [bootOrbState, setBootOrbState] = useState<OrbState>("wake");
@@ -166,34 +167,12 @@ export function App() {
     [language, i18n, ws],
   );
 
-  // ── Sessions (in-memory only for v1) ─────────────────────────────────────
-  // Sample conversations — static demo data. Strings come from the i18n
-  // catalog so they flip with the UI language; the `when` field is a
-  // composed template (today/yesterday + a fixed time) rather than a
-  // real Date to keep the mock deterministic.
-  const sessions = [
-    {
-      id: "s1",
-      preview: t("sessions.sample.1"),
-      when: t("sessions.when.todayAt", { time: "3:42 PM" }),
-      duration: "14m",
-      turns: 23,
-    },
-    {
-      id: "s2",
-      preview: t("sessions.sample.2"),
-      when: t("sessions.when.todayAt", { time: "1:08 PM" }),
-      duration: "2m",
-      turns: 4,
-    },
-    {
-      id: "s3",
-      preview: t("sessions.sample.3"),
-      when: t("sessions.when.yesterday"),
-      duration: "6m",
-      turns: 11,
-    },
-  ];
+  // ── Sessions (T1.12) ─────────────────────────────────────────────────────
+  // SessionsSheet pulls `ws.sessionsList` (fetched on mount via
+  // `ws.listSessions()`); SessionDetailSheet pulls `ws.sessionDetail`
+  // for the row identified by `activeSessionId`. Server is the source
+  // of truth — no local cache beyond what useWs holds.
+  const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
 
   // ── Boot wake animation ───────────────────────────────────────────────────
   useEffect(() => {
@@ -654,8 +633,28 @@ export function App() {
         {activeSheet === "sessions" && (
           <SessionsSheet
             onClose={() => setActiveSheet(null)}
-            sessions={sessions}
-            onPick={() => setActiveSheet(null)}
+            sessions={ws.sessionsList}
+            onPick={(id) => {
+              setActiveSessionId(id);
+              setActiveSheet("session-detail");
+            }}
+            onMount={ws.listSessions}
+          />
+        )}
+        {activeSheet === "session-detail" && activeSessionId !== null && (
+          <SessionDetailSheet
+            onClose={() => {
+              setActiveSheet("sessions");
+              setActiveSessionId(null);
+            }}
+            sessionId={activeSessionId}
+            detail={ws.sessionDetail}
+            onMount={() => ws.getSession(activeSessionId)}
+            onDelete={() => {
+              ws.deleteSession(activeSessionId);
+              setActiveSheet("sessions");
+              setActiveSessionId(null);
+            }}
           />
         )}
         {activeSheet === "device" && (
