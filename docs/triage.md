@@ -1985,11 +1985,10 @@ skill needs non-narrated audio in that tier" — reminders does not).
 
 ### Ship (Gate 5 — done 2026-04-29)
 
-**Commit**: `<filled at git commit>` · **Effort actual**: ~1
-session, matches the 1-week estimate (estimate budgeted for design
-
-- critic + impl + docs; design + critic happened first, leaving
-  focused implementation).
+**Commit**: `a4beba69` · **Effort actual**: ~1 session, matches the
+1-week estimate (estimate budgeted for design + critic + impl +
+docs; design + critic happened first, leaving focused
+implementation).
 
 **Lessons**:
 
