@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 // Mermaid renderer with brand-matched theme variables. Used inline in
 // MDX for turn flow, focus channel, and audio path diagrams. The dynamic
@@ -8,10 +8,11 @@ import { useEffect, useRef, useState } from "react";
 export function Mermaid({ chart }: { chart: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const [svg, setSvg] = useState<string>("");
+  const rawId = useId();
+  const id = `mermaid-${rawId.replace(/:/g, "")}`;
 
   useEffect(() => {
     let cancelled = false;
-    const id = `mermaid-${Math.random().toString(36).slice(2)}`;
     (async () => {
       const mermaid = (await import("mermaid")).default;
       mermaid.initialize({
@@ -26,8 +27,8 @@ export function Mermaid({ chart }: { chart: string }) {
           fontSize: "14px",
         },
       });
-      const { svg } = await mermaid.render(id, chart);
-      if (!cancelled) setSvg(svg);
+      const { svg: rendered } = await mermaid.render(id, chart);
+      if (!cancelled) setSvg(rendered);
     })();
     return () => {
       cancelled = true;

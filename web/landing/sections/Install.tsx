@@ -75,8 +75,8 @@ export function Install() {
           }}
         >
           {isMobile
-            ? `$ git clone github.com/ma-r-s/Huxley && cd Huxley
-$ echo "OPENAI_KEY=sk-..." > server/runtime/.env
+            ? `$ git clone https://github.com/ma-r-s/Huxley.git && cd Huxley
+$ echo "HUXLEY_OPENAI_API_KEY=sk-..." > server/runtime/.env
 # terminal 1
 $ uv sync && cd server/runtime && uv run huxley
 # terminal 2

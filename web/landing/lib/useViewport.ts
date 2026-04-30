@@ -17,8 +17,17 @@ export interface Viewport {
   isDesktop: boolean;
 }
 
+// SSR default matches the server render (desktop) so hydration is stable.
+// The useEffect immediately fires on mount with the real window size.
+const SSR_DEFAULT: Viewport = {
+  width: 1280,
+  isMobile: false,
+  isTablet: false,
+  isDesktop: true,
+};
+
 function snapshot(): Viewport {
-  const w = typeof window === "undefined" ? 1280 : window.innerWidth;
+  const w = window.innerWidth;
   return {
     width: w,
     isMobile: w < BP_MOBILE,
@@ -28,8 +37,9 @@ function snapshot(): Viewport {
 }
 
 export function useViewport(): Viewport {
-  const [vp, setVp] = useState<Viewport>(() => snapshot());
+  const [vp, setVp] = useState<Viewport | null>(null);
   useEffect(() => {
+    setVp(snapshot());
     const onResize = () => setVp(snapshot());
     window.addEventListener("resize", onResize, { passive: true });
     window.addEventListener("orientationchange", onResize);
@@ -38,5 +48,5 @@ export function useViewport(): Viewport {
       window.removeEventListener("orientationchange", onResize);
     };
   }, []);
-  return vp;
+  return vp ?? SSR_DEFAULT;
 }
