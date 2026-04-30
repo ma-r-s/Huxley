@@ -1486,7 +1486,9 @@ class TestRruleValidationDeeperChecks:
         )
         payload = json.loads(result.output)
         assert "error" in payload
-        assert "future" in payload["error"].lower()
+        # New (round-3) probe anchors on when_iso instead of now;
+        # message wording reflects that.
+        assert "occurrences" in payload["error"].lower()
         await skill.teardown()
 
     async def test_count_zero_rejected(self) -> None:
@@ -1648,3 +1650,129 @@ class TestV1MidRetryMigration:
         # semantically identical to having series_start populated.
         assert after.series_start is None
         assert after.effective_series_start == after.scheduled_for
+
+
+# ---------------------------------------------- post-round-3-review regressions
+
+
+class TestSnoozeOnMissedRejected:
+    """R3-F1: snoozing a missed row used to silently no-op (state stayed
+    MISSED, the scheduler filters by PENDING, the row never fired but
+    the handler returned `ok: True`). Now rejects so the LLM gets a
+    real error and falls back to ack/cancel per the persona prompt."""
+
+    async def test_snooze_on_missed_returns_error(self) -> None:
+        skill, _, storage = await _make_skill(start_scheduler=False)
+        entry = _Entry(
+            id=1,
+            message="missed pill",
+            kind="medication",
+            scheduled_for=datetime.now(UTC) - timedelta(hours=4),
+            next_fire_at=datetime.now(UTC) - timedelta(hours=4),
+            recurrence_rule=None,
+            state=_STATE_MISSED,
+            missed_at=datetime.now(UTC),
+        )
+        await storage.set_setting("reminder:1", entry.to_json())
+        result = await skill.handle("snooze_reminder", {"id": 1, "minutes": 10})
+        payload = json.loads(result.output)
+        assert "error" in payload
+        assert "missed" in payload["error"].lower()
+        # Storage row unchanged — state still MISSED, next_fire_at unmoved.
+        raw = await storage.get_setting("reminder:1")
+        assert raw is not None
+        unchanged = _Entry.from_json(raw)
+        assert unchanged.state == _STATE_MISSED
+        assert unchanged.next_fire_at == entry.next_fire_at
+
+
+class TestRruleCountOneAccepted:
+    """R3-F2: `FREQ=DAILY;COUNT=1` is a valid one-shot. The pre-fix
+    validator anchored its no-future-occurrences probe on `now`, so the
+    sole occurrence at `dtstart=now` was already past the +1s probe
+    window — rejected with a misleading "exhausted" error. Fix anchors
+    on `when_iso` so COUNT=1 (and any other rule whose first occurrence
+    is exactly at `when`) validates correctly."""
+
+    async def test_count_one_rule_accepted(self) -> None:
+        skill, _, storage = await _make_skill()
+        result = await skill.handle(
+            "add_reminder",
+            {
+                "message": "single fire",
+                "when_iso": _future_iso(3600),
+                "recurrence_rule": "FREQ=DAILY;COUNT=1",
+            },
+        )
+        payload = json.loads(result.output)
+        assert payload.get("ok") is True, payload
+        assert payload["recurrence_rule"] == "FREQ=DAILY;COUNT=1"
+        await skill.teardown()
+
+    async def test_count_one_fires_then_terminates_without_successor(self) -> None:
+        # End-to-end: COUNT=1 reminder fires once. _schedule_next_recurrence
+        # asks _next_recurrence(when, when, "FREQ=DAILY;COUNT=1", tz) which
+        # returns None (the only occurrence is `when` itself), so no
+        # successor row is created.
+        skill, _, storage = await _make_skill(start_scheduler=False)
+        when = datetime.now(UTC) + timedelta(hours=1)
+        entry = _Entry(
+            id=1,
+            message="one shot",
+            kind="generic",
+            scheduled_for=when,
+            next_fire_at=when,
+            recurrence_rule="FREQ=DAILY;COUNT=1",
+            series_start=when,
+            state=_STATE_PENDING,
+        )
+        await storage.set_setting("reminder:1", entry.to_json())
+        await skill._fire(entry)
+        rows = await storage.list_settings(_STORAGE_PREFIX)
+        entries = [
+            _Entry.from_json(v)
+            for k, v in rows
+            if not k.removeprefix(_STORAGE_PREFIX).startswith("_meta:")
+        ]
+        assert len(entries) == 1
+        assert entries[0].state == _STATE_ACKED
+
+
+class TestExdateRdateRejected:
+    """R3-F3: `RDATE:` and `EXDATE:` lines silently modify the
+    occurrence chain — EXDATE in particular can drop the user's first
+    fire from the successor sequence. The skill's contract is "RRULE
+    only; anchoring is `when_iso`" — extras are not part of that
+    contract, reject loudly."""
+
+    async def test_exdate_rejected(self) -> None:
+        skill, _, _ = await _make_skill()
+        rule = "RRULE:FREQ=DAILY\nEXDATE:20260501T120000Z"
+        result = await skill.handle(
+            "add_reminder",
+            {
+                "message": "x",
+                "when_iso": _future_iso(),
+                "recurrence_rule": rule,
+            },
+        )
+        payload = json.loads(result.output)
+        assert "error" in payload
+        assert "EXDATE" in payload["error"] or "compound" in payload["error"].lower()
+        await skill.teardown()
+
+    async def test_rdate_rejected(self) -> None:
+        skill, _, _ = await _make_skill()
+        rule = "RRULE:FREQ=DAILY\nRDATE:20260501T120000Z"
+        result = await skill.handle(
+            "add_reminder",
+            {
+                "message": "x",
+                "when_iso": _future_iso(),
+                "recurrence_rule": rule,
+            },
+        )
+        payload = json.loads(result.output)
+        assert "error" in payload
+        assert "RDATE" in payload["error"] or "compound" in payload["error"].lower()
+        await skill.teardown()
