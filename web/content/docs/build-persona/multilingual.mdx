@@ -111,19 +111,15 @@ The `on_complete_prompt` string gets injected at the end of natural playback com
 
 ## Designing the prompts
 
-Two anti-patterns to avoid:
+### Write each language's prompt natively
 
-### Don't translate-then-call-it-done
+Machine-translated prompts feel off to native speakers immediately — stilted, awkward, slightly wrong register. Write each language's prompt from scratch (or have a fluent speaker write it). The *behaviors* should match across languages; the *prose* should not be a transliteration.
 
-Run the English prompt through Google Translate, paste the Spanish into the `es` block, ship. Result: a stilted, awkward Spanish persona that the model still kind of speaks but feels off. Spanish speakers who interact with it will notice immediately.
+### Keep instructions consistent across languages
 
-The fix: write each language's prompt *natively*. Get a fluent speaker to review. The behaviors should match across languages, but the prose shouldn't be a transliteration.
+If your English prompt says "be brief," your Spanish prompt should say the equivalent. If one language adds a behavior the others don't, the personas will behave differently when users switch — and bilingual users will notice.
 
-### Don't add behaviors in one language only
-
-If your English prompt says "be brief" and your Spanish prompt also says it, fine. But if the Spanish prompt adds "and use Spanish idioms," and the English doesn't add the equivalent — the personas behave differently in different languages.
-
-This matters because the *user* expects consistent behavior. If they're bilingual and switch the toggle mid-conversation, the agent shouldn't suddenly become a different agent. Match instructions across all language overrides.
+Match instructions across all language blocks. Only let the prose differ.
 
 ## Testing across languages
 

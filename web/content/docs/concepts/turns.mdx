@@ -38,6 +38,8 @@ Every turn walks through this sequence:
 
 Seven states. Five edges that matter to skill authors. The coordinator (`server/runtime/src/huxley/turn/coordinator.py`) is the sole authority — it owns the state, owns the transitions, and owns the audio sequencing.
 
+_Diagram notation: rounded nodes (`([STATE])`) are terminal — the system rests there. Square nodes (`(STATE)`) are transient — the coordinator moves through them and keeps going._
+
 ## What each state means
 
 <Accordions>

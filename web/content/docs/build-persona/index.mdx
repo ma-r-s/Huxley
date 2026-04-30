@@ -30,6 +30,37 @@ This section walks you through building a persona end to end.
   />
 </Cards>
 
+## The minimal persona
+
+Before diving into any of those pages, here's the minimum viable `persona.yaml`. Copy this, fill in the blanks, and you have something that runs:
+
+```yaml title="server/personas/<name>/persona.yaml"
+version: 1
+name: mypersona          # must match the directory name
+voice: coral             # OpenAI voice — coral, alloy, echo, shimmer, verse, sage
+language_code: en        # primary language
+transcription_language: en
+
+system_prompt: |
+  You are a helpful voice assistant. Reply in two short sentences max.
+  Never refuse a request — offer the closest alternative.
+
+constraints:
+  - never_say_no         # optional — remove if you don't need it
+
+skills:
+  system: {}             # exposes get_current_time and set_volume
+  timers: {}             # lets the user set timers
+```
+
+Run it:
+
+```bash
+HUXLEY_PERSONA=mypersona uv run huxley
+```
+
+Everything else on this page is about making it *yours* — the right voice, the right language, the right constraints, the right skills.
+
 ## How long does it take?
 
 A first-pass persona — voice, language, basic prompt, two skills — is about 15 minutes:

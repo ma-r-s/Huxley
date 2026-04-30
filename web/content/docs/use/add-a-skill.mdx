@@ -55,11 +55,14 @@ To use it, list it in `persona.yaml`:
 ```yaml
 skills:
   spotify:
-    client_id: ${SPOTIFY_CLIENT_ID}
     library_path: spotify/
 ```
 
 Then restart the server. Huxley discovers skills at startup via Python entry points — the new skill registers itself automatically when it's pip-installed.
+
+<Callout type="info">
+  **Secrets:** Per-skill secret interpolation (`${ENV_VAR}` in persona.yaml) is on the roadmap but not yet shipped. For now, well-written skills read secrets via `os.environ` inside their code rather than accepting them as plain config. Check each skill's README to see how it handles credentials.
+</Callout>
 
 ## What does a skill's config look like?
 
@@ -68,7 +71,6 @@ That depends on the skill. There's no schema enforced by the framework — a ski
 Conventions you'll see across well-written skills:
 
 - **Paths are relative to `data/`.** `library: audiobooks` resolves to `server/personas/<name>/data/audiobooks/`.
-- **Secrets reference env vars.** `${SPOTIFY_CLIENT_ID}` reads `SPOTIFY_CLIENT_ID` from the environment at startup. (This is not yet shipped as of v0.x — it's on the roadmap as Stage 4 secret interpolation. For now, hardcode or use `os.environ` reads inside the skill.)
 - **Per-language overrides go in `i18n`.**
   ```yaml
   audiobooks:

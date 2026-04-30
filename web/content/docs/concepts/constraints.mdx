@@ -28,7 +28,9 @@ When the framework loads the persona, it injects each constraint as a small inst
 This is a prompting tactic. The model receives the rule, internalizes it, and behaves accordingly. There's no runtime enforcement — if the model decides to refuse anyway, it refuses. Constraints are nudges, not contracts.
 
 <Callout type="warn">
-  **Today's constraint snippets are Spanish-only** — the constraint registry was authored alongside AbuelOS. Personas in other languages still get the rule injected, just in Spanish text. A future change will localize the snippets per persona language; until then, English/French personas may see slightly less effective enforcement of these rules.
+  **Do not rely on constraints alone in non-Spanish personas.** The constraint snippets were written alongside AbuelOS — they're injected in Spanish regardless of your persona's language. A future version will localize them; until then, English/French/other personas may see inconsistent enforcement.
+
+  **Workaround (required for non-Spanish personas):** Add the constraint intent directly to your system prompt in your persona's language alongside the `constraints:` declaration. For example, for an English persona: `"Never refuse a request. If you can't do exactly what's asked, offer the closest alternative."` This is fully effective.
 </Callout>
 
 ## The shipped constraints

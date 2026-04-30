@@ -145,7 +145,7 @@ Available in `setup` and stored for use in handlers.
 | `ctx.storage`                               | `SkillStorage` (see below)                       |
 | `ctx.catalog()`                             | Returns a `Catalog` for fuzzy-matched search     |
 | `await ctx.inject_turn(prompt, ...)`        | Make the persona speak proactively               |
-| `await ctx.inject_turn_and_wait(prompt, ...)` | Like `inject_turn`, but blocks until the model finishes (falls back to plain enqueue if the coordinator is busy) |
+| `await ctx.inject_turn_and_wait(prompt, ...)` | Like `inject_turn`, but blocks until the model finishes speaking. **Falls back to plain enqueue if the coordinator is busy** — do not assume the model finished just because this returned. |
 | `await ctx.start_input_claim(claim)`        | Activate an `InputClaim`                         |
 | `await ctx.cancel_active_claim(reason=...)` | End the current claim                            |
 | `ctx.background_task(name, factory, ...)`   | Spawn a supervised async task                    |
@@ -166,9 +166,9 @@ await ctx.inject_turn(
 
 `InjectPriority` values:
 
-- `NORMAL` — fires immediately if idle; otherwise queues until the next quiet turn-end (no pending content stream).
-- `BLOCK_BEHIND_COMMS` — preempts CONTENT, yields to COMMS. Default for timers/reminders.
-- `PREEMPT` — preempts everything, including phone calls. Emergency only.
+- `NORMAL` — fires only when the coordinator is fully idle (no active turn, content stream, or call). Queues until the next quiet moment.
+- `BLOCK_BEHIND_COMMS` — preempts CONTENT (audiobooks, music), but yields to COMMS (active calls). Default for timers/reminders.
+- `PREEMPT` — preempts everything, including active phone calls. Emergency only.
 
 Prompts that should be *spoken* must say so: "Tell the user: ...". Bare statements may be treated as silent notifications.
 
