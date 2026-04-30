@@ -265,28 +265,6 @@ function PersonaCell({
       <div style={{ fontSize: 12, opacity: 0.7, lineHeight: 1.35 }}>
         {x.tag}
       </div>
-      {/* Honesty marker — only AbuelOS ships in production today; the
-          others are design examples per the section subtitle. */}
-      {x.id === "abuelos" && (
-        <div
-          style={{
-            display: "inline-flex",
-            alignSelf: "flex-start",
-            marginTop: 4,
-            padding: "3px 8px",
-            border: "1px solid var(--hux-fg-line)",
-            borderRadius: 999,
-            fontFamily: "var(--hux-mono)",
-            fontSize: 9,
-            letterSpacing: "0.18em",
-            textTransform: "uppercase",
-            opacity: 0.85,
-            background: "color-mix(in oklab, var(--hux-fg) 8%, transparent)",
-          }}
-        >
-          {t("personas.shipsTag")}
-        </div>
-      )}
     </button>
   );
 }

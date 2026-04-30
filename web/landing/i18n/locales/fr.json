@@ -250,7 +250,7 @@
       },
       "esp32": {
         "k": "Client walky-talky ESP32",
-        "v": "Remplace le navigateur comme client de production pour AbuelOS. Même protocole WebSocket ; le firmware vit dans clients/firmware/."
+        "v": "Remplace le navigateur comme client de production principal. Même protocole WebSocket ; le firmware vit dans clients/firmware/."
       }
     }
   },
@@ -258,7 +258,7 @@
     "eyebrow": "Personas",
     "titleA": "Un seul framework.",
     "titleB": "Chaque voix dont vous avez besoin.",
-    "subtitle": "Une persona est un fichier YAML : voix, langue, skills, garde-fous. AbuelOS est en production aujourd’hui ; les autres sont des exemples de conception qui montrent jusqu’où le même framework peut aller.",
+    "subtitle": "Une persona est un fichier YAML : voix, langue, skills, garde-fous. Six exemples montrant jusqu’où le même framework peut aller.",
     "personaLabel": "persona",
     "shipsTag": "en production",
     "facetKeys": {

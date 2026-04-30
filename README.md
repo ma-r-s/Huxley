@@ -135,4 +135,4 @@ Full documentation at [huxley.ma-r-s.com/docs](https://huxley.ma-r-s.com/docs) �
 
 ---
 
-MIT License · pre-1.0 — runs end-to-end, AbuelOS persona in daily use
+MIT License · pre-1.0 — runs end-to-end, in daily use
