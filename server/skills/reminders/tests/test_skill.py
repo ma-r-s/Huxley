@@ -91,6 +91,9 @@ async def _make_skill(
 class TestAddReminder:
     async def test_happy_path(self) -> None:
         skill, _, storage = await _make_skill()
+        # Exercises the legacy `recurrence: "daily"` enum compat path —
+        # the LLM may still emit it during a transition session before
+        # picking up the new tool description.
         result = await skill.handle(
             "add_reminder",
             {
@@ -104,7 +107,8 @@ class TestAddReminder:
         assert payload["ok"] is True
         assert payload["id"] == 1
         assert payload["kind"] == "medication"
-        assert payload["recurrence"] == "daily"
+        # Legacy "daily" was translated to FREQ=DAILY.
+        assert payload["recurrence_rule"] == "FREQ=DAILY"
         # Persisted under reminder:1.
         rows = await storage.list_settings(_STORAGE_PREFIX)
         ids = [k for k, _ in rows if k == "reminder:1"]
@@ -267,7 +271,7 @@ class TestSnoozeReminder:
             kind="medication",
             scheduled_for=datetime.now(UTC) - timedelta(minutes=10),
             next_fire_at=datetime.now(UTC) + timedelta(minutes=5),
-            recurrence=None,
+            recurrence_rule=None,
             state=_STATE_FIRED,
             fired_count=1,
         )
@@ -373,7 +377,7 @@ class TestPromptContext:
             kind="medication",
             scheduled_for=datetime.now(UTC) - timedelta(hours=4),
             next_fire_at=datetime.now(UTC) - timedelta(hours=4),
-            recurrence=None,
+            recurrence_rule=None,
             state=_STATE_MISSED,
             missed_at=datetime.now(UTC),
         )
@@ -392,7 +396,7 @@ class TestPromptContext:
                 kind="generic",
                 scheduled_for=datetime.now(UTC),
                 next_fire_at=datetime.now(UTC),
-                recurrence=None,
+                recurrence_rule=None,
                 state=state,
             )
             await storage.set_setting(f"reminder:{state}", entry.to_json())
@@ -414,7 +418,7 @@ class TestBootReconciliation:
             kind="generic",
             scheduled_for=future,
             next_fire_at=future,
-            recurrence=None,
+            recurrence_rule=None,
             state=_STATE_PENDING,
         )
         await storage.set_setting("reminder:1", entry.to_json())
@@ -435,7 +439,7 @@ class TestBootReconciliation:
             kind="medication",
             scheduled_for=past,
             next_fire_at=past,
-            recurrence=None,
+            recurrence_rule=None,
             state=_STATE_PENDING,
         )
         await storage.set_setting("reminder:1", entry.to_json())
@@ -457,7 +461,7 @@ class TestBootReconciliation:
             kind="medication",
             scheduled_for=past,
             next_fire_at=past,
-            recurrence=None,
+            recurrence_rule=None,
             state=_STATE_PENDING,
         )
         await storage.set_setting("reminder:1", entry.to_json())
@@ -480,7 +484,7 @@ class TestBootReconciliation:
             kind="medication",
             scheduled_for=past,
             next_fire_at=past,
-            recurrence="daily",
+            recurrence_rule="FREQ=DAILY",
             state=_STATE_PENDING,
         )
         await storage.set_setting("reminder:1", entry.to_json())
@@ -507,7 +511,7 @@ class TestBootReconciliation:
             kind="medication",
             scheduled_for=past,
             next_fire_at=past,
-            recurrence=None,
+            recurrence_rule=None,
             state=_STATE_FIRED,
             fired_count=1,
             last_fired_at=past,
@@ -529,7 +533,7 @@ class TestBootReconciliation:
             kind="medication",
             scheduled_for=past,
             next_fire_at=past,
-            recurrence=None,
+            recurrence_rule=None,
             state=_STATE_FIRED,
             fired_count=len(_MEDICATION_RETRY_INTERVALS),
             last_fired_at=past,
@@ -550,7 +554,7 @@ class TestBootReconciliation:
             kind="appointment",
             scheduled_for=past,
             next_fire_at=past,
-            recurrence=None,
+            recurrence_rule=None,
             state=_STATE_FIRED,
             fired_count=1,
             last_fired_at=past,
@@ -589,7 +593,7 @@ class TestMedicationRetry:
             kind="medication",
             scheduled_for=datetime.now(UTC),
             next_fire_at=datetime.now(UTC),
-            recurrence=None,
+            recurrence_rule=None,
             state=_STATE_PENDING,
         )
         await storage.set_setting("reminder:1", entry.to_json())
@@ -610,7 +614,7 @@ class TestMedicationRetry:
             kind="medication",
             scheduled_for=datetime.now(UTC),
             next_fire_at=datetime.now(UTC),
-            recurrence=None,
+            recurrence_rule=None,
             state=_STATE_FIRED,
             fired_count=len(_MEDICATION_RETRY_INTERVALS) - 1,  # one retry left
         )
@@ -632,7 +636,7 @@ class TestMedicationRetry:
                 kind=kind,
                 scheduled_for=datetime.now(UTC),
                 next_fire_at=datetime.now(UTC),
-                recurrence=None,
+                recurrence_rule=None,
                 state=_STATE_PENDING,
             )
             await storage.set_setting("reminder:1", entry.to_json())
@@ -656,7 +660,7 @@ class TestRecurrence:
             kind="generic",
             scheduled_for=when,
             next_fire_at=when,
-            recurrence="daily",
+            recurrence_rule="FREQ=DAILY",
             state=_STATE_PENDING,
         )
         await storage.set_setting("reminder:1", entry.to_json())
@@ -686,7 +690,7 @@ class TestRecurrence:
             kind="medication",
             scheduled_for=past,
             next_fire_at=past,
-            recurrence="daily",
+            recurrence_rule="FREQ=DAILY",
             state=_STATE_PENDING,
         )
         await storage.set_setting("reminder:1", entry.to_json())
@@ -727,7 +731,7 @@ class TestSeedImport:
         assert len(entries) == 1
         assert entries[0].message == "tomar la pastilla del corazón"
         assert entries[0].kind == "medication"
-        assert entries[0].recurrence == "daily"
+        assert entries[0].recurrence_rule == "FREQ=DAILY"
         await skill.teardown()
 
     async def test_seed_idempotent_across_reboots(self) -> None:
@@ -784,7 +788,7 @@ class TestSchedulerFires:
             kind="generic",
             scheduled_for=past,
             next_fire_at=past,
-            recurrence=None,
+            recurrence_rule=None,
             state=_STATE_PENDING,
         )
         await storage.set_setting("reminder:1", entry.to_json())
@@ -868,6 +872,259 @@ async def test_prompt_context_localized(language: str, expected_substring: str) 
     assert expected_substring in ctx
 
 
+# ---------------------------------------------------------- RRULE migration
+
+
+class TestRruleMigration:
+    """v1 entries with `recurrence: 'daily'|'weekly'` are translated to
+    RRULE strings on load. The next save persists them in v2 shape."""
+
+    async def test_v1_daily_legacy_value_translates_to_freq_daily(self) -> None:
+        storage = _NoopSkillStorage()
+        when = datetime.now(UTC) + timedelta(hours=1)
+        # Hand-craft a v1 storage entry using the legacy field name.
+        legacy_payload = {
+            "v": 1,
+            "id": 1,
+            "message": "pill",
+            "kind": "medication",
+            "scheduled_for": when.isoformat(),
+            "next_fire_at": when.isoformat(),
+            "recurrence": "daily",
+            "state": _STATE_PENDING,
+            "fired_count": 0,
+            "last_fired_at": None,
+            "acked_at": None,
+            "cancelled_at": None,
+            "missed_at": None,
+        }
+        await storage.set_setting("reminder:1", json.dumps(legacy_payload))
+        skill, _, _ = await _make_skill(storage=storage, start_scheduler=False)
+        # Loading via _load_entry should auto-upgrade the field name.
+        loaded = await skill._load_entry(1)
+        assert loaded is not None
+        assert loaded.recurrence_rule == "FREQ=DAILY"
+
+    async def test_v1_weekly_legacy_translates_to_freq_weekly(self) -> None:
+        storage = _NoopSkillStorage()
+        when = datetime.now(UTC) + timedelta(hours=1)
+        legacy_payload = {
+            "v": 1,
+            "id": 1,
+            "message": "checkup",
+            "kind": "appointment",
+            "scheduled_for": when.isoformat(),
+            "next_fire_at": when.isoformat(),
+            "recurrence": "weekly",
+            "state": _STATE_PENDING,
+        }
+        await storage.set_setting("reminder:1", json.dumps(legacy_payload))
+        skill, _, _ = await _make_skill(storage=storage, start_scheduler=False)
+        loaded = await skill._load_entry(1)
+        assert loaded is not None
+        assert loaded.recurrence_rule == "FREQ=WEEKLY"
+
+    async def test_legacy_value_in_tool_args_translates(self) -> None:
+        # The LLM may still emit `recurrence: "daily"` during a session
+        # that started before the new tool description loaded.
+        skill, _, storage = await _make_skill()
+        await skill.handle(
+            "add_reminder",
+            {
+                "message": "x",
+                "when_iso": _future_iso(),
+                "recurrence": "weekly",
+            },
+        )
+        raw = await storage.get_setting("reminder:1")
+        assert raw is not None
+        assert json.loads(raw)["recurrence_rule"] == "FREQ=WEEKLY"
+        await skill.teardown()
+
+
+# ----------------------------------------------------------------- DST
+
+
+class TestDstHandling:
+    """Recurrence math must preserve wall-clock hour across DST. A
+    daily 8 AM reminder in `America/New_York` set the day before
+    spring-forward (DST starts) must produce 8 AM EDT the next day,
+    not 9 AM EDT."""
+
+    async def test_daily_recurrence_preserves_local_hour_across_spring_forward(
+        self,
+    ) -> None:
+        from zoneinfo import ZoneInfo
+
+        from huxley_skill_reminders.skill import _next_recurrence
+
+        ny = ZoneInfo("America/New_York")
+        # 2026 DST starts 2026-03-08 02:00 → 03:00 local.
+        # Saturday 2026-03-07 08:00 EST = 13:00 UTC.
+        scheduled = datetime(2026, 3, 7, 8, 0, tzinfo=ny).astimezone(UTC)
+        nxt = _next_recurrence(scheduled, scheduled, "FREQ=DAILY", ny)
+        assert nxt is not None
+        # Sunday 2026-03-08 08:00 EDT = 12:00 UTC (NOT 13:00 = naive add).
+        local_next = nxt.astimezone(ny)
+        assert local_next.year == 2026
+        assert local_next.month == 3
+        assert local_next.day == 8
+        assert local_next.hour == 8
+        assert local_next.minute == 0
+
+    async def test_daily_recurrence_preserves_local_hour_across_fall_back(
+        self,
+    ) -> None:
+        from zoneinfo import ZoneInfo
+
+        from huxley_skill_reminders.skill import _next_recurrence
+
+        ny = ZoneInfo("America/New_York")
+        # 2026 DST ends 2026-11-01 02:00 → 01:00 local.
+        # Saturday 2026-10-31 08:00 EDT = 12:00 UTC.
+        scheduled = datetime(2026, 10, 31, 8, 0, tzinfo=ny).astimezone(UTC)
+        nxt = _next_recurrence(scheduled, scheduled, "FREQ=DAILY", ny)
+        assert nxt is not None
+        local_next = nxt.astimezone(ny)
+        # Sunday 2026-11-01 08:00 EST = 13:00 UTC.
+        assert local_next.day == 1
+        assert local_next.month == 11
+        assert local_next.hour == 8
+
+    async def test_no_dst_zone_unaffected(self) -> None:
+        # Bogota doesn't observe DST — the daily 8 AM rule produces
+        # the same UTC offset every day.
+        from zoneinfo import ZoneInfo
+
+        from huxley_skill_reminders.skill import _next_recurrence
+
+        bog = ZoneInfo("America/Bogota")
+        scheduled = datetime(2026, 3, 7, 8, 0, tzinfo=bog).astimezone(UTC)
+        nxt = _next_recurrence(scheduled, scheduled, "FREQ=DAILY", bog)
+        assert nxt is not None
+        local_next = nxt.astimezone(bog)
+        assert local_next.day == 8
+        assert local_next.hour == 8
+        # 24h elapsed exactly (no DST shift).
+        assert (nxt - scheduled).total_seconds() == 24 * 3600
+
+
+# ----------------------------------------------------------- RRULE patterns
+
+
+class TestRrulePatterns:
+    """Verify the canonical RRULE patterns the tool description
+    teaches the LLM all evaluate correctly."""
+
+    async def test_weekday_only_skips_weekends(self) -> None:
+        from zoneinfo import ZoneInfo
+
+        from huxley_skill_reminders.skill import _next_recurrence
+
+        ny = ZoneInfo("America/New_York")
+        # Friday 2026-05-01 08:00 (post-DST so EDT).
+        friday = datetime(2026, 5, 1, 8, 0, tzinfo=ny).astimezone(UTC)
+        rule = "FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR"
+        nxt = _next_recurrence(friday, friday, rule, ny)
+        # Should skip Sat/Sun → Mon 2026-05-04.
+        assert nxt is not None
+        local = nxt.astimezone(ny)
+        assert local.day == 4
+        assert local.weekday() == 0  # Monday
+
+    async def test_biweekly_advances_two_weeks(self) -> None:
+        from zoneinfo import ZoneInfo
+
+        from huxley_skill_reminders.skill import _next_recurrence
+
+        bog = ZoneInfo("America/Bogota")
+        when = datetime(2026, 5, 1, 8, 0, tzinfo=bog).astimezone(UTC)
+        rule = "FREQ=WEEKLY;INTERVAL=2"
+        nxt = _next_recurrence(when, when, rule, bog)
+        assert nxt is not None
+        # Exactly 14 days later (no DST in Bogota).
+        assert (nxt - when).total_seconds() == 14 * 24 * 3600
+
+    async def test_count_exhaustion_returns_none(self) -> None:
+        from zoneinfo import ZoneInfo
+
+        from huxley_skill_reminders.skill import _next_recurrence
+
+        bog = ZoneInfo("America/Bogota")
+        when = datetime(2026, 5, 1, 8, 0, tzinfo=bog).astimezone(UTC)
+        # COUNT=2 means the original + one more, period.
+        rule = "FREQ=DAILY;COUNT=2"
+        # series_start is fixed at the very first instance. The
+        # `after` argument advances each call.
+        nxt1 = _next_recurrence(when, when, rule, bog)
+        assert nxt1 is not None
+        # Second call from the second occurrence — series_start STILL
+        # `when` (the dtstart anchor), only `after` advances.
+        nxt2 = _next_recurrence(when, nxt1, rule, bog)
+        assert nxt2 is None
+
+    async def test_invalid_rrule_rejected_at_add(self) -> None:
+        skill, _, _ = await _make_skill()
+        result = await skill.handle(
+            "add_reminder",
+            {
+                "message": "x",
+                "when_iso": _future_iso(),
+                "recurrence_rule": "NOT_A_VALID_RULE",
+            },
+        )
+        payload = json.loads(result.output)
+        assert "error" in payload
+        assert "recurrence_rule" in payload["error"].lower()
+        await skill.teardown()
+
+    async def test_count_exhausted_recurring_does_not_schedule_successor(
+        self,
+    ) -> None:
+        # COUNT=1 reminder should fire once, then close out without
+        # creating a successor row.
+        skill, _, storage = await _make_skill(start_scheduler=False)
+        when = datetime.now(UTC) + timedelta(hours=1)
+        entry = _Entry(
+            id=1,
+            message="last call",
+            kind="generic",
+            scheduled_for=when,
+            next_fire_at=when,
+            recurrence_rule="FREQ=DAILY;COUNT=1",
+            state=_STATE_PENDING,
+        )
+        await storage.set_setting("reminder:1", entry.to_json())
+        await skill._fire(entry)
+        rows = await storage.list_settings(_STORAGE_PREFIX)
+        entries = [
+            _Entry.from_json(v)
+            for k, v in rows
+            if not k.removeprefix(_STORAGE_PREFIX).startswith("_meta:")
+        ]
+        # Only the original (now acked) — no successor.
+        assert len(entries) == 1
+        assert entries[0].state == _STATE_ACKED
+
+
+class TestTimezoneResolution:
+    async def test_invalid_tz_falls_back_to_utc(self) -> None:
+        # Persona authors who typo the tz get a warning + UTC default,
+        # not a startup crash.
+        from zoneinfo import ZoneInfo
+
+        skill, _, _ = await _make_skill(config={"timezone": "Mars/Olympus_Mons"})
+        assert skill._tz == ZoneInfo("UTC")
+        await skill.teardown()
+
+    async def test_valid_tz_resolved_to_zoneinfo(self) -> None:
+        from zoneinfo import ZoneInfo
+
+        skill, _, _ = await _make_skill(config={"timezone": "America/New_York"})
+        assert skill._tz == ZoneInfo("America/New_York")
+        await skill.teardown()
+
+
 # ---------------------------------------------------------- regressions (post-review)
 
 
@@ -889,7 +1146,7 @@ class TestRecurrenceIdempotency:
             kind="medication",
             scheduled_for=past,
             next_fire_at=past,
-            recurrence="daily",
+            recurrence_rule="FREQ=DAILY",
             state=_STATE_PENDING,
         )
         await storage.set_setting("reminder:1", entry.to_json())
@@ -922,7 +1179,7 @@ class TestRecurrenceIdempotency:
             kind="medication",
             scheduled_for=when,
             next_fire_at=when,
-            recurrence="daily",
+            recurrence_rule="FREQ=DAILY",
             state=_STATE_PENDING,
         )
         e2 = _Entry(
@@ -931,7 +1188,7 @@ class TestRecurrenceIdempotency:
             kind="medication",
             scheduled_for=when,
             next_fire_at=when,
-            recurrence="daily",
+            recurrence_rule="FREQ=DAILY",
             state=_STATE_PENDING,
         )
         await storage.set_setting("reminder:1", e1.to_json())
@@ -975,7 +1232,7 @@ class TestCommitBeforeInject:
             kind="medication",
             scheduled_for=datetime.now(UTC),
             next_fire_at=datetime.now(UTC),
-            recurrence=None,
+            recurrence_rule=None,
             state=_STATE_PENDING,
         )
         await storage.set_setting("reminder:1", entry.to_json())
@@ -999,7 +1256,7 @@ class TestCommitBeforeInject:
             kind="appointment",
             scheduled_for=datetime.now(UTC),
             next_fire_at=datetime.now(UTC),
-            recurrence=None,
+            recurrence_rule=None,
             state=_STATE_PENDING,
         )
         await storage.set_setting("reminder:1", entry.to_json())
@@ -1023,7 +1280,7 @@ class TestCommitBeforeInject:
             kind="medication",
             scheduled_for=datetime.now(UTC),
             next_fire_at=datetime.now(UTC),
-            recurrence=None,
+            recurrence_rule=None,
             state=_STATE_PENDING,
         )
         await storage.set_setting("reminder:1", entry.to_json())
@@ -1054,7 +1311,7 @@ class TestMidFireCrashRecovery:
             kind="medication",
             scheduled_for=last_fired - timedelta(minutes=2),
             next_fire_at=last_fired + _MEDICATION_RETRY_INTERVALS[0],
-            recurrence=None,
+            recurrence_rule=None,
             state=_STATE_FIRED,
             fired_count=1,
             last_fired_at=last_fired,
@@ -1084,7 +1341,7 @@ class TestAckOnFiredMedication:
             kind="medication",
             scheduled_for=datetime.now(UTC) - timedelta(minutes=10),
             next_fire_at=datetime.now(UTC) + timedelta(minutes=5),
-            recurrence=None,
+            recurrence_rule=None,
             state=_STATE_FIRED,
             fired_count=1,
         )
@@ -1108,7 +1365,7 @@ class TestAckOnFiredMedication:
             kind="medication",
             scheduled_for=when,
             next_fire_at=datetime.now(UTC) + timedelta(minutes=5),
-            recurrence="daily",
+            recurrence_rule="FREQ=DAILY",
             state=_STATE_FIRED,
             fired_count=1,
         )
@@ -1139,7 +1396,7 @@ class TestWeeklyRecurrence:
             kind="generic",
             scheduled_for=when,
             next_fire_at=when,
-            recurrence="weekly",
+            recurrence_rule="FREQ=WEEKLY",
             state=_STATE_PENDING,
         )
         await storage.set_setting("reminder:1", entry.to_json())
@@ -1170,7 +1427,7 @@ class TestInjectPriorityIsBlockBehindComms:
             kind="generic",
             scheduled_for=datetime.now(UTC),
             next_fire_at=datetime.now(UTC),
-            recurrence=None,
+            recurrence_rule=None,
             state=_STATE_PENDING,
         )
         await storage.set_setting("reminder:1", entry.to_json())

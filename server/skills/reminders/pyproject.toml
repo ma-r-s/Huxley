@@ -5,6 +5,11 @@ description = "Reminders skill for Huxley (medication/appointment/generic, persi
 requires-python = ">=3.13"
 dependencies = [
     "huxley-sdk",
+    # Recurrence rules are stored and evaluated as RFC 5545 RRULE strings
+    # (e.g. "FREQ=DAILY", "FREQ=WEEKLY;BYDAY=MO,WE,FR"). `dateutil.rrule`
+    # is the canonical implementation, handles tz-aware dtstart correctly
+    # so DST transitions don't drift the local fire time.
+    "python-dateutil>=2.9",
 ]
 
 [project.entry-points."huxley.skills"]
