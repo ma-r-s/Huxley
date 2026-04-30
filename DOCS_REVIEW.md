@@ -51,10 +51,10 @@ Critic round 2 flagged a few corners (the wire-protocol table in `connect-a-clie
 
 These are choices I made on my own. Reverse them if any feel wrong; each was self-contained.
 
-1. **AbuelOS persona walkthrough is a _simplified_ version**, not a verbatim copy of `server/personas/abuelos/persona.yaml`. The real file is much longer (more skill config, contacts, a long system prompt). Mentioned explicitly at the top of the page; readers are pointed at the source for the full version.
+1. **Abuelo persona walkthrough is a _simplified_ version**, not a verbatim copy of `server/personas/abuelos/persona.yaml`. The real file is much longer (more skill config, contacts, a long system prompt). Mentioned explicitly at the top of the page; readers are pointed at the source for the full version.
 2. **No auto-generated Python API reference.** Per your call, the reference section is a hand-curated cheat sheet plus `persona.yaml` schema + env vars. Auto-generated full type docs are noted as "coming soon."
 3. **Constraints section honestly says `ctx.constraints` is not yet implemented.** The first draft assumed it existed (per the research dump). Critic correctly flagged that skills _cannot_ read constraints today; I rewrote the page to explain that constraints are prompt-only for now, with a callout pointing at the future. **This is a real product gap** — see "Things to follow up on" below.
-4. **Spanish-only constraint snippets called out.** The framework's constraint registry is currently Spanish-only (because AbuelOS is the only persona). Mentioned in `concepts/constraints.mdx`. Future work: localize per persona language.
+4. **Spanish-only constraint snippets called out.** The framework's constraint registry is currently Spanish-only (because Abuelo is the only persona). Mentioned in `concepts/constraints.mdx`. Future work: localize per persona language.
 5. **No dedicated AI-chat / OG-image generation** in the docs site setup. Fumadocs offers both as optional add-ons; we skipped them — they're easy to add later.
 6. **Mermaid is the diagramming choice.** Renders client-side via dynamic import. Used sparingly: turn state machine, focus channel arbitration. Not over-applied.
 
@@ -90,7 +90,7 @@ There are zero dead links. I removed two that the round-1 critic flagged (`/docs
 **Round 1** (30 findings):
 
 - 11 critical (fictional API surface, wrong env vars, wrong skill config keys)
-- 10 important (voice consistency, dead links, AbuelOS walkthrough YAML divergence)
+- 10 important (voice consistency, dead links, Abuelo walkthrough YAML divergence)
 - 9 minor (typos, formatting)
 
 Most stemmed from one root cause: the research dump from the Explore agent had some inaccuracies that propagated into the first draft. Fixed via global sed renames + targeted edits.

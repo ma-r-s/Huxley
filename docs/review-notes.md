@@ -44,7 +44,7 @@ Not every OpenAI account has Realtime beta access. A reviewer without it can ver
 
 ### 5. Spanish-first canonical persona
 
-The bundled persona is AbuelOS — Spanish-language, targeting an elderly blind user. A reviewer expecting English-first docs will notice. The persona schema is language-agnostic; only the shipped example is Spanish. A template English persona would help, but hasn't been written yet.
+The bundled persona is Abuelo — Spanish-language, targeting an elderly blind user. A reviewer expecting English-first docs will notice. The persona schema is language-agnostic; only the shipped example is Spanish. A template English persona would help, but hasn't been written yet.
 
 ### 6. Python 3.13 requirement is tight
 
@@ -58,11 +58,11 @@ Correct. The YAML points at a directory for user data; the directory is gitignor
 
 ### Voice is `coral` in the bundled persona, not `alloy`
 
-Intentional — `coral` was chosen for AbuelOS based on listening tests. `README.md`'s schema example uses `alloy` as the generic stand-in. Both valid OpenAI Realtime voice IDs.
+Intentional — `coral` was chosen for Abuelo based on listening tests. `README.md`'s schema example uses `alloy` as the generic stand-in. Both valid OpenAI Realtime voice IDs.
 
-### `docs/decisions.md` references "AbuelOS" as a former project name
+### `docs/decisions.md` references "Abuelo" as a former project name
 
-Preserved on purpose. ADRs document past states; rewriting them to match the current framing would erase the decision history. The rename from "AbuelOS the project" to "Huxley the framework / AbuelOS the persona" is itself an ADR entry.
+Preserved on purpose. ADRs document past states; rewriting them to match the current framing would erase the decision history. The rename from "Abuelo the project" to "Huxley the framework / Abuelo the persona" is itself an ADR entry.
 
 ### `packages/core/pyproject.toml` depends on `huxley-skill-audiobooks` + `huxley-skill-system`
 

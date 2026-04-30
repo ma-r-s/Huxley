@@ -1,11 +1,11 @@
 ---
-title: Walkthrough — BasicOS
+title: Walkthrough — Basic
 description: A minimal, terse persona — every field explained. A clear template for your own persona.
 ---
 
-BasicOS is the terse counter-persona that ships alongside Huxley. It does less than a full persona on purpose — two skills, a short prompt, and a clean i18n block. That makes it a better teaching example than a complex persona: every field pulls its weight, nothing is hidden in warmth.
+Basic is the terse counter-persona that ships alongside Huxley. It does less than a full persona on purpose — two skills, a short prompt, and a clean i18n block. That makes it a better teaching example than a complex persona: every field pulls its weight, nothing is hidden in warmth.
 
-This page reads BasicOS top to bottom and explains every choice. Use it as a starting point when you build your own persona.
+This page reads Basic top to bottom and explains every choice. Use it as a starting point when you build your own persona.
 
 ## The full file
 
@@ -13,7 +13,7 @@ Here's a representative version of `server/personas/basicos/persona.yaml`, abbre
 
 ```yaml title="server/personas/basicos/persona.yaml"
 version: 1
-name: BasicOS
+name: Basic
 voice: alloy
 language_code: en
 transcription_language: en
@@ -113,7 +113,7 @@ skills:
 
 ### `voice: alloy`
 
-Alloy is OpenAI's neutral, clear voice. No warmth, no flourishes — exactly matching BasicOS's tone. A warm persona would use `coral` or `shimmer`; a formal one might try `echo`. Choose by feel in the OpenAI playground first.
+Alloy is OpenAI's neutral, clear voice. No warmth, no flourishes — exactly matching Basic's tone. A warm persona would use `coral` or `shimmer`; a formal one might try `echo`. Choose by feel in the OpenAI playground first.
 
 ### `language_code: en` + `transcription_language: en`
 
@@ -137,9 +137,9 @@ Read it as instructions to an actor, not as documentation. A few things worth no
 
 ### `constraints: [confirm_destructive]`
 
-BasicOS only declares one constraint: `confirm_destructive`. Before deleting, sending, or irreversibly calling something, the model asks "are you sure?" This is a good default for any persona that connects to the real world.
+Basic only declares one constraint: `confirm_destructive`. Before deleting, sending, or irreversibly calling something, the model asks "are you sure?" This is a good default for any persona that connects to the real world.
 
-`never_say_no` is not enabled — BasicOS is for developers who want to see the framework's unmodified behavior. A refusal is a data point, not a failure.
+`never_say_no` is not enabled — Basic is for developers who want to see the framework's unmodified behavior. A refusal is a data point, not a failure.
 
 `echo_short_input` and `confirm_if_unclear` aren't needed here — this persona is designed for direct, unambiguous interaction.
 
@@ -167,7 +167,7 @@ No config. The system skill exposes `get_current_time` and `set_volume`. It read
 
 ## The directory layout
 
-BasicOS is intentionally minimal:
+Basic is intentionally minimal:
 
 <Files>
   <Folder name="server/personas/basicos" defaultOpen>
@@ -183,18 +183,18 @@ No sounds directory, no media library. The `data/basicos.db` file doesn't exist 
 
 ## What this teaches
 
-Reading BasicOS reveals the key design lever in Huxley personas:
+Reading Basic reveals the key design lever in Huxley personas:
 
 - **The system prompt is your primary tool.** Voice and constraints shape the register; the prompt shapes behavior. A two-sentence prompt and a detailed one both work — but the detailed one wins when the user does something unexpected.
 - **Minimal skills, focused behavior.** Two skills, two tools each. The model can't get confused about what it's supposed to do. Add skills one at a time and test.
 - **Multilingual is opt-in.** You only need `i18n` if you actually support multiple languages. A single-language persona doesn't need it at all.
-- **Constraints compose.** BasicOS uses one; a more capable persona might use three or four. Each adds a behavioral guarantee without touching the skill code.
+- **Constraints compose.** Basic uses one; a more capable persona might use three or four. Each adds a behavioral guarantee without touching the skill code.
 
 ## What you'd change for your own persona
 
 From this template:
 
-- **The user description** — BasicOS has none (it's persona-for-developers). Yours should establish who the user is, right at the top of the prompt.
+- **The user description** — Basic has none (it's persona-for-developers). Yours should establish who the user is, right at the top of the prompt.
 - **The voice** — match it to your user's expectations. `alloy` is neutral; other voices carry more personality.
 - **The language** — swap `es` for your user's language. The `i18n` block is optional if you only need one.
 - **The skill list** — add skills for everything your user actually needs. Remove `news` if they don't need headlines. Add `timers` for one-shot countdowns ("timer de 5 minutos"). Add `reminders` for scheduled or recurring prompts ("recuérdame tomar la pastilla todos los días a las 9").

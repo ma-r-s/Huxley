@@ -1,5 +1,5 @@
 "use client";
-// Personas grid + active-persona detail. Six personas (AbuelOS one of them);
+// Personas grid + active-persona detail. Six personas (Abuelo one of them);
 // click a cell to swap the description + YAML. Cells stagger in.
 
 import { useState } from "react";
@@ -20,7 +20,7 @@ interface Persona {
 const PERSONAS: Persona[] = [
   {
     id: "abuelos",
-    name: "AbuelOS",
+    name: "Abuelo",
     tag: "Elderly companion · Español",
     desc: "Slow warm voice for an elderly blind user. Audiobooks, radio, Telegram calls. Never says no.",
     facets: [
@@ -30,11 +30,11 @@ const PERSONAS: Persona[] = [
       ["Hardware", "WebSocket client, mic + speaker"],
       ["Rule", "never_say_no"],
     ],
-    yaml: `name: AbuelOS
+    yaml: `name: Abuelo
 voice: alloy
 language_code: es
 system_prompt: |
-  Eres AbuelOS. Hablas despacio, con calma.
+  Eres Abuelo. Hablas despacio, con calma.
   Nunca dices "no puedo". Siempre intentas ayudar.
 constraints: [never_say_no, confirm_destructive]
 skills:

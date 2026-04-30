@@ -10,7 +10,7 @@ At load time, `compose(names)` looks each one up in `CONSTRAINTS` and
 concatenates the snippets, which the framework appends to the persona
 system prompt. Unknown names raise — typos should fail fast.
 
-Language: constraint snippets today are Spanish because AbuelOS is the
+Language: constraint snippets today are Spanish because Abuelo is the
 only persona and its language is Spanish. A future non-Spanish persona
 will force a language-aware composition layer. That's explicitly out of
 scope until a second persona ships — don't speculate.

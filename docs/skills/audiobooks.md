@@ -1,6 +1,6 @@
 # Skill: audiobooks
 
-The first first-party Huxley skill. Will be packaged as `huxley-skill-audiobooks` after the SDK extraction. Provides voice-driven audiobook search, playback, and navigation against a local library of M4B files. The Spanish examples below come from the AbuelOS persona ([`../personas/abuelos.md`](../personas/abuelos.md)) because it's the canonical use case, but the skill works against any persona that enables it — tool descriptions and user-facing strings should be localized to the persona's language.
+The first first-party Huxley skill. Will be packaged as `huxley-skill-audiobooks` after the SDK extraction. Provides voice-driven audiobook search, playback, and navigation against a local library of M4B files. The Spanish examples below come from the Abuelo persona ([`../personas/abuelos.md`](../personas/abuelos.md)) because it's the canonical use case, but the skill works against any persona that enables it — tool descriptions and user-facing strings should be localized to the persona's language.
 
 ## Product surface
 

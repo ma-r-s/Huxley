@@ -1,6 +1,6 @@
-# Persona: BasicOS
+# Persona: Basic
 
-The proof-of-architecture counterweight to [AbuelOS](./abuelos.md). Same
+The proof-of-architecture counterweight to [Abuelo](./abuelos.md). Same
 framework, same skills, same Spanish language — totally different
 consumption shape because the persona's `system_prompt` says different
 things.
@@ -12,8 +12,8 @@ skill returns structured data; the persona shapes how the LLM speaks it.
 
 That claim is testable. If the news skill bakes in "warm tone" or "always
 plays a chime," you can't write a persona that consumes it tersely without
-chimes. BasicOS is the counter-test: a deliberately plain, terse persona
-sharing the same machinery as AbuelOS. Anything in `server/skills/*/`
+chimes. Basic is the counter-test: a deliberately plain, terse persona
+sharing the same machinery as Abuelo. Anything in `server/skills/*/`
 that fights it has leaked persona assumptions where they don't belong.
 
 ## Target user (notional)
@@ -23,14 +23,14 @@ Sighted, not particularly accessibility-constrained, prefers terse output.
 
 This persona is mostly a development testbed today, not a polished
 deployment target. It's what you'd run when you're checking that a new
-skill works for "an average person" and not just for AbuelOS's specific
+skill works for "an average person" and not just for Abuelo's specific
 audio-only constraints.
 
 ## Persona attributes
 
 | Attribute   | Value                                                                 |
 | ----------- | --------------------------------------------------------------------- |
-| Voice       | `alloy` (different from AbuelOS's `coral` — easier to A/B audibly)    |
+| Voice       | `alloy` (different from Abuelo's `coral` — easier to A/B audibly)    |
 | Language    | Spanish                                                               |
 | Tono        | directo, sin rodeos                                                   |
 | Estilo      | viñetas habladas, frases cortas, cero adornos                         |
@@ -40,7 +40,7 @@ audio-only constraints.
 ## persona.yaml (the actual file)
 
 Lives at [`server/personas/basicos/persona.yaml`](../../personas/basicos/persona.yaml).
-Notable bits versus AbuelOS:
+Notable bits versus Abuelo:
 
 ```yaml
 voice: alloy # vs coral
@@ -54,7 +54,7 @@ constraints:
 
 skills:
   news:
-    location: "Villavicencio" # same data as AbuelOS
+    location: "Villavicencio" # same data as Abuelo
     interests: [] # vs [politica, local] — no weighting
     max_items: 5 # vs 8 — terser
     # no start_sound — no chime, no PlaySound side effect ever fires
@@ -65,7 +65,7 @@ skills:
 
 Both personas, asking _"qué hay de noticias"_:
 
-| Step            | AbuelOS                                          | BasicOS                                |
+| Step            | Abuelo                                          | Basic                                |
 | --------------- | ------------------------------------------------ | -------------------------------------- |
 | Pre-narration   | _"a ver, le cuento las noticias"_                | _"un momento"_                         |
 | Chime           | `news_start.wav` plays (~1.4s)                   | _none_                                 |
@@ -77,7 +77,7 @@ Both personas, asking _"qué hay de noticias"_:
 Same `get_news` tool. Same JSON byte-for-byte. The audio diverges entirely
 because of the persona's `system_prompt` + the absence of `start_sound`.
 
-## Run BasicOS
+## Run Basic
 
 ```bash
 cd server/runtime
@@ -88,10 +88,10 @@ Or run both servers side-by-side and switch with the [web UI persona
 dropdown](../../web/.env.local.example):
 
 ```bash
-# Terminal 1 — AbuelOS on default port
+# Terminal 1 — Abuelo on default port
 cd server/runtime && uv run huxley
 
-# Terminal 2 — BasicOS on port 8766
+# Terminal 2 — Basic on port 8766
 cd server/runtime && HUXLEY_PERSONA=basicos HUXLEY_SERVER_PORT=8766 uv run huxley
 
 # Terminal 3 — web client; the dropdown reads VITE_HUXLEY_PERSONAS
@@ -104,8 +104,8 @@ opens the new one, no auto-reconnect to the old URL during the switch).
 
 ## Skills not enabled
 
-- **audiobooks** — distinct use case; BasicOS doesn't manage an audiobook
+- **audiobooks** — distinct use case; Basic doesn't manage an audiobook
   library. Re-enable per-deployment if you want it.
 - Future skills (messaging, music, reminders) will be enable-by-default for
-  the persona that needs them; BasicOS opts in only when the use case fits
+  the persona that needs them; Basic opts in only when the use case fits
   its tone.

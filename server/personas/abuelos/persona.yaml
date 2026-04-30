@@ -1,5 +1,5 @@
 version: 1
-name: AbuelOS
+name: Abuelo
 voice: coral
 language_code: es
 transcription_language: es
@@ -604,7 +604,7 @@ skills:
   # current/live info it doesn't know (today's weather, sports results,
   # recent events). See docs/skills/search.md.
   #
-  # `safesearch`: off | moderate | strict. AbuelOS is an adult user,
+  # `safesearch`: off | moderate | strict. Abuelo is an adult user,
   # `moderate` is fine; a child-safe persona would set `strict`.
   search:
     safesearch: "moderate"
@@ -685,7 +685,7 @@ skills:
   # supervisor lands.
   timers:
     # Fire prompt template — the Spanish default below is the on-record
-    # AbuelOS tone. EN/FR overrides under `i18n.<lang>` keep the same
+    # Abuelo tone. EN/FR overrides under `i18n.<lang>` keep the same
     # shape (imperative instruction to the LLM, `{message}` placeholder).
     fire_prompt: |
       Ha sonado un temporizador que el usuario programó. Avísale con
@@ -726,7 +726,7 @@ skills:
     # late_window_medication_s: 900
     # late_window_appointment_s: 7200
     # late_window_generic_s: 3600
-    # Spanish/AbuelOS-toned default. EN/FR overrides via i18n below
+    # Spanish/Abuelo-toned default. EN/FR overrides via i18n below
     # so a session language flip picks up the right phrasing.
     fire_prompt: |
       Suena un recordatorio que el usuario programó. Avísale con tono

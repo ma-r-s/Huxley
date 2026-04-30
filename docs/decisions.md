@@ -2,7 +2,7 @@
 
 Append-only log of non-obvious calls. Format: date · context · decision · consequences. Each entry has a stable heading for cross-linking from other docs.
 
-> **Naming note**: ADRs predating 2026-04-16 reference "AbuelOS" because that was the project's name at the time. Today, **AbuelOS** is the canonical persona, and the framework itself is called **Huxley**. Historical ADRs are preserved verbatim — they record the decision in the language used at the time. New ADRs use the current naming.
+> **Naming note**: ADRs predating 2026-04-16 reference "Abuelo" because that was the project's name at the time. Today, **Abuelo** is the canonical persona, and the framework itself is called **Huxley**. Historical ADRs are preserved verbatim — they record the decision in the language used at the time. New ADRs use the current naming.
 
 ## Template
 
@@ -100,7 +100,7 @@ per-client scoping anywhere.
 
 ## 2026-04-13 — One-button UX contract
 
-**Context**: The dev browser client had three distinct buttons at one point: "Iniciar sesión" to start an OpenAI session, "Interrumpir reproducción" to stop an audiobook, and the big red PTT button to talk. This was never going to fly on the actual hardware: the production device is a walky-talky with **one** physical button, and the AbuelOS persona's target user is blind — they cannot distinguish "first the rectangular button, then the round one, then press-and-hold." Every interaction has to collapse onto the same gesture: press-and-hold the one button.
+**Context**: The dev browser client had three distinct buttons at one point: "Iniciar sesión" to start an OpenAI session, "Interrumpir reproducción" to stop an audiobook, and the big red PTT button to talk. This was never going to fly on the actual hardware: the production device is a walky-talky with **one** physical button, and the Abuelo persona's target user is blind — they cannot distinguish "first the rectangular button, then the round one, then press-and-hold." Every interaction has to collapse onto the same gesture: press-and-hold the one button.
 
 **Decision**: The browser client exposes **exactly one button**. Press-and-hold semantics depend on the server-side state machine, but the physical gesture is identical in every state:
 
@@ -168,33 +168,33 @@ per-client scoping anywhere.
 
 ---
 
-## 2026-04-16 — AbuelOS becomes a persona; the project is renamed Huxley
+## 2026-04-16 — Abuelo becomes a persona; the project is renamed Huxley
 
-**Context**: The project started as "AbuelOS" — an assistant targeting an elderly blind Spanish-speaking user. The skill system, the WebSocket protocol, the turn coordinator, the audio path are all generic — none are AbuelOS-specific. Continuing to call the framework "AbuelOS" conflates two things (the framework and the canonical instance of it), confuses anyone discovering the project, and fights against the goal of making it open-source-and-extensible. Mario's vision: "anyone with a chatbot need can build a voice agent on this; the AbuelOS use case is one persona among many."
+**Context**: The project started as "Abuelo" — an assistant targeting an elderly blind Spanish-speaking user. The skill system, the WebSocket protocol, the turn coordinator, the audio path are all generic — none are Abuelo-specific. Continuing to call the framework "Abuelo" conflates two things (the framework and the canonical instance of it), confuses anyone discovering the project, and fights against the goal of making it open-source-and-extensible. Mario's vision: "anyone with a chatbot need can build a voice agent on this; the Abuelo use case is one persona among many."
 
-**Decision**: Rename the project to **Huxley** — the voice agent framework. The original assistant becomes a **persona** named **AbuelOS** that lives at [`server/personas/abuelos/`](./personas/abuelos.md). The vocabulary becomes:
+**Decision**: Rename the project to **Huxley** — the voice agent framework. The original assistant becomes a **persona** named **Abuelo** that lives at [`server/personas/abuelos/`](./personas/abuelos.md). The vocabulary becomes:
 
 - **Persona** = who the agent is (config: name, voice, language, personality, constraints, list of skills). YAML.
 - **Skill** = what the agent can do (Python package, exports a class implementing the SDK protocol). Installable via PyPI under `huxley-skill-*` convention.
-- **Constraint** = a named behavioral rule layered onto the system prompt (`never_say_no`, `confirm_destructive`, `child_safe`). The "nunca decir no" rule, formerly project-wide, becomes the `never_say_no` constraint that the AbuelOS persona declares.
+- **Constraint** = a named behavioral rule layered onto the system prompt (`never_say_no`, `confirm_destructive`, `child_safe`). The "nunca decir no" rule, formerly project-wide, becomes the `never_say_no` constraint that the Abuelo persona declares.
 - **Side effect** = the generalized version of `audio_factory` — what a tool produces beyond text. Audio is one kind. The framework can be extended to support more (notifications, state changes) without touching skills that don't use them.
 
-The Python namespace (`abuel_os/`) and repo path (`AbuelOS/`) are renamed as part of the next refactor, and the skill SDK is extracted into `packages/sdk/` so third-party authors import from a stable surface.
+The Python namespace (`abuel_os/`) and repo path (`Abuelo/`) are renamed as part of the next refactor, and the skill SDK is extracted into `packages/sdk/` so third-party authors import from a stable surface.
 
 **Consequences**:
 
-- **Documentation reorganized**: `vision.md` describes Huxley the framework; `server/personas/abuelos.md` is the AbuelOS persona spec (what was in vision.md before). New: `concepts.md` (vocabulary), `server/personas/README.md` (how to write a persona), `observability.md` (logging/debugging workflow).
+- **Documentation reorganized**: `vision.md` describes Huxley the framework; `server/personas/abuelos.md` is the Abuelo persona spec (what was in vision.md before). New: `concepts.md` (vocabulary), `server/personas/README.md` (how to write a persona), `observability.md` (logging/debugging workflow).
 - **Skill author surface area becomes stable**: skills depend on `huxley_sdk`, never on framework internals. Persona authors are non-developers writing YAML.
-- **The `never_say_no` rule is opt-in per persona**, not framework-mandated. AbuelOS keeps it; other personas (a child's tutor, a developer's assistant) may not need it.
+- **The `never_say_no` rule is opt-in per persona**, not framework-mandated. Abuelo keeps it; other personas (a child's tutor, a developer's assistant) may not need it.
 - **The repo grows a workspace structure**: `packages/sdk/`, `packages/core/`, `server/skills/audiobooks/`, `server/skills/system/`, `server/personas/abuelos/`. uv workspaces handle the multi-package layout.
-- **Historical ADRs preserved verbatim**. They reference "AbuelOS" because that was the project's name at the time. The naming note at the top of this file flags this for new readers.
+- **Historical ADRs preserved verbatim**. They reference "Abuelo" because that was the project's name at the time. The naming note at the top of this file flags this for new readers.
 - **What does NOT change for v1**: the 3-state session machine, the turn coordinator, the audio path, the WebSocket protocol, the OpenAI Realtime integration. Those are framework, and they were already persona-agnostic by accident — the rename just makes the role explicit.
 
 ---
 
 ## 2026-04-18 — Default model is `gpt-4o-mini-realtime-preview`
 
-**Context**: Initial dev ran on `gpt-4o-realtime-preview` (full model). Text input tokens are ~8x more expensive on the full model than on mini ($5 vs $0.60 per 1M tokens). For AbuelOS, the agent dispatches tool calls in Spanish against a fixed set of skills — not reasoning-heavy work. Mini is sufficient.
+**Context**: Initial dev ran on `gpt-4o-realtime-preview` (full model). Text input tokens are ~8x more expensive on the full model than on mini ($5 vs $0.60 per 1M tokens). For Abuelo, the agent dispatches tool calls in Spanish against a fixed set of skills — not reasoning-heavy work. Mini is sufficient.
 
 **Decision**: Default `Settings.openai_model` is `gpt-4o-mini-realtime-preview`. `.env` can override to the full model for A/B testing.
 

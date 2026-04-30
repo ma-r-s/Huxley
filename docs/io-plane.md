@@ -1114,7 +1114,7 @@ the research and the design:
 **Earcon sourcing for the three tier earcons.** The spec locks that
 each urgency tier (CHIME_DEFER, INTERRUPT, CRITICAL) gets a distinct,
 persona-owned earcon. You chose "real audio, synths are hard." Before
-Stage 1 ships, three specific audio files need to exist in the AbuelOS
+Stage 1 ships, three specific audio files need to exist in the Abuelo
 persona. Either you pick them from a sound library, or we defer the
 actual audio selection (framework plays nothing when the earcon is
 missing, logs a warning) and curate the audio as a separate task.

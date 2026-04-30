@@ -179,7 +179,7 @@ class TestPromptContext:
 class TestFirePromptPersonaConfig:
     """Persona config override for the fire-prompt template (PQ-2).
 
-    The default is Spanish / AbuelOS-toned. Any persona can override
+    The default is Spanish / Abuelo-toned. Any persona can override
     via `persona.yaml`'s `timers.fire_prompt`; the skill interpolates
     `{message}` at fire time.
     """
@@ -189,7 +189,7 @@ class TestFirePromptPersonaConfig:
         await skill.handle("set_timer", {"seconds": 1, "message": "agua"})
         await _drain()
         prompt = inject_mock.await_args.args[0]
-        # Default is the Spanish/AbuelOS-toned template.
+        # Default is the Spanish/Abuelo-toned template.
         assert "temporizador" in prompt.lower()
         assert "agua" in prompt
 

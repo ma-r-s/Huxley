@@ -24,7 +24,7 @@ Huxley is the name of both the platform and the PWA — same brand, different su
 
 - **Huxley** — the product. Both the platform (Python runtime, skill system, voice provider integration) and this PWA. Inside this PWA, the product name in the header / install prompt / icon is just **"Huxley"**.
 - **Persona** — a YAML configuration that customizes Huxley for a specific user. Defines the voice, language, system prompt, behavioral constraints, and the set of enabled skills. A Huxley instance runs exactly one persona.
-- **AbuelOS** — one _example_ persona that ships with the Huxley framework. Spanish-language, warm-toned, configured for an elderly user who benefits from large text and high contrast. Not a product name. It's mentioned in this brief to give the design tool a concrete example of what a persona looks like, but **the PWA must not assume the persona is AbuelOS**. Other personas will exist.
+- **Abuelo** — one _example_ persona that ships with the Huxley framework. Spanish-language, warm-toned, configured for an elderly user who benefits from large text and high contrast. Not a product name. It's mentioned in this brief to give the design tool a concrete example of what a persona looks like, but **the PWA must not assume the persona is Abuelo**. Other personas will exist.
 - **Skill** — a module the persona enables. Provides tools the voice agent can invoke (read an audiobook, set a timer, send a Telegram message, etc.). Skills can eventually contribute UI to the PWA via a structured event protocol (see "Skill-extensible UI" below).
 - **User** — the human interacting with their Huxley through this PWA. Always exactly one person per PWA install, always exactly one PWA install per Huxley instance. **There is no multi-user, no family, no sharing.** If the user's friends want to reach them, that's Telegram / WhatsApp / email — not this PWA.
 
@@ -34,7 +34,7 @@ Exactly one person: **the Huxley user**. The human whose Huxley it is. That's th
 
 This person might be:
 
-- An elderly Spanish-speaking user running the AbuelOS persona — the voice agent is configured for their daily needs (audiobooks, news, reminders). They hold the PWA on a tablet next to them and press-and-hold to talk. Large text, high contrast, calm animation.
+- An elderly Spanish-speaking user running the Abuelo persona — the voice agent is configured for their daily needs (audiobooks, news, reminders). They hold the PWA on a tablet next to them and press-and-hold to talk. Large text, high contrast, calm animation.
 - A software developer running a developer persona — their voice agent is configured for journaling, quick notes, code-adjacent conversation. Denser UI works for them.
 - A busy parent running a household-manager persona — shopping lists, reminders, kids' schedules.
 - Any future Huxley user running any future persona.
@@ -160,8 +160,8 @@ The PWA talks to the Huxley user. Huxley talks to the world through its skills.
 
 - **Calm.** Opens for a purpose, does the thing, puts down. Not busy, not loud, not notification-heavy.
 - **Reliable.** Voice is the primary interface; if the PWA glitches during a hold-to-talk, the user thinks the device is broken.
-- **Accessible.** The AbuelOS persona's user is blind; font size and contrast are non-cosmetic concerns. Screen-reader friendly. Motion can be reduced via OS prefers-reduced-motion.
-- **Persona-adaptive.** Respect the persona's language for UI strings where possible (Spanish UI for the AbuelOS persona), fallback to the user's browser language otherwise. English / Spanish at minimum for v1.
+- **Accessible.** The Abuelo persona's user is blind; font size and contrast are non-cosmetic concerns. Screen-reader friendly. Motion can be reduced via OS prefers-reduced-motion.
+- **Persona-adaptive.** Respect the persona's language for UI strings where possible (Spanish UI for the Abuelo persona), fallback to the user's browser language otherwise. English / Spanish at minimum for v1.
 - **Installable.** Proper PWA manifest, icon set, service worker for offline shell (the actual voice agent needs the server online, but the PWA shell should open without network).
 - **Fast to first voice.** Open the app → hold the button → be talking within a second. No splash screens, no login flows at the cold path.
 
@@ -177,7 +177,7 @@ The PWA talks to the Huxley user. Huxley talks to the world through its skills.
 
 - **Calm.** This is a voice app. The eyes aren't the point.
 - **Personal.** The user is talking to _their_ Huxley. Copy should read as first-person to the user ("tu asistente", not "el asistente"), not third-person-marketing.
-- **Persona-aware for copy.** For the AbuelOS persona: warm, Spanish-Colombian Spanish, forms like _"abuelo"_ only if the persona's user wants that. For other personas: match their tone.
+- **Persona-aware for copy.** For the Abuelo persona: warm, Spanish-Colombian Spanish, forms like _"abuelo"_ only if the persona's user wants that. For other personas: match their tone.
 - **Sparse.** Minimum chrome; big targets; clear hierarchy. A blind user's family member opens this app to make sure things are working; they shouldn't have to parse a dashboard.
 
 ## Tech stack — recommendations, not requirements
@@ -198,7 +198,7 @@ The Huxley repo includes `spikes/test_caller.py` (and will add more spike script
 ## Glossary
 
 - **Huxley** — the platform and the PWA (context disambiguates).
-- **Persona** — YAML config that customizes Huxley for a user. AbuelOS is one example.
+- **Persona** — YAML config that customizes Huxley for a user. Abuelo is one example.
 - **Skill** — Python package providing tools the voice agent can invoke. Persona-agnostic; opts into persona constraints.
 - **Tool** — a function a skill exposes that the LLM can dispatch during a conversation.
 - **Side effect** — what happens after a tool dispatches. Long-form audio playback, for instance, is a side effect of a "play audiobook" tool.

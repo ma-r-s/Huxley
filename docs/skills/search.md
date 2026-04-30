@@ -32,7 +32,7 @@ Persona's `skills.search` block:
 
 Skill internals (cache TTL, snippet length, circuit-breaker thresholds, the 5-result cap, recovery message text) are **not** persona-overridable. They're mechanical; if a deployer needs to vary one, expose it then.
 
-## How AbuelOS uses it
+## How Abuelo uses it
 
 The system prompt tells the LLM: use it for current info, never for stable facts (capitals, definitions), never for digesting today's news (that's `get_news`). Pre-narrate "a ver, déjame buscar" before calling so the user doesn't sit in silence during the fetch. Cite sources by name (`según El País`), never read URLs.
 

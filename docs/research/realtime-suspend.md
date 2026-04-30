@@ -29,7 +29,7 @@ A residual concern: a few audio deltas may already be in-flight over the network
 
 **Answer**: **preserved.** In experiment 3, turn 1 completed, we paused 60 s, then fired turn 2 successfully on the same WebSocket. No `session.created` event during resume = no session rotation. Conversation context (instructions + prior turns) remained intact; the model responded to turn 2 consistent with turn 1's state.
 
-**Implication**: no transcript-cursor gymnastics needed on resume. The session continues where it left off; AbuelOS context is preserved. This matters for calls: after a 10-minute call ends, grandpa can say "¿qué decíamos?" and the model has the pre-call conversation to reference.
+**Implication**: no transcript-cursor gymnastics needed on resume. The session continues where it left off; Abuelo context is preserved. This matters for calls: after a 10-minute call ends, grandpa can say "¿qué decíamos?" and the model has the pre-call conversation to reference.
 
 ### 4. Billing during idle / paused state
 

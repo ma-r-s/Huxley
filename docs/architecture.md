@@ -1,6 +1,6 @@
 # Architecture
 
-This is the architecture of **Huxley the framework** — the parts that are persona-agnostic and skill-agnostic. Persona spec lives in [`server/personas/`](./personas/), skill spec in [`skills/`](./skills/). Diagrams use the AbuelOS persona as the worked example because it's the canonical one, but the architecture is identical for any persona.
+This is the architecture of **Huxley the framework** — the parts that are persona-agnostic and skill-agnostic. Persona spec lives in [`server/personas/`](./personas/), skill spec in [`skills/`](./skills/). Diagrams use the Abuelo persona as the worked example because it's the canonical one, but the architecture is identical for any persona.
 
 > **Layout**: the Python source lives under `server/`. Runtime is `server/runtime/` (the `huxley` package), SDK is `server/sdk/` (the `huxley_sdk` package), each first-party skill is its own workspace member under `server/skills/<name>/`. Personas live alongside under `server/personas/<name>/`. Clients (PWA, firmware) are at `clients/<name>/`; the marketing site is at `site/`.
 
@@ -205,7 +205,7 @@ reshaping the coordinator:
   gain down to 0.3 over 100ms; **pump keeps running**), and
   `BACKGROUND/MUST_PAUSE` when a NONMIXABLE Activity is preempted
   (cancels the pump immediately — overlaying two voices is worse
-  than a pause). All current AbuelOS content is NONMIXABLE (spoken
+  than a pause). All current Abuelo content is NONMIXABLE (spoken
   word), so the MAY_DUCK code path is scaffolding for future MIXABLE
   streams (background music, ambient).
 - **`FocusManager`** (app-owned, constructed by `Application`,
@@ -332,6 +332,6 @@ Dependencies flow **downward**. `huxley_sdk/types.py` is the universal leaf — 
 After stage 4 lands, persona-driven configuration takes over:
 
 ```
-server/personas/abuelos/persona.yaml   # the AbuelOS persona spec
+server/personas/abuelos/persona.yaml   # the Abuelo persona spec
 server/personas/abuelos/data/          # audiobooks library + sqlite db
 ```

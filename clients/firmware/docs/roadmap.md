@@ -118,7 +118,7 @@ pressing `K2` again and watch `audio_clear` reset playback cleanly.
 The board needs a presence-of-mind signal for a blind user: something
 audible happens when the session state changes, a steady LED for
 sighted developers. This is the first persona-aware firmware feature
-— AbuelOS needs _audible_ feedback; other personas may not.
+— Abuelo needs _audible_ feedback; other personas may not.
 
 **Ships**:
 

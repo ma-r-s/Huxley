@@ -70,7 +70,7 @@ class NewsSkill:
         # `_feed_language_code` — the language passed to the news feed
         # provider (Google News RSS `hl`/`ceid`). Comes from persona
         # `skills.news.language_code` and stays stable across UI language
-        # switches: an AbuelOS persona serving Colombian Spanish news
+        # switches: an Abuelo persona serving Colombian Spanish news
         # to an English-UI caller still queries the Spanish feed.
         self._feed_language_code: str = "en"
         # `_ui_language_code` — the language for LLM-facing tool

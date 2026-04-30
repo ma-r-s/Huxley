@@ -9,7 +9,7 @@ The Huxley vocabulary, in the order you encounter it.
 A persona is a YAML file that declares the agent's identity — name, voice, language, personality, values — and the list of skills it has access to. It's pure configuration; no Python.
 
 ```yaml
-name: AbuelOS
+name: Abuelo
 language: es-CO
 voice: alloy
 personality: |
