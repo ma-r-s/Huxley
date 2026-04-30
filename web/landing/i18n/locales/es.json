@@ -250,7 +250,7 @@
       },
       "esp32": {
         "k": "Cliente walky-talky ESP32",
-        "v": "Reemplaza el navegador como cliente de producción de AbuelOS. Mismo protocolo WebSocket; el firmware vive en clients/firmware/."
+        "v": "Reemplaza el navegador como cliente de producción principal. Mismo protocolo WebSocket; el firmware vive en clients/firmware/."
       }
     }
   },
@@ -258,7 +258,7 @@
     "eyebrow": "Personas",
     "titleA": "Un solo framework.",
     "titleB": "Cada voz que necesites.",
-    "subtitle": "Una persona es un archivo YAML: voz, idioma, skills, restricciones. AbuelOS está en producción hoy; las demás son ejemplos de diseño que muestran hasta dónde llega el mismo framework.",
+    "subtitle": "Una persona es un archivo YAML: voz, idioma, skills, restricciones. Seis ejemplos que muestran hasta dónde llega el mismo framework.",
     "personaLabel": "persona",
     "shipsTag": "en producción",
     "facetKeys": {
