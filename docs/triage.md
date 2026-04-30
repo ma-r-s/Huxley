@@ -1767,15 +1767,10 @@ Plus stream mock signatures in `test_skill.py` and `test_coordinator_skill_integ
 
 ## T1.8 — `huxley-skill-reminders` (full medication/appointment UX)
 
-**Status**: partially shipped as `huxley-skill-timers` MVP (`<this
-commit>`, 2026-04-18) — one-shot timers via `set_timer(seconds,
-message)`, in-memory only, no persistence / ack / retry. Full
-reminders skill remains queued. · **Effort**: ~1 week for the full
-version · **Blocked by**: Stage 3 (`background_task` for persistence
-
-- restart). Stage 1d.2 (`InjectedTurnHandle.wait_outcome`) is
-  **shelved** — ack uses LLM-driven `acknowledge_reminder(id)` tool
-  instead (see Stage 1d.2 note above).
+**Status**: in_progress (2026-04-29) · **Effort**: ~1 week ·
+**Blockers**: cleared (Stage 3b persistence shipped; Stage 5
+`BLOCK_BEHIND_COMMS` shipped; LLM-driven ack pattern locked
+2026-04-21). No framework changes needed.
 
 **MVP shipped (2026-04-18)**: `server/skills/timers/` — proves the
 full inject_turn path works end-to-end. User says "recuérdame en 5
@@ -1830,11 +1825,201 @@ right call.
 **Framework changes needed**: none. Uses existing `inject_turn` +
 `background_task` + skill-owned SQLite storage.
 
-**UX validation**: set a medication reminder for 1 minute in the future;
-verify: the interrupt earcon plays, book (if playing) is cancelled, model
-speaks "Es hora de la pastilla"; grandpa PTTs "ya me la tomé"; reminder
-marked acknowledged. Set a second reminder, don't acknowledge; verify re-
-fire at escalating urgency.
+### Critic notes (Gate 2 — ran 2026-04-29)
+
+A fresh critic agent reviewed a more ambitious dual-channel design
+(ALERT loop + DIALOG narration, plus `dismiss_on_ptt` and `loop` on
+`PlaySound`/`AudioStream`, plus TTL on `inject_turn`) and was hostile
+to it. Findings, all incorporated:
+
+1. **Ship T1.8 exactly as already specced — zero framework changes.**
+   The MVP timers skill at `server/skills/timers/` already proves the
+   `inject_turn(BLOCK_BEHIND_COMMS)` proactive-narration path. Adding
+   `loop` / `dismiss_on_ptt` / `channel=ALERT` / `ttl_seconds` now is
+   solving speculative failure modes (OpenAI-down, mass alert-skill
+   proliferation) without data forcing them. The 2026-04-24 ADR
+   explicitly trapped this trade ("ALERT gets wired when a concrete
+   skill needs non-narrated audio in that tier") — reminders is not
+   that skill if narrated alerts work.
+2. **Cloud-down resilience is misleading.** Dual-channel buys
+   OpenAI-unreachable resilience but NOT server-down resilience.
+   Server uptime in grandpa's house is almost certainly worse than
+   OpenAI Realtime's. The right answer for true alarm reliability is
+   firmware-side scheduling, not SDK abstractions today.
+3. **`dismiss_on_ptt=True` re-opens the bug class the 2026-04-24
+   post-smoke patch closed.** Adding a fourth case onto
+   `on_ptt_start`'s three existing branches creates the same race
+   surface between dismissal and a queued `BLOCK_BEHIND_COMMS`
+   inject. Decline.
+4. **Boot reconciliation policy belongs in the skill** (already
+   settled by ADR 2026-04-19 — skill-owned persistence). Confirmed.
+5. **Caregiver escalation skipped from v1.** Cannot design correctly
+   without observing the actual failure mode (didn't hear / forgot /
+   button confusion / dead device). Defer until grandpa misses
+   reminders in real use.
+6. **TTL on `inject_turn` (D7) stays deferred.** Independently
+   useful, but landing it with reminders bundles unrelated work.
+   File separately if a real consumer surfaces.
+
+The earlier 2026-04-21 decisions stand:
+
+- YAML is read-only seed; SQLite is the runtime store.
+- Ack is LLM-driven via `acknowledge_reminder(id)` tool (no
+  `wait_outcome`).
+
+### Definition of Done (locked 2026-04-29)
+
+- [ ] New workspace package `server/skills/reminders/`, entry-point
+      `huxley-skill-reminders`, mirror of `huxley-skill-timers` shape.
+- [ ] Tools (es / en / fr descriptions): `add_reminder`,
+      `list_reminders`, `cancel_reminder`, `snooze_reminder`,
+      `acknowledge_reminder`.
+- [ ] Persistent state via `SkillStorage` under prefix `reminder:` —
+      one JSON entry per reminder. Schema versioned (`v: 1`).
+- [ ] Scheduler runs as a single supervised
+      `ctx.background_task("scheduler", ...)`; on each tick picks the
+      next-due `pending` reminder, sleeps, fires
+      `inject_turn(BLOCK_BEHIND_COMMS)`, transitions state.
+- [ ] Boot reconciliation with kind-specific `late_window`:
+      medication=15min, appointment=2h, generic=1h. Past-but-within
+      → fire on next tick (catch-up). Past-but-outside → mark
+      `missed` (medication safety: don't double-dose).
+      `state='fired'` on boot → resume retry timer (medication only).
+- [ ] Retry escalation for `kind='medication'`: up to 3 re-fires at
+      5 / 10 / 30 minutes. After exhaustion, mark `missed`.
+- [ ] Recurrence: `recurrence: 'daily' | 'weekly' | None`. On ack
+      OR on `missed`, schedule next instance (recurrence outlasts a
+      single missed dose).
+- [ ] YAML seed import on first boot only (idempotent — gated on
+      `reminder:` prefix being empty in storage).
+- [ ] `prompt_context()` surfaces missed reminders since last
+      session start so the LLM weaves them into the next reply,
+      then transitions `missed` → `surfaced`.
+- [ ] AbuelOS persona system prompt gains a RECORDATORIOS section
+      (es/en/fr) and a `skills.reminders` block (timezone, language
+      i18n templates, optional seed).
+- [ ] Tests: happy path, restart-catch-up (within window), restart-
+      mark-missed (outside window), ack cancels retry, snooze
+      reschedules, cancel removes, recurrence schedules next on
+      ack, missed-with-recurrence still schedules next, malformed
+      entries skipped, prompt_context lists missed.
+- [ ] Docs: `docs/skills/reminders.md`, `docs/skills/README.md`
+      index entry, `docs/personas/abuelos.md` mention, AbuelOS
+      `persona.yaml` change.
+- [ ] `uv run ruff check server/`, `uv run mypy server/sdk/src
+  server/runtime/src server/skills/reminders/src`, and
+      `uv run --package huxley-skill-reminders pytest` all green.
+- [ ] Workspace `huxley` runtime tests still green.
+
+### Tests (Gate 3 — filled at ship 2026-04-29)
+
+`server/skills/reminders/tests/test_skill.py` — 52 tests across:
+
+- **`TestAddReminder`** — happy path, empty message rejection, missing
+  `when_iso` rejection, naive-datetime rejection, past-time rejection,
+  invalid-kind rejection, invalid-recurrence rejection, default kind is
+  `generic`, unique ids across calls.
+- **`TestListReminders`** — empty list, chronological order, excludes
+  acked + cancelled.
+- **`TestCancelReminder`** — cancels pending, unknown id error,
+  already-terminal idempotent.
+- **`TestSnoozeReminder`** — reschedules, fired→pending reset,
+  out-of-range rejection, terminal-row rejection.
+- **`TestAcknowledgeReminder`** — terminal transition, unknown id
+  error, recurrence schedules next instance.
+- **`TestPromptContext`** — time + tz banner (es / en), missed
+  surfacing, terminal rows excluded.
+- **`TestBootReconciliation`** — future pending kept, past pending
+  within window kept pending, past pending outside window → missed,
+  past pending outside window with recurrence schedules next, fired
+  medication with retries left resumes, fired medication retries
+  exhausted → missed, fired non-medication → acked, malformed entry
+  skipped without crash.
+- **`TestMedicationRetry`** — first fire transitions to fired,
+  retry-budget exhaustion marks missed, one-shot kinds (appointment
+  / generic) do not retry.
+- **`TestRecurrence`** — fire-with-recurrence schedules next,
+  missed-with-recurrence still schedules next on boot.
+- **`TestSeedImport`** — imported on first boot, idempotent across
+  reboots, invalid entries skipped.
+- **`TestSchedulerFires`** — end-to-end: pre-seeded overdue pending
+  - real scheduler → inject_turn fires + state transitions to
+    acked.
+- **`TestUnknownTool`** — error envelope.
+- **`TestTeardown`** — cancels scheduler, preserves storage.
+- **`TestDefaultLateWindows`** — encodes safety property
+  (medication < generic < appointment).
+- **`TestPersonaConfig`** — custom late_window override, invalid
+  override falls back.
+- **`test_prompt_context_localized`** — parametrized es / en / fr.
+
+All 52 pass. Workspace check: 376 runtime + 72 SDK + 30 timers + 52
+reminders = 530 tests green; ruff clean for new code (4 pre-existing
+SIM117 errors in `server/runtime/tests/unit/test_firmware_contract.py`
+predate this work — flagged for separate housekeeping); mypy --strict
+clean across `server/sdk/src server/runtime/src server/skills/reminders/src`.
+
+### Docs touched (Gate 4 — filled at ship 2026-04-29)
+
+- New: `docs/skills/reminders.md` — full skill doc (tools, persona
+  config, state machine, persistence, boot reconciliation, what's
+  not in v1, logging events).
+- `docs/skills/README.md` — index entry alongside the timers split
+  rationale.
+- `docs/personas/abuelos.md` — proactive-speech note now lists
+  `reminders` alongside `timers`.
+- `CLAUDE.md` — repo-layout tree adds `reminders/` and refines the
+  timers description; commands list adds the reminders pytest line.
+- `server/personas/abuelos/persona.yaml` — RECORDATORIOS section in
+  es / en / fr system prompts; new `skills.reminders` block with
+  timezone, fire_prompt, i18n.{en,fr}.fire_prompt, optional
+  late_window overrides commented out, optional seed list commented
+  out.
+
+ADR review (2026-04-29): no new ADR needed. The dual-channel /
+ALERT-loop / `dismiss_on_ptt` ideas were considered and explicitly
+declined in the Gate-2 critic notes above — that decision is captured
+in the triage entry, doesn't rise to ADR-level, and consistent with
+the 2026-04-24 ADR closing line ("ALERT gets wired when a concrete
+skill needs non-narrated audio in that tier" — reminders does not).
+
+### Ship (Gate 5 — done 2026-04-29)
+
+**Commit**: `<filled at git commit>` · **Effort actual**: ~1
+session, matches the 1-week estimate (estimate budgeted for design
+
+- critic + impl + docs; design + critic happened first, leaving
+  focused implementation).
+
+**Lessons**:
+
+1. **`_allocate_id` defensive scan caught a real bug.** The original
+   code read `_meta:next_id` with default `"1"` if absent, and
+   `_reconcile_on_boot` set the meta key only AFTER processing
+   entries. A `_schedule_next_recurrence` call inside that loop
+   allocated id 1, colliding with an original row whose state
+   transition hadn't been written yet. Fix: scan-on-missing-or-stale
+   in `_allocate_id` PLUS prime the meta key before the loop. Both
+   landed because either alone would have been fragile in the test
+   path that bypasses `setup()`.
+2. **Critic was right to say "ship the smaller version."** The
+   ALERT-channel / `dismiss_on_ptt` design would have added 80 LOC
+   to the SDK + a coordinator branch + risked re-opening the
+   2026-04-24 PTT race bugs. The shipped version composes existing
+   primitives only and total skill code (skill + tests) is ~1 600
+   LOC self-contained.
+3. **Single-loop scheduler over per-task scheduler was the right
+   call.** Timers uses one task per timer with `restart_on_crash=False`;
+   reminders uses one supervised loop over storage with
+   `restart_on_crash=True`. The state machine carries the truth, so
+   a crashed scheduler is recoverable by re-reading rows on the next
+   loop iteration. Scales better as the reminder count grows
+   (audiobooks-style background loop, not fan-out).
+4. **`prompt_context()` cache pattern**. The Skill protocol's
+   `prompt_context` is sync, so the missed-surface cache must be
+   refreshed by writers (`_save_entry`, `_load_all_entries`). Pulling
+   that into a helper kept the two refresh paths consistent and
+   avoided per-turn storage round-trips.
 
 ---
 

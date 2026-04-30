@@ -9,6 +9,7 @@ members = [
     "server/skills/search",
     "server/skills/system",
     "server/skills/timers",
+    "server/skills/reminders",
 ]
 
 [tool.uv.sources]
@@ -20,6 +21,7 @@ huxley-skill-radio = { workspace = true }
 huxley-skill-search = { workspace = true }
 huxley-skill-system = { workspace = true }
 huxley-skill-timers = { workspace = true }
+huxley-skill-reminders = { workspace = true }
 
 # Shared tool config (each package's pyproject can override).
 
@@ -58,6 +60,7 @@ known-first-party = [
     "huxley_skill_search",
     "huxley_skill_system",
     "huxley_skill_timers",
+    "huxley_skill_reminders",
 ]
 
 [tool.mypy]

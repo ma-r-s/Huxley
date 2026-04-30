@@ -28,9 +28,10 @@ Huxley/                              # repo root
 │   │   ├── news/                    #   huxley-skill-news (Open-Meteo + Google News RSS)
 │   │   ├── radio/                   #   huxley-skill-radio (HTTP/Icecast via ffmpeg)
 │   │   ├── search/                  #   huxley-skill-search (DuckDuckGo via ddgs, no API key)
+│   │   ├── reminders/               #   huxley-skill-reminders (scheduled reminders, persistent, retry escalation)
 │   │   ├── system/                  #   huxley-skill-system (volume, time)
 │   │   ├── telegram/                #   huxley-skill-telegram (MTProto comms)
-│   │   └── timers/                  #   huxley-skill-timers (proactive reminders)
+│   │   └── timers/                  #   huxley-skill-timers (one-shot relative reminders)
 │   └── personas/                    # Persona configs + assets the runtime loads
 │       ├── _shared/                 #   Framework-shared assets (palette of all personas)
 │       │   └── sounds/              #     Earcons rendered by scripts/synth_sounds.py — book_start, book_end, news_start, radio_start, search_start
@@ -81,6 +82,7 @@ uv run --package huxley-skill-news pytest server/skills/news/tests              
 uv run --package huxley-skill-radio pytest server/skills/radio/tests             # radio skill
 uv run --package huxley-skill-search pytest server/skills/search/tests           # search skill
 uv run --package huxley-skill-timers pytest server/skills/timers/tests           # timers skill
+uv run --package huxley-skill-reminders pytest server/skills/reminders/tests     # reminders skill
 cd server/runtime && uv run huxley                                               # run the server (loads .env from server/runtime/)
 # Run BasicOS in parallel for persona A/B testing:
 cd server/runtime && HUXLEY_PERSONA=basicos HUXLEY_SERVER_PORT=8766 uv run huxley
