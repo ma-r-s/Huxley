@@ -32,13 +32,20 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata = {
-  metadataBase: new URL("https://huxley.example.com"),
+  metadataBase: new URL("https://huxley.ma-r-s.com"),
   title: {
-    default: "Huxley docs",
-    template: "%s — Huxley docs",
+    default: "huxley",
+    template: "%s — huxley",
   },
   description:
     "Build voice agents you own. Bring a persona and skills — Huxley handles turn coordination, interrupts, proactive speech, and audio bridging.",
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/favicon.svg", type: "image/svg+xml" },
+    ],
+    apple: "/apple-touch-icon.png",
+  },
 };
 
 export default function Layout({ children }: { children: ReactNode }) {
