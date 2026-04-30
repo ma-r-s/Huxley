@@ -89,9 +89,9 @@ IANA timezone string. Used by skills like `system.get_current_time`. List at [ia
 
 ```yaml
 system_prompt: |
-  You are a warm, slow-spoken assistant for Don Carlos, a 90-year-old in
-  Bogotá. He can't see — everything is audio. Reply in one or two short
-  sentences. Never refuse — offer alternatives.
+  You are a concise home automation assistant. The user may be in another
+  room, so keep replies under two sentences. Never refuse — offer the
+  closest available alternative.
 ```
 
 Multi-line. In the persona's `language_code`. The framework appends:
@@ -234,5 +234,5 @@ The `name` in `persona.yaml` should match the directory name. The framework read
 
 For complete real-world examples:
 
-- AbuelOS: [Build: AbuelOS walkthrough](/docs/build-persona/abuelos-walkthrough)
+- BasicOS: [Build: BasicOS walkthrough](/docs/build-persona/basicos-walkthrough)
 - The minimal one: [Build: Anatomy](/docs/build-persona/anatomy)

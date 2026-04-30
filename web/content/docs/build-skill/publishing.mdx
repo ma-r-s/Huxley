@@ -164,7 +164,7 @@ Don't hardcode prompts in your skill if they vary by language. Read them from `c
 
 ## Testing across personas
 
-Run your skill against both AbuelOS and BasicOS to check it behaves well in different prompt registers. The same `play_warmup` tool, fired by AbuelOS, should produce a warm Spanish narration; fired by BasicOS, a terse one. If it doesn't — if your skill's `output` text is so opinionated that personas can't shape it — that's a smell.
+Run your skill against multiple personas to check it behaves well in different prompt registers. The same `play_warmup` tool, fired by a warm persona, should produce a warm narration; fired by a terse persona, a clipped one. If it doesn't — if your skill's `output` text is so opinionated that personas can't shape it — that's a smell.
 
 Rule of thumb: skills return *data*; personas shape *prose*.
 
