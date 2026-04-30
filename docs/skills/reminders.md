@@ -134,7 +134,7 @@ Recurrence rolls forward on `acked` AND on `missed` so a single missed dose does
 
 All state is in `SkillStorage` under the `reminder:` prefix:
 
-- `reminder:<id>` — JSON-encoded `_Entry` (id, message, kind, scheduled_for, next_fire_at, recurrence_rule, series_start, state, fired_count, last_fired_at, …). Schema is versioned (`v: 2` today; `v: 1` rows persisted before this change had a `recurrence: 'daily' | 'weekly'` enum which `_Entry.from_json` translates to the equivalent RRULE on read).
+- `reminder:<id>` — JSON-encoded `_Entry` (id, message, kind, scheduled_for, next_fire_at, recurrence_rule, series_start, state, fired_count, last_fired_at, …). Each row stamps a `v` field (currently `2`) for forward-compat, but `_Entry.from_json` does NOT branch on `v` — migration is **field-presence heuristic**: if `recurrence_rule` is missing AND legacy `recurrence` is present, translate the enum to the equivalent RRULE. The `v` field is informational today; a future v3 migration would add a `v == 2` branch then.
 - `reminder:_meta:next_id` — monotonic id allocator. Primed by `setup()` past every existing row's id BEFORE the reconcile loop runs (otherwise `_schedule_next_recurrence` would collide with an original row's id). `_allocate_id` is wrapped in an `asyncio.Lock` so concurrent callers (scheduler-driven recurrence vs. tool-handler `add_reminder`) serialize their read-then-write — without the lock, a real I/O-awaiting `SkillStorage` lets the read interleave and the writes both produce the same id.
 - `reminder:_meta:seed_imported` — `"1"` after the persona's `seed` list has been imported. Manual deletion of seeded rows doesn't trigger re-import.
 
