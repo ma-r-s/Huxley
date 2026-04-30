@@ -16,6 +16,7 @@ import { Install, Footer } from "./sections/Install";
 export function Landing() {
   return (
     <div
+      className="hux-landing"
       style={{
         background: "var(--hux-coral)",
         color: "var(--hux-fg)",
