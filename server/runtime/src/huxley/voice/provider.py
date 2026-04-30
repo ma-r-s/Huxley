@@ -51,7 +51,14 @@ class VoiceProviderCallbacks:
     on_commit_failed: Callable[[], Awaitable[None]]
 
     # The transport dropped; the coordinator should unwind any live turn.
-    on_session_end: Callable[[], Awaitable[None]]
+    # The argument carries the LLM-generated summary of the session if the
+    # provider produced one (e.g. OpenAI's summarization on `disconnect`),
+    # else None. The framework writes it to the session row via
+    # `Storage.end_session(session_id, summary)` — the provider must NOT
+    # write to storage directly, so a session-id race between receive-loop
+    # finally and the next session's start can't misattribute the summary
+    # (T1.12 critic-round finding, 2026-04-29).
+    on_session_end: Callable[[str | None], Awaitable[None]]
 
     # Optional: transcript lines (user or assistant). `None` means the
     # provider doesn't produce transcripts.
