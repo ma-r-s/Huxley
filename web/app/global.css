@@ -11,11 +11,27 @@
   canonical source of truth across the project.
 */
 :root {
+  /* Brand palette */
   --hux-coral: oklch(0.62 0.19 23);
   --hux-coral-dk: oklch(0.42 0.14 22);
   --hux-coral-xdk: oklch(0.2 0.06 22);
   --hux-paper: oklch(0.96 0.015 60);
   --hux-ink: oklch(0.16 0.04 25);
+  --hux-ink-dim: oklch(0.45 0.02 40);
+  --hux-ink-line: color-mix(in oklab, var(--hux-ink) 22%, transparent);
+  --hux-ink-faint: color-mix(in oklab, var(--hux-ink) 10%, transparent);
+
+  /* Dark-surface (coral background) tokens used by landing sections */
+  --hux-fg: oklch(0.985 0.005 50);
+  --hux-fg-dim: color-mix(in oklab, var(--hux-fg) 65%, transparent);
+  --hux-fg-line: color-mix(in oklab, var(--hux-fg) 22%, transparent);
+  --hux-fg-faint: color-mix(in oklab, var(--hux-fg) 10%, transparent);
+  --hux-bg: var(--hux-coral);
+
+  /* Font stack aliases */
+  --hux-serif: "Instrument Serif", Georgia, serif;
+  --hux-sans: "Inter Tight", system-ui, sans-serif;
+  --hux-mono: "JetBrains Mono", "SF Mono", monospace;
 }
 
 /*
@@ -97,32 +113,6 @@ kbd {
   font-weight: 400;
   letter-spacing: -0.015em;
   line-height: 1;
-}
-/* Huxley landing — global tokens, fonts, keyframes.
-   Mirrors the prototype's shared.css verbatim. */
-
-:root {
-  --hux-coral: oklch(0.62 0.19 23);
-  --hux-coral-dk: oklch(0.42 0.14 22);
-  --hux-coral-xdk: oklch(0.2 0.06 22);
-  --hux-paper: oklch(0.96 0.015 60);
-  --hux-ink: oklch(0.2 0.02 40);
-  --hux-ink-dim: oklch(0.45 0.02 40);
-  --hux-fg: oklch(0.985 0.005 50);
-  --hux-fg-dim: color-mix(in oklab, var(--hux-fg) 65%, transparent);
-  --hux-fg-line: color-mix(in oklab, var(--hux-fg) 22%, transparent);
-  --hux-fg-faint: color-mix(in oklab, var(--hux-fg) 10%, transparent);
-  --hux-bg: var(--hux-coral);
-
-  /* Inverted-foreground tokens — used by paper sections via CSS-variable
-     override on the section root. Children that read --hux-fg / --hux-fg-line
-     pick these up automatically through the cascade. */
-  --hux-ink-line: color-mix(in oklab, var(--hux-ink) 22%, transparent);
-  --hux-ink-faint: color-mix(in oklab, var(--hux-ink) 10%, transparent);
-
-  --hux-serif: "Instrument Serif", Georgia, serif;
-  --hux-sans: "Inter Tight", system-ui, sans-serif;
-  --hux-mono: "JetBrains Mono", "SF Mono", monospace;
 }
 
 * {

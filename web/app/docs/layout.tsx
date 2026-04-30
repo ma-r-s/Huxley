@@ -34,7 +34,7 @@ function SidebarFooter() {
 export default function Layout({ children }: { children: ReactNode }) {
   return (
     <DocsLayout
-      {...baseOptions()}
+      {...baseOptions}
       tree={source.pageTree}
       slots={{ themeSwitch: false }}
       sidebar={{ footer: <SidebarFooter /> }}

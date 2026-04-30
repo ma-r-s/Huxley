@@ -1,6 +1,5 @@
 // i18next configuration for the landing site.
-// Three languages — EN base, ES + FR drafts (machine-translated; Mario and
-// reviewers will polish before launch). Locale chosen by:
+// Three languages — EN base, ES + FR. Locale chosen by:
 //   1. Persisted user choice in localStorage (key "huxley-site-lang")
 //   2. Browser preference (navigator.language)
 //   3. Fallback: en
