@@ -110,6 +110,9 @@ class Application:
             on_audio_frame=self._on_audio_frame,
             on_reset=self._on_reset,
             on_language_select=self._on_language_select,
+            on_list_sessions=self._on_list_sessions,
+            on_get_session=self._on_get_session,
+            on_delete_session=self._on_delete_session,
         )
 
         # Skill discovery via entry points. The persona names which skills it
@@ -521,6 +524,36 @@ class Application:
                     role=role,
                 )
         await self.server.send_transcript(role, text)
+
+    # --- Session history (T1.12) ---
+
+    async def _on_list_sessions(self) -> None:
+        """Client opened the SessionsSheet — return persisted history."""
+        sessions = await self.storage.list_sessions()
+        payload = [
+            {
+                "id": s.id,
+                "started_at": s.started_at,
+                "ended_at": s.ended_at,
+                "last_turn_at": s.last_turn_at,
+                "turn_count": s.turn_count,
+                "preview": s.preview,
+                "summary": s.summary,
+            }
+            for s in sessions
+        ]
+        await self.server.send_sessions_list(payload)
+
+    async def _on_get_session(self, session_id: int) -> None:
+        """Client clicked a session preview — return its full transcript."""
+        turns = await self.storage.get_session_turns(session_id)
+        payload = [{"idx": t.idx, "role": t.role, "text": t.text} for t in turns]
+        await self.server.send_session_detail(session_id, payload)
+
+    async def _on_delete_session(self, session_id: int) -> None:
+        """Client tapped Delete on the SessionDetailSheet — privacy floor."""
+        await self.storage.delete_session(session_id)
+        await self.server.send_session_deleted(session_id)
 
     # --- Client callbacks ---
 
