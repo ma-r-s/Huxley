@@ -20,15 +20,9 @@ export function baseOptions(): BaseLayoutProps {
           huxley
         </span>
       ),
-      url: "/docs",
+      url: "/",
     },
     githubUrl: "https://github.com/ma-r-s/Huxley",
-    links: [
-      {
-        text: "Home",
-        url: "/",
-        external: true,
-      },
-    ],
+    links: [],
   };
 }
