@@ -207,12 +207,13 @@ body,
   }
 }
 
-/* Reasonable text-rendering defaults */
-h1,
-h2,
-h3 {
+/* Scoped to the landing wrapper — prevents these resets from bleeding
+   into Fumadocs prose (where h2/h3 need their own margin-top). */
+.hux-landing h1,
+.hux-landing h2,
+.hux-landing h3 {
   margin: 0;
 }
-a {
+.hux-landing a {
   color: inherit;
 }
