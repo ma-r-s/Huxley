@@ -95,6 +95,9 @@ class AudioServer:
         on_audio_frame: Callable[[bytes], Awaitable[None]],
         on_reset: Callable[[], Awaitable[None]],
         on_language_select: Callable[[str | None], Awaitable[None]] | None = None,
+        on_list_sessions: Callable[[], Awaitable[None]] | None = None,
+        on_get_session: Callable[[int], Awaitable[None]] | None = None,
+        on_delete_session: Callable[[int], Awaitable[None]] | None = None,
     ) -> None:
         self._host = host
         self._port = port
@@ -104,6 +107,13 @@ class AudioServer:
         self._on_audio_frame = on_audio_frame
         self._on_reset = on_reset
         self._on_language_select = on_language_select
+        # T1.12 — session history retrieval. Optional so clients without
+        # a sessions-aware app (or tests using the registry-only stub)
+        # don't have to plumb empty handlers; an unset callback turns
+        # the inbound message into a logged no-op rather than a crash.
+        self._on_list_sessions = on_list_sessions
+        self._on_get_session = on_get_session
+        self._on_delete_session = on_delete_session
         self._client: ServerConnection | None = None
         self._state = "IDLE"
         # Last-sent input mode — cached so a new client can be brought
@@ -293,6 +303,33 @@ class AudioServer:
                 await logger.ainfo("server.rx.set_language", language=language)
                 if self._on_language_select is not None:
                     await self._on_language_select(language)
+            case "list_sessions":
+                # T1.12 — PWA opens the SessionsSheet. App responds via
+                # `send_sessions_list` with the persisted history rows.
+                await logger.ainfo("server.rx.list_sessions")
+                if self._on_list_sessions is not None:
+                    await self._on_list_sessions()
+            case "get_session":
+                # T1.12 — PWA clicks a session preview. App responds via
+                # `send_session_detail` with the full transcript.
+                raw_id = msg.get("id")
+                if not isinstance(raw_id, int):
+                    await logger.awarning("server.rx.get_session.bad_id", raw=raw_id)
+                    return
+                await logger.ainfo("server.rx.get_session", session_id=raw_id)
+                if self._on_get_session is not None:
+                    await self._on_get_session(raw_id)
+            case "delete_session":
+                # T1.12 — privacy floor. PWA's SessionDetailSheet "Delete"
+                # button. App responds via `send_session_deleted` once
+                # the row + its turns are gone.
+                raw_id = msg.get("id")
+                if not isinstance(raw_id, int):
+                    await logger.awarning("server.rx.delete_session.bad_id", raw=raw_id)
+                    return
+                await logger.ainfo("server.rx.delete_session", session_id=raw_id)
+                if self._on_delete_session is not None:
+                    await self._on_delete_session(raw_id)
             case "client_event":
                 # Two consumers in parallel:
                 # 1. Telemetry sink — every client_event is logged as
@@ -366,6 +403,27 @@ class AudioServer:
     async def send_model_speaking(self, value: bool) -> None:
         await logger.ainfo("server.tx.model_speaking", value=value)
         await self._send({"type": "model_speaking", "value": value})
+
+    async def send_sessions_list(self, sessions: list[dict[str, Any]]) -> None:
+        """T1.12 — reply to inbound `list_sessions`. The app converts
+        `Storage.SessionMeta` to plain dicts before calling so the
+        server stays free of storage-domain types."""
+        await logger.ainfo("server.tx.sessions_list", count=len(sessions))
+        await self._send({"type": "sessions_list", "sessions": sessions})
+
+    async def send_session_detail(self, session_id: int, turns: list[dict[str, Any]]) -> None:
+        """T1.12 — reply to inbound `get_session`. Turns are pre-serialized
+        dicts (see `send_sessions_list` rationale)."""
+        await logger.ainfo(
+            "server.tx.session_detail", session_id=session_id, turn_count=len(turns)
+        )
+        await self._send({"type": "session_detail", "id": session_id, "turns": turns})
+
+    async def send_session_deleted(self, session_id: int) -> None:
+        """T1.12 — confirm an inbound `delete_session` succeeded so the
+        PWA can remove the row from its local list state."""
+        await logger.ainfo("server.tx.session_deleted", session_id=session_id)
+        await self._send({"type": "session_deleted", "id": session_id})
 
     async def send_dev_event(self, kind: str, payload: dict[str, Any]) -> None:
         """Broadcast a dev-observability event for the dev UI to visualize.
