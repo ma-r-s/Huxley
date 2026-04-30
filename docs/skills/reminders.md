@@ -92,38 +92,50 @@ skills:
 ## State machine
 
 ```
-pending ──(scheduler tick at next_fire_at)──> fired (medication only)
-   │                                              │
-   │                                              ├─ acked   (user said "ya me la tomé")
-   │                                              ├─ pending (snoozed; ladder resets)
-   │                                              └─ retry → fired → … → missed (budget exhausted)
+                            ┌──(non-medication fire — ack-on-fire)──> acked
+                            │       └─ if recurrence: schedule next pending
+                            │
+pending ──(fire at next_fire_at)──> fired (medication only)
+   │                            │
+   │                            ├──(user PTT "ya me la tomé" → ack tool)──> acked
+   │                            │       └─ if recurrence: schedule next pending
+   │                            ├──(user "dame 5 más" → snooze)──> pending (ladder resets)
+   │                            └──(no ack → retry timer)──> fired → … →  missed (budget=3 exhausted)
+   │                                                                  └─ if recurrence: schedule next pending
    │
    ├──(boot reconciliation, past + outside late_window)──> missed
+   │       └─ if recurrence: schedule next pending
    ├──(user cancelled)──> cancelled
-   ├──(non-medication fired and ack-on-fire)──> acked
-   │                                              └─ if recurrence: schedule next pending
-   │
-missed ──(prompt_context surfaced once)──> surfaced
 ```
 
-Terminal states (`acked`, `cancelled`, `surfaced`) are kept in storage for `list_reminders` until pruned manually. Recurrence rolls forward on `acked` AND on `missed` so a single missed dose doesn't wipe out tomorrow's reminder.
+Terminal states (`acked`, `cancelled`) are kept in storage for `list_reminders` until pruned manually. **`missed` is _not_ terminal** — it stays in `prompt_context` so the LLM can mention it; the LLM is instructed (via the persona prompt) to follow up by calling `acknowledge_reminder` (user did the action / will skip) or `cancel_reminder` (user says it doesn't matter) to clear it. If the LLM forgets, the row surfaces again next turn — annoying but bounded, and self-limiting because the LLM tends to follow through on the second mention.
+
+Recurrence rolls forward on `acked` AND on `missed` so a single missed dose doesn't wipe out tomorrow's reminder. The next-instance creation is **idempotent**: `_schedule_next_recurrence` scans existing rows and skips creation if a successor for `(kind, recurrence, message, scheduled_for ≈ next_when)` already exists. Without this guard, repeated boot reconciliation on a missed recurring reminder would fan out N successors after N restarts.
 
 ## Persistence
 
 All state is in `SkillStorage` under the `reminder:` prefix:
 
-- `reminder:<id>` — JSON-encoded `_Entry` (id, message, kind, scheduled_for, next_fire_at, recurrence, state, fired_count, last_fired_at, …). Schema versioned (`v: 1`); a future migration would bump and tolerate v1 rows during reconciliation.
-- `reminder:_meta:next_id` — monotonic id allocator. Primed by `setup()` past every existing row's id BEFORE the reconcile loop runs (otherwise `_schedule_next_recurrence` would collide with the original row's id).
+- `reminder:<id>` — JSON-encoded `_Entry` (id, message, kind, scheduled_for, next_fire_at, recurrence, state, fired_count, last_fired_at, …).
+- `reminder:_meta:next_id` — monotonic id allocator. Primed by `setup()` past every existing row's id BEFORE the reconcile loop runs (otherwise `_schedule_next_recurrence` would collide with an original row's id). `_allocate_id` is wrapped in an `asyncio.Lock` so concurrent callers (scheduler-driven recurrence vs. tool-handler `add_reminder`) serialize their read-then-write — without the lock, a real I/O-awaiting `SkillStorage` lets the read interleave and the writes both produce the same id.
 - `reminder:_meta:seed_imported` — `"1"` after the persona's `seed` list has been imported. Manual deletion of seeded rows doesn't trigger re-import.
 
 The scheduler runs as a single supervised `background_task` with `restart_on_crash=True`. Different from timers (one task per timer, no restart) — for reminders, the storage IS the truth, so a crashed scheduler is recoverable by re-reading rows on the next loop iteration.
+
+### Crash safety: commit-before-inject
+
+`_fire` saves the post-fire state **before** calling `inject_turn`, mirroring the timers skill's `fired_at` pattern. Order matters for medication safety: if narration ran first and the process died before the state save, the next boot would see `state=pending` with `next_fire_at` past + within `late_window[medication]=15min`, and re-narrate. **Double-dose.** Saving first eliminates that window.
+
+The trade-off this introduces: a transient `inject_turn` failure (OpenAI Realtime blip) burns a retry-budget slot for medication kind without grandpa hearing anything. A sustained outage spanning all three retries marks the row `missed` with zero successful narrations. We accept that — silent miss is safer than double dose. Operators diagnose the path via the `reminders.fire_failed` log alongside the `reminders.fired` line that records each attempt's `fired_count`.
+
+For one-shot kinds with recurrence, `_schedule_next_recurrence` is also called BEFORE narration so a crash between terminal-save and recurrence-schedule doesn't lose tomorrow's reminder. `_schedule_next_recurrence` is itself idempotent (scans for an existing successor before creating one), so re-running it on boot reconcile is safe.
 
 ### Boot reconciliation policy
 
 Per row, in order:
 
-1. Terminal (`acked` / `cancelled` / `surfaced`) → leave alone.
-2. `missed` (from a prior boot) → if recurrence, schedule the next instance. Original stays `missed` for surfacing in the next session's `prompt_context`.
+1. Terminal (`acked` / `cancelled`) → leave alone.
+2. `missed` (from a prior boot) → if recurrence, schedule the next instance (idempotent — won't create a duplicate if a successor already exists). Original stays `missed` for surfacing in the next session's `prompt_context`.
 3. `pending` future → leave alone; scheduler picks it up.
 4. `pending` past, within `late_window[kind]` → leave `pending`; scheduler fires on next tick (catch-up).
 5. `pending` past, beyond `late_window[kind]` → mark `missed`. Recurring rows still get the next instance scheduled.
@@ -137,13 +149,13 @@ The bias throughout: **err on the side of NOT re-narrating** when in doubt. For 
 Two purposes:
 
 1. **Time + tz banner** — surfaces the current UTC time and the persona's timezone label so the LLM can compute correct ISO offsets for `add_reminder.when_iso`. Without this the LLM either guesses UTC (wrong for any non-UTC user) or refuses ("I don't know your timezone").
-2. **Missed surfacing** — lists every `state='missed'` row with id, kind, scheduled_for, and message. The LLM is instructed (via the persona prompt) to mention these naturally when it fits, NOT to insist the user take a hours-late dose. Once narrated, the user's next utterance lets the LLM call `acknowledge_reminder` (or the row times out and is pruned manually).
+2. **Missed surfacing** — lists every `state='missed'` row with id, kind, scheduled_for, and message. The LLM is instructed (via the persona prompt) to mention these naturally when it fits, NOT to insist the user take a hours-late dose, and to follow up with `acknowledge_reminder` or `cancel_reminder` to clear the row from the surface list. If the LLM forgets to clear, the row surfaces again next turn.
 
 `prompt_context` is sync (per the Skill protocol) and so cannot await storage on every call. The skill maintains a `_missed_cache` snapshot refreshed after every storage write — fresh enough for prompt builds, no per-turn round-trip.
 
 ## What's not in v1 (deferred until grandpa needs it)
 
-- **ALERT-channel local fallback** — narrated reminders only. If OpenAI Realtime is unreachable at fire time, the `inject_turn` fails and the row stays `pending`; the next scheduler tick will retry until the inject succeeds. A non-narrated alert tone on the ALERT channel was discussed and explicitly punted (see [`docs/triage.md`](../triage.md) T1.8 critic notes 2026-04-29). Revisit when a real outage causes a real missed dose.
+- **ALERT-channel local fallback** — narrated reminders only. If OpenAI Realtime is unreachable at fire time, the `inject_turn` failure is logged and the row's state is **already advanced** (commit-before-inject — see Crash safety above), so the user gets no narration but the medication-safety property is preserved. A sustained outage across all three medication retries ends in `missed` without any successful narration. A non-narrated alert tone on the ALERT channel was discussed and explicitly punted (see [`docs/triage.md`](../triage.md) T1.8 critic notes 2026-04-29). Revisit when a real outage causes a real missed dose.
 - **Caregiver escalation** — exhausted medication retries mark `missed` and surface via `prompt_context`; they do NOT notify a caregiver via Telegram. Cannot design correctly without observing the actual failure mode (didn't hear / forgot / button confusion / dead device). Will be designed against the observed failure once we see it.
 - **TTL on `inject_turn`** — currently if a reminder fires during a 4h Telegram call, the inject queues for 4h and narrates at call-end. For a medication that's potentially wrong (the next dose may already be due). D7 in `triage.md` will close this when a real consumer surfaces the gap.
 - **Cron-style RRULE recurrence** — only `daily` and `weekly` are supported. "Every Monday and Wednesday" / "every weekday" would need RRULE; not built until asked for.

@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -65,8 +65,18 @@ _STATE_PENDING = "pending"
 _STATE_FIRED = "fired"  # narrated at least once, awaiting ack (medication only)
 _STATE_ACKED = "acked"
 _STATE_MISSED = "missed"  # too-late on boot, or retry budget exhausted
-_STATE_SURFACED = "surfaced"  # missed, then mentioned to user via prompt_context
 _STATE_CANCELLED = "cancelled"
+
+# A `missed` row keeps surfacing in `prompt_context` until the LLM calls
+# `acknowledge_reminder` or `cancel_reminder` to clear it. The persona
+# prompt instructs the LLM to dismiss missed reminders explicitly after
+# mentioning them. If the LLM forgets, the row surfaces again next turn —
+# annoying but bounded, and self-limiting because the LLM tends to
+# follow through on the second mention. We previously had a `surfaced`
+# state intended to auto-dismiss after one prompt-context tick; that
+# couldn't be implemented cleanly because `prompt_context` is sync (no
+# storage write) and the resulting dead state caused a fan-out bug
+# during boot reconcile (review F4, 2026-04-29). Removed.
 
 _VALID_KINDS = ("medication", "appointment", "generic")
 _VALID_RECURRENCE = ("daily", "weekly")
@@ -337,8 +347,6 @@ class _Entry:
     acked_at: datetime | None = None
     cancelled_at: datetime | None = None
     missed_at: datetime | None = None
-    surfaced_at: datetime | None = None
-    notes: dict[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> str:
         return json.dumps(
@@ -356,8 +364,6 @@ class _Entry:
                 "acked_at": self.acked_at.isoformat() if self.acked_at else None,
                 "cancelled_at": self.cancelled_at.isoformat() if self.cancelled_at else None,
                 "missed_at": self.missed_at.isoformat() if self.missed_at else None,
-                "surfaced_at": self.surfaced_at.isoformat() if self.surfaced_at else None,
-                "notes": self.notes,
             }
         )
 
@@ -384,10 +390,6 @@ class _Entry:
                 _parse_iso(payload["cancelled_at"]) if payload.get("cancelled_at") else None
             ),
             missed_at=_parse_iso(payload["missed_at"]) if payload.get("missed_at") else None,
-            surfaced_at=(
-                _parse_iso(payload["surfaced_at"]) if payload.get("surfaced_at") else None
-            ),
-            notes=dict(payload.get("notes") or {}),
         )
 
 
@@ -424,6 +426,15 @@ class RemindersSkill:
         # and on storage reads so `prompt_context` (sync, can't await)
         # has fresh data without a round-trip.
         self._missed_cache_value: list[_Entry] = []
+        # Serializes `_allocate_id`'s read-then-write against itself
+        # across concurrent callers. Without this, a tool-handler
+        # `add_reminder` and a scheduler-driven
+        # `_schedule_next_recurrence` interleaving on a real (I/O-
+        # awaiting) `SkillStorage` can both read the same `next_id`
+        # and produce colliding rows. Tests' in-memory storage doesn't
+        # yield on get/set so the race never appeared in CI; production
+        # SQLite definitely does.
+        self._id_lock: asyncio.Lock = asyncio.Lock()
 
     @property
     def name(self) -> str:
@@ -624,7 +635,7 @@ class RemindersSkill:
             f"{_STORAGE_PREFIX}{_STORAGE_META_NEXT_ID}", str(max_id + 1)
         )
         for entry in entries:
-            if entry.state in (_STATE_ACKED, _STATE_CANCELLED, _STATE_SURFACED):
+            if entry.state in (_STATE_ACKED, _STATE_CANCELLED):
                 continue
             if entry.state == _STATE_MISSED:
                 # Already missed; surfacing is on the next prompt_context.
@@ -732,11 +743,43 @@ class RemindersSkill:
             await self._schedule_next_recurrence(entry)
 
     async def _schedule_next_recurrence(self, entry: _Entry) -> None:
-        """Create a fresh `pending` row at the next recurrence boundary."""
+        """Create a fresh `pending` row at the next recurrence boundary.
+
+        **Idempotent**: if a successor already exists for the computed
+        `next_when`, returns without creating a duplicate. This guard
+        is load-bearing — boot reconciliation calls
+        `_schedule_next_recurrence` for every `_STATE_MISSED` recurring
+        row on every restart. Without the guard, N restarts on a daily
+        medication produces N duplicate rows for tomorrow's dose. The
+        check matches on `(kind, recurrence, message,
+        scheduled_for ≈ next_when)` rather than just id so a
+        successor created via a different path (ack handler vs.
+        boot reconcile) is also detected.
+        """
+        assert self._logger is not None
         assert self._storage is not None
         if not entry.recurrence:
             return
         next_when = _next_recurrence(entry.scheduled_for, entry.recurrence)
+        # Idempotency check — see docstring. Costs one storage scan per
+        # call; called O(reminders * restarts), so still cheap.
+        existing = await self._load_all_entries()
+        for other in existing:
+            if (
+                other.id != entry.id
+                and other.recurrence == entry.recurrence
+                and other.message == entry.message
+                and other.kind == entry.kind
+                and other.state in (_STATE_PENDING, _STATE_FIRED)
+                and abs((other.scheduled_for - next_when).total_seconds()) < 1
+            ):
+                await self._logger.adebug(
+                    "reminders.recurrence_successor_exists",
+                    original_id=entry.id,
+                    successor_id=other.id,
+                    next_when=next_when.isoformat(),
+                )
+                return
         new_id = await self._allocate_id()
         new_entry = _Entry(
             id=new_id,
@@ -864,12 +907,70 @@ class RemindersSkill:
             self._wakeup.clear()
 
     async def _fire(self, entry: _Entry) -> None:
-        """Narrate the reminder and update state for retry / completion."""
+        """Commit state, then narrate.
+
+        **Order matters for medication safety.** If we narrated first
+        and the process died before saving the post-fire state, the
+        next boot would see `state=pending` with `next_fire_at` past
+        and within the late window — and re-narrate. Double-dose.
+        Mirrors the timers skill's commit-then-narrate pattern
+        (`fired_at` written before `inject_turn`).
+
+        **Trade-off**: a transient `inject_turn` failure (Realtime API
+        blip) burns a retry budget slot for medication without
+        narrating to the user. A sustained outage spanning all three
+        retries marks the row `missed` without grandpa hearing
+        anything. We accept that — silent miss is safer than double
+        dose. Operators diagnose via the `reminders.fire_failed` log
+        line plus the `reminders.fired` line that records each
+        attempt's `fired_count`.
+
+        Recurrence is also scheduled BEFORE narration: a crash between
+        terminal-save and recurrence-schedule would otherwise lose
+        tomorrow's reminder. `_schedule_next_recurrence` is itself
+        idempotent so re-running it on boot reconcile is safe.
+        """
         assert self._logger is not None
         assert self._inject_turn is not None
         now = _utcnow()
         entry.fired_count += 1
         entry.last_fired_at = now
+
+        advance_recurrence = False
+        if entry.kind == "medication":
+            if entry.fired_count >= _MEDICATION_MAX_RETRIES:
+                entry.state = _STATE_MISSED
+                entry.missed_at = now
+                advance_recurrence = bool(entry.recurrence)
+            else:
+                # 1-based: index 0 is the wait BEFORE retry #2 (after
+                # the first fire). Pairs with first-fire-then-wait-5min.
+                interval = _MEDICATION_RETRY_INTERVALS[entry.fired_count - 1]
+                entry.next_fire_at = now + interval
+                entry.state = _STATE_FIRED
+        else:
+            entry.state = _STATE_ACKED
+            entry.acked_at = now
+            advance_recurrence = bool(entry.recurrence)
+
+        await self._save_entry(entry)
+        if advance_recurrence:
+            await self._schedule_next_recurrence(entry)
+
+        if entry.state == _STATE_MISSED:
+            # Budget exhausted — log the miss with the same shape as
+            # other miss paths so operators can grep `reminders.missed`
+            # uniformly. We only inline the log here; transitioning was
+            # already done above as part of commit-before-inject.
+            await self._logger.ainfo(
+                "reminders.missed",
+                id=entry.id,
+                kind=entry.kind,
+                reason="retry_budget_exhausted",
+                scheduled_for=entry.scheduled_for.isoformat(),
+                fired_count=entry.fired_count,
+            )
+
         prompt = self._fire_prompt.format(message=entry.message, kind=entry.kind)
         try:
             # BLOCK_BEHIND_COMMS: preempts content (audiobook pauses,
@@ -878,50 +979,19 @@ class RemindersSkill:
             # a medication reminder — call ends, narration drains).
             await self._inject_turn(prompt, priority=InjectPriority.BLOCK_BEHIND_COMMS)
         except Exception:
+            # State already advanced. Don't roll back: rolling back
+            # creates the double-fire risk this whole pattern exists
+            # to prevent.
             await self._logger.aexception("reminders.fire_failed", id=entry.id)
-            # Even on failure, advance state so we don't infinite-loop
-            # on the same row. Medication will retry (counts the failed
-            # narration as one fire); others terminate.
+
         await self._logger.ainfo(
             "reminders.fired",
             id=entry.id,
             kind=entry.kind,
             fired_count=entry.fired_count,
+            state=entry.state,
             message=entry.message,
         )
-        if entry.kind == "medication":
-            await self._post_fire_medication(entry, now=now)
-        else:
-            await self._post_fire_one_shot(entry, now=now)
-
-    async def _post_fire_medication(self, entry: _Entry, *, now: datetime) -> None:
-        """Schedule a retry, or mark missed if the budget is exhausted."""
-        if entry.fired_count >= _MEDICATION_MAX_RETRIES:
-            # Last fire happened above; no more retries. Don't ack —
-            # the user may yet PTT to confirm; if they do, the ack
-            # handler will close the row. Until then, treat it as
-            # missed for surfacing purposes (so prompt_context will
-            # mention it next session) but leave the door open: we
-            # still accept ack on a `missed` row and re-roll recurrence
-            # at that point.
-            await self._mark_missed(entry, reason="retry_budget_exhausted", now=now)
-            return
-        interval = _MEDICATION_RETRY_INTERVALS[entry.fired_count - 1]
-        # NB: fired_count is 1-based after the increment above; the
-        # interval at index 0 is the wait BEFORE retry #2 (after the
-        # first fire). This pairs the first-fire-then-wait-5min model.
-        # Reset above when ack arrives.
-        entry.next_fire_at = now + interval
-        entry.state = _STATE_FIRED
-        await self._save_entry(entry)
-
-    async def _post_fire_one_shot(self, entry: _Entry, *, now: datetime) -> None:
-        """One-shot kinds (appointment, generic): close out + recurrence."""
-        entry.state = _STATE_ACKED
-        entry.acked_at = now
-        await self._save_entry(entry)
-        if entry.recurrence:
-            await self._schedule_next_recurrence(entry)
 
     # -------------------------------------------------------------- handlers
 
@@ -1040,7 +1110,7 @@ class RemindersSkill:
         entry = await self._load_entry(rid)
         if entry is None:
             raise _SkillBadInputError(f"no reminder with id {rid}")
-        if entry.state in (_STATE_ACKED, _STATE_CANCELLED, _STATE_SURFACED):
+        if entry.state in (_STATE_ACKED, _STATE_CANCELLED):
             return ToolResult(
                 output=json.dumps(
                     {"ok": True, "id": rid, "state": entry.state, "note": "already terminal"}
@@ -1062,7 +1132,7 @@ class RemindersSkill:
         entry = await self._load_entry(rid)
         if entry is None:
             raise _SkillBadInputError(f"no reminder with id {rid}")
-        if entry.state in (_STATE_ACKED, _STATE_CANCELLED, _STATE_SURFACED):
+        if entry.state in (_STATE_ACKED, _STATE_CANCELLED):
             raise _SkillBadInputError(f"reminder {rid} is already terminal ({entry.state})")
         entry.next_fire_at = _utcnow() + timedelta(minutes=minutes)
         # A snooze on a `fired` medication resets retry: we explicitly
@@ -1091,7 +1161,7 @@ class RemindersSkill:
         entry = await self._load_entry(rid)
         if entry is None:
             raise _SkillBadInputError(f"no reminder with id {rid}")
-        already = entry.state in (_STATE_ACKED, _STATE_CANCELLED, _STATE_SURFACED)
+        already = entry.state in (_STATE_ACKED, _STATE_CANCELLED)
         if already:
             return ToolResult(
                 output=json.dumps(
@@ -1214,30 +1284,32 @@ class RemindersSkill:
         (or in a test that skips setup) would otherwise collide on id 1
         and overwrite the original row.
 
-        SkillStorage isn't transactional; two concurrent allocations
-        could collide. The scheduler runs in one task and tool handlers
-        run serially within the turn coordinator, so in practice we
-        don't have concurrent allocations today. If that ever changes
-        (multiple scheduler instances), wrap with an asyncio.Lock here.
+        Wrapped in `_id_lock` so concurrent callers
+        (scheduler-side `_schedule_next_recurrence` racing a tool-
+        handler `add_reminder`) serialize the read-then-write. The
+        scheduler and tool handlers do run on the same event loop
+        but each `await` inside this method is a yield point that
+        could let the other path see stale `next_id` without the lock.
         """
         assert self._storage is not None
-        meta_key = f"{_STORAGE_PREFIX}{_STORAGE_META_NEXT_ID}"
-        raw = await self._storage.get_setting(meta_key)
-        try:
-            current = int(raw) if raw is not None else 0
-        except ValueError:
-            current = 0
-        if current <= 0:
-            # Cursor missing or invalid — derive from existing rows.
-            rows = await self._storage.list_settings(_STORAGE_PREFIX)
-            max_existing = 0
-            for key, _ in rows:
-                suffix = key.removeprefix(_STORAGE_PREFIX)
-                if suffix.isdigit():
-                    max_existing = max(max_existing, int(suffix))
-            current = max_existing + 1
-        await self._storage.set_setting(meta_key, str(current + 1))
-        return current
+        async with self._id_lock:
+            meta_key = f"{_STORAGE_PREFIX}{_STORAGE_META_NEXT_ID}"
+            raw = await self._storage.get_setting(meta_key)
+            try:
+                current = int(raw) if raw is not None else 0
+            except ValueError:
+                current = 0
+            if current <= 0:
+                # Cursor missing or invalid — derive from existing rows.
+                rows = await self._storage.list_settings(_STORAGE_PREFIX)
+                max_existing = 0
+                for key, _ in rows:
+                    suffix = key.removeprefix(_STORAGE_PREFIX)
+                    if suffix.isdigit():
+                        max_existing = max(max_existing, int(suffix))
+                current = max_existing + 1
+            await self._storage.set_setting(meta_key, str(current + 1))
+            return current
 
     async def _save_entry(self, entry: _Entry) -> None:
         assert self._storage is not None
