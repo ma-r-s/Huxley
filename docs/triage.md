@@ -2009,6 +2009,18 @@ skill needs non-narrated audio in that tier" — reminders does not).
   forward and fall-back), weekday-only / biweekly / monthly-by-day
   / COUNT-exhaustion patterns, v1→v2 migration, invalid-rule
   rejection, tz fallback.
+- `255d3e85` — RRULE review fixes (post-`d45cce88`). Second-round
+  critic found two 🔴 in the validator: (a) embedded `DTSTART:` in
+  the rule string silently shadowed our `series_start` kwarg,
+  jumping next-fire dates by years on medication rows; (b)
+  UNTIL-past validated as parseable then degraded to one-shot with
+  no LLM feedback. Plus 🟠 snooze docstring/code drift (the comment
+  said "ladder resumes at fired_count = 1" but the code only flipped
+  state, leaving fired_count non-zero so the next fire skipped to
+  the 10-min interval). All fixed; 8 new regression tests including
+  documented DST-gap behavior at 02:30 AM and a v1-mid-retry-
+  medication migration path. Doc + tool description tightened so
+  the LLM gets correct `when_iso` guidance for BYDAY rules.
 
 **Effort actual**: ~1 session for impl + ~1 session for review-fix
 follow-up. Total matches the 1-week estimate (estimate budgeted for
