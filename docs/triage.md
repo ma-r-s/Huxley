@@ -2021,6 +2021,22 @@ skill needs non-narrated audio in that tier" — reminders does not).
   documented DST-gap behavior at 02:30 AM and a v1-mid-retry-
   medication migration path. Doc + tool description tightened so
   the LLM gets correct `when_iso` guidance for BYDAY rules.
+- `b93041c3` — third-round review fixes. Found two more 🔴 plus a
+  🟡: (a) snooze on a `state=missed` row silently no-oped while
+  returning `ok: true` to the LLM (medication-safety UX hazard:
+  user thinks the snooze worked, no fire ever happens, infinite
+  re-surface loop); (b) `FREQ=DAILY;COUNT=1` — a valid one-shot —
+  was incorrectly rejected as "no future occurrences" because the
+  validator anchored its probe on `now` instead of `when_iso`,
+  AND used `rrule.after()` which is microsecond-sensitive against
+  rrulestr's seconds-truncated dtstart; (c) `EXDATE:` / `RDATE:`
+  in compound rule strings bypassed the round-2 DTSTART guard,
+  with EXDATE silently dropping the user's first fire from the
+  recurring chain. All fixed; 5 new regression tests. Validator
+  now threads `when_iso` through and probes via `next(iter(rrule),
+None)` to dodge the microsecond truncation. Compound-rule guard
+  now covers `(DTSTART, RDATE, EXDATE)`. Stale `_STATE_SURFACED`
+  references in docstring + doc cleaned up.
 
 **Effort actual**: ~1 session for impl + ~1 session for review-fix
 follow-up. Total matches the 1-week estimate (estimate budgeted for
@@ -2110,6 +2126,29 @@ hadn't anticipated).
    v1 rows from development testing. Every future schema change can
    reuse the same pattern; the alternative ("there are no v1 rows
    yet, just rename the field") would have set the wrong precedent.
+10. **Validation probes need to anchor on the user's input, not on
+    `now()`.** Round-2's `_validate_rrule` probed `rrule.after(now+1s)`
+    to detect "no future occurrences." That worked for UNTIL-past
+    but rejected `FREQ=DAILY;COUNT=1` (a valid one-shot anchored at
+    `when_iso`) because the sole occurrence at `dtstart=now` was
+    already past the +1s window. Round-3 fix anchors the probe on
+    `when_iso` and uses `next(iter(rrule), None)` to dodge the
+    microsecond-truncation issue (`rrulestr` rounds dtstart to whole
+    seconds; `.after(when_with_microseconds, inc=True)` returns None
+    even when `when` is itself an occurrence). Generalizable rule:
+    when validating user-supplied input, probes should anchor on
+    user-supplied state, not on the wall clock.
+11. **The handler-returns-`ok`-while-doing-nothing pattern is the
+    most insidious failure mode.** Rounds 1–2 caught it once
+    (round-1 F31's "row state didn't save before inject_turn"),
+    round 3 caught it again (snooze-on-missed). Both shapes:
+    handler accepts the input, does part of the work, returns
+    success — but the work doesn't reach the consumer. From the
+    LLM's perspective, the call succeeded, so it tells the user
+    confidently. Lesson: when a handler can't fulfill the
+    semantics, **fail loudly**. Silent success is worse than
+    explicit error because the LLM's response treats silent
+    success as ground truth.
 
 ---
 
