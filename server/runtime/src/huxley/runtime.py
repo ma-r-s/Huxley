@@ -83,6 +83,14 @@ class Runtime:
         # re-opening the same SQLite DB — fixes the WAL writer-lock
         # collision the critic flagged.
         self._teardown_task: asyncio.Task[None] | None = None
+        # Serializes `_switch_to_persona` so two concurrent swap requests
+        # (PWA in two tabs, StrictMode double-mount, rapid picker clicks)
+        # can't race their reference-overwrite of `current_app`. Without
+        # this, the LOSER's freshly-built Application is silently leaked
+        # — never shutdown, holds open SQLite + FocusManager + a live
+        # OpenAI session if `auto_connect=True`. Critic round 2 finding
+        # §2; see docs/triage.md T1.13.
+        self._swap_lock = asyncio.Lock()
         self._shutdown_event = asyncio.Event()
         self._shutting_down = False
 
@@ -152,6 +160,14 @@ class Runtime:
 
     # ── Persona swap algorithm ──────────────────────────────────────────
 
+    # Cap on how long a swap will wait for the previous Application's
+    # teardown (provider summary write, skill teardowns) to finish before
+    # giving up. A buggy skill teardown that deadlocks an `await` would
+    # otherwise stall every subsequent swap forever — DoSing the picker.
+    # Critic round 2 finding §10. Ten seconds is generous for the LLM-
+    # backed summary call (typical 1-3s) plus skill teardowns.
+    _TEARDOWN_TIMEOUT_S = 10.0
+
     async def _switch_to_persona(self, name: str, *, auto_connect: bool = False) -> None:
         """Build a new Application for `name`, atomically replace
         `current_app`, schedule old's teardown in the background.
@@ -162,54 +178,78 @@ class Runtime:
         decide. If there was no `current_app` (first call at boot), the
         exception propagates and `current_app` stays None — the runtime
         can't serve until a working persona loads.
+
+        Serialized via `_swap_lock` so concurrent calls (e.g. two-tab
+        PWA, StrictMode double-mount) don't leak a freshly-built
+        Application via reference-overwrite. Critic round 2 §2.
         """
-        old_app = self.current_app
-        if old_app is not None and old_app.persona.name == name:
-            return  # no-op — already on this persona
+        async with self._swap_lock:
+            old_app = self.current_app
+            if old_app is not None and old_app.persona.name == name:
+                return  # no-op — already on this persona
 
-        # Storage-lock-race fix (critic finding): if a teardown task is
-        # in flight, wait it before constructing a new Application that
-        # would open the same SQLite DB. Critical for rapid back-and-
-        # forth swap (A→B→A within ~500ms) where the OLD shutdown's
-        # provider summary write may still be writing to abuelos.db
-        # when the new abuelos opens it.
-        if self._teardown_task is not None and not self._teardown_task.done():
-            with contextlib.suppress(Exception):
-                await self._teardown_task
-        self._teardown_task = None
+            # Storage-lock-race fix (critic round 1): if a teardown task
+            # is in flight, wait it before constructing a new Application
+            # that would open the same SQLite DB. Critical for rapid
+            # back-and-forth swap (A→B→A within ~500ms) where the OLD
+            # shutdown's provider summary write may still be writing to
+            # abuelos.db when the new abuelos opens it. Capped by
+            # `_TEARDOWN_TIMEOUT_S` (round 2 §10) so a stuck teardown
+            # doesn't block subsequent swaps forever — log + abandon.
+            if self._teardown_task is not None and not self._teardown_task.done():
+                try:
+                    # `shield` so the wait_for timeout doesn't cancel the
+                    # underlying teardown — we still want it to complete
+                    # in the background; we just stop waiting on it.
+                    await asyncio.wait_for(
+                        asyncio.shield(self._teardown_task),
+                        timeout=self._TEARDOWN_TIMEOUT_S,
+                    )
+                except TimeoutError:
+                    await logger.awarning(
+                        "runtime.teardown_timeout_abandoned",
+                        timeout_s=self._TEARDOWN_TIMEOUT_S,
+                        note="previous teardown still running; proceeding anyway",
+                    )
+                except Exception:
+                    # Teardown raised — already logged inside
+                    # `_teardown_app`. Don't block the new swap on a
+                    # botched cleanup.
+                    pass
+            self._teardown_task = None
 
-        await logger.ainfo(
-            "runtime.persona_swap_started",
-            from_=old_app.persona.name if old_app else None,
-            to=name,
-        )
+            await logger.ainfo(
+                "runtime.persona_swap_started",
+                from_=old_app.persona.name if old_app else None,
+                to=name,
+            )
 
-        persona_path = _find_named_persona(name)
-        try:
-            new_persona = load_persona(persona_path)
-        except PersonaError:
-            await logger.aexception("runtime.persona_load_failed", persona=name)
-            raise
+            persona_path = _find_named_persona(name)
+            try:
+                new_persona = load_persona(persona_path)
+            except PersonaError:
+                await logger.aexception("runtime.persona_load_failed", persona=name)
+                raise
 
-        new_app = Application(self._config, new_persona, audio_server=self.audio_server)
-        try:
-            await new_app.start(auto_connect=auto_connect)
-        except Exception:
-            # Cleanup partial init; OLD app (if any) untouched.
-            with contextlib.suppress(Exception):
-                await new_app.shutdown()
-            await logger.aexception("runtime.persona_start_failed", persona=name)
-            raise
+            new_app = Application(self._config, new_persona, audio_server=self.audio_server)
+            try:
+                await new_app.start(auto_connect=auto_connect)
+            except Exception:
+                # Cleanup partial init; OLD app (if any) untouched.
+                with contextlib.suppress(Exception):
+                    await new_app.shutdown()
+                await logger.aexception("runtime.persona_start_failed", persona=name)
+                raise
 
-        self.current_app = new_app
-        await logger.ainfo(
-            "runtime.persona_swap_committed",
-            from_=old_app.persona.name if old_app else None,
-            to=name,
-        )
+            self.current_app = new_app
+            await logger.ainfo(
+                "runtime.persona_swap_committed",
+                from_=old_app.persona.name if old_app else None,
+                to=name,
+            )
 
-        if old_app is not None:
-            self._teardown_task = asyncio.create_task(self._teardown_app(old_app))
+            if old_app is not None:
+                self._teardown_task = asyncio.create_task(self._teardown_app(old_app))
 
     async def _teardown_app(self, app: Application) -> None:
         try:
@@ -228,39 +268,39 @@ class Runtime:
 
     async def _shim_wake_word(self) -> None:
         if self.current_app is not None:
-            await self.current_app._on_wake_word()
+            await self.current_app.on_wake_word()
 
     async def _shim_ptt_start(self) -> None:
         if self.current_app is not None:
-            await self.current_app._on_ptt_start()
+            await self.current_app.on_ptt_start()
 
     async def _shim_ptt_stop(self) -> None:
         if self.current_app is not None:
-            await self.current_app._on_ptt_stop()
+            await self.current_app.on_ptt_stop()
 
     async def _shim_audio_frame(self, pcm: bytes) -> None:
         if self.current_app is not None:
-            await self.current_app._on_audio_frame(pcm)
+            await self.current_app.on_audio_frame(pcm)
 
     async def _shim_reset(self) -> None:
         if self.current_app is not None:
-            await self.current_app._on_reset()
+            await self.current_app.on_reset()
 
     async def _shim_language_select(self, language: str | None) -> None:
         if self.current_app is not None:
-            await self.current_app._on_language_select(language)
+            await self.current_app.on_language_select(language)
 
     async def _shim_list_sessions(self) -> None:
         if self.current_app is not None:
-            await self.current_app._on_list_sessions()
+            await self.current_app.on_list_sessions()
 
     async def _shim_get_session(self, session_id: int) -> None:
         if self.current_app is not None:
-            await self.current_app._on_get_session(session_id)
+            await self.current_app.on_get_session(session_id)
 
     async def _shim_delete_session(self, session_id: int) -> None:
         if self.current_app is not None:
-            await self.current_app._on_delete_session(session_id)
+            await self.current_app.on_delete_session(session_id)
 
     async def _shim_persona_select(self, name: str | None) -> None:
         """Fired by AudioServer on each new connection with the
@@ -272,16 +312,23 @@ class Runtime:
         client sees `hello.current_persona` reflect whatever's actually
         loaded and can retry via the picker. Letting the handshake
         crash on a bad persona name would create a reconnect loop on
-        the PWA side that's hard to recover from."""
+        the PWA side that's hard to recover from.
+
+        Eager-connects the new persona (`auto_connect=True`) so the
+        user's first PTT after the swap reaches a CONVERSING session
+        instead of being rejected by the IDLE-state guard in
+        `Application.on_ptt_start`. The original "lazy" plan was
+        broken: the state machine has no IDLE→CONNECTING transition
+        on PTT, only on `wake_word`, and the PWA does not emit
+        `wake_word` on a swap-reconnect. Idle Realtime sessions cost
+        $0 (see memory/project_realtime_costs.md), so eager-connect
+        is functionally free here. Critic round 2 §4."""
         if name is None:
             return
         if self.current_app is not None and self.current_app.persona.name == name:
             return
         try:
-            # Mid-session swap: lazy connect (don't auto-fire wake_word).
-            # The next user PTT triggers the new persona's first OpenAI
-            # session via the existing state-machine path.
-            await self._switch_to_persona(name, auto_connect=False)
+            await self._switch_to_persona(name, auto_connect=True)
         except Exception:
             await logger.aexception("runtime.persona_swap_via_query_failed", persona=name)
 
