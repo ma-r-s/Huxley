@@ -301,6 +301,49 @@ class TestWalAndSchemaVersion:
         await s2.close()
 
 
+class TestSkillSchemaVersion:
+    """T1.14 — per-skill data_schema_version persistence in schema_meta.
+
+    Behavior pinned in docs/skill-marketplace.md § Schema versioning:
+    first boot writes silently; equal-version is a no-op; mismatch
+    logs warning and writes the new declared version.
+    """
+
+    async def test_skill_version_absent_returns_none(self, storage: Storage) -> None:
+        assert await storage.get_skill_schema_version("audiobooks") is None
+
+    async def test_set_then_get_skill_version(self, storage: Storage) -> None:
+        await storage.set_skill_schema_version("audiobooks", 3)
+        assert await storage.get_skill_schema_version("audiobooks") == 3
+
+    async def test_set_overwrites_skill_version(self, storage: Storage) -> None:
+        await storage.set_skill_schema_version("audiobooks", 1)
+        await storage.set_skill_schema_version("audiobooks", 2)
+        assert await storage.get_skill_schema_version("audiobooks") == 2
+
+    async def test_skill_versions_isolated_per_skill(self, storage: Storage) -> None:
+        await storage.set_skill_schema_version("audiobooks", 5)
+        await storage.set_skill_schema_version("news", 1)
+        assert await storage.get_skill_schema_version("audiobooks") == 5
+        assert await storage.get_skill_schema_version("news") == 1
+
+    async def test_skill_versions_dont_collide_with_schema_version(self, storage: Storage) -> None:
+        # The framework's own schema_version key must not be touched by
+        # per-skill writes; both share the schema_meta table.
+        cursor = await storage._conn.execute(
+            "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+        )
+        row = await cursor.fetchone()
+        before = row[0] if row else None
+        await storage.set_skill_schema_version("audiobooks", 99)
+        cursor = await storage._conn.execute(
+            "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+        )
+        row = await cursor.fetchone()
+        after = row[0] if row else None
+        assert before == after
+
+
 class TestSessions:
     """T1.12 — session history: persistence + retrieval.
 
