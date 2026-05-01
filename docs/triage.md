@@ -2875,7 +2875,7 @@ Other round-2 findings (PWA TS type drift on hello extras, `list_personas()` re-
 
 ## T1.14 — Skill marketplace v1 (developer-primary: SDK + reference skill + authoring docs)
 
-**Status**: in_progress (2026-05-01) — design phase, post-critic-round-1 revision. Architectural specification at [`docs/skill-marketplace.md`](./skill-marketplace.md) (split into v1 and v2). **This entry covers v1 only**; v2 is deferred until caregiver-shipping is decided. **Effort**: ~1.5 weeks for v1. **Prerequisite**: T2.8 (move telegram creds out of repo root → establishes the per-persona secrets dir pattern).
+**Status**: in_progress (2026-05-01) — design phase locked, post-critic-round-3. Architectural specification at [`docs/skill-marketplace.md`](./skill-marketplace.md) (split into v1 and v2). **This entry covers v1 only**; v2 is deferred until caregiver-shipping is decided. **Effort**: ~2 weeks for v1 (bumped from 1.5w in round 3 — authoring docs realistically 2-3d, not 1d, for a doc the entire third-party ecosystem hangs on). **Prerequisite**: T2.8 (move telegram creds out of repo root → establishes the per-persona secrets dir pattern).
 
 **Problem.** Huxley's load-bearing thesis is skill extensibility ("LLM understands rough natural-language intent and dispatches to user-installable custom tools, including for personal content" — see `docs/vision.md`). Today, "installable" means "the developer edits the runtime's `pyproject.toml`, runs `uv sync`, edits `persona.yaml`, restarts the server" — and there is no standardized way for a third-party author to publish a `huxley-skill-*` package that other people can install. The SDK doesn't define a config-schema convention or a secrets-storage primitive. The framework is extensible in principle but not in practice.
 
@@ -2901,24 +2901,25 @@ The full architectural specification is [`docs/skill-marketplace.md`](./skill-ma
 | 2   | **Distribution: PyPI public packages** (`huxley-skill-<name>`), with `git+https://...` for private/in-development skills.                                                                            |
 | 3   | **Discovery: static `docs/skills/index.md` directory page.** No JSON registry, no GitHub repo, no CI. v2 promotes this to a structured registry.                                                     |
 | 4   | **Install: `uv add huxley-skill-foo` + manual restart.** No PWA install path, no `os.execv` self-restart machinery in v1 — that's v2's hardest engineering work and it deserves its own design pass. |
-| 5   | **Configure: edit `persona.yaml` + drop secrets in `<persona>/data/secrets/<skill>/values.json`.** Authoring docs + the Spotify reference skill establish the convention.                            |
+| 5   | **Configure: edit `persona.yaml` + drop secrets in `<persona>/data/secrets/<skill>/values.json`.** Authoring docs + the `huxley-skill-stocks` reference skill establish the convention.              |
 | 6   | **Per-persona enable/disable: edit `persona.yaml` `skills:` list.** Already how it works today.                                                                                                      |
 | 7   | **Trust: author-trusted (read the source).** No registry curation in v1; that's v2.                                                                                                                  |
 
 **v1-v2 contracts** (the primitives that don't change between versions, so v2 is purely additive — see spec § Cross-version contracts):
 
-- `Skill.config_schema: ClassVar[dict | None] = None` — **OPTIONAL**. Skills with simple configs declare a JSON Schema; skills with complex configs (i18n maps, list-of-records, contact dicts) leave it `None`. v2's PWA only renders forms for opt-in skills; falls back to "manual config required" for the rest. This neutralizes the critic-round-1 §5 concern about JSON Schema not fitting every skill.
-- `Skill.data_schema_version: ClassVar[int] = 1` — version bump on incompatible storage layout. Runtime logs a loud warning on mismatch; v2 gates cross-major upgrades behind explicit confirmation.
-- `ctx.secrets: SkillSecrets` — `get/set/delete/keys` over per-skill JSON values file. v1 ships string-only; v2 may add `set_json` additively for OAuth refresh state.
+- `Skill.config_schema: ClassVar[dict | None] = None` — **OPTIONAL**. Skills with simple configs declare a JSON Schema; skills with complex configs (i18n maps, list-of-records, contact dicts) leave it `None`. v2's PWA only renders forms for opt-in skills; falls back to "manual config required" for the rest.
+- `Skill.data_schema_version: ClassVar[int] = 1` — persisted in the per-persona `schema_meta` table under key `skill_version:<name>` (existing table, just a new key prefix). v1 logs a `warning` event on mismatch (`skill.schema.upgrade_needed` / `downgrade_detected`); v1 does **not** auto-migrate. v2 gates cross-major upgrades behind explicit confirmation. Storage location pinned now so v2 layers UX on top without changing v1 on-disk format.
+- `ctx.secrets: SkillSecrets` — `async get/set/delete/keys` (async to match `SkillStorage`). On-disk shape is **always** a flat `dict[str, str]`. Skills with nested data (OAuth refresh state) JSON-encode the dict themselves into a single key like `oauth_state`. v2's `set_json/get_json` is sugar over the same on-disk shape — additive, no migration. Pinned in spec § Secrets storage layout.
 - Secrets storage layout: `<persona.data_dir>/secrets/<skill>/values.json`, perms `0700/0600`. No encryption-at-rest in v1 (defer until shared-machine deployments emerge).
-- Persona.yaml stays the source of truth for both v1 and v2.
+- Persona.yaml stays the source of truth for both v1 and v2 (v2 PWA writes via `ruamel.yaml` round-trip to preserve comments + ordering).
+- **Privacy carve-out for T1.13**: v1 skills install into the shared `uv` workspace venv. Per-persona privacy lives in the persona's data dir + `persona.yaml.skills:` enable list, **not** the venv. The enable list IS the trust boundary at runtime — a persona that doesn't list a skill never imports its setup code. v2 may revisit per-persona venvs if the threat model demands it; v1 does not.
 
 ### Critic Notes (round 1 — design — complete 2026-05-01)
 
 Critic agent reviewed the original v1+v2-as-one-feature spec. Verdict: the spec architected for an audience that doesn't exist yet (the caregiver-installer), buying optionality at 4-5 weeks of engineering when the marketplace thesis is unproven. Most findings dispositioned by splitting into v1 (developer-primary, ~1.5 weeks, what we're building) and v2 (caregiver expansion, deferred).
 
 - **§1 — caregiver-vs-end-user conflation.** The original spec said "end user" while meaning "caregiver-installer"; the elderly user is never the installer. **Incorporated**: spec now distinguishes _skill author_, _caregiver / installer_, and _end user_ explicitly. v1 audience is the developer-installer; v2 audience is the caregiver-installer.
-- **§2 — Phase 1 alone doesn't ship marketplace value.** The original Phase 1 (PWA Skills panel without install) was "a settings panel for stuff you already installed via uv add" — the secrets-out-of-YAML refactor dressed as marketplace work. **Incorporated**: dropped the PWA panel from v1 entirely. v1's deliverable is SDK primitives + Spotify reference + authoring docs + static directory page. The PWA panel is v2 work.
+- **§2 — Phase 1 alone doesn't ship marketplace value.** The original Phase 1 (PWA Skills panel without install) was "a settings panel for stuff you already installed via uv add" — the secrets-out-of-YAML refactor dressed as marketplace work. **Incorporated**: dropped the PWA panel from v1 entirely. v1's deliverable is SDK primitives + a third-party reference skill + authoring docs + static directory page. The PWA panel is v2 work. (Reference skill choice was originally Spotify; round 2 swapped it to `huxley-skill-stocks` — see Round 2 notes below.)
 - **§3 — simplest alternative.** Critic suggested ship-Phase-1-plus-doc and stop. **Incorporated**: that's almost exactly what v1 is now (minus the panel). Earns the optionality.
 - **§4 — `os.execv` self-restart hand-waved.** Real foot-guns (SQLite WAL torn state, partial-pip-install bricked venv, C-extension compile time on a Pi). **Incorporated**: deferred to v2 entirely. v2's design phase will engage seriously (probably staged-venv-and-swap pattern).
 - **§5 — JSON Schema doesn't fit complex skill configs** (audiobooks i18n, telegram contacts dict). **Incorporated**: `config_schema` is OPTIONAL. Skills opt in; complex skills leave it `None`. v2's PWA shows "manual config required" for opt-out skills.
@@ -2930,35 +2931,83 @@ Critic agent reviewed the original v1+v2-as-one-feature spec. Verdict: the spec 
 - **§12 — umbrella + sub-entries pattern overengineered.** **Incorporated**: dropped the umbrella. This entry covers all v1 phases as a single triage item with phase status checkboxes inside (matching T1.13's shape).
 - **§15 — "both audiences first-class" was the load-bearing decision.** **Incorporated**: v1 = developer-primary only. The "both audiences" framing is reframed as "v1 serves developers; v2 layers caregiver UX on top of v1's primitives."
 
+### Critic Notes (round 2 — design — complete 2026-05-01)
+
+Critic agent reviewed v2 of the spec (after critic-round-1 split into v1+v2). Verdict: **not ready to implement, three real issues need fixing before code starts.** All incorporated:
+
+- **Replace Spotify reference skill — OAuth-with-1hr-expiry is hostile to a v1 demo.** Spotify access tokens expire in 1 hour; the smoke-test path "install + use" stops working an hour after token paste, and fixing it properly drags real OAuth refresh into v1 (out of scope per row 4 of locked decisions). **Incorporated**: dropped Spotify. After Mario's pushback on weather (overlaps with existing `huxley-skill-news` Open-Meteo integration), settled on `huxley-skill-stocks` (Alpha Vantage). API-key-only, no expiry, free tier requires the key (proper test of secrets routing), and `config_schema` exercises three JSON-Schema shapes (secret string, array, enum) the v2 form-renderer must support — strictly more SDK surface validated than weather would have.
+- **Resolve instance-venv question; document T1.13 privacy carve-out.** v1 ships skills into a shared `uv` workspace venv, not per-persona venvs. T1.13's "filesystem-enforced privacy" guarantee needs an explicit carve-out: per-persona privacy lives in the data dir + `persona.yaml.skills:` enable list, NOT the venv. **Incorporated**: spec § "Privacy carve-out for T1.13 (shared workspace venv)" pins this. Restart docs cover single-instance, launchd-supervised, and multi-instance (T1.13) cases.
+- **Pin OAuth-blob convention + `data_schema_version` mismatch behavior.** Both were claimed "additive in v2" but only true if v1 normalizes the on-disk shape now. **Incorporated**: (a) Secrets are ALWAYS a flat `dict[str, str]`. Nested data JSON-encoded into a single key. v2's `set_json/get_json` writes the same on-disk bytes — no migration. Spec § Secrets storage layout shows the canonical OAuth-blob example. (b) `data_schema_version` persists in the existing `schema_meta` table under key `skill_version:<name>`. Mismatch behavior pinned: v1 logs warning, does NOT auto-migrate; v2 gates upgrades behind explicit confirmation. Spec § Schema versioning.
+
+Smaller fixes also incorporated:
+
+- `SkillSecrets` is **async** to match `SkillStorage` (both are filesystem I/O from async contexts).
+- First-party `config_schema` adopter is `huxley-skill-search` (DuckDuckGo, simple `safesearch` enum + `region` string), not `huxley-skill-news` — search has a cleaner schema for the "first opt-in" demo without dragging API-key-secret routing onto a first-party skill.
+- `huxley-skill-stocks` lives in **its own repo from day 1** (not `server/skills/spotify/`-style) — proves the third-party flow more authentically.
+- `ruamel.yaml` round-trip noted for v2 PWA YAML editing (preserves comments + ordering).
+- Restart story documents launchd `kickstart -k` and T1.13 multi-instance cases.
+- Auto-aggregating the index page from per-skill frontmatter is a v2 nice-to-have; v1 hand-curates `docs/skills/index.md`.
+- Cut narrative fluff (intro paragraphs, decorative ASCII art, duplicated v2-open-questions section).
+
+### Critic Notes (round 3 — design — complete 2026-05-01)
+
+Critic agent reviewed v3 of the spec (post-round-2 + stocks pivot). **Verdict**: "one or two small fixes, then ready" — leaning ready. All paper fixes, no redesign.
+
+- **`ctx.skill_config` is the wrong attribute name.** Spec line 277 (now corrected) said skills read non-secret config from `ctx.skill_config`. The actual attribute on `SkillContext` is `ctx.config` (see `server/sdk/src/huxley_sdk/types.py:836`; every existing first-party skill reads `ctx.config`). Factual error in the worked-example contract — copy-paste authors would hit `AttributeError`. **Incorporated**: `ctx.skill_config` replaced with `ctx.config` everywhere in spec.
+- **Schema-version event semantics on persona swap.** Spec didn't say the equal-version case is silent; T1.13 calls `setup()` on every reconnect, so a naive "checked" event would create log noise. Also didn't address torn-swap atomicity. **Incorporated**: spec § Schema versioning now says equal is silent (no event), the version-write happens in the same DB transaction as init writes (so torn swap rolls back atomically), and adds a DoD test "swap personas 3× → no `skill.schema.*` events fire after first boot."
+- **Authoring docs at "1 day" is the wrong order of magnitude** for a doc the entire third-party ecosystem hangs on. **Incorporated**: bumped to 2-3 days; v1 effort estimate updated to ~2 weeks; added DoD bullet "self-test: walking the doc verbatim from a clean checkout produces a working install — if a step doesn't work as written, the doc is the bug."
+
+Smaller fixes also incorporated (all in spec):
+
+- **`huxley-skill-search` schema scoped to actual existing fields**: just `safesearch` enum. The originally claimed schema (`safesearch` + `region` string) would have conflated "adopt schema" with "add new feature" since `region` doesn't exist today. `start_sound` / `sounds_path` are persona-author / framework-shared fields, stay un-schemaed.
+- **i18n merge interaction with `config_schema`**: schemas describe the **post-merge** view of `ctx.config`. Skills that use the i18n merge stay schemaless.
+- **OAuth-blob corruption recovery**: skills `try: json.loads except json.JSONDecodeError: return None`; recovery is `await ctx.secrets.delete("oauth_state")` + re-auth. v1 does not auto-quarantine.
+- **Gitignore inheritance**: secrets land at `<persona>/data/secrets/` which inherits the existing `<persona>/data/` gitignore exclusion. **No new `.gitignore` rule needed.**
+- **Stocks bootstrap chicken-and-egg**: during v1 dev, stocks pins SDK as a `uv` path dep against Huxley repo's main; once Phase 1 publishes `huxley-sdk` to PyPI, switches to versioned pin (and that's the path the authoring docs document for external authors).
+- **Stocks repo CI scope**: `ruff` + `mypy --strict` + `pytest` + a publishing GH Action template. Out of scope: coverage gates, signing, distribution beyond PyPI.
+- **Smoke persona pinned to `basicos`** (not Abuelo — stocks isn't a credible voice intent for the elderly Spanish-language end user; basicos has no constraints to interfere with the plumbing-focused test).
+- **`docs/skills/index.md` per-entry metadata schema** (5 fields: `name`, `description`, `install`, `docs_url`, `tier`) so the PR template is mechanical.
+
+**What round 3 explicitly approved as solid** (so the implementer knows where the design is load-bearing): OAuth-blob convention, T1.13 privacy carve-out, `schema_meta` reuse, stocks-vs-Spotify-vs-weather decision, `SkillSecrets` async, v1/v2 split.
+
 ### Definition of Done (v1)
 
 - [ ] T2.8 prerequisite landed (per-persona secrets dir pattern in place).
-- [ ] **Phase 1: SDK additions** — `Skill.config_schema: ClassVar[dict | None] = None`, `Skill.data_schema_version: ClassVar[int] = 1`, `SkillContext.secrets: SkillSecrets` with `get/set/delete/keys`, backed by `<persona.data_dir>/secrets/<skill>/values.json` (perms `0700/0600`). Tests + mypy + ruff + per-package pytest green.
-- [ ] At least one first-party skill adopts `config_schema` to validate the convention end-to-end.
-- [ ] **Phase 2: `huxley-skill-spotify` reference skill** — pip-installable from PyPI (or the in-repo workspace package, decided during implementation). Declares `config_schema`. Uses `ctx.secrets` for the access token. v1 OAuth UX: user generates a token externally, pastes it into `values.json`, or uses a CLI helper command.
-- [ ] **Phase 3: `docs/skills/authoring.md`** — how to write a `huxley-skill-foo` package. Worked example: walks through `huxley-skill-spotify`'s shape. Covers project structure, the Skill protocol, config_schema convention, secrets API, persona integration, PyPI publishing, submitting to the directory page.
-- [ ] **Phase 4: `docs/skills/index.md` directory page** — static curated list of known `huxley-skill-*` packages with install commands + author docs links. Renderable by the docs site.
-- [ ] Mario smoke: install `huxley-skill-spotify` into a fresh persona via the documented path; PTT-control Spotify; verify secrets land in the secrets dir + don't leak into git diffs.
+- [ ] **Phase 1: SDK additions** — `Skill.config_schema: ClassVar[dict | None] = None`, `Skill.data_schema_version: ClassVar[int] = 1`, `SkillContext.secrets: SkillSecrets` with **async** `get/set/delete/keys`, backed by `<persona.data_dir>/secrets/<skill>/values.json` (perms `0700/0600`). `data_schema_version` persists in `schema_meta` table under `skill_version:<name>`; mismatch logs `skill.schema.upgrade_needed` / `skill.schema.downgrade_detected`, no auto-migration in v1. Tests + mypy + ruff + per-package pytest green.
+- [ ] **`huxley-skill-search` adopts `config_schema`** as the first-party validation of the JSON-Schema convention (clean schema: `safesearch` enum + `region` string; no API key). Backward-compat: existing skills with `config_schema=None` still load.
+- [ ] **Phase 2: `huxley-skill-stocks` reference skill** — own repo from day 1 (not `server/skills/`). Pip-installable from PyPI. Declares `config_schema` with `api_key` (secret) + `watchlist` (array) + `currency` (enum). Uses async `ctx.secrets` for the API key. Voice tools: "what's <ticker> stock at" / "how's my watchlist."
+- [ ] **Phase 3: `docs/skills/authoring.md`** — how to write a `huxley-skill-foo` package. Worked example: `huxley-skill-stocks`. Covers project structure, the Skill protocol, config_schema convention, async secrets API, OAuth-blob convention (json-encode dicts), persona integration, PyPI publishing, submitting to the directory page.
+- [ ] **Phase 3 self-test**: walking authoring.md verbatim from a clean checkout produces a working `huxley-skill-stocks` install. Mario validates on a fresh persona — if a step doesn't work as written, the doc is the bug.
+- [ ] **Phase 4: `docs/skills/index.md` directory page** — static curated list of known `huxley-skill-*` packages following the per-entry metadata schema (`name`, `description`, `install`, `docs_url`, `tier`). First-party skills + `huxley-skill-stocks`. Renderable by the docs site.
+- [ ] Mario smoke: install `huxley-skill-stocks` into a fresh **`basicos`** persona (not Abuelo — stocks isn't a credible voice intent for the elderly Spanish-language end user; basicos has no persona constraints to interfere). PTT: "what's Apple stock at"; verify the API key lands in the secrets dir + does not leak into git diffs; verify the call succeeds.
+- [ ] Persona-swap stability test: swap personas 3× via `?persona=` reconnect with stocks enabled — `skill.schema.*` events fire only on first boot of each (skill, persona) pair; subsequent swaps are silent.
 - [ ] `ruff check server/` + `mypy server/sdk/src server/runtime/src` + per-package pytest all green.
 
 ### Implementation order
 
 Phases are tracked inside this entry per critic-round-1 §12 (no umbrella + sub-entries). When work begins on each phase, flip its checkbox to in_progress and log lessons inline below.
 
-| #   | Phase                   | Scope                                                                                                                                                                                                      | Effort    |
-| --- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| 0   | T2.8 (separate entry)   | Move telegram creds → `<persona>/data/secrets/telegram/`. Establishes the secrets-dir pattern T1.14 generalizes.                                                                                           | ~1 hour   |
-| 1   | SDK additions           | `Skill.config_schema`, `Skill.data_schema_version`, `SkillContext.secrets`. Tests, docstrings, backward-compat (defaults preserve existing behavior). At least one first-party skill adopts config_schema. | ~2-3 days |
-| 2   | Spotify reference skill | `huxley-skill-spotify` end-to-end. Pressure-tests SDK additions on a real third-party-shaped skill.                                                                                                        | ~3-4 days |
-| 3   | Authoring docs          | `docs/skills/authoring.md` with worked example referencing the Spotify package.                                                                                                                            | ~1 day    |
-| 4   | Static directory page   | `docs/skills/index.md` listing known skills with install commands. First-party skills + Spotify.                                                                                                           | ~½ day    |
+| #   | Phase                  | Scope                                                                                                                                                                                                                                                                                                                                                                                            | Effort    |
+| --- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- |
+| 0   | T2.8 (separate entry)  | Move telegram creds → `<persona>/data/secrets/telegram/`. Establishes the secrets-dir pattern T1.14 generalizes.                                                                                                                                                                                                                                                                                 | ~1 hour   |
+| 1   | SDK additions          | `Skill.config_schema`, `Skill.data_schema_version` (persisted in `schema_meta`), async `SkillContext.secrets`. Tests, docstrings, backward-compat (defaults preserve existing behavior). `huxley-skill-search` adopts `config_schema` as the first-party validation.                                                                                                                             | ~2-3 days |
+| 2   | Stocks reference skill | `huxley-skill-stocks` end-to-end (own repo, Alpha Vantage, secret + array + enum config). Pressure-tests SDK additions on a real third-party-shaped skill.                                                                                                                                                                                                                                       | ~3-4 days |
+| 3   | Authoring docs         | `docs/skills/authoring.md` with worked example referencing `huxley-skill-stocks`. Covers project structure, Skill protocol, async secrets API, OAuth-blob convention (even though stocks doesn't need it — future OAuth skills have a documented path), PyPI publishing. **Self-test**: Mario walks the doc verbatim from a clean checkout; doc fails the DoD if a step doesn't work as written. | ~2-3 days |
+| 4   | Static directory page  | `docs/skills/index.md` listing known skills with install commands. First-party skills + `huxley-skill-stocks`.                                                                                                                                                                                                                                                                                   | ~½ day    |
 
 ### v1 cross-phase open questions
 
 Tracked in spec doc; v1-relevant subset:
 
-- **Where does `huxley-skill-spotify` live?** Initially in-repo at `server/skills/spotify/` (matches existing first-party convention) or its own repo from day one (matches future third-party shape). Decide during Phase 2.
-- **Does an existing first-party skill adopt `config_schema` in v1, or only Spotify?** Likely yes — `news` (country, location, interests) is a clean candidate with a simple-enough schema. Decide during Phase 1.
+_All Phase-1/2 questions resolved in critic round 2:_
+
+- **Reference skill choice**: `huxley-skill-stocks` (Alpha Vantage). Not Spotify (1-hr token expiry forces OAuth refresh into v1), not weather (overlaps existing news/Open-Meteo).
+- **Reference skill location**: own repo from day 1. Proves the third-party flow more authentically than in-repo `server/skills/`.
+- **First-party `config_schema` adopter**: `huxley-skill-search` (DuckDuckGo, simple `safesearch` enum + `region` string). Cleaner than `news` for the first opt-in, no API-key complexity dragged onto a first-party skill.
+
+Open at implementation time:
+
+- Whether `huxley-skill-stocks` ships v1.0.0 to PyPI in Phase 2 or stays as a `git+https://...` install until authoring docs validate the publish flow. Pick during Phase 2.
 
 ### v2 (deferred) open questions
 
