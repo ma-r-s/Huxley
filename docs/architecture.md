@@ -95,11 +95,13 @@ Runtime (process singleton)
 1. **Same persona** → no-op (early return).
 2. **Different persona** → acquire `_swap_lock` (serializes concurrent swap requests so the loser doesn't get reference-overwritten), then:
 3. Await any in-flight `_teardown_task` (capped at `_TEARDOWN_TIMEOUT_S = 10s` via `asyncio.wait_for(asyncio.shield(...))`) so we don't open the same SQLite DB the previous teardown is still writing to.
-4. **Pre-validate**: `Application.load + start(auto_connect=True)`. If this raises, OLD app is untouched and the exception propagates.
+4. **Pre-validate**: `Application(persona, language=requested_language) + start(auto_connect=True)`. The runtime threads the connection's `?lang=` into the new Application so its OpenAI session opens in the right language from the start — avoids a "default-then-disconnect-and-reconnect" cascade that leaks IDLE state to the new client. If start raises, OLD app is untouched and the exception propagates.
 5. **Atomic ref swap**: `self.current_app = new_app`. Single Python assignment.
 6. **Background teardown**: `asyncio.create_task(self._teardown_app(old_app))`. The user is unblocked immediately; the old app's provider summary write, skill teardowns, storage close happen out of band.
 
 Eager-connect on swap (`auto_connect=True`) is correct: idle Realtime sessions cost $0, and the state machine has no IDLE→CONNECTING transition on PTT — so a "lazy" swap would leave the new persona unreachable until the user reset the connection.
+
+**Shared AudioServer + dying-app gating**: AudioServer is process-singleton, shared between `current_app` and any previous Application still running its background teardown. An Application's `_on_state_transition` handler relays state changes through `self.server.send_state(...)` — which routes to whatever WS the AudioServer currently has, i.e. the NEW persona's connection. Without gating, the OLD app's teardown-time CONVERSING→IDLE transition would leak `state: IDLE` to the new client, firing the PWA's unexpected-session-drop error tone and zeroing the appState the PTT handler dispatches on. Application's outbound paths (`_on_state_transition`, etc.) gate on `_shutting_down` to suppress this leak. The dying app can't speak to the wire; the runtime already swapped current_app to the new persona.
 
 **One process = one human**, by convention. Two humans on one machine = two Huxley processes, each in its own working directory with its own `personas/`, `.env`, port, and DBs. There is no profile abstraction; multi-instance follows standard Unix-daemon shape. See [decision: multi-instance via cwds](./decisions.md#2026-05-01--multi-instance-deployment-via-cwds-no-profile-abstraction-t113). Canonical layout for a household:
 

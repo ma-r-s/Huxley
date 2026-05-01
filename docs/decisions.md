@@ -529,7 +529,7 @@ The cwd-based pattern is self-explanatory and inherits all the existing tooling 
 - Swap path eagerly connects (`auto_connect=True` in `_shim_persona_select`'s call to `_switch_to_persona`). Boot path was already eager; swap now mirrors it. Idle Realtime sessions cost $0 (see `memory/project_realtime_costs.md`) so eager-connect on swap is functionally free.
 - `_switch_to_persona` body wrapped in `asyncio.Lock`. Concurrent swaps serialize; the loser's swap runs after the winner commits and tears down the correct `old_app`. No leaked Applications.
 - Teardown await is `asyncio.wait_for(asyncio.shield(task), timeout=10.0)`. On timeout: log loudly + abandon. `shield` so the underlying teardown still runs in the background — we just stop blocking on it.
-- Application's 9 AudioServer-callback methods (wake*word, ptt_start/stop, audio_frame, reset, language_select, list_sessions, get_session, delete_session) renamed from `\_on*_`to`on\__`— they're now the public dispatch surface. Runtime shims call them directly. Future renames of the`_on_\*`-prefixed-private convention won't silently break Runtime.
+- Application's 9 AudioServer-callback methods (wake*word, ptt_start/stop, audio_frame, reset, language_select, list_sessions, get_session, delete_session) renamed from `\_on*\_`to`on\__`— they're now the public dispatch surface. Runtime shims call them directly. Future renames of the`\_on_\*`-prefixed-private convention won't silently break Runtime.
 
 **Consequences**:
 
@@ -538,3 +538,29 @@ The cwd-based pattern is self-explanatory and inherits all the existing tooling 
 - Swap-path liveness preserved against buggy teardown code (§10).
 - "Public dispatch surface" is now named in code (§3); test renames + protocol changes hit it loudly.
 - Test coverage for the swap algorithm landed alongside the fixes (`server/runtime/tests/unit/test_runtime.py`, 10 tests including rapid-back-and-forth and concurrent-swap regressions).
+
+---
+
+## 2026-05-01 — T1.13 post-smoke fixes (canonical id, swap-window state, language-threading, teardown gating)
+
+**Context**: with critic rounds 1 and 2 closed and the implementation locked, Mario ran the final DoD bullet (browser smoke). Three runtime bugs surfaced that neither critic round caught — they all required real client state to manifest. Three follow-up commits (`6b252021`, `512ff48f`, `06d83c5d`) closed the gate.
+
+1. **`PersonaSummary.name` conflated wire id with display label.** `list_personas()` returned `spec.name` (the YAML's `name:` field, e.g. `"Buddy"`, `"Basic"`) as the persona's `name` — but `?persona=` looks up the **directory basename** (`buddy/`, `basicos/`) for filesystem resolution. macOS's case-insensitive FS made `Buddy → buddy/` work by accident (same length); `Basic → basicos/` failed (different length). Critics couldn't catch this — they reasoned about the contract; the bug was in the runtime mapping.
+
+2. **`selectPersona` set `appState=IDLE` during the swap window.** Triggered the unexpected-session-drop error tone (App.tsx:222) on every intentional swap. Plus the PWA's PTT handler dispatched on `IDLE` and fired `wake_word` against the server's already-CONVERSING session — rejected, no listening tone. Critics reviewed the design; the App.tsx error-tone effect wasn't in the read radius.
+
+3. **AudioServer fires `on_persona_select` before `on_language_select`.** The swap auto-connected the new persona's OpenAI session in its DEFAULT language. Then `on_language_select` ran, saw `current=en != requested=es`, called `provider.disconnect(save_summary=True)` to switch — and the disconnect transition CONVERSING→IDLE leaked through the OLD app's `_on_state_transition` (shared AudioServer) to the NEW client. PWA fired the error tone, lost track of state, PTT broke. Critics couldn't trace this — it requires composing the runtime swap algorithm with AudioServer's dispatch order with the client's language preference, all in head.
+
+**Decisions**:
+
+- **`PersonaSummary.name` is the directory basename** — the canonical id `?persona=` looks up. `display_name` carries the YAML label. The protocol doc and concepts doc clarify the distinction. The lesson generalizes: any time a thing has a wire/storage id AND a human label, name them as separate fields in the type system.
+- **`selectPersona` sets `CONNECTING` during the swap window**, not IDLE. The error-tone effect only fires on CONVERSING→IDLE; CONNECTING is "transitioning" and doesn't trigger it. The PWA's PTT handler treats CONNECTING as "wait for state to settle" — sets pending without firing wake_word against an already-CONVERSING server.
+- **The swap threads the requested language into the new Application**. AudioServer's `on_persona_select` callback signature gains a `language` arg; `Runtime._switch_to_persona` and `Application.__init__` accept it; `Application` resolves persona + sets `_active_language` upfront so the OpenAI session opens in the right language from the start. The subsequent `on_language_select` short-circuits at its `target == current` check — no disconnect+reconnect cascade.
+- **Application's `_on_state_transition` gates on `_shutting_down`**. AudioServer is shared between the current app and any previous app being torn down in the background. Without the gate, the OLD app's CONVERSING→IDLE during teardown leaked to the new client. The gate ensures the dying app can't speak to the wire — the runtime already swapped current_app, the singleton has no business hearing from the dying instance.
+
+**Consequences**:
+
+- Persona swap is now silent (no error tone), the picker works for all language combinations, and PTT works immediately after a swap.
+- The "canonical id vs display name" distinction lands as a durable framework convention (memory: `feedback_canonical_id_vs_display_name.md`).
+- The "shared singleton + dying instance needs gating" pattern lands as a durable framework convention (memory: `feedback_shutting_down_gate.md`). Future hot-swap-style refactors will hit this same shape.
+- "Critics catch design issues; smoke catches runtime issues. Don't claim done before smoke" lands as a process convention (memory: `feedback_smoke_after_critic.md`). The DoD's "Mario browser smoke" bullet is non-negotiable for any user-visible change.
