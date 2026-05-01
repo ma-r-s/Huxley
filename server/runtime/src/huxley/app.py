@@ -21,8 +21,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import signal
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
@@ -31,9 +29,7 @@ from huxley.background import TaskSupervisor
 from huxley.cost import CostTracker
 from huxley.focus.manager import FocusManager
 from huxley.loader import discover_skills
-from huxley.logging import setup_logging
 from huxley.reconnect import no_signal_tone_pcm, run_reconnect_loop
-from huxley.server.server import AudioServer
 from huxley.state.machine import StateMachine
 from huxley.storage.backup import ensure_daily_snapshot
 from huxley.storage.db import Storage
@@ -49,6 +45,7 @@ if TYPE_CHECKING:
 
     from huxley.config import Settings
     from huxley.persona import PersonaSpec, ResolvedPersona
+    from huxley.server.server import AudioServer
 
 logger = structlog.get_logger()
 
@@ -86,7 +83,7 @@ class Application:
     communication. Manages the async main loop and graceful shutdown.
     """
 
-    def __init__(self, config: Settings, persona: PersonaSpec) -> None:
+    def __init__(self, config: Settings, persona: PersonaSpec, audio_server: AudioServer) -> None:
         self.config = config
         self.persona = persona
         # Active-session language (ISO 639-1). Set by clients via
@@ -101,19 +98,13 @@ class Application:
         self.storage = Storage(persona.data_dir / f"{persona.name.lower()}.db")
         self.skill_registry = SkillRegistry()
 
-        self.server = AudioServer(
-            host=config.server_host,
-            port=config.server_port,
-            on_wake_word=self._on_wake_word,
-            on_ptt_start=self._on_ptt_start,
-            on_ptt_stop=self._on_ptt_stop,
-            on_audio_frame=self._on_audio_frame,
-            on_reset=self._on_reset,
-            on_language_select=self._on_language_select,
-            on_list_sessions=self._on_list_sessions,
-            on_get_session=self._on_get_session,
-            on_delete_session=self._on_delete_session,
-        )
+        # T1.13 — `AudioServer` is now process-lifelong (owned by `Runtime`)
+        # so it can survive persona swaps. Application receives a reference
+        # and uses its `send_X` methods to push messages to the active
+        # client, but does NOT install its own callbacks — those are
+        # routed through Runtime's shims to `current_app._on_X` so a
+        # swap rebinds the dispatch target atomically.
+        self.server = audio_server
 
         # Skill discovery via entry points. The persona names which skills it
         # wants — in declaration order — and the loader resolves each to a
@@ -156,15 +147,15 @@ class Application:
 
         # FocusManager — serialized arbitrator over the single speaker.
         # Constructed here so it outlives the coordinator (survives session
-        # reconnects); started in `run()` where a running loop is guaranteed,
-        # stopped in `_shutdown`. The coordinator holds the reference but
+        # reconnects); started in `start()` where a running loop is guaranteed,
+        # stopped in `shutdown()`. The coordinator holds the reference but
         # doesn't use it until Stage 1c.2 (CONTENT-channel routing).
         self.focus_manager = FocusManager.with_default_channels()
 
         # TaskSupervisor — pool of named long-running async tasks for skills.
         # Owns lifecycle: skills call `ctx.background_task(...)`, supervisor
         # restarts crashes within budget, cancels everything at shutdown.
-        # Stored on `self` so `_shutdown` can stop it; passed into each
+        # Stored on `self` so `shutdown` can stop it; passed into each
         # SkillContext via the `background_task` field.
         self.task_supervisor = TaskSupervisor(
             send_dev_event=self.server.send_dev_event,
@@ -188,7 +179,11 @@ class Application:
             focus_manager=self.focus_manager,
         )
 
-        self._shutdown_event = asyncio.Event()
+        # `_shutting_down` gates auto-reconnect inside `_on_session_end`
+        # so a teardown-triggered provider disconnect doesn't kick off a
+        # reconnect race. Set by `shutdown()`. The shutdown signal /
+        # signal-handler setup itself lives at the `Runtime` level
+        # (process-wide), not on Application.
         self._shutting_down = False
         self._reconnect_task: asyncio.Task[None] | None = None
         # Active session row in `sessions` table, lazily created on the
@@ -238,18 +233,22 @@ class Application:
             emit_server_event=self.server.send_server_event,
         )
 
-    async def run(self) -> None:
-        """Initialize subsystems and run the main loop."""
-        log_file: Path | None = self.config.log_file
-        if log_file is None:
-            log_file = Path("logs/huxley.log")
-        setup_logging(
-            level=self.config.log_level,
-            json_output=self.config.log_json,
-            log_file=log_file,
-        )
-        await logger.ainfo("huxley_starting")
+    async def start(self, *, auto_connect: bool = True) -> None:
+        """Bring up the per-persona runtime: storage, skills, state machine.
 
+        Does NOT block. Returns once the Application is ready to receive
+        callbacks from `AudioServer` (which lives at the `Runtime` level
+        and is already listening). The `Runtime` is responsible for the
+        process-wide concerns (logging setup, signal handlers, the audio
+        server's `run()` task, the eventual `shutdown()` call).
+
+        `auto_connect=True` (the default for the FIRST persona at boot)
+        eagerly fires `wake_word` so the OpenAI session is ready before
+        the user's first PTT — preserves the "instant first press" UX.
+        `auto_connect=False` (for mid-session persona swaps) leaves the
+        new persona in IDLE; the next user PTT triggers connect via the
+        existing state-machine path.
+        """
         # Snapshot the existing DB before opening it for the new run, so
         # today's backup captures the state we're about to mutate. Idempotent
         # (no-op if today's snapshot exists). On a fresh checkout this is a
@@ -269,41 +268,23 @@ class Application:
         self.state_machine.on_enter(AppState.CONNECTING, self._enter_connecting)
         self.state_machine.on_transition(self._on_state_transition)
 
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, self._signal_shutdown)
-
         await logger.ainfo(
-            "huxley_ready",
+            "huxley_app_ready",
+            persona=self.persona.name,
             skills=self.skill_registry.skill_names,
             tools=self.skill_registry.tool_names,
-            server=f"ws://{self.config.server_host}:{self.config.server_port}",
-        )
-        print(
-            f"\033[1;32m[Huxley] Server listening on "
-            f"ws://{self.config.server_host}:{self.config.server_port}\033[0m",
-            flush=True,
         )
 
-        server_task = asyncio.create_task(self.server.run())
+        if auto_connect:
+            # Auto-connect to OpenAI at startup so the first press is instant — no
+            # lost audio from "the first half of what I said while holding the
+            # button." Idle sessions cost zero tokens (see turns.md §7), so there's
+            # no reason to stay disconnected until the user presses. If the connect
+            # fails, `_enter_connecting` catches it and drops back to IDLE; the
+            # user can retry manually.
+            await self.state_machine.trigger("wake_word")
 
-        # Auto-connect to OpenAI at startup so the first press is instant — no
-        # lost audio from "the first half of what I said while holding the
-        # button." Idle sessions cost zero tokens (see turns.md §7), so there's
-        # no reason to stay disconnected until the user presses. If the connect
-        # fails, `_enter_connecting` catches it and drops back to IDLE; the
-        # user can retry manually.
-        await self.state_machine.trigger("wake_word")
-
-        await self._shutdown_event.wait()
-
-        server_task.cancel()
-        await self._shutdown()
-
-    def _signal_shutdown(self) -> None:
-        self._shutdown_event.set()
-
-    async def _shutdown(self) -> None:
+    async def shutdown(self) -> None:
         """Tear down all subsystems in reverse order."""
         await logger.ainfo("huxley_shutting_down")
         self._shutting_down = True
