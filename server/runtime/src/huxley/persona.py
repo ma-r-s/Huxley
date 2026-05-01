@@ -353,10 +353,20 @@ def load_persona(path: Path | None = None) -> PersonaSpec:
 class PersonaSummary:
     """Lightweight metadata for a persona — used by the runtime to
     enumerate all available personas (e.g. for the PWA picker) without
-    exposing every internal `PersonaSpec` field. The `name` is the
-    directory basename and is the stable identifier the wire protocol
-    uses; `language` is the persona's default `language_code` (overrides
-    are not summarized here)."""
+    exposing every internal `PersonaSpec` field.
+
+    `name` is the **directory basename** (the canonical id; what
+    `?persona=<name>` selects via filesystem lookup in
+    `_find_named_persona`). `display_name` is the human-readable label
+    from the persona's YAML `name:` field — typically capitalized
+    ("Abuelo", "Buddy") and may differ from the directory name
+    ("abuelos/", "buddy/"). `language` is the persona's default
+    `language_code` (overrides are not summarized here).
+
+    The directory-basename / display-name distinction matters: the
+    wire protocol's `?persona=` handshake parameter MUST be the
+    directory name, otherwise `_find_named_persona` can't resolve it
+    on case-sensitive filesystems."""
 
     name: str
     display_name: str
@@ -396,11 +406,14 @@ def list_personas() -> list[PersonaSummary]:
             continue
         summaries.append(
             PersonaSummary(
-                name=spec.name,
-                # No `display_name` field on PersonaSpec yet — return the
-                # name as the display value. Add an optional field later
-                # if a user-facing label distinct from the directory id
-                # becomes useful.
+                # Directory basename — the canonical id `?persona=` looks
+                # up. NOT `spec.name`, which is the YAML's display label
+                # (often capitalized: "Abuelo", "Buddy") and may differ
+                # from the directory name ("abuelos", "buddy"). Conflating
+                # them broke `?persona=Basic` resolution against the
+                # `basicos/` directory because Basic ≠ basicos even
+                # case-insensitively.
+                name=d.name,
                 display_name=spec.name,
                 language=spec.language_code,
             )

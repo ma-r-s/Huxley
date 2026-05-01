@@ -221,9 +221,10 @@ class TestListPersonas:
 
         # Broken one is skipped silently (logged as a warning); the
         # valid one still surfaces. The picker should never be empty
-        # because of one bad persona.
+        # because of one bad persona. `name` is the directory basename
+        # (the canonical id `?persona=` looks up), not `spec.name`.
         names = [s.name for s in list_personas()]
-        assert names == ["TestBot"]  # only "good" loaded; uses spec.name
+        assert names == ["good"]
 
     def test_summary_carries_default_language(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -263,7 +264,10 @@ class TestPickDefaultPersonaName:
         _write_persona(personas_dir / "abuelos", VALID_YAML)
         monkeypatch.chdir(tmp_path)
 
-        assert pick_default_persona_name() == "TestBot"  # spec.name
+        # Returns the directory basename, not `spec.name`. The directory
+        # is `abuelos`; the YAML's `name: TestBot` is just a display
+        # label (the `display_name` field on PersonaSummary).
+        assert pick_default_persona_name() == "abuelos"
 
     def test_multi_persona_alphabetic_fallback(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -281,10 +285,10 @@ class TestPickDefaultPersonaName:
         monkeypatch.chdir(tmp_path)
 
         # No env var, no single-persona autodiscovery → pick
-        # alphabetically-first directory (Abuelos's dir is "abuelos").
-        # Loud log line is emitted; we don't assert on log contents
-        # here — that's verified by inspection during smoke.
-        assert pick_default_persona_name() == "Abuelos"
+        # alphabetically-first DIRECTORY (canonical id), not the
+        # YAML's `name:` label. Loud log line is emitted; we don't
+        # assert on log contents here.
+        assert pick_default_persona_name() == "abuelos"
 
     def test_no_personas_returns_none(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
