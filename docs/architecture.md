@@ -124,6 +124,17 @@ Eager-connect on swap (`auto_connect=True`) is correct: idle Realtime sessions c
 
 Production uses one launchd plist per instance with different `WorkingDirectory`. Privacy is filesystem-enforced; the two processes share nothing.
 
+### Per-skill secrets and schema versions (T1.14)
+
+Each `SkillContext` carries two storage handles routed at the persona's data dir:
+
+- `ctx.storage` — namespaced KV adapter (`NamespacedSkillStorage`) over the persona's SQLite DB; keys prefixed with `<skill_name>:`. See `server/runtime/src/huxley/storage/skill.py`.
+- `ctx.secrets` — file-backed per-skill secrets store (`JsonFileSecrets`) at `<persona.data_dir>/secrets/<skill_name>/values.json`, perms `0700/0600`, atomic writes via tmp + replace, asyncio.Lock around RMW. See `server/runtime/src/huxley/storage/secrets.py`.
+
+Both are constructed inline in `Application._build_skill_context` (one `JsonFileSecrets` per skill, pointed at its own dir). Privacy between personas is filesystem-enforced via the data dir; privacy between skills sharing a persona is `persona.yaml`'s `skills:` enable list (a skill not listed never imports its setup code, regardless of what's installed in the workspace venv).
+
+Per-skill `data_schema_version` is persisted in the persona's existing `schema_meta` table under `skill_version:<name>`. `Application.start` runs `_check_skill_schema_versions` (read-only, logs `skill.schema.upgrade_needed` / `downgrade_detected` warnings on mismatch) BEFORE `setup_all`, then runs `_persist_skill_schema_versions` AFTER `setup_all` succeeds. The split means a torn skill setup leaves stored at the OLD version so the next boot re-warns the same way.
+
 ## State machine
 
 The session-level state machine has 3 states:
@@ -390,6 +401,7 @@ Dependencies flow **downward**. `huxley_sdk/types.py` is the universal leaf — 
 | System skill                      | `server/skills/system/src/huxley_skill_system/skill.py`          |
 | SQLite wrapper                    | `server/runtime/src/huxley/storage/db.py`                        |
 | Per-skill namespaced KV adapter   | `server/runtime/src/huxley/storage/skill.py`                     |
+| Per-skill secrets (T1.14)         | `server/runtime/src/huxley/storage/secrets.py`                   |
 | Config (env-driven settings)      | `server/runtime/src/huxley/config.py`                            |
 
 After stage 4 lands, persona-driven configuration takes over:

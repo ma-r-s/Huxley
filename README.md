@@ -60,7 +60,7 @@ flowchart LR
 | `huxley-skill-system`     | Volume control, current time                                            |
 | `huxley-skill-telegram`   | Full-duplex voice calls + text messages via Telegram                    |
 
-Third-party skills install from PyPI and enable with one line in `persona.yaml`.
+Third-party skills install from PyPI and enable with one line in `persona.yaml`. The reference third-party skill is [`huxley-skill-stocks`](https://github.com/ma-r-s/huxley-skill-stocks) (Alpha Vantage stock quotes); browse the directory at [`docs/skills/index.md`](./docs/skills/index.md).
 
 ## Writing a skill
 
@@ -108,7 +108,10 @@ skills:
     api_key: "..."
 ```
 
-Full guide: [docs/skills/README.md](./docs/skills/README.md)
+- **SDK reference** — [`docs/skills/README.md`](./docs/skills/README.md): every primitive (`ctx.storage`, `ctx.secrets`, `ctx.inject_turn`, `InputClaim`, ...).
+- **Build-your-first-skill walkthrough** — [`docs/skills/authoring.md`](./docs/skills/authoring.md): annotates `huxley-skill-stocks` line by line.
+- **Operator-side install + smoke** — [`docs/skills/installing.md`](./docs/skills/installing.md): how to drop a skill into a persona.
+- **Architectural contract** — [`docs/skill-marketplace.md`](./docs/skill-marketplace.md): v1/v2 split, on-disk shapes, conventions you can rely on.
 
 ## Requirements
 

@@ -4,7 +4,7 @@ Honest answer to the question _"can I build skill X with Huxley today?"_ This do
 
 The intent: make it obvious to a prospective skill author what shape their skill needs to take, and make the framework's actual limits visible — not hidden behind "you'd just have to..."
 
-For the building blocks themselves, see [`skills/README.md`](./skills/README.md). For the philosophy, see [`vision.md`](./vision.md).
+For the building blocks themselves, see [`skills/README.md`](./skills/README.md) (SDK reference) and [`skills/authoring.md`](./skills/authoring.md) (build-your-first-skill walkthrough using `huxley-skill-stocks` as the worked example). For the install + smoke-test flow, see [`skills/installing.md`](./skills/installing.md). For the philosophy, see [`vision.md`](./vision.md).
 
 ## The shape every skill takes today
 
@@ -84,21 +84,15 @@ Resolved (T1.4 Stage 4, 2026-04-29). Clients emit `{"type": "client_event", "eve
 
 This unblocks the whole class of "skill that reacts to a client-side signal that isn't audio": hardware buttons (one PR away from a panic skill once K1/K3 firmware ships), smart-home announcers (PWA forwards a Home Assistant webhook → skill narrates the door), wearable health alerts (Apple Watch → PWA → skill check-in), and any non-PTT client signal a future skill author wants. None of these require further framework changes.
 
-## 🔑 Concerns to address before more skills land
+## ✅ Previously-gap, also shipped
 
-### Per-skill secrets
+### ~~Per-skill secrets~~ → `ctx.secrets` is live
 
-Telegram bot tokens, Twilio API keys, OpenWeather keys, etc. These can't live in `persona.yaml` (git-tracked) and shouldn't be hard-coded in the skill. Today's only option is `os.environ["MY_SKILL_TOKEN"]` in the skill's `setup()`. That works but is unstructured.
+Resolved (T1.14, 2026-05-01). API keys, OAuth tokens, and any other per-persona secret live at `<persona.data_dir>/secrets/<skill_name>/values.json` (perms `0700/0600`, gitignored under `<persona>/data/`). Skills read them via the async `ctx.secrets.get(key)` API; nested OAuth state JSON-encodes into a single key (the OAuth-blob convention). See [`docs/skill-marketplace.md` § Secrets storage layout](./skill-marketplace.md#secrets-storage-layout) and the [authoring docs](./skills/authoring.md#oauth-blob-convention-for-skills-that-need-it).
 
-A clean fix during stage 4 (persona loader): support `${ENV_VAR}` interpolation in `persona.yaml` config values, so a persona declares the shape of the secret without storing it:
+### ~~Structured per-skill config~~ → `Skill.config_schema` is live
 
-```yaml
-skills:
-  telegram:
-    bot_token: ${HUXLEY_TELEGRAM_TOKEN}
-```
-
-**Status:** small but easy to get wrong. Decide and document before stage 4 ships.
+Resolved (T1.14, 2026-05-01). Skills MAY declare a `config_schema: ClassVar[dict | None]` — JSON Schema 2020-12 with two custom extensions (`format: secret` for fields routed to `ctx.secrets`; `x-huxley:help` for markdown help text). v2's PWA renders forms from this; v1 reads it as authoring-doc-grade documentation that ships alongside the skill. Skills with complex configs (i18n maps, contact dicts) leave it `None` and v2 falls back to "edit YAML directly" — opt-in, not mandatory.
 
 ## What this means for the framework's "extensible" claim
 

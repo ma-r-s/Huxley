@@ -32,12 +32,13 @@ Make Huxley what it claims to be in [`vision.md`](./vision.md): a framework anyo
 - ✅ **`PlaySound` SideEffect primitive + shared `huxley_sdk.audio` helper** — info tools can emit a one-shot chime that lands on the WebSocket ahead of the model's response audio (FIFO). Audiobooks + news both use it; news skill (`get_news`) is the canonical example.
 - ✅ **Second first-party skill (`huxley-skill-news`)** — proves the persona-agnostic abstraction. Same skill, totally different audio for Abuelo (slow + chime) vs Basic (terse + no chime). See [`skills/news.md`](./skills/news.md) and [`server/personas/basicos.md`](./personas/basicos.md).
 - ✅ **Web UI persona dropdown** — `clients/pwa/.env.local`'s `VITE_HUXLEY_PERSONAS` lists `name:url` pairs; the header dropdown switches the active WebSocket connection cleanly.
-- [P1] **Skill SDK README + cookbook**: a third-party skill author can write a working skill in under 30 minutes with no Huxley-internals knowledge.
+- ✅ **Skill SDK README + cookbook**: a third-party skill author can write a working skill in under 30 minutes with no Huxley-internals knowledge. See [`skills/README.md`](./skills/README.md) (SDK reference), [`skills/authoring.md`](./skills/authoring.md) (build-your-first-skill walkthrough), [`skills/installing.md`](./skills/installing.md) (operator-side install + smoke), [`skills/index.md`](./skills/index.md) (directory of known skills).
+- ✅ **Skill marketplace v1 (T1.14)**: per-skill secrets at `<persona>/data/secrets/<skill>/values.json` via async `ctx.secrets`; optional `Skill.config_schema` (JSON Schema 2020-12 with `format: secret` + `x-huxley:help` extensions); optional `Skill.data_schema_version` persisted in `schema_meta` with mismatch warnings (no auto-migration in v1). Reference third-party skill: [`huxley-skill-stocks`](https://github.com/ma-r-s/huxley-skill-stocks). See [`skill-marketplace.md`](./skill-marketplace.md). v2 (caregiver-installer UX, PWA Skills panel, JSON registry, self-restart machinery) is deferred.
 
 ### Later
 
 - ✅ **Proactive notifications** (`ctx.inject_turn` / `ctx.inject_turn_and_wait`) — shipped via the focus-plane completion (T1.4 Stage 2b/3/5). First production consumers are `huxley-skill-timers` (medication reminders) and `huxley-skill-telegram` (inbound-message announcements + post-restart unread backfill).
-- [P1] **Per-skill secret interpolation** in `persona.yaml`: support `${HUXLEY_TELEGRAM_TOKEN}` so personas declare the shape of the secret without storing it. Decide before stage 4 ships.
+- ~~[P1] Per-skill secret interpolation in `persona.yaml`~~ — superseded by T1.14's `ctx.secrets` API. Per-skill secrets now live in `<persona>/data/secrets/<skill>/values.json`, not interpolated into YAML.
 - [P2] **Background-task pattern for skills** (BLE, MQTT, polling daemons): formalize the "skill spawns an asyncio task in setup()" convention into an SDK helper so the framework can supervise / restart / log task crashes. Today it works but the framework is blind to failures.
 - **Voice provider abstraction**: extract OpenAI Realtime as one implementation of a `VoiceProvider` interface. Trigger: a credible second provider exists. Not speculative.
 - **More side-effect kinds**: state changes, image output. Trigger: a real skill needs them.
@@ -48,31 +49,37 @@ Make Huxley what it claims to be in [`vision.md`](./vision.md): a framework anyo
 
 Two ideas the architecture leaves room for but that aren't being built. Captured here so they don't get lost; both appeared in early landing copy and were cut when the landing was tightened.
 
-#### `huxley-market` — community skill registry
+#### Marketplace v2 — caregiver-installer UX
 
-A registry of community-published `huxley-skill-*` packages, browsable from a voice command or a web UI. Today skills are distributed via PyPI and discovered by name (`pip install huxley-skill-foo` + add `foo: {}` to `persona.yaml`). The market would replace that ceremony with: search by voice or via `huxley-web`, install with one tap or one phrase, no terminal needed.
+Marketplace v1 (T1.14) shipped the developer-primary path: SDK additions, authoring conventions, a worked third-party reference skill, and a static markdown directory page that takes PRs. v2 layers a **caregiver-friendly install + configure UX** on top of v1's primitives — the same skills, a different audience.
 
-The framework already supports the underlying primitive — entry-point loading via `huxley.skills`. The missing pieces are a PyPI-fronted curation layer (reviews, security signals), a web UI for browsing, and a voice install flow (e.g. an `install_skill(name)` tool that mutates `persona.yaml` and reloads).
+The pieces v2 adds (purely additive — no v1 rewrites):
 
-**Not shipping because:** distribution via PyPI is enough today. **Trigger to start:** enough community-authored `huxley-skill-*` packages exist on PyPI that discovery becomes real friction.
+- **PWA Skills panel**: WS endpoints + a sheet that reads installed skills, renders forms from each skill's `config_schema`, writes config back to `persona.yaml` via `ruamel.yaml` round-trip, writes secrets to the per-persona dir, toggles enable/disable.
+- **Self-restart machinery**: `install_skill` server endpoint + pip orchestration + atomic-swap-venv approach. The hard part — `os.execv` has real foot-guns (SQLite WAL torn state, partial pip-install bricks the venv, C-extension compile time on a Pi can be 60-90s).
+- **Curated registry**: a separate `huxley/skills` GitHub repo with `index.json`, JSON Schema, CI, tier system (official vs community), and a Marketplace tab in the PWA.
+- **Real OAuth**: SDK helper + redirect URL handler in the runtime + PWA "Authenticate with X" button. Uses v1's flat-secret + JSON-encode convention internally — same on-disk bytes.
+- **`set_json` / `get_json`** typed accessors on `SkillSecrets` — sugar over v1's `set/get` with `json.dumps/json.loads`. Same on-disk bytes; v1 callers keep working.
+
+**Not shipping because:** v1's developer-primary surface is the cheapest test of the marketplace thesis ("third-party skills will get written"). If real third-party skills emerge from v1, v2 earns its place. **Trigger to start:** a credible cohort of caregiver-installers materializes (i.e. v1 has produced enough community skills that the install-via-terminal ceremony is the bottleneck), AND we've decided to ship Huxley to non-developer households.
 
 #### `huxley-grows` — build agent that writes new skills from voice
 
 A higher-tier skill that takes a request like _"make me a skill that reads my Notion inbox,"_ runs an LLM build agent against the Huxley SDK, generates a candidate `huxley-skill-notion` package, lints/tests it, and offers to install. Failure modes are first-class: if the build can't be done (no API, ambiguous spec, broken auth), the agent says so precisely instead of producing a hallucinated capability.
 
-This sits on top of the SDK and `huxley-market` — the build agent's output is just another `huxley-skill-*` package, and install goes through the same registry. From the user's perspective, find-or-build is the same ceremony: a new skill on your box, same API, same permissions, same voice command.
+This sits on top of the SDK and the marketplace registry — the build agent's output is just another `huxley-skill-*` package, and install goes through the same registry. From the user's perspective, find-or-build is the same ceremony: a new skill on your box, same API, same permissions, same voice command.
 
-**Not shipping because:** needs `huxley-market` first, and the quality bar is high (a hallucinated skill that _almost_ works is worse than a refusal). **Trigger to start:** market exists with enough surface area that find-misses are common, and a separate experiment shows agentic skill generation can hit a usable success rate against the SDK.
+**Not shipping because:** needs marketplace v2's curated registry first, and the quality bar is high (a hallucinated skill that _almost_ works is worse than a refusal). **Trigger to start:** v2 registry exists with enough surface area that find-misses are common, and a separate experiment shows agentic skill generation can hit a usable success rate against the SDK.
 
 ### Excluded from Huxley framework
 
-| Feature                        | Why                                                                           |
-| ------------------------------ | ----------------------------------------------------------------------------- |
-| Multi-tenant / SaaS            | Different product. One person → one agent.                                    |
-| Wake-word as framework feature | Persona-level concern; framework supports any client input model              |
-| Cross-language skill authoring | Python-only for v1. MCP shim handles cross-language someday.                  |
-| Marketplace / registry         | Open-source, distributed via PyPI. Registry is `huxley-market` (speculative). |
-| Multi-user voice               | One person at a time. Multi-voice = different system entirely.                |
+| Feature                          | Why                                                                                                                                                                                                                |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Multi-tenant / SaaS              | Different product. One person → one agent.                                                                                                                                                                         |
+| Wake-word as framework feature   | Persona-level concern; framework supports any client input model                                                                                                                                                   |
+| Cross-language skill authoring   | Python-only for v1. MCP shim handles cross-language someday.                                                                                                                                                       |
+| Closed-source / SaaS marketplace | Skills are open-source, distributed via PyPI. v1 directory is a static markdown page in this repo (`docs/skills/index.md`); v2 is a curated GitHub repo with `index.json`. No server-hosted catalog, no paid tier. |
+| Multi-user voice                 | One person at a time. Multi-voice = different system entirely.                                                                                                                                                     |
 
 ## Abuelo persona
 
