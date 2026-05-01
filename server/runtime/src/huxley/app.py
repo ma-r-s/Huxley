@@ -207,39 +207,43 @@ class Application:
         self._active_session_id: int | None = None
 
     async def _check_skill_schema_versions(self) -> None:
-        """Compare each skill's declared data_schema_version against
-        what's stored in the persona's schema_meta table.
+        """Log warnings on declared-vs-stored mismatch. **Read-only.**
 
-        On mismatch, log a warning event so the operator sees it; never
-        block setup — v1 trusts the developer to handle migrations via
-        their CHANGELOG. v2's PWA will gate cross-major upgrades behind
-        explicit user confirmation, but that lives on top of v1's data.
+        Per ``docs/skill-marketplace.md`` § Schema versioning, the new
+        declared version is persisted ONLY after ``setup_all`` succeeds
+        (see :meth:`_persist_skill_schema_versions`). This split means a
+        skill that throws in ``setup()`` doesn't leave ``schema_meta``
+        at the new version while skill state is half-initialized — the
+        next boot will see the SAME mismatch and re-warn, which is the
+        right behavior for a torn upgrade.
 
         On first boot for a (skill, persona) pair: stored is None, log
-        nothing (the equal-version case after the first write would be
-        equally silent), just write the declared version.
+        nothing — the equal-version case after the first persist is also
+        silent, so the first-boot path stays symmetric.
 
         On equal version: silent no-op. T1.13's hot persona swap calls
         ``setup()`` on every reconnect; emitting a heartbeat event here
         would create log noise on every swap.
 
-        Atomicity vs T1.13 hot swap: ``set_skill_schema_version`` runs
-        under the same DB connection that skill setup will use; a torn
-        teardown that interrupts mid-init leaves the prior version
-        intact in ``schema_meta``, so the next swap re-evaluates from
-        the correct stored value.
+        Defensive: ``int(getattr(...))`` may raise if a skill declares
+        ``data_schema_version`` as a non-numeric value. Catching falls
+        back to 1 (the default) and logs a single error so authors see
+        their bug.
         """
         for skill in self.skill_registry.skills:
-            declared = int(getattr(skill, "data_schema_version", 1))
-            stored = await self.storage.get_skill_schema_version(skill.name)
-            if stored is None:
-                # First boot for this (skill, persona) pair. Write the
-                # current version silently — equal-versions on the next
-                # boot will also be silent, so the first-boot path stays
-                # symmetric.
-                await self.storage.set_skill_schema_version(skill.name, declared)
+            try:
+                declared = int(getattr(skill, "data_schema_version", 1))
+            except (TypeError, ValueError):
+                await logger.aerror(
+                    "skill.schema.invalid_declared_version",
+                    skill=skill.name,
+                    raw=repr(getattr(skill, "data_schema_version", None)),
+                )
                 continue
-            if stored == declared:
+            stored = await self.storage.get_skill_schema_version(skill.name)
+            if stored is None or stored == declared:
+                # First boot or equal — silent. Persist happens in the
+                # post-setup phase regardless.
                 continue
             if declared > stored:
                 await logger.awarning(
@@ -255,8 +259,26 @@ class Application:
                     declared=declared,
                     stored=stored,
                 )
-            # Write the new declared version after the warning so the
-            # next boot is silent unless something changed again.
+
+    async def _persist_skill_schema_versions(self) -> None:
+        """Write each skill's declared ``data_schema_version`` to
+        ``schema_meta``. Called AFTER ``setup_all`` succeeds.
+
+        Splitting persist from check (see :meth:`_check_skill_schema_versions`)
+        lets a torn setup leave the OLD stored version intact, so the
+        next boot re-evaluates against the same starting state. Without
+        this split, a skill that fails ``setup()`` after the version was
+        written would lose the warning the next time it booted.
+        """
+        for skill in self.skill_registry.skills:
+            try:
+                declared = int(getattr(skill, "data_schema_version", 1))
+            except (TypeError, ValueError):
+                # Already logged in the check phase; skip the persist.
+                continue
+            stored = await self.storage.get_skill_schema_version(skill.name)
+            if stored == declared:
+                continue
             await self.storage.set_skill_schema_version(skill.name, declared)
 
     def _build_skill_context(self, skill_name: str) -> SkillContext:
@@ -329,11 +351,14 @@ class Application:
         # Safe to do before any skill needs it — observers acquire/release
         # through the mailbox, so events are serialized from the first call.
         self.focus_manager.start()
-        # T1.14: per-skill data_schema_version check before setup. Skills
-        # that don't declare get the default of 1; mismatch logs a warning
-        # but never blocks setup (v1 trusts the developer; v2 will gate).
+        # T1.14: per-skill data_schema_version mismatch warnings BEFORE
+        # setup so the operator sees the drift before any skill state
+        # touches disk. The version is **persisted only after** setup_all
+        # succeeds — a torn setup leaves stored at the old version, so
+        # next boot re-warns the same way.
         await self._check_skill_schema_versions()
         await self.skill_registry.setup_all(self._build_skill_context)
+        await self._persist_skill_schema_versions()
 
         self.state_machine.on_enter(AppState.CONNECTING, self._enter_connecting)
         self.state_machine.on_transition(self._on_state_transition)
