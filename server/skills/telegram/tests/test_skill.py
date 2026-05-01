@@ -6,6 +6,7 @@ Uses a stub transport so no pyrogram imports are needed.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -329,6 +330,100 @@ class TestSetup:
         )
         await skill.setup(ctx)
         assert captured[0].api_id == 77777777
+
+    @pytest.mark.asyncio
+    async def test_secrets_file_takes_precedence_over_env_and_yaml(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # values.json beats env vars (which beat persona.yaml).
+        monkeypatch.setenv("HUXLEY_TELEGRAM_API_ID", "22222222")
+        monkeypatch.setenv("HUXLEY_TELEGRAM_API_HASH", "env_hash")
+        monkeypatch.setenv("HUXLEY_TELEGRAM_USERBOT_PHONE", "+22222222")
+        secrets_dir = tmp_path / "secrets" / "telegram"
+        secrets_dir.mkdir(parents=True)
+        (secrets_dir / "values.json").write_text(
+            json.dumps(
+                {
+                    "api_id": "11111111",
+                    "api_hash": "file_hash_wins",
+                    "userbot_phone": "+11111111",
+                }
+            )
+        )
+
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            captured.append(t)
+            return t
+
+        skill = TelegramSkill(transport_factory=factory)
+        ctx, _ = _build_ctx(
+            {
+                "api_id": 33333333,
+                "api_hash": "yaml_hash",
+                "userbot_phone": "+33333333",
+                "contacts": {"x": "+1"},
+            },
+            tmp_path,
+        )
+        await skill.setup(ctx)
+        assert captured[0].api_id == 11111111
+        assert captured[0].api_hash == "file_hash_wins"
+        assert captured[0].userbot_phone == "+11111111"
+
+    @pytest.mark.asyncio
+    async def test_secrets_file_only_also_works(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("HUXLEY_TELEGRAM_API_ID", raising=False)
+        monkeypatch.delenv("HUXLEY_TELEGRAM_API_HASH", raising=False)
+        monkeypatch.delenv("HUXLEY_TELEGRAM_USERBOT_PHONE", raising=False)
+        secrets_dir = tmp_path / "secrets" / "telegram"
+        secrets_dir.mkdir(parents=True)
+        (secrets_dir / "values.json").write_text(
+            json.dumps({"api_id": "55555555", "api_hash": "file_only_hash"})
+        )
+
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            captured.append(t)
+            return t
+
+        skill = TelegramSkill(transport_factory=factory)
+        ctx, _ = _build_ctx({"contacts": {"x": "+1"}}, tmp_path)
+        await skill.setup(ctx)
+        assert captured[0].api_id == 55555555
+        assert captured[0].api_hash == "file_only_hash"
+
+    @pytest.mark.asyncio
+    async def test_malformed_secrets_file_falls_back_to_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A corrupted values.json must NOT break boot — it falls through to
+        # env vars / persona.yaml. Recovery is "fix the file"; in the
+        # meantime the running server stays up.
+        monkeypatch.setenv("HUXLEY_TELEGRAM_API_ID", "44444444")
+        monkeypatch.setenv("HUXLEY_TELEGRAM_API_HASH", "env_after_corrupt")
+        secrets_dir = tmp_path / "secrets" / "telegram"
+        secrets_dir.mkdir(parents=True)
+        (secrets_dir / "values.json").write_text("{not valid json")
+
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            captured.append(t)
+            return t
+
+        skill = TelegramSkill(transport_factory=factory)
+        ctx, _ = _build_ctx({"contacts": {"x": "+1"}}, tmp_path)
+        await skill.setup(ctx)
+        assert captured[0].api_id == 44444444
+        assert captured[0].api_hash == "env_after_corrupt"
 
     @pytest.mark.asyncio
     async def test_non_string_phone_values_dropped(self, tmp_path: Path) -> None:
