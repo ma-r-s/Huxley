@@ -60,7 +60,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from huxley_sdk import (
     ClaimBusyError,
@@ -86,7 +86,6 @@ from huxley_skill_telegram.transport import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
-    from pathlib import Path
 
     from huxley_sdk import SkillContext
 
@@ -97,45 +96,6 @@ def _telegram_lang_bucket(language: str) -> str:
         if code.startswith(key):
             return key
     return "en"
-
-
-def _load_creds_from_secrets_file(secrets_dir: Path) -> dict[str, str]:
-    """Read `<secrets_dir>/values.json` if it exists.
-
-    Returns the parsed flat dict (stringified values) or an empty dict
-    when the file is absent / unreadable / malformed. Caller layers env
-    vars + persona.yaml fallbacks on top.
-
-    The file shape is the same one T1.14's `ctx.secrets` API will own:
-    a flat `dict[str, str]`. Pre-T1.14 we read it directly here; once
-    T1.14 ships, this loader collapses into `await ctx.secrets.get(key)`
-    calls and the file shape stays unchanged.
-
-    Nested dicts/lists get `json.dumps`-encoded (NOT `str()`-coerced —
-    `str(dict)` produces Python repr with single quotes which is not
-    valid JSON). This matches T1.14's planned `set_json/get_json`
-    sugar: setting a dict via `set_json` writes `json.dumps(dict)`
-    bytes; reading via `get` returns those same bytes; reading via
-    `get_json` parses them back. The OAuth-blob convention in
-    docs/skill-marketplace.md § Secrets storage layout is built on
-    this round-trip.
-    """
-    path = secrets_dir / "values.json"
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except (FileNotFoundError, NotADirectoryError, PermissionError, OSError):
-        return {}
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    return {
-        str(k): json.dumps(v) if isinstance(v, dict | list) else str(v)
-        for k, v in data.items()
-        if v is not None
-    }
 
 
 _TOOL_DESC: dict[str, dict[str, str]] = {
@@ -345,6 +305,22 @@ class TelegramSkill:
     """p2p Telegram voice-call skill — outbound via call_contact,
     inbound via answer_incoming_call (when inbound.enabled)."""
 
+    # `config_schema = None`: telegram's config is too rich for the v2
+    # PWA form-renderer to handle automatically. `contacts` is a dict
+    # of user-defined keys (name → phone); `inbound` is a nested object
+    # with a mix of bool / str / int / float fields and per-field
+    # validation rules; first-time auth is an SMS-code flow that
+    # doesn't fit a JSON-Schema-driven form. Per
+    # docs/skill-marketplace.md § Config schema convention, complex
+    # configs leave config_schema None and v2's PWA falls back to
+    # "edit YAML directly."
+    config_schema: ClassVar[dict[str, Any] | None] = None
+
+    # Bump on any incompatible change to: contacts dict shape, the
+    # secrets values (api_id / api_hash / userbot_phone), the Pyrogram
+    # session file format, or inbox/backfill persistence shape.
+    data_schema_version: ClassVar[int] = 1
+
     def __init__(
         self,
         *,
@@ -457,28 +433,29 @@ class TelegramSkill:
         self._language = ctx.language or "en"
 
         cfg = ctx.config
-        # Cred resolution priority (T2.8 — establishes the per-persona
-        # secrets-dir pattern T1.14 generalizes via ctx.secrets):
-        #   1. <persona.data_dir>/secrets/telegram/values.json   (preferred)
+        # Cred resolution priority (T2.9 — migrated from T2.8's file
+        # loader to the framework's ctx.secrets API; same on-disk shape
+        # at <persona.data_dir>/secrets/telegram/values.json):
+        #   1. ctx.secrets.get("...")                             (preferred)
         #   2. HUXLEY_TELEGRAM_* env vars                         (fallback)
         #   3. persona.yaml `skills.telegram.<field>`             (dev/test)
-        # Falsy values (empty string, "0") in values.json fall through to
-        # env/yaml — practical risk is zero for these keys (api_id can't
-        # be 0; api_hash can't be empty), but T1.14's ctx.secrets may
-        # tighten this to "key-present-overrides" semantics later.
-        # Contacts stay in persona.yaml -- they're not really "secrets" for
-        # a family-specific persona, and they aren't a flat string dict.
-        secrets = _load_creds_from_secrets_file(ctx.persona_data_dir / "secrets" / "telegram")
+        # Falsy values (empty string, "0") fall through to env/yaml —
+        # practical risk is zero for these keys (api_id can't be 0;
+        # api_hash can't be empty). Contacts stay in persona.yaml — they
+        # aren't secrets for a family-specific persona, and they aren't
+        # a flat string dict.
         api_id_raw = (
-            secrets.get("api_id") or os.environ.get("HUXLEY_TELEGRAM_API_ID") or cfg.get("api_id")
+            await ctx.secrets.get("api_id")
+            or os.environ.get("HUXLEY_TELEGRAM_API_ID")
+            or cfg.get("api_id")
         )
         api_hash = (
-            secrets.get("api_hash")
+            await ctx.secrets.get("api_hash")
             or os.environ.get("HUXLEY_TELEGRAM_API_HASH")
             or cfg.get("api_hash")
         )
         userbot_phone = (
-            secrets.get("userbot_phone")
+            await ctx.secrets.get("userbot_phone")
             or os.environ.get("HUXLEY_TELEGRAM_USERBOT_PHONE")
             or cfg.get("userbot_phone")
         )

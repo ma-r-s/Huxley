@@ -31,7 +31,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from huxley_sdk import (
     BackgroundTaskHandle,
@@ -194,6 +194,17 @@ class TimersSkill:
     `cancel_timer` tool can target by id) without leaking work into
     the event loop.
     """
+
+    # `config_schema = None`: timers ships per-language i18n maps for
+    # fire-prompt phrasing. Mostly persona-author surface that doesn't
+    # fit a JSON-Schema-rendered form. Per docs/skill-marketplace.md
+    # § Config schema convention, complex configs leave config_schema
+    # None and v2's PWA falls back to "edit YAML directly."
+    config_schema: ClassVar[dict[str, Any] | None] = None
+
+    # Bump on incompatible change to the persisted timer rows under
+    # `timer:<id>` (see `setup()`'s restore-on-boot pass).
+    data_schema_version: ClassVar[int] = 1
 
     def __init__(
         self,

@@ -3752,7 +3752,7 @@ for an unrelated reason — fold this in then.
 
 ## T2.9 — Migrate huxley-skill-telegram to ctx.secrets
 
-**Status**: queued — follow-up to T2.8 + T1.14 Phase 1. **Effort**: S (~30 min).
+**Status**: done (2026-05-01). Follow-up to T2.8 + T1.14 Phase 1. **Effort actual**: ~20 min, plus ~30 min to declare `config_schema` + `data_schema_version` ClassVars across the other 6 first-party skills for consistency.
 
 **Problem.** The telegram skill still loads creds via the file-based helper `_load_creds_from_secrets_file()` introduced in T2.8, even though T1.14 Phase 1 shipped the official `ctx.secrets` API that reads the SAME on-disk file. The helper was the right call before the SDK had a proper accessor, but keeping it after Phase 1 creates two ways to do the same thing — confusing for future skill authors who copy the telegram skill as a reference.
 

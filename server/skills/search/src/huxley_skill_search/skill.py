@@ -145,8 +145,10 @@ class SearchSkill:
         },
     }
 
-    # data_schema_version inherits the protocol default of 1; bump on
-    # any incompatible change to the cache or persisted state shape.
+    # No persisted state today (the in-memory TTL cache vanishes at
+    # restart). Kept at 1 so a future feature that persists, e.g., the
+    # consecutive-failure counter across restarts can bump.
+    data_schema_version: ClassVar[int] = 1
 
     def __init__(self, *, provider: SearchProvider | None = None) -> None:
         # `provider` is keyword-only and reserved for tests that inject

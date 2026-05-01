@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from huxley_sdk import (
     PlaySound,
@@ -58,6 +58,19 @@ def _now_seconds() -> float:
 
 class NewsSkill:
     """Fetches news + weather, returns structured JSON for LLM narration."""
+
+    # `config_schema = None`: news config mixes simple fields (location,
+    # latitude, longitude, units, max_items) with per-language `i18n`
+    # overrides for tool descriptions and an `interests` list whose
+    # values are user-defined strings — the per-language map is the
+    # blocker. Per docs/skill-marketplace.md § Config schema
+    # convention, complex configs leave config_schema None and v2's
+    # PWA falls back to "edit YAML directly."
+    config_schema: ClassVar[dict[str, Any] | None] = None
+
+    # In-memory cache only; no persisted state. Bump if any future
+    # version persists a per-source cursor or read-status to storage.
+    data_schema_version: ClassVar[int] = 1
 
     def __init__(self, *, http: HttpClient | None = None) -> None:
         # `http` is keyword-only and reserved for tests that inject a fake.
