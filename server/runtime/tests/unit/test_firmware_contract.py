@@ -123,14 +123,13 @@ async def _recv_hello(ws: Any) -> dict[str, Any]:
 async def test_server_sends_hello_on_connect() -> None:
     """The firmware checks `hello.protocol == 2` before anything else."""
     rec = _Recorder()
-    async with _server_on_ephemeral_port(rec) as (url, _srv):
-        async with connect(url) as ws:
-            hello = await _recv_hello(ws)
-            assert "protocol" in hello
-            assert isinstance(hello["protocol"], int)
-            assert hello["protocol"] == 2, (
-                "protocol version bump would break every existing client without a migration"
-            )
+    async with _server_on_ephemeral_port(rec) as (url, _srv), connect(url) as ws:
+        hello = await _recv_hello(ws)
+        assert "protocol" in hello
+        assert isinstance(hello["protocol"], int)
+        assert hello["protocol"] == 2, (
+            "protocol version bump would break every existing client without a migration"
+        )
 
 
 @pytest.mark.asyncio
@@ -143,32 +142,31 @@ async def test_firmware_session_sequence_accepted() -> None:
     then a stream of `audio` frames, then `ptt_stop` on release.
     """
     rec = _Recorder()
-    async with _server_on_ephemeral_port(rec) as (url, _srv):
-        async with connect(url) as ws:
-            await _recv_hello(ws)
+    async with _server_on_ephemeral_port(rec) as (url, _srv), connect(url) as ws:
+        await _recv_hello(ws)
 
-            await ws.send(json.dumps({"type": "wake_word"}))
-            await ws.send(json.dumps({"type": "ptt_start"}))
+        await ws.send(json.dumps({"type": "wake_word"}))
+        await ws.send(json.dumps({"type": "ptt_start"}))
 
-            # 1920 B = 20 ms of PCM16 @ 24 kHz mono — matches what the
-            # firmware emits per frame (see `hux_audio.c` FRAME_SAMPLES).
-            pcm = bytes(i % 256 for i in range(1920))
-            await ws.send(
-                json.dumps(
-                    {
-                        "type": "audio",
-                        "data": base64.b64encode(pcm).decode("ascii"),
-                    }
-                )
+        # 1920 B = 20 ms of PCM16 @ 24 kHz mono — matches what the
+        # firmware emits per frame (see `hux_audio.c` FRAME_SAMPLES).
+        pcm = bytes(i % 256 for i in range(1920))
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "audio",
+                    "data": base64.b64encode(pcm).decode("ascii"),
+                }
             )
+        )
 
-            await ws.send(json.dumps({"type": "ptt_stop"}))
+        await ws.send(json.dumps({"type": "ptt_stop"}))
 
-            # Give the server's event loop a moment to drain dispatches.
-            for _ in range(25):
-                await asyncio.sleep(0.02)
-                if rec.ptt_stops >= 1:
-                    break
+        # Give the server's event loop a moment to drain dispatches.
+        for _ in range(25):
+            await asyncio.sleep(0.02)
+            if rec.ptt_stops >= 1:
+                break
 
     assert rec.wake_words == 1, "wake_word not dispatched"
     assert rec.ptt_starts == 1, "ptt_start not dispatched"
@@ -188,21 +186,20 @@ async def test_malformed_message_does_not_close_connection() -> None:
     understand — we rely on the server logging + continuing, not closing.
     """
     rec = _Recorder()
-    async with _server_on_ephemeral_port(rec) as (url, _srv):
-        async with connect(url) as ws:
-            await _recv_hello(ws)
+    async with _server_on_ephemeral_port(rec) as (url, _srv), connect(url) as ws:
+        await _recv_hello(ws)
 
-            # Totally unknown type, plus malformed bytes.
-            await ws.send(json.dumps({"type": "this_is_not_a_thing"}))
-            await ws.send("this is not json at all")
+        # Totally unknown type, plus malformed bytes.
+        await ws.send(json.dumps({"type": "this_is_not_a_thing"}))
+        await ws.send("this is not json at all")
 
-            # Follow-up legitimate message must still be dispatched.
-            await ws.send(json.dumps({"type": "wake_word"}))
+        # Follow-up legitimate message must still be dispatched.
+        await ws.send(json.dumps({"type": "wake_word"}))
 
-            for _ in range(25):
-                await asyncio.sleep(0.02)
-                if rec.wake_words >= 1:
-                    break
+        for _ in range(25):
+            await asyncio.sleep(0.02)
+            if rec.wake_words >= 1:
+                break
 
     assert rec.wake_words == 1, (
         "server must tolerate unknown / malformed messages and keep the connection alive"
@@ -220,31 +217,33 @@ async def test_second_client_evicts_first() -> None:
     behavior; see firmware/docs/triage.md for the doc-drift follow-up.
     """
     rec = _Recorder()
-    async with _server_on_ephemeral_port(rec) as (url, _srv):
-        async with connect(url) as first:
-            await _recv_hello(first)
+    async with (
+        _server_on_ephemeral_port(rec) as (url, _srv),
+        connect(url) as first,
+    ):
+        await _recv_hello(first)
 
-            async with connect(url) as second:
-                await _recv_hello(second)
+        async with connect(url) as second:
+            await _recv_hello(second)
 
-                # First client should now be closed by the server.
-                with pytest.raises(
-                    (
-                        websockets.exceptions.ConnectionClosedError,
-                        websockets.exceptions.ConnectionClosedOK,
-                    )
-                ):
-                    # Drain anything still in the first client's buffer
-                    # until the server-side close propagates.
-                    for _ in range(50):
-                        await asyncio.wait_for(first.recv(), timeout=0.2)
+            # First client should now be closed by the server.
+            with pytest.raises(
+                (
+                    websockets.exceptions.ConnectionClosedError,
+                    websockets.exceptions.ConnectionClosedOK,
+                )
+            ):
+                # Drain anything still in the first client's buffer
+                # until the server-side close propagates.
+                for _ in range(50):
+                    await asyncio.wait_for(first.recv(), timeout=0.2)
 
-                # Second client is the live one now — its messages are
-                # dispatched to the recorder.
-                await second.send(json.dumps({"type": "wake_word"}))
-                for _ in range(25):
-                    await asyncio.sleep(0.02)
-                    if rec.wake_words >= 1:
-                        break
+            # Second client is the live one now — its messages are
+            # dispatched to the recorder.
+            await second.send(json.dumps({"type": "wake_word"}))
+            for _ in range(25):
+                await asyncio.sleep(0.02)
+                if rec.wake_words >= 1:
+                    break
 
     assert rec.wake_words == 1, "second client's messages must be dispatched"
