@@ -14,38 +14,29 @@ Three names must match: the entry-point key in the skill's `pyproject.toml`, the
 
 Three install scenarios, in increasing order of separation:
 
-### A. First-party (bundled) — already installed
+### A. Workspace member — already installed
 
-`huxley-skill-audiobooks`, `huxley-skill-news`, `huxley-skill-radio`, `huxley-skill-search`, `huxley-skill-reminders`, `huxley-skill-system`, `huxley-skill-telegram`, `huxley-skill-timers`. These ship with the Huxley repo as workspace members; `uv sync` installs them automatically. **Skip to "Enable on a persona"** below.
+`huxley-skill-audiobooks`, `huxley-skill-news`, `huxley-skill-radio`, `huxley-skill-reminders`, `huxley-skill-search`, `huxley-skill-stocks`, `huxley-skill-system`, `huxley-skill-telegram`, `huxley-skill-timers`. These live at `server/skills/<name>/` in the Huxley repo. `uv sync` from the repo root installs them all into the workspace venv. **Skip to "Enable on a persona"** below.
+
+The framework itself depends on none of them — they're discovered at runtime via Python entry points. The workspace is a development convenience; canonical distribution is PyPI.
 
 ### B. Local skill repo (sibling to Huxley)
 
-You have the skill checked out next to Huxley — e.g., `~/Projects/Personal/Code/huxley-skill-stocks/` parallel to `~/Projects/Personal/Code/Huxley/`. This is the v1-development-mode path the reference skill `huxley-skill-stocks` uses today.
+You're developing your own skill outside the Huxley monorepo — e.g., `~/Projects/Personal/Code/huxley-skill-mytool/` parallel to `~/Projects/Personal/Code/Huxley/`. This is the typical path for an external author building their first skill.
 
-Edit the workspace root `pyproject.toml` to add a `uv` source, and `server/runtime/pyproject.toml` to depend on it:
+Edit the workspace root `pyproject.toml` to add a `uv` source pointing at your local checkout:
 
 ```toml
 # pyproject.toml (workspace root)
 [tool.uv.sources]
-huxley-skill-stocks = { path = "../huxley-skill-stocks", editable = true }
+huxley-skill-mytool = { path = "../huxley-skill-mytool", editable = true }
 ```
 
-```toml
-# server/runtime/pyproject.toml
-dependencies = [
-    "huxley-sdk",
-    "huxley-skill-audiobooks",
-    "huxley-skill-system",
-    "huxley-skill-stocks",     # NEW
-    # ...
-]
-```
-
-Then `uv sync` from the Huxley repo root.
+Then `uv add huxley-skill-mytool` from a persona's runtime venv (or, if you want the skill always present, add it to a workspace member's deps).
 
 ### C. Published on PyPI
 
-Once a skill ships to PyPI, an external operator just runs `uv add huxley-skill-<name>` from `server/runtime/`. No workspace edits. No path deps. This is the steady-state install path the authoring docs document for external authors. (`huxley-sdk` itself is still pre-PyPI as of T1.14 v1; that's why path deps are the default for the moment.)
+Once a skill ships to PyPI, an external operator just runs `uv add huxley-skill-<name>`. No workspace edits. No path deps. This is the steady-state install path. (`huxley-sdk` itself is still pre-PyPI as of T1.14 v1; that's why path deps are the default for the moment.)
 
 ## Verify the entry point is discoverable
 

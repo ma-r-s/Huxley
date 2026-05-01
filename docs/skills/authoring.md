@@ -1,10 +1,10 @@
 # Authoring a Huxley skill
 
-This is the walkthrough for writing your own `huxley-skill-<name>` package — a Python skill that any Huxley persona can install and call by voice. It uses [`huxley-skill-stocks`](https://github.com/ma-r-s/huxley-skill-stocks) (Alpha Vantage stock quotes) as the worked example because it exercises every primitive a real third-party skill needs: secret API keys, structured config, multiple voice tools, classified errors, and graceful soft-fail when configuration is missing.
+This is the walkthrough for writing your own `huxley-skill-<name>` package — a Python skill that any Huxley persona can install and call by voice. It uses [`huxley-skill-stocks`](https://github.com/ma-r-s/Huxley/tree/main/server/skills/stocks) (Alpha Vantage stock quotes) as the worked example because it exercises every primitive a real third-party skill needs: secret API keys, structured config, multiple voice tools, classified errors, and graceful soft-fail when configuration is missing.
 
 > **Audience**: Python developers who want to extend a Huxley persona with a new skill. Not for end users (who just install + use skills via the docs page) and not for the AbuelOS user (who never installs anything).
 
-If you'd rather read than walk, jump to [`huxley-skill-stocks` on GitHub](https://github.com/ma-r-s/huxley-skill-stocks). Everything below is annotation on that repo.
+If you'd rather read than walk, jump to [`huxley-skill-stocks` on GitHub](https://github.com/ma-r-s/Huxley/tree/main/server/skills/stocks). Everything below is annotation on that repo.
 
 ## What a skill is
 
@@ -50,7 +50,7 @@ The `provider.py` / `skill.py` split is the canonical pattern for skills that ta
 
 ## `pyproject.toml`
 
-The [stocks pyproject](https://github.com/ma-r-s/huxley-skill-stocks/blob/main/pyproject.toml), annotated:
+The [stocks pyproject](https://github.com/ma-r-s/Huxley/blob/main/server/skills/stocks/pyproject.toml), annotated:
 
 ```toml
 [project]
@@ -370,4 +370,4 @@ If you copied this walkthrough end-to-end and your skill still doesn't work as d
 - [`docs/skills/README.md`](README.md) — the SDK API reference (`SkillContext`, `ctx.storage`, `ctx.inject_turn`, `InputClaim`, etc.).
 - [`docs/skill-marketplace.md`](../skill-marketplace.md) — the architectural contract: storage layout, schema versioning, what v2 will add.
 - [`docs/concepts.md`](../concepts.md) — Huxley's vocabulary (persona, skill, turn, side effect).
-- [`huxley-skill-stocks`](https://github.com/ma-r-s/huxley-skill-stocks) — the worked example. Read the source.
+- [`huxley-skill-stocks`](https://github.com/ma-r-s/Huxley/tree/main/server/skills/stocks) — the worked example. Read the source.
