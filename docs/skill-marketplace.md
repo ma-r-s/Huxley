@@ -51,7 +51,8 @@ The shape we're building toward is **VS Code-like**: curated registry for end-us
 V1 — DEVELOPER-PRIMARY
 
   Skill author flow:
-  1. Write huxley-skill-foo using huxley_sdk (own repo from day 1)
+  1. Write huxley-skill-foo using huxley_sdk (own repo, OR a workspace
+     member in a fork/clone of Huxley — both shapes work)
   2. Declare config_schema (or leave None) + use ctx.secrets API
   3. pip-publish to PyPI (or git+https:// for private)
   4. Optional: PR to docs/skills/ index page
@@ -290,14 +291,13 @@ v1: developer hand-edits this. v2: PWA writes to it using `ruamel.yaml` (round-t
 
 ### Stocks reference skill (Phase 2)
 
-`huxley-skill-stocks` lives in **its own repo from day 1** (not `server/skills/`). The first canonical example of what a third-party skill looks like:
+`huxley-skill-stocks` ships as a workspace member at `server/skills/stocks/` — same shape as the other 8 first-party skills. The reference role is now "this is what a skill looks like, period" — not "this is what a SEPARATE skill looks like." After the framework-ships-empty refactor, every first-party skill demonstrates the same authoring shape, so distinguishing a "third-party reference" was buying nothing.
 
-- Built against `huxley_sdk` (during v1 development pinned as a `uv` path dep against the Huxley repo's main; once Phase 1 publishes `huxley-sdk` to PyPI, switches to a versioned pin — and that's the install path the authoring docs document for external authors).
+- Built against `huxley_sdk` via the workspace (path-resolved at sync time). External authors flip `huxley-sdk = { workspace = true }` to a versioned PyPI pin once `huxley-sdk` publishes — that's the install path the authoring docs document.
 - Declares `config_schema` with `api_key` (secret, Alpha Vantage), `watchlist` (array of tickers), `currency` (enum). Single example covers all three of the JSON-Schema shapes v2's form-renderer must support.
 - Uses `ctx.secrets` for the API key; `ctx.config` for watchlist + currency.
 - Voice tools: "what's Apple stock at?" / "how's my watchlist doing?" / "did the S&P close up today?"
 - Authoring docs walk through this exact package as the worked example.
-- Repo CI: `ruff` + `mypy --strict` + `pytest` + a publishing GitHub Action template (so authors copying it have a reference). Out of scope: code coverage gates, release signing, distribution-channel automation beyond PyPI.
 
 **Why stocks, not Spotify**: Spotify access tokens expire in 1 hour. Building v1's demo on a skill where the secret rotates every hour forces either real OAuth refresh into v1 (out of v1 scope per locked decisions table) or a "regenerate your token every hour" UX (hostile). Alpha Vantage uses long-lived API keys — pure config + secrets, no token-lifecycle complexity.
 
@@ -384,7 +384,7 @@ That's the entirety of v1. Tracked as a single triage entry with phase checkboxe
 - [ ] SDK additions shipped (with tests + mypy + docstrings). `SkillSecrets` is async to match `SkillStorage`.
 - [ ] `data_schema_version` persists in `schema_meta` under `skill_version:<name>`; mismatch behavior matches § Schema versioning (warning logs, no auto-migration in v1).
 - [ ] `huxley-skill-search` adopts `config_schema` to validate the convention end-to-end on a first-party skill.
-- [ ] `huxley-skill-stocks` exists in its own repo, is pip-installable from PyPI, declares `config_schema` (api_key as secret + watchlist array + currency enum), uses async `ctx.secrets` for the API key. Working voice-control demo path.
+- [x] `huxley-skill-stocks` exists as a workspace member at `server/skills/stocks/`, is pip-installable from PyPI under the same path as every other skill, declares `config_schema` (api_key as secret + watchlist array + currency enum), uses async `ctx.secrets` for the API key. Working voice-control demo path.
 - [ ] `docs/skills/authoring.md` published with the worked-example walkthrough (`huxley-skill-stocks` as the canonical example).
 - [ ] **Authoring-docs self-test**: walking the docs verbatim from a clean checkout produces a working `huxley-skill-stocks` install. Verified by Mario on a fresh persona — if a step doesn't work as written, the doc is the bug.
 - [ ] `docs/skills/index.md` published with first-party skills + `huxley-skill-stocks` listed (per the Per-entry metadata schema in § Static directory page) and a "submit a PR to add yours" footer.
@@ -416,7 +416,7 @@ v2-blocking concerns (`os.execv` foot-guns, JSON-Schema-doesn't-fit complex conf
 
 - **Nobody writes a third-party `huxley-skill-*`.** The biggest risk: v1 ships, no community materializes, v2 was always going to be vapor. Mitigation: `huxley-skill-stocks` is the existence proof + a high-quality authoring guide. If no external skills emerge in 3 months, the marketplace thesis is wrong and we don't owe v2.
 - **Authoring docs go stale.** The SDK is in flight; docs lag. Mitigation: tie authoring-docs updates to SDK changes via a doc lint check or a triage convention.
-- **Alpha Vantage free tier rate-limits or breaks.** Mitigation: stocks is a reference, not a load-bearing feature. If AV goes away, swap providers in the skill (its own repo, own release cadence). The framework doesn't depend on it.
+- **Alpha Vantage free tier rate-limits or breaks.** Mitigation: stocks is a reference, not a load-bearing feature. If AV goes away, swap providers in the skill — same release cadence as any other workspace skill. The framework doesn't depend on it.
 
 ### v2 risks (deferred but documented)
 

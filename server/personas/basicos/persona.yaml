@@ -107,3 +107,6 @@ skills:
     max_items: 5
     # No start_sound — terse persona, chime would be noise.
   system: {}
+  stocks:
+    watchlist: ["AAPL", "MSFT"]
+    currency: USD

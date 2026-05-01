@@ -29,6 +29,7 @@ Huxley/                              # repo root
 │   │   ├── radio/                   #   huxley-skill-radio (HTTP/Icecast via ffmpeg)
 │   │   ├── search/                  #   huxley-skill-search (DuckDuckGo via ddgs, no API key)
 │   │   ├── reminders/               #   huxley-skill-reminders (scheduled reminders, persistent, retry escalation)
+│   │   ├── stocks/                  #   huxley-skill-stocks (Alpha Vantage; reference third-party-shape skill)
 │   │   ├── system/                  #   huxley-skill-system (volume, time)
 │   │   ├── telegram/                #   huxley-skill-telegram (MTProto comms)
 │   │   └── timers/                  #   huxley-skill-timers (one-shot relative reminders)
@@ -67,17 +68,17 @@ Huxley/                              # repo root
 │   ├── skills/{README,authoring,installing,index,audiobooks,news,radio,search,telegram,timers,reminders}.md
 │   ├── sounds.md                    # sound UX architecture (PlaySound, AudioStream, synthesis pipeline)
 │   └── research/sonic-ux.md
-├── scripts/                         # One-off ops + synth_sounds.py (renders the earcon palette) + launchd plist
+├── scripts/                         # One-off ops + synth_sounds.py + smoke_t114.py + launchd plist
 └── CLAUDE.md                        # this file
 
-# NOT in this repo — parallel sibling repo:
-~/Projects/Personal/Code/huxley-skill-stocks/
-                                     # Reference third-party skill (T1.14 Phase 2).
-                                     # Lives in its own repo by design — proves the
-                                     # third-party authoring flow works without the
-                                     # skill being a workspace member. Wired in via
-                                     # `[tool.uv.sources] huxley-skill-stocks = { path = "../huxley-skill-stocks" }`
-                                     # at the workspace root for local development.
+# Sibling repos (parallel to Huxley):
+~/Projects/Personal/Code/huxley-registry/
+                                     # ma-r-s/huxley-registry — discovery feed for
+                                     # installable skills. JSON Schema + index.json +
+                                     # per-skill detail files. PR-curated. Static
+                                     # JSON served via raw.githubusercontent /
+                                     # jsdelivr; no infra. Tier 1 of the v2
+                                     # marketplace per docs/skill-marketplace.md.
 ```
 
 All five refactor stages have shipped — framework / SDK / skills / personas / constraints / entry-point loading are all in place. T1.14 (skill marketplace v1) shipped 2026-05-01: `ctx.secrets`, optional `Skill.config_schema` + `data_schema_version`, authoring docs, static directory page. See [`docs/roadmap.md`](./docs/roadmap.md) for what's next.
@@ -99,6 +100,7 @@ uv run --package huxley-skill-radio pytest server/skills/radio/tests            
 uv run --package huxley-skill-search pytest server/skills/search/tests           # search skill
 uv run --package huxley-skill-timers pytest server/skills/timers/tests           # timers skill
 uv run --package huxley-skill-reminders pytest server/skills/reminders/tests     # reminders skill
+uv run --package huxley-skill-stocks pytest server/skills/stocks/tests           # stocks skill
 cd server/runtime && uv run huxley                                               # run the server (loads .env from server/runtime/)
 # Run Basic in parallel for persona A/B testing:
 cd server/runtime && HUXLEY_PERSONA=basicos HUXLEY_SERVER_PORT=8766 uv run huxley
