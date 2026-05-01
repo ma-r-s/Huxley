@@ -1,14 +1,30 @@
 [project]
 name = "huxley-skill-system"
 version = "0.1.0"
-description = "System control skill for Huxley (volume, time)."
+description = "System utilities for Huxley — current time, volume control. Stateless; the simplest first-party skill."
+readme = "README.md"
 requires-python = ">=3.13"
+license = { text = "MIT" }
+authors = [{ name = "Mario Ruiz", email = "marioalejandroruizsarmiento@gmail.com" }]
+keywords = ["huxley", "voice-agent", "skill", "system", "time", "volume"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.13",
+]
 dependencies = [
     "huxley-sdk",
 ]
 
 [project.entry-points."huxley.skills"]
 system = "huxley_skill_system:SystemSkill"
+
+[project.urls]
+Homepage = "https://github.com/ma-r-s/Huxley"
+Source = "https://github.com/ma-r-s/Huxley/tree/main/server/skills/system"
+Issues = "https://github.com/ma-r-s/Huxley/issues"
+Changelog = "https://github.com/ma-r-s/Huxley/blob/main/server/skills/system/CHANGELOG.md"
 
 [dependency-groups]
 dev = [

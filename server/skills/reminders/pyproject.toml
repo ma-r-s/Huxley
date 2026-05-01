@@ -1,8 +1,18 @@
 [project]
 name = "huxley-skill-reminders"
 version = "0.1.0"
-description = "Reminders skill for Huxley (medication/appointment/generic, persistent, with retry escalation and recurrence)."
+description = "Persistent reminders for Huxley — RFC 5545 RRULE recurrence, kind-aware retry escalation, catch-up at boot."
+readme = "README.md"
 requires-python = ">=3.13"
+license = { text = "MIT" }
+authors = [{ name = "Mario Ruiz", email = "marioalejandroruizsarmiento@gmail.com" }]
+keywords = ["huxley", "voice-agent", "skill", "reminders", "rrule", "recurrence"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.13",
+]
 dependencies = [
     "huxley-sdk",
     # Recurrence rules are stored and evaluated as RFC 5545 RRULE strings
@@ -14,6 +24,12 @@ dependencies = [
 
 [project.entry-points."huxley.skills"]
 reminders = "huxley_skill_reminders:RemindersSkill"
+
+[project.urls]
+Homepage = "https://github.com/ma-r-s/Huxley"
+Source = "https://github.com/ma-r-s/Huxley/tree/main/server/skills/reminders"
+Issues = "https://github.com/ma-r-s/Huxley/issues"
+Changelog = "https://github.com/ma-r-s/Huxley/blob/main/server/skills/reminders/CHANGELOG.md"
 
 [dependency-groups]
 dev = [

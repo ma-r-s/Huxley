@@ -1,14 +1,31 @@
 [project]
 name = "huxley-skill-radio"
 version = "0.1.0"
-description = "Internet radio playback for Huxley. Streams from a configured list of HTTP/Icecast URLs via ffmpeg."
+description = "Internet radio for Huxley — HTTP/Icecast streams via ffmpeg, last-station resume, auto-reconnect."
+readme = "README.md"
 requires-python = ">=3.13"
+license = { text = "MIT" }
+authors = [{ name = "Mario Ruiz", email = "marioalejandroruizsarmiento@gmail.com" }]
+keywords = ["huxley", "voice-agent", "skill", "radio", "icecast", "ffmpeg"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio :: Players",
+]
 dependencies = [
     "huxley-sdk",
 ]
 
 [project.entry-points."huxley.skills"]
 radio = "huxley_skill_radio:RadioSkill"
+
+[project.urls]
+Homepage = "https://github.com/ma-r-s/Huxley"
+Source = "https://github.com/ma-r-s/Huxley/tree/main/server/skills/radio"
+Issues = "https://github.com/ma-r-s/Huxley/issues"
+Changelog = "https://github.com/ma-r-s/Huxley/blob/main/server/skills/radio/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
