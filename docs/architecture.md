@@ -15,15 +15,16 @@ flowchart LR
     end
 
     subgraph Huxley["Huxley framework (Python server)"]
-        WS[AudioServer<br/>WebSocket :8765]
-        App[Application<br/>orchestrator]
+        Runtime[Runtime<br/>process singleton]
+        WS[AudioServer<br/>WebSocket :8765<br/>lifelong listener]
+        App[Application<br/>per-persona — swappable<br/>via ?persona= reconnect]
         SM[StateMachine]
         Sess[VoiceProvider<br/>OpenAI Realtime]
         Coord[TurnCoordinator]
         Reg[SkillRegistry]
         Skills[Skills:<br/>audiobooks, system, ...]
         Player[AudiobookPlayer<br/>ffmpeg subprocess]
-        DB[(SQLite<br/>positions + summaries)]
+        DB[(SQLite<br/>per-persona DB)]
     end
 
     OpenAI[OpenAI Realtime API]
@@ -33,6 +34,8 @@ flowchart LR
     UI -- ptt_start / ptt_stop / wake_word --> WS
     WS -- state / status / transcript / model_speaking / dev_event / audio_clear --> UI
 
+    Runtime --> WS
+    Runtime -. swaps at ?persona= reconnect .-> App
     WS <--> App
     App --> SM
     App <--> Sess
@@ -61,6 +64,63 @@ See [decision 2026-04-13 — Audiobook audio streams through the WebSocket](./de
 ### Persona is config, not code
 
 The framework loads a `persona.yaml` at startup and uses it to build the system prompt, register the listed skills, and configure the voice provider. Swap the persona file → swap the agent. Code does not know "this is for a blind elderly user" — that knowledge lives entirely in the persona file and the constraint definitions it references.
+
+## Runtime topology
+
+> Added in T1.13. Background: [decision: hot persona swap via reconnect](./decisions.md#2026-05-01--hot-persona-swap-via-reconnect-not-in-band-t113).
+
+A Huxley process runs ONE `Runtime` (process singleton). The Runtime owns the `AudioServer` (lifelong WebSocket listener) and a swappable `current_app` of type `Application`. When a client reconnects with a different `?persona=<name>` query, the Runtime constructs a new `Application` for that persona, atomically replaces `current_app`, and tears down the old Application in the background.
+
+```
+Runtime (process singleton)
+├── AudioServer           ← single TCP listener, lifelong
+├── current_app: Application | None
+│   ├── Storage (per-persona DB)
+│   ├── SkillRegistry
+│   ├── VoiceProvider (OpenAI Realtime)
+│   ├── TurnCoordinator, FocusManager, ...
+│   └── ... (everything that's persona-bound)
+└── _teardown_task        ← background shutdown of previous app
+```
+
+**Responsibility split**:
+
+- **`Runtime`** — process-wide concerns. Owns the AudioServer, resolves the default persona at boot per the locked rule (env > single-persona autodiscovery > alphabetic-first-with-loud-log), implements the swap algorithm, signal handlers, the audio-server task, the shutdown event.
+- **`Application`** — per-persona stack. Reconstructed on each persona swap. Receives a reference to the lifelong `AudioServer` (its `send_*` methods reach the active client) but does NOT install callbacks on it. `Application.start(auto_connect=True)` brings up storage, skills, state machine; `Application.shutdown()` is the inverse.
+
+**Swap dispatch** — AudioServer's callbacks are bound to runtime-level `_shim_*` methods that forward to `current_app.on_*`. The dispatch target rebinds atomically when `current_app` changes — no need to tell AudioServer "your callbacks moved." The 9 dispatch methods (`on_wake_word`, `on_ptt_start`, `on_ptt_stop`, `on_audio_frame`, `on_reset`, `on_language_select`, `on_list_sessions`, `on_get_session`, `on_delete_session`) constitute Application's public WS-event surface.
+
+**Swap algorithm**:
+
+1. **Same persona** → no-op (early return).
+2. **Different persona** → acquire `_swap_lock` (serializes concurrent swap requests so the loser doesn't get reference-overwritten), then:
+3. Await any in-flight `_teardown_task` (capped at `_TEARDOWN_TIMEOUT_S = 10s` via `asyncio.wait_for(asyncio.shield(...))`) so we don't open the same SQLite DB the previous teardown is still writing to.
+4. **Pre-validate**: `Application.load + start(auto_connect=True)`. If this raises, OLD app is untouched and the exception propagates.
+5. **Atomic ref swap**: `self.current_app = new_app`. Single Python assignment.
+6. **Background teardown**: `asyncio.create_task(self._teardown_app(old_app))`. The user is unblocked immediately; the old app's provider summary write, skill teardowns, storage close happen out of band.
+
+Eager-connect on swap (`auto_connect=True`) is correct: idle Realtime sessions cost $0, and the state machine has no IDLE→CONNECTING transition on PTT — so a "lazy" swap would leave the new persona unreachable until the user reset the connection.
+
+**One process = one human**, by convention. Two humans on one machine = two Huxley processes, each in its own working directory with its own `personas/`, `.env`, port, and DBs. There is no profile abstraction; multi-instance follows standard Unix-daemon shape. See [decision: multi-instance via cwds](./decisions.md#2026-05-01--multi-instance-deployment-via-cwds-no-profile-abstraction-t113). Canonical layout for a household:
+
+```
+~/huxley-grandpa/
+├── .env                  # grandpa's HUXLEY_OPENAI_API_KEY, TELEGRAM creds
+└── personas/
+    ├── abuelos/persona.yaml
+    └── librarian/persona.yaml
+
+~/huxley-kid/
+├── .env                  # kid's separate creds
+└── personas/
+    └── buddy/persona.yaml
+
+# Run each instance from its own cwd:
+(cd ~/huxley-grandpa && HUXLEY_SERVER_PORT=8765 uv run huxley) &
+(cd ~/huxley-kid     && HUXLEY_SERVER_PORT=8766 uv run huxley) &
+```
+
+Production uses one launchd plist per instance with different `WorkingDirectory`. Privacy is filesystem-enforced; the two processes share nothing.
 
 ## State machine
 
@@ -296,13 +356,14 @@ flowchart TD
     Coord --> Types
 ```
 
-Dependencies flow **downward**. `huxley_sdk/types.py` is the universal leaf — everyone imports from it, it imports from nothing. `app.py` is the root — nothing imports from it, it wires everything. Skill packages depend only on `huxley_sdk`, never on framework internals; the framework reaches them only through entry-point discovery and the `Skill` protocol. This is the boundary that makes third-party skills possible.
+Dependencies flow **downward**. `huxley_sdk/types.py` is the universal leaf — everyone imports from it, it imports from nothing. `runtime.py` is the root — nothing imports from it, it wires everything (constructs `AudioServer` once and the active `Application` on demand per persona swap). `app.py` sits below it as the per-persona orchestrator. Skill packages depend only on `huxley_sdk`, never on framework internals; the framework reaches them only through entry-point discovery and the `Skill` protocol. This is the boundary that makes third-party skills possible.
 
 ## Where to look in code
 
 | Concern                           | File                                                             |
 | --------------------------------- | ---------------------------------------------------------------- |
-| Orchestrator / all wiring         | `server/runtime/src/huxley/app.py`                               |
+| Process root / persona swap       | `server/runtime/src/huxley/runtime.py`                           |
+| Per-persona orchestrator          | `server/runtime/src/huxley/app.py`                               |
 | WebSocket audio server            | `server/runtime/src/huxley/server/server.py`                     |
 | State machine + transitions       | `server/runtime/src/huxley/state/machine.py`                     |
 | Turn coordinator + factory fire   | `server/runtime/src/huxley/turn/coordinator.py`                  |
