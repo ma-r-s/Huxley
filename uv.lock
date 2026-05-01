@@ -399,8 +399,6 @@ source = { editable = "server/runtime" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "huxley-sdk" },
-    { name = "huxley-skill-audiobooks" },
-    { name = "huxley-skill-system" },
     { name = "openai" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
@@ -426,8 +424,6 @@ synth = [
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "huxley-sdk", editable = "server/sdk" },
-    { name = "huxley-skill-audiobooks", editable = "server/skills/audiobooks" },
-    { name = "huxley-skill-system", editable = "server/skills/system" },
     { name = "openai", specifier = ">=1.60" },
     { name = "pydantic-settings", specifier = ">=2.7" },
     { name = "python-dotenv", specifier = ">=1.0" },
