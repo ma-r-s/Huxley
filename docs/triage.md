@@ -2873,6 +2873,93 @@ Other round-2 findings (PWA TS type drift on hello extras, `list_personas()` re-
 12. **Docs** — concepts.md, protocol.md, architecture.md, decisions.md.
 13. **Mario smoke + close gate.**
 
+## T1.14 — Skill marketplace (curated registry + sideload + in-PWA install/configure)
+
+**Status**: in_progress (2026-05-01) — design phase. Architectural specification locked in [`docs/skill-marketplace.md`](./skill-marketplace.md). Sub-entries (T1.14.1 through T1.14.4) will be filed as each phase begins. **Effort**: ~4–5 weeks across all phases; each phase independently shippable. **Prerequisite**: T2.8 (move telegram creds out of repo root → establishes the per-persona secrets dir pattern).
+
+**Problem.** Huxley's load-bearing thesis is skill extensibility ("LLM understands rough natural-language intent and dispatches to user-installable custom tools, including for personal content" — see `docs/vision.md`). Today, "installable" means "the developer edits `pyproject.toml`, runs `uv sync`, edits `persona.yaml`, restarts the server." That gates the framework's extensibility behind developer-only ergonomics. End-users (the elderly, blind AbuelOS user; their caregiver) can't install or configure skills. Third-party authors have no surface to publish skills users can find. The framework is extensible in principle but not in practice.
+
+**Why it matters.** Without this, Huxley scales linearly with how many skills its core team writes. With this, it scales with how many people choose to write `huxley-skill-*` packages. This is the difference between "Huxley is a one-off Abuelo deployment" and "Huxley is a platform." Doing it right also forces the SDK + framework boundary to harden — every assumption a third-party author would trip on becomes a real bug to fix.
+
+### Validation (Gate 1)
+
+- `docs/vision.md` names skill-extensibility as the load-bearing differentiator; no surface today supports the workflow.
+- `server/personas/<name>/persona.yaml` is hand-edited to enable/disable skills. The PWA cannot mutate it.
+- `pyproject.toml` of the runtime hardcodes the first-party skill set as workspace deps. Third-party `huxley-skill-*` packages have no standard install path.
+- No skill today declares a config schema; per-skill config (e.g. `news.country`, `telegram.api_id`) is hand-typed into `persona.yaml`.
+- Per-skill secrets (Telegram creds, OAuth tokens) have no standardized storage; T2.8 is in flight to fix exactly this gap and lays the foundation.
+
+### Design (Gate 2 — locked 2026-05-01 with Mario; critic round pending per phase)
+
+The full architectural specification is [`docs/skill-marketplace.md`](./skill-marketplace.md). Key locked decisions:
+
+| #   | Decision                                                                                                                                                                   |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **Both audiences first-class** — non-technical end users via PWA, developers via terminal escape hatches.                                                                  |
+| 2   | **Curated registry + sideload escape hatch.** Mario gatekeeps the registry (PRs to a public GitHub repo); developers sideload any pip package via PWA developer mode.      |
+| 3   | **Restart-on-install.** Pip-install + self-exit (launchd revives in prod, `os.execv` in dev). ~3s outage with audible "be right back" + earcon.                            |
+| 4   | **Install global, enable per-persona.** Pip-install once into the runtime's venv; persona's YAML lists which to load.                                                      |
+| 5   | **Config + secrets entirely in PWA.** Skills declare a JSON Schema; PWA renders a form. Secrets stored in `<persona.data_dir>/secrets/<skill>/values.json`, never in YAML. |
+| 6   | **Trust = registry curation.** No sandboxing. Mario reviews submissions; user owns their device. Same model as VS Code Marketplace.                                        |
+
+Architecture in one diagram (see spec doc for the full rendering):
+
+```
+Registry (huxley/skills GitHub repo: index.json + JSON Schema + CI)
+   ↑ submissions = PRs; Mario reviews + merges
+   ↓ PWA fetches index.json directly (no backend)
+PWA (Skills panel — Installed / Marketplace / Sideload tabs; config form rendered from JSON Schema)
+   ↕ WS messages
+Runtime (new endpoints: list_installed_skills, get_skill_config_schema,
+        get_skill_config, set_skill_config, enable_skill, disable_skill,
+        install_skill, uninstall_skill; new SDK: Skill.config_schema, ctx.secrets;
+        self-restart on install/uninstall)
+```
+
+### Critic Notes
+
+_Per-phase critic rounds before each child phase begins. The umbrella architecture in `docs/skill-marketplace.md` will be reviewed by a fresh agent before T1.14.1 starts._
+
+### Definition of Done (umbrella)
+
+The marketplace is "shipped" when **all** of the following hold:
+
+- [ ] T2.8 prerequisite landed (per-persona secrets dir pattern in place).
+- [ ] T1.14.1 (Skills panel + SDK) shipped.
+- [ ] T1.14.2 (Sideload install) shipped.
+- [ ] T1.14.3 (Curated registry) shipped.
+- [ ] T1.14.4 (Spotify reference skill + OAuth) shipped.
+- [ ] An end-user can: open the PWA, browse Marketplace, install Spotify, configure it, enable for their persona, and voice-control Spotify — without touching a terminal.
+- [ ] A developer can: write a `huxley-skill-foo` package, publish to PyPI, sideload via PWA dev mode, configure + enable per persona, and submit a PR to `huxley/skills` for registry inclusion.
+- [ ] Mario can review submissions with confidence: CI validates entries, manual review is well-scoped, merging is the explicit "in the registry" act.
+- [ ] `docs/skill-marketplace.md` reflects shipped reality (reviewed at each phase close).
+- [ ] `docs/skills/authoring.md` exists, documenting the SDK additions + PyPI publish + registry submission flow.
+
+### Implementation order (phases — each becomes its own triage entry when started)
+
+| #   | Entry   | Scope                                                                                                                                                                                                                                                                                                                                                                                                           | Effort    | Status                               |
+| --- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- | ------------------------------------ |
+| 0   | T2.8    | Move telegram creds → `<persona>/data/secrets/telegram/`. Establishes the secrets-dir pattern T1.14 builds on.                                                                                                                                                                                                                                                                                                  | ~1 hour   | queued (prereq)                      |
+| 1   | T1.14.1 | **SDK additions** (`Skill.config_schema`, `ctx.secrets` API) + **PWA Skills panel** (Installed tab only): list installed skills, enable/disable per persona, render config form from schema, write config + secrets, soft-reload persona on change. **No install path; no marketplace UI yet.** Ships value even if later phases don't land — turns the runtime's existing extensibility into a usable surface. | ~1 week   | not started (file when Phase 0 done) |
+| 2   | T1.14.2 | **Sideload install** — server `install_skill` / `uninstall_skill` endpoints, pip orchestration, self-restart machinery (launchd path + os.execv path), PWA "Install by package name" UI gated behind a Developer Mode toggle. Tested end-to-end against the existing first-party skill packages.                                                                                                                | ~1 week   | not started                          |
+| 3   | T1.14.3 | **Curated registry** — create `huxley/skills` GitHub repo with `index.json` + `schema/index.schema.json` + CI validation + `CONTRIBUTING.md` + PR template. PWA Marketplace tab fetches + renders the registry. "Install from registry" buttons reuse Phase 2's install pipeline. First entries: the existing first-party skills.                                                                               | ~1 week   | not started                          |
+| 4   | T1.14.4 | **Spotify reference skill** — `huxley-skill-spotify` as the canonical third-party-shaped skill. OAuth helper in the SDK if needed (else: paste-token-from-elsewhere as the v1). End-to-end: marketplace → install → configure → enable → voice-control. Ships alongside `docs/skills/authoring.md` as the worked example for future skill authors.                                                              | ~3-5 days | not started                          |
+
+### Cross-phase open questions
+
+Tracked in [`docs/skill-marketplace.md` § Open questions](./skill-marketplace.md#open-questions-need-resolution-before-each-phase-ships). Highlights:
+
+- **Self-restart in dev** (Phase 2): `os.execv` is universal but tricky; launchd is clean but only-in-prod. Decide before Phase 2 critic.
+- **Pip install isolation** (Phase 2): one runtime venv vs per-runtime venvs. Defer until pain shows.
+- **OAuth helper shape** (Phase 4): real OAuth flow vs paste-token v1. Decide before Phase 4 critic.
+- **Registry schema versioning** (Phase 3): how to evolve `index.json` schema additively.
+- **Concurrent skill operations** (Phase 2): server serializes via single asyncio Lock.
+- **Uninstall while persona has it enabled** (Phase 2): auto-disable from all personas first, with confirmation.
+
+### Lessons
+
+_Captured per-phase as they ship; rolled up here at umbrella close._
+
 ---
 
 # Active — Tier 2 (pre-ship hardening)
@@ -3493,7 +3580,7 @@ See DoD bullets. No new files beyond the ADR.
 
 ## T2.8 — Move telegram MTProto creds out of repo root
 
-**Status**: queued · **Task**: — · **Effort**: S (~1 hour)
+**Status**: queued — **prerequisite for T1.14** (skill marketplace). The per-persona `secrets/<skill>/` pattern this item establishes is the foundation T1.14 generalizes for arbitrary skill secrets. **Task**: — · **Effort**: S (~1 hour)
 
 **Problem.** The telegram skill loads MTProto credentials from two files at the
 repo root: `telegram` (api_id + api_hash + bot token, exported from
