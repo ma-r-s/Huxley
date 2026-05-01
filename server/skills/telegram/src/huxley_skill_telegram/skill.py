@@ -86,6 +86,7 @@ from huxley_skill_telegram.transport import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
+    from pathlib import Path
 
     from huxley_sdk import SkillContext
 
@@ -96,6 +97,32 @@ def _telegram_lang_bucket(language: str) -> str:
         if code.startswith(key):
             return key
     return "en"
+
+
+def _load_creds_from_secrets_file(secrets_dir: Path) -> dict[str, str]:
+    """Read `<secrets_dir>/values.json` if it exists.
+
+    Returns the parsed flat dict (stringified values) or an empty dict
+    when the file is absent / unreadable / malformed. Caller layers env
+    vars + persona.yaml fallbacks on top.
+
+    The file shape is the same one T1.14's `ctx.secrets` API will own:
+    a flat `dict[str, str]`. Pre-T1.14 we read it directly here; once
+    T1.14 ships, this loader collapses into `await ctx.secrets.get(key)`
+    calls and the file shape stays unchanged.
+    """
+    path = secrets_dir / "values.json"
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (FileNotFoundError, NotADirectoryError, PermissionError, OSError):
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): str(v) for k, v in data.items() if v is not None}
 
 
 _TOOL_DESC: dict[str, dict[str, str]] = {
@@ -417,14 +444,27 @@ class TelegramSkill:
         self._language = ctx.language or "en"
 
         cfg = ctx.config
-        # Env vars take precedence so secrets (api_id/hash/phone) don't have
-        # to live in a checked-in persona.yaml. A real deployment sets these
-        # in `.env` at packages/core/; dev/test can put them directly in the
-        # persona file. Contacts stay in persona.yaml -- they're not really
-        # "secrets" for a family-specific persona.
-        api_id_raw = os.environ.get("HUXLEY_TELEGRAM_API_ID") or cfg.get("api_id")
-        api_hash = os.environ.get("HUXLEY_TELEGRAM_API_HASH") or cfg.get("api_hash")
-        userbot_phone = os.environ.get("HUXLEY_TELEGRAM_USERBOT_PHONE") or cfg.get("userbot_phone")
+        # Cred resolution priority (T2.8 — establishes the per-persona
+        # secrets-dir pattern T1.14 generalizes via ctx.secrets):
+        #   1. <persona.data_dir>/secrets/telegram/values.json   (preferred)
+        #   2. HUXLEY_TELEGRAM_* env vars                         (fallback)
+        #   3. persona.yaml `skills.telegram.<field>`             (dev/test)
+        # Contacts stay in persona.yaml -- they're not really "secrets" for
+        # a family-specific persona, and they aren't a flat string dict.
+        secrets = _load_creds_from_secrets_file(ctx.persona_data_dir / "secrets" / "telegram")
+        api_id_raw = (
+            secrets.get("api_id") or os.environ.get("HUXLEY_TELEGRAM_API_ID") or cfg.get("api_id")
+        )
+        api_hash = (
+            secrets.get("api_hash")
+            or os.environ.get("HUXLEY_TELEGRAM_API_HASH")
+            or cfg.get("api_hash")
+        )
+        userbot_phone = (
+            secrets.get("userbot_phone")
+            or os.environ.get("HUXLEY_TELEGRAM_USERBOT_PHONE")
+            or cfg.get("userbot_phone")
+        )
         raw_contacts = cfg.get("contacts") or {}
 
         try:
@@ -471,10 +511,12 @@ class TelegramSkill:
             await ctx.logger.awarning(
                 "telegram.credentials_missing",
                 hint=(
-                    "Set HUXLEY_TELEGRAM_API_ID + HUXLEY_TELEGRAM_API_HASH env "
-                    "vars (or `api_id` / `api_hash` in persona.yaml); get them "
-                    "from my.telegram.org/apps. Skill will register but "
-                    "call_contact will return an error until configured."
+                    "Drop `{api_id, api_hash, userbot_phone}` into "
+                    "<persona>/data/secrets/telegram/values.json (preferred), "
+                    "or set HUXLEY_TELEGRAM_API_ID + HUXLEY_TELEGRAM_API_HASH "
+                    "env vars, or put `api_id` / `api_hash` in persona.yaml. "
+                    "Get them from my.telegram.org/apps. Skill will register "
+                    "but call_contact will return an error until configured."
                 ),
             )
             self._transport = None

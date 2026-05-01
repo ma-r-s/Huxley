@@ -5,12 +5,9 @@ server/runtime/.env
 .env.*.local
 clients/pwa/.env.local
 site/.env.local
-# Telegram app credentials (Mario exports the my.telegram.org/apps
-# page as a plain file in repo root; kept out of git). Leading slash
-# anchors to repo root so we don't accidentally swallow paths like
-# server/skills/telegram/ or any *.py file named telegram_*.
-/telegram
-/telegram.*
+# Telegram-skill creds + Pyrogram session files. Creds live in
+# <persona>/data/secrets/telegram/values.json (covered by the
+# server/personas/*/data/ ignore below). Session files match anywhere.
 *.session
 *.session-journal
 

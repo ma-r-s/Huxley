@@ -265,6 +265,14 @@ async def setup(self, ctx: SkillContext) -> None:
 - Large binary blobs — it's a string KV, not a file system. Use `ctx.persona_data_dir` for files.
 - High-frequency writes — every `set_setting` is a SQLite commit. Fine for user events ("bookmark position on turn end"), not fine for per-frame state.
 
+## Per-skill secrets — `<persona>/data/secrets/<skill>/values.json`
+
+Skills that need API keys, OAuth tokens, or other credentials use a per-persona secrets directory at `<persona.data_dir>/secrets/<skill_name>/values.json`. The file is a flat JSON `{string: string}` map, perms `0700` on the dir and `0600` on the file. The persona's data dir is gitignored, so secrets never enter git.
+
+This is **not yet** a SDK API — T1.14 will add `ctx.secrets` as the first-class accessor. Until then, skills that need secrets read the file directly (see `huxley_skill_telegram.skill._load_creds_from_secrets_file` for the canonical pattern). When T1.14 ships, those direct reads collapse into `await ctx.secrets.get(key)` and the on-disk shape stays unchanged.
+
+The telegram skill is the first adopter (T2.8). Authoring conventions for the API-backed version land with T1.14.
+
 ## Proactive speech — `ctx.inject_turn`
 
 > ℹ️ **Shipped (Stages 1c.3 + 1d).** Today's API supports the queue

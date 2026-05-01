@@ -2972,7 +2972,7 @@ Smaller fixes also incorporated (all in spec):
 
 ### Definition of Done (v1)
 
-- [ ] T2.8 prerequisite landed (per-persona secrets dir pattern in place).
+- [x] T2.8 prerequisite landed (per-persona secrets dir pattern in place; telegram skill is the first adopter).
 - [ ] **Phase 1: SDK additions** — `Skill.config_schema: ClassVar[dict | None] = None`, `Skill.data_schema_version: ClassVar[int] = 1`, `SkillContext.secrets: SkillSecrets` with **async** `get/set/delete/keys`, backed by `<persona.data_dir>/secrets/<skill>/values.json` (perms `0700/0600`). `data_schema_version` persists in `schema_meta` table under `skill_version:<name>`; mismatch logs `skill.schema.upgrade_needed` / `skill.schema.downgrade_detected`, no auto-migration in v1. Tests + mypy + ruff + per-package pytest green.
 - [ ] **`huxley-skill-search` adopts `config_schema`** as the first-party validation of the JSON-Schema convention (clean schema: `safesearch` enum + `region` string; no API key). Backward-compat: existing skills with `config_schema=None` still load.
 - [ ] **Phase 2: `huxley-skill-stocks` reference skill** — own repo from day 1 (not `server/skills/`). Pip-installable from PyPI. Declares `config_schema` with `api_key` (secret) + `watchlist` (array) + `currency` (enum). Uses async `ctx.secrets` for the API key. Voice tools: "what's <ticker> stock at" / "how's my watchlist."
@@ -3637,7 +3637,7 @@ See DoD bullets. No new files beyond the ADR.
 
 ## T2.8 — Move telegram MTProto creds out of repo root
 
-**Status**: queued — **prerequisite for T1.14** (skill marketplace). The per-persona `secrets/<skill>/` pattern this item establishes is the foundation T1.14 generalizes for arbitrary skill secrets. **Task**: — · **Effort**: S (~1 hour)
+**Status**: done (2026-05-01) — **prerequisite for T1.14** delivered. The per-persona `secrets/<skill>/values.json` pattern this item established is the foundation T1.14 generalizes via `ctx.secrets`. **Effort actual**: ~1.5 hours (original 1h estimate undersold because the original Validation misread the loader — see corrected Validation below).
 
 **Problem.** The telegram skill loads MTProto credentials from two files at the
 repo root: `telegram` (api_id + api_hash + bot token, exported from
@@ -3656,67 +3656,68 @@ runs from" to "where the telegram skill finds its creds." Decoupling means
 the skill can be loaded by any persona that has the right files in its
 data dir, not just one that runs from a particular cwd.
 
-### Validation (Gate 1)
+### Validation (Gate 1 — corrected 2026-05-01)
 
-- `server/skills/telegram/src/huxley_skill_telegram/skill.py` line 422
-  comment: _"in `.env` at packages/core/; dev/test can put them directly in
-  the…"_ (path is even stale — references the pre-restructure location).
-- `.gitignore` lines 11–12: `/telegram` and `/telegram.*` anchored to
-  repo root with the comment _"Mario exports the my.telegram.org/apps
-  page as a plain file in repo root; kept out of git"_.
-- `ls /Users/mario/Projects/Personal/Code/Huxley/` shows `telegram` and
-  `telegram.phones` at root today.
+The original entry described the symptom but misread the cred-loading code. Corrected understanding:
+
+- **Root files `telegram` + `telegram.phones`**: Mario's hand-exported reference notes (the my.telegram.org/apps page text + a phone-number memo from the T1.10 spike). **No code reads them.** They exist only because Mario put them there during the spike and never moved them.
+- **Actual cred-loading** (`server/skills/telegram/src/huxley_skill_telegram/skill.py:425-427`): `os.environ.get("HUXLEY_TELEGRAM_API_ID") or cfg.get("api_id")`. Same pattern for `api_hash`, `userbot_phone`. Env vars in `server/runtime/.env` are the actual source of truth today; persona.yaml is a fallback.
+- **Contacts** come from `cfg.get("contacts")` in `persona.yaml` `skills.telegram.contacts:` — NOT from `telegram.phones`. The root `telegram.phones` file is dead reference data.
+- `.gitignore` lines 11-12: `/telegram` and `/telegram.*` anchored to repo root.
+
+So T2.8 is two things at once:
+
+1. **Bookkeeping**: kill the dead reference files at repo root.
+2. **Pattern foundation**: introduce a per-persona `values.json` loader path that T1.14 will generalize via `ctx.secrets`.
 
 ### Design (Gate 2 — trivial, skip critic)
 
-1. Introduce a `secrets_dir: str` field on the telegram skill's persona
-   config block (`server/personas/abuelos/persona.yaml`). Default:
-   `${persona.data_dir}/secrets/telegram/` (resolved at load time via the
-   existing `SkillContext` data-dir API).
-2. Skill reads `<secrets_dir>/telegram` (api_id/api_hash/bot token) and
-   `<secrets_dir>/contacts.phones` (renamed from `telegram.phones` to drop
-   the redundant prefix once it lives under a telegram-named dir).
-3. Move the two files locally:
-   `mv telegram server/personas/abuelos/data/secrets/telegram/telegram`
-   `mv telegram.phones server/personas/abuelos/data/secrets/telegram/contacts.phones`
-4. Update `.gitignore`: drop the root-anchored `/telegram` entries; the
-   per-persona data dir is already gitignored via
-   `server/personas/*/data/`, so the new location is automatically covered.
-5. Update the comment in `skill.py` to point at the new location.
-6. Skill regression test: existing tests load creds via a fixture; update
-   the fixture to point at a temp `secrets_dir` and verify the loader
-   honors it.
+1. **Introduce a per-persona JSON cred file** at `<persona.data_dir>/secrets/telegram/values.json` containing `{"api_id": "...", "api_hash": "...", "userbot_phone": "..."}` (all string values, matching T1.14's flat-`dict[str, str]` shape).
+2. **Telegram skill cred resolution priority order** (in `setup()`):
+   1. `<persona.data_dir>/secrets/telegram/values.json` (NEW — the T1.14-compatible path)
+   2. `os.environ.get("HUXLEY_TELEGRAM_*")` (existing env-var fallback; keeps the running server alive during the transition)
+   3. `cfg.get("api_id")` etc. from persona.yaml (existing fallback for dev/test)
+3. **Migrate Mario's creds**: write the env-var values into the new `values.json` at `server/personas/abuelos/data/secrets/telegram/values.json`. Once T1.14 ships and the values.json path is the canonical source, the env vars in `.env` can be dropped (deferred to a later cleanup; T2.8 keeps them as fallback so nothing breaks mid-transition).
+4. **Clean up repo root**: delete `/telegram` and `/telegram.phones` from the repo root (they are gitignored, so this is a local `rm`, no commit). The hand-exported reference content from `/telegram` (api_id/api_hash + the my.telegram.org boilerplate Mario pasted) goes into `<persona>/data/secrets/telegram/source.txt` for Mario's own future reference. `/telegram.phones` is dead spike data; archived under the same dir as `notes.txt` rather than deleted, so Mario can decide later.
+5. **Update `.gitignore`**: drop the root-anchored `/telegram` and `/telegram.*` patterns. The per-persona data dir is already gitignored via `server/personas/*/data/`, so the new location is automatically covered.
+6. **Update the comment** in `skill.py:420-424` to point at the new location and reflect the new priority order.
+7. **Skill regression test**: assert the loader respects `values.json` when present and falls back to env vars when absent.
 
 ### Definition of Done
 
-- [ ] `secrets_dir` field added to telegram skill config (with sensible
-      default under `${persona.data_dir}/secrets/telegram/`)
-- [ ] Skill reads from `secrets_dir`, not cwd
-- [ ] Files moved out of repo root on Mario's laptop (mechanical mv, no
-      git change since they're gitignored)
-- [ ] `.gitignore` cleaned: root-anchored `/telegram` patterns removed
-- [ ] `skill.py` location-comment updated
-- [ ] Existing telegram test suite still green (90 tests); fixture
-      updated to use temp `secrets_dir`
-- [ ] One regression test asserting the loader respects `secrets_dir`
-- [ ] `server/personas/abuelos/persona.yaml` documents the field
-- [ ] `docs/skills/README.md` mentions per-skill secrets convention
-- [ ] After ship: `ls Huxley/` shows zero `telegram*` entries
+- [x] `<persona>/data/secrets/telegram/values.json` loader added to skill (`_load_creds_from_secrets_file` helper).
+- [x] Cred resolution priority: values.json → env vars → persona.yaml. Env vars stay as fallback during transition.
+- [x] Mario's creds migrated: `server/personas/abuelos/data/secrets/telegram/values.json` (perms `0700` dir, `0600` file).
+- [x] Repo-root reference files moved into `<persona>/data/secrets/telegram/`: `telegram` → `source.txt`, `telegram.phones` → `notes.txt`.
+- [x] `.gitignore` cleaned: root-anchored `/telegram` and `/telegram.*` patterns dropped; comment updated to point at the new location.
+- [x] `skill.py` cred-loading comment rewritten to describe the new priority order.
+- [x] Existing telegram test suite still green (was 90, now 93 with 3 new regression tests).
+- [x] Regression tests: `test_secrets_file_takes_precedence_over_env_and_yaml`, `test_secrets_file_only_also_works`, `test_malformed_secrets_file_falls_back_to_env`.
+- [x] `docs/skills/README.md` § "Per-skill secrets" added.
+- [x] `docs/skills/telegram.md` § "Credentials" rewritten with the priority order + JSON shape.
+- [x] After ship: `ls Huxley/` shows zero `telegram*` entries.
 
 ### Tests (Gate 3)
 
-- Regression: `test_loads_creds_from_configured_secrets_dir` — set
-  `secrets_dir=tmp_path`, drop `telegram` + `contacts.phones` files
-  there, assert the skill reads them and doesn't touch cwd.
+Three regression tests (replace the original "loads_creds_from_configured_secrets_dir" plan with three sharper cases):
+
+- `test_secrets_file_takes_precedence_over_env_and_yaml` — values.json beats env vars beats persona.yaml.
+- `test_secrets_file_only_also_works` — file alone, no env vars, no persona.yaml fields.
+- `test_malformed_secrets_file_falls_back_to_env` — corrupt JSON does not break boot; falls through to env-var fallback.
 
 ### Docs touched (Gate 4)
 
-- `docs/skills/README.md` — note the per-skill-secrets pattern
-- `docs/skills/<telegram skill doc>` — document the new config field
-- `CLAUDE.md` — drop the "telegram creds at root" footnote once it's no
-  longer true
-- `.gitignore` — drop the `/telegram*` block, leave the explanatory
-  comment at the new location (or delete it entirely)
+- [x] `docs/skills/README.md` — § "Per-skill secrets" added.
+- [x] `docs/skills/telegram.md` — § "Credentials" rewritten with priority + JSON shape; `api_id`/`api_hash`/`userbot_phone` removed from the persona.yaml example block.
+- [x] `.gitignore` — root-anchored `/telegram*` block dropped; the `*.session` lines moved under a new comment block pointing at the new secrets-dir convention.
+- [x] `server/runtime/.env` (gitignored, comment-only update) — env-var values retained as fallback; comment rewritten to point at values.json as preferred source.
+- [x] `docs/triage.md` (this entry) — Validation corrected (the original misread the cred-loading code), Definition of Done flipped, lessons captured below.
+
+### Lessons
+
+- **The triage entry's Validation must reflect what the code actually does, not what we remember.** The original Validation said the skill reads files at repo root; in reality it reads env vars, and the root files are dead reference notes. Reading the code carefully before writing the design saves the round-trip.
+- **The values.json shape is now under contract** — it's what T1.14's `ctx.secrets` will read. Any changes between now and then need to preserve the flat `dict[str, str]` invariant (or T1.14 will need a migration step).
+- **Env vars stay as fallback during the transition** — keeping a fallback path means the running server doesn't break if the secrets file is moved/renamed/deleted accidentally. Drop them once T1.14 ships and the per-persona pattern is canonical.
 
 ### Why deferred
 

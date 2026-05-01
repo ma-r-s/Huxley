@@ -60,9 +60,6 @@ The `skills.telegram:` block in `persona.yaml`:
 ```yaml
 skills:
   telegram:
-    api_id: 12345678 # int, from my.telegram.org/apps
-    api_hash: "abcdef..." # 32-char hex
-    userbot_phone: "+57…" # first-run auth only; persists in session file
     contacts:
       hija: "+57 318 685 1696"
       hijo: "+573001234567"
@@ -75,7 +72,27 @@ skills:
       backfill_max: 50 # 0 disables; cap on backfill messages per session
 ```
 
-- **`api_id` / `api_hash`** _(required)_ — Telegram application credentials. Create once at [my.telegram.org/apps](https://my.telegram.org/apps) (see `docs/research/telegram-voice.md` for how to fill the form). Missing or wrong-type values are soft-fails — the skill registers but `call_contact` / `send_message` return LLM-facing errors explaining the gap.
+### Credentials (`api_id`, `api_hash`, `userbot_phone`)
+
+These are secrets — they don't go in `persona.yaml`. Drop them in `<persona>/data/secrets/telegram/values.json` (perms `0700` on the dir, `0600` on the file):
+
+```json
+{
+  "api_id": "12345678",
+  "api_hash": "abcdef0123456789abcdef0123456789",
+  "userbot_phone": "+57..."
+}
+```
+
+Resolution priority (first match wins):
+
+1. `<persona.data_dir>/secrets/telegram/values.json` — the canonical path.
+2. `HUXLEY_TELEGRAM_API_ID` / `HUXLEY_TELEGRAM_API_HASH` / `HUXLEY_TELEGRAM_USERBOT_PHONE` env vars — pre-T2.8 fallback, kept for transition.
+3. `api_id` / `api_hash` / `userbot_phone` in `persona.yaml` — dev/test only; do not use in production.
+
+Missing or wrong-type values are soft-fails — the skill registers but `call_contact` / `send_message` return LLM-facing errors explaining the gap.
+
+- **`api_id` / `api_hash`** _(required)_ — Telegram application credentials. Create once at [my.telegram.org/apps](https://my.telegram.org/apps) (see `docs/research/telegram-voice.md` for how to fill the form).
 - **`userbot_phone`** _(optional except first run)_ — phone number of the spare SIM the userbot signs in as. Consulted only on first startup; from then on the sqlite session file in the persona data dir authenticates silently. If the session is deleted, set this again and the SMS-code flow fires once.
 - **`contacts`** _(required for the skill to be useful)_ — name → phone mapping. Phones can be in any format; the skill normalizes (strips spaces, dashes, parens). Missing / empty / non-string values log a warning and get dropped.
 - **`inbound.enabled`** — when true, eagerly connects at setup, builds the user_id→name reverse map, registers the call + message handlers, and runs the backfill pass.
