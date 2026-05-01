@@ -3727,6 +3727,23 @@ because (a) it requires a small skill code change, not just file moves, and
 Trigger to revisit: any session that's already touching the telegram skill
 for an unrelated reason — fold this in then.
 
+## T2.9 — Migrate huxley-skill-telegram to ctx.secrets
+
+**Status**: queued — follow-up to T2.8 + T1.14 Phase 1. **Effort**: S (~30 min).
+
+**Problem.** The telegram skill still loads creds via the file-based helper `_load_creds_from_secrets_file()` introduced in T2.8, even though T1.14 Phase 1 shipped the official `ctx.secrets` API that reads the SAME on-disk file. The helper was the right call before the SDK had a proper accessor, but keeping it after Phase 1 creates two ways to do the same thing — confusing for future skill authors who copy the telegram skill as a reference.
+
+**Why it matters.** Authoring docs (T1.14 Phase 3) reference `ctx.secrets` as THE convention. If the canonical first-party adopter isn't using it, the docs ship with a contradiction. Plus: the helper duplicates the same json-encode-on-read coercion that `JsonFileSecrets._read` already does, so there's a real maintenance overhead.
+
+**Plan.** In `server/skills/telegram/src/huxley_skill_telegram/skill.py`:
+
+1. Replace the three `_load_creds_from_secrets_file(...)` results with three `await ctx.secrets.get("api_id" / "api_hash" / "userbot_phone")` calls (the api/hash/phone keys map 1:1 to the file's keys, so the on-disk file doesn't need to change).
+2. Delete the `_load_creds_from_secrets_file` helper from the skill (it's a duplicate of `JsonFileSecrets._read` with identical semantics).
+3. Update the priority-order comment to say "values.json (via `ctx.secrets`) → env vars → persona.yaml".
+4. Test fixtures already provide a no-op `FakeSecrets` (added in Phase 1); existing values-file tests should be rewritten to populate `FakeSecrets` instead of writing actual JSON files.
+
+**DoD**: ruff + mypy + 97 telegram tests still green; the helper is gone.
+
 ---
 
 # Deferred (with revisit trigger)
