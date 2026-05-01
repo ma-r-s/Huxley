@@ -176,3 +176,123 @@ class TestResolvePersonaPath:
         # pass — but tmp_path under /tmp is isolated.
         with pytest.raises(PersonaError, match="auto-discovered"):
             resolve_persona_path()
+
+
+class TestListPersonas:
+    """T1.13 — multi-persona enumeration for the runtime / PWA picker."""
+
+    def test_returns_empty_when_no_personas_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from huxley.persona import list_personas
+
+        deep = tmp_path / "a" / "b" / "c"
+        deep.mkdir(parents=True)
+        monkeypatch.chdir(deep)
+
+        assert list_personas() == []
+
+    def test_enumerates_alphabetically(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from huxley.persona import list_personas
+
+        personas_dir = tmp_path / "personas"
+        # Create three personas — write them in non-alphabetical order
+        # to verify the list comes back sorted.
+        for name in ("zebra", "abuelos", "librarian"):
+            body = VALID_YAML.replace("name: TestBot", f"name: {name}")
+            _write_persona(personas_dir / name, body)
+        monkeypatch.chdir(tmp_path)
+
+        names = [s.name for s in list_personas()]
+        assert names == ["abuelos", "librarian", "zebra"]
+
+    def test_skips_invalid_personas_without_failing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from huxley.persona import list_personas
+
+        personas_dir = tmp_path / "personas"
+        # One valid, one with bad YAML.
+        _write_persona(personas_dir / "good", VALID_YAML)
+        _write_persona(personas_dir / "broken", "name: : :: invalid")
+        monkeypatch.chdir(tmp_path)
+
+        # Broken one is skipped silently (logged as a warning); the
+        # valid one still surfaces. The picker should never be empty
+        # because of one bad persona.
+        names = [s.name for s in list_personas()]
+        assert names == ["TestBot"]  # only "good" loaded; uses spec.name
+
+    def test_summary_carries_default_language(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from huxley.persona import list_personas
+
+        personas_dir = tmp_path / "personas"
+        _write_persona(personas_dir / "abuelos", VALID_YAML)
+        monkeypatch.chdir(tmp_path)
+
+        summaries = list_personas()
+        assert len(summaries) == 1
+        assert summaries[0].language == "es"
+
+
+class TestPickDefaultPersonaName:
+    """T1.13 — boot-time persona resolution rule (locked):
+    env > single-persona-autodiscovery > alphabetic-fallback-with-log."""
+
+    def test_env_wins(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from huxley.persona import pick_default_persona_name
+
+        personas_dir = tmp_path / "personas"
+        _write_persona(personas_dir / "abuelos", VALID_YAML)
+        monkeypatch.chdir(tmp_path)
+
+        # Even though "abuelos" is the only one and would be
+        # autodiscovered, the env name passes through verbatim.
+        assert pick_default_persona_name(env_name="basicos") == "basicos"
+
+    def test_single_persona_autodiscovery(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from huxley.persona import pick_default_persona_name
+
+        personas_dir = tmp_path / "personas"
+        _write_persona(personas_dir / "abuelos", VALID_YAML)
+        monkeypatch.chdir(tmp_path)
+
+        assert pick_default_persona_name() == "TestBot"  # spec.name
+
+    def test_multi_persona_alphabetic_fallback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from huxley.persona import pick_default_persona_name
+
+        personas_dir = tmp_path / "personas"
+        for dirname, name in (
+            ("zebra", "Zebra"),
+            ("abuelos", "Abuelos"),
+            ("librarian", "Librarian"),
+        ):
+            body = VALID_YAML.replace("name: TestBot", f"name: {name}")
+            _write_persona(personas_dir / dirname, body)
+        monkeypatch.chdir(tmp_path)
+
+        # No env var, no single-persona autodiscovery → pick
+        # alphabetically-first directory (Abuelos's dir is "abuelos").
+        # Loud log line is emitted; we don't assert on log contents
+        # here — that's verified by inspection during smoke.
+        assert pick_default_persona_name() == "Abuelos"
+
+    def test_no_personas_returns_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from huxley.persona import pick_default_persona_name
+
+        deep = tmp_path / "a" / "b" / "c"
+        deep.mkdir(parents=True)
+        monkeypatch.chdir(deep)
+
+        assert pick_default_persona_name() is None

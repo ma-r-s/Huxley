@@ -27,10 +27,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import structlog
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 from huxley.constraints import compose as compose_constraints
+
+logger = structlog.get_logger()
 
 
 class PersonaError(Exception):
@@ -341,3 +344,96 @@ def load_persona(path: Path | None = None) -> PersonaSpec:
         raise PersonaError(msg) from exc
 
     return spec
+
+
+# ── Multi-persona enumeration (T1.13) ─────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class PersonaSummary:
+    """Lightweight metadata for a persona — used by the runtime to
+    enumerate all available personas (e.g. for the PWA picker) without
+    exposing every internal `PersonaSpec` field. The `name` is the
+    directory basename and is the stable identifier the wire protocol
+    uses; `language` is the persona's default `language_code` (overrides
+    are not summarized here)."""
+
+    name: str
+    display_name: str
+    language: str
+
+
+def list_personas() -> list[PersonaSummary]:
+    """Enumerate every loadable persona under `./personas/`, alphabetically.
+
+    Walks up from CWD using the same `_find_personas_dir` logic
+    `load_persona` uses, so this works from any subdirectory of a
+    deployment. Skips directories whose `persona.yaml` is missing or
+    invalid (logs a warning per skipped dir; does not fail enumeration —
+    the runtime still returns the personas that DO load so the picker
+    isn't entirely empty when one persona is broken).
+
+    Empty list when no `./personas/` directory exists between CWD and
+    filesystem root.
+    """
+    personas_dir = _find_personas_dir()
+    if personas_dir is None:
+        return []
+    summaries: list[PersonaSummary] = []
+    for d in sorted(personas_dir.iterdir(), key=lambda p: p.name):
+        if not d.is_dir():
+            continue
+        if not (d / "persona.yaml").is_file():
+            continue
+        try:
+            spec = load_persona(d)
+        except PersonaError as exc:
+            logger.warning(
+                "persona.skipped_invalid",
+                dir=str(d),
+                error=str(exc),
+            )
+            continue
+        summaries.append(
+            PersonaSummary(
+                name=spec.name,
+                # No `display_name` field on PersonaSpec yet — return the
+                # name as the display value. Add an optional field later
+                # if a user-facing label distinct from the directory id
+                # becomes useful.
+                display_name=spec.name,
+                language=spec.language_code,
+            )
+        )
+    return summaries
+
+
+def pick_default_persona_name(env_name: str | None = None) -> str | None:
+    """Pick which persona to load when the client doesn't specify one.
+
+    Precedence:
+
+    1. `env_name` (typically `HUXLEY_PERSONA`) — passed through; the
+       caller resolves it via `_find_named_persona` + `load_persona`.
+    2. Single persona under `./personas/` — autodiscovered.
+    3. Multiple personas + no env var — pick **alphabetically first**
+       and log loudly. Refusing to start would force the env var on
+       multi-persona installs, exactly the deployment artifact T1.13
+       retires; the PWA picker lets the user change immediately.
+    4. No personas → `None` (caller decides whether to error out).
+    """
+    if env_name is not None:
+        return env_name
+    summaries = list_personas()
+    if not summaries:
+        return None
+    if len(summaries) == 1:
+        return summaries[0].name
+    chosen = summaries[0].name  # list_personas returns alphabetically sorted
+    logger.warning(
+        "persona.default_picked_alphabetically",
+        chosen=chosen,
+        available=[s.name for s in summaries],
+        note="set HUXLEY_PERSONA to choose explicitly",
+    )
+    return chosen
