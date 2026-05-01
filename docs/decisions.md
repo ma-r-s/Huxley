@@ -448,3 +448,93 @@ T1.12 ships with a privacy floor (`delete_session` + `clear_summaries`) but expl
 - **Multilingual sessions**: a single session that switches `es-CO` → `en` mid-conversation has turns in two languages but no `language` column on `session_turns`. Caregiver UI can't filter or render per-language. Revisit if mid-conversation language switch becomes a documented user pattern.
 - **Transcript accuracy**: OpenAI Whisper is unreliable on dialect-heavy Spanish (a known pain point per Mario's user research). The caregiver-review use case implies the elderly user is being judged by transcripts that may misquote them. No UI affordance currently flags this. Revisit when the caregiver workflow is real (today it's hypothetical product framing).
 - **Telegram call/message capture**: a 4-minute Telegram call that landed inside a session does not appear in the transcript — the call's audio/text path bypasses the framework's transcript pipeline. Caregivers reviewing the day will see a gap. Tracked under T1.10 / T1.11; the schema is extensible (could add a `kind` column to `session_turns`) but that design work belongs with whatever ships richer Telegram audit.
+
+---
+
+## 2026-05-01 — Persona is a distinct entity, not a theme (T1.13)
+
+**Context**: T1.13 needed to land a persona-swap UX, but the swap design forces a deeper question: what is a persona? Two clean models surfaced during design:
+
+1. **Persona = theme** — there is one user with one world (reminders, contacts, Telegram, history). Personas are different voices/personalities/skill-sets layered on top of that shared world. A reminder set in abuelos fires regardless of which persona is currently active.
+2. **Persona = distinct entity** — each persona is a separate "person" the user talks to. Each has their own memory, conversation history, reminders, Telegram, audiobook progress. Switching personas is reuniting with a different person; information does not flow between them.
+
+**Decision**: persona = distinct entity. Each persona has their own world.
+
+**Why** — the segmentation is **forced by reality**, not chosen for elegance. The LLM's conversation summary and transcript context are intrinsically per-persona: injecting librarian's summary into abuelos's instructions confuses the model. Once any data is per-persona, mixing user-scoped reminders/audiobooks/contacts on top creates a hybrid where the persona seems to know some things about the user but not others. That's worse than either pure model. The "different person" framing matches what's structurally true and gives the user a clean mental model: "if I told abuelos something, abuelos remembers; librarian doesn't."
+
+The "missed reminder when persona swaps away" footgun (a reminder set in abuelos doesn't fire while librarian is active) reframes from a bug to documented behavior: when you're not talking to abuelos, abuelos isn't around. On return, abuelos catches up via the same skill-setup-reads-DB mechanism that already handles process restarts.
+
+**Consequences**:
+
+- Per-persona DBs are correct, not a code-shape accident. Session history, reminders, audiobook progress, Telegram session state — all scoped to one persona, no cross-leak.
+- Multi-user households work cleanly: abuelos for grandpa with grandpa's Telegram, buddy for the kid with the kid's Telegram. Privacy is filesystem-enforced.
+- No `SkillScope` enum, no `data/user.db` split, no skill-author cognitive overhead. Skills always operate inside the active persona's world.
+- Inactive personas are genuinely **absent** while another persona is active — not running in the background. Their MTProto is offline; their reminders are paused. On reactivation, skill `setup()` rehydrates pending state from storage.
+- Defers any "watcher mode" / cross-persona notification work until a real product need surfaces. Today's framing is honest about the boundary.
+
+---
+
+## 2026-05-01 — Hot persona swap via reconnect, not in-band (T1.13)
+
+**Context**: with the runtime supporting multi-persona via the new `Runtime` layer, the UX call was how persona-switch should travel over the wire. Two options:
+
+1. **In-band** `select_persona { name }` over the existing WebSocket. The connection persists; the server tears down the old Application and brings up the new one in-place, pushing status frames + a `persona_changed` message through the same socket.
+2. **Reconnect** with `?persona=<name>` query parameter. PWA closes the WS, opens a new one with the new query param. Server parses the param at handshake, swaps Application before sending hello.
+
+**Decision**: reconnect.
+
+**Why** — both paths look identical from the user's seat. The picker is gated on `!_claim_or_stream_active()` (no live call, no live audiobook), so the WS dropping for ~50ms during the swap is invisible: no audio is interrupted, no state is lost from the user's perspective. The "soul change vs reincarnation" framing the in-band path was sold on is aesthetic, not functional. The cost of in-band is real: a `Runtime`-level swap-lock to drop client events during teardown, atomic reference rebinding the audio dispatcher, audio-frame-during-swap concurrency hazards, and a new `select_persona` / `persona_changed` message-type pair. None of that pays for the user-perceived UX.
+
+The reconnect path mirrors the existing `setLanguage(code)` pattern (which also reconnects with `?lang=<code>`), so it costs zero new mental model on the client side.
+
+**Consequences**:
+
+- Wire protocol stays at version 2. The `hello` payload gets two additive fields (`current_persona`, `available_personas`); old clients ignore unknown keys.
+- AudioServer doesn't need to know about persona-swap — it just routes events to whichever `current_app` Runtime is pointing at. Runtime owns the swap algorithm; AudioServer owns the listener.
+- The atomic-swap concern collapses: the WebSocket is closed during the swap window by definition, so no audio frames hit the wrong Application.
+- The PWA's existing `switchPersona(url)` becomes `switchPersona(name)` — same close-and-reopen flow, different URL construction.
+- A subsequent design that wants in-band swap (e.g. for a hardware client where TCP reconnects are expensive) can layer it on top without regressing the reconnect path; both can coexist if needed.
+
+---
+
+## 2026-05-01 — Multi-instance deployment via cwds, no profile abstraction (T1.13)
+
+**Context**: T1.13 makes one Huxley process serve multiple personas via the picker. But the next deployment shape — two humans in one house, each with their own Huxley — requires running **two processes** with separate persona sets, secrets, and ports. The question was whether the framework should ship a `huxley start <profile>` CLI with profiles registered under `~/.huxley/profiles/<name>/`, or rely on plain Unix-daemon convention (one cwd per instance, port via env var).
+
+**Decision**: no profile abstraction. Multi-instance is "another working directory."
+
+**Why** — a profile abstraction was a Mac-app convention bleeding into a server-process system that doesn't need it. Every other server daemon (nginx sites, postgres clusters, redis instances) handles multi-instance the same way: a directory with config + data, a port, and a service definition (launchd plist / systemd unit) per instance. Adding `huxley start <name>` would be more code, more surface area, and more documentation for zero capability gain.
+
+The cwd-based pattern is self-explanatory and inherits all the existing tooling around Unix-daemon shape (launchd, backup-this-folder, scoped permissions, …).
+
+**Consequences**:
+
+- The household scenario is documented as: per-human directory with `personas/`, `.env`, and a port; one `cd <dir> && uv run huxley` per human; production uses a launchd plist per instance with different `WorkingDirectory`. See `docs/architecture.md` for the canonical layout.
+- A `huxley init <dir>` scaffolder may land later as docs polish (creates the dir layout + template `.env` + picks a free port) — that's CLI ergonomics, not architecture, and can come whenever a real user friction shows up.
+- Privacy boundary between instances is filesystem-enforced (different `.env`, different DBs, different MTProto sessions). No cross-process state shared by design.
+- Two Huxley processes on the same machine are "two parallel Huxleys" — there is no notion of a multi-instance manager. The framework does not actively forbid running multiple processes (port-binding naturally prevents same-port conflicts; different-port conflicts are user-level). Documented as unsupported-but-allowed in `concepts.md`.
+
+---
+
+## 2026-05-01 — T1.13 critic-round-2 fixes (eager swap-connect, swap lock, teardown timeout)
+
+**Context**: between the T1.13 design landing and the implementation completing, an independent critic agent reviewed the shipped code (commits `0e32684e`, `ab5f1aea`). Three findings forced a follow-up commit (`b83232e0`).
+
+1. **The "lazy connect on swap" path was structurally broken.** The locked design said "user PTT triggers connect via the existing state-machine path" — false. The state machine has no IDLE→CONNECTING transition on PTT, only on `wake_word`, and the PWA does not emit `wake_word` after a persona-swap reconnect. So a user who swapped personas and then pressed PTT got rejected by `Application.on_ptt_start`'s IDLE-state guard. The swap appeared to succeed but the new persona was unreachable.
+2. **Concurrent `_switch_to_persona` calls leak Applications.** With no serialization, two simultaneous swap requests (PWA in two tabs, StrictMode double-mount, rapid picker clicks) both write `self.current_app = new_app`, the loser's freshly-built Application is silently overwritten — never shutdown, holding open SQLite + FocusManager + (now that swap eagerly connects) a live OpenAI session.
+3. **A stuck teardown can DoS the swap path.** `_teardown_task` was awaited unconditionally. If a buggy skill teardown deadlocks an `await`, every subsequent swap blocks forever.
+
+**Decisions**:
+
+- Swap path eagerly connects (`auto_connect=True` in `_shim_persona_select`'s call to `_switch_to_persona`). Boot path was already eager; swap now mirrors it. Idle Realtime sessions cost $0 (see `memory/project_realtime_costs.md`) so eager-connect on swap is functionally free.
+- `_switch_to_persona` body wrapped in `asyncio.Lock`. Concurrent swaps serialize; the loser's swap runs after the winner commits and tears down the correct `old_app`. No leaked Applications.
+- Teardown await is `asyncio.wait_for(asyncio.shield(task), timeout=10.0)`. On timeout: log loudly + abandon. `shield` so the underlying teardown still runs in the background — we just stop blocking on it.
+- Application's 9 AudioServer-callback methods (wake*word, ptt_start/stop, audio_frame, reset, language_select, list_sessions, get_session, delete_session) renamed from `\_on*_`to`on\__`— they're now the public dispatch surface. Runtime shims call them directly. Future renames of the`_on_\*`-prefixed-private convention won't silently break Runtime.
+
+**Consequences**:
+
+- Smoke is functional on first swap (the §1 fix).
+- Resource-leak class of bug eliminated for swap concurrency (§2).
+- Swap-path liveness preserved against buggy teardown code (§10).
+- "Public dispatch surface" is now named in code (§3); test renames + protocol changes hit it loudly.
+- Test coverage for the swap algorithm landed alongside the fixes (`server/runtime/tests/unit/test_runtime.py`, 10 tests including rapid-back-and-forth and concurrent-swap regressions).

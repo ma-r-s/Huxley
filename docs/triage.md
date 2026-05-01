@@ -2771,7 +2771,7 @@ Production: two launchd plists with different `WorkingDirectory`. Grandpa's ESP3
 
 We do **not** ship a profile abstraction (`huxley start <name>`). The cwd-based pattern is self-explanatory and matches every other server daemon (nginx sites, postgres clusters, redis instances). A `huxley init <dir>` scaffolder may land later as docs polish; not required.
 
-### Critic Notes (Gate 2 — round complete 2026-05-01)
+### Critic Notes (Gate 2 round 1 — design — complete 2026-05-01)
 
 Critic agent ran the full design (then in-band) with file:line refs. Verdict: in-band was overscoped. Findings + dispositions:
 
@@ -2786,30 +2786,56 @@ Critic agent ran the full design (then in-band) with file:line refs. Verdict: in
 - **Class shape** (Runtime + PersonaRegistry, no separate PersonaSwitcher). **Incorporated**: reconnect path collapses the swap algorithm to ~30 LOC inside Runtime; no PersonaSwitcher needed.
 - **Multi-process household scenario**: critic didn't address; Mario surfaced the question. **Decision**: cwd-based convention, no profile abstraction. Documented above.
 
+### Critic Notes (Gate 3 round 2 — implementation — complete 2026-05-01)
+
+After the server-side implementation landed (commits `0e32684e`, `ab5f1aea`), an independent critic agent reviewed the actual code against the locked design. Four findings forced a fix-up commit (`b83232e0`); summary in [`docs/decisions.md`](./decisions.md#2026-05-01--t113-critic-round-2-fixes-eager-swap-connect-swap-lock-teardown-timeout).
+
+- **§4 — "lazy connect on swap" was structurally broken.** Locked design said "user PTT triggers connect via the existing state-machine path." False: state machine has no IDLE→CONNECTING transition on PTT, only on `wake_word`, and the PWA does not emit `wake_word` on a swap reconnect. So PTT after swap got rejected by `Application.on_ptt_start`'s IDLE-state guard. The new persona was unreachable. **Fix**: `_shim_persona_select` calls `_switch_to_persona(name, auto_connect=True)`. Idle Realtime sessions cost $0 so eager-connect on swap is functionally free (mirrors boot path). Lesson: "the existing state-machine path" had a critical asymmetry the design glossed over — would have hit Mario on first smoke.
+- **§2 — concurrent swap leaks an Application.** Two `_switch_to_persona` calls overlapping (PWA in two tabs, StrictMode double-mount, rapid picker clicks) both ran their build-new path concurrently and the loser's freshly-built Application was silently reference-overwritten — never shutdown, holding open SQLite + FocusManager + (with §4 fix) a live OpenAI session. **Fix**: `asyncio.Lock` around `_switch_to_persona` body. Concurrent swaps serialize.
+- **§10 — stuck teardown DoSes the swap path.** `_teardown_task` was awaited unconditionally; a buggy skill teardown deadlock would stall every subsequent swap forever. **Fix**: `asyncio.wait_for(asyncio.shield(task), timeout=10.0)`. On timeout: log loudly + abandon. `shield` so the underlying teardown still runs in the background.
+- **§3 — Runtime accessed Application's private `_on_*` methods.** Silently brittle: a future rename of `_on_wake_word` would break Runtime at runtime, no type-check or test would catch it. **Fix**: renamed all 9 AudioServer-callback methods on Application from `_on_X` to `on_X`. They're now Application's public dispatch surface; Runtime shims call them directly.
+- **§11 — swap tests landed alongside the fixes.** The headline storage-lock-race fix (round 1) was previously unverified. New `tests/unit/test_runtime.py` with 10 tests including rapid back-and-forth, concurrent swap, failure-mode, hello-extras contract.
+
+Other round-2 findings (PWA TS type drift on hello extras, `list_personas()` re-enumeration cost per connection, "module functions vs `PersonaRegistry` class" deviation) deferred to step 8 (PWA wiring) and step 12 (docs polish) — non-blocking.
+
 ### Definition of Done (locked 2026-05-01 post-critic)
 
-- [ ] `PersonaRegistry` class — enumerates `./personas/<name>/persona.yaml`; `list()` returns lightweight summaries (name, display_name, language); `load(name)` returns `PersonaSpec`.
-- [ ] `Runtime` class — owns `AudioServer` + `PersonaRegistry` + `current_app` + `_teardown_task`. Implements the on-connection swap algorithm.
-- [ ] `Application.shutdown()` audited as complete (every resource released so a subsequent swap doesn't leak); idempotency tests.
-- [ ] `Application.start()` confirmed light — storage init + skill setup only, no OpenAI session.
-- [ ] `__main__.py` refactored to construct Runtime → Runtime constructs first Application lazily on first connection (or eagerly with default persona; small choice, document either way).
-- [ ] Boot-time ambiguity: multiple personas + no `HUXLEY_PERSONA` → pick alphabetic with loud log. Test it.
-- [ ] `?persona=<name>` query string at WS connect resolves correctly — same as current = no-op; different = swap; missing = default.
-- [ ] `hello` payload extended with `current_persona` (string) and `available_personas` (list of `{name, display_name, language}`). Additive only; protocol stays at 2.
-- [ ] PWA: `VITE_HUXLEY_PERSONAS` removed (from any `.env*` and from `App.tsx`'s `parsePersonas`). Persona picker reads `ws.availablePersonas` + `ws.currentPersona`. `selectPersona(name)` becomes "close WS, reopen with `?persona=name`" (extension of existing `setLanguage` pattern). Picker disabled during `activeClaimId || activeStream`. Chip text reflects `currentPersona` on each `hello`.
+**Server-side (DONE)** — commits `0e32684e`, `ab5f1aea`, `b83232e0`:
+
+- [x] Persona enumeration helpers (`list_personas`, `pick_default_persona_name`) — module functions; `PersonaRegistry` as a class was speced but the no-state shape didn't justify a class.
+- [x] `Runtime` class — owns `AudioServer` + `current_app` + `_teardown_task` + `_swap_lock`. Implements the swap algorithm.
+- [x] `Application.shutdown()` audited; reused as-is, no leaks identified. Now public (was `_shutdown`).
+- [x] `Application.start(auto_connect=True)` is light — storage init + skill setup; OpenAI session opens via `wake_word` trigger only when `auto_connect=True`.
+- [x] `__main__.py` refactored: constructs `Runtime` → `Runtime.run()`. Persona resolution moved into `Runtime.run()`.
+- [x] Boot-time ambiguity rule (alphabetic + loud log) implemented in `pick_default_persona_name`. `test_multi_persona_alphabetic_fallback` covers it.
+- [x] `?persona=<name>` parsing in `AudioServer._process_request`. `_shim_persona_select` triggers swap before hello.
+- [x] `hello` payload carries `current_persona` + `available_personas`. Additive; protocol stays at 2.
+- [x] **Rapid back-and-forth swap test passes**: `test_swap_back_to_same_persona_within_teardown_window` — exercises the storage-lock fix.
+- [x] **Failure-mode test passes**: `test_unknown_persona_keeps_previous_current_app`.
+- [x] **Concurrent swap test passes**: `test_concurrent_swap_serializes_no_leak` — exercises the round-2 §2 lock.
+- [x] **Boot ambiguity test passes**: in `test_persona.py::TestPickDefaultPersonaName`.
+- [x] Swap phases logged: `runtime.persona_swap_started/committed/failed`, `runtime.persona_load_failed/start_failed`, `runtime.old_app_shutdown_complete/failed`, `runtime.teardown_timeout_abandoned`, `persona.default_picked_alphabetically`.
+- [x] `ruff check server/runtime/` + `mypy server/sdk/src server/runtime/src` + 444 runtime tests all green.
+
+**Docs (DONE — this commit)**:
+
+- [x] `docs/concepts.md` — added "Persona = distinct entity, not theme" + "Persona switch = reconnect, not theme change" + "One Huxley process = one human" sections under `## Persona`.
+- [x] `docs/protocol.md` — added `?persona=` to handshake query params + additive `current_persona` / `available_personas` to hello + new "Persona selection via query param (T1.13)" section.
+- [x] `docs/architecture.md` — added `## Runtime topology` section + updated system-overview diagram to show `Runtime` above `Application` + corrected dependency-flow note (`runtime.py` is now the root, not `app.py`) + updated "Where to look in code" table.
+- [x] `docs/decisions.md` — three new ADRs (persona-as-distinct-entity, hot-swap-via-reconnect, multi-instance-via-cwds) + one round-2 fixes ADR.
+
+**PWA (PENDING — step 8)**:
+
+- [ ] `VITE_HUXLEY_PERSONAS` removed from any `.env*` + `App.tsx`'s `parsePersonas`. Persona picker reads `ws.availablePersonas` + `ws.currentPersona`. `selectPersona(name)` becomes "close WS, reopen with `?persona=name`" (extension of existing `setLanguage` pattern). Picker disabled during `activeClaimId || activeStream`. Chip text reflects `currentPersona` on each `hello`. PWA detects `current_persona !== requested` after a select-persona reconnect and surfaces a "couldn't switch" toast.
 - [ ] `persona_swap.wav` rendered by `scripts/synth_sounds.py` and committed to `server/personas/_shared/sounds/`. PWA plays it between WS close and reopen.
-- [ ] **Reminders catch-up verified**: switch from abuelos (with a reminder set for T+5min) to librarian, wait past T+5min, switch back to abuelos. Reminder fires (or rolls up "while you were away") via `setup()` re-read. If T1.8 doesn't already do this, fix inside T1.13.
-- [ ] **Telegram backfill verified for persona-swap-and-return path** (likely already works since T1.11 backfill handles process-restart; same code path).
-- [ ] **Gold integration test passes**: connect with no `?persona=` → server uses default → close + reconnect with `?persona=different` → `current_app.persona.name` reflects new → original persona's DB still has its summary, new persona's DB is independent.
-- [ ] **Rapid back-and-forth swap test passes** (the storage-lock fix): switch A→B→A within 500ms → no `database is locked`, no half-built state, both DBs intact.
-- [ ] **Failure-mode test passes**: connect with `?persona=<broken>` whose `start()` raises → WS closes with explanatory code → previous current_app (if any) is unaffected.
-- [ ] **Boot ambiguity test passes**: multi-persona dir + no env → alphabetic pick + log line emitted.
-- [ ] Each swap phase logged: `runtime.persona_swap_started`, `runtime.persona_swap_committed`, `runtime.persona_load_failed`, `runtime.old_app_shutdown_complete`, `runtime.default_persona_alphabetic`.
-- [ ] `ruff check server/` + `mypy server/sdk/src server/runtime/src` + per-package pytest all green.
-- [ ] `docs/concepts.md` updated with the persona-as-different-person product story (locked above).
-- [ ] `docs/protocol.md` updated with `?persona=` query, additive `hello` fields. No version bump note.
-- [ ] `docs/architecture.md` updated for Runtime topology.
-- [ ] `docs/decisions.md` ADR added documenting (a) reconnect-not-in-band call + reasoning, (b) cost-tracker-per-persona footgun + future split if friction, (c) cwd-based multi-instance deployment + no profile abstraction.
+
+**Skill catch-up verification (PENDING — step 10)**:
+
+- [ ] Reminders catch-up verified: switch from abuelos (with a reminder set for T+5min) to librarian, wait past T+5min, switch back to abuelos. Reminder fires (or rolls up "while you were away") via `setup()` re-read.
+- [ ] Telegram backfill verified for the persona-swap-and-return path (likely already works since T1.11 backfill handles process-restart; same code path).
+
+**Smoke (PENDING — step 13)**:
+
 - [ ] Mario browser smoke: PWA shows all 5 shipped personas in the picker; tap one → audible swap → reconnect → new persona on first PTT; rapid back-and-forth A→B→A works.
 
 ### Implementation order

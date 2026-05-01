@@ -21,11 +21,33 @@ skills:
   - system: {}
 ```
 
-A persona is shareable. You can clone someone else's persona file, install the skills it lists, and have an identical agent. Personas live in the `server/personas/` directory; Huxley loads one at startup based on config.
+A persona is shareable. You can clone someone else's persona file, install the skills it lists, and have an identical agent. Personas live in the `server/personas/` directory; Huxley discovers all of them at startup and loads one at a time.
 
 Personas can declare multiple languages in a single YAML file via an `i18n:` block (per-language `system_prompt`, `ui_strings`, and skill overrides). Clients pick the language at connect time with a `?lang=<code>` query param on the WebSocket URL; the framework resolves the persona for that language and hands skills a `SkillContext` whose `language` field flips accordingly. See [`server/personas/README.md#multilingual-personas`](./personas/README.md#multilingual-personas).
 
 How to write one: [`server/personas/README.md`](./personas/README.md).
+
+### Persona = distinct entity, not theme
+
+This is a product contract, not just an implementation detail.
+
+**A persona is a distinct entity that the user talks to. It is not a theme layered on a shared user profile.** Each persona has its own conversation memory, its own session history, its own reminders, its own Telegram identity, its own audiobook progress. Switching personas is reuniting with a different person — information does not flow between them. If you tell abuelos something, librarian does not know it.
+
+Why this contract:
+
+- The LLM's conversation summary and transcript context are intrinsically per-persona. Mixing librarian's summary into abuelos's instructions confuses the model. Once **any** state is per-persona, mixing user-scoped data on top creates a hybrid where the persona seems to know some things but not others — worse than either pure model. Owning the boundary is more honest than papering over it.
+- Multi-user households work cleanly: abuelos for grandpa with grandpa's Telegram, buddy for the kid with the kid's Telegram. Privacy is filesystem-enforced (per-persona DBs, per-persona MTProto sessions).
+- The "missed reminder when I switched personas" footgun reframes from a bug to documented behavior: when you're not talking to abuelos, abuelos isn't around. On return, abuelos catches up via the same skill-setup-reads-DB mechanism that already handles process restarts.
+
+When a persona is **not** active, it is genuinely **absent**: its Telegram is offline, its reminders are paused, its conversation context is dormant. The runtime hosts ONE active persona at a time (`current_app` in [`huxley.runtime`](../server/runtime/src/huxley/runtime.py)); inactive personas are not running in the background. See the [hot persona swap ADR](./decisions.md#2026-05-01--persona-is-a-distinct-entity-not-a-theme-t113) for the rationale and consequences in full.
+
+### Persona switch = reconnect, not theme change
+
+Switching personas is implemented as a WebSocket reconnect with a `?persona=<name>` query parameter. The PWA closes the WS, opens a new one with the new param, and the server swaps the active `Application` before sending hello. From the user's seat this looks like a brief loading state — same flow as a language switch (`?lang=<code>` reconnect). See the [reconnect-vs-in-band ADR](./decisions.md#2026-05-01--hot-persona-swap-via-reconnect-not-in-band-t113) and the [protocol contract](./protocol.md#persona-selection-via-query-param-t113).
+
+### One Huxley process = one human
+
+A Huxley process hosts one human's set of personas. Two humans in one house = two Huxley processes, each in its own working directory with its own `personas/`, `.env`, port, and DBs. There is no profile abstraction — multi-instance follows the standard Unix-daemon convention (one cwd per instance, launchd plist or systemd unit per instance). See [`docs/architecture.md`](./architecture.md#runtime-topology) for the canonical layout and the [no-profile-abstraction ADR](./decisions.md#2026-05-01--multi-instance-deployment-via-cwds-no-profile-abstraction-t113).
 
 ## Skill
 
