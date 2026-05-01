@@ -38,12 +38,21 @@ export interface DevEvent {
   ts: string;
 }
 
+// Persona summary as the server pushes it in the `hello` payload's
+// `available_personas` array (T1.13). Field shape mirrors the wire
+// shape exactly — `name` is the canonical id (the persona directory's
+// basename, what `?persona=<name>` selects), `display_name` is the
+// human-readable label (today same as `name` since `PersonaSpec`
+// doesn't yet carry a separate display field), `language` is the
+// persona's default language code.
+//
+// There is no `url` field anymore: post-T1.13 the runtime hosts
+// every persona in one process, so the picker just selects by name
+// and the WS reconnects with `?persona=<name>` against the same URL.
 export interface PersonaEntry {
-  id: string;
   name: string;
-  url: string;
-  lang?: string;
-  desc?: string;
+  display_name: string;
+  language: string;
 }
 
 // Session history (T1.12). Field shape mirrors the wire shape from

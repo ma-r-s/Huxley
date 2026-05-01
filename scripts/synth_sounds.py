@@ -461,6 +461,36 @@ def radio_start() -> F32:
     )
 
 
+def persona_swap() -> F32:
+    """Transition (~0.7 s): F6 -> C7 ascending fifth + Risset accent on C7.
+
+    Plays during a persona-swap reconnect (T1.13), bridging the WS close
+    and the new connection's hello. Two-note ascending pair reads as
+    "shift, then resolved into new context" — shorter and quieter than
+    book_start so it doesn't compete with the new persona's first
+    greeting that follows. Sits in the same shimmer register as the
+    rest of the palette (F6 = 1397 Hz, C7 = 2093 Hz), well above the
+    vocal band, so the immediate post-swap status TTS isn't masked.
+    """
+    voices = chord(
+        [
+            fm_bell(note("F6"), duration_s=0.5, mod_ratio=1.4, mod_index_peak=3.5),
+            fm_bell(note("C7"), duration_s=0.5, mod_ratio=1.4, mod_index_peak=3.5),
+        ],
+        stagger_ms=120.0,
+    )
+    shimmer = risset_bell(note("C7"), duration_s=0.45, brightness=0.7)
+    mixed = mix((0.7, voices), (0.35, shimmer))
+    return post(
+        mixed,
+        reverb_room=0.72,
+        reverb_damping=0.5,
+        reverb_wet=0.22,
+        reverb_dry=0.80,
+        pad_tail_s=0.3,
+    )
+
+
 def search_start() -> F32:
     """Single bright pluck (~0.7 s): E7 FM bell + brief Risset shimmer. "On it."
 
@@ -501,6 +531,7 @@ PALETTE: dict[str, Callable[[], F32]] = {
     "news_start": news_start,
     "radio_start": radio_start,
     "search_start": search_start,
+    "persona_swap": persona_swap,
 }
 
 

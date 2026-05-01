@@ -6,6 +6,7 @@ import { useState, useRef, useCallback } from "react";
 import type {
   AppState,
   InputMode,
+  PersonaEntry,
   TranscriptEntry,
   StatusEntry,
   DevEvent,
@@ -39,7 +40,18 @@ export interface ActiveStream {
 }
 
 type ServerMessage =
-  | { type: "hello"; protocol: number }
+  | {
+      type: "hello";
+      protocol: number;
+      // T1.13 additive fields. `current_persona` is the name of the
+      // persona this connection is for (null only in the brief boot
+      // window before the first persona loads — clients today won't
+      // observe this). `available_personas` is the runtime-pushed
+      // list the picker renders. Old clients ignore these keys, so
+      // protocol stays at 2 — see docs/protocol.md.
+      current_persona?: string | null;
+      available_personas?: PersonaEntry[];
+    }
   | { type: "audio"; data: string }
   | { type: "audio_clear" }
   | { type: "state"; value: AppState }
@@ -107,6 +119,13 @@ export function useWs() {
     id: number;
     turns: SessionTurn[];
   } | null>(null);
+  // Persona discovery (T1.13). The server pushes both fields on every
+  // `hello`. `availablePersonas` drives the picker; `currentPersona`
+  // drives the chip text. `null` until the first hello arrives.
+  const [availablePersonas, setAvailablePersonas] = useState<
+    PersonaEntry[] | null
+  >(null);
+  const [currentPersona, setCurrentPersona] = useState<string | null>(null);
 
   // ── Refs (callback-readable without stale closures) ─────────────────────
   const socketRef = useRef<WebSocket | null>(null);
@@ -119,6 +138,17 @@ export function useWs() {
   // Mirrors of state vars that callbacks need to read synchronously
   const inputModeRef = useRef<InputMode>("assistant_ptt");
   const thinkingActiveRef = useRef(false);
+
+  // Persona the client requested via the most recent `?persona=` —
+  // tracked so the hello handler can detect when the server returned a
+  // different `current_persona` (load failed, fell back to previous)
+  // and surface a status to the user. Cleared once the next hello
+  // arrives, regardless of match.
+  const requestedPersonaRef = useRef<string | null>(null);
+  // Mirror of `currentPersona` for callbacks (the hello handler runs
+  // before React re-renders; this lets `selectPersona` short-circuit
+  // a no-op call without waiting for state to flush).
+  const currentPersonaRef = useRef<string | null>(null);
 
   // Silence timer (auditory thinking tone — fires after SILENCE_TIMEOUT_MS)
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -217,26 +247,38 @@ export function useWs() {
   );
 
   // ── Connection ───────────────────────────────────────────────────────────
-  // `language` is appended to the base URL as `?lang=<code>` so the
-  // server can resolve the persona for that language BEFORE the session
-  // is established. The base URL stashed in `activeUrlRef` is WITHOUT
-  // the query string (so a persona switch that keeps the same language
-  // compares cleanly), and the lang is tracked separately so
-  // `setLanguage` can rebuild the full URL without parsing.
+  // `language` and `persona` are appended to the base URL as
+  // `?lang=<code>` and `?persona=<name>` so the server can resolve the
+  // active session BEFORE the WebSocket handshake completes. The base
+  // URL stashed in `activeUrlRef` is WITHOUT any query string; the
+  // params are tracked separately so a swap-or-relang flow can rebuild
+  // the full URL without parsing the previous one. T1.13: persona is
+  // chosen at handshake time, not in-band, so the picker UX is a
+  // close-and-reopen with a different `?persona=`.
   const activeLanguageRef = useRef<string | null>(null);
+  const activePersonaRef = useRef<string | null>(null);
   const connect = useCallback(
-    (url?: string, language?: string | null) => {
+    (url?: string, language?: string | null, persona?: string | null) => {
       // An explicit connect() call (initial mount, persona switch, or StrictMode
       // remount) always re-enables auto-reconnect.
       noReconnectRef.current = false;
       activeUrlRef.current = url ?? activeUrlRef.current ?? defaultWsUrl();
       if (language !== undefined) activeLanguageRef.current = language;
+      if (persona !== undefined) activePersonaRef.current = persona;
       // Don't open a second socket if one is already live or connecting.
       // This prevents StrictMode's second mount from racing the first.
       const rs = socketRef.current?.readyState;
       if (rs === WebSocket.CONNECTING || rs === WebSocket.OPEN) return;
-      const full = activeLanguageRef.current
-        ? `${activeUrlRef.current}${activeUrlRef.current.includes("?") ? "&" : "?"}lang=${encodeURIComponent(activeLanguageRef.current)}`
+      const params = new URLSearchParams();
+      if (activeLanguageRef.current) {
+        params.set("lang", activeLanguageRef.current);
+      }
+      if (activePersonaRef.current) {
+        params.set("persona", activePersonaRef.current);
+      }
+      const qs = params.toString();
+      const full = qs
+        ? `${activeUrlRef.current}${activeUrlRef.current.includes("?") ? "&" : "?"}${qs}`
         : activeUrlRef.current;
       const ws = new WebSocket(full);
 
@@ -270,6 +312,33 @@ export function useWs() {
                   `Protocol mismatch: server=${msg.protocol} client=${EXPECTED_PROTOCOL}`,
                 );
                 ws.close(1002, "Protocol version mismatch");
+                break;
+              }
+              // T1.13: server pushes `current_persona` + `available_personas`
+              // on every hello. Capture both into render state so the picker
+              // and chip refresh on each (re)connect.
+              if (msg.available_personas !== undefined) {
+                setAvailablePersonas(msg.available_personas);
+              }
+              if (msg.current_persona !== undefined) {
+                const actual = msg.current_persona ?? null;
+                currentPersonaRef.current = actual;
+                setCurrentPersona(actual);
+                // If the user requested a specific persona via
+                // `selectPersona()`, the server may have rejected it
+                // (load failed, persona not found) and fallen back to
+                // whatever was previously active. Surface that to the
+                // user instead of letting the picker silently snap
+                // back to the wrong choice. Cleared regardless of
+                // outcome so a subsequent same-persona reconnect (no
+                // mismatch by definition) doesn't fire false positives.
+                const requested = requestedPersonaRef.current;
+                requestedPersonaRef.current = null;
+                if (requested !== null && requested !== actual) {
+                  pushStatus(
+                    `Could not switch to ${requested} — staying on ${actual ?? "(no persona)"}`,
+                  );
+                }
               }
               break;
             case "audio":
@@ -397,11 +466,21 @@ export function useWs() {
     setConnected(false);
   }, [cancelSilenceTimer, setThinkingActiveSync]);
 
-  const switchPersona = useCallback(
-    (url: string) => {
-      if (url === activeUrlRef.current && socketRef.current !== null) return;
-      pushStatus(`Switching to ${url}\u2026`);
+  // T1.13: persona switch is a WebSocket reconnect with `?persona=<name>`.
+  // The server runs its swap algorithm on connect \u2014 close-and-reopen
+  // mirrors the existing `setLanguage` flow. No-op if the requested
+  // name already matches `currentPersona`. Sets `requestedPersonaRef`
+  // so the next hello can detect a server-side fallback and surface
+  // it as a "couldn't switch" status.
+  const selectPersona = useCallback(
+    (name: string) => {
+      if (currentPersonaRef.current === name && socketRef.current !== null) {
+        return;
+      }
+      requestedPersonaRef.current = name;
+      activePersonaRef.current = name;
       switchingRef.current = true;
+      pushStatus(`Switching to ${name}\u2026`);
       setAppState("IDLE");
       setTranscript([]);
       setDevEvents([]);
@@ -411,10 +490,9 @@ export function useWs() {
       cancelSilenceTimer("persona_switch");
       setThinkingActiveSync(false);
       if (socketRef.current !== null) socketRef.current.close();
-      activeUrlRef.current = url;
       setTimeout(() => {
         switchingRef.current = false;
-        connect(url);
+        connect(undefined, undefined, name);
       }, 50);
     },
     [pushStatus, cancelSilenceTimer, setThinkingActiveSync, connect],
@@ -521,6 +599,8 @@ export function useWs() {
     thinkingActive,
     sessionsList,
     sessionDetail,
+    availablePersonas,
+    currentPersona,
     get activeUrl() {
       return activeUrlRef.current;
     },
@@ -528,7 +608,7 @@ export function useWs() {
     // Connection
     connect,
     disconnect,
-    switchPersona,
+    selectPersona,
     setLanguage,
     pushStatus,
 
