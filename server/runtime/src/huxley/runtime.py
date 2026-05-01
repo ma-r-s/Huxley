@@ -354,9 +354,22 @@ class Runtime:
         `available_personas` is enumerated fresh on each connection;
         cheap (single directory listing) and means a persona added to
         `./personas/` while the server is running shows up without a
-        restart."""
+        restart.
+
+        `current_persona` is the **directory basename** (the canonical
+        id `?persona=` resolves against), NOT `PersonaSpec.name` which
+        is the YAML's display label (`"Basic"`, `"Chief"`, ...). The
+        PWA picker compares this against `available_personas[].name`
+        which is also the directory basename, so both must agree.
+        Conflating them was the regression that made post-swap UI show
+        the wrong active row even when the swap actually landed (the
+        same id-vs-display-name foot-gun the post-T1.13 fix locked
+        down for `available_personas` but missed here).
+        """
         return {
-            "current_persona": (self.current_app.persona.name if self.current_app else None),
+            "current_persona": (
+                self.current_app.persona.data_dir.parent.name if self.current_app else None
+            ),
             "available_personas": [
                 {
                     "name": s.name,

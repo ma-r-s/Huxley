@@ -233,3 +233,50 @@ class TestHelloExtras:
         assert extras["current_persona"] == "beta"
         await runtime_in_tmp.current_app.shutdown()  # type: ignore[union-attr]
         await _drain_teardown(runtime_in_tmp)
+
+    async def test_current_persona_is_directory_basename_not_yaml_label(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: post-T1.13 fix locked down PersonaSummary.name to be
+        the directory basename (the canonical id ?persona= resolves
+        against), but `current_persona` in the hello extras kept reading
+        PersonaSpec.name (the YAML's display label). When directory
+        basename ≠ YAML name (e.g. dir=basicos, yaml.name="Basic"), the
+        hello pushed `Basic` while the picker compared against
+        available_personas[].name == "basicos" — so the active row
+        highlight broke after every swap.
+
+        This test creates a persona where the two differ and asserts the
+        hello uses the directory basename. The earlier
+        `test_extras_reflects_current_persona_after_swap` test shadowed
+        this bug because its fixture writes YAML with `name: {dir}` —
+        directory and label happen to agree.
+        """
+        personas_dir = tmp_path / "personas"
+        # Directory "basicos", but YAML name is "Basic" (the display
+        # label) — mirrors the real basicos/persona.yaml shape that
+        # tripped Mario's voice smoke.
+        d = personas_dir / "basicos"
+        d.mkdir(parents=True)
+        (d / "persona.yaml").write_text(
+            _MINIMAL_PERSONA_YAML.format(name="Basic"), encoding="utf-8"
+        )
+        (d / "data").mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        runtime = Runtime(Settings(openai_api_key="test-key"))
+        await runtime._switch_to_persona("basicos", auto_connect=False)
+        try:
+            extras = runtime._get_hello_extras()
+            # Must be the directory basename, not the YAML label.
+            assert extras["current_persona"] == "basicos"
+            # And the available_personas entry uses the same id (already
+            # verified by the post-T1.13 fix; regression-pinning here so
+            # the two remain in sync).
+            available = extras["available_personas"]
+            assert isinstance(available, list)
+            assert available[0]["name"] == "basicos"
+            assert available[0]["display_name"] == "Basic"
+        finally:
+            await runtime.current_app.shutdown()  # type: ignore[union-attr]
+            await _drain_teardown(runtime)
