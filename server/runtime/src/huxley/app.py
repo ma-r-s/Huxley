@@ -83,17 +83,28 @@ class Application:
     communication. Manages the async main loop and graceful shutdown.
     """
 
-    def __init__(self, config: Settings, persona: PersonaSpec, audio_server: AudioServer) -> None:
+    def __init__(
+        self,
+        config: Settings,
+        persona: PersonaSpec,
+        audio_server: AudioServer,
+        *,
+        language: str | None = None,
+    ) -> None:
         self.config = config
         self.persona = persona
-        # Active-session language (ISO 639-1). Set by clients via
-        # `?lang=<code>` in the WebSocket URL; `None` means "use persona
-        # default." `_resolved_persona` caches the language-collapsed
-        # view built at each session connect — the coordinator reads it
-        # for UI strings and the skill-context factory reads its `skills`
-        # dict for per-skill config.
-        self._active_language: str | None = None
-        self._resolved_persona: ResolvedPersona = persona.resolve()
+        # Active-session language (ISO 639-1). The runtime passes the
+        # client's `?lang=<code>` in here when a persona swap is driven
+        # by a reconnect that carries a language too — so the new
+        # OpenAI session opens in the right language from the start
+        # instead of in the persona's default and then immediately
+        # disconnect+reconnect in the requested language. `None` means
+        # "use persona default." `_resolved_persona` caches the
+        # language-collapsed view; resolved upfront with `language` so
+        # the first skill setup runs in the right locale without a
+        # subsequent reconfigure churn.
+        self._active_language = language
+        self._resolved_persona: ResolvedPersona = persona.resolve(language)
         self.state_machine = StateMachine()
         self.storage = Storage(persona.data_dir / f"{persona.name.lower()}.db")
         self.skill_registry = SkillRegistry()
@@ -388,6 +399,16 @@ class Application:
         )
 
     async def _on_state_transition(self, new_state: AppState) -> None:
+        # T1.13: AudioServer is shared across the current Application
+        # AND the previous one being torn down in the background after
+        # a persona swap. If we relay state transitions while
+        # `_shutting_down`, the old app's IDLE/disconnect transitions
+        # leak to the NEW persona's connection and the PWA sees a
+        # spurious CONVERSING→IDLE flap (firing the error tone +
+        # poisoning the appState the PTT handler dispatches on).
+        # Suppress here so the dying app can't speak to the wire.
+        if self._shutting_down:
+            return
         await self.server.send_state(new_state.name)
 
     # --- Session callbacks ---
