@@ -8,11 +8,11 @@ import sys
 from dotenv import load_dotenv
 
 from huxley.config import Settings
-from huxley.persona import PersonaError, load_persona, resolve_persona_path
+from huxley.persona import PersonaError
 
 
 def main() -> None:
-    """Parse config, load persona, run the application."""
+    """Parse config, build the Runtime, run."""
     # Load .env into os.environ BEFORE constructing Settings. pydantic-settings
     # reads .env too, but only for fields declared on the model — skill
     # secrets like HUXLEY_TELEGRAM_API_ID aren't framework config and
@@ -31,24 +31,22 @@ def main() -> None:
         print("Error: HUXLEY_OPENAI_API_KEY is required.", file=sys.stderr)
         sys.exit(1)
 
-    persona_path = resolve_persona_path(env_name=config.persona)
+    # Lazy import so configuration errors above surface quickly without
+    # paying the framework's import cost.
+    from huxley.runtime import Runtime
+
+    runtime = Runtime(config)
     try:
-        persona = load_persona(persona_path)
+        asyncio.run(runtime.run())
     except PersonaError as e:
         print(f"Persona error: {e}", file=sys.stderr)
         print(
-            "Set HUXLEY_PERSONA to a persona name under ./personas/, "
-            "or run from a directory containing ./personas/<name>/persona.yaml. "
-            "If exactly one persona is present under ./personas/, it is "
-            "picked automatically.",
+            "Place a persona dir under ./personas/<name>/persona.yaml, "
+            "set HUXLEY_PERSONA to a name under ./personas/, or run "
+            "from a directory that contains ./personas/.",
             file=sys.stderr,
         )
         sys.exit(1)
-
-    from huxley.app import Application
-
-    app = Application(config, persona)
-    asyncio.run(app.run())
 
 
 if __name__ == "__main__":

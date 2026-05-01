@@ -98,6 +98,16 @@ class AudioServer:
         on_list_sessions: Callable[[], Awaitable[None]] | None = None,
         on_get_session: Callable[[int], Awaitable[None]] | None = None,
         on_delete_session: Callable[[int], Awaitable[None]] | None = None,
+        # T1.13 — persona swap via `?persona=<name>` reconnect.
+        # `on_persona_select` fires BEFORE hello on each new connection;
+        # the runtime decides whether to swap to a different Application.
+        # `get_hello_extras` lets the runtime inject `current_persona`
+        # + `available_personas` into the hello payload (additive,
+        # non-breaking; old clients ignore unknown fields). Both default
+        # to None for tests / single-persona deployments that don't wire
+        # a runtime layer.
+        on_persona_select: Callable[[str | None], Awaitable[None]] | None = None,
+        get_hello_extras: Callable[[], dict[str, object]] | None = None,
     ) -> None:
         self._host = host
         self._port = port
@@ -114,6 +124,14 @@ class AudioServer:
         self._on_list_sessions = on_list_sessions
         self._on_get_session = on_get_session
         self._on_delete_session = on_delete_session
+        # T1.13 — persona swap hooks (see constructor docstring above).
+        self._on_persona_select = on_persona_select
+        self._get_hello_extras = get_hello_extras
+        # `?persona=<name>` from the URL, captured in `_process_request`
+        # and consumed before hello in `_handle_connection`. Single field
+        # is safe for the same reason `_pending_language` is — handshakes
+        # serialize per connection and we evict old clients.
+        self._pending_persona: str | None = None
         self._client: ServerConnection | None = None
         self._state = "IDLE"
         # Last-sent input mode — cached so a new client can be brought
@@ -187,10 +205,17 @@ class AudioServer:
             lang_values = qs.get("lang") or qs.get("language")
             lang = lang_values[0].strip().lower() if lang_values else None
             self._pending_language = lang or None
+            # T1.13 — `?persona=<name>` selects which persona this
+            # connection is for. Trimmed but not lowercased; persona
+            # directory names are case-sensitive.
+            persona_values = qs.get("persona")
+            persona = persona_values[0].strip() if persona_values else None
+            self._pending_persona = persona or None
         except Exception:
             # Never block a handshake over a malformed query string;
             # fall back to persona default.
             self._pending_language = None
+            self._pending_persona = None
         return None
 
     async def _handle_connection(self, ws: ServerConnection) -> None:
@@ -209,31 +234,52 @@ class AudioServer:
                 await old.close(1001, "Replaced by new client")
 
         self._client = ws
-        # Pull the language the client requested in its URL (captured
-        # during `_process_request`) and hand it to the app. The callback
-        # decides whether to reconnect the LLM session to pick up the
-        # new language (no-op if it matches the current session).
+        # Pull the language and persona the client requested in its URL
+        # (captured during `_process_request`) and hand each to the
+        # respective callback. Persona-select runs FIRST so the runtime
+        # can swap to the requested persona BEFORE we serialize hello —
+        # otherwise the hello would carry the old persona's name.
         selected_language = self._pending_language
+        selected_persona = self._pending_persona
         self._pending_language = None
+        self._pending_persona = None
         await logger.ainfo(
             "client_connected",
             remote=str(ws.remote_address),
             language=selected_language,
+            persona=selected_persona,
         )
+        # T1.13 — fire the persona-select callback BEFORE hello. The
+        # runtime's swap algorithm runs here; on success, current_app
+        # is the new persona by the time hello goes out. On failure,
+        # the runtime keeps the previous current_app and logs; we
+        # continue serving the connection on the un-swapped state
+        # rather than dropping it (PWA can retry the picker).
+        if self._on_persona_select is not None:
+            try:
+                await self._on_persona_select(selected_persona)
+            except Exception:
+                await logger.aexception("persona_select_failed", requested=selected_persona)
         try:
             # Handshake: hello first, then current state + input mode
             # sync so a reconnecting client knows whether a claim is
             # already active on the server (if we land mid-call, the
             # client should jump straight to continuous-mic).
-            await ws.send(
-                json.dumps(
-                    {
-                        "type": "hello",
-                        "protocol": PROTOCOL_VERSION,
-                        "language": selected_language,
-                    }
-                )
-            )
+            hello_payload: dict[str, object] = {
+                "type": "hello",
+                "protocol": PROTOCOL_VERSION,
+                "language": selected_language,
+            }
+            # T1.13 — additive hello fields: current_persona +
+            # available_personas. Wired via `get_hello_extras` so the
+            # runtime owns the truth (we don't re-read the filesystem
+            # per connection). Old clients ignore unknown keys.
+            if self._get_hello_extras is not None:
+                try:
+                    hello_payload.update(self._get_hello_extras())
+                except Exception:
+                    await logger.aexception("hello_extras_failed")
+            await ws.send(json.dumps(hello_payload))
             await ws.send(json.dumps({"type": "state", "value": self._state}))
             await ws.send(
                 json.dumps(
