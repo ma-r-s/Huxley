@@ -32,7 +32,7 @@ cd server/runtime
 HUXLEY_PERSONA=chief uv run huxley
 ```
 
-Try it alongside basicos to compare terse styles:
+Try it alongside basic to compare terse styles:
 
 ```bash
 HUXLEY_PERSONA=chief HUXLEY_SERVER_PORT=8766 uv run huxley

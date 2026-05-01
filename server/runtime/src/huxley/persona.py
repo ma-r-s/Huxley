@@ -411,7 +411,7 @@ def list_personas() -> list[PersonaSummary]:
                 # (often capitalized: "Abuelo", "Buddy") and may differ
                 # from the directory name ("abuelos", "buddy"). Conflating
                 # them broke `?persona=Basic` resolution against the
-                # `basicos/` directory because Basic ≠ basicos even
+                # `basic/` directory because Basic ≠ basic even
                 # case-insensitively.
                 name=d.name,
                 display_name=spec.name,

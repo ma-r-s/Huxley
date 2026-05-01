@@ -133,6 +133,57 @@ class TestBasicSwap:
         await runtime_in_tmp.current_app.shutdown()
 
 
+class TestLazyBoot:
+    """Lazy boot: Runtime.run() doesn't pre-pick a persona. The first
+    WS connection's `_shim_persona_select` does, falling back to
+    `pick_default_persona_name` when no `?persona=` query param is
+    supplied. This removes the boot-time HUXLEY_PERSONA= ceremony — the
+    PWA picker becomes the single source of truth for which persona is
+    active."""
+
+    async def test_first_connect_with_persona_query_sets_current_app(
+        self, runtime_in_tmp: Runtime
+    ) -> None:
+        # Server boots with no current_app; first WS connection arrives
+        # with `?persona=beta`; shim brings beta up.
+        assert runtime_in_tmp.current_app is None
+        await runtime_in_tmp._shim_persona_select("beta", language=None)
+        assert runtime_in_tmp.current_app is not None
+        assert runtime_in_tmp.current_app.persona.name == "beta"
+        await runtime_in_tmp.current_app.shutdown()
+        await _drain_teardown(runtime_in_tmp)
+
+    async def test_first_connect_without_persona_query_falls_back_to_default(
+        self, runtime_in_tmp: Runtime, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # No HUXLEY_PERSONA env var, no `?persona=` query → shim falls
+        # back to pick_default_persona_name. With three personas
+        # (alpha/beta/gamma) and no env, that's "alpha" (alphabetic
+        # first, with a loud warning logged at the picker level).
+        monkeypatch.delenv("HUXLEY_PERSONA", raising=False)
+        assert runtime_in_tmp.current_app is None
+        await runtime_in_tmp._shim_persona_select(None, language=None)
+        assert runtime_in_tmp.current_app is not None
+        assert runtime_in_tmp.current_app.persona.name == "alpha"
+        await runtime_in_tmp.current_app.shutdown()
+        await _drain_teardown(runtime_in_tmp)
+
+    async def test_lazy_boot_no_personas_logs_and_does_not_crash(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Edge case: a personas dir is created with NO valid persona
+        # (e.g. someone deleted them between boot and first connect).
+        # Shim should log warning and return without raising — the WS
+        # handshake proceeds with no current_app and the client sees
+        # `current_persona: null` in the hello extras.
+        (tmp_path / "personas").mkdir()
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("HUXLEY_PERSONA", raising=False)
+        runtime = Runtime(Settings(openai_api_key="test-key"))
+        await runtime._shim_persona_select(None, language=None)
+        assert runtime.current_app is None  # no crash, no swap
+
+
 class TestRapidBackAndForthSwap:
     """Critic round 1 finding (locked in DoD): rapid A→B→A within the
     teardown window must NOT collide on SQLite's WAL writer-lock when
@@ -241,9 +292,9 @@ class TestHelloExtras:
         the directory basename (the canonical id ?persona= resolves
         against), but `current_persona` in the hello extras kept reading
         PersonaSpec.name (the YAML's display label). When directory
-        basename ≠ YAML name (e.g. dir=basicos, yaml.name="Basic"), the
+        basename ≠ YAML name (e.g. dir=basic, yaml.name="Basic"), the
         hello pushed `Basic` while the picker compared against
-        available_personas[].name == "basicos" — so the active row
+        available_personas[].name == "basic" — so the active row
         highlight broke after every swap.
 
         This test creates a persona where the two differ and asserts the
@@ -253,10 +304,10 @@ class TestHelloExtras:
         directory and label happen to agree.
         """
         personas_dir = tmp_path / "personas"
-        # Directory "basicos", but YAML name is "Basic" (the display
-        # label) — mirrors the real basicos/persona.yaml shape that
+        # Directory "basic", but YAML name is "Basic" (the display
+        # label) — mirrors the real basic/persona.yaml shape that
         # tripped Mario's voice smoke.
-        d = personas_dir / "basicos"
+        d = personas_dir / "basic"
         d.mkdir(parents=True)
         (d / "persona.yaml").write_text(
             _MINIMAL_PERSONA_YAML.format(name="Basic"), encoding="utf-8"
@@ -265,17 +316,17 @@ class TestHelloExtras:
         monkeypatch.chdir(tmp_path)
 
         runtime = Runtime(Settings(openai_api_key="test-key"))
-        await runtime._switch_to_persona("basicos", auto_connect=False)
+        await runtime._switch_to_persona("basic", auto_connect=False)
         try:
             extras = runtime._get_hello_extras()
             # Must be the directory basename, not the YAML label.
-            assert extras["current_persona"] == "basicos"
+            assert extras["current_persona"] == "basic"
             # And the available_personas entry uses the same id (already
             # verified by the post-T1.13 fix; regression-pinning here so
             # the two remain in sync).
             available = extras["available_personas"]
             assert isinstance(available, list)
-            assert available[0]["name"] == "basicos"
+            assert available[0]["name"] == "basic"
             assert available[0]["display_name"] == "Basic"
         finally:
             await runtime.current_app.shutdown()  # type: ignore[union-attr]

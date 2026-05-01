@@ -107,7 +107,13 @@ class Application:
         self._active_language = language
         self._resolved_persona: ResolvedPersona = persona.resolve(language)
         self.state_machine = StateMachine()
-        self.storage = Storage(persona.data_dir / f"{persona.name.lower()}.db")
+        # DB filename is the persona's directory basename (the canonical
+        # id), not `persona.name` (the YAML display label). For most
+        # personas these agree, but conflating them breaks the moment
+        # someone names a persona dir `basic/` with `name: "Basic"` —
+        # the same id-vs-display foot-gun that bit the hello-extras
+        # `current_persona` field. See decisions.md 2026-05-01 entry.
+        self.storage = Storage(persona.data_dir / f"{persona.data_dir.parent.name}.db")
         self.skill_registry = SkillRegistry()
 
         # T1.13 — `AudioServer` is now process-lifelong (owned by `Runtime`)

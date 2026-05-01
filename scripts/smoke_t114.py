@@ -6,7 +6,7 @@ through the same code paths the production server uses:
 
 1. discover_skills() reads the entry-point group and returns the
    StocksSkill class.
-2. load_persona() reads server/personas/basicos/persona.yaml and
+2. load_persona() reads server/personas/basic/persona.yaml and
    resolves the skills + config.
 3. JsonFileSecrets reads <persona>/data/secrets/stocks/values.json
    (perms 0700/0600).
@@ -77,8 +77,8 @@ async def smoke() -> int:
         if getattr(skill_class, "data_schema_version", None) != 1:
             failures.append("data_schema_version != 1")
 
-    print("\n=== Smoke 2: load basicos persona ===")
-    spec = load_persona(REPO / "server" / "personas" / "basicos")
+    print("\n=== Smoke 2: load basic persona ===")
+    spec = load_persona(REPO / "server" / "personas" / "basic")
     resolved = spec.resolve()
     if "stocks" not in resolved.skills:
         failures.append("stocks not in resolved.skills (persona.yaml broken?)")
@@ -90,7 +90,7 @@ async def smoke() -> int:
         )
 
     print("\n=== Smoke 3: JsonFileSecrets reads values.json ===")
-    secrets_dir = REPO / "server" / "personas" / "basicos" / "data" / "secrets" / "stocks"
+    secrets_dir = REPO / "server" / "personas" / "basic" / "data" / "secrets" / "stocks"
     secrets = JsonFileSecrets(secrets_dir)
     api_key = await secrets.get("api_key")
     if api_key != "smoke-test-placeholder-key":
@@ -99,7 +99,7 @@ async def smoke() -> int:
         _log("secrets_ok", value_preview=api_key[:12] + "...")
 
     print("\n=== Smoke 4: schema-version writes to schema_meta ===")
-    db_path = REPO / "server" / "personas" / "basicos" / "data" / "smoke.db"
+    db_path = REPO / "server" / "personas" / "basic" / "data" / "smoke.db"
     db_path.unlink(missing_ok=True)
     storage = Storage(db_path)
     await storage.init()
@@ -131,7 +131,7 @@ async def smoke() -> int:
         logger=logger,
         storage=NamespacedSkillStorage(storage, "stocks"),
         secrets=secrets,
-        persona_data_dir=REPO / "server" / "personas" / "basicos" / "data",
+        persona_data_dir=REPO / "server" / "personas" / "basic" / "data",
         config=resolved.skills["stocks"],
         language=resolved.language_code,
     )

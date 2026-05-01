@@ -97,8 +97,22 @@ class Runtime:
     # ── Lifecycle ───────────────────────────────────────────────────────
 
     async def run(self) -> None:
-        """Process-wide lifecycle: setup logging + signals, bring up
-        default persona, run audio server until shutdown."""
+        """Process-wide lifecycle: setup logging + signals, run audio
+        server until shutdown.
+
+        **Lazy boot**: the runtime starts without a `current_app`. The
+        first WebSocket connection drives persona selection via
+        ``?persona=<name>``; the shim falls back to
+        ``pick_default_persona_name`` if no query param is supplied.
+        Cost: the very first PTT after a server start pays the
+        Realtime handshake latency (~1-2s) since there's no
+        preconnected session. Benefit: no ``HUXLEY_PERSONA=`` ceremony
+        for development; the PWA picker is the single source of truth
+        for which persona is active.
+
+        If ``HUXLEY_PERSONA`` IS set in the environment, it still wins
+        — the env var becomes the default the lazy fallback picks.
+        """
         log_file = self._config.log_file or Path("logs/huxley.log")
         setup_logging(
             level=self._config.log_level,
@@ -107,18 +121,15 @@ class Runtime:
         )
         await logger.ainfo("huxley_starting")
 
-        # Resolve which persona to bring up first. Locked rule: env >
-        # single-persona autodiscovery > alphabetic-first-with-loud-log.
-        default_name = pick_default_persona_name(env_name=self._config.persona)
-        if default_name is None:
-            msg = (
-                "no personas could be discovered. Place a persona dir "
-                "under ./personas/<name>/ or set HUXLEY_PERSONA."
-            )
+        # Validate at least one persona exists so we fail loudly NOW
+        # (rather than on the first WS connect, which surfaces in the
+        # client as a confusing handshake rejection). pick_default_persona_name
+        # returns the first usable persona; we discard the value and
+        # rely on the shim to pick at first-connect time. Env var still
+        # influences the fallback inside the shim.
+        if pick_default_persona_name(env_name=self._config.persona) is None:
+            msg = "no personas could be discovered. Place a persona dir under ./personas/<name>/."
             raise PersonaError(msg)
-
-        # Eager-connect the default at boot so first PTT is instant.
-        await self._switch_to_persona(default_name, auto_connect=True)
 
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
@@ -126,12 +137,14 @@ class Runtime:
 
         await logger.ainfo(
             "huxley_ready",
-            persona=default_name,
+            persona=None,
+            note="lazy boot — first WS connect picks the persona",
             server=f"ws://{self._config.server_host}:{self._config.server_port}",
         )
         print(
             f"\033[1;32m[Huxley] Server listening on "
-            f"ws://{self._config.server_host}:{self._config.server_port}\033[0m",
+            f"ws://{self._config.server_host}:{self._config.server_port}"
+            f" — awaiting first client to pick persona\033[0m",
             flush=True,
         )
 
@@ -328,14 +341,55 @@ class Runtime:
         Failures are caught and logged — we do NOT propagate them to
         AudioServer because that would crash the WS handshake.
 
+        Lazy-boot: when `current_app is None` (the post-startup state
+        before any client has connected), this is the **first**
+        connection driving persona selection. If the client supplied
+        `?persona=<name>` we use it; otherwise we fall back to
+        `pick_default_persona_name` (HUXLEY_PERSONA env var if set,
+        else single-persona autodiscovery, else alphabetic-first). The
+        first PTT pays the Realtime handshake latency in this state;
+        every subsequent connect is fast because `current_app` stays
+        live until process shutdown.
+
         Eager-connects (`auto_connect=True`) so the user's first PTT
         after the swap reaches a CONVERSING session instead of being
         rejected by the IDLE-state guard. Critic round 2 §4."""
-        if name is None:
-            # No persona requested — same-persona path. The subsequent
-            # `on_language_select` callback handles a language flip.
+        # Lazy-boot path: no current_app yet. Pick a name (env var
+        # default if no query param was supplied) and bring it up.
+        if self.current_app is None:
+            chosen = name or pick_default_persona_name(env_name=self._config.persona)
+            if chosen is None:
+                # No personas at all — Runtime.run() validated this
+                # already, so reaching here means the personas/ dir
+                # got deleted between boot and first connect. Log and
+                # let the WS handshake proceed with no app; the client
+                # will see no `current_persona` and surface "no
+                # personas available."
+                await logger.awarning(
+                    "runtime.lazy_boot.no_persona_pickable",
+                    requested=name,
+                    env=self._config.persona,
+                )
+                return
+            try:
+                await self._switch_to_persona(chosen, auto_connect=True, language=language)
+            except Exception:
+                await logger.aexception(
+                    "runtime.lazy_boot.first_swap_failed",
+                    persona=chosen,
+                )
             return
-        if self.current_app is not None and self.current_app.persona.name == name:
+
+        if name is None:
+            # No persona requested on a subsequent connect — same-persona
+            # path. The subsequent `on_language_select` callback handles
+            # a language flip.
+            return
+        # Compare against directory basename (the canonical id ?persona=
+        # resolves), NOT persona.name (the YAML display label). Same
+        # id-vs-display foot-gun the post-T1.13 fix locked down for
+        # PersonaSummary.name and the hello extras current_persona.
+        if self.current_app.persona.data_dir.parent.name == name:
             # Same persona; let `on_language_select` (fired right after
             # by AudioServer) handle a language change if any.
             return

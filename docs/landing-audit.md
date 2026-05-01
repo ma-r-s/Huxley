@@ -8,7 +8,7 @@
 ## Quick Stats
 
 - **Shipped first-party skills:** 6 (audiobooks, news, radio, system, telegram, timers)
-- **Shipped personas:** 2 (abuelos, basicos)
+- **Shipped personas:** 2 (abuelos, basic)
 - **Framework Python LOC:** ~8,758 (runtime: 7,186 + sdk: 1,572)
 - **Test count:** 34 test files across server packages
 - **ADRs filed:** 15 architectural decisions documented
@@ -24,7 +24,7 @@
 > "Six personas in the wild" (Install.tsx:112, Footer)
 
 **Reality:**  
-- Only 2 personas shipped in the codebase: `abuelos` and `basicos` (server/personas/)
+- Only 2 personas shipped in the codebase: `abuelos` and `basic` (server/personas/)
 - No evidence of 6 personas deployed externally
 - README.md credits Abuelo as "the first persona shipped on Huxley" (line 38)
 

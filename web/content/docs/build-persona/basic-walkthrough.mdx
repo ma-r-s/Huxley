@@ -9,9 +9,9 @@ This page reads Basic top to bottom and explains every choice. Use it as a start
 
 ## The full file
 
-Here's a representative version of `server/personas/basicos/persona.yaml`, abbreviated slightly for readability (inline comments and some system prompt detail omitted). The actual file at `server/personas/basicos/persona.yaml` is the source of truth.
+Here's a representative version of `server/personas/basic/persona.yaml`, abbreviated slightly for readability (inline comments and some system prompt detail omitted). The actual file at `server/personas/basic/persona.yaml` is the source of truth.
 
-```yaml title="server/personas/basicos/persona.yaml"
+```yaml title="server/personas/basic/persona.yaml"
 version: 1
 name: Basic
 voice: alloy
@@ -170,16 +170,16 @@ No config. The system skill exposes `get_current_time` and `set_volume`. It read
 Basic is intentionally minimal:
 
 <Files>
-  <Folder name="server/personas/basicos" defaultOpen>
+  <Folder name="server/personas/basic" defaultOpen>
     <File name="persona.yaml" />
     <File name="README.md" />
     <Folder name="data">
-      <File name="basicos.db" />
+      <File name="basic.db" />
     </Folder>
   </Folder>
 </Files>
 
-No sounds directory, no media library. The `data/basicos.db` file doesn't exist in a fresh clone — the framework creates it on first run. This is the minimum viable persona directory.
+No sounds directory, no media library. The `data/basic.db` file doesn't exist in a fresh clone — the framework creates it on first run. This is the minimum viable persona directory.
 
 ## What this teaches
 

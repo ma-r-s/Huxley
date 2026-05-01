@@ -3,7 +3,7 @@
 Persona-agnostic news + weather skill. Returns structured JSON; the LLM
 narrates per its persona's tone (slow/warm vs terse/bullets). Same skill,
 same JSON, totally different audio depending on which persona consumes it
-— see [Basic](../personas/basicos.md) as the proof of that abstraction.
+— see [Basic](../personas/basic.md) as the proof of that abstraction.
 
 ## What it does
 
@@ -62,7 +62,7 @@ like you're telling a friend what happened today." Combined with
 ("a ver, le cuento") → chime → ~60s narrated digest → "¿quiere que le
 cuente más?".
 
-**[Basic](../personas/basicos.md)** uses it as a terse 5-bullet briefing.
+**[Basic](../personas/basic.md)** uses it as a terse 5-bullet briefing.
 Same skill, same JSON, no chime, no `never_say_no`. The persona's
 `system_prompt` says "máximo cinco puntos, cada uno una sola frase." User
 hears: pre-narration ("un momento") → 5 short bullets, period.

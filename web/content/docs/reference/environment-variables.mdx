@@ -23,7 +23,7 @@ HUXLEY_OPENAI_API_KEY=sk-proj-...
 
 Which persona directory to load.
 
-- **No default.** If your `server/personas/` has exactly one persona, the loader picks it automatically. With two or more (the repo ships `abuelos` and `basicos`), you must set this explicitly or startup fails with a clear error.
+- **No default.** If your `server/personas/` has exactly one persona, the loader picks it automatically. With two or more (the repo ships `abuelos` and `basic`), you must set this explicitly or startup fails with a clear error.
 - Resolves to `server/personas/<value>/persona.yaml`.
 
 ```bash
@@ -125,7 +125,7 @@ HUXLEY_TELEGRAM_USERBOT_PHONE=+57...
 Environment variables take precedence over `.env` values, so you can override per-shell:
 
 ```bash
-HUXLEY_PERSONA=basicos uv run huxley     # one-off
+HUXLEY_PERSONA=basic uv run huxley     # one-off
 ```
 
 ## A complete production-ish example

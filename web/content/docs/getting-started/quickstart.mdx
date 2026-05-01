@@ -43,11 +43,11 @@ cd Huxley
 ```bash
 cat > server/runtime/.env << 'EOF'
 HUXLEY_OPENAI_API_KEY=sk-...
-HUXLEY_PERSONA=basicos
+HUXLEY_PERSONA=basic
 EOF
 ```
 
-The server loads this file at startup. Both variables are required: the repo ships two personas (`abuelos` and `basicos`), and the loader requires you to choose explicitly when more than one is available.
+The server loads this file at startup. Both variables are required: the repo ships two personas (`abuelos` and `basic`), and the loader requires you to choose explicitly when more than one is available.
 
 </Step>
 
@@ -74,7 +74,7 @@ cd server/runtime
 uv run huxley
 ```
 
-You should see `app.starting`, `persona.loaded name=basicos`, and `server.listening port=8765`. Leave this running.
+You should see `app.starting`, `persona.loaded name=basic`, and `server.listening port=8765`. Leave this running.
 
 </Step>
 
