@@ -508,7 +508,7 @@ class Application:
 
     # --- Session history (T1.12) ---
 
-    async def _on_list_sessions(self) -> None:
+    async def on_list_sessions(self) -> None:
         """Client opened the SessionsSheet — return persisted history."""
         sessions = await self.storage.list_sessions()
         payload = [
@@ -525,20 +525,20 @@ class Application:
         ]
         await self.server.send_sessions_list(payload)
 
-    async def _on_get_session(self, session_id: int) -> None:
+    async def on_get_session(self, session_id: int) -> None:
         """Client clicked a session preview — return its full transcript."""
         turns = await self.storage.get_session_turns(session_id)
         payload = [{"idx": t.idx, "role": t.role, "text": t.text} for t in turns]
         await self.server.send_session_detail(session_id, payload)
 
-    async def _on_delete_session(self, session_id: int) -> None:
+    async def on_delete_session(self, session_id: int) -> None:
         """Client tapped Delete on the SessionDetailSheet — privacy floor."""
         await self.storage.delete_session(session_id)
         await self.server.send_session_deleted(session_id)
 
     # --- Client callbacks ---
 
-    async def _on_wake_word(self) -> None:
+    async def on_wake_word(self) -> None:
         if self.state_machine.state != AppState.IDLE:
             await logger.ainfo(
                 "app.wake_word_rejected",
@@ -548,7 +548,7 @@ class Application:
         await self.server.send_audio_clear()
         await self.state_machine.trigger("wake_word")
 
-    async def _on_reset(self) -> None:
+    async def on_reset(self) -> None:
         """Drop the current OpenAI session and reconnect fresh — dev tool."""
         await logger.ainfo("app.reset", state=self.state_machine.state.name)
         await self.coordinator.interrupt()
@@ -559,7 +559,7 @@ class Application:
         # transitions state → IDLE, and schedules a fresh auto-reconnect.
         # Nothing else needed here.
 
-    async def _on_language_select(self, language: str | None) -> None:
+    async def on_language_select(self, language: str | None) -> None:
         """Client asked for a specific persona translation on this session.
 
         Fires right after a client's WebSocket handshake completes (see
@@ -603,11 +603,11 @@ class Application:
         # so the next connect picks it up naturally.
         await self._apply_language(target)
 
-    async def _on_audio_frame(self, pcm: bytes) -> None:
+    async def on_audio_frame(self, pcm: bytes) -> None:
         """Mic frame from client — forward to the coordinator."""
         await self.coordinator.on_user_audio_frame(pcm)
 
-    async def _on_ptt_start(self) -> None:
+    async def on_ptt_start(self) -> None:
         if self.state_machine.state != AppState.CONVERSING:
             await logger.ainfo(
                 "app.ptt_rejected",
@@ -619,7 +619,7 @@ class Application:
             return
         await self.coordinator.on_ptt_start()
 
-    async def _on_ptt_stop(self) -> None:
+    async def on_ptt_stop(self) -> None:
         if self.state_machine.state != AppState.CONVERSING:
             return
         await self.coordinator.on_ptt_stop()
