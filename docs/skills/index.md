@@ -2,21 +2,27 @@
 
 Curated list of known `huxley-skill-*` packages. Use this to discover skills you can install into a Huxley persona.
 
+> **The framework ships empty.** Every skill — first-party or community — is an independent PyPI package installed via `uv add`. The Huxley repo's workspace is a development convenience for iterating on the SDK + first-party skills together; the canonical distribution path is identical for everyone.
+
 > **Want to add your skill?** Open a PR adding a row below. Include all five fields per the [Per-entry metadata](#per-entry-metadata) spec; Mario reviews before merging. Inclusion bar: package installs cleanly, declares `config_schema` if it has user-tunable fields, has a public docs page with at least the install command and one example voice intent.
+>
+> v2 will promote this static page to a separate registry repo (`ma-r-s/huxley-registry`) with `index.json`, JSON Schema, and a Marketplace tab in the PWA. The shape of an entry below is forward-compatible with that registry.
 
 ## Skills
 
-| Name                      | Description                                                                                                                              | Install                      | Docs                                                                                   | Tier        |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- | -------------------------------------------------------------------------------------- | ----------- |
-| `huxley-skill-audiobooks` | Local-library audiobook playback with resume-position persistence.                                                                       | bundled                      | [audiobooks.md](audiobooks.md)                                                         | first-party |
-| `huxley-skill-news`       | Headlines from Google News RSS + Open-Meteo weather card.                                                                                | bundled                      | [news.md](news.md)                                                                     | first-party |
-| `huxley-skill-radio`      | HTTP / Icecast radio streaming via ffmpeg.                                                                                               | bundled                      | [radio.md](radio.md)                                                                   | first-party |
-| `huxley-skill-reminders`  | Persistent scheduled reminders with retry escalation.                                                                                    | bundled                      | [reminders.md](reminders.md)                                                           | first-party |
-| `huxley-skill-search`     | Open-web search via DuckDuckGo (no API key).                                                                                             | bundled                      | [search.md](search.md)                                                                 | first-party |
-| `huxley-skill-system`     | Volume control + current time.                                                                                                           | bundled                      | —                                                                                      | first-party |
-| `huxley-skill-telegram`   | Full-duplex Telegram voice calls + text messaging.                                                                                       | bundled                      | [telegram.md](telegram.md)                                                             | first-party |
-| `huxley-skill-timers`     | One-shot relative timers ("remind me in 5 minutes").                                                                                     | bundled                      | [timers.md](timers.md)                                                                 | first-party |
-| `huxley-skill-stocks`     | Voice-controlled stock quotes via Alpha Vantage. The reference third-party skill — see [authoring.md](authoring.md) for the walkthrough. | `uv add huxley-skill-stocks` | [github.com/ma-r-s/huxley-skill-stocks](https://github.com/ma-r-s/huxley-skill-stocks) | community   |
+| Name                      | Description                                                                                                                              | Install                          | Docs                                                                                   | Tier        |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- | -------------------------------------------------------------------------------------- | ----------- |
+| `huxley-skill-audiobooks` | Local-library audiobook playback with resume-position persistence.                                                                       | `uv add huxley-skill-audiobooks` | [audiobooks.md](audiobooks.md)                                                         | first-party |
+| `huxley-skill-news`       | Headlines from Google News RSS + Open-Meteo weather card.                                                                                | `uv add huxley-skill-news`       | [news.md](news.md)                                                                     | first-party |
+| `huxley-skill-radio`      | HTTP / Icecast radio streaming via ffmpeg.                                                                                               | `uv add huxley-skill-radio`      | [radio.md](radio.md)                                                                   | first-party |
+| `huxley-skill-reminders`  | Persistent scheduled reminders with retry escalation.                                                                                    | `uv add huxley-skill-reminders`  | [reminders.md](reminders.md)                                                           | first-party |
+| `huxley-skill-search`     | Open-web search via DuckDuckGo (no API key).                                                                                             | `uv add huxley-skill-search`     | [search.md](search.md)                                                                 | first-party |
+| `huxley-skill-system`     | Volume control + current time.                                                                                                           | `uv add huxley-skill-system`     | —                                                                                      | first-party |
+| `huxley-skill-telegram`   | Full-duplex Telegram voice calls + text messaging.                                                                                       | `uv add huxley-skill-telegram`   | [telegram.md](telegram.md)                                                             | first-party |
+| `huxley-skill-timers`     | One-shot relative timers ("remind me in 5 minutes").                                                                                     | `uv add huxley-skill-timers`     | [timers.md](timers.md)                                                                 | first-party |
+| `huxley-skill-stocks`     | Voice-controlled stock quotes via Alpha Vantage. The reference third-party skill — see [authoring.md](authoring.md) for the walkthrough. | `uv add huxley-skill-stocks`     | [github.com/ma-r-s/huxley-skill-stocks](https://github.com/ma-r-s/huxley-skill-stocks) | community   |
+
+The `tier` distinction is curation-only: `first-party` skills are maintained in the Huxley repo's workspace by the framework's authors; `community` skills are maintained elsewhere. Both install identically.
 
 ## Per-entry metadata
 
@@ -26,11 +32,9 @@ Each row is required to have:
 | ------------- | ------------------------------------------------------------------- | -------------------------------------------------- |
 | `name`        | PyPI package name                                                   | `huxley-skill-stocks`                              |
 | `description` | One sentence (under 120 chars)                                      | "Voice-controlled stock quotes via Alpha Vantage." |
-| `install`     | Code-formatted command, or `bundled` if first-party                 | `uv add huxley-skill-stocks`                       |
+| `install`     | The exact `uv add` command (code-formatted)                         | `uv add huxley-skill-stocks`                       |
 | `docs_url`    | Link to a public docs page (the package's README on GitHub is fine) | `https://github.com/ma-r-s/huxley-skill-stocks`    |
-| `tier`        | Either `first-party` (in this repo) or `community` (anyone else)    | `community`                                        |
-
-The directory is a static page for v1. v2 will promote it to a structured registry (a separate `huxley/skills` GitHub repo with `index.json`, JSON Schema, CI, and a Marketplace tab in the PWA). Until then, this page is the registry.
+| `tier`        | Either `first-party` (workspace-maintained) or `community`          | `community`                                        |
 
 ## Submitting your skill
 
@@ -43,5 +47,6 @@ The author of [`huxley-skill-stocks`](https://github.com/ma-r-s/huxley-skill-sto
 ## See also
 
 - [authoring.md](authoring.md) — the build-your-first-skill walkthrough.
+- [installing.md](installing.md) — the operator-side install + smoke-test recipe.
 - [README.md](README.md) — full SDK API reference for skill authors.
 - [`docs/skill-marketplace.md`](../skill-marketplace.md) — architectural contract; how the marketplace will evolve in v2.

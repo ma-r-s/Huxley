@@ -241,6 +241,16 @@ This single example exercises all three of the JSON-Schema shapes the v2 PWA for
 
 **Schemas describe the post-merge view of `ctx.config`.** The runtime already merges per-language i18n maps from `skills.<name>.i18n.<lang>` into `ctx.config` before the skill sees it (see `SkillContext.config` docstring). A `config_schema` describes the post-merge shape the skill consumes — not the pre-merge YAML structure. Skills that use the i18n merge stay schemaless; declaring a schema for the merged shape would mislead v2's form-renderer into writing un-mergeable flat values.
 
+### Framework ships empty
+
+The Huxley framework's runtime depends on `huxley-sdk` and the I/O infra (`openai`, `websockets`, `aiosqlite`, `structlog`, etc.) — **and zero skills**. The framework imports nothing skill-specific; entry-point discovery resolves whatever is installed in the venv at `setup_all` time.
+
+Every skill, including the first-party ones (`huxley-skill-audiobooks`, `huxley-skill-news`, ...), is an independent PyPI package. From an external installer's perspective there is no difference between `uv add huxley-skill-audiobooks` and `uv add huxley-skill-stocks` — both are skills, both install the same way, both are listed identically in the registry. `tier: first-party` is a curation label (Mario maintains them in the Huxley repo's workspace); it is NOT an installation privilege.
+
+The Huxley repo's `[tool.uv.workspace]` keeps the 8 first-party skills as workspace members because that's the cheap synchronization mechanism for SDK + skill iteration during pre-1.0. **The workspace is a development convenience.** When a skill stabilizes, it can extract to its own repo via `git subtree split` without changing how anyone consumes it.
+
+This means Huxley's "shipped" surface is small enough to fit in a paragraph: a runtime that loads personas + a SDK that defines the Skill protocol. Everything else — including the framework's entire batteries-included demo — is just packages that happen to install via `uv add`.
+
 ### Privacy carve-out for T1.13 (shared workspace venv)
 
 T1.13's persona model promises filesystem-enforced privacy: each persona's data dir is private; persona A cannot read persona B's audiobook positions or telegram threads. **That guarantee is preserved.** Per-persona privacy lives in:
