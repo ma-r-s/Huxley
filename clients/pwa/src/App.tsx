@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { useWs, defaultWsUrl } from "./lib/useWs.js";
+import { useWs } from "./lib/useWs.js";
 import { MicCapture } from "./lib/audio/capture.js";
 import { AudioPlayback } from "./lib/audio/playback.js";
 import { deriveOrbState } from "./lib/orbState.js";
@@ -12,7 +12,7 @@ import { DeviceSheet } from "./components/DeviceSheet.js";
 import { LogsSheet } from "./components/LogsSheet.js";
 import { ClientEventPanel } from "./components/ClientEventPanel.js";
 import { TweaksPanel } from "./components/TweaksPanel.js";
-import type { OrbState, Appearance, PersonaEntry, AppState } from "./types.js";
+import type { OrbState, Appearance, AppState } from "./types.js";
 import type { Tweaks } from "./components/TweaksPanel.js";
 import { DEFAULT_APPEARANCE } from "./types.js";
 import {
@@ -21,34 +21,13 @@ import {
   saveLanguage,
 } from "./i18n/index.js";
 
-// ── Persona list from env ─────────────────────────────────────────────────
-function parsePersonas(): PersonaEntry[] {
-  const raw =
-    (import.meta.env["VITE_HUXLEY_PERSONAS"] as string | undefined) ?? "";
-  const fallback: PersonaEntry[] = [
-    {
-      id: "abuelos",
-      name: "abuelos",
-      url: defaultWsUrl(),
-    },
-  ];
-  if (!raw.trim()) return fallback;
-  const entries = raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((pair) => {
-      const idx = pair.indexOf(":");
-      if (idx === -1) return null;
-      const name = pair.slice(0, idx).trim();
-      const url = pair.slice(idx + 1).trim();
-      return name && url ? { id: name, name, url } : null;
-    })
-    .filter((e): e is PersonaEntry => e !== null);
-  return entries.length > 0 ? entries : fallback;
-}
-
-const PERSONAS = parsePersonas();
+// T1.13: the runtime pushes `available_personas` + `current_persona`
+// in every hello payload, so the PWA discovers personas at runtime.
+// `VITE_HUXLEY_PERSONAS` is gone; one process now hosts every persona
+// the directory ./personas/ contains. The picker reads
+// `ws.availablePersonas` + `ws.currentPersona`; switching personas is
+// `ws.selectPersona(name)` which closes the WS and reopens with
+// `?persona=<name>` against the same URL. See docs/protocol.md.
 
 // ── Appearance persistence ────────────────────────────────────────────────
 const APPEARANCE_KEY = "huxley-appearance";
@@ -140,11 +119,15 @@ export function App() {
   }, []);
 
   // ── Persona state ────────────────────────────────────────────────────────
-  const [selectedPersonaId, setSelectedPersonaId] = useState(
-    PERSONAS[0]?.id ?? "abuelos",
-  );
-  const currentPersona =
-    PERSONAS.find((p) => p.id === selectedPersonaId) ?? PERSONAS[0];
+  // Source of truth lives on the server: `ws.availablePersonas` is
+  // the picker's list, `ws.currentPersona` is the active persona's
+  // name (the chip text). Both arrive in every `hello` payload so
+  // they refresh on (re)connect; null until the first hello.
+  const personas = ws.availablePersonas ?? [];
+  // Defensive fallback only matters for the boot window before the
+  // first hello arrives. Once connected, `ws.currentPersona` is the
+  // canonical answer.
+  const selectedPersonaId = ws.currentPersona ?? personas[0]?.name ?? "abuelos";
 
   // ── Language state ───────────────────────────────────────────────────────
   // i18n.language is initialized from localStorage / navigator on module
@@ -210,11 +193,13 @@ export function App() {
       playback.onceIdle(done);
     });
     mic.onFrame = (data) => ws.sendAudio(data);
-    // Connect to first persona with the currently-selected language so
-    // the very first session opens in the right translation. Subsequent
-    // language flips go through `ws.setLanguage()` which drops the
-    // socket and reconnects with `?lang=<code>`.
-    ws.connect(currentPersona?.url, language);
+    // Open the WS with the user's currently-selected language. Server
+    // resolves the persona itself per the locked rule (env >
+    // single-persona autodiscovery > alphabetic-first-with-loud-log).
+    // Subsequent language flips go through `ws.setLanguage()`;
+    // persona swaps go through `ws.selectPersona(name)`. Both close
+    // the WS and reopen with the relevant query param.
+    ws.connect(undefined, language);
     return () => {
       ws.disconnect();
       mic.destroy();
@@ -336,6 +321,12 @@ export function App() {
       setMicError(t("mic.accessDenied"));
       return;
     }
+    // T1.13: preload the persona-swap earcon now that the AudioContext
+    // is unlocked — first user PTT is the earliest point we can fetch +
+    // decodeAudioData. Idempotent + non-blocking; later swaps play
+    // instantly. Failure is logged inside playback and ignored — earcon
+    // is UX polish, not load-bearing.
+    void playback.preloadPersonaSwap();
     playback.stop();
     switch (ws.appState) {
       case "CONVERSING":
@@ -543,12 +534,16 @@ export function App() {
   const connLabel = ws.connected ? deviceHost : t("header.connRetrying");
 
   // ── Persona switch ────────────────────────────────────────────────────────
+  // T1.13: tap the picker → play the swap earcon → close current WS →
+  // reopen with the new `?persona=<name>` against the same URL. The
+  // server's swap algorithm (build-new → start → atomic ref-swap →
+  // background teardown of old) runs as part of the new connection's
+  // handshake. The earcon bridges the brief silence; status text +
+  // chip update on hello arrival confirm the swap landed.
   const handlePersonaPick = useCallback(
-    (id: string) => {
-      const p = PERSONAS.find((x) => x.id === id);
-      if (!p) return;
-      setSelectedPersonaId(id);
-      ws.switchPersona(p.url);
+    (name: string) => {
+      playback.playPersonaSwap();
+      ws.selectPersona(name);
       setActiveSheet(null);
     },
     [ws],
@@ -572,7 +567,7 @@ export function App() {
             <div className="hux-wordmark">huxley</div>
           </div>
           <button className="hux-chip" onClick={() => setActiveSheet("device")}>
-            {currentPersona?.name ?? "huxley"}
+            {ws.currentPersona ?? "huxley"}
             <span className="hux-chip-arrow">{"\u203a"}</span>
           </button>
         </header>
@@ -664,9 +659,12 @@ export function App() {
               connected: ws.connected,
               url: ws.activeUrl ?? "localhost:8765",
               persona: selectedPersonaId,
-              personas: PERSONAS,
+              personas,
             }}
             onPersonaPick={handlePersonaPick}
+            personaPickerDisabled={
+              ws.activeClaimId !== null || ws.activeStream !== null
+            }
             language={language}
             supportedLanguages={SUPPORTED_LANGUAGES}
             onLanguagePick={handleLanguagePick}

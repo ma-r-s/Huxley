@@ -69,6 +69,10 @@ const fr = {
         persona: "Persona",
         maintenance: "Maintenance",
       },
+      persona: {
+        disabledHint:
+          "Termine d'abord l'appel ou l'audio en cours — changer de persona ferme la connexion active.",
+      },
       appearance: {
         accent: "Accent",
         typeface: "Typographie",

@@ -246,6 +246,54 @@ export class AudioPlayback {
     this.drainIdleCallbacks();
   }
 
+  /**
+   * Persona-swap earcon (T1.13). Fetches the WAV at `/sounds/persona_swap.wav`
+   * once and caches the decoded buffer. Idempotent — subsequent calls reuse
+   * the cached buffer. Failure is logged but never throws; the earcon is
+   * UX polish, not a correctness primitive.
+   */
+  private personaSwapBuffer: AudioBuffer | null = null;
+  private personaSwapPreloadInFlight: Promise<void> | null = null;
+
+  preloadPersonaSwap(): Promise<void> {
+    if (!this.ctx) return Promise.resolve();
+    if (this.personaSwapBuffer) return Promise.resolve();
+    if (this.personaSwapPreloadInFlight) return this.personaSwapPreloadInFlight;
+    const ctx = this.ctx;
+    this.personaSwapPreloadInFlight = (async () => {
+      try {
+        const res = await fetch("/sounds/persona_swap.wav");
+        if (!res.ok) throw new Error(`http ${res.status}`);
+        const arr = await res.arrayBuffer();
+        this.personaSwapBuffer = await ctx.decodeAudioData(arr);
+      } catch (e) {
+        console.warn("[playback] persona_swap preload failed", e);
+      } finally {
+        this.personaSwapPreloadInFlight = null;
+      }
+    })();
+    return this.personaSwapPreloadInFlight;
+  }
+
+  /**
+   * Plays the persona-swap earcon if the buffer is loaded. No-op if
+   * preload hasn't completed yet (the audio context may still be locked
+   * pre-user-gesture, in which case the swap fires silently — fine,
+   * the status text and the new persona's first PTT are the load-bearing
+   * UX cues; the earcon is polish).
+   */
+  playPersonaSwap(): void {
+    if (!this.ctx || !this.personaSwapBuffer) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.personaSwapBuffer;
+    src.connect(this.masterGain ?? this.ctx.destination);
+    try {
+      src.start();
+    } catch {
+      /* already started or context closed */
+    }
+  }
+
   destroy(): void {
     this.stop();
     void this.ctx?.close();

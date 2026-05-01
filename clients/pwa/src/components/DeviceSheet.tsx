@@ -495,21 +495,58 @@ function AppearancePicker({ appearance, onChange }: AppearancePickerProps) {
 }
 
 // ── Persona picker ────────────────────────────────────────────────────────
+// T1.13: persona shape comes from the server's `available_personas`.
+// `name` is the canonical id (what `?persona=` selects), `display_name`
+// is the human-readable label, `language` is the persona's default.
+// The picker is disabled while a claim or stream is active because a
+// swap closes the WS, and tearing down a live call / audiobook
+// midstream is the user-hostile sort of surprise the picker shouldn't
+// volunteer for. Symmetric to the server contract: client can't
+// request, server doesn't act.
 interface PersonaPickerProps {
   personas: PersonaEntry[];
   current: string;
-  onPick: (id: string) => void;
+  onPick: (name: string) => void;
+  disabled?: boolean;
+  disabledHint?: string;
 }
 
-function PersonaPicker({ personas, current, onPick }: PersonaPickerProps) {
+function PersonaPicker({
+  personas,
+  current,
+  onPick,
+  disabled = false,
+  disabledHint,
+}: PersonaPickerProps) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 0,
+        opacity: disabled ? 0.45 : 1,
+        pointerEvents: disabled ? "none" : "auto",
+      }}
+      aria-disabled={disabled}
+    >
+      {disabled && disabledHint && (
+        <div
+          style={{
+            fontSize: 12,
+            color: "var(--hux-fg-dim)",
+            fontFamily: "var(--hux-sans)",
+            paddingBottom: 8,
+          }}
+        >
+          {disabledHint}
+        </div>
+      )}
       {personas.map((p) => {
-        const active = p.id === current;
+        const active = p.name === current;
         return (
           <button
-            key={p.id}
-            onClick={() => onPick(p.id)}
+            key={p.name}
+            onClick={() => onPick(p.name)}
             style={{
               display: "flex",
               justifyContent: "space-between",
@@ -519,18 +556,16 @@ function PersonaPicker({ personas, current, onPick }: PersonaPickerProps) {
               border: "none",
               borderBottom: "1px solid var(--hux-fg-line)",
               color: "var(--hux-fg)",
-              cursor: "pointer",
+              cursor: disabled ? "not-allowed" : "pointer",
               textAlign: "left",
               fontFamily: "var(--hux-sans)",
             }}
           >
             <span style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <span style={{ fontSize: 16 }}>{p.name}</span>
-              {(p.lang || p.desc) && (
-                <span style={{ fontSize: 12, color: "var(--hux-fg-dim)" }}>
-                  {[p.lang, p.desc].filter(Boolean).join(" \u00b7 ")}
-                </span>
-              )}
+              <span style={{ fontSize: 16 }}>{p.display_name}</span>
+              <span style={{ fontSize: 12, color: "var(--hux-fg-dim)" }}>
+                {p.language}
+              </span>
             </span>
             <span
               style={{
@@ -560,7 +595,12 @@ export interface DeviceInfo {
 interface DeviceSheetProps {
   onClose: () => void;
   device: DeviceInfo;
-  onPersonaPick: (id: string) => void;
+  onPersonaPick: (name: string) => void;
+  // T1.13: when a claim or stream is active, switching personas
+  // would terminate it abruptly (the WS closes during the swap).
+  // Caller (App) sets this true while `activeClaimId !== null` or
+  // `activeStream !== null`; the picker grays out with a hint.
+  personaPickerDisabled?: boolean;
   language: LanguageCode;
   supportedLanguages: typeof SUPPORTED_LANGUAGES;
   onLanguagePick: (code: LanguageCode) => void;
@@ -575,6 +615,7 @@ export function DeviceSheet({
   onClose,
   device,
   onPersonaPick,
+  personaPickerDisabled = false,
   language,
   supportedLanguages,
   onLanguagePick,
@@ -671,6 +712,12 @@ export function DeviceSheet({
             personas={device.personas}
             current={device.persona}
             onPick={onPersonaPick}
+            disabled={personaPickerDisabled}
+            disabledHint={
+              personaPickerDisabled
+                ? t("device.persona.disabledHint")
+                : undefined
+            }
           />
         </Section>
 

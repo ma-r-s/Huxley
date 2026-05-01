@@ -69,6 +69,10 @@ const es = {
         persona: "Persona",
         maintenance: "Mantenimiento",
       },
+      persona: {
+        disabledHint:
+          "Termina la llamada o el audio actual primero — cambiar de persona cierra la conexión activa.",
+      },
       appearance: {
         accent: "Acento",
         typeface: "Tipografía",

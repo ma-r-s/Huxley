@@ -78,6 +78,10 @@ const en = {
         persona: "Persona",
         maintenance: "Maintenance",
       },
+      persona: {
+        disabledHint:
+          "Finish the current call or audio first — switching personas closes the active connection.",
+      },
       appearance: {
         accent: "Accent",
         typeface: "Typeface",
