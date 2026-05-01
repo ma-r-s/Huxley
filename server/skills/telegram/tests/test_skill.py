@@ -426,6 +426,113 @@ class TestSetup:
         assert captured[0].api_hash == "env_after_corrupt"
 
     @pytest.mark.asyncio
+    async def test_missing_secrets_file_falls_back_silently(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # No values.json at all — loader must return {} silently and the
+        # priority chain falls through to env vars without erroring.
+        monkeypatch.setenv("HUXLEY_TELEGRAM_API_ID", "66666666")
+        monkeypatch.setenv("HUXLEY_TELEGRAM_API_HASH", "env_no_file")
+        # Note: secrets_dir intentionally NOT created.
+
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            captured.append(t)
+            return t
+
+        skill = TelegramSkill(transport_factory=factory)
+        ctx, _ = _build_ctx({"contacts": {"x": "+1"}}, tmp_path)
+        await skill.setup(ctx)
+        assert captured[0].api_id == 66666666
+        assert captured[0].api_hash == "env_no_file"
+
+    @pytest.mark.asyncio
+    async def test_non_dict_secrets_file_falls_back_to_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # JSON arrays / scalars / null must NOT be treated as creds — the
+        # loader returns {} when the parsed JSON is not a dict, then the
+        # chain falls through to env vars.
+        monkeypatch.setenv("HUXLEY_TELEGRAM_API_ID", "88888888")
+        monkeypatch.setenv("HUXLEY_TELEGRAM_API_HASH", "env_after_array")
+        secrets_dir = tmp_path / "secrets" / "telegram"
+        secrets_dir.mkdir(parents=True)
+        (secrets_dir / "values.json").write_text('["api_id", "api_hash"]')
+
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            captured.append(t)
+            return t
+
+        skill = TelegramSkill(transport_factory=factory)
+        ctx, _ = _build_ctx({"contacts": {"x": "+1"}}, tmp_path)
+        await skill.setup(ctx)
+        assert captured[0].api_id == 88888888
+        assert captured[0].api_hash == "env_after_array"
+
+    @pytest.mark.asyncio
+    async def test_partial_secrets_file_merges_per_field(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # values.json supplies only api_id; api_hash + userbot_phone come
+        # from env. The priority chain fires per-field, not whole-dict.
+        # T1.14's ctx.secrets must preserve this semantic.
+        monkeypatch.setenv("HUXLEY_TELEGRAM_API_HASH", "env_only_hash")
+        monkeypatch.setenv("HUXLEY_TELEGRAM_USERBOT_PHONE", "+19999999999")
+        monkeypatch.delenv("HUXLEY_TELEGRAM_API_ID", raising=False)
+        secrets_dir = tmp_path / "secrets" / "telegram"
+        secrets_dir.mkdir(parents=True)
+        (secrets_dir / "values.json").write_text(json.dumps({"api_id": "12121212"}))
+
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            captured.append(t)
+            return t
+
+        skill = TelegramSkill(transport_factory=factory)
+        ctx, _ = _build_ctx({"contacts": {"x": "+1"}}, tmp_path)
+        await skill.setup(ctx)
+        assert captured[0].api_id == 12121212
+        assert captured[0].api_hash == "env_only_hash"
+        assert captured[0].userbot_phone == "+19999999999"
+
+    @pytest.mark.asyncio
+    async def test_secrets_file_nested_value_is_json_encoded(self, tmp_path: Path) -> None:
+        # Nested dicts in values.json (the OAuth-blob convention from
+        # docs/skill-marketplace.md § Secrets storage layout) get
+        # json.dumps-encoded, NOT str()-coerced. This is what makes the
+        # round-trip "skill writes json.dumps(blob); reads via get; gets
+        # back the same JSON bytes" work — and it's what T1.14's
+        # ctx.secrets.set_json/get_json sugar will rely on.
+        from huxley_skill_telegram.skill import _load_creds_from_secrets_file
+
+        secrets_dir = tmp_path / "secrets" / "telegram"
+        secrets_dir.mkdir(parents=True)
+        (secrets_dir / "values.json").write_text(
+            json.dumps(
+                {
+                    "api_id": "12345678",
+                    "oauth_state": {"access_token": "x", "expires_at": 1700000000},
+                    "scopes": ["read", "write"],
+                }
+            )
+        )
+        result = _load_creds_from_secrets_file(secrets_dir)
+        assert result["api_id"] == "12345678"
+        # Round-trip: must parse cleanly back to the original dict.
+        assert json.loads(result["oauth_state"]) == {
+            "access_token": "x",
+            "expires_at": 1700000000,
+        }
+        assert json.loads(result["scopes"]) == ["read", "write"]
+
+    @pytest.mark.asyncio
     async def test_non_string_phone_values_dropped(self, tmp_path: Path) -> None:
         skill = TelegramSkill(transport_factory=StubTransport)
         ctx, _ = _build_ctx(

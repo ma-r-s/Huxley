@@ -110,6 +110,15 @@ def _load_creds_from_secrets_file(secrets_dir: Path) -> dict[str, str]:
     a flat `dict[str, str]`. Pre-T1.14 we read it directly here; once
     T1.14 ships, this loader collapses into `await ctx.secrets.get(key)`
     calls and the file shape stays unchanged.
+
+    Nested dicts/lists get `json.dumps`-encoded (NOT `str()`-coerced —
+    `str(dict)` produces Python repr with single quotes which is not
+    valid JSON). This matches T1.14's planned `set_json/get_json`
+    sugar: setting a dict via `set_json` writes `json.dumps(dict)`
+    bytes; reading via `get` returns those same bytes; reading via
+    `get_json` parses them back. The OAuth-blob convention in
+    docs/skill-marketplace.md § Secrets storage layout is built on
+    this round-trip.
     """
     path = secrets_dir / "values.json"
     try:
@@ -122,7 +131,11 @@ def _load_creds_from_secrets_file(secrets_dir: Path) -> dict[str, str]:
         return {}
     if not isinstance(data, dict):
         return {}
-    return {str(k): str(v) for k, v in data.items() if v is not None}
+    return {
+        str(k): json.dumps(v) if isinstance(v, dict | list) else str(v)
+        for k, v in data.items()
+        if v is not None
+    }
 
 
 _TOOL_DESC: dict[str, dict[str, str]] = {
@@ -449,6 +462,10 @@ class TelegramSkill:
         #   1. <persona.data_dir>/secrets/telegram/values.json   (preferred)
         #   2. HUXLEY_TELEGRAM_* env vars                         (fallback)
         #   3. persona.yaml `skills.telegram.<field>`             (dev/test)
+        # Falsy values (empty string, "0") in values.json fall through to
+        # env/yaml — practical risk is zero for these keys (api_id can't
+        # be 0; api_hash can't be empty), but T1.14's ctx.secrets may
+        # tighten this to "key-present-overrides" semantics later.
         # Contacts stay in persona.yaml -- they're not really "secrets" for
         # a family-specific persona, and they aren't a flat string dict.
         secrets = _load_creds_from_secrets_file(ctx.persona_data_dir / "secrets" / "telegram")
