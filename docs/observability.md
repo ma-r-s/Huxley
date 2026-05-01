@@ -274,6 +274,20 @@ Diagnosing common failures:
 3. **"Backfill fired but the LLM said 'I have a message' without reading it"** — the prompt wasn't an instruction to the LLM. Verify `text_len` on `session.tx.conversation_message` is large enough to include the message bodies; if it's short (< 100 chars), the prompt may be missing the body content.
 4. **"Backfill on restart didn't fire at all"** — `_run_backfill` waits 5 s after `setup_complete` before injecting, so the OpenAI session has time to connect (otherwise the inject is lost — see the lessons in `docs/triage.md` T1.11). If you see `telegram.setup_complete` but never `telegram.backfill.injecting`, check whether the Pyrogram session re-authenticated mid-flight or the resolver returned no whitelisted user_ids.
 
+## Skill schema versions — pin the upgrade path
+
+T1.14's `data_schema_version` mechanism emits three events from the runtime, all under the `skill.schema.*` prefix:
+
+| Event                                   | When                                                                                                                                                | Severity |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| `skill.schema.upgrade_needed`           | Skill's declared `data_schema_version` is greater than what's stored in `schema_meta` for this persona.                                             | warning  |
+| `skill.schema.downgrade_detected`       | Declared is less than stored — the persona has data from a newer skill version than what's currently installed.                                     | warning  |
+| `skill.schema.invalid_declared_version` | The skill declared a non-numeric value for `data_schema_version`. Author bug; runtime falls back to default `1` and skips the check for that skill. | error    |
+
+All three carry `skill=<name>`, `declared=<int>`, `stored=<int>` (where applicable). v1 does NOT auto-migrate — the warning is the operator's signal to read the skill's CHANGELOG and apply migration steps.
+
+**Equal-version is silent.** T1.13's hot persona swap calls `setup()` on every reconnect; emitting a heartbeat event would create per-swap log noise. If you see `skill.schema.*` events after the first boot of a (skill, persona) pair, something regressed — see [`docs/skill-marketplace.md` § Schema versioning](./skill-marketplace.md#schema-versioning-data_schema_version).
+
 ## Skill failures
 
 When a skill's `handle()` raises, the coordinator catches it (see `docs/triage.md` T1.6) and emits two events:

@@ -62,15 +62,25 @@ Huxley/                              # repo root
 │   ├── turns.md                     # turn coordinator spec
 │   ├── decisions.md                 # ADR log
 │   ├── roadmap.md                   # framework + persona roadmaps
+│   ├── skill-marketplace.md         # T1.14 spec: v1/v2 split, secrets layout, schema versioning
 │   ├── personas/{README,abuelos,basicos,chief,librarian,buddy}.md
-│   ├── skills/{README,audiobooks,news,radio,search,timers}.md
+│   ├── skills/{README,authoring,installing,index,audiobooks,news,radio,search,telegram,timers,reminders}.md
 │   ├── sounds.md                    # sound UX architecture (PlaySound, AudioStream, synthesis pipeline)
 │   └── research/sonic-ux.md
 ├── scripts/                         # One-off ops + synth_sounds.py (renders the earcon palette) + launchd plist
 └── CLAUDE.md                        # this file
+
+# NOT in this repo — parallel sibling repo:
+~/Projects/Personal/Code/huxley-skill-stocks/
+                                     # Reference third-party skill (T1.14 Phase 2).
+                                     # Lives in its own repo by design — proves the
+                                     # third-party authoring flow works without the
+                                     # skill being a workspace member. Wired in via
+                                     # `[tool.uv.sources] huxley-skill-stocks = { path = "../huxley-skill-stocks" }`
+                                     # at the workspace root for local development.
 ```
 
-All five refactor stages have shipped — framework / SDK / skills / personas / constraints / entry-point loading are all in place. See [`docs/roadmap.md`](./docs/roadmap.md) for what's next.
+All five refactor stages have shipped — framework / SDK / skills / personas / constraints / entry-point loading are all in place. T1.14 (skill marketplace v1) shipped 2026-05-01: `ctx.secrets`, optional `Skill.config_schema` + `data_schema_version`, authoring docs, static directory page. See [`docs/roadmap.md`](./docs/roadmap.md) for what's next.
 
 ## Commands
 

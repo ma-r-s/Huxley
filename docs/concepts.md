@@ -57,9 +57,21 @@ A skill is a Python package. It declares one or more **tools** (function definit
 
 A skill never imports framework internals. It uses the Huxley SDK, which gives it a typed context (storage, config, logger) and the types it needs. This contract is what keeps skills portable — a skill works against any persona that enables it.
 
-A skill is `pip install`-able. Built-in skills live in `server/skills/`; community skills are published on PyPI under the `huxley-skill-*` prefix.
+A skill is `pip install`-able. Built-in skills live in `server/skills/`; community skills are published on PyPI under the `huxley-skill-*` prefix and discovered at runtime via Python entry points.
 
-How to write one: [`skills/README.md`](./skills/README.md).
+How to write one: [`skills/authoring.md`](./skills/authoring.md). How to install one into a persona: [`skills/installing.md`](./skills/installing.md). The directory of known skills: [`skills/index.md`](./skills/index.md).
+
+### Config schema
+
+A skill **may** declare a `config_schema: ClassVar[dict | None]` — a JSON Schema 2020-12 describing the user-tunable fields the skill consumes from `ctx.config`. Skills with simple configs (a few enums, an array, an API key) declare the schema; skills with complex configs (i18n maps, contact dicts) leave it `None`. The v2 PWA Skills panel renders forms from this schema; v1 just expects users to hand-write the YAML. Two custom JSON-Schema extensions: `"format": "secret"` routes a string field to `ctx.secrets`; `"x-huxley:help"` carries markdown help text. See [`skill-marketplace.md` § Config schema convention](./skill-marketplace.md#config-schema-convention-when-a-skill-opts-in).
+
+### Per-skill secrets (`ctx.secrets`)
+
+API keys, OAuth tokens, anything that must NOT land in `persona.yaml` lives in a per-persona secrets file at `<persona.data_dir>/secrets/<skill_name>/values.json` — a flat `dict[str, str]`, perms `0700/0600`, gitignored under `<persona>/data/`. Skills read it via the async `ctx.secrets.get(key)` API. Skills that need to persist nested OAuth state JSON-encode the dict themselves into a single key (the OAuth-blob convention, [`skill-marketplace.md` § Secrets storage layout](./skill-marketplace.md#secrets-storage-layout)).
+
+### data_schema_version
+
+A skill **may** declare `data_schema_version: ClassVar[int]` (default `1`). The runtime persists each skill's last-seen version in the persona's `schema_meta` table; a mismatch on next boot fires a `skill.schema.upgrade_needed` (or `downgrade_detected`) warning event. v1 does NOT auto-migrate — the skill's `CHANGELOG.md` instructs the user. v2 will gate cross-major upgrades behind explicit confirmation.
 
 ## Tool
 

@@ -564,3 +564,68 @@ The cwd-based pattern is self-explanatory and inherits all the existing tooling 
 - The "canonical id vs display name" distinction lands as a durable framework convention (memory: `feedback_canonical_id_vs_display_name.md`).
 - The "shared singleton + dying instance needs gating" pattern lands as a durable framework convention (memory: `feedback_shutting_down_gate.md`). Future hot-swap-style refactors will hit this same shape.
 - "Critics catch design issues; smoke catches runtime issues. Don't claim done before smoke" lands as a process convention (memory: `feedback_smoke_after_critic.md`). The DoD's "Mario browser smoke" bullet is non-negotiable for any user-visible change.
+
+## 2026-05-01 — Skill marketplace v1: developer-primary, defer caregiver UX (T1.14)
+
+**Context**: Huxley's load-bearing thesis is skill extensibility — the framework is interesting only to the extent that people write `huxley-skill-*` packages for it. The first marketplace spec went broad: a curated registry, a PWA Skills panel with form-rendered config, in-app install via `os.execv` self-restart, real OAuth, all of it. ~4-5 weeks of work, optimized for an audience that does not yet exist (caregivers installing skills via PWA), built on a thesis that is itself unproven (third-party authors will write skills if we make it easy).
+
+**Decision**: Split the marketplace into v1 (developer-primary, ~2 weeks) and v2 (caregiver expansion, deferred). v1 ships the SDK additions + authoring conventions + a worked third-party-shaped reference skill + a static markdown directory page. v2 layers a PWA Skills panel + curated JSON registry + self-restart machinery on top of v1's primitives — purely additive, no v1 rewrites.
+
+**v1 contract** (the primitives v2 must NOT rewrite, see [`docs/skill-marketplace.md`](./skill-marketplace.md)):
+
+- `Skill.config_schema: ClassVar[dict | None] = None` — optional JSON Schema 2020-12. v2's PWA renders forms only for opt-in skills; complex configs (i18n maps, contact dicts) leave it None.
+- `Skill.data_schema_version: ClassVar[int] = 1` — persisted in `schema_meta` under `skill_version:<name>`; mismatch logs warning, no auto-migration in v1.
+- `ctx.secrets: SkillSecrets` — async `get/set/delete/keys` over `<persona.data_dir>/secrets/<skill>/values.json` (perms `0700/0600`). Flat `dict[str, str]` shape always.
+- Persona.yaml stays the source of truth for both v1 and v2; v2 PWA writes via `ruamel.yaml` round-trip.
+- Privacy carve-out for T1.13: skills install into the shared `uv` workspace venv; per-persona privacy lives in the data dir + `persona.yaml.skills:` enable list, NOT separate venvs.
+
+**Reference skill**: [`huxley-skill-stocks`](https://github.com/ma-r-s/huxley-skill-stocks) (Alpha Vantage). Lives in its own repo from day 1 (proves the third-party flow). Exercises the three JSON-Schema shapes (secret + array + enum) the v2 PWA must render. Not Spotify (1-hr OAuth refresh hostile to demo) and not weather (overlaps existing news/Open-Meteo).
+
+**Consequences**:
+
+- The marketplace thesis ("third-party skills will get written") becomes falsifiable. If no external skills emerge in 3 months from v1, v2 was always going to be vapor and we don't owe it.
+- The `<persona>/data/secrets/<skill>/values.json` convention is now a framework primitive shared across all skills. T2.8 was the prereq that established the path; T1.14 generalized it via `ctx.secrets`. T2.9 (queued) will migrate the telegram skill from its own file loader to `ctx.secrets`.
+- v2's design phase (deferred) inherits a fully-pinned on-disk format and Skill protocol, so the PWA work is purely additive: new endpoints, new sheets, no protocol changes.
+
+## 2026-05-01 — OAuth-blob convention: skills JSON-encode nested data into a single secret key (T1.14)
+
+**Context**: `ctx.secrets` is intentionally flat `dict[str, str]` — keeps the storage layout simple, matches what `JsonFileSecrets` reads/writes. But real skills sometimes need to persist nested state: OAuth has `access_token` + `refresh_token` + `expires_at` + `scope` + `token_type`. Two ways to handle it: (a) flatten into `oauth_access_token`, `oauth_refresh_token`, etc. (n keys, fragile to schema drift), or (b) store the dict JSON-encoded under a single key (one key, full structure preserved).
+
+**Decision**: Skills store nested data JSON-encoded under a single key. The convention is documented in [`docs/skill-marketplace.md` § Secrets storage layout](./skill-marketplace.md#secrets-storage-layout) and the [authoring docs](./skills/authoring.md#oauth-blob-convention-for-skills-that-need-it).
+
+```python
+state = {"access_token": "...", "refresh_token": "...", "expires_at": 1735689600}
+await ctx.secrets.set("oauth_state", json.dumps(state))
+
+# On read:
+raw = await ctx.secrets.get("oauth_state")
+try:
+    state = json.loads(raw) if raw else None
+except json.JSONDecodeError:
+    state = None
+    await ctx.secrets.delete("oauth_state")  # force re-auth
+```
+
+`JsonFileSecrets._read` ALSO handles the case where a user hand-edits `values.json` with a nested literal — it `json.dumps`-coerces nested dicts/lists on read so the round-trip stays lossless. This is what makes a future `set_json/get_json` SDK addition purely additive: the same on-disk bytes round-trip whether the writer was `set("oauth_state", json.dumps(d))` (today) or `set_json("oauth_state", d)` (tomorrow).
+
+**Consequences**:
+
+- v2 can add `set_json/get_json` typed accessors without changing the on-disk format or migrating any data.
+- Skills that store nested OAuth state get a documented corruption-recovery pattern (`try/except + delete`) instead of inventing one.
+- One critic-found bug: an early `JsonFileSecrets._read` used `str(v)` on nested values, which produces Python repr (single quotes, not valid JSON). Fixed to `json.dumps(v) if isinstance(v, dict | list) else str(v)` — the convention only works if the loader honors it.
+
+## 2026-05-01 — Schema-version check before setup, persist after (T1.14)
+
+**Context**: T1.14's `data_schema_version` mechanism needs to compare the skill's declared version against what's stored in `schema_meta` and log warnings on mismatch. Naive implementation: read declared, read stored, log mismatch, write declared, then call `setup()`. But this loses information when `setup()` throws — `schema_meta` was already advanced to the new version, so the next boot sees `stored == declared` and the warning is gone.
+
+**Decision**: Split the version logic in two passes. `_check_skill_schema_versions` runs BEFORE `setup_all` and is read-only — it logs `skill.schema.upgrade_needed` / `downgrade_detected` warnings on mismatch but writes nothing. `_persist_skill_schema_versions` runs AFTER `setup_all` succeeds and writes the declared version. A torn setup leaves `schema_meta` at the OLD version so the next boot re-warns the same way.
+
+Equal-version is silent in both passes (no event, no write). T1.13's hot persona swap calls `setup()` on every reconnect; emitting a heartbeat would create per-swap log noise. The 3x-swap stability test (`test_skill_schema_version.py::test_three_consecutive_swaps_silent_after_first`) pins this invariant.
+
+First-boot for a (skill, persona) pair is also silent: `_check` sees `stored is None` and skips; `_persist` writes the declared version with no event. Symmetric with the equal-version case after the first persist.
+
+**Consequences**:
+
+- A skill author's broken setup() doesn't silently advance the persisted schema version — the operator gets the warning every boot until the bug is fixed.
+- The post-Phase-1 critic round caught this; the original implementation wrote-before-setup. Real bug, cheap fix, pinned by tests.
+- v2's PWA layer can add cross-major upgrade gating on top of v1's events without changing the v1 persistence path.
