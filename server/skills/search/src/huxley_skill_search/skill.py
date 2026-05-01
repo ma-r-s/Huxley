@@ -29,7 +29,7 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from huxley_sdk import (
     PlaySound,
@@ -121,6 +121,32 @@ class SearchSkill:
     sitting through a 4-second timeout on every query during a DDG
     outage.
     """
+
+    # T1.14: declare a JSON Schema for the user-tunable config field so
+    # v2's PWA Skills panel can render a form. Scoped to `safesearch`
+    # only — `start_sound` and `sounds_path` are persona-author /
+    # framework-shared fields (sound-palette plumbing), not user-
+    # tunable, and stay un-schemaed. v2 falls back to "edit YAML
+    # directly" for un-schemaed fields.
+    config_schema: ClassVar[dict[str, Any] | None] = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "safesearch": {
+                "type": "string",
+                "enum": ["off", "moderate", "strict"],
+                "default": "moderate",
+                "title": "Safe search",
+                "x-huxley:help": (
+                    "How aggressively to filter explicit results. "
+                    "`moderate` is the DuckDuckGo default."
+                ),
+            }
+        },
+    }
+
+    # data_schema_version inherits the protocol default of 1; bump on
+    # any incompatible change to the cache or persisted state shape.
 
     def __init__(self, *, provider: SearchProvider | None = None) -> None:
         # `provider` is keyword-only and reserved for tests that inject

@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 from huxley_sdk.types import SkillContext, ToolDefinition, ToolResult
 
 if TYPE_CHECKING:
-    from huxley_sdk.types import SkillStorage
+    from huxley_sdk.types import SkillSecrets, SkillStorage
 
 
 class _NoopSkillStorage:
@@ -38,12 +38,36 @@ class _NoopSkillStorage:
         self._data.pop(key, None)
 
 
+class _NoopSkillSecrets:
+    """In-memory SkillSecrets for tests. Implements the protocol structurally.
+
+    Production storage is a JSON file under ``<persona>/data/secrets/<skill>/``;
+    tests use this in-memory shim so they don't touch the filesystem.
+    """
+
+    def __init__(self, initial: dict[str, str] | None = None) -> None:
+        self._data: dict[str, str] = dict(initial or {})
+
+    async def get(self, key: str) -> str | None:
+        return self._data.get(key)
+
+    async def set(self, key: str, value: str) -> None:
+        self._data[key] = value
+
+    async def delete(self, key: str) -> None:
+        self._data.pop(key, None)
+
+    async def keys(self) -> list[str]:
+        return sorted(self._data.keys())
+
+
 def make_test_context(
     *,
     name: str = "test",
     config: dict[str, Any] | None = None,
     persona_data_dir: Path | None = None,
     storage: SkillStorage | None = None,
+    secrets: SkillSecrets | None = None,
     language: str | None = None,
 ) -> SkillContext:
     """Build a SkillContext for unit-testing a skill's setup() and handle().
@@ -71,6 +95,7 @@ def make_test_context(
     return SkillContext(
         logger=logger,
         storage=storage if storage is not None else _NoopSkillStorage(),
+        secrets=secrets if secrets is not None else _NoopSkillSecrets(),
         persona_data_dir=persona_data_dir or Path("/tmp"),
         config=cfg,
         language=language,

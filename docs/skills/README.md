@@ -265,13 +265,63 @@ async def setup(self, ctx: SkillContext) -> None:
 - Large binary blobs — it's a string KV, not a file system. Use `ctx.persona_data_dir` for files.
 - High-frequency writes — every `set_setting` is a SQLite commit. Fine for user events ("bookmark position on turn end"), not fine for per-frame state.
 
-## Per-skill secrets — `<persona>/data/secrets/<skill>/values.json`
+## Per-skill secrets — `ctx.secrets`
 
-Skills that need API keys, OAuth tokens, or other credentials use a per-persona secrets directory at `<persona.data_dir>/secrets/<skill_name>/values.json`. The file is a flat JSON `{string: string}` map, perms `0700` on the dir and `0600` on the file. The persona's data dir is gitignored, so secrets never enter git.
+Skills that need API keys, OAuth tokens, or other credentials use `ctx.secrets`, an async `get/set/delete/keys` API backed by a JSON file at `<persona.data_dir>/secrets/<skill_name>/values.json`. The file is a flat `dict[str, str]`, perms `0700` on the dir and `0600` on the file. The persona's data dir is gitignored, so secrets never enter git.
 
-This is **not yet** a SDK API — T1.14 will add `ctx.secrets` as the first-class accessor. Until then, skills that need secrets read the file directly (see `huxley_skill_telegram.skill._load_creds_from_secrets_file` for the canonical pattern). When T1.14 ships, those direct reads collapse into `await ctx.secrets.get(key)` and the on-disk shape stays unchanged.
+```python
+class SkillSecrets(Protocol):
+    async def get(self, key: str) -> str | None: ...
+    async def set(self, key: str, value: str) -> None: ...
+    async def delete(self, key: str) -> None: ...
+    async def keys(self) -> list[str]: ...
+```
 
-The telegram skill is the first adopter (T2.8). Authoring conventions for the API-backed version land with T1.14.
+```python
+async def setup(self, ctx: SkillContext) -> None:
+    self._api_key = await ctx.secrets.get("api_key")
+    if self._api_key is None:
+        await ctx.logger.awarning("myskill.api_key_missing", hint="...")
+```
+
+**Nested data — the OAuth-blob convention.** The on-disk shape is always a flat `dict[str, str]`. Skills that need to persist nested OAuth state JSON-encode the dict themselves into a single key:
+
+```python
+state = {"access_token": "...", "refresh_token": "...", "expires_at": 1735689600}
+await ctx.secrets.set("oauth_state", json.dumps(state))
+
+# Later, with corruption recovery:
+raw = await ctx.secrets.get("oauth_state")
+try:
+    state = json.loads(raw) if raw else None
+except json.JSONDecodeError:
+    state = None
+    await ctx.secrets.delete("oauth_state")  # force re-auth
+```
+
+A future SDK release will add `ctx.secrets.set_json` / `get_json` typed accessors that wrap `set/get` with `json.dumps/json.loads`. The on-disk bytes are identical, so it's a purely additive change — code using `set/get` today keeps working.
+
+## Optional class-level metadata — `config_schema` + `data_schema_version`
+
+Two optional class-level attributes the framework reads via `getattr` (skills that don't declare them get the documented defaults):
+
+```python
+class MySkill:
+    config_schema: ClassVar[dict | None] = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "safesearch": {"type": "string", "enum": ["off", "moderate", "strict"]},
+            "api_key": {"type": "string", "format": "secret"},
+        },
+    }
+    data_schema_version: ClassVar[int] = 1
+```
+
+- **`config_schema`** — JSON Schema 2020-12 describing the user-tunable fields the skill consumes from `ctx.config`. v2's PWA Skills panel will render forms from this. Two custom extensions: `"format": "secret"` routes a string field to `ctx.secrets` (PWA renders password input); `"x-huxley:help"` carries markdown help text shown next to the field. The schema describes the **post-merge** view of `ctx.config` — the framework merges per-language `i18n.<lang>` overrides before the skill sees the dict. Skills with complex configs (i18n maps, list-of-records, contact dicts) leave it `None`; v2 falls back to "edit YAML directly."
+- **`data_schema_version`** — bump on incompatible change to your skill's persisted shape (`ctx.storage` keys, `ctx.secrets` values). Persisted in the persona's `schema_meta` table. The runtime logs `skill.schema.upgrade_needed` / `skill.schema.downgrade_detected` on mismatch and writes the new declared version after setup; v1 does NOT auto-migrate (your CHANGELOG instructs the user). v2's PWA will gate cross-major upgrades behind explicit confirmation.
+
+See [`docs/skill-marketplace.md`](../skill-marketplace.md) for the full convention. The `huxley-skill-search` skill is the first first-party adopter (declares `config_schema` for `safesearch`).
 
 ## Proactive speech — `ctx.inject_turn`
 

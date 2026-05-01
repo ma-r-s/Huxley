@@ -147,6 +147,28 @@ class FakeStorage:
         return []
 
 
+class FakeSecrets:
+    """In-memory SkillSecrets for tests. The telegram skill currently
+    reads creds via ``_load_creds_from_secrets_file`` (file-based);
+    once it migrates to ``ctx.secrets.get(...)``, these tests will
+    populate via ``self._data`` to drive the same paths."""
+
+    def __init__(self, initial: dict[str, str] | None = None) -> None:
+        self._data: dict[str, str] = dict(initial or {})
+
+    async def get(self, key: str) -> str | None:
+        return self._data.get(key)
+
+    async def set(self, key: str, value: str) -> None:
+        self._data[key] = value
+
+    async def delete(self, key: str) -> None:
+        self._data.pop(key, None)
+
+    async def keys(self) -> list[str]:
+        return sorted(self._data.keys())
+
+
 def _build_ctx(
     config: dict[str, Any],
     data_dir: Path,
@@ -192,6 +214,7 @@ def _build_ctx(
     return SkillContext(  # type: ignore[call-arg]
         logger=structlog.get_logger().bind(skill="telegram"),
         storage=FakeStorage(),  # type: ignore[arg-type]
+        secrets=FakeSecrets(),  # type: ignore[arg-type]
         persona_data_dir=data_dir,
         config=config,
         # Tests assert against the Spanish copy (historic assumption — the

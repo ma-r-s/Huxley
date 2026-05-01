@@ -506,6 +506,40 @@ class SkillStorage(Protocol):
     async def delete_setting(self, key: str) -> None: ...
 
 
+@runtime_checkable
+class SkillSecrets(Protocol):
+    """Per-skill secrets store. Backed by a JSON file at
+    ``<persona.data_dir>/secrets/<skill_name>/values.json``.
+
+    On-disk shape is a flat ``dict[str, str]``. Skills that need to
+    persist nested data (OAuth refresh state with access_token /
+    refresh_token / expires_at) JSON-encode the dict themselves into
+    a single key:
+
+        state = {"access_token": "...", "expires_at": 1735689600}
+        await ctx.secrets.set("oauth_state", json.dumps(state))
+        # Later:
+        raw = await ctx.secrets.get("oauth_state")
+        state = json.loads(raw) if raw else None
+
+    Recovery from a corrupted blob is
+    ``await ctx.secrets.delete("oauth_state")`` followed by re-auth.
+
+    Async to match :class:`SkillStorage` — both are filesystem I/O
+    called from skill ``setup()`` / ``handle()`` coroutines.
+
+    See ``docs/skill-marketplace.md`` § Secrets storage layout for the
+    full convention. v2 may add ``set_json`` / ``get_json`` typed
+    accessors that wrap ``set`` / ``get`` with ``json.dumps`` / ``json.loads`` —
+    purely additive, same on-disk bytes.
+    """
+
+    async def get(self, key: str) -> str | None: ...
+    async def set(self, key: str, value: str) -> None: ...
+    async def delete(self, key: str) -> None: ...
+    async def keys(self) -> list[str]: ...
+
+
 class SkillLogger(Protocol):
     """Async logger interface the framework hands to each skill.
 
@@ -762,6 +796,12 @@ class SkillContext:
     - `logger`: a logger pre-tagged with `skill=<name>`. Use
       `ctx.logger.ainfo(...)` for events your skill emits.
     - `storage`: namespaced key-value storage scoped to this skill.
+    - `secrets`: per-skill secrets store at
+      ``<persona.data_dir>/secrets/<skill_name>/values.json``. Use this
+      for API keys, OAuth tokens, anything that must NOT land in
+      ``persona.yaml``. Async ``get/set/delete/keys`` over a flat
+      ``dict[str, str]`` shape — JSON-encode nested blobs yourself and
+      store under one key. See :class:`SkillSecrets` for the convention.
     - `persona_data_dir`: absolute path to the persona's data directory.
       Resolve your skill's file paths against this, not against CWD.
     - `config`: the per-skill config dict from `persona.yaml`'s
@@ -832,6 +872,7 @@ class SkillContext:
 
     logger: SkillLogger
     storage: SkillStorage
+    secrets: SkillSecrets
     persona_data_dir: Path
     config: dict[str, Any]
     # Active language as an ISO 639-1 code. Defaults to "en" so test
@@ -900,7 +941,35 @@ class Skill(Protocol):
     defaults so skill authors only implement what they need. The defaults
     are inherited by Protocol subtyping — a class with `name`, `tools`,
     and `handle` is a valid Skill.
+
+    ## Optional class-level metadata (T1.14)
+
+    Skills MAY declare two class-level attributes that the framework reads
+    via ``getattr``. Skills that omit them get the documented defaults —
+    the framework no-ops on opt-out, so v1 is fully usable without any
+    skill adopting these.
+
+    - ``config_schema: dict | None = None`` — JSON Schema 2020-12
+      describing this skill's per-persona config. Skills with simple
+      configs declare a schema; skills with nested i18n maps or contact
+      dicts (audiobooks, telegram) leave it ``None``. v2's PWA only
+      renders forms for opt-in skills. Two custom extensions:
+      ``"format": "secret"`` on a string field routes the value to
+      ``ctx.secrets``; ``"x-huxley:help"`` carries markdown help text.
+      The schema describes the **post-merge** view of ``ctx.config`` —
+      after the framework merges per-language i18n overrides.
+    - ``data_schema_version: int = 1`` — integer version of this skill's
+      persisted data layout (storage namespace + secrets values). Bump
+      on incompatible change. Persisted in the persona's ``schema_meta``
+      table under ``skill_version:<name>``. Runtime logs a warning event
+      on mismatch (``skill.schema.upgrade_needed`` /
+      ``skill.schema.downgrade_detected``); v1 does NOT auto-migrate.
+
+    See ``docs/skill-marketplace.md`` for the full convention.
     """
+
+    config_schema: ClassVar[dict[str, Any] | None] = None
+    data_schema_version: ClassVar[int] = 1
 
     @property
     def name(self) -> str: ...

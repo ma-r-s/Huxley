@@ -413,6 +413,36 @@ class Storage:
         await self._conn.execute("UPDATE sessions SET summary = NULL")
         await self._conn.commit()
 
+    # --- Skill schema versions (T1.14) ---
+    #
+    # Per-skill data_schema_version persisted under schema_meta with the
+    # key ``skill_version:<skill_name>``. The runtime reads these on
+    # skill setup, compares against the value declared by the skill
+    # class, and either logs warning + writes (mismatch) or stays silent
+    # (equal / first boot). See docs/skill-marketplace.md § Schema
+    # versioning for the full convention.
+
+    async def get_skill_schema_version(self, skill_name: str) -> int | None:
+        cursor = await self._conn.execute(
+            "SELECT value FROM schema_meta WHERE key = ?",
+            (f"skill_version:{skill_name}",),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        try:
+            return int(row[0])
+        except (TypeError, ValueError):
+            return None
+
+    async def set_skill_schema_version(self, skill_name: str, version: int) -> None:
+        await self._conn.execute(
+            "INSERT INTO schema_meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (f"skill_version:{skill_name}", str(version)),
+        )
+        await self._conn.commit()
+
     # --- Settings ---
 
     async def get_setting(self, key: str, default: str | None = None) -> str | None:

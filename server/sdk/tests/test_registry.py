@@ -23,6 +23,7 @@ def _ctx(name: str) -> SkillContext:
     return SkillContext(
         logger=MagicMock(),
         storage=MagicMock(),
+        secrets=MagicMock(),
         persona_data_dir=Path("/tmp"),
         config={},
     )

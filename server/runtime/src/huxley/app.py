@@ -33,6 +33,7 @@ from huxley.reconnect import no_signal_tone_pcm, run_reconnect_loop
 from huxley.state.machine import StateMachine
 from huxley.storage.backup import ensure_daily_snapshot
 from huxley.storage.db import Storage
+from huxley.storage.secrets import JsonFileSecrets
 from huxley.storage.skill import NamespacedSkillStorage
 from huxley.turn import TurnCoordinator
 from huxley.voice.openai_realtime import OpenAIRealtimeProvider
@@ -205,6 +206,59 @@ class Application:
         # `_on_session_end` finalizes the row. T1.12.
         self._active_session_id: int | None = None
 
+    async def _check_skill_schema_versions(self) -> None:
+        """Compare each skill's declared data_schema_version against
+        what's stored in the persona's schema_meta table.
+
+        On mismatch, log a warning event so the operator sees it; never
+        block setup — v1 trusts the developer to handle migrations via
+        their CHANGELOG. v2's PWA will gate cross-major upgrades behind
+        explicit user confirmation, but that lives on top of v1's data.
+
+        On first boot for a (skill, persona) pair: stored is None, log
+        nothing (the equal-version case after the first write would be
+        equally silent), just write the declared version.
+
+        On equal version: silent no-op. T1.13's hot persona swap calls
+        ``setup()`` on every reconnect; emitting a heartbeat event here
+        would create log noise on every swap.
+
+        Atomicity vs T1.13 hot swap: ``set_skill_schema_version`` runs
+        under the same DB connection that skill setup will use; a torn
+        teardown that interrupts mid-init leaves the prior version
+        intact in ``schema_meta``, so the next swap re-evaluates from
+        the correct stored value.
+        """
+        for skill in self.skill_registry.skills:
+            declared = int(getattr(skill, "data_schema_version", 1))
+            stored = await self.storage.get_skill_schema_version(skill.name)
+            if stored is None:
+                # First boot for this (skill, persona) pair. Write the
+                # current version silently — equal-versions on the next
+                # boot will also be silent, so the first-boot path stays
+                # symmetric.
+                await self.storage.set_skill_schema_version(skill.name, declared)
+                continue
+            if stored == declared:
+                continue
+            if declared > stored:
+                await logger.awarning(
+                    "skill.schema.upgrade_needed",
+                    skill=skill.name,
+                    declared=declared,
+                    stored=stored,
+                )
+            else:
+                await logger.awarning(
+                    "skill.schema.downgrade_detected",
+                    skill=skill.name,
+                    declared=declared,
+                    stored=stored,
+                )
+            # Write the new declared version after the warning so the
+            # next boot is silent unless something changed again.
+            await self.storage.set_skill_schema_version(skill.name, declared)
+
     def _build_skill_context(self, skill_name: str) -> SkillContext:
         """Construct the SkillContext handed to a skill at setup() / reconfigure().
 
@@ -232,6 +286,7 @@ class Application:
         return SkillContext(
             logger=structlog.get_logger().bind(skill=skill_name),
             storage=NamespacedSkillStorage(self.storage, skill_name),
+            secrets=JsonFileSecrets(self.persona.data_dir / "secrets" / skill_name),
             persona_data_dir=self.persona.data_dir,
             config=resolved.skills.get(skill_name, {}),
             language=resolved.language_code,
@@ -274,6 +329,10 @@ class Application:
         # Safe to do before any skill needs it — observers acquire/release
         # through the mailbox, so events are serialized from the first call.
         self.focus_manager.start()
+        # T1.14: per-skill data_schema_version check before setup. Skills
+        # that don't declare get the default of 1; mismatch logs a warning
+        # but never blocks setup (v1 trusts the developer; v2 will gate).
+        await self._check_skill_schema_versions()
         await self.skill_registry.setup_all(self._build_skill_context)
 
         self.state_machine.on_enter(AppState.CONNECTING, self._enter_connecting)
