@@ -1,8 +1,18 @@
 [project]
 name = "huxley-skill-news"
 version = "0.1.0"
-description = "News + weather skill for Huxley. Fetches from Open-Meteo (weather) and Google News RSS."
+description = "News headlines + weather for Huxley — Google News RSS + Open-Meteo, no API keys, multi-language."
+readme = "README.md"
 requires-python = ">=3.13"
+license = { text = "MIT" }
+authors = [{ name = "Mario Ruiz", email = "marioalejandroruizsarmiento@gmail.com" }]
+keywords = ["huxley", "voice-agent", "skill", "news", "weather", "rss"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.13",
+]
 dependencies = [
     "huxley-sdk",
     "httpx>=0.27",
@@ -10,6 +20,12 @@ dependencies = [
 
 [project.entry-points."huxley.skills"]
 news = "huxley_skill_news:NewsSkill"
+
+[project.urls]
+Homepage = "https://github.com/ma-r-s/Huxley"
+Source = "https://github.com/ma-r-s/Huxley/tree/main/server/skills/news"
+Issues = "https://github.com/ma-r-s/Huxley/issues"
+Changelog = "https://github.com/ma-r-s/Huxley/blob/main/server/skills/news/CHANGELOG.md"
 
 [dependency-groups]
 dev = [

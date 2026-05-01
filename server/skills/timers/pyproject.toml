@@ -1,14 +1,30 @@
 [project]
 name = "huxley-skill-timers"
 version = "0.1.0"
-description = "Timer / reminder skill for Huxley (one-shot proactive announcements)."
+description = "One-shot relative timers for Huxley — 'remind me in 5 minutes'. Persistent, supervised, stale-restore-guarded."
+readme = "README.md"
 requires-python = ">=3.13"
+license = { text = "MIT" }
+authors = [{ name = "Mario Ruiz", email = "marioalejandroruizsarmiento@gmail.com" }]
+keywords = ["huxley", "voice-agent", "skill", "timer"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.13",
+]
 dependencies = [
     "huxley-sdk",
 ]
 
 [project.entry-points."huxley.skills"]
 timers = "huxley_skill_timers:TimersSkill"
+
+[project.urls]
+Homepage = "https://github.com/ma-r-s/Huxley"
+Source = "https://github.com/ma-r-s/Huxley/tree/main/server/skills/timers"
+Issues = "https://github.com/ma-r-s/Huxley/issues"
+Changelog = "https://github.com/ma-r-s/Huxley/blob/main/server/skills/timers/CHANGELOG.md"
 
 [dependency-groups]
 dev = [

@@ -1,8 +1,18 @@
 [project]
 name = "huxley-skill-search"
 version = "0.1.0"
-description = "Web search skill for Huxley. Free, no-API-key DuckDuckGo lookups via the ddgs package — for current/live info the LLM doesn't already know."
+description = "Web search for Huxley via DuckDuckGo — free, no API key, in-memory cache, circuit-breaker."
+readme = "README.md"
 requires-python = ">=3.13"
+license = { text = "MIT" }
+authors = [{ name = "Mario Ruiz", email = "marioalejandroruizsarmiento@gmail.com" }]
+keywords = ["huxley", "voice-agent", "skill", "search", "duckduckgo"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.13",
+]
 dependencies = [
     "huxley-sdk",
     "ddgs>=9.0",
@@ -10,6 +20,12 @@ dependencies = [
 
 [project.entry-points."huxley.skills"]
 search = "huxley_skill_search:SearchSkill"
+
+[project.urls]
+Homepage = "https://github.com/ma-r-s/Huxley"
+Source = "https://github.com/ma-r-s/Huxley/tree/main/server/skills/search"
+Issues = "https://github.com/ma-r-s/Huxley/issues"
+Changelog = "https://github.com/ma-r-s/Huxley/blob/main/server/skills/search/CHANGELOG.md"
 
 [dependency-groups]
 dev = [

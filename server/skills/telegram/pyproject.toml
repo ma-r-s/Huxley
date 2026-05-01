@@ -1,8 +1,19 @@
 [project]
 name = "huxley-skill-telegram"
 version = "0.1.0"
-description = "Telegram skill for Huxley — p2p voice calls (and, coming, messaging) via py-tgcalls + pyrogram."
+description = "Full-duplex Telegram voice + text for Huxley — single Pyrogram userbot, p2p calls via py-tgcalls + ntgcalls."
+readme = "README.md"
 requires-python = ">=3.13"
+license = { text = "MIT" }
+authors = [{ name = "Mario Ruiz", email = "marioalejandroruizsarmiento@gmail.com" }]
+keywords = ["huxley", "voice-agent", "skill", "telegram", "pyrogram", "py-tgcalls"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Communications :: Telephony",
+]
 dependencies = [
     "huxley-sdk",
     # kurigram: drop-in pyrogram replacement that py-tgcalls imports at runtime.
@@ -21,6 +32,12 @@ dependencies = [
 
 [project.entry-points."huxley.skills"]
 telegram = "huxley_skill_telegram:TelegramSkill"
+
+[project.urls]
+Homepage = "https://github.com/ma-r-s/Huxley"
+Source = "https://github.com/ma-r-s/Huxley/tree/main/server/skills/telegram"
+Issues = "https://github.com/ma-r-s/Huxley/issues"
+Changelog = "https://github.com/ma-r-s/Huxley/blob/main/server/skills/telegram/CHANGELOG.md"
 
 [dependency-groups]
 dev = [

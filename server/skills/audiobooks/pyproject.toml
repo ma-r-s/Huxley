@@ -1,14 +1,31 @@
 [project]
 name = "huxley-skill-audiobooks"
 version = "0.1.0"
-description = "Audiobook search and playback skill for Huxley."
+description = "Local-library audiobook playback for Huxley — pause, resume, position-persist, multi-language."
+readme = "README.md"
 requires-python = ">=3.13"
+license = { text = "MIT" }
+authors = [{ name = "Mario Ruiz", email = "marioalejandroruizsarmiento@gmail.com" }]
+keywords = ["huxley", "voice-agent", "skill", "audiobook", "m4b", "ffmpeg"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio :: Players",
+]
 dependencies = [
     "huxley-sdk",
 ]
 
 [project.entry-points."huxley.skills"]
 audiobooks = "huxley_skill_audiobooks:AudiobooksSkill"
+
+[project.urls]
+Homepage = "https://github.com/ma-r-s/Huxley"
+Source = "https://github.com/ma-r-s/Huxley/tree/main/server/skills/audiobooks"
+Issues = "https://github.com/ma-r-s/Huxley/issues"
+Changelog = "https://github.com/ma-r-s/Huxley/blob/main/server/skills/audiobooks/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
