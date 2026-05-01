@@ -2875,7 +2875,9 @@ Other round-2 findings (PWA TS type drift on hello extras, `list_personas()` re-
 
 ## T1.14 — Skill marketplace v1 (developer-primary: SDK + reference skill + authoring docs)
 
-**Status**: in_progress (2026-05-01) — design phase locked, post-critic-round-3. Architectural specification at [`docs/skill-marketplace.md`](./skill-marketplace.md) (split into v1 and v2). **This entry covers v1 only**; v2 is deferred until caregiver-shipping is decided. **Effort**: ~2 weeks for v1 (bumped from 1.5w in round 3 — authoring docs realistically 2-3d, not 1d, for a doc the entire third-party ecosystem hangs on). **Prerequisite**: T2.8 (move telegram creds out of repo root → establishes the per-persona secrets dir pattern).
+**Status**: shipped (2026-05-01) — all four phases code-complete, pending Mario smoke. Architectural specification at [`docs/skill-marketplace.md`](./skill-marketplace.md) (split into v1 and v2). **This entry covers v1 only**; v2 is deferred until caregiver-shipping is decided. **Effort actual**: ~1 day end-to-end (estimate was ~2 weeks; the split-and-critic discipline kept rework low and Phase 1's SDK additions were smaller than expected once Phase 2 validated them). **Prerequisite**: T2.8 (move telegram creds out of repo root → established the per-persona secrets dir pattern).
+
+**Commits**: `c113e398` (T2.8) → `ec854a88` (T2.8 critic) → `4587c511` (spec v3) → `e2009e02` (lint housekeeping) → `576740a4` (Phase 1 SDK) → `32c99fd7` (Phase 1 critic) → Phase 2 in `huxley-skill-stocks` repo (`9d92ef6` + `d4f85e7`) → `7566efd2` (triage flip) → Phase 3+4 docs commits below.
 
 **Problem.** Huxley's load-bearing thesis is skill extensibility ("LLM understands rough natural-language intent and dispatches to user-installable custom tools, including for personal content" — see `docs/vision.md`). Today, "installable" means "the developer edits the runtime's `pyproject.toml`, runs `uv sync`, edits `persona.yaml`, restarts the server" — and there is no standardized way for a third-party author to publish a `huxley-skill-*` package that other people can install. The SDK doesn't define a config-schema convention or a secrets-storage primitive. The framework is extensible in principle but not in practice.
 
@@ -2976,12 +2978,12 @@ Smaller fixes also incorporated (all in spec):
 - [x] **Phase 1: SDK additions** — `Skill.config_schema: ClassVar[dict | None] = None`, `Skill.data_schema_version: ClassVar[int] = 1`, `SkillContext.secrets: SkillSecrets` with **async** `get/set/delete/keys`, backed by `<persona.data_dir>/secrets/<skill>/values.json` (perms `0700/0600`). `data_schema_version` persists in `schema_meta` table under `skill_version:<name>`; mismatch logs `skill.schema.upgrade_needed` / `skill.schema.downgrade_detected`, no auto-migration in v1. Tests + mypy + ruff + per-package pytest green.
 - [x] **`huxley-skill-search` adopts `config_schema`** as the first-party validation of the JSON-Schema convention (clean schema: `safesearch` enum only — `region` was descoped per round-2 to avoid conflating schema adoption with adding a new feature). Backward-compat: existing skills with `config_schema=None` still load.
 - [x] **Phase 2: `huxley-skill-stocks` reference skill** — own repo at `~/Projects/Personal/Code/huxley-skill-stocks/` (not `server/skills/`). Initial commit `9d92ef6`. Declares `config_schema` with `api_key` (secret) + `watchlist` (array) + `currency` (enum). Uses async `ctx.secrets` for the API key. Three voice tools (`get_stock_price`, `get_watchlist_summary`, `compare_stocks`). 40 tests, ruff + mypy --strict + pytest green. CI workflow scaffolded for ubuntu-latest. Path-dep against `../Huxley/server/sdk` during v1 dev; switches to PyPI pin once `huxley-sdk` is published.
-- [ ] **Phase 3: `docs/skills/authoring.md`** — how to write a `huxley-skill-foo` package. Worked example: `huxley-skill-stocks`. Covers project structure, the Skill protocol, config_schema convention, async secrets API, OAuth-blob convention (json-encode dicts), persona integration, PyPI publishing, submitting to the directory page.
-- [ ] **Phase 3 self-test**: walking authoring.md verbatim from a clean checkout produces a working `huxley-skill-stocks` install. Mario validates on a fresh persona — if a step doesn't work as written, the doc is the bug.
-- [ ] **Phase 4: `docs/skills/index.md` directory page** — static curated list of known `huxley-skill-*` packages following the per-entry metadata schema (`name`, `description`, `install`, `docs_url`, `tier`). First-party skills + `huxley-skill-stocks`. Renderable by the docs site.
-- [ ] Mario smoke: install `huxley-skill-stocks` into a fresh **`basicos`** persona (not Abuelo — stocks isn't a credible voice intent for the elderly Spanish-language end user; basicos has no persona constraints to interfere). PTT: "what's Apple stock at"; verify the API key lands in the secrets dir + does not leak into git diffs; verify the call succeeds.
-- [ ] Persona-swap stability test: swap personas 3× via `?persona=` reconnect with stocks enabled — `skill.schema.*` events fire only on first boot of each (skill, persona) pair; subsequent swaps are silent.
-- [ ] `ruff check server/` + `mypy server/sdk/src server/runtime/src` + per-package pytest all green.
+- [x] **Phase 3: `docs/skills/authoring.md`** — published. Worked example: `huxley-skill-stocks`. Covers project structure, the Skill protocol, `config_schema` convention with the two custom JSON-Schema extensions (`format: secret` + `x-huxley:help`), async `ctx.secrets` API, OAuth-blob convention with corruption recovery, `data_schema_version` semantics, soft-fail patterns, two-layer error classification, fully-offline test patterns, distribution + directory PR.
+- [ ] **Phase 3 self-test**: walking authoring.md verbatim from a clean checkout produces a working `huxley-skill-stocks` install. Mario validates on a fresh persona — if a step doesn't work as written, the doc is the bug. **Pending Mario smoke.**
+- [x] **Phase 4: `docs/skills/index.md` directory page** — published. Static curated list of all 8 first-party skills + `huxley-skill-stocks` following the 5-field per-entry metadata schema (`name`, `description`, `install`, `docs_url`, `tier`). PR submission instructions included.
+- [ ] Mario smoke: install `huxley-skill-stocks` into a fresh **`basicos`** persona (not Abuelo — stocks isn't a credible voice intent for the elderly Spanish-language end user; basicos has no persona constraints to interfere). PTT: "what's Apple stock at"; verify the API key lands in the secrets dir + does not leak into git diffs; verify the call succeeds. **Pending Mario smoke.**
+- [ ] Persona-swap stability test: swap personas 3× via `?persona=` reconnect with stocks enabled — `skill.schema.*` events fire only on first boot of each (skill, persona) pair; subsequent swaps are silent. **Phase 1 unit tests pin the underlying invariant (`test_skill_schema_version.py::test_three_consecutive_swaps_silent_after_first`); Mario smoke pins the runtime path.**
+- [x] `ruff check server/` + `mypy server/sdk/src server/runtime/src` + per-package pytest all green.
 
 ### Implementation order
 
@@ -3015,7 +3017,28 @@ Documented in [`docs/skill-marketplace.md` § v2 open questions](./skill-marketp
 
 ### Lessons
 
-_Captured per-phase as they ship._
+**Phase 1 (SDK additions)**:
+
+- **`ClassVar` defaults on a `runtime_checkable` Protocol + `getattr` on the runtime side is a robust opt-in pattern.** Existing skills that don't declare `config_schema` / `data_schema_version` continue to load without modification; the Protocol's defaults give mypy something to type-check against when skills DO declare them. The dual-write defense (declared default + `getattr` with a default) is belt-and-suspenders for old SDK consumers.
+- **The "split check from persist" pattern landed via the post-Phase-1 critic round.** The original implementation wrote schema versions in the same loop as the mismatch check; a torn `setup()` would advance `schema_meta` to the new version while skill state was uninitialized. The split (check before `setup_all`, persist after) means a torn setup leaves the OLD version intact and the next boot re-warns the same way. Cheap fix, real bug.
+- **`asyncio.Lock` per-instance is the right granularity for `JsonFileSecrets`.** Cross-persona contention is impossible (different paths, different instances) so a global lock would have been overkill; same-skill concurrent writes are the only real race and the lock catches them.
+- **The OAuth-blob convention (flat `dict[str, str]` + skill-side json-encoding for nested data) needs to handle hand-edited values.json gracefully too.** The `_read` coercion (`json.dumps if isinstance(v, dict | list) else str(v)`) makes the round-trip lossless whether a skill writes via `set()` or a user hand-edits a nested literal.
+
+**Phase 2 (huxley-skill-stocks reference skill)**:
+
+- **The two-layer error classification (provider raises typed errors → skill catches and translates) is the load-bearing pattern for any skill talking to a flaky third-party API.** Provider tests pin the HTTP surface; skill tests pin the user-facing behavior. Each layer is testable in isolation.
+- **`_ok` / `_error` module-level helpers + `say_to_user` payload field** is the canonical convention copied from search/news. Worked example for the docs is now in stocks.
+- **Worked-example skills must use real GitHub slugs.** The post-Phase-2 critic caught `marioruizsa` references in three files; the actual user is `ma-r-s`. Authors copying the CI workflow would've hit a 404 on first push. Always verify URLs against `git remote -v` before committing.
+- **Skill packages need explicit LICENSE files** even when `pyproject.toml` declares the license — PyPI publishing flags it, downstream copyists lose it.
+
+**Phase 3 (authoring docs)**:
+
+- **The doc's job is to teach the load-bearing patterns, not document every feature.** Authoring.md walks through `huxley-skill-stocks` annotating each pattern (provider/skill split, `_ok`/`_error`, soft-fail, OAuth-blob, two-layer errors). The reference repo is the source of truth; the doc is annotation.
+- **"If the doc is wrong, file an issue."** The self-test DoD bullet is intentionally framed as falsifiable — Mario walks the doc verbatim and any discrepancy is a doc bug.
+
+**Phase 4 (directory page)**:
+
+- **A static markdown table with a per-entry metadata schema is sufficient registry for v1.** v2 will promote to JSON + structured registry + PWA Marketplace tab; today's table is the discovery surface that earns the optionality.
 
 ---
 
