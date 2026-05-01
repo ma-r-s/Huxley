@@ -318,9 +318,9 @@ This pressure-tests the SDK additions on a real third-party-shaped skill before 
 - Publishing to PyPI.
 - Submitting to the static directory page.
 
-### Static directory page (Phase 4)
+### Static directory page (Phase 4) → structured registry repo (post-v1)
 
-`docs/skills/index.md` — curated list of known `huxley-skill-*` packages. Tracked in git; PRs add/remove entries; rendered by Fumadocs.
+Phase 4 shipped as `docs/skills/index.md` — a human-readable markdown table. Post-v1 we promoted this to [`ma-r-s/huxley-registry`](https://github.com/ma-r-s/huxley-registry), a separate repo with [`schema.json`](https://github.com/ma-r-s/huxley-registry/blob/main/schema.json), [`index.json`](https://github.com/ma-r-s/huxley-registry/blob/main/index.json), and per-skill detail files (the Tier 1 design from this doc's marketplace v2 research). The static markdown stays as a mirror; the registry repo is the canonical feed clients fetch.
 
 **Per-entry metadata schema** (so the PR template is mechanical):
 

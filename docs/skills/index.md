@@ -6,7 +6,7 @@ Curated list of known `huxley-skill-*` packages. Use this to discover skills you
 
 > **Want to add your skill?** Open a PR adding a row below. Include all five fields per the [Per-entry metadata](#per-entry-metadata) spec; Mario reviews before merging. Inclusion bar: package installs cleanly, declares `config_schema` if it has user-tunable fields, has a public docs page with at least the install command and one example voice intent.
 >
-> v2 will promote this static page to a separate registry repo (`ma-r-s/huxley-registry`) with `index.json`, JSON Schema, and a Marketplace tab in the PWA. The shape of an entry below is forward-compatible with that registry.
+> v2's structured registry now lives at [`ma-r-s/huxley-registry`](https://github.com/ma-r-s/huxley-registry) — a separate repo with [`index.json`](https://github.com/ma-r-s/huxley-registry/blob/main/index.json), [JSON Schema](https://github.com/ma-r-s/huxley-registry/blob/main/schema.json), and PR-driven curation. Clients (the PWA Marketplace tab, when it lands) fetch the canonical feed from there. This static markdown page stays as a human-readable mirror.
 
 ## Skills
 
