@@ -481,7 +481,13 @@ export function useWs() {
       activePersonaRef.current = name;
       switchingRef.current = true;
       pushStatus(`Switching to ${name}\u2026`);
-      setAppState("IDLE");
+      // Set CONNECTING (not IDLE) during the swap window. CONVERSING\u2192IDLE
+      // triggers the unexpected-session-drop error tone (App.tsx) \u2014 we
+      // don't want that on an INTENTIONAL swap. CONNECTING also makes
+      // the PWA's PTT handler treat presses as "wait for state to
+      // settle" instead of firing `wake_word` against the new server's
+      // already-CONVERSING session (which the server would reject).
+      setAppState("CONNECTING");
       setTranscript([]);
       setDevEvents([]);
       setStatusLog((prev) => prev.slice(0, 5));
