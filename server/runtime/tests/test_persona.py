@@ -253,7 +253,7 @@ class TestPickDefaultPersonaName:
 
         # Even though "abuelos" is the only one and would be
         # autodiscovered, the env name passes through verbatim.
-        assert pick_default_persona_name(env_name="basicos") == "basicos"
+        assert pick_default_persona_name(env_name="basic") == "basic"
 
     def test_single_persona_autodiscovery(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

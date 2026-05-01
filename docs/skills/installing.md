@@ -50,7 +50,7 @@ You should see your skill's entry-point key alongside the bundled ones. If it's 
 
 ## Enable on a persona
 
-Edit the persona's `persona.yaml` (e.g. `server/personas/basicos/persona.yaml`):
+Edit the persona's `persona.yaml` (e.g. `server/personas/basic/persona.yaml`):
 
 ```yaml
 skills:
@@ -66,7 +66,7 @@ Plain config (everything that ISN'T a secret) goes in YAML. The skill reads it v
 Skills that need API keys, OAuth tokens, etc. read them from `<persona.data_dir>/secrets/<skill_name>/values.json` — a flat JSON `{key: string}` map. Permissions are enforced by the runtime's `JsonFileSecrets` writer (`0700` on the dir, `0600` on the file); when you create the file by hand, set the perms yourself:
 
 ```bash
-PERSONA=basicos
+PERSONA=basic
 SKILL=stocks
 mkdir -p server/personas/$PERSONA/data/secrets/$SKILL
 chmod 700 server/personas/$PERSONA/data/secrets/$SKILL
@@ -121,7 +121,7 @@ The smoke is "did the right tool fire and was the response coherent." The skill 
 
 T1.13's hot persona swap calls `setup()` on every reconnect. If the skill emits log noise on every swap, that's a regression we want to catch.
 
-In the PWA, swap personas via `?persona=` reconnect three times: e.g. abuelos → basicos → abuelos → basicos. **`skill.schema.*` events should fire only on the first boot of each (skill, persona) pair**, never on subsequent swaps. The Phase 1 unit tests pin this invariant ([`test_skill_schema_version.py::test_three_consecutive_swaps_silent_after_first`](../../server/runtime/tests/unit/test_skill_schema_version.py)); the swap smoke confirms the runtime path matches.
+In the PWA, swap personas via `?persona=` reconnect three times: e.g. abuelos → basic → abuelos → basic. **`skill.schema.*` events should fire only on the first boot of each (skill, persona) pair**, never on subsequent swaps. The Phase 1 unit tests pin this invariant ([`test_skill_schema_version.py::test_three_consecutive_swaps_silent_after_first`](../../server/runtime/tests/unit/test_skill_schema_version.py)); the swap smoke confirms the runtime path matches.
 
 ## Uninstalling
 

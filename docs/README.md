@@ -20,7 +20,7 @@ Single source of truth for what Huxley is, what it does, and how it's built. Cod
 ## Worked examples
 
 - [**personas/abuelos.md**](./personas/abuelos.md) — canonical persona spec (Spanish-language assistant for an elderly blind user)
-- [**personas/basicos.md**](./personas/basicos.md) — terse counter-persona; proves skills are persona-agnostic
+- [**personas/basic.md**](./personas/basic.md) — terse counter-persona; proves skills are persona-agnostic
 - [**skills/audiobooks.md**](./skills/audiobooks.md) — first-party skill (audio playback via `AudioStream`)
 - [**skills/news.md**](./skills/news.md) — second first-party skill (info tool via `PlaySound` chime)
 - [**skills/radio.md**](./skills/radio.md) — internet radio (live HTTP/Icecast streams via ffmpeg)

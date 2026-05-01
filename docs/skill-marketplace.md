@@ -388,8 +388,8 @@ That's the entirety of v1. Tracked as a single triage entry with phase checkboxe
 - [ ] `docs/skills/authoring.md` published with the worked-example walkthrough (`huxley-skill-stocks` as the canonical example).
 - [ ] **Authoring-docs self-test**: walking the docs verbatim from a clean checkout produces a working `huxley-skill-stocks` install. Verified by Mario on a fresh persona — if a step doesn't work as written, the doc is the bug.
 - [ ] `docs/skills/index.md` published with first-party skills + `huxley-skill-stocks` listed (per the Per-entry metadata schema in § Static directory page) and a "submit a PR to add yours" footer.
-- [ ] Mario smoke: install `huxley-skill-stocks` into a fresh **`basicos`** persona (not Abuelo — stocks isn't a credible voice intent for the elderly Spanish-language end user; basicos has no `never_say_no` / `child_safe` constraints to interfere with the test's plumbing focus). PTT-ask "what's Apple stock at"; verify the API key lands in the secrets dir + does not leak into git diffs; verify the call succeeds.
-- [ ] **Persona-swap stability test**: with `huxley-skill-stocks` enabled on basicos, swap personas 3× via `?persona=` reconnect. `skill.schema.*` events fire only on first boot of each (skill, persona) pair — no log noise on subsequent swaps.
+- [ ] Mario smoke: install `huxley-skill-stocks` into a fresh **`basic`** persona (not Abuelo — stocks isn't a credible voice intent for the elderly Spanish-language end user; basic has no `never_say_no` / `child_safe` constraints to interfere with the test's plumbing focus). PTT-ask "what's Apple stock at"; verify the API key lands in the secrets dir + does not leak into git diffs; verify the call succeeds.
+- [ ] **Persona-swap stability test**: with `huxley-skill-stocks` enabled on basic, swap personas 3× via `?persona=` reconnect. `skill.schema.*` events fire only on first boot of each (skill, persona) pair — no log noise on subsequent swaps.
 - [ ] `ruff check server/` + `mypy server/sdk/src server/runtime/src` + per-package pytest all green.
 
 When the above is true, **v1 marketplace is shipped**.

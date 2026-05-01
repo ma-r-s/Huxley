@@ -48,7 +48,7 @@ skills:
   telegram: { contacts: { ... } }`,
   },
   {
-    id: "basicos",
+    id: "basic",
     name: "Basic",
     tag: "Developer reference · English",
     desc: "Minimal, terse English assistant. Two skills, a short prompt. The reference implementation for building your own persona.",

@@ -8,7 +8,7 @@ A persona is just a YAML file plus a directory. The server picks one at startup;
 ## Pick at startup
 
 ```bash
-HUXLEY_PERSONA=basicos uv run huxley
+HUXLEY_PERSONA=basic uv run huxley
 ```
 
 There's no default. When more than one persona exists under `server/personas/`, set `HUXLEY_PERSONA` explicitly. Any directory there with a valid `persona.yaml` is a candidate.
@@ -33,10 +33,10 @@ Run them on different ports:
 HUXLEY_PERSONA=abuelos HUXLEY_SERVER_PORT=8765 uv run huxley
 
 # terminal 2
-HUXLEY_PERSONA=basicos HUXLEY_SERVER_PORT=8766 uv run huxley
+HUXLEY_PERSONA=basic HUXLEY_SERVER_PORT=8766 uv run huxley
 ```
 
-The PWA's `VITE_HUXLEY_PERSONAS` env var is a comma-separated `name:url` registry — e.g. `VITE_HUXLEY_PERSONAS=abuelos:ws://localhost:8765,basicos:ws://localhost:8766` — and the in-app picker switches between them. Useful for A/B-testing prompt changes side by side.
+The PWA's `VITE_HUXLEY_PERSONAS` env var is a comma-separated `name:url` registry — e.g. `VITE_HUXLEY_PERSONAS=abuelos:ws://localhost:8765,basic:ws://localhost:8766` — and the in-app picker switches between them. Useful for A/B-testing prompt changes side by side.
 
 ## Family-of-personas patterns
 
@@ -66,7 +66,7 @@ Skill code also requires restart. The good news: server boot is fast — a few s
 Huxley validates persona files at startup; an invalid one fails fast with a structured error. The fastest way to validate today: run the server with the persona; if the YAML or skill list is bad, the error message is immediate and structured.
 
 ```bash
-HUXLEY_PERSONA=basicos uv run huxley
+HUXLEY_PERSONA=basic uv run huxley
 ```
 
 A dedicated `--check` flag is on the roadmap; for now the boot path is the validator.

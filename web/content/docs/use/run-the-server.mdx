@@ -14,12 +14,12 @@ cd server/runtime
 uv run huxley
 ```
 
-This loads `.env` from the current directory, reads `HUXLEY_PERSONA`, and listens on `:8765`. With multiple personas in `server/personas/` (the repo ships `abuelos` and `basicos`), set `HUXLEY_PERSONA` explicitly. Restart between code changes — there's no hot reload for the server (skills hold state; reloads would lose it).
+This loads `.env` from the current directory, reads `HUXLEY_PERSONA`, and listens on `:8765`. With multiple personas in `server/personas/` (the repo ships `abuelos` and `basic`), set `HUXLEY_PERSONA` explicitly. Restart between code changes — there's no hot reload for the server (skills hold state; reloads would lose it).
 
 For development with a different persona running side by side:
 
 ```bash
-HUXLEY_PERSONA=basicos HUXLEY_SERVER_PORT=8766 uv run huxley
+HUXLEY_PERSONA=basic HUXLEY_SERVER_PORT=8766 uv run huxley
 ```
 
 You can A/B-test two personas by pointing two PWA tabs at the two ports.
@@ -159,7 +159,7 @@ Persona files change rarely. Skill code changes more often. If a skill updates i
 
 A common dev pattern: Abuelo on `:8765`, Basic on `:8766`, both running, both pointed at the same data dir or separate ones. They're independent processes, they don't coordinate. Run them in two terminals, or as two systemd units with different `Environment=` lines.
 
-If you do this, make sure their database paths don't collide — by default each persona has its own (`server/personas/abuelos/data/`, `server/personas/basicos/data/`).
+If you do this, make sure their database paths don't collide — by default each persona has its own (`server/personas/abuelos/data/`, `server/personas/basic/data/`).
 
 ## Next
 

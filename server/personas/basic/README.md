@@ -17,7 +17,7 @@ without code changes. The differences live entirely in `persona.yaml`.
 ## Run
 
 ```bash
-HUXLEY_PERSONA=basicos HUXLEY_SERVER_PORT=8766 uv run --package huxley huxley
+HUXLEY_PERSONA=basic HUXLEY_SERVER_PORT=8766 uv run --package huxley huxley
 ```
 
 The web client (`web/`) defaults to `ws://localhost:8765` (Abuelo). To talk

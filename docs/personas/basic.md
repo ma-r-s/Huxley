@@ -39,7 +39,7 @@ audio-only constraints.
 
 ## persona.yaml (the actual file)
 
-Lives at [`server/personas/basicos/persona.yaml`](../../personas/basicos/persona.yaml).
+Lives at [`server/personas/basic/persona.yaml`](../../personas/basic/persona.yaml).
 Notable bits versus Abuelo:
 
 ```yaml
@@ -81,7 +81,7 @@ because of the persona's `system_prompt` + the absence of `start_sound`.
 
 ```bash
 cd server/runtime
-HUXLEY_PERSONA=basicos HUXLEY_SERVER_PORT=8766 uv run huxley
+HUXLEY_PERSONA=basic HUXLEY_SERVER_PORT=8766 uv run huxley
 ```
 
 Or run both servers side-by-side and switch with the [web UI persona
@@ -92,7 +92,7 @@ dropdown](../../web/.env.local.example):
 cd server/runtime && uv run huxley
 
 # Terminal 2 — Basic on port 8766
-cd server/runtime && HUXLEY_PERSONA=basicos HUXLEY_SERVER_PORT=8766 uv run huxley
+cd server/runtime && HUXLEY_PERSONA=basic HUXLEY_SERVER_PORT=8766 uv run huxley
 
 # Terminal 3 — web client; the dropdown reads VITE_HUXLEY_PERSONAS
 cd clients/pwa && cp .env.local.example .env.local && bun dev

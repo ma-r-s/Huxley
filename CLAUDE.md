@@ -40,7 +40,7 @@ Huxley/                              # repo root
 │       │   ├── persona.yaml         #     version, name, voice, language, system_prompt, constraints, skills
 │       │   ├── data/                #     gitignored: audiobook library + abuelos.db
 │       │   └── README.md
-│       ├── basicos/                 #   terse counter-persona — proves skills are persona-agnostic
+│       ├── basic/                 #   terse counter-persona — proves skills are persona-agnostic
 │       │   ├── persona.yaml
 │       │   └── README.md
 │       ├── chief/                   #   action-oriented executive assistant (en)
@@ -64,7 +64,7 @@ Huxley/                              # repo root
 │   ├── decisions.md                 # ADR log
 │   ├── roadmap.md                   # framework + persona roadmaps
 │   ├── skill-marketplace.md         # T1.14 spec: v1/v2 split, secrets layout, schema versioning
-│   ├── personas/{README,abuelos,basicos,chief,librarian,buddy}.md
+│   ├── personas/{README,abuelos,basic,chief,librarian,buddy}.md
 │   ├── skills/{README,authoring,installing,index,audiobooks,news,radio,search,telegram,timers,reminders}.md
 │   ├── sounds.md                    # sound UX architecture (PlaySound, AudioStream, synthesis pipeline)
 │   └── research/sonic-ux.md
@@ -103,7 +103,7 @@ uv run --package huxley-skill-reminders pytest server/skills/reminders/tests    
 uv run --package huxley-skill-stocks pytest server/skills/stocks/tests           # stocks skill
 cd server/runtime && uv run huxley                                               # run the server (loads .env from server/runtime/)
 # Run Basic in parallel for persona A/B testing:
-cd server/runtime && HUXLEY_PERSONA=basicos HUXLEY_SERVER_PORT=8766 uv run huxley
+cd server/runtime && HUXLEY_PERSONA=basic HUXLEY_SERVER_PORT=8766 uv run huxley
 # Re-render the shared earcon palette (writes server/personas/_shared/sounds/*.wav):
 uv run --package huxley --group synth python scripts/synth_sounds.py
 ```
