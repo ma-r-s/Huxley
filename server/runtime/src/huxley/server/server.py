@@ -106,7 +106,15 @@ class AudioServer:
         # non-breaking; old clients ignore unknown fields). Both default
         # to None for tests / single-persona deployments that don't wire
         # a runtime layer.
-        on_persona_select: Callable[[str | None], Awaitable[None]] | None = None,
+        # The runtime receives BOTH the requested persona name and the
+        # `?lang=` value here so a swap can construct the new Application
+        # in the right language from the start, avoiding a redundant
+        # disconnect+reconnect when the persona's default language
+        # differs from what the client requested. The server's
+        # subsequent `on_language_select` call still fires (covers
+        # the same-persona-different-language case), but for a swap
+        # path it short-circuits because target == current already.
+        on_persona_select: (Callable[[str | None, str | None], Awaitable[None]] | None) = None,
         get_hello_extras: Callable[[], dict[str, object]] | None = None,
     ) -> None:
         self._host = host
@@ -257,9 +265,18 @@ class AudioServer:
         # rather than dropping it (PWA can retry the picker).
         if self._on_persona_select is not None:
             try:
-                await self._on_persona_select(selected_persona)
+                # Pass language too — runtime threads it into the new
+                # Application so the OpenAI session opens in the right
+                # language from the start, avoiding a "default-then-
+                # disconnect-and-reconnect" cascade that leaks IDLE
+                # state to the new client. Critic round 3.
+                await self._on_persona_select(selected_persona, selected_language)
             except Exception:
-                await logger.aexception("persona_select_failed", requested=selected_persona)
+                await logger.aexception(
+                    "persona_select_failed",
+                    requested=selected_persona,
+                    language=selected_language,
+                )
         try:
             # Handshake: hello first, then current state + input mode
             # sync so a reconnecting client knows whether a claim is

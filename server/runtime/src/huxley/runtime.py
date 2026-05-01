@@ -168,7 +168,13 @@ class Runtime:
     # backed summary call (typical 1-3s) plus skill teardowns.
     _TEARDOWN_TIMEOUT_S = 10.0
 
-    async def _switch_to_persona(self, name: str, *, auto_connect: bool = False) -> None:
+    async def _switch_to_persona(
+        self,
+        name: str,
+        *,
+        auto_connect: bool = False,
+        language: str | None = None,
+    ) -> None:
         """Build a new Application for `name`, atomically replace
         `current_app`, schedule old's teardown in the background.
 
@@ -231,7 +237,12 @@ class Runtime:
                 await logger.aexception("runtime.persona_load_failed", persona=name)
                 raise
 
-            new_app = Application(self._config, new_persona, audio_server=self.audio_server)
+            new_app = Application(
+                self._config,
+                new_persona,
+                audio_server=self.audio_server,
+                language=language,
+            )
             try:
                 await new_app.start(auto_connect=auto_connect)
             except Exception:
@@ -302,33 +313,34 @@ class Runtime:
         if self.current_app is not None:
             await self.current_app.on_delete_session(session_id)
 
-    async def _shim_persona_select(self, name: str | None) -> None:
+    async def _shim_persona_select(self, name: str | None, language: str | None) -> None:
         """Fired by AudioServer on each new connection with the
-        `?persona=<name>` query param parsed out. Triggers a swap if
-        the name differs from the current persona.
+        `?persona=<name>` and `?lang=<code>` query params parsed out.
+        Triggers a swap if the name differs from the current persona;
+        the language is threaded into the new Application so its
+        OpenAI session opens in the requested language from the start
+        (avoids a "open in default → on_language_select fires →
+        disconnect+reconnect to switch language" cascade that leaked
+        a spurious CONVERSING→IDLE state to the new client mid-swap,
+        firing the error tone and breaking PTT for the user). Critic
+        round 3 finding from Mario's smoke.
 
         Failures are caught and logged — we do NOT propagate them to
-        AudioServer because that would crash the WS handshake. The
-        client sees `hello.current_persona` reflect whatever's actually
-        loaded and can retry via the picker. Letting the handshake
-        crash on a bad persona name would create a reconnect loop on
-        the PWA side that's hard to recover from.
+        AudioServer because that would crash the WS handshake.
 
-        Eager-connects the new persona (`auto_connect=True`) so the
-        user's first PTT after the swap reaches a CONVERSING session
-        instead of being rejected by the IDLE-state guard in
-        `Application.on_ptt_start`. The original "lazy" plan was
-        broken: the state machine has no IDLE→CONNECTING transition
-        on PTT, only on `wake_word`, and the PWA does not emit
-        `wake_word` on a swap-reconnect. Idle Realtime sessions cost
-        $0 (see memory/project_realtime_costs.md), so eager-connect
-        is functionally free here. Critic round 2 §4."""
+        Eager-connects (`auto_connect=True`) so the user's first PTT
+        after the swap reaches a CONVERSING session instead of being
+        rejected by the IDLE-state guard. Critic round 2 §4."""
         if name is None:
+            # No persona requested — same-persona path. The subsequent
+            # `on_language_select` callback handles a language flip.
             return
         if self.current_app is not None and self.current_app.persona.name == name:
+            # Same persona; let `on_language_select` (fired right after
+            # by AudioServer) handle a language change if any.
             return
         try:
-            await self._switch_to_persona(name, auto_connect=True)
+            await self._switch_to_persona(name, auto_connect=True, language=language)
         except Exception:
             await logger.aexception("runtime.persona_swap_via_query_failed", persona=name)
 
