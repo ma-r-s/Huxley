@@ -148,10 +148,9 @@ class FakeStorage:
 
 
 class FakeSecrets:
-    """In-memory SkillSecrets for tests. The telegram skill currently
-    reads creds via ``_load_creds_from_secrets_file`` (file-based);
-    once it migrates to ``ctx.secrets.get(...)``, these tests will
-    populate via ``self._data`` to drive the same paths."""
+    """In-memory SkillSecrets for tests. The telegram skill reads
+    creds via ``await ctx.secrets.get(...)`` (T2.9); tests populate
+    this fake's ``_data`` to drive the same paths."""
 
     def __init__(self, initial: dict[str, str] | None = None) -> None:
         self._data: dict[str, str] = dict(initial or {})
@@ -176,6 +175,7 @@ def _build_ctx(
     captured_turns: list[str] | None = None,
     captured_inject_calls: list[dict[str, Any]] | None = None,
     captured_claims: list[InputClaim] | None = None,
+    secrets: dict[str, str] | None = None,
 ) -> tuple[SkillContext, list[StubTransport]]:
     """Return (ctx, captured_transports). Tests inspect the captured
     stub after calling `setup()` to verify config was applied.
@@ -184,6 +184,8 @@ def _build_ctx(
     `captured_inject_calls` receives the full kwargs (prompt, dedup_key,
     priority) so tests can assert on prioritization / dedup keys.
     `captured_claims` receives any start_input_claim() calls if provided.
+    `secrets` pre-populates the FakeSecrets so post-T2.9 tests can drive
+    `ctx.secrets.get(...)` returns directly.
     """
     _turns = captured_turns if captured_turns is not None else []
     _calls = captured_inject_calls if captured_inject_calls is not None else []
@@ -214,7 +216,7 @@ def _build_ctx(
     return SkillContext(  # type: ignore[call-arg]
         logger=structlog.get_logger().bind(skill="telegram"),
         storage=FakeStorage(),  # type: ignore[arg-type]
-        secrets=FakeSecrets(),  # type: ignore[arg-type]
+        secrets=FakeSecrets(secrets),  # type: ignore[arg-type]
         persona_data_dir=data_dir,
         config=config,
         # Tests assert against the Spanish copy (historic assumption — the
@@ -284,7 +286,6 @@ class TestSetup:
         assert skill._transport is None  # type: ignore[attr-defined]
 
         result = await skill.handle("call_contact", {"name": "x"})
-        import json
 
         payload = json.loads(result.output)
         assert payload["ok"] is False
@@ -355,24 +356,13 @@ class TestSetup:
         assert captured[0].api_id == 77777777
 
     @pytest.mark.asyncio
-    async def test_secrets_file_takes_precedence_over_env_and_yaml(
+    async def test_ctx_secrets_takes_precedence_over_env_and_yaml(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # values.json beats env vars (which beat persona.yaml).
+        # ctx.secrets values beat env vars (which beat persona.yaml).
         monkeypatch.setenv("HUXLEY_TELEGRAM_API_ID", "22222222")
         monkeypatch.setenv("HUXLEY_TELEGRAM_API_HASH", "env_hash")
         monkeypatch.setenv("HUXLEY_TELEGRAM_USERBOT_PHONE", "+22222222")
-        secrets_dir = tmp_path / "secrets" / "telegram"
-        secrets_dir.mkdir(parents=True)
-        (secrets_dir / "values.json").write_text(
-            json.dumps(
-                {
-                    "api_id": "11111111",
-                    "api_hash": "file_hash_wins",
-                    "userbot_phone": "+11111111",
-                }
-            )
-        )
 
         captured: list[StubTransport] = []
 
@@ -390,6 +380,11 @@ class TestSetup:
                 "contacts": {"x": "+1"},
             },
             tmp_path,
+            secrets={
+                "api_id": "11111111",
+                "api_hash": "file_hash_wins",
+                "userbot_phone": "+11111111",
+            },
         )
         await skill.setup(ctx)
         assert captured[0].api_id == 11111111
@@ -397,17 +392,12 @@ class TestSetup:
         assert captured[0].userbot_phone == "+11111111"
 
     @pytest.mark.asyncio
-    async def test_secrets_file_only_also_works(
+    async def test_ctx_secrets_only_also_works(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("HUXLEY_TELEGRAM_API_ID", raising=False)
         monkeypatch.delenv("HUXLEY_TELEGRAM_API_HASH", raising=False)
         monkeypatch.delenv("HUXLEY_TELEGRAM_USERBOT_PHONE", raising=False)
-        secrets_dir = tmp_path / "secrets" / "telegram"
-        secrets_dir.mkdir(parents=True)
-        (secrets_dir / "values.json").write_text(
-            json.dumps({"api_id": "55555555", "api_hash": "file_only_hash"})
-        )
 
         captured: list[StubTransport] = []
 
@@ -417,46 +407,27 @@ class TestSetup:
             return t
 
         skill = TelegramSkill(transport_factory=factory)
-        ctx, _ = _build_ctx({"contacts": {"x": "+1"}}, tmp_path)
+        ctx, _ = _build_ctx(
+            {"contacts": {"x": "+1"}},
+            tmp_path,
+            secrets={"api_id": "55555555", "api_hash": "file_only_hash"},
+        )
         await skill.setup(ctx)
         assert captured[0].api_id == 55555555
         assert captured[0].api_hash == "file_only_hash"
 
     @pytest.mark.asyncio
-    async def test_malformed_secrets_file_falls_back_to_env(
+    async def test_empty_ctx_secrets_falls_back_to_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # A corrupted values.json must NOT break boot — it falls through to
-        # env vars / persona.yaml. Recovery is "fix the file"; in the
-        # meantime the running server stays up.
-        monkeypatch.setenv("HUXLEY_TELEGRAM_API_ID", "44444444")
-        monkeypatch.setenv("HUXLEY_TELEGRAM_API_HASH", "env_after_corrupt")
-        secrets_dir = tmp_path / "secrets" / "telegram"
-        secrets_dir.mkdir(parents=True)
-        (secrets_dir / "values.json").write_text("{not valid json")
-
-        captured: list[StubTransport] = []
-
-        def factory(**kwargs: Any) -> StubTransport:
-            t = StubTransport(**kwargs)
-            captured.append(t)
-            return t
-
-        skill = TelegramSkill(transport_factory=factory)
-        ctx, _ = _build_ctx({"contacts": {"x": "+1"}}, tmp_path)
-        await skill.setup(ctx)
-        assert captured[0].api_id == 44444444
-        assert captured[0].api_hash == "env_after_corrupt"
-
-    @pytest.mark.asyncio
-    async def test_missing_secrets_file_falls_back_silently(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # No values.json at all — loader must return {} silently and the
-        # priority chain falls through to env vars without erroring.
+        # When ctx.secrets has no values for these keys (the post-T2.9
+        # equivalent of "no values.json file" or "values.json missing
+        # the key"), the chain falls through to env vars without
+        # erroring. Recovery for a corrupt values.json is handled at
+        # the JsonFileSecrets layer (see runtime test_secrets.py); from
+        # the skill's perspective, the only signal is a None return.
         monkeypatch.setenv("HUXLEY_TELEGRAM_API_ID", "66666666")
-        monkeypatch.setenv("HUXLEY_TELEGRAM_API_HASH", "env_no_file")
-        # Note: secrets_dir intentionally NOT created.
+        monkeypatch.setenv("HUXLEY_TELEGRAM_API_HASH", "env_no_secrets")
 
         captured: list[StubTransport] = []
 
@@ -469,47 +440,18 @@ class TestSetup:
         ctx, _ = _build_ctx({"contacts": {"x": "+1"}}, tmp_path)
         await skill.setup(ctx)
         assert captured[0].api_id == 66666666
-        assert captured[0].api_hash == "env_no_file"
+        assert captured[0].api_hash == "env_no_secrets"
 
     @pytest.mark.asyncio
-    async def test_non_dict_secrets_file_falls_back_to_env(
+    async def test_partial_ctx_secrets_merges_per_field(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # JSON arrays / scalars / null must NOT be treated as creds — the
-        # loader returns {} when the parsed JSON is not a dict, then the
-        # chain falls through to env vars.
-        monkeypatch.setenv("HUXLEY_TELEGRAM_API_ID", "88888888")
-        monkeypatch.setenv("HUXLEY_TELEGRAM_API_HASH", "env_after_array")
-        secrets_dir = tmp_path / "secrets" / "telegram"
-        secrets_dir.mkdir(parents=True)
-        (secrets_dir / "values.json").write_text('["api_id", "api_hash"]')
-
-        captured: list[StubTransport] = []
-
-        def factory(**kwargs: Any) -> StubTransport:
-            t = StubTransport(**kwargs)
-            captured.append(t)
-            return t
-
-        skill = TelegramSkill(transport_factory=factory)
-        ctx, _ = _build_ctx({"contacts": {"x": "+1"}}, tmp_path)
-        await skill.setup(ctx)
-        assert captured[0].api_id == 88888888
-        assert captured[0].api_hash == "env_after_array"
-
-    @pytest.mark.asyncio
-    async def test_partial_secrets_file_merges_per_field(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # values.json supplies only api_id; api_hash + userbot_phone come
-        # from env. The priority chain fires per-field, not whole-dict.
-        # T1.14's ctx.secrets must preserve this semantic.
+        # ctx.secrets supplies only api_id; api_hash + userbot_phone
+        # come from env. The priority chain fires per-field, not
+        # whole-dict.
         monkeypatch.setenv("HUXLEY_TELEGRAM_API_HASH", "env_only_hash")
         monkeypatch.setenv("HUXLEY_TELEGRAM_USERBOT_PHONE", "+19999999999")
         monkeypatch.delenv("HUXLEY_TELEGRAM_API_ID", raising=False)
-        secrets_dir = tmp_path / "secrets" / "telegram"
-        secrets_dir.mkdir(parents=True)
-        (secrets_dir / "values.json").write_text(json.dumps({"api_id": "12121212"}))
 
         captured: list[StubTransport] = []
 
@@ -519,41 +461,15 @@ class TestSetup:
             return t
 
         skill = TelegramSkill(transport_factory=factory)
-        ctx, _ = _build_ctx({"contacts": {"x": "+1"}}, tmp_path)
+        ctx, _ = _build_ctx(
+            {"contacts": {"x": "+1"}},
+            tmp_path,
+            secrets={"api_id": "12121212"},
+        )
         await skill.setup(ctx)
         assert captured[0].api_id == 12121212
         assert captured[0].api_hash == "env_only_hash"
         assert captured[0].userbot_phone == "+19999999999"
-
-    @pytest.mark.asyncio
-    async def test_secrets_file_nested_value_is_json_encoded(self, tmp_path: Path) -> None:
-        # Nested dicts in values.json (the OAuth-blob convention from
-        # docs/skill-marketplace.md § Secrets storage layout) get
-        # json.dumps-encoded, NOT str()-coerced. This is what makes the
-        # round-trip "skill writes json.dumps(blob); reads via get; gets
-        # back the same JSON bytes" work — and it's what T1.14's
-        # ctx.secrets.set_json/get_json sugar will rely on.
-        from huxley_skill_telegram.skill import _load_creds_from_secrets_file
-
-        secrets_dir = tmp_path / "secrets" / "telegram"
-        secrets_dir.mkdir(parents=True)
-        (secrets_dir / "values.json").write_text(
-            json.dumps(
-                {
-                    "api_id": "12345678",
-                    "oauth_state": {"access_token": "x", "expires_at": 1700000000},
-                    "scopes": ["read", "write"],
-                }
-            )
-        )
-        result = _load_creds_from_secrets_file(secrets_dir)
-        assert result["api_id"] == "12345678"
-        # Round-trip: must parse cleanly back to the original dict.
-        assert json.loads(result["oauth_state"]) == {
-            "access_token": "x",
-            "expires_at": 1700000000,
-        }
-        assert json.loads(result["scopes"]) == ["read", "write"]
 
     @pytest.mark.asyncio
     async def test_non_string_phone_values_dropped(self, tmp_path: Path) -> None:
@@ -585,7 +501,6 @@ class TestCallContactTool:
         await skill.setup(ctx)
 
         result = await skill.handle("call_contact", {"name": "cousin_bob"})
-        import json
 
         payload = json.loads(result.output)
         assert payload["ok"] is False
@@ -619,7 +534,6 @@ class TestCallContactTool:
         assert transport.connected is True
         assert transport.placed_calls == [7392572538]
 
-        import json
 
         payload = json.loads(result.output)
         assert payload["ok"] is True
@@ -641,7 +555,6 @@ class TestCallContactTool:
         await skill.setup(ctx)
 
         result = await skill.handle("call_contact", {"name": "  HIJA  "})
-        import json
 
         assert json.loads(result.output)["ok"] is True
 
@@ -665,7 +578,6 @@ class TestCallContactTool:
         await skill.setup(ctx)
 
         result = await skill.handle("call_contact", {"name": "hija"})
-        import json
 
         payload = json.loads(result.output)
         assert payload["ok"] is False
@@ -681,7 +593,6 @@ class TestCallContactTool:
         )
         await skill.setup(ctx)
 
-        import json
 
         for bad in ["", "   ", None, 123]:
             result = await skill.handle("call_contact", {"name": bad})
@@ -1103,7 +1014,6 @@ class TestSendMessageTool:
         await skill.setup(ctx)
 
         result = await skill.handle("send_message", {"name": "hija", "text": "te quiero"})
-        import json
 
         payload = json.loads(result.output)
         assert payload["ok"] is True
@@ -1121,7 +1031,6 @@ class TestSendMessageTool:
         await skill.setup(ctx)
 
         result = await skill.handle("send_message", {"name": "vecino", "text": "hola"})
-        import json
 
         payload = json.loads(result.output)
         assert payload["ok"] is False
@@ -1144,7 +1053,6 @@ class TestSendMessageTool:
         await skill.setup(ctx)
 
         result = await skill.handle("send_message", {"name": "hija", "text": "   "})
-        import json
 
         payload = json.loads(result.output)
         assert payload["ok"] is False
@@ -1166,7 +1074,6 @@ class TestSendMessageTool:
 
         long_text = "a" * 4097
         result = await skill.handle("send_message", {"name": "hija", "text": long_text})
-        import json
 
         payload = json.loads(result.output)
         assert payload["ok"] is False
@@ -1187,7 +1094,6 @@ class TestSendMessageTool:
         await skill.setup(ctx)
 
         result = await skill.handle("send_message", {"name": "hija", "text": "hola"})
-        import json
 
         payload = json.loads(result.output)
         assert payload["ok"] is False
@@ -1203,7 +1109,6 @@ class TestSendMessageTool:
         await skill.setup(ctx)
 
         result = await skill.handle("send_message", {"name": "hija", "text": "hola"})
-        import json
 
         payload = json.loads(result.output)
         assert payload["ok"] is False

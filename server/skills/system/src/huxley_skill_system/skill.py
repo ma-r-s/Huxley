@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
 
 from huxley_sdk import SetVolume, SkillContext, SkillLogger, ToolDefinition, ToolResult
@@ -137,6 +137,32 @@ def _format_date(now: datetime, language: str) -> str:
 
 class SystemSkill:
     """Provides system-level tools."""
+
+    # The simplest first-party config_schema — system has exactly one
+    # user-tunable field (`timezone`). v2's PWA can render this as a
+    # plain text field with `x-huxley:help` for the IANA-zone hint.
+    config_schema: ClassVar[dict[str, Any] | None] = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "timezone": {
+                "type": "string",
+                "title": "Time zone",
+                "default": "America/Bogota",
+                "x-huxley:help": (
+                    "IANA Time Zone Database name (e.g. `America/Bogota`, "
+                    "`Europe/Madrid`). Defaults to America/Bogota if unset; "
+                    "the `get_time` tool's date string formats against this "
+                    "zone."
+                ),
+            }
+        },
+    }
+
+    # No persisted state today (volume + time are both stateless
+    # operations). Kept at 1 so a future feature that persists, e.g.,
+    # a last-set-volume can bump.
+    data_schema_version: ClassVar[int] = 1
 
     def __init__(self) -> None:
         self._logger: SkillLogger | None = None

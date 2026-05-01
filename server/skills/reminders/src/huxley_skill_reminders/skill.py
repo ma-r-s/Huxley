@@ -42,7 +42,7 @@ import asyncio
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dateutil.rrule import rrulestr
@@ -584,6 +584,19 @@ class _Entry:
 
 class RemindersSkill:
     """Persistent reminders with kind-aware retry, recurrence, and catch-up."""
+
+    # `config_schema = None`: reminders ships per-language i18n maps
+    # for fire-prompt phrasing + locale-specific recovery strings, plus
+    # a deterministic-seed override for tests. Mostly persona-author
+    # surface that doesn't fit a JSON-Schema-rendered form. Per
+    # docs/skill-marketplace.md § Config schema convention, complex
+    # configs leave config_schema None and v2's PWA falls back to
+    # "edit YAML directly."
+    config_schema: ClassVar[dict[str, Any] | None] = None
+
+    # Bump on incompatible change to the persisted reminder rows under
+    # `reminder:<id>` or the per-reminder retry-state shape.
+    data_schema_version: ClassVar[int] = 1
 
     def __init__(
         self,

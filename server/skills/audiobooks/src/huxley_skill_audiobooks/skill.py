@@ -22,7 +22,7 @@ import asyncio
 import json
 import time
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from huxley_sdk import (
     AudioStream,
@@ -517,6 +517,20 @@ class AudiobooksSkill:
         └── Jorge Isaacs/
             └── María.m4b
     """
+
+    # `config_schema = None`: audiobooks ships per-language i18n maps
+    # for tool descriptions (`i18n.es`, `i18n.en`, ...) plus filesystem
+    # path config (`library`, `ffmpeg`, `ffprobe`, `sounds_path`) — none
+    # of which fit a JSON-Schema-rendered form cleanly. Per
+    # docs/skill-marketplace.md § Config schema convention, complex
+    # configs leave config_schema None and v2's PWA falls back to
+    # "edit YAML directly."
+    config_schema: ClassVar[dict[str, Any] | None] = None
+
+    # Bump on incompatible change to: position-key shape stored under
+    # `position:<book_id>`, the audiobook library scan output, or the
+    # catalog snapshot the framework persists.
+    data_schema_version: ClassVar[int] = 1
 
     def __init__(self, *, player: AudiobookPlayer | None = None) -> None:
         # `player` is keyword-only and reserved for tests that inject a mock.

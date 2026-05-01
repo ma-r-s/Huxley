@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from huxley_sdk import (
     AudioStream,
@@ -54,6 +54,19 @@ LAST_STATION_KEY = "last_id"
 
 class RadioSkill:
     """Streams internet radio from a configured list of stations."""
+
+    # `config_schema = None`: radio's primary config is a list of
+    # station records (`{id, name, url, language}`), which JSON Schema
+    # describes but a v2 PWA form-renderer would render as a deeply
+    # nested accordion that's painful to edit. Per
+    # docs/skill-marketplace.md § Config schema convention, complex
+    # list-of-records configs leave config_schema None and v2's PWA
+    # falls back to "edit YAML directly."
+    config_schema: ClassVar[dict[str, Any] | None] = None
+
+    # Bump on incompatible change to the persisted last-station key
+    # (`last_station_id`) or any future per-station play-count storage.
+    data_schema_version: ClassVar[int] = 1
 
     def __init__(self, *, player: RadioPlayer | None = None) -> None:
         # `player` is keyword-only and reserved for tests that inject a fake.
