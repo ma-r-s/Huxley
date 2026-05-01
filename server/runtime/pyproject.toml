@@ -4,15 +4,14 @@ version = "0.1.0"
 description = "Huxley — voice agent framework runtime."
 requires-python = ">=3.13"
 dependencies = [
+    # Framework ships empty: only the SDK + I/O infra. Every skill is
+    # an independent PyPI package the persona's installer pulls in
+    # via `uv add huxley-skill-<name>`. See docs/skill-marketplace.md
+    # § "Framework ships empty". The workspace is a dev-time convenience
+    # for iterating on the SDK + first-party skills together; the
+    # canonical distribution path is "uv add ..." for every skill,
+    # including the first-party ones.
     "huxley-sdk",
-    # First-party skills are bundled here so `uv sync` installs them and
-    # the framework can resolve their `huxley.skills` entry points. Core
-    # never imports them statically — discovery is via entry points only.
-    # Stage 4 will let a persona reference additional pip-installable
-    # skills (`huxley-skill-<name>`); the persona's deps drive installation,
-    # and these two stay listed only because they ship with the framework.
-    "huxley-skill-audiobooks",
-    "huxley-skill-system",
     "openai>=1.60",
     "websockets>=14.0",
     "pydantic-settings>=2.7",
