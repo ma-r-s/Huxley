@@ -47,6 +47,7 @@ from huxley.persona import (
     pick_default_persona_name,
 )
 from huxley.server.server import AudioServer
+from huxley.skills_state import build_skills_state
 
 if TYPE_CHECKING:
     from huxley.config import Settings
@@ -74,6 +75,7 @@ class Runtime:
             on_get_session=self._shim_get_session,
             on_delete_session=self._shim_delete_session,
             on_persona_select=self._shim_persona_select,
+            on_get_skills_state=self._shim_get_skills_state,
             get_hello_extras=self._get_hello_extras,
         )
         self.current_app: Application | None = None
@@ -325,6 +327,23 @@ class Runtime:
     async def _shim_delete_session(self, session_id: int) -> None:
         if self.current_app is not None:
             await self.current_app.on_delete_session(session_id)
+
+    async def _shim_get_skills_state(self) -> None:
+        """Marketplace v2 Phase A — PWA opens DeviceSheet's Skills section.
+
+        Built at the runtime level (not on `current_app`) so the panel
+        works during the lazy-boot window before any persona is
+        selected: clients see the list of installed skills with
+        `enabled=False` everywhere, ready to be turned on once a
+        persona loads. Failures are logged + the response is skipped;
+        we don't crash the WS connection over a malformed entry-point.
+        """
+        try:
+            payload = build_skills_state(self.current_app)
+        except Exception:
+            await logger.aexception("skills_state.build_failed")
+            return
+        await self.audio_server.send_skills_state(payload)
 
     async def _shim_persona_select(self, name: str | None, language: str | None) -> None:
         """Fired by AudioServer on each new connection with the
