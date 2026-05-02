@@ -737,14 +737,21 @@ export function App() {
               // Phase D will route this to a detail / install sheet.
               // Phase C: open the upstream registry detail in a new
               // tab so the user can read the README and copy the
-              // install command.
+              // install command. Names + paths are passed through
+              // encodeURIComponent because, while the registry schema
+              // enforces sane chars today, treating registry data as
+              // trusted-without-encoding is a habit that would bite
+              // us when Phase D feeds the same `entry.name` to
+              // `uv add`. Phase C critic finding 7.
               const detail = (entry as { detail?: unknown }).detail;
-              const ns = entry.namespace;
               const detailStr = typeof detail === "string" ? detail : "";
-              const url =
-                detailStr && ns
-                  ? `https://github.com/ma-r-s/huxley-registry/blob/main/${detailStr}`
-                  : `https://pypi.org/project/${entry.name}/`;
+              // The registry schema constrains skill names to
+              // `^huxley-skill-[a-z0-9-]+$`; reject anything else
+              // rather than open a malformed URL.
+              if (!/^huxley-skill-[a-z0-9-]+$/.test(entry.name)) return;
+              const url = detailStr
+                ? `https://github.com/ma-r-s/huxley-registry/blob/main/${detailStr.split("/").map(encodeURIComponent).join("/")}`
+                : `https://pypi.org/project/${encodeURIComponent(entry.name)}/`;
               window.open(url, "_blank", "noopener,noreferrer");
             }}
             onRequestSkillsState={ws.requestSkillsState}

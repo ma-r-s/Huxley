@@ -273,7 +273,12 @@ export function SkillsSheet({
               setTab("marketplace");
               // Phase C: lazy-fetch the feed when the user opens the
               // tab. Subsequent opens hit the server's 1h cache.
-              if (marketplaceState === null) onRequestMarketplace();
+              // Re-fetch if the previous attempt errored so a
+              // transient network blip doesn't keep the user stuck
+              // on a stale failure UI. Phase C critic finding 8.
+              if (marketplaceState === null || marketplaceState.error) {
+                onRequestMarketplace();
+              }
             }}
           >
             <span>{t("skillsSheet.tabs.marketplace", "Marketplace")}</span>
