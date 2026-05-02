@@ -89,6 +89,20 @@ PEER_CHANNELS = 2
 # re-running the SMS flow.
 _SESSION_NAME = "huxley_userbot"
 
+# T1.17 — pyrogram session-DB lock retry. Cold PWA reload + the
+# server's own `client_evicted` flow can spawn two near-simultaneous
+# WS connects. The previous Application's pyrogram client is still
+# tearing down its session SQLite while the new one tries to open
+# it, hitting `OperationalError: database is locked` on the very
+# first `UPDATE` in `Storage.update()`. Pre-T1.16 this surfaced as
+# a silent dead-PTT; post-T1.16 it shows as a "Server not ready"
+# the user has to manually reload past. This retry closes the loop
+# — the previous teardown completes within hundreds of ms, so a
+# single retry-with-backoff clears it on the next attempt for the
+# vast majority of cases.
+_DB_LOCK_BACKOFFS_S: tuple[float, ...] = (0.2, 0.5, 1.0)
+_DB_LOCK_NEEDLE = "database is locked"
+
 
 def _rms_pcm16(data: bytes) -> float:
     """RMS of a PCM16 buffer. For diagnostic heartbeats -- silence is
@@ -215,7 +229,16 @@ class TelegramTransport:
         self._ended = asyncio.Event()
 
     async def connect(self) -> None:
-        """Start pyrogram + PyTgCalls. Idempotent."""
+        """Start pyrogram + PyTgCalls. Idempotent.
+
+        T1.17 — wraps `call_py.start()` with a small retry loop on
+        `OperationalError: database is locked`. The previous
+        Application's pyrogram client may still be tearing down its
+        session SQLite when the new one starts; a few hundred ms of
+        backoff is enough for the lock to clear in practice. Other
+        OperationalError variants raise immediately so genuinely
+        broken sessions still fail loudly.
+        """
         if self._call_py is not None:
             return
         from pyrogram import Client  # type: ignore[attr-defined]
@@ -230,10 +253,57 @@ class TelegramTransport:
         )
         call_py = PyTgCalls(app)
         self._wire_handlers(call_py, app)
-        await call_py.start()
+        await self._start_with_db_lock_retry(call_py)
         self._app = app
         self._call_py = call_py
         await logger.ainfo("telegram.transport.connected")
+
+    async def _start_with_db_lock_retry(self, call_py: object) -> None:
+        """Call `call_py.start()` with retry-on-database-locked.
+
+        Retries only when the underlying `sqlite3.OperationalError`
+        carries the "database is locked" message. Any other
+        OperationalError (or any non-OperationalError exception) is
+        re-raised immediately so the caller's normal failure path
+        runs unchanged.
+
+        Backoff schedule lives at module level (`_DB_LOCK_BACKOFFS_S`).
+        Final exhaustion re-raises the last captured exception so the
+        runtime's session-readiness path (T1.16) shows a real error
+        instead of swallowing it.
+        """
+        from sqlite3 import OperationalError
+
+        last_exc: OperationalError | None = None
+        # `attempts = len(backoffs) + 1`: backoffs is the wait BEFORE
+        # each retry, so 3 backoffs = 1 initial attempt + 3 retries.
+        for attempt in range(len(_DB_LOCK_BACKOFFS_S) + 1):
+            if attempt > 0:
+                backoff_s = _DB_LOCK_BACKOFFS_S[attempt - 1]
+                await logger.awarning(
+                    "telegram.session_db_lock.retry",
+                    attempt=attempt,
+                    backoff_s=backoff_s,
+                    last_error=str(last_exc),
+                )
+                await asyncio.sleep(backoff_s)
+            try:
+                await call_py.start()  # type: ignore[attr-defined]
+            except OperationalError as exc:
+                if _DB_LOCK_NEEDLE not in str(exc):
+                    raise
+                last_exc = exc
+                continue
+            return
+        await logger.aerror(
+            "telegram.session_db_lock.exhausted",
+            attempts=len(_DB_LOCK_BACKOFFS_S) + 1,
+            last_error=str(last_exc),
+        )
+        # By construction last_exc is set (we only fall out of the
+        # loop after at least one OperationalError was caught).
+        assert last_exc is not None
+        raise last_exc
 
     def _wire_handlers(self, call_py: object, app: object) -> None:
         """Attach all update handlers: peer audio + ring/discard + messages.
@@ -456,8 +526,8 @@ class TelegramTransport:
         )
 
         try:
-            await self._call_py.play(user_id, out_stream)  # type: ignore[attr-defined]
-            await self._call_py.record(  # type: ignore[attr-defined]
+            await self._call_py.play(user_id, out_stream)  # type: ignore[union-attr]
+            await self._call_py.record(  # type: ignore[union-attr]
                 user_id,
                 RecordStream(
                     audio=True,

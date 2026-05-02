@@ -4618,7 +4618,7 @@ The third one was the StrictMode-amplified instance of the broader pattern: any 
 
 ## T1.17 — Retry pyrogram session-DB init on `OperationalError: database is locked`
 
-**Status**: queued (2026-05-02). Surfaces as `session_failed` after T1.16; the underlying transient still needs to go away.
+**Status**: done (2026-05-02). T1.16 made it diagnosable; T1.17 makes it not happen.
 
 **Problem.** Cold reload of the PWA frequently triggers two near-simultaneous WS connects (React StrictMode double-mount + the server's own `client_evicted` flow). The Telegram skill's `setup()` opens a Pyrogram client whose backing SQLite session file gets locked when the previous Application's pyrogram client is still tearing down — `sqlite3.OperationalError: database is locked` on the very first `UPDATE` in `version()`. Captured live during T1.16 verification:
 

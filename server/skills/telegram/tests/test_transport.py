@@ -155,3 +155,149 @@ class TestTransportConstruction:
         )
         await t.send_pcm(b"")
         assert t._sent_count == 0  # type: ignore[attr-defined]
+
+
+class TestT117DbLockRetry:
+    """T1.17 — `_start_with_db_lock_retry` recovers from transient
+    `OperationalError: database is locked` raised by pyrogram's
+    Storage.update() when a previous Application's session SQLite
+    is still tearing down on top of a rapid-reconnect.
+
+    The wider `connect()` integration is exercised by the live
+    smoke (Mario's voice flow); these tests pin the retry helper
+    in isolation against a fake `call_py` whose `.start()` is
+    scriptable. Backoffs are skipped via `monkeypatch.setattr` on
+    `asyncio.sleep` so the test doesn't actually wait.
+    """
+
+    @pytest.fixture
+    def transport(self, tmp_path: Path) -> TelegramTransport:
+        return TelegramTransport(
+            api_id=12345678,
+            api_hash="abcdef0123456789",
+            session_dir=tmp_path,
+        )
+
+    @pytest.fixture
+    def no_sleep(self, monkeypatch: pytest.MonkeyPatch) -> list[float]:
+        """Replace `asyncio.sleep` (as referenced inside the
+        transport module) with a no-op that records the requested
+        duration. Tests assert the right backoffs were attempted
+        without actually waiting on them."""
+        sleeps: list[float] = []
+
+        async def _fake_sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+
+        monkeypatch.setattr("huxley_skill_telegram.transport.asyncio.sleep", _fake_sleep)
+        return sleeps
+
+    @pytest.mark.asyncio
+    async def test_start_succeeds_first_try_no_retry(
+        self, transport: TelegramTransport, no_sleep: list[float]
+    ) -> None:
+        starts: list[None] = []
+
+        class _FakeCallPy:
+            async def start(self) -> None:
+                starts.append(None)
+
+        await transport._start_with_db_lock_retry(_FakeCallPy())  # type: ignore[arg-type]
+        assert len(starts) == 1
+        assert no_sleep == []  # no backoff fired
+
+    @pytest.mark.asyncio
+    async def test_start_recovers_after_one_lock_then_succeeds(
+        self, transport: TelegramTransport, no_sleep: list[float]
+    ) -> None:
+        from sqlite3 import OperationalError
+
+        attempts = {"count": 0}
+
+        class _FakeCallPy:
+            async def start(self) -> None:
+                attempts["count"] += 1
+                if attempts["count"] == 1:
+                    raise OperationalError("database is locked")
+
+        await transport._start_with_db_lock_retry(_FakeCallPy())  # type: ignore[arg-type]
+        assert attempts["count"] == 2
+        assert no_sleep == [0.2]  # only the first backoff fired
+
+    @pytest.mark.asyncio
+    async def test_start_recovers_on_last_attempt(
+        self, transport: TelegramTransport, no_sleep: list[float]
+    ) -> None:
+        """Three lock errors then success on the fourth (final)
+        attempt — verifies the full backoff schedule before
+        exhaustion would have fired."""
+        from sqlite3 import OperationalError
+
+        attempts = {"count": 0}
+
+        class _FakeCallPy:
+            async def start(self) -> None:
+                attempts["count"] += 1
+                if attempts["count"] <= 3:
+                    raise OperationalError("database is locked")
+
+        await transport._start_with_db_lock_retry(_FakeCallPy())  # type: ignore[arg-type]
+        assert attempts["count"] == 4
+        assert no_sleep == [0.2, 0.5, 1.0]
+
+    @pytest.mark.asyncio
+    async def test_start_exhausts_and_reraises_last_lock_error(
+        self, transport: TelegramTransport, no_sleep: list[float]
+    ) -> None:
+        """Permanent lock — every attempt raises. Helper exhausts
+        its retries and re-raises the most recent exception so the
+        caller's normal failure path runs."""
+        from sqlite3 import OperationalError
+
+        class _FakeCallPy:
+            async def start(self) -> None:
+                raise OperationalError("database is locked")
+
+        with pytest.raises(OperationalError, match="database is locked"):
+            await transport._start_with_db_lock_retry(_FakeCallPy())  # type: ignore[arg-type]
+        assert no_sleep == [0.2, 0.5, 1.0]  # all three backoffs fired
+
+    @pytest.mark.asyncio
+    async def test_non_lock_operational_error_raises_immediately(
+        self, transport: TelegramTransport, no_sleep: list[float]
+    ) -> None:
+        """An OperationalError for a different reason (e.g. missing
+        table, malformed schema) is NOT a transient lock — re-raise
+        immediately without burning the retry budget."""
+        from sqlite3 import OperationalError
+
+        attempts = {"count": 0}
+
+        class _FakeCallPy:
+            async def start(self) -> None:
+                attempts["count"] += 1
+                raise OperationalError("no such table: version")
+
+        with pytest.raises(OperationalError, match="no such table"):
+            await transport._start_with_db_lock_retry(_FakeCallPy())  # type: ignore[arg-type]
+        assert attempts["count"] == 1  # zero retries
+        assert no_sleep == []
+
+    @pytest.mark.asyncio
+    async def test_unrelated_exception_raises_immediately(
+        self, transport: TelegramTransport, no_sleep: list[float]
+    ) -> None:
+        """Anything that isn't an OperationalError bypasses the
+        retry path entirely."""
+        attempts = {"count": 0}
+
+        class _FakeCallPy:
+            async def start(self) -> None:
+                attempts["count"] += 1
+                msg = "auth failed"
+                raise RuntimeError(msg)
+
+        with pytest.raises(RuntimeError, match="auth failed"):
+            await transport._start_with_db_lock_retry(_FakeCallPy())  # type: ignore[arg-type]
+        assert attempts["count"] == 1
+        assert no_sleep == []
