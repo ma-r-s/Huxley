@@ -293,7 +293,7 @@ v1: developer hand-edits this. v2: PWA writes to it using `ruamel.yaml` (round-t
 
 `huxley-skill-stocks` ships as a workspace member at `server/skills/stocks/` — same shape as the other 8 first-party skills. The reference role is now "this is what a skill looks like, period" — not "this is what a SEPARATE skill looks like." After the framework-ships-empty refactor, every first-party skill demonstrates the same authoring shape, so distinguishing a "third-party reference" was buying nothing.
 
-- Built against `huxley_sdk` via the workspace (path-resolved at sync time). External authors flip `huxley-sdk = { workspace = true }` to a versioned PyPI pin once `huxley-sdk` publishes — that's the install path the authoring docs document.
+- Built against `huxley-sdk>=0.1.1,<0.2` (versioned PyPI pin) — the same dep external authors declare. Inside the workspace, the root `pyproject.toml`'s `[tool.uv.sources]` block resolves `huxley-sdk` to the local source for dev-time iteration; outside the workspace, the version pin in the wheel METADATA pulls `huxley-sdk` from PyPI.
 - Declares `config_schema` with `api_key` (secret, Alpha Vantage), `watchlist` (array of tickers), `currency` (enum). Single example covers all three of the JSON-Schema shapes v2's form-renderer must support.
 - Uses `ctx.secrets` for the API key; `ctx.config` for watchlist + currency.
 - Voice tools: "what's Apple stock at?" / "how's my watchlist doing?" / "did the S&P close up today?"

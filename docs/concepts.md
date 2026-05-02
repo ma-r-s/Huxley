@@ -57,7 +57,7 @@ A skill is a Python package. It declares one or more **tools** (function definit
 
 A skill never imports framework internals. It uses the Huxley SDK, which gives it a typed context (storage, config, logger) and the types it needs. This contract is what keeps skills portable — a skill works against any persona that enables it.
 
-A skill is `pip install`-able. Built-in skills live in `server/skills/`; community skills are published on PyPI under the `huxley-skill-*` prefix and discovered at runtime via Python entry points.
+A skill is `pip install`-able from PyPI under the `huxley-skill-*` prefix; the framework discovers it at runtime via Python entry points. The 9 first-party skills (`huxley-skill-audiobooks`, `huxley-skill-news`, `huxley-skill-radio`, `huxley-skill-reminders`, `huxley-skill-search`, `huxley-skill-stocks`, `huxley-skill-system`, `huxley-skill-telegram`, `huxley-skill-timers`) live at `server/skills/<name>/` in the monorepo as workspace members for dev-time iteration AND publish to PyPI like any other skill — the workspace is a development convenience, not the canonical install path.
 
 How to write one: [`skills/authoring.md`](./skills/authoring.md). How to install one into a persona: [`skills/installing.md`](./skills/installing.md). The directory of known skills: [`skills/index.md`](./skills/index.md).
 

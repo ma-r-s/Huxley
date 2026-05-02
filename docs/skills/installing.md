@@ -34,9 +34,11 @@ huxley-skill-mytool = { path = "../huxley-skill-mytool", editable = true }
 
 Then `uv add huxley-skill-mytool` from a persona's runtime venv (or, if you want the skill always present, add it to a workspace member's deps).
 
-### C. Published on PyPI
+### C. Published on PyPI (steady-state)
 
-Once a skill ships to PyPI, an external operator just runs `uv add huxley-skill-<name>`. No workspace edits. No path deps. This is the steady-state install path. (`huxley-sdk` itself is still pre-PyPI as of T1.14 v1; that's why path deps are the default for the moment.)
+`uv add huxley-skill-<name>`. No workspace edits, no path deps. The package's wheel METADATA pulls `huxley-sdk` (currently `>=0.1.1,<0.2`) from PyPI automatically. This is how every external user installs a skill into their Huxley persona.
+
+All 9 first-party skills (`huxley-skill-audiobooks`, `huxley-skill-news`, `huxley-skill-radio`, `huxley-skill-reminders`, `huxley-skill-search`, `huxley-skill-stocks`, `huxley-skill-system`, `huxley-skill-telegram`, `huxley-skill-timers`) are on PyPI alongside `huxley-sdk` itself.
 
 ## Verify the entry point is discoverable
 

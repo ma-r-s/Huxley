@@ -22,7 +22,7 @@ Read [`docs/skills/README.md`](README.md) for the full SDK reference. This page 
 
 - Python **3.13+** (matches Huxley's runtime).
 - `uv` for package management ([install instructions](https://docs.astral.sh/uv/getting-started/installation/)).
-- A Huxley checkout if you want to run the skill end-to-end. During v1 development your skill builds against `huxley-sdk` as a path dependency on the Huxley repo; after `huxley-sdk` ships to PyPI it's a versioned pin.
+- A Huxley checkout if you want to run the skill end-to-end against a real persona. Not needed just to write/test the skill — `huxley-sdk` is on PyPI ([0.1.1 onward](https://pypi.org/project/huxley-sdk/)), so a fresh `uv venv` + `uv add huxley-sdk` is enough to import the SDK and run your tests.
 
 ## Project layout
 
@@ -58,8 +58,8 @@ name = "huxley-skill-stocks"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
-    "huxley-sdk",       # the Skill protocol + types
-    "httpx>=0.27",      # whatever your skill needs
+    "huxley-sdk>=0.1.1,<0.2",   # the Skill protocol + types (from PyPI)
+    "httpx>=0.27",               # whatever your skill needs
 ]
 
 # This entry point is how Huxley discovers your skill. The key is the
@@ -68,13 +68,11 @@ dependencies = [
 # secrets-dir name (if you use ctx.secrets) must all match.**
 [project.entry-points."huxley.skills"]
 stocks = "huxley_skill_stocks.skill:StocksSkill"
-
-# During v1 dev, pin huxley-sdk via a path dep against your local
-# Huxley checkout. Once huxley-sdk publishes to PyPI, drop this block
-# and pin a version range under [project.dependencies].
-[tool.uv.sources]
-huxley-sdk = { path = "../Huxley/server/sdk", editable = true }
 ```
+
+That's it for the standalone-skill case — your `pyproject.toml` declares a versioned PyPI dep on `huxley-sdk` and `uv add huxley-skill-yourtool` from any venv resolves the chain.
+
+If you're developing a skill INSIDE the Huxley monorepo as a workspace member (the path the 9 first-party skills take), the workspace's root `pyproject.toml` adds a `[tool.uv.sources]` entry that locally resolves `huxley-sdk` to the workspace member instead of fetching from PyPI — pure dev-time convenience. Your `dependencies` line stays the same versioned pin so the wheel METADATA is correct for downstream consumers.
 
 The full file also configures `ruff`, `mypy --strict`, and `pytest-asyncio` — copy as-is unless you have a reason to deviate.
 
