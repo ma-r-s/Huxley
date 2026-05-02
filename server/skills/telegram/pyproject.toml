@@ -15,7 +15,7 @@ classifiers = [
     "Topic :: Communications :: Telephony",
 ]
 dependencies = [
-    "huxley-sdk",
+    "huxley-sdk>=0.1.1,<0.2",
     # kurigram: drop-in pyrogram replacement that py-tgcalls imports at runtime.
     # Mainline pyrogram 2.0.x is missing GroupcallForbidden; py-tgcalls fails to
     # import against it. See docs/research/telegram-voice.md.
