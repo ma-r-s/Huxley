@@ -212,6 +212,19 @@ class Application:
         # `_on_session_end` finalizes the row. T1.12.
         self._active_session_id: int | None = None
 
+    @property
+    def active_language(self) -> str | None:
+        """Public read-only view of the active session's language.
+
+        ISO 639-1 code or None when no in-session override is set
+        (the persona's default applies). Updated only on a *committed*
+        language flip — see `_apply_language`. Marketplace v2 Phase B's
+        reload reads this to preserve the user's current language
+        across the swap; reaching into `_active_language` directly
+        from outside the class would be encapsulation-broken.
+        """
+        return self._active_language
+
     async def _check_skill_schema_versions(self) -> None:
         """Log warnings on declared-vs-stored mismatch. **Read-only.**
 

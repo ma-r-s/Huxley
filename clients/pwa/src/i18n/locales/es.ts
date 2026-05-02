@@ -133,9 +133,13 @@ const es = {
       toggleHint: "Activa o desactiva esta habilidad para la persona actual.",
       toggleAria: "Cambiar habilidad",
       save: "Guardar",
+      saving: "Guardando…",
       cancel: "Cancelar",
       unsavedHint: "Cambios sin guardar.",
       savedHint: "Todos los cambios guardados.",
+      savingHint: "Guardando — aplicando cambios…",
+      writesDisabledHint:
+        "Editar habilidades interrumpe una llamada o reproducción activa. Espera a que termine y luego haz los cambios.",
       secretSave: "Guardar secreto",
       secretUpdate: "Actualizar",
       secretClear: "Borrar",

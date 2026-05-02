@@ -142,9 +142,13 @@ const en = {
       toggleHint: "Toggle to add or remove from the active persona.",
       toggleAria: "Toggle skill",
       save: "Save",
+      saving: "Saving…",
       cancel: "Cancel",
       unsavedHint: "Unsaved changes.",
       savedHint: "All changes saved.",
+      savingHint: "Saving — applying changes…",
+      writesDisabledHint:
+        "Editing skills interrupts an active call or audio stream. Wait for it to finish, then make your changes.",
       secretSave: "Save secret",
       secretUpdate: "Update",
       secretClear: "Clear",

@@ -104,6 +104,14 @@ class Runtime:
         # OpenAI session if `auto_connect=True`. Critic round 2 finding
         # §2; see docs/triage.md T1.13.
         self._swap_lock = asyncio.Lock()
+        # Marketplace v2 Phase B — serializes the `load → mutate → save`
+        # sequence on persona.yaml. Two concurrent shim writes (e.g. two
+        # PWA tabs editing different skills against the same persona)
+        # would race the read-modify-write without this — both load
+        # the same on-disk version, both write, the second clobbers
+        # the first's changes even though they touched different skill
+        # blocks. Phase B critic round 1 finding 8.
+        self._persona_write_lock = asyncio.Lock()
         self._shutdown_event = asyncio.Event()
         self._shutting_down = False
 
@@ -344,7 +352,7 @@ class Runtime:
             await self._switch_to_persona(
                 name,
                 auto_connect=True,
-                language=self.current_app._active_language,
+                language=self.current_app.active_language,
                 force=True,
             )
         except Exception:
@@ -434,9 +442,10 @@ class Runtime:
             return
         persona_path = self.current_app.persona.data_dir.parent / "persona.yaml"
         try:
-            data = await asyncio.to_thread(load_persona_yaml, persona_path)
-            set_skill_enabled(data, skill_name, enabled)
-            await asyncio.to_thread(save_persona_yaml, persona_path, data)
+            async with self._persona_write_lock:
+                data = await asyncio.to_thread(load_persona_yaml, persona_path)
+                set_skill_enabled(data, skill_name, enabled)
+                await asyncio.to_thread(save_persona_yaml, persona_path, data)
         except Exception:
             await logger.aexception(
                 "runtime.set_skill_enabled.write_failed",
@@ -460,9 +469,10 @@ class Runtime:
             return
         persona_path = self.current_app.persona.data_dir.parent / "persona.yaml"
         try:
-            data = await asyncio.to_thread(load_persona_yaml, persona_path)
-            set_skill_config(data, skill_name, config)
-            await asyncio.to_thread(save_persona_yaml, persona_path, data)
+            async with self._persona_write_lock:
+                data = await asyncio.to_thread(load_persona_yaml, persona_path)
+                set_skill_config(data, skill_name, config)
+                await asyncio.to_thread(save_persona_yaml, persona_path, data)
         except Exception:
             await logger.aexception(
                 "runtime.set_skill_config.write_failed",
@@ -485,11 +495,15 @@ class Runtime:
             )
             return
         # The skill's secrets dir lives at <persona>/data/secrets/<name>/.
-        # JsonFileSecrets handles the atomic write + 0700/0600 perms.
+        # JsonFileSecrets handles its own asyncio.Lock for atomic write
+        # + 0700/0600 perms; we hold the persona write lock too so a
+        # secret write doesn't interleave with a yaml write that's
+        # changing the skill's enabled-state.
         secrets_dir = self.current_app.persona.data_dir / "secrets" / skill_name
         secrets = JsonFileSecrets(secrets_dir)
         try:
-            await secrets.set(key, value)
+            async with self._persona_write_lock:
+                await secrets.set(key, value)
         except Exception:
             await logger.aexception(
                 "runtime.set_skill_secret.write_failed",
@@ -515,7 +529,8 @@ class Runtime:
         secrets_dir = self.current_app.persona.data_dir / "secrets" / skill_name
         secrets = JsonFileSecrets(secrets_dir)
         try:
-            await secrets.delete(key)
+            async with self._persona_write_lock:
+                await secrets.delete(key)
         except Exception:
             await logger.aexception(
                 "runtime.delete_skill_secret.write_failed",

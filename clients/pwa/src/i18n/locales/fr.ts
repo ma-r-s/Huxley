@@ -134,9 +134,13 @@ const fr = {
         "Active ou désactive cette compétence pour la persona active.",
       toggleAria: "Basculer la compétence",
       save: "Enregistrer",
+      saving: "Enregistrement…",
       cancel: "Annuler",
       unsavedHint: "Modifications non enregistrées.",
       savedHint: "Toutes les modifications enregistrées.",
+      savingHint: "Enregistrement — application des changements…",
+      writesDisabledHint:
+        "Modifier les compétences interrompt un appel ou un audio en cours. Attends qu'il se termine, puis fais tes changements.",
       secretSave: "Enregistrer le secret",
       secretUpdate: "Mettre à jour",
       secretClear: "Effacer",
