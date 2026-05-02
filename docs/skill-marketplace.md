@@ -1,6 +1,6 @@
 # Skill Marketplace
 
-> **Status**: v1 (developer-primary) **shipped 2026-05-01** as **T1.14** + PyPI release. v2 caregiver expansion **Phase A + Phase B shipped 2026-05-02** (read-only Skills panel with cards/tabs, write-side toggle/config/secrets via hot reload, atomic ruamel.yaml round-trip). v2 Phases C (Marketplace registry browse) and D (auto-install + self-restart) are next. See [`triage.md`](./triage.md) for the work tracker.
+> **Status**: v1 (developer-primary) **shipped 2026-05-01** as **T1.14** + PyPI release. v2 caregiver expansion **Phase A + B + C + D all shipped 2026-05-02** — read-only Skills panel, write-side toggle/config/secrets via hot reload, Marketplace tab consuming the registry feed, and `uv add` auto-install with `os.execv` self-restart. See [`triage.md`](./triage.md) for the work tracker.
 
 ## Vision
 
@@ -9,7 +9,7 @@ Huxley's load-bearing thesis is **skill extensibility** — a voice agent framew
 The shape we're building toward is **VS Code-like**: curated registry for end-users, sideload escape hatch for developers, in-PWA configuration. We ship in two cleanly-staged steps:
 
 - **v1 — developer-primary** (~2 weeks). SDK additions + authoring conventions that let third-party authors write `huxley-skill-*` packages. Distribution via PyPI; install via `uv add`; configuration via `persona.yaml` + a per-persona secrets dir; "registry" is a static markdown directory page in the docs site. **Earns the optionality.**
-- **v2 — caregiver expansion** (Phases A + B shipped; C + D in progress). Layers a PWA Skills panel + install machinery + browseable registry on top of v1's primitives. Purely additive: new server endpoints, new PWA tabs. **No v1 rewrites.** Phase A (read-only state + cards UX) and Phase B (writes via hot reload — toggle / config / secrets) are live; Phase C (Marketplace tab consuming `huxley-registry`) and Phase D (`uv add` auto-install with self-restart) are pending.
+- **v2 — caregiver expansion** (Phases A + B + C + D all shipped 2026-05-02). Layers a PWA Skills panel + install machinery + browseable registry on top of v1's primitives. Purely additive: new server endpoints, new PWA tabs. **No v1 rewrites.** Phase A (read-only state + cards UX) and Phase B (writes via hot reload — toggle / config / secrets) are live; Phase C (Marketplace tab consuming `huxley-registry`) and Phase D (`uv add` auto-install with self-restart) are pending.
 
 § Cross-version contracts pins what doesn't change between them.
 

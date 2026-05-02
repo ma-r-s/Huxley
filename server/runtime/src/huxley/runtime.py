@@ -31,13 +31,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import signal
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from huxley.app import Application
+from huxley.installer import InstallEvent, InstallResult, install_skill
 from huxley.logging import setup_logging
 from huxley.marketplace import fetch_marketplace
 from huxley.persona import (
@@ -85,6 +88,8 @@ class Runtime:
             on_persona_select=self._shim_persona_select,
             on_get_skills_state=self._shim_get_skills_state,
             on_get_marketplace=self._shim_get_marketplace,
+            on_restart_server=self._shim_restart_server,
+            on_install_skill=self._shim_install_skill,
             on_set_skill_enabled=self._shim_set_skill_enabled,
             on_set_skill_config=self._shim_set_skill_config,
             on_set_skill_secret=self._shim_set_skill_secret,
@@ -114,6 +119,24 @@ class Runtime:
         # the first's changes even though they touched different skill
         # blocks. Phase B critic round 1 finding 8.
         self._persona_write_lock = asyncio.Lock()
+        # Marketplace v2 Phase D — serializes install operations so two
+        # concurrent install requests don't race the same `uv add`
+        # subprocess + `uv.lock` write. Distinct from `_persona_write_lock`
+        # so a future-direction config write doesn't deadlock against
+        # an in-flight install. Lock ordering: install acquires this
+        # lock then `_persona_write_lock` (never the reverse). Phase D
+        # planning critic finding §E.4.
+        self._install_lock = asyncio.Lock()
+        # Set when a restart is initiated (via `_perform_restart()`).
+        # `run()` checks this after its normal shutdown sequence and,
+        # if true, replaces the current process with `os.execv` instead
+        # of returning normally. Idempotent — second call is a no-op.
+        self._restart_after_shutdown = False
+        # Tracks an in-flight install so concurrent connections see
+        # the right state (Phase D critic §A8). Set on install start,
+        # cleared on completion/failure. Pushed via hello extras as
+        # `install_in_progress: {package, started_at_ms} | null`.
+        self._install_in_progress: dict[str, Any] | None = None
         self._shutdown_event = asyncio.Event()
         self._shutting_down = False
 
@@ -191,7 +214,52 @@ class Runtime:
 
         await logger.ainfo("huxley_stopped")
 
+        # Marketplace v2 Phase D — if a restart was requested via
+        # `_perform_restart()`, replace the current process with a
+        # fresh exec of the same script + args. This NEVER returns
+        # if successful. Done AFTER the normal shutdown so the
+        # listener socket, SQLite WAL, and skill teardowns all run
+        # before the new process inherits any FDs. Critic §A3.
+        if self._restart_after_shutdown:
+            await logger.ainfo(
+                "runtime.restart_execv",
+                argv0=sys.argv[0],
+                argv=sys.argv,
+            )
+            os.execv(sys.argv[0], sys.argv)
+            # Should not reach here; if execv fails, the process exits
+            # via the launchd KeepAlive path (or via the user re-running
+            # `uv run huxley` in dev). This raise is defense in depth so
+            # a bug in execv doesn't leave a zombie process.
+            msg = "os.execv returned unexpectedly"
+            raise RuntimeError(msg)
+
     def _signal_shutdown(self) -> None:
+        self._shutdown_event.set()
+
+    async def _perform_restart(self) -> None:
+        """Marketplace v2 Phase D — graceful shutdown then `os.execv`
+        of the same script + args.
+
+        Returns to its caller (the WS handler) so the inbound frame
+        finishes processing and the response can flush. Then the
+        main `run()` coroutine wakes up, runs its normal shutdown
+        sequence (cancel listener → drain teardown → shutdown app),
+        and calls `os.execv` last.
+
+        **Why exec instead of exit + supervisor**: works in both
+        `uv run huxley` (terminal dev) and launchd (prod) without a
+        wrapper. PID is preserved. The new process re-execs the same
+        entry-point script with the same args, inherits env vars, and
+        starts fresh.
+
+        **Idempotent**: second call while one is in flight is a no-op.
+        """
+        if self._restart_after_shutdown:
+            await logger.ainfo("runtime.restart.already_in_flight")
+            return
+        await logger.ainfo("runtime.restart_initiated")
+        self._restart_after_shutdown = True
         self._shutdown_event.set()
 
     # ── Persona swap algorithm ──────────────────────────────────────────
@@ -427,6 +495,147 @@ class Runtime:
                 "error": "internal error fetching marketplace",
             }
         await self.audio_server.send_marketplace_state(payload)
+
+    async def _shim_restart_server(self) -> None:
+        """Marketplace v2 Phase D — manual restart trigger.
+
+        Two callsites: the DeviceSheet "Restart server" maintenance
+        button, and the install-completion path (which auto-restarts
+        after `uv add` succeeds). Both go through `_perform_restart`
+        which sets the `_restart_after_shutdown` flag + signals the
+        shutdown event; `run()` then performs the normal shutdown
+        sequence (cancel listener, drain teardown, shutdown app) and
+        ends with `os.execv`.
+        """
+        await self._perform_restart()
+
+    async def _shim_install_skill(self, package: str) -> None:
+        """Marketplace v2 Phase D — PWA-driven install via `uv add`.
+
+        Validates the package name (regex), gates against active
+        claims/streams (mid-call install would interrupt the
+        conversation), serializes via `_install_lock` so two
+        concurrent installs don't race the workspace's `uv.lock`
+        write, runs the subprocess via `huxley.installer.install_skill`,
+        and on success triggers `_perform_restart` so the new entry
+        point is visible to the freshly-execed Python.
+
+        On failure: sends an `install_event` with `ok=False`; no
+        restart. The PWA renders the error in the Marketplace card.
+
+        Mid-call gating: if a claim or audio stream is active, refuse
+        with a clear error rather than tearing down the call. Mirrors
+        Phase B's `writesDisabled` pattern.
+        """
+        # Mid-call gate — same logic AudioServer's `has_active_claim`
+        # exposes for Phase B writes.
+        active_claim = self.audio_server._active_claim_id is not None
+        if active_claim:
+            await logger.awarning(
+                "runtime.install_skill.declined_in_call",
+                package=package,
+            )
+            await self.audio_server.send_install_event(
+                {
+                    "kind": "complete",
+                    "package": package,
+                    "ok": False,
+                    "error_code": "in_call",
+                    "error_message": (
+                        "An audio call or stream is active. End it "
+                        "before installing a skill — the install "
+                        "restarts the server."
+                    ),
+                    "restart_required": False,
+                },
+            )
+            return
+
+        # Concurrency gate.
+        if self._install_lock.locked():
+            await logger.awarning(
+                "runtime.install_skill.already_in_progress",
+                package=package,
+                in_progress=self._install_in_progress,
+            )
+            await self.audio_server.send_install_event(
+                {
+                    "kind": "complete",
+                    "package": package,
+                    "ok": False,
+                    "error_code": "install_in_progress",
+                    "error_message": (
+                        "Another install is already running. Wait for "
+                        "it to finish + the server to restart."
+                    ),
+                    "restart_required": False,
+                },
+            )
+            return
+
+        async with self._install_lock:
+            # Track in-flight state so a new connection's hello extras
+            # surface the install (Phase D planning critic §A8).
+            import time
+
+            self._install_in_progress = {
+                "package": package,
+                "started_at_ms": int(time.time() * 1000),
+            }
+
+            async def _emit(event: InstallEvent) -> None:
+                # Forward installer's lifecycle events to the WS.
+                # `started` is the only event the installer emits;
+                # `complete` is sent by THIS shim (since it knows
+                # the restart_required flag).
+                await self.audio_server.send_install_event(
+                    {
+                        "kind": event.kind,
+                        "package": event.package,
+                        "ok": None,
+                        "error_code": None,
+                        "error_message": None,
+                        "restart_required": False,
+                    },
+                )
+
+            try:
+                result: InstallResult = await install_skill(
+                    package,
+                    on_event=_emit,
+                )
+            finally:
+                self._install_in_progress = None
+
+            if not result.ok:
+                await self.audio_server.send_install_event(
+                    {
+                        "kind": "complete",
+                        "package": package,
+                        "ok": False,
+                        "error_code": result.error_code,
+                        "error_message": result.error_message,
+                        "restart_required": False,
+                    },
+                )
+                return
+
+            # Success path: send `complete` BEFORE triggering restart
+            # so the PWA can flip its UI to "Restarting…" before the
+            # WS dies. The WS frame should land in the kernel send
+            # buffer before exec; we then schedule the restart so
+            # this handler returns + the response actually flushes.
+            await self.audio_server.send_install_event(
+                {
+                    "kind": "complete",
+                    "package": package,
+                    "ok": True,
+                    "error_code": None,
+                    "error_message": None,
+                    "restart_required": True,
+                },
+            )
+            await self._perform_restart()
 
     async def _shim_get_skills_state(self) -> None:
         """Marketplace v2 Phase A — PWA opens DeviceSheet's Skills section.
@@ -677,4 +886,8 @@ class Runtime:
                 }
                 for s in list_personas()
             ],
+            # Marketplace v2 Phase D — surface in-flight install so a
+            # new tab connecting mid-install knows the server is about
+            # to restart (planning critic §A8). Null in steady state.
+            "install_in_progress": self._install_in_progress,
         }

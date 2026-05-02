@@ -99,6 +99,34 @@ export function App() {
   // Reset when DeviceSheet closes so a future open doesn't reuse a
   // stale selection.
   const [activeSkillName, setActiveSkillName] = useState<string | null>(null);
+
+  // Marketplace v2 Phase D — pending install confirmation. When the
+  // user taps a Marketplace card, this holds the registry entry the
+  // confirmation modal renders. Cleared on confirm (install fires)
+  // or cancel (modal dismissed).
+  const [pendingInstall, setPendingInstall] = useState<
+    import("./types.js").MarketplaceEntry | null
+  >(null);
+
+  // Phase D — when an install completes successfully + the post-restart
+  // reconnect lands, fetch fresh marketplace_state so the card flips
+  // to "Installed ✓", then clear the install state. The detection:
+  // installState.status === "success-restarting" + ws.connected goes
+  // false (server os.execv) → true (reconnect).
+  useEffect(() => {
+    if (!ws.installState) return;
+    if (ws.installState.status === "success-restarting" && ws.connected) {
+      // Reconnected after restart. Refresh the registry feed (cache
+      // was wiped by the restart) so the card shows installed=true.
+      ws.requestMarketplace();
+      ws.requestSkillsState();
+      // Brief delay so the user sees "Installed ✓" land in the panel
+      // before we clear the modal — feels more confirmatory.
+      const t = setTimeout(() => ws.clearInstallState(), 600);
+      return () => clearTimeout(t);
+    }
+    return undefined;
+  }, [ws.installState, ws.connected, ws]);
   const [booted, setBooted] = useState(false);
   const [bootOrbState, setBootOrbState] = useState<OrbState>("wake");
 
@@ -716,7 +744,7 @@ export function App() {
               setTweaks((tw) => ({ ...tw, ...patch }));
             }}
             onReload={() => ws.sendClientEvent("ui.reload_skills")}
-            onRestart={() => ws.sendClientEvent("ui.restart_server")}
+            onRestart={() => ws.restartServer()}
             onViewLogs={() => setActiveSheet("logs")}
             skillsState={ws.skillsState}
             onRequestSkillsState={ws.requestSkillsState}
@@ -734,25 +762,15 @@ export function App() {
               setActiveSheet("skill-config");
             }}
             onPickMarketplaceSkill={(entry) => {
-              // Phase D will route this to a detail / install sheet.
-              // Phase C: open the upstream registry detail in a new
-              // tab so the user can read the README and copy the
-              // install command. Names + paths are passed through
-              // encodeURIComponent because, while the registry schema
-              // enforces sane chars today, treating registry data as
-              // trusted-without-encoding is a habit that would bite
-              // us when Phase D feeds the same `entry.name` to
-              // `uv add`. Phase C critic finding 7.
-              const detail = (entry as { detail?: unknown }).detail;
-              const detailStr = typeof detail === "string" ? detail : "";
-              // The registry schema constrains skill names to
-              // `^huxley-skill-[a-z0-9-]+$`; reject anything else
-              // rather than open a malformed URL.
+              // Phase D — install flow. Tapping a card opens a
+              // confirmation modal (handled below); from there the
+              // user can read the upstream README link, then click
+              // Install. The install flow goes through `ws.installSkill`
+              // which sends the WS frame and tracks state in
+              // `ws.installState`.
+              if (entry.installed) return; // already installed; nothing to do
               if (!/^huxley-skill-[a-z0-9-]+$/.test(entry.name)) return;
-              const url = detailStr
-                ? `https://github.com/ma-r-s/huxley-registry/blob/main/${detailStr.split("/").map(encodeURIComponent).join("/")}`
-                : `https://pypi.org/project/${encodeURIComponent(entry.name)}/`;
-              window.open(url, "_blank", "noopener,noreferrer");
+              setPendingInstall(entry);
             }}
             onRequestSkillsState={ws.requestSkillsState}
             onRequestMarketplace={ws.requestMarketplace}
@@ -826,6 +844,290 @@ export function App() {
           }}
         />
       )}
+
+      {/* Marketplace v2 Phase D — install flow overlays. Sit on top of
+          every sheet at zIndex 100 so they're never visually covered. */}
+      {pendingInstall !== null && ws.installState === null && (
+        <InstallConfirmModal
+          entry={pendingInstall}
+          onConfirm={() => {
+            ws.installSkill(pendingInstall.name);
+            setPendingInstall(null);
+          }}
+          onCancel={() => setPendingInstall(null)}
+        />
+      )}
+      {ws.installState !== null && (
+        <InstallProgressOverlay
+          state={ws.installState}
+          connected={ws.connected}
+          onDismiss={ws.clearInstallState}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Marketplace v2 Phase D — install confirmation modal ──────────────────
+
+interface InstallConfirmModalProps {
+  entry: import("./types.js").MarketplaceEntry;
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
+function InstallConfirmModal({
+  entry,
+  onConfirm,
+  onCancel,
+}: InstallConfirmModalProps) {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 100,
+        background: "rgba(0,0,0,0.55)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+      }}
+      onClick={onCancel}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--hux-bg)",
+          color: "var(--hux-fg)",
+          border: "1px solid var(--hux-fg-line)",
+          borderRadius: 14,
+          padding: "28px 28px 20px",
+          maxWidth: 480,
+          width: "100%",
+          fontFamily: "var(--hux-sans)",
+          fontSize: 15,
+          lineHeight: 1.4,
+          boxShadow: "0 12px 48px rgba(0,0,0,0.4)",
+        }}
+      >
+        <h3
+          style={{
+            fontFamily: "var(--hux-serif)",
+            fontWeight: 400,
+            fontSize: 26,
+            lineHeight: 1.1,
+            margin: "0 0 8px",
+          }}
+        >
+          {t("install.confirmTitle", "Install {{name}}?").replace(
+            "{{name}}",
+            entry.display_name ?? entry.name,
+          )}
+        </h3>
+        <p style={{ margin: "0 0 16px", color: "var(--hux-fg-dim)" }}>
+          {entry.tagline ?? t("install.noTagline", "No description provided.")}
+        </p>
+        <p
+          style={{
+            margin: "0 0 16px",
+            fontSize: 13,
+            color: "var(--hux-fg-dim)",
+            lineHeight: 1.5,
+          }}
+        >
+          {t(
+            "install.warning",
+            "This will run `uv add {{pkg}}` and restart the server. Any active call or stream is preserved (mid-call installs are blocked).",
+          ).replace("{{pkg}}", entry.name)}
+        </p>
+        <div
+          style={{
+            display: "flex",
+            gap: 10,
+            justifyContent: "flex-end",
+            marginTop: 24,
+          }}
+        >
+          <button
+            style={{
+              background: "transparent",
+              border: "1px solid var(--hux-fg-line)",
+              color: "var(--hux-fg)",
+              padding: "8px 16px",
+              borderRadius: 999,
+              fontFamily: "var(--hux-sans)",
+              fontSize: 13,
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              cursor: "pointer",
+            }}
+            onClick={onCancel}
+          >
+            {t("install.cancel", "Cancel")}
+          </button>
+          <button
+            style={{
+              background: "var(--hux-fg)",
+              border: "1px solid var(--hux-fg)",
+              color: "var(--hux-bg)",
+              padding: "8px 18px",
+              borderRadius: 999,
+              fontFamily: "var(--hux-sans)",
+              fontSize: 13,
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              cursor: "pointer",
+              fontWeight: 600,
+            }}
+            onClick={onConfirm}
+          >
+            {t("install.install", "Install")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Marketplace v2 Phase D — install progress overlay ───────────────────
+
+interface InstallProgressOverlayProps {
+  state: import("./types.js").InstallUIState;
+  connected: boolean;
+  onDismiss: () => void;
+}
+
+function InstallProgressOverlay({
+  state,
+  connected,
+  onDismiss,
+}: InstallProgressOverlayProps) {
+  const { t } = useTranslation();
+  // Status copy varies by phase. The "success-restarting + !connected"
+  // state is the post-execv reconnect window.
+  let title: string;
+  let body: string;
+  let canDismiss = false;
+  if (state.status === "starting" || state.status === "running") {
+    title = t("install.installing", "Installing {{pkg}}…").replace(
+      "{{pkg}}",
+      state.package,
+    );
+    body = t(
+      "install.installingBody",
+      "Running `uv add`. This may take a minute on first install (C-extension wheels build from source on slower machines).",
+    );
+  } else if (state.status === "success-restarting") {
+    title = connected
+      ? t("install.installedTitle", "Installed ✓")
+      : t("install.restartingTitle", "Restarting server…");
+    body = connected
+      ? t(
+          "install.installedBody",
+          "{{pkg}} is now available. Open the Skills tab to enable it on this persona.",
+        ).replace("{{pkg}}", state.package)
+      : t(
+          "install.restartingBody",
+          "The server is replacing itself with a fresh interpreter so the new skill's entry point is visible. ~5 seconds.",
+        );
+    canDismiss = connected;
+  } else {
+    // error
+    title = t("install.errorTitle", "Install failed");
+    body = state.error_message
+      ? state.error_message
+      : t(
+          "install.errorGeneric",
+          "uv add returned an error. Check the server log.",
+        );
+    canDismiss = true;
+  }
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-live="polite"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 100,
+        background: "rgba(0,0,0,0.55)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+      }}
+    >
+      <div
+        style={{
+          background: "var(--hux-bg)",
+          color: "var(--hux-fg)",
+          border: "1px solid var(--hux-fg-line)",
+          borderRadius: 14,
+          padding: "28px 28px 20px",
+          maxWidth: 480,
+          width: "100%",
+          fontFamily: "var(--hux-sans)",
+          fontSize: 15,
+          lineHeight: 1.4,
+          boxShadow: "0 12px 48px rgba(0,0,0,0.4)",
+        }}
+      >
+        <h3
+          style={{
+            fontFamily: "var(--hux-serif)",
+            fontWeight: 400,
+            fontSize: 26,
+            lineHeight: 1.1,
+            margin: "0 0 12px",
+          }}
+        >
+          {title}
+        </h3>
+        <p style={{ margin: "0 0 8px", color: "var(--hux-fg-dim)" }}>{body}</p>
+        {state.status === "running" && (
+          <div
+            style={{
+              fontSize: 12,
+              color: "var(--hux-fg-dim)",
+              fontVariantNumeric: "tabular-nums",
+            }}
+          >
+            {Math.floor((Date.now() - state.started_at_ms) / 1000)}s
+          </div>
+        )}
+        {canDismiss && (
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              marginTop: 24,
+            }}
+          >
+            <button
+              style={{
+                background: "transparent",
+                border: "1px solid var(--hux-fg-line)",
+                color: "var(--hux-fg)",
+                padding: "8px 18px",
+                borderRadius: 999,
+                fontFamily: "var(--hux-sans)",
+                fontSize: 13,
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+                cursor: "pointer",
+              }}
+              onClick={onDismiss}
+            >
+              {t("install.dismiss", "Done")}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
