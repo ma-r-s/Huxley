@@ -39,6 +39,7 @@ import structlog
 
 from huxley.app import Application
 from huxley.logging import setup_logging
+from huxley.marketplace import fetch_marketplace
 from huxley.persona import (
     PersonaError,
     _find_named_persona,
@@ -83,6 +84,7 @@ class Runtime:
             on_delete_session=self._shim_delete_session,
             on_persona_select=self._shim_persona_select,
             on_get_skills_state=self._shim_get_skills_state,
+            on_get_marketplace=self._shim_get_marketplace,
             on_set_skill_enabled=self._shim_set_skill_enabled,
             on_set_skill_config=self._shim_set_skill_config,
             on_set_skill_secret=self._shim_set_skill_secret,
@@ -401,6 +403,30 @@ class Runtime:
     async def _shim_delete_session(self, session_id: int) -> None:
         if self.current_app is not None:
             await self.current_app.on_delete_session(session_id)
+
+    async def _shim_get_marketplace(self) -> None:
+        """Marketplace v2 Phase C — PWA opens the Marketplace tab.
+
+        Fetches the canonical `huxley-registry/index.json` feed
+        (cached for 1h), decorates with installed-status against the
+        active venv's `huxley.skills` entry-point group, and replies
+        via `send_marketplace_state`. Failures (offline, GitHub down,
+        registry malformed) surface as `{error: <msg>, skills: []}`
+        OR `{stale: true, ...}` when a previous fetch's cache is
+        still serviceable."""
+        try:
+            payload = await fetch_marketplace()
+        except Exception:
+            await logger.aexception("marketplace.fetch_failed")
+            payload = {
+                "skills": [],
+                "registry_version": None,
+                "generated_at": None,
+                "fetched_at_ms": 0,
+                "stale": False,
+                "error": "internal error fetching marketplace",
+            }
+        await self.audio_server.send_marketplace_state(payload)
 
     async def _shim_get_skills_state(self) -> None:
         """Marketplace v2 Phase A — PWA opens DeviceSheet's Skills section.

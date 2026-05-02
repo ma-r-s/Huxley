@@ -14,6 +14,8 @@ import type {
   SessionTurn,
   SkillSummary,
   SkillsState,
+  MarketplaceEntry,
+  MarketplaceState,
 } from "../types.js";
 
 const EXPECTED_PROTOCOL = 2;
@@ -89,7 +91,16 @@ type ServerMessage =
   | { type: "sessions_list"; sessions: SessionMeta[] }
   | { type: "session_detail"; id: number; turns: SessionTurn[] }
   | { type: "session_deleted"; id: number }
-  | { type: "skills_state"; persona: string | null; skills: SkillSummary[] };
+  | { type: "skills_state"; persona: string | null; skills: SkillSummary[] }
+  | {
+      type: "marketplace_state";
+      skills: MarketplaceEntry[];
+      registry_version: string | null;
+      generated_at: string | null;
+      fetched_at_ms: number;
+      stale: boolean;
+      error: string | null;
+    };
 
 export function useWs() {
   // ── Render state ────────────────────────────────────────────────────────
@@ -135,6 +146,13 @@ export function useWs() {
   // reply arrives so the UI can distinguish "loading" from "loaded
   // and empty." Refreshed on every `skills_state` frame.
   const [skillsState, setSkillsState] = useState<SkillsState | null>(null);
+
+  // Marketplace v2 Phase C — registry feed. Null until the first
+  // `marketplace_state` reply arrives so the UI can distinguish
+  // "loading" from "loaded and empty / errored." Refreshed on
+  // every `marketplace_state` frame.
+  const [marketplaceState, setMarketplaceState] =
+    useState<MarketplaceState | null>(null);
 
   // ── Refs (callback-readable without stale closures) ─────────────────────
   const socketRef = useRef<WebSocket | null>(null);
@@ -462,6 +480,19 @@ export function useWs() {
                 skills: msg.skills,
               });
               break;
+            case "marketplace_state":
+              // Marketplace v2 Phase C — registry feed. Whole payload
+              // replaced; server caches at 1h TTL so subsequent reads
+              // return the same response cheaply.
+              setMarketplaceState({
+                skills: msg.skills,
+                registry_version: msg.registry_version,
+                generated_at: msg.generated_at,
+                fetched_at_ms: msg.fetched_at_ms,
+                stale: msg.stale,
+                error: msg.error,
+              });
+              break;
           }
         } catch {
           // ignore malformed messages
@@ -612,6 +643,11 @@ export function useWs() {
     sendRaw({ type: "get_skills_state" });
   }, [sendRaw]);
 
+  // ── Marketplace (Marketplace v2 Phase C) ───────────────────────────────
+  const requestMarketplace = useCallback(() => {
+    sendRaw({ type: "get_marketplace" });
+  }, [sendRaw]);
+
   // Phase B writes. Each fires a fire-and-forget WS frame; the server
   // persists to disk + triggers a hot reload of the active persona,
   // which pushes a fresh skills_state frame. The PWA's reducer-style
@@ -661,6 +697,7 @@ export function useWs() {
     availablePersonas,
     currentPersona,
     skillsState,
+    marketplaceState,
     get activeUrl() {
       return activeUrlRef.current;
     },
@@ -682,6 +719,7 @@ export function useWs() {
     getSession,
     deleteSession,
     requestSkillsState,
+    requestMarketplace,
     setSkillEnabled,
     setSkillConfig,
     setSkillSecret,

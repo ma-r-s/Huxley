@@ -163,9 +163,16 @@ const fr = {
         noDescription: "Aucune description fournie.",
       },
       marketplace: {
-        intro:
-          "Parcours les compétences communautaires curatées par le registre de Huxley. La Phase C remplira cet onglet avec des cartes depuis le flux canonique.",
-        feed: "En attendant, parcours le registre directement :",
+        loading: "Chargement du registre…",
+        empty:
+          "Le registre est vide. Soumets une PR à ma-r-s/huxley-registry pour ajouter une compétence.",
+        retry: "Réessayer",
+        staleHint:
+          "Registre en cache — impossible d'atteindre le flux en direct.",
+        installed: "Installée ✓",
+        tierFirst: "Officielle",
+        tierCommunity: "Communauté",
+        tierExperimental: "Expérimentale",
       },
     },
   },

@@ -171,9 +171,15 @@ const en = {
         noDescription: "No description provided.",
       },
       marketplace: {
-        intro:
-          "Browse community-contributed skills curated by Huxley's discovery registry. Phase C will populate this tab with cards from the canonical feed.",
-        feed: "Until then, browse the registry directly:",
+        loading: "Loading registry…",
+        empty:
+          "Registry is empty. Submit a PR at ma-r-s/huxley-registry to add a skill.",
+        retry: "Retry",
+        staleHint: "Showing cached registry — couldn't reach the live feed.",
+        installed: "Installed ✓",
+        tierFirst: "First-party",
+        tierCommunity: "Community",
+        tierExperimental: "Experimental",
       },
     },
   },

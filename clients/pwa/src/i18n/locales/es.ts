@@ -162,9 +162,16 @@ const es = {
         noDescription: "Sin descripción.",
       },
       marketplace: {
-        intro:
-          "Explora habilidades de la comunidad curadas por el registro de Huxley. La Fase C poblará esta pestaña con tarjetas desde el feed canónico.",
-        feed: "Mientras tanto, explora el registro directamente:",
+        loading: "Cargando registro…",
+        empty:
+          "El registro está vacío. Envía un PR a ma-r-s/huxley-registry para agregar una habilidad.",
+        retry: "Reintentar",
+        staleHint:
+          "Mostrando registro en caché — no se pudo conectar al feed en vivo.",
+        installed: "Instalada ✓",
+        tierFirst: "Oficial",
+        tierCommunity: "Comunidad",
+        tierExperimental: "Experimental",
       },
     },
   },

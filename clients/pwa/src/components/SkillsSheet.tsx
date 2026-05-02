@@ -1,19 +1,26 @@
-// Full-page Skills + Marketplace sheet (Marketplace v2 Phase A).
+// Full-page Skills + Marketplace sheet (Marketplace v2 Phase A + C).
 //
-// Two tabs: Installed (cards for every entry-point-discoverable skill
-// in the active venv) and Marketplace (Phase C populates from the
-// huxley-registry feed; Phase A shows a "coming soon" placeholder).
-// Cards expose name, one-line description, author, version, enabled
-// state. Tap a card → SkillConfigSheet opens over this sheet.
+// Two tabs:
+//   Installed   — cards for every entry-point-discoverable skill in
+//                 the active venv. Tap → SkillConfigSheet (read +
+//                 write per Phase B).
+//   Marketplace — cards from the canonical huxley-registry feed.
+//                 Browse-only in Phase C; Phase D adds an Install
+//                 button that drives `uv add` server-side.
 //
-// Replaces the inline list inside DeviceSheet — the visual block /
-// card layout gives skills room to breathe and matches the marketplace
-// metaphor: skills are products you browse, not lines in a settings
-// menu.
+// Both tabs share the same card grid + visual rhythm. The
+// "Installed ✓" badge surfaces on Marketplace cards whose package
+// is also entry-point-discoverable in the active venv (the server
+// decorates with `installed: bool`).
 
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { SkillSummary, SkillsState } from "../types.js";
+import type {
+  MarketplaceEntry,
+  MarketplaceState,
+  SkillSummary,
+  SkillsState,
+} from "../types.js";
 import { prettyLabel } from "../lib/schemaForm.js";
 
 // Position fixed (not absolute) so the sheet escapes the
@@ -196,8 +203,10 @@ type Tab = "installed" | "marketplace";
 
 interface Props {
   skillsState: SkillsState | null;
+  marketplaceState: MarketplaceState | null;
   onClose: () => void;
   onPickSkill: (skill: SkillSummary) => void;
+  onPickMarketplaceSkill?: (entry: MarketplaceEntry) => void;
   // Fired once on mount so the panel refreshes whenever the user
   // opens it. Without this, the sheet would rely on DeviceSheet's
   // mount-time fetch — a race when the user navigates fast OR when
@@ -205,6 +214,10 @@ interface Props {
   // server's persona-swap push (Phase A critic fix #3) covers
   // mid-session swaps; this covers the cold-open path.
   onRequestSkillsState: () => void;
+  // Phase C — fired the first time the user opens the Marketplace
+  // tab so the registry feed loads on demand (not at sheet mount,
+  // since most opens just want to configure existing skills).
+  onRequestMarketplace: () => void;
   // Sheet wrapper class — `hux-sheet` runs the fade-up animation,
   // `hux-sheet hux-sheet-no-anim` skips it. App passes the no-anim
   // variant when transitioning sheet → sheet so the user doesn't
@@ -214,9 +227,12 @@ interface Props {
 
 export function SkillsSheet({
   skillsState,
+  marketplaceState,
   onClose,
   onPickSkill,
+  onPickMarketplaceSkill,
   onRequestSkillsState,
+  onRequestMarketplace,
   sheetClassName = "hux-sheet",
 }: Props) {
   const { t } = useTranslation();
@@ -253,16 +269,31 @@ export function SkillsSheet({
           </button>
           <button
             style={S.tabBtn(tab === "marketplace")}
-            onClick={() => setTab("marketplace")}
+            onClick={() => {
+              setTab("marketplace");
+              // Phase C: lazy-fetch the feed when the user opens the
+              // tab. Subsequent opens hit the server's 1h cache.
+              if (marketplaceState === null) onRequestMarketplace();
+            }}
           >
             <span>{t("skillsSheet.tabs.marketplace", "Marketplace")}</span>
+            {marketplaceState !== null &&
+              marketplaceState.skills.length > 0 && (
+                <span style={S.tabCount}>{marketplaceState.skills.length}</span>
+              )}
           </button>
         </div>
 
         {tab === "installed" && (
           <InstalledTab skillsState={skillsState} onPickSkill={onPickSkill} />
         )}
-        {tab === "marketplace" && <MarketplaceTab />}
+        {tab === "marketplace" && (
+          <MarketplaceTab
+            state={marketplaceState}
+            onPick={onPickMarketplaceSkill}
+            onRetry={onRequestMarketplace}
+          />
+        )}
       </div>
     </div>
   );
@@ -343,32 +374,150 @@ function SkillCard({ skill, onClick }: CardProps) {
   );
 }
 
-function MarketplaceTab() {
+interface MarketplaceTabProps {
+  state: MarketplaceState | null;
+  onPick: ((entry: MarketplaceEntry) => void) | undefined;
+  onRetry: () => void;
+}
+
+function MarketplaceTab({ state, onPick, onRetry }: MarketplaceTabProps) {
   const { t } = useTranslation();
-  return (
-    <div style={S.marketplacePlaceholder}>
-      <p style={{ marginTop: 0 }}>
-        {t(
-          "skillsSheet.marketplace.intro",
-          "Browse community-contributed skills curated by Huxley's discovery registry. Phase C will populate this tab with cards from the canonical feed.",
-        )}
-      </p>
-      <p>
-        {t(
-          "skillsSheet.marketplace.feed",
-          "Until then, browse the registry directly:",
-        )}
-      </p>
-      <p>
-        <a
-          href="https://github.com/ma-r-s/huxley-registry"
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{ color: "var(--hux-fg)" }}
+  if (state === null) {
+    return (
+      <div style={S.empty}>
+        {t("skillsSheet.marketplace.loading", "Loading registry…")}
+      </div>
+    );
+  }
+  if (state.skills.length === 0) {
+    return (
+      <div style={S.empty}>
+        <p style={{ marginTop: 0 }}>
+          {state.error
+            ? state.error
+            : t(
+                "skillsSheet.marketplace.empty",
+                "Registry is empty. Submit a PR at ma-r-s/huxley-registry to add a skill.",
+              )}
+        </p>
+        <button
+          style={{
+            background: "transparent",
+            border: "1px solid var(--hux-fg-line)",
+            color: "var(--hux-fg)",
+            padding: "6px 14px",
+            borderRadius: 999,
+            cursor: "pointer",
+            fontFamily: "var(--hux-sans)",
+            fontSize: 12,
+            letterSpacing: "0.06em",
+            textTransform: "uppercase",
+          }}
+          onClick={onRetry}
         >
-          github.com/ma-r-s/huxley-registry
-        </a>
-      </p>
+          {t("skillsSheet.marketplace.retry", "Retry")}
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div>
+      {state.stale && state.error && (
+        <div
+          style={{
+            fontFamily: "var(--hux-sans)",
+            fontSize: 12,
+            color: "var(--hux-fg-dim)",
+            padding: "8px 12px",
+            border: "1px solid var(--hux-fg-line)",
+            borderRadius: 8,
+            marginBottom: 16,
+          }}
+        >
+          {t(
+            "skillsSheet.marketplace.staleHint",
+            "Showing cached registry — couldn't reach the live feed.",
+          )}
+        </div>
+      )}
+      <div style={S.cardGrid}>
+        {state.skills.map((entry) => (
+          <MarketplaceCard
+            key={entry.namespace ?? entry.name}
+            entry={entry}
+            onClick={onPick ? () => onPick(entry) : undefined}
+          />
+        ))}
+      </div>
     </div>
+  );
+}
+
+interface MarketplaceCardProps {
+  entry: MarketplaceEntry;
+  onClick: (() => void) | undefined;
+}
+
+function MarketplaceCard({ entry, onClick }: MarketplaceCardProps) {
+  const { t } = useTranslation();
+  const tierLabel =
+    entry.tier === "first-party"
+      ? t("skillsSheet.marketplace.tierFirst", "First-party")
+      : entry.tier === "experimental"
+        ? t("skillsSheet.marketplace.tierExperimental", "Experimental")
+        : t("skillsSheet.marketplace.tierCommunity", "Community");
+  const display =
+    entry.display_name ?? prettyLabel(entry.name.replace(/^huxley-skill-/, ""));
+  return (
+    <button
+      style={S.card}
+      onClick={onClick}
+      onMouseEnter={(e) => {
+        (e.currentTarget as HTMLButtonElement).style.borderColor =
+          "var(--hux-fg)";
+      }}
+      onMouseLeave={(e) => {
+        (e.currentTarget as HTMLButtonElement).style.borderColor =
+          "var(--hux-fg-line)";
+      }}
+    >
+      <div style={S.cardName}>
+        <span>{display}</span>
+        {entry.installed && (
+          <span
+            style={{
+              fontSize: 10,
+              fontFamily: "var(--hux-sans)",
+              letterSpacing: "0.10em",
+              textTransform: "uppercase",
+              color: "var(--hux-fg)",
+              border: "1px solid var(--hux-fg)",
+              borderRadius: 999,
+              padding: "1px 8px",
+            }}
+          >
+            {t("skillsSheet.marketplace.installed", "Installed ✓")}
+          </span>
+        )}
+      </div>
+      <div style={S.cardDesc}>
+        {entry.tagline ??
+          t("skillsSheet.card.noDescription", "No description provided.")}
+      </div>
+      <div style={S.cardMeta}>
+        <span
+          style={{
+            fontSize: 10,
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+          }}
+        >
+          {tierLabel}
+        </span>
+        <span style={{ fontVariantNumeric: "tabular-nums" }}>
+          {entry.version ? `v${entry.version}` : ""}
+        </span>
+      </div>
+    </button>
   );
 }
