@@ -4740,3 +4740,57 @@ if (
 **Lessons hint** (will fill at gate close): the id-vs-display-name pair belongs to a Persona summary type; every comparison or display site should pull from a typed accessor, not a stringly-typed `.name`. T1.13 fixed two sites, T1.19 fixes the third — there's a deeper refactor implied (rename `PersonaSpec.name` → `display_name` and add an explicit `id` field) but it's out of scope for the bug fix.
 
 ---
+
+## T1.20 — Hello watchdog: detect half-dead WS and self-heal via reconnect
+
+**Status**: done (2026-05-02). Mario hit a "PWA looks ready, doesn't answer, skills+marketplace stuck loading" wedge that survived a `window.location.reload()` + a Vite dev-server restart.
+
+**Problem.** Reproduced live during the T1.17/T1.18/T1.19 smoke. Symptoms:
+
+- Server log shows `client_connected` + `client_evicted` storms (StrictMode + the existing eviction flow).
+- Server received `get_skills_state` requests and emitted `server.tx.skills_state count=9` responses against the live `_client`.
+- PWA's React-held WebSocket reported `readyState=1` (OPEN), `bufferedAmount=0`, all handlers attached.
+- **`ws.addEventListener("message", ...)` registered on the live React-held socket received zero frames** in 1.5s after sending `get_skills_state` — outbound writes worked, inbound delivery was dead.
+- A _fresh_ raw `new WebSocket("ws://localhost:5174/ws?lang=en")` opened in the same browser console received `hello`, `state`, `input_mode`, `skills_state` instantly. The proxy + server were fine; the React-held socket specifically was wedged.
+- `window.location.reload()` did not recover — the new mount produced another wedged socket. Stopping + restarting Vite + reload finally recovered, but only because every reconnect attempt was a fresh PWA load against a fresh proxy.
+
+The wedge is reproducible enough to have hit Mario twice in one session. T1.16 + T1.17 + T1.19 reduce its triggers; T1.20 makes the PWA self-heal when it does occur.
+
+**Why it matters.** From the user's POV: "it says ready, it doesn't answer, skills don't load, refresh doesn't help." Worst-class failure — system claims healthy state with no recovery path. Pre-T1.20, only manual Vite restart cleared it.
+
+**Validation.** Live trace at 2026-05-02 13:24-13:27. Recovery confirmed by force-closing the React-held socket via dev console (`ws.close(4001, "forced-reset-debug")`) — the existing `onclose → setTimeout(connect, 2000)` reconnect path produced a fresh socket that received `skills_state` immediately. PWA went from "Loading…" to "6 of 9 enabled" within 2 seconds.
+
+**Root cause hypothesis.** TCP-level connection survives in both directions but the WebSocket frame layer (or Vite's WS proxy buffering, or the browser's `permessage-deflate` state) gets desynchronized after the StrictMode + `client_evicted` storm. Outbound frames serialize correctly; inbound frames either don't reach `onmessage` or arrive but the deflate decoder rejects them silently. The browser still reports `readyState=1` because no close frame has been observed.
+
+Confirming the exact mechanism would require packet-level inspection of Vite's proxy. T1.20 sidesteps the diagnostic and chooses recovery over root-cause: if the hello frame doesn't arrive within the SLA, the socket is broken regardless of why.
+
+**Design (collapsed; reactive timeout, not Tier 1)**:
+
+- `ws.onopen` arms a 3s timer (`HELLO_WATCHDOG_MS`).
+- `case "hello"` in the message dispatcher disarms it.
+- `ws.onclose` clears it defensively (so a normal close doesn't trip a stale timer).
+- If the timer fires while the socket is still open and current, force-close with code `4002` and reason `"no-hello-watchdog"`. The existing onclose path schedules a reconnect in 2s.
+- User-facing status: "Connection unhealthy — reconnecting…" so a smoke-testing operator sees the recovery instead of guessing at why the orb hint flickered.
+
+3s SLA chosen because the server emits hello within milliseconds of accepting the WS upgrade — anything past 3s is wedged with overwhelming probability. Errs slightly long to avoid false-positive recoveries on a slow loopback; if the timer over-fires under real load, drop to 2s.
+
+**Implement.** One file (`clients/pwa/src/lib/useWs.ts`): module-level constant, one ref, three short blocks (arm, disarm, clear). No protocol change, no server-side change.
+
+**DoD**:
+
+- [x] Watchdog armed in `ws.onopen`, disarmed on `hello`, cleared on `onclose`.
+- [x] Timer fires `ws.close(4002, "no-hello-watchdog")` only if socket is current + open.
+- [x] PWA reconnect path picks up automatically after force-close.
+- [x] Healthy connect verified live: skills_state populates within 1s of WS open.
+- [x] tsc green.
+- [ ] Live re-test under a deliberate wedge (next time the wedge naturally reproduces, confirm the watchdog fires and recovers without manual intervention).
+
+**Lessons**:
+
+- Browser WebSocket "OPEN" is necessary but not sufficient for a healthy connection. Without an inbound liveness signal, the React layer can't distinguish "open and quiet" from "open and dead." Hello-or-watchdog is the cheapest such signal because the server sends it unprompted.
+- Recovery beats diagnosis when the failure is rare and the fix is cheap. T1.20 doesn't explain _why_ the deflate state gets desynced — it just heals it. If the wedge becomes common, escalate to packet-level instrumentation.
+- The same lesson as T1.16: every protocol assertion ("ready", "open", "connected") needs an explicit liveness check from a real frame, not from a status flag.
+
+**Follow-up if this recurs**: a heartbeat (ping every 30s, expect pong within 5s) generalizes the watchdog beyond just connection-time. Doesn't ship until we observe a post-hello wedge — speculative now.
+
+---

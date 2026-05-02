@@ -20,6 +20,13 @@ import type {
 } from "../types.js";
 
 const EXPECTED_PROTOCOL = 2;
+// T1.20 — how long after `onopen` we'll wait for the server's `hello`
+// frame before declaring the socket half-dead and force-reconnecting.
+// Server emits hello within milliseconds of accepting the WS upgrade,
+// so 3s is a generous SLA — anything past this means the frame won't
+// arrive (either Vite's proxy or the browser's deflate state is wedged
+// after a StrictMode + eviction race).
+const HELLO_WATCHDOG_MS = 3000;
 
 // 1500 ms threshold before the auditory thinking-tone fires.
 // Visual "thinking" state fires immediately on ptt_stop (see thinkingActive).
@@ -207,6 +214,15 @@ export function useWs() {
   // Set to true on intentional disconnect (unmount / persona switch) so the
   // onclose handler doesn't schedule a reconnect.
   const noReconnectRef = useRef(false);
+  // T1.20 — hello watchdog. Server emits `hello` within milliseconds of
+  // accepting the WS upgrade. If we don't see it within `_HELLO_WATCHDOG_MS`
+  // of `onopen`, the socket is half-dead (TCP up both ways, frames not
+  // flowing through Vite's proxy / browser's deflate state — observed
+  // under StrictMode double-mount + the server's `client_evicted` flow).
+  // The watchdog force-closes the socket so the normal reconnect path
+  // schedules a fresh connection. Pre-T1.20 the user had to manually
+  // reload past the wedge.
+  const helloWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Mirrors of state vars that callbacks need to read synchronously
   const inputModeRef = useRef<InputMode>("assistant_ptt");
@@ -359,6 +375,19 @@ export function useWs() {
         if (socketRef.current !== ws) return; // stale socket
         setConnected(true);
         pushStatus(`Connected to ${activeUrlRef.current}`);
+        // T1.20 — arm the hello watchdog. Cleared on hello arrival
+        // (case "hello" below) and on close. If it fires, the socket
+        // is half-dead and we force-close to trigger reconnect.
+        if (helloWatchdogRef.current !== null) {
+          clearTimeout(helloWatchdogRef.current);
+        }
+        helloWatchdogRef.current = setTimeout(() => {
+          helloWatchdogRef.current = null;
+          if (socketRef.current !== ws) return; // already replaced
+          if (ws.readyState !== WebSocket.OPEN) return; // already closed
+          pushStatus("Connection unhealthy — reconnecting…");
+          ws.close(4002, "no-hello-watchdog");
+        }, HELLO_WATCHDOG_MS);
         // T1.16 — refetch skills_state on every open, not just on
         // sheet mount. The previous fire-on-mount-only path lost the
         // response when StrictMode's double-mount eviction landed
@@ -377,6 +406,14 @@ export function useWs() {
         setConnected(false);
         socketRef.current = null;
         cancelSilenceTimer("socket_close");
+        // T1.20 — clear the hello watchdog if a close pre-empted it
+        // (normal close, server-side eviction, or our own watchdog
+        // fire). Prevents a stale timer from firing against a socket
+        // that's already gone.
+        if (helloWatchdogRef.current !== null) {
+          clearTimeout(helloWatchdogRef.current);
+          helloWatchdogRef.current = null;
+        }
         setThinkingActiveSync(false);
         setActiveStream(null);
         setActiveClaimTitle(null);
@@ -396,6 +433,12 @@ export function useWs() {
           const msg = JSON.parse(ev.data as string) as ServerMessage;
           switch (msg.type) {
             case "hello":
+              // T1.20 — disarm the hello watchdog. Frames are
+              // flowing, the socket is healthy.
+              if (helloWatchdogRef.current !== null) {
+                clearTimeout(helloWatchdogRef.current);
+                helloWatchdogRef.current = null;
+              }
               if (msg.protocol !== EXPECTED_PROTOCOL) {
                 pushStatus(
                   `Protocol mismatch: server=${msg.protocol} client=${EXPECTED_PROTOCOL}`,
