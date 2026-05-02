@@ -18,6 +18,7 @@ const en = {
       error: "Reconnecting…",
       paused: "Paused",
       wake: "Connecting",
+      notReady: "Server not ready — see log",
     },
     orbHint: "Press & hold the circle. Or hold space.",
     // Active-call banner: "Talking with Mario"

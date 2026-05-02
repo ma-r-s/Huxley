@@ -379,6 +379,12 @@ export function App() {
 
   const pressPtt = useCallback(async () => {
     if (!ws.connected) return;
+    // T1.16 — don't open a turn when the server has explicitly told
+    // us it's not ready (lazy-boot persona load failed, swap raised,
+    // etc.). The orb-hint surfaces the session_error string from the
+    // hello payload so the user sees *why* PTT is disabled instead
+    // of pressing-and-getting-nothing.
+    if (!ws.sessionReady) return;
     if (pttHeldRef.current || pttPendingRef.current) return;
     setMicError(null);
     try {
@@ -670,9 +676,23 @@ export function App() {
 
           <div className="hux-status" key={effectiveOrbState}>
             <div className="hux-status-line">{statusLabel}</div>
-            {effectiveOrbState === "idle" && booted && (
-              <div className="hux-hint">{t("orbHint")}</div>
-            )}
+            {/* T1.16 — when the server says session_ready=false, the
+                "Hold to talk" hint is a lie. Show the server's
+                session_error (or a generic "not ready" fallback)
+                instead, so the user sees a real reason rather than
+                pressing PTT and getting silence. */}
+            {effectiveOrbState === "idle" &&
+              booted &&
+              (ws.sessionReady ? (
+                <div className="hux-hint">{t("orbHint")}</div>
+              ) : (
+                <div
+                  className="hux-hint"
+                  style={{ color: "var(--hux-fg)", opacity: 0.9 }}
+                >
+                  {ws.sessionError ?? t("orbStatus.notReady")}
+                </div>
+              ))}
             {micError && (
               <div
                 className="hux-hint"

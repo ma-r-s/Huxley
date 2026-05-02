@@ -11,6 +11,7 @@ const es = {
       error: "Reconectando…",
       paused: "En pausa",
       wake: "Conectando",
+      notReady: "El servidor no está listo — revisa el log",
     },
     orbHint: "Mantén el círculo pulsado. O mantén espacio.",
     call: {

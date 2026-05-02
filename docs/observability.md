@@ -297,6 +297,22 @@ When a skill's `handle()` raises, the coordinator catches it (see `docs/triage.m
 
 The session does not die. A structured error `tool_output` is sent back to OpenAI with a Spanish apology hint, and the model produces an audible acknowledgement on the next response round. Look for `coord.tool_error` first when a tool call seems to disappear silently.
 
+## Session readiness — diagnosing "told ready when not"
+
+Three runtime-level events bracket every WS connection's session-readiness lifecycle. They were added in T1.16 after a class of bugs where the server emitted a normal-looking hello + `state: IDLE` even when `_shim_persona_select` had silently failed — leaving the PWA showing "Hold to talk" while every PTT silently dropped because `current_app is None`.
+
+- `runtime.session_ready` (info) — fired after a successful `_shim_persona_select`. Always carries `persona=<basename>`. The next hello will set `session_ready=true`.
+- `runtime.session_failed` (warning) — fired when lazy-boot persona-select raised, or when no persona could be picked at all. Carries `reason=<lazy_boot_swap_failed | no_persona_pickable>`, `persona=<requested>`, `error=<short class+msg>`. The next hello will set `session_ready=false` and `session_error=<human string>`.
+- `runtime.session_degraded` (warning) — fired when a persona swap raised mid-session but the previous `current_app` is still serving. The hello stays `session_ready=true`; the user sees a `status` frame ("Could not switch to 'foo' — staying on current persona"). Useful for catching a click-through pattern where users repeatedly try to load a broken persona.
+
+When triaging a "PWA looks ready but PTT does nothing" report, grep for these three events around the failed connect timestamp:
+
+```
+grep -E "runtime\.session_(ready|failed|degraded)" /private/tmp/huxley_server.log
+```
+
+If you see `session_failed` followed by no `session_ready`, the server is in a degraded-boot state — the PWA's orb hint will show the `session_error` string, but the operator-facing log carries the full traceback (always logged via `runtime.lazy_boot.first_swap_failed` or similar in the same connect block).
+
 ## When something looks wrong
 
 The dev workflow:

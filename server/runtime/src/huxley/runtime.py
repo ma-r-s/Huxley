@@ -137,6 +137,15 @@ class Runtime:
         # cleared on completion/failure. Pushed via hello extras as
         # `install_in_progress: {package, started_at_ms} | null`.
         self._install_in_progress: dict[str, Any] | None = None
+        # T1.16 — last per-connection session-readiness error, if any.
+        # Set when a `_shim_persona_select` call raises (lazy boot fails,
+        # mid-session swap raises, etc.) so the next hello payload can
+        # signal `session_ready: false` + a human-readable `session_error`
+        # to the client. The PWA gates PTT off `session_ready` so the
+        # user is never told "ready" when the server actually couldn't
+        # bring up an Application. Cleared on the next successful
+        # persona-select. See docs/triage.md T1.16.
+        self._last_session_error: str | None = None
         self._shutdown_event = asyncio.Event()
         self._shutting_down = False
 
@@ -658,14 +667,25 @@ class Runtime:
         works during the lazy-boot window before any persona is
         selected: clients see the list of installed skills with
         `enabled=False` everywhere, ready to be turned on once a
-        persona loads. Failures are logged + the response is skipped;
-        we don't crash the WS connection over a malformed entry-point.
+        persona loads.
+
+        T1.16 — always responds, even on internal exception. The
+        previous "log + return" path left the PWA panel showing
+        "Loading…" forever, with no way for the client to distinguish
+        "request lost in flight" from "server raised an exception."
+        On failure we send an empty payload + a status frame so the
+        operator sees the trace in the log AND the user sees an empty
+        skill list rather than a perpetual spinner.
         """
         try:
             payload = build_skills_state(self.current_app)
         except Exception:
             await logger.aexception("skills_state.build_failed")
-            return
+            payload = {"skills": []}
+            with contextlib.suppress(Exception):
+                await self.audio_server.send_status(
+                    "Could not load skills — see server log",
+                )
         await self.audio_server.send_skills_state(payload)
 
     # ── Phase B write shims ──────────────────────────────────────────
@@ -838,30 +858,52 @@ class Runtime:
                     requested=name,
                     env=self._config.persona,
                 )
+                self._last_session_error = "no personas available"
+                await logger.awarning(
+                    "runtime.session_failed",
+                    reason="no_persona_pickable",
+                    requested=name,
+                )
                 return
             try:
                 await self._switch_to_persona(chosen, auto_connect=True, language=language)
-            except Exception:
+            except Exception as exc:
                 await logger.aexception(
                     "runtime.lazy_boot.first_swap_failed",
                     persona=chosen,
                 )
-                # Phase D post-impl critic §3: silent boot-loop on a
-                # broken-after-install persona is the "you'll find it
-                # at 3am" failure. Surface to the PWA via a status
-                # frame so the user sees something other than empty
-                # state. Server log carries the full traceback.
+                # T1.16 — capture the failure for the next hello so the
+                # client sees `session_ready: false` instead of being
+                # told "IDLE" on a half-initialized server. Also send
+                # the explicit status frame (kept from Phase D post-
+                # impl critic §3 for the user-visible message).
+                err_msg = f"persona '{chosen}' failed to load: {exc.__class__.__name__}"
+                self._last_session_error = err_msg
+                await logger.awarning(
+                    "runtime.session_failed",
+                    reason="lazy_boot_swap_failed",
+                    persona=chosen,
+                    error=err_msg,
+                )
                 with contextlib.suppress(Exception):
                     await self.audio_server.send_status(
                         f"Persona '{chosen}' failed to load — see server log "
                         f"(~/Library/Logs/Huxley/huxley.log)"
                     )
+            else:
+                # Lazy boot succeeded. Clear any stale error from a
+                # previous failed connect (state is per-runtime, not
+                # per-connection — last connect wins).
+                self._last_session_error = None
+                await logger.ainfo("runtime.session_ready", persona=chosen)
             return
 
         if name is None:
             # No persona requested on a subsequent connect — same-persona
             # path. The subsequent `on_language_select` callback handles
-            # a language flip.
+            # a language flip. Existing app is healthy, so clear any
+            # stale error from an earlier failed connect.
+            self._last_session_error = None
             return
         # Compare against directory basename (the canonical id ?persona=
         # resolves), NOT persona.name (the YAML display label). Same
@@ -870,11 +912,31 @@ class Runtime:
         if self.current_app.persona.data_dir.parent.name == name:
             # Same persona; let `on_language_select` (fired right after
             # by AudioServer) handle a language change if any.
+            self._last_session_error = None
             return
         try:
             await self._switch_to_persona(name, auto_connect=True, language=language)
-        except Exception:
+        except Exception as exc:
             await logger.aexception("runtime.persona_swap_via_query_failed", persona=name)
+            # T1.16 — explicit user-visible status; the previous
+            # current_app is still serving, so `session_ready` stays
+            # true (existing persona works). The error tells the user
+            # *which* requested swap failed without breaking the live
+            # session.
+            err_msg = f"persona '{name}' swap failed: {exc.__class__.__name__}"
+            with contextlib.suppress(Exception):
+                await self.audio_server.send_status(
+                    f"Could not switch to '{name}' — staying on current persona (see server log)"
+                )
+            await logger.awarning(
+                "runtime.session_degraded",
+                reason="persona_swap_via_query_failed",
+                requested=name,
+                error=err_msg,
+            )
+        else:
+            self._last_session_error = None
+            await logger.ainfo("runtime.session_ready", persona=name)
 
     # ── Hello payload extras (T1.13 additive fields) ───────────────────
 
@@ -898,6 +960,14 @@ class Runtime:
         same id-vs-display-name foot-gun the post-T1.13 fix locked
         down for `available_personas` but missed here).
         """
+        # T1.16 — explicit session-readiness signal so the PWA can gate
+        # PTT + orb-hint on a real "the server can actually serve a
+        # turn right now" boolean instead of inferring it from the
+        # state frame (which says IDLE on a half-initialized server).
+        # Ready iff there's a current_app AND no captured per-connection
+        # error from `_shim_persona_select`. `session_error` carries
+        # the human-readable reason when not ready.
+        session_ready = self.current_app is not None and self._last_session_error is None
         return {
             "current_persona": (
                 self.current_app.persona.data_dir.parent.name if self.current_app else None
@@ -914,4 +984,6 @@ class Runtime:
             # new tab connecting mid-install knows the server is about
             # to restart (planning critic §A8). Null in steady state.
             "install_in_progress": self._install_in_progress,
+            "session_ready": session_ready,
+            "session_error": self._last_session_error,
         }

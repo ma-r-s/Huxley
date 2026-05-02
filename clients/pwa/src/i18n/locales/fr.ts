@@ -11,6 +11,7 @@ const fr = {
       error: "Reconnexion…",
       paused: "En pause",
       wake: "Connexion",
+      notReady: "Le serveur n'est pas prêt — voir le log",
     },
     orbHint: "Maintiens le cercle appuyé. Ou maintiens espace.",
     call: {

@@ -64,6 +64,15 @@ type ServerMessage =
         package: string;
         started_at_ms: number;
       } | null;
+      // T1.16 — explicit session-readiness signal. `true` when the
+      // server has a live `current_app` and no captured per-connection
+      // error; `false` during lazy-boot failures, persona-load
+      // failures, or recovering from a crashed swap. Old servers
+      // (pre-T1.16) omit this; the PWA defaults `sessionReady = true`
+      // so they stay usable. `session_error` is the human-readable
+      // reason when not ready (e.g., "persona 'foo' failed to load").
+      session_ready?: boolean;
+      session_error?: string | null;
     }
   | { type: "audio"; data: string }
   | { type: "audio_clear" }
@@ -178,6 +187,18 @@ export function useWs() {
   // PWA component owns it; useEffect can clear it once the new
   // marketplace_state arrives showing the package as installed.
   const [installState, setInstallState] = useState<InstallUIState | null>(null);
+
+  // T1.16 — explicit session-readiness signal pushed by the server in
+  // every hello. `true` once the server has a live `current_app` and
+  // no captured persona-select error; `false` while lazy-booting,
+  // failing to load a persona, or recovering from a crashed swap. The
+  // PWA gates PTT + the orb hint on this so the user is never told
+  // "ready" when the server actually couldn't bring up an Application.
+  // `sessionError` carries the human-readable reason when not ready.
+  // Default `true` so old servers (pre-T1.16) that don't emit the
+  // field stay usable — the new field is strictly additive.
+  const [sessionReady, setSessionReady] = useState(true);
+  const [sessionError, setSessionError] = useState<string | null>(null);
 
   // ── Refs (callback-readable without stale closures) ─────────────────────
   const socketRef = useRef<WebSocket | null>(null);
@@ -338,6 +359,17 @@ export function useWs() {
         if (socketRef.current !== ws) return; // stale socket
         setConnected(true);
         pushStatus(`Connected to ${activeUrlRef.current}`);
+        // T1.16 — refetch skills_state on every open, not just on
+        // sheet mount. The previous fire-on-mount-only path lost the
+        // response when StrictMode's double-mount eviction landed
+        // the reply on a socket that had already been closed —
+        // leaving the panel "Loading…" forever.
+        try {
+          ws.send(JSON.stringify({ type: "get_skills_state" }));
+        } catch {
+          // Socket closed between OPEN check and send; the next
+          // reconnect's onopen will retry.
+        }
       };
 
       ws.onclose = () => {
@@ -348,6 +380,11 @@ export function useWs() {
         setThinkingActiveSync(false);
         setActiveStream(null);
         setActiveClaimTitle(null);
+        // T1.16 — drop session-readiness on disconnect so the orb
+        // hint shows "Reconnecting…" rather than stale "ready" while
+        // the auto-reconnect loop is in flight.
+        setSessionReady(false);
+        setSessionError(null);
         if (switchingRef.current || noReconnectRef.current) return;
         pushStatus("Disconnected — retrying in 2s\u2026");
         setTimeout(() => connect(), 2000);
@@ -425,6 +462,18 @@ export function useWs() {
                   }
                   return prev;
                 });
+              }
+              // T1.16 — explicit session-readiness fields. Default to
+              // ready when the field is missing (old servers) so we
+              // don't break compatibility. When false, stash the
+              // server-supplied error message so the orb hint can
+              // show it.
+              if (msg.session_ready === false) {
+                setSessionReady(false);
+                setSessionError(msg.session_error ?? "Server not ready");
+              } else {
+                setSessionReady(true);
+                setSessionError(null);
               }
               break;
             case "audio":
@@ -818,6 +867,8 @@ export function useWs() {
     skillsState,
     marketplaceState,
     installState,
+    sessionReady,
+    sessionError,
     get activeUrl() {
       return activeUrlRef.current;
     },

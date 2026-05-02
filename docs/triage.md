@@ -4567,3 +4567,51 @@ Every clean interrupt sends a `response.cancel` to a response that's already don
 - Federation registry-URL override via env var (Phase C critic §9) — speculative until first operator asks.
 
 ---
+
+## T1.16 — Session-readiness signal (don't tell user "ready" when not)
+
+**Status**: in_progress (2026-05-02). Server + PWA + tests + docs all in this commit; Mario voice smoke after restart.
+
+**Problem.** Mario reported: on cold reload, PTT plays the listening + thinking tones locally but the turn never completes. Skills panel sits on "Loading…" forever. Refresh doesn't fix it. Intermittent — sometimes the same reload works.
+
+**Validation.** Reading `/private/tmp/huxley_server.log` around the failure window showed three compounding root causes:
+
+1. **No "session ready" signal.** The server sent `state: IDLE` after every handshake regardless of whether `_shim_persona_select` had actually succeeded. If lazy-boot persona-load raised, the exception was caught at `server/server.py:343`, logged, and the connection proceeded as if everything were fine. PWA showed "Hold to talk" but `current_app is None`, so every PTT silently dropped.
+2. **`_shim_get_skills_state` silently dropped responses on `build_skills_state` exception.** The `try/except → log → return` shape meant the PWA got no reply at all when the runtime hit a malformed entry-point — perpetual "Loading…" with no way for the client to distinguish "request lost" from "server raised."
+3. **`get_skills_state` was fire-once on sheet mount.** Under React StrictMode's double-mount + the server's `client_evicted` race (visible in the log as same-millisecond connect/evict/disconnect storms), the request landed on a socket that had been replaced on the server; the response was sent on a socket the PWA had already discarded as stale. PWA never retried.
+
+The third one was the StrictMode-amplified instance of the broader pattern: any time a frame is fire-once, a socket-replacement race can lose it.
+
+**Why it matters.** "PTT looks ready but does nothing" is the worst kind of failure — the user has no diagnostic affordance and no way to tell the system from a cold socket. For the Abuelo target user (blind, audio-only), this is uniquely dangerous — there's no visual cue to "actually you should retry."
+
+**Design + critic** (collapsed; this is a 2-hour fix, not Tier 1):
+
+- Add `session_ready: bool` + `session_error: string | null` to hello extras. Strict additive — old PWA defaults `sessionReady=true`. Server sets `_last_session_error` in `_shim_persona_select` on raise; clears on success.
+- PTT + orb hint gate on `sessionReady` in `App.tsx`. When false, show the server's `session_error` string instead of "Hold to talk." `pressPtt()` early-bails so the local audio init never starts.
+- `_shim_get_skills_state` always responds: empty payload `{skills: []}` + `status` frame on internal exception, never silent return.
+- `useWs.ts onopen` fires `get_skills_state` itself, not just on sheet mount. Survives StrictMode races for free.
+- `useWs.ts onclose` flips `sessionReady=false` so the gap between disconnect and reconnect doesn't show stale "ready."
+- Three new structured log events: `runtime.session_ready`, `runtime.session_failed`, `runtime.session_degraded` — bracket every connection's readiness lifecycle. See `docs/observability.md#session-readiness`.
+
+**Implement.** One commit, four files server-side (`runtime.py`, `test_runtime.py`, `protocol.md`, `observability.md`) + four PWA files (`useWs.ts`, `App.tsx`, three locale files). Four new tests covering: lazy-boot failure → `session_ready=false`, successful swap → flip to `true` + clear error, swap-with-live-app → stays `true`, defensive `get_skills_state` empty-payload-on-exception path. ruff + mypy --strict + 554 runtime tests + tsc all green.
+
+**DoD**:
+
+- [x] `runtime.session_failed` log when lazy boot raises, with persona + error.
+- [x] `runtime.session_ready` log on successful persona-select.
+- [x] `_get_hello_extras` returns the new fields; old clients still work.
+- [x] PTT disabled when `sessionReady=false`; orb hint shows server's error string.
+- [x] `get_skills_state` request fires on every WS open, not just sheet mount.
+- [x] `_shim_get_skills_state` always sends a response.
+- [x] Test for each of: lazy-boot fail, swap-success-clears, swap-fail-keeps-ready, get_skills_state-defensive.
+- [x] `docs/protocol.md` documents the new hello fields.
+- [x] `docs/observability.md` documents the three new log events with a "diagnose this class of bug" recipe.
+- [ ] Mario voice smoke: cold reload → PTT works without retries; force a broken persona via env → PWA shows `session_error` string + PTT disabled.
+
+**Lessons** (will be filled at gate close):
+
+- Pre-T1.16 hello carried persona/install state but no readiness signal — protocol additivity means the field can be added without a version bump, but it took a real bug to notice the gap.
+- The StrictMode double-mount + server-side `client_evicted` race is a permanent feature of this dev setup. Fire-once frames are the common failure mode; assume any "send X on mount" needs a corresponding "send X on every onopen" path.
+- "Log + return" is a lurking bug: it looks defensive but it strands the client. Prefer "log + send empty/error response" as the defensive pattern when the response is what unblocks the UI.
+
+---

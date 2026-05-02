@@ -379,6 +379,112 @@ class TestHelloExtras:
             await _drain_teardown(runtime)
 
 
+class TestT116SessionReadiness:
+    """T1.16 — explicit session-readiness signal in hello extras.
+
+    Background: pre-T1.16, a server whose `_shim_persona_select`
+    raised on lazy boot would still emit a normal-looking hello
+    + `state: IDLE` to the client. The PWA showed "Hold to talk"
+    but every PTT silently failed because `current_app is None`.
+    The fix introduces `_last_session_error` + `session_ready` /
+    `session_error` fields in `_get_hello_extras` so the client
+    can gate PTT on a real "the server can serve a turn" boolean.
+
+    The defensive `_shim_get_skills_state` test pins the second
+    half of the symptom — a perpetually-loading skills panel
+    when `build_skills_state` raised mid-flight (the previous
+    log-and-return path silently dropped the response).
+    """
+
+    async def test_lazy_boot_failure_sets_session_error(self, runtime_in_tmp: Runtime) -> None:
+        # No current_app + a name that doesn't exist on disk.
+        # `_shim_persona_select` catches the exception and stashes
+        # the error so the next hello signals not-ready.
+        assert runtime_in_tmp.current_app is None
+        await runtime_in_tmp._shim_persona_select("nonexistent", language=None)
+        assert runtime_in_tmp.current_app is None
+        assert runtime_in_tmp._last_session_error is not None
+        assert "nonexistent" in runtime_in_tmp._last_session_error
+
+        extras = runtime_in_tmp._get_hello_extras()
+        assert extras["session_ready"] is False
+        assert extras["session_error"] is not None
+
+    async def test_successful_swap_clears_session_error(self, runtime_in_tmp: Runtime) -> None:
+        # Pre-stamp a stale error from a previous failed connect, then
+        # run a successful swap and verify the next hello flips ready.
+        runtime_in_tmp._last_session_error = "stale error from earlier connect"
+        await runtime_in_tmp._shim_persona_select("alpha", language=None)
+        assert runtime_in_tmp.current_app is not None
+        assert runtime_in_tmp._last_session_error is None
+
+        extras = runtime_in_tmp._get_hello_extras()
+        assert extras["session_ready"] is True
+        assert extras["session_error"] is None
+
+        await runtime_in_tmp.current_app.shutdown()
+        await _drain_teardown(runtime_in_tmp)
+
+    async def test_swap_failure_with_live_app_stays_ready(self, runtime_in_tmp: Runtime) -> None:
+        """A persona swap to a broken target while a healthy
+        `current_app` is already serving must keep `session_ready`
+        true. The existing app still works; only the user's
+        requested swap was rejected."""
+        await runtime_in_tmp._shim_persona_select("alpha", language=None)
+        assert runtime_in_tmp.current_app is not None
+        assert runtime_in_tmp._last_session_error is None
+
+        await runtime_in_tmp._shim_persona_select("nonexistent", language=None)
+        # Old app still there.
+        assert runtime_in_tmp.current_app is not None
+        assert runtime_in_tmp.current_app.persona.data_dir.parent.name == "alpha"
+
+        # Hello says ready (existing app serves) — the transient
+        # swap failure surfaces via the status frame, not via
+        # `session_ready=False`.
+        extras = runtime_in_tmp._get_hello_extras()
+        assert extras["session_ready"] is True
+        assert extras["session_error"] is None
+
+        await runtime_in_tmp.current_app.shutdown()
+        await _drain_teardown(runtime_in_tmp)
+
+    async def test_get_skills_state_responds_on_build_failure(
+        self,
+        runtime_in_tmp: Runtime,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Defensive: if `build_skills_state` raises, the shim must
+        still send a response (empty payload + status) so the PWA's
+        skills panel doesn't sit on "Loading…" forever."""
+        sent_skills: list[dict[str, Any]] = []
+        sent_status: list[str] = []
+
+        async def _capture_skills(payload: dict[str, Any]) -> None:
+            sent_skills.append(payload)
+
+        async def _capture_status(message: str) -> None:
+            sent_status.append(message)
+
+        monkeypatch.setattr(runtime_in_tmp.audio_server, "send_skills_state", _capture_skills)
+        monkeypatch.setattr(runtime_in_tmp.audio_server, "send_status", _capture_status)
+
+        def _boom(_: Any) -> dict[str, Any]:
+            msg = "synthetic build failure"
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr("huxley.runtime.build_skills_state", _boom)
+
+        await runtime_in_tmp._shim_get_skills_state()
+
+        # Empty payload sent, not a silent drop.
+        assert len(sent_skills) == 1
+        assert sent_skills[0] == {"skills": []}
+        # Status frame surfaced the failure to the user.
+        assert len(sent_status) == 1
+        assert "skills" in sent_status[0].lower()
+
+
 class TestPhaseBWriteShims:
     """Marketplace v2 Phase B: PWA-driven config edits land via these
     shims. Each writes to disk (persona.yaml or values.json) and
