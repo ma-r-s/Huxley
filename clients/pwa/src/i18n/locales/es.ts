@@ -145,6 +145,26 @@ const es = {
       secretClear: "Borrar",
       secretPlaceholder: "Pega el valor del secreto",
     },
+    install: {
+      confirmTitle: "¿Instalar {{name}}?",
+      noTagline: "Sin descripción.",
+      warning:
+        "Esto ejecutará `uv add {{pkg}}` y reiniciará el servidor. Las llamadas o audio activos se conservan (la instalación durante una llamada está bloqueada).",
+      cancel: "Cancelar",
+      install: "Instalar",
+      installing: "Instalando {{pkg}}…",
+      installingBody:
+        "Ejecutando `uv add`. Puede tardar un minuto la primera vez (las wheels con extensiones C se compilan desde fuente en máquinas lentas).",
+      restartingTitle: "Reiniciando servidor…",
+      restartingBody:
+        "El servidor se está reemplazando con un intérprete nuevo para que el entry-point de la nueva habilidad sea visible. ~5 segundos.",
+      installedTitle: "Instalado ✓",
+      installedBody:
+        "{{pkg}} ya está disponible. Abre la pestaña Habilidades para activarla en esta persona.",
+      errorTitle: "Instalación falló",
+      errorGeneric: "uv add devolvió un error. Revisa el log del servidor.",
+      dismiss: "Listo",
+    },
     skillsSheet: {
       eyebrow: "Habilidades",
       close: "Cerrar",

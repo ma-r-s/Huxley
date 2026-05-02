@@ -154,6 +154,26 @@ const en = {
       secretClear: "Clear",
       secretPlaceholder: "Paste the secret value",
     },
+    install: {
+      confirmTitle: "Install {{name}}?",
+      noTagline: "No description provided.",
+      warning:
+        "This will run `uv add {{pkg}}` and restart the server. Any active call or stream is preserved (mid-call installs are blocked).",
+      cancel: "Cancel",
+      install: "Install",
+      installing: "Installing {{pkg}}…",
+      installingBody:
+        "Running `uv add`. This may take a minute on first install (C-extension wheels build from source on slower machines).",
+      restartingTitle: "Restarting server…",
+      restartingBody:
+        "The server is replacing itself with a fresh interpreter so the new skill's entry point is visible. ~5 seconds.",
+      installedTitle: "Installed ✓",
+      installedBody:
+        "{{pkg}} is now available. Open the Skills tab to enable it on this persona.",
+      errorTitle: "Install failed",
+      errorGeneric: "uv add returned an error. Check the server log.",
+      dismiss: "Done",
+    },
     skillsSheet: {
       eyebrow: "Skills",
       close: "Close",
@@ -171,6 +191,8 @@ const en = {
         noDescription: "No description provided.",
       },
       marketplace: {
+        installButton: "Install",
+        installedHint: "Already installed",
         loading: "Loading registry…",
         empty:
           "Registry is empty. Submit a PR at ma-r-s/huxley-registry to add a skill.",

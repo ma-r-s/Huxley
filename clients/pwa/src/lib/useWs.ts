@@ -16,6 +16,7 @@ import type {
   SkillsState,
   MarketplaceEntry,
   MarketplaceState,
+  InstallUIState,
 } from "../types.js";
 
 const EXPECTED_PROTOCOL = 2;
@@ -55,6 +56,14 @@ type ServerMessage =
       // protocol stays at 2 — see docs/protocol.md.
       current_persona?: string | null;
       available_personas?: PersonaEntry[];
+      // Marketplace v2 Phase D: a new tab connecting mid-install
+      // sees the in-flight install via this field so its UI can
+      // jump straight to the "Restarting" state instead of showing
+      // "Installed ✓" prematurely. Null in steady state.
+      install_in_progress?: {
+        package: string;
+        started_at_ms: number;
+      } | null;
     }
   | { type: "audio"; data: string }
   | { type: "audio_clear" }
@@ -100,6 +109,15 @@ type ServerMessage =
       fetched_at_ms: number;
       stale: boolean;
       error: string | null;
+    }
+  | {
+      type: "install_event";
+      kind: "started" | "complete";
+      package: string;
+      ok: boolean | null;
+      error_code: string | null;
+      error_message: string | null;
+      restart_required: boolean;
     };
 
 export function useWs() {
@@ -153,6 +171,13 @@ export function useWs() {
   // every `marketplace_state` frame.
   const [marketplaceState, setMarketplaceState] =
     useState<MarketplaceState | null>(null);
+
+  // Marketplace v2 Phase D — local install lifecycle state. Set when
+  // the user clicks Install in MarketplaceDetailSheet; cleared when
+  // the post-restart reconnect lands. Survives WS drops because the
+  // PWA component owns it; useEffect can clear it once the new
+  // marketplace_state arrives showing the package as installed.
+  const [installState, setInstallState] = useState<InstallUIState | null>(null);
 
   // ── Refs (callback-readable without stale closures) ─────────────────────
   const socketRef = useRef<WebSocket | null>(null);
@@ -367,6 +392,23 @@ export function useWs() {
                   );
                 }
               }
+              // Phase D: server-side install in flight. Surface to
+              // the install UI state so a fresh tab joining mid-
+              // install sees "Restarting…" instead of "Idle".
+              if (msg.install_in_progress) {
+                setInstallState((prev) =>
+                  prev !== null &&
+                  prev.package === msg.install_in_progress!.package
+                    ? prev // tab that started the install already has its state
+                    : {
+                        package: msg.install_in_progress!.package,
+                        status: "running",
+                        error_code: null,
+                        error_message: null,
+                        started_at_ms: msg.install_in_progress!.started_at_ms,
+                      },
+                );
+              }
               break;
             case "audio":
               cancelSilenceTimer("audio_arrived");
@@ -491,6 +533,41 @@ export function useWs() {
                 fetched_at_ms: msg.fetched_at_ms,
                 stale: msg.stale,
                 error: msg.error,
+              });
+              break;
+            case "install_event":
+              // Marketplace v2 Phase D — install lifecycle.
+              // `started` flips the local state to "running"; `complete`
+              // either flips to "success-restarting" (server is about
+              // to os.execv; PWA's reconnect kicks in shortly) or
+              // "error" (with error_code + message for the UI).
+              setInstallState((prev) => {
+                if (msg.kind === "started") {
+                  return {
+                    package: msg.package,
+                    status: "running",
+                    error_code: null,
+                    error_message: null,
+                    started_at_ms: Date.now(),
+                  };
+                }
+                // kind === "complete"
+                if (msg.ok) {
+                  return {
+                    package: msg.package,
+                    status: "success-restarting",
+                    error_code: null,
+                    error_message: null,
+                    started_at_ms: prev?.started_at_ms ?? Date.now(),
+                  };
+                }
+                return {
+                  package: msg.package,
+                  status: "error",
+                  error_code: msg.error_code,
+                  error_message: msg.error_message,
+                  started_at_ms: prev?.started_at_ms ?? Date.now(),
+                };
               });
               break;
           }
@@ -648,6 +725,31 @@ export function useWs() {
     sendRaw({ type: "get_marketplace" });
   }, [sendRaw]);
 
+  // ── Install + restart (Marketplace v2 Phase D) ─────────────────────────
+  const installSkill = useCallback(
+    (pkg: string) => {
+      // Optimistic local state — flips the UI to "starting" before
+      // the server's `started` event arrives. The server's event
+      // overwrites this within ~50ms unless validation fails (in
+      // which case the `complete` event with ok=false replaces it).
+      setInstallState({
+        package: pkg,
+        status: "starting",
+        error_code: null,
+        error_message: null,
+        started_at_ms: Date.now(),
+      });
+      sendRaw({ type: "install_skill", package: pkg });
+    },
+    [sendRaw],
+  );
+  const restartServer = useCallback(() => {
+    sendRaw({ type: "restart_server" });
+  }, [sendRaw]);
+  const clearInstallState = useCallback(() => {
+    setInstallState(null);
+  }, []);
+
   // Phase B writes. Each fires a fire-and-forget WS frame; the server
   // persists to disk + triggers a hot reload of the active persona,
   // which pushes a fresh skills_state frame. The PWA's reducer-style
@@ -698,6 +800,7 @@ export function useWs() {
     currentPersona,
     skillsState,
     marketplaceState,
+    installState,
     get activeUrl() {
       return activeUrlRef.current;
     },
@@ -720,6 +823,9 @@ export function useWs() {
     deleteSession,
     requestSkillsState,
     requestMarketplace,
+    installSkill,
+    restartServer,
+    clearInstallState,
     setSkillEnabled,
     setSkillConfig,
     setSkillSecret,

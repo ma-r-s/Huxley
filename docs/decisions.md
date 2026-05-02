@@ -661,3 +661,38 @@ Considered alternatives:
 - The Huxley framework itself is NOT published as a PyPI package — `huxley` (the runtime) stays in the monorepo. External operators clone the repo and `uv sync`; it's a self-hosted-server pattern, not a library-import pattern. Skills are the unit of distribution; the framework is the unit of deployment.
 - Every future skill author follows the same publishing flow: declare `huxley-sdk>=0.1.1,<0.2` in pyproject, `uv build`, dry-run on TestPyPI, smoke-install in clean venv, real PyPI. The authoring docs ([`docs/skills/authoring.md`](./skills/authoring.md)) document the steady-state path.
 - Locks down the package names: `huxley-sdk` and `huxley-skill-{audiobooks,news,radio,reminders,search,stocks,system,telegram,timers}` are now permanently associated with this project on PyPI. PyPI doesn't allow re-using a name even after release deletion. Naming choices made today are durable.
+
+## 2026-05-02 — `os.execv` for Phase D auto-install restart, not exit + supervisor
+
+**Context**: Marketplace v2 Phase D adds PWA-driven `uv add huxley-skill-<name>`. After the subprocess succeeds, the new package's entry point is in `site-packages` but the running Python interpreter has already cached its entry-point index. Without a fresh interpreter, the new skill is invisible until the next manual restart. Two restart strategies:
+
+(a) **`os.execv(sys.argv[0], sys.argv)`** — replace the current process with a fresh exec of the same script + args. PID preserved. Works in both `uv run huxley` (terminal dev) and launchd (prod) because launchd doesn't notice — same PID + entry-point continues uninterrupted from its perspective.
+
+(b) **`os._exit(0)` + supervisor restart** — clean exit, rely on launchd's `KeepAlive` to respawn. Works in prod but breaks dev: `uv run huxley` exits to the shell prompt; the user manually re-runs.
+
+**Decision**: (a). The `uv run` + launchd dual-target requirement makes (a) the only path that works for both without operator intervention. Mario explicitly approved this 2026-05-02 evening.
+
+**Sequence the implementer follows**:
+
+1. Send `install_event { kind: "complete", ok: true, restart_required: true }` (PWA flips UI to "Restarting…").
+2. `_perform_restart()` sets `_restart_after_shutdown = True` + sets `_shutdown_event`. Returns to caller (so the WS frame finishes flushing).
+3. `run()` wakes up, runs the normal shutdown sequence: cancel listener task (closes the websockets server's serve() async-with → listener socket closes), drain teardown task, shutdown current_app (skill teardowns, OpenAI session disconnect, storage close).
+4. After cleanup: `os.execv(sys.argv[0], sys.argv)`. Never returns (process replaced).
+
+**Foot-guns the implementer addressed** (Phase D planning critic):
+
+- **FD inheritance / EADDRINUSE on rebind**: Python sockets get `O_CLOEXEC` by default since 3.4 (PEP 446). The async-with on `serve()` closes the listener proactively before the exec, so even without CLOEXEC the listener is gone. Belt-and-suspenders: the cleanup sequence runs cancellation first, then exec.
+- **Mid-call restart breaks conversation**: install shim refuses if `_active_claim_id` is non-null OR `_install_lock` is held. PWA also gates the Install button on `writesDisabled` (mirrors Phase B).
+- **Subprocess inheritance leak**: the install subprocess is a child of the server. After exec, the child becomes a zombie reparented to PID 1; `uv add` is fast (~5-90s) and finishes before the new server's first wake. No orphaned processes.
+- **Concurrent install race**: `_install_lock` (separate from `_persona_write_lock` and `_swap_lock` to avoid lock-ordering bugs) serializes installs. A concurrent `_shim_install_skill` while one is in flight is rejected with `error_code: install_in_progress`.
+
+**Alternatives rejected**:
+
+- **`importlib.invalidate_caches()` + in-process reload**: would avoid the restart, but the existing `_reload_current_persona()` (Phase B) only re-runs `setup_all`; new entry points aren't picked up by the running interpreter without re-parsing every `*.dist-info` directory under `site-packages`. Even then, edge cases (a skill that `import`s top-level a brand-new module) require a fresh interpreter. The restart cost is ~3-5s; cleaner.
+- **`subprocess.Popen(sys.executable, ...)` + `os._exit(0)`**: spawns a sibling instead of replacing self. Listener port might still be held by the dying parent during the handoff (TIME_WAIT). `os.execv` avoids the port race entirely.
+
+**Consequences**:
+
+- The PWA's existing 2s reconnect logic Just Works™ for restart recovery — no new code path needed on the client.
+- launchd's `ThrottleInterval=10s` means a broken venv (uv add succeeds but the new dep doesn't import cleanly at boot) leaves the operator with a server that won't come back up. Mitigation: launchd logs go to `~/Library/Logs/Huxley/`. The PWA shows "Disconnected — retrying" indefinitely if the server can't restart; not great UX for a non-technical caregiver, but acceptable for v1.
+- Phase D ships install only. Uninstall (`uv remove`) requires the same pattern; deferred to post-D.

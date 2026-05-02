@@ -109,6 +109,17 @@ class AudioServer:
         # huxley-registry/index.json feed + decorates with
         # installed-status; replies with `marketplace_state`.
         on_get_marketplace: Callable[[], Awaitable[None]] | None = None,
+        # Marketplace v2 Phase D — restart trigger. PWA's "Restart server"
+        # maintenance button + (post-Phase D) the install completion
+        # callback both invoke this. Runtime initiates a graceful
+        # shutdown + `os.execv` to replace the current process with a
+        # fresh interpreter (picks up new venv state from `uv add`).
+        on_restart_server: Callable[[], Awaitable[None]] | None = None,
+        # Marketplace v2 Phase D — install request from the PWA's
+        # Marketplace tab. Runtime validates, runs `uv add`, and on
+        # success triggers a restart via the same path as
+        # `on_restart_server`.
+        on_install_skill: Callable[[str], Awaitable[None]] | None = None,
         # Marketplace v2 Phase B — write handlers. The dispatch case
         # validates types + shapes before invoking; Runtime persists
         # the change to disk and triggers _reload_current_persona,
@@ -155,6 +166,8 @@ class AudioServer:
         self._on_delete_session = on_delete_session
         self._on_get_skills_state = on_get_skills_state
         self._on_get_marketplace = on_get_marketplace
+        self._on_restart_server = on_restart_server
+        self._on_install_skill = on_install_skill
         self._on_set_skill_enabled = on_set_skill_enabled
         self._on_set_skill_config = on_set_skill_config
         self._on_set_skill_secret = on_set_skill_secret
@@ -436,6 +449,37 @@ class AudioServer:
                 await logger.ainfo("server.rx.get_marketplace")
                 if self._on_get_marketplace is not None:
                     await self._on_get_marketplace()
+            case "restart_server":
+                # Marketplace v2 Phase D — graceful shutdown + os.execv.
+                # Two callsites: the DeviceSheet Maintenance "Restart
+                # server" button (manual op trigger), and the
+                # install-completion path which auto-restarts after
+                # `uv add` succeeds so the new entry-point is visible.
+                # The handler returns immediately — the actual restart
+                # happens after run()'s normal shutdown sequence
+                # completes, so the response can flush before exec.
+                await logger.ainfo("server.rx.restart_server")
+                if self._on_restart_server is not None:
+                    await self._on_restart_server()
+            case "install_skill":
+                # Marketplace v2 Phase D — install a `huxley-skill-*`
+                # package via `uv add`. Runtime validates the package
+                # name + mid-call gate, runs the subprocess, and on
+                # success triggers a restart so the running interpreter
+                # picks up the new entry point.
+                package = msg.get("package")
+                if not isinstance(package, str) or not package:
+                    await logger.awarning(
+                        "server.rx.install_skill.bad_args",
+                        package=package,
+                    )
+                    return
+                await logger.ainfo(
+                    "server.rx.install_skill",
+                    package=package,
+                )
+                if self._on_install_skill is not None:
+                    await self._on_install_skill(package)
             case "set_skill_enabled":
                 # Marketplace v2 Phase B — toggle enable/disable. The
                 # PWA's SkillConfigSheet header switch sends this when
@@ -637,6 +681,29 @@ class AudioServer:
             error=payload.get("error"),
         )
         await self._send({"type": "marketplace_state", **payload})
+
+    async def send_install_event(self, payload: dict[str, Any]) -> None:
+        """Marketplace v2 Phase D — install lifecycle events.
+
+        `payload` includes `kind` ("started" | "complete"), `package`,
+        `ok: bool` (only meaningful on `kind=complete`), `error_code`,
+        `error_message`, and `restart_required: bool`. The PWA branches
+        on `kind` + `ok`; the human `error_message` goes to the UI,
+        the `error_code` is for branching logic.
+
+        Phase D planning critic §E.1 collapsed `install_progress` and
+        `install_complete` into a single discriminated frame so future
+        kinds (`queued`, `rolled_back`, etc.) slot in additively
+        without new top-level frame types.
+        """
+        await logger.ainfo(
+            "server.tx.install_event",
+            kind=payload.get("kind"),
+            package=payload.get("package"),
+            ok=payload.get("ok"),
+            error_code=payload.get("error_code"),
+        )
+        await self._send({"type": "install_event", **payload})
 
     async def send_skills_state(self, payload: dict[str, Any]) -> None:
         """Marketplace v2 Phase A — reply to inbound `get_skills_state`.

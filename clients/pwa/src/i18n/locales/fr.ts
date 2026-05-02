@@ -146,6 +146,26 @@ const fr = {
       secretClear: "Effacer",
       secretPlaceholder: "Colle la valeur du secret",
     },
+    install: {
+      confirmTitle: "Installer {{name}} ?",
+      noTagline: "Aucune description fournie.",
+      warning:
+        "Ceci exécutera `uv add {{pkg}}` et redémarrera le serveur. Les appels ou audios actifs sont préservés (les installations pendant un appel sont bloquées).",
+      cancel: "Annuler",
+      install: "Installer",
+      installing: "Installation de {{pkg}}…",
+      installingBody:
+        "Exécution de `uv add`. Cela peut prendre une minute la première fois (les wheels d'extensions C compilent depuis les sources sur les machines lentes).",
+      restartingTitle: "Redémarrage du serveur…",
+      restartingBody:
+        "Le serveur se remplace lui-même avec un interpréteur neuf pour que l'entry-point de la nouvelle compétence soit visible. ~5 secondes.",
+      installedTitle: "Installée ✓",
+      installedBody:
+        "{{pkg}} est maintenant disponible. Ouvre l'onglet Compétences pour l'activer sur cette persona.",
+      errorTitle: "Échec de l'installation",
+      errorGeneric: "uv add a retourné une erreur. Consulte le log serveur.",
+      dismiss: "OK",
+    },
     skillsSheet: {
       eyebrow: "Compétences",
       close: "Fermer",

@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -489,3 +489,203 @@ class TestPhaseBWriteShims:
         await runtime_in_tmp._shim_delete_skill_secret("stocks", "k")
         # Still no current app afterward.
         assert runtime_in_tmp.current_app is None
+
+
+class TestPhaseDInstallShim:
+    """Marketplace v2 Phase D: install + restart wiring. The
+    `_shim_install_skill` orchestrates validation → subprocess → restart;
+    `_perform_restart` sets the flag + signals shutdown so `run()` exec's
+    last. The actual `os.execv` is unreachable in unit tests (it would
+    replace the test runner) — we patch it to record-and-return.
+
+    The single highest-ROI test (planning critic §D) lives here:
+    `test_install_full_happy_path_with_concurrent_rejection`.
+    """
+
+    async def test_perform_restart_sets_flag_and_signals_shutdown(
+        self, runtime_in_tmp: Runtime
+    ) -> None:
+        assert runtime_in_tmp._restart_after_shutdown is False
+        assert not runtime_in_tmp._shutdown_event.is_set()
+        await runtime_in_tmp._perform_restart()
+        assert runtime_in_tmp._restart_after_shutdown is True
+        assert runtime_in_tmp._shutdown_event.is_set()
+
+    async def test_perform_restart_idempotent(self, runtime_in_tmp: Runtime) -> None:
+        # Second call within the same boot is a no-op (the first
+        # already requested restart; we don't want competing
+        # exec attempts).
+        await runtime_in_tmp._perform_restart()
+        # Manually clear shutdown_event to detect if the second call
+        # re-sets it.
+        runtime_in_tmp._shutdown_event.clear()
+        await runtime_in_tmp._perform_restart()
+        assert not runtime_in_tmp._shutdown_event.is_set()
+
+    async def test_install_validation_rejects_bad_name(
+        self, runtime_in_tmp: Runtime, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Use a bare AudioServer mock that captures send_install_event.
+        sent: list[dict[str, Any]] = []
+
+        async def _capture(payload: dict[str, Any]) -> None:
+            sent.append(payload)
+
+        monkeypatch.setattr(runtime_in_tmp.audio_server, "send_install_event", _capture)
+        await runtime_in_tmp._switch_to_persona("alpha", auto_connect=False)
+
+        await runtime_in_tmp._shim_install_skill("invalid-package-name")
+
+        # Failure event sent, no restart.
+        assert len(sent) == 1
+        assert sent[0]["ok"] is False
+        assert sent[0]["error_code"] == "validation_failed"
+        assert runtime_in_tmp._restart_after_shutdown is False
+        await _drain_teardown(runtime_in_tmp)
+        if runtime_in_tmp.current_app is not None:
+            await runtime_in_tmp.current_app.shutdown()
+
+    async def test_install_full_happy_path_with_concurrent_rejection(
+        self, runtime_in_tmp: Runtime, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Phase D planning critic §D — the single test that catches
+        the most. Asserts:
+          1. Install runs the right subprocess command from the right cwd.
+          2. On success, install_event {complete, ok=True, restart_required=True}
+             is sent.
+          3. `_perform_restart` is triggered (restart_after_shutdown=True).
+          4. While the install is running, a concurrent install for a
+             DIFFERENT skill is rejected with `install_in_progress` code.
+          5. The mid-install hello extras include `install_in_progress`
+             with the package name.
+        """
+        sent: list[dict[str, Any]] = []
+
+        async def _capture(payload: dict[str, Any]) -> None:
+            sent.append(payload)
+
+        monkeypatch.setattr(runtime_in_tmp.audio_server, "send_install_event", _capture)
+
+        # Patch the installer's subprocess to return success without
+        # touching the real venv. The install_skill function reads
+        # the current `asyncio.create_subprocess_exec`; we replace it.
+        captured_args: list[tuple[Any, ...]] = []
+
+        class _FakeProc:
+            def __init__(self) -> None:
+                self.returncode = 0
+                self._can_finish = asyncio.Event()
+
+            async def communicate(self) -> tuple[bytes, bytes]:
+                # Block until allowed. Lets the test fire a concurrent
+                # install while we're "in flight".
+                await self._can_finish.wait()
+                return b"installed\n", b""
+
+            def kill(self) -> None:
+                pass
+
+            async def wait(self) -> int:
+                return 0
+
+        proc = _FakeProc()
+
+        async def _stub_subprocess(*args: Any, **kwargs: Any) -> _FakeProc:
+            captured_args.append((args, kwargs))
+            return proc
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", _stub_subprocess)
+        await runtime_in_tmp._switch_to_persona("alpha", auto_connect=False)
+
+        # Fire the install but don't await — let it block on `communicate`.
+        install_task = asyncio.create_task(
+            runtime_in_tmp._shim_install_skill("huxley-skill-foo"),
+        )
+        # Yield control so the install reaches the `await` on subprocess.
+        await asyncio.sleep(0.05)
+
+        # Mid-flight: confirm hello extras carry install_in_progress.
+        extras = runtime_in_tmp._get_hello_extras()
+        assert extras["install_in_progress"] is not None
+        assert extras["install_in_progress"]["package"] == "huxley-skill-foo"
+
+        # Concurrent install for a different skill is refused.
+        await runtime_in_tmp._shim_install_skill("huxley-skill-bar")
+        # The concurrent attempt sent ONE event (the rejection).
+        rejected = [s for s in sent if s.get("package") == "huxley-skill-bar"]
+        assert len(rejected) == 1
+        assert rejected[0]["ok"] is False
+        assert rejected[0]["error_code"] == "install_in_progress"
+
+        # Allow the in-flight install to complete.
+        proc._can_finish.set()
+        await install_task
+
+        # Subprocess command: `uv add huxley-skill-foo`.
+        assert len(captured_args) == 1
+        args, _ = captured_args[0]
+        assert args[:3] == ("uv", "add", "huxley-skill-foo")
+
+        # Success event with restart_required=true.
+        success = [
+            s
+            for s in sent
+            if s.get("package") == "huxley-skill-foo" and s.get("kind") == "complete"
+        ]
+        assert len(success) == 1
+        assert success[0]["ok"] is True
+        assert success[0]["restart_required"] is True
+
+        # Restart triggered.
+        assert runtime_in_tmp._restart_after_shutdown is True
+
+        # Cleanup.
+        await _drain_teardown(runtime_in_tmp)
+        if runtime_in_tmp.current_app is not None:
+            await runtime_in_tmp.current_app.shutdown()
+
+    async def test_install_failure_does_not_trigger_restart(
+        self, runtime_in_tmp: Runtime, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sent: list[dict[str, Any]] = []
+
+        async def _capture(payload: dict[str, Any]) -> None:
+            sent.append(payload)
+
+        monkeypatch.setattr(runtime_in_tmp.audio_server, "send_install_event", _capture)
+
+        class _FailProc:
+            def __init__(self) -> None:
+                self.returncode = 1
+
+            async def communicate(self) -> tuple[bytes, bytes]:
+                return b"", b"error: no matching distribution found\n"
+
+            def kill(self) -> None:
+                pass
+
+            async def wait(self) -> int:
+                return 1
+
+        async def _stub(*args: Any, **kwargs: Any) -> _FailProc:
+            return _FailProc()
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", _stub)
+        await runtime_in_tmp._switch_to_persona("alpha", auto_connect=False)
+
+        await runtime_in_tmp._shim_install_skill("huxley-skill-nope")
+
+        complete = [
+            s
+            for s in sent
+            if s.get("kind") == "complete" and s.get("package") == "huxley-skill-nope"
+        ]
+        assert len(complete) == 1
+        assert complete[0]["ok"] is False
+        assert complete[0]["error_code"] == "package_not_found"
+        # No restart on failure.
+        assert runtime_in_tmp._restart_after_shutdown is False
+
+        await _drain_teardown(runtime_in_tmp)
+        if runtime_in_tmp.current_app is not None:
+            await runtime_in_tmp.current_app.shutdown()

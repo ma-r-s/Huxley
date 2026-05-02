@@ -136,6 +136,31 @@ export interface MarketplaceState {
   error: string | null;
 }
 
+// Marketplace v2 Phase D — install lifecycle frame.
+// Server emits exactly two events per install: `started` (right after
+// the regex/concurrency gates pass, before the subprocess runs) and
+// `complete` (after `uv add` returns). On success, `restart_required`
+// is true and the server immediately initiates the restart sequence —
+// the WS will close, the PWA's existing reconnect logic kicks in.
+export interface InstallEvent {
+  kind: "started" | "complete";
+  package: string;
+  ok: boolean | null;
+  error_code: string | null;
+  error_message: string | null;
+  restart_required: boolean;
+}
+
+// Local UI state for the install flow. Held in `useWs` and threaded
+// through to the MarketplaceCard / detail view that initiated it.
+export interface InstallUIState {
+  package: string;
+  status: "starting" | "running" | "success-restarting" | "error";
+  error_code: string | null;
+  error_message: string | null;
+  started_at_ms: number;
+}
+
 // Minimal subset of JSON Schema 2020-12 the form renderer recognizes.
 // Server validates that schemas conform; this is just enough to walk
 // the tree and decide what input element to render. Anything we don't
