@@ -336,3 +336,112 @@ def test_author_email_with_no_name_part_returns_none(
     assert out["skills"][0]["author"] is None
     serialized = json.dumps(out)
     assert "bare@example.com" not in serialized
+
+
+def test_legacy_author_field_with_email_strips_email(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pre-PEP-621 packages set `Author: "Name <email>"` and leave
+    `Author-email` empty. The same email-stripping must apply — the
+    public claim "email never on the wire" is non-negotiable.
+    Critic-flagged in Phase A round 1: the previous fallback was
+    `author_plain.strip()` which forwarded the raw `<email>`."""
+    eps = [_FakeEntryPoint("legacy", _NoSchemaLike, "legacy-pkg", "1.0.0")]
+    monkeypatch.setattr(
+        "huxley.skills_state.entry_points",
+        lambda group: eps if group == "huxley.skills" else [],
+    )
+    monkeypatch.setattr(
+        "huxley.skills_state.metadata",
+        lambda pkg: _FakeMetadata(
+            author="Mario Ruiz <mario@example.com>",
+            author_email=None,
+        ),
+    )
+    out = build_skills_state(None)
+    assert out["skills"][0]["author"] == "Mario Ruiz"
+    serialized = json.dumps(out)
+    assert "@example.com" not in serialized
+    assert "mario@example.com" not in serialized
+
+
+def test_legacy_author_field_with_only_email_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defensive: `Author: "bare@example.com"` (no angle brackets,
+    no name) must surface None, not the raw email."""
+    eps = [_FakeEntryPoint("anon", _NoSchemaLike, "anon-pkg", "1.0.0")]
+    monkeypatch.setattr(
+        "huxley.skills_state.entry_points",
+        lambda group: eps if group == "huxley.skills" else [],
+    )
+    monkeypatch.setattr(
+        "huxley.skills_state.metadata",
+        lambda pkg: _FakeMetadata(author="bare@example.com", author_email=None),
+    )
+    out = build_skills_state(None)
+    assert out["skills"][0]["author"] is None
+    serialized = json.dumps(out)
+    assert "bare@example.com" not in serialized
+
+
+def test_current_config_scrubbed_of_secret_keys(
+    fake_eps: list[_FakeEntryPoint],
+    tmp_path: Path,
+) -> None:
+    """Defense-in-depth: if a misconfigured persona.yaml puts a
+    secret value directly in `skills.<name>.<key>` (instead of
+    secrets/values.json), the scrub at the wire boundary drops it
+    so the secret doesn't reach the browser console + WS frames +
+    network tab. Critic-flagged in Phase A round 1."""
+    app = _fake_app(
+        tmp_path,
+        skills_block={
+            "stocks": {
+                # WRONG — secret should live in values.json. The wire
+                # frame must NOT carry this.
+                "api_key": "sk-LEAKED-IN-YAML",
+                # Right — non-secret config rides through unchanged.
+                "currency": "USD",
+                "watchlist": ["AAPL"],
+            },
+        },
+    )
+    out = build_skills_state(app)
+    stocks = next(s for s in out["skills"] if s["name"] == "stocks")
+    # api_key is config_schema's `format: "secret"` field — scrubbed.
+    assert "api_key" not in stocks["current_config"]
+    # Non-secret config preserved.
+    assert stocks["current_config"]["currency"] == "USD"
+    assert stocks["current_config"]["watchlist"] == ["AAPL"]
+    # Belt-and-suspenders: the leaked value never appears anywhere.
+    serialized = json.dumps(out)
+    assert "sk-LEAKED-IN-YAML" not in serialized
+
+
+def test_current_config_scrubbed_of_filesystem_secret_keys(
+    fake_eps: list[_FakeEntryPoint],
+    tmp_path: Path,
+) -> None:
+    """Even if a key isn't in `secret_required_keys` (no schema
+    declaration), the presence of the same key in
+    `<persona>/data/secrets/<skill>/values.json` means it IS a
+    secret in this deployment. Drop it from `current_config` too."""
+    secrets_dir = tmp_path / "secrets" / "stocks"
+    secrets_dir.mkdir(parents=True)
+    (secrets_dir / "values.json").write_text(
+        json.dumps({"watchlist_token": "tok-PRIVATE"}), encoding="utf-8"
+    )
+    # Operator has duplicated the same key in BOTH places — wire
+    # frame must defer to the secrets file's authority.
+    app = _fake_app(
+        tmp_path,
+        skills_block={"stocks": {"watchlist_token": "should-not-ride-the-wire"}},
+    )
+    out = build_skills_state(app)
+    stocks = next(s for s in out["skills"] if s["name"] == "stocks")
+    assert "watchlist_token" not in stocks["current_config"]
+    assert stocks["secret_keys_set"] == ["watchlist_token"]
+    serialized = json.dumps(out)
+    assert "should-not-ride-the-wire" not in serialized
+    assert "tok-PRIVATE" not in serialized

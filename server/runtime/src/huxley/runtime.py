@@ -274,6 +274,18 @@ class Runtime:
                 to=name,
             )
 
+            # Push fresh skills_state to the connected client right after
+            # the swap commits. The PWA's SkillsSheet caches the previous
+            # persona's enabled-flags + current_config + secret_keys_set,
+            # which would otherwise read as the new persona's state until
+            # the user re-opened DeviceSheet and triggered a refetch.
+            # Phase B's "refresh after write" flow uses the same push.
+            try:
+                payload = build_skills_state(self.current_app)
+                await self.audio_server.send_skills_state(payload)
+            except Exception:
+                await logger.aexception("skills_state.swap_push_failed")
+
             if old_app is not None:
                 self._teardown_task = asyncio.create_task(self._teardown_app(old_app))
 

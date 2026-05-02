@@ -81,9 +81,21 @@ def _build_one(
     description, author = _description_and_author(package)
     config_schema, data_schema_version = _class_metadata(ep)
     enabled = name in enabled_block
-    current_config = dict(enabled_block.get(name, {}))
     secret_keys_set = _secret_keys(secrets_root, name)
     secret_required_keys = _required_secret_keys(config_schema)
+    # Defense-in-depth: scrub any keys the schema marks as secret out
+    # of `current_config` before the payload reaches the wire. The
+    # supported convention puts secrets in `<persona>/data/secrets/
+    # <skill>/values.json`, but a misconfigured persona.yaml can
+    # accidentally land them in the YAML itself. Without this scrub,
+    # a copy-paste mistake at config time would ship the secret to
+    # the browser console + WS frames + dev-tools network tab. Keys
+    # are listed via `secret_required_keys` (config_schema-derived)
+    # AND `secret_keys_set` (filesystem-derived) so Phase B writes
+    # don't reintroduce the gap by editing one without the other.
+    raw_config = enabled_block.get(name, {})
+    sensitive = set(secret_required_keys) | set(secret_keys_set)
+    current_config = {k: v for k, v in raw_config.items() if k not in sensitive}
     return {
         "name": name,
         "package": package,
@@ -145,16 +157,43 @@ def _description_and_author(
     summary = m.get("Summary")
     author_email = m.get("Author-email")
     author_plain = m.get("Author")
-    # `Author-email` shape ``"Name <email>"``: extract just the name.
-    # Email-only with no name part → ``None`` (we don't surface raw
-    # contact info on the wire).
+    # Both ``Author-email`` (modern) and ``Author`` (legacy) can
+    # carry the ``"Name <email>"`` shape. Strip the email portion
+    # from both. Email-only with no name part → ``None``. The wire
+    # frame must NEVER carry contact info — Phase A's defense-in-
+    # depth claim mirrors `secret_keys_set` (keys, never values).
     author: str | None = None
     if author_email:
-        match = _AUTHOR_NAME_RE.match(author_email)
-        author = match.group(1) if match else None
+        author = _strip_email(author_email)
     if author is None and author_plain:
-        author = author_plain.strip() or None
+        author = _strip_email(author_plain)
     return summary, author
+
+
+def _strip_email(raw: str) -> str | None:
+    """Take a raw author string in either shape:
+
+    - ``"Mario Ruiz <mario@example.com>"`` → ``"Mario Ruiz"``
+    - ``"Jane Doe"``                       → ``"Jane Doe"``
+    - ``"<bare@example.com>"`` / ``"bare@example.com"`` → ``None``
+
+    Returns ``None`` rather than the raw email so the wire never
+    carries contact info even when an author publishes with only an
+    email and no name.
+    """
+    if not raw:
+        return None
+    match = _AUTHOR_NAME_RE.match(raw)
+    if match:
+        return match.group(1).strip() or None
+    # No angle-bracketed email — but the field could still BE an
+    # email with no name part (e.g. ``"bare@example.com"``).
+    stripped = raw.strip()
+    if not stripped:
+        return None
+    if "@" in stripped:
+        return None
+    return stripped
 
 
 def _class_metadata(ep: Any) -> tuple[dict[str, Any] | None, int]:
