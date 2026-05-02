@@ -18,7 +18,7 @@
 //    secret state alongside plain state but Saves them via different
 //    WS frames.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { SkillSummary } from "../types.js";
 import {
@@ -290,6 +290,12 @@ interface Props {
   onSetConfig: (skill: string, config: Record<string, unknown>) => void;
   onSetSecret: (skill: string, key: string, value: string) => void;
   onDeleteSecret: (skill: string, key: string) => void;
+  // Caller passes true when an InputClaim or AudioStream is active —
+  // a write triggers `_reload_current_persona` which tears down the
+  // OpenAI session, the FocusManager, and the active skill mid-claim.
+  // Mirrors DeviceSheet's persona-picker guard. Phase B critic finding 1.
+  writesDisabled?: boolean;
+  writesDisabledHint?: string;
   sheetClassName?: string;
 }
 
@@ -323,6 +329,8 @@ export function SkillConfigSheet({
   onSetConfig,
   onSetSecret,
   onDeleteSecret,
+  writesDisabled = false,
+  writesDisabledHint,
   sheetClassName = "hux-sheet",
 }: Props) {
   const { t } = useTranslation();
@@ -356,16 +364,36 @@ export function SkillConfigSheet({
     return out;
   });
 
+  // Phase B critic finding 3: when the user clicks Save, snapshot
+  // the just-saved drafts. While a save is in flight, the user may
+  // keep typing — we must NOT clobber their fresh edits when the
+  // server's post-reload `skills_state` push lands. The reconciliation
+  // (in the useEffect below) preserves any field where the draft has
+  // diverged from the snapshot since Save fired.
+  const lastSavedRef = useRef<Record<string, unknown> | null>(null);
+  const [saving, setSaving] = useState(false);
+
   // Reset drafts when the underlying skill changes (server pushes
   // a fresh skills_state after a write — we want the form to mirror
-  // disk truth, not retain a stale draft from before the save).
+  // disk truth, not retain a stale draft from before the save). When
+  // a save is in flight, only reset fields the user hasn't typed
+  // since Save fired; preserve user-typed-since-save edits to avoid
+  // silently overwriting them with the value they just submitted.
   useEffect(() => {
-    const out: Record<string, unknown> = {};
-    for (const f of fields) {
-      if (f.kind === "secret") continue;
-      out[f.name] = toDraft(f, skill.current_config[f.name]);
-    }
-    setDrafts(out);
+    setDrafts((prev) => {
+      const out = { ...prev };
+      for (const f of fields) {
+        if (f.kind === "secret") continue;
+        const baseline = lastSavedRef.current?.[f.name];
+        const userTypedSinceSave =
+          lastSavedRef.current !== null && prev[f.name] !== baseline;
+        if (userTypedSinceSave) continue; // keep user's in-progress edit
+        out[f.name] = toDraft(f, skill.current_config[f.name]);
+      }
+      return out;
+    });
+    lastSavedRef.current = null;
+    setSaving(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [skill.name, skill.current_config, fields]);
 
@@ -383,7 +411,7 @@ export function SkillConfigSheet({
   }, [drafts, plainFields, skill.current_config]);
 
   const handleSaveConfig = () => {
-    if (!isDirty) return;
+    if (!isDirty || saving || writesDisabled) return;
     const out: Record<string, unknown> = {};
     for (const f of plainFields) {
       const parsed = parseValue(f.kind, drafts[f.name]);
@@ -392,7 +420,35 @@ export function SkillConfigSheet({
       if (parsed === undefined) continue;
       out[f.name] = parsed;
     }
+    // Snapshot the drafts AT save time so the post-reload reconciliation
+    // can tell which fields the user touched after Save fired (those
+    // diverge from the snapshot and should be preserved).
+    lastSavedRef.current = { ...drafts };
+    setSaving(true);
     onSetConfig(skill.name, out);
+  };
+
+  // Toggle + secret writes share the in-flight gate: don't fire if
+  // a previous write hasn't been confirmed by the next skills_state
+  // push, and don't fire while writes are guarded (mid-call).
+  const writeGate = saving || writesDisabled;
+  const handleToggle = () => {
+    if (writeGate) return;
+    lastSavedRef.current = { ...drafts };
+    setSaving(true);
+    onSetEnabled(skill.name, !skill.enabled);
+  };
+  const handleSetSecret = (key: string, value: string) => {
+    if (writeGate) return;
+    lastSavedRef.current = { ...drafts };
+    setSaving(true);
+    onSetSecret(skill.name, key, value);
+  };
+  const handleDeleteSecret = (key: string) => {
+    if (writeGate) return;
+    lastSavedRef.current = { ...drafts };
+    setSaving(true);
+    onDeleteSecret(skill.name, key);
   };
 
   return (
@@ -433,11 +489,30 @@ export function SkillConfigSheet({
           <button
             style={S.toggle(skill.enabled)}
             aria-label={t("skills.toggleAria", "Toggle skill")}
-            onClick={() => onSetEnabled(skill.name, !skill.enabled)}
+            disabled={writeGate}
+            onClick={handleToggle}
           >
             <span style={S.toggleKnob(skill.enabled)} />
           </button>
         </div>
+
+        {writesDisabled && writesDisabledHint && (
+          <div
+            style={{
+              fontFamily: "var(--hux-sans)",
+              fontSize: 13,
+              color: "var(--hux-fg-dim)",
+              padding: "10px 14px",
+              borderRadius: 8,
+              background: "rgba(255,255,255,0.04)",
+              border: "1px solid var(--hux-fg-line)",
+              marginBottom: 16,
+              lineHeight: 1.45,
+            }}
+          >
+            {writesDisabledHint}
+          </div>
+        )}
 
         {fields.length === 0 && (
           <div style={S.emptyState}>
@@ -450,7 +525,7 @@ export function SkillConfigSheet({
             key={field.name}
             field={field}
             value={drafts[field.name]}
-            disabled={!skill.enabled}
+            disabled={!skill.enabled || writeGate}
             onChange={(v) =>
               setDrafts((prev) => ({ ...prev, [field.name]: v }))
             }
@@ -462,9 +537,9 @@ export function SkillConfigSheet({
             key={field.name}
             field={field}
             isSet={secretsSet.has(field.name)}
-            disabled={!skill.enabled}
-            onSet={(value) => onSetSecret(skill.name, field.name, value)}
-            onDelete={() => onDeleteSecret(skill.name, field.name)}
+            disabled={!skill.enabled || writeGate}
+            onSet={(value) => handleSetSecret(field.name, value)}
+            onDelete={() => handleDeleteSecret(field.name)}
           />
         ))}
 
@@ -487,16 +562,20 @@ export function SkillConfigSheet({
                 color: "var(--hux-fg-dim)",
               }}
             >
-              {isDirty
-                ? t("skills.unsavedHint", "Unsaved changes.")
-                : t("skills.savedHint", "All changes saved.")}
+              {saving
+                ? t("skills.savingHint", "Saving — applying changes…")
+                : isDirty
+                  ? t("skills.unsavedHint", "Unsaved changes.")
+                  : t("skills.savedHint", "All changes saved.")}
             </span>
             <button
-              style={S.saveBtn(isDirty && skill.enabled)}
+              style={S.saveBtn(isDirty && skill.enabled && !writeGate)}
               onClick={handleSaveConfig}
-              disabled={!isDirty || !skill.enabled}
+              disabled={!isDirty || !skill.enabled || writeGate}
             >
-              {t("skills.save", "Save")}
+              {saving
+                ? t("skills.saving", "Saving…")
+                : t("skills.save", "Save")}
             </button>
           </div>
         </div>

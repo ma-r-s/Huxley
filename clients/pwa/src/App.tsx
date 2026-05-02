@@ -761,6 +761,10 @@ export function App() {
                 onSetConfig={ws.setSkillConfig}
                 onSetSecret={ws.setSkillSecret}
                 onDeleteSecret={ws.deleteSkillSecret}
+                writesDisabled={
+                  ws.activeClaimId !== null || ws.activeStream !== null
+                }
+                writesDisabledHint={t("skills.writesDisabledHint")}
                 sheetClassName={sheetClass}
               />
             );

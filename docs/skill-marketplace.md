@@ -1,6 +1,6 @@
 # Skill Marketplace
 
-> **Status**: design phase locked (post-critic-round-2). v1 (developer-primary) is feature **T1.14**. v2 (caregiver expansion) is deferred until caregiver-shipping is decided. See [`triage.md` § T1.14](./triage.md) for the work tracker.
+> **Status**: v1 (developer-primary) **shipped 2026-05-01** as **T1.14** + PyPI release. v2 caregiver expansion **Phase A + Phase B shipped 2026-05-02** (read-only Skills panel with cards/tabs, write-side toggle/config/secrets via hot reload, atomic ruamel.yaml round-trip). v2 Phases C (Marketplace registry browse) and D (auto-install + self-restart) are next. See [`triage.md`](./triage.md) for the work tracker.
 
 ## Vision
 
@@ -9,7 +9,7 @@ Huxley's load-bearing thesis is **skill extensibility** — a voice agent framew
 The shape we're building toward is **VS Code-like**: curated registry for end-users, sideload escape hatch for developers, in-PWA configuration. We ship in two cleanly-staged steps:
 
 - **v1 — developer-primary** (~2 weeks). SDK additions + authoring conventions that let third-party authors write `huxley-skill-*` packages. Distribution via PyPI; install via `uv add`; configuration via `persona.yaml` + a per-persona secrets dir; "registry" is a static markdown directory page in the docs site. **Earns the optionality.**
-- **v2 — caregiver expansion** (deferred). Layers a PWA Skills panel + install machinery + browseable registry on top of v1's primitives. Purely additive: new server endpoints, new PWA tabs. **No v1 rewrites.**
+- **v2 — caregiver expansion** (Phases A + B shipped; C + D in progress). Layers a PWA Skills panel + install machinery + browseable registry on top of v1's primitives. Purely additive: new server endpoints, new PWA tabs. **No v1 rewrites.** Phase A (read-only state + cards UX) and Phase B (writes via hot reload — toggle / config / secrets) are live; Phase C (Marketplace tab consuming `huxley-registry`) and Phase D (`uv add` auto-install with self-restart) are pending.
 
 § Cross-version contracts pins what doesn't change between them.
 
@@ -394,21 +394,22 @@ That's the entirety of v1. Tracked as a single triage entry with phase checkboxe
 
 When the above is true, **v1 marketplace is shipped**.
 
-## v2 — caregiver expansion (deferred)
+## v2 — caregiver expansion
 
-Documented here for continuity; **not committed to**. Filed as triage entries when caregiver-shipping is decided.
+Phase A + Phase B shipped (2026-05-02); Phase C + Phase D pending.
 
 ### What v2 adds (purely on top of v1)
 
-| Capability              | New surface                                                                                                                                                                      | Touches v1?                                                               |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| PWA Skills panel        | New WS endpoints + new PWA sheet that reads installed skills, renders forms from `config_schema`, writes config (via `ruamel.yaml` round-trip) + secrets, toggles enable/disable | No SDK changes; reads what v1 declared                                    |
-| Self-restart machinery  | `install_skill` server endpoint + pip orchestration + atomic-swap-venv approach                                                                                                  | None                                                                      |
-| Curated registry        | `huxley/skills` GitHub repo with `index.json` + JSON Schema + CI + tier system + delisting + PWA Marketplace tab                                                                 | None — registry replaces the markdown page; markdown can stay or redirect |
-| Real OAuth              | OAuth helper in the SDK; redirect URL handler in the runtime; PWA "Authenticate with X" button. Uses v1's flat-secret + JSON-encode convention internally.                       | Additive — skills opt in                                                  |
-| `set_json` / `get_json` | Typed accessors on `SkillSecrets` that wrap `set/get` with `json.dumps/loads`. Same on-disk bytes as v1.                                                                         | Additive — v1 callers keep using `get/set`                                |
+| Capability              | New surface                                                                                                                                                                                                                                        | Status                                                    | Touches v1?                                |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------ |
+| PWA Skills panel        | Full-page SkillsSheet (cards + tabs), per-skill SkillConfigSheet with editable inputs (string / number / enum / array_of_strings / boolean) + toggle. Mid-call writes are gated (mirrors T1.13's persona-picker disabled pattern).                 | **Shipped** (Phase A + B)                                 | No SDK changes; reads what v1 declared     |
+| Hot reload via WS       | Four write frames (`set_skill_enabled`, `set_skill_config`, `set_skill_secret`, `delete_skill_secret`) → ruamel.yaml round-trip OR JsonFileSecrets → `_reload_current_persona()` (force-swap to same persona, re-runs `setup_all` with new state). | **Shipped** (Phase B)                                     | None                                       |
+| Self-restart machinery  | `install_skill` server endpoint + `uv add` orchestration + `os.execv` re-exec or supervisor-driven restart. Required for venv changes; the in-process reload Phase B uses can't pick up new entry points.                                          | **Pending** (Phase D)                                     | None                                       |
+| Curated registry browse | PWA Marketplace tab consumes the static `huxley-registry/index.json` feed (already shipped at `ma-r-s/huxley-registry`). Cards with name + description + author + install command.                                                                 | **Pending** (Phase C; tab placeholder shipped in Phase A) | None — registry already exists             |
+| Real OAuth              | OAuth helper in the SDK; redirect URL handler in the runtime; PWA "Authenticate with X" button. Uses v1's flat-secret + JSON-encode convention internally.                                                                                         | Pending (post-Phase-D)                                    | Additive — skills opt in                   |
+| `set_json` / `get_json` | Typed accessors on `SkillSecrets` that wrap `set/get` with `json.dumps/loads`. Same on-disk bytes as v1.                                                                                                                                           | Pending (post-Phase-D)                                    | Additive — v1 callers keep using `get/set` |
 
-v2-blocking concerns (`os.execv` foot-guns, JSON-Schema-doesn't-fit complex configs, registry maintainer load, dep conflicts, telegram-style first-time-auth, T1.13 swap interactions, in-flight `inject_turn` on uninstall) are real and engaged in v2's design phase — not v1 blockers.
+Phase D-blocking concerns (`os.execv` foot-guns, JSON-Schema-doesn't-fit complex configs, registry maintainer load, dep conflicts, telegram-style first-time-auth, in-flight `inject_turn` on uninstall) are real and engaged when Phase D opens — not v1 or Phase A/B blockers.
 
 ## Risks
 
