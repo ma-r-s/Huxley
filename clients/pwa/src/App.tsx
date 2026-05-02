@@ -711,6 +711,7 @@ export function App() {
               setActiveSkillName(skill.name);
               setActiveSheet("skill-config");
             }}
+            onRequestSkillsState={ws.requestSkillsState}
           />
         )}
         {activeSheet === "skill-config" &&
