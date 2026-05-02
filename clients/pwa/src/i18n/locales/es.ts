@@ -163,6 +163,9 @@ const es = {
         "{{pkg}} ya está disponible. Abre la pestaña Habilidades para activarla en esta persona.",
       errorTitle: "Instalación falló",
       errorGeneric: "uv add devolvió un error. Revisa el log del servidor.",
+      restartTimedOutTitle: "El servidor no volvió",
+      restartTimedOutBody:
+        "La instalación terminó pero el servidor no responde después de 30 segundos. Revisa el log (~/Library/Logs/Huxley/huxley.log) — la nueva habilidad puede tener un setup roto.",
       dismiss: "Listo",
     },
     skillsSheet: {

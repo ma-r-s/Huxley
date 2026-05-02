@@ -617,6 +617,12 @@ class TestPhaseDInstallShim:
         assert rejected[0]["ok"] is False
         assert rejected[0]["error_code"] == "install_in_progress"
 
+        # Phase D post-impl critic §11 — assert the second install
+        # did NOT spawn a subprocess. Without this, a future bug in
+        # the concurrency gate could spawn a parallel `uv add` while
+        # passing the rejection event check.
+        assert len(captured_args) == 1, "Concurrent install must not spawn a second subprocess"
+
         # Allow the in-flight install to complete.
         proc._can_finish.set()
         await install_task
@@ -640,6 +646,89 @@ class TestPhaseDInstallShim:
         assert runtime_in_tmp._restart_after_shutdown is True
 
         # Cleanup.
+        await _drain_teardown(runtime_in_tmp)
+        if runtime_in_tmp.current_app is not None:
+            await runtime_in_tmp.current_app.shutdown()
+
+    async def test_install_refused_when_claim_active(
+        self, runtime_in_tmp: Runtime, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Phase D post-impl critic §1: mid-call gate must include
+        active InputClaims. The original implementation reached into
+        the private `_active_claim_id`; we now use the public
+        `is_busy` accessor which composes claim + stream state."""
+        sent: list[dict[str, Any]] = []
+
+        async def _capture(payload: dict[str, Any]) -> None:
+            sent.append(payload)
+
+        monkeypatch.setattr(runtime_in_tmp.audio_server, "send_install_event", _capture)
+
+        # Simulate an active claim.
+        runtime_in_tmp.audio_server._active_claim_id = "claim-fake"
+        # No subprocess should ever be spawned in this branch.
+        spawn_calls = []
+
+        async def _stub(*args: Any, **kwargs: Any) -> None:
+            spawn_calls.append(args)
+            return None
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", _stub)
+
+        await runtime_in_tmp._switch_to_persona("alpha", auto_connect=False)
+        await runtime_in_tmp._shim_install_skill("huxley-skill-foo")
+
+        # Refusal sent.
+        refused = [s for s in sent if s.get("kind") == "complete"]
+        assert len(refused) == 1
+        assert refused[0]["ok"] is False
+        assert refused[0]["error_code"] == "in_call"
+        # No subprocess.
+        assert spawn_calls == []
+        # No restart.
+        assert runtime_in_tmp._restart_after_shutdown is False
+
+        runtime_in_tmp.audio_server._active_claim_id = None
+        await _drain_teardown(runtime_in_tmp)
+        if runtime_in_tmp.current_app is not None:
+            await runtime_in_tmp.current_app.shutdown()
+
+    async def test_install_refused_when_stream_active(
+        self, runtime_in_tmp: Runtime, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same gate, stream side. Audiobook / radio / news stream
+        with no claim still blocks install."""
+        sent: list[dict[str, Any]] = []
+
+        async def _capture(payload: dict[str, Any]) -> None:
+            sent.append(payload)
+
+        monkeypatch.setattr(runtime_in_tmp.audio_server, "send_install_event", _capture)
+        runtime_in_tmp.audio_server._active_stream_id = "stream-fake"
+
+        await runtime_in_tmp._switch_to_persona("alpha", auto_connect=False)
+        await runtime_in_tmp._shim_install_skill("huxley-skill-foo")
+
+        refused = [s for s in sent if s.get("kind") == "complete"]
+        assert len(refused) == 1
+        assert refused[0]["error_code"] == "in_call"
+
+        runtime_in_tmp.audio_server._active_stream_id = None
+        await _drain_teardown(runtime_in_tmp)
+        if runtime_in_tmp.current_app is not None:
+            await runtime_in_tmp.current_app.shutdown()
+
+    async def test_restart_server_refused_when_busy(self, runtime_in_tmp: Runtime) -> None:
+        """Phase D post-impl critic §2: maintenance Restart button
+        is gated server-side too. Defense in depth — UI gate isn't
+        enough for ESP32 / future clients."""
+        await runtime_in_tmp._switch_to_persona("alpha", auto_connect=False)
+        runtime_in_tmp.audio_server._active_claim_id = "fake"
+        await runtime_in_tmp._shim_restart_server()
+        # Restart NOT triggered.
+        assert runtime_in_tmp._restart_after_shutdown is False
+
+        runtime_in_tmp.audio_server._active_claim_id = None
         await _drain_teardown(runtime_in_tmp)
         if runtime_in_tmp.current_app is not None:
             await runtime_in_tmp.current_app.shutdown()

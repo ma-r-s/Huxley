@@ -4527,3 +4527,43 @@ Every clean interrupt sends a `response.cancel` to a response that's already don
 **Fix sketch**: track `response_in_flight: bool` in the coordinator (set on `commit_and_request_response` / `request_response`, cleared on `on_response_done` and `on_audio_done`). Skip the cancel send when not in flight. Alternative: drop the OpenAI-side error from log entirely (just stop reporting it at info level).
 
 ---
+
+## T1.15 — Marketplace v2 (caregiver expansion)
+
+**Status**: done (2026-05-02; Mario voice smoke pending — implementation, planning critic, and post-impl critic-fixes all landed overnight). v2 was originally deferred per the T1.14 spec; Mario greenlit it as the next workstream after PyPI shipped.
+
+**Commits**:
+
+- Phase A (read-only Skills panel + Marketplace tab placeholder): `c3c91650` server, `e856f6cf` PWA cards/tabs, `2904d9b4` critic-round-1 (email scrub, current_config scrub, swap-push), `45808040` full-screen sheets, `949729f3` animation polish.
+- Phase B (writes via hot reload): `c8dd6fd5` ruamel persona.yaml, `86958d70` `_reload_current_persona` + `force` flag, `81470590` server WS handlers, `e022b21e` PWA editable inputs, `cd59d685` critic-round-1 (mid-call guard, in-flight save, write-lock, docs).
+- Phase C (Marketplace registry browse): `1bf13691` registry feed → cards, `52f22120` critic-round-1 (max-body cap, encodeURIComponent, refetch on error).
+- Phase D (auto-install + `os.execv` self-restart): `c328dfcc` end-to-end with planning critic upfront, post-impl critic round 1 in this commit set (mid-call gate covers active streams via `is_busy` accessor; Maintenance Restart button gated server-side; `_active_stream_id` tracking; PWA regex aligned with server; 30s overlay watchdog; hello-fallback transition for dropped install_event; ticking elapsed counter; Esc-to-close on confirm modal; 3 new tests for the gating paths).
+
+**Problem.** v1 (T1.14) shipped the developer-primary substrate: SDK + reference skill + authoring docs + PyPI distribution. Useful for skill authors, useless for caregivers. v2 layers a PWA-driven UX on top of v1's primitives: browse, install, configure, toggle — without leaving the assistant.
+
+**Why it matters.** Caregivers (and Mario as the operator-of-Huxley-for-Abuelo) can now extend Huxley without touching `persona.yaml` or running `uv add` from a terminal. Closes the gap between "the framework supports skills" and "the operator can install one without instructions."
+
+**Effort actual**: ~12 hours of continuous work, four phases shipped sequentially, three planning/post-impl critic rounds. Mario was asleep for Phase D — the planning critic ran upfront per his directive, post-impl critic + fixes ran overnight.
+
+**Lessons**:
+
+1. **Critic-before-implementation pays for the foot-gunny work.** Phase D had explicit "block on these conditions before merge" findings from the planning critic. Building the standalone restart machinery first (per planning critic §B) caught FD-leak / EADDRINUSE concerns separately from install-subprocess concerns; either bug would have been identifiable in isolation.
+2. **Locked decisions stay locked.** Mario approved 5 product decisions before bedtime; the implementation honored them all without drift. The post-impl critic caught one violation (mid-call gate ignored streams) which was incorporated.
+3. **`os.execv` works in dev (`uv run huxley`) and prod (launchd) without a wrapper.** PID is preserved; launchd doesn't notice the re-exec. Verified empirically via the standalone restart smoke before wiring install.
+4. **Discriminated event frames future-proof a state machine.** Phase D's `install_event {kind: "started" | "complete"}` lets v2 (uninstall, queued, rolled_back) slot in additively without new top-level frame types. Planning critic §E.1.
+5. **Public accessors over private-attr reach.** The implementation initially reached into `audio_server._active_claim_id`; post-impl critic flagged + the fix added `has_active_claim`, `has_active_stream`, `is_busy` accessors. Renames now break the gate at compile time, not runtime.
+
+**Deferred to post-D**:
+
+- Uninstall (`uv remove`). Symmetric foot-guns; needs its own design pass.
+- Per-skill detail sheet inside the PWA (currently the Marketplace card click opens the registry's GitHub page externally).
+- Boot-loop quarantine: if a freshly-installed skill's `setup()` raises, the runtime's lazy-boot path now sends a `status` frame to the PWA (Phase D post-impl critic §3 mitigation), but the broken skill still gets re-tried on every connect. A "quarantine after N consecutive failures" path would be cleaner.
+- PWA-side install/uninstall test coverage (per Phase B + C critics).
+
+**Triage descendants** (queued from the four critic rounds):
+
+- Audit all 9 first-party skills for missing `teardown()` methods (Phase B critic finding) — chip task already filed.
+- Singleflight lock for marketplace fetch concurrency (Phase C critic §1) — cheap stampede; relevant when Phase D's "refetch after install" runs concurrently from multiple tabs.
+- Federation registry-URL override via env var (Phase C critic §9) — speculative until first operator asks.
+
+---

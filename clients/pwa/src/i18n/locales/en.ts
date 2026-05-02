@@ -172,6 +172,9 @@ const en = {
         "{{pkg}} is now available. Open the Skills tab to enable it on this persona.",
       errorTitle: "Install failed",
       errorGeneric: "uv add returned an error. Check the server log.",
+      restartTimedOutTitle: "Server didn't come back",
+      restartTimedOutBody:
+        "The install completed but the server hasn't responded in 30 seconds. Check the server log (~/Library/Logs/Huxley/huxley.log) — the new skill may have a broken setup.",
       dismiss: "Done",
     },
     skillsSheet: {

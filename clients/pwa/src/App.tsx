@@ -769,7 +769,12 @@ export function App() {
               // which sends the WS frame and tracks state in
               // `ws.installState`.
               if (entry.installed) return; // already installed; nothing to do
-              if (!/^huxley-skill-[a-z0-9-]+$/.test(entry.name)) return;
+              // Match the server's tightened regex exactly (Phase D
+              // critic §8): no leading hyphen after the prefix, no
+              // double-hyphens at the head. Out-of-sync regexes meant
+              // the PWA would optimistically flash "Installing…" for
+              // names the server immediately rejected.
+              if (!/^huxley-skill-[a-z0-9][a-z0-9-]*$/.test(entry.name)) return;
               setPendingInstall(entry);
             }}
             onRequestSkillsState={ws.requestSkillsState}
@@ -882,10 +887,20 @@ function InstallConfirmModal({
   onCancel,
 }: InstallConfirmModalProps) {
   const { t } = useTranslation();
+  // Esc to dismiss — Phase D post-impl critic §12. Skipped on the
+  // progress overlay (intentional; install in flight isn't cancelable).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
   return (
     <div
       role="dialog"
       aria-modal="true"
+      aria-labelledby="install-confirm-title"
       style={{
         position: "fixed",
         inset: 0,
@@ -915,6 +930,7 @@ function InstallConfirmModal({
         }}
       >
         <h3
+          id="install-confirm-title"
           style={{
             fontFamily: "var(--hux-serif)",
             fontWeight: 400,
@@ -1007,12 +1023,44 @@ function InstallProgressOverlay({
   onDismiss,
 }: InstallProgressOverlayProps) {
   const { t } = useTranslation();
+  // Force re-render every second so the elapsed counter ticks.
+  // Phase D post-impl critic §7. Only when `running` — other states
+  // are terminal-ish and don't need the tick.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (state.status !== "running") return undefined;
+    const id = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [state.status]);
+
+  // Watchdog for the post-execv reconnect window. If the server
+  // fails to come back up (broken venv, launchd respawn loop), the
+  // PWA would otherwise sit on "Restarting…" forever. After 30s we
+  // surface a recoverable error state. Phase D post-impl critic §4.
+  const [restartTimedOut, setRestartTimedOut] = useState(false);
+  useEffect(() => {
+    if (state.status !== "success-restarting") {
+      setRestartTimedOut(false);
+      return undefined;
+    }
+    if (connected) return undefined; // reconnected; no watchdog needed
+    const id = setTimeout(() => setRestartTimedOut(true), 30_000);
+    return () => clearTimeout(id);
+  }, [state.status, connected]);
+
   // Status copy varies by phase. The "success-restarting + !connected"
   // state is the post-execv reconnect window.
   let title: string;
   let body: string;
   let canDismiss = false;
-  if (state.status === "starting" || state.status === "running") {
+  if (restartTimedOut) {
+    title = t("install.restartTimedOutTitle", "Server didn't come back");
+    body = t(
+      "install.restartTimedOutBody",
+      "The install completed but the server hasn't responded in 30 seconds. Check the server log (~/Library/Logs/Huxley/huxley.log) — the new skill may have a broken setup.",
+    );
+    canDismiss = true;
+  } else if (state.status === "starting" || state.status === "running") {
     title = t("install.installing", "Installing {{pkg}}…").replace(
       "{{pkg}}",
       state.package,
