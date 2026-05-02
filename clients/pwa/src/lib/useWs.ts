@@ -408,6 +408,23 @@ export function useWs() {
                         started_at_ms: msg.install_in_progress!.started_at_ms,
                       },
                 );
+              } else {
+                // Phase D post-impl critic §6 — self-healing fallback.
+                // If the install's `complete` WS frame got dropped on
+                // the floor (race against `os.execv` flushing the
+                // kernel buffer), the post-restart hello arriving
+                // with `install_in_progress: null` is the signal that
+                // the install is OVER. Transition any stuck running/
+                // starting state to success-restarting so the
+                // post-reconnect useEffect's auto-dismiss + refetch
+                // path activates instead of hanging forever.
+                setInstallState((prev) => {
+                  if (prev === null) return prev;
+                  if (prev.status === "running" || prev.status === "starting") {
+                    return { ...prev, status: "success-restarting" };
+                  }
+                  return prev;
+                });
               }
               break;
             case "audio":

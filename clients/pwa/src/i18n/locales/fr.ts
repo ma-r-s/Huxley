@@ -164,6 +164,9 @@ const fr = {
         "{{pkg}} est maintenant disponible. Ouvre l'onglet Compétences pour l'activer sur cette persona.",
       errorTitle: "Échec de l'installation",
       errorGeneric: "uv add a retourné une erreur. Consulte le log serveur.",
+      restartTimedOutTitle: "Le serveur n'est pas revenu",
+      restartTimedOutBody:
+        "L'installation s'est terminée mais le serveur ne répond pas depuis 30 secondes. Consulte le log (~/Library/Logs/Huxley/huxley.log) — la nouvelle compétence peut avoir un setup cassé.",
       dismiss: "OK",
     },
     skillsSheet: {

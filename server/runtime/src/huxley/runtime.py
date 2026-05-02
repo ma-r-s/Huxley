@@ -499,14 +499,24 @@ class Runtime:
     async def _shim_restart_server(self) -> None:
         """Marketplace v2 Phase D — manual restart trigger.
 
-        Two callsites: the DeviceSheet "Restart server" maintenance
-        button, and the install-completion path (which auto-restarts
-        after `uv add` succeeds). Both go through `_perform_restart`
-        which sets the `_restart_after_shutdown` flag + signals the
-        shutdown event; `run()` then performs the normal shutdown
-        sequence (cancel listener, drain teardown, shutdown app) and
-        ends with `os.execv`.
+        Used by the DeviceSheet "Restart server" maintenance button.
+        Refuses if a call/stream is active so the operator doesn't
+        accidentally kill an audiobook or Telegram call. The PWA's
+        Maintenance button is also gated client-side; this is
+        defense in depth (covers ESP32 / future clients that don't
+        gate UI-side). Phase D post-impl critic §2.
+
+        The install-completion path calls `_perform_restart` directly
+        (bypassing this gate) because the install shim already
+        verified `is_busy` was false at the start.
         """
+        if self.audio_server.is_busy:
+            await logger.awarning(
+                "runtime.restart_server.declined_in_call",
+                claim=self.audio_server.has_active_claim,
+                stream=self.audio_server.has_active_stream,
+            )
+            return
         await self._perform_restart()
 
     async def _shim_install_skill(self, package: str) -> None:
@@ -527,13 +537,17 @@ class Runtime:
         with a clear error rather than tearing down the call. Mirrors
         Phase B's `writesDisabled` pattern.
         """
-        # Mid-call gate — same logic AudioServer's `has_active_claim`
-        # exposes for Phase B writes.
-        active_claim = self.audio_server._active_claim_id is not None
-        if active_claim:
+        # Mid-call + mid-stream gate — refuses install while either
+        # an InputClaim (Telegram call, voice memo) or a long-form
+        # AudioStream (audiobook, radio) is active. Phase D post-impl
+        # critic §1: streams were missing from the original gate;
+        # the public `is_busy` accessor (Phase D §5) covers both.
+        if self.audio_server.is_busy:
             await logger.awarning(
                 "runtime.install_skill.declined_in_call",
                 package=package,
+                claim=self.audio_server.has_active_claim,
+                stream=self.audio_server.has_active_stream,
             )
             await self.audio_server.send_install_event(
                 {
@@ -542,7 +556,7 @@ class Runtime:
                     "ok": False,
                     "error_code": "in_call",
                     "error_message": (
-                        "An audio call or stream is active. End it "
+                        "An audio call or playback is active. End it "
                         "before installing a skill — the install "
                         "restarts the server."
                     ),
@@ -832,6 +846,16 @@ class Runtime:
                     "runtime.lazy_boot.first_swap_failed",
                     persona=chosen,
                 )
+                # Phase D post-impl critic §3: silent boot-loop on a
+                # broken-after-install persona is the "you'll find it
+                # at 3am" failure. Surface to the PWA via a status
+                # frame so the user sees something other than empty
+                # state. Server log carries the full traceback.
+                with contextlib.suppress(Exception):
+                    await self.audio_server.send_status(
+                        f"Persona '{chosen}' failed to load — see server log "
+                        f"(~/Library/Logs/Huxley/huxley.log)"
+                    )
             return
 
         if name is None:

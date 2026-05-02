@@ -187,6 +187,12 @@ class AudioServer:
         # because a fresh client has no active claim by definition.
         self._input_mode = INPUT_MODE_ASSISTANT_PTT
         self._active_claim_id: str | None = None
+        # Marketplace v2 Phase D — track stream lifecycle so
+        # `_shim_install_skill` (and the maintenance restart button)
+        # can refuse mid-stream restart that would kill an audiobook
+        # or radio stream. Set from `send_stream_started`, cleared
+        # from `send_stream_ended`. Phase D post-impl critic §1+§2.
+        self._active_stream_id: str | None = None
         # Language the currently-handshaking client requested via
         # `?lang=<code>` in the WebSocket URL. Captured in
         # `_process_request` (runs before `_handle_connection`), consumed
@@ -218,6 +224,29 @@ class AudioServer:
     @property
     def has_client(self) -> bool:
         return self._client is not None
+
+    @property
+    def has_active_claim(self) -> bool:
+        """Phase D — public accessor used by `_shim_install_skill`
+        and `_shim_restart_server` to gate destructive ops on an
+        active call. Mirrors the `_active_claim_id` lifecycle that
+        `claim_started` / `claim_ended` already maintain."""
+        return self._active_claim_id is not None
+
+    @property
+    def has_active_stream(self) -> bool:
+        """Phase D — public accessor for active long-form audio
+        playback (audiobook, radio). Mirrors `_active_stream_id` set
+        by `send_stream_started` and cleared by `send_stream_ended`.
+        Same destructive-op gating as `has_active_claim`."""
+        return self._active_stream_id is not None
+
+    @property
+    def is_busy(self) -> bool:
+        """Combined gate — true if a claim or stream is active.
+        Phase D's restart paths use this to refuse mid-conversation
+        installs / manual restarts."""
+        return self.has_active_claim or self.has_active_stream
 
     async def run(self) -> None:
         async with serve(
@@ -938,6 +967,7 @@ class AudioServer:
             label=label,
             preroll_ms=preroll_ms,
         )
+        self._active_stream_id = stream_id
         await self._send(
             {
                 "type": "stream_started",
@@ -954,6 +984,8 @@ class AudioServer:
         (user PTT, new tool call, or session reset).
         """
         await logger.ainfo("server.tx.stream_ended", stream_id=stream_id, end_reason=end_reason)
+        if self._active_stream_id == stream_id:
+            self._active_stream_id = None
         await self._send(
             {"type": "stream_ended", "stream_id": stream_id, "end_reason": end_reason},
         )
