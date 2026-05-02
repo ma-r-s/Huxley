@@ -102,7 +102,9 @@ class StocksSkill:
 
 This is the entire `Skill` Protocol. There's no base class to inherit from — Huxley uses [structural typing](https://typing.readthedocs.io/en/latest/spec/protocol.html). If your class has the right shape, it's a Skill.
 
-Optional methods (`reconfigure`, `teardown`, `prompt_context`) are no-ops by default; only override them when you need to.
+Optional methods (`reconfigure`, `teardown`, `prompt_context`) are no-ops by default; only override them when you need to. The framework checks for them via `getattr` and skips silently if absent — no AttributeError, no need to define empty stubs.
+
+`teardown` is the lifecycle hook for cleanup: cancel background tasks, close persistent network clients, flush pending writes. If your skill doesn't hold any of those (the StocksSkill reference is one such case — it opens a fresh `httpx.AsyncClient` per call inside an `async with`), you can omit it entirely.
 
 ### `name`
 

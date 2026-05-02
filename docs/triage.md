@@ -4646,7 +4646,7 @@ T1.16 makes this visible to the user (PWA shows the error string instead of pret
 
 ## T1.18 — Audit first-party skills for missing `teardown()` (and a stocks-specific fix)
 
-**Status**: queued (2026-05-02). Upgrades the T1.15 deferred chip with evidence.
+**Status**: done (2026-05-02). Audit revealed 8 of 9 first-party skills already define teardown; Stocks correctly omits it (no persistent state). Real fix was the SDK guard, not per-skill changes.
 
 **Problem.** During Mario's T1.15 voice smoke (2026-05-02 12:57), persona-swap teardown raised `AttributeError: 'StocksSkill' object has no attribute 'teardown'` and aborted the rest of `teardown_all`:
 

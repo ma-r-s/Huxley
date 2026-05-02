@@ -150,9 +150,24 @@ class SkillRegistry:
         background tasks still running until `task_supervisor.stop()`
         cancelled them later in the shutdown — silent inconsistency.
         """
+        # T1.18 — `teardown` is optional per the Skill Protocol's
+        # documented contract ("Optional methods (`prompt_context`,
+        # `setup`, `teardown`) have empty defaults"). The Protocol
+        # method body provides a default at type-check time but does
+        # NOT inject a runtime method on classes that don't inherit
+        # from Skill (most skills are structurally typed — e.g.
+        # `class StocksSkill:` with no base class). Use the same
+        # `getattr`-then-callable pattern as `reconfigure_all` above
+        # so a skill without a teardown silently no-ops instead of
+        # raising AttributeError mid-shutdown — which previously
+        # aborted the loop and left later skills' background tasks /
+        # clients dangling until the supervisor cancelled them.
         for name, skill in self._skills.items():
+            teardown = getattr(skill, "teardown", None)
+            if not callable(teardown):
+                continue
             try:
-                await skill.teardown()
+                await teardown()
             except Exception as exc:
                 if on_error is not None:
                     await on_error(name, exc)

@@ -125,6 +125,89 @@ class TestLifecycle:
         await registry.teardown_all()
         assert skill.teardown_called
 
+    async def test_teardown_all_skips_skills_without_teardown(self) -> None:
+        """T1.18 regression: a structurally-typed skill (no base
+        class, no `teardown` method defined) must NOT abort
+        `teardown_all` mid-loop with AttributeError.
+
+        Pre-T1.18 the registry called `await skill.teardown()`
+        unconditionally, raising AttributeError on classes that
+        relied on the Skill Protocol's documented "optional with
+        default" semantics — Python Protocol method bodies are
+        type-check defaults, not runtime injections. A real-world
+        offender (StocksSkill) had no teardown-able state but
+        still crashed every persona swap.
+
+        This test pins the fix: a skill without `teardown`
+        registered alongside one that DOES define teardown — the
+        teardown-having skill's cleanup must still run, the
+        teardown-less one is silently skipped."""
+
+        class _NoTeardownSkill:
+            name = "no_teardown"
+            tools: ClassVar[list[ToolDefinition]] = []
+
+            async def setup(self, _ctx: Any) -> None: ...
+            async def handle(self, _name: str, _args: dict[str, Any]) -> ToolResult:
+                return ToolResult(output="{}")
+
+        registry = SkillRegistry()
+        no_teardown = _NoTeardownSkill()
+        with_teardown = FakeSkill(name="cleans_up")
+        registry.register(no_teardown)
+        registry.register(with_teardown)
+
+        # Must NOT raise AttributeError.
+        errors: list[tuple[str, BaseException]] = []
+
+        async def _on_error(name: str, exc: BaseException) -> None:
+            errors.append((name, exc))
+
+        await registry.teardown_all(on_error=_on_error)
+
+        # The teardown-having skill still got cleaned up, even
+        # though it was registered AFTER the teardown-less one.
+        assert with_teardown.teardown_called
+        # No error path fired — the missing-teardown case is a
+        # clean skip, not a swallowed exception.
+        assert errors == []
+
+    async def test_teardown_all_continues_past_a_raising_teardown(self) -> None:
+        """Companion to the above: a teardown that raises must
+        also not abort the loop (existing behavior, regression-
+        pinned here so the T1.18 getattr-guard refactor doesn't
+        accidentally drop it)."""
+
+        class _RaisingSkill:
+            name = "raises"
+            tools: ClassVar[list[ToolDefinition]] = []
+
+            async def setup(self, _ctx: Any) -> None: ...
+            async def teardown(self) -> None:
+                msg = "boom"
+                raise RuntimeError(msg)
+
+            async def handle(self, _name: str, _args: dict[str, Any]) -> ToolResult:
+                return ToolResult(output="{}")
+
+        registry = SkillRegistry()
+        raising = _RaisingSkill()
+        with_teardown = FakeSkill(name="cleans_up")
+        registry.register(raising)
+        registry.register(with_teardown)
+
+        errors: list[tuple[str, BaseException]] = []
+
+        async def _on_error(name: str, exc: BaseException) -> None:
+            errors.append((name, exc))
+
+        await registry.teardown_all(on_error=_on_error)
+
+        assert with_teardown.teardown_called
+        assert len(errors) == 1
+        assert errors[0][0] == "raises"
+        assert isinstance(errors[0][1], RuntimeError)
+
 
 class TestPromptContext:
     """T3 #96 — prompt_context() is in the Skill Protocol with empty default."""

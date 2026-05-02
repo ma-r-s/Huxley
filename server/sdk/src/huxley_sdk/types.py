@@ -937,10 +937,13 @@ class Skill(Protocol):
     `SkillContext` carrying the skill's logger, storage, persona data dir,
     and per-skill config from `persona.yaml`.
 
-    Optional methods (`prompt_context`, `setup`, `teardown`) have empty
-    defaults so skill authors only implement what they need. The defaults
-    are inherited by Protocol subtyping — a class with `name`, `tools`,
-    and `handle` is a valid Skill.
+    Optional methods (`prompt_context`, `setup`, `reconfigure`, `teardown`)
+    are skipped at the registry level via `getattr` when a skill class
+    doesn't define them. A class with `name`, `tools`, and `handle` is a
+    valid Skill at runtime — the framework no-ops on absent optional
+    methods rather than relying on Protocol-default inheritance (which
+    only applies when a class explicitly subclasses Skill, and most
+    skills are structurally typed).
 
     ## Optional class-level metadata (T1.14)
 
