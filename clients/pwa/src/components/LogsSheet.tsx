@@ -115,6 +115,7 @@ interface LogsSheetProps {
   statusLog: StatusEntry[];
   devEvents: DevEvent[];
   onClear: () => void;
+  sheetClassName?: string;
 }
 
 export function LogsSheet({
@@ -122,6 +123,7 @@ export function LogsSheet({
   statusLog,
   devEvents,
   onClear,
+  sheetClassName = "hux-sheet",
 }: LogsSheetProps) {
   const { t } = useTranslation();
 
@@ -152,7 +154,7 @@ export function LogsSheet({
   }, [statusLog, devEvents]);
 
   return (
-    <div style={sheetStyles.sheet} className="hux-sheet">
+    <div style={sheetStyles.sheet} className={sheetClassName}>
       <div style={sheetStyles.header}>
         <span>{t("logs.recent")}</span>
         <button style={sheetStyles.closeBtn} onClick={onClose}>

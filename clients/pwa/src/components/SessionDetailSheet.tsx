@@ -95,6 +95,7 @@ interface SessionDetailSheetProps {
   detail: { id: number; turns: SessionTurn[] } | null;
   onMount: () => void;
   onDelete: () => void;
+  sheetClassName?: string;
 }
 
 export function SessionDetailSheet({
@@ -103,6 +104,7 @@ export function SessionDetailSheet({
   detail,
   onMount,
   onDelete,
+  sheetClassName = "hux-sheet",
 }: SessionDetailSheetProps) {
   const { t } = useTranslation();
 
@@ -119,7 +121,7 @@ export function SessionDetailSheet({
   const turns = detail?.id === sessionId ? detail.turns : null;
 
   return (
-    <div style={sheetStyles.sheet} className="hux-sheet">
+    <div style={sheetStyles.sheet} className={sheetClassName}>
       <div style={sheetStyles.header}>
         <span>{t("sessionDetail.recent")}</span>
         <button style={sheetStyles.closeBtn} onClick={onClose}>

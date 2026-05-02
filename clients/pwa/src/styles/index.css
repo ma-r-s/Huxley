@@ -515,6 +515,15 @@ body {
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
 }
+/* Suppress the fade-up animation when navigating between sheets
+   (e.g. SkillsSheet → SkillConfigSheet, SessionsSheet →
+   SessionDetailSheet). The new sheet's `opacity: 0` start would
+   briefly let the underlying sheet — or the home view — show
+   through. Only the first sheet entering from the home view
+   should animate. */
+.hux-sheet.hux-sheet-no-anim {
+  animation: none;
+}
 @keyframes hux-sheet-in {
   from {
     opacity: 0;

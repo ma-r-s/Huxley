@@ -71,6 +71,7 @@ interface SessionsSheetProps {
   sessions: SessionMeta[] | null;
   onPick: (id: number) => void;
   onMount: () => void;
+  sheetClassName?: string;
 }
 
 export function SessionsSheet({
@@ -78,6 +79,7 @@ export function SessionsSheet({
   sessions,
   onPick,
   onMount,
+  sheetClassName = "hux-sheet",
 }: SessionsSheetProps) {
   const { t } = useTranslation();
 
@@ -91,7 +93,7 @@ export function SessionsSheet({
   }, []);
 
   return (
-    <div style={sheetStyles.sheet} className="hux-sheet">
+    <div style={sheetStyles.sheet} className={sheetClassName}>
       <div style={sheetStyles.header}>
         <span>{t("sessions.recent")}</span>
         <button style={sheetStyles.closeBtn} onClick={onClose}>
