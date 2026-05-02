@@ -116,6 +116,49 @@ class TestBasicSwap:
         await runtime_in_tmp.current_app.shutdown()
         await _drain_teardown(runtime_in_tmp)
 
+    async def test_same_persona_noop_when_dir_differs_from_yaml_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """T1.19 regression: the same-persona short-circuit must
+        compare against the directory basename (the canonical id
+        `?persona=` resolves against), NOT `PersonaSpec.name` which
+        is the YAML's display label.
+
+        The existing `test_same_persona_is_noop` shadows this bug
+        because the test fixture writes YAML with `name: {dir}` so
+        directory basename and label happen to agree. This test
+        creates a persona where they diverge (dir=basic,
+        yaml.name="Basic" — exactly the shape of the four shipped
+        personas) and asserts the second `_switch_to_persona("basic")`
+        no-ops instead of running a full swap with teardown."""
+        personas_dir = tmp_path / "personas"
+        d = personas_dir / "basic"
+        d.mkdir(parents=True)
+        (d / "persona.yaml").write_text(
+            _MINIMAL_PERSONA_YAML.format(name="Basic"), encoding="utf-8"
+        )
+        (d / "data").mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        runtime = Runtime(Settings(openai_api_key="test-key"))
+        await runtime._switch_to_persona("basic", auto_connect=False)
+        first = runtime.current_app
+        assert first is not None
+        # Sanity: dir basename and YAML label disagree, otherwise
+        # this test trivially passes via the existing test's path.
+        assert first.persona.name == "Basic"
+        assert first.persona.data_dir.parent.name == "basic"
+
+        # Second swap to the SAME persona via its canonical id.
+        # Pre-T1.19 this fired a full swap (Realtime handshake +
+        # skill re-setup); post-T1.19 it short-circuits.
+        await runtime._switch_to_persona("basic", auto_connect=False)
+        assert runtime.current_app is first
+        assert runtime._teardown_task is None
+
+        await runtime.current_app.shutdown()
+        await _drain_teardown(runtime)
+
     async def test_swap_replaces_current_app_and_schedules_teardown(
         self, runtime_in_tmp: Runtime
     ) -> None:

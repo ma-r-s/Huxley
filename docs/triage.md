@@ -4688,7 +4688,7 @@ The T1.15 Phase B critic flagged that several first-party skills probably miss t
 
 ## T1.19 — Same-persona swap short-circuit uses display label vs directory basename
 
-**Status**: queued (2026-05-02). Same id-vs-display-name foot-gun T1.13 fixed for hello extras but missed here.
+**Status**: done (2026-05-02). Same id-vs-display-name foot-gun T1.13 fixed for hello extras but missed here.
 
 **Problem.** Live trace from 2026-05-02 12:57:52:
 

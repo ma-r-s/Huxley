@@ -310,7 +310,16 @@ class Runtime:
         """
         async with self._swap_lock:
             old_app = self.current_app
-            if not force and old_app is not None and old_app.persona.name == name:
+            # T1.19 — compare against the directory basename (the
+            # canonical id `?persona=` resolves against), NOT the YAML
+            # display label `persona.name` (e.g. "Basic" vs dir
+            # "basic"). The previous comparison fired a full swap +
+            # Realtime handshake on every reconnect to a same-persona
+            # whose dir/label disagreed — which is most of them. Same
+            # id-vs-display-name foot-gun T1.13 fixed for the hello
+            # extras `current_persona` field but missed in this
+            # short-circuit.
+            if not force and old_app is not None and old_app.persona.data_dir.parent.name == name:
                 return  # no-op — already on this persona
 
             # Storage-lock-race fix (critic round 1): if a teardown task
