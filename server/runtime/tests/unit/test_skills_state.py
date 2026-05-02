@@ -56,6 +56,26 @@ class _FakeEntryPoint:
         return self._cls
 
 
+class _FakeMetadata:
+    """Stand-in for `importlib.metadata.PackageMetadata` exposing only
+    the `.get()` keys the skills_state builder reads."""
+
+    def __init__(
+        self,
+        summary: str | None = None,
+        author: str | None = None,
+        author_email: str | None = None,
+    ) -> None:
+        self._fields = {
+            "Summary": summary,
+            "Author": author,
+            "Author-email": author_email,
+        }
+
+    def get(self, key: str) -> str | None:
+        return self._fields.get(key)
+
+
 class _StocksLike:
     """Stand-in for `huxley-skill-stocks` — declares config_schema with
     one secret + one plain enum + one array."""
@@ -98,19 +118,43 @@ def _fake_app(persona_dir: Path, skills_block: dict[str, dict[str, Any]]) -> Any
 
 @pytest.fixture
 def fake_eps(monkeypatch: pytest.MonkeyPatch) -> list[_FakeEntryPoint]:
-    """Replace `huxley.skills_state.entry_points` with a deterministic
-    fixture so tests don't depend on the real workspace venv."""
+    """Replace `huxley.skills_state.entry_points` and the per-package
+    `metadata` lookup with deterministic fixtures so tests don't
+    depend on what's installed in the active venv."""
     eps = [
         _FakeEntryPoint("stocks", _StocksLike, "huxley-skill-stocks", "0.1.0"),
         _FakeEntryPoint("search", _SearchLike, "huxley-skill-search", "0.1.0"),
         _FakeEntryPoint("plain", _NoSchemaLike, "huxley-skill-plain", "0.1.0"),
     ]
+    meta_by_pkg = {
+        "huxley-skill-stocks": _FakeMetadata(
+            summary="Voice-controlled stock quotes via Alpha Vantage.",
+            author_email="Mario Ruiz <mario@example.com>",
+        ),
+        "huxley-skill-search": _FakeMetadata(
+            summary="DuckDuckGo web search, no API key needed.",
+            author_email="Mario Ruiz <mario@example.com>",
+        ),
+        "huxley-skill-plain": _FakeMetadata(
+            summary=None,
+            author=None,
+            author_email=None,
+        ),
+    }
 
-    def _stub(group: str) -> list[_FakeEntryPoint]:
+    def _stub_eps(group: str) -> list[_FakeEntryPoint]:
         assert group == "huxley.skills"
         return eps
 
-    monkeypatch.setattr("huxley.skills_state.entry_points", _stub)
+    def _stub_metadata(pkg: str) -> _FakeMetadata:
+        if pkg in meta_by_pkg:
+            return meta_by_pkg[pkg]
+        from importlib.metadata import PackageNotFoundError
+
+        raise PackageNotFoundError(pkg)
+
+    monkeypatch.setattr("huxley.skills_state.entry_points", _stub_eps)
+    monkeypatch.setattr("huxley.skills_state.metadata", _stub_metadata)
     return eps
 
 
@@ -231,3 +275,64 @@ def test_skills_listed_in_sorted_name_order(
     out = build_skills_state(None)
     names = [s["name"] for s in out["skills"]]
     assert names == sorted(names)
+
+
+def test_description_pulled_from_pypi_summary(
+    fake_eps: list[_FakeEntryPoint],
+) -> None:
+    out = build_skills_state(None)
+    by_name = {s["name"]: s for s in out["skills"]}
+    assert by_name["stocks"]["description"] == "Voice-controlled stock quotes via Alpha Vantage."
+    assert by_name["search"]["description"] == "DuckDuckGo web search, no API key needed."
+    assert by_name["plain"]["description"] is None
+
+
+def test_author_parsed_from_author_email_field(
+    fake_eps: list[_FakeEntryPoint],
+) -> None:
+    """`Author-email` is the modern field; we extract just the name
+    portion so the email itself never reaches the wire."""
+    out = build_skills_state(None)
+    by_name = {s["name"]: s for s in out["skills"]}
+    assert by_name["stocks"]["author"] == "Mario Ruiz"
+    # Author-email NEVER appears anywhere in the payload
+    serialized = json.dumps(out)
+    assert "@example.com" not in serialized
+    # Plain has no author at all
+    assert by_name["plain"]["author"] is None
+
+
+def test_author_falls_back_to_author_field_when_email_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    eps = [_FakeEntryPoint("legacy", _NoSchemaLike, "legacy-pkg", "1.0.0")]
+    monkeypatch.setattr(
+        "huxley.skills_state.entry_points",
+        lambda group: eps if group == "huxley.skills" else [],
+    )
+    monkeypatch.setattr(
+        "huxley.skills_state.metadata",
+        lambda pkg: _FakeMetadata(summary=None, author="Jane Doe"),
+    )
+    out = build_skills_state(None)
+    assert out["skills"][0]["author"] == "Jane Doe"
+
+
+def test_author_email_with_no_name_part_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If `Author-email` is just an email (no name), surface None
+    rather than leak the email address."""
+    eps = [_FakeEntryPoint("anon", _NoSchemaLike, "anon-pkg", "1.0.0")]
+    monkeypatch.setattr(
+        "huxley.skills_state.entry_points",
+        lambda group: eps if group == "huxley.skills" else [],
+    )
+    monkeypatch.setattr(
+        "huxley.skills_state.metadata",
+        lambda pkg: _FakeMetadata(author_email="bare@example.com"),
+    )
+    out = build_skills_state(None)
+    assert out["skills"][0]["author"] is None
+    serialized = json.dumps(out)
+    assert "bare@example.com" not in serialized

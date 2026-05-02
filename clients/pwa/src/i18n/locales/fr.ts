@@ -67,11 +67,18 @@ const fr = {
         appearance: "Apparence",
         language: "Langue",
         persona: "Persona",
+        skills: "Compétences",
         maintenance: "Maintenance",
       },
       persona: {
         disabledHint:
           "Termine d'abord l'appel ou l'audio en cours — changer de persona ferme la connexion active.",
+      },
+      skills: {
+        manage: "Gérer les compétences",
+        loading: "Chargement…",
+        none: "Aucune installée",
+        summary: "{{enabled}} sur {{total}} actives",
       },
       appearance: {
         accent: "Accent",
@@ -108,6 +115,42 @@ const fr = {
         reloadSkills: "Recharger les skills",
         restartServer: "Redémarrer le serveur",
         viewLogs: "Voir les logs",
+      },
+    },
+    skills: {
+      detailEyebrow: "Compétence",
+      back: "Retour",
+      enabled: "Active",
+      disabled: "Inactive",
+      noConfig: "Cette compétence n'a aucun réglage configurable.",
+      dataSchemaVersion: "Version du schéma de données",
+      entryPointName: "Nom de l'entry-point",
+      secretSet: "Configuré ✓",
+      secretNotSet: "Non configuré",
+      default: "Par défaut",
+      unset: "Non configuré",
+      secretBadge: "Secret",
+    },
+    skillsSheet: {
+      eyebrow: "Compétences",
+      close: "Fermer",
+      headline: "Tes compétences",
+      tabs: {
+        installed: "Installées",
+        marketplace: "Marketplace",
+      },
+      installed: {
+        loading: "Chargement…",
+        empty:
+          "Aucune compétence installée. Ajoute-en une avec `uv add huxley-skill-<nom>` et redémarre le serveur.",
+      },
+      card: {
+        noDescription: "Aucune description fournie.",
+      },
+      marketplace: {
+        intro:
+          "Parcours les compétences communautaires curatées par le registre de Huxley. La Phase C remplira cet onglet avec des cartes depuis le flux canonique.",
+        feed: "En attendant, parcours le registre directement :",
       },
     },
   },

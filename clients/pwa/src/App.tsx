@@ -8,6 +8,8 @@ import { Orb } from "./components/Orb.js";
 import { TranscriptDrawer } from "./components/TranscriptDrawer.js";
 import { SessionsSheet } from "./components/SessionsSheet.js";
 import { SessionDetailSheet } from "./components/SessionDetailSheet.js";
+import { SkillConfigSheet } from "./components/SkillConfigSheet.js";
+import { SkillsSheet } from "./components/SkillsSheet.js";
 import { DeviceSheet } from "./components/DeviceSheet.js";
 import { LogsSheet } from "./components/LogsSheet.js";
 import { ClientEventPanel } from "./components/ClientEventPanel.js";
@@ -66,8 +68,19 @@ export function App() {
   // ── UI state ─────────────────────────────────────────────────────────────
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [activeSheet, setActiveSheet] = useState<
-    "sessions" | "session-detail" | "device" | "logs" | null
+    | "sessions"
+    | "session-detail"
+    | "device"
+    | "logs"
+    | "skills"
+    | "skill-config"
+    | null
   >(null);
+  // Marketplace v2 Phase A — which skill the user just tapped in
+  // DeviceSheet's Skills section. Null when no detail sheet is open.
+  // Reset when DeviceSheet closes so a future open doesn't reuse a
+  // stale selection.
+  const [activeSkillName, setActiveSkillName] = useState<string | null>(null);
   const [booted, setBooted] = useState(false);
   const [bootOrbState, setBootOrbState] = useState<OrbState>("wake");
 
@@ -685,8 +698,45 @@ export function App() {
             onReload={() => ws.sendClientEvent("ui.reload_skills")}
             onRestart={() => ws.sendClientEvent("ui.restart_server")}
             onViewLogs={() => setActiveSheet("logs")}
+            skillsState={ws.skillsState}
+            onRequestSkillsState={ws.requestSkillsState}
+            onOpenSkills={() => setActiveSheet("skills")}
           />
         )}
+        {activeSheet === "skills" && (
+          <SkillsSheet
+            skillsState={ws.skillsState}
+            onClose={() => setActiveSheet("device")}
+            onPickSkill={(skill) => {
+              setActiveSkillName(skill.name);
+              setActiveSheet("skill-config");
+            }}
+          />
+        )}
+        {activeSheet === "skill-config" &&
+          ws.skillsState &&
+          activeSkillName !== null &&
+          (() => {
+            const skill = ws.skillsState.skills.find(
+              (s) => s.name === activeSkillName,
+            );
+            if (!skill) {
+              // Skill vanished mid-flight (e.g. uninstalled in Phase D).
+              // Drop back to the SkillsSheet rather than render stale.
+              setActiveSheet("skills");
+              setActiveSkillName(null);
+              return null;
+            }
+            return (
+              <SkillConfigSheet
+                skill={skill}
+                onClose={() => {
+                  setActiveSheet("skills");
+                  setActiveSkillName(null);
+                }}
+              />
+            );
+          })()}
         {activeSheet === "logs" && (
           <LogsSheet
             onClose={() => setActiveSheet(null)}

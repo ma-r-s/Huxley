@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { Appearance, PersonaEntry } from "../types.js";
+import type { Appearance, PersonaEntry, SkillsState } from "../types.js";
 import {
   LANGUAGE_NAMES,
   type LanguageCode,
@@ -584,6 +584,26 @@ function PersonaPicker({
   );
 }
 
+// ── Skills entry summary helper ─────────────────────────────────────────
+//
+// DeviceSheet now exposes Skills via a single "Manage skills →" row
+// that opens the dedicated SkillsSheet (cards + tabs UX). The summary
+// shown on that row is a quick "N of M enabled" so the user gets
+// at-a-glance state without expanding anything.
+
+function skillsRowSummary(
+  state: SkillsState | null,
+  t: (key: string, fallback: string) => string,
+): string {
+  if (state === null) return t("device.skills.loading", "Loading…");
+  const total = state.skills.length;
+  if (total === 0) return t("device.skills.none", "None installed");
+  const enabled = state.skills.filter((s) => s.enabled).length;
+  return t("device.skills.summary", "{{enabled}} of {{total}} enabled")
+    .replace("{{enabled}}", String(enabled))
+    .replace("{{total}}", String(total));
+}
+
 // ── DeviceSheet ───────────────────────────────────────────────────────────
 export interface DeviceInfo {
   connected: boolean;
@@ -609,6 +629,14 @@ interface DeviceSheetProps {
   onReload: () => void;
   onRestart: () => void;
   onViewLogs: () => void;
+  // Marketplace v2 Phase A — DeviceSheet shows a single "Manage skills →"
+  // row whose summary is computed from `skillsState`. `null` until the
+  // first `skills_state` reply arrives. `onRequestSkillsState` fires on
+  // mount + on every reopen so a stale persona swap re-syncs.
+  // `onOpenSkills` opens the dedicated SkillsSheet (cards + tabs).
+  skillsState: SkillsState | null;
+  onRequestSkillsState: () => void;
+  onOpenSkills: () => void;
 }
 
 export function DeviceSheet({
@@ -624,8 +652,19 @@ export function DeviceSheet({
   onReload,
   onRestart,
   onViewLogs,
+  skillsState,
+  onRequestSkillsState,
+  onOpenSkills,
 }: DeviceSheetProps) {
   const { t } = useTranslation();
+
+  // Refresh on every open. The closure is stable (App.tsx wraps it
+  // in useCallback) so this fires once per mount, not on every
+  // render. Phase B will also re-fire on every successful write so
+  // the panel reflects writes from another tab / external edits.
+  useEffect(() => {
+    onRequestSkillsState();
+  }, [onRequestSkillsState]);
 
   const accentName =
     ACCENTS.find((a) => a.id === appearance.accent)?.name ?? "Custom";
@@ -719,6 +758,24 @@ export function DeviceSheet({
                 : undefined
             }
           />
+        </Section>
+
+        <Section label={t("device.sections.skills", "Skills")}>
+          <button style={S.rowBtn} onClick={onOpenSkills}>
+            <span>{t("device.skills.manage", "Manage skills")}</span>
+            <span
+              style={{
+                display: "flex",
+                alignItems: "baseline",
+                gap: 12,
+                fontSize: 13,
+                color: "var(--hux-fg-dim)",
+              }}
+            >
+              <span>{skillsRowSummary(skillsState, t)}</span>
+              <span>{"›"}</span>
+            </span>
+          </button>
         </Section>
 
         <Section label={t("device.sections.maintenance")}>

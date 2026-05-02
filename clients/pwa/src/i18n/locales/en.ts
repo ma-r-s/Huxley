@@ -76,11 +76,18 @@ const en = {
         appearance: "Appearance",
         language: "Language",
         persona: "Persona",
+        skills: "Skills",
         maintenance: "Maintenance",
       },
       persona: {
         disabledHint:
           "Finish the current call or audio first — switching personas closes the active connection.",
+      },
+      skills: {
+        manage: "Manage skills",
+        loading: "Loading…",
+        none: "None installed",
+        summary: "{{enabled}} of {{total}} enabled",
       },
       appearance: {
         accent: "Accent",
@@ -117,6 +124,42 @@ const en = {
         reloadSkills: "Reload skills",
         restartServer: "Restart server",
         viewLogs: "View logs",
+      },
+    },
+    skills: {
+      detailEyebrow: "Skill",
+      back: "Back",
+      enabled: "Enabled",
+      disabled: "Disabled",
+      noConfig: "This skill has no configurable settings.",
+      dataSchemaVersion: "Data schema version",
+      entryPointName: "Entry-point name",
+      secretSet: "Set ✓",
+      secretNotSet: "Not set",
+      default: "Default",
+      unset: "Not configured",
+      secretBadge: "Secret",
+    },
+    skillsSheet: {
+      eyebrow: "Skills",
+      close: "Close",
+      headline: "Your skills",
+      tabs: {
+        installed: "Installed",
+        marketplace: "Marketplace",
+      },
+      installed: {
+        loading: "Loading…",
+        empty:
+          "No skills installed. Add one with `uv add huxley-skill-<name>` and restart the server.",
+      },
+      card: {
+        noDescription: "No description provided.",
+      },
+      marketplace: {
+        intro:
+          "Browse community-contributed skills curated by Huxley's discovery registry. Phase C will populate this tab with cards from the canonical feed.",
+        feed: "Until then, browse the registry directly:",
       },
     },
   },
