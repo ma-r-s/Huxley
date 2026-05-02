@@ -67,11 +67,18 @@ const es = {
         appearance: "Apariencia",
         language: "Idioma",
         persona: "Persona",
+        skills: "Habilidades",
         maintenance: "Mantenimiento",
       },
       persona: {
         disabledHint:
           "Termina la llamada o el audio actual primero — cambiar de persona cierra la conexión activa.",
+      },
+      skills: {
+        manage: "Administrar habilidades",
+        loading: "Cargando…",
+        none: "Ninguna instalada",
+        summary: "{{enabled}} de {{total}} activas",
       },
       appearance: {
         accent: "Acento",
@@ -108,6 +115,42 @@ const es = {
         reloadSkills: "Recargar skills",
         restartServer: "Reiniciar servidor",
         viewLogs: "Ver logs",
+      },
+    },
+    skills: {
+      detailEyebrow: "Habilidad",
+      back: "Atrás",
+      enabled: "Activa",
+      disabled: "Inactiva",
+      noConfig: "Esta habilidad no tiene ajustes configurables.",
+      dataSchemaVersion: "Versión del esquema de datos",
+      entryPointName: "Nombre del entry-point",
+      secretSet: "Configurado ✓",
+      secretNotSet: "Sin configurar",
+      default: "Por defecto",
+      unset: "Sin configurar",
+      secretBadge: "Secreto",
+    },
+    skillsSheet: {
+      eyebrow: "Habilidades",
+      close: "Cerrar",
+      headline: "Tus habilidades",
+      tabs: {
+        installed: "Instaladas",
+        marketplace: "Marketplace",
+      },
+      installed: {
+        loading: "Cargando…",
+        empty:
+          "No hay habilidades instaladas. Agrega una con `uv add huxley-skill-<nombre>` y reinicia el servidor.",
+      },
+      card: {
+        noDescription: "Sin descripción.",
+      },
+      marketplace: {
+        intro:
+          "Explora habilidades de la comunidad curadas por el registro de Huxley. La Fase C poblará esta pestaña con tarjetas desde el feed canónico.",
+        feed: "Mientras tanto, explora el registro directamente:",
       },
     },
   },

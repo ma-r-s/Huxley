@@ -12,6 +12,8 @@ import type {
   DevEvent,
   SessionMeta,
   SessionTurn,
+  SkillSummary,
+  SkillsState,
 } from "../types.js";
 
 const EXPECTED_PROTOCOL = 2;
@@ -86,7 +88,8 @@ type ServerMessage =
   | { type: "server_event"; event: string; data: Record<string, unknown> }
   | { type: "sessions_list"; sessions: SessionMeta[] }
   | { type: "session_detail"; id: number; turns: SessionTurn[] }
-  | { type: "session_deleted"; id: number };
+  | { type: "session_deleted"; id: number }
+  | { type: "skills_state"; persona: string | null; skills: SkillSummary[] };
 
 export function useWs() {
   // ── Render state ────────────────────────────────────────────────────────
@@ -126,6 +129,12 @@ export function useWs() {
     PersonaEntry[] | null
   >(null);
   const [currentPersona, setCurrentPersona] = useState<string | null>(null);
+
+  // Marketplace v2 Phase A — DeviceSheet's Skills section requests
+  // this on open via `requestSkillsState()`. Null until the first
+  // reply arrives so the UI can distinguish "loading" from "loaded
+  // and empty." Refreshed on every `skills_state` frame.
+  const [skillsState, setSkillsState] = useState<SkillsState | null>(null);
 
   // ── Refs (callback-readable without stale closures) ─────────────────────
   const socketRef = useRef<WebSocket | null>(null);
@@ -444,6 +453,15 @@ export function useWs() {
               );
               setSessionDetail((prev) => (prev?.id === msg.id ? null : prev));
               break;
+            case "skills_state":
+              // Marketplace v2 Phase A — DeviceSheet's Skills section.
+              // Whole array replaced each time; the server is the
+              // source of truth.
+              setSkillsState({
+                persona: msg.persona,
+                skills: msg.skills,
+              });
+              break;
           }
         } catch {
           // ignore malformed messages
@@ -589,6 +607,11 @@ export function useWs() {
     [sendRaw],
   );
 
+  // ── Skills (Marketplace v2 Phase A) ─────────────────────────────────────
+  const requestSkillsState = useCallback(() => {
+    sendRaw({ type: "get_skills_state" });
+  }, [sendRaw]);
+
   // ── Public API ───────────────────────────────────────────────────────────
   return {
     // State
@@ -607,6 +630,7 @@ export function useWs() {
     sessionDetail,
     availablePersonas,
     currentPersona,
+    skillsState,
     get activeUrl() {
       return activeUrlRef.current;
     },
@@ -627,6 +651,7 @@ export function useWs() {
     listSessions,
     getSession,
     deleteSession,
+    requestSkillsState,
     sendAudio: (data: string) => sendRaw({ type: "audio", data }),
     sendClientEvent,
 

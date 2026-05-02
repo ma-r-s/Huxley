@@ -75,6 +75,59 @@ export interface SessionTurn {
   text: string;
 }
 
+// Marketplace v2 Phase A — DeviceSheet's Skills section. Shape mirrors
+// the `skills_state` wire frame from docs/protocol.md.
+//
+// `name` is the entry-point key (`stocks`, `audiobooks`, ...); the
+// `package` is the PyPI dist name (`huxley-skill-stocks`). `enabled`
+// is whether the active persona's `skills:` block lists this skill.
+// `current_config` is the per-skill block from persona.yaml — empty
+// dict for skills that aren't enabled. `secret_keys_set` lists the
+// keys present in `<persona>/data/secrets/<skill>/values.json` (no
+// values, never on the wire); `secret_required_keys` is derived from
+// `config_schema` properties whose `format` is `"secret"` — used to
+// compute "missing required secret" UI affordances.
+export interface SkillSummary {
+  name: string;
+  package: string | null;
+  version: string | null;
+  description: string | null;
+  author: string | null;
+  enabled: boolean;
+  config_schema: JsonSchema | null;
+  data_schema_version: number;
+  current_config: Record<string, unknown>;
+  secret_keys_set: string[];
+  secret_required_keys: string[];
+}
+
+export interface SkillsState {
+  persona: string | null;
+  skills: SkillSummary[];
+}
+
+// Minimal subset of JSON Schema 2020-12 the form renderer recognizes.
+// Server validates that schemas conform; this is just enough to walk
+// the tree and decide what input element to render. Anything we don't
+// handle falls through to a debug-only "raw" view in dev builds.
+export interface JsonSchema {
+  type?: string | string[];
+  properties?: Record<string, JsonSchema>;
+  required?: string[];
+  items?: JsonSchema;
+  enum?: unknown[];
+  default?: unknown;
+  description?: string;
+  format?: string;
+  minimum?: number;
+  maximum?: number;
+  // Two custom Huxley extensions — see docs/skill-marketplace.md
+  // § Config schema convention.
+  "x-huxley:help"?: string;
+  // (Cannot use `format: "secret"` as a constraint on the type system
+  // since `format` is open-ended in JSON Schema; we just match by string.)
+}
+
 // Appearance preferences — persisted in localStorage.
 export interface Appearance {
   accent: string;

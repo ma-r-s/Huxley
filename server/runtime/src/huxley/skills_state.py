@@ -23,7 +23,13 @@ from __future__ import annotations
 
 import contextlib
 import json
-from importlib.metadata import PackageNotFoundError, distribution, entry_points
+import re
+from importlib.metadata import (
+    PackageNotFoundError,
+    distribution,
+    entry_points,
+    metadata,
+)
 from typing import TYPE_CHECKING, Any
 
 from huxley.loader import ENTRY_POINT_GROUP
@@ -32,6 +38,13 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from huxley.app import Application
+
+# `Author-email` is the dominant author-identification field in modern
+# pyproject.toml metadata (PEP 621). It typically arrives as
+# ``"Mario Ruiz <marioalejandroruizsarmiento@gmail.com>"``; we extract
+# just the name for display. Falls back to the raw `Author` field if
+# email isn't set.
+_AUTHOR_NAME_RE = re.compile(r"^\s*([^<]+?)\s*<")
 
 
 def build_skills_state(app: Application | None) -> dict[str, Any]:
@@ -65,6 +78,7 @@ def _build_one(
 ) -> dict[str, Any]:
     name = ep.name
     package, version = _package_metadata(ep)
+    description, author = _description_and_author(package)
     config_schema, data_schema_version = _class_metadata(ep)
     enabled = name in enabled_block
     current_config = dict(enabled_block.get(name, {}))
@@ -74,6 +88,8 @@ def _build_one(
         "name": name,
         "package": package,
         "version": version,
+        "description": description,
+        "author": author,
         "enabled": enabled,
         "config_schema": config_schema,
         "data_schema_version": data_schema_version,
@@ -107,6 +123,38 @@ def _package_metadata(ep: Any) -> tuple[str | None, str | None]:
         d = distribution(candidate)
         return d.name, d.version
     return dist_name, version
+
+
+def _description_and_author(
+    package_name: str | None,
+) -> tuple[str | None, str | None]:
+    """Pull the PyPI ``Summary`` (description) + parsed author name
+    from package metadata. Both fall back to ``None`` for packages
+    whose metadata can't be located, which the PWA renders as ``—``.
+
+    The author parser handles modern ``Author-email`` shape
+    (``"Name <email>"``); falls back to the raw ``Author`` field when
+    email isn't set. The email itself is **not** surfaced — only the
+    parsed display name — so the wire frame doesn't leak contact info."""
+    if not package_name:
+        return None, None
+    try:
+        m = metadata(package_name)
+    except PackageNotFoundError:
+        return None, None
+    summary = m.get("Summary")
+    author_email = m.get("Author-email")
+    author_plain = m.get("Author")
+    # `Author-email` shape ``"Name <email>"``: extract just the name.
+    # Email-only with no name part → ``None`` (we don't surface raw
+    # contact info on the wire).
+    author: str | None = None
+    if author_email:
+        match = _AUTHOR_NAME_RE.match(author_email)
+        author = match.group(1) if match else None
+    if author is None and author_plain:
+        author = author_plain.strip() or None
+    return summary, author
 
 
 def _class_metadata(ep: Any) -> tuple[dict[str, Any] | None, int]:
