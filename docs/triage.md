@@ -4887,3 +4887,77 @@ Three layers, each independently useful:
 - Server-side test: verify `conn_id` propagates through every `server.rx.*` and `server.tx.*` log line.
 
 ---
+
+## T1.22 — Debounce disconnect to survive React StrictMode's double-mount (the actual root cause of "skills not loading")
+
+**Status**: done (2026-05-02). The bug T1.16/T1.17/T1.18/T1.19/T1.20/T1.21 were all observing or mitigating; this is the root cause fix.
+
+**Problem.** The "PWA looks ready, skills stuck loading, audio sent never gets a response" failure has been hitting Mario for hours across multiple commits. T1.16 surfaced it as a session_ready signal, T1.20 added a hello watchdog, T1.21 added the diagnostic panel + ping watchdog — each layer caught more of the symptom but never the cause. With T1.21's per-frame visibility, the actual mechanism was finally observable end-to-end.
+
+**Validation (the diagnostic flow that finally pinned it).**
+
+Reproduced live in Mario's Chrome (via Claude-in-Chrome MCP) at 2026-05-02 11:18-11:35:
+
+1. Diagnostic panel showed conn_id `d1185e17` on a fresh reload. RX BY TYPE = `hello: 1, state: 1, input_mode: 1`. **No `skills_state`.**
+2. `grep d1185e17 huxley.log`:
+   - `client_connected` for `d1185e17` at 16:21:30.207 (UTC).
+   - `server.rx.get_skills_state` at 16:21:30.224 (PWA's request).
+   - `server.tx.skills_state count=9` at 16:21:30.228 (server reply).
+   - **Server sent the response. The PWA's `ws.onmessage` never fired for it.**
+3. From the dev console, sent 5 `get_skills_state` in tight succession on the React-held WS. Server received and replied to all 5. PWA's `addEventListener('message', ...)` on the same WS captured zero. `bufferedAmount=0`, `readyState=1`. Bytes left the server. Bytes never reached the JS handler.
+4. From the same console, opened a fresh `new WebSocket('ws://localhost:5174/ws')`. All 4 frames including `skills_state` arrived correctly. Same browser, same Vite proxy, same server.
+5. Disabled `permessage-deflate` server-side. Bug unchanged. Not compression.
+6. Direct connection bypassing Vite (`ws://localhost:8765/ws`). Worked. So Vite is involved.
+7. **Disabled `<StrictMode>` in `main.tsx`.** Bug vanished. Skills loaded immediately. Re-enabled StrictMode → bug returned.
+
+That isolated it. **React 18 StrictMode's mount-cleanup-mount cycle creates two near-simultaneous WebSockets.** The server treats them as one client at a time (newest wins via eviction), but somewhere in the Vite-proxy + websockets-Python + browser-WS stack, the second WS — after the first is evicted — experiences silent inbound frame loss after the first ~3 frames. Root cause beyond that boundary likely needs packet-level inspection of Vite's WS proxy under the eviction-then-reuse pattern, but the application-level fix is straightforward: **don't open two sockets in the first place.**
+
+**Why this hid for so long.** Server logs always showed correct `server.rx.get_skills_state` + `server.tx.skills_state count=9` pairs — server was doing its job. PWA `readyState=1` reported the WS as healthy. Vite's proxy was handling other traffic correctly. T1.20's hello watchdog couldn't catch it (hello arrived). T1.21's ping watchdog took 95s to detect (3 missed pongs at 30s intervals). The pattern was visible only when you correlated server-side `client_connected` + `client_evicted` events with the PWA-side frame log — which is exactly what T1.21 made possible.
+
+**Design.**
+
+The standard StrictMode-safe pattern for setup/cleanup of expensive resources: defer the cleanup so a quick re-setup can cancel it. Implementation in `useWs.ts`:
+
+- `pendingDisconnectRef = useRef<Timeout | null>(null)` — stores the deferred close.
+- `disconnect()` no longer eagerly closes. It schedules a 50ms `setTimeout` that does the actual close + state cleanup. If a second `disconnect()` arrives before the timer fires, it replaces the prior timer.
+- `connect()` cancels any pending disconnect at its top. If the existing socket from before is still alive (per the existing `readyState` guard), `connect()` returns early — no new socket is created, the server sees one connection across the whole StrictMode mount-cleanup-mount cycle.
+
+Result: StrictMode dev runs the same lifecycle, but only one server-side connection is created. The frame-loss pattern (caused by ws1 → close-1001 → ws2 race in the Vite/websockets stack) doesn't trigger.
+
+**Fix scope:**
+
+- `clients/pwa/src/lib/useWs.ts` — added `pendingDisconnectRef`, debounced `disconnect()`, cancel-on-`connect()` at top.
+- Drive-by from earlier in the session: moved `wsLogRef.current?.recordRx(ev.data)` BEFORE the `if (socketRef.current !== ws) return` gate in `onmessage` so even gated frames are logged. Doesn't fix this bug (the bug was that onmessage didn't fire at all), but the gate semantics are still valid for state dispatch — just shouldn't apply to observability.
+
+**Verification.** With T1.22 + StrictMode re-enabled:
+
+- DiagnosticPanel shows: `conn_id: f1e30f66, ready: OPEN, RX BY TYPE: hello:1 state:1 input_mode:1 skills_state:1`. All 4 frames.
+- DeviceSheet → Skills section shows "Manage skills — 8 of 9 enabled" instead of "Loading…".
+- Server log shows a single `client_connected` per page load (instead of the StrictMode pair + `client_evicted`).
+
+**DoD**:
+
+- [x] React StrictMode re-enabled in `main.tsx`.
+- [x] `disconnect()` debounced to 50ms.
+- [x] `connect()` cancels any pending disconnect at entry.
+- [x] No new server connection is created during StrictMode's mount-cleanup-mount.
+- [x] All four handshake-burst frames (hello/state/input_mode/skills_state) arrive at the React-held WS.
+- [x] Skills panel shows actual skill count, not "Loading…".
+- [x] tsc + ruff + mypy --strict green.
+- [ ] Test for the debounce (regression-pin).
+
+**Lessons**:
+
+- The standard React 18 dev-server pattern (`<StrictMode>`) is incompatible with naive setup/cleanup of WebSocket connections. The intended "did you handle the double mount?" check works for observers but breaks producers — opening a fresh socket then opening another fresh socket racing on the same server is not always safe at the protocol layer.
+- **Debounce-cleanup is the canonical StrictMode-safe pattern** for any expensive resource (sockets, network connections, timers tied to external state). 50ms is enough to span the StrictMode mount-cleanup-mount cycle (which is sub-millisecond in practice) without being noticeable to a user-driven disconnect.
+- Each prior triage entry (T1.16-T1.21) was solving a downstream symptom of a single root cause. We shipped six fixes' worth of diagnostic infrastructure before finding the one-page debounce that resolves all of them. The diagnostic infrastructure was worth it — without T1.21's frame log + conn_id correlation, this would still be open. But the cost was a session of "patching at the wrong layer." Lesson: when a class of bugs keeps happening, the fix should target the input not the output, and "the input" sometimes means "stop creating the bad state in the first place."
+- Vite's WS proxy + websockets-Python + browser WebSocket has a real interaction bug under the rapid open-evict-open pattern. The fix here avoids triggering it client-side; if a future scenario can't avoid it (e.g. genuine multi-tab use cases), the Vite layer would need investigation. Filed as a follow-up below.
+
+**Follow-ups (queued, not this commit)**:
+
+- PWA test for the debounce: regression-pin `connect()` + `disconnect()` within 50ms → no new socket, no server connection churn.
+- Investigate the Vite-proxy/websockets/browser interaction that loses frames after the open-evict-open pattern. Out of scope for the framework fix; would need packet capture + reproduction outside Huxley to file upstream.
+- Audit other `useEffect` setup/cleanup pairs in `useWs.ts` and `App.tsx` for similar StrictMode hazards. The mic + audio playback init might benefit from the same pattern.
+- Now that the root cause is fixed, T1.20's hello watchdog and T1.21's ping watchdog are belt-and-suspenders — they catch genuine network drops, not the StrictMode bug. Consider adjusting their thresholds (faster detection) since they're no longer paying for a bug that produced ~95s of bad UX.
+
+---

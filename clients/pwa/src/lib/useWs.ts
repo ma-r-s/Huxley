@@ -252,6 +252,24 @@ export function useWs() {
   // schedules a fresh connection. Pre-T1.20 the user had to manually
   // reload past the wedge.
   const helloWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // T1.22 — debounce disconnect to survive React StrictMode's
+  // mount-cleanup-mount cycle (and Fast Refresh's analogue). Eagerly
+  // closing the socket on cleanup-#1 then opening a fresh one on
+  // mount-#2 created two near-simultaneous server connections — the
+  // server evicted the first (close-1001 to ws1) and the second (ws2)
+  // experienced silent frame loss after handshake (the bug Mario hit
+  // for hours: hello/state/input_mode arrived, skills_state didn't).
+  // Reproducible: with StrictMode disabled, the bug vanished. With
+  // this debounce, StrictMode stays on AND the bug is gone — the
+  // mount-cleanup-mount cycle keeps ws1 alive throughout because
+  // mount-#2's connect() cancels the pending close before it fires.
+  // 50ms is shorter than any deliberate disconnect+reconnect cycle
+  // a real user can trigger; persona swap (`selectPersona`) calls
+  // `socketRef.current.close()` directly without going through this
+  // path, so it's unaffected.
+  const pendingDisconnectRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   // Mirrors of state vars that callbacks need to read synchronously
   const inputModeRef = useRef<InputMode>("assistant_ptt");
@@ -409,6 +427,14 @@ export function useWs() {
 
   const connect = useCallback(
     (url?: string, language?: string | null, persona?: string | null) => {
+      // T1.22 — cancel any pending disconnect from a recent
+      // StrictMode-pair cleanup. If the existing socket from before
+      // is still alive, the readyState guard below will reuse it; no
+      // new socket is created, the server sees only one connection.
+      if (pendingDisconnectRef.current !== null) {
+        clearTimeout(pendingDisconnectRef.current);
+        pendingDisconnectRef.current = null;
+      }
       // An explicit connect() call (initial mount, persona switch, or StrictMode
       // remount) always re-enables auto-reconnect.
       noReconnectRef.current = false;
@@ -566,14 +592,26 @@ export function useWs() {
       };
 
       ws.onmessage = (ev) => {
-        if (socketRef.current !== ws) return; // stale socket
-        // T1.21 — log every inbound frame BEFORE dispatch so even a
-        // dispatcher that drops on parse failure still leaves a trace
-        // in the timeline. The log records its own parse + falls
-        // back to a [malformed] entry if JSON.parse fails.
+        // T1.21 — log every inbound frame UNCONDITIONALLY, BEFORE
+        // any stale-socket gate. The previous version (and pre-T1.21
+        // code) dropped frames whose `socketRef.current !== ws`.
+        // Under React StrictMode + HMR, socketRef churns between
+        // mounts; a frame from THIS ws can arrive in a window where
+        // socketRef briefly points elsewhere (or is null between
+        // disconnect and reconnect), and it would be dropped silently.
+        // The closure captures `ws` so this onmessage only ever
+        // fires for THIS specific WebSocket — there's no actual
+        // stale-frame risk at the log layer. State dispatch below
+        // still gates because state updates from a non-current ws
+        // would clobber state, but logging is an observer.
         if (typeof ev.data === "string") {
           wsLogRef.current?.recordRx(ev.data);
         }
+        // The actual gate moved here: state-mutation dispatch only
+        // runs if this `ws` is still the current one. The frame is
+        // already captured in the diag log above, so a wedge is
+        // visible even when the gate fires.
+        if (socketRef.current !== ws) return;
         try {
           const msg = JSON.parse(ev.data as string) as ServerMessage;
           switch (msg.type) {
@@ -867,14 +905,28 @@ export function useWs() {
   );
 
   const disconnect = useCallback(() => {
-    noReconnectRef.current = true;
-    cancelSilenceTimer("disconnect");
-    setThinkingActiveSync(false);
-    setActiveStream(null);
-    setActiveClaimTitle(null);
-    socketRef.current?.close();
-    socketRef.current = null;
-    setConnected(false);
+    // T1.22 — debounce. StrictMode's mount-cleanup-mount calls
+    // disconnect() then connect() within microseconds; eagerly
+    // closing here creates two server connections in rapid succession
+    // (the second one experiences silent frame loss after handshake,
+    // which is the Mario-reported "skills not loading" bug). Defer
+    // the actual close so a follow-up connect() can cancel it. A real
+    // unmount has no follow-up connect → the timer fires and we close
+    // normally.
+    if (pendingDisconnectRef.current !== null) {
+      clearTimeout(pendingDisconnectRef.current);
+    }
+    pendingDisconnectRef.current = setTimeout(() => {
+      pendingDisconnectRef.current = null;
+      noReconnectRef.current = true;
+      cancelSilenceTimer("disconnect");
+      setThinkingActiveSync(false);
+      setActiveStream(null);
+      setActiveClaimTitle(null);
+      socketRef.current?.close();
+      socketRef.current = null;
+      setConnected(false);
+    }, 50);
   }, [cancelSilenceTimer, setThinkingActiveSync]);
 
   // T1.13: persona switch is a WebSocket reconnect with `?persona=<name>`.
