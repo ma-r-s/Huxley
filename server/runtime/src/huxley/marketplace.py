@@ -42,6 +42,10 @@ DEFAULT_REGISTRY_URL = "https://raw.githubusercontent.com/ma-r-s/huxley-registry
 _CACHE: tuple[dict[str, Any], float] | None = None
 _CACHE_TTL_S = 3600.0  # 60 minutes
 _FETCH_TIMEOUT_S = 8.0
+# Hard cap on registry response size. Today's canonical feed is < 100 KB;
+# 2 MB is 20x headroom. Rejecting larger bodies prevents OOM if a
+# federation operator's self-hosted endpoint mis-streams.
+_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 _USER_AGENT = "Huxley-PWA/marketplace.v1"
 
 
@@ -73,13 +77,28 @@ async def fetch_marketplace(*, force: bool = False) -> dict[str, Any]:
             return _decorate(payload, fetched_at_ms=int(fetched_at * 1000))
 
     try:
-        async with httpx.AsyncClient(
-            timeout=_FETCH_TIMEOUT_S,
-            headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
-        ) as client:
-            resp = await client.get(DEFAULT_REGISTRY_URL)
+        # Stream-read with a hard size cap. The today-canonical
+        # registry feed is < 100 KB, but a federation operator
+        # could point us at a self-hosted endpoint that streams
+        # an unbounded body. 2 MB is generous (20x headroom);
+        # bigger than that is a misconfigured endpoint, not a
+        # legitimate registry, and we reject rather than OOM.
+        # Phase C critic round 1 finding 3.
+        async with (
+            httpx.AsyncClient(
+                timeout=_FETCH_TIMEOUT_S,
+                headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
+            ) as client,
+            client.stream("GET", DEFAULT_REGISTRY_URL) as resp,
+        ):
             resp.raise_for_status()
-            payload = resp.json()
+            buf = bytearray()
+            async for chunk in resp.aiter_bytes():
+                buf.extend(chunk)
+                if len(buf) > _MAX_RESPONSE_BYTES:
+                    msg = f"registry response exceeded {_MAX_RESPONSE_BYTES} bytes"
+                    raise ValueError(msg)
+            payload = json.loads(bytes(buf))
     except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
         # Serve stale cache if we have one — better than blank panel.
         if _CACHE is not None:
@@ -123,13 +142,19 @@ def _decorate(payload: dict[str, Any], *, fetched_at_ms: int) -> dict[str, Any]:
     for entry in raw_skills:
         if not isinstance(entry, dict):
             continue
-        # Match against the package name (the registry's `name` field is
-        # the PyPI dist; entry points report names like `audiobooks`,
-        # not `huxley-skill-audiobooks`. We normalize via the convention
-        # `huxley-skill-<key>` → `<key>`.)
-        pkg = entry.get("name", "") if isinstance(entry.get("name"), str) else ""
-        ep_key = pkg.removeprefix("huxley-skill-") if pkg else ""
-        installed = ep_key in installed_names if ep_key else False
+        # Match against the package name. Drop entries with no string
+        # `name` — the schema requires it, but a registry-PR slip
+        # could still ship one through. Letting it pass would crash
+        # the PWA's `entry.name.replace(...)` downstream. Phase C
+        # critic round 1 finding 11.
+        name_raw = entry.get("name")
+        if not isinstance(name_raw, str) or not name_raw:
+            continue
+        # The registry's `name` is the PyPI dist (`huxley-skill-foo`);
+        # entry points report just `foo`. Normalize via the convention
+        # `huxley-skill-<key>` → `<key>`.
+        ep_key = name_raw.removeprefix("huxley-skill-")
+        installed = ep_key in installed_names
         out_skills.append({**entry, "installed": installed})
     return {
         "skills": out_skills,
@@ -143,9 +168,18 @@ def _decorate(payload: dict[str, Any], *, fetched_at_ms: int) -> dict[str, Any]:
 
 def _installed_skill_names() -> set[str]:
     """Set of installed skill names (entry-point keys) in the active
-    venv. Read fresh on every fetch — cheap (importlib.metadata is
-    already cached at the Python level) and means a `uv add` just
-    completed (Phase D) shows up immediately."""
+    venv. Read fresh on every fetch — cheap (importlib.metadata
+    caches its discovery at the Python level).
+
+    **Phase D caveat**: `uv add` mutates `site-packages` AFTER the
+    Python process started. The cached entry-point index does NOT
+    pick up the new package automatically — Phase D's install-
+    completion path must call `importlib.invalidate_caches()` (or
+    restart the process) before the next `_decorate` call to flip
+    the freshly-installed skill's `installed: bool` from False to
+    True. Phase C operates on a static venv so this is forward-only
+    documentation.
+    """
     from importlib.metadata import entry_points
 
     return {ep.name for ep in entry_points(group=ENTRY_POINT_GROUP)}

@@ -15,6 +15,7 @@ Pin the contract:
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -69,9 +70,25 @@ def reset_cache() -> None:
 
 
 class _FakeResponse:
-    def __init__(self, status: int, body: Any) -> None:
+    """Mimics enough of `httpx.Response` for the streaming code path
+    used by `marketplace.fetch_marketplace`. `body` is bytes (or
+    encoded from a Python object); `aiter_bytes` yields it as a single
+    chunk OR as `chunks` if a sequence is supplied (lets tests
+    exercise the size-cap by chunking past the threshold)."""
+
+    def __init__(
+        self,
+        status: int,
+        body: Any,
+        *,
+        chunks: list[bytes] | None = None,
+    ) -> None:
         self.status_code = status
-        self._body = body
+        if isinstance(body, bytes | bytearray):
+            self._body_bytes = bytes(body)
+        else:
+            self._body_bytes = json.dumps(body).encode("utf-8")
+        self._chunks = chunks
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
@@ -83,10 +100,27 @@ class _FakeResponse:
                 response=None,  # type: ignore[arg-type]
             )
 
-    def json(self) -> Any:
-        if callable(self._body):
-            return self._body()
-        return self._body
+    async def aiter_bytes(self):
+        if self._chunks is not None:
+            for chunk in self._chunks:
+                yield chunk
+            return
+        yield self._body_bytes
+
+
+class _FakeStreamCtx:
+    """Mimics the async context returned by `httpx.AsyncClient.stream(...)`."""
+
+    def __init__(self, response: _FakeResponse | Exception) -> None:
+        self._response = response
+
+    async def __aenter__(self) -> _FakeResponse:
+        if isinstance(self._response, Exception):
+            raise self._response
+        return self._response
+
+    async def __aexit__(self, *args: Any) -> None:
+        return None
 
 
 class _FakeAsyncClient:
@@ -100,23 +134,17 @@ class _FakeAsyncClient:
     async def __aexit__(self, *args: Any) -> None:
         return None
 
-    async def get(self, url: str) -> _FakeResponse:
+    def stream(self, method: str, url: str) -> _FakeStreamCtx:
         self._call_count += 1
-        if isinstance(self._response, Exception):
-            raise self._response
-        return self._response
+        return _FakeStreamCtx(self._response)
 
 
 async def test_successful_fetch_returns_decorated_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        "huxley.marketplace.entry_points",
-        _stub_entry_points(["audiobooks"]),
-        raising=False,
-    )
-    # entry_points isn't imported at module level — it's imported inside
-    # _installed_skill_names. Patch via a different path:
+    # `entry_points` is imported inside `_installed_skill_names`, not at
+    # module scope of huxley.marketplace — patch the importlib.metadata
+    # module so the lazy import sees the stub.
     from importlib import metadata as md
 
     monkeypatch.setattr(md, "entry_points", _stub_entry_points(["audiobooks"]))
@@ -283,3 +311,25 @@ async def test_fetched_at_ms_is_current_time(
     out = await marketplace.fetch_marketplace()
     after = int(time.time() * 1000)
     assert before <= out["fetched_at_ms"] <= after
+
+
+async def test_oversized_response_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase C critic round 1 finding 3: a registry feed larger than
+    `_MAX_RESPONSE_BYTES` is rejected mid-stream rather than buffered
+    into memory. The size-cap protects against a misconfigured
+    federation endpoint streaming an unbounded body."""
+    from importlib import metadata as md
+
+    monkeypatch.setattr(md, "entry_points", _stub_entry_points([]))
+    # Stream chunks adding up to > 2 MB. Each chunk is 256 KB; 10 of
+    # them = 2.5 MB, blasting past the 2 MB cap on chunk 9.
+    huge_chunks = [b"x" * (256 * 1024) for _ in range(10)]
+    client = _FakeAsyncClient(_FakeResponse(200, b"unused", chunks=huge_chunks))
+    monkeypatch.setattr("huxley.marketplace.httpx.AsyncClient", lambda **kw: client)
+
+    out = await marketplace.fetch_marketplace()
+    assert out["skills"] == []
+    assert out["error"] is not None
+    assert "exceeded" in out["error"].lower() or "too large" in out["error"].lower()
