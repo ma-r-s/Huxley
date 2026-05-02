@@ -98,6 +98,12 @@ class AudioServer:
         on_list_sessions: Callable[[], Awaitable[None]] | None = None,
         on_get_session: Callable[[int], Awaitable[None]] | None = None,
         on_delete_session: Callable[[int], Awaitable[None]] | None = None,
+        # Marketplace v2 Phase A — PWA opens DeviceSheet's Skills section
+        # and asks for the current state of every installed skill (enabled
+        # flag, current_config, secret_keys_set, config_schema). Runtime
+        # owns the builder because it has both `current_app` AND access
+        # to the `huxley.skills` entry-point group.
+        on_get_skills_state: Callable[[], Awaitable[None]] | None = None,
         # T1.13 — persona swap via `?persona=<name>` reconnect.
         # `on_persona_select` fires BEFORE hello on each new connection;
         # the runtime decides whether to swap to a different Application.
@@ -132,6 +138,7 @@ class AudioServer:
         self._on_list_sessions = on_list_sessions
         self._on_get_session = on_get_session
         self._on_delete_session = on_delete_session
+        self._on_get_skills_state = on_get_skills_state
         # T1.13 — persona swap hooks (see constructor docstring above).
         self._on_persona_select = on_persona_select
         self._get_hello_extras = get_hello_extras
@@ -393,6 +400,14 @@ class AudioServer:
                 await logger.ainfo("server.rx.delete_session", session_id=raw_id)
                 if self._on_delete_session is not None:
                     await self._on_delete_session(raw_id)
+            case "get_skills_state":
+                # Marketplace v2 Phase A — PWA opens the Skills section
+                # in DeviceSheet. Runtime builds the payload (entry
+                # points + persona enabled-block + secrets dir) and
+                # responds via `send_skills_state`.
+                await logger.ainfo("server.rx.get_skills_state")
+                if self._on_get_skills_state is not None:
+                    await self._on_get_skills_state()
             case "client_event":
                 # Two consumers in parallel:
                 # 1. Telemetry sink — every client_event is logged as
@@ -487,6 +502,18 @@ class AudioServer:
         PWA can remove the row from its local list state."""
         await logger.ainfo("server.tx.session_deleted", session_id=session_id)
         await self._send({"type": "session_deleted", "id": session_id})
+
+    async def send_skills_state(self, payload: dict[str, Any]) -> None:
+        """Marketplace v2 Phase A — reply to inbound `get_skills_state`.
+
+        `payload` is built by `huxley.skills_state.build_skills_state`
+        and includes: `persona` (directory basename or None during lazy
+        boot) and `skills` (list of per-skill records). Phase B adds
+        push frames after writes; Phase A is request/response only."""
+        skills = payload.get("skills") if isinstance(payload, dict) else None
+        count = len(skills) if isinstance(skills, list) else 0
+        await logger.ainfo("server.tx.skills_state", count=count)
+        await self._send({"type": "skills_state", **payload})
 
     async def send_dev_event(self, kind: str, payload: dict[str, Any]) -> None:
         """Broadcast a dev-observability event for the dev UI to visualize.

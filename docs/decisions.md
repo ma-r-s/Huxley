@@ -651,7 +651,7 @@ Considered alternatives:
 
 **Token-handling policy**:
 
-- Account-scoped tokens are necessary only for the first publish (no projects exist yet). Once published, **rotate to project-scoped tokens** — if any one leaks, damage is limited to one package.
+- **Account-scoped tokens are fine for this repo's solo-publish setup.** PyPI's published guidance recommends project-scoped tokens for CI / shared accounts where blast-radius reduction matters; for a single-person project with `~/.pypirc` (chmod 600) on a personal Mac + 2FA on the account, the marginal benefit of project-scoping is small (it bounds a leak from "all my packages" to "named packages") relative to the operational friction of re-creating the token every time a new package ships. **Reconsider if**: the account ever gets used from a CI runner, the token gets shared with a collaborator, or the package count grows past ~20.
 - Tokens live in `~/.pypirc` (chmod 600); never in chat, never in git. The `~/.pypirc` file format is twine's convention; `uv publish` reads via `--token` (not `~/.pypirc` directly), so we extract via `python -c "import configparser; ..."` at publish time.
 - 2FA on the PyPI account is required (PyPI policy as of 2024); ours uses TOTP via the account holder's password manager.
 
