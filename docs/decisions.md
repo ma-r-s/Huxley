@@ -629,3 +629,35 @@ First-boot for a (skill, persona) pair is also silent: `_check` sees `stored is 
 - A skill author's broken setup() doesn't silently advance the persisted schema version — the operator gets the warning every boot until the bug is fixed.
 - The post-Phase-1 critic round caught this; the original implementation wrote-before-setup. Real bug, cheap fix, pinned by tests.
 - v2's PWA layer can add cross-major upgrade gating on top of v1's events without changing the v1 persistence path.
+
+## 2026-05-02 — PyPI as the canonical distribution channel for SDK + skills (T1.14 follow-up)
+
+**Context**: T1.14 v1 shipped the marketplace internally — workspace-resolved skills, registry repo with `install: uv add` lines, full SDK + reference skill. But until `huxley-sdk` itself was on PyPI, those install lines were aspirational: external operators couldn't actually run them, because every skill's wheel METADATA declared `Requires-Dist: huxley-sdk` (no version) and PyPI couldn't find it. The marketplace was real internally, theoretical externally.
+
+**Decision**: publish `huxley-sdk` 0.1.1 + all 9 first-party skills (`huxley-skill-audiobooks`, `huxley-skill-news`, `huxley-skill-radio`, `huxley-skill-reminders`, `huxley-skill-search`, `huxley-skill-stocks`, `huxley-skill-system`, `huxley-skill-telegram`, `huxley-skill-timers`) to the canonical PyPI index. Every skill's `dependencies` declares `huxley-sdk>=0.1.1,<0.2` so its wheel METADATA pulls the SDK from PyPI automatically. The Huxley monorepo's `[tool.uv.sources] huxley-sdk = { workspace = true }` resolves to the local source for dev-time iteration; outside the workspace, the same version pin pulls from PyPI.
+
+Considered alternatives:
+
+- **GitHub Releases + `git+https://...`**: zero new infra (we already have GitHub) but breaks the "browse + install" registry contract — every install becomes a git clone (slower); `uv add huxley-skill-foo` short form unsupported; harder for new users to discover. Rejected.
+- **Self-hosted devpi**: full control over the index but extra infra to run, doesn't solve the "external author publishes their skill" pattern (the whole point of the marketplace). Rejected.
+- **conda-forge**: different ecosystem (conda not pip), not where Python skill authors live in 2026. Rejected.
+- **TestPyPI only**: useful as a staging step (we used it); not a long-term home — downstream users have to add `--index-url` to install. Rejected as the primary index.
+
+**Versioning policy**:
+
+- `huxley-sdk` is pre-1.0; the public surface is the `Skill` Protocol + `SkillContext` + side-effect types + `ctx.secrets` / `ctx.storage` / `ctx.inject_turn`. **0.1.x is the bytecode-stable contract** for v1; bumps within 0.1.x are additive (new exports, bug fixes) but never break existing skill code. **0.2.0** would be the first version allowed to make breaking changes — and skills can pin `huxley-sdk>=0.1.1,<0.2` to opt out of that breakage automatically. Once the API is genuinely stable, 1.0.0 follows the same semver discipline (no breaking changes within 1.x).
+- Each skill is independently versioned. Skills don't have to track SDK versions; they pin a range and any compatible SDK works. A skill that needs new SDK features bumps its `huxley-sdk>=` floor.
+- TestPyPI dry runs catch shipped-but-DOA releases before real PyPI gets them. The TestPyPI smoke caught `huxley-sdk` 0.1.0 forgetting to export `SkillSecrets` from `huxley_sdk.__init__` — `from huxley_sdk import SkillSecrets` raised `ImportError`. 0.1.1 was the first usable version. Without the dry run, 0.1.0 would have shipped to real PyPI broken. **Future SDK / skill releases go to TestPyPI first as a non-skippable step.**
+
+**Token-handling policy**:
+
+- Account-scoped tokens are necessary only for the first publish (no projects exist yet). Once published, **rotate to project-scoped tokens** — if any one leaks, damage is limited to one package.
+- Tokens live in `~/.pypirc` (chmod 600); never in chat, never in git. The `~/.pypirc` file format is twine's convention; `uv publish` reads via `--token` (not `~/.pypirc` directly), so we extract via `python -c "import configparser; ..."` at publish time.
+- 2FA on the PyPI account is required (PyPI policy as of 2024); ours uses TOTP via the account holder's password manager.
+
+**Consequences**:
+
+- The marketplace is now externally usable. The registry's `install: uv add huxley-skill-<name>` lines are executable from any fresh venv, anywhere.
+- The Huxley framework itself is NOT published as a PyPI package — `huxley` (the runtime) stays in the monorepo. External operators clone the repo and `uv sync`; it's a self-hosted-server pattern, not a library-import pattern. Skills are the unit of distribution; the framework is the unit of deployment.
+- Every future skill author follows the same publishing flow: declare `huxley-sdk>=0.1.1,<0.2` in pyproject, `uv build`, dry-run on TestPyPI, smoke-install in clean venv, real PyPI. The authoring docs ([`docs/skills/authoring.md`](./skills/authoring.md)) document the steady-state path.
+- Locks down the package names: `huxley-sdk` and `huxley-skill-{audiobooks,news,radio,reminders,search,stocks,system,telegram,timers}` are now permanently associated with this project on PyPI. PyPI doesn't allow re-using a name even after release deletion. Naming choices made today are durable.

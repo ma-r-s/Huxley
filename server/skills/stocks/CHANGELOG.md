@@ -15,5 +15,5 @@ Initial release. The reference third-party skill for Huxley's T1.14 marketplace 
 
 ### Notes
 
-- Built against `huxley-sdk` from the Huxley repo's main branch (path dep). Switches to a versioned PyPI pin once `huxley-sdk` is published.
+- Depends on `huxley-sdk>=0.1.1,<0.2` — published to PyPI alongside this skill. Inside the Huxley monorepo workspace, the dep resolves locally for dev-time iteration; in any external venv, `uv add` pulls both from PyPI.
 - No automatic `data_schema_version` migration — the Huxley runtime logs `skill.schema.upgrade_needed` on bump; consult this CHANGELOG for migration steps when applicable.

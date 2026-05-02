@@ -49,18 +49,21 @@ flowchart LR
 
 ## Shipped skills
 
-| Skill                     | What it does                                                            |
-| ------------------------- | ----------------------------------------------------------------------- |
-| `huxley-skill-audiobooks` | Local `.m4b`/`.mp3` library — pause, resume, rewind, position persisted |
-| `huxley-skill-radio`      | HTTP/Icecast radio via ffmpeg, buffered with auto-reconnect             |
-| `huxley-skill-news`       | Weather (Open-Meteo) + headlines (Google News RSS), cached              |
-| `huxley-skill-search`     | DuckDuckGo web search, no API key needed                                |
-| `huxley-skill-timers`     | Countdown timers (relative — "in 10 minutes"), SQLite-persisted         |
-| `huxley-skill-reminders`  | Calendar-time reminders with retry escalation if unacknowledged         |
-| `huxley-skill-system`     | Volume control, current time                                            |
-| `huxley-skill-telegram`   | Full-duplex voice calls + text messages via Telegram                    |
+All 9 are independently published to PyPI; install any of them with `uv add huxley-skill-<name>` and enable with one line in `persona.yaml`.
 
-Third-party skills install from PyPI and enable with one line in `persona.yaml`. The reference third-party skill is [`huxley-skill-stocks`](https://github.com/ma-r-s/huxley-skill-stocks) (Alpha Vantage stock quotes); browse the directory at [`docs/skills/index.md`](./docs/skills/index.md).
+| Skill                                                                          | What it does                                                            |
+| ------------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| [`huxley-skill-audiobooks`](https://pypi.org/project/huxley-skill-audiobooks/) | Local `.m4b`/`.mp3` library — pause, resume, rewind, position persisted |
+| [`huxley-skill-radio`](https://pypi.org/project/huxley-skill-radio/)           | HTTP/Icecast radio via ffmpeg, buffered with auto-reconnect             |
+| [`huxley-skill-news`](https://pypi.org/project/huxley-skill-news/)             | Weather (Open-Meteo) + headlines (Google News RSS), cached              |
+| [`huxley-skill-search`](https://pypi.org/project/huxley-skill-search/)         | DuckDuckGo web search, no API key needed                                |
+| [`huxley-skill-timers`](https://pypi.org/project/huxley-skill-timers/)         | Countdown timers (relative — "in 10 minutes"), SQLite-persisted         |
+| [`huxley-skill-reminders`](https://pypi.org/project/huxley-skill-reminders/)   | Calendar-time reminders with retry escalation if unacknowledged         |
+| [`huxley-skill-system`](https://pypi.org/project/huxley-skill-system/)         | Volume control, current time                                            |
+| [`huxley-skill-telegram`](https://pypi.org/project/huxley-skill-telegram/)     | Full-duplex voice calls + text messages via Telegram                    |
+| [`huxley-skill-stocks`](https://pypi.org/project/huxley-skill-stocks/)         | Voice-controlled stock quotes via Alpha Vantage — the reference skill   |
+
+Browse the registry feed at [huxley-registry/index.json](https://raw.githubusercontent.com/ma-r-s/huxley-registry/main/index.json) or its human-readable mirror at [`docs/skills/index.md`](./docs/skills/index.md). The SDK every skill builds against is [`huxley-sdk`](https://pypi.org/project/huxley-sdk/) — `uv add huxley-sdk` if you're writing a new one.
 
 ## Writing a skill
 

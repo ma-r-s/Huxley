@@ -1,8 +1,8 @@
 # huxley-skill-stocks
 
-Voice-controlled stock quotes for [Huxley](https://github.com/ma-r-s/Huxley), the voice agent framework. A reference skill demonstrating the third-party authoring path: own repo, PyPI distribution, `config_schema` form-rendering, `ctx.secrets` for API keys.
+Voice-controlled stock quotes for [Huxley](https://github.com/ma-r-s/Huxley), the voice agent framework. The reference skill demonstrating the authoring conventions every `huxley-skill-*` package follows: PyPI distribution, `config_schema` form-rendering, `ctx.secrets` for API keys, two-layer error classification.
 
-> **Status**: Reference skill for Huxley T1.14 (skill marketplace v1). Built and tested against `huxley-sdk` from the Huxley repo's main branch during v1 development. Switches to a versioned PyPI pin once `huxley-sdk` is published.
+> **Status**: 0.1.0 on PyPI ([huxley-skill-stocks](https://pypi.org/project/huxley-skill-stocks/)). Depends on `huxley-sdk>=0.1.1,<0.2`. Lives at `server/skills/stocks/` in the Huxley monorepo as a workspace member; `uv add huxley-skill-stocks` from any external venv resolves the same package from PyPI.
 
 ## What it does
 
