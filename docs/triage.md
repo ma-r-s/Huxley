@@ -4615,3 +4615,128 @@ The third one was the StrictMode-amplified instance of the broader pattern: any 
 - "Log + return" is a lurking bug: it looks defensive but it strands the client. Prefer "log + send empty/error response" as the defensive pattern when the response is what unblocks the UI.
 
 ---
+
+## T1.17 — Retry pyrogram session-DB init on `OperationalError: database is locked`
+
+**Status**: queued (2026-05-02). Surfaces as `session_failed` after T1.16; the underlying transient still needs to go away.
+
+**Problem.** Cold reload of the PWA frequently triggers two near-simultaneous WS connects (React StrictMode double-mount + the server's own `client_evicted` flow). The Telegram skill's `setup()` opens a Pyrogram client whose backing SQLite session file gets locked when the previous Application's pyrogram client is still tearing down — `sqlite3.OperationalError: database is locked` on the very first `UPDATE` in `version()`. Captured live during T1.16 verification:
+
+```
+runtime.session_failed reason=lazy_boot_swap_failed persona=abuelos
+  error="persona 'abuelos' failed to load: OperationalError"
+```
+
+T1.16 makes this visible to the user (PWA shows the error string instead of pretending IDLE) but doesn't recover from it. User sees "Server not ready" and has to manually reload.
+
+**Why it matters.** It's a classic transient — a single retry with backoff would clear it on the next attempt because the previous teardown completes within hundreds of ms. Today it surfaces as a flaky cold-reload that requires manual retry, exactly the foot-gun T1.16 was supposed to make rare.
+
+**Validation.** Reproducible by reloading the PWA twice in quick succession. Log shows `runtime.session_failed` with the OperationalError; the next reload (~5s later) succeeds.
+
+**Effort**: ~10 lines + a unit test. Live in `huxley-skill-telegram`'s `setup()` (NOT in the runtime — this is skill-layer concern; the framework shouldn't know about pyrogram).
+
+**Fix sketch**:
+
+- Wrap the `Client.start()` call (or wherever `Storage.open()` happens) in a small retry loop: 3 attempts, 200ms / 500ms / 1s backoff, only on `sqlite3.OperationalError` whose message matches "database is locked".
+- Each retry logged as `telegram.session_db_lock.retry attempt=N`. Final failure logged as `telegram.session_db_lock.exhausted` and re-raised so the runtime's existing failure path (now T1.16-aware) still kicks in for genuinely persistent locks.
+
+**Lessons hint**: T1.16 made this diagnosable, T1.17 makes it not happen. Pattern: "surfacing the failure" and "not having the failure" are two separate fixes; ship the surfacing first (cheap, defensive), schedule the recovery second (right layer, narrower blast radius).
+
+---
+
+## T1.18 — Audit first-party skills for missing `teardown()` (and a stocks-specific fix)
+
+**Status**: queued (2026-05-02). Upgrades the T1.15 deferred chip with evidence.
+
+**Problem.** During Mario's T1.15 voice smoke (2026-05-02 12:57), persona-swap teardown raised `AttributeError: 'StocksSkill' object has no attribute 'teardown'` and aborted the rest of `teardown_all`:
+
+```
+ERROR skill.teardown_failed skill=stocks
+Traceback ...
+  File ".../huxley_sdk/registry.py", line 155, in teardown_all
+    await skill.teardown()
+AttributeError: 'StocksSkill' object has no attribute 'teardown'
+```
+
+Caught + logged but non-fatal — the swap completed. The bug is two-shaped:
+
+1. **`huxley_sdk.SkillRegistry.teardown_all` calls `skill.teardown()` blindly.** No `getattr(..., None)` guard, no Protocol default. Any skill that doesn't define teardown raises AttributeError. This is the framework half — the SDK's contract is unclear about whether teardown is required or optional.
+2. **`StocksSkill` doesn't implement teardown.** The reference third-party-shape skill is the worst possible offender — every operator who copies it as a starting point inherits the bug. This is the skill half.
+
+The T1.15 Phase B critic flagged that several first-party skills probably miss teardown; the chip task to audit all 9 was filed but not actioned.
+
+**Why it matters.** Every persona swap (which T1.19 will show happens more often than necessary) hits this teardown path. The error is logged at ERROR level, which makes the operator log noisy. Worse: an AttributeError early in `teardown_all` may abort the loop before later skills' teardowns run, leaking their resources.
+
+**Validation.** Live trace from `/private/tmp/huxley_server.log` at 12:57:58.029. Reproducible on every persona swap.
+
+**Effort**: ~30 min for the SDK guard + audit; per-skill teardown additions vary (most are a no-op or a simple `await self._client.close()`).
+
+**Fix sketch (SDK-first)**:
+
+1. **SDK**: change `teardown_all` to `if hasattr(skill, "teardown"): await skill.teardown()` OR — better — make `Skill.teardown` a default `async def teardown(self) -> None: pass` in the Protocol class so subclasses don't need to opt in. Decide: required-and-explicit vs. optional-with-default. The latter is friendlier for skill authors; the former forces them to think about cleanup.
+2. **First-party audit**: enumerate all 9 skills (audiobooks / news / radio / search / reminders / stocks / system / telegram / timers); for each, decide if it owns teardown-able state (open clients, background tasks, file handles) and add an explicit teardown that closes / cancels / flushes. Stocks is the canary; the others may need real teardowns.
+3. **Test**: SDK contract test asserts `teardown_all` survives a skill missing teardown without losing other skills' cleanup.
+
+**DoD**:
+
+- [ ] SDK decision (default vs. required) documented in `docs/skills/authoring.md`.
+- [ ] All 9 first-party skills audited; teardown added where state needs cleanup, no-op where genuinely stateless.
+- [ ] SDK regression test: `teardown_all` with a deliberately-broken skill mid-list runs the others.
+- [ ] No `skill.teardown_failed` events on a clean persona-swap smoke.
+
+---
+
+## T1.19 — Same-persona swap short-circuit uses display label vs directory basename
+
+**Status**: queued (2026-05-02). Same id-vs-display-name foot-gun T1.13 fixed for hello extras but missed here.
+
+**Problem.** Live trace from 2026-05-02 12:57:52:
+
+```
+runtime.persona_swap_started from_=Basic to=basic
+storage_initialized path=.../basic/data/basic.db
+news.setup_complete ...
+session_connected ...
+state_transition CONNECTING -> CONVERSING
+```
+
+User stayed on the same persona (directory `basic/`, YAML display name `"Basic"`) — but a full swap fired anyway. The short-circuit at [runtime.py:303-305](server/runtime/src/huxley/runtime.py:303) reads:
+
+```python
+if not force and old_app is not None and old_app.persona.name == name:
+    return  # no-op — already on this persona
+```
+
+`old_app.persona.name` is the YAML's display label (`"Basic"`); `name` is the requested directory basename (`"basic"`). For any persona where the two differ — which is most of them, including all four shipped (`abuelos`/Abuelo, `basic`/Basic, `chief`/Chief, `librarian`/Librarian) — the comparison fails and the runtime does a full swap-with-teardown. Wastes:
+
+- One Realtime API handshake (~700ms latency added to the next PTT)
+- Full skill `setup_all` cycle (storage init, secrets re-read, network calls in `setup` like Open-Meteo geocoding)
+- Provider summary write on the OLD app's teardown
+- The teardown bug T1.18 fires on every same-persona reconnect
+
+**Why it matters.** Every PWA reload triggers a same-persona "swap" that's actually a no-op intent. With T1.19, that's a free reconnect; without it, every reload pays ~1s of needless re-setup + Realtime handshake. Multiplies the surface area for the T1.17 (pyrogram lock) and T1.18 (missing teardown) bugs because each unnecessary swap is an additional teardown + setup cycle.
+
+**Validation.** Reproducible on any persona where YAML `name:` differs from directory basename. The four shipped personas all qualify; the test fixture `_MINIMAL_PERSONA_YAML` makes them agree by construction (`name: {dir}`), which is why the existing TestBasicSwap and TestHelloExtras tests didn't catch this — same shadowing pattern as the T1.13 `test_current_persona_is_directory_basename_not_yaml_label` regression.
+
+**Fix sketch**:
+
+```python
+if (
+    not force
+    and old_app is not None
+    and old_app.persona.data_dir.parent.name == name  # was: .name
+):
+    return
+```
+
+`data_dir.parent.name` is the directory basename, the canonical id `?persona=` resolves against. Same fix the post-T1.13 patch applied to `_get_hello_extras`.
+
+**DoD**:
+
+- [ ] Short-circuit uses directory basename, not YAML name.
+- [ ] Regression test using a persona where `dir_basename != yaml_name` (mirror the T1.13 `test_current_persona_is_directory_basename_not_yaml_label` shape).
+- [ ] Live smoke: reload PWA on same persona → no `runtime.persona_swap_started` event in the log; the connection short-circuits + only language-select fires.
+
+**Lessons hint** (will fill at gate close): the id-vs-display-name pair belongs to a Persona summary type; every comparison or display site should pull from a typed accessor, not a stringly-typed `.name`. T1.13 fixed two sites, T1.19 fixes the third — there's a deeper refactor implied (rename `PersonaSpec.name` → `display_name` and add an explicit `id` field) but it's out of scope for the bug fix.
+
+---
