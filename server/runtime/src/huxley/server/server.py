@@ -41,6 +41,10 @@ import asyncio
 import base64
 import contextlib
 import json
+import time
+import uuid
+from collections import deque
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlparse
 
@@ -63,6 +67,80 @@ if TYPE_CHECKING:
 logger = structlog.get_logger()
 
 PROTOCOL_VERSION = 2
+
+# T1.21 — keep the last N connection records (after they close) so the
+# `get_diag` frame can return a recent-history snapshot. Bounded so a
+# long-running server can't grow unbounded.
+_DIAG_RECENT_CONNS_CAP = 32
+
+
+def _now_ms() -> int:
+    """Wall-clock ms since epoch for diagnostic timestamps. Matches the
+    PWA's `Date.now()` so server + client logs can be aligned on a single
+    timeline without timezone math."""
+    return int(time.time() * 1000)
+
+
+@dataclass
+class _ConnInfo:
+    """T1.21 — per-WS-connection diagnostic record.
+
+    Holds the live websocket plus a count of frames seen in each
+    direction, plus close-time metadata once the connection ends. Stays
+    in `_recent_conns` after disconnect so the diagnostic endpoint can
+    return a "what happened in the last few connects" timeline.
+
+    `conn_id` is the operator-facing id — short enough to type, long
+    enough to be unique across a session. Echoed in `hello` so the PWA
+    can render it in its diagnostic panel and so server log lines (which
+    bind `conn_id` via structlog contextvars) can be filtered by the
+    same string the operator sees client-side.
+    """
+
+    conn_id: str
+    remote: str
+    connected_at_ms: int
+    requested_persona: str | None
+    requested_language: str | None
+    ws: ServerConnection | None = None  # None after close (released for GC)
+    frames_tx: int = 0
+    frames_rx: int = 0
+    bytes_tx: int = 0
+    bytes_rx: int = 0
+    last_rx_at_ms: int | None = None
+    last_tx_at_ms: int | None = None
+    closed_at_ms: int | None = None
+    close_code: int | None = None
+    close_reason: str | None = None
+    # Per-frame-type histogram so the diag panel can show "this conn
+    # sent 5 ptt_start, 200 audio, 3 get_skills_state". Cheap; updated
+    # in `_send` / `_dispatch`.
+    rx_types: dict[str, int] = field(default_factory=dict)
+    tx_types: dict[str, int] = field(default_factory=dict)
+
+    def to_diag(self) -> dict[str, Any]:
+        """Serialize to the wire-format the `diag_state` frame uses.
+        Drops the live `ws` reference (not JSON-serializable, not
+        useful client-side)."""
+        return {
+            "conn_id": self.conn_id,
+            "remote": self.remote,
+            "connected_at_ms": self.connected_at_ms,
+            "requested_persona": self.requested_persona,
+            "requested_language": self.requested_language,
+            "frames_tx": self.frames_tx,
+            "frames_rx": self.frames_rx,
+            "bytes_tx": self.bytes_tx,
+            "bytes_rx": self.bytes_rx,
+            "last_rx_at_ms": self.last_rx_at_ms,
+            "last_tx_at_ms": self.last_tx_at_ms,
+            "closed_at_ms": self.closed_at_ms,
+            "close_code": self.close_code,
+            "close_reason": self.close_reason,
+            "rx_types": dict(self.rx_types),
+            "tx_types": dict(self.tx_types),
+        }
+
 
 # Mic-streaming policy values (server → client in `input_mode`).
 # - `assistant_ptt`: the client gates mic streaming by the user's
@@ -180,7 +258,19 @@ class AudioServer:
         # is safe for the same reason `_pending_language` is — handshakes
         # serialize per connection and we evict old clients.
         self._pending_persona: str | None = None
-        self._client: ServerConnection | None = None
+        # T1.21 — `_conn` carries the live websocket plus per-connection
+        # diagnostic state (conn_id, frame counts, frame-type histograms,
+        # connect/close timestamps). Replaces the old `_client:
+        # ServerConnection | None` so frame stats are tracked at the same
+        # boundary every send/receive crosses, without scattering counters
+        # across the dispatch path. Public accessors (`has_client`, etc.)
+        # are preserved for compatibility.
+        self._conn: _ConnInfo | None = None
+        # T1.21 — recent-history buffer. After a connection closes, its
+        # `_ConnInfo` lands here so `get_diag` can return the timeline
+        # of recent connects + their close reasons. Bounded so a long-
+        # running server can't grow unbounded.
+        self._recent_conns: deque[_ConnInfo] = deque(maxlen=_DIAG_RECENT_CONNS_CAP)
         self._state = "IDLE"
         # Last-sent input mode — cached so a new client can be brought
         # up to the current mic policy on connect. Defaults to PTT
@@ -223,7 +313,14 @@ class AudioServer:
 
     @property
     def has_client(self) -> bool:
-        return self._client is not None
+        return self._conn is not None
+
+    @property
+    def conn_id(self) -> str | None:
+        """T1.21 — current connection's id, or None during the gap
+        between disconnect and the next connect. Useful to operators
+        cross-referencing PWA-side log entries against server logs."""
+        return self._conn.conn_id if self._conn is not None else None
 
     @property
     def has_active_claim(self) -> bool:
@@ -296,21 +393,32 @@ class AudioServer:
         return None
 
     async def _handle_connection(self, ws: ServerConnection) -> None:
-        if self._client is not None:
+        # T1.21 — per-connection diagnostic id. Short hex prefix is
+        # plenty unique within a session and easy to type when grepping
+        # the log. Echoed in `hello` so the PWA's diag panel renders
+        # the same id and structured log lines (which bind it via
+        # contextvars below) can be filtered by the operator.
+        conn_id = uuid.uuid4().hex[:8]
+        if self._conn is not None:
             # Evict the old client rather than rejecting the new one.
             # A new connection means either a browser reload or a freshly-
             # booted device — both should take priority over a stale socket.
+            old_conn = self._conn
             await logger.ainfo(
                 "client_evicted",
-                old=str(self._client.remote_address),
+                old=old_conn.remote,
+                old_conn_id=old_conn.conn_id,
                 new=str(ws.remote_address),
+                new_conn_id=conn_id,
             )
-            old = self._client
-            self._client = None
+            old_conn.close_reason = "evicted_by_new_client"
+            old_conn.close_code = 1001
+            old_conn.closed_at_ms = _now_ms()
+            self._recent_conns.append(old_conn)
+            self._conn = None
             with contextlib.suppress(Exception):
-                await old.close(1001, "Replaced by new client")
+                await old_conn.ws.close(1001, "Replaced by new client") if old_conn.ws else None
 
-        self._client = ws
         # Pull the language and persona the client requested in its URL
         # (captured during `_process_request`) and hand each to the
         # respective callback. Persona-select runs FIRST so the runtime
@@ -320,6 +428,21 @@ class AudioServer:
         selected_persona = self._pending_persona
         self._pending_language = None
         self._pending_persona = None
+
+        # Build the conn record + bind contextvars BEFORE the first
+        # log line so every event in this handler carries `conn_id`
+        # automatically (see logging.py — `merge_contextvars` is in
+        # the shared processor chain). Operators grepping `conn_id=ab12cd34`
+        # get every log entry from this connection in one filter.
+        self._conn = _ConnInfo(
+            conn_id=conn_id,
+            remote=str(ws.remote_address),
+            connected_at_ms=_now_ms(),
+            requested_persona=selected_persona,
+            requested_language=selected_language,
+            ws=ws,
+        )
+        structlog.contextvars.bind_contextvars(conn_id=conn_id)
         await logger.ainfo(
             "client_connected",
             remote=str(ws.remote_address),
@@ -355,6 +478,11 @@ class AudioServer:
                 "type": "hello",
                 "protocol": PROTOCOL_VERSION,
                 "language": selected_language,
+                # T1.21 — server-generated per-connection id, echoed
+                # so the PWA can render it in its diag panel and
+                # cross-reference server logs (which bind it via
+                # contextvars).
+                "conn_id": conn_id,
             }
             # T1.13 — additive hello fields: current_persona +
             # available_personas. Wired via `get_hello_extras` so the
@@ -365,17 +493,16 @@ class AudioServer:
                     hello_payload.update(self._get_hello_extras())
                 except Exception:
                     await logger.aexception("hello_extras_failed")
-            await ws.send(json.dumps(hello_payload))
-            await ws.send(json.dumps({"type": "state", "value": self._state}))
-            await ws.send(
-                json.dumps(
-                    {
-                        "type": "input_mode",
-                        "mode": self._input_mode,
-                        "reason": "idle",
-                        "claim_id": self._active_claim_id,
-                    },
-                ),
+            await self._send_raw(hello_payload, _via_handshake=True)
+            await self._send_raw({"type": "state", "value": self._state}, _via_handshake=True)
+            await self._send_raw(
+                {
+                    "type": "input_mode",
+                    "mode": self._input_mode,
+                    "reason": "idle",
+                    "claim_id": self._active_claim_id,
+                },
+                _via_handshake=True,
             )
             # Fire the language-select callback AFTER the handshake so the
             # app can reconcile the OpenAI session language with what the
@@ -388,18 +515,62 @@ class AudioServer:
                 await self._on_language_select(selected_language)
             async for raw in ws:
                 await self._dispatch(raw)
-        except websockets.ConnectionClosed:
-            pass
+        except websockets.ConnectionClosed as exc:
+            # T1.21 — capture the close cause so the diag panel can
+            # show "why" (1000 normal, 1001 going away, 4002 watchdog,
+            # etc.) instead of the generic "client_disconnected".
+            if self._conn is not None:
+                self._conn.close_code = exc.code
+                self._conn.close_reason = exc.reason or None
         finally:
-            self._client = None
-            await logger.ainfo("client_disconnected")
+            # T1.21 — finalize the conn record, archive into recent
+            # history for the diag endpoint, then unbind contextvars.
+            if self._conn is not None:
+                self._conn.closed_at_ms = _now_ms()
+                self._conn.ws = None  # release ref for GC
+                # If we got here without a ConnectionClosed exception
+                # (e.g. handler raised something else), close_code stays
+                # None — that's a useful diagnostic signal in itself.
+                self._recent_conns.append(self._conn)
+                await logger.ainfo(
+                    "client_disconnected",
+                    frames_tx=self._conn.frames_tx,
+                    frames_rx=self._conn.frames_rx,
+                    bytes_tx=self._conn.bytes_tx,
+                    bytes_rx=self._conn.bytes_rx,
+                    duration_ms=self._conn.closed_at_ms - self._conn.connected_at_ms,
+                    close_code=self._conn.close_code,
+                    close_reason=self._conn.close_reason,
+                )
+                self._conn = None
+            else:
+                # Race: an `evicted_by_new_client` path already moved
+                # this connection out of `_conn` before the finally.
+                # Don't double-log; the eviction event already covered it.
+                pass
+            structlog.contextvars.unbind_contextvars("conn_id")
 
     async def _dispatch(self, raw: str | bytes) -> None:
+        # T1.21 — frame-level rx accounting. Counted before any parse
+        # so a malformed frame still shows up in the diag panel as
+        # "1 rx" + a malformed log line, instead of silently disappearing.
+        if self._conn is not None:
+            raw_len = len(raw) if isinstance(raw, bytes | bytearray) else len(raw.encode())
+            self._conn.frames_rx += 1
+            self._conn.bytes_rx += raw_len
+            self._conn.last_rx_at_ms = _now_ms()
         try:
             msg: dict[str, Any] = json.loads(raw)
         except (json.JSONDecodeError, ValueError):
             await logger.awarning("server.rx.malformed")
             return
+        # T1.21 — per-type histogram (after parse so we know the type).
+        if self._conn is not None:
+            msg_type_for_hist = msg.get("type")
+            if isinstance(msg_type_for_hist, str):
+                self._conn.rx_types[msg_type_for_hist] = (
+                    self._conn.rx_types.get(msg_type_for_hist, 0) + 1
+                )
         match msg.get("type"):
             case "audio":
                 pcm = base64.b64decode(msg.get("data", ""))
@@ -599,6 +770,23 @@ class AudioServer:
                 )
                 if self._on_delete_skill_secret is not None:
                     await self._on_delete_skill_secret(skill_name, key)
+            case "get_diag":
+                # T1.21 — PWA diagnostic panel asks for a snapshot of
+                # current server state + recent connection history.
+                # Bounded payload (recent_conns capped at
+                # _DIAG_RECENT_CONNS_CAP); always responds even if no
+                # `_conn` (would mean the connection died between rx
+                # and reply, but that's a useful diagnostic signal).
+                await logger.ainfo("server.rx.get_diag")
+                await self._send_diag_state()
+            case "ping":
+                # T1.21 liveness — the PWA emits a `ping` periodically;
+                # server replies `pong` with the original timestamp so
+                # the client can compute round-trip latency. Unrelated
+                # to WebSocket-protocol-level ping; that's at the
+                # transport layer and the browser owns it.
+                ts = msg.get("ts")
+                await self._send_raw({"type": "pong", "ts": ts, "server_ts": _now_ms()})
             case "client_event":
                 # Two consumers in parallel:
                 # 1. Telemetry sink — every client_event is logged as
@@ -764,7 +952,7 @@ class AudioServer:
         is safe to call even without a per-client capability check —
         the worst case is a recipient that drops the message.
         """
-        if self._client is None:
+        if self._conn is None:
             await logger.adebug("server.tx.server_event.no_client", event_name=event)
             return
         await self._send(
@@ -990,8 +1178,93 @@ class AudioServer:
             {"type": "stream_ended", "stream_id": stream_id, "end_reason": end_reason},
         )
 
+    async def _send_diag_state(self) -> None:
+        """T1.21 — reply to a `get_diag` frame with a snapshot of
+        observability state.
+
+        Payload:
+        - `now_ms`: server wall clock so the PWA can compute clock
+          skew (server vs `Date.now()`). Critical when correlating
+          client-side log timestamps with server log timestamps.
+        - `current`: the live `_ConnInfo` (or null if between connects).
+        - `recent`: bounded history of recently-closed connections,
+          oldest-first. Lets the operator see "did this connect get
+          evicted" at a glance.
+        - `state`: app state, input mode, claim/stream ids, eviction-
+          relevant bits. Mirrors what the existing `state` and
+          `input_mode` frames carry but in one snapshot.
+        - `runtime`: optional dict from runtime hook (current_app
+          persona, skills count, install in progress) — pulled via
+          `get_hello_extras` since it's the same data surface.
+        """
+        runtime_extras: dict[str, object] = {}
+        if self._get_hello_extras is not None:
+            try:
+                runtime_extras = self._get_hello_extras()
+            except Exception:
+                # Don't crash the diag reply over a runtime hiccup —
+                # the diag is for debugging, not for breaking things.
+                await logger.aexception("diag.runtime_extras_failed")
+        await self._send_raw(
+            {
+                "type": "diag_state",
+                "now_ms": _now_ms(),
+                "current": self._conn.to_diag() if self._conn is not None else None,
+                "recent": [c.to_diag() for c in self._recent_conns],
+                "state": {
+                    "app_state": self._state,
+                    "input_mode": self._input_mode,
+                    "active_claim_id": self._active_claim_id,
+                    "active_stream_id": self._active_stream_id,
+                    "dispatching_enabled": self._dispatching_enabled,
+                },
+                "runtime": runtime_extras,
+            }
+        )
+
     async def _send(self, msg: dict[str, Any]) -> None:
-        if self._client is None:
+        """Public send used by every `send_*` callsite. Goes through
+        `_send_raw` so frame counters / type histograms / last-tx
+        timestamps update for every TX, including the ones from skills
+        (`server_event`, `set_volume`, etc.). Pre-T1.21 this was the
+        only send path; now `_send_raw` handles the actual write so
+        the handshake's pre-dispatch sends stay accounted for too.
+        """
+        await self._send_raw(msg)
+
+    async def _send_raw(
+        self,
+        msg: dict[str, Any],
+        *,
+        _via_handshake: bool = False,
+    ) -> None:
+        """T1.21 — single chokepoint for every outbound frame.
+
+        - Updates `_conn` frame counters + `tx_types` histogram +
+          `last_tx_at_ms` so the diag panel + `client_disconnected`
+          summary log line have a correct count.
+        - Drops the frame silently if no `_conn` (e.g. between an
+          eviction and the new connection's hello). Pre-T1.21 the
+          equivalent silent-drop was at `if self._client is None: return`.
+        - Suppresses `ConnectionClosed` so a race between dispatch
+          deciding to send and the WS dying mid-frame doesn't crash
+          the handler.
+
+        `_via_handshake=True` is for the three sends inside
+        `_handle_connection` BEFORE the dispatch loop starts; counted
+        the same way but documented because they're written before
+        any inbound message has hit `_dispatch`.
+        """
+        del _via_handshake  # documentation only; counted normally
+        conn = self._conn
+        if conn is None or conn.ws is None:
             return
+        encoded = json.dumps(msg)
         with contextlib.suppress(websockets.ConnectionClosed):
-            await self._client.send(json.dumps(msg))
+            await conn.ws.send(encoded)
+            conn.frames_tx += 1
+            conn.bytes_tx += len(encoded)
+            conn.last_tx_at_ms = _now_ms()
+            msg_type = msg.get("type")
+            if isinstance(msg_type, str):
+                conn.tx_types[msg_type] = conn.tx_types.get(msg_type, 0) + 1

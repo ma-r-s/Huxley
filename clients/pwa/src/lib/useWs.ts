@@ -18,8 +18,19 @@ import type {
   MarketplaceState,
   InstallUIState,
 } from "../types.js";
+import { WsLog, type WsLogSnapshot } from "./wsLog.js";
 
 const EXPECTED_PROTOCOL = 2;
+// T1.21 — heartbeat ping interval. Every PING_INTERVAL_MS we send a
+// `ping` and expect a `pong` back within PING_TIMEOUT_MS. Misses get
+// recorded in the diag panel + a third miss force-closes the WS so
+// the existing reconnect path heals it. 30s/5s SLA balances cost
+// (one frame per direction every 30s) against detection latency
+// (~95s worst case to detect a post-hello wedge that the T1.20
+// watchdog can't catch because hello already arrived).
+const PING_INTERVAL_MS = 30_000;
+const PING_TIMEOUT_MS = 5_000;
+const PING_MAX_MISSES = 3;
 // T1.20 — how long after `onopen` we'll wait for the server's `hello`
 // frame before declaring the socket half-dead and force-reconnecting.
 // Server emits hello within milliseconds of accepting the WS upgrade,
@@ -80,9 +91,27 @@ type ServerMessage =
       // reason when not ready (e.g., "persona 'foo' failed to load").
       session_ready?: boolean;
       session_error?: string | null;
+      // T1.21 — server-generated per-connection id, echoed back so
+      // the PWA's diag panel can render it for cross-referencing
+      // with server logs (which bind it via structlog contextvars).
+      conn_id?: string;
     }
   | { type: "audio"; data: string }
   | { type: "audio_clear" }
+  // T1.21 — heartbeat. Server replies pong with the original ts so
+  // the client computes RTT.
+  | { type: "pong"; ts: number; server_ts: number }
+  // T1.21 — diagnostic state response. Server snapshots its
+  // observability state (current conn, recent conns, app state,
+  // runtime extras) on demand.
+  | {
+      type: "diag_state";
+      now_ms: number;
+      current: Record<string, unknown> | null;
+      recent: Record<string, unknown>[];
+      state: Record<string, unknown>;
+      runtime: Record<string, unknown>;
+    }
   | { type: "state"; value: AppState }
   | { type: "status"; message: string }
   | { type: "transcript"; role: "user" | "assistant"; text: string }
@@ -281,7 +310,11 @@ export function useWs() {
 
   const sendRaw = useCallback((msg: object) => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify(msg));
+      const encoded = JSON.stringify(msg);
+      socketRef.current.send(encoded);
+      // T1.21 — log every outbound frame. The log is a ref so this
+      // doesn't trigger a re-render; the diag panel polls when open.
+      wsLogRef.current?.recordTx(encoded, msg);
     }
   }, []);
 
@@ -346,6 +379,34 @@ export function useWs() {
   // close-and-reopen with a different `?persona=`.
   const activeLanguageRef = useRef<string | null>(null);
   const activePersonaRef = useRef<string | null>(null);
+
+  // T1.21 — bidirectional frame log + lifecycle log. Lives in a ref
+  // because new entries shouldn't trigger a re-render (frames are
+  // hot-path). The diagnostic panel polls `wsLogRef.current.snapshot()`
+  // when open. Created once per useWs instance via `useRef`'s lazy
+  // initializer pattern.
+  const wsLogRef = useRef<WsLog | null>(null);
+  if (wsLogRef.current === null) wsLogRef.current = new WsLog();
+  // T1.21 — heartbeat machinery. Each `ping` we send gets a unique ts;
+  // when the matching `pong` lands we compute RTT and reset the miss
+  // counter. After PING_MAX_MISSES consecutive timeouts we force-close
+  // the WS (same path as the hello watchdog).
+  const pingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pingPendingRef = useRef<{
+    ts: number;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
+  const pingMissesRef = useRef(0);
+  const lastPingRttMsRef = useRef<number | null>(null);
+  // T1.21 — most-recent `diag_state` payload from the server. Stored
+  // in a ref (not state) because only the diag panel reads it; we
+  // don't want a re-render on every diag refresh. Panel pulls via
+  // `getDiagnostic()` which composes this with the local frame log.
+  const lastServerDiagRef = useRef<{
+    receivedAtMs: number;
+    payload: Record<string, unknown>;
+  } | null>(null);
+
   const connect = useCallback(
     (url?: string, language?: string | null, persona?: string | null) => {
       // An explicit connect() call (initial mount, persona switch, or StrictMode
@@ -375,6 +436,11 @@ export function useWs() {
         if (socketRef.current !== ws) return; // stale socket
         setConnected(true);
         pushStatus(`Connected to ${activeUrlRef.current}`);
+        // T1.21 — lifecycle log entry so the diag panel timeline
+        // shows the open event alongside the frames that follow.
+        wsLogRef.current?.recordLifecycle("open", {
+          url: activeUrlRef.current,
+        });
         // T1.20 — arm the hello watchdog. Cleared on hello arrival
         // (case "hello" below) and on close. If it fires, the socket
         // is half-dead and we force-close to trigger reconnect.
@@ -386,6 +452,9 @@ export function useWs() {
           if (socketRef.current !== ws) return; // already replaced
           if (ws.readyState !== WebSocket.OPEN) return; // already closed
           pushStatus("Connection unhealthy — reconnecting…");
+          wsLogRef.current?.recordLifecycle("watchdog-fired", {
+            reason: "no-hello-after-3s",
+          });
           ws.close(4002, "no-hello-watchdog");
         }, HELLO_WATCHDOG_MS);
         // T1.16 — refetch skills_state on every open, not just on
@@ -394,15 +463,72 @@ export function useWs() {
         // the reply on a socket that had already been closed —
         // leaving the panel "Loading…" forever.
         try {
-          ws.send(JSON.stringify({ type: "get_skills_state" }));
+          const reqEncoded = JSON.stringify({ type: "get_skills_state" });
+          ws.send(reqEncoded);
+          wsLogRef.current?.recordTx(reqEncoded, { type: "get_skills_state" });
         } catch {
           // Socket closed between OPEN check and send; the next
           // reconnect's onopen will retry.
         }
+        // T1.21 — start the heartbeat loop. Every PING_INTERVAL_MS
+        // we send a `ping` and arm a per-ping timeout. On miss,
+        // increment misses + record; after PING_MAX_MISSES, force-close.
+        if (pingTimerRef.current !== null) clearInterval(pingTimerRef.current);
+        pingMissesRef.current = 0;
+        lastPingRttMsRef.current = null;
+        pingTimerRef.current = setInterval(() => {
+          if (socketRef.current !== ws || ws.readyState !== WebSocket.OPEN)
+            return;
+          const ts = Date.now();
+          // Cancel any in-flight ping waiter (a fresh ping replaces it
+          // — the previous one already counted as a miss when it was
+          // pending past the last interval).
+          if (pingPendingRef.current !== null) {
+            clearTimeout(pingPendingRef.current.timer);
+          }
+          const timer = setTimeout(() => {
+            // Pong didn't arrive within PING_TIMEOUT_MS.
+            pingMissesRef.current += 1;
+            wsLogRef.current?.recordLifecycle("ping-miss", {
+              ts,
+              consecutive: pingMissesRef.current,
+            });
+            pingPendingRef.current = null;
+            if (
+              pingMissesRef.current >= PING_MAX_MISSES &&
+              socketRef.current === ws &&
+              ws.readyState === WebSocket.OPEN
+            ) {
+              pushStatus("Connection unhealthy — reconnecting…");
+              wsLogRef.current?.recordLifecycle("watchdog-fired", {
+                reason: `ping-miss-${pingMissesRef.current}`,
+              });
+              ws.close(4003, "ping-miss-watchdog");
+            }
+          }, PING_TIMEOUT_MS);
+          pingPendingRef.current = { ts, timer };
+          try {
+            const encoded = JSON.stringify({ type: "ping", ts });
+            ws.send(encoded);
+            wsLogRef.current?.recordTx(encoded, { type: "ping", ts });
+          } catch {
+            // Send failed; the interval will try again next tick. The
+            // ping-pending timeout will fire and count as a miss.
+          }
+        }, PING_INTERVAL_MS);
       };
 
-      ws.onclose = () => {
+      ws.onclose = (ev) => {
         if (socketRef.current !== ws) return; // stale socket — don't clobber live connection
+        // T1.21 — capture the close cause in the lifecycle log so the
+        // diag panel timeline shows WHY a connection ended (1006
+        // network drop vs 1001 server eviction vs 4002 hello watchdog
+        // vs 4003 ping watchdog). Code 1000 is normal.
+        wsLogRef.current?.recordLifecycle(`close-${ev.code}`, {
+          code: ev.code,
+          reason: ev.reason || null,
+          wasClean: ev.wasClean,
+        });
         setConnected(false);
         socketRef.current = null;
         cancelSilenceTimer("socket_close");
@@ -414,6 +540,18 @@ export function useWs() {
           clearTimeout(helloWatchdogRef.current);
           helloWatchdogRef.current = null;
         }
+        // T1.21 — clear the heartbeat machinery on every close so a
+        // stale interval can't keep firing against a dead socket.
+        if (pingTimerRef.current !== null) {
+          clearInterval(pingTimerRef.current);
+          pingTimerRef.current = null;
+        }
+        if (pingPendingRef.current !== null) {
+          clearTimeout(pingPendingRef.current.timer);
+          pingPendingRef.current = null;
+        }
+        pingMissesRef.current = 0;
+        lastPingRttMsRef.current = null;
         setThinkingActiveSync(false);
         setActiveStream(null);
         setActiveClaimTitle(null);
@@ -429,6 +567,13 @@ export function useWs() {
 
       ws.onmessage = (ev) => {
         if (socketRef.current !== ws) return; // stale socket
+        // T1.21 — log every inbound frame BEFORE dispatch so even a
+        // dispatcher that drops on parse failure still leaves a trace
+        // in the timeline. The log records its own parse + falls
+        // back to a [malformed] entry if JSON.parse fails.
+        if (typeof ev.data === "string") {
+          wsLogRef.current?.recordRx(ev.data);
+        }
         try {
           const msg = JSON.parse(ev.data as string) as ServerMessage;
           switch (msg.type) {
@@ -678,6 +823,37 @@ export function useWs() {
                   started_at_ms: prev?.started_at_ms ?? Date.now(),
                 };
               });
+              break;
+            case "pong": {
+              // T1.21 — heartbeat reply. Compute RTT, clear the
+              // pending-ping timeout, reset the miss counter. If
+              // the timer was already cleared (e.g. socket racing
+              // close), this still no-ops safely.
+              if (
+                pingPendingRef.current !== null &&
+                pingPendingRef.current.ts === msg.ts
+              ) {
+                clearTimeout(pingPendingRef.current.timer);
+                pingPendingRef.current = null;
+              }
+              const rtt = Date.now() - msg.ts;
+              lastPingRttMsRef.current = rtt;
+              pingMissesRef.current = 0;
+              wsLogRef.current?.recordLifecycle("pong", {
+                rtt_ms: rtt,
+                server_ts: msg.server_ts,
+              });
+              break;
+            }
+            case "diag_state":
+              // T1.21 — server-side diag snapshot. Stash in a ref;
+              // the panel reads it via `getDiagnostic()`. Never
+              // re-renders the rest of the app — diag is a passive
+              // observer.
+              lastServerDiagRef.current = {
+                receivedAtMs: Date.now(),
+                payload: msg as unknown as Record<string, unknown>,
+              };
               break;
           }
         } catch {
@@ -943,6 +1119,51 @@ export function useWs() {
     deleteSkillSecret,
     sendAudio: (data: string) => sendRaw({ type: "audio", data }),
     sendClientEvent,
+
+    // T1.21 — diagnostic surface. `requestDiag` triggers the server
+    // to emit a `diag_state` reply (stashed in `lastServerDiagRef`).
+    // `getDiagnostic()` composes everything we know — server state,
+    // local frame log, ping RTT — into a single snapshot the panel
+    // renders. Both are no-arg, side-effect-light: requestDiag fires
+    // an outbound frame (logged in the WsLog), getDiagnostic just
+    // reads refs.
+    requestDiag: () => sendRaw({ type: "get_diag" }),
+    getDiagnostic: (): {
+      log: WsLogSnapshot;
+      lastServerDiag: {
+        receivedAtMs: number;
+        payload: Record<string, unknown>;
+      } | null;
+      lastPingRttMs: number | null;
+      pingMisses: number;
+      pingPending: boolean;
+      socketReadyState: number | null;
+      activeUrl: string | null;
+    } => ({
+      log: wsLogRef.current?.snapshot() ?? {
+        entries: [],
+        connId: null,
+        totals: {
+          rx: 0,
+          tx: 0,
+          rxBytes: 0,
+          txBytes: 0,
+          rxByType: {},
+          txByType: {},
+        },
+        lastRxAt: null,
+        lastTxAt: null,
+        lastOpenAt: null,
+        lastCloseAt: null,
+      },
+      lastServerDiag: lastServerDiagRef.current,
+      lastPingRttMs: lastPingRttMsRef.current,
+      pingMisses: pingMissesRef.current,
+      pingPending: pingPendingRef.current !== null,
+      socketReadyState: socketRef.current?.readyState ?? null,
+      activeUrl: activeUrlRef.current,
+    }),
+    clearDiagLog: () => wsLogRef.current?.clear(),
 
     // Audio callback wiring (call once in useEffect/onMount)
     setOnAudio: (fn: (data: string) => void) => {

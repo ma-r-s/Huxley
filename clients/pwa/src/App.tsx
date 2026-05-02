@@ -14,6 +14,7 @@ import { DeviceSheet } from "./components/DeviceSheet.js";
 import { LogsSheet } from "./components/LogsSheet.js";
 import { ClientEventPanel } from "./components/ClientEventPanel.js";
 import { TweaksPanel } from "./components/TweaksPanel.js";
+import { DiagnosticPanel } from "./components/DiagnosticPanel.js";
 import type { OrbState, Appearance, AppState } from "./types.js";
 import type { Tweaks } from "./components/TweaksPanel.js";
 import { DEFAULT_APPEARANCE } from "./types.js";
@@ -151,6 +152,15 @@ export function App() {
   // PWA for testing skill subscriptions registered via
   // `ctx.subscribe_client_event`. Bound to Shift+E (locked Stage-4 DoD).
   const [eventPanelOpen, setEventPanelOpen] = useState(false);
+  // T1.21 — diagnostic panel (Ctrl+Shift+\ or `?diag=1`). Always-on
+  // observability for the WebSocket link: bidirectional frame log,
+  // connection lifecycle, ping RTT, server snapshot. Opens initially
+  // when the URL has `?diag=1` so a screenshot link can include it.
+  const [diagOpen, setDiagOpen] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const params = new URLSearchParams(window.location.search);
+    return params.get("diag") === "1";
+  });
   const [tweaks, setTweaks] = useState<Tweaks>({
     redHue: appearance.redHue,
     redChroma: appearance.redChroma,
@@ -353,6 +363,19 @@ export function App() {
       ) {
         e.preventDefault();
         setEventPanelOpen((v) => !v);
+      }
+      // T1.21 — Ctrl+Shift+\ (or Cmd+Shift+\ on macOS) toggles the
+      // diagnostic panel. Backslash is unbound in Chrome / Safari /
+      // Firefox by default on macOS, so no shortcut conflict. The
+      // event reports `e.key === "\\"` regardless of platform.
+      if (
+        e.shiftKey &&
+        (e.ctrlKey || e.metaKey) &&
+        !e.altKey &&
+        (e.key === "\\" || e.key === "|")
+      ) {
+        e.preventDefault();
+        setDiagOpen((v) => !v);
       }
     };
     window.addEventListener("keydown", h);
@@ -869,6 +892,15 @@ export function App() {
           }}
         />
       )}
+
+      {/* T1.21 — diagnostic panel. Ctrl+Shift+\ toggles, ?diag=1 auto-
+          opens. Renders on top of everything (zIndex 9999) so it's
+          never covered by an active sheet. */}
+      <DiagnosticPanel
+        ws={ws}
+        open={diagOpen}
+        onClose={() => setDiagOpen(false)}
+      />
 
       {/* Marketplace v2 Phase D — install flow overlays. Sit on top of
           every sheet at zIndex 100 so they're never visually covered. */}

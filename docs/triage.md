@@ -4791,6 +4791,99 @@ Confirming the exact mechanism would require packet-level inspection of Vite's p
 - Recovery beats diagnosis when the failure is rare and the fix is cheap. T1.20 doesn't explain _why_ the deflate state gets desynced — it just heals it. If the wedge becomes common, escalate to packet-level instrumentation.
 - The same lesson as T1.16: every protocol assertion ("ready", "open", "connected") needs an explicit liveness check from a real frame, not from a status flag.
 
-**Follow-up if this recurs**: a heartbeat (ping every 30s, expect pong within 5s) generalizes the watchdog beyond just connection-time. Doesn't ship until we observe a post-hello wedge — speculative now.
+**Follow-up if this recurs**: a heartbeat (ping every 30s, expect pong within 5s) generalizes the watchdog beyond just connection-time. Doesn't ship until we observe a post-hello wedge — speculative now. **Update 2026-05-02: superseded by T1.21 — the post-hello wedge was observed within hours, ping/pong heartbeat shipped as part of the full diagnostic infrastructure.**
+
+---
+
+## T1.21 — WebSocket diagnostic infrastructure (the floor under T1.16/T1.20)
+
+**Status**: done (2026-05-02). Live-verified in Mario's Chrome — recovery loop visible end-to-end in the panel.
+
+**Problem.** Mario hit the post-hello WS wedge a second time within hours of T1.20 shipping (skills/marketplace stuck loading, audio sent but no response). Diagnosed via dev console: PWA's React-held WS reports `readyState=1` (OPEN) but no inbound frames reach `onmessage`; outbound `ws.send(...)` appears to succeed. Server's response was actually going to a different WS instance — server-side `_client` had been evicted in favor of a newer connection while the React layer held a phantom that no one was listening to.
+
+T1.20's hello watchdog can't catch this — it only checks the first 3s of the connection. Mario's request: stop patching, build proper observability so any future "looks ready but isn't" failure is _visible_ without re-instrumenting the client.
+
+**Why it matters.** Every prior triage entry (T1.16 readiness, T1.17 pyrogram retry, T1.18 teardown audit, T1.19 swap short-circuit, T1.20 hello watchdog) was a single-symptom fix. The pattern: a WS-protocol assertion silently desynced from reality. Without frame-level visibility on both sides + correlation IDs, each new symptom required a new bespoke debugging session. T1.21 is the floor under that pattern — make every WS frame, every connection lifecycle event, and every liveness signal observable on both ends, with cross-referenceable conn_ids.
+
+**Validation.** Reproduced live during the T1.21 smoke (2026-05-02 09:45-09:46 in the Chrome MCP tab). Panel showed the wedge unfolding in real time:
+
+```
+09:44:46  open + hello (conn_id c60159ab) + 3 inbound frames
+09:45:17  ping #1 → no reply
+09:45:23  ping-miss consecutive:1
+09:45:47  ping #2 → no reply
+09:45:53  ping-miss consecutive:2
+09:46:17  ping #3 → no reply
+09:46:23  ping-miss consecutive:3
+09:46:23  watchdog-fired reason:"ping-miss-3"
+09:46:23  close-4003 reason:"ping-miss-watchdog"
+09:46:26  open + hello (NEW conn_id 84b83e60) + frames flowing again
+```
+
+The pre-T1.21 user experience: silent dead PTT until a manual reload. The post-T1.21 experience: ~95s of degraded heartbeat → automatic close + reconnect → fresh socket. No user intervention required, no operator instrumentation required.
+
+**Design** (collapsed, this is infrastructure not a one-line fix):
+
+Three layers, each independently useful:
+
+1. **Server-side correlation** (`server/runtime/src/huxley/server/server.py`):
+   - Per-connection `_ConnInfo` dataclass: `conn_id` (uuid hex prefix), `connected_at_ms`, frame counts in each direction, byte counts, per-type histograms, close code/reason, closed_at_ms. Replaces `_client: ServerConnection | None`.
+   - `structlog.contextvars.bind_contextvars(conn_id=...)` at handler start so every log line within the connection's asyncio task carries `conn_id` automatically. The `merge_contextvars` processor was already in the chain (`logging.py:93`); T1.21 just exercises it.
+   - `_send_raw` chokepoint replaces direct `ws.send` calls — every TX increments counters, every TX type updates the histogram. Identical semantics to the old `_send` (silent drop on no-conn, suppress `ConnectionClosed`); the difference is accounting.
+   - Bounded `_recent_conns: deque[_ConnInfo]` (cap 32) holds connection records after close so the diag endpoint can show recent history including eviction reasons.
+   - `conn_id` echoed in the `hello` payload so the PWA's panel renders the same id the operator sees in `grep conn_id=ab12cd34 huxley.log`.
+
+2. **PWA frame log** (`clients/pwa/src/lib/wsLog.ts`, `useWs.ts`):
+   - `WsLog` class — bounded ring buffer (500 entries) of `WsLogEntry { ts, dir, type, size, preview }`. Logs every rx/tx/lifecycle event. Audio frames get a special compressed entry (`audio: ~3500B PCM`) so they don't drown the log.
+   - `useWs` instantiates one `WsLog` per hook instance via `useRef`'s lazy initializer. Lives in a ref (not state) so logging is hot-path-free — no re-render per frame; the panel polls instead.
+   - Every `sendRaw` and every `ws.onmessage` and every onopen/onclose feeds the log. Lifecycle events include close codes (1001 = eviction, 4002 = hello watchdog, 4003 = ping watchdog, 1006 = network drop).
+   - Heartbeat (ping every 30s, pong expected within 5s) added at the same layer. Three consecutive misses → force-close → existing reconnect path → fresh socket. Timer cleanup wired in `onclose` so a stale interval can't fire against a dead socket.
+
+3. **Diagnostic panel** (`clients/pwa/src/components/DiagnosticPanel.tsx`):
+   - Full-screen overlay, monospace font, dark background. Z-index 9999 so it covers any open sheet.
+   - Header: live `conn_id`, ready state, ping RTT, miss count (red when nonzero).
+   - Three columns: client totals (last rx/tx ago, byte counts), rx-by-type histogram, tx-by-type histogram.
+   - Collapsed `<details>` with the full server snapshot JSON (refresh on demand via the "Refresh server" button — fires `get_diag` WS frame, server replies `diag_state`).
+   - Frame log table: time, direction (color-coded), type, size, JSON preview. Newest first. Capped at 200 rendered rows.
+   - Buttons: Refresh server, Copy JSON, Clear log, Close.
+   - Toggles: `Ctrl+Shift+\` (or `Cmd+Shift+\` on macOS — Chrome doesn't bind it) and `?diag=1` URL param (auto-opens; useful for shared links / screenshots). Escape closes.
+   - Polls `ws.getDiagnostic()` every 200ms while open; ref-based snapshot read is ~free.
+   - Critic-found bug: initial implementation had useEffect deps `[open, ws]`; since `ws` is a fresh hook return on every parent render, the effect re-fired on every App render, sending 8 `get_diag` requests in seconds. Fixed by stashing `ws` in a ref + keying off `[open]` only. Lesson logged below.
+
+**Implement.** Single feature shipped in one commit (this one). Files:
+
+- Server: `server/runtime/src/huxley/server/server.py` (+~180 lines for `_ConnInfo`, contextvars binding, `_send_raw`, `_send_diag_state`, `get_diag`/`ping` cases).
+- PWA: `clients/pwa/src/lib/wsLog.ts` (new, ~190 lines), `clients/pwa/src/lib/useWs.ts` (+~140 lines for log wiring + heartbeat machinery + diag accessor), `clients/pwa/src/components/DiagnosticPanel.tsx` (new, ~310 lines), `clients/pwa/src/App.tsx` (+15 lines for state + shortcut + mount).
+
+**DoD**:
+
+- [x] Server: every log line within a connection's handler carries `conn_id` automatically (verified: `grep conn_id=0ab76336 huxley.log` returns the full session).
+- [x] Server: `_ConnInfo` tracks frame counts + per-type histograms; close-time log line summarizes the connection.
+- [x] Server: `get_diag` WS frame returns full snapshot (current conn + recent + state + runtime).
+- [x] Server: `ping`/`pong` echo with original ts so client computes RTT.
+- [x] PWA: every WS frame logged into `WsLog` ring buffer. Audio frames compressed.
+- [x] PWA: lifecycle log captures open/close-CODE/watchdog-fired/ping-miss/pong with details.
+- [x] PWA: heartbeat sends ping every 30s, expects pong within 5s, force-closes after 3 misses.
+- [x] PWA: panel auto-opens with `?diag=1`, toggles via Ctrl+Shift+\ + Escape closes.
+- [x] PWA: panel renders header + three-column totals + collapsed server snapshot + frame log table.
+- [x] PWA: "Copy JSON" button puts the full diagnostic on clipboard.
+- [x] tsc + ruff + mypy --strict + 555 server tests green.
+- [x] Live verification in Mario's Chrome via Claude-in-Chrome MCP — full recovery loop observed in the panel.
+
+**Lessons**:
+
+- Custom React hooks that return a fresh object every render are landmines for `useEffect` deps. The diag panel's initial useEffect ran 8x in seconds because `ws` (the `useWs` return) was a new identity each render. Fix: ref-stash the unstable value, key the effect on stable inputs only. Same antipattern likely lurks elsewhere — worth a sweep.
+- "Open and quiet" looks identical to "open and dead" without a liveness probe. The browser WebSocket API gives `readyState=1` for both. The only reliable signal is round-tripping a frame the server unconditionally answers (hello during connect, pong post-connect). Anything else assumes the protocol invariants hold; T1.16/T1.20/T1.21 are all variations on this lesson.
+- Diagnostic infrastructure pays for itself the first time it's used. The wedge T1.21 caught was happening anyway; pre-T1.21 it was a 30-minute debugging session per occurrence. Post-T1.21 it's "open the panel, see the ping-miss timeline, the watchdog already recovered."
+- Correlation IDs threaded through _both_ sides cut diagnosis time by an order of magnitude. `grep conn_id=84b83e60` on the server log returns exactly the session the user was in; the same id is in the panel header. No more "what was happening when you saw that?"
+- Recovery > diagnosis > prevention is the right priority order for hard-to-reproduce protocol bugs. T1.16 surfaced (diagnosis), T1.20 healed connection-time (recovery), T1.21 generalized to the whole connection lifetime (recovery + diagnosis + prevention via heartbeat). The diagnostic panel makes future occurrences cheap to handle.
+
+**Follow-ups (queued, not this commit)**:
+
+- Server-side `/diag` HTTP endpoint (currently we expose via `get_diag` WS frame; an HTTP route would allow ops tooling to scrape state without an active WS).
+- Persist the WsLog ring buffer to localStorage on close so a post-mortem after a tab crash still has the timeline.
+- Add a "Replay this session" button to the panel that exports a structured timeline + opens it in a separate review tool.
+- PWA tests covering the heartbeat machinery + force-close path. Currently regression-pinned only via the live smoke.
+- Server-side test: verify `conn_id` propagates through every `server.rx.*` and `server.tx.*` log line.
 
 ---
