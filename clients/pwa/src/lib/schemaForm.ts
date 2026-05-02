@@ -134,3 +134,71 @@ export function prettyLabel(name: string): string {
     .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
     .join(" ");
 }
+
+// Parse the user-edited form value back into the JSON shape the
+// server expects (Phase B). Inverse of `formatValue`. The renderer
+// holds inputs as strings (text, comma-joined arrays) or booleans
+// (toggles) and converts on Save. Returns `undefined` when the
+// input can't be coerced — the caller surfaces a per-field error.
+//
+// Secret values are not handled here — secrets ride a different
+// frame (`set_skill_secret`) and the renderer treats them as
+// strings end-to-end.
+export function parseValue(kind: FieldKind, raw: unknown): unknown | undefined {
+  switch (kind) {
+    case "string":
+    case "secret":
+      return typeof raw === "string" ? raw : undefined;
+    case "number": {
+      if (typeof raw === "number") return raw;
+      if (typeof raw === "string") {
+        const trimmed = raw.trim();
+        if (trimmed === "") return undefined;
+        const n = Number(trimmed);
+        return Number.isFinite(n) ? n : undefined;
+      }
+      return undefined;
+    }
+    case "integer": {
+      if (typeof raw === "number" && Number.isInteger(raw)) return raw;
+      if (typeof raw === "string") {
+        const trimmed = raw.trim();
+        if (trimmed === "") return undefined;
+        const n = Number(trimmed);
+        return Number.isInteger(n) ? n : undefined;
+      }
+      return undefined;
+    }
+    case "boolean":
+      return typeof raw === "boolean" ? raw : undefined;
+    case "enum":
+      // Enums round-trip as strings (or numbers for numeric enums);
+      // any non-empty value is acceptable here, the schema's `enum`
+      // list is enforced by the form rendering (we only show the
+      // valid options).
+      return typeof raw === "string" || typeof raw === "number"
+        ? raw
+        : undefined;
+    case "array_of_strings": {
+      // The renderer holds the array as a single comma-separated
+      // string; split + trim + drop empties on Save. An empty input
+      // becomes `[]` (not undefined) so the user can clear an array.
+      if (Array.isArray(raw)) {
+        return raw.filter((v): v is string => typeof v === "string");
+      }
+      if (typeof raw === "string") {
+        return raw
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0);
+      }
+      return undefined;
+    }
+    case "object":
+    case "unknown":
+      // Objects + unknowns aren't editable in Phase B's form. The
+      // renderer pins them as read-only "raw JSON"; on Save the
+      // existing value is preserved unchanged.
+      return raw;
+  }
+}

@@ -130,6 +130,17 @@ const fr = {
       default: "Par défaut",
       unset: "Non configuré",
       secretBadge: "Secret",
+      toggleHint:
+        "Active ou désactive cette compétence pour la persona active.",
+      toggleAria: "Basculer la compétence",
+      save: "Enregistrer",
+      cancel: "Annuler",
+      unsavedHint: "Modifications non enregistrées.",
+      savedHint: "Toutes les modifications enregistrées.",
+      secretSave: "Enregistrer le secret",
+      secretUpdate: "Mettre à jour",
+      secretClear: "Effacer",
+      secretPlaceholder: "Colle la valeur du secret",
     },
     skillsSheet: {
       eyebrow: "Compétences",

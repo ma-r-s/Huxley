@@ -607,10 +607,40 @@ export function useWs() {
     [sendRaw],
   );
 
-  // ── Skills (Marketplace v2 Phase A) ─────────────────────────────────────
+  // ── Skills (Marketplace v2 Phase A + B) ────────────────────────────────
   const requestSkillsState = useCallback(() => {
     sendRaw({ type: "get_skills_state" });
   }, [sendRaw]);
+
+  // Phase B writes. Each fires a fire-and-forget WS frame; the server
+  // persists to disk + triggers a hot reload of the active persona,
+  // which pushes a fresh skills_state frame. The PWA's reducer-style
+  // dispatch catches that and re-renders the panel — no manual refresh
+  // needed, no ack frame, no separate "saved" event.
+  const setSkillEnabled = useCallback(
+    (skill: string, enabled: boolean) => {
+      sendRaw({ type: "set_skill_enabled", skill, enabled });
+    },
+    [sendRaw],
+  );
+  const setSkillConfig = useCallback(
+    (skill: string, config: Record<string, unknown>) => {
+      sendRaw({ type: "set_skill_config", skill, config });
+    },
+    [sendRaw],
+  );
+  const setSkillSecret = useCallback(
+    (skill: string, key: string, value: string) => {
+      sendRaw({ type: "set_skill_secret", skill, key, value });
+    },
+    [sendRaw],
+  );
+  const deleteSkillSecret = useCallback(
+    (skill: string, key: string) => {
+      sendRaw({ type: "delete_skill_secret", skill, key });
+    },
+    [sendRaw],
+  );
 
   // ── Public API ───────────────────────────────────────────────────────────
   return {
@@ -652,6 +682,10 @@ export function useWs() {
     getSession,
     deleteSession,
     requestSkillsState,
+    setSkillEnabled,
+    setSkillConfig,
+    setSkillSecret,
+    deleteSkillSecret,
     sendAudio: (data: string) => sendRaw({ type: "audio", data }),
     sendClientEvent,
 
