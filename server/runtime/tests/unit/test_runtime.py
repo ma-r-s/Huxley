@@ -377,3 +377,115 @@ class TestHelloExtras:
         finally:
             await runtime.current_app.shutdown()  # type: ignore[union-attr]
             await _drain_teardown(runtime)
+
+
+class TestPhaseBWriteShims:
+    """Marketplace v2 Phase B: PWA-driven config edits land via these
+    shims. Each writes to disk (persona.yaml or values.json) and
+    triggers `_reload_current_persona` so running skills pick up the
+    new state. The fake personas have empty `skills: {}` blocks so
+    the writes don't conflict with discover_skills (no real skill
+    packages are loaded by these tests)."""
+
+    async def test_set_skill_enabled_persists_to_persona_yaml(
+        self, runtime_in_tmp: Runtime, tmp_path: Path
+    ) -> None:
+        await runtime_in_tmp._switch_to_persona("alpha", auto_connect=False)
+        # The fake skill name doesn't need to be installed in the venv —
+        # the shim writes to YAML regardless. discover_skills will fail
+        # on the next reload because there's no entry point, so we
+        # capture the YAML write before the reload runs.
+        await runtime_in_tmp._shim_set_skill_enabled("system", enabled=True)
+        # YAML on disk now lists `system:` under skills:
+        from huxley.persona_yaml import load_persona_yaml
+
+        yaml_path = tmp_path / "personas" / "alpha" / "persona.yaml"
+        data = load_persona_yaml(yaml_path)
+        assert "system" in data["skills"]
+        # The reload may have failed (system isn't registered in the test
+        # venv), but the runtime's current_app should still be valid —
+        # _reload_current_persona's failure is logged + non-raising.
+        await _drain_teardown(runtime_in_tmp)
+        if runtime_in_tmp.current_app is not None:
+            await runtime_in_tmp.current_app.shutdown()
+
+    async def test_set_skill_enabled_false_removes_from_yaml(
+        self, runtime_in_tmp: Runtime, tmp_path: Path
+    ) -> None:
+        await runtime_in_tmp._switch_to_persona("alpha", auto_connect=False)
+        # First add a skill, then remove it.
+        from huxley.persona_yaml import load_persona_yaml, save_persona_yaml
+        from huxley.persona_yaml import set_skill_enabled as yaml_enable
+
+        yaml_path = tmp_path / "personas" / "alpha" / "persona.yaml"
+        data = load_persona_yaml(yaml_path)
+        yaml_enable(data, "system", enabled=True)
+        save_persona_yaml(yaml_path, data)
+
+        await runtime_in_tmp._shim_set_skill_enabled("system", enabled=False)
+        data = load_persona_yaml(yaml_path)
+        assert "system" not in data["skills"]
+        await _drain_teardown(runtime_in_tmp)
+        if runtime_in_tmp.current_app is not None:
+            await runtime_in_tmp.current_app.shutdown()
+
+    async def test_set_skill_config_replaces_block(
+        self, runtime_in_tmp: Runtime, tmp_path: Path
+    ) -> None:
+        await runtime_in_tmp._switch_to_persona("alpha", auto_connect=False)
+        await runtime_in_tmp._shim_set_skill_config("system", {"timezone": "Europe/Madrid"})
+        from huxley.persona_yaml import load_persona_yaml
+
+        yaml_path = tmp_path / "personas" / "alpha" / "persona.yaml"
+        data = load_persona_yaml(yaml_path)
+        assert dict(data["skills"]["system"]) == {"timezone": "Europe/Madrid"}
+        await _drain_teardown(runtime_in_tmp)
+        if runtime_in_tmp.current_app is not None:
+            await runtime_in_tmp.current_app.shutdown()
+
+    async def test_set_skill_secret_writes_to_secrets_dir(
+        self, runtime_in_tmp: Runtime, tmp_path: Path
+    ) -> None:
+        await runtime_in_tmp._switch_to_persona("alpha", auto_connect=False)
+        await runtime_in_tmp._shim_set_skill_secret("stocks", "api_key", "sk-VERYSECRET")
+        secrets_path = (
+            tmp_path / "personas" / "alpha" / "data" / "secrets" / "stocks" / "values.json"
+        )
+        assert secrets_path.exists()
+        contents = secrets_path.read_text(encoding="utf-8")
+        assert "sk-VERYSECRET" in contents
+        # Perms locked down to 0600 (file) — the JsonFileSecrets contract.
+        assert (secrets_path.stat().st_mode & 0o777) == 0o600
+        # Parent dir 0700.
+        assert (secrets_path.parent.stat().st_mode & 0o777) == 0o700
+        await _drain_teardown(runtime_in_tmp)
+        if runtime_in_tmp.current_app is not None:
+            await runtime_in_tmp.current_app.shutdown()
+
+    async def test_delete_skill_secret_removes_key(
+        self, runtime_in_tmp: Runtime, tmp_path: Path
+    ) -> None:
+        await runtime_in_tmp._switch_to_persona("alpha", auto_connect=False)
+        await runtime_in_tmp._shim_set_skill_secret("stocks", "api_key", "sk-A")
+        await runtime_in_tmp._shim_set_skill_secret("stocks", "extra", "sk-B")
+        await runtime_in_tmp._shim_delete_skill_secret("stocks", "api_key")
+        secrets_path = (
+            tmp_path / "personas" / "alpha" / "data" / "secrets" / "stocks" / "values.json"
+        )
+        contents = secrets_path.read_text(encoding="utf-8")
+        assert "sk-A" not in contents
+        assert "sk-B" in contents  # other keys untouched
+        await _drain_teardown(runtime_in_tmp)
+        if runtime_in_tmp.current_app is not None:
+            await runtime_in_tmp.current_app.shutdown()
+
+    async def test_writes_are_noop_when_no_current_app(self, runtime_in_tmp: Runtime) -> None:
+        # Lazy-boot window: server up, no persona selected. All four
+        # shims must NOT crash — they log a warning and return.
+        assert runtime_in_tmp.current_app is None
+        await runtime_in_tmp._shim_set_skill_enabled("system", enabled=True)
+        await runtime_in_tmp._shim_set_skill_config("system", {"x": 1})
+        await runtime_in_tmp._shim_set_skill_secret("stocks", "k", "v")
+        await runtime_in_tmp._shim_delete_skill_secret("stocks", "k")
+        # Still no current app afterward.
+        assert runtime_in_tmp.current_app is None

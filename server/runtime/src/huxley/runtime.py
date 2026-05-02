@@ -33,7 +33,7 @@ import asyncio
 import contextlib
 import signal
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -46,8 +46,15 @@ from huxley.persona import (
     load_persona,
     pick_default_persona_name,
 )
+from huxley.persona_yaml import (
+    load_persona_yaml,
+    save_persona_yaml,
+    set_skill_config,
+    set_skill_enabled,
+)
 from huxley.server.server import AudioServer
 from huxley.skills_state import build_skills_state
+from huxley.storage.secrets import JsonFileSecrets
 
 if TYPE_CHECKING:
     from huxley.config import Settings
@@ -76,6 +83,10 @@ class Runtime:
             on_delete_session=self._shim_delete_session,
             on_persona_select=self._shim_persona_select,
             on_get_skills_state=self._shim_get_skills_state,
+            on_set_skill_enabled=self._shim_set_skill_enabled,
+            on_set_skill_config=self._shim_set_skill_config,
+            on_set_skill_secret=self._shim_set_skill_secret,
+            on_delete_skill_secret=self._shim_delete_skill_secret,
             get_hello_extras=self._get_hello_extras,
         )
         self.current_app: Application | None = None
@@ -399,6 +410,125 @@ class Runtime:
             await logger.aexception("skills_state.build_failed")
             return
         await self.audio_server.send_skills_state(payload)
+
+    # ── Phase B write shims ──────────────────────────────────────────
+    #
+    # Each takes a validated payload from AudioServer (types coerced /
+    # rejected upstream), persists to disk via the appropriate
+    # primitive (`persona_yaml.set_skill_*` for YAML edits,
+    # `JsonFileSecrets` for secrets), then triggers a hot reload of
+    # the active persona so running skills pick up the new state.
+    #
+    # No-op when `current_app is None` (lazy-boot window) — there's
+    # no persona.yaml to mutate. Failures during write or reload are
+    # logged but not raised; the WS write callsite already acked the
+    # frame, and Phase B's UX surfaces the failure via the next
+    # `skills_state` push (which reflects the actual disk state).
+
+    async def _shim_set_skill_enabled(self, skill_name: str, enabled: bool) -> None:
+        if self.current_app is None:
+            await logger.awarning(
+                "runtime.set_skill_enabled.no_current_app",
+                skill=skill_name,
+            )
+            return
+        persona_path = self.current_app.persona.data_dir.parent / "persona.yaml"
+        try:
+            data = await asyncio.to_thread(load_persona_yaml, persona_path)
+            set_skill_enabled(data, skill_name, enabled)
+            await asyncio.to_thread(save_persona_yaml, persona_path, data)
+        except Exception:
+            await logger.aexception(
+                "runtime.set_skill_enabled.write_failed",
+                skill=skill_name,
+                enabled=enabled,
+            )
+            return
+        await logger.ainfo(
+            "runtime.set_skill_enabled.persisted",
+            skill=skill_name,
+            enabled=enabled,
+        )
+        await self._reload_current_persona()
+
+    async def _shim_set_skill_config(self, skill_name: str, config: dict[str, Any]) -> None:
+        if self.current_app is None:
+            await logger.awarning(
+                "runtime.set_skill_config.no_current_app",
+                skill=skill_name,
+            )
+            return
+        persona_path = self.current_app.persona.data_dir.parent / "persona.yaml"
+        try:
+            data = await asyncio.to_thread(load_persona_yaml, persona_path)
+            set_skill_config(data, skill_name, config)
+            await asyncio.to_thread(save_persona_yaml, persona_path, data)
+        except Exception:
+            await logger.aexception(
+                "runtime.set_skill_config.write_failed",
+                skill=skill_name,
+            )
+            return
+        await logger.ainfo(
+            "runtime.set_skill_config.persisted",
+            skill=skill_name,
+            keys=sorted(config.keys()),
+        )
+        await self._reload_current_persona()
+
+    async def _shim_set_skill_secret(self, skill_name: str, key: str, value: str) -> None:
+        if self.current_app is None:
+            await logger.awarning(
+                "runtime.set_skill_secret.no_current_app",
+                skill=skill_name,
+                key=key,
+            )
+            return
+        # The skill's secrets dir lives at <persona>/data/secrets/<name>/.
+        # JsonFileSecrets handles the atomic write + 0700/0600 perms.
+        secrets_dir = self.current_app.persona.data_dir / "secrets" / skill_name
+        secrets = JsonFileSecrets(secrets_dir)
+        try:
+            await secrets.set(key, value)
+        except Exception:
+            await logger.aexception(
+                "runtime.set_skill_secret.write_failed",
+                skill=skill_name,
+                key=key,
+            )
+            return
+        await logger.ainfo(
+            "runtime.set_skill_secret.persisted",
+            skill=skill_name,
+            key=key,
+        )
+        await self._reload_current_persona()
+
+    async def _shim_delete_skill_secret(self, skill_name: str, key: str) -> None:
+        if self.current_app is None:
+            await logger.awarning(
+                "runtime.delete_skill_secret.no_current_app",
+                skill=skill_name,
+                key=key,
+            )
+            return
+        secrets_dir = self.current_app.persona.data_dir / "secrets" / skill_name
+        secrets = JsonFileSecrets(secrets_dir)
+        try:
+            await secrets.delete(key)
+        except Exception:
+            await logger.aexception(
+                "runtime.delete_skill_secret.write_failed",
+                skill=skill_name,
+                key=key,
+            )
+            return
+        await logger.ainfo(
+            "runtime.delete_skill_secret.persisted",
+            skill=skill_name,
+            key=key,
+        )
+        await self._reload_current_persona()
 
     async def _shim_persona_select(self, name: str | None, language: str | None) -> None:
         """Fired by AudioServer on each new connection with the

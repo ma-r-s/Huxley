@@ -104,6 +104,16 @@ class AudioServer:
         # owns the builder because it has both `current_app` AND access
         # to the `huxley.skills` entry-point group.
         on_get_skills_state: Callable[[], Awaitable[None]] | None = None,
+        # Marketplace v2 Phase B — write handlers. The dispatch case
+        # validates types + shapes before invoking; Runtime persists
+        # the change to disk and triggers _reload_current_persona,
+        # which re-runs setup_all so the running skills pick up the
+        # new state. The existing skills_state push (Phase A critic
+        # fix #3) refreshes the PWA automatically on swap_committed.
+        on_set_skill_enabled: (Callable[[str, bool], Awaitable[None]] | None) = None,
+        on_set_skill_config: (Callable[[str, dict[str, Any]], Awaitable[None]] | None) = None,
+        on_set_skill_secret: (Callable[[str, str, str], Awaitable[None]] | None) = None,
+        on_delete_skill_secret: (Callable[[str, str], Awaitable[None]] | None) = None,
         # T1.13 — persona swap via `?persona=<name>` reconnect.
         # `on_persona_select` fires BEFORE hello on each new connection;
         # the runtime decides whether to swap to a different Application.
@@ -139,6 +149,10 @@ class AudioServer:
         self._on_get_session = on_get_session
         self._on_delete_session = on_delete_session
         self._on_get_skills_state = on_get_skills_state
+        self._on_set_skill_enabled = on_set_skill_enabled
+        self._on_set_skill_config = on_set_skill_config
+        self._on_set_skill_secret = on_set_skill_secret
+        self._on_delete_skill_secret = on_delete_skill_secret
         # T1.13 — persona swap hooks (see constructor docstring above).
         self._on_persona_select = on_persona_select
         self._get_hello_extras = get_hello_extras
@@ -408,6 +422,96 @@ class AudioServer:
                 await logger.ainfo("server.rx.get_skills_state")
                 if self._on_get_skills_state is not None:
                     await self._on_get_skills_state()
+            case "set_skill_enabled":
+                # Marketplace v2 Phase B — toggle enable/disable. The
+                # PWA's SkillConfigSheet header switch sends this when
+                # the user flips the toggle. Runtime mutates persona.yaml
+                # (ruamel round-trip preserves comments) and reloads.
+                skill_name = msg.get("skill")
+                enabled = msg.get("enabled")
+                if not isinstance(skill_name, str) or not isinstance(enabled, bool):
+                    await logger.awarning(
+                        "server.rx.set_skill_enabled.bad_args",
+                        skill=skill_name,
+                        enabled=enabled,
+                    )
+                    return
+                await logger.ainfo(
+                    "server.rx.set_skill_enabled",
+                    skill=skill_name,
+                    enabled=enabled,
+                )
+                if self._on_set_skill_enabled is not None:
+                    await self._on_set_skill_enabled(skill_name, enabled)
+            case "set_skill_config":
+                # Marketplace v2 Phase B — replace a skill's config
+                # block. The PWA's SkillConfigSheet "Save" button
+                # sends the full edited block (replace, not merge).
+                # Secret keys never appear in the payload — those go
+                # through set_skill_secret to a different on-disk
+                # location (values.json, not persona.yaml).
+                skill_name = msg.get("skill")
+                config = msg.get("config")
+                if not isinstance(skill_name, str) or not isinstance(config, dict):
+                    await logger.awarning(
+                        "server.rx.set_skill_config.bad_args",
+                        skill=skill_name,
+                    )
+                    return
+                await logger.ainfo(
+                    "server.rx.set_skill_config",
+                    skill=skill_name,
+                    keys=sorted(config.keys()),
+                )
+                if self._on_set_skill_config is not None:
+                    await self._on_set_skill_config(skill_name, config)
+            case "set_skill_secret":
+                # Marketplace v2 Phase B — write a single secret key
+                # to <persona>/data/secrets/<skill>/values.json. The
+                # PWA's secret-input "Save" button sends this; the
+                # value rides the WS but never touches persona.yaml.
+                # Logged WITHOUT the value (key only) to keep the
+                # server log free of credentials.
+                skill_name = msg.get("skill")
+                key = msg.get("key")
+                value = msg.get("value")
+                if (
+                    not isinstance(skill_name, str)
+                    or not isinstance(key, str)
+                    or not isinstance(value, str)
+                ):
+                    await logger.awarning(
+                        "server.rx.set_skill_secret.bad_args",
+                        skill=skill_name,
+                        key=key,
+                    )
+                    return
+                await logger.ainfo(
+                    "server.rx.set_skill_secret",
+                    skill=skill_name,
+                    key=key,
+                )
+                if self._on_set_skill_secret is not None:
+                    await self._on_set_skill_secret(skill_name, key, value)
+            case "delete_skill_secret":
+                # Marketplace v2 Phase B — remove a secret key. The
+                # PWA's secret-input "Clear" button sends this.
+                skill_name = msg.get("skill")
+                key = msg.get("key")
+                if not isinstance(skill_name, str) or not isinstance(key, str):
+                    await logger.awarning(
+                        "server.rx.delete_skill_secret.bad_args",
+                        skill=skill_name,
+                        key=key,
+                    )
+                    return
+                await logger.ainfo(
+                    "server.rx.delete_skill_secret",
+                    skill=skill_name,
+                    key=key,
+                )
+                if self._on_delete_skill_secret is not None:
+                    await self._on_delete_skill_secret(skill_name, key)
             case "client_event":
                 # Two consumers in parallel:
                 # 1. Telemetry sink — every client_event is logged as
