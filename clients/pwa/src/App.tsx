@@ -67,15 +67,33 @@ export function App() {
 
   // ── UI state ─────────────────────────────────────────────────────────────
   const [transcriptOpen, setTranscriptOpen] = useState(false);
-  const [activeSheet, setActiveSheet] = useState<
+  type SheetKind =
     | "sessions"
     | "session-detail"
     | "device"
     | "logs"
     | "skills"
     | "skill-config"
-    | null
-  >(null);
+    | null;
+  const [activeSheet, setActiveSheet] = useState<SheetKind>(null);
+  // Sheet-mount fade-up animation should only run when entering the
+  // sheet stack from the home view. Transitions BETWEEN sheets
+  // (Skills → SkillConfig, Sessions → SessionDetail, etc.) skip the
+  // animation because the new sheet's `opacity: 0` start would let
+  // the previous sheet briefly show through. The ref tracks the
+  // previous render's `activeSheet`; if the previous was non-null
+  // and the current is non-null, we're transitioning sheet → sheet,
+  // so suppress the animation. The ref updates AFTER render commits,
+  // so during the very render where `activeSheet` flips null →
+  // something, the ref still reads `null` (= animate).
+  const prevActiveSheetRef = useRef<SheetKind>(null);
+  const sheetClass =
+    prevActiveSheetRef.current !== null && activeSheet !== null
+      ? "hux-sheet hux-sheet-no-anim"
+      : "hux-sheet";
+  useEffect(() => {
+    prevActiveSheetRef.current = activeSheet;
+  }, [activeSheet]);
   // Marketplace v2 Phase A — which skill the user just tapped in
   // DeviceSheet's Skills section. Null when no detail sheet is open.
   // Reset when DeviceSheet closes so a future open doesn't reuse a
@@ -656,6 +674,7 @@ export function App() {
               setActiveSheet("session-detail");
             }}
             onMount={ws.listSessions}
+            sheetClassName={sheetClass}
           />
         )}
         {activeSheet === "session-detail" && activeSessionId !== null && (
@@ -672,6 +691,7 @@ export function App() {
               setActiveSheet("sessions");
               setActiveSessionId(null);
             }}
+            sheetClassName={sheetClass}
           />
         )}
         {activeSheet === "device" && (
@@ -701,6 +721,7 @@ export function App() {
             skillsState={ws.skillsState}
             onRequestSkillsState={ws.requestSkillsState}
             onOpenSkills={() => setActiveSheet("skills")}
+            sheetClassName={sheetClass}
           />
         )}
         {activeSheet === "skills" && (
@@ -712,6 +733,7 @@ export function App() {
               setActiveSheet("skill-config");
             }}
             onRequestSkillsState={ws.requestSkillsState}
+            sheetClassName={sheetClass}
           />
         )}
         {activeSheet === "skill-config" &&
@@ -735,6 +757,7 @@ export function App() {
                   setActiveSheet("skills");
                   setActiveSkillName(null);
                 }}
+                sheetClassName={sheetClass}
               />
             );
           })()}
@@ -744,6 +767,7 @@ export function App() {
             statusLog={ws.statusLog}
             devEvents={ws.devEvents}
             onClear={ws.clearLog}
+            sheetClassName={sheetClass}
           />
         )}
       </div>

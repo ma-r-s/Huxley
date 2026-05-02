@@ -637,6 +637,7 @@ interface DeviceSheetProps {
   skillsState: SkillsState | null;
   onRequestSkillsState: () => void;
   onOpenSkills: () => void;
+  sheetClassName?: string;
 }
 
 export function DeviceSheet({
@@ -655,6 +656,7 @@ export function DeviceSheet({
   skillsState,
   onRequestSkillsState,
   onOpenSkills,
+  sheetClassName = "hux-sheet",
 }: DeviceSheetProps) {
   const { t } = useTranslation();
 
@@ -679,7 +681,7 @@ export function DeviceSheet({
   const deviceHost = device.url.replace(/^wss?:\/\//, "").replace(/:\d+$/, "");
 
   return (
-    <div style={S.sheet} className="hux-sheet">
+    <div style={S.sheet} className={sheetClassName}>
       <div style={S.header}>
         <span>{t("device.title")}</span>
         <button style={S.closeBtn} onClick={onClose}>

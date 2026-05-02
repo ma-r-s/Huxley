@@ -178,9 +178,14 @@ const S = {
 interface Props {
   skill: SkillSummary;
   onClose: () => void;
+  sheetClassName?: string;
 }
 
-export function SkillConfigSheet({ skill, onClose }: Props) {
+export function SkillConfigSheet({
+  skill,
+  onClose,
+  sheetClassName = "hux-sheet",
+}: Props) {
   const { t } = useTranslation();
   const fields = topLevelFields(skill.config_schema);
   const secretsSet = new Set(skill.secret_keys_set);
@@ -193,7 +198,7 @@ export function SkillConfigSheet({ skill, onClose }: Props) {
     skill.secret_keys_set.length > 0;
 
   return (
-    <div style={S.sheet} className="hux-sheet">
+    <div style={S.sheet} className={sheetClassName}>
       <div style={S.headerOuter}>
         <div style={S.headerInner}>
           <span>{t("skills.detailEyebrow", "Skill")}</span>

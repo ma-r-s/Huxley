@@ -205,6 +205,11 @@ interface Props {
   // server's persona-swap push (Phase A critic fix #3) covers
   // mid-session swaps; this covers the cold-open path.
   onRequestSkillsState: () => void;
+  // Sheet wrapper class — `hux-sheet` runs the fade-up animation,
+  // `hux-sheet hux-sheet-no-anim` skips it. App passes the no-anim
+  // variant when transitioning sheet → sheet so the user doesn't
+  // see the underlying view briefly through the fading-in sheet.
+  sheetClassName?: string;
 }
 
 export function SkillsSheet({
@@ -212,6 +217,7 @@ export function SkillsSheet({
   onClose,
   onPickSkill,
   onRequestSkillsState,
+  sheetClassName = "hux-sheet",
 }: Props) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>("installed");
@@ -223,7 +229,7 @@ export function SkillsSheet({
   }, [onRequestSkillsState]);
 
   return (
-    <div style={S.sheet} className="hux-sheet">
+    <div style={S.sheet} className={sheetClassName}>
       <div style={S.headerOuter}>
         <div style={S.headerInner}>
           <span>{t("skillsSheet.eyebrow", "Skills")}</span>
