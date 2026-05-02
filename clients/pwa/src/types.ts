@@ -106,6 +106,36 @@ export interface SkillsState {
   skills: SkillSummary[];
 }
 
+// Marketplace v2 Phase C — registry feed entry. Mirrors the schema
+// at https://github.com/ma-r-s/huxley-registry/blob/main/schema.json
+// (index.json shape) plus the runtime-decorated `installed: bool`
+// field. We pass through every upstream field so the PWA can
+// surface new ones without a wire-protocol bump (forward-compat).
+export interface MarketplaceEntry {
+  namespace?: string;
+  name: string;
+  display_name?: string;
+  tagline?: string;
+  version?: string;
+  tier?: "first-party" | "community" | "experimental";
+  categories?: string[];
+  config_schema_present?: boolean;
+  platforms?: string[];
+  detail?: string;
+  installed: boolean;
+  // Forward-compat: unknown fields ride through.
+  [key: string]: unknown;
+}
+
+export interface MarketplaceState {
+  skills: MarketplaceEntry[];
+  registry_version: string | null;
+  generated_at: string | null;
+  fetched_at_ms: number;
+  stale: boolean;
+  error: string | null;
+}
+
 // Minimal subset of JSON Schema 2020-12 the form renderer recognizes.
 // Server validates that schemas conform; this is just enough to walk
 // the tree and decide what input element to render. Anything we don't

@@ -104,6 +104,11 @@ class AudioServer:
         # owns the builder because it has both `current_app` AND access
         # to the `huxley.skills` entry-point group.
         on_get_skills_state: Callable[[], Awaitable[None]] | None = None,
+        # Marketplace v2 Phase C — registry browse. PWA opens the
+        # Marketplace tab; runtime fetches/caches the static
+        # huxley-registry/index.json feed + decorates with
+        # installed-status; replies with `marketplace_state`.
+        on_get_marketplace: Callable[[], Awaitable[None]] | None = None,
         # Marketplace v2 Phase B — write handlers. The dispatch case
         # validates types + shapes before invoking; Runtime persists
         # the change to disk and triggers _reload_current_persona,
@@ -149,6 +154,7 @@ class AudioServer:
         self._on_get_session = on_get_session
         self._on_delete_session = on_delete_session
         self._on_get_skills_state = on_get_skills_state
+        self._on_get_marketplace = on_get_marketplace
         self._on_set_skill_enabled = on_set_skill_enabled
         self._on_set_skill_config = on_set_skill_config
         self._on_set_skill_secret = on_set_skill_secret
@@ -422,6 +428,14 @@ class AudioServer:
                 await logger.ainfo("server.rx.get_skills_state")
                 if self._on_get_skills_state is not None:
                     await self._on_get_skills_state()
+            case "get_marketplace":
+                # Marketplace v2 Phase C — PWA opens the Marketplace
+                # tab. Runtime fetches the registry feed (cached for
+                # 1h) + decorates with installed-status, replies via
+                # `send_marketplace_state`.
+                await logger.ainfo("server.rx.get_marketplace")
+                if self._on_get_marketplace is not None:
+                    await self._on_get_marketplace()
             case "set_skill_enabled":
                 # Marketplace v2 Phase B — toggle enable/disable. The
                 # PWA's SkillConfigSheet header switch sends this when
@@ -606,6 +620,23 @@ class AudioServer:
         PWA can remove the row from its local list state."""
         await logger.ainfo("server.tx.session_deleted", session_id=session_id)
         await self._send({"type": "session_deleted", "id": session_id})
+
+    async def send_marketplace_state(self, payload: dict[str, Any]) -> None:
+        """Marketplace v2 Phase C — reply to inbound `get_marketplace`.
+
+        `payload` is built by `huxley.marketplace.fetch_marketplace`
+        and includes: `skills` (list of registry entries augmented
+        with `installed: bool`), `registry_version`, `generated_at`,
+        `fetched_at_ms`, `stale`, `error`."""
+        skills = payload.get("skills") if isinstance(payload, dict) else None
+        count = len(skills) if isinstance(skills, list) else 0
+        await logger.ainfo(
+            "server.tx.marketplace_state",
+            count=count,
+            stale=payload.get("stale"),
+            error=payload.get("error"),
+        )
+        await self._send({"type": "marketplace_state", **payload})
 
     async def send_skills_state(self, payload: dict[str, Any]) -> None:
         """Marketplace v2 Phase A — reply to inbound `get_skills_state`.

@@ -727,12 +727,28 @@ export function App() {
         {activeSheet === "skills" && (
           <SkillsSheet
             skillsState={ws.skillsState}
+            marketplaceState={ws.marketplaceState}
             onClose={() => setActiveSheet("device")}
             onPickSkill={(skill) => {
               setActiveSkillName(skill.name);
               setActiveSheet("skill-config");
             }}
+            onPickMarketplaceSkill={(entry) => {
+              // Phase D will route this to a detail / install sheet.
+              // Phase C: open the upstream registry detail in a new
+              // tab so the user can read the README and copy the
+              // install command.
+              const detail = (entry as { detail?: unknown }).detail;
+              const ns = entry.namespace;
+              const detailStr = typeof detail === "string" ? detail : "";
+              const url =
+                detailStr && ns
+                  ? `https://github.com/ma-r-s/huxley-registry/blob/main/${detailStr}`
+                  : `https://pypi.org/project/${entry.name}/`;
+              window.open(url, "_blank", "noopener,noreferrer");
+            }}
             onRequestSkillsState={ws.requestSkillsState}
+            onRequestMarketplace={ws.requestMarketplace}
             sheetClassName={sheetClass}
           />
         )}
