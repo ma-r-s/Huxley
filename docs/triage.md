@@ -4570,7 +4570,7 @@ Every clean interrupt sends a `response.cancel` to a response that's already don
 
 ## T1.16 — Session-readiness signal (don't tell user "ready" when not)
 
-**Status**: in_progress (2026-05-02). Server + PWA + tests + docs all in this commit; Mario voice smoke after restart.
+**Status**: done (2026-05-02 · `d3cc5509`). Mario voice smoke pending.
 
 **Problem.** Mario reported: on cold reload, PTT plays the listening + thinking tones locally but the turn never completes. Skills panel sits on "Loading…" forever. Refresh doesn't fix it. Intermittent — sometimes the same reload works.
 
