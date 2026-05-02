@@ -757,6 +757,10 @@ export function App() {
                   setActiveSheet("skills");
                   setActiveSkillName(null);
                 }}
+                onSetEnabled={ws.setSkillEnabled}
+                onSetConfig={ws.setSkillConfig}
+                onSetSecret={ws.setSkillSecret}
+                onDeleteSecret={ws.deleteSkillSecret}
                 sheetClassName={sheetClass}
               />
             );
