@@ -128,6 +128,15 @@ export function App() {
   // first hello arrives. Once connected, `ws.currentPersona` is the
   // canonical answer.
   const selectedPersonaId = ws.currentPersona ?? personas[0]?.name ?? "abuelos";
+  // Header chip + status messages should show the human-readable
+  // display_name ("Basic", "Abuelo"), NOT the canonical id ("basic",
+  // "abuelos") which is the picker's wire identity. Resolve via the
+  // available_personas list; fall back to the id capitalized if the
+  // hello hasn't arrived yet (boot window).
+  const selectedPersonaLabel =
+    personas.find((p) => p.name === selectedPersonaId)?.display_name ??
+    ws.currentPersona ??
+    "huxley";
 
   // ── Language state ───────────────────────────────────────────────────────
   // i18n.language is initialized from localStorage / navigator on module
@@ -567,7 +576,7 @@ export function App() {
             <div className="hux-wordmark">huxley</div>
           </div>
           <button className="hux-chip" onClick={() => setActiveSheet("device")}>
-            {ws.currentPersona ?? "huxley"}
+            {selectedPersonaLabel}
             <span className="hux-chip-arrow">{"\u203a"}</span>
           </button>
         </header>
