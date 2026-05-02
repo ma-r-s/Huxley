@@ -11,14 +11,20 @@
 // metaphor: skills are products you browse, not lines in a settings
 // menu.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { SkillSummary, SkillsState } from "../types.js";
 import { prettyLabel } from "../lib/schemaForm.js";
 
+// Position fixed (not absolute) so the sheet escapes the
+// `.hux-stage`'s 720px max-width column on desktop. The card grid
+// needs the full viewport width to breathe; the inner `.body`
+// caps at 1100px so cards don't stretch ugly on ultra-wide displays.
+// Stage container has no transform/filter/will-change so fixed
+// resolves against the viewport, not the stage.
 const S = {
   sheet: {
-    position: "absolute" as const,
+    position: "fixed" as const,
     inset: 0,
     zIndex: 30,
     background: "var(--hux-bg)",
@@ -27,17 +33,29 @@ const S = {
     flexDirection: "column" as const,
     overflow: "hidden",
   },
-  header: {
+  // Outer header is full-width (background + border bleed to edges).
+  // Inner row caps at the same maxWidth as the body so the eyebrow
+  // and close button align with the content column on ultra-wide
+  // displays. Without this, the close button drifts far from the
+  // cards on a 27" monitor.
+  headerOuter: {
+    flexShrink: 0,
+    width: "100%",
+  },
+  headerInner: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    padding: "20px 24px 12px",
+    padding: "20px 32px 12px",
+    width: "100%",
+    maxWidth: 1100,
+    margin: "0 auto",
+    boxSizing: "border-box" as const,
     fontFamily: "var(--hux-sans)",
     fontSize: 14,
     letterSpacing: "0.08em",
     textTransform: "uppercase" as const,
     color: "var(--hux-fg-dim)",
-    flexShrink: 0,
   },
   closeBtn: {
     background: "transparent",
@@ -55,7 +73,11 @@ const S = {
     flex: 1,
     overflowY: "auto" as const,
     overscrollBehavior: "contain" as const,
-    padding: "8px 24px 32px",
+    padding: "8px 32px 48px",
+    width: "100%",
+    maxWidth: 1100,
+    margin: "0 auto",
+    boxSizing: "border-box" as const,
   },
   title: {
     fontFamily: "var(--hux-serif)",
@@ -176,21 +198,39 @@ interface Props {
   skillsState: SkillsState | null;
   onClose: () => void;
   onPickSkill: (skill: SkillSummary) => void;
+  // Fired once on mount so the panel refreshes whenever the user
+  // opens it. Without this, the sheet would rely on DeviceSheet's
+  // mount-time fetch — a race when the user navigates fast OR when
+  // StrictMode's double-mount swallows the first effect. The
+  // server's persona-swap push (Phase A critic fix #3) covers
+  // mid-session swaps; this covers the cold-open path.
+  onRequestSkillsState: () => void;
 }
 
-export function SkillsSheet({ skillsState, onClose, onPickSkill }: Props) {
+export function SkillsSheet({
+  skillsState,
+  onClose,
+  onPickSkill,
+  onRequestSkillsState,
+}: Props) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>("installed");
   const installed = skillsState?.skills ?? [];
   const installedCount = installed.length;
 
+  useEffect(() => {
+    onRequestSkillsState();
+  }, [onRequestSkillsState]);
+
   return (
     <div style={S.sheet} className="hux-sheet">
-      <div style={S.header}>
-        <span>{t("skillsSheet.eyebrow", "Skills")}</span>
-        <button style={S.closeBtn} onClick={onClose}>
-          {t("skillsSheet.close", "Close")}
-        </button>
+      <div style={S.headerOuter}>
+        <div style={S.headerInner}>
+          <span>{t("skillsSheet.eyebrow", "Skills")}</span>
+          <button style={S.closeBtn} onClick={onClose}>
+            {t("skillsSheet.close", "Close")}
+          </button>
+        </div>
       </div>
       <div style={S.body}>
         <h2 style={S.title}>{t("skillsSheet.headline", "Your skills")}</h2>

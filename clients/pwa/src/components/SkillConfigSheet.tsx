@@ -17,9 +17,12 @@ import {
   topLevelFields,
 } from "../lib/schemaForm.js";
 
+// Position fixed (not absolute) so the sheet escapes the
+// `.hux-stage`'s 720px max-width column on desktop. Stays narrower
+// than SkillsSheet (form-shaped, not card-grid-shaped).
 const S = {
   sheet: {
-    position: "absolute" as const,
+    position: "fixed" as const,
     inset: 0,
     zIndex: 31,
     background: "var(--hux-bg)",
@@ -28,17 +31,26 @@ const S = {
     flexDirection: "column" as const,
     overflow: "hidden",
   },
-  header: {
+  // Outer/inner split so the chrome aligns with the body's centered
+  // column on ultra-wide displays — see SkillsSheet for the rationale.
+  headerOuter: {
+    flexShrink: 0,
+    width: "100%",
+  },
+  headerInner: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    padding: "20px 24px 12px",
+    padding: "20px 32px 12px",
+    width: "100%",
+    maxWidth: 720,
+    margin: "0 auto",
+    boxSizing: "border-box" as const,
     fontFamily: "var(--hux-sans)",
     fontSize: 14,
     letterSpacing: "0.08em",
     textTransform: "uppercase" as const,
     color: "var(--hux-fg-dim)",
-    flexShrink: 0,
   },
   closeBtn: {
     background: "transparent",
@@ -56,7 +68,11 @@ const S = {
     flex: 1,
     overflowY: "auto" as const,
     overscrollBehavior: "contain" as const,
-    padding: "8px 24px 32px",
+    padding: "8px 32px 48px",
+    width: "100%",
+    maxWidth: 720,
+    margin: "0 auto",
+    boxSizing: "border-box" as const,
   },
   title: {
     fontFamily: "var(--hux-serif)",
@@ -178,11 +194,13 @@ export function SkillConfigSheet({ skill, onClose }: Props) {
 
   return (
     <div style={S.sheet} className="hux-sheet">
-      <div style={S.header}>
-        <span>{t("skills.detailEyebrow", "Skill")}</span>
-        <button style={S.closeBtn} onClick={onClose}>
-          {t("skills.back", "Back")}
-        </button>
+      <div style={S.headerOuter}>
+        <div style={S.headerInner}>
+          <span>{t("skills.detailEyebrow", "Skill")}</span>
+          <button style={S.closeBtn} onClick={onClose}>
+            {t("skills.back", "Back")}
+          </button>
+        </div>
       </div>
       <div style={S.body}>
         <h2 style={S.title}>{prettyLabel(skill.name)}</h2>
