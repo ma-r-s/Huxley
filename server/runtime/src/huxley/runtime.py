@@ -189,6 +189,7 @@ class Runtime:
         *,
         auto_connect: bool = False,
         language: str | None = None,
+        force: bool = False,
     ) -> None:
         """Build a new Application for `name`, atomically replace
         `current_app`, schedule old's teardown in the background.
@@ -203,10 +204,15 @@ class Runtime:
         Serialized via `_swap_lock` so concurrent calls (e.g. two-tab
         PWA, StrictMode double-mount) don't leak a freshly-built
         Application via reference-overwrite. Critic round 2 §2.
+
+        `force=True` bypasses the same-persona short-circuit. Used by
+        `_reload_current_persona()` (Phase B) to apply persona.yaml /
+        secrets edits via a fresh load + setup_all without a process
+        restart.
         """
         async with self._swap_lock:
             old_app = self.current_app
-            if old_app is not None and old_app.persona.name == name:
+            if not force and old_app is not None and old_app.persona.name == name:
                 return  # no-op — already on this persona
 
             # Storage-lock-race fix (critic round 1): if a teardown task
@@ -295,6 +301,43 @@ class Runtime:
             await logger.ainfo("runtime.old_app_shutdown_complete", persona=app.persona.name)
         except Exception:
             await logger.aexception("runtime.old_app_shutdown_failed", persona=app.persona.name)
+
+    async def _reload_current_persona(self) -> None:
+        """Reload the active persona without changing identity.
+
+        Marketplace v2 Phase B writes (toggle skill, edit config,
+        edit secret) call this after persisting to disk so the
+        running skills pick up the new state. Mechanism: the existing
+        `_switch_to_persona` builds a new Application from a fresh
+        persona.yaml load + runs setup_all on every skill, which is
+        exactly what's needed — the only thing missing is the
+        same-persona short-circuit, which `force=True` bypasses.
+
+        Audio-wise this is heavier than just notifying skills:
+        the OpenAI session disconnects + reconnects (~1-2s gap). For
+        Phase B's config-time use case that's acceptable; mid-call
+        config edits aren't a supported flow. Phase D (auto-install)
+        uses a different path because the venv changes mid-run.
+
+        No-op if no current persona is loaded (lazy-boot window).
+        Failures are logged but not raised — the WS write callsite
+        still acknowledges to the PWA so the user sees the disk
+        write succeeded; the reload-failure shows up in the server
+        log for diagnosis.
+        """
+        if self.current_app is None:
+            await logger.ainfo("runtime.reload.no_current_app")
+            return
+        name = self.current_app.persona.data_dir.parent.name
+        try:
+            await self._switch_to_persona(
+                name,
+                auto_connect=True,
+                language=self.current_app._active_language,
+                force=True,
+            )
+        except Exception:
+            await logger.aexception("runtime.reload_failed", persona=name)
 
     # ── AudioServer callback shims ──────────────────────────────────────
     #

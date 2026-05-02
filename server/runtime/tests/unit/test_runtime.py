@@ -241,6 +241,52 @@ class TestConcurrentSwap:
         await runtime_in_tmp.current_app.shutdown()
 
 
+class TestReloadCurrentPersona:
+    """Marketplace v2 Phase B: writes to persona.yaml or per-skill
+    secrets must take effect without a process restart. The runtime
+    achieves this by re-running `_switch_to_persona` against the
+    *current* persona name with `force=True`, which bypasses the
+    same-name short-circuit and re-reads persona.yaml + re-runs
+    setup_all on every skill."""
+
+    async def test_force_bypasses_same_persona_shortcircuit(self, runtime_in_tmp: Runtime) -> None:
+        await runtime_in_tmp._switch_to_persona("alpha", auto_connect=False)
+        first = runtime_in_tmp.current_app
+        # Without force, same-name is a no-op (Application identity
+        # preserved) — see test_same_persona_is_noop above.
+        # WITH force, the existing app is torn down + a freshly-built
+        # one takes its place.
+        await runtime_in_tmp._switch_to_persona("alpha", auto_connect=False, force=True)
+        assert runtime_in_tmp.current_app is not first
+        assert runtime_in_tmp.current_app is not None
+        assert runtime_in_tmp.current_app.persona.name == "alpha"
+        # The previous app was scheduled for teardown, not leaked.
+        assert runtime_in_tmp._teardown_task is not None
+        await _drain_teardown(runtime_in_tmp)
+        await runtime_in_tmp.current_app.shutdown()
+
+    async def test_reload_helper_is_noop_when_no_current_app(
+        self, runtime_in_tmp: Runtime
+    ) -> None:
+        # Lazy-boot window: server is up but no persona selected yet.
+        # _reload_current_persona must NOT raise — it just logs and
+        # returns. (A WS write during this window can't happen anyway
+        # because the panel is empty, but defense in depth.)
+        assert runtime_in_tmp.current_app is None
+        await runtime_in_tmp._reload_current_persona()
+        assert runtime_in_tmp.current_app is None
+
+    async def test_reload_helper_reloads_current_persona(self, runtime_in_tmp: Runtime) -> None:
+        await runtime_in_tmp._switch_to_persona("alpha", auto_connect=False)
+        first = runtime_in_tmp.current_app
+        await runtime_in_tmp._reload_current_persona()
+        assert runtime_in_tmp.current_app is not first
+        assert runtime_in_tmp.current_app is not None
+        assert runtime_in_tmp.current_app.persona.name == "alpha"
+        await _drain_teardown(runtime_in_tmp)
+        await runtime_in_tmp.current_app.shutdown()
+
+
 class TestFailureMode:
     """Critic round 2 finding §1 / DoD bullet: if the new persona's
     `load_persona` or `start()` raises, the OLD `current_app` must
