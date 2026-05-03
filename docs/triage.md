@@ -4961,3 +4961,33 @@ Result: StrictMode dev runs the same lifecycle, but only one server-side connect
 - Now that the root cause is fixed, T1.20's hello watchdog and T1.21's ping watchdog are belt-and-suspenders — they catch genuine network drops, not the StrictMode bug. Consider adjusting their thresholds (faster detection) since they're no longer paying for a bug that produced ~95s of bad UX.
 
 ---
+
+## T1.23 — Telegram contact management (contacts.json + voice add/remove/list)
+
+**Status**: `done` (2026-05-02) · **Effort**: ~3h
+
+**Problem.** Contacts were baked into `persona.yaml` as a static dict. Adding a new contact required editing a 700-line config file, restarting the server, and knowing where to look. No voice management existed. Contacts are persona *data* (mutable, grows over time), not config (structural), and were in the wrong layer.
+
+**Why it matters.** For the Abuelo persona, the contacts list is the primary social network of the device. It needs to be maintainable without technical file editing, and ideally voice-manageable for the primary user.
+
+**Solution.**
+- `contacts.json` in `persona_data_dir` (alongside `abuelos.db` and the Telegram session). Loaded at `setup()`, merged on top of YAML contacts (JSON wins on collision). Written atomically on every `add_contact` / `remove_contact` call.
+- YAML `contacts:` block remains for immutable baseline contacts (family members unlikely to change). `_yaml_contacts` frozenset tracks which names came from YAML so `remove_contact` can warn when a YAML contact is removed in-session but will restore on restart.
+- 3 new LLM tools: `add_contact(name, phone)`, `remove_contact(name)`, `list_contacts()`.
+- Phone validation: normalize (strip whitespace/hyphens/parens, auto-prepend `+`), then validate against `+\d{7,15}`.
+- Resolution on add: if `inbound.enabled`, immediately attempt `resolve_contact()` to update the `user_id→name` reverse map for inbound caller recognition. Soft-fails with a note if the person hasn't messaged the userbot yet.
+- `persona.yaml` system prompt updated with contact management instructions.
+
+**DoD.**
+- [x] `_load_contacts_file` / `_save_contacts_file` module helpers, atomic write.
+- [x] Setup merges YAML + JSON, tracks which source each contact came from.
+- [x] 3 new tools + 3 new handler methods + localized strings (ES/EN/FR).
+- [x] 12 new tests in `TestContactManagement`.
+- [x] 4 existing tool-surface tests updated to reflect expanded tool list.
+- [x] `docs/skills/telegram.md` updated with dynamic contacts section.
+- [x] `persona.yaml` system prompt updated for new tools.
+- [x] ruff + mypy + 112 tests green.
+
+**Docs**: `docs/skills/telegram.md` updated.
+
+**Lessons**: Contacts as config was a layering mistake caught early. The `_yaml_contacts` / `_json_contacts` split is a clean pattern for "immutable baseline + mutable overlay" — applicable to any skill that reads persona config at startup and allows runtime writes.

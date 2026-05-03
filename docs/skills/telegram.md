@@ -94,12 +94,39 @@ Missing or wrong-type values are soft-fails — the skill registers but `call_co
 
 - **`api_id` / `api_hash`** _(required)_ — Telegram application credentials. Create once at [my.telegram.org/apps](https://my.telegram.org/apps) (see `docs/research/telegram-voice.md` for how to fill the form).
 - **`userbot_phone`** _(optional except first run)_ — phone number of the spare SIM the userbot signs in as. Consulted only on first startup; from then on the sqlite session file in the persona data dir authenticates silently. If the session is deleted, set this again and the SMS-code flow fires once.
-- **`contacts`** _(required for the skill to be useful)_ — name → phone mapping. Phones can be in any format; the skill normalizes (strips spaces, dashes, parens). Missing / empty / non-string values log a warning and get dropped.
+- **`contacts`** _(optional)_ — static name → phone mapping baked into the persona config. Phones can be in any format; the skill normalizes (strips spaces, dashes, parens). Missing / empty / non-string values log a warning and get dropped. **Prefer `contacts.json` for mutable contacts** (see below).
 - **`inbound.enabled`** — when true, eagerly connects at setup, builds the user_id→name reverse map, registers the call + message handlers, and runs the backfill pass.
 - **`inbound.auto_answer`** — `contacts_only` (default) rejects unknown callers; `all` accepts; `false` disables inbound entirely.
 - **`inbound.unknown_messages`** — `drop` (default, mirrors `contacts_only` for messages: spam vector mitigation) silently logs and drops messages from senders not in the contacts whitelist; `announce` surfaces them as `"un número desconocido"` (use only on locked-down deployments where the userbot's number is private).
 - **`inbound.debounce_seconds`** — per-sender coalesce window. Long enough to absorb a typed-burst-then-pause; short enough to feel responsive. Bumping past ~5s starts to feel laggy.
 - **`inbound.backfill_hours` / `inbound.backfill_max`** — bound the on-connect backfill. Set either to `0` to disable.
+
+### Dynamic contacts (`contacts.json`)
+
+In addition to the static `contacts:` block in `persona.yaml`, the skill loads **`<persona.data_dir>/contacts.json`** at startup and merges it on top (JSON wins on name collision). This file is the right place for contacts that change over time — family members added after initial setup, contacts added by voice, etc.
+
+Format matches the YAML block — a flat JSON object of lowercase names to E.164 phones:
+
+```json
+{
+  "nieta": "+573001234567",
+  "médico": "+573000000074"
+}
+```
+
+The file is written atomically by the skill whenever `add_contact` or `remove_contact` is called. You can also edit it directly while the server is stopped; changes are picked up on next startup.
+
+**Tools exposed to the LLM** (all three are available via voice):
+
+| Tool                       | What it does                                                                                                                                                                                                            |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `add_contact(name, phone)` | Adds or updates a contact. Writes to `contacts.json`. If `inbound.enabled`, attempts immediate user_id resolution (soft-fails if the person hasn't messaged the userbot yet).                                           |
+| `remove_contact(name)`     | Removes a contact. If the contact was in `persona.yaml` (not `contacts.json`), it's removed for the current session only and will be restored on restart — the tool result includes a `note` the LLM reads to the user. |
+| `list_contacts()`          | Returns the live contacts list.                                                                                                                                                                                         |
+
+**Phone validation**: after stripping formatting, the number must match `+\d{7,15}`. If the caller omits the leading `+` (e.g. says just the digits), it is added automatically before validation.
+
+**Telegram resolution caveat**: Telegram only lets the userbot resolve a phone to a `user_id` if that person has previously sent the userbot at least one message. Cold-adding a number will store the contact and allow outbound calls (resolution retried at call time), but inbound caller recognition won't work until they initiate contact first.
 
 ## Architecture — how the audio actually flows
 

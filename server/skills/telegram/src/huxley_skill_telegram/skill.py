@@ -60,6 +60,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from huxley_sdk import (
@@ -86,8 +87,39 @@ from huxley_skill_telegram.transport import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
+    from pathlib import Path
 
     from huxley_sdk import SkillContext
+
+_VALID_PHONE_RE = re.compile(r"^\+\d{7,15}$")
+_CONTACTS_FILE = "contacts.json"
+
+
+def _load_contacts_file(data_dir: Path) -> dict[str, str]:
+    """Load contacts.json from the persona data dir. Returns {} on missing/corrupt."""
+    path = data_dir / _CONTACTS_FILE
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            str(k).lower().strip(): normalize_phone(str(v))
+            for k, v in raw.items()
+            if isinstance(v, str) and v
+        }
+    except Exception:
+        return {}
+
+
+def _save_contacts_file(data_dir: Path, contacts: dict[str, str]) -> None:
+    """Atomically write contacts dict to contacts.json in the persona data dir."""
+    data_dir.mkdir(parents=True, exist_ok=True)
+    path = data_dir / _CONTACTS_FILE
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(contacts, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.rename(path)
 
 
 def _telegram_lang_bucket(language: str) -> str:
@@ -123,6 +155,26 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
         "send_text_param": (
             "Texto del mensaje a enviar. Telegram acepta hasta 4096 caracteres por mensaje."
         ),
+        "add_contact": (
+            "Agrega o actualiza un contacto en la lista de Telegram. "
+            "Úsalo cuando el usuario quiera guardar el número de alguien para "
+            "poder llamarle o enviarle mensajes más adelante. "
+            "El nombre debe ser simple (ej. 'nieto', 'vecina', 'médico'). "
+            "Contactos actuales: {contacts}."
+        ),
+        "add_name_param": "Nombre del contacto en minúsculas (ej. 'nieto').",
+        "add_phone_param": (
+            "Número de teléfono en formato internacional, empezando con + "
+            "(ej. +573001234567). Sin espacios ni guiones."
+        ),
+        "remove_contact": (
+            "Elimina un contacto de la lista de Telegram. Contactos actuales: {contacts}."
+        ),
+        "remove_name_param": "Nombre (en minúsculas) del contacto a eliminar.",
+        "list_contacts": (
+            "Lista todos los contactos de Telegram guardados. "
+            "Úsalo cuando el usuario pregunte quiénes están en su lista o quiera ver sus contactos."
+        ),
         "contacts_empty": "(ninguno)",
     },
     "en": {
@@ -145,6 +197,21 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
         ),
         "send_name_param": "Contact name (lowercase) to send the message to.",
         "send_text_param": ("Body of the message. Telegram accepts up to 4096 characters."),
+        "add_contact": (
+            "Add or update a contact in the Telegram list. Use when the user wants to save "
+            "someone's number to call or message them later. The name should be simple "
+            "(e.g. 'grandson', 'neighbor', 'doctor'). Current contacts: {contacts}."
+        ),
+        "add_name_param": "Contact name in lowercase (e.g. 'grandson').",
+        "add_phone_param": (
+            "Phone number in international format, starting with + (e.g. +13145551234). "
+            "No spaces or dashes."
+        ),
+        "remove_contact": "Remove a contact from the Telegram list. Current contacts: {contacts}.",
+        "remove_name_param": "Name (lowercase) of the contact to remove.",
+        "list_contacts": (
+            "List all saved Telegram contacts. Use when the user asks who is in their contact list."
+        ),
         "contacts_empty": "(none)",
     },
     "fr": {
@@ -169,6 +236,25 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
         ),
         "send_name_param": "Nom du contact destinataire (en minuscules).",
         "send_text_param": ("Corps du message. Telegram accepte jusqu'à 4096 caractères."),
+        "add_contact": (
+            "Ajoute ou met à jour un contact dans la liste Telegram. À utiliser quand "
+            "l'utilisateur veut sauvegarder le numéro de quelqu'un pour l'appeler ou lui "
+            "envoyer des messages. Le nom doit être simple (ex. 'petite-fille', 'voisine'). "
+            "Contacts actuels : {contacts}."
+        ),
+        "add_name_param": "Nom du contact en minuscules (ex. 'petite-fille').",
+        "add_phone_param": (
+            "Numéro de téléphone en format international, commençant par + (ex. +33612345678). "
+            "Sans espaces ni tirets."
+        ),
+        "remove_contact": (
+            "Supprime un contact de la liste Telegram. Contacts actuels : {contacts}."
+        ),
+        "remove_name_param": "Nom (en minuscules) du contact à supprimer.",
+        "list_contacts": (
+            "Liste tous les contacts Telegram enregistrés. À utiliser quand l'utilisateur "
+            "demande qui est dans sa liste de contacts."
+        ),
         "contacts_empty": "(aucun)",
     },
 }
@@ -214,6 +300,15 @@ _STRINGS: dict[str, dict[str, str]] = {
             "colgó antes de que se contestara."
         ),
         "contacts_none": "(ninguno)",
+        "phone_invalid": (
+            "El numero '{phone}' no tiene formato valido. "
+            "Debe empezar con + y contener solo digitos, por ejemplo +573001234567."
+        ),
+        "contact_not_found_remove": "No tengo a '{name}' en la lista de contactos.",
+        "contact_removed_yaml_note": (
+            "Elimine a {name} de la sesion actual, pero este contacto esta en el archivo "
+            "de configuracion y volvera al reiniciar el servidor."
+        ),
     },
     "en": {
         "unknown_caller": "unknown number",
@@ -253,6 +348,15 @@ _STRINGS: dict[str, dict[str, str]] = {
             "hung up before it could be answered."
         ),
         "contacts_none": "(none)",
+        "phone_invalid": (
+            "The number '{phone}' doesn't look valid. "
+            "It must start with + and contain only digits, e.g. +13145551234."
+        ),
+        "contact_not_found_remove": "I don't have '{name}' in the contacts list.",
+        "contact_removed_yaml_note": (
+            "Removed {name} for this session, but this contact is in the configuration file "
+            "and will be restored when the server restarts."
+        ),
     },
     "fr": {
         "unknown_caller": "numéro inconnu",
@@ -297,6 +401,15 @@ _STRINGS: dict[str, dict[str, str]] = {
             "raccroché avant qu'on ne réponde."
         ),
         "contacts_none": "(aucun)",
+        "phone_invalid": (
+            "Le numero '{phone}' ne semble pas valide. "
+            "Il doit commencer par + et ne contenir que des chiffres, ex. +33612345678."
+        ),
+        "contact_not_found_remove": "Je n'ai pas '{name}' dans la liste de contacts.",
+        "contact_removed_yaml_note": (
+            "J'ai supprime {name} pour cette session, mais ce contact est dans le fichier "
+            "de configuration et sera restaure au prochain redemarrage du serveur."
+        ),
     },
 }
 
@@ -331,7 +444,10 @@ class TelegramSkill:
         """
         self._logger: SkillLogger | None = None
         self._ctx: SkillContext | None = None
-        self._contacts: dict[str, str] = {}  # lowercased name -> normalized phone
+        self._contacts: dict[str, str] = {}  # lowercased name -> normalized phone (all sources)
+        self._yaml_contacts: frozenset[str] = frozenset()  # names that came from persona.yaml
+        self._json_contacts: dict[str, str] = {}  # names that came from / written to contacts.json
+        self._data_dir: Path | None = None
         self._transport: TelegramTransport | None = None
         self._transport_factory = transport_factory or TelegramTransport
 
@@ -425,6 +541,34 @@ class TelegramSkill:
                     "required": ["name", "text"],
                 },
             ),
+            ToolDefinition(
+                name="add_contact",
+                description=td["add_contact"].format(contacts=contacts_list),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": td["add_name_param"]},
+                        "phone": {"type": "string", "description": td["add_phone_param"]},
+                    },
+                    "required": ["name", "phone"],
+                },
+            ),
+            ToolDefinition(
+                name="remove_contact",
+                description=td["remove_contact"].format(contacts=contacts_list),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": td["remove_name_param"]},
+                    },
+                    "required": ["name"],
+                },
+            ),
+            ToolDefinition(
+                name="list_contacts",
+                description=td["list_contacts"],
+                parameters={"type": "object", "properties": {}, "required": []},
+            ),
         ]
 
     async def setup(self, ctx: SkillContext) -> None:
@@ -466,11 +610,16 @@ class TelegramSkill:
         except (TypeError, ValueError):
             api_id = None
 
-        self._contacts = {
+        yaml_contacts = {
             str(name).lower().strip(): normalize_phone(str(phone))
             for name, phone in (raw_contacts.items() if isinstance(raw_contacts, dict) else [])
             if isinstance(phone, str) and phone
         }
+        self._yaml_contacts = frozenset(yaml_contacts.keys())
+        self._data_dir = ctx.persona_data_dir
+        self._json_contacts = _load_contacts_file(ctx.persona_data_dir)
+        # YAML first; JSON wins on name collision (JSON represents more recent edits).
+        self._contacts = {**yaml_contacts, **self._json_contacts}
 
         # Inbound config -- defaults to disabled.
         inbound_cfg = cfg.get("inbound") or {}
@@ -613,6 +762,21 @@ class TelegramSkill:
                 if not isinstance(text_raw, str) or not text_raw.strip():
                     return _error_result(self._t("empty_message_arg"))
                 return await self._send_message(name_raw.lower().strip(), text_raw)
+            case "add_contact":
+                name_raw = args.get("name")
+                phone_raw = args.get("phone")
+                if not isinstance(name_raw, str) or not name_raw.strip():
+                    return _error_result("add_contact requires a non-empty `name` argument")
+                if not isinstance(phone_raw, str) or not phone_raw.strip():
+                    return _error_result("add_contact requires a non-empty `phone` argument")
+                return await self._add_contact(name_raw.lower().strip(), phone_raw.strip())
+            case "remove_contact":
+                name_raw = args.get("name")
+                if not isinstance(name_raw, str) or not name_raw.strip():
+                    return _error_result("remove_contact requires a non-empty `name` argument")
+                return await self._remove_contact(name_raw.lower().strip())
+            case "list_contacts":
+                return self._list_contacts()
             case _:
                 await self._logger.awarning("telegram.unknown_tool", tool=tool_name)
                 return _error_result(f"Unknown tool: {tool_name}")
@@ -701,6 +865,76 @@ class TelegramSkill:
             output=json.dumps(
                 {"ok": True, "contact": name, "chars": len(text), "sent_at": sent_at}
             )
+        )
+
+    # --- Contact management tools ---
+
+    async def _add_contact(self, name: str, phone_raw: str) -> ToolResult:
+        assert self._logger is not None
+
+        phone = normalize_phone(phone_raw)
+        if not phone.startswith("+"):
+            phone = "+" + phone
+        if not _VALID_PHONE_RE.match(phone):
+            return _error_result(self._t("phone_invalid", phone=phone_raw))
+
+        action = "updated" if name in self._contacts else "added"
+        self._contacts[name] = phone
+        self._json_contacts[name] = phone
+        if self._data_dir is not None:
+            _save_contacts_file(self._data_dir, self._json_contacts)
+
+        # Attempt immediate resolution for inbound caller recognition — soft-fail.
+        resolve_warning = False
+        if self._inbound_enabled and self._transport is not None:
+            try:
+                uid = await self._transport.resolve_contact(phone)
+                self._user_id_to_name[uid] = name
+            except Exception:
+                resolve_warning = True
+                await self._logger.awarning(
+                    "telegram.add_contact.resolve_failed",
+                    name=name,
+                    phone=phone,
+                    hint="contact won't be recognized on inbound calls until they message the userbot first",
+                )
+
+        await self._logger.ainfo("telegram.contact_added", name=name, phone=phone, action=action)
+        result: dict[str, Any] = {"ok": True, "action": action, "name": name, "phone": phone}
+        if resolve_warning:
+            result["note"] = (
+                "Informa al usuario que el contacto fue guardado. Menciona que para que las "
+                "llamadas entrantes lo reconozcan, esa persona debe enviarle un mensaje de "
+                "Telegram al menos una vez."
+            )
+        return ToolResult(output=json.dumps(result))
+
+    async def _remove_contact(self, name: str) -> ToolResult:
+        assert self._logger is not None
+
+        if name not in self._contacts:
+            return _error_result(self._t("contact_not_found_remove", name=name))
+
+        self._contacts.pop(name)
+        # Remove from inbound reverse map.
+        uid_to_drop = next((k for k, v in self._user_id_to_name.items() if v == name), None)
+        if uid_to_drop is not None:
+            del self._user_id_to_name[uid_to_drop]
+
+        yaml_only = name in self._yaml_contacts and name not in self._json_contacts
+        self._json_contacts.pop(name, None)
+        if self._data_dir is not None:
+            _save_contacts_file(self._data_dir, self._json_contacts)
+
+        await self._logger.ainfo("telegram.contact_removed", name=name, yaml_only=yaml_only)
+        result: dict[str, Any] = {"ok": True, "name": name}
+        if yaml_only:
+            result["note"] = self._t("contact_removed_yaml_note", name=name)
+        return ToolResult(output=json.dumps(result))
+
+    def _list_contacts(self) -> ToolResult:
+        return ToolResult(
+            output=json.dumps({"ok": True, "contacts": sorted(self._contacts.keys())})
         )
 
     # --- Inbound ring callbacks (called by transport) ---

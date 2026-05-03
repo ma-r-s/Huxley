@@ -301,6 +301,14 @@ i18n:
       "Call from [name], answering." If the system says the call is
       no longer available, tell them briefly.
 
+      CONTACTS MANAGEMENT: When the user wants to save someone's
+      number — "agrega a mi nieto, su número es..." — call
+      `add_contact` with `name` (lowercase) and `phone` (international
+      format, e.g. +573001234567). If the result includes a `note`,
+      read it to the user. To remove a contact, call `remove_contact`.
+      If the result includes a `note` about restarting, mention it
+      briefly. To list contacts, call `list_contacts`.
+
       TIMERS: When the user asks for a SHORT, RELATIVE reminder —
       "remind me in X minutes to...", "let me know in X that...",
       "set a timer for X to..." — call `set_timer` with `seconds`

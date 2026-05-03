@@ -534,7 +534,6 @@ class TestCallContactTool:
         assert transport.connected is True
         assert transport.placed_calls == [1000000081]
 
-
         payload = json.loads(result.output)
         assert payload["ok"] is True
         assert payload["contact"] == "hija"
@@ -592,7 +591,6 @@ class TestCallContactTool:
             tmp_path,
         )
         await skill.setup(ctx)
-
 
         for bad in ["", "   ", None, 123]:
             result = await skill.handle("call_contact", {"name": bad})
@@ -677,10 +675,16 @@ class TestInbound:
 
         # No eager connect without inbound.
         assert captured[0].connected is False
-        # Both outbound tools are always exposed (call + message); inbound
-        # config only affects whether the skill listens for INCOMING_CALL
-        # rings and inbound MessageHandler events, not the tool surface.
-        assert sorted(t.name for t in skill.tools) == ["call_contact", "send_message"]
+        # All five tools are always exposed; inbound config only affects
+        # whether the skill listens for INCOMING_CALL rings and inbound
+        # MessageHandler events, not the tool surface.
+        assert sorted(t.name for t in skill.tools) == [
+            "add_contact",
+            "call_contact",
+            "list_contacts",
+            "remove_contact",
+            "send_message",
+        ]
 
     @pytest.mark.asyncio
     async def test_inbound_enabled_connects_eagerly_at_setup(self, tmp_path: Path) -> None:
@@ -945,9 +949,16 @@ class TestTools:
         # pre-setup (`SkillContext.language` default) so we assert on the
         # English sentinel; per-language behavior is covered elsewhere.
         tools = {t.name: t for t in skill.tools}
-        assert set(tools) == {"call_contact", "send_message"}
-        for tool in tools.values():
-            assert "(none)" in tool.description
+        assert set(tools) == {
+            "call_contact",
+            "send_message",
+            "add_contact",
+            "remove_contact",
+            "list_contacts",
+        }
+        # Tools that mention the contact list should show the empty sentinel.
+        for name in ("call_contact", "send_message", "add_contact", "remove_contact"):
+            assert "(none)" in tools[name].description
 
     @pytest.mark.asyncio
     async def test_tool_descriptions_include_contact_names_after_setup(
@@ -964,9 +975,11 @@ class TestTools:
         )
         await skill.setup(ctx)
         tools = {t.name: t for t in skill.tools}
-        for tool in tools.values():
-            assert "hija" in tool.description
-            assert "hijo" in tool.description
+        # Tools that embed the contacts list should show both names.
+        # list_contacts has a static description with no contact list.
+        for name in ("call_contact", "send_message", "add_contact", "remove_contact"):
+            assert "hija" in tools[name].description
+            assert "hijo" in tools[name].description
 
     @pytest.mark.asyncio
     async def test_tool_surface_independent_of_inbound_flag(self, tmp_path: Path) -> None:
@@ -985,7 +998,13 @@ class TestTools:
                 tmp_path,
             )
             await skill.setup(ctx)
-            assert sorted(t.name for t in skill.tools) == ["call_contact", "send_message"]
+            assert sorted(t.name for t in skill.tools) == [
+                "add_contact",
+                "call_contact",
+                "list_contacts",
+                "remove_contact",
+                "send_message",
+            ]
 
 
 # ---------- Messaging: outbound send_message tool ----------
@@ -1497,3 +1516,218 @@ class TestBackfill:
         await skill.setup(ctx)
         await asyncio.sleep(0.1)
         assert [c for c in calls if "Mientras estabas desconectado" in c["prompt"]] == []
+
+
+# ---------------------------------------------------------------------------
+# Contact management: add_contact / remove_contact / list_contacts
+# ---------------------------------------------------------------------------
+
+_BASIC_CFG = {
+    "api_id": 12345678,
+    "api_hash": "abcdef0123456789",
+    "userbot_phone": "+573000000073",
+    "contacts": {"mario": "+573000000078"},
+}
+
+
+class TestContactManagement:
+    @pytest.mark.asyncio
+    async def test_contacts_json_loaded_at_setup(self, tmp_path: Path) -> None:
+        """contacts.json in data dir is merged on top of YAML contacts at setup."""
+        import json
+
+        (tmp_path / "contacts.json").write_text(
+            json.dumps({"nieto": "+573001234567"}), encoding="utf-8"
+        )
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(_BASIC_CFG, tmp_path)
+        await skill.setup(ctx)
+
+        assert "mario" in skill._contacts  # type: ignore[attr-defined]
+        assert "nieto" in skill._contacts  # type: ignore[attr-defined]
+        assert skill._contacts["nieto"] == "+573001234567"  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_contacts_json_wins_over_yaml(self, tmp_path: Path) -> None:
+        """JSON contact for the same name overrides the YAML entry."""
+        import json
+
+        (tmp_path / "contacts.json").write_text(
+            json.dumps({"mario": "+573999999999"}), encoding="utf-8"
+        )
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(_BASIC_CFG, tmp_path)
+        await skill.setup(ctx)
+
+        assert skill._contacts["mario"] == "+573999999999"  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_add_contact_persists_to_json(self, tmp_path: Path) -> None:
+        """add_contact writes the new contact to contacts.json."""
+        import json
+
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(_BASIC_CFG, tmp_path)
+        await skill.setup(ctx)
+
+        result = json.loads(
+            (await skill.handle("add_contact", {"name": "Nieta", "phone": "+573001234567"})).output
+        )
+        assert result["ok"] is True
+        assert result["action"] == "added"
+        assert result["name"] == "nieta"
+        assert result["phone"] == "+573001234567"
+
+        # Contact is live immediately.
+        assert skill._contacts["nieta"] == "+573001234567"  # type: ignore[attr-defined]
+
+        # Persisted to JSON file.
+        saved = json.loads((tmp_path / "contacts.json").read_text(encoding="utf-8"))
+        assert saved["nieta"] == "+573001234567"
+
+    @pytest.mark.asyncio
+    async def test_add_contact_update_existing(self, tmp_path: Path) -> None:
+        """Adding a contact that already exists reports action='updated'."""
+        import json
+
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(_BASIC_CFG, tmp_path)
+        await skill.setup(ctx)
+
+        result = json.loads(
+            (await skill.handle("add_contact", {"name": "mario", "phone": "+573000000001"})).output
+        )
+        assert result["ok"] is True
+        assert result["action"] == "updated"
+        assert skill._contacts["mario"] == "+573000000001"  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_add_contact_normalizes_phone(self, tmp_path: Path) -> None:
+        """Spaces and dashes in the phone number are stripped; missing + is added."""
+        import json
+
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(_BASIC_CFG, tmp_path)
+        await skill.setup(ctx)
+
+        result = json.loads(
+            (
+                await skill.handle("add_contact", {"name": "vecina", "phone": "57 300 123 4567"})
+            ).output
+        )
+        assert result["ok"] is True
+        assert result["phone"] == "+573001234567"
+
+    @pytest.mark.asyncio
+    async def test_add_contact_invalid_phone(self, tmp_path: Path) -> None:
+        """Clearly invalid phone strings return an LLM-facing error."""
+        import json
+
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(_BASIC_CFG, tmp_path)
+        await skill.setup(ctx)
+
+        result = json.loads(
+            (await skill.handle("add_contact", {"name": "nadie", "phone": "abc"})).output
+        )
+        assert result["ok"] is False
+
+    @pytest.mark.asyncio
+    async def test_remove_contact_json_contact(self, tmp_path: Path) -> None:
+        """remove_contact removes a JSON-added contact permanently."""
+        import json
+
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(_BASIC_CFG, tmp_path)
+        await skill.setup(ctx)
+
+        await skill.handle("add_contact", {"name": "nieta", "phone": "+573001234567"})
+        result = json.loads((await skill.handle("remove_contact", {"name": "nieta"})).output)
+        assert result["ok"] is True
+        assert "nieta" not in skill._contacts  # type: ignore[attr-defined]
+
+        saved = json.loads((tmp_path / "contacts.json").read_text(encoding="utf-8"))
+        assert "nieta" not in saved
+
+    @pytest.mark.asyncio
+    async def test_remove_contact_yaml_contact_warns(self, tmp_path: Path) -> None:
+        """Removing a YAML-only contact succeeds in-memory but returns a note
+        explaining it will be restored on restart."""
+        import json
+
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(_BASIC_CFG, tmp_path)
+        await skill.setup(ctx)
+
+        result = json.loads((await skill.handle("remove_contact", {"name": "mario"})).output)
+        assert result["ok"] is True
+        assert "mario" not in skill._contacts  # type: ignore[attr-defined]
+        assert "note" in result  # restart-warning present
+
+    @pytest.mark.asyncio
+    async def test_remove_contact_unknown_name(self, tmp_path: Path) -> None:
+        """Trying to remove a name not in the list returns an LLM-facing error."""
+        import json
+
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(_BASIC_CFG, tmp_path)
+        await skill.setup(ctx)
+
+        result = json.loads((await skill.handle("remove_contact", {"name": "fantasma"})).output)
+        assert result["ok"] is False
+
+    @pytest.mark.asyncio
+    async def test_list_contacts(self, tmp_path: Path) -> None:
+        """list_contacts returns the current live contacts list."""
+        import json
+
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(_BASIC_CFG, tmp_path)
+        await skill.setup(ctx)
+
+        await skill.handle("add_contact", {"name": "nieta", "phone": "+573001234567"})
+        result = json.loads((await skill.handle("list_contacts", {})).output)
+        assert result["ok"] is True
+        assert "mario" in result["contacts"]
+        assert "nieta" in result["contacts"]
+
+    @pytest.mark.asyncio
+    async def test_contacts_json_ignored_on_corrupt_file(self, tmp_path: Path) -> None:
+        """A corrupt contacts.json is silently skipped; YAML contacts still load."""
+        (tmp_path / "contacts.json").write_text("not json!!", encoding="utf-8")
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(_BASIC_CFG, tmp_path)
+        await skill.setup(ctx)
+
+        assert skill._contacts == {"mario": "+573000000078"}  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_add_contact_removes_reverse_map_on_update(self, tmp_path: Path) -> None:
+        """Updating a contact whose user_id was resolved replaces the reverse-map entry."""
+        import json
+
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            t.resolve_map = {"+573000000078": 111}
+            captured.append(t)
+            return t
+
+        inbound_cfg = dict(_BASIC_CFG)
+        inbound_cfg["inbound"] = {"enabled": True, "auto_answer": "contacts_only"}
+        skill = TelegramSkill(transport_factory=factory)
+        ctx, _ = _build_ctx(inbound_cfg, tmp_path)
+        await skill.setup(ctx)
+        await asyncio.sleep(0.1)
+
+        # Resolve map is built — mario -> uid 111.
+        assert skill._user_id_to_name.get(111) == "mario"  # type: ignore[attr-defined]
+
+        # Now add a new contact; resolution works because stub has the mapping.
+        captured[0].resolve_map["+573001234567"] = 222
+        result = json.loads(
+            (await skill.handle("add_contact", {"name": "nieta", "phone": "+573001234567"})).output
+        )
+        assert result["ok"] is True
+        assert skill._user_id_to_name.get(222) == "nieta"  # type: ignore[attr-defined]
