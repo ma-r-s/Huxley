@@ -1731,3 +1731,140 @@ class TestContactManagement:
         )
         assert result["ok"] is True
         assert skill._user_id_to_name.get(222) == "nieta"  # type: ignore[attr-defined]
+
+
+class TestDefaultCountryCode:
+    """Persona-level `default_country_code` config — when set, bare digits
+    sent to `add_contact` get the persona's country prefix prepended instead
+    of just '+'. The LLM is told the default via the tool description so it
+    can read back the full international number for confirmation."""
+
+    def _cfg(self, default_cc: str | None = "+57") -> dict[str, Any]:
+        cfg: dict[str, Any] = {
+            "api_id": 12345678,
+            "api_hash": "abcdef0123456789",
+            "userbot_phone": "+573000000073",
+            "contacts": {"mario": "+573000000078"},
+        }
+        if default_cc is not None:
+            cfg["default_country_code"] = default_cc
+        return cfg
+
+    @pytest.mark.asyncio
+    async def test_default_country_code_loaded(self, tmp_path: Path) -> None:
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(self._cfg("+57"), tmp_path)
+        await skill.setup(ctx)
+        assert skill._default_country_code == "+57"  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_no_default_means_plain_plus_prefix(self, tmp_path: Path) -> None:
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(self._cfg(default_cc=None), tmp_path)
+        await skill.setup(ctx)
+        assert skill._default_country_code is None  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_add_contact_prepends_default_country_code(self, tmp_path: Path) -> None:
+        """Bare digits get the persona's country code prepended (not just '+').
+
+        This is the bug the layered approach exists to fix: when the LLM forgets
+        to include the country code in the read-back, the skill still does the
+        right thing because it knows the persona's default.
+        """
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(self._cfg("+57"), tmp_path)
+        await skill.setup(ctx)
+
+        result = json.loads(
+            (await skill.handle("add_contact", {"name": "patricia", "phone": "3000000076"})).output
+        )
+        assert result["ok"] is True
+        assert result["phone"] == "+573000000076"  # +57 prepended, not just "+"
+
+    @pytest.mark.asyncio
+    async def test_add_contact_with_plus_but_local_digits_prepends_cc(
+        self, tmp_path: Path
+    ) -> None:
+        """Defense in depth: LLM commonly produces '+<local digits>' without
+        the country code. The skill detects 'short' numbers (<=10 digits) that
+        don't start with the default country code and prepends it. This was
+        the exact bug observed in smoke testing — LLM read back '+3104567891'
+        for a Colombian number, missing the +57."""
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(self._cfg("+57"), tmp_path)
+        await skill.setup(ctx)
+
+        result = json.loads(
+            (
+                await skill.handle("add_contact", {"name": "patricia", "phone": "+3104567891"})
+            ).output
+        )
+        assert result["ok"] is True
+        # '+3104567891' has only 10 digits and doesn't start with '57', so the
+        # skill treats it as missing the country code and prepends +57.
+        assert result["phone"] == "+573104567891"
+
+    @pytest.mark.asyncio
+    async def test_explicit_country_code_in_input_wins(self, tmp_path: Path) -> None:
+        """When the user explicitly includes a country code, it overrides the default."""
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(self._cfg("+57"), tmp_path)
+        await skill.setup(ctx)
+
+        # User-provided "+34..." is for Spain — must NOT get +57 prepended.
+        result = json.loads(
+            (await skill.handle("add_contact", {"name": "amiga", "phone": "+34612345678"})).output
+        )
+        assert result["ok"] is True
+        assert result["phone"] == "+34612345678"
+
+    @pytest.mark.asyncio
+    async def test_no_default_bare_digits_get_plus_only(self, tmp_path: Path) -> None:
+        """No persona default → fall back to the prior behavior (just prepend +).
+
+        The validation regex then catches anything that doesn't look international.
+        """
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(self._cfg(default_cc=None), tmp_path)
+        await skill.setup(ctx)
+
+        # 12 digits is in-range for the E.164 regex (+\d{7,15}).
+        result = json.loads(
+            (await skill.handle("add_contact", {"name": "x", "phone": "573000000076"})).output
+        )
+        assert result["ok"] is True
+        assert result["phone"] == "+573000000076"
+
+    @pytest.mark.asyncio
+    async def test_invalid_default_country_code_logs_and_ignores(self, tmp_path: Path) -> None:
+        """Malformed default_country_code (no leading +, too many digits, etc.)
+        is logged as a warning and falls back to None — the skill keeps working."""
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(self._cfg("57"), tmp_path)  # missing +
+        await skill.setup(ctx)
+        assert skill._default_country_code is None  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_tool_description_advertises_default(self, tmp_path: Path) -> None:
+        """The LLM sees the default country code in the add_contact description
+        so it can read back the full international number for confirmation."""
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(self._cfg("+57"), tmp_path)
+        await skill.setup(ctx)
+
+        add_tool = next(t for t in skill.tools if t.name == "add_contact")
+        assert "+57" in add_tool.description
+
+    @pytest.mark.asyncio
+    async def test_tool_description_no_default_no_hint(self, tmp_path: Path) -> None:
+        """No default → the country code hint clause is absent from the description."""
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(self._cfg(default_cc=None), tmp_path)
+        await skill.setup(ctx)
+
+        add_tool = next(t for t in skill.tools if t.name == "add_contact")
+        # No "Default country code" / "Código de país" substring.
+        desc_lower = add_tool.description.lower()
+        assert "default country code" not in desc_lower
+        assert "país por defecto" not in desc_lower

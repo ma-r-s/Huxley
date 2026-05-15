@@ -100,6 +100,7 @@ Missing or wrong-type values are soft-fails — the skill registers but `call_co
 - **`inbound.unknown_messages`** — `drop` (default, mirrors `contacts_only` for messages: spam vector mitigation) silently logs and drops messages from senders not in the contacts whitelist; `announce` surfaces them as `"un número desconocido"` (use only on locked-down deployments where the userbot's number is private).
 - **`inbound.debounce_seconds`** — per-sender coalesce window. Long enough to absorb a typed-burst-then-pause; short enough to feel responsive. Bumping past ~5s starts to feel laggy.
 - **`inbound.backfill_hours` / `inbound.backfill_max`** — bound the on-connect backfill. Set either to `0` to disable.
+- **`default_country_code`** _(optional)_ — international prefix (e.g. `"+57"`, `"+1"`, `"+33"`) the skill prepends when `add_contact` receives a phone without a `+`. Surfaced in the `add_contact` tool description so the LLM tells the user "I'll save it as +57..." for confirmation. When unset, bare digits get just `+` prepended and the validation regex enforces an explicit country code. Must match `/^\+\d{1,4}$/`; malformed values log a warning and behave as if unset. **Set this in any persona that ships for a specific country** — the skill cannot infer the user's country from context.
 
 ### Dynamic contacts (`contacts.json`)
 
@@ -124,7 +125,9 @@ The file is written atomically by the skill whenever `add_contact` or `remove_co
 | `remove_contact(name)`     | Removes a contact. If the contact was in `persona.yaml` (not `contacts.json`), it's removed for the current session only and will be restored on restart — the tool result includes a `note` the LLM reads to the user. |
 | `list_contacts()`          | Returns the live contacts list.                                                                                                                                                                                         |
 
-**Phone validation**: after stripping formatting, the number must match `+\d{7,15}`. If the caller omits the leading `+` (e.g. says just the digits), it is added automatically before validation.
+**Phone validation**: after stripping formatting, the number must match `+\d{7,15}`. If the caller omits the leading `+` (e.g. says just the digits), the skill prepends the persona's `default_country_code` if one is configured, otherwise just `+`.
+
+**Country code defense in depth**: the persona prompt tells the LLM to read back the full international number for confirmation, and the LLM sees the `default_country_code` in the `add_contact` tool description. As belt-and-suspenders, the skill itself prepends the default country code on bare digits, so even if the LLM forgets to include the prefix in its read-back, the saved value is still correct.
 
 **Telegram resolution caveat**: Telegram only lets the userbot resolve a phone to a `user_id` if that person has previously sent the userbot at least one message. Cold-adding a number will store the contact and allow outbound calls (resolution retried at call time), but inbound caller recognition won't work until they initiate contact first.
 

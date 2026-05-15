@@ -175,6 +175,12 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "Lista todos los contactos de Telegram guardados. "
             "Úsalo cuando el usuario pregunte quiénes están en su lista o quiera ver sus contactos."
         ),
+        "country_code_hint": (
+            " Código de país por defecto para esta persona: {cc}. Si el usuario "
+            "da solo dígitos locales (sin prefijo internacional), construye el "
+            "número con {cc} delante y léelo así de vuelta para confirmar. Si el "
+            "usuario menciona explícitamente otro país, usa ese prefijo en su lugar."
+        ),
         "contacts_empty": "(ninguno)",
     },
     "en": {
@@ -211,6 +217,12 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
         "remove_name_param": "Name (lowercase) of the contact to remove.",
         "list_contacts": (
             "List all saved Telegram contacts. Use when the user asks who is in their contact list."
+        ),
+        "country_code_hint": (
+            " Default country code for this persona: {cc}. If the user gives "
+            "only local digits (no international prefix), build the number with "
+            "{cc} in front and read it back that way for confirmation. If the "
+            "user explicitly mentions another country, use that prefix instead."
         ),
         "contacts_empty": "(none)",
     },
@@ -254,6 +266,12 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
         "list_contacts": (
             "Liste tous les contacts Telegram enregistrés. À utiliser quand l'utilisateur "
             "demande qui est dans sa liste de contacts."
+        ),
+        "country_code_hint": (
+            " Code pays par défaut pour ce persona : {cc}. Si l'utilisateur donne "
+            "seulement les chiffres locaux (sans préfixe international), construis "
+            "le numéro avec {cc} devant et relis-le ainsi pour confirmer. Si "
+            "l'utilisateur mentionne explicitement un autre pays, utilise ce préfixe."
         ),
         "contacts_empty": "(aucun)",
     },
@@ -448,6 +466,12 @@ class TelegramSkill:
         self._yaml_contacts: frozenset[str] = frozenset()  # names that came from persona.yaml
         self._json_contacts: dict[str, str] = {}  # names that came from / written to contacts.json
         self._data_dir: Path | None = None
+        # Default country prefix (e.g. "+57") prepended to phones supplied
+        # without an international prefix. Persona-specific — set via
+        # skills.telegram.default_country_code in persona.yaml. When None,
+        # bare digits are prefixed with just "+" (callers must supply the
+        # country code explicitly).
+        self._default_country_code: str | None = None
         self._transport: TelegramTransport | None = None
         self._transport_factory = transport_factory or TelegramTransport
 
@@ -508,6 +532,15 @@ class TelegramSkill:
         contacts_list = (
             ", ".join(sorted(self._contacts)) if self._contacts else td["contacts_empty"]
         )
+        # When a persona declares a default country code, surface it in the
+        # add_contact description so the LLM (a) reads back the full
+        # international number including the prefix and (b) doesn't ask the
+        # user to dictate the country code for every local contact.
+        cc_hint = (
+            td["country_code_hint"].format(cc=self._default_country_code)
+            if self._default_country_code
+            else ""
+        )
         return [
             ToolDefinition(
                 name="call_contact",
@@ -543,7 +576,7 @@ class TelegramSkill:
             ),
             ToolDefinition(
                 name="add_contact",
-                description=td["add_contact"].format(contacts=contacts_list),
+                description=td["add_contact"].format(contacts=contacts_list) + cc_hint,
                 parameters={
                     "type": "object",
                     "properties": {
@@ -620,6 +653,20 @@ class TelegramSkill:
         self._json_contacts = _load_contacts_file(ctx.persona_data_dir)
         # YAML first; JSON wins on name collision (JSON represents more recent edits).
         self._contacts = {**yaml_contacts, **self._json_contacts}
+
+        # Optional default country code (e.g. "+57"). When the user gives a
+        # phone without an international prefix, the skill prepends this
+        # instead of just "+". Must match /^\+\d{1,4}$/. Invalid/missing
+        # values fall back to None (caller must supply explicit prefix).
+        default_cc_raw = cfg.get("default_country_code")
+        if isinstance(default_cc_raw, str) and re.match(r"^\+\d{1,4}$", default_cc_raw):
+            self._default_country_code = default_cc_raw
+        elif default_cc_raw is not None:
+            await ctx.logger.awarning(
+                "telegram.default_country_code_invalid",
+                value=default_cc_raw,
+                hint="Must match +\\d{1,4} (e.g. '+57'). Falling back to plain '+' prefix.",
+            )
 
         # Inbound config -- defaults to disabled.
         inbound_cfg = cfg.get("inbound") or {}
@@ -714,6 +761,7 @@ class TelegramSkill:
             configured=self._transport is not None,
             inbound=self._inbound_enabled,
             auto_answer=self._auto_answer if self._inbound_enabled else None,
+            default_country_code=self._default_country_code,
         )
 
     async def _build_reverse_map(self) -> None:
@@ -872,9 +920,29 @@ class TelegramSkill:
     async def _add_contact(self, name: str, phone_raw: str) -> ToolResult:
         assert self._logger is not None
 
-        phone = normalize_phone(phone_raw)
-        if not phone.startswith("+"):
-            phone = "+" + phone
+        # Phone normalization with default-country-code defense in depth.
+        # Two ways the LLM (or a manual caller) can construct a malformed
+        # phone, both caught here:
+        #   1) Bare digits with no "+" at all — "3000000076"
+        #   2) "+" plus local-only digits without country code — "+3000000076"
+        # Case 2 is the common LLM failure mode: it knows to prepend "+" but
+        # forgets the persona's country code. The skill prepends the default
+        # country code in BOTH cases when the digits are short enough to be
+        # plausibly local-only (≤ 10 digits total). Numbers ≥ 11 digits are
+        # assumed to already carry a country code and are left as-is, so real
+        # foreign contacts ("+34612345678" Spain) survive intact.
+        phone_normalized = normalize_phone(phone_raw)
+        digits = phone_normalized.lstrip("+")
+        if self._default_country_code:
+            cc_digits = self._default_country_code.lstrip("+")
+            if not digits.startswith(cc_digits) and len(digits) <= 10:
+                phone = self._default_country_code + digits
+            else:
+                phone = "+" + digits
+        elif not phone_normalized.startswith("+"):
+            phone = "+" + digits
+        else:
+            phone = phone_normalized
         if not _VALID_PHONE_RE.match(phone):
             return _error_result(self._t("phone_invalid", phone=phone_raw))
 

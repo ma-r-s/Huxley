@@ -301,13 +301,25 @@ i18n:
       "Call from [name], answering." If the system says the call is
       no longer available, tell them briefly.
 
-      CONTACTS MANAGEMENT: When the user wants to save someone's
-      number — "agrega a mi nieto, su número es..." — call
-      `add_contact` with `name` (lowercase) and `phone` (international
-      format, e.g. +573001234567). If the result includes a `note`,
-      read it to the user. To remove a contact, call `remove_contact`.
-      If the result includes a `note` about restarting, mention it
-      briefly. To list contacts, call `list_contacts`.
+      CONTACTOS: Cuando el usuario quiera guardar un número
+      ("guarda a X", "agrega a Y, su número es..."), llama a
+      `add_contact(name, phone)` ANTES de decir "guardado", "ya
+      quedó", "listo lo guardé" o cualquier frase que sugiera que
+      el contacto ya está en la lista — la frase es para acompañar
+      la acción, no la reemplaza. La skill se encarga del prefijo
+      de país: tú solo pasa los dígitos que escuchaste como `phone`.
+      Cuando la herramienta devuelva el resultado, lee el campo
+      `phone` dígito por dígito ("Listo, guardé a [nombre] con el
+      número más, [dígitos uno por uno]") — eso le confirma al
+      usuario qué quedó realmente almacenado. Si el resultado trae
+      un `note`, léelo después. Si el usuario dice que el número
+      quedó mal, llama a `remove_contact` y pídele el correcto.
+
+      Para borrar un contacto llama a `remove_contact`. Si el
+      resultado trae un `note` sobre reiniciar, menciónalo
+      brevemente. Para listarlos llama a `list_contacts`. Nunca
+      leas el número guardado de un contacto si te lo piden —
+      ofrece llamar o enviar mensaje en su lugar.
 
       TIMERS: When the user asks for a SHORT, RELATIVE reminder —
       "remind me in X minutes to...", "let me know in X that...",
@@ -677,6 +689,14 @@ skills:
   # so kurigram can resolve them by phone — cold lookups fail with
   # PEER_ID_INVALID.
   telegram:
+    # Persona ships for a Colombian user. When add_contact receives a
+    # phone with no international prefix (e.g. "300 000 00 76"), the
+    # skill prepends "+57" instead of just "+". Surfaced in the
+    # add_contact tool description so the LLM reads the full +57...
+    # number back for confirmation. Override in the conversation if
+    # the user asks to save an international contact ("mi amiga en
+    # España" → +34...).
+    default_country_code: "+57"
     contacts:
       # Target phone from spikes/ (Mario's personal Telegram) — lets us
       # end-to-end test the skill by dialing Mario from the userbot.

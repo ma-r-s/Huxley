@@ -4991,3 +4991,43 @@ Result: StrictMode dev runs the same lifecycle, but only one server-side connect
 **Docs**: `docs/skills/telegram.md` updated.
 
 **Lessons**: Contacts as config was a layering mistake caught early. The `_yaml_contacts` / `_json_contacts` split is a clean pattern for "immutable baseline + mutable overlay" — applicable to any skill that reads persona config at startup and allows runtime writes.
+
+## T1.24 — Telegram `default_country_code` + tool-first prompt pattern
+
+**Status**: `done` (2026-05-15) · **Effort**: ~4h (1h skill code, 3h prompt iteration loop)
+
+**Problem.** Smoke testing T1.23 surfaced two layered issues that the LLM's read-back was masking:
+
+1. **Phone-validation gap**: regex `+\d{7,15}` accepted obviously-wrong numbers. First test saved Elsa as `+5730000000` (10 digits, missing country code) — the user dictated incompletely, the LLM transcribed faithfully, and the skill saved it. Per-country tight validation isn't framework-shaped (Huxley ships to multiple countries), but a persona-declared default country code with skill-side normalization IS.
+2. **Hallucinated saves**: the `gpt-4o-mini-realtime-preview` model under prompts with multi-step confirmation flows would generate "ya está guardado" without invoking `add_contact` (`tool_calls=0`). Two separate smoke tests reproduced this. The model is biased toward low-latency conversational responses over write-tool invocations.
+
+**Why it matters.** The Abuelo user is blind. The LLM's narration IS the user's only interface to system state. A hallucinated save creates a phantom contact in the user's mental model that doesn't exist in storage — and they discover the gap only when a call fails.
+
+**Solution.**
+- Per-persona `skills.telegram.default_country_code: "+57"` config. Skill normalizes bare digits AND short `+`-prefixed numbers (≤10 digits not matching the country code) by prepending the default. Foreign contacts (`+34...`, `+1...` ≥11 digits) pass through unchanged.
+- Tool description embeds `country_code_hint` so the LLM sees the default at decision time.
+- Defense in depth at multiple layers: tool description hint → LLM read-back → skill normalization → post-save narration.
+- Persona prompt rewritten to mirror the audiobooks anti-hallucination pattern (the only one in the prompt that's never hallucinated): *"llama a `add_contact` ANTES de decir 'guardado'... la frase es para acompañar la acción, no la reemplaza."* Same wording shape, same model behavior — fixed the hallucination on first try after 4 iterations of "do step A, then B, then C" prompts failed.
+- 9 new tests in `TestDefaultCountryCode` covering: config load, validation, bare digits, "+local" digits (the exact bug), explicit foreign codes, invalid config fallback, tool-description hint presence/absence.
+
+**Smoke verification (2026-05-15)**:
+- *"Agrega a Patricia, su número es 318-123-4567"* → LLM read back *"+57 310-123-4567"* (caught a digit transcription error, didn't catch it on confirmation but the +57 was present) → user confirmed → `add_contact(phone="+573101234567")` actually fired → saved `+573101234567` → narration matched storage → `list_contacts` confirmed presence.
+- `contacts.json` shape correct.
+- Zero hallucinations across two consecutive add+list cycles.
+
+**DoD.**
+- [x] `default_country_code` config field loaded + validated in `setup()`.
+- [x] Tool description embeds the default for LLM context.
+- [x] Skill normalizes both bare digits AND `+`-prefixed local digits when default is set.
+- [x] 9 new tests pass; 121 total in the telegram suite.
+- [x] `docs/skills/telegram.md` documents the config + the defense-in-depth approach.
+- [x] Abuelo persona system prompt rewritten in the audiobook-pattern shape.
+- [x] Server-side smoke test: hallucination gone, tool actually invoked, country code applied.
+
+**Docs**: `docs/skills/telegram.md` updated. Persona system_prompt updated.
+
+**Lessons**:
+- **Mirror prompt patterns that already work for the same model.** Four prompt iterations failed to fix the hallucination by reasoning about what *should* work. The fix came from copying the wording of the audiobooks section (proven to never hallucinate with this model) verbatim into contacts. Match observed model behavior, not theoretical instruction-following.
+- **Defense in depth for write paths.** The LLM is one of three layers (tool description hint → LLM read-back → skill normalization). When any one layer fails, the next catches it. Tested by deliberately constructing the LLM-failure case in `test_add_contact_with_plus_but_local_digits_prepends_cc`.
+- **Country code is persona data, not framework primitive.** Resisted promoting to a framework-level `locale.country` field — only Telegram needs it today, premature to abstract.
+- **Phone validation is fundamentally country-dependent.** E.164 (`+\d{7,15}`) is the global truth and stays. Country-specific tightening (digit-count rules per country) belongs in libphonenumber territory; deferred until we hit a case the heuristic miss.
