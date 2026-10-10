@@ -20,6 +20,7 @@ const es = {
     mic: {
       cannotOpen: "No pude abrir el micrófono para la llamada",
       accessDenied: "Micrófono denegado — revisa los permisos del navegador",
+      pressAgain: "Micrófono listo — suelta y vuelve a presionar",
     },
     header: {
       sessions: "Sesiones",

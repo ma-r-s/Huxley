@@ -28,6 +28,7 @@ const en = {
     mic: {
       cannotOpen: "Could not open microphone for the call",
       accessDenied: "Mic access denied — check browser permissions",
+      pressAgain: "Mic ready — let go and press again",
     },
     header: {
       sessions: "Sessions",

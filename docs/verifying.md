@@ -94,7 +94,22 @@ tailscale serve --bg --https=8443 http://127.0.0.1:5174
 
 Open `https://<mac-name>.<tailnet>.ts.net:8443` in Safari, then Share → Add to Home Screen. It launches full screen with the Huxley icon. Vite proxies `/ws` to the server, so the page and the voice socket share one origin.
 
-The server takes **one client at a time**: a newer connection evicts the older one (`client_evicted` in the log). Close the PWA on the desktop while testing on the phone, or the two keep kicking each other off. Turn the address off with `tailscale serve --https=8443 off`.
+The server takes **one client at a time**: a newer connection evicts the older one (`client_evicted` in the log). A copy that isn't on screen (a Safari tab behind the home-screen app) no longer reconnects until it's shown again, but a desktop tab left open and visible still competes, so close it while testing on the phone. Turn the address off with `tailscale serve --https=8443 off`.
+
+iOS rules the PWA works around (details in `clients/pwa/src/lib/audio/capture.ts`): only a finger *lift* counts as a gesture, so the mic is acquired on the first lift or press of each launch and then kept muted between turns; iOS asks for mic permission once per launch of a home-screen app; reconnects happen automatically when the app returns to the foreground. If a phone misbehaves, start from `client.device` and the `client.mic_*` / `client.playback_*` lines in the server log (see `docs/observability.md`).
+
+### Testing on the iOS simulator without kicking the phone off
+
+A second server + PWA pair, isolated so it can't load the real persona's Telegram session:
+
+```bash
+mkdir -p /tmp/huxley-rig/personas && cd /tmp/huxley-rig
+ln -s <repo>/server/personas/basic personas/basic && ln -s <repo>/server/personas/_shared personas/_shared
+printf 'HUXLEY_OPENAI_API_KEY=...\nHUXLEY_SERVER_PORT=8766\nHUXLEY_PERSONA=basic\n' > .env
+uv run --project <repo> --package huxley huxley
+```
+
+Then start the `pwa-sim` launch config (PWA on 5175, proxied to 8766) and open `http://localhost:5175` in the simulator. The macOS Simulator app needs microphone permission the first time.
 
 ## Smoke test 1 — info tool path (`get_current_time`)
 

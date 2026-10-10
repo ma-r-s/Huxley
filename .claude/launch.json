@@ -18,6 +18,15 @@
         "cd /Users/mario/Projects/Personal/Code/Huxley/clients/pwa && bun dev"
       ],
       "port": 5174
+    },
+    {
+      "name": "pwa-sim",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/mario/Projects/Personal/Code/Huxley/clients/pwa && HUXLEY_PWA_PORT=5175 HUXLEY_WS_TARGET=ws://localhost:8766 bun dev"
+      ],
+      "port": 5175
     }
   ]
 }

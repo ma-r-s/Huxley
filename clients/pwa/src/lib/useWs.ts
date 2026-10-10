@@ -19,6 +19,7 @@ import type {
   InstallUIState,
 } from "../types.js";
 import { WsLog, type WsLogSnapshot } from "./wsLog.js";
+import { deviceSnapshot } from "./device.js";
 
 const EXPECTED_PROTOCOL = 2;
 // T1.21 — heartbeat ping interval. Every PING_INTERVAL_MS we send a
@@ -29,6 +30,8 @@ const EXPECTED_PROTOCOL = 2;
 // (~95s worst case to detect a post-hello wedge that the T1.20
 // watchdog can't catch because hello already arrived).
 const PING_INTERVAL_MS = 30_000;
+// Absences shorter than this (a notification pull-down) keep the socket.
+const FOREGROUND_REFRESH_MIN_AWAY_MS = 3_000;
 const PING_TIMEOUT_MS = 5_000;
 const PING_MAX_MISSES = 3;
 // T1.20 — how long after `onopen` we'll wait for the server's `hello`
@@ -243,6 +246,11 @@ export function useWs() {
   // Set to true on intentional disconnect (unmount / persona switch) so the
   // onclose handler doesn't schedule a reconnect.
   const noReconnectRef = useRef(false);
+  // Set by `refreshAfterForeground`: the next close reconnects at once
+  // instead of after the usual 2 s back-off, and the following hello
+  // reports how long the app was away.
+  const immediateReconnectRef = useRef(false);
+  const foregroundAwayMsRef = useRef<number | null>(null);
   // T1.20 — hello watchdog. Server emits `hello` within milliseconds of
   // accepting the WS upgrade. If we don't see it within `_HELLO_WATCHDOG_MS`
   // of `onopen`, the socket is half-dead (TCP up both ways, frames not
@@ -587,8 +595,25 @@ export function useWs() {
         setSessionReady(false);
         setSessionError(null);
         if (switchingRef.current || noReconnectRef.current) return;
+        if (immediateReconnectRef.current) {
+          immediateReconnectRef.current = false;
+          connect();
+          return;
+        }
+        // The server takes one client at a time. A copy the user isn't
+        // looking at (an old Safari tab beside the home-screen app)
+        // reconnecting on a timer evicts the copy they ARE using, and the
+        // two kick each other off forever. Hidden copies wait until shown;
+        // `refreshAfterForeground` reconnects them then.
+        if (document.visibilityState === "hidden") {
+          wsLogRef.current?.recordLifecycle("reconnect-deferred-hidden", {});
+          return;
+        }
         pushStatus("Disconnected — retrying in 2s\u2026");
-        setTimeout(() => connect(), 2000);
+        setTimeout(() => {
+          if (document.visibilityState === "hidden") return;
+          connect();
+        }, 2000);
       };
 
       ws.onmessage = (ev) => {
@@ -621,6 +646,13 @@ export function useWs() {
               if (helloWatchdogRef.current !== null) {
                 clearTimeout(helloWatchdogRef.current);
                 helloWatchdogRef.current = null;
+              }
+              sendClientEvent("device", deviceSnapshot());
+              if (foregroundAwayMsRef.current !== null) {
+                sendClientEvent("foreground_reconnect", {
+                  away_ms: foregroundAwayMsRef.current,
+                });
+                foregroundAwayMsRef.current = null;
               }
               if (msg.protocol !== EXPECTED_PROTOCOL) {
                 pushStatus(
@@ -901,7 +933,7 @@ export function useWs() {
 
       socketRef.current = ws;
     },
-    [pushStatus, pushDevEvent, cancelSilenceTimer, setThinkingActiveSync],
+    [pushStatus, pushDevEvent, cancelSilenceTimer, setThinkingActiveSync, sendClientEvent],
   );
 
   const disconnect = useCallback(() => {
@@ -928,6 +960,31 @@ export function useWs() {
       setConnected(false);
     }, 50);
   }, [cancelSilenceTimer, setThinkingActiveSync]);
+
+  // iOS freezes a backgrounded web app and often kills its socket without
+  // a close event. On return the socket can look OPEN while it's dead, and
+  // the 30 s ping takes up to a minute to notice, so a PTT in that window
+  // vanishes ("stuck thinking"). After any real absence, replace the
+  // socket right away; the server evicts the old one.
+  const refreshAfterForeground = useCallback(
+    (awayMs: number) => {
+      if (noReconnectRef.current || switchingRef.current) return;
+      const sock = socketRef.current;
+      if (sock === null || sock.readyState === WebSocket.CLOSED) {
+        foregroundAwayMsRef.current = awayMs;
+        connect();
+        return;
+      }
+      if (awayMs < FOREGROUND_REFRESH_MIN_AWAY_MS) return;
+      if (sock.readyState === WebSocket.OPEN) {
+        foregroundAwayMsRef.current = awayMs;
+        immediateReconnectRef.current = true;
+        wsLogRef.current?.recordLifecycle("foreground-refresh", { awayMs });
+        sock.close(4004, "foreground-refresh");
+      }
+    },
+    [connect],
+  );
 
   // T1.13: persona switch is a WebSocket reconnect with `?persona=<name>`.
   // The server runs its swap algorithm on connect \u2014 close-and-reopen
@@ -1147,6 +1204,7 @@ export function useWs() {
     // Connection
     connect,
     disconnect,
+    refreshAfterForeground,
     selectPersona,
     setLanguage,
     pushStatus,

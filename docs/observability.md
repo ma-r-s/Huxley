@@ -39,6 +39,18 @@ A skill named `audiobooks` emits events like `audiobooks.factory_built`, `audiob
 
 The `client.*` events come in via the `client_event` WebSocket message type — clients emit `{"type": "client_event", "event": "<name>", "data": {...}}` and the server logs them as `client.<name>` with the data fields spread. Pure observability — the framework takes no action. This closes the "client-side blackbox" gap; thinking-tone state, silence-timer fires, and PTT UI transitions are now visible in the same log file as the server-side flow.
 
+PWA client events worth knowing when debugging a phone (added 2026-10-10):
+
+| Event | Meaning |
+| --- | --- |
+| `client.device` | Sent on every connection: user agent (iOS version), standalone vs Safari tab, viewport sizes (`inner`, `visual`, `lvh`/`dvh`/`svh`), safe-area insets. First stop for layout bugs. |
+| `client.ptt_press` | Finger down on the orb, before any audio work. A press with nothing after it means the press got stuck client-side. |
+| `client.mic_acquired` / `client.mic_acquire_failed` | Stream obtained (`trigger=press` or `gesture`) or refused (`name=NotAllowedError` etc.). |
+| `client.mic_idle` / `client.mic_released` | Track muted between turns or while in the background / stream stopped (unmount). |
+| `client.ptt_released_during_mic_open` | Finger lifted while the mic was still opening; the press was cancelled cleanly. |
+| `client.playback_suspended` / `client.playback_resumed` / `client.playback_resume_blocked` | Speaker context slept when idle / woke for new audio / iOS refused to wake it (audio would be lost). |
+| `client.foreground_reconnect` | The app came back after `away_ms` and replaced a socket iOS may have killed. |
+
 ## Context fields
 
 Every event carries the minimum context needed to be useful in isolation:

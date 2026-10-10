@@ -54,6 +54,10 @@ function saveAppearance(a: Appearance) {
 // ── Singleton audio instances ─────────────────────────────────────────────
 const mic = new MicCapture();
 const playback = new AudioPlayback();
+// Walkie-talkie mic: held while talking plus this long after release, so a
+// quick follow-up ("sí") doesn't pay the reopen cost, then released so the
+// OS microphone indicator goes off.
+const MIC_LINGER_MS = 5000;
 
 export function App() {
   const ws = useWs();
@@ -65,6 +69,11 @@ export function App() {
   const [micError, setMicError] = useState<string | null>(null);
   const pttHeldRef = useRef(false);
   const pttPendingRef = useRef(false);
+  // Physical finger/key state, separate from the PTT turn state: the mic
+  // opens asynchronously, and a release during that await must cancel the
+  // press instead of latching PTT on.
+  const fingerDownRef = useRef(false);
+  const pressIdRef = useRef(0);
 
   // ── UI state ─────────────────────────────────────────────────────────────
   const [transcriptOpen, setTranscriptOpen] = useState(false);
@@ -271,6 +280,9 @@ export function App() {
       playback.onceIdle(done);
     });
     mic.onFrame = (data) => ws.sendAudio(data);
+    mic.onEvent = (event, data) => ws.sendClientEvent(event, data ?? {});
+    playback.micOpen = () => mic.holdsSession;
+    playback.onEvent = (event, data) => ws.sendClientEvent(event, data ?? {});
     // Open the WS with the user's currently-selected language. Server
     // resolves the persona itself per the locked rule (env >
     // single-persona autodiscovery > alphabetic-first-with-loud-log).
@@ -280,7 +292,7 @@ export function App() {
     ws.connect(undefined, language);
     return () => {
       ws.disconnect();
-      mic.destroy();
+      mic.release("unmount");
       playback.destroy();
       if (prerollTimerRef.current !== null)
         clearTimeout(prerollTimerRef.current);
@@ -313,8 +325,7 @@ export function App() {
     if (ws.inputMode === "skill_continuous") {
       void (async () => {
         try {
-          await mic.init();
-          await mic.resume();
+          await mic.open();
           mic.active = true;
         } catch {
           setMicError(t("mic.cannotOpen"));
@@ -326,6 +337,7 @@ export function App() {
       !pttPendingRef.current
     ) {
       mic.active = false;
+      mic.scheduleIdle(MIC_LINGER_MS, "claim_ended");
     }
   }, [ws.inputMode]);
 
@@ -409,13 +421,35 @@ export function App() {
     // of pressing-and-getting-nothing.
     if (!ws.sessionReady) return;
     if (pttHeldRef.current || pttPendingRef.current) return;
+    const pressId = ++pressIdRef.current;
+    fingerDownRef.current = true;
     setMicError(null);
+    ws.sendClientEvent("ptt_press", { mic_stream: mic.hasStream });
+    // Both audio contexts must be started before the first await: iOS only
+    // honors resume() inside the gesture itself.
+    const playbackUnlocked = playback.unlock();
     try {
-      await mic.init();
-      await mic.resume();
-      await playback.resume();
-    } catch {
-      setMicError(t("mic.accessDenied"));
+      await mic.open();
+      await Promise.race([
+        playbackUnlocked,
+        new Promise<void>((resolve) => setTimeout(resolve, 1000)),
+      ]);
+    } catch (err) {
+      // iOS refuses to (re)acquire the mic from a press: only a finger lift
+      // counts as a gesture. The release of this press primes it (see the
+      // gesture listener below), so the next press works. A real refusal
+      // stays NotAllowedError on the lift too and shows as accessDenied.
+      // Details land in the log as client.mic_acquire_failed.
+      const name = (err as { name?: string })?.name;
+      setMicError(t(name === "NotAllowedError" ? "mic.pressAgain" : "mic.accessDenied"));
+      return;
+    }
+    // Released (or pressed again) while the mic was opening. Starting the
+    // turn now would latch PTT on with no release coming: the orb stuck in
+    // "listening" and the server waiting for a commit that never arrives.
+    if (!fingerDownRef.current || pressIdRef.current !== pressId) {
+      ws.sendClientEvent("ptt_released_during_mic_open", {});
+      mic.scheduleIdle(MIC_LINGER_MS, "released_during_open");
       return;
     }
     // T1.13: preload the persona-swap earcon now that the AudioContext
@@ -446,19 +480,100 @@ export function App() {
   }, [ws, activatePtt]);
 
   const releasePtt = useCallback(() => {
+    fingerDownRef.current = false;
     if (!pttHeldRef.current && !pttPendingRef.current) return;
     if (pttPendingRef.current && !mic.active) {
       setPttPendingStart(false);
       pttPendingRef.current = false;
       setPttHeld(false);
       pttHeldRef.current = false;
+      mic.scheduleIdle(MIC_LINGER_MS, "linger_elapsed");
       return;
     }
     mic.active = false;
     setPttHeld(false);
     pttHeldRef.current = false;
     ws.pttStop();
+    if (ws.inputMode !== "skill_continuous") {
+      mic.scheduleIdle(MIC_LINGER_MS, "linger_elapsed");
+    }
   }, [ws]);
+
+  // ── Audio unlock on every gesture ───────────────────────────────────────
+  // On touch screens WebKit treats only a finger LIFT as a user gesture, so
+  // a hold-to-talk press can never start audio by itself. Every lift, click
+  // or key unlocks both contexts and (first time per visit) acquires the
+  // mic, so by the next press everything is already running. Capture phase
+  // so it runs before any handler that might stop propagation.
+  useEffect(() => {
+    const unlock = () => {
+      void playback.unlock();
+      mic.prime();
+    };
+    const opts = { capture: true, passive: true } as const;
+    for (const type of ["pointerup", "touchend", "click", "keydown"] as const) {
+      document.addEventListener(type, unlock, opts);
+    }
+    return () => {
+      for (const type of ["pointerup", "touchend", "click", "keydown"] as const) {
+        document.removeEventListener(type, unlock, opts);
+      }
+    };
+  }, []);
+
+  // ── Foreground / background ─────────────────────────────────────────────
+  // Hidden: end any held turn and mute the mic. Visible again: let the
+  // socket layer replace a connection iOS may have silently killed while
+  // frozen. If iOS ended the track meanwhile, `open()` re-acquires it.
+  //
+  // iOS freezes a home-screen app the moment it leaves the screen, so the
+  // "hidden" event is often delivered only on return, right before
+  // "visible". Measuring from it reads ~0 ms away. A 1 s heartbeat stops
+  // while frozen, so the gap since its last beat is the real absence.
+  // Subscribed once; the latest callbacks come through this ref. Deps on
+  // `releasePtt` would re-subscribe every render (it closes over `ws`) and
+  // reset the heartbeat and `hiddenAt` mid-absence.
+  const visibilityDepsRef = useRef({
+    releasePtt,
+    inputMode: ws.inputMode,
+    refresh: ws.refreshAfterForeground,
+  });
+  visibilityDepsRef.current = {
+    releasePtt,
+    inputMode: ws.inputMode,
+    refresh: ws.refreshAfterForeground,
+  };
+  useEffect(() => {
+    let hiddenAt: number | null = null;
+    let lastBeat = Date.now();
+    const beat = setInterval(() => {
+      lastBeat = Date.now();
+    }, 1000);
+    const onVisibility = () => {
+      const now = Date.now();
+      const frozenMs = now - lastBeat;
+      lastBeat = now;
+      const deps = visibilityDepsRef.current;
+      if (document.visibilityState === "hidden") {
+        hiddenAt = now - Math.max(0, frozenMs - 1000);
+        if (pttHeldRef.current || pttPendingRef.current) deps.releasePtt();
+        // Mute, don't release: a released stream makes iOS ask for mic
+        // permission again on return and refuses to re-open it from a
+        // press. A disabled track with a suspended context keeps the
+        // grant without capturing.
+        if (deps.inputMode !== "skill_continuous") mic.idle("app_hidden");
+      } else {
+        const sinceHidden = hiddenAt === null ? 0 : now - hiddenAt;
+        hiddenAt = null;
+        deps.refresh(Math.max(sinceHidden, frozenMs));
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      clearInterval(beat);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
 
   // Pointer events (orb touch/click)
   const handlePointerDown = useCallback(

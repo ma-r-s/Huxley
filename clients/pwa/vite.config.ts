@@ -5,11 +5,13 @@ export default defineConfig({
   plugins: [react()],
   server: {
     host: true,
-    port: 5174,
+    port: Number(process.env.HUXLEY_PWA_PORT ?? 5174),
     allowedHosts: [".ts.net"],
     proxy: {
       "/ws": {
-        target: "ws://localhost:8765",
+        // Override to point a second PWA instance at a second server
+        // (e.g. a simulator test rig that must not evict a real phone).
+        target: process.env.HUXLEY_WS_TARGET ?? "ws://localhost:8765",
         ws: true,
       },
     },

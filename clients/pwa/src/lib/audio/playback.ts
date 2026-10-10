@@ -3,7 +3,20 @@
  *
  * Receives base64-encoded PCM16 chunks (24 kHz, mono) from the server and
  * schedules them back-to-back for gapless playback.
+ *
+ * The context suspends after IDLE_SUSPEND_MS of silence and wakes on the
+ * next sound. A context left running forever plays silence forever, which
+ * iOS shows as an app playing audio in the background (Dynamic Island).
+ * Once a user gesture has unlocked the context, WebKit lets later
+ * `resume()` calls through without one; if it ever refuses, the
+ * `playback_resume_blocked` event lands in the server log.
  */
+const IDLE_SUSPEND_MS = 4000;
+
+import { setAudioSessionType } from "./session.js";
+
+export type PlaybackEvent = (event: string, data?: Record<string, unknown>) => void;
+
 export class AudioPlayback {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
@@ -14,6 +27,15 @@ export class AudioPlayback {
   private thinkingToneOsc: OscillatorNode | null = null;
   private thinkingToneGain: GainNode | null = null;
   private thinkingToneRefillTimer: ReturnType<typeof setTimeout> | null = null;
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingChunks: string[] = [];
+  private waking: Promise<void> | null = null;
+
+  /** Telemetry hook (forwarded to the server log as client events). */
+  onEvent: PlaybackEvent | null = null;
+
+  /** Whether the mic currently holds the session (set by the app). */
+  micOpen: () => boolean = () => false;
 
   get initialized(): boolean {
     return this.ctx !== null;
@@ -36,6 +58,72 @@ export class AudioPlayback {
     if (this.activeSources.length > 0) return;
     const cbs = this.idleCallbacks.splice(0);
     for (const cb of cbs) cb();
+    this.armIdleSuspend();
+  }
+
+  private cancelIdleSuspend(): void {
+    if (this.idleTimer !== null) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+  }
+
+  private isIdle(): boolean {
+    return (
+      this.activeSources.length === 0 &&
+      this.thinkingToneOsc === null &&
+      this.pendingChunks.length === 0
+    );
+  }
+
+  private armIdleSuspend(): void {
+    this.cancelIdleSuspend();
+    if (!this.ctx || this.ctx.state !== "running" || !this.isIdle()) return;
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null;
+      if (!this.ctx || this.ctx.state !== "running" || !this.isIdle()) return;
+      void this.ctx.suspend().then(() => this.onEvent?.("playback_suspended"));
+    }, IDLE_SUSPEND_MS);
+  }
+
+  /** Run `fn` once the context is running, waking it if it was suspended. */
+  private whenRunning(fn: () => void): void {
+    if (!this.ctx) return;
+    this.cancelIdleSuspend();
+    if (this.ctx.state === "running") {
+      fn();
+      return;
+    }
+    void this.wake().then(() => {
+      if (this.ctx?.state === "running") fn();
+    });
+  }
+
+  private wake(): Promise<void> {
+    if (this.waking) return this.waking;
+    const ctx = this.ctx;
+    if (!ctx) return Promise.resolve();
+    const before = ctx.state;
+    this.waking = ctx
+      .resume()
+      .catch(() => undefined)
+      .then(() => {
+        if (ctx.state === "running") {
+          this.onEvent?.("playback_resumed", { from: before });
+          const queued = this.pendingChunks.splice(0);
+          for (const chunk of queued) this.schedule(chunk);
+        } else {
+          this.onEvent?.("playback_resume_blocked", {
+            from: before,
+            state: ctx.state,
+            queued: this.pendingChunks.length,
+          });
+        }
+      })
+      .finally(() => {
+        this.waking = null;
+      });
+    return this.waking;
   }
 
   async init(): Promise<void> {
@@ -43,18 +131,9 @@ export class AudioPlayback {
     this.ctx = new AudioContext({ sampleRate: 24000 });
     // Tell iOS this is media playback — without this, WebAudio output is
     // routed through the ringer volume bus, which tops out well below the
-    // media volume the user actually has cranked up. Safari 16.4+; the
-    // feature-detect keeps other browsers happy.
-    try {
-      const session = (
-        navigator as Navigator & {
-          audioSession?: { type: string };
-        }
-      ).audioSession;
-      if (session) session.type = "playback";
-    } catch {
-      /* unsupported — fall back to default routing */
-    }
+    // media volume the user actually has cranked up. The mic flips this to
+    // "play-and-record" while it's open (see session.ts).
+    if (!this.micOpen()) setAudioSessionType("playback");
     this.masterGain = this.ctx.createGain();
     this.masterGain.connect(this.ctx.destination);
     // Branch the master output to an analyser for the waveform visualizer.
@@ -98,7 +177,43 @@ export class AudioPlayback {
     }
   }
 
+  /**
+   * Create/start the context synchronously. Call first thing in a press
+   * handler, before any await: iOS only lets audio start inside the
+   * gesture itself, and `resume()` above awaits before reaching it.
+   */
+  unlock(): Promise<void> {
+    if (!this.ctx) {
+      // init() has no awaits, so the context exists when this returns.
+      void this.init();
+    }
+    const ctx = this.ctx;
+    if (!ctx) return Promise.resolve();
+    if (ctx.state === "running") {
+      this.armIdleSuspend();
+      return Promise.resolve();
+    }
+    // Every unlock re-arms the idle sleep: a tap that plays nothing must
+    // not leave the context running (iOS shows it as audio activity).
+    return ctx
+      .resume()
+      .catch(() => undefined)
+      .then(() => this.armIdleSuspend());
+  }
+
   play(base64: string): void {
+    if (!this.ctx) return;
+    this.cancelIdleSuspend();
+    if (this.ctx.state !== "running" || this.waking) {
+      // Keep arrival order: everything queues behind the wake-up.
+      this.pendingChunks.push(base64);
+      void this.wake();
+      return;
+    }
+    this.schedule(base64);
+  }
+
+  private schedule(base64: string): void {
     if (!this.ctx) return;
     const float32 = pcm16Base64ToFloat32(base64);
     const buffer = this.ctx.createBuffer(1, float32.length, 24000);
@@ -120,6 +235,10 @@ export class AudioPlayback {
 
   /** Rising 880 Hz ready-to-talk cue. */
   playTone(freq = 880, durationMs = 90): void {
+    this.whenRunning(() => this.toneNow(freq, durationMs));
+  }
+
+  private toneNow(freq: number, durationMs: number): void {
     if (!this.ctx) return;
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
@@ -135,10 +254,15 @@ export class AudioPlayback {
     gain.connect(this.masterGain ?? this.ctx.destination);
     osc.start(now);
     osc.stop(end + 0.02);
+    osc.onended = () => this.armIdleSuspend();
   }
 
   /** Descending two-tone error chime: 660 Hz -> 330 Hz. */
   playErrorTone(): void {
+    this.whenRunning(() => this.errorToneNow());
+  }
+
+  private errorToneNow(): void {
     if (!this.ctx) return;
     const now = this.ctx.currentTime;
     const beepDur = 0.12;
@@ -160,6 +284,7 @@ export class AudioPlayback {
     };
     beep(now, 660);
     beep(now + beepDur + gap, 330);
+    setTimeout(() => this.armIdleSuspend(), 500);
   }
 
   /**
@@ -167,6 +292,10 @@ export class AudioPlayback {
    * Below vocal band so it doesn't mask incoming speech.
    */
   playThinkingTone(): void {
+    this.whenRunning(() => this.thinkingToneNow());
+  }
+
+  private thinkingToneNow(): void {
     if (!this.ctx || this.thinkingToneOsc) return;
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
@@ -230,6 +359,7 @@ export class AudioPlayback {
     }
     this.thinkingToneOsc = null;
     this.thinkingToneGain = null;
+    this.armIdleSuspend();
   }
 
   stop(): void {
@@ -241,6 +371,7 @@ export class AudioPlayback {
       }
     }
     this.activeSources = [];
+    this.pendingChunks = [];
     this.nextTime = 0;
     this.stopThinkingTone();
     this.drainIdleCallbacks();
@@ -283,6 +414,10 @@ export class AudioPlayback {
    * UX cues; the earcon is polish).
    */
   playPersonaSwap(): void {
+    this.whenRunning(() => this.personaSwapNow());
+  }
+
+  private personaSwapNow(): void {
     if (!this.ctx || !this.personaSwapBuffer) return;
     const src = this.ctx.createBufferSource();
     src.buffer = this.personaSwapBuffer;
@@ -296,6 +431,7 @@ export class AudioPlayback {
 
   destroy(): void {
     this.stop();
+    this.cancelIdleSuspend();
     void this.ctx?.close();
     this.ctx = null;
     this.masterGain = null;
