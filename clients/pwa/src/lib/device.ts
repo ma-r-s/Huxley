@@ -4,8 +4,13 @@
  * status bar, transcript bar off-screen) depend on the iOS version, the
  * standalone/browser mode and how each viewport unit resolves; without
  * this the server log can't tell an iOS 18 tab from an iOS 26 home-screen
- * app.
+ * app. `shell` and `audio` say which client this is: the native iOS app,
+ * the home-screen web app or a browser tab, and whether audio runs through
+ * the native plugin or WebAudio (an old app install falls back to web).
  */
+
+import { Capacitor } from "@capacitor/core";
+import { isNativeAudioAvailable } from "./audio/native.js";
 
 function probePx(css: string): number {
   const el = document.createElement("div");
@@ -19,11 +24,18 @@ function probePx(css: string): number {
 export function deviceSnapshot(): Record<string, unknown> {
   const nav = navigator as Navigator & { standalone?: boolean };
   const vv = window.visualViewport;
+  const standalone =
+    nav.standalone === true ||
+    window.matchMedia("(display-mode: standalone)").matches;
   return {
+    shell: Capacitor.isNativePlatform()
+      ? "native_app"
+      : standalone
+        ? "home_screen"
+        : "browser",
+    audio: isNativeAudioAvailable() ? "native" : "web",
     ua: navigator.userAgent,
-    standalone:
-      nav.standalone === true ||
-      window.matchMedia("(display-mode: standalone)").matches,
+    standalone,
     inner: `${window.innerWidth}x${window.innerHeight}`,
     visual: vv ? `${Math.round(vv.width)}x${Math.round(vv.height)}` : null,
     screen: `${window.screen.width}x${window.screen.height}`,
