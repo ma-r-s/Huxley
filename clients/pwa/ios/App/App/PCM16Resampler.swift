@@ -5,18 +5,21 @@ import AVFoundation
 /// format: PCM16 mono 24 kHz little-endian.
 ///
 /// One instance per press: the converter's filter state carries across
-/// buffers, so consecutive chunks join without clicks. It also keeps the
-/// per-press numbers the plugin logs on release (frames in/out, peak), which
-/// tell a silent mic from a broken conversion.
+/// buffers, so consecutive chunks join without clicks. If the input format
+/// changes mid-press (a headset plugged in), it rebuilds the converter for
+/// the new format. It also keeps the per-press numbers the plugin logs on
+/// release (frames in/out, peak), which tell a silent mic from a broken
+/// conversion.
 ///
 /// No Capacitor dependency, so `bun run ios:test` compiles it standalone.
 final class PCM16Resampler {
     static let outputFormat = AVAudioFormat(
         commonFormat: .pcmFormatInt16, sampleRate: 24_000, channels: 1, interleaved: true)!
 
-    let inputFormat: AVAudioFormat
-    private let converter: AVAudioConverter
+    private(set) var inputFormat: AVAudioFormat
+    private var converter: AVAudioConverter
     private let lock = NSLock()
+    private var formatChanges = 0
     private var chunks = 0
     private var inFrames = 0
     private var outFrames = 0
@@ -32,6 +35,15 @@ final class PCM16Resampler {
 
     /// One hardware buffer in, PCM16 bytes out; nil when nothing came out.
     func convert(_ buffer: AVAudioPCMBuffer) -> Data? {
+        if buffer.format != inputFormat {
+            guard let fresh = AVAudioConverter(from: buffer.format, to: Self.outputFormat)
+            else { return nil }
+            lock.lock()
+            inputFormat = buffer.format
+            converter = fresh
+            formatChanges += 1
+            lock.unlock()
+        }
         let ratio = Self.outputFormat.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
         guard let out = AVAudioPCMBuffer(pcmFormat: Self.outputFormat, frameCapacity: capacity)
@@ -73,6 +85,7 @@ final class PCM16Resampler {
             "in_frames": inFrames,
             "out_frames": outFrames,
             "peak": peak,
+            "format_changes": formatChanges,
         ]
     }
 }

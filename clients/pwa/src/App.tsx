@@ -3,7 +3,11 @@ import { useTranslation } from "react-i18next";
 import { useWs } from "./lib/useWs.js";
 import { Capacitor } from "@capacitor/core";
 import { MicCapture } from "./lib/audio/capture.js";
-import { isNativeAudioAvailable, NativeCapture, NativePlayback } from "./lib/audio/native.js";
+import {
+  isNativeAudioAvailable,
+  NativeCapture,
+  NativePlayback,
+} from "./lib/audio/native.js";
 import { AudioPlayback } from "./lib/audio/playback.js";
 import { deriveOrbState } from "./lib/orbState.js";
 import { Orb } from "./components/Orb.js";
@@ -59,7 +63,9 @@ function saveAppearance(a: Appearance) {
 // installed before the plugin existed): web audio.
 const NATIVE_AUDIO = isNativeAudioAvailable();
 const NATIVE_APP = Capacitor.isNativePlatform();
-const mic: MicCapture | NativeCapture = NATIVE_AUDIO ? new NativeCapture() : new MicCapture();
+const mic: MicCapture | NativeCapture = NATIVE_AUDIO
+  ? new NativeCapture()
+  : new MicCapture();
 const playback: AudioPlayback | NativePlayback = NATIVE_AUDIO
   ? new NativePlayback()
   : new AudioPlayback();
@@ -98,6 +104,8 @@ export function App() {
   // press instead of latching PTT on.
   const fingerDownRef = useRef(false);
   const pressIdRef = useRef(0);
+  // The last release's ptt_stop, sent once the mic has flushed.
+  const pttStopPendingRef = useRef<Promise<void>>(Promise.resolve());
 
   // ── UI state ─────────────────────────────────────────────────────────────
   const [transcriptOpen, setTranscriptOpen] = useState(false);
@@ -465,7 +473,9 @@ export function App() {
       // stays NotAllowedError on the lift too and shows as accessDenied.
       // Details land in the log as client.mic_acquire_failed.
       const name = (err as { name?: string })?.name;
-      setMicError(t(name === "NotAllowedError" ? "mic.pressAgain" : "mic.accessDenied"));
+      setMicError(
+        t(name === "NotAllowedError" ? "mic.pressAgain" : "mic.accessDenied"),
+      );
       return;
     }
     // Released (or pressed again) while the mic was opening. Starting the
@@ -488,6 +498,9 @@ export function App() {
     // instantly. Failure is logged inside playback and ignored — earcon
     // is UX polish, not load-bearing.
     void playback.preloadPersonaSwap();
+    // A quick re-press: the previous press's release must reach the server
+    // before this press's start.
+    await pttStopPendingRef.current;
     playback.stop();
     switch (ws.appState) {
       case "CONVERSING":
@@ -523,10 +536,14 @@ export function App() {
     mic.active = false;
     setPttHeld(false);
     pttHeldRef.current = false;
-    ws.pttStop();
-    if (ws.inputMode !== "skill_continuous") {
-      mic.scheduleIdle(MIC_LINGER_MS, "linger_elapsed");
+    if (ws.inputMode === "skill_continuous") {
+      ws.pttStop();
+      return;
     }
+    // The mic may still hold the end of the last word (natively up to one
+    // 100 ms block): release the turn only once that has been sent.
+    pttStopPendingRef.current = mic.finish().then(() => ws.pttStop());
+    mic.scheduleIdle(MIC_LINGER_MS, "linger_elapsed");
   }, [ws]);
 
   // ── Audio unlock on every gesture ───────────────────────────────────────
@@ -551,7 +568,12 @@ export function App() {
       document.addEventListener(type, unlock, opts);
     }
     return () => {
-      for (const type of ["pointerup", "touchend", "click", "keydown"] as const) {
+      for (const type of [
+        "pointerup",
+        "touchend",
+        "click",
+        "keydown",
+      ] as const) {
         document.removeEventListener(type, unlock, opts);
       }
     };

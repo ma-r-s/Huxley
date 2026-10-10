@@ -5128,7 +5128,7 @@ Two findings that matter for B: `coral` works on GPT-Live (it's not limited to t
 
 ## T1.27: Huxley on Mario's iPhone (PWA fixes, native shell, native audio)
 
-**Status**: `done` (2026-10-10, `49a833f2` server, `bfdb70f7` native audio) · **Effort**: ~1 day
+**Status**: `in_progress` (2026-10-10, round 2 on the phone awaiting Mario; round 1 shipped in `49a833f2` server, `bfdb70f7` native audio) · **Effort**: ~1.5 days
 
 **Problem.** Mario wants to use Huxley from his iPhone as if it were the product. As a home-screen PWA it had: a white band at the top, transcripts out of view, a mic prompt on every launch, a permanent Dynamic Island live activity, stalls and stuck "thinking". As a Capacitor app (commit `ef8e8389`) the band and the per-launch prompt went away, but replies played from the earpiece ("like a phone call") and the island still showed a live activity while Huxley spoke.
 
@@ -5147,7 +5147,29 @@ Two findings that matter for B: `coral` works on GPT-Live (it's not limited to t
 - [x] Server: 0.7 s native press commits (`user_audio_ms=490`); regression tests for large and small chunks. 564 runtime tests, ruff, mypy green.
 - [x] Mario on the phone (iPhone 15 Pro, 19:38 UTC): "Working well." Log: `mic_acquired native=True ms=160`, first frame 262 ms after the press, 1.2 s press committed (`audio_ms=1199`, 12 chunks; the old rule would have rejected it), `native_capture_summary peak=17948`, transcript "¿Escuchas?" exact, reply played.
 
-**Open (not blocking).** Press to first frame is ~260 ms on the phone (engine built per press, 100 ms hardware buffers). A word spoken the instant the button goes down could lose its first syllable. Candidate fix: keep the capture engine prepared between presses and ask for shorter IO buffers.
+**Round 2: latency + critic fixes (2026-10-10).**
+
+Latency, measured: press to recording was ~160 ms on the phone (cold session + engine built per press); a press soon after another was 7 ms on the simulator, so the cost was session activation plus engine build. Release dropped the mic's partial 100 ms block plus frames in flight (`active=false` before the bridge delivered them), often the end of the last word.
+- Session stays active while the app is in the foreground; capture engine built once (tap installed once, `prepare()` after each stop), a press only starts it. Simulator: `mic_acquired ms=6-16`, `warm_session=True warm_engine=True`.
+- Release drains: the plugin keeps recording until the tap hands over its next block, JS keeps forwarding until `stopCapture` resolves, and `ptt_stop` goes out after (`mic.finish()`). A 0.7 s press now delivers 794 ms of audio (was 490). A quick re-press still orders `ptt_stop` before the next `ptt_start` (measured 28 ms apart).
+- Smaller hardware buffers don't help: an AVAudioEngine tap delivers at least 100 ms. `AVAudioSinkNode` would, at the cost of realtime-thread code; not needed since the server waits for the release anyway.
+
+Critic (fresh agent, cold brief) found 7 real bugs; all fixed:
+1. A barge-in cut its own ready tone (`stopPlayback` stopped the shared effects node). Now three nodes: voice, one-shot tone, thinking loop; stop clears voice and loop only, like the web build.
+2. A stale `playbackIdle` (from a stop, or an underrun) could end a newer reply: orb flat, `onceIdle` early. Chunks carry a sequence number; JS ignores an idle that a newer chunk overtook.
+3. Barge-in waited for a ~160 ms mic open before stopping the reply. Now ~10 ms (warm open).
+4. End of utterance lost (above).
+5. Interruption / background left `pendingBuffers` stuck or resumed a stale reply later. Now both drop the reply, emit idle, and stop capture; a watchdog forces idle 1 s after the queued audio should have ended.
+6. In a call, an engine stopped by a phone call or route change left the call deaf (`hasStream` still true). Now the plugin emits `captureEnded`; a route change mid-press rebuilds the engine and carries on (the resampler follows format changes; `ios:test` covers it).
+7. A rejected `play()` left JS busy forever. Now it emits idle.
+Also: the category check includes options (play-and-record without `defaultToSpeaker` routes to the earpiece); a route change restarts the thinking loop; deactivation errors are logged; the tap uses `format: nil` (a fixed format can raise an uncatchable exception); removed Capacitor's template storyboard, which built a second, unused bridge controller.
+
+DoD round 2:
+- [x] Simulator: warm press 6-16 ms; drained summaries; re-press ordering; background and return re-warms (183 ms, off the press path); no native error events.
+- [x] `bun run ios:test` 6/6 (new: format switch mid-press), `bun run check` green.
+- [ ] Mario on the phone: press feels instant, last word not clipped, orange mic dot off between presses, ready tone audible when interrupting a reply.
+
+**Follow-up (product question, not started).** No background-audio mode: locking the phone stops a reply or an audiobook. Enabling it means keeping the WebSocket alive in the background too (it lives in WebKit, which iOS suspends), so it's a bigger change. Only worth it if the phone becomes a real client, not just a dev one.
 
 **Docs**: `verifying.md` (native audio section), `observability.md` (native client events), `protocol.md` + `turns.md` + web `turns.mdx` / `connect-a-client.mdx` (133 ms rule).
 

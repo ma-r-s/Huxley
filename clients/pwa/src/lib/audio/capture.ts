@@ -281,6 +281,15 @@ export class MicCapture {
       this.idleTimer = null;
     }
   }
+
+  /**
+   * End of a press; same contract as NativeCapture.finish. The worklet
+   * hands over 5 ms frames as they're captured, so nothing is pending.
+   */
+  finish(): Promise<void> {
+    this.active = false;
+    return Promise.resolve();
+  }
 }
 
 function bufferToBase64(buffer: ArrayBuffer): string {

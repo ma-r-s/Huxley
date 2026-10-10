@@ -40,11 +40,51 @@ struct ResamplerCheck {
                 for p in problems { print("        \(p)") }
             }
         }
+        let switchProblems = runFormatSwitch()
+        if switchProblems.isEmpty {
+            print("ok    input switches 48 kHz -> 16 kHz mid-press (headset)")
+        } else {
+            failures += 1
+            print("FAIL  input switches 48 kHz -> 16 kHz mid-press (headset)")
+            for p in switchProblems { print("        \(p)") }
+        }
         if failures > 0 {
-            print("\(failures) of \(cases.count) cases failed")
+            print("\(failures) of \(cases.count + 1) cases failed")
             exit(1)
         }
-        print("all \(cases.count) cases passed")
+        print("all \(cases.count + 1) cases passed")
+    }
+
+    /// One second at 48 kHz, then one second at 16 kHz into the same
+    /// resampler: the output stays one continuous 2 s, 1 kHz signal.
+    static func runFormatSwitch() -> [String] {
+        let first = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false)!
+        guard let resampler = PCM16Resampler(from: first) else { return ["init returned nil"] }
+        var outFrames = 0
+        var phase = 0.0
+        for rate in [48_000.0, 16_000.0] {
+            let format = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false)!
+            let chunk = Int(rate / 10)
+            for _ in 0..<10 {
+                let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(chunk))!
+                buf.frameLength = AVAudioFrameCount(chunk)
+                for i in 0..<chunk {
+                    buf.floatChannelData![0][i] = amplitude * Float(sin(phase))
+                    phase += 2 * Double.pi * toneHz / rate
+                }
+                if let data = resampler.convert(buf) { outFrames += data.count / 2 }
+            }
+        }
+        var problems: [String] = []
+        if abs(outFrames - 48_000) > 480 {
+            problems.append("length \(outFrames), expected about 48000")
+        }
+        if resampler.stats["format_changes"] as? Int != 1 {
+            problems.append("format_changes \(resampler.stats["format_changes"] ?? "nil"), expected 1")
+        }
+        return problems
     }
 
     static func run(_ c: Case) -> [String] {

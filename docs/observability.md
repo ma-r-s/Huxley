@@ -54,14 +54,19 @@ PWA client events worth knowing when debugging a phone (added 2026-10-10):
 | `client.call_mic_recovered`                                                                | A call (skill-owned mic) got its mic back after starting without one (no gesture yet, or iOS ended the track in the background).                                                                  |
 | `client.foreground_reconnect`                                                              | The app came back after `away_ms` and replaced a socket iOS may have killed.                                                                                                                      |
 
-The native iOS app (Capacitor, `clients/pwa/ios/`) records and plays through its own audio plugin, not the web view. Its mic events carry `native=True`, and it adds:
+The native iOS app (Capacitor, `clients/pwa/ios/`) records and plays through its own audio plugin, not the web view. Its mic events carry `native=True` and add detail:
 
-| Event                              | Meaning                                                                                                                                                                                                                                                                                 |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `client.native_capture_summary`    | One per press, on release: hardware `in_rate` / `in_channels`, `chunks`, `in_frames`, `out_frames` (24 kHz), and `peak` (0 to 32767). A low `peak` (a few hundred) means the mic heard only room noise; `out_frames` far from `in_frames x 24000 / in_rate` means the conversion broke. |
-| `client.native_audio_interruption` | iOS took the audio session (`type=began`, e.g. a phone call) or gave it back (`ended`).                                                                                                                                                                                                 |
-| `client.native_audio_engine_reset` | A route change (headphones, Bluetooth) restarted the playback engine.                                                                                                                                                                                                                   |
-| `client.native_play_failed`        | The plugin refused a reply chunk; the message says why.                                                                                                                                                                                                                                 |
+| Event | Meaning |
+| --- | --- |
+| `client.mic_acquired` (native) | Also `session_ms` (audio session switched on), `build_ms` (capture engine built), `start_ms` (engine started), `warm_session` / `warm_engine`. A warm press is `start_ms` only, ~5-15 ms. A cold one (both `warm_*` false) means the foreground warm-up didn't run or failed. |
+| `client.mic_released` (native, `reason=press_ended`) | `flush_ms`: how long the release waited for the mic's last 100 ms block. Up to ~100 ms is normal; 400 is the deadline (the plugin didn't answer). |
+| `client.native_capture_summary` | One per press: hardware `in_rate` / `in_channels`, `chunks`, `in_frames`, `out_frames` (24 kHz), `peak` (0 to 32767), `drained` (false = the press was cut short by a call, the background, or a new press), `format_changes` (input format changed mid-press). A low `peak` (a few hundred) means the mic heard only room noise; `out_frames` far from `in_frames x 24000 / in_rate` means the conversion broke. |
+| `client.mic_capture_ended` | The plugin stopped recording on its own (`reason`: `interruption`, `background`, `route_change`, `media_services_reset`). A call reopens the mic on the next tap or return to the foreground. |
+| `client.native_audio_warm` / `_warm_failed` | Session switched on and capture engine built ahead of presses (`reason`: `load`, `foreground`, `interruption_ended`). Events from `load` are usually lost (no socket yet). |
+| `client.native_audio_interruption` | iOS took the audio session (`type=began`, e.g. a phone call; the reply is dropped, not resumed later) or gave it back (`ended`). |
+| `client.native_audio_engine_reset` / `client.native_capture_reset` | A route change (headphones, Bluetooth) stopped the playback / capture engine; it was restarted (`pending`, `loop`, `recording` say what was running). |
+| `client.native_playback_watchdog` | Queued reply audio never reported finishing, so the plugin ended the reply a second after it should have. Means the engine dropped buffers silently; worth a look if it repeats. |
+| `client.native_play_failed` / `native_audio_restart_failed` / `native_audio_deactivate_failed` / `native_media_services_reset` | The plugin couldn't play a chunk / restart after a route change / release the session in the background / the iOS audio daemon restarted. |
 
 ## Context fields
 

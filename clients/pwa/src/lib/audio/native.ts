@@ -14,16 +14,26 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 
 type EventFn = (event: string, data?: Record<string, unknown>) => void;
 
+interface StartCaptureResult {
+  ms: number;
+  session_ms: number;
+  build_ms: number;
+  start_ms: number;
+  warm_session: boolean;
+  warm_engine: boolean;
+  inputRate: number;
+}
+
 interface HuxleyAudioPlugin {
-  startCapture(): Promise<{ ms: number; inputRate: number }>;
+  startCapture(): Promise<StartCaptureResult>;
   stopCapture(): Promise<void>;
-  play(options: { data: string }): Promise<void>;
+  play(options: { data: string; seq: number }): Promise<void>;
   stopPlayback(): Promise<void>;
   playEffect(options: { data: string }): Promise<void>;
   setLoopingEffect(options: { data?: string }): Promise<void>;
   setVolume(options: { level: number }): Promise<void>;
   addListener(
-    event: "frame" | "playbackIdle" | "event",
+    event: "frame" | "playbackIdle" | "captureEnded" | "event",
     cb: (payload: Record<string, unknown>) => void,
   ): Promise<{ remove: () => Promise<void> }>;
 }
@@ -106,6 +116,8 @@ export class NativeCapture {
   releaseWhenIdle = true;
 
   private capturing = false;
+  // Released, but the plugin is still handing over the last block.
+  private flushing = false;
   private wanted = false;
   private starting: Promise<void> | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -113,7 +125,7 @@ export class NativeCapture {
 
   constructor() {
     void HuxleyAudio.addListener("frame", (payload) => {
-      if (!this.active || !this.onFrame) return;
+      if (!(this.active || this.flushing) || !this.onFrame) return;
       if (this.openedAt !== null) {
         this.onEvent?.("mic_first_frame", {
           ms: Math.round(performance.now() - this.openedAt),
@@ -122,6 +134,16 @@ export class NativeCapture {
         this.openedAt = null;
       }
       this.onFrame(String(payload.data ?? ""));
+    });
+    // The plugin stopped recording on its own: a phone call, Siri, the
+    // app leaving the screen, or a route change it couldn't follow. A call
+    // (skill_continuous) then sees `hasStream` false and reopens the mic.
+    void HuxleyAudio.addListener("captureEnded", (payload) => {
+      this.capturing = false;
+      this.onEvent?.("mic_capture_ended", {
+        reason: String(payload.reason ?? "unknown"),
+        native: true,
+      });
     });
   }
 
@@ -145,9 +167,17 @@ export class NativeCapture {
       this.starting = HuxleyAudio.startCapture()
         .then((r) => {
           this.capturing = true;
+          // The breakdown says where a slow press went: session_ms (audio
+          // session switched on), build_ms (capture engine built), start_ms
+          // (engine started). Warm presses should be start_ms only.
           this.onEvent?.("mic_acquired", {
             trigger: "press",
             ms: r.ms,
+            session_ms: r.session_ms,
+            build_ms: r.build_ms,
+            start_ms: r.start_ms,
+            warm_session: r.warm_session,
+            warm_engine: r.warm_engine,
             native: true,
           });
           // Released while the engine was starting: stop it now.
@@ -184,11 +214,40 @@ export class NativeCapture {
     this.release(reason);
   }
 
+  /**
+   * End of a press. Resolves once the last of the speech has reached
+   * onFrame: the plugin keeps recording until the mic hands over its next
+   * 100 ms block, which holds the audio up to the release. Send ptt_stop
+   * after this resolves, or the server drops that tail (often the end of
+   * the last word, sometimes all of a quick "si").
+   */
+  finish(): Promise<void> {
+    this.cancelIdle();
+    this.active = false;
+    this.wanted = false;
+    if (!this.capturing) return Promise.resolve();
+    this.capturing = false;
+    this.flushing = true;
+    const started = performance.now();
+    // The plugin answers within ~100 ms; never hold a release longer.
+    const deadline = new Promise<void>((resolve) => setTimeout(resolve, 400));
+    return Promise.race([HuxleyAudio.stopCapture(), deadline])
+      .catch(() => {})
+      .finally(() => {
+        this.flushing = false;
+        this.onEvent?.("mic_released", {
+          reason: "press_ended",
+          flush_ms: Math.round(performance.now() - started),
+          native: true,
+        });
+      });
+  }
+
   release(reason: string): void {
     this.cancelIdle();
     this.active = false;
     this.wanted = false;
-    if (!this.capturing) return;
+    if (!this.capturing || this.flushing) return;
     this.capturing = false;
     void HuxleyAudio.stopCapture();
     this.onEvent?.("mic_released", { reason, native: true });
@@ -222,6 +281,10 @@ export class NativePlayback {
   micOpen: () => boolean = () => false;
 
   private busy = false;
+  // Sequence number of the latest chunk sent to the plugin. Its
+  // playbackIdle carries the latest it had; an older one is stale (a newer
+  // chunk was already on its way) and must not end this reply.
+  private seq = 0;
   private idleCallbacks: Array<() => void> = [];
   private thinking = false;
   // Level timeline for the orb: each scheduled chunk's playing window.
@@ -229,7 +292,8 @@ export class NativePlayback {
   private playhead = 0;
 
   constructor() {
-    void HuxleyAudio.addListener("playbackIdle", () => {
+    void HuxleyAudio.addListener("playbackIdle", (payload) => {
+      if (Number(payload.seq) !== this.seq) return;
       this.busy = false;
       this.levels = [];
       const cbs = this.idleCallbacks.splice(0);
@@ -254,7 +318,8 @@ export class NativePlayback {
     const start = Math.max(now, this.playhead);
     this.playhead = start + seconds;
     this.levels.push({ start, end: this.playhead, level });
-    void HuxleyAudio.play({ data: base64 }).catch(
+    this.seq += 1;
+    void HuxleyAudio.play({ data: base64, seq: this.seq }).catch(
       (err: { message?: string }) => {
         this.onEvent?.("native_play_failed", {
           message: String(err?.message ?? err).slice(0, 200),
