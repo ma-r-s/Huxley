@@ -11,6 +11,7 @@ members = [
     "server/skills/timers",
     "server/skills/reminders",
     "server/skills/stocks",
+    "server/skills/spotify",
 ]
 
 [tool.uv.sources]
@@ -24,6 +25,7 @@ huxley-skill-system = { workspace = true }
 huxley-skill-timers = { workspace = true }
 huxley-skill-reminders = { workspace = true }
 huxley-skill-stocks = { workspace = true }
+huxley-skill-spotify = { workspace = true }
 
 # Shared tool config (each package's pyproject can override).
 
@@ -64,6 +66,7 @@ known-first-party = [
     "huxley_skill_timers",
     "huxley_skill_reminders",
     "huxley_skill_stocks",
+    "huxley_skill_spotify",
 ]
 
 [tool.mypy]

@@ -1,0 +1,207 @@
+"""Client for Spotify Soloist's local WebSocket API.
+
+Soloist is Spotify's official headless Spotify Connect client. It runs
+beside the server (a systemd unit on Linux, a container on a Mac; see
+`dev/`) and the skill controls it over `ws://127.0.0.1:<port>`.
+
+This client keeps one connection open (reconnecting with backoff),
+caches the latest auth and playback state from Soloist's events, and
+sends commands in order from a queue, so callers never wait on the
+socket. That matters for a stream factory's `finally`, which runs
+inside the coordinator's cancel path and must not block on a network
+round trip.
+
+Generations: each playback session the skill starts takes a new
+generation number. A command tagged with an older generation is dropped
+when it reaches the front of the queue, so a late `pause` from a stream
+that was replaced can't stop the one that replaced it.
+
+Protocol reference:
+https://developer.spotify.com/documentation/soloist/reference/websocket-api
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
+
+import websockets
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from huxley_sdk import SkillLogger
+
+
+@dataclass
+class PlayerState:
+    """What Soloist last told us. `connected` is our socket, not Spotify's."""
+
+    connected: bool = False
+    logged_in: bool = False
+    is_active: bool = False
+    device_name: str | None = None
+    # idle | playing | paused | buffering
+    status: str = "idle"
+    item: dict[str, Any] | None = None
+    last_error: str | None = None
+    # Bumped on every `error` event, so a waiter can tell a new error
+    # from one it already saw.
+    error_count: int = 0
+    extra: dict[str, Any] = field(default_factory=dict)
+
+
+def describe_item(item: dict[str, Any] | None) -> tuple[str | None, str | None]:
+    """(title, artists) from a Soloist track item, tolerant of shape."""
+    if not item:
+        return None, None
+    title = item.get("name") or item.get("title")
+    raw = item.get("artists") or item.get("artist_names") or []
+    names: list[str] = []
+    for artist in raw if isinstance(raw, list) else [raw]:
+        if isinstance(artist, dict):
+            name = artist.get("name")
+            if name:
+                names.append(str(name))
+        elif artist:
+            names.append(str(artist))
+    return (str(title) if title else None), (", ".join(names) or None)
+
+
+class SoloistClient:
+    """One reconnecting WebSocket to Soloist, with a state cache and an
+    ordered, non-blocking command queue."""
+
+    def __init__(self, url: str, logger: SkillLogger) -> None:
+        self._url = url
+        self._log = logger
+        self.state = PlayerState()
+        self._queue: asyncio.Queue[tuple[int | None, dict[str, Any]]] = asyncio.Queue()
+        self._generation = 0
+        self._changed = asyncio.Condition()
+
+    @property
+    def generation(self) -> int:
+        return self._generation
+
+    def new_generation(self) -> int:
+        """Start a playback session. Older-generation commands still
+        queued are dropped from now on."""
+        self._generation += 1
+        return self._generation
+
+    def send(self, command: str, *, generation: int | None = None, **fields: Any) -> None:
+        """Queue a command. Never blocks; safe from a `finally`."""
+        self._queue.put_nowait((generation, {"type": "command", "command": command, **fields}))
+
+    async def wait_until(self, predicate: Callable[[PlayerState], bool], seconds: float) -> bool:
+        """Wait until `predicate(state)` holds, at most `seconds`."""
+        try:
+            async with asyncio.timeout(seconds), self._changed:
+                await self._changed.wait_for(lambda: predicate(self.state))
+        except TimeoutError:
+            return False
+        return True
+
+    async def run(self) -> None:
+        """Background task: connect, pump events in and commands out,
+        reconnect with backoff when the socket drops. Runs until cancelled."""
+        backoff = 1.0
+        while True:
+            try:
+                async with websockets.connect(self._url, open_timeout=5) as ws:
+                    backoff = 1.0
+                    await self._update(connected=True)
+                    await self._log.ainfo("spotify.ws_state", connected=True, url=self._url)
+                    # Seed the cache; play/pause decisions read it.
+                    await ws.send(json.dumps({"type": "command", "command": "get_auth_state"}))
+                    await ws.send(json.dumps({"type": "command", "command": "get_state"}))
+                    sender = asyncio.create_task(self._send_loop(ws))
+                    try:
+                        async for raw in ws:
+                            await self._on_message(raw)
+                    finally:
+                        sender.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await sender
+            except (OSError, TimeoutError, websockets.WebSocketException) as exc:
+                await self._log.awarning(
+                    "spotify.ws_state",
+                    connected=False,
+                    url=self._url,
+                    error=f"{type(exc).__name__}: {exc}"[:200],
+                    retry_in_s=backoff,
+                )
+            await self._update(connected=False, is_active=False)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)
+
+    async def _send_loop(self, ws: Any) -> None:
+        while True:
+            generation, message = await self._queue.get()
+            if generation is not None and generation < self._generation:
+                await self._log.adebug(
+                    "spotify.command_dropped_stale",
+                    command=message["command"],
+                    generation=generation,
+                    current=self._generation,
+                )
+                continue
+            await ws.send(json.dumps(message))
+            await self._log.adebug("spotify.command_sent", command=message["command"])
+
+    async def _on_message(self, raw: str | bytes) -> None:
+        try:
+            event = json.loads(raw)
+        except ValueError:
+            await self._log.awarning("spotify.bad_message", raw=str(raw)[:200])
+            return
+        kind = event.get("type")
+        before = (self.state.logged_in, self.state.is_active, self.state.status)
+        match kind:
+            case "auth_state":
+                await self._update(
+                    logged_in=bool(event.get("logged_in")),
+                    is_active=bool(event.get("is_active")),
+                    device_name=event.get("device_name"),
+                )
+            case "playback_state":
+                await self._update(
+                    status=str(event.get("status") or "idle"),
+                    item=event.get("item"),
+                    is_active=bool(event.get("is_active", self.state.is_active)),
+                )
+            case "playback_changed":
+                await self._update(status=str(event.get("status") or "idle"))
+            case "track_changed":
+                await self._update(item=event.get("item"))
+                title, artists = describe_item(event.get("item"))
+                await self._log.ainfo("spotify.track", title=title, artists=artists)
+            case "device_changed":
+                await self._update(
+                    is_active=bool(event.get("is_active")),
+                    device_name=event.get("device_name", self.state.device_name),
+                )
+            case "error":
+                message = str(event.get("message") or "unknown")
+                await self._update(last_error=message, error_count=self.state.error_count + 1)
+                await self._log.awarning("spotify.soloist_error", message=message[:200])
+            case _:
+                await self._log.adebug("spotify.event", type=kind)
+        after = (self.state.logged_in, self.state.is_active, self.state.status)
+        if after != before:
+            await self._log.ainfo(
+                "spotify.player_state",
+                logged_in=after[0],
+                is_active=after[1],
+                status=after[2],
+            )
+
+    async def _update(self, **changes: Any) -> None:
+        async with self._changed:
+            for key, value in changes.items():
+                setattr(self.state, key, value)
+            self._changed.notify_all()

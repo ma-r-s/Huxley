@@ -5189,7 +5189,7 @@ DoD round 2 + 3:
 
 ## T1.28: Spotify skill (play music from a household Spotify Premium account)
 
-**Status**: `blocked` (2026-10-10, Gates 1-2 done, design locked; blocked on the Soloist API key + Web API app and the Orange Pi being online) · **Effort**: ~2-3 days
+**Status**: `in_progress` (2026-10-10, skill built and tested on the Mac with Soloist in Docker; waiting on the one-time pairing, then voice smoke) · **Effort**: ~2-3 days
 
 **Problem.** Mario wants Huxley to play music from Spotify ("pon algo de Los Panchos"), using a Premium Family member account he set aside for it. A Spotify skill was never built: in T1.14 it was only rejected as the marketplace's *reference* skill (hourly token expiry made the v1 demo fragile), not as a skill.
 
@@ -5227,7 +5227,13 @@ DoD round 2 + 3:
 - Log events: `spotify.ws_state`, `spotify.auth_state`, `spotify.play_requested` / `play_started` (`latency_ms`), `spotify.stream_ended` (`reason`), `spotify.expiry_days_left`.
 - Docs: `docs/skills/spotify.md` (deploy, pairing, build refresh, failure table), skills index, Abuelo prompt, this entry.
 
-**Blocked on Mario.** (1) Generate the Soloist API key and a Web API app with the family-member account, into the gitignored `server/personas/abuelos/data/secrets/spotify/values.json` (the Soloist key then moves to the Pi's unit EnvironmentFile); (2) the Orange Pi is offline on Tailscale (last seen 2026-10-10 ~21:00 UTC).
+**Implementation (Gate 3, 2026-10-10).** The Orange Pi was busy, so Soloist runs on the Mac in Docker (`server/skills/spotify/dev/`: Debian + PulseAudio null sink + `module-simple-protocol-tcp`, Soloist downloaded from Spotify at start). Pairing needs Spotify Connect discovery on the LAN, which a container on macOS can't join: `pair-on-mac.sh` forwards a fixed port into Soloist's pairing endpoint and announces the device from the Mac with `dns-sd` (verified: `getInfo` answers through the bridge and Spotify apps on the network query it).
+- Search verified live with the household's app: "Los Panchos" → artist mode (10 tracks), "Sin ti Los Panchos" → the track, "Bésame mucho" → Los Panchos' version, "boleros clásicos" → a 200-bolero playlist.
+- Live server: `spotify.setup_complete search=True earcon=True`, `spotify.ws_state connected=True` against the container; Abuelo's skill list includes `spotify`.
+- Tests: 31 (fake Soloist + a real local TCP PCM server + pytest-httpx), covering the DoD list; the stale-generation test fails with the rule disabled. ruff, mypy strict green; no "spotify" in runtime/sdk.
+- Found along the way: `ntgcalls` 2.2.1b3 (pinned in our lock for Telegram calls) was removed from PyPI along with every 2.2.x before 2.2.5, so the committed lock couldn't install fresh anywhere. Relocking for the new member moved it to 2.2.5 (inside Telegram's `>=2.2.1b2`); Telegram's 121 tests pass. A real Telegram call should be smoke-tested on 2.2.5.
+
+**Remaining.** Pair once (Mario selects "Huxley" in a Spotify app signed into the family-member account), then `run.sh`, then the voice smoke in the DoD.
 
 ---
 

@@ -594,7 +594,7 @@ Integration tests that hit real subprocess (ffmpeg) or real provider APIs live i
 
 ## Distribution — making your skill installable
 
-Built-in skills (audiobooks, news, radio, reminders, system, telegram, timers) live in `server/skills/<name>/` in this repo. Community skills are independent Python packages published on PyPI under the convention `huxley-skill-<name>`.
+Built-in skills (audiobooks, news, radio, reminders, spotify, system, telegram, timers) live in `server/skills/<name>/` in this repo. Community skills are independent Python packages published on PyPI under the convention `huxley-skill-<name>`.
 
 Skill-specific docs:
 
@@ -602,6 +602,7 @@ Skill-specific docs:
 - [`telegram.md`](telegram.md) — full-duplex p2p Telegram voice calls AND text messages over a single Pyrogram userbot session. Outbound `call_contact` + `send_message`; inbound calls auto-answered, inbound messages debounced + coalesced into proactive announcements.
 - [`news.md`](news.md) — Open-Meteo weather + Google News RSS summarization.
 - [`radio.md`](radio.md) — HTTP/Icecast streams via ffmpeg.
+- [`spotify.md`](spotify.md) — Spotify through Spotify Soloist, streamed like radio.
 - [`search.md`](search.md) — open-web search via DuckDuckGo (no API key); for current/live info the LLM doesn't already know.
 - [`timers.md`](timers.md) — one-shot relative reminders ("recuérdame en 5 minutos") via proactive speech, persisted across restart.
 - [`reminders.md`](reminders.md) — scheduled reminders for specific times ("recuérdame mañana a las 8") with kind-aware retry escalation, daily/weekly recurrence, and missed-reminder catch-up.

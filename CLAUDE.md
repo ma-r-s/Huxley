@@ -27,6 +27,7 @@ Huxley/                              # repo root
 │   │   ├── audiobooks/              #   huxley-skill-audiobooks
 │   │   ├── news/                    #   huxley-skill-news (Open-Meteo + Google News RSS)
 │   │   ├── radio/                   #   huxley-skill-radio (HTTP/Icecast via ffmpeg)
+│   │   ├── spotify/                 #   huxley-skill-spotify (Spotify Soloist; dev/ runs it in Docker on a Mac)
 │   │   ├── search/                  #   huxley-skill-search (DuckDuckGo via ddgs, no API key)
 │   │   ├── reminders/               #   huxley-skill-reminders (scheduled reminders, persistent, retry escalation)
 │   │   ├── stocks/                  #   huxley-skill-stocks (Alpha Vantage; reference third-party-shape skill)
@@ -65,7 +66,7 @@ Huxley/                              # repo root
 │   ├── roadmap.md                   # framework + persona roadmaps
 │   ├── skill-marketplace.md         # T1.14 spec: v1/v2 split, secrets layout, schema versioning
 │   ├── personas/{README,abuelos,basic,chief,librarian,buddy}.md
-│   ├── skills/{README,authoring,installing,index,audiobooks,news,radio,search,telegram,timers,reminders}.md
+│   ├── skills/{README,authoring,installing,index,audiobooks,news,radio,search,spotify,telegram,timers,reminders}.md
 │   ├── sounds.md                    # sound UX architecture (PlaySound, AudioStream, synthesis pipeline)
 │   └── research/sonic-ux.md
 ├── scripts/                         # One-off ops + synth_sounds.py + smoke_t114.py + launchd plist
@@ -101,6 +102,7 @@ uv run --package huxley-skill-search pytest server/skills/search/tests          
 uv run --package huxley-skill-timers pytest server/skills/timers/tests           # timers skill
 uv run --package huxley-skill-reminders pytest server/skills/reminders/tests     # reminders skill
 uv run --package huxley-skill-stocks pytest server/skills/stocks/tests           # stocks skill
+uv run --package huxley-skill-spotify pytest server/skills/spotify/tests         # spotify skill
 cd server/runtime && uv run huxley                                               # run the server (loads .env from server/runtime/)
 # Run Basic in parallel for persona A/B testing:
 cd server/runtime && HUXLEY_PERSONA=basic HUXLEY_SERVER_PORT=8766 uv run huxley
