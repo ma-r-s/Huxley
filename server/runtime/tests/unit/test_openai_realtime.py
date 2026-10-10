@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
 
 import pytest
+import structlog
 
 from huxley.config import Settings
 from huxley.storage.db import Storage
@@ -272,6 +273,35 @@ class TestConnectGAInterface:
         assert "OpenAI-Beta" not in captured["headers"]
         assert captured["headers"]["Authorization"] == "Bearer test-key"
         assert captured["url"].endswith("?model=gpt-realtime-2.1-mini")
+
+    async def test_receive_loop_does_not_inherit_client_conn_id(
+        self, provider_deps: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The receive loop outlives the client connection that opened the
+        # session; a stale conn_id on its log lines misdirected a field
+        # diagnosis. Callbacks fire inside the receive task, so capture
+        # the contextvars there.
+        seen: dict[str, Any] = {}
+
+        async def on_session_end(_summary: str | None) -> None:
+            seen.update(structlog.contextvars.get_contextvars())
+            seen["fired"] = True
+
+        provider_deps["callbacks"] = VoiceProviderCallbacks(
+            on_audio_delta=AsyncMock(),
+            on_tool_call=AsyncMock(),
+            on_response_done=AsyncMock(),
+            on_audio_done=AsyncMock(),
+            on_commit_failed=AsyncMock(),
+            on_session_end=on_session_end,
+        )
+        structlog.contextvars.bind_contextvars(conn_id="client-a")
+        try:
+            await self._connect(provider_deps, monkeypatch)
+        finally:
+            structlog.contextvars.unbind_contextvars("conn_id")
+        assert seen.get("fired")
+        assert "conn_id" not in seen
 
     async def test_session_update_uses_ga_shape(
         self, provider_deps: dict[str, Any], monkeypatch: pytest.MonkeyPatch

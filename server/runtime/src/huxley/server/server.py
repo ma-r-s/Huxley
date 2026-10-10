@@ -434,7 +434,10 @@ class AudioServer:
         # automatically (see logging.py — `merge_contextvars` is in
         # the shared processor chain). Operators grepping `conn_id=ab12cd34`
         # get every log entry from this connection in one filter.
-        self._conn = _ConnInfo(
+        # `conn` is THIS handler's record. `self._conn` is whichever client
+        # is current, and a newer connection can replace it while this
+        # handler is still draining. Cleanup below must only touch `conn`.
+        conn = _ConnInfo(
             conn_id=conn_id,
             remote=str(ws.remote_address),
             connected_at_ms=_now_ms(),
@@ -442,6 +445,7 @@ class AudioServer:
             requested_language=selected_language,
             ws=ws,
         )
+        self._conn = conn
         structlog.contextvars.bind_contextvars(conn_id=conn_id)
         await logger.ainfo(
             "client_connected",
@@ -514,40 +518,49 @@ class AudioServer:
             if self._on_language_select is not None:
                 await self._on_language_select(selected_language)
             async for raw in ws:
+                if self._conn is not conn:
+                    # Evicted while its close handshake drains (a backgrounded
+                    # phone tab can take seconds). Its frames must not drive
+                    # the app on behalf of the newer client.
+                    await logger.ainfo("server.rx.dropped_from_evicted_client")
+                    break
                 await self._dispatch(raw)
         except websockets.ConnectionClosed as exc:
             # T1.21 — capture the close cause so the diag panel can
             # show "why" (1000 normal, 1001 going away, 4002 watchdog,
             # etc.) instead of the generic "client_disconnected".
-            if self._conn is not None:
-                self._conn.close_code = exc.code
-                self._conn.close_reason = exc.reason or None
+            if self._conn is conn:
+                conn.close_code = exc.code
+                conn.close_reason = exc.reason or None
         finally:
             # T1.21 — finalize the conn record, archive into recent
             # history for the diag endpoint, then unbind contextvars.
-            if self._conn is not None:
-                self._conn.closed_at_ms = _now_ms()
-                self._conn.ws = None  # release ref for GC
+            if self._conn is conn:
+                conn.closed_at_ms = _now_ms()
+                conn.ws = None  # release ref for GC
                 # If we got here without a ConnectionClosed exception
                 # (e.g. handler raised something else), close_code stays
                 # None — that's a useful diagnostic signal in itself.
-                self._recent_conns.append(self._conn)
+                self._recent_conns.append(conn)
                 await logger.ainfo(
                     "client_disconnected",
-                    frames_tx=self._conn.frames_tx,
-                    frames_rx=self._conn.frames_rx,
-                    bytes_tx=self._conn.bytes_tx,
-                    bytes_rx=self._conn.bytes_rx,
-                    duration_ms=self._conn.closed_at_ms - self._conn.connected_at_ms,
-                    close_code=self._conn.close_code,
-                    close_reason=self._conn.close_reason,
+                    frames_tx=conn.frames_tx,
+                    frames_rx=conn.frames_rx,
+                    bytes_tx=conn.bytes_tx,
+                    bytes_rx=conn.bytes_rx,
+                    duration_ms=conn.closed_at_ms - conn.connected_at_ms,
+                    close_code=conn.close_code,
+                    close_reason=conn.close_reason,
                 )
                 self._conn = None
             else:
-                # Race: an `evicted_by_new_client` path already moved
-                # this connection out of `_conn` before the finally.
-                # Don't double-log; the eviction event already covered it.
-                pass
+                # Evicted earlier: the eviction path already archived and
+                # logged this record. Leave `self._conn` alone. Before
+                # 2026-10-10 this branch cleared whatever client was
+                # current, so a slow-closing evicted tab silently cut off
+                # the newer client's outbound audio.
+                conn.ws = None
+                await logger.ainfo("client_evicted_handler_exited")
             structlog.contextvars.unbind_contextvars("conn_id")
 
     async def _dispatch(self, raw: str | bytes) -> None:

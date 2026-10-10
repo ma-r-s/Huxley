@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import contextvars
 import json
 from typing import TYPE_CHECKING, Any
 
@@ -172,7 +173,13 @@ class OpenAIRealtimeProvider:
             {"session": self._session_config(instructions, voice)},
         )
 
-        self._receive_task = asyncio.create_task(self._receive_loop())
+        # The receive loop outlives whichever client connection happened
+        # to open this session. Inheriting that handler's `conn_id` stamped
+        # a stale id on every provider/coordinator line for the rest of the
+        # session, which misdirected the 2026-10-10 phone diagnosis.
+        receive_ctx = contextvars.copy_context()
+        receive_ctx.run(structlog.contextvars.unbind_contextvars, "conn_id")
+        self._receive_task = asyncio.create_task(self._receive_loop(), context=receive_ctx)
         self._reset_timeout()
         await logger.ainfo(
             "session_connected",
