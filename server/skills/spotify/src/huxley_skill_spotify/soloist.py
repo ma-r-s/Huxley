@@ -47,6 +47,8 @@ class PlayerState:
     # idle | playing | paused | buffering
     status: str = "idle"
     item: dict[str, Any] | None = None
+    # What is loaded: a track, album, playlist or artist URI.
+    context_uri: str | None = None
     last_error: str | None = None
     # Bumped on every `error` event, so a waiter can tell a new error
     # from one it already saw.
@@ -54,20 +56,33 @@ class PlayerState:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
+def _identity(entity: dict[str, Any]) -> str | None:
+    name = (entity.get("decorations") or {}).get("identity", {}).get("name")
+    return str(name) if name else None
+
+
 def describe_item(item: dict[str, Any] | None) -> tuple[str | None, str | None]:
-    """(title, artists) from a Soloist track item, tolerant of shape."""
+    """(title, artists) from a Soloist track item.
+
+    Soloist's shape (observed 2026-10-10): the title is at
+    `decorations.identity.name`, artists at
+    `decorations.creators[].entity.decorations.identity.name`. Plain
+    `name` / `artists` are accepted too.
+    """
     if not item:
         return None, None
-    title = item.get("name") or item.get("title")
-    raw = item.get("artists") or item.get("artist_names") or []
-    names: list[str] = []
-    for artist in raw if isinstance(raw, list) else [raw]:
-        if isinstance(artist, dict):
-            name = artist.get("name")
+    decorations = item.get("decorations") or {}
+    title = _identity(item) or item.get("name") or item.get("title")
+    names = [
+        n
+        for creator in decorations.get("creators") or []
+        if (n := _identity((creator or {}).get("entity") or {}))
+    ]
+    if not names:
+        for artist in item.get("artists") or item.get("artist_names") or []:
+            name = artist.get("name") if isinstance(artist, dict) else artist
             if name:
                 names.append(str(name))
-        elif artist:
-            names.append(str(artist))
     return (str(title) if title else None), (", ".join(names) or None)
 
 
@@ -157,10 +172,13 @@ class SoloistClient:
         try:
             event = json.loads(raw)
         except ValueError:
+            event = None
+        if not isinstance(event, dict):
             await self._log.awarning("spotify.bad_message", raw=str(raw)[:200])
             return
         kind = event.get("type")
-        before = (self.state.logged_in, self.state.is_active, self.state.status)
+        auth_before = (self.state.logged_in, self.state.is_active)
+        status_before = self.state.status
         match kind:
             case "auth_state":
                 await self._update(
@@ -170,12 +188,15 @@ class SoloistClient:
                 )
             case "playback_state":
                 await self._update(
-                    status=str(event.get("status") or "idle"),
-                    item=event.get("item"),
+                    status=str(event.get("status") or self.state.status),
+                    item=event.get("item", self.state.item),
                     is_active=bool(event.get("is_active", self.state.is_active)),
+                    context_uri=(event.get("context") or {}).get("uri", self.state.context_uri),
                 )
             case "playback_changed":
-                await self._update(status=str(event.get("status") or "idle"))
+                await self._update(status=str(event.get("status") or self.state.status))
+            case "context_changed":
+                await self._update(context_uri=(event.get("context") or {}).get("uri"))
             case "track_changed":
                 await self._update(item=event.get("item"))
                 title, artists = describe_item(event.get("item"))
@@ -191,13 +212,15 @@ class SoloistClient:
                 await self._log.awarning("spotify.soloist_error", message=message[:200])
             case _:
                 await self._log.adebug("spotify.event", type=kind)
-        after = (self.state.logged_in, self.state.is_active, self.state.status)
-        if after != before:
+        if (self.state.logged_in, self.state.is_active) != auth_before:
             await self._log.ainfo(
-                "spotify.player_state",
-                logged_in=after[0],
-                is_active=after[1],
-                status=after[2],
+                "spotify.auth_state",
+                logged_in=self.state.logged_in,
+                is_active=self.state.is_active,
+            )
+        if self.state.status != status_before:
+            await self._log.ainfo(
+                "spotify.playback", status=self.state.status, context=self.state.context_uri
             )
 
     async def _update(self, **changes: Any) -> None:

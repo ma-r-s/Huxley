@@ -14,6 +14,8 @@ set -eu
 port=47100
 
 docker rm -f "$container" >/dev/null 2>&1 || true
+# Ctrl-C or a failure: don't leave a pairing container behind.
+trap 'docker rm -f "$container" >/dev/null 2>&1; rm -f "$envfile"' INT TERM
 docker run -d --name "$container" --env-file "$envfile" -v "$data:/data" \
   -p 127.0.0.1:9090:9090 -p 127.0.0.1:4712:4712 -p "$port:$port" \
   "$image" --pair >/dev/null
@@ -35,8 +37,18 @@ dns-sd -R "$name" _spotify-connect._tcp local "$port" "CPath=$zc_path" VERSION=1
 announce=$!
 trap 'kill $announce 2>/dev/null; rm -f "$envfile"' EXIT
 
-echo "Announcing \"$name\". In a Spotify app signed into the account, pick it from the device list."
-docker wait "$container" >/dev/null
+echo "Announcing \"$name\". In a Spotify app signed into the account (the desktop or"
+echo "phone app; the web player can't see local devices), pick it from the device list."
+# Soloist exits once paired. Give up after 15 minutes.
+for _ in $(seq 1 900); do
+  [ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null)" = "true" ] || break
+  sleep 1
+done
+if [ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null)" = "true" ]; then
+  docker rm -f "$container" >/dev/null
+  echo "Nobody picked \"$name\" within 15 minutes; run this again when ready."
+  exit 1
+fi
 if docker logs "$container" 2>&1 | grep -qi "error"; then
   docker logs "$container" 2>&1 | grep -i "error" | tail -3
 fi

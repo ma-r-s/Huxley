@@ -10,13 +10,16 @@ set -eu
 DEVICE_NAME="${DEVICE_NAME:-Huxley}"
 mkdir -p "$XDG_RUNTIME_DIR" /data/bin /cache
 
-pulseaudio --daemonize=yes --exit-idle-time=-1 --disallow-exit -n \
+# --log-target=stderr: the container has no syslog; this lands in docker logs.
+pulseaudio --daemonize=yes --exit-idle-time=-1 --disallow-exit -n --log-target=stderr \
   --load=module-native-protocol-unix \
   --load="module-null-sink sink_name=huxley_spotify rate=48000" \
   --load="module-simple-protocol-tcp port=4712 listen=0.0.0.0 record=true playback=false source=huxley_spotify.monitor format=s16le rate=24000 channels=1"
 pactl set-default-sink huxley_spotify
 
 # Current build from Spotify, re-fetched only if newer (If-Modified-Since).
+# Always download to .new and move into place: a partial first download
+# must not become the file that -z compares against forever.
 arch="$(uname -m)"
 case "$arch" in
   aarch64) pkg=soloist_release_arm64.tar.gz ;;
@@ -28,7 +31,8 @@ if [ -f "$archive" ]; then
   curl -fsSL -z "$archive" -o "$archive.new" "https://soloist-builds.spotifycdn.com/$pkg" \
     && [ -s "$archive.new" ] && mv "$archive.new" "$archive" || rm -f "$archive.new"
 else
-  curl -fsSL -o "$archive" "https://soloist-builds.spotifycdn.com/$pkg"
+  curl -fsSL -o "$archive.new" "https://soloist-builds.spotifycdn.com/$pkg"
+  mv "$archive.new" "$archive"
 fi
 tar -xzf "$archive" -C /data/bin
 /data/bin/soloist --version || true

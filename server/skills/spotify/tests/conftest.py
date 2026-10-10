@@ -31,6 +31,9 @@ if TYPE_CHECKING:
 
 
 class FakeSoloist(SoloistClient):
+    """Starts paired but inactive, as a freshly started Soloist is; it
+    turns active a moment after playback starts (tests call `activate`)."""
+
     def __init__(self) -> None:
         logger = MagicMock()
         super().__init__("ws://fake", logger)
@@ -38,15 +41,19 @@ class FakeSoloist(SoloistClient):
         self.start_playing = True
         self.state.connected = True
         self.state.logged_in = True
-        self.state.is_active = True
+        self.state.is_active = False
 
     def send(self, command: str, *, generation: int | None = None, **fields: Any) -> None:
         self.sent.append({"command": command, "generation": generation, **fields})
         if command == "play" and self.start_playing:
             self.state.status = "playing"
-            self.state.is_active = True
+            if "uri" in fields:
+                self.state.context_uri = fields["uri"]
         if command == "pause":
             self.state.status = "paused"
+
+    def activate(self) -> None:
+        self.state.is_active = True
 
     async def run(self) -> None:
         return None

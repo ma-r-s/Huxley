@@ -1,0 +1,107 @@
+---
+title: Connect Spotify
+description: Play music from your own Spotify Premium account on your Huxley device.
+---
+
+The Spotify skill plays music from a Spotify **Premium** account on any Huxley device: "play something by Los Panchos", "put on boleros", "next song", "what song is this?". The music reaches your device through Huxley itself, the same way the radio does.
+
+It runs on **Spotify Soloist**, Spotify's official player for headless devices. Soloist runs next to the Huxley server and appears in your Spotify apps as a speaker named after your device.
+
+<Callout type="info">
+  Each household connects its own account and creates its own keys. Spotify's terms don't allow sharing a Soloist key, so nobody can hand you theirs.
+</Callout>
+
+## What you need
+
+- A **Spotify Premium** account. A Premium Family member account works; that's a good choice, because Huxley's listening then stays out of your own recommendations.
+- The Spotify **desktop or phone app**, signed into that account, on the same Wi-Fi as the Huxley server, for a one-time pairing. The web player can't do this step (browsers can't see devices on your network).
+- A computer for Soloist: **Linux** (a Raspberry Pi or similar, ARM or x86), or a **Mac with Docker** for development.
+
+## 1. Create your keys
+
+Sign in at [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) **with the Premium account that will play**.
+
+1. **Soloist key.** Open **Soloist** in the dashboard and generate an API key. Spotify requires the account that creates it to have Premium.
+2. **Search app.** Choose **Create app**. Any name works (for example "Huxley"); set the redirect URI to `http://127.0.0.1:8888/callback` and select **Web API**. Open the app's settings and copy its **Client ID** and **Client secret**.
+
+Put all three in your persona's secrets file, `server/personas/<persona>/data/secrets/spotify/values.json`:
+
+```json title="values.json"
+{
+  "soloist_api_key": "…",
+  "client_id": "…",
+  "client_secret": "…"
+}
+```
+
+This file is ignored by git. Never paste these keys into `persona.yaml`, a chat or an issue.
+
+## 2. Run Soloist
+
+Soloist plays into a silent virtual speaker; Huxley records from it and sends the sound to your device. Nothing plays out of the server's own speakers.
+
+<Tabs items={["Mac (Docker)", "Linux"]}>
+  <Tab value="Mac (Docker)">
+    Start Docker Desktop, then from the repository root:
+
+    ```bash
+    server/skills/spotify/dev/pair-on-mac.sh
+    ```
+
+    It downloads the current Soloist build from Spotify, starts it, and announces a device called **Huxley** on your Wi-Fi. (A Docker container on a Mac can't announce itself, so the script does it from the Mac.) Leave it running and go to step 3.
+  </Tab>
+  <Tab value="Linux">
+    Run Soloist the way `server/skills/spotify/dev/entrypoint.sh` does: a PulseAudio null sink as its output, the sink's monitor served on `127.0.0.1:4712` as PCM16 mono 24 kHz, and Soloist with `--ws 127.0.0.1:9090`. A systemd user unit next to the Huxley server is the intended setup. For the first run, add `--pair`.
+  </Tab>
+</Tabs>
+
+## 3. Pair your account (once)
+
+1. Open the Spotify **desktop or phone app**, signed into the account from step 1.
+2. Open the device list (the speaker icon, "Connect to a device").
+3. Pick **Huxley**.
+
+The app shows it as connected, and Soloist saves the login and stops. That's the only time you need the app.
+
+On a Mac, now start the player for everyday use:
+
+```bash
+server/skills/spotify/dev/run.sh
+```
+
+It restarts with Docker and keeps the login.
+
+## 4. Turn the skill on
+
+Add `spotify` to your persona's skills, with your country so search returns songs you can play there:
+
+```yaml title="persona.yaml"
+skills:
+  spotify:
+    market: US                     # your country, ISO code
+    sounds_path: ../../_shared/sounds
+    start_sound: radio_start       # optional chime before the music
+```
+
+Restart the Huxley server and ask for a song.
+
+## Switching or re-pairing an account
+
+Run the pairing again (`pair-on-mac.sh`, or Soloist with `--pair` on Linux) and pick the device from the app signed into the new account. The new login replaces the old one. The Soloist key and the search app belong to whoever created them; a new household creates its own.
+
+## Keeping it running
+
+- **Builds expire after 90 days.** Spotify doesn't allow redistributing Soloist, so the container downloads the current build from Spotify each time it starts. Restarting it (or the computer) is enough to stay current.
+- **Someone else can take over.** Picking another device in a Spotify app moves the music there; Huxley says so out loud.
+
+## Troubleshooting
+
+| What you see | What to do |
+| --- | --- |
+| Huxley isn't in the device list | Use the desktop or phone app, not the web player; make sure it's on the same Wi-Fi as the server and the pairing script is still running. |
+| Huxley says Spotify isn't available | Soloist isn't running: `docker ps` on a Mac, or check its service on Linux. |
+| Huxley says Spotify isn't connected on this device | Pair again (step 3). |
+| Huxley says it can't search Spotify | The `client_id` / `client_secret` in `values.json` are missing or wrong. |
+| Songs are found but won't play | The account must be Premium. Open-source Spotify players (librespot and its relatives) no longer work for Premium accounts created since December 2024; that's why this skill uses Soloist. |
+
+The design and the full list of log events are in [`docs/skills/spotify.md`](https://github.com/ma-r-s/Huxley/blob/main/docs/skills/spotify.md).

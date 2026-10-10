@@ -5,6 +5,7 @@
     "run-the-server",
     "connect-a-client",
     "switch-personas",
-    "add-a-skill"
+    "add-a-skill",
+    "connect-spotify"
   ]
 }

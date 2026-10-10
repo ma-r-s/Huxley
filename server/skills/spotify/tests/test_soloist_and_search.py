@@ -139,6 +139,17 @@ class TestSoloistClient:
 
 
 def test_describe_item_tolerates_shapes() -> None:
+    soloist_shape = {
+        "uri": "spotify:track:t",
+        "decorations": {
+            "identity": {"name": "Sin Ti"},
+            "creators": [
+                {"entity": {"decorations": {"identity": {"name": "Los Panchos"}}}},
+                {"entity": {"decorations": {"identity": {"name": "Los Tres Reyes"}}}},
+            ],
+        },
+    }
+    assert describe_item(soloist_shape) == ("Sin Ti", "Los Panchos, Los Tres Reyes")
     assert describe_item({"name": "A", "artists": [{"name": "X"}, {"name": "Y"}]}) == ("A", "X, Y")
     assert describe_item({"name": "A", "artist_names": ["X"]}) == ("A", "X")
     assert describe_item(None) == (None, None)
@@ -158,26 +169,15 @@ def _artist(artist_id: str, name: str) -> dict[str, Any]:
 
 
 class TestSearch:
-    async def test_artist_name_plays_their_tracks_only(self, httpx_mock: HTTPXMock) -> None:
+    async def test_artist_name_plays_the_artist(self, httpx_mock: HTTPXMock) -> None:
         _token(httpx_mock)
-        panchos = _artist("p", "Los Panchos")
         httpx_mock.add_response(
             method="GET",
             json={
-                "artists": {"items": [panchos]},
+                "artists": {
+                    "items": [{"uri": "spotify:artist:p", "name": "Los Panchos", "id": "p"}]
+                },
                 "tracks": {"items": [{"uri": "spotify:track:cover", "name": "x", "artists": []}]},
-            },
-        )
-        httpx_mock.add_response(
-            method="GET",
-            json={
-                "tracks": {
-                    "items": [
-                        {"uri": "spotify:track:1", "name": "Sin Ti", "artists": [panchos]},
-                        {"uri": "spotify:track:2", "name": "Otro", "artists": [_artist("o", "O")]},
-                        {"uri": "spotify:track:3", "name": "Rayito", "artists": [panchos]},
-                    ]
-                }
             },
         )
         search = SpotifySearch("id", "secret", market="CO", http=httpx.AsyncClient())
@@ -185,14 +185,26 @@ class TestSearch:
         match = await search.find("los panchos")
 
         assert match is not None
-        assert (match.kind, match.uri, match.queue) == (
+        assert (match.kind, match.uri, match.title, match.artist) == (
             "artist",
-            "spotify:track:1",
-            ("spotify:track:3",),
+            "spotify:artist:p",
+            "Los Panchos",
+            "Los Panchos",
         )
-        searches = [r for r in httpx_mock.get_requests() if r.method == "GET"]
-        assert searches[0].url.params["market"] == "CO"
-        assert searches[1].url.params["q"] == 'artist:"Los Panchos"'
+        (request,) = [r for r in httpx_mock.get_requests() if r.method == "GET"]
+        assert request.url.params["market"] == "CO"
+
+    async def test_artist_kind_searches_artists(self, httpx_mock: HTTPXMock) -> None:
+        _token(httpx_mock)
+        httpx_mock.add_response(
+            method="GET",
+            json={"artists": {"items": [None, {"uri": "spotify:artist:t", "name": "Trío"}]}},
+        )
+        search = SpotifySearch("id", "secret", http=httpx.AsyncClient())
+        match = await search.find("trio", "artist")
+        assert match is not None and match.uri == "spotify:artist:t"
+        (request,) = [r for r in httpx_mock.get_requests() if r.method == "GET"]
+        assert request.url.params["type"] == "artist"
 
     async def test_song_query_plays_the_track(self, httpx_mock: HTTPXMock) -> None:
         _token(httpx_mock)
@@ -247,6 +259,14 @@ class TestSearch:
             if r.method == "GET"
         ]
         assert auth == ["Bearer t1", "Bearer t1", "Bearer t2"]
+
+    async def test_token_without_access_token_is_a_search_error(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        httpx_mock.add_response(url=TOKEN_URL, method="POST", json={"error": "invalid_client"})
+        search = SpotifySearch("id", "secret", http=httpx.AsyncClient())
+        with pytest.raises(SearchError, match="access_token"):
+            await search.find("x", "track")
 
     async def test_quota_or_outage_raises_search_error(self, httpx_mock: HTTPXMock) -> None:
         _token(httpx_mock)

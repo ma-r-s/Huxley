@@ -7,11 +7,14 @@ name="${DEVICE_NAME:-Huxley}"
 image=huxley-soloist-dev
 container=huxley-soloist
 
-docker image inspect "$image" >/dev/null 2>&1 || docker build -q -t "$image" "$(dirname "$0")" >/dev/null
+# Always build: cached layers make it instant, and an edited entrypoint
+# or Dockerfile takes effect without anyone remembering to rebuild.
+docker build -q -t "$image" "$(dirname "$0")" >/dev/null
 mkdir -p "$data"
 
-# The Soloist key goes to the container through a private env file,
-# never on a command line or in the terminal.
+# The Soloist key goes to the container through a private env file, not
+# the docker command line or the terminal. (Inside the container Soloist
+# takes it as an argument, so `docker top` on this machine shows it.)
 envfile="$(mktemp)"
 chmod 600 "$envfile"
 trap 'rm -f "$envfile"' EXIT

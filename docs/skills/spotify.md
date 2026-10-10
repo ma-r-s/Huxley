@@ -13,10 +13,20 @@ server's one audio channel, never through a separate speaker.
 | `music_control` | `action: pause \| resume \| next \| previous`                         | pause: `CancelMedia`; the others: `AudioStream` (resume)                     |
 | `whats_playing` | (none)                                                                | `{ ok, title, by }` + resume `AudioStream`, or `nothing_playing`             |
 
-An artist plays as their songs (up to 10, the first plays and the rest
-are queued; Spotify autoplay continues after), because Soloist can't
-play an artist URI and Spotify removed the top-tracks endpoint for new
-apps.
+An artist plays as the artist (`spotify:artist:...`), like the play
+button on an artist page: their popular songs, then more. Soloist's docs
+list only track, album, playlist and episode URIs, but it plays artist
+URIs (verified 2026-10-10). No queueing, so nothing leaks into the next
+request.
+
+Soloist's events, as observed (its docs don't show the shapes): a track
+item's title is at `decorations.identity.name` and its artists at
+`decorations.creators[].entity.decorations.identity.name`. After a
+`play`, Soloist first reports `playing` for the _old_ context, then
+`context_changed`, `track_changed`, `buffering`, `playing`; and a freshly
+started device turns `is_active` only a moment after playback starts. So
+a start counts only when the new context is playing, and a takeover only
+when the device was active and then wasn't.
 
 ## How it works
 
@@ -55,15 +65,23 @@ Spotify app ─┐                        ┌─ WebSocket (control, events) ─
 
 ## Failures (every one is spoken)
 
-| Situation                                     | What happens                                                  |
-| --------------------------------------------- | ------------------------------------------------------------- |
-| Soloist unreachable                           | `play_music` returns `player_offline`; the model offers radio |
-| Soloist not paired                            | `player_not_paired`; offers radio                             |
-| Web API app missing or failing                | `search_not_configured` / `search_failed`; offers radio       |
-| Nothing found                                 | `not_found`; asks for another song or artist                  |
-| Soloist doesn't start playing within 10 s     | stream ends, narrated `start_failed`                          |
-| Someone picks another device in a Spotify app | stream ends, narrated `takeover` (no pause sent)              |
-| Album / playlist runs out                     | stream ends quietly                                           |
+| Situation                                     | What happens                                                                                  |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Soloist unreachable                           | `play_music` returns `player_offline`; the model offers radio                                 |
+| Soloist not paired                            | `player_not_paired`; offers radio                                                             |
+| Web API app missing or failing                | `search_not_configured` / `search_failed`; offers radio                                       |
+| Nothing found                                 | `not_found`; asks for another song or artist                                                  |
+| Soloist doesn't start playing within 10 s     | stream ends, narrated `start_failed`                                                          |
+| Someone picks another device in a Spotify app | stream ends, narrated `takeover` (no pause sent)                                              |
+| The audio feed drops mid-song                 | stream ends, narrated `interrupted`                                                           |
+| The audio feed closes before any sound        | narrated `player_offline` (Docker accepts the port even when the sound server inside is down) |
+| Paused from a Spotify app for 3 s             | stream ends quietly, freeing the speaker                                                      |
+| A call outlasts the 30 min patience           | narrated `patience_expired` (the music stays paused)                                          |
+| Album / playlist runs out                     | stream ends quietly                                                                           |
+
+"What song is this?" brings the music back only if a press stopped it in
+the last two minutes: not after "pausa", and not after it moved to
+another device.
 
 ## Configuration
 
@@ -85,6 +103,10 @@ Soloist unit's environment).
 
 ## Setup
 
+The step-by-step guide for any user connecting their own account is on
+the docs site: [Connect Spotify](../../web/content/docs/use/connect-spotify.mdx).
+In short:
+
 1. With the **Premium** account that will play, on
    [developer.spotify.com](https://developer.spotify.com/dashboard):
    generate a Soloist API key (Dashboard → Soloist), and create a Web
@@ -105,7 +127,15 @@ Soloist unit's environment).
 ## Logs
 
 `spotify.setup_complete`, `spotify.ws_state` (connected / retrying),
-`spotify.player_state` (logged in, active, status), `spotify.track`,
-`spotify.play_requested` (query, match, uri), `spotify.play_started`
-(`latency_ms`), `spotify.stream_ended` (`reason`), `spotify.soloist_error`,
-`spotify.search_failed`, `spotify.capture_failed`, `spotify.unavailable`.
+`spotify.auth_state` (logged in, active), `spotify.playback` (status,
+context), `spotify.track`, `spotify.play_requested` (query, match, uri),
+`spotify.play_started` (`latency_ms`, context), `spotify.start_failed`,
+`spotify.stream_ended` (`reason`: cancelled, finished, takeover,
+paused_elsewhere, capture_closed, start_failed, player_offline),
+`spotify.capture_closed` (`chunks`), `spotify.soloist_error`,
+`spotify.search_failed`, `spotify.capture_failed`, `spotify.unavailable`,
+`spotify.control`.
+
+The Soloist build's expiry is logged by the container at start ("client
+expires in N days"); an expired build exits with code 10, which the skill
+sees as `player_offline`.

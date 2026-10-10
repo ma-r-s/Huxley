@@ -39,11 +39,13 @@ async def open_capture(host: str, port: int) -> tuple[asyncio.StreamReader, asyn
 
 
 async def read_chunks(reader: asyncio.StreamReader) -> AsyncIterator[bytes]:
-    """Yield 100 ms chunks until the source closes."""
+    """Yield 100 ms chunks until the source closes or drops."""
     while True:
         try:
             yield await reader.readexactly(CHUNK_BYTES)
         except asyncio.IncompleteReadError as exc:
             if exc.partial:
                 yield exc.partial
+            return
+        except OSError:  # reset mid-stream: same as closed
             return

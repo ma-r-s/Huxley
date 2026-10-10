@@ -7,7 +7,7 @@ A skill is a Python package. Installing one means: add it to your dependencies, 
 
 ## The first-party skills
 
-Huxley ships with seven skills. You don't install them separately — they're part of the workspace and `uv sync` brings them in:
+Huxley ships with these skills. You don't install them separately — they're part of the workspace and `uv sync` brings them in:
 
 | Skill                  | Provides                                                  |
 |------------------------|-----------------------------------------------------------|
@@ -18,6 +18,9 @@ Huxley ships with seven skills. You don't install them separately — they're pa
 | `huxley-skill-telegram`| Voice calls + text messages via MTProto                  |
 | `huxley-skill-timers`  | One-shot reminders, persistent across restart             |
 | `huxley-skill-search`  | Web search                                                |
+| `huxley-skill-reminders` | Scheduled reminders with retries, persistent           |
+| `huxley-skill-spotify` | Spotify Premium via Spotify Soloist ([setup](/docs/use/connect-spotify)) |
+| `huxley-skill-stocks`  | Stock quotes (reference third-party-shaped skill)          |
 
 To use one in a persona, list it under `skills:`:
 
@@ -44,7 +47,7 @@ Each skill defines what config keys it accepts. Read the skill's README, or see 
 Third-party skills come from PyPI, GitHub, or any other Python package source. Install with `uv add` from the workspace root:
 
 ```bash
-uv add huxley-skill-spotify              # from PyPI
+uv add huxley-skill-example              # from PyPI
 uv add git+https://github.com/foo/huxley-skill-bar.git  # from git
 ```
 
@@ -54,14 +57,14 @@ To use it, list it in `persona.yaml`:
 
 ```yaml
 skills:
-  spotify:
-    library_path: spotify/
+  example:
+    some_option: value   # whatever keys that skill documents
 ```
 
 Then restart the server. Huxley discovers skills at startup via Python entry points — the new skill registers itself automatically when it's pip-installed.
 
 <Callout type="info">
-  **Secrets:** Per-skill secret interpolation (`${ENV_VAR}` in persona.yaml) is on the roadmap but not yet shipped. For now, well-written skills read secrets via `os.environ` inside their code rather than accepting them as plain config. Check each skill's README to see how it handles credentials.
+  **Secrets** never go in `persona.yaml`. A skill reads them from `server/personas/<persona>/data/secrets/<skill>/values.json`, a flat JSON object that git ignores. Each skill's docs list the keys it needs; [Connect Spotify](/docs/use/connect-spotify) is a worked example.
 </Callout>
 
 ## What does a skill's config look like?

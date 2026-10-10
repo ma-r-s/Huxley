@@ -32,6 +32,7 @@ Secrets (`<persona data>/secrets/spotify/values.json`): `client_id`,
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from datetime import timedelta
@@ -52,7 +53,7 @@ from huxley_skill_spotify.search import KINDS, Match, SearchError, SpotifySearch
 from huxley_skill_spotify.soloist import PlayerState, SoloistClient, describe_item
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterator
 
     from huxley_sdk import SkillLogger
 
@@ -61,6 +62,10 @@ DEFAULT_WS = "ws://127.0.0.1:9090"
 DEFAULT_PCM = "127.0.0.1:4712"
 # How long to wait for Soloist to report "playing" after a play command.
 START_TIMEOUT_S = 10.0
+# Paused from a Spotify app for this long: end the stream (free the speaker).
+PAUSED_GRACE_S = 3.0
+# "What song is this?" resumes the music only if a press stopped it this recently.
+RESUME_WINDOW_S = 120.0
 
 # What the model should tell the user, per failure. Instructions, not
 # literal text: the persona phrases them.
@@ -93,6 +98,14 @@ _SAY: dict[str, dict[str, str]] = {
         "takeover": (
             "Dile al usuario, en una frase, que la música de Spotify pasó a sonar en otro aparato."
         ),
+        "interrupted": (
+            "Dile al usuario, en una frase, que la música de Spotify se cortó y "
+            "pregúntale si quiere que la vuelvas a poner."
+        ),
+        "patience_expired": (
+            "Dile al usuario, en una frase, que la música quedó en pausa y que "
+            "puede pedirte que siga cuando quiera."
+        ),
     },
     "en": {
         "player_offline": "Tell the user Spotify music isn't available right now; offer the radio.",
@@ -112,6 +125,14 @@ _SAY: dict[str, dict[str, str]] = {
         ),
         "takeover": (
             "Tell the user, in one sentence, that the Spotify music moved to another device."
+        ),
+        "interrupted": (
+            "Tell the user, in one sentence, that the Spotify music cut out and ask "
+            "if they want it back on."
+        ),
+        "patience_expired": (
+            "Tell the user, in one sentence, that the music stayed paused and they "
+            "can ask you to continue it."
         ),
     },
     "fr": {
@@ -142,6 +163,14 @@ _SAY: dict[str, dict[str, str]] = {
         "takeover": (
             "Dis à l'utilisateur, en une phrase, que la musique Spotify est passée "
             "sur un autre appareil."
+        ),
+        "interrupted": (
+            "Dis à l'utilisateur, en une phrase, que la musique Spotify s'est coupée "
+            "et demande s'il veut la remettre."
+        ),
+        "patience_expired": (
+            "Dis à l'utilisateur, en une phrase, que la musique est restée en pause "
+            "et qu'il peut te demander de la reprendre."
         ),
     },
 }
@@ -176,6 +205,9 @@ class SpotifySkill:
         # stream (it runs in the coordinator's media path). Held so they
         # aren't garbage collected mid-flight.
         self._tasks: set[asyncio.Task[None]] = set()
+        # When a press last stopped the music (None after an explicit
+        # pause or when it moved elsewhere). Drives whats_playing's resume.
+        self._interrupted_at: float | None = None
 
     @property
     def name(self) -> str:
@@ -380,7 +412,6 @@ class SpotifySkill:
             title=match.title,
             artist=match.artist,
             uri=match.uri,
-            queued=len(match.queue),
         )
         payload = {"ok": True, "playing": match.title, "by": match.artist, "kind": match.kind}
         return ToolResult(
@@ -396,7 +427,9 @@ class SpotifySkill:
         await self._log().ainfo("spotify.control", action=action)
         if action == "pause":
             # The press already cancelled the stream (its finally queued a
-            # pause); this covers a pause asked while nothing streamed.
+            # pause); this covers a pause asked while nothing streamed. An
+            # explicit pause also means "don't bring it back on its own".
+            self._interrupted_at = None
             self._require_client().send("pause")
             return ToolResult(
                 output=json.dumps({"ok": True, "action": "pause"}), side_effect=CancelMedia()
@@ -425,26 +458,48 @@ class SpotifySkill:
                 )
             )
         payload = {"ok": True, "title": title, "by": artists}
-        # Asking stopped the music (the press); bring it back after the answer.
-        side_effect = self._stream() if self._unavailable() is None else None
-        return ToolResult(output=json.dumps(payload, ensure_ascii=False), side_effect=side_effect)
+        # The press that asked stopped the music; bring it back after the
+        # answer, but only if a press just interrupted it here. Not after
+        # "pausa", and not if it moved to another device.
+        interrupted = self._interrupted_at
+        resume = (
+            interrupted is not None
+            and time.monotonic() - interrupted < RESUME_WINDOW_S
+            and self._unavailable() is None
+        )
+        return ToolResult(
+            output=json.dumps(payload, ensure_ascii=False),
+            side_effect=self._stream() if resume else None,
+        )
 
     # --- Streaming ---
 
     def _stream(self, *, start: Match | None = None, before: tuple[str, ...] = ()) -> AudioStream:
         """An AudioStream whose first run starts `start` (or resumes) and
         whose later runs, after a reminder or call paused it, resume."""
-        first = True
+        # Flips once the first run has actually sent its play: a run
+        # cancelled before that (say, during the capture connect) must
+        # leave the next run to start `start`, not resume something else.
+        progress = {"played": False}
 
         async def factory() -> AsyncIterator[bytes]:
-            nonlocal first
-            initial, first = first, False
-            async for chunk in self._run(
+            initial = not progress["played"]
+            run = self._run(
                 start=start if initial else None,
                 before=before if initial else (),
                 earcon=initial and start is not None,
-            ):
-                yield chunk
+                progress=progress,
+            )
+            # aclosing: on cancel, run's finally (pause, close the capture)
+            # happens now, not whenever the generator is collected.
+            async with contextlib.aclosing(run):
+                async for chunk in run:
+                    yield chunk
+
+        async def on_patience_expired() -> None:
+            # A call outlasted the patience window; the music won't come
+            # back on its own. Called from the focus manager: schedule only.
+            self._narrate("patience_expired")
 
         label = start.title if start else "Spotify"
         return AudioStream(
@@ -453,11 +508,17 @@ class SpotifySkill:
             label=label,
             preroll_ms=len(self._earcon) * 1000 // 48_000 if self._earcon and start else 0,
             patience=self._patience,
+            on_patience_expired=on_patience_expired,
         )
 
     async def _run(
-        self, *, start: Match | None, before: tuple[str, ...], earcon: bool
-    ) -> AsyncIterator[bytes]:
+        self,
+        *,
+        start: Match | None,
+        before: tuple[str, ...],
+        earcon: bool,
+        progress: dict[str, bool],
+    ) -> AsyncGenerator[bytes]:
         client = self._require_client()
         log = self._log()
         generation = client.new_generation()
@@ -476,63 +537,94 @@ class SpotifySkill:
             errors_before = client.state.error_count
             for command in before:
                 client.send(command, generation=generation)
-            # Volume belongs to the client (SetVolume); keep Soloist at full
-            # so a phone can't silently turn this device down.
-            client.send("set_volume", volume=100, generation=generation)
             if start is not None:
                 client.send("play", uri=start.uri, generation=generation)
-                for uri in start.queue:
-                    client.send("add_to_queue", uri=uri, generation=generation)
             else:
                 client.send("play", generation=generation)
+            progress["played"] = True
             if earcon and self._earcon:
                 yield self._earcon
 
             def started(s: PlayerState) -> bool:
-                return s.status == "playing" or s.error_count > errors_before or not s.connected
+                if s.error_count > errors_before or not s.connected:
+                    return True
+                # Soloist reports "playing" for the old context for an
+                # instant before loading a new one; wait for ours.
+                return s.status == "playing" and (start is None or s.context_uri == start.uri)
 
             await client.wait_until(started, START_TIMEOUT_S)
-            if client.state.status != "playing":
+            state = client.state
+            if state.status != "playing" or (start is not None and state.context_uri != start.uri):
                 reason = "start_failed"
                 await log.awarning(
                     "spotify.start_failed",
-                    status=client.state.status,
-                    error=client.state.last_error,
-                    connected=client.state.connected,
+                    status=state.status,
+                    context=state.context_uri,
+                    error=state.last_error,
+                    connected=state.connected,
                 )
                 self._narrate("start_failed")
                 return
+            # Volume belongs to the client (SetVolume); keep Soloist at full
+            # so a phone can't silently turn this device down.
+            client.send("set_volume", volume=100, generation=generation)
             await log.ainfo(
                 "spotify.play_started",
                 latency_ms=int((time.monotonic() - requested) * 1000),
                 resumed=start is None,
+                context=state.context_uri,
             )
 
+            seen_active = False
+            paused_since: float | None = None
+            chunks = 0
             async for chunk in read_chunks(reader):
                 state = client.state
                 if not state.connected:
                     reason = "player_offline"
                     self._narrate("player_offline")
                     return
-                if not state.is_active:
-                    # Someone picked another device in a Spotify app.
+                # Soloist turns active a moment after playback starts; only
+                # active-then-not means someone picked another device.
+                if state.is_active:
+                    seen_active = True
+                elif seen_active:
                     reason = "takeover"
                     self._narrate("takeover")
                     return
                 if state.status == "idle":
                     reason = "finished"
                     return
+                if state.status == "paused":
+                    # Paused from a Spotify app: let the speaker go.
+                    paused_since = paused_since or time.monotonic()
+                    if time.monotonic() - paused_since > PAUSED_GRACE_S:
+                        reason = "paused_elsewhere"
+                        return
+                else:
+                    paused_since = None
+                chunks += 1
                 yield chunk
+            # The capture closed under us (the container's sound server is
+            # down, or the container restarted). Behind Docker on a Mac the
+            # connect succeeds and closes at once, so a stream with no audio
+            # at all is the offline case.
             reason = "capture_closed"
-            await log.awarning("spotify.capture_closed")
+            await log.awarning("spotify.capture_closed", chunks=chunks)
+            self._narrate("interrupted" if chunks else "player_offline")
         finally:
             if writer is not None:
                 writer.close()
+            if reason == "cancelled":
+                # A press (or another stream) stopped it: "what song was
+                # that?" may bring it back. See _whats_playing.
+                self._interrupted_at = time.monotonic()
+            elif reason in ("takeover", "paused_elsewhere"):
+                self._interrupted_at = None
             # Never await Soloist here: this runs in the coordinator's
-            # cancel path. Queue the pause; a newer stream drops it.
-            # Not after a takeover (that would pause the other device) or
-            # when the music already ended.
-            if reason not in ("takeover", "finished", "capture_unreachable"):
+            # cancel path. Queue the pause; a newer stream drops it. Not
+            # when the music moved, was paused elsewhere, or ended.
+            if reason not in ("takeover", "finished", "paused_elsewhere", "capture_unreachable"):
                 client.send("pause", generation=generation)
             await log.ainfo(
                 "spotify.stream_ended",

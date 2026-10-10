@@ -5233,7 +5233,26 @@ DoD round 2 + 3:
 - Tests: 31 (fake Soloist + a real local TCP PCM server + pytest-httpx), covering the DoD list; the stale-generation test fails with the rule disabled. ruff, mypy strict green; no "spotify" in runtime/sdk.
 - Found along the way: `ntgcalls` 2.2.1b3 (pinned in our lock for Telegram calls) was removed from PyPI along with every 2.2.x before 2.2.5, so the committed lock couldn't install fresh anywhere. Relocking for the new member moved it to 2.2.5 (inside Telegram's `>=2.2.1b2`); Telegram's 121 tests pass. A real Telegram call should be smoke-tested on 2.2.5.
 
-**Remaining.** Pair once (Mario selects "Huxley" in a Spotify app signed into the family-member account), then `run.sh`, then the voice smoke in the DoD.
+**Pairing (2026-10-10).** The Spotify web player can't see local devices (browsers can't do LAN discovery); Mario paired from the desktop app on the Mac: "pairing settled", login stored, restored on every start ("logged in as ...", build valid 89 days).
+
+**Live checks against real Soloist.** A raw play captured 7.5 s of music through the TCP capture (RMS 2,000-4,200 per second, peaks to 21k). Two things only the real thing showed: the track title is at `item.decorations.identity.name` (artists under `decorations.creators`), not `item.name`; and after `play`, Soloist reports `playing` for the old context first and turns `is_active` only after playback starts. Soloist also plays artist URIs although its docs list only track/album/playlist/episode, so an artist now plays natively (no queue).
+
+**Implementation critic (fresh agent, on 7d97f0ee)**, all fixed in round 2:
+1. False "moved to another device" on the first play (inactive until playback starts; the fake hid it). Now takeover = active then not; the fake starts inactive like real Soloist; the regression test fails on the old logic.
+2. Errors from queued `add_to_queue` / `set_volume` counted as a failed start. Queueing removed (artists play natively); `set_volume` sent after the start is confirmed; a start counts only when the requested context is playing.
+3. A capture that closed was silent, a reset escaped as "cancelled", and behind Docker the offline case was never seen (connect then EOF). Now resets end the stream, a mid-song drop says `interrupted`, a close before any audio says `player_offline`.
+4. `whats_playing` always resumed. Now only if a press stopped the music in the last 2 min (not after "pausa" or a takeover).
+5. Artist filtering could return nothing; quotes broke `artist:"X"`. Moot: artists play by URI.
+6. Queue leakage between requests: moot, no queue.
+7. A partial first Soloist download wedged the container. Downloads now go to `.new` first.
+8. The stream's `finally` could run late on cancel. The factory now wraps the run in `contextlib.aclosing`.
+Also: paused from an app for 3 s frees the speaker; a call longer than the patience is spoken (`on_patience_expired`); a run cancelled before its `play` leaves the next run to start the request; `playback_changed` without status keeps the last one; non-dict messages can't kill the client; token responses without `access_token` are a `SearchError`; search timeout 5 s; PulseAudio logs to stderr; the image always rebuilds (cached); pairing script cleans up on Ctrl-C and gives up after 15 min. `expiry_days_left` is logged by the container at start, not the skill (Soloist's WebSocket doesn't expose it); an expired build exits with code 10 and reads as `player_offline`.
+
+**End to end (skill against real search, real Soloist, real capture):** "Los Panchos" → `spotify:artist:...`; 8.2 s of audio (earcon + music, RMS 4,316); no false narrations; whats_playing answered "Contigo - Versión Alternativa" by Los Panchos and offered to resume; cancel paused Soloist within a second. 41 tests; ruff, mypy strict green.
+
+**Docs for other households:** user guide `web/content/docs/use/connect-spotify.mdx` (Premium, own keys, pairing on Mac and Linux, switching accounts, troubleshooting); `docs/skills/spotify.md` updated; the site's skills page fixed (it showed a made-up Spotify config and said per-skill secrets weren't shipped).
+
+**Remaining.** Mario's voice smoke from the phone app (DoD list).
 
 ---
 

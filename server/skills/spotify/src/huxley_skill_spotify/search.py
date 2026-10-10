@@ -30,15 +30,15 @@ class SearchError(Exception):
 
 @dataclass(frozen=True)
 class Match:
-    """What to play. `queue`: extra track URIs to queue after `uri`
-    (an artist plays as their tracks, since Soloist can't play an
-    artist URI)."""
+    """What to play: a track, album, playlist or artist URI. Soloist
+    plays an artist URI natively (verified 2026-10-10, though its docs
+    only list track/album/playlist/episode), the way the Spotify apps'
+    play-artist button does."""
 
     uri: str
     kind: str
     title: str
     artist: str | None
-    queue: tuple[str, ...] = ()
 
 
 def _fold(text: str) -> str:
@@ -64,7 +64,9 @@ class SpotifySearch:
         self._client_id = client_id
         self._client_secret = client_secret
         self._market = market
-        self._http = http or httpx.AsyncClient(timeout=8.0)
+        # One search is up to two requests (token + search); keep the
+        # worst case short, the user is waiting in silence.
+        self._http = http or httpx.AsyncClient(timeout=5.0)
         self._token: str | None = None
         self._token_expires = 0.0
 
@@ -78,24 +80,23 @@ class SpotifySearch:
             return None
         if kind not in KINDS:
             kind = "any"
-        if kind == "artist":
-            return await self._artist(query)
         if kind == "any":
             data = await self._search(query, "track,artist,album,playlist", limit=5)
-            artists = [a for a in data.get("artists", {}).get("items", []) if a]
             # "Los Panchos" names an artist; "Sin ti" a song. Only treat
             # the query as an artist when it is the artist's name.
-            if artists and _fold(artists[0].get("name", "")) == _fold(query):
-                return await self._artist_tracks(artists[0])
+            artist = self._first(data, "artists", "artist")
+            if artist and _fold(artist.title) == _fold(query):
+                return artist
             for section, found in (
                 ("tracks", "track"),
                 ("albums", "album"),
                 ("playlists", "playlist"),
+                ("artists", "artist"),
             ):
                 match = self._first(data, section, found)
                 if match:
                     return match
-            return await self._artist_tracks(artists[0]) if artists else None
+            return None
         data = await self._search(query, kind, limit=5)
         return self._first(data, f"{kind}s", kind)
 
@@ -103,35 +104,16 @@ class SpotifySearch:
         # Playlist results can contain nulls (removed playlists).
         for entry in data.get(section, {}).get("items", []):
             if entry and entry.get("uri"):
+                name = str(entry.get("name") or "")
                 owner = (entry.get("owner") or {}).get("display_name")
+                by = name if kind == "artist" else _artists(entry) or owner
                 return Match(
                     uri=str(entry["uri"]),
                     kind=kind,
-                    title=str(entry.get("name") or ""),
-                    artist=_artists(entry) or (str(owner) if owner else None),
+                    title=name,
+                    artist=str(by) if by else None,
                 )
         return None
-
-    async def _artist(self, query: str) -> Match | None:
-        data = await self._search(query, "artist", limit=1)
-        artists = [a for a in data.get("artists", {}).get("items", []) if a]
-        return await self._artist_tracks(artists[0]) if artists else None
-
-    async def _artist_tracks(self, artist: dict[str, Any]) -> Match | None:
-        """An artist plays as their tracks: Spotify retired the top-tracks
-        endpoint for new apps, so search their tracks and keep only those
-        they're actually on."""
-        name = str(artist.get("name") or "")
-        artist_id = artist.get("id")
-        data = await self._search(f'artist:"{name}"', "track", limit=10)
-        uris = [
-            str(t["uri"])
-            for t in data.get("tracks", {}).get("items", [])
-            if t and t.get("uri") and any(a.get("id") == artist_id for a in t.get("artists") or [])
-        ]
-        if not uris:
-            return None
-        return Match(uri=uris[0], kind="artist", title=name, artist=name, queue=tuple(uris[1:]))
 
     async def _search(self, query: str, types: str, *, limit: int) -> dict[str, Any]:
         params: dict[str, str | int] = {"q": query, "type": types, "limit": limit}
@@ -149,7 +131,10 @@ class SpotifySearch:
                 continue  # token revoked or expired early: renew once
             if response.status_code != 200:
                 raise SearchError(f"search answered {response.status_code}")
-            result: dict[str, Any] = response.json()
+            try:
+                result: dict[str, Any] = response.json()
+            except ValueError as exc:
+                raise SearchError("search answered non-JSON") from exc
             return result
         raise SearchError("search unauthorized after token renewal")
 
@@ -166,8 +151,11 @@ class SpotifySearch:
             raise SearchError(f"token request failed: {type(exc).__name__}") from exc
         if response.status_code != 200:
             raise SearchError(f"token request answered {response.status_code}")
-        body = response.json()
-        self._token = str(body["access_token"])
+        try:
+            body = response.json()
+            self._token = str(body["access_token"])
+        except (ValueError, KeyError, TypeError) as exc:
+            raise SearchError("token response without access_token") from exc
         # Renew a minute early so a search never starts on a dying token.
         self._token_expires = time.monotonic() + float(body.get("expires_in", 3600)) - 60
         return self._token
