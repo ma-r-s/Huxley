@@ -201,7 +201,8 @@ class AudioStream(SideEffect):
     # None (default), the coordinator derives patience from
     # `content_type` (0 for NONMIXABLE, 5min for MIXABLE). Audiobooks
     # set this to 30 minutes so a typical phone call parks the book;
-    # radio (ambient) accepts the 5min MIXABLE default.
+    # radio is NONMIXABLE (the default) with no patience, so a
+    # preemption stops it.
     patience: timedelta | None = None
 
 
