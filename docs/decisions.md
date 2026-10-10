@@ -696,3 +696,30 @@ Considered alternatives:
 - The PWA's existing 2s reconnect logic Just Works™ for restart recovery — no new code path needed on the client.
 - launchd's `ThrottleInterval=10s` means a broken venv (uv add succeeds but the new dep doesn't import cleanly at boot) leaves the operator with a server that won't come back up. Mitigation: launchd logs go to `~/Library/Logs/Huxley/`. The PWA shows "Disconnected — retrying" indefinitely if the server can't restart; not great UX for a non-technical caregiver, but acceptable for v1.
 - Phase D ships install only. Uninstall (`uv remove`) requires the same pattern; deferred to post-D.
+
+---
+
+## 2026-10-10: GA Realtime API, default `gpt-realtime-2.1-mini`
+
+**Context**: OpenAI shut down `gpt-4o-mini-realtime-preview` (2026-05-07) and the Realtime beta interface (2026-05-12). Huxley used both and was down until T1.25. Successor candidates on the account: `gpt-realtime-2.1-mini` and `gpt-realtime-2.1`. Supersedes [2026-04-18: default model](#2026-04-18--default-model-is-gpt-4o-mini-realtime-preview).
+
+**Decision**: Speak the GA interface. Default model `gpt-realtime-2.1-mini`: the same audio price as the retired model ($10 in / $20 out per 1M), cheaper cached text ($0.06), adds reasoning. `gpt-realtime-2.1` (~3x audio cost) stays an env override. Background summaries move from `gpt-4o-mini` to `gpt-6-luna` with reasoning off (half the latency, lower price).
+
+**Consequences**:
+
+- Measured 2026-10-10 with Abuelo's full prompt: about $0.005-0.01 per spoken question. Audiobook/radio time stays free (idle sessions bill nothing).
+- Cost totals are stored in micro-dollars; whole-cent storage was rounding most mini responses to zero.
+- A provider retiring a model is now a known outage mode. The session-shape test pins the wire contract; it doesn't catch a retired model name.
+
+---
+
+## 2026-10-10: Walkie-talkie only; GPT-Live not adopted
+
+**Context**: OpenAI's GPT-Live (full-duplex voice that delegates tool work to a background model) raised the question of rebuilding Huxley around it. Probes showed latency roughly at parity once prompted (T1.26).
+
+**Decision**: Huxley is half-duplex push-to-talk, project-wide: the user talks while holding a button, the device answers after release, never an open mic. GPT-Live is built for open-mic conversation and has no manual commit, so it is not adopted. Stay on turn-based APIs with explicit commit on release.
+
+**Consequences**:
+
+- Evaluate future voice providers against PTT first. Gemini Live qualifies on paper (manual `activityStart`/`activityEnd`); untested.
+- The one GPT-Live idea worth borrowing, handing slow work to a stronger background model and announcing the result later, needs its own plan.

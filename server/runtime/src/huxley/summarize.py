@@ -8,9 +8,10 @@ last 20 lines are noise unrelated to current state. A real LLM-generated
 summary preserves intent ("user is mid-book X at chapter Y, last paused
 5 minutes ago") in a small token budget.
 
-Uses gpt-4o-mini via standard chat-completions — much cheaper than the
-Realtime API, runs in the natural ~2s reconnect window so the user sees
-no extra latency. ~$0.001 per summarization at typical sizes.
+Uses gpt-6-luna with reasoning off via standard chat-completions —
+much cheaper than the Realtime API, ~1s, inside the natural reconnect
+window so the user sees no extra latency. Fractions of a cent per
+summarization. (Was gpt-4o-mini until 2026-10-10: twice as slow, pricier.)
 
 See docs/triage.md T1.5.
 """
@@ -22,8 +23,10 @@ from openai import AsyncOpenAI
 
 logger = structlog.get_logger()
 
-SUMMARY_MODEL = "gpt-4o-mini"
-"""Cheap chat-completions model (NOT the realtime variant)."""
+SUMMARY_MODEL = "gpt-6-luna"
+"""Cheap chat-completions model (NOT the realtime variant). Reasoning
+model: takes `max_completion_tokens` and `reasoning_effort`, rejects
+`max_tokens` and `temperature`."""
 
 # Per-language summarization prompts. The summary is fed back into the
 # next session's system prompt under a localized header (see
@@ -103,7 +106,7 @@ async def summarize_transcript(
     max_lines: int = DEFAULT_MAX_LINES,
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
 ) -> str | None:
-    """Summarize a transcript via gpt-4o-mini chat completion.
+    """Summarize a transcript via a cheap chat-completions model.
 
     Returns the summary string on success, or `None` if the transcript is
     empty, the API call fails, or the model returns no content. Callers
@@ -130,8 +133,10 @@ async def summarize_transcript(
                 {"role": "system", "content": summary_prompt_for(language)},
                 {"role": "user", "content": transcript},
             ],
-            max_tokens=max_output_tokens,
-            temperature=0.3,
+            max_completion_tokens=max_output_tokens,
+            # Summaries are extraction, not reasoning; "none" halves latency
+            # and keeps reasoning tokens from eating the output budget.
+            reasoning_effort="none",
         )
     except Exception:
         await logger.aexception("summarize.failed")

@@ -11,9 +11,11 @@ The threshold structure is intentionally three-tier:
 - `kill_switch` — about 100x normal; "stop now, do not let this run"
 
 Daily totals persist to `Storage.set_setting` under
-`cost:YYYY-MM-DD:cents` so warnings survive restarts and the kill-switch
-state is recoverable. Cents are stored as integers to avoid float
-serialization drift.
+`cost:YYYY-MM-DD:micro_usd` so warnings survive restarts and the
+kill-switch state is recoverable. Stored as integer micro-dollars: no
+float drift, and a $0.004 response still counts. (Whole cents, used
+before 2026-10-10, rounded every sub-half-cent response to zero, which
+on mini models is most of them.)
 
 See docs/triage.md T2.2.
 """
@@ -172,21 +174,19 @@ class CostTracker:
             return
 
         today = self._clock().strftime("%Y-%m-%d")
-        cents_key = f"cost:{today}:cents"
+        total_key = f"cost:{today}:micro_usd"
         warned_key = f"cost:{today}:warned"
 
-        prev_cents_str = await self._storage.get_setting(cents_key, default="0")
-        prev_cents = int(prev_cents_str or "0")
-        delta_cents = round(cost_usd * 100)
-        new_cents = prev_cents + delta_cents
-        await self._storage.set_setting(cents_key, str(new_cents))
+        prev_str = await self._storage.get_setting(total_key, default="0")
+        new_micro = int(prev_str or "0") + round(cost_usd * 1_000_000)
+        await self._storage.set_setting(total_key, str(new_micro))
 
-        new_total_usd = new_cents / 100
+        new_total_usd = new_micro / 1_000_000
         await logger.ainfo(
             "cost.response_done",
             model=self._model,
             cost_usd=round(cost_usd, 4),
-            day_total_usd=round(new_total_usd, 2),
+            day_total_usd=round(new_total_usd, 4),
         )
 
         await self._check_thresholds(warned_key, new_total_usd)

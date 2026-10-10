@@ -134,25 +134,19 @@ class TestAudiobookPlayBasic:
 
         # Fixture usage: 1500 text in + 30 audio in + 8 text out + 60 audio out
         # mini: 1500*0.60/1M + 30*10/1M + 8*2.40/1M + 60*20/1M
-        #     = 0.0009 + 0.0003 + 0.0000192 + 0.0012 = 0.0024192 USD = 0 cents (rounded down)
-        # Actually round() banker-rounds 0.24 cents to 0. Tracker stores 0
-        # cents because `delta_cents = round(0.0024192 * 100) = 0`.
-        # The cents key may not even be written in that case (record returns
-        # early on cost_usd > 0 check though, since the float is positive).
-        # Let's look up what's there.
-        cents_keys: list[str] = []
+        #     = 0.0009 + 0.0003 + 0.0000192 + 0.0012 = 0.0024192 USD = 2419 micro-USD
+        # Under the old whole-cent storage this rounded to 0 and the test
+        # asserted 0; the sub-cent response now counts.
+        keys: list[str] = []
         cursor = await storage._conn.execute(
-            "SELECT key FROM settings WHERE key LIKE 'cost:%:cents'"
+            "SELECT key FROM settings WHERE key LIKE 'cost:%:micro_usd'"
         )
         async for row in cursor:
-            cents_keys.append(row[0])
-        # Either 0 keys (tracker wrote 0 cents) or 1 key with value "0".
-        # Both prove the path was exercised; the math is verified in
-        # test_cost.py.
-        if cents_keys:
-            cents_str = await storage.get_setting(cents_keys[0])
-            assert cents_str is not None
-            assert int(cents_str) == 0
+            keys.append(row[0])
+        assert len(keys) == 1
+        stored = await storage.get_setting(keys[0])
+        assert stored is not None
+        assert int(stored) == 2419
 
 
 class TestLoaderHandlesCommentsAndBlankLines:

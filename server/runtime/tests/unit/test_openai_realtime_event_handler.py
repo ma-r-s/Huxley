@@ -296,18 +296,18 @@ class TestHandleResponseDone:
             }
         )
 
-        # Cost tracker writes a non-zero cents key for today.
-        # Cost = 10k*0.60/1M + 1k*20/1M = 0.006 + 0.02 = 0.026 USD = 3 cents (rounded)
-        cents_keys = []
+        # Cost tracker writes today's micro-dollar total.
+        # Cost = 10k*0.60/1M + 1k*20/1M = 0.006 + 0.02 = 0.026 USD = 26000 micro-USD
+        keys = []
         cursor = await storage._conn.execute(
-            "SELECT key FROM settings WHERE key LIKE 'cost:%:cents'"
+            "SELECT key FROM settings WHERE key LIKE 'cost:%:micro_usd'"
         )
         async for row in cursor:
-            cents_keys.append(row[0])
-        assert len(cents_keys) == 1
-        cents_str = await storage.get_setting(cents_keys[0])
-        assert cents_str is not None
-        assert int(cents_str) == 3
+            keys.append(row[0])
+        assert len(keys) == 1
+        stored = await storage.get_setting(keys[0])
+        assert stored is not None
+        assert int(stored) == 26_000
 
         mocks["on_response_done"].assert_awaited_once()
 

@@ -164,37 +164,52 @@ def _tracker(
 
 
 class TestCostTrackerAccumulates:
-    async def test_records_cents_to_storage(self, storage: Storage) -> None:
+    async def test_records_micro_usd_to_storage(self, storage: Storage) -> None:
         tr = _tracker(storage)
         await tr.record(USAGE_SIMPLE)
 
-        cents_str = await storage.get_setting("cost:2026-04-18:cents")
-        # USAGE_SIMPLE on mini = 0.00572 USD = 1 cent rounded
-        assert cents_str is not None
-        assert int(cents_str) == 1
+        stored = await storage.get_setting("cost:2026-04-18:micro_usd")
+        # USAGE_SIMPLE on mini = 0.00572 USD = 5720 micro-dollars
+        assert stored is not None
+        assert int(stored) == 5720
+
+    async def test_sub_cent_responses_add_up_and_cross_warn(self, storage: Storage) -> None:
+        # Regression: whole-cent rounding stored round(0.4) == 0 for every
+        # sub-half-cent response, so a day of cheap mini responses never
+        # reached any threshold. 150 x $0.004 = $0.60 must cross warn ($0.50).
+        tr = _tracker(storage)
+        cheap = {"output_token_details": {"audio_tokens": 200}}  # 200*20/1M = $0.004
+        for _ in range(150):
+            await tr.record(cheap)
+
+        stored = await storage.get_setting("cost:2026-04-18:micro_usd")
+        assert stored is not None
+        assert int(stored) == 600_000
+        warned = await storage.get_setting("cost:2026-04-18:warned")
+        assert warned is not None
+        assert "warn" in warned.split(",")
 
     async def test_accumulates_across_records(self, storage: Storage) -> None:
         tr = _tracker(storage)
-        # Make each record cross the cent boundary clearly.
         big_usage = {
             "input_token_details": {"text_tokens": 100_000},
             "output_token_details": {"audio_tokens": 100_000},
         }
-        # Per record: 100k*0.60/1M + 100k*20/1M = 0.06 + 2 = 2.06 USD = 206 cents
+        # Per record: 100k*0.60/1M + 100k*20/1M = 0.06 + 2 = 2.06 USD
         await tr.record(big_usage)
         await tr.record(big_usage)
 
-        cents_str = await storage.get_setting("cost:2026-04-18:cents")
-        assert cents_str is not None
-        assert int(cents_str) == 412  # 206 * 2
+        stored = await storage.get_setting("cost:2026-04-18:micro_usd")
+        assert stored is not None
+        assert int(stored) == 4_120_000  # 2.06 USD * 2
 
     async def test_zero_cost_record_is_noop(self, storage: Storage) -> None:
         tr = _tracker(storage)
         await tr.record({"input_token_details": {}, "output_token_details": {}})
 
         # Storage key never written.
-        cents_str = await storage.get_setting("cost:2026-04-18:cents")
-        assert cents_str is None
+        stored = await storage.get_setting("cost:2026-04-18:micro_usd")
+        assert stored is None
 
     async def test_per_day_keys_are_independent(self, storage: Storage) -> None:
         clock = _FixedClock("2026-04-18")
@@ -209,10 +224,10 @@ class TestCostTrackerAccumulates:
         clock.advance_to("2026-04-19")
         await tr.record(big)
 
-        d1 = await storage.get_setting("cost:2026-04-18:cents")
-        d2 = await storage.get_setting("cost:2026-04-19:cents")
-        assert d1 is not None and int(d1) == 206
-        assert d2 is not None and int(d2) == 206
+        d1 = await storage.get_setting("cost:2026-04-18:micro_usd")
+        d2 = await storage.get_setting("cost:2026-04-19:micro_usd")
+        assert d1 is not None and int(d1) == 2_060_000
+        assert d2 is not None and int(d2) == 2_060_000
 
 
 class TestCostTrackerThresholds:
