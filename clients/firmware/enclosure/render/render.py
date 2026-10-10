@@ -43,7 +43,7 @@ EXTRA_VIEWS = {
     },
 }
 
-FROSTED_BACK_PREVIEW = {"hx1"}
+FROSTED_BACK_PREVIEW: set[str] = set()  # HX-1 now models its frosted back
 
 # Per-concept camera azimuth for the hero shot (deg, 0 = straight at the front).
 HERO_AZ = {"hx1a": -38, "hx1": 36, "hx2": -32, "hx3": -28, "hx4": -40}
@@ -98,6 +98,7 @@ def build_materials():
         rubber=mat("rubber", (0.015, 0.015, 0.015), 0.9),
         screw=mat("steel", (0.6, 0.6, 0.62), 0.3, metal=1.0),
         pcb=mat("pcb", (0.02, 0.1, 0.32), 0.35),
+        pcb_green=mat("pcb green", (0.02, 0.22, 0.06), 0.35),
         metal=mat("nickel", (0.7, 0.7, 0.72), 0.25, metal=1.0),
         black=mat("plastic black", (0.02, 0.02, 0.02), 0.4),
         white=mat("led", (0.9, 0.9, 0.85), 0.3),

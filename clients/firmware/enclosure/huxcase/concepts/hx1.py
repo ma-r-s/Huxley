@@ -62,6 +62,12 @@ H = BOARD_Z + hw.PCB_R + 0.3 + 0.1 + T
 # Board +x -> device -Z, board +y -> device +X, board +z (top face) -> device -Y.
 BOARD_LOC = Location((X0, BOARD_TOP_Y, BOARD_Z)) * Rot(90, 0, 0) * Rot(0, 0, -90)
 CAP_Z = 97.0  # frosted top cap from here up
+BACK_FROST_Z = 36.0  # the back (and the sides' back half) is frosted from here up
+# KCD1-101 rocker on the left side, above the left cell, fully recessed: the
+# back had only 20 mm of depth behind it before the light ring.
+ROCKER_Y, ROCKER_Z, ROCKER_RECESS = 5.3, 91.5, 7.2  # rocker top 0.2 below the surface
+# Reserved pocket for a 1S protection board, in the grey bottom third behind the speaker.
+PROT_X, PROT_Y, PROT_Z = 6.0, 10.75, 23.0
 
 # PTT lever on the right side.
 X_OUT = W / 2
@@ -116,7 +122,9 @@ def _bar(grow: float = 0.0):
         slab = fillet(slab.edges().filter_by(Axis.X), 3.0)
         slab = fillet(slab.edges().group_by(Axis.X)[-1], 0.8)
     knuckle = (
-        Pos(PIVOT_X, SWITCH_Y, PIVOT_Z) * Rot(90, 0, 0) * Cylinder(2.0 + g, BAR_W - 6.0 + 2 * g)  # 12 mm knuckle: an M2 x 16 + nut spans it
+        Pos(PIVOT_X, SWITCH_Y, PIVOT_Z)
+        * Rot(90, 0, 0)
+        * Cylinder(2.0 + g, BAR_W - 6.0 + 2 * g)  # 12 mm knuckle: an M2 x 16 + nut spans it
     )
     web = bbox_solid(
         PIVOT_X - g,
@@ -256,7 +264,9 @@ def build() -> Concept:
         s = _pressed(_bar(grow=CLEAR), k / 10)
         channel = s if channel is None else channel + s
     body -= channel
-    pin = Pos(PIVOT_X, SWITCH_Y, PIVOT_Z) * Rot(90, 0, 0) * Cylinder(1.0, BAR_W - 3.0)  # M2 x 16 screw as the pin
+    pin = (
+        Pos(PIVOT_X, SWITCH_Y, PIVOT_Z) * Rot(90, 0, 0) * Cylinder(1.0, BAR_W - 3.0)
+    )  # M2 x 16 screw as the pin
     bar = _bar() - Pos(PIVOT_X, SWITCH_Y, PIVOT_Z) * Rot(90, 0, 0) * Cylinder(1.1, 40)
 
     # 12 x 12 tactile switch in a cradle above the right cell. The lever
@@ -310,11 +320,51 @@ def build() -> Concept:
     body -= on_front(label("huxley", 2.4), 6.0, Y_FRONT, CAP_Z - 4.2)
     body -= on_front(label("HX-1", 3.2), -20.0, Y_FRONT, CAP_Z - 4.4)
 
+    # KCD1-101 on the left side: a mount inside the wall gives it a 1.5 mm
+    # panel at the bottom of a 6 mm recess, so the rocker sits below the surface.
+    panel_x = -W / 2 + ROCKER_RECESS
+    by, bz = hw.ROCKER_BEZEL[0] / 2, hw.ROCKER_BEZEL[1] / 2  # long side along Y
+    mount = (
+        bbox_solid(
+            -W / 2 + T - 0.1,
+            panel_x + 1.5,
+            max(ROCKER_Y - by - 1.7, PCB_BOTTOM_Y + CELL_GAP + 0.1),  # stay behind the board
+            ROCKER_Y + by + 1.7,
+            ROCKER_Z - bz - 1.7,
+            ROCKER_Z + bz + 1.7,
+        )
+        & inner
+    )
+    body += mount
+    body -= bbox_solid(
+        -W / 2 - 1,
+        panel_x,
+        ROCKER_Y - by - 0.5,
+        ROCKER_Y + by + 0.5,
+        ROCKER_Z - bz - 0.5,
+        ROCKER_Z + bz + 0.5,
+    )
+    cy_, cz = hw.ROCKER_BODY[0] / 2, hw.ROCKER_BODY[1] / 2
+    body -= bbox_solid(
+        panel_x - 0.1,
+        panel_x + 1.6,
+        ROCKER_Y - cy_ - 0.1,
+        ROCKER_Y + cy_ + 0.1,
+        ROCKER_Z - cz - 0.1,
+        ROCKER_Z + cz + 0.1,
+    )
+    # local +z (outward) -> device -X, local x (long side) -> device Y
+    rocker_loc = Location((panel_x, ROCKER_Y, ROCKER_Z)) * Rot(0, -90, 0) * Rot(0, 0, 90)
+    rocker = hw.place(hw.rocker(), rocker_loc)
+
+    # Shells: grey front; back grey below BACK_FROST_Z; frosted upper back + top cap.
     seam_y = PCB_BOTTOM_Y + 1.0
     lower = body & bbox_solid(-60, 60, -60, 60, -10, CAP_Z - 0.15)
     cap = body & bbox_solid(-60, 60, -60, 60, CAP_Z + 0.15, 200)
     front = lower & bbox_solid(-60, 60, -60, seam_y - 0.15, -10, 200)
-    back = lower & bbox_solid(-60, 60, seam_y + 0.15, 60, -10, 200)
+    back_all = lower & bbox_solid(-60, 60, seam_y + 0.15, 60, -10, 200)
+    back = back_all & bbox_solid(-60, 60, -60, 60, -10, BACK_FROST_Z - 0.15)
+    frosted = cap + (back_all & bbox_solid(-60, 60, -60, 60, BACK_FROST_Z + 0.15, 200))
 
     # Hardware.
     board = hw.place(hw.board_parts(), BOARD_LOC, "board_")
@@ -346,6 +396,15 @@ def build() -> Concept:
     bat_x, spk_x = to_device(17.81, -6.04)[0], to_device(17.81, 5.19)[0]
     plug_z = to_device(17.81, 0)[1]
     plug_y = PCB_BOTTOM_Y + hw.BOTTOM_CONN
+    rocker_tab_x = panel_x + hw.ROCKER_BODY[2] + hw.ROCKER_TABS - 0.5
+    prot = bbox_solid(
+        X0 + PROT_X - hw.PROTECTION_PCB[1] / 2,
+        X0 + PROT_X + hw.PROTECTION_PCB[1] / 2,
+        PROT_Y - hw.PROTECTION_PCB[2] / 2,
+        PROT_Y + hw.PROTECTION_PCB[2] / 2,
+        PROT_Z - hw.PROTECTION_PCB[0] / 2,
+        PROT_Z + hw.PROTECTION_PCB[0] / 2,
+    )
     tab_y = SPK_FRONT_Y + SPK_TAB_DEPTH + 0.6
     cables = {
         "cable_spk": hw.cable(
@@ -357,24 +416,43 @@ def build() -> Concept:
                 (X0, tab_y, SPK_Z + SPK_TAB_R + 1.0),
             ]
         ),
+        # + : plug -> rocker -> top bridge, hugging the board side of the channel.
         "cable_bat_pos": hw.cable(
             [
                 (bat_x, plug_y, plug_z),
-                (bat_x, plug_y + 3.5, plug_z + 1.0),
-                (X0 - 3.0, 9.0, plug_z + 12.0),
-                (X0, 9.5, CELL_TOP - 3.0),
-                (X0, CELL_Y + 2.0, CELL_TOP + 0.4),
+                (bat_x, plug_y + 3.0, plug_z + 1.5),
+                (X0 - 7.0, 0.8, plug_z + 15.0),
+                (rocker_tab_x + 1.5, 1.6, CELL_TOP + 1.5),
+                (rocker_tab_x + 0.5, ROCKER_Y - hw.ROCKER_TAB_PITCH / 2, ROCKER_Z - 1.5),
+                (rocker_tab_x, ROCKER_Y - hw.ROCKER_TAB_PITCH / 2, ROCKER_Z),
             ],
             d=1.2,
         ),
+        "cable_bat_sw": hw.cable(
+            [
+                (rocker_tab_x, ROCKER_Y + hw.ROCKER_TAB_PITCH / 2, ROCKER_Z),
+                (rocker_tab_x + 0.5, ROCKER_Y + hw.ROCKER_TAB_PITCH / 2, ROCKER_Z - 3.0),
+                (rocker_tab_x - 3.0, CELL_Y + 0.5, CELL_TOP + 2.2),
+                (X0 - CELL_X + 4.0, CELL_Y, CELL_TOP + 0.9),
+            ],
+            d=1.2,
+        ),
+        # - : plug -> protection board (P-) ... (B-) -> bottom bridge, behind the speaker.
         "cable_bat_neg": hw.cable(
             [
                 (bat_x - 1.2, plug_y, plug_z),
-                (bat_x - 1.5, plug_y + 3.5, plug_z - 2.0),
-                (X0 - 4.0, 10.0, plug_z - 14.0),
-                (X0 - 2.0, 10.5, SPK_Z),
-                (X0, 9.0, CELL_Z0 + 3.0),
-                (X0, CELL_Y + 2.0, CELL_Z0 - 0.4),
+                (bat_x - 1.5, plug_y + 3.0, plug_z - 2.0),
+                (X0 - 5.0, 1.5, BACK_FROST_Z + 6.0),
+                (X0 + PROT_X - 1.0, PROT_Y - 3.0, PROT_Z + 15.0),
+                (X0 + PROT_X, PROT_Y - 2.4, PROT_Z + hw.PROTECTION_PCB[0] / 2 - 1.0),
+            ],
+            d=1.2,
+        ),
+        "cable_bat_neg2": hw.cable(
+            [
+                (X0 + PROT_X, PROT_Y - 2.4, PROT_Z - hw.PROTECTION_PCB[0] / 2 + 1.0),
+                (X0 + PROT_X - 2.0, PROT_Y - 2.0, CELL_Z0 + 2.5),
+                (X0 + 2.0, CELL_Y + 1.0, CELL_Z0 - 0.4),
             ],
             d=1.2,
         ),
@@ -407,7 +485,9 @@ def build() -> Concept:
     parts = [
         Part("shell_front", front, "shell"),
         Part("shell_back", back, "shell"),
-        Part("top_cap", cap, "translucent"),
+        Part("frosted_back", frosted, "translucent"),
+        *rocker,
+        Part("protection_pcb", prot, "pcb_green"),
         Part("light_ring", ring, "glow"),
         Part("face_panel", face_panel, "shell_dark"),
         Part("standoffs", standoffs, "shell_inner"),
@@ -429,6 +509,8 @@ def build() -> Concept:
         Part("cable_spk", cables["cable_spk"], "wire_black"),
         Part("cable_bat_pos", cables["cable_bat_pos"], "wire_red"),
         Part("cable_bat_neg", cables["cable_bat_neg"], "wire_black"),
+        Part("cable_bat_neg2", cables["cable_bat_neg2"], "wire_black"),
+        Part("cable_bat_sw", cables["cable_bat_sw"], "wire_red"),
         Part("cable_ptt_a", cables["cable_ptt_a"], "wire_white"),
         Part("cable_ptt_b", cables["cable_ptt_b"], "wire_white"),
     ]
@@ -447,6 +529,8 @@ def build() -> Concept:
         "bar_sweep": sweep,
         "bridge_top": bridge_top,
         "bridge_bottom": bridge_bot,
+        "rocker": rocker[2].shape + rocker[3].shape,
+        "protection_pcb": prot,
         **cables,
     }
     shells = {
@@ -468,12 +552,19 @@ def build() -> Concept:
         ("spring", "body"),  # seated in its pocket
         ("spring", "bar_sweep"),  # it is what the lever compresses
         ("bar_sweep", "spring"),
-        ("bridge_top", "cable_bat_pos"),
-        ("bridge_bottom", "cable_bat_neg"),
+        ("bridge_top", "cable_bat_sw"),
+        ("bridge_bottom", "cable_bat_neg2"),
+        ("rocker", "body"),  # clipped into its panel
+        ("rocker", "cable_bat_pos"),  # soldered to its tabs
+        ("rocker", "cable_bat_sw"),
+        ("protection_pcb", "cable_bat_neg"),  # soldered to its pads
+        ("protection_pcb", "cable_bat_neg2"),
+        ("cable_bat_pos", "cable_bat_sw"),
         ("cable_spk", "board"),  # leads start in the plug zone
         ("cable_bat_pos", "board"),
         ("cable_bat_neg", "board"),
         ("cable_bat_pos", "cable_bat_neg"),  # same lead out of one plug
+        ("cable_bat_neg", "cable_bat_neg2"),
         ("cable_ptt_a", "board"),  # soldered to the header tails
         ("cable_ptt_b", "board"),
         ("cable_ptt_a", "cable_ptt_b"),

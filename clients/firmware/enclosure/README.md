@@ -67,22 +67,47 @@ button (green cap not used) and a 0.4 x 4 x 15 mm spring from the SciWil kit.
   through-hole tails on the board's back (one free GPIO, GPIO3 to GPIO9,
   plus GND).
 
-## The light: frosted ring + frosted cap
+## The light: frosted back, frosted cap, light ring
 
-The board's 7 WS2812B LEDs face backward, toward the cells. A flat frosted PLA
-ring (r 20.8 to 29, 2.5 mm) sits right on them behind the PCB, clamped by the
-board's own three M2.5 screws, with notches for the BAT/SPK plugs and the RTC
-socket. It carries the light up to a frosted cap: the top 7 mm of the case
-(`CAP_Z`), printed in the same frosted PLA, so the top of the device glows.
-The ring's back face clears the cells by 0.5 mm (a test asserts it).
+The board's 7 WS2812B LEDs face backward, toward the cells (the mics are on
+the other face and must face the user). Mario's call (2026-10-10): print the
+top cap **and the upper two-thirds of the back** (`BACK_FROST_Z` = 36 mm up,
+including the sides' back half) in his frosted PLA. Same size as before; the
+light shows through the top and the back, strongest above the cells and in
+the channel between them, with the cells visible as soft shadows.
+
+A flat frosted ring (r 20.8 to 29, 2.5 mm) sits right on the LEDs behind the
+PCB, clamped by the board's three screws, with notches for the BAT/SPK plugs
+and the RTC socket. It spreads all 7 LEDs into a glow instead of 7 dots and
+feeds the cap. The ring's back face clears the cells by 0.5 mm (a test).
+
+## Power switch: KCD1-101 on the left side
+
+Recessed 7.2 mm in the left side above the left cell, where there is ~38 mm
+of depth behind the board (the back had only 20 mm before the light ring, so
+a back-mounted rocker would have stood 4 mm proud and added depth). Wired in
+the battery + lead between the BAT plug and the top contact bridge. Power on
+the left, talk on the right: easy to tell apart by touch. A test asserts it
+stays below the surface.
+
+## Battery protection: pocket reserved, not fitted
+
+Mario chose to skip it for now. The board has no cell protection (see
+MEASUREMENTS), so a 26 x 5 x 3.5 mm pocket in the grey bottom third, behind
+the speaker, is reserved for a 1S board (DW01 + 8205) in the - lead. Until
+then the firmware should shut the device down at a safe cell voltage via
+`BAT_ADC` (GPIO1).
 
 ## Cables: the channel is the duct
+
+In the frosted zone the leads run close to the board (y ~0 to 2 mm), as far
+from the frosted back as possible, so they read as one soft spine.
 
 | Run | From | To | Path |
 | --- | --- | --- | --- |
 | Speaker | SPK plug (board back) | solder tabs on the speaker rim | straight down the channel; mount the speaker so its tabs point up |
-| Battery + | BAT plug | top contact bridge | up the channel to the strip joining both + terminals |
-| Battery − | BAT plug | bottom contact bridge | down the channel behind the speaker magnet |
+| Battery + | BAT plug | rocker, then the top contact bridge | up the channel close to the board, over the left cell's top to the rocker |
+| Battery − | BAT plug | protection pocket, then the bottom bridge | down the channel; behind the speaker magnet only in the grey bottom third |
 | PTT (2) | mouse switch pins | header tails on the board back | above the right cell, behind the light ring |
 
 The two cells are in **parallel (1S2P)**: same model, protected, charged to the

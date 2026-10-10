@@ -61,3 +61,12 @@ def test_hx1_light_ring_clears_cells():
 
     ring_back_y = hx1.BOARD_TOP_Y - hx1.RING_Z1
     assert ring_back_y < hx1.CELL_Y - hx1.hw.CELL_BAY_D / 2
+
+
+def test_hx1_rocker_sits_below_the_side_surface():
+    """The KCD1-101 is recessed: nothing of it stands past the left side."""
+    from huxcase.concepts import hx1
+
+    c = hx1.build()
+    rocker = [p.shape for p in c.parts if p.name.startswith("rocker_")]
+    assert min(r.bounding_box().min.X for r in rocker) >= -hx1.W / 2

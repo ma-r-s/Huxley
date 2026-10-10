@@ -88,7 +88,7 @@ power-path MOSFETs, but I found no cell-protection IC (no DW01-class part).
 | 12 x 12 tactile switch | body 12 x 12 x 4.0, round stem Ø3.5 standing 3.3 proud, actuation ~2 N / 0.25 mm | `TACT_*` |
 | Series spring (SciWil) | 0.4 wire x 4 OD x 15 free, 10 coils, ~0.59 N/mm | `SERIES_SPRING_*` |
 | Lever pin | M2 x 16 screw + nut | `_bar`, `pin` |
-| KCD1-101 rocker | 21 x 15 bezel, 19 x 13 cutout, ~18 deep incl. terminals (not placed yet) | - |
+| KCD1-101 rocker | 21 x 15 bezel, 19 x 13 body x 11.5, 6 mm tabs 6 mm apart, rocker 5 mm above the bezel | `ROCKER_*` |
 | 18650 cells | green wrap, probably Sony/Murata VTC: unprotected, flat top, 65 mm | `CELL_*` (bay still 74) |
 
 ## Battery protection
@@ -97,7 +97,8 @@ The board's charger (ETA6098) only manages charging. Nothing on the board
 limits a short circuit or stops a deep discharge: the schematic shows no
 protection IC (no DW01-class part), only the charger and two power-path
 MOSFETs. Waveshare's own LiPo has its protection board inside the pack, which
-is why the board omits it. Bare 18650s therefore need a 1S protection board
+is why the board omits it. Mario chose to skip it for now (pocket reserved in
+the case). Bare 18650s properly need a 1S protection board
 (DW01 + 8205 class) between the cells and the BAT socket, or protected
 cells. Firmware can add a low-voltage shutdown via `BAT_ADC` (GPIO1), which
 covers deep discharge but not shorts.

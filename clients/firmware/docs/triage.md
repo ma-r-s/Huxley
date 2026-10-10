@@ -82,6 +82,15 @@ socket is 1.25 mm pitch (his kit is 2.5 mm XH). Open: he expected the LED
 face toward a frosted back; that conflicts with the mics on the other face
 and the cells sharing depth with the board. Three options put to him.
 
+**Frosted back + rocker (2026-10-10)**: Mario: the frosted cap should
+continue down the upper two-thirds of the back, no size change (I had
+misread it as "board at the back" and first quoted a wrong "few mm" cost
+for that; corrected before building). Done: frosted region from z 36 up on
+the back shell + cap; cables pulled toward the board in that zone. KCD1-101
+moved from the back (would stand 4 mm proud, no depth behind it) to the left
+side, fully recessed (test). Protection: Mario skipped it; pocket reserved,
+firmware low-voltage shutdown noted in the firmware README.
+
 **Decisions waiting on Mario**: (resolved: HX-1 Duo is the build, speaker at the bottom is fine); dock yes/no; volume buttons
 yes/no; plus measurements of the speaker cable, the 18650 he will use and a
 look at the mic ports.

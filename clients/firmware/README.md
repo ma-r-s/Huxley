@@ -123,7 +123,10 @@ reach it from the LAN, set `HUXLEY_SERVER_HOST=0.0.0.0` in
   soldered to the header's through-hole tails; `K2` stays as the bench
   fallback (see F-0010 in `docs/triage.md`)
 - State light: the case pipes the 7 WS2812 LEDs (GPIO38) into a frosted top
-  cap, so listening / thinking / speaking / low battery can show as colours
+  cap and frosted upper back, so listening / thinking / speaking / low
+  battery can show as colours
+- Low-battery shutdown: the HX-1 cells have no protection board (Mario's
+  call), so read `BAT_ADC` (GPIO1) and deep-sleep below a safe cell voltage
 - Mic → base64-in-JSON `audio` frames while PTT held
 - Inbound `audio` → speaker playback queue
 - State LED via the onboard WS2812

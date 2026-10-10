@@ -292,3 +292,34 @@ def tact_switch() -> list[Part]:
         Part("tact_stem", stem, "black"),
         Part("tact_legs", legs, "metal"),
     ]
+
+
+# --- KCD1-101 rocker (Mario's on/off), assumed generic until measured ----------
+# Bezel 21 x 15 x 2 outside the panel, snap body 19 x 13 x 11.5 behind it,
+# two 6 mm solder tabs 6 mm apart, rocker standing ~5 mm above the bezel.
+ROCKER_BEZEL = (21.0, 15.0, 2.0)
+ROCKER_BODY = (19.0, 13.0, 11.5)
+ROCKER_TABS, ROCKER_TAB_PITCH, ROCKER_CAP = 6.0, 6.0, 5.0
+
+# 1S Li-ion protection board (DW01 + 8205 class): reserved, not fitted.
+PROTECTION_PCB = (26.0, 5.0, 3.5)
+
+
+def rocker() -> list[Part]:
+    """Local frame: panel (outer face of the wall it clips into) at z = 0,
+    bezel and rocker outward (+z), body and tabs inward (-z); long side along x."""
+    bx, by, bz = ROCKER_BEZEL
+    cx, cy, cz = ROCKER_BODY
+    bezel = Pos(0, 0, bz / 2) * Box(bx, by, bz)
+    cap = Pos(0, 0, bz + ROCKER_CAP / 2) * Box(bx - 4.0, by - 4.0, ROCKER_CAP)
+    body = Pos(0, 0, -cz / 2) * Box(cx, cy, cz)
+    tabs = None
+    for sx in (-1, 1):
+        t = Pos(sx * ROCKER_TAB_PITCH / 2, 0, -cz - ROCKER_TABS / 2) * Box(0.8, 4.8, ROCKER_TABS)
+        tabs = t if tabs is None else tabs + t
+    return [
+        Part("rocker_bezel", bezel, "black"),
+        Part("rocker_cap", cap, "black"),
+        Part("rocker_body", body, "black"),
+        Part("rocker_tabs", tabs, "metal"),
+    ]
