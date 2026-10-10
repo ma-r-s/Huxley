@@ -98,6 +98,20 @@ The server takes **one client at a time**: a newer connection evicts the older o
 
 iOS rules the PWA works around (details in `clients/pwa/src/lib/audio/capture.ts`): only a finger *lift* counts as a gesture, so the mic is acquired on the first lift or press of each launch and then kept muted between turns; iOS asks for mic permission once per launch of a home-screen app; reconnects happen automatically when the app returns to the foreground. If a phone misbehaves, start from `client.device` and the `client.mic_*` / `client.playback_*` lines in the server log (see `docs/observability.md`).
 
+### As a native iOS app (Capacitor)
+
+`clients/pwa/ios/` wraps the same web app in a native shell. Why: a home-screen web app asks for the microphone on every launch; the native app asks once per install, and its web view auto-grants the page's mic request and lets audio play without a tap.
+
+Dev loop, no reinstall for web changes: the app loads the live Vite dev server, so edits hot-reload on the phone.
+
+```bash
+cd clients/pwa
+CAP_SERVER_URL=https://<mac-name>.<tailnet>.ts.net:8443 bun run ios:sync   # point the app at the dev server
+bun run ios:open                                                            # Xcode: pick the phone, Run (once)
+```
+
+Reinstall only when native config changes (Info.plist, plugins, `capacitor.config.ts`). Without `CAP_SERVER_URL`, `ios:sync` bundles `dist/` (run `bun run build` first). Building needs the iOS platform installed in Xcode (Settings > Components) and, for a real phone, an Apple ID under Xcode > Settings > Accounts.
+
 ### Testing on the iOS simulator without kicking the phone off
 
 A second server + PWA pair, isolated so it can't load the real persona's Telegram session:
