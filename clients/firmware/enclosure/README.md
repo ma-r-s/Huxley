@@ -188,6 +188,7 @@ huxcase/concept.py       Concept container + collision (fit) check + cavity volu
 huxcase/concepts/hx*.py  one module per concept, Z up, front face at -Y (hx1.py = HX-1, hx1_classic.py = rev A)
 huxcase/export.py        build all, refuse on collision, write out/
 huxcase/fits.py          every clearance (P2S, PLA, 0.4 nozzle); huxcase/coupon.py prints a test of them
+huxcase/site.py          the HX-1 build page: per-part glTF + assembly steps (site/index.html is the page)
 render/render.py         Blender Cycles renders from out/*.glb: hero, back, x-ray, plus section views (switch, open back)
 tests/                   fit check per concept + board model vs the official STEP
 MEASUREMENTS.md          every dimension with its source
@@ -203,9 +204,12 @@ uv run python -m huxcase.export            # out/<id>.glb, out/<id>.step, out/we
 uv run --group dev pytest -q               # fit checks + STEP comparison (needs reference/)
 /Applications/Blender.app/Contents/MacOS/Blender --background \
   --python render/render.py -- out/ out/renders/          # add --quick for previews
+uv run python -m huxcase.site           # out/site/: the interactive HX-1 build page (spin, explode, x-ray, build)
 ```
 
-`out/` is gitignored; everything in it regenerates from the code.
+`out/` is gitignored; everything in it regenerates from the code. The build page is published as a
+private artifact from `out/site/` (index.html + hx1.gltf.json); `preview.html` is the same page for
+a local static server. Every HX-1 part must belong to a build step (`site.STEPS`, tested).
 
 ## How the fit check works
 
