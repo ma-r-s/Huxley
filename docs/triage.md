@@ -5032,7 +5032,7 @@ Result: StrictMode dev runs the same lifecycle, but only one server-side connect
 - **Country code is persona data, not framework primitive.** Resisted promoting to a framework-level `locale.country` field — only Telegram needs it today, premature to abstract.
 - **Phone validation is fundamentally country-dependent.** E.164 (`+\d{7,15}`) is the global truth and stays. Country-specific tightening (digit-count rules per country) belongs in libphonenumber territory; deferred until we hit a case the heuristic miss.
 
-## T1.25 — OpenAI shut down our Realtime model and the beta interface (Huxley is down)
+## T1.25: OpenAI shut down our Realtime model and the beta interface (Huxley is down)
 
 **Status**: `in_progress` (2026-10-10, code shipped; awaiting Mario browser smoke) · **Effort**: ~3h (wire-format migration, contained to `huxley/voice/` + cost table)
 
@@ -5070,5 +5070,48 @@ Result: StrictMode dev runs the same lifecycle, but only one server-side connect
 - **Pin the third-party wire contract in a test.** The suite was green for five months of total outage because nothing asserted what we send to OpenAI. A payload-shape test is cheap and is the only thing that ties our code to the provider's current contract.
 - **A provider deprecation is a production incident with a date on it.** OpenAI announced both shutdowns in September 2025. Nobody was watching. Follow-up candidate: a weekly check that `GET /v1/models/$HUXLEY_OPENAI_MODEL` returns 200, with an audible alert for the Abuelo deployment.
 - **Error hints must name every cause that produces the error.** "Add credits" sent the diagnosis the wrong way for exactly the failure we hit.
+
+---
+
+## T1.26: GPT-Live, reshape Huxley around it, or use it as a skill?
+
+**Status**: `queued` (2026-10-10, needs Mario's product call) · **Effort**: experiment ~1 day / <$5; skill ~1 week; core reshape several weeks
+
+**Question (Mario, 2026-10-10).** OpenAI's GPT-Live (openai.com/index/introducing-gpt-live, July 2026) is full duplex and does tool work through delegation. Should Huxley reshape into "a hardware device that uses GPT-Live plus tool calls" while keeping everything Huxley does?
+
+**Facts (developers.openai.com, read 2026-10-10).**
+- `gpt-live-1` is in the API at `v1/live/sessions` (WebRTC, WebSocket, SIP, plus a server "sideband"). Our key has access.
+- Billed **$0.05 per minute of open session**, per second, silence included; muting the mic still bills. Backend model tokens on top. Realtime (T1.25) bills per response, so an idle session costs $0.
+- The voice model never calls tools itself. It **delegates**: either OpenAI runs a Responses model with our function tools ("Responses delegation"), or our server is the backend ("client delegation") and feeds results back with `session.commentary.append` (spoken), `session.thinking.append` (silent) or `session.instructions.append`. Max 500 tokens per append.
+- No manual turns and **no end-of-spoken-response event**: "GPT-Live decides when to speak; remove manual audio commits." Transcript deltas carry no item IDs.
+- Voices: default `marin`; the GPT-Live voice list is English and Brazilian Portuguese only, with a warning about accents and fluency gaps in some languages. Abuelo is Spanish on `coral`.
+- Docs recommend closing idle sessions and reopening on push-to-talk; continuity via fork (`store: true`, 30 days) or 8k tokens of seeded history.
+
+**Probe (2026-10-10, scratch script, ~$0.02).** Same TTS'd Spanish question ("Hola, ¿qué hora es ahora mismo?"), voice `coral`, one `get_time` function returning 15:42. Times are from the end of the user's speech (GPT-Live) or PTT release (Realtime).
+
+| | gpt-live-1 (Responses delegation, `gpt-6-luna` backend) | gpt-realtime-2.1-mini (Huxley today) |
+| --- | --- | --- |
+| First sound | +0.14s "Claro." | +1.27s |
+| Tool call | +0.53s (delegation started at -0.19s, before speech ended) | +0.81s |
+| Actual answer | +3.69s "Son las 15:42" after filler "Voy a consultar la hora ahora mismo" | +1.27s "Son las 15:42" |
+| Said the time before the tool returned? | No | No |
+| Spanish transcript | exact | exact |
+| Billed | 13s of session ($0.011) + backend tokens | ~950 tokens |
+
+Two findings that matter for B: `coral` works on GPT-Live (it's not limited to the listed voices), and **GPT-Live streams output audio continuously, silence included** (RMS 0 for the first 3s and the last 5s of a 12.6s stream). Huxley's coordinator treats arriving audio as "model speaking"; that assumption breaks.
+
+**Options and critic notes** (fresh Plan agent, cold brief, 2026-10-10):
+- **A. Device talks to GPT-Live directly, Huxley as sideband.** Rejected. Breaks "one audio pipe out": audiobook, radio, earcons and Telegram calls would need mixing in ESP32 firmware, which has no Opus/DTLS/AEC today (`clients/firmware/components/hux_net`, `hux_audio`). Hard-codes an OpenAI endpoint into hardware, against "Not Alexa" in `vision.md`.
+- **B. GPT-Live as a second `VoiceProvider`.** Not a provider swap. `VoiceProvider` is turn-shaped (`commit_and_request_response`, `on_response_done`, `on_audio_done` in `voice/provider.py`). The coordinator starts book audio after the final `response.done` (`turn/coordinator.py` ~587-620) and drops stale audio by response boundary after an interrupt. Without those events the "book jumps in" bugs from `turns.md` come back. `cost.py` can't see per-minute billing, so the kill switch goes blind. A model that "keeps talking while the backend works" risks a spoken "listo" before the tool ran, the worst failure for a blind user (see T1.24). Realistically a parallel LiveCoordinator: weeks.
+- **C. Stay on Realtime GA (done in T1.25).** No architecture change.
+- **D. GPT-Live as a skill (recommended to try).** A "charla" skill opens a GPT-Live WebSocket and bridges it through `InputClaim` (mic in, `speaker_source` out; `huxley_sdk/types.py`), exactly how Telegram calls work. Cost is bounded by the chat length; a PTT press ends the claim and hands back to Realtime for commands. Framework untouched. It lines up with the Abuelo roadmap's "Companionship mode — open-ended chat", where full duplex, backchannels and patience with pauses actually matter. Needs echo cancellation (PWA captures with `echoCancellation: false`, `clients/pwa/src/lib/audio/capture.ts:61`; field finding F5 already saw radio bleed into the mic).
+
+**Cost sketch** (estimates, not measured): Abuelo pattern of ~30-60 min talk/day plus hours of media. Realtime 2.1-mini: media is free (idle session), talk is token-billed at the same rate as the old model. GPT-Live: $45-90/month for talk time alone, plus open-session tails and backend tokens; leaving a session open through 4h/day of audiobooks adds ~$360/month.
+
+**Recommendation.** Don't reshape. Huxley's split (device does I/O, server is the brain) is what lets a hardware device use any voice engine; GPT-Live fits as a skill, not as the core. Run the experiment below first.
+
+**Cheapest experiment (~1 day, <$5).** Standalone script, outside Huxley: replay ~20 recorded Abuelo-style Spanish commands plus some free chat over WebSocket to `gpt-live-1` and `gpt-realtime-2.1-mini`. Measure end-of-speech-to-confirmation latency, transcript accuracy, how often it confirms before the tool result arrives, and billed cost. Then 10 minutes of live chat with the real user on the best voice. If he doesn't prefer GPT-Live blind, stop.
+
+**Decision needed from Mario.** Whether to pursue D (a companionship skill) at all; it's a new skill, so it goes through plan mode per CLAUDE.md.
 
 ---
