@@ -23,7 +23,7 @@ def test_has_core_hardware(concept):
     assert any(p.kind == "cell" for p in concept.parts)
     assert {"board", "speaker"} <= set(concept.envelopes)
     assert set(concept.envelopes) & {"mx", "microswitch", "tact_switch"}
-    assert any(k.startswith("cell") for k in concept.envelopes)
+    assert any(k.startswith(("cell", "holder")) for k in concept.envelopes)
 
 
 def test_hx1_is_smaller_than_rev_a_with_twice_the_cells():
@@ -56,11 +56,17 @@ def test_hx1_tact_switch_clicks_before_the_stop():
     assert solid + 1.0 < hx1.SPRING_REST - hx1.STOP + hw.TACT_TRAVEL
 
 
-def test_hx1_light_ring_clears_cells():
+def test_hx1_light_ring_clears_the_holders():
+    """The frosted ring behind the rear LEDs must stop short of the holders'
+    front faces, or the cells would shadow the light."""
     from huxcase.concepts import hx1
 
+    c = hx1.build()
     ring_back_y = hx1.BOARD_TOP_Y - hx1.RING_Z1
-    assert ring_back_y < hx1.CELL_Y - hx1.hw.CELL_BAY_D / 2
+    holder_front_y = min(
+        e.bounding_box().min.Y for k, e in c.envelopes.items() if k.startswith("holder")
+    )
+    assert ring_back_y < holder_front_y
 
 
 def test_hx1_rocker_sits_below_the_side_surface():

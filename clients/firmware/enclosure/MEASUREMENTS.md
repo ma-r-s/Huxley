@@ -63,12 +63,17 @@ the TF slot, **+y** toward the mics and the pin header, **-y** toward USB-C,
 
 ## 18650 cell
 
-Not measured: the design assumes the worst case, a protected button-top cell,
-Ø18.6 × 70. A bare cell is Ø18.0 to 18.6 × 65. Each case reserves a
-Ø19.4 × 74 bay (cell + spring contact + flat contact).
+HX-1 uses Mario's two single-cell holders whole (photo 2026-10-10), so the
+holder sets the space, not the cell. Not measured yet; the model assumes a
+typical open single-18650 holder: 77 × 21 mm outside, 1.2 mm floor and side
+walls, 3.5 mm end caps, a bare flat-top cell Ø18.6 × 65 inside, one red and
+one black lead per holder (`HOLDER_*`, `hardware.holder()`).
 
-**Use a protected cell.** The schematic shows a charger (ETA6098) and
-power-path MOSFETs, but I found no cell-protection IC (no DW01-class part).
+The older concepts (rev A, HX-2 to HX-4) still reserve a bare Ø19.4 × 74 bay
+for a protected button-top cell.
+
+The schematic shows a charger (ETA6098) and power-path MOSFETs but no
+cell-protection IC (no DW01-class part); see "Battery protection" below.
 
 ## Electrical facts that shape the case
 
@@ -89,7 +94,8 @@ power-path MOSFETs, but I found no cell-protection IC (no DW01-class part).
 | Series spring (SciWil) | 0.4 wire x 4 OD x 15 free, 10 coils, ~0.59 N/mm | `SERIES_SPRING_*` |
 | Lever pin | M2 x 16 screw + nut | `_bar`, `pin` |
 | KCD1-101 rocker | 21 x 15 bezel, 19 x 13 body x 11.5, 6 mm tabs 6 mm apart, rocker 5 mm above the bezel | `ROCKER_*` |
-| 18650 cells | green wrap, probably Sony/Murata VTC: unprotected, flat top, 65 mm | `CELL_*` (bay still 74) |
+| 18650 cells | green wrap, probably Sony/Murata VTC: unprotected, flat top, 65 mm | `CELL_*` |
+| 18650 holders (2) | 77 x 21, 1.2 floor/walls, 3.5 end caps, leads at each end, wired in parallel | `HOLDER_*` |
 
 ## Battery protection
 
@@ -107,9 +113,9 @@ covers deep discharge but not shorts.
 
 1. Speaker: confirm Ø40 front and 20.5 deep, and **measure the cable length**
    from the speaker to the plug.
-2. Which 18650 (bare / protected, flat / button top), and how it connects:
-   holder with leads, or a cell with solder tabs. Does the kit include the
-   1.25 mm battery pigtail?
+2. **The holder:** outside length, width and height with a cell in it, and
+   where each lead leaves (end face or floor, and how far from the floor).
+   Did a 1.25 mm battery pigtail come with the board?
 3. A glance at the mics: is there a pinhole on top of each metal can?
 4. The tactile switch: body height and stem height/diameter, and its
    actuation force if known.

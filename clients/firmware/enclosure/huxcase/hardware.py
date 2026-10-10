@@ -323,3 +323,49 @@ def rocker() -> list[Part]:
         Part("rocker_body", body, "black"),
         Part("rocker_tabs", tabs, "metal"),
     ]
+
+
+# --- Single-18650 holder with leads (Mario's), assumed generic until measured --
+# Open frame: floor on one side, side walls up to the cell's centre plane,
+# full-height end caps with the spring (-) at one end and the flat contact (+)
+# at the other; one lead out of each end cap. Holds a 65 mm flat-top cell.
+HOLDER_L, HOLDER_W = 77.0, 21.0
+HOLDER_FLOOR, HOLDER_WALL, HOLDER_CAP = 1.2, 1.2, 3.5
+HOLDER_CELL_L = 65.0
+
+
+def holder() -> list[Part]:
+    """Local frame: cell axis along z centred at the origin, floor toward +y."""
+    r = CELL_D / 2
+    back = r + HOLDER_FLOOR
+    floor = Pos(0, r + HOLDER_FLOOR / 2, 0) * Box(HOLDER_W, HOLDER_FLOOR, HOLDER_L)
+    frame = floor
+    for sx in (-1, 1):
+        wall = Pos(sx * (HOLDER_W - HOLDER_WALL) / 2, back / 2, 0) * Box(
+            HOLDER_WALL, back, HOLDER_L
+        )
+        frame += wall
+    for sz in (-1, 1):
+        cap = Pos(0, (back - r - 0.5) / 2, sz * (HOLDER_L - HOLDER_CAP) / 2) * Box(
+            HOLDER_W, back + r + 0.5, HOLDER_CAP
+        )
+        frame += cap
+    inner = HOLDER_L / 2 - HOLDER_CAP
+    spring = Pos(0, 0, -inner + 2.5) * (Cylinder(4.5, 5.0) - Cylinder(3.9, 6.0))
+    plate = Pos(0, 0, inner - 0.2) * Cylinder(5.0, 0.4)
+    cell = Pos(0, 0, -inner + 5.0 + HOLDER_CELL_L / 2) * Cylinder(r, HOLDER_CELL_L)
+    return [
+        Part("holder", frame, "black"),
+        Part("holder_spring", spring, "metal"),
+        Part("holder_plate", plate, "metal"),
+        Part("cell", cell, "cell"),
+    ]
+
+
+def holder_envelope() -> Solid:
+    """Frame + cell, for the fit check (same local frame as holder())."""
+    parts = holder()
+    out = parts[0].shape
+    for p in parts[1:]:
+        out += p.shape
+    return out

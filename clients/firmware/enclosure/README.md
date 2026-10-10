@@ -5,14 +5,14 @@ its SPK-4020 speaker, two 18650s and a spring-loaded push-to-talk lever. Hold
 to talk, release to hear the answer
 ([`../../../docs/concepts.md`](../../../docs/concepts.md)).
 
-Status: **HX-1 is the build** (rev C, 2026-10-10). Layout, mechanism, light
-and cable runs are modelled and fit-checked; case fasteners, battery-holder
-details, print orientation and STL export are next. Tracked as F-0010 in
+Status: **HX-1 is the build** (rev C, 2026-10-10). Layout, mechanism, light,
+Mario's two 18650 holders and the cable runs are modelled and fit-checked;
+case fasteners, holder clips, print orientation and STL export are next. Tracked as F-0010 in
 [`../docs/triage.md`](../docs/triage.md).
 
 | Model        | Shape                                  | Talk button                              |
 | ------------ | -------------------------------------- | ---------------------------------------- |
-| **HX-1**     | two 18650s, 68 × 36 × 104              | 49 mm lever, right side, mouse switch    |
+| **HX-1**     | two 18650s in holders, 70 × 37 × 104   | 56 mm lever, right side, 12 x 12 tact    |
 | HX-1 rev A   | one 18650, 66 × 35 × 125 (superseded)  | 2u MX bar + stabiliser, left side        |
 | HX-2 Baton   | round head on a grip, 70 × 70 × 148    | hinged trigger on the grip, index finger |
 | HX-3 Radio   | landscape box + handle, 128 × 36 × 122 | squeeze bar under the handle rail        |
@@ -31,20 +31,36 @@ of them. HX-1 moves four things:
 2. **Speaker under the board, nested.** The speaker's magnet (Ø21.8) fits the
    same channel, so the cells run past the speaker instead of stacking on top
    of it: H drops from 125 to 104. The binding fit is the speaker basket's
-   back rim (r 15.8 at 12.3 mm deep) against the cells' inner flanks, which
-   sets the cells' depth and D = 36.2. Body volume is 11% below rev A.
+   back rim (r 15.8 at 12.3 mm deep) against the holders' inner walls, which
+   sets the cells' depth and D = 37. Body volume is still below rev A.
 3. **No bulkhead.** The whole sealed interior is the speaker's back box:
-   about 127 cc versus 62 in rev A.
+   about 134 cc versus 62 in rev A.
 4. **PTT on the right, as a lever.** The right cell sits right behind the
    side wall, so a bar there cannot travel straight in. It is pinned at its
    bottom end inside a channel in the wall; the channel floor is tilted
-   (1 mm of wall left over the cell, deep above it). To make room, the case
-   is 68 wide and the internal assembly sits 1 mm left of centre.
+   (1 mm of wall left over the holder, deep above it). To make room, the
+   case is 70 wide and the internal assembly sits 1.2 mm left of centre.
 
 Side effects: the ceramic antenna is at the top of the device (out of the
 hand); USB-C exits the left side in a deep pocket; KEY1 to KEY3 sit at the top
-edge (candidate volume buttons); the bottom 5 mm under the cells is free for
-dock contacts.
+edge (candidate volume buttons); the bottom 5 mm under the holders is free
+for dock contacts.
+
+## The cells: Mario's holders, used whole
+
+Mario has two single-18650 holders, each with its own pair of leads, and
+wires them in parallel so the board's charger charges both (2026-10-10). The
+holders go in whole, upright, open side facing the board, floor against the
+back. Modelled as 77 x 21 mm with a 1.2 mm floor and walls, 3.5 mm end caps,
+spring (-) at the bottom, plate (+) at the top (`HOLDER_*`, still to be
+measured). Against bare cells they cost 2 mm of width and 0.8 mm of depth.
+
+The parallel joints sit off the cells, where the leads are short and nothing
+presses on them: the + joint over the channel just under the rocker, the -
+joint at the bottom of the channel next to the protection pocket. From each
+joint one lead goes on to the board. Before joining, charge both cells to the
+same voltage (within ~0.05 V); a large gap makes one cell dump current into
+the other when they meet.
 
 ## The talk switch: 12 x 12 tactile button + series spring
 
@@ -83,10 +99,11 @@ feeds the cap. The ring's back face clears the cells by 0.5 mm (a test).
 
 ## Power switch: KCD1-101 on the left side
 
-Recessed 7.2 mm in the left side above the left cell, where there is ~38 mm
-of depth behind the board (the back had only 20 mm before the light ring, so
-a back-mounted rocker would have stood 4 mm proud and added depth). Wired in
-the battery + lead between the BAT plug and the top contact bridge. Power on
+Recessed 7.2 mm in the left side above the left holder, where there is
+~38 mm of depth behind the board (the back had only 20 mm before the light
+ring, so a back-mounted rocker would have stood 4 mm proud and added depth).
+Wired in the battery + lead between the BAT plug and the + joint. The
+charger sits behind it too, so **the rocker must be ON to charge**. Power on
 the left, talk on the right: easy to tell apart by touch. A test asserts it
 stays below the surface.
 
@@ -106,12 +123,13 @@ from the frosted back as possible, so they read as one soft spine.
 | Run | From | To | Path |
 | --- | --- | --- | --- |
 | Speaker | SPK plug (board back) | solder tabs on the speaker rim | straight down the channel; mount the speaker so its tabs point up |
-| Battery + | BAT plug | rocker, then the top contact bridge | up the channel close to the board, over the left cell's top to the rocker |
-| Battery − | BAT plug | protection pocket, then the bottom bridge | down the channel; behind the speaker magnet only in the grey bottom third |
-| PTT (2) | mouse switch pins | header tails on the board back | above the right cell, behind the light ring |
+| Battery + | BAT plug | rocker, then the + joint | up the channel close to the board, to the rocker above the left holder |
+| Holder + leads (2) | top of each holder | + joint over the channel | over the holder tops, under the rocker |
+| Battery − | BAT plug | protection pocket, then the - joint | down the channel; behind the speaker magnet only in the grey bottom third |
+| Holder - leads (2) | bottom of each holder | - joint at the channel's foot | under the speaker, in the grey bottom third |
+| PTT (2) | tact switch legs | header tails on the board back | down the lever channel, in front of the right holder's top cap |
 
-The two cells are in **parallel (1S2P)**: same model, protected, charged to the
-same voltage (within ~0.05 V) before they are joined.
+The two cells are in **parallel (1S2P)**: same model, same charge.
 
 ## Parts list
 
@@ -119,20 +137,22 @@ Only Mario's inventory (photos 2026-10-10): Kadrick M2-M5 button-head
 screws, nuts and washers; FFVRVSS M2-M5 heat-set inserts + tool; SciWil
 compression springs (0.3-0.8 wire, 2-8 mm OD); Noxtren JST-XH + Dupont kit
 with 1 m ribbon cable; KCD1-101 rocker; 12 x 12 tactile button; two green
-18650s; the board and its speaker (lead ~75 mm, leaves at the rim).
+18650s in two single-cell holders with leads; the board and its speaker
+(lead ~75 mm, leaves at the rim).
 
 Printed: front and back shell (grey), speaker panel (black), lever (orange),
 top cap and light ring (frosted PLA), switch cradle and plunger. Board: 3 x
 M2 x 8 + washers into M2 x 2 inserts. Lever pin: M2 x 16 + nut. Switch:
 12 x 12 tact + 0.4 x 4 x 15 spring. Wires: ribbon cable (double the
-conductors for the battery). Not in the inventory and needed: a 1S Li-ion
-protection board (the board has none; see MEASUREMENTS), and a 1.25 mm 2-pin
-plug for the BAT socket unless the leads are soldered straight to it.
+conductors for the battery). Not in the inventory: a 1.25 mm 2-pin plug for
+the BAT socket (the JST-XH kit is 2.5 mm), unless the leads are soldered
+straight to the board's battery pads. A 1S protection board is optional
+(skipped for now, pocket reserved).
 
 ## Layout
 
 ```
-huxcase/hardware.py      measured board / speaker / cell / switch (single source of truth)
+huxcase/hardware.py      measured board / speaker / cell / holder / switches (single source of truth)
 huxcase/concept.py       Concept container + collision (fit) check + cavity volume
 huxcase/concepts/hx*.py  one module per concept, Z up, front face at -Y (hx1.py = HX-1, hx1_classic.py = rev A)
 huxcase/export.py        build all, refuse on collision, write out/
@@ -159,8 +179,9 @@ uv run --group dev pytest -q               # fit checks + STEP comparison (needs
 
 Each concept declares packaging **envelopes**: the board with 5.9 mm top
 clearance, 2.5 mm under it and a 9 mm plug zone under the BAT/SPK connectors;
-the speaker solid; the Ø19.4 × 74 cell bay; the MX switch, stabiliser and
-key travel. It also declares its printed **shells**. `collisions()`
+the speaker solid; the cells (HX-1: Mario's whole holders; the older
+concepts: a Ø19.4 × 74 bay); the talk switch with its travel; the rocker; and
+every cable and lead as a swept tube. It also declares its printed **shells**. `collisions()`
 intersects every envelope with every other envelope and every shell, and the
 export refuses to write a concept that collides. Intended contacts (standoffs
 touching the PCB, the switch clipped into its plate) are listed per concept

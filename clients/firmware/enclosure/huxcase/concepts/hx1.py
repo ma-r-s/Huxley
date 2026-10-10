@@ -1,4 +1,4 @@
-"""HX-1: the walkie, two 18650s, mouse-switch PTT, frosted light cap.
+"""HX-1: the walkie, two 18650s in holders, tact-switch PTT, frosted back.
 
 Packing (see README "HX-1"):
 - The board is rotated 90 deg in its plane so the BAT/SPK plugs and the RTC
@@ -33,10 +33,10 @@ from huxcase.concept import Concept, cavity_cc
 from huxcase.hardware import Part
 from huxcase.shapes import bbox_solid, hex_holes, hole_field, label, on_front, rounded_box
 
-W = 68.0
+W = 70.0  # +2 mm over the bare-cell layout: Mario's 18650 holders are 21 mm wide
 T = 2.4
-X0 = -1.0  # internal assembly offset; frees 2 mm for the PTT channel on the right
-R_FACE = 9.0  # front silhouette corners; tight so the cells reach the corners
+X0 = -1.2  # internal assembly offset; frees room for the PTT channel on the right
+R_FACE = 8.0  # front silhouette corners; tight so the holders reach the corners
 Y_FRONT = -18.0
 BOARD_TOP_Y = Y_FRONT + T + 6.0
 PCB_BOTTOM_Y = BOARD_TOP_Y + hw.PCB_T
@@ -46,12 +46,13 @@ CELL_X = 20.7  # from the assembly centre; the board's plug zone fits between th
 # grazing the cells' inner flanks, not the board. 4.6 mm stays behind the PCB,
 # which is where the light ring lives.
 CELL_Y = 5.9
-assert CELL_Y - hw.CELL_BAY_D / 2 >= PCB_BOTTOM_Y + CELL_GAP
-CELL_Z0 = 7.6  # clears the 6.6 mm inner corner radius; room under the cells for contacts
-CELL_TOP = CELL_Z0 + hw.CELL_BAY_L
-Y_BACK = CELL_Y + hw.CELL_BAY_D / 2 + 0.2 + T
+assert CELL_Y - hw.CELL_D / 2 - 0.5 >= PCB_BOTTOM_Y + CELL_GAP  # holder end caps
+CELL_Z0 = 6.7  # holder bottom: clears the 6.6 mm inner corner radius, leads join below
+CELL_TOP = CELL_Z0 + hw.HOLDER_L
+HOLDER_Z = (CELL_Z0 + CELL_TOP) / 2
+Y_BACK = CELL_Y + hw.CELL_D / 2 + hw.HOLDER_FLOOR + 0.2 + T  # holder floor at the back
 D = Y_BACK - Y_FRONT
-assert X0 - CELL_X - hw.CELL_BAY_D / 2 >= -W / 2 + T + 0.15  # left cell clears its wall
+assert X0 - CELL_X - hw.HOLDER_W / 2 >= -W / 2 + T + 0.15  # left holder clears its wall
 
 SPK_Z = T + 0.4 + hw.SPK_D / 2
 SPK_FRONT_Y = Y_FRONT + T + 0.5
@@ -65,18 +66,18 @@ CAP_Z = 97.0  # frosted top cap from here up
 BACK_FROST_Z = 36.0  # the back (and the sides' back half) is frosted from here up
 # KCD1-101 rocker on the left side, above the left cell, fully recessed: the
 # back had only 20 mm of depth behind it before the light ring.
-ROCKER_Y, ROCKER_Z, ROCKER_RECESS = 5.3, 91.5, 7.2  # rocker top 0.2 below the surface
+ROCKER_Y, ROCKER_Z, ROCKER_RECESS = 5.3, 93.1, 7.2  # rocker top 0.2 below the surface
 # Reserved pocket for a 1S protection board, in the grey bottom third behind the speaker.
 PROT_X, PROT_Y, PROT_Z = 6.0, 10.75, 23.0
 
 # PTT lever on the right side.
 X_OUT = W / 2
-PIVOT_Z, TS_Z, SWITCH_Y = 50.0, 89.5, 2.5
+PIVOT_Z, TS_Z, SWITCH_Y = 50.0, 91.1, 2.5
 PIVOT_X = X_OUT - 1.0  # pin sits inside the wall, between the channel's side walls
 STOP = 3.8  # lever travel at the switch axis before it lands on the stop post
 PRESS_DEG = math.degrees(math.atan(STOP / (TS_Z - PIVOT_Z)))
 BAR_T, BAR_W = 3.0, 18.0
-BAR_Z0, BAR_Z1 = PIVOT_Z - 7.0, 98.0  # tail below the pin is the rest stop
+BAR_Z0, BAR_Z1 = PIVOT_Z - 7.0, 99.0  # tail below the pin is the rest stop
 CLEAR = 0.4
 # Series spring between the lever's inner face and the plunger flange.
 SPRING_REST = hw.SERIES_SPRING_FREE - 0.4  # 0.4 mm preload holds the lever on its rest stop
@@ -249,7 +250,7 @@ def build() -> Concept:
     # PTT channel: backing fills the gap between the right cell and the wall,
     # then the lever's swept volume (plus clearance) is cut out of both. The
     # tail below the pin rests on the wall: that is the lever's rest stop.
-    cell_edge = X0 + CELL_X + hw.CELL_BAY_D / 2
+    cell_edge = X0 + CELL_X + hw.HOLDER_W / 2
     backing = bbox_solid(
         cell_edge + 0.2,
         X_OUT - T + 0.1,
@@ -370,27 +371,39 @@ def build() -> Concept:
     board = hw.place(hw.board_parts(), BOARD_LOC, "board_")
     spk = hw.place(hw.speaker(), SPK_LOC)
     tab = Location((X0, SPK_FRONT_Y + SPK_TAB_DEPTH, SPK_Z + SPK_TAB_R)) * Box(3.0, 1.0, 2.0)
+    # Mario's two single-18650 holders, + end up, floor toward the back. Their
+    # own leads join in parallel: + above the holders (on to the rocker), -
+    # below them (on to the protection pocket).
     cells, bays = [], []
     for i, x in enumerate((X0 - CELL_X, X0 + CELL_X)):
-        zc = CELL_Z0 + hw.CELL_BAY_L / 2
         cells += [
             Part(f"{p.name}_{i}", p.shape, p.kind)
-            for p in hw.place(hw.cell(), Location((x, CELL_Y, zc)))
+            for p in hw.place(hw.holder(), Location((x, CELL_Y, HOLDER_Z)))
         ]
-        cells.append(
-            Part(f"cell_spring_{i}", Pos(x, CELL_Y, CELL_Z0 + 1.0) * Cylinder(4.0, 2.0), "metal")
+        bays.append(Pos(x, CELL_Y, HOLDER_Z) * hw.holder_envelope())
+    j_pos = (X0 - 4.0, CELL_Y + 7.0, CELL_TOP + 1.5)  # over the channel, under the rocker
+    j_neg = (X0 + 2.0, CELL_Y + 8.0, T + 1.8)
+    lead_y = CELL_Y + hw.CELL_D / 2 - 0.5
+    leads = {}
+    for i, x in enumerate((X0 - CELL_X, X0 + CELL_X)):
+        leads[f"lead_pos_{i}"] = hw.cable(
+            [
+                (x, lead_y, CELL_TOP - 0.5),
+                (x, lead_y + 0.5, CELL_TOP + 1.0),
+                ((x + j_pos[0]) / 2, j_pos[1] + 1.0, CELL_TOP + 1.3),
+                j_pos,
+            ],
+            d=1.5,
         )
-        cells.append(
-            Part(f"cell_plate_{i}", Pos(x, CELL_Y, CELL_TOP - 0.7) * Cylinder(5.0, 0.4), "metal")
+        leads[f"lead_neg_{i}"] = hw.cable(
+            [
+                (x, lead_y, CELL_Z0 + 0.5),
+                (x, lead_y + 0.5, CELL_Z0 - 1.4),
+                ((x + j_neg[0]) / 2, j_neg[1] + 0.5, j_neg[2] + 0.4),
+                j_neg,
+            ],
+            d=1.5,
         )
-        bays.append(Pos(x, CELL_Y, zc) * Cylinder(hw.CELL_BAY_D / 2, hw.CELL_BAY_L))
-    # Parallel (1S2P): + plates bridged on top, - springs bridged underneath.
-    bridge_top = bbox_solid(
-        X0 - CELL_X, X0 + CELL_X, CELL_Y - 3, CELL_Y + 3, CELL_TOP + 0.1, CELL_TOP + 0.4
-    )
-    bridge_bot = bbox_solid(
-        X0 - CELL_X, X0 + CELL_X, CELL_Y - 3, CELL_Y + 3, CELL_Z0 - 0.4, CELL_Z0 - 0.1
-    )
 
     # Cable runs, all in the channel between the cells.
     bat_x, spk_x = to_device(17.81, -6.04)[0], to_device(17.81, 5.19)[0]
@@ -416,7 +429,7 @@ def build() -> Concept:
                 (X0, tab_y, SPK_Z + SPK_TAB_R + 1.0),
             ]
         ),
-        # + : plug -> rocker -> top bridge, hugging the board side of the channel.
+        # + : plug -> rocker -> + joint, hugging the board side of the channel.
         "cable_bat_pos": hw.cable(
             [
                 (bat_x, plug_y, plug_z),
@@ -432,12 +445,12 @@ def build() -> Concept:
             [
                 (rocker_tab_x, ROCKER_Y + hw.ROCKER_TAB_PITCH / 2, ROCKER_Z),
                 (rocker_tab_x + 0.5, ROCKER_Y + hw.ROCKER_TAB_PITCH / 2, ROCKER_Z - 3.0),
-                (rocker_tab_x - 3.0, CELL_Y + 0.5, CELL_TOP + 2.2),
-                (X0 - CELL_X + 4.0, CELL_Y, CELL_TOP + 0.9),
+                (rocker_tab_x - 1.0, CELL_Y + 4.0, CELL_TOP + 3.5),
+                j_pos,
             ],
             d=1.2,
         ),
-        # - : plug -> protection board (P-) ... (B-) -> bottom bridge, behind the speaker.
+        # - : plug -> protection board (P-) ... (B-) -> - joint, behind the speaker.
         "cable_bat_neg": hw.cable(
             [
                 (bat_x - 1.2, plug_y, plug_z),
@@ -451,8 +464,8 @@ def build() -> Concept:
         "cable_bat_neg2": hw.cable(
             [
                 (X0 + PROT_X, PROT_Y - 2.4, PROT_Z - hw.PROTECTION_PCB[0] / 2 + 1.0),
-                (X0 + PROT_X - 2.0, PROT_Y - 2.0, CELL_Z0 + 2.5),
-                (X0 + 2.0, CELL_Y + 1.0, CELL_Z0 - 0.4),
+                (X0 + PROT_X - 1.0, PROT_Y - 1.0, CELL_Z0 + 1.0),
+                j_neg,
             ],
             d=1.2,
         ),
@@ -468,14 +481,9 @@ def build() -> Concept:
         cables[name] = hw.cable(
             [
                 (legs_x, leg_y, legs_z),
-                (legs_x - 0.5, min(leg_y, 1.2) - 0.5, legs_z - 0.8),  # behind the cradle
-                (legs_x + 1.4, -1.8, CELL_TOP - 0.6),  # under the cradle, beside the bridge
-                (
-                    TS_BASE_X + hw.TACT_BODY + 0.8,
-                    -3.0,
-                    CELL_TOP - 0.2,
-                ),  # clear of the cradle floor
-                (tx + 0.4, -3.6, tz + 0.8),  # stay behind the ring until inside its hole
+                (legs_x - 0.5, min(leg_y, 1.0) - 1.0, legs_z - 1.5),  # down the channel
+                (legs_x + 1.0, -4.6, CELL_TOP - 2.5),  # in front of the right holder's cap
+                (tx - 0.4, -5.0, tz + 0.6),  # inside the light ring's hole
                 (tx, tail_y + 1.5, tz + 0.3),
                 (tx, tail_y, tz),
             ],
@@ -503,8 +511,7 @@ def build() -> Concept:
         *spk,
         Part("speaker_tab", tab, "metal"),
         *cells,
-        Part("bridge_top", bridge_top, "metal"),
-        Part("bridge_bottom", bridge_bot, "metal"),
+        *[Part(n, c, "wire_red" if "pos" in n else "wire_black") for n, c in leads.items()],
         *ts_parts,
         Part("cable_spk", cables["cable_spk"], "wire_black"),
         Part("cable_bat_pos", cables["cable_bat_pos"], "wire_red"),
@@ -522,13 +529,12 @@ def build() -> Concept:
     envelopes = {
         "board": board_env,
         "speaker": SPK_LOC * hw.speaker()[0].shape,
-        "cell_0": bays[0],
-        "cell_1": bays[1],
+        "holder_0": bays[0],
+        "holder_1": bays[1],
         "tact_switch": ts_env,
         "spring": spring.shape,
         "bar_sweep": sweep,
-        "bridge_top": bridge_top,
-        "bridge_bottom": bridge_bot,
+        **leads,
         "rocker": rocker[2].shape + rocker[3].shape,
         "protection_pcb": prot,
         **cables,
@@ -552,8 +558,16 @@ def build() -> Concept:
         ("spring", "body"),  # seated in its pocket
         ("spring", "bar_sweep"),  # it is what the lever compresses
         ("bar_sweep", "spring"),
-        ("bridge_top", "cable_bat_sw"),
-        ("bridge_bottom", "cable_bat_neg2"),
+        ("lead_pos_0", "holder_0"),  # leads leave their holders
+        ("lead_pos_1", "holder_1"),
+        ("lead_neg_0", "holder_0"),
+        ("lead_neg_1", "holder_1"),
+        ("lead_pos_0", "lead_pos_1"),  # parallel junctions
+        ("lead_neg_0", "lead_neg_1"),
+        ("cable_bat_sw", "lead_pos_0"),
+        ("cable_bat_sw", "lead_pos_1"),
+        ("cable_bat_neg2", "lead_neg_0"),
+        ("cable_bat_neg2", "lead_neg_1"),
         ("rocker", "body"),  # clipped into its panel
         ("rocker", "cable_bat_pos"),  # soldered to its tabs
         ("rocker", "cable_bat_sw"),

@@ -91,12 +91,22 @@ moved from the back (would stand 4 mm proud, no depth behind it) to the left
 side, fully recessed (test). Protection: Mario skipped it; pocket reserved,
 firmware low-voltage shutdown noted in the firmware README.
 
-**Decisions waiting on Mario**: (resolved: HX-1 Duo is the build, speaker at the bottom is fine); dock yes/no; volume buttons
-yes/no; plus measurements of the speaker cable, the 18650 he will use and a
-look at the mic ports.
+**Whole holders (2026-10-10)**: Mario found single-18650 holders with two
+leads each and will parallel them into the board's charger; asked, he chose
+to use the holders whole (not stripped to the springs). Modelled as an
+assumed 77 x 21 holder (`hardware.holder()`), replacing the bare cells and
+the printed contact bridges; parallel joints off the cells (+ under the
+rocker, - at the channel foot); PTT wires rerouted down the lever channel.
+Cost: W 68 -> 70, D 36.2 -> 37, back box 127 -> 134 cc. Fit check clean,
+25 tests green. Holder size and lead exits still to measure.
+
+**Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
+bottom is fine, protection skipped, holders whole); dock yes/no; volume
+buttons yes/no; plus measurements of the holder, the 12 x 12 switch, the
+KCD1-101 depth, the speaker cable and a look at the mic ports.
 
 **Firmware impact**: PTT moves from the on-board `K2` (via TCA9555) to an
-external MX switch on a free header GPIO (GPIO3 to GPIO9; LCD is unused).
+external switch on a free header GPIO (GPIO3 to GPIO9; LCD is unused).
 `hux_button` in F-0003 should read a direct GPIO; keep `K2` as the bench
 fallback.
 
