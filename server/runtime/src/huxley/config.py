@@ -35,7 +35,9 @@ class Settings(BaseSettings):
 
     # --- OpenAI Realtime API ---
     openai_api_key: str | None = None
-    openai_model: str = "gpt-4o-mini-realtime-preview"
+    # Same audio price as the shut-down gpt-4o-mini-realtime-preview,
+    # plus reasoning. See docs/triage.md T1.25.
+    openai_model: str = "gpt-realtime-2.1-mini"
     # `persona.voice` is the source of truth. Setting `HUXLEY_OPENAI_VOICE`
     # overrides it for a single run (useful when A/B-testing voices without
     # editing `persona.yaml`). `None` = defer to the persona.

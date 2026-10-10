@@ -8,7 +8,7 @@ from huxley.config import Settings
 class TestSettings:
     def test_defaults(self) -> None:
         s = Settings(openai_api_key="test")
-        assert s.openai_model == "gpt-4o-mini-realtime-preview"
+        assert s.openai_model == "gpt-realtime-2.1-mini"
         # openai_voice defaults to None — persona.voice is the source of truth.
         assert s.openai_voice is None
         assert s.server_host == "localhost"

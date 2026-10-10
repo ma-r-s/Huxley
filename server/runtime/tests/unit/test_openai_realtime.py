@@ -220,6 +220,89 @@ class TestSessionEndSummary:
         await storage.close()
 
 
+class _FakeRealtimeWS:
+    """Captures sends; yields no server events so the receive loop exits."""
+
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+
+    async def send(self, msg: str) -> None:
+        self.sent.append(json.loads(msg))
+
+    async def close(self) -> None:
+        return None
+
+    def __aiter__(self) -> _FakeRealtimeWS:
+        return self
+
+    async def __anext__(self) -> str:
+        raise StopAsyncIteration
+
+
+class TestConnectGAInterface:
+    """T1.25: OpenAI shut down the beta interface on 2026-05-12. Nothing
+    pinned the connect headers or the session.update shape, so the suite
+    stayed green while every real connect failed. These tests pin the GA
+    contract."""
+
+    async def _connect(
+        self, provider_deps: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[dict[str, Any], _FakeRealtimeWS]:
+        storage = provider_deps["storage"]
+        await storage.init()
+        captured: dict[str, Any] = {}
+        fake_ws = _FakeRealtimeWS()
+
+        async def fake_connect(url: str, **kwargs: Any) -> _FakeRealtimeWS:
+            captured["url"] = url
+            captured["headers"] = kwargs.get("additional_headers", {})
+            return fake_ws
+
+        monkeypatch.setattr("huxley.voice.openai_realtime.websockets.connect", fake_connect)
+        provider = OpenAIRealtimeProvider(**provider_deps)
+        await provider.connect()
+        await provider.disconnect(save_summary=False)
+        await storage.close()
+        return captured, fake_ws
+
+    async def test_no_beta_header_and_model_in_url(
+        self, provider_deps: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured, _ = await self._connect(provider_deps, monkeypatch)
+        assert "OpenAI-Beta" not in captured["headers"]
+        assert captured["headers"]["Authorization"] == "Bearer test-key"
+        assert captured["url"].endswith("?model=gpt-realtime-2.1-mini")
+
+    async def test_session_update_uses_ga_shape(
+        self, provider_deps: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, fake_ws = await self._connect(provider_deps, monkeypatch)
+        update = fake_ws.sent[0]
+        assert update["type"] == ClientEventType.SESSION_UPDATE.value
+        session = update["session"]
+        assert session["type"] == "realtime"
+        assert session["output_modalities"] == ["audio"]
+        pcm_24k = {"type": "audio/pcm", "rate": 24000}
+        assert session["audio"]["input"]["format"] == pcm_24k
+        assert session["audio"]["output"]["format"] == pcm_24k
+        assert session["audio"]["output"]["voice"] == "coral"
+        assert session["audio"]["input"]["transcription"] == {
+            "model": "whisper-1",
+            "language": "es",
+        }
+        # PTT: server VAD stays off; the coordinator commits on release.
+        assert session["audio"]["input"]["turn_detection"] is None
+        # Beta-only top-level keys are rejected by the GA interface.
+        for beta_key in (
+            "voice",
+            "input_audio_format",
+            "output_audio_format",
+            "input_audio_transcription",
+            "turn_detection",
+        ):
+            assert beta_key not in session
+
+
 class TestSuspendResume:
     """Provider-side half of T1.4 Stage 2 `InputClaim`.
 
@@ -326,7 +409,7 @@ class TestSuspendResume:
     async def test_audio_delta_dropped_while_suspended(
         self, provider_deps: dict[str, Any]
     ) -> None:
-        """A response.audio.delta arriving after our cancel (network race)
+        """A response.output_audio.delta arriving after our cancel (network race)
         must not reach the coordinator — its audio would play stale on
         resume. This is the worst bug from the spike if not guarded."""
         callbacks = _callbacks()
@@ -338,7 +421,7 @@ class TestSuspendResume:
         # Simulate a delta arriving from the wire after suspend.
         pcm = b"\xaa\xbb" * 10
         event = {
-            "type": "response.audio.delta",
+            "type": "response.output_audio.delta",
             "delta": base64.b64encode(pcm).decode("ascii"),
         }
         await provider._handle_server_event(event)
@@ -355,7 +438,7 @@ class TestSuspendResume:
 
         pcm = b"\xaa\xbb" * 10
         event = {
-            "type": "response.audio.delta",
+            "type": "response.output_audio.delta",
             "delta": base64.b64encode(pcm).decode("ascii"),
         }
         await provider._handle_server_event(event)
@@ -405,5 +488,5 @@ class TestSuspendResume:
         provider._ws = AsyncMock()
         await provider.suspend()
 
-        await provider._handle_server_event({"type": "response.audio.done"})
+        await provider._handle_server_event({"type": "response.output_audio.done"})
         callbacks.on_audio_done.assert_awaited_once()  # type: ignore[attr-defined]

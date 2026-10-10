@@ -47,6 +47,14 @@ logger = structlog.get_logger()
 
 REALTIME_API_URL = "wss://api.openai.com/v1/realtime"
 
+# Two causes look identical on the wire. T1.25: the model had been shut
+# down for months while this hint still blamed billing.
+_MODEL_UNAVAILABLE_HINT = (
+    "Model unavailable. Either OpenAI retired it (check "
+    "developers.openai.com/api/docs/deprecations and set HUXLEY_OPENAI_MODEL) "
+    "or the account lacks Realtime access (needs >=5 USD lifetime spend)."
+)
+
 
 class OpenAIRealtimeProvider:
     """`VoiceProvider` implementation for the OpenAI Realtime API.
@@ -123,11 +131,12 @@ class OpenAIRealtimeProvider:
         url = f"{REALTIME_API_URL}?model={model}"
 
         try:
+            # GA interface: no `OpenAI-Beta` header. The beta interface was
+            # shut down 2026-05-12 (docs/triage.md T1.25).
             self._ws = await websockets.connect(
                 url,
                 additional_headers={
                     "Authorization": f"Bearer {self._config.openai_api_key}",
-                    "OpenAI-Beta": "realtime=v1",
                 },
             )
         except websockets.InvalidStatus as exc:
@@ -160,25 +169,7 @@ class OpenAIRealtimeProvider:
 
         await self._send(
             ClientEventType.SESSION_UPDATE,
-            {
-                "session": {
-                    "instructions": instructions,
-                    "voice": voice,
-                    "tools": self._skills.get_all_tool_definitions(),
-                    "input_audio_format": "pcm16",
-                    "output_audio_format": "pcm16",
-                    # Force the persona's transcription language. Without
-                    # `language`, Whisper auto-detects per utterance and with
-                    # heavy regional accents it flips languages on short
-                    # inputs; the hint eliminates the ambiguity.
-                    "input_audio_transcription": {
-                        "model": "whisper-1",
-                        "language": self._resolved.transcription_language,
-                    },
-                    # PTT mode — disable server VAD, we commit manually on PTT release
-                    "turn_detection": None,
-                }
-            },
+            {"session": self._session_config(instructions, voice)},
         )
 
         self._receive_task = asyncio.create_task(self._receive_loop())
@@ -188,6 +179,36 @@ class OpenAIRealtimeProvider:
             model=model,
             language=self._resolved.language_code,
         )
+
+    def _session_config(self, instructions: str, voice: str) -> dict[str, Any]:
+        """The GA `session.update` payload.
+
+        Audio is PCM16 at 24 kHz both ways, matching the client wire
+        format, so no resampling happens anywhere in the server.
+        """
+        pcm_24k = {"type": "audio/pcm", "rate": 24000}
+        return {
+            "type": "realtime",
+            "instructions": instructions,
+            "output_modalities": ["audio"],
+            "tools": self._skills.get_all_tool_definitions(),
+            "audio": {
+                "input": {
+                    "format": pcm_24k,
+                    # Force the persona's transcription language. Without
+                    # `language`, Whisper auto-detects per utterance and with
+                    # heavy regional accents it flips languages on short
+                    # inputs; the hint eliminates the ambiguity.
+                    "transcription": {
+                        "model": "whisper-1",
+                        "language": self._resolved.transcription_language,
+                    },
+                    # PTT mode — disable server VAD, we commit manually on PTT release
+                    "turn_detection": None,
+                },
+                "output": {"format": pcm_24k, "voice": voice},
+            },
+        }
 
     async def disconnect(self, *, save_summary: bool = True) -> None:
         """Close the WebSocket connection.
@@ -370,10 +391,7 @@ class OpenAIRealtimeProvider:
                 await logger.aerror(
                     "realtime_api_access_denied",
                     model=self._config.openai_model,
-                    hint=(
-                        "The Realtime API requires Tier 1 access (≥$5 lifetime spend). "
-                        "Add credits at platform.openai.com/settings/billing"
-                    ),
+                    hint=_MODEL_UNAVAILABLE_HINT,
                 )
             raise
 
@@ -457,15 +475,11 @@ class OpenAIRealtimeProvider:
                 if parsed.code == "model_not_found":
                     await logger.aerror(
                         "session.rx.error",
-                        hint=(
-                            "The Realtime API requires Tier 1 access "
-                            "(>=5 USD lifetime spend). Add a payment "
-                            "method and purchase credits at "
-                            "platform.openai.com/settings/billing"
-                        ),
+                        model=self._config.openai_model,
+                        hint=_MODEL_UNAVAILABLE_HINT,
                     )
 
-        if event_type == ServerEventType.RESPONSE_AUDIO_DONE.value:
+        if event_type == ServerEventType.RESPONSE_OUTPUT_AUDIO_DONE.value:
             await self._cb.on_audio_done()
 
         if event_type == ServerEventType.RESPONSE_DONE.value:

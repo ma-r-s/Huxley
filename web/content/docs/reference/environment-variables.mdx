@@ -44,14 +44,16 @@ HUXLEY_SERVER_PORT=8766
 
 Override the model the server requests from OpenAI Realtime.
 
-- Default: `gpt-4o-mini-realtime-preview`
+- Default: `gpt-realtime-2.1-mini`
 - Supported: any model name OpenAI Realtime accepts at the time you run.
 
 ```bash
-HUXLEY_OPENAI_MODEL=gpt-4o-realtime-preview-2024-10-01
+HUXLEY_OPENAI_MODEL=gpt-realtime-2.1
 ```
 
-The default is *deliberately* the smaller, cheaper model. The mini variant is enough for tool-dispatch in fixed skill sets — the work the model does is mostly "decide which tool to call" and "narrate the result," both of which the smaller model handles well.
+The default is *deliberately* the smaller, cheaper model. The mini variant is enough for tool-dispatch in fixed skill sets — the work the model does is mostly "decide which tool to call" and "narrate the result," both of which the smaller model handles well. `gpt-realtime-2.1` costs roughly 3x more per audio token; switch to it if the mini model skips tool calls in your persona.
+
+Huxley speaks the GA Realtime interface. OpenAI shut down the beta interface (`OpenAI-Beta: realtime=v1`) and the `gpt-4o-*-realtime-preview` models in May 2026, so those names no longer work.
 
 ### `HUXLEY_OPENAI_VOICE`
 
@@ -133,7 +135,7 @@ HUXLEY_PERSONA=basic uv run huxley     # one-off
 ```bash title="server/runtime/.env"
 # OpenAI
 HUXLEY_OPENAI_API_KEY=sk-proj-...
-HUXLEY_OPENAI_MODEL=gpt-4o-mini-realtime-preview
+HUXLEY_OPENAI_MODEL=gpt-realtime-2.1-mini
 HUXLEY_OPENAI_VOICE=coral
 
 # Persona

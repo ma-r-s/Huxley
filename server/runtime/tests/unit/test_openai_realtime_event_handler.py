@@ -92,7 +92,7 @@ class TestHandleAudioDelta:
         raw_pcm = b"\x01\x02\x03\x04"
         await prov._handle_server_event(
             {
-                "type": "response.audio.delta",
+                "type": "response.output_audio.delta",
                 "delta": base64.b64encode(raw_pcm).decode("ascii"),
             }
         )
@@ -156,7 +156,7 @@ class TestHandleTranscript:
 
         await prov._handle_server_event(
             {
-                "type": "response.audio_transcript.done",
+                "type": "response.output_audio_transcript.done",
                 "transcript": "Buenos días",
             }
         )
@@ -257,7 +257,7 @@ class TestHandleResponseDone:
         cb, mocks = _callbacks()
         prov = _provider(settings, persona, storage, cb)
 
-        await prov._handle_server_event({"type": "response.audio.done"})
+        await prov._handle_server_event({"type": "response.output_audio.done"})
 
         mocks["on_audio_done"].assert_awaited_once()
         mocks["on_response_done"].assert_not_awaited()
@@ -278,7 +278,7 @@ class TestHandleResponseDone:
         cb, mocks = _callbacks()
         tracker = CostTracker(
             storage=storage,
-            model="gpt-4o-mini-realtime-preview",
+            model="gpt-realtime-2.1-mini",
             thresholds=CostThresholds(),
         )
         prov = _provider(settings, persona, storage, cb, cost_tracker=tracker)

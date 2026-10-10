@@ -46,24 +46,25 @@ class ModelPricing:
     audio_output_per_1m: float
 
 
-# Prices verified 2026-04-18 from openai.com/api/pricing.
+# Prices verified 2026-10-10 from developers.openai.com/api/docs/models.
 # Update when OpenAI changes rates or when adding a new model.
+DEFAULT_PRICING_MODEL = "gpt-realtime-2.1-mini"
 PRICES: dict[str, ModelPricing] = {
-    "gpt-4o-mini-realtime-preview": ModelPricing(
+    "gpt-realtime-2.1-mini": ModelPricing(
         text_input_per_1m=0.60,
-        text_input_cached_per_1m=0.30,
+        text_input_cached_per_1m=0.06,
         text_output_per_1m=2.40,
         audio_input_per_1m=10.00,
         audio_input_cached_per_1m=0.30,
         audio_output_per_1m=20.00,
     ),
-    "gpt-4o-realtime-preview": ModelPricing(
-        text_input_per_1m=5.00,
-        text_input_cached_per_1m=2.50,
-        text_output_per_1m=20.00,
-        audio_input_per_1m=100.00,
-        audio_input_cached_per_1m=20.00,
-        audio_output_per_1m=200.00,
+    "gpt-realtime-2.1": ModelPricing(
+        text_input_per_1m=4.00,
+        text_input_cached_per_1m=0.40,
+        text_output_per_1m=24.00,
+        audio_input_per_1m=32.00,
+        audio_input_cached_per_1m=0.40,
+        audio_output_per_1m=64.00,
     ),
 }
 
@@ -86,7 +87,7 @@ class CostThresholds:
 def compute_cost_usd(model: str, usage: dict[str, Any]) -> float:
     """Compute USD cost for one `response.done.usage` payload.
 
-    Unknown models fall back to mini pricing with a warning log so a
+    Unknown models fall back to default-model pricing with a warning log so a
     fresh model rollout doesn't silently produce zero-cost numbers.
     Missing token-detail subkeys default to 0. Cached tokens are billed
     at the cached rate; the rest at the full rate.
@@ -94,11 +95,11 @@ def compute_cost_usd(model: str, usage: dict[str, Any]) -> float:
     pricing = PRICES.get(model)
     if pricing is None:
         logger.warning(
-            "cost.unknown_model_using_mini_pricing",
+            "cost.unknown_model_using_default_pricing",
             model=model,
             known=list(PRICES.keys()),
         )
-        pricing = PRICES["gpt-4o-mini-realtime-preview"]
+        pricing = PRICES[DEFAULT_PRICING_MODEL]
 
     in_details = usage.get("input_token_details", {}) or {}
     out_details = usage.get("output_token_details", {}) or {}

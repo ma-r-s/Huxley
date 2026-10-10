@@ -5031,3 +5031,44 @@ Result: StrictMode dev runs the same lifecycle, but only one server-side connect
 - **Defense in depth for write paths.** The LLM is one of three layers (tool description hint → LLM read-back → skill normalization). When any one layer fails, the next catches it. Tested by deliberately constructing the LLM-failure case in `test_add_contact_with_plus_but_local_digits_prepends_cc`.
 - **Country code is persona data, not framework primitive.** Resisted promoting to a framework-level `locale.country` field — only Telegram needs it today, premature to abstract.
 - **Phone validation is fundamentally country-dependent.** E.164 (`+\d{7,15}`) is the global truth and stays. Country-specific tightening (digit-count rules per country) belongs in libphonenumber territory; deferred until we hit a case the heuristic miss.
+
+## T1.25 — OpenAI shut down our Realtime model and the beta interface (Huxley is down)
+
+**Status**: `in_progress` (2026-10-10, code shipped; awaiting Mario browser smoke) · **Effort**: ~3h (wire-format migration, contained to `huxley/voice/` + cost table)
+
+**Problem.** OpenAI removed `gpt-4o-mini-realtime-preview` on 2026-05-07 and the Realtime beta interface (`OpenAI-Beta: realtime=v1`) on 2026-05-12. Huxley defaults to both. Every connect fails, so every persona is silent.
+
+**Validation (2026-10-10).**
+- `GET /v1/models/gpt-4o-mini-realtime-preview` → `404`. Same key: `gpt-realtime-2.1` → 200, `gpt-realtime-2.1-mini` → 200, `gpt-live-1` → 200.
+- developers.openai.com/api/docs/deprecations: "2026-05-07 gpt-4o-mini-realtime-preview → gpt-realtime-mini" and "2026-05-12 OpenAI-Beta: realtime=v1 → Realtime API". `gpt-realtime-mini` is itself marked deprecated on the models page; its successor is `gpt-realtime-2.1-mini`.
+- No unit test pinned the `session.update` payload or the connect headers, so the suite stayed green through the outage.
+
+**Probe (2026-10-10).** Scratch script: TTS'd Spanish audio ("Hola, ¿qué hora es ahora mismo?") → GA endpoint, manual commit (PTT shape, `turn_detection: null`), whisper-1 transcription with `language: es`, one `get_time` tool round trip.
+- `gpt-realtime-2.1`: session accepted, transcript exact, first audio 0.90s, tool call 1.42s, answer correct.
+- `gpt-realtime-2.1-mini`: same, first audio 0.82s, tool call 0.94s, answer correct. `usage` shape unchanged (reasoning tokens are folded into `output_token_details.text_tokens`), so `cost.py` math carries over.
+
+**Solution.**
+- Drop the beta header. GA `session.update`: `session.type: "realtime"`, `output_modalities: ["audio"]`, `audio.input.{format, transcription, turn_detection}`, `audio.output.{format, voice}`.
+- Rename the three server events: `response.output_audio.delta`, `response.output_audio.done`, `response.output_audio_transcript.done`. Everything else Huxley uses (`input_audio_buffer.*`, `conversation.item.create`, `response.create/cancel/done`, `function_call_arguments.done`, input transcription completed, `error`) is unchanged.
+- Default model → `gpt-realtime-2.1-mini`: same audio price as the shut-down model ($10 in / $20 out per 1M), cheaper cached text ($0.06), adds reasoning. `gpt-realtime-2.1` is a one-line env override (~3x audio cost).
+- Cost table: replace the two dead models with `gpt-realtime-2.1-mini` and `gpt-realtime-2.1`; unknown-model fallback points at the new default.
+
+**DoD.**
+- [x] Provider connects without the beta header and sends the GA session shape. `TestConnectGAInterface` (2 tests) fails on the pre-fix code, passes after.
+- [x] Parser handles the GA event names (fixtures + replay test updated).
+- [x] Default model + `.env.example` + cost table updated. 557 runtime tests, all skill suites, SDK, ruff, mypy green.
+- [x] Live server boots and reaches CONVERSING on the new default. Scripted PWA-shaped smoke (`ptt_start` → 20ms TTS'd Spanish frames → `ptt_stop`) through the real server: "¿qué hora es?" → `get_current_time` → spoken answer, first audio 0.74s after release. "Ponme El Principito" → `search_audiobooks` → `play_audiobook` → `coord.response_done pending_audio_streams=1` → `coord.audio_stream_started`, book resumed at the saved position.
+- [x] Model-unavailable log hint names both causes (retired model vs. account access). Pre-fix, the hint blamed billing. Observed on the wire: a retired model opens the socket and sends `error.code=model_not_found`; the beta header gets `error.code=beta_api_shape_disabled`.
+- [x] Docs: `architecture.md` sequence diagrams, `verifying.md`, web env-var + run-the-server pages.
+- [ ] Mario browser smoke: PTT, Spanish question, tool call, audiobook start.
+
+**Smoke note.** On "Ponme El Principito" the model went straight to the tool calls with no spoken ack; the user hears the `book_start` earcon (2.3s preroll) and then the book. Worth listening for in the browser smoke; if it feels abrupt, it's a persona-prompt tweak, not a framework change.
+
+**Docs**: `docs/architecture.md`, `docs/verifying.md`, `web/content/docs/reference/environment-variables.mdx`, `web/content/docs/use/run-the-server.mdx`. `decisions.md` and `research/realtime-suspend.md` keep the old event names on purpose (historical records). Checked `protocol.md` (client contract unchanged), `observability.md` (no event names changed except `cost.unknown_model_using_default_pricing`, not documented there), `concepts.md`, skill docs: none affected.
+
+**Lessons**:
+- **Pin the third-party wire contract in a test.** The suite was green for five months of total outage because nothing asserted what we send to OpenAI. A payload-shape test is cheap and is the only thing that ties our code to the provider's current contract.
+- **A provider deprecation is a production incident with a date on it.** OpenAI announced both shutdowns in September 2025. Nobody was watching. Follow-up candidate: a weekly check that `GET /v1/models/$HUXLEY_OPENAI_MODEL` returns 200, with an audible alert for the Abuelo deployment.
+- **Error hints must name every cause that produces the error.** "Add credits" sent the diagnosis the wrong way for exactly the failure we hit.
+
+---

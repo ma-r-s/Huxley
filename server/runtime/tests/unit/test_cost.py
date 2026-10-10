@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from huxley.cost import (
+    DEFAULT_PRICING_MODEL,
     PRICES,
     CostThresholds,
     CostTracker,
@@ -67,25 +68,25 @@ USAGE_CACHE_NO_BREAKDOWN = {
 
 class TestComputeCostUsd:
     def test_mini_pricing_simple_usage(self) -> None:
-        cost = compute_cost_usd("gpt-4o-mini-realtime-preview", USAGE_SIMPLE)
+        cost = compute_cost_usd("gpt-realtime-2.1-mini", USAGE_SIMPLE)
         # Expected: 1000*0.60/1M + 100*10/1M + 50*2.40/1M + 200*20/1M
         # = 0.0006 + 0.001 + 0.00012 + 0.004 = 0.00572
         assert round(cost, 6) == round(0.00572, 6)
 
     def test_full_model_pricing(self) -> None:
-        cost = compute_cost_usd("gpt-4o-realtime-preview", USAGE_SIMPLE)
-        # Same shape, full pricing: 1000*5/1M + 100*100/1M + 50*20/1M + 200*200/1M
-        # = 0.005 + 0.01 + 0.001 + 0.04 = 0.056
-        assert round(cost, 6) == round(0.056, 6)
+        cost = compute_cost_usd("gpt-realtime-2.1", USAGE_SIMPLE)
+        # Same shape, full pricing: 1000*4/1M + 100*32/1M + 50*24/1M + 200*64/1M
+        # = 0.004 + 0.0032 + 0.0012 + 0.0128 = 0.0212
+        assert round(cost, 6) == round(0.0212, 6)
 
     def test_cached_tokens_billed_at_cached_rate(self) -> None:
-        cost = compute_cost_usd("gpt-4o-mini-realtime-preview", USAGE_WITH_CACHE)
+        cost = compute_cost_usd("gpt-realtime-2.1-mini", USAGE_WITH_CACHE)
         # Fresh text in: 1000-700 = 300. Fresh audio in: 100-100 = 0.
-        # Cached text: 700 @ 0.30. Cached audio: 100 @ 0.30.
+        # Cached text: 700 @ 0.06. Cached audio: 100 @ 0.30.
         # Output text: 50 @ 2.40. Output audio: 200 @ 20.
         expected = (
             300 * 0.60 / 1_000_000  # fresh text in
-            + 700 * 0.30 / 1_000_000  # cached text
+            + 700 * 0.06 / 1_000_000  # cached text
             + 0 * 10.0 / 1_000_000  # fresh audio in
             + 100 * 0.30 / 1_000_000  # cached audio
             + 50 * 2.40 / 1_000_000  # text out
@@ -94,12 +95,12 @@ class TestComputeCostUsd:
         assert round(cost, 8) == round(expected, 8)
 
     def test_cache_without_breakdown_assumes_text(self) -> None:
-        cost = compute_cost_usd("gpt-4o-mini-realtime-preview", USAGE_CACHE_NO_BREAKDOWN)
+        cost = compute_cost_usd("gpt-realtime-2.1-mini", USAGE_CACHE_NO_BREAKDOWN)
         # cached_tokens=800, no breakdown -> all treated as cached text.
         # Fresh text: 1000-800=200. Fresh audio: 100. Cached text: 800.
         expected = (
             200 * 0.60 / 1_000_000
-            + 800 * 0.30 / 1_000_000
+            + 800 * 0.06 / 1_000_000
             + 100 * 10.0 / 1_000_000
             + 0 * 0.30 / 1_000_000
             + 50 * 2.40 / 1_000_000
@@ -107,29 +108,32 @@ class TestComputeCostUsd:
         )
         assert round(cost, 8) == round(expected, 8)
 
-    def test_unknown_model_falls_back_to_mini(self) -> None:
-        # Should not raise; should use mini pricing.
+    def test_unknown_model_falls_back_to_default(self) -> None:
+        # Should not raise; should use the default model's pricing.
         cost_unknown = compute_cost_usd("gpt-9000-future", USAGE_SIMPLE)
-        cost_mini = compute_cost_usd("gpt-4o-mini-realtime-preview", USAGE_SIMPLE)
-        assert cost_unknown == cost_mini
+        cost_default = compute_cost_usd(DEFAULT_PRICING_MODEL, USAGE_SIMPLE)
+        assert cost_unknown == cost_default
 
     def test_missing_token_details_treats_as_zero(self) -> None:
         cost = compute_cost_usd(
-            "gpt-4o-mini-realtime-preview",
+            "gpt-realtime-2.1-mini",
             {"input_token_details": {}, "output_token_details": {}},
         )
         assert cost == 0.0
 
     def test_missing_top_level_keys_treats_as_zero(self) -> None:
-        cost = compute_cost_usd("gpt-4o-mini-realtime-preview", {})
+        cost = compute_cost_usd("gpt-realtime-2.1-mini", {})
         assert cost == 0.0
 
     def test_known_models_table_in_sync(self) -> None:
-        # Both default models that ship with Huxley must have pricing rows.
-        # Catches the case where a model is added to .env without updating
-        # PRICES, which would silently fall back to mini.
-        assert "gpt-4o-mini-realtime-preview" in PRICES
-        assert "gpt-4o-realtime-preview" in PRICES
+        # The shipped default and the documented upgrade must have pricing
+        # rows. Catches a default-model bump without a PRICES update, which
+        # would silently bill at the fallback rate.
+        from huxley.config import Settings
+
+        assert Settings.model_fields["openai_model"].default in PRICES
+        assert DEFAULT_PRICING_MODEL in PRICES
+        assert "gpt-realtime-2.1" in PRICES
 
 
 class _FixedClock:
@@ -152,7 +156,7 @@ def _tracker(
 ) -> CostTracker:
     return CostTracker(
         storage=storage,
-        model="gpt-4o-mini-realtime-preview",
+        model="gpt-realtime-2.1-mini",
         thresholds=thresholds,
         on_kill_switch=on_kill_switch,
         clock=clock or _FixedClock(),

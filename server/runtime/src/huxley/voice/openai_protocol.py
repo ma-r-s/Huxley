@@ -1,7 +1,10 @@
-"""Typed schemas for OpenAI Realtime API events.
+"""Typed schemas for OpenAI Realtime API events (GA interface).
 
 These mirror the server-sent events we need to handle. We don't model
 every possible event — just the ones relevant to Huxley.
+
+The beta interface (`OpenAI-Beta: realtime=v1`, `response.audio.*`
+event names) was shut down 2026-05-12; see docs/triage.md T1.25.
 """
 
 from __future__ import annotations
@@ -16,9 +19,9 @@ class ServerEventType(Enum):
 
     SESSION_CREATED = "session.created"
     SESSION_UPDATED = "session.updated"
-    RESPONSE_AUDIO_DELTA = "response.audio.delta"
-    RESPONSE_AUDIO_DONE = "response.audio.done"
-    RESPONSE_AUDIO_TRANSCRIPT_DONE = "response.audio_transcript.done"
+    RESPONSE_OUTPUT_AUDIO_DELTA = "response.output_audio.delta"
+    RESPONSE_OUTPUT_AUDIO_DONE = "response.output_audio.done"
+    RESPONSE_OUTPUT_AUDIO_TRANSCRIPT_DONE = "response.output_audio_transcript.done"
     RESPONSE_FUNCTION_CALL_ARGUMENTS_DONE = "response.function_call_arguments.done"
     RESPONSE_DONE = "response.done"
     INPUT_AUDIO_BUFFER_SPEECH_STARTED = "input_audio_buffer.speech_started"
@@ -52,7 +55,7 @@ class FunctionCallEvent:
 
 @dataclass(frozen=True, slots=True)
 class AudioDeltaEvent:
-    """Parsed from response.audio.delta."""
+    """Parsed from response.output_audio.delta."""
 
     delta: str  # base64-encoded audio
 
@@ -87,10 +90,10 @@ def parse_server_event(
             arguments=data.get("arguments", "{}"),
         )
 
-    if event_type == ServerEventType.RESPONSE_AUDIO_DELTA.value:
+    if event_type == ServerEventType.RESPONSE_OUTPUT_AUDIO_DELTA.value:
         return AudioDeltaEvent(delta=data.get("delta", ""))
 
-    if event_type == ServerEventType.RESPONSE_AUDIO_TRANSCRIPT_DONE.value:
+    if event_type == ServerEventType.RESPONSE_OUTPUT_AUDIO_TRANSCRIPT_DONE.value:
         return TranscriptEvent(transcript=data.get("transcript", ""), role="assistant")
 
     if event_type == ServerEventType.CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_COMPLETED.value:

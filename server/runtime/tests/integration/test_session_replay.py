@@ -68,7 +68,7 @@ class TestAudiobookPlayBasic:
         self, settings: Settings, persona: PersonaSpec, storage: Storage
     ) -> None:
         cb, mocks = _full_callbacks()
-        tracker = CostTracker(storage=storage, model="gpt-4o-mini-realtime-preview")
+        tracker = CostTracker(storage=storage, model="gpt-realtime-2.1-mini")
         prov = OpenAIRealtimeProvider(
             config=settings,
             persona=persona,
@@ -119,7 +119,7 @@ class TestAudiobookPlayBasic:
         self, settings: Settings, persona: PersonaSpec, storage: Storage
     ) -> None:
         cb, _ = _full_callbacks()
-        tracker = CostTracker(storage=storage, model="gpt-4o-mini-realtime-preview")
+        tracker = CostTracker(storage=storage, model="gpt-realtime-2.1-mini")
         prov = OpenAIRealtimeProvider(
             config=settings,
             persona=persona,

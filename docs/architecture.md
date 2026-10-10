@@ -184,11 +184,11 @@ sequenceDiagram
     Server->>Coord: on_ptt_stop()
     Coord->>Prov: commit_and_request_response()
     Prov->>LLM: buffer.commit + response.create
-    LLM-->>Prov: response.audio.delta (streaming)
+    LLM-->>Prov: response.output_audio.delta (streaming)
     Prov-->>Coord: on_audio_delta(pcm)
     Coord->>Server: send_model_speaking(true)<br/>send_audio(pcm)
     Server-->>Client: { type: "audio", data: PCM16 }
-    LLM-->>Prov: response.audio.done
+    LLM-->>Prov: response.output_audio.done
     Prov-->>Coord: on_audio_done()
     Coord->>Server: send_model_speaking(false)
     LLM-->>Prov: response.done
@@ -211,7 +211,7 @@ sequenceDiagram
     participant WS as AudioServer
 
     Note over LLM: model pre-narrates ack<br/>(persona-language)
-    LLM-->>Prov: response.audio.delta (ack chunks)
+    LLM-->>Prov: response.output_audio.delta (ack chunks)
     Prov-->>Coord: on_audio_delta(...)
     Coord->>WS: send_audio(...)
     LLM-->>Prov: response.function_call<br/>play_audiobook({book_id})
@@ -224,7 +224,7 @@ sequenceDiagram
     Note over Coord: AudioStream latched onto pending_audio_streams
     Coord->>Prov: send_tool_output(call_id, output)
     Prov->>LLM: conversation.item.create
-    LLM-->>Prov: response.audio.done
+    LLM-->>Prov: response.output_audio.done
     Prov-->>Coord: on_audio_done()
     LLM-->>Prov: response.done
     Prov-->>Coord: on_response_done()

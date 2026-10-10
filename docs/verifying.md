@@ -62,7 +62,7 @@ audiobooks.catalog_loaded   count=<N>   path=.../personas/abuelos/data/audiobook
 huxley_ready   skills=['audiobooks', 'system']   tools=[...6 tools...]
 [Huxley] Server listening on ws://localhost:8765
 state_transition   from_state=IDLE   to_state=CONNECTING   trigger=wake_word
-session_connected   model=gpt-4o-mini-realtime-preview
+session_connected   model=gpt-realtime-2.1-mini
 state_transition   from_state=CONNECTING   to_state=CONVERSING   trigger=connected
 ```
 

@@ -7,10 +7,10 @@
 {"type": "conversation.item.input_audio_transcription.completed", "transcript": "ponme un libro de garcia marquez"}
 
 // Model speaks the acknowledgement ("ahí va") — two short audio chunks.
-{"type": "response.audio_transcript.done", "transcript": "Ahí va, don."}
-{"type": "response.audio.delta", "delta": "AAECAw=="}
-{"type": "response.audio.delta", "delta": "BAUGBw=="}
-{"type": "response.audio.done"}
+{"type": "response.output_audio_transcript.done", "transcript": "Ahí va, don."}
+{"type": "response.output_audio.delta", "delta": "AAECAw=="}
+{"type": "response.output_audio.delta", "delta": "BAUGBw=="}
+{"type": "response.output_audio.done"}
 
 // Tool call to play_audiobook.
 {"type": "response.function_call_arguments.done", "call_id": "call_1", "name": "play_audiobook", "arguments": "{\"book_id\": \"garcia-marquez-cien-anos\"}"}

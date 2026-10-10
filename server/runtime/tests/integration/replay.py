@@ -15,12 +15,12 @@ are skipped so fixtures can be authored readably. Example:
 // User says "ponme un libro"
 {"type": "conversation.item.input_audio_transcription.completed", "transcript": "ponme un libro"}
 // Model speaks
-{"type": "response.audio_transcript.done", "transcript": "Ahí va"}
-{"type": "response.audio.delta", "delta": "AAAA"}
+{"type": "response.output_audio_transcript.done", "transcript": "Ahí va"}
+{"type": "response.output_audio.delta", "delta": "AAAA"}
 // Tool call
 {"type": "response.function_call_arguments.done", "call_id": "c1", "name": "play_audiobook", "arguments": "{\"book_id\": \"x\"}"}
 // Done
-{"type": "response.audio.done"}
+{"type": "response.output_audio.done"}
 {"type": "response.done", "response": {"id": "r1", "usage": {"input_token_details": {"text_tokens": 100}}}}
 ```
 
