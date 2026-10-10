@@ -5125,3 +5125,32 @@ Two findings that matter for B: `coral` works on GPT-Live (it's not limited to t
 **Decision needed from Mario.** Whether to pursue D (a companionship skill) at all; it's a new skill, so it goes through plan mode per CLAUDE.md.
 
 ---
+
+## T1.27: Huxley on Mario's iPhone (PWA fixes, native shell, native audio)
+
+**Status**: `in_progress` (2026-10-10, native audio built and simulator-verified; awaiting Mario's phone test) · **Effort**: ~1 day so far
+
+**Problem.** Mario wants to use Huxley from his iPhone as if it were the product. As a home-screen PWA it had: a white band at the top, transcripts out of view, a mic prompt on every launch, a permanent Dynamic Island live activity, stalls and stuck "thinking". As a Capacitor app (commit `ef8e8389`) the band and the per-launch prompt went away, but replies played from the earpiece ("like a phone call") and the island still showed a live activity while Huxley spoke.
+
+**Validation.** Mario's reports and screenshot (island speaker pill on "Escuchando", 2026-10-10). Root cause, measured: WKWebView renders audio in a WebKit helper process with its own audio session. iOS shows that as a live activity, and WebKit's play-and-record routes output to the earpiece. Releasing the web mic between presses (`f060da9a`) fixed the earpiece only partially and not the island.
+
+**Solution.**
+- PWA reliability fixes for iOS WebKit: `28bd26de`, `9cd2bf36`.
+- Native shell via Capacitor 8 with live-reload dev mode: `ef8e8389`, `3d012a06`.
+- Native audio plugin (`clients/pwa/ios/App/App/HuxleyAudioPlugin.swift`, JS `src/lib/audio/native.ts`): AVAudioEngine in the app's process, `.playAndRecord` + `.defaultToSpeaker`, mic engine runs only while the button is held, session released 3 s after idle. 48 kHz to 24 kHz PCM16 conversion in `PCM16Resampler.swift`.
+
+**Finding along the way (fixed).** The server's too-short rule counted chunks (25, sized for the web worklet's 5.3 ms frames). The native plugin sends 100 ms chunks, so every press under 2.5 s was rejected as "muy corto", a quick "Sí" included. The rule now measures audio duration (133 ms). Also correct for the ESP32, whose chunk size differs again.
+
+**DoD.**
+- [x] Simulator: native mic prompt once, `client.mic_acquired native=True`, frames flow, reply plays, no web-audio events.
+- [x] `bun run ios:test`: resampler keeps length, pitch, level and continuity for 48k, 48k small buffers, 44.1k, 16k and stereo input; two mutated copies (flush per chunk, wrong output rate) fail it.
+- [x] Server: 0.7 s native press commits (`user_audio_ms=490`); regression tests for large and small chunks. 564 runtime tests, ruff, mypy green.
+- [ ] Mario on the phone: replies from the main speaker, no island live activity, a short "Sí" goes through.
+
+**Docs**: `verifying.md` (native audio section), `observability.md` (native client events), `protocol.md` + `turns.md` + web `turns.mdx` / `connect-a-client.mdx` (133 ms rule).
+
+**Lessons**:
+- **A threshold in "frames" is a hidden contract with one client's chunk size.** Measure the quantity you mean (milliseconds of audio), not a proxy for it.
+- **Log what the hardware gave you.** A garbled simulator test turned out to be a muted Mac speaker, found by hand. The per-press `native_capture_summary` (rate, frames in/out, peak) now shows a silent mic in one log line.
+
+---

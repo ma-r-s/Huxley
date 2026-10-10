@@ -96,7 +96,7 @@ Open `https://<mac-name>.<tailnet>.ts.net:8443` in Safari, then Share → Add to
 
 The server takes **one client at a time**: a newer connection evicts the older one (`client_evicted` in the log). A copy that isn't on screen (a Safari tab behind the home-screen app) no longer reconnects until it's shown again, but a desktop tab left open and visible still competes, so close it while testing on the phone. Turn the address off with `tailscale serve --https=8443 off`.
 
-iOS rules the PWA works around (details in `clients/pwa/src/lib/audio/capture.ts`): only a finger *lift* counts as a gesture, so the mic is acquired on the first lift or press of each launch and then kept muted between turns; iOS asks for mic permission once per launch of a home-screen app; reconnects happen automatically when the app returns to the foreground. If a phone misbehaves, start from `client.device` and the `client.mic_*` / `client.playback_*` lines in the server log (see `docs/observability.md`).
+iOS rules the PWA works around (details in `clients/pwa/src/lib/audio/capture.ts`): only a finger _lift_ counts as a gesture, so the mic is acquired on the first lift or press of each launch and then kept muted between turns; iOS asks for mic permission once per launch of a home-screen app; reconnects happen automatically when the app returns to the foreground. If a phone misbehaves, start from `client.device` and the `client.mic_*` / `client.playback_*` lines in the server log (see `docs/observability.md`).
 
 ### As a native iOS app (Capacitor)
 
@@ -122,7 +122,9 @@ xcrun devicectl device process launch --terminate-existing --device <device udid
 
 A free Apple ID's profile expires after 7 days; re-run the build and install. On a new phone, trust the certificate once: Settings > General > VPN & Device Management.
 
-In the native app the mic is open only while the button is held (`MicCapture.releaseWhenIdle`): holding a muted stream between turns kept iOS in play-and-record, which sends replies to the earpiece and keeps the mic indicator on. Re-opening per press measured 14-45 ms to first frame.
+Audio in the native app does not go through the web view. WKWebView plays and records in a WebKit helper process with its own audio session: iOS showed that as a Dynamic Island live activity while Huxley spoke, and WebKit's play-and-record sent replies to the earpiece. So the app has its own plugin (`ios/App/App/HuxleyAudioPlugin.swift`, JS side `src/lib/audio/native.ts`) that records and plays through AVAudioEngine in the app's process, on the main speaker. The web build keeps WebAudio; the app picks the plugin when the installed binary has it, so editing `native.ts` hot-reloads but editing the Swift needs a rebuild. The mic is open only while the button is held.
+
+The plugin's 48 kHz to 24 kHz conversion has a device-free check: `bun run ios:test` (compiles `PCM16Resampler.swift` with a test harness and checks length, pitch, level, and chunk-boundary continuity across the input formats an iPhone can produce). On a device, each press logs `client.native_capture_summary` (see [observability](./observability.md)).
 
 ### Testing on the iOS simulator without kicking the phone off
 

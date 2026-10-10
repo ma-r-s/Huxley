@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useWs } from "./lib/useWs.js";
 import { Capacitor } from "@capacitor/core";
 import { MicCapture } from "./lib/audio/capture.js";
+import { isNativeAudioAvailable, NativeCapture, NativePlayback } from "./lib/audio/native.js";
 import { AudioPlayback } from "./lib/audio/playback.js";
 import { deriveOrbState } from "./lib/orbState.js";
 import { Orb } from "./components/Orb.js";
@@ -53,15 +54,20 @@ function saveAppearance(a: Appearance) {
 }
 
 // ── Singleton audio instances ─────────────────────────────────────────────
-const mic = new MicCapture();
-const playback = new AudioPlayback();
-// Walkie-talkie mic: held while talking plus this long after release, so a
-// quick follow-up ("sí") doesn't pay the reopen cost, then released so the
-// OS microphone indicator goes off.
-// In the native app the mic closes the moment the button is released (see
-// MicCapture.releaseWhenIdle): replies then play through the main speaker
-// instead of the earpiece, and the mic indicator turns off.
+// iOS app with the native audio plugin: record and play in the app's own
+// process (lib/audio/native.ts). Otherwise (browsers, or an app binary
+// installed before the plugin existed): web audio.
+const NATIVE_AUDIO = isNativeAudioAvailable();
 const NATIVE_APP = Capacitor.isNativePlatform();
+const mic: MicCapture | NativeCapture = NATIVE_AUDIO ? new NativeCapture() : new MicCapture();
+const playback: AudioPlayback | NativePlayback = NATIVE_AUDIO
+  ? new NativePlayback()
+  : new AudioPlayback();
+// Walkie-talkie mic: on the web it's held while talking plus this long
+// after release, so a quick follow-up ("sí") doesn't pay the reopen cost,
+// then muted. In the app it closes the moment the button is released
+// (releaseWhenIdle): replies then play through the main speaker instead of
+// the earpiece, and the mic indicator turns off.
 mic.releaseWhenIdle = NATIVE_APP;
 const MIC_LINGER_MS = NATIVE_APP ? 0 : 5000;
 

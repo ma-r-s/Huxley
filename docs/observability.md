@@ -41,18 +41,27 @@ The `client.*` events come in via the `client_event` WebSocket message type — 
 
 PWA client events worth knowing when debugging a phone (added 2026-10-10):
 
-| Event | Meaning |
-| --- | --- |
-| `client.device` | Sent on every connection: user agent (iOS version), standalone vs Safari tab, viewport sizes (`inner`, `visual`, `lvh`/`dvh`/`svh`), safe-area insets. First stop for layout bugs. |
-| `client.ptt_press` | Finger down on the orb, before any audio work. A press with nothing after it means the press got stuck client-side. |
-| `client.mic_acquired` / `client.mic_acquire_failed` | Stream obtained (`trigger=press` or `gesture`) or refused (`name=NotAllowedError` etc.). |
-| `client.mic_idle` / `client.mic_released` | Track muted between turns or while in the background / stream stopped (unmount). |
-| `client.ptt_released_during_mic_open` | Finger lifted while the mic was still opening; the press was cancelled cleanly. |
+| Event                                                                                      | Meaning                                                                                                                                                                                           |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `client.device`                                                                            | Sent on every connection: user agent (iOS version), standalone vs Safari tab, viewport sizes (`inner`, `visual`, `lvh`/`dvh`/`svh`), safe-area insets. First stop for layout bugs.                |
+| `client.ptt_press`                                                                         | Finger down on the orb, before any audio work. A press with nothing after it means the press got stuck client-side.                                                                               |
+| `client.mic_acquired` / `client.mic_acquire_failed`                                        | Stream obtained (`trigger=press` or `gesture`) or refused (`name=NotAllowedError` etc.).                                                                                                          |
+| `client.mic_idle` / `client.mic_released`                                                  | Track muted between turns or while in the background / stream stopped (unmount).                                                                                                                  |
+| `client.ptt_released_during_mic_open`                                                      | Finger lifted while the mic was still opening; the press was cancelled cleanly.                                                                                                                   |
 | `client.playback_suspended` / `client.playback_resumed` / `client.playback_resume_blocked` | Speaker context slept when idle / woke for new audio / a wake-up didn't take within 1.5 s (expected on the very first press of a launch; the finger lift unlocks it and queued audio then plays). |
-| `client.playback_pending_dropped` | Audio that had queued while the speaker was asleep was thrown away by a press. Should be rare; a reminder lost this way is a bug. |
-| `client.mic_ctx_not_running` | 1 s into a turn the mic context still isn't running, so frames aren't flowing. |
-| `client.call_mic_recovered` | A call (skill-owned mic) got its mic back after starting without one (no gesture yet, or iOS ended the track in the background). |
-| `client.foreground_reconnect` | The app came back after `away_ms` and replaced a socket iOS may have killed. |
+| `client.playback_pending_dropped`                                                          | Audio that had queued while the speaker was asleep was thrown away by a press. Should be rare; a reminder lost this way is a bug.                                                                 |
+| `client.mic_ctx_not_running`                                                               | 1 s into a turn the mic context still isn't running, so frames aren't flowing.                                                                                                                    |
+| `client.call_mic_recovered`                                                                | A call (skill-owned mic) got its mic back after starting without one (no gesture yet, or iOS ended the track in the background).                                                                  |
+| `client.foreground_reconnect`                                                              | The app came back after `away_ms` and replaced a socket iOS may have killed.                                                                                                                      |
+
+The native iOS app (Capacitor, `clients/pwa/ios/`) records and plays through its own audio plugin, not the web view. Its mic events carry `native=True`, and it adds:
+
+| Event                              | Meaning                                                                                                                                                                                                                                                                                 |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `client.native_capture_summary`    | One per press, on release: hardware `in_rate` / `in_channels`, `chunks`, `in_frames`, `out_frames` (24 kHz), and `peak` (0 to 32767). A low `peak` (a few hundred) means the mic heard only room noise; `out_frames` far from `in_frames x 24000 / in_rate` means the conversion broke. |
+| `client.native_audio_interruption` | iOS took the audio session (`type=began`, e.g. a phone call) or gave it back (`ended`).                                                                                                                                                                                                 |
+| `client.native_audio_engine_reset` | A route change (headphones, Bluetooth) restarted the playback engine.                                                                                                                                                                                                                   |
+| `client.native_play_failed`        | The plugin refused a reply chunk; the message says why.                                                                                                                                                                                                                                 |
 
 ## Context fields
 
@@ -153,7 +162,7 @@ A typical turn looks like this (reformatted for readability):
 ```
 server.rx.ptt_start
 coord.ptt_start            turn=abc12345  had_turn=false  had_media=false
-coord.ptt_stop             turn=abc12345  frames=28  committed=true
+coord.ptt_stop             turn=abc12345  frames=28  audio_ms=149  committed=true
 session.tx.commit
 coord.audio_start          turn=abc12345  state=in_response  owner=user
 server.tx.model_speaking   value=true

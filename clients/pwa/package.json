@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "check": "tsc --noEmit",
     "ios:sync": "cap sync ios",
-    "ios:open": "cap open ios"
+    "ios:open": "cap open ios",
+    "ios:test": "swiftc -parse-as-library -O ios/App/App/PCM16Resampler.swift ios/tests/ResamplerCheck.swift -o \"${TMPDIR:-/tmp}/huxley-resampler-check\" && \"${TMPDIR:-/tmp}/huxley-resampler-check\""
   },
   "dependencies": {
     "@capacitor/core": "8.5.3",
