@@ -67,6 +67,7 @@ RTC_CONN = (-17.53, -6.0)
 # --- Speaker: SPK-4020-5W (as shipped in the kit) ------------------------------
 SPK_D = 40.0
 SPK_DEPTH = 20.5
+SPK_CABLE_L = 97.0  # measured by Mario (2026-10-10): speaker to the end of its plug
 SPK_PROFILE = (  # (depth from front, radius) along the axis
     (0.0, 20.0),
     (2.6, 19.5),
@@ -266,9 +267,10 @@ def cable(points: list[tuple[float, float, float]], d: float = 1.4):
 
 
 # --- 12 x 12 tactile switch PTT (Mario's, from his dev-kit drawer) ------------
-# Assumed generic 12x12x7.3 until measured: body 12 x 12 x 4.0, round stem
-# 3.5 mm across standing 3.3 mm proud, 4 legs. Actuation ~1.6-2.6 N, 0.25 mm.
-TACT_W, TACT_BODY, TACT_STEM_D, TACT_STEM_H = 12.0, 4.0, 3.5, 3.3
+# Measured by Mario (2026-10-10): 7.3 mm from the base to the top of the stem,
+# stem a 3.8 mm square seen from above. Body 12 x 12 x 4.0 and 4 legs assumed
+# (generic). Actuation ~1.6-2.6 N, 0.25 mm.
+TACT_W, TACT_BODY, TACT_STEM_W, TACT_STEM_H = 12.0, 4.0, 3.8, 3.3
 TACT_TRAVEL, TACT_FORCE = 0.25, 2.0
 TACT_LEGS = 3.5
 
@@ -280,7 +282,7 @@ def tact_switch() -> list[Part]:
     """Local frame: body base at z = 0, stem up +z (stem top at TACT_BODY + TACT_STEM_H)."""
     body = Pos(0, 0, TACT_BODY / 2) * Box(TACT_W, TACT_W, TACT_BODY)
     plate = Pos(0, 0, TACT_BODY - 0.15) * Box(TACT_W - 0.6, TACT_W - 0.6, 0.3)
-    stem = Pos(0, 0, TACT_BODY + TACT_STEM_H / 2) * Cylinder(TACT_STEM_D / 2, TACT_STEM_H)
+    stem = Pos(0, 0, TACT_BODY + TACT_STEM_H / 2) * Box(TACT_STEM_W, TACT_STEM_W, TACT_STEM_H)
     legs = None
     for sx in (-1, 1):
         for sy in (-1, 1):
@@ -294,12 +296,15 @@ def tact_switch() -> list[Part]:
     ]
 
 
-# --- KCD1-101 rocker (Mario's on/off), assumed generic until measured ----------
-# Bezel 21 x 15 x 2 outside the panel, snap body 19 x 13 x 11.5 behind it,
-# two 6 mm solder tabs 6 mm apart, rocker standing ~5 mm above the bezel.
+# --- KCD1-101 rocker (Mario's on/off) ------------------------------------------
+# Measured by Mario (2026-10-10): 18.6 mm from the underside of the frame to
+# the tips of the solder tabs. Assumed (generic): bezel 21 x 15 x 2 outside the
+# panel, snap body 19 x 13 x 11.5 behind it (so the tabs stand 7.1), tabs 6 mm
+# apart, rocker ~5 mm above the bezel.
 ROCKER_BEZEL = (21.0, 15.0, 2.0)
 ROCKER_BODY = (19.0, 13.0, 11.5)
-ROCKER_TABS, ROCKER_TAB_PITCH, ROCKER_CAP = 6.0, 6.0, 5.0
+ROCKER_DEPTH = 18.6  # measured: frame underside to tab tips
+ROCKER_TABS, ROCKER_TAB_PITCH, ROCKER_CAP = ROCKER_DEPTH - ROCKER_BODY[2], 6.0, 5.0
 
 # 1S Li-ion protection board (DW01 + 8205 class): reserved, not fitted.
 PROTECTION_PCB = (26.0, 5.0, 3.5)
@@ -325,12 +330,14 @@ def rocker() -> list[Part]:
     ]
 
 
-# --- Single-18650 holder with leads (Mario's), assumed generic until measured --
-# Open frame: floor on one side, side walls up to the cell's centre plane,
-# full-height end caps with the spring (-) at one end and the flat contact (+)
-# at the other; one lead out of each end cap. Holds a 65 mm flat-top cell.
-HOLDER_L, HOLDER_W = 77.0, 21.0
-HOLDER_FLOOR, HOLDER_WALL, HOLDER_CAP = 1.2, 1.2, 3.5
+# --- Single-18650 holder with leads (Mario's) -----------------------------------
+# Measured by Mario (2026-10-10): 76 x 21 x 20.5 outside. Assumed: open frame,
+# floor on one side, side walls up to the cell's centre plane, full-height end
+# caps with the spring (-) at one end and the flat contact (+) at the other;
+# one lead out of each end cap near the floor. Holds a 65 mm flat-top cell.
+HOLDER_L, HOLDER_W, HOLDER_H = 76.0, 21.0, 20.5
+HOLDER_FLOOR, HOLDER_WALL, HOLDER_CAP = 1.2, 1.2, 3.0
+HOLDER_SPRING = 4.5  # compressed spring between the - cap and the cell
 HOLDER_CELL_L = 65.0
 
 
@@ -346,14 +353,17 @@ def holder() -> list[Part]:
         )
         frame += wall
     for sz in (-1, 1):
-        cap = Pos(0, (back - r - 0.5) / 2, sz * (HOLDER_L - HOLDER_CAP) / 2) * Box(
-            HOLDER_W, back + r + 0.5, HOLDER_CAP
+        cap = Pos(0, back - HOLDER_H / 2, sz * (HOLDER_L - HOLDER_CAP) / 2) * Box(
+            HOLDER_W, HOLDER_H, HOLDER_CAP
         )
         frame += cap
     inner = HOLDER_L / 2 - HOLDER_CAP
-    spring = Pos(0, 0, -inner + 2.5) * (Cylinder(4.5, 5.0) - Cylinder(3.9, 6.0))
+    spring = Pos(0, 0, -inner + HOLDER_SPRING / 2) * (
+        Cylinder(4.5, HOLDER_SPRING) - Cylinder(3.9, HOLDER_SPRING + 1)
+    )
     plate = Pos(0, 0, inner - 0.2) * Cylinder(5.0, 0.4)
-    cell = Pos(0, 0, -inner + 5.0 + HOLDER_CELL_L / 2) * Cylinder(r, HOLDER_CELL_L)
+    cell = Pos(0, 0, -inner + HOLDER_SPRING + HOLDER_CELL_L / 2) * Cylinder(r, HOLDER_CELL_L)
+    assert -inner + HOLDER_SPRING + HOLDER_CELL_L <= inner - 0.4  # cell ends on the + plate
     return [
         Part("holder", frame, "black"),
         Part("holder_spring", spring, "metal"),

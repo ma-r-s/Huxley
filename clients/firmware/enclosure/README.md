@@ -51,9 +51,9 @@ for dock contacts.
 Mario has two single-18650 holders, each with its own pair of leads, and
 wires them in parallel so the board's charger charges both (2026-10-10). The
 holders go in whole, upright, open side facing the board, floor against the
-back. Modelled as 77 x 21 mm with a 1.2 mm floor and walls, 3.5 mm end caps,
-spring (-) at the bottom, plate (+) at the top (`HOLDER_*`, still to be
-measured). Against bare cells they cost 2 mm of width and 0.8 mm of depth.
+back. Measured 76 x 21 x 20.5 (spring (-) at the bottom, plate (+) at the
+top; `HOLDER_*`). Against bare cells they cost 2 mm of width and 0.8 mm of
+depth.
 
 The parallel joints sit off the cells, where the leads are short and nothing
 presses on them: the + joint over the channel just under the rocker, the -
@@ -62,14 +62,38 @@ joint one lead goes on to the board. Before joining, charge both cells to the
 same voltage (within ~0.05 V); a large gap makes one cell dump current into
 the other when they meet.
 
+## Fits: everything goes together first time, no glue
+
+Mario's rule (2026-10-10): every part must fit and stay put by design. All
+clearances live in [`huxcase/fits.py`](huxcase/fits.py), per side, tuned as
+starting points for his Bambu Lab P2S with PLA and a 0.4 mm nozzle:
+
+| Interface | Clearance | Why |
+| --- | --- | --- |
+| Printed slides on printed, drawn in X/Y | 0.20 | `SLIDE`: free, no rattle |
+| Same, bore lying horizontal on the bed | 0.30 | `SLIDE_HBORE`: horizontal holes print oval |
+| Removable but stays (cap, tongue) | 0.12 | `SNUG` |
+| Metal pin turning in print (lever pivot) | 0.25 | `PIVOT` |
+| Bought part into a printed pocket | 0.30 + crush ribs | `PART`: always goes in; 0.8 mm ribs crush 0.15 to take up the slack |
+| Heat-set insert bores | M2 3.2, M3 4.0 | `INSERT_BORE` (confirm against the kit's inserts) |
+
+No P2S-specific tolerance data is published yet, so the first print should be a
+small coupon with these fits; any correction goes into `fits.py` and every
+part follows.
+
 ## The talk switch: 12 x 12 tactile button + series spring
 
 Built only from Mario's parts drawer (2026-10-10): his 12 x 12 mm tactile
 button (green cap not used) and a 0.4 x 4 x 15 mm spring from the SciWil kit.
 
-- The orange lever is pinned at its bottom end (M2 x 16 screw + M2 nut).
+- The orange lever is pinned at its bottom end. (How the pin is captured
+  is being redesigned with the case split: the first model had no way to
+  fit the screw.)
 - Its top end presses a **spring in series** with the switch: lever ->
-  spring -> printed plunger -> switch stem. The press feels progressive
+  spring -> printed plunger -> switch stem. The plunger is a 3.5 mm piston
+  in a 1.2 mm-walled tube on the switch cradle; the switch sits in a pocket
+  with crush ribs. Mario's switch stem is a 3.8 mm square, and its corners
+  clear the tube bore (tested). The press feels progressive
   (spring-loaded) until the spring reaches the switch's actuation force,
   then the switch clicks. The click point no longer depends on print
   accuracy, so there is no adjuster screw.
@@ -122,7 +146,7 @@ from the frosted back as possible, so they read as one soft spine.
 
 | Run | From | To | Path |
 | --- | --- | --- | --- |
-| Speaker | SPK plug (board back) | solder tabs on the speaker rim | straight down the channel; mount the speaker so its tabs point up |
+| Speaker | SPK plug (board back) | solder tabs on the speaker rim | straight down the channel; mount the speaker so its tabs point up. **Cut the 97 mm lead to 45 mm** and re-solder at the speaker: the route is 22 mm, and loose wire buzzes in the back box |
 | Battery + | BAT plug | rocker, then the + joint | up the channel close to the board, to the rocker above the left holder |
 | Holder + leads (2) | top of each holder | + joint over the channel | over the holder tops, under the rocker |
 | Battery − | BAT plug | protection pocket, then the - joint | down the channel; behind the speaker magnet only in the grey bottom third |

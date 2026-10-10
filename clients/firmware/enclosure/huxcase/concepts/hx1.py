@@ -28,6 +28,7 @@ import math
 
 from build123d import Axis, Box, Circle, Cylinder, Location, Pos, Rot, extrude, fillet
 
+from huxcase import fits
 from huxcase import hardware as hw
 from huxcase.concept import Concept, cavity_cc
 from huxcase.hardware import Part
@@ -46,7 +47,8 @@ CELL_X = 20.7  # from the assembly centre; the board's plug zone fits between th
 # grazing the cells' inner flanks, not the board. 4.6 mm stays behind the PCB,
 # which is where the light ring lives.
 CELL_Y = 5.9
-assert CELL_Y - hw.CELL_D / 2 - 0.5 >= PCB_BOTTOM_Y + CELL_GAP  # holder end caps
+HOLDER_FRONT_Y = CELL_Y + hw.CELL_D / 2 + hw.HOLDER_FLOOR - hw.HOLDER_H  # end caps' front face
+assert HOLDER_FRONT_Y >= PCB_BOTTOM_Y + CELL_GAP
 CELL_Z0 = 6.7  # holder bottom: clears the 6.6 mm inner corner radius, leads join below
 CELL_TOP = CELL_Z0 + hw.HOLDER_L
 HOLDER_Z = (CELL_Z0 + CELL_TOP) / 2
@@ -58,6 +60,10 @@ SPK_Z = T + 0.4 + hw.SPK_D / 2
 SPK_FRONT_Y = Y_FRONT + T + 0.5
 SPK_LOC = Location((X0, SPK_FRONT_Y, SPK_Z), (-90, 0, 0))  # local -y -> device +Z
 SPK_TAB_R, SPK_TAB_DEPTH = 15.3, 12.2  # solder tabs on the basket rim (STEP)
+# Mario's lead is 97 mm; the route is ~22 mm, and 75 mm of loose wire would
+# buzz in the back box. Cut it to this (plug to tab) and re-solder at the speaker:
+# enough slack to lift the board off its standoffs with the speaker attached.
+SPK_LEAD_CUT = 45.0
 BOARD_Z = SPK_Z + hw.SPK_D / 2 + 0.3 + hw.PCB_R + 0.3 + 0.2
 H = BOARD_Z + hw.PCB_R + 0.3 + 0.1 + T
 # Board +x -> device -Z, board +y -> device +X, board +z (top face) -> device -Y.
@@ -78,11 +84,16 @@ STOP = 3.8  # lever travel at the switch axis before it lands on the stop post
 PRESS_DEG = math.degrees(math.atan(STOP / (TS_Z - PIVOT_Z)))
 BAR_T, BAR_W = 3.0, 18.0
 BAR_Z0, BAR_Z1 = PIVOT_Z - 7.0, 99.0  # tail below the pin is the rest stop
-CLEAR = 0.4
+CLEAR = fits.PIVOT  # the lever swings in its channel: printed against printed
 # Series spring between the lever's inner face and the plunger flange.
 SPRING_REST = hw.SERIES_SPRING_FREE - 0.4  # 0.4 mm preload holds the lever on its rest stop
 FLANGE_X = X_OUT - SPRING_REST  # plunger flange face (spring seat)
-PLUNGER_TIP_X = FLANGE_X - 1.0 - 2.5  # 1 mm flange + 2.5 mm shaft onto the stem
+PLUNGER_TIP_X = FLANGE_X - 3.5  # plunger is a 3.5 mm piston, the length guides it
+PLUNGER_R = 3.0
+# Plunger tube (part of the switch cradle). Printed standing on the cradle's
+# back, so its bore is drawn in X/Y and gets the plain sliding fit.
+TUBE_BORE = PLUNGER_R + fits.SLIDE
+TUBE_R = TUBE_BORE + 1.2  # three perimeters
 # Tactile switch: stem +X, base toward the board's centre line.
 TS_BASE_X = PLUNGER_TIP_X - hw.TACT_BODY - hw.TACT_STEM_H
 TS_LOC = Location((TS_BASE_X, SWITCH_Y, TS_Z)) * Rot(0, 90, 0)
@@ -97,7 +108,7 @@ def click_travel(force: float = hw.TACT_FORCE, shim: float = 0.0) -> float:
 
 # Light ring (frosted PLA) on the board's rear LEDs, in board coordinates.
 RING_R0, RING_R1 = 20.8, 29.0  # inner edge clears the header tails the PTT wires use
-RING_Z0, RING_Z1 = -hw.PCB_T - 1.6, -hw.PCB_T - 4.1  # just over the 1.5 mm LEDs
+RING_Z0, RING_Z1 = -hw.PCB_T - 1.6, -hw.PCB_T - 4.0  # just over the 1.5 mm LEDs
 
 
 def to_device(x: float, y: float) -> tuple[float, float]:
@@ -268,18 +279,24 @@ def build() -> Concept:
     pin = (
         Pos(PIVOT_X, SWITCH_Y, PIVOT_Z) * Rot(90, 0, 0) * Cylinder(1.0, BAR_W - 3.0)
     )  # M2 x 16 screw as the pin
-    bar = _bar() - Pos(PIVOT_X, SWITCH_Y, PIVOT_Z) * Rot(90, 0, 0) * Cylinder(1.1, 40)
+    bar = _bar() - Pos(PIVOT_X, SWITCH_Y, PIVOT_Z) * Rot(90, 0, 0) * Cylinder(1.0 + fits.PIVOT, 40)
 
     # 12 x 12 tactile switch in a cradle above the right cell. The lever
     # compresses the series spring, the spring pushes the plunger onto the
     # stem; a post stops the lever at STOP, after the click.
     ts_parts = hw.place(hw.tact_switch(), TS_LOC)
-    ts_env = ts_parts[0].shape + ts_parts[2].shape
     half = hw.TACT_W / 2
+    pocket = half + fits.PART
     cradle = TS_LOC * (
-        bbox_solid(-half - 1.2, half + 1.2, -half - 1.2, half + 1.2, -1.5, hw.TACT_BODY)
-        - bbox_solid(-half - 0.1, half + 0.1, -half - 0.1, half + 0.1, 0, 10)
+        bbox_solid(-pocket - 1.2, pocket + 1.2, -pocket - 1.2, pocket + 1.2, -1.5, hw.TACT_BODY)
+        - bbox_solid(-pocket, pocket, -pocket, pocket, 0, 10)
     )
+    # Crush ribs on the two walls the legs do not use: the switch always drops
+    # in, then sits without play.
+    rib_in, rw = pocket - fits.CRUSH_RIB, fits.CRUSH_RIB_W / 2
+    for y0, y1 in ((-pocket, -rib_in), (rib_in, pocket)):
+        for off in (-3.0, 3.0):
+            cradle += TS_LOC * bbox_solid(off - rw, off + rw, y0, y1, 0.4, hw.TACT_BODY)
     for sx in (-1, 1):
         for sy in (-1, 1):
             cradle -= TS_LOC * Pos(sx * 6.25, sy * 2.5, 0) * Box(1.4, 1.6, 5)  # leg holes
@@ -287,19 +304,16 @@ def build() -> Concept:
     tube = (
         Pos((tube_x0 + X_OUT - T + 0.1) / 2, SWITCH_Y, TS_Z)
         * Rot(0, 90, 0)
-        * Cylinder(3.6, X_OUT - T + 0.1 - tube_x0)
+        * Cylinder(TUBE_R, X_OUT - T + 0.1 - tube_x0)
     )
-    tube -= (
-        Pos(FLANGE_X - 1.2, SWITCH_Y, TS_Z) * Rot(0, 90, 0) * Cylinder(3.3, 2 * 30)
-    )  # flange+spring
-    tube -= (
-        Pos(PLUNGER_TIP_X, SWITCH_Y, TS_Z) * Rot(0, 90, 0) * Cylinder(2.4, 2 * 4.0)
-    )  # shaft bore
+    # One bore end to end: the plunger and spring go in from either end, and
+    # it clears the square stem's corners.
+    tube -= Pos(tube_x0 + 20, SWITCH_Y, TS_Z) * Rot(0, 90, 0) * Cylinder(TUBE_BORE, 2 * 30)
     ts_cradle = ((cradle + tube) & inner) - _pressed_union()
     body -= (
         Pos((tube_x0 + X_OUT) / 2, SWITCH_Y, TS_Z)
         * Rot(0, 90, 0)
-        * Cylinder(3.65, X_OUT - tube_x0)
+        * Cylinder(TUBE_R + fits.SNUG, X_OUT - tube_x0)
     )
     # The lever travels slightly further at the post's top edge than at its axis.
     stop_x = X_OUT - STOP * (TS_Z + 1.4 - PIVOT_Z) / (TS_Z - PIVOT_Z) - 0.05
@@ -309,9 +323,14 @@ def build() -> Concept:
         * Cylinder(1.4, stop_x - tube_x0 - 4)
     )
     body += stop_post
-    plunger = Pos(FLANGE_X - 0.5, SWITCH_Y, TS_Z) * Rot(0, 90, 0) * Cylinder(3.0, 1.0)
-    plunger += Pos(PLUNGER_TIP_X + 1.25, SWITCH_Y, TS_Z) * Rot(0, 90, 0) * Cylinder(2.2, 2.5)
-    plunger += Pos(FLANGE_X + 0.75, SWITCH_Y, TS_Z) * Rot(0, 90, 0) * Cylinder(1.4, 1.5)
+    plunger = (
+        Pos((PLUNGER_TIP_X + FLANGE_X) / 2, SWITCH_Y, TS_Z)
+        * Rot(0, 90, 0)
+        * Cylinder(PLUNGER_R, FLANGE_X - PLUNGER_TIP_X)
+    )
+    plunger += (
+        Pos(FLANGE_X + 0.75, SWITCH_Y, TS_Z) * Rot(0, 90, 0) * Cylinder(1.4, 1.5)
+    )  # spring locator
     spring = hw.spring(SPRING_REST)
     spring = Part("spring", Pos(FLANGE_X, SWITCH_Y, TS_Z) * Rot(0, 90, 0) * spring.shape, "metal")
 
@@ -482,9 +501,18 @@ def build() -> Concept:
             [
                 (legs_x, leg_y, legs_z),
                 (legs_x - 0.5, min(leg_y, 1.0) - 1.0, legs_z - 1.5),  # down the channel
-                (legs_x + 1.0, -4.6, CELL_TOP - 2.5),  # in front of the right holder's cap
-                (tx - 0.4, -5.0, tz + 0.6),  # inside the light ring's hole
-                (tx, tail_y + 1.5, tz + 0.3),
+                (
+                    legs_x + 1.0,
+                    HOLDER_FRONT_Y - 0.8,
+                    CELL_TOP - 2.5,
+                ),  # in front of the right holder
+                ((legs_x + tx) / 2, HOLDER_FRONT_Y - 0.9, CELL_TOP - 1.6),
+                (
+                    tx - 0.4,
+                    HOLDER_FRONT_Y - 0.9,
+                    tz - 0.3,
+                ),  # in the light ring's hole, under the cradle
+                (tx, tail_y + 1.5, tz - 0.1),
                 (tx, tail_y, tz),
             ],
             d=1.0,
@@ -531,7 +559,9 @@ def build() -> Concept:
         "speaker": SPK_LOC * hw.speaker()[0].shape,
         "holder_0": bays[0],
         "holder_1": bays[1],
-        "tact_switch": ts_env,
+        "tact_switch": ts_parts[0].shape,
+        "tact_stem": ts_parts[2].shape,  # square: its corners must clear the bore
+        "plunger": plunger,
         "spring": spring.shape,
         "bar_sweep": sweep,
         **leads,
@@ -555,6 +585,9 @@ def build() -> Concept:
         ("board", "light_ring"),  # sits on the LEDs, inside the generic 2.5 mm keep-out
         ("tact_switch", "ts_cradle"),
         ("spring", "ts_cradle"),  # guided in its tube
+        ("tact_stem", "tact_switch"),  # one part
+        ("plunger", "tact_stem"),  # rests on it
+        ("plunger", "spring"),  # the spring sits on it
         ("spring", "body"),  # seated in its pocket
         ("spring", "bar_sweep"),  # it is what the lever compresses
         ("bar_sweep", "spring"),

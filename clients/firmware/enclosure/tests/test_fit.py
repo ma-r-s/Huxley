@@ -76,3 +76,45 @@ def test_hx1_rocker_sits_below_the_side_surface():
     c = hx1.build()
     rocker = [p.shape for p in c.parts if p.name.startswith("rocker_")]
     assert min(r.bounding_box().min.X for r in rocker) >= -hx1.W / 2
+
+
+def _route_length(tube, d: float = 1.4) -> float:
+    import math
+
+    return tube.volume / (math.pi * (d / 2) ** 2)
+
+
+def test_hx1_speaker_lead_cut_reaches_with_slack():
+    """The lead is cut to SPK_LEAD_CUT: it must cover the route plus room to
+    lift the board out, and Mario's 97 mm lead must be long enough to cut."""
+    from huxcase import hardware as hw
+    from huxcase.concepts import hx1
+
+    route = _route_length(hx1.build().envelopes["cable_spk"])
+    assert route + 15.0 <= hx1.SPK_LEAD_CUT <= hw.SPK_CABLE_L
+
+
+def test_hx1_plunger_tube_prints_and_clears_the_square_stem():
+    """Mario measured a 3.8 mm square stem: its corners need more room than a
+    round stem. The tube wall must be printable with a 0.4 mm nozzle."""
+    import math
+
+    from huxcase import fits
+    from huxcase import hardware as hw
+    from huxcase.concepts import hx1
+
+    corner = hw.TACT_STEM_W / math.sqrt(2)
+    assert corner + fits.PART <= hx1.TUBE_BORE
+    assert hx1.TUBE_BORE - hx1.PLUNGER_R >= fits.SLIDE
+    assert hx1.TUBE_R - hx1.TUBE_BORE >= fits.MIN_WALL
+
+
+def test_hx1_bought_parts_measured():
+    """Mario's caliper numbers (2026-10-10) are what the model uses."""
+    from huxcase import hardware as hw
+
+    assert (hw.HOLDER_L, hw.HOLDER_W, hw.HOLDER_H) == (76.0, 21.0, 20.5)
+    assert hw.TACT_BODY + hw.TACT_STEM_H == 7.3
+    assert hw.ROCKER_BODY[2] + hw.ROCKER_TABS == 18.6
+    h = next(p.shape for p in hw.holder() if p.name == "holder").bounding_box().size
+    assert (round(h.X, 2), round(h.Y, 2), round(h.Z, 2)) == (21.0, 20.5, 76.0)

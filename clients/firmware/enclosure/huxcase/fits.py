@@ -1,0 +1,48 @@
+"""Fit clearances for Mario's printer: Bambu Lab P2S, PLA, 0.4 mm nozzle, 0.2 mm layers.
+
+Every number is a clearance PER SIDE (radial for bores), in mm. Mario's rule
+(2026-10-10): everything must fit first time and stay put by design, no glue.
+So a bought part never gets a press fit straight into PLA; it gets enough
+clearance to always go in, and crush ribs or the closing case take up the
+slack so nothing rattles.
+
+Print axis matters. A wall or bore whose axis is vertical on the bed is drawn
+by X/Y motion and lands within about 0.05 mm. A bore lying horizontally comes
+out oval (its height snaps to whole layers and its roof sags), so it gets
+more. Faces that meet across layers (stacked in Z) can only be one layer
+apart at best.
+
+Starting points synthesised from published Bambu / PLA tolerance tests (no
+P2S-specific data exists yet); confirm with one test coupon before the first
+full print and adjust here, nowhere else:
+- Bambu H2D Pro lab guide (sliding 0.15-0.2, free 0.2+, press 0-0.05).
+- Sovol FDM tolerance guide (PLA sliding 0.15-0.25).
+- Prusa / Bambu forum reports on horizontal-hole ovaling.
+- Heat-set insert bores: M2 3.2, M3 4.0 (Accu / spec sheets).
+"""
+
+from __future__ import annotations
+
+LAYER = 0.2
+
+# Printed part against printed part.
+SLIDE = 0.20  # slides or rotates freely; both faces drawn in X/Y (vertical walls/bores)
+SLIDE_HBORE = 0.30  # same, but the bore lies horizontal on the bed (oval, sagging roof)
+SNUG = 0.12  # goes together by hand and stays (cap spigot, case tongue)
+STACK = LAYER  # faces that meet across layers: one layer is the finest real gap
+
+# Metal pin or screw turning in a printed bore (lever pivot).
+PIVOT = 0.25
+
+# Bought part into a printed pocket: always goes in; ribs take up the slack.
+PART = 0.30
+CRUSH_RIB = 0.45  # rib height into the PART gap: 0.15 mm of interference, crushed on insertion
+CRUSH_RIB_W = 0.8  # two perimeters wide so it deforms instead of snapping off
+
+# Heat-set inserts (bore for the insert, clearance for the screw through the other part).
+INSERT_BORE = {"M2": 3.2, "M3": 4.0}
+SCREW_CLEAR = {"M2": 2.4, "M3": 3.4}
+
+# Printability.
+MIN_WALL = 0.8  # two perimeters of a 0.4 mm nozzle; anything thinner is not printed
+FOOT_CHAMFER = 0.4  # bed-side edge chamfer on mating faces (elephant's foot)

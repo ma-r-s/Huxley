@@ -100,10 +100,23 @@ rocker, - at the channel foot); PTT wires rerouted down the lever channel.
 Cost: W 68 -> 70, D 36.2 -> 37, back box 127 -> 134 cc. Fit check clean,
 25 tests green. Holder size and lead exits still to measure.
 
+**Measurements + fits (2026-10-10)**: Mario measured the holder (76 x 21 x
+20.5), the tact switch (7.3 tall, 3.8 mm square stem), the KCD1-101 (18.6
+behind the frame), the speaker lead (97) and confirmed top-ported mics. His
+rule: everything fits first time and stays put, no glue; sliding fits tuned
+for his Bambu P2S (PLA, 0.4). New `huxcase/fits.py` holds every clearance
+(per side, print-axis aware; synthesised from published Bambu/PLA tests,
+coupon print recommended). Found and fixed while applying it: plunger tube
+wall was 0.3 mm (unprintable) -> 1.2 mm, plunger is now a 3.5 mm piston;
+the square stem is its own fit-checked envelope; switch pocket has PART
+clearance + crush ribs; lever channel and pin hole on `PIVOT`. Found, not
+yet fixed: the lever's M2 pin has no lugs and no insertion path; goes into
+the case-split design (critic running). Speaker lead route is 22 mm, so the
+build cuts it to 45 mm (tested). 28 tests green.
+
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
-bottom is fine, protection skipped, holders whole); dock yes/no; volume
-buttons yes/no; plus measurements of the holder, the 12 x 12 switch, the
-KCD1-101 depth, the speaker cable and a look at the mic ports.
+bottom is fine, protection skipped, holders whole, no glue); dock yes/no;
+volume buttons yes/no; insert OD/length and longest M2/M3 screws.
 
 **Firmware impact**: PTT moves from the on-board `K2` (via TCA9555) to an
 external switch on a free header GPIO (GPIO3 to GPIO9; LCD is unused).

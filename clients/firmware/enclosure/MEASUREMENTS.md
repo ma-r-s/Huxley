@@ -59,15 +59,15 @@ the TF slot, **+y** toward the mics and the pin header, **-y** toward USB-C,
 | Total depth                      | 20.5                                                                               | STEP        |
 | Rating                           | 5 W (part name). Impedance not stated; the NS4150B amp is a 3 W / 4 Ω class-D part | STEP + SCH  |
 | Back volume in the original case | roughly 40 to 60 cc, shared with the board                                         | derived     |
-| Cable length, plug               | **unknown**                                                                        | **MEASURE** |
+| Cable length, plug               | 97 mm, speaker to plug end (cut to 45 for HX-1)                                    | Mario       |
 
 ## 18650 cell
 
 HX-1 uses Mario's two single-cell holders whole (photo 2026-10-10), so the
-holder sets the space, not the cell. Not measured yet; the model assumes a
-typical open single-18650 holder: 77 × 21 mm outside, 1.2 mm floor and side
-walls, 3.5 mm end caps, a bare flat-top cell Ø18.6 × 65 inside, one red and
-one black lead per holder (`HOLDER_*`, `hardware.holder()`).
+holder sets the space, not the cell. Mario measured it at 76 × 21 × 20.5;
+the inside is assumed: 1.2 mm floor and side walls, 3.0 mm end caps, a bare
+flat-top cell Ø18.6 × 65, one red and one black lead per holder (`HOLDER_*`,
+`hardware.holder()`).
 
 The older concepts (rev A, HX-2 to HX-4) still reserve a bare Ø19.4 × 74 bay
 for a protected button-top cell.
@@ -86,16 +86,27 @@ cell-protection IC (no DW01-class part); see "Battery protection" below.
 - **Antenna.** Keep metal (the 18650 can, the speaker magnet) at least ~10 mm
   from the ceramic antenna at the -x edge. Every concept does.
 
-## Mario's parts (assumed until measured)
+## Mario's parts
 
-| Part | Assumed | Constant |
-|---|---|---|
-| 12 x 12 tactile switch | body 12 x 12 x 4.0, round stem Ø3.5 standing 3.3 proud, actuation ~2 N / 0.25 mm | `TACT_*` |
-| Series spring (SciWil) | 0.4 wire x 4 OD x 15 free, 10 coils, ~0.59 N/mm | `SERIES_SPRING_*` |
-| Lever pin | M2 x 16 screw + nut | `_bar`, `pin` |
-| KCD1-101 rocker | 21 x 15 bezel, 19 x 13 body x 11.5, 6 mm tabs 6 mm apart, rocker 5 mm above the bezel | `ROCKER_*` |
-| 18650 cells | green wrap, probably Sony/Murata VTC: unprotected, flat top, 65 mm | `CELL_*` |
-| 18650 holders (2) | 77 x 21, 1.2 floor/walls, 3.5 end caps, leads at each end, wired in parallel | `HOLDER_*` |
+Calipers, Mario, 2026-10-10 (**MARIO**), or assumed generic (**ASSUMED**).
+
+| Part | Value | Source | Constant |
+|---|---|---|---|
+| 12 x 12 tactile switch | 7.3 base to stem top; stem a 3.8 mm square | **MARIO** | `TACT_*` |
+| | body 12 x 12 x 4.0, 4 legs, ~2 N / 0.25 mm actuation | **ASSUMED** | |
+| Series spring (SciWil) | 0.4 wire x 4 OD x 15 free, 10 coils, ~0.59 N/mm | **ASSUMED** (kit label) | `SERIES_SPRING_*` |
+| Lever pin | M2 x 16 screw + nut | **ASSUMED** | `_bar`, `pin` |
+| KCD1-101 rocker | 18.6 from the frame's underside to the tab tips | **MARIO** | `ROCKER_DEPTH` |
+| | 21 x 15 bezel, 19 x 13 body x 11.5, tabs 6 mm apart, rocker 5 mm proud | **ASSUMED** | `ROCKER_*` |
+| 18650 holders (2) | 76 x 21 x 20.5 outside | **MARIO** | `HOLDER_*` |
+| | 1.2 floor and walls, 3.0 end caps, 4.5 spring, leads out of the end caps near the floor | **ASSUMED** | |
+| 18650 cells | green wrap, probably Sony/Murata VTC: unprotected, flat top, 65 mm | **ASSUMED** | `CELL_*` |
+| Speaker lead | 97 from the speaker to the end of the plug | **MARIO** | `SPK_CABLE_L` |
+| Mics | pinhole on top of each can: top-ported, as the front mic ports assume | **MARIO** | `MICS` |
+
+The speaker lead is ~75 mm longer than its 22 mm route, and loose wire buzzes
+in a sealed back box, so the build cuts it to 45 mm and re-solders it at the
+speaker (`SPK_LEAD_CUT`, tested).
 
 ## Battery protection
 
@@ -111,12 +122,9 @@ covers deep discharge but not shorts.
 
 ## Still to measure (Mario)
 
-1. Speaker: confirm Ø40 front and 20.5 deep, and **measure the cable length**
-   from the speaker to the plug.
-2. **The holder:** outside length, width and height with a cell in it, and
-   where each lead leaves (end face or floor, and how far from the floor).
-   Did a 1.25 mm battery pigtail come with the board?
-3. A glance at the mics: is there a pinhole on top of each metal can?
-4. The tactile switch: body height and stem height/diameter, and its
-   actuation force if known.
-5. The cells' label (model) and length; the KCD1-101's body depth.
+1. One M2 and one M3 heat-set insert from the FFVRVSS kit: outer diameter
+   across the knurl, and length. The bores in `fits.INSERT_BORE` assume the
+   common 3.5 / 4.4-4.6 mm sizes.
+2. The longest M2 and M3 screws in the Kadrick kit.
+3. The holder leads: confirm they leave the end caps near the floor (the
+   model assumes so).
