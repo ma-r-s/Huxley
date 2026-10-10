@@ -5075,7 +5075,7 @@ Result: StrictMode dev runs the same lifecycle, but only one server-side connect
 
 ## T1.26: GPT-Live, reshape Huxley around it, or use it as a skill?
 
-**Status**: `queued` (2026-10-10, Mario leaning toward GPT-Live as the single core; awaiting go for a design plan) · **Effort**: core reshape several weeks
+**Status**: `done` (2026-10-10, decided: no GPT-Live; walkie-talkie stays on Realtime) · **Follow-up**: background delegation for slow work, unplanned
 
 **Question (Mario, 2026-10-10).** OpenAI's GPT-Live (openai.com/index/introducing-gpt-live, July 2026) is full duplex and does tool work through delegation. Should Huxley reshape into "a hardware device that uses GPT-Live plus tool calls" while keeping everything Huxley does?
 
@@ -5105,6 +5105,10 @@ Two findings that matter for B: `coral` works on GPT-Live (it's not limited to t
 - Default prompt: GPT-Live still says a filler line first and speaks the time at +3.4 to +4.4s (3 runs). The delay is its pacing, not the backend.
 - Prompt "if the result arrives before you start speaking, say it directly": answer at +1.37s and +2.35s (2 runs), still with a short filler ("Un momento... Son las 15:42"). Roughly at parity with Realtime's +1.27s.
 - **Correction:** the first probe's "Realtime is 2.4s faster" was mostly GPT-Live's default filler pacing, not an architectural cost. Mario's direction (2026-10-10): one abstraction, not modes. With client delegation that's viable: GPT-Live is the single voice, Huxley's skills are the backend.
+
+**Decision input (Mario, 2026-10-10): Huxley is walkie-talkie, project-wide.** The trigger is a held button (on screen or physical). The user talks only while holding; the device answers only after release. No open mic, ever. That removes everything GPT-Live adds (end-of-speech detection, backchannels, barge-in) and collides with its contract: GPT-Live has no manual commit ("stream audio continuously; GPT-Live decides when to speak") and can speak while the button is held.
+
+**Conclusion.** Stay on the turn-based Realtime API (T1.25). Borrow GPT-Live's one idea that fits: hand slow or hard work (search, deep questions) to a stronger background model, say "un momento" now, announce the result when it's ready (via `inject_turn`). That's a possible framework item; needs a plan + critic before any code.
 
 **Options and critic notes** (fresh Plan agent, cold brief, 2026-10-10):
 - **A. Device talks to GPT-Live directly, Huxley as sideband.** Rejected. Breaks "one audio pipe out": audiobook, radio, earcons and Telegram calls would need mixing in ESP32 firmware, which has no Opus/DTLS/AEC today (`clients/firmware/components/hux_net`, `hux_audio`). Hard-codes an OpenAI endpoint into hardware, against "Not Alexa" in `vision.md`.
