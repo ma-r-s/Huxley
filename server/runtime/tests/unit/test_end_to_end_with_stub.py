@@ -93,7 +93,7 @@ async def wired() -> AsyncIterator[
 async def _commit_turn(coordinator: TurnCoordinator) -> None:
     await coordinator.on_ptt_start()
     assert coordinator.current_turn is not None
-    coordinator.current_turn.user_audio_frames = 60
+    coordinator.current_turn.user_audio_bytes = 300 * 48
     await coordinator.on_ptt_stop()
 
 

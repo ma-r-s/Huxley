@@ -43,16 +43,16 @@ def _factory(*chunks: bytes) -> Callable[[], AsyncIterator[bytes]]:
     return lambda: _stream(*chunks)
 
 
-async def _commit_turn(coordinator: TurnCoordinator, frames: int = 60) -> None:
-    """Helper: start a turn, stuff `frames` into user_audio_frames, and commit.
+async def _commit_turn(coordinator: TurnCoordinator, audio_ms: int = 300) -> None:
+    """Helper: start a turn, record `audio_ms` of mic audio, and commit.
 
-    Mirrors the production flow where `on_user_audio_frame` increments the
-    counter — we set it directly here to keep tests concise. Default of 60
-    is comfortably above the 57-frame minimum (~300 ms speech floor).
+    Mirrors the production flow where `on_user_audio_frame` adds each
+    chunk's bytes; set directly here to keep tests concise. The default is
+    comfortably above the 133 ms commit floor.
     """
     await coordinator.on_ptt_start()
     assert coordinator.current_turn is not None
-    coordinator.current_turn.user_audio_frames = frames
+    coordinator.current_turn.user_audio_bytes = audio_ms * 48  # PCM16 24 kHz
     await coordinator.on_ptt_stop()
 
 
@@ -122,10 +122,36 @@ class TestTurnLifecycle:
     async def test_ptt_stop_too_short_aborts_without_commit(
         self, coordinator: TurnCoordinator, mocks: dict[str, Any], provider: StubVoiceProvider
     ) -> None:
-        await _commit_turn(coordinator, frames=10)  # below 25-frame threshold
+        await _commit_turn(coordinator, audio_ms=50)  # below the 133 ms floor
 
         assert coordinator.current_turn is None
         assert ("cancel_current_response",) in provider.sent
+        assert ("commit_and_request_response",) not in provider.sent
+
+    async def test_ptt_stop_measures_audio_not_chunks_large_chunks(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider
+    ) -> None:
+        """The iOS app sends 100 ms chunks: two of them are a real 200 ms
+        "Si", not two accidental frames. Counting chunks rejected every press
+        under 2.5 s from the native app."""
+        await coordinator.on_ptt_start()
+        for _ in range(2):
+            await coordinator.on_user_audio_frame(b"\x00" * 4800)  # 100 ms
+        await coordinator.on_ptt_stop()
+
+        assert ("commit_and_request_response",) in provider.sent
+
+    async def test_ptt_stop_measures_audio_not_chunks_small_chunks(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider
+    ) -> None:
+        """The web worklet sends 5.3 ms chunks: 20 of them (~107 ms) is
+        still an accidental tap."""
+        await coordinator.on_ptt_start()
+        for _ in range(20):
+            await coordinator.on_user_audio_frame(b"\x00" * 256)  # 128 samples
+        await coordinator.on_ptt_stop()
+
+        assert coordinator.current_turn is None
         assert ("commit_and_request_response",) not in provider.sent
 
     async def test_commit_failed_aborts_stuck_turn(

@@ -362,11 +362,14 @@ class TurnCoordinator:
         if self.current_turn is None:
             return
         frames = self.current_turn.user_audio_frames
-        # AudioWorklet frames are 128 samples = 5.33 ms at 24 kHz.
-        # 25 frames x 5.33 ms = ~133 ms — just above the tap-noise floor
-        # (accidental presses are <100 ms) while still allowing a quick "Sí".
-        if frames < 25:
-            await self._log.ainfo("coord.ptt_stop", frames=frames, committed=False)
+        # Measured in audio, not chunks: clients chunk differently (the web
+        # worklet sends 5.3 ms frames, the iOS app 20-100 ms, the ESP32 its
+        # own size), so a chunk count means a different duration on each.
+        audio_ms = self.current_turn.user_audio_bytes * 1000 // self._CLIENT_AUDIO_BYTES_PER_SECOND
+        if audio_ms < self._MIN_COMMIT_AUDIO_MS:
+            await self._log.ainfo(
+                "coord.ptt_stop", frames=frames, audio_ms=audio_ms, committed=False
+            )
             await self._send_status(self._status["too_short"])
             # audio_clear tells the client to cancel its silence timer — without
             # it the thinking tone fires 400ms after ptt_stop and loops forever
@@ -379,7 +382,7 @@ class TurnCoordinator:
             return
         self.current_turn.state = TurnState.COMMITTING
         self.response_cancelled = False
-        await self._log.ainfo("coord.ptt_stop", frames=frames, committed=True)
+        await self._log.ainfo("coord.ptt_stop", frames=frames, audio_ms=audio_ms, committed=True)
         await self._send_status(self._status["sent"])
         await self._provider.commit_and_request_response()
 
@@ -409,6 +412,7 @@ class TurnCoordinator:
         ):
             await self._mic_router.dispatch(pcm)
             self.current_turn.user_audio_frames += 1
+            self.current_turn.user_audio_bytes += len(pcm)
             await self._log.adebug("coord.mic_fwd", bytes=len(pcm))
         elif self.current_turn is not None:
             await self._log.adebug(
@@ -943,6 +947,9 @@ class TurnCoordinator:
             response_done_count=self.current_turn.response_done_count,
             spawned_audio_stream=spawned_audio_stream,
             user_audio_frames=self.current_turn.user_audio_frames,
+            user_audio_ms=self.current_turn.user_audio_bytes
+            * 1000
+            // self._CLIENT_AUDIO_BYTES_PER_SECOND,
         )
 
     async def _start_content_stream(self, stream: AudioStream, turn_id: str | None) -> None:
@@ -1412,6 +1419,10 @@ class TurnCoordinator:
     # Audio rate for the one audio channel shared with the client:
     # 24kHz sample rate * 2 bytes/sample (PCM16 mono).
     _CLIENT_AUDIO_BYTES_PER_SECOND: ClassVar[int] = 24_000 * 2
+
+    # Shortest press that commits: just above the tap-noise floor
+    # (accidental presses are < 100 ms) while still allowing a quick "Si".
+    _MIN_COMMIT_AUDIO_MS: ClassVar[int] = 133
 
     # Extra headroom past the computed drain time — covers the client's
     # Web Audio scheduling floor (`max(now + 0.01, nextTime)`) plus a

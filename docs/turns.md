@@ -44,7 +44,8 @@ v2 proposed named audio channels (`speech`, `media`, cut to just those two after
 class Turn:
     id: UUID
     state: TurnState
-    user_audio_frames: int
+    user_audio_frames: int             # chunks received (logged)
+    user_audio_bytes: int              # PCM16 bytes received; the 133 ms too-short check measures this
     response_ids: list[str]
     pending_factories: list[Factory]   # accumulated across all responses in this turn
     needs_follow_up: bool              # per-response flag: set when a None-factory tool was called in the current response

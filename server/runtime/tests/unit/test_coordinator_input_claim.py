@@ -647,7 +647,7 @@ class TestToolDispatchedClaim:
         mocks["dispatch_tool"].return_value = ToolResult(output="{}", side_effect=claim)
         await coordinator.on_ptt_start()
         assert coordinator.current_turn is not None
-        coordinator.current_turn.user_audio_frames = 60
+        coordinator.current_turn.user_audio_bytes = 300 * 48
         await coordinator.on_ptt_stop()
         # Tool dispatched — latches the claim on the turn.
         await coordinator.on_tool_call("call_1", "start_record", {})
@@ -667,7 +667,7 @@ class TestToolDispatchedClaim:
         mocks["dispatch_tool"].return_value = ToolResult(output="{}", side_effect=claim)
         await coordinator.on_ptt_start()
         assert coordinator.current_turn is not None
-        coordinator.current_turn.user_audio_frames = 60
+        coordinator.current_turn.user_audio_bytes = 300 * 48
         await coordinator.on_ptt_stop()
         await coordinator.on_tool_call("call_1", "start_record", {})
         assert coordinator.current_turn is not None
@@ -712,7 +712,7 @@ class TestToolDispatchedClaim:
         mocks["dispatch_tool"].return_value = ToolResult(output="{}", side_effect=stream)
         await coordinator.on_ptt_start()
         assert coordinator.current_turn is not None
-        coordinator.current_turn.user_audio_frames = 60
+        coordinator.current_turn.user_audio_bytes = 300 * 48
         await coordinator.on_ptt_stop()
         await coordinator.on_tool_call("call_1", "play", {})
 
@@ -750,7 +750,7 @@ class TestToolDispatchedClaim:
         # before terminal barrier fires.
         await coordinator.on_ptt_start()
         assert coordinator.current_turn is not None
-        coordinator.current_turn.user_audio_frames = 60
+        coordinator.current_turn.user_audio_bytes = 300 * 48
         await coordinator.on_ptt_stop()
         await coordinator.on_tool_call("call_1", "start_record", {})
 
@@ -785,7 +785,7 @@ class TestToolDispatchedClaim:
 
         await coordinator.on_ptt_start()
         assert coordinator.current_turn is not None
-        coordinator.current_turn.user_audio_frames = 60
+        coordinator.current_turn.user_audio_bytes = 300 * 48
         await coordinator.on_ptt_stop()
         await coordinator.on_tool_call("call_1", "start_record", {})
         assert coordinator.current_turn is not None

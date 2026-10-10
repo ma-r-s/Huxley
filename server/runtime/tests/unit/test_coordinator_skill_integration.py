@@ -133,11 +133,11 @@ async def _build_wired_coordinator(
     return coordinator, registry, skill, player, consumed, mocks
 
 
-async def _commit_turn(coordinator: TurnCoordinator, frames: int = 60) -> None:
+async def _commit_turn(coordinator: TurnCoordinator, audio_ms: int = 300) -> None:
     """Start a turn and commit it (same helper as test_turn_coordinator)."""
     await coordinator.on_ptt_start()
     assert coordinator.current_turn is not None
-    coordinator.current_turn.user_audio_frames = frames
+    coordinator.current_turn.user_audio_bytes = audio_ms * 48  # PCM16 24 kHz
     await coordinator.on_ptt_stop()
 
 
@@ -311,7 +311,7 @@ class TestRewindReplacesPriorMediaTask:
         await coord.on_ptt_start()
         assert first_task.done()  # interrupt cancelled the old task
 
-        coord.current_turn.user_audio_frames = 60  # type: ignore[union-attr]
+        coord.current_turn.user_audio_bytes = 300 * 48  # type: ignore[union-attr]
         await coord.on_ptt_stop()
         await coord.on_tool_call("c2", "audiobook_control", {"action": "rewind", "seconds": 5})
         await coord.on_response_done()
@@ -356,7 +356,7 @@ class TestPauseRequestsFollowUp:
 
         # Turn 2: user says pause — coordinator should cancel media immediately
         await coord.on_ptt_start()
-        coord.current_turn.user_audio_frames = 60  # type: ignore[union-attr]
+        coord.current_turn.user_audio_bytes = 300 * 48  # type: ignore[union-attr]
         await coord.on_ptt_stop()
         await coord.on_audio_delta(b"listo, pauso")
         await coord.on_tool_call("c2", "audiobook_control", {"action": "pause"})

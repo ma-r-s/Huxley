@@ -103,9 +103,9 @@ The server enforces these regardless of what the client sends:
    - `_ptt_active == true`
    - `session.is_connected == true`
    - `session.is_model_speaking == false` (prevents echo feedback)
-2. A PTT release with fewer than 25 captured frames (~133 ms of audio) is treated as an accidental tap: no commit, no response, just a status _"Muy corto — mantén el botón mientras hablas."_ The threshold is set above the tap-noise floor while still allowing a quick _"Sí"_.
+2. A PTT release with less than 133 ms of captured audio is treated as an accidental tap: no commit, no response, just a status _"Muy corto — mantén el botón mientras hablas."_ The threshold is set above the tap-noise floor while still allowing a quick _"Sí"_. It is measured in audio duration (bytes of PCM16 24 kHz), not in frames, so clients may chunk mic audio however they like: the web worklet sends 5.3 ms frames, the iOS app 20 to 100 ms chunks.
 3. Pressing PTT while the model is speaking **cancels** the current response and starts listening (interrupt behavior).
-4. Pressing PTT while an `InputClaim` is active (mic-mode = `skill_continuous`) **ends the claim** with `USER_PTT` and starts a fresh listening turn. The accidental-tap 25-frame filter in rule 2 does **not** apply during `skill_continuous` — any press, even a brief one, is a hang-up intent. (A 300 ms server-side debounce after a claim latches drops the same-tap bounce that could otherwise end the call the instant it connects.)
+4. Pressing PTT while an `InputClaim` is active (mic-mode = `skill_continuous`) **ends the claim** with `USER_PTT` and starts a fresh listening turn. The accidental-tap 133 ms filter in rule 2 does **not** apply during `skill_continuous` — any press, even a brief one, is a hang-up intent. (A 300 ms server-side debounce after a claim latches drops the same-tap bounce that could otherwise end the call the instant it connects.)
 
 ## Mic mode — assistant-address vs. skill-owned audio
 

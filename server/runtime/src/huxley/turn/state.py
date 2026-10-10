@@ -58,6 +58,8 @@ class Turn:
     id: UUID = field(default_factory=uuid4)
     state: TurnState = TurnState.LISTENING
     user_audio_frames: int = 0
+    # PCM16 bytes forwarded this turn; the too-short check measures this.
+    user_audio_bytes: int = 0
     pending_audio_streams: list[AudioStream] = field(default_factory=list)
     needs_follow_up: bool = False
     # Latched PlaySound from an info-tool call. Sent to the audio channel
