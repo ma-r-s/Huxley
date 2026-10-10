@@ -69,6 +69,19 @@ export class MicCapture {
   /** Telemetry hook (forwarded to the server log as client events). */
   onEvent: MicEvent | null = null;
 
+  /**
+   * Native app (Capacitor): stop the stream instead of muting it between
+   * turns. The native web view re-opens the mic from a press without the
+   * gesture/permission limits of Safari, and holding the stream keeps iOS
+   * in play-and-record: replies come out of the earpiece like a phone
+   * call and the mic indicator stays on. Web keeps the mute strategy.
+   */
+  releaseWhenIdle = false;
+
+  // Press-to-first-frame telemetry: if re-opening the mic per press clips
+  // the first word, this number shows it.
+  private openedAt: number | null = null;
+
   /** True when a capture stream is live (it may be idle/disabled). */
   get hasStream(): boolean {
     const track = this.stream?.getAudioTracks()[0];
@@ -98,6 +111,12 @@ export class MicCapture {
         const node = new AudioWorkletNode(ctx, "mic-processor");
         node.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
           if (!this.active || !this.onFrame) return;
+          if (this.openedAt !== null) {
+            this.onEvent?.("mic_first_frame", {
+              ms: Math.round(performance.now() - this.openedAt),
+            });
+            this.openedAt = null;
+          }
           this.onFrame(bufferToBase64(e.data));
         };
         // Silent gain keeps the graph pulling without echoing the mic.
@@ -135,6 +154,7 @@ export class MicCapture {
    */
   async open(): Promise<void> {
     this.openCount += 1;
+    this.openedAt = performance.now();
     try {
       this.cancelIdle();
       const ctx = this.ensureContext();
@@ -221,6 +241,10 @@ export class MicCapture {
   }
 
   idle(reason: string): void {
+    if (this.releaseWhenIdle) {
+      this.release(reason);
+      return;
+    }
     this.cancelIdle();
     this.active = false;
     if (!this.hasStream) return;

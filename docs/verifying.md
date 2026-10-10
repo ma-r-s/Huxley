@@ -112,6 +112,18 @@ bun run ios:open                                                            # Xc
 
 Reinstall only when native config changes (Info.plist, plugins, `capacitor.config.ts`). Without `CAP_SERVER_URL`, `ios:sync` bundles `dist/` (run `bun run build` first). Building needs the iOS platform installed in Xcode (Settings > Components) and, for a real phone, an Apple ID under Xcode > Settings > Accounts.
 
+Signing: put your team in `clients/pwa/ios/local.xcconfig` (gitignored, included by `debug.xcconfig`): `DEVELOPMENT_TEAM = <team id>`. The first device build must be run from Xcode (it creates the certificate and profile); after that the command line works:
+
+```bash
+xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug -destination 'id=<device udid>' build
+xcrun devicectl device install app --device <device udid> <DerivedData>/Build/Products/Debug-iphoneos/App.app
+xcrun devicectl device process launch --terminate-existing --device <device udid> com.marioruiz.huxley
+```
+
+A free Apple ID's profile expires after 7 days; re-run the build and install. On a new phone, trust the certificate once: Settings > General > VPN & Device Management.
+
+In the native app the mic is open only while the button is held (`MicCapture.releaseWhenIdle`): holding a muted stream between turns kept iOS in play-and-record, which sends replies to the earpiece and keeps the mic indicator on. Re-opening per press measured 14-45 ms to first frame.
+
 ### Testing on the iOS simulator without kicking the phone off
 
 A second server + PWA pair, isolated so it can't load the real persona's Telegram session:

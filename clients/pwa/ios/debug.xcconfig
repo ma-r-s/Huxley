@@ -1,1 +1,5 @@
 CAPACITOR_DEBUG = true
+
+// Per-developer signing (team ID) lives in local.xcconfig, which is gitignored:
+//   DEVELOPMENT_TEAM = <your team id>
+#include? "local.xcconfig"

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { useWs } from "./lib/useWs.js";
+import { Capacitor } from "@capacitor/core";
 import { MicCapture } from "./lib/audio/capture.js";
 import { AudioPlayback } from "./lib/audio/playback.js";
 import { deriveOrbState } from "./lib/orbState.js";
@@ -57,7 +58,12 @@ const playback = new AudioPlayback();
 // Walkie-talkie mic: held while talking plus this long after release, so a
 // quick follow-up ("sí") doesn't pay the reopen cost, then released so the
 // OS microphone indicator goes off.
-const MIC_LINGER_MS = 5000;
+// In the native app the mic closes the moment the button is released (see
+// MicCapture.releaseWhenIdle): replies then play through the main speaker
+// instead of the earpiece, and the mic indicator turns off.
+const NATIVE_APP = Capacitor.isNativePlatform();
+mic.releaseWhenIdle = NATIVE_APP;
+const MIC_LINGER_MS = NATIVE_APP ? 0 : 5000;
 
 /** Call mode streams the mic continuously; (re)open it if it isn't. */
 function ensureCallMic(trigger: string): void {
