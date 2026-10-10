@@ -85,6 +85,8 @@ ToolResult(
 
 The model is told (via the tool description) to **pre-narrate** the side effect — e.g. _"Putting on the book for you."_ or _"a ver, un momento"_ — _before_ calling the tool. The framework guarantees the narration plays before the factory does.
 
+The flip side: an audio-stream tool gets **no follow-up round**, so nothing in its `output` is ever spoken. If the user needs to hear the tool's answer ("what song is this?"), return it as an info tool (`side_effect=None`), and if audio should follow, have the output tell the model to call the stream tool next; the stream then starts after the spoken answer. The spotify skill's `whats_playing` does this.
+
 ### Loading sound files
 
 The SDK ships `huxley_sdk.audio.load_pcm_palette(directory, roles)` for skills that bundle WAV files (chimes, tones). It expects PCM16 / 24 kHz / mono and silently skips wrong-format files — wrong-format would play as garbage through the channel anyway. Both audiobooks (`book_start.wav`, `book_end.wav`) and news (`news_start.wav`) use it.

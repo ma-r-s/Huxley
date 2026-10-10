@@ -393,9 +393,12 @@ class TestControl:
         play = next(c for c in client.sent if c["command"] == "play")
         assert "uri" not in play
 
-    async def test_whats_playing_after_a_press_answers_and_resumes(
+    async def test_whats_playing_after_a_press_answers_then_asks_for_resume(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
+        """An AudioStream side effect would end the turn with no follow-up
+        round, so the answer would never be spoken (seen live 2026-10-10).
+        The answer is an info result; resuming is the model's next call."""
         skill, client, _ = await _skill(tmp_path, pcm_server)
         task, _ = await _consume_until(await _play(skill), 2)
         await _cancel(task)  # the press that asked "¿qué canción es esta?"
@@ -403,8 +406,10 @@ class TestControl:
 
         result = await skill.handle("whats_playing", {})
 
-        assert json.loads(result.output) == {"ok": True, "title": "Sin Ti", "by": "Los Panchos"}
-        assert isinstance(result.side_effect, AudioStream)
+        payload = json.loads(result.output)
+        assert (payload["title"], payload["by"]) == ("Sin Ti", "Los Panchos")
+        assert "music_control" in payload["then"] and "resume" in payload["then"]
+        assert result.side_effect is None
 
     async def test_whats_playing_after_pausa_does_not_resume(
         self, tmp_path: Path, pcm_server: PcmServer
@@ -417,7 +422,9 @@ class TestControl:
 
         result = await skill.handle("whats_playing", {})
 
-        assert json.loads(result.output)["title"] == "Sin Ti"
+        payload = json.loads(result.output)
+        assert payload["title"] == "Sin Ti"
+        assert "then" not in payload
         assert result.side_effect is None
 
     async def test_whats_playing_with_nothing(self, tmp_path: Path, pcm_server: PcmServer) -> None:
@@ -492,9 +499,9 @@ class TestAgainstRealClient:
                 assert next(m for m in fake.received if m["command"] == "play")["uri"] == (
                     "spotify:artist:panchos"
                 )
-                assert (await skill.handle("whats_playing", {})).output == json.dumps(
-                    {"ok": True, "title": "Sin Ti", "by": "Los Panchos"}, ensure_ascii=False
-                )
+                answer = json.loads((await skill.handle("whats_playing", {})).output)
+                assert (answer["title"], answer["by"]) == ("Sin Ti", "Los Panchos")
+                assert "then" in answer  # the press just interrupted it
             finally:
                 await _cancel(pump)
 

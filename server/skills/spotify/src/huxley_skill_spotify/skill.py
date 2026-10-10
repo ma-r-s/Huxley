@@ -11,11 +11,15 @@ Tools:
 - `play_music(query, kind?)`: search and play a song, artist, album or
   playlist.
 - `music_control(action)`: pause, resume, next, previous.
-- `whats_playing()`: what is on; the music comes back after the answer.
+- `whats_playing()`: what is on. An info tool: the model speaks the
+  answer, then (if a press just stopped the music) calls
+  `music_control(resume)`. It can't return the resume stream itself: a
+  tool with an AudioStream gets no follow-up round, so the answer would
+  never be spoken.
 
 A press always stops the music first (the coordinator cancels the
-stream), so next/previous/what's-playing act and then return a resume
-stream; the factory's `finally` queues a pause without awaiting it.
+stream), so next/previous act and then return a resume stream; the
+factory's `finally` queues a pause without awaiting it.
 
 Config (persona's `skills.spotify` block), all optional:
 - `soloist_ws` (default `ws://127.0.0.1:9090`), `pcm` (default
@@ -177,6 +181,22 @@ _SAY: dict[str, dict[str, str]] = {
 
 _ACTIONS = ("pause", "resume", "next", "previous")
 
+# Appended to whats_playing's answer when the music should come back.
+_THEN_RESUME = {
+    "es": (
+        "Dile al usuario el título y el artista. Después llama a music_control "
+        "con action 'resume' para que la música siga."
+    ),
+    "en": (
+        "Tell the user the title and artist. Then call music_control with "
+        "action 'resume' so the music continues."
+    ),
+    "fr": (
+        "Dis le titre et l'artiste. Puis appelle music_control avec action "
+        "'resume' pour que la musique reprenne."
+    ),
+}
+
 
 class SpotifySkill:
     """Plays Spotify through Soloist, streamed like radio."""
@@ -307,7 +327,8 @@ class SpotifySkill:
             )
             whats = (
                 "Dice qué está sonando en Spotify ('¿qué canción es esta?', '¿quién "
-                "canta?'). La música sigue después de responder."
+                "canta?'). Responde con el título y el artista que devuelve, y sigue "
+                "la indicación `then` si viene."
             )
         elif lang == "fr":
             play = (
@@ -326,8 +347,8 @@ class SpotifySkill:
                 "'next' (suivante), 'previous' (précédente)."
             )
             whats = (
-                "Dit ce qui joue sur Spotify ('c'est quelle chanson ?'). La musique "
-                "reprend après la réponse."
+                "Dit ce qui joue sur Spotify ('c'est quelle chanson ?'). Réponds avec "
+                "le titre et l'artiste renvoyés, et suis l'indication `then` si présente."
             )
         else:
             play = (
@@ -348,7 +369,8 @@ class SpotifySkill:
             )
             whats = (
                 "Says what is playing on Spotify ('what song is this?', 'who sings "
-                "this?'). The music continues after the answer."
+                "this?'). Answer with the title and artist it returns, and follow its "
+                "`then` instruction if present."
             )
         return [
             ToolDefinition(
@@ -457,20 +479,21 @@ class SpotifySkill:
                     ensure_ascii=False,
                 )
             )
-        payload = {"ok": True, "title": title, "by": artists}
-        # The press that asked stopped the music; bring it back after the
-        # answer, but only if a press just interrupted it here. Not after
-        # "pausa", and not if it moved to another device.
+        payload: dict[str, Any] = {"ok": True, "title": title, "by": artists}
+        # The press that asked stopped the music. It comes back after the
+        # answer only if a press just interrupted it here: not after
+        # "pausa", and not if it moved to another device. This tool must
+        # not return the resume stream itself: a tool with an AudioStream
+        # gets no follow-up round, so the answer would never be spoken.
+        # The model speaks the answer, then calls music_control(resume).
         interrupted = self._interrupted_at
-        resume = (
+        if (
             interrupted is not None
             and time.monotonic() - interrupted < RESUME_WINDOW_S
             and self._unavailable() is None
-        )
-        return ToolResult(
-            output=json.dumps(payload, ensure_ascii=False),
-            side_effect=self._stream() if resume else None,
-        )
+        ):
+            payload["then"] = _THEN_RESUME[self._lang()]
+        return ToolResult(output=json.dumps(payload, ensure_ascii=False))
 
     # --- Streaming ---
 
