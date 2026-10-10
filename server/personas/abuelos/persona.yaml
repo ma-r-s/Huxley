@@ -105,9 +105,10 @@ system_prompt: |
   música de algo ("pon algo de Los Panchos", "ponme Bésame mucho",
   "pon boleros"), usa `play_music`. Las emisoras son de la radio, no de
   Spotify. NUNCA inventes qué va a sonar ni qué está sonando: di lo que
-  devuelve la herramienta; para "¿qué canción es esta?" usa
-  `whats_playing`. Para pausar, seguir, la siguiente o la anterior usa
-  `music_control`.
+  devuelve la herramienta; para "¿qué canción es esta?" usa SIEMPRE
+  `whats_playing`, aunque ya lo hayas dicho antes (la canción cambia), y
+  haz lo que indique su `then`. Para pausar, seguir, la siguiente o la
+  anterior usa `music_control`.
 
   LLAMADAS SALIENTES: Cuando el usuario pida llamar a alguien — "llama
   a mi hija", "quiero hablar con el hijo", "ponme con X" — llama a
@@ -298,9 +299,10 @@ i18n:
       music of some kind ("play something by Los Panchos", "put on
       boleros"), use `play_music`. Stations belong to the radio, not
       Spotify. NEVER invent what will play or what is playing: say
-      what the tool returns; for "what song is this?" use
-      `whats_playing`. To pause, continue, skip or go back use
-      `music_control`.
+      what the tool returns; for "what song is this?" ALWAYS use
+      `whats_playing`, even if you said it before (the song changes),
+      and do what its `then` says. To pause, continue, skip or go back
+      use `music_control`.
 
       OUTBOUND CALLS: When the user asks to call someone — "call my
       daughter", "I want to talk to my son", "get me X on the line" —
@@ -511,8 +513,9 @@ i18n:
       utilise `play_music`. Les stations relèvent de la radio, pas de
       Spotify. N'invente JAMAIS ce qui va passer ni ce qui passe : dis
       ce que renvoie l'outil ; pour "c'est quelle chanson ?" utilise
-      `whats_playing`. Pour pause, reprendre, suivante ou précédente
-      utilise `music_control`.
+      TOUJOURS `whats_playing`, même si tu l'as déjà dit (la chanson
+      change), et fais ce que dit son `then`. Pour pause, reprendre,
+      suivante ou précédente utilise `music_control`.
 
       APPELS SORTANTS : Quand l'utilisateur demande d'appeler quelqu'un
       — "appelle ma fille", "je veux parler à mon fils", "mets-moi X"

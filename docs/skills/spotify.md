@@ -7,11 +7,11 @@ server's one audio channel, never through a separate speaker.
 
 ## What it does
 
-| Tool            | Args                                                                  | Returns                                                                                        |
-| --------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `play_music`    | `query: string`, `kind?: any \| track \| artist \| album \| playlist` | `{ ok, playing, by, kind }` + `AudioStream`, or `{ ok: false, reason, say }`                   |
-| `music_control` | `action: pause \| resume \| next \| previous`                         | pause: `CancelMedia`; the others: `AudioStream` (resume)                                       |
-| `whats_playing` | (none)                                                                | `{ ok, title, by, then? }` (info tool: `then` tells the model to resume), or `nothing_playing` |
+| Tool            | Args                                                                  | Returns                                                                                      |
+| --------------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `play_music`    | `query: string`, `kind?: any \| track \| artist \| album \| playlist` | `{ ok, playing, by, kind }` + `AudioStream`, or `{ ok: false, reason, say }`                 |
+| `music_control` | `action: pause \| resume \| next \| previous`                         | pause: `CancelMedia`; the others: `AudioStream` (resume)                                     |
+| `whats_playing` | (none)                                                                | `{ ok, title, by, then }` (info tool; a queued turn resumes the music), or `nothing_playing` |
 
 An artist plays as the artist (`spotify:artist:...`), like the play
 button on an artist page: their popular songs, then more. Soloist's docs
@@ -59,8 +59,11 @@ Spotify app ─┐                        ┌─ WebSocket (control, events) ─
   and "pause" is just `CancelMedia`. `whats_playing` can't return a
   stream: a tool with an `AudioStream` gets no follow-up round, so its
   answer would never be spoken (seen live). It answers as an info tool
-  and its `then` field asks the model to call `music_control(resume)`
-  after speaking.
+  whose `then` names the exact line to say; when a press just stopped
+  the music it also queues an `inject_turn` asking the model to call
+  `music_control(resume)`, which the coordinator runs after the answer's
+  turn ends. (Asking for both in one reply skipped the answer 1 time in
+  3; split, 5 of 5.)
 - **Content type:** `NONMIXABLE` with `patience` (default 30 min): a
   reminder or call pauses the music and it comes back afterwards.
   (Ducking would interleave music and speech; see T1.29.)

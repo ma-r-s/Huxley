@@ -393,13 +393,13 @@ class TestControl:
         play = next(c for c in client.sent if c["command"] == "play")
         assert "uri" not in play
 
-    async def test_whats_playing_after_a_press_answers_then_asks_for_resume(
+    async def test_whats_playing_after_a_press_answers_then_queues_the_resume(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
         """An AudioStream side effect would end the turn with no follow-up
         round, so the answer would never be spoken (seen live 2026-10-10).
-        The answer is an info result; resuming is the model's next call."""
-        skill, client, _ = await _skill(tmp_path, pcm_server)
+        The answer is an info result; resuming is a separate queued turn."""
+        skill, client, recorded = await _skill(tmp_path, pcm_server)
         task, _ = await _consume_until(await _play(skill), 2)
         await _cancel(task)  # the press that asked "¿qué canción es esta?"
         client.state.item = SIN_TI
@@ -408,13 +408,18 @@ class TestControl:
 
         payload = json.loads(result.output)
         assert (payload["title"], payload["by"]) == ("Sin Ti", "Los Panchos")
-        assert "music_control" in payload["then"] and "resume" in payload["then"]
+        assert "«Es Sin Ti, de Los Panchos.»" in payload["then"]  # the exact line
+        assert "music_control" not in payload["then"]  # one action per reply
         assert result.side_effect is None
+        await _settle()
+        # The resume is a separate queued turn, drained after the answer.
+        assert [key for _, key in recorded.injected] == ["spotify:resume_after_answer"]
+        assert "resume" in recorded.injected[0][0]
 
     async def test_whats_playing_after_pausa_does_not_resume(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
-        skill, client, _ = await _skill(tmp_path, pcm_server)
+        skill, client, recorded = await _skill(tmp_path, pcm_server)
         task, _ = await _consume_until(await _play(skill), 2)
         await _cancel(task)
         await skill.handle("music_control", {"action": "pause"})
@@ -424,8 +429,10 @@ class TestControl:
 
         payload = json.loads(result.output)
         assert payload["title"] == "Sin Ti"
-        assert "then" not in payload
+        assert "«Es Sin Ti, de Los Panchos.»" in payload["then"]
         assert result.side_effect is None
+        await _settle()
+        assert recorded.injected == []  # no resume after "pausa"
 
     async def test_whats_playing_with_nothing(self, tmp_path: Path, pcm_server: PcmServer) -> None:
         skill, _, _ = await _skill(tmp_path, pcm_server)

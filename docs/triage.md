@@ -5252,7 +5252,9 @@ Also: paused from an app for 3 s frees the speaker; a call longer than the patie
 
 **Docs for other households:** user guide `web/content/docs/use/connect-spotify.mdx` (Premium, own keys, pairing on Mac and Linux, switching accounts, troubleshooting); `docs/skills/spotify.md` updated; the site's skills page fixed (it showed a made-up Spotify config and said per-skill secrets weren't shipped).
 
-**Remaining.** Mario's voice smoke from the phone app (DoD list).
+**Voice smoke (Mario, phone app, 2026-10-10).** Play, interrupt, "siguiente", "pausa" all worked. "¿Qué canción es esta?" failed: the model said "déjame ver" and the music came back with no answer. Cause in the log: whats_playing returned the resume `AudioStream`, and a tool with an AudioStream gets no follow-up round (`has_audio_stream=True`, `follow_up=False`), so its output was never spoken. Fix 1 (info tool + "say it, then call music_control(resume)") failed again for Mario: once the model resumed without saying the title, once it answered from memory without calling the tool. Measured with a two-turn scripted voice test on the test server (`song_smoke.py`, TTS'd questions through the real server and Realtime model): 2 of 3. Fix 2: the answer turn does one thing (say an exact line, "«Es X, de Y.»"), and the skill queues `inject_turn("call music_control resume, say nothing")`, which the coordinator drains after the answer turn: 5 of 5, music back ~1-1.5 s after the answer. Persona prompt and tool description: always call whats_playing, even if said before.
+
+**Remaining.** Mario re-tries the song question on the phone.
 
 ---
 
@@ -5263,5 +5265,19 @@ Also: paused from an app for 3 s frees the speaker; a call longer than the patie
 **Problem.** `AudioStream` docs tell skill authors to pick `MIXABLE` for "ambient / musical content", which keeps the stream pumping at ~0.3 gain while speech overlays. But there is no mixer: the ducked stream's chunks and the model's speech go down the same single audio channel, and the clients (PWA `playback.ts`, iOS native, ESP32) play chunks back to back. Likely result: speech and music interleave, chopping both. No skill uses `MIXABLE` today, and tests cover the focus and gain mechanics, not what a client hears.
 
 **Solution.** Write a coordinator-level test that ducks a stream and overlays model audio, and inspect what reaches the client channel. If it interleaves, either add a server-side mix for the ducked case or change the docstring to steer music to `NONMIXABLE` with a patience until a mixer exists.
+
+---
+
+## T1.30: Resume the interrupted media after a question (proposal, needs Mario)
+
+**Status**: `queued` (2026-10-10, proposal; product decision, then plan + critic) · **Effort**: ~1-2 days
+
+**Problem.** A press during an audiobook, radio or Spotify stops the media for good (`coordinator.interrupt()` → stream `NONE`); after "¿qué hora es?" the user must say "sigue". Proactive turns (`inject_turn`) already *park* media (MUST_PAUSE with patience) and resume it afterward. T1.28's whats_playing had to work around this with a queued resume turn.
+
+**Proposal.** A user press parks the current media like an injected turn does. When the turn ends with no new content and no `CancelMedia`, the parked media resumes; a new `AudioStream` replaces it; "pausa"/"para" (`CancelMedia`) ends it. Covers every media skill at once, and whats_playing's workaround goes away.
+
+**Risks to weigh.** The model must reliably call stop for "silencio", "apaga", or the media comes back against the user's wish (worst for a blind user who can't see why). Calls (InputClaim) and very long questions need a patience bound. Audiobook position semantics on resume.
+
+**Decision needed from Mario.** Should media come back on its own after a question? (Product behavior across audiobooks, radio and music.)
 
 ---

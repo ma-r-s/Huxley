@@ -12,10 +12,10 @@ Tools:
   playlist.
 - `music_control(action)`: pause, resume, next, previous.
 - `whats_playing()`: what is on. An info tool: the model speaks the
-  answer, then (if a press just stopped the music) calls
-  `music_control(resume)`. It can't return the resume stream itself: a
-  tool with an AudioStream gets no follow-up round, so the answer would
-  never be spoken.
+  answer; if a press just stopped the music, a queued turn (drained
+  after the answer) has it call `music_control(resume)`. It can't return
+  the resume stream itself: a tool with an AudioStream gets no follow-up
+  round, so the answer would never be spoken.
 
 A press always stops the music first (the coordinator cancels the
 stream), so next/previous act and then return a resume stream; the
@@ -181,20 +181,26 @@ _SAY: dict[str, dict[str, str]] = {
 
 _ACTIONS = ("pause", "resume", "next", "previous")
 
-# Appended to whats_playing's answer when the music should come back.
-_THEN_RESUME = {
-    "es": (
-        "Dile al usuario el título y el artista. Después llama a music_control "
-        "con action 'resume' para que la música siga."
-    ),
-    "en": (
-        "Tell the user the title and artist. Then call music_control with "
-        "action 'resume' so the music continues."
-    ),
-    "fr": (
-        "Dis le titre et l'artiste. Puis appelle music_control avec action "
-        "'resume' pour que la musique reprenne."
-    ),
+# whats_playing's instruction: one thing only, say this exact line. Asking
+# for "say it, then call music_control(resume)" in the same reply got the
+# resume without the line 1 time in 3 (live, 2026-10-10); one action per
+# reply is reliable. The resume comes from a separate queued turn.
+_SAY_SONG = {
+    "es": "«Es {title}, de {by}.»",
+    "en": '"It\'s {title}, by {by}."',
+    "fr": "« C'est {title}, de {by}. »",
+}
+_THEN = {
+    "es": "Di en voz alta exactamente {line} No llames a ninguna herramienta.",
+    "en": "Say out loud exactly {line} Do not call any tool.",
+    "fr": "Dis à voix haute exactement {line} N'appelle aucun outil.",
+}
+# Queued with inject_turn; the coordinator drains it once the answer's
+# turn has ended, so the music comes back after the spoken answer.
+_RESUME_AFTER_ANSWER = {
+    "es": "Llama ahora a music_control con action 'resume'. No digas nada.",
+    "en": "Call music_control with action 'resume' now. Say nothing.",
+    "fr": "Appelle maintenant music_control avec action 'resume'. Ne dis rien.",
 }
 
 
@@ -327,8 +333,9 @@ class SpotifySkill:
             )
             whats = (
                 "Dice qué está sonando en Spotify ('¿qué canción es esta?', '¿quién "
-                "canta?'). Responde con el título y el artista que devuelve, y sigue "
-                "la indicación `then` si viene."
+                "canta?'). Llámala SIEMPRE que pregunten, aunque creas saberlo: la "
+                "canción cambia. No digas nada antes de llamarla. Después haz "
+                "exactamente lo que diga `then`; la música vuelve sola."
             )
         elif lang == "fr":
             play = (
@@ -347,8 +354,10 @@ class SpotifySkill:
                 "'next' (suivante), 'previous' (précédente)."
             )
             whats = (
-                "Dit ce qui joue sur Spotify ('c'est quelle chanson ?'). Réponds avec "
-                "le titre et l'artiste renvoyés, et suis l'indication `then` si présente."
+                "Dit ce qui joue sur Spotify ('c'est quelle chanson ?'). Appelle-la "
+                "TOUJOURS, même si tu crois savoir : la chanson change. Ne dis rien "
+                "avant. Ensuite fais exactement ce que dit `then` ; la musique "
+                "reprend toute seule."
             )
         else:
             play = (
@@ -369,8 +378,9 @@ class SpotifySkill:
             )
             whats = (
                 "Says what is playing on Spotify ('what song is this?', 'who sings "
-                "this?'). Answer with the title and artist it returns, and follow its "
-                "`then` instruction if present."
+                "this?'). ALWAYS call it when asked, even if you think you know: the "
+                "song changes. Say nothing before calling it. Then do exactly what "
+                "`then` says; the music comes back on its own."
             )
         return [
             ToolDefinition(
@@ -485,14 +495,19 @@ class SpotifySkill:
         # "pausa", and not if it moved to another device. This tool must
         # not return the resume stream itself: a tool with an AudioStream
         # gets no follow-up round, so the answer would never be spoken.
-        # The model speaks the answer, then calls music_control(resume).
+        # So: the model speaks the answer (follow-up round), and a queued
+        # turn, drained after that, asks it to call music_control(resume).
+        lang = self._lang()
+        line = _SAY_SONG[lang].format(title=title, by=artists or "?")
         interrupted = self._interrupted_at
-        if (
+        resume = (
             interrupted is not None
             and time.monotonic() - interrupted < RESUME_WINDOW_S
             and self._unavailable() is None
-        ):
-            payload["then"] = _THEN_RESUME[self._lang()]
+        )
+        payload["then"] = _THEN[lang].format(line=line)
+        if resume:
+            self._inject(_RESUME_AFTER_ANSWER[lang], "spotify:resume_after_answer")
         return ToolResult(output=json.dumps(payload, ensure_ascii=False))
 
     # --- Streaming ---
@@ -675,11 +690,13 @@ class SpotifySkill:
         )
 
     def _narrate(self, reason: str) -> None:
+        self._inject(self._say(reason), f"spotify:{reason}")
+
+    def _inject(self, prompt: str, dedup_key: str) -> None:
+        """Schedule an inject_turn; never awaited from a tool or a stream."""
         if self._ctx is None:
             return
-        task = asyncio.create_task(
-            self._ctx.inject_turn(self._say(reason), dedup_key=f"spotify:{reason}")
-        )
+        task = asyncio.create_task(self._ctx.inject_turn(prompt, dedup_key=dedup_key))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 

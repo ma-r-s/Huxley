@@ -85,7 +85,7 @@ ToolResult(
 
 The model is told (via the tool description) to **pre-narrate** the side effect — e.g. _"Putting on the book for you."_ or _"a ver, un momento"_ — _before_ calling the tool. The framework guarantees the narration plays before the factory does.
 
-The flip side: an audio-stream tool gets **no follow-up round**, so nothing in its `output` is ever spoken. If the user needs to hear the tool's answer ("what song is this?"), return it as an info tool (`side_effect=None`), and if audio should follow, have the output tell the model to call the stream tool next; the stream then starts after the spoken answer. The spotify skill's `whats_playing` does this.
+The flip side: an audio-stream tool gets **no follow-up round**, so nothing in its `output` is ever spoken. If the user needs to hear the tool's answer ("what song is this?"), return it as an info tool (`side_effect=None`). If audio should follow, don't ask the model to do both in one reply (it sometimes skips the speech and goes straight to the tool: measured 1 in 3); instead queue `ctx.inject_turn("call <stream tool> now, say nothing")`. The coordinator drains it once the answer's turn has ended, so the stream starts after the spoken answer. The spotify skill's `whats_playing` does this (5 of 5 in a live voice test).
 
 ### Loading sound files
 
