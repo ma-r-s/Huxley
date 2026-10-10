@@ -14,10 +14,10 @@ from pathlib import Path
 from build123d import Color, Compound, export_gltf, export_step
 
 from huxcase.concept import Concept, collisions
-from huxcase.concepts import hx1_classic, hx1d_duo, hx2_baton, hx3_radio, hx4_can
+from huxcase.concepts import hx1, hx1_classic, hx2_baton, hx3_radio, hx4_can
 
 OUT = Path(__file__).resolve().parent.parent / "out"
-BUILDERS = [hx1_classic.build, hx1d_duo.build, hx2_baton.build, hx3_radio.build, hx4_can.build]
+BUILDERS = [hx1.build, hx1_classic.build, hx2_baton.build, hx3_radio.build, hx4_can.build]
 
 # Approximate masses for the weight estimate (g).
 PLA_G_PER_CC = 1.24
@@ -31,6 +31,10 @@ KIND_COLOR = {
     "accent": (1.0, 0.36, 0.0),
     "accent_dark": (0.1, 0.1, 0.1),
     "translucent": (0.95, 0.95, 0.95),
+    "glow": (0.85, 0.95, 1.0),
+    "wire_black": (0.05, 0.05, 0.05),
+    "wire_red": (0.7, 0.05, 0.05),
+    "wire_white": (0.9, 0.9, 0.85),
     "clear": (0.95, 0.95, 1.0),
     "rubber": (0.08, 0.08, 0.08),
     "screw": (0.55, 0.55, 0.58),
@@ -44,7 +48,7 @@ KIND_COLOR = {
     "switch": (0.2, 0.2, 0.22),
     "stem": (0.8, 0.45, 0.1),
 }
-PRINTED = {"shell", "shell_dark", "shell_inner", "accent", "accent_dark", "translucent"}
+PRINTED = {"shell", "shell_dark", "shell_inner", "accent", "accent_dark", "translucent", "glow"}
 
 
 def summarize(c: Concept, hits: list[tuple[str, str, float]]) -> dict:

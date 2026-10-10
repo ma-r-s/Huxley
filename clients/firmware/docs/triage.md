@@ -60,7 +60,18 @@ tilted wall channel because the right cell sits behind that wall (first try,
 a tilted external flap, rendered badly and was replaced). Fit check clean; a
 test asserts it stays smaller than HX-1 with twice the cells.
 
-**Decisions waiting on Mario**: HX-1 Duo vs HX-1 as drawn; dock yes/no; volume buttons
+**HX-1, rev C (2026-10-10)**: Mario: "let's just call it HX-1", he has the
+cells and boards, no keyboard switch, and asked for LED feedback with his
+frosted PLA plus tidy back-side cables. The Duo became HX-1 (`hx1.py`; the
+one-cell version is "rev A"): PTT now a mouse microswitch clicked by an M2
+adjuster screw on the lever, pen-spring return, stop post (overtravel
+asserted in a test); frosted light ring on the 7 rear LEDs feeding a frosted
+top cap; the channel between the cells is the cable duct (four runs modelled
+and fit-checked); 1S2P contact bridges. Section renders (switch, open back)
+added for build reference; the 3D viewer's "See inside" now looks like the
+x-ray render.
+
+**Decisions waiting on Mario**: (resolved: HX-1 Duo is the build, speaker at the bottom is fine); dock yes/no; volume buttons
 yes/no; plus measurements of the speaker cable, the 18650 he will use and a
 look at the mic ports.
 

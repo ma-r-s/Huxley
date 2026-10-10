@@ -237,3 +237,53 @@ def stabiliser_pair(spacing: float) -> Part:
 
 def place(parts: list[Part], loc: Location, prefix: str = "") -> list[Part]:
     return [Part(prefix + p.name, loc * p.shape, p.kind) for p in parts]
+
+
+# --- Mouse microswitch PTT (Omron D2F / D2FC class, from any old mouse) -------
+# Not measured: the common mouse-switch envelope. Mario measures his before print.
+MS_L, MS_W, MS_H = 12.8, 5.8, 6.5  # body length, width, height (button side up)
+MS_BUTTON = (2.8, 1.6, 0.8)  # button footprint (along L, along W) and height above body
+MS_PRETRAVEL, MS_OVERTRAVEL = 0.3, 0.5
+MS_PINS = 3.5
+
+# Return spring: a ballpoint-pen spring.
+SPRING_D, SPRING_FREE = 4.0, 12.0
+
+
+def microswitch() -> list[Part]:
+    """Local frame: body bottom at z = -MS_H, top (button side) at z = 0, button up +z,
+    length along x."""
+    body = Pos(0, 0, -MS_H / 2) * Box(MS_L, MS_W, MS_H)
+    bl, bw, bh = MS_BUTTON
+    button = Pos(0, 0, bh / 2) * Box(bl, bw, bh)
+    pins = None
+    for x in (-5.0, 0.0, 5.0):
+        p = Pos(x, 0, -MS_H - MS_PINS / 2) * Box(0.6, 3.0, MS_PINS)
+        pins = p if pins is None else pins + p
+    return [
+        Part("ms_body", body, "black"),
+        Part("ms_button", button, "white"),
+        Part("ms_pins", pins, "metal"),
+    ]
+
+
+def spring(length: float) -> Part:
+    """Compression spring along +z from z = 0, drawn as a ribbed tube."""
+    coil = None
+    turns = int(length / 0.9)
+    for i in range(turns + 1):
+        ring = Pos(0, 0, i * length / turns) * (
+            Cylinder(SPRING_D / 2, 0.4) - Cylinder(SPRING_D / 2 - 0.4, 1.0)
+        )
+        coil = ring if coil is None else coil + ring
+    return Part("spring", coil, "metal")
+
+
+def cable(points: list[tuple[float, float, float]], d: float = 1.4):
+    """A wire bundle swept along a smooth path through `points`."""
+    from build123d import Plane, Spline, sweep
+
+    path = Spline(*points)
+    start = path.location_at(0)
+    profile = Plane(origin=start.position, z_dir=path.tangent_at(0)) * Circle(d / 2)
+    return sweep(profile, path=path)

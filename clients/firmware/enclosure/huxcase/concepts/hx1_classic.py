@@ -1,4 +1,4 @@
-"""HX-1 Classic: the archetypal portrait walkie-talkie brick.
+"""HX-1 rev A: the first, one-cell HX-1 (superseded by hx1.py, kept for comparison).
 
 Board faces the front (mics toward the user), speaker above it behind a dot
 grille, 18650 standing upright behind the board, PTT bar on the left side
@@ -204,8 +204,8 @@ def build() -> Concept:
         [envelopes["speaker"], spk_ring, pocket_outer],
     )
     return Concept(
-        id="hx1",
-        name="HX-1 Classic",
+        id="hx1a",
+        name="HX-1 rev A (one cell)",
         parts=parts,
         envelopes=envelopes,
         shells=shells,

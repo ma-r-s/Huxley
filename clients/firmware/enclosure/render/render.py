@@ -33,8 +33,18 @@ SHELL_KINDS = {
     "clear",
 }
 
+# Section views: the orthographic camera's near clip plane slices the model
+# so the mechanism shows in profile. name -> (look, clip_y_mm, centre_xz_mm,
+# height_mm, (res_x, res_y)). look "front" = camera at -Y looking +Y.
+EXTRA_VIEWS = {
+    "hx1": {
+        "switch": ("front", 2.5, (26.0, 72.0), 66.0, (1280, 1600)),
+        "open_back": ("back", 15.6, (1.5, 52.0), 112.0, (1280, 1600)),
+    },
+}
+
 # Per-concept camera azimuth for the hero shot (deg, 0 = straight at the front).
-HERO_AZ = {"hx1": -38, "hx1d": 36, "hx2": -32, "hx3": -28, "hx4": -40}
+HERO_AZ = {"hx1a": -38, "hx1": 36, "hx2": -32, "hx3": -28, "hx4": -40}
 
 
 def mat(
@@ -74,6 +84,14 @@ def build_materials():
         accent=mat("TE orange", (0.95, 0.12, 0.004), 0.4, coat=0.1),
         accent_dark=mat("dark", (0.02, 0.02, 0.02), 0.5),
         translucent=mat("frosted", (0.95, 0.97, 1.0), 0.32, transmission=1.0),
+        glow=mat(
+            "light ring",
+            (0.9, 0.96, 1.0),
+            0.35,
+            transmission=0.6,
+            emission=(0.45, 0.82, 1.0),
+            strength=12.0,
+        ),
         clear=mat("clear", (1, 1, 1), 0.05, transmission=1.0),
         rubber=mat("rubber", (0.015, 0.015, 0.015), 0.9),
         screw=mat("steel", (0.6, 0.6, 0.62), 0.3, metal=1.0),
@@ -87,6 +105,9 @@ def build_materials():
         cell=mat("cell", (0.12, 0.36, 0.3), 0.35, coat=0.6),
         switch=mat("switch", (0.08, 0.08, 0.09), 0.4),
         stem=mat("stem", (0.85, 0.5, 0.15), 0.4),
+        wire_black=mat("wire black", (0.02, 0.02, 0.02), 0.5),
+        wire_red=mat("wire red", (0.55, 0.02, 0.02), 0.45),
+        wire_white=mat("wire white", (0.8, 0.8, 0.75), 0.5),
         ghost=mat("ghost", (0.8, 0.84, 0.9), 0.25, alpha=0.07),
     )
 
@@ -192,8 +213,8 @@ def bounds(objs):
     return lo, hi
 
 
-def camera(objs, az_deg, el_deg, lens=85, margin=1.15):
-    lo, hi = bounds(objs)
+def camera(objs, az_deg, el_deg, lens=85, margin=1.15, focus=None):
+    lo, hi = focus if focus else bounds(objs)
     c = (lo + hi) / 2
     radius = (hi - lo).length / 2
     sc = bpy.context.scene
@@ -215,6 +236,52 @@ def camera(objs, az_deg, el_deg, lens=85, margin=1.15):
     cam_data.dof.use_dof = True
     cam_data.dof.focus_distance = (c - cam.location).length
     cam_data.dof.aperture_fstop = 8.0
+    sc.camera = cam
+    return cam
+
+
+def section_caps(on: bool):
+    """Where a clip plane exposes a part's inside, show it as flat part colour."""
+    for m in bpy.data.materials:
+        if not m.use_nodes or "Principled BSDF" not in m.node_tree.nodes:
+            continue
+        nt = m.node_tree
+        out = nt.nodes["Material Output"]
+        bsdf = nt.nodes["Principled BSDF"]
+        if on and "cap_mix" not in nt.nodes:
+            geo = nt.nodes.new("ShaderNodeNewGeometry")
+            emit = nt.nodes.new("ShaderNodeEmission")
+            col = bsdf.inputs["Base Color"].default_value
+            emit.inputs["Color"].default_value = (col[0] * 0.8, col[1] * 0.8, col[2] * 0.8, 1)
+            emit.inputs["Strength"].default_value = 1.0
+            mix = nt.nodes.new("ShaderNodeMixShader")
+            mix.name = "cap_mix"
+            nt.links.new(geo.outputs["Backfacing"], mix.inputs["Fac"])
+            nt.links.new(bsdf.outputs["BSDF"], mix.inputs[1])
+            nt.links.new(emit.outputs["Emission"], mix.inputs[2])
+            nt.links.new(mix.outputs["Shader"], out.inputs["Surface"])
+        elif not on and "cap_mix" in nt.nodes:
+            nt.links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+
+
+def section_camera(look, clip_y, centre, height, res):
+    """Orthographic camera whose near clip plane is y = clip_y (CAD mm)."""
+    sc = bpy.context.scene
+    scale = 0.6 if QUICK else 1.0
+    sc.render.resolution_x, sc.render.resolution_y = int(res[0] * scale), int(res[1] * scale)
+    data = bpy.data.cameras.new("section")
+    data.type = "ORTHO"
+    data.ortho_scale = height / 1000
+    cam = bpy.data.objects.new("section", data)
+    sc.collection.objects.link(cam)
+    sign = -1 if look == "front" else 1
+    dist = 0.5
+    cam.location = Vector((centre[0] / 1000, clip_y / 1000 + sign * dist, centre[1] / 1000))
+    # Camera looks down its -Z; (90, 0, 0) looks along +Y with +Z up.
+    cam.rotation_euler = (math.radians(90), 0, 0 if look == "front" else math.radians(180))
+    sc.world.node_tree.nodes["Background"].inputs["Strength"].default_value = 0.9
+    data.clip_start = dist
+    data.clip_end = dist + 0.2
     sc.camera = cam
     return cam
 
@@ -246,6 +313,14 @@ def concept_views(cid: str):
     ghost(objs, True)
     cam = camera(objs, az * 0.6, 14)
     render(DST / f"{cid}_xray.png")
+    ghost(objs, False)
+    section_caps(True)
+    for name, view in EXTRA_VIEWS.get(cid, {}).items():
+        bpy.data.objects.remove(cam)
+        cam = section_camera(*view)
+        render(DST / f"{cid}_{name}.png")
+    sc = bpy.context.scene
+    sc.render.resolution_x, sc.render.resolution_y = (1000, 800) if QUICK else (1600, 1280)
 
 
 def family():

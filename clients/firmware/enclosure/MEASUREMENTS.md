@@ -81,6 +81,15 @@ power-path MOSFETs, but I found no cell-protection IC (no DW01-class part).
 - **Antenna.** Keep metal (the 18650 can, the speaker magnet) at least ~10 mm
   from the ceramic antenna at the -x edge. Every concept does.
 
+## Scavenged parts (assumed until measured)
+
+| Part | Assumed | Constant |
+|---|---|---|
+| Mouse microswitch body | 12.8 × 5.8 × 6.5 mm, button 2.8 × 1.6 × 0.8, pretravel 0.3, overtravel 0.5 | `MS_*` |
+| Pen spring | Ø4.0, cut to 12 mm free length, ~11 mm installed | `SPRING_*`, `SPRING_REST` |
+| Adjuster screw | M2, self-tapping into the lever | `SCREW_PROUD` |
+| Lever pin | Ø2 × 21 mm (M2 × 20 screw) | `_bar`, `pin` |
+
 ## Still to measure (Mario)
 
 1. Speaker: confirm Ø40 front and 20.5 deep, and **measure the cable length**
@@ -89,3 +98,5 @@ power-path MOSFETs, but I found no cell-protection IC (no DW01-class part).
    holder with leads, or a cell with solder tabs. Does the kit include the
    1.25 mm battery pigtail?
 3. A glance at the mics: is there a pinhole on top of each metal can?
+4. The mouse switch he pulls: body L × W × H and button height.
+5. The pen spring: outer diameter and free length.

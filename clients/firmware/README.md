@@ -118,9 +118,12 @@ reach it from the LAN, set `HUXLEY_SERVER_HOST=0.0.0.0` in
 
 - `hux_audio` component — I2S + ES8311/ES7210/TCA9555 drivers, PSRAM
   ring buffers, PCM16 @ 24 kHz mono
-- Push-to-talk → `ptt_start` / `ptt_stop`: the case uses an external MX
-  switch on a free header GPIO (GPIO3 to GPIO9); `K2` stays as the bench
+- Push-to-talk → `ptt_start` / `ptt_stop`: the HX-1 case uses an external
+  mouse microswitch wired to a free header GPIO (GPIO3 to GPIO9) + GND,
+  soldered to the header's through-hole tails; `K2` stays as the bench
   fallback (see F-0010 in `docs/triage.md`)
+- State light: the case pipes the 7 WS2812 LEDs (GPIO38) into a frosted top
+  cap, so listening / thinking / speaking / low battery can show as colours
 - Mic → base64-in-JSON `audio` frames while PTT held
 - Inbound `audio` → speaker playback queue
 - State LED via the onboard WS2812
