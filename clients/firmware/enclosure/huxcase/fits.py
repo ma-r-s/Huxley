@@ -40,8 +40,14 @@ CRUSH_RIB = 0.45  # rib height into the PART gap: 0.15 mm of interference, crush
 CRUSH_RIB_W = 0.8  # two perimeters wide so it deforms instead of snapping off
 
 # Heat-set inserts (bore for the insert, clearance for the screw through the other part).
+# M3 measured by Mario (2026-10-10): 4.4 over the knurls, 3.8 smooth pilot, so a
+# 4.0 bore (between the two). Bore depth = insert length + 1 for the melt.
+# M2 assumed (3.5 OD class); the coupon checks it.
 INSERT_BORE = {"M2": 3.2, "M3": 4.0}
+INSERT_LENGTHS = {"M3": (3.0, 5.0, 7.0)}
 SCREW_CLEAR = {"M2": 2.4, "M3": 3.4}
+# Mario's button-head screws, lengths in stock (M3 measured; M2 unconfirmed).
+SCREW_LENGTHS = {"M3": (6.0, 8.0, 12.0, 16.0)}
 
 # Printability.
 MIN_WALL = 0.8  # two perimeters of a 0.4 mm nozzle; anything thinner is not printed

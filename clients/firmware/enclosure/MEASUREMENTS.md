@@ -99,10 +99,13 @@ Calipers, Mario, 2026-10-10 (**MARIO**), or assumed generic (**ASSUMED**).
 | KCD1-101 rocker | 18.6 from the frame's underside to the tab tips | **MARIO** | `ROCKER_DEPTH` |
 | | 21 x 15 bezel, 19 x 13 body x 11.5, tabs 6 mm apart, rocker 5 mm proud | **ASSUMED** | `ROCKER_*` |
 | 18650 holders (2) | 76 x 21 x 20.5 outside | **MARIO** | `HOLDER_*` |
-| | 1.2 floor and walls, 3.0 end caps, 4.5 spring, leads out of the end caps near the floor | **ASSUMED** | |
+| | 1.2 floor and walls, 3.0 end caps, 4.5 spring | **ASSUMED** | |
 | 18650 cells | green wrap, probably Sony/Murata VTC: unprotected, flat top, 65 mm | **ASSUMED** | `CELL_*` |
 | Speaker lead | 97 from the speaker to the end of the plug | **MARIO** | `SPK_CABLE_L` |
 | Mics | pinhole on top of each can: top-ported, as the front mic ports assume | **MARIO** | `MICS` |
+| M3 heat-set inserts | 4.4 over the knurls, 3.8 smooth pilot; 3, 5 and 7 long | **MARIO** | `fits.INSERT_*` |
+| M3 button-head screws | 6, 8, 12, 16 long | **MARIO** | `fits.SCREW_LENGTHS` |
+| Holder leads | black (-) out of the spring end cap, red (+) out of the plate end cap | **MARIO** (photo) | `lead_*` |
 
 The speaker lead is ~75 mm longer than its 22 mm route, and loose wire buzzes
 in a sealed back box, so the build cuts it to 45 mm and re-solders it at the
@@ -122,9 +125,6 @@ covers deep discharge but not shorts.
 
 ## Still to measure (Mario)
 
-1. One M2 and one M3 heat-set insert from the FFVRVSS kit: outer diameter
-   across the knurl, and length. The bores in `fits.INSERT_BORE` assume the
-   common 3.5 / 4.4-4.6 mm sizes.
-2. The longest M2 and M3 screws in the Kadrick kit.
-3. The holder leads: confirm they leave the end caps near the floor (the
-   model assumes so).
+1. M2 heat-set inserts and screws, only if the final design uses them: the
+   fit coupon's M2 bore tests the assumed insert.
+2. The fit coupon results (see README "Fits").
