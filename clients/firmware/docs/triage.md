@@ -50,7 +50,17 @@ contacts. Per concept: HX-1's antenna sits under the thumb (rotate the
 board), HX-2's trigger pivot is on the wrong end, HX-3 presses PTT when
 carried, HX-4 tips and gets gripped onto the bar.
 
-**Decisions waiting on Mario**: which concept; dock yes/no; volume buttons
+**HX-1 Duo (2026-10-10)**: Mario picked HX-1 and asked for two 18650s with
+less empty space. HX-1 Duo (`hx1d_duo.py`): board rotated 90 deg so its
+underside plugs sit between two upright cells, speaker under the board with
+its magnet nested between the cells, whole interior as the speaker box.
+68 × 36.2 × 104 body versus HX-1's 66 × 35 × 125 (11% less volume, 2× cells,
+130 cc back volume). PTT became a 49 mm lever on the right side, pinned in a
+tilted wall channel because the right cell sits behind that wall (first try,
+a tilted external flap, rendered badly and was replaced). Fit check clean; a
+test asserts it stays smaller than HX-1 with twice the cells.
+
+**Decisions waiting on Mario**: HX-1 Duo vs HX-1 as drawn; dock yes/no; volume buttons
 yes/no; plus measurements of the speaker cable, the 18650 he will use and a
 look at the mic ports.
 

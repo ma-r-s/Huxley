@@ -14,14 +14,15 @@ from pathlib import Path
 from build123d import Color, Compound, export_gltf, export_step
 
 from huxcase.concept import Concept, collisions
-from huxcase.concepts import hx1_classic, hx2_baton, hx3_radio, hx4_can
+from huxcase.concepts import hx1_classic, hx1d_duo, hx2_baton, hx3_radio, hx4_can
 
 OUT = Path(__file__).resolve().parent.parent / "out"
-BUILDERS = [hx1_classic.build, hx2_baton.build, hx3_radio.build, hx4_can.build]
+BUILDERS = [hx1_classic.build, hx1d_duo.build, hx2_baton.build, hx3_radio.build, hx4_can.build]
 
 # Approximate masses for the weight estimate (g).
 PLA_G_PER_CC = 1.24
-HARDWARE_G = {"board": 22.0, "speaker": 28.0, "cell": 47.0, "switch": 6.0, "screws": 4.0}
+HARDWARE_G = {"board": 22.0, "speaker": 28.0, "switch": 6.0, "screws": 4.0}
+CELL_G = 47.0
 
 KIND_COLOR = {
     "shell": (0.85, 0.85, 0.83),
@@ -48,13 +49,15 @@ PRINTED = {"shell", "shell_dark", "shell_inner", "accent", "accent_dark", "trans
 
 def summarize(c: Concept, hits: list[tuple[str, str, float]]) -> dict:
     printed_cc = sum(p.shape.volume for p in c.parts if p.kind in PRINTED) / 1000
+    cells = sum(1 for p in c.parts if p.kind == "cell")
     w, d, h = c.size()
     return {
         "id": c.id,
         "name": c.name,
         "size_mm": [round(w, 1), round(d, 1), round(h, 1)],
         "printed_cc": round(printed_cc, 1),
-        "weight_g": round(printed_cc * PLA_G_PER_CC + sum(HARDWARE_G.values())),
+        "cells": cells,
+        "weight_g": round(printed_cc * PLA_G_PER_CC + sum(HARDWARE_G.values()) + cells * CELL_G),
         "back_volume_cc": c.notes.get("back_volume_cc"),
         "collisions": hits,
         "parts": sorted({p.name for p in c.parts}),

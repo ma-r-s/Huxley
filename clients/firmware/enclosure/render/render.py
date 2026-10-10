@@ -16,6 +16,7 @@ from mathutils import Vector
 
 argv = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
 QUICK = "--quick" in argv
+FAMILY_ONLY = "--family-only" in argv  # skip per-concept views, render the group shot
 argv = [a for a in argv if not a.startswith("--")]
 SRC = Path(argv[0]) if argv else Path("out")
 DST = Path(argv[1]) if len(argv) > 1 else SRC / "renders"
@@ -33,7 +34,7 @@ SHELL_KINDS = {
 }
 
 # Per-concept camera azimuth for the hero shot (deg, 0 = straight at the front).
-HERO_AZ = {"hx1": -38, "hx2": -32, "hx3": -28, "hx4": -40}
+HERO_AZ = {"hx1": -38, "hx1d": 36, "hx2": -32, "hx3": -28, "hx4": -40}
 
 
 def mat(
@@ -262,12 +263,13 @@ def family():
         r.location.x -= (lo.x + hi.x) / 2
     bpy.context.view_layer.update()
     studio(max(hi - lo) * 0.6)
-    camera(allobjs, -16, 12, lens=70, margin=1.1)
-    render(DST / "family.png")
+    camera(allobjs, -16 if len(IDS) > 2 else 8, 12, lens=70, margin=1.1)
+    name = "family.png" if len(IDS) > 2 else f"compare_{'_'.join(IDS)}.png"
+    render(DST / name)
 
 
 if __name__ == "__main__":
-    for cid in IDS:
+    for cid in IDS if not FAMILY_ONLY else []:
         concept_views(cid)
     if len(IDS) > 1:
         family()
