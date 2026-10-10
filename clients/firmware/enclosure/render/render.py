@@ -43,6 +43,8 @@ EXTRA_VIEWS = {
     },
 }
 
+FROSTED_BACK_PREVIEW = {"hx1"}
+
 # Per-concept camera azimuth for the hero shot (deg, 0 = straight at the front).
 HERO_AZ = {"hx1a": -38, "hx1": 36, "hx2": -32, "hx3": -28, "hx4": -40}
 
@@ -321,6 +323,16 @@ def concept_views(cid: str):
         render(DST / f"{cid}_{name}.png")
     sc = bpy.context.scene
     sc.render.resolution_x, sc.render.resolution_y = (1000, 800) if QUICK else (1600, 1280)
+    if cid in FROSTED_BACK_PREVIEW:
+        # Option preview: the same model with the back shell printed in frosted PLA.
+        section_caps(False)
+        sc.world.node_tree.nodes["Background"].inputs["Strength"].default_value = 0.06
+        for o in objs:
+            if o.name.startswith("shell__shell_back"):
+                o.data.materials[0] = MATS["translucent"]
+        bpy.data.objects.remove(cam)
+        cam = camera(objs, 180 - az * 0.9, 22)
+        render(DST / f"{cid}_back_frosted.png")
 
 
 def family():

@@ -19,10 +19,10 @@ def test_no_collisions(concept):
 def test_has_core_hardware(concept):
     names = {p.name for p in concept.parts}
     assert {"board_pcb", "speaker_frame"} <= names
-    assert names & {"mx_housing", "ms_body"}, "every concept needs a talk switch"
+    assert names & {"mx_housing", "ms_body", "tact_body"}, "every concept needs a talk switch"
     assert any(p.kind == "cell" for p in concept.parts)
     assert {"board", "speaker"} <= set(concept.envelopes)
-    assert set(concept.envelopes) & {"mx", "microswitch"}
+    assert set(concept.envelopes) & {"mx", "microswitch", "tact_switch"}
     assert any(k.startswith("cell") for k in concept.envelopes)
 
 
@@ -42,15 +42,18 @@ def test_speaker_gets_a_real_back_box(concept):
     assert concept.notes["back_volume_cc"] >= 40.0
 
 
-def test_hx1_switch_never_overtravels():
-    """At the lever's stop the mouse switch is pressed past its click, but by
-    less than its overtravel."""
+def test_hx1_tact_switch_clicks_before_the_stop():
+    """Spring in series: the lever compresses the spring until it reaches the
+    switch's actuation force. That must happen before the stop post, with
+    margin, for a nominal 12x12 switch; a stiff one (2.6 N) must still click
+    with one 0.5 mm washer under the plunger flange."""
     from huxcase import hardware as hw
     from huxcase.concepts import hx1
 
-    screw_tip_at_stop = hx1.X_OUT - hx1.SCREW_PROUD - hx1.STOP
-    pressed = hx1.MS_BUTTON_X - screw_tip_at_stop
-    assert hw.MS_PRETRAVEL < pressed < hw.MS_PRETRAVEL + hw.MS_OVERTRAVEL
+    assert hx1.click_travel() < hx1.STOP - 0.5
+    assert hx1.click_travel(force=2.6, shim=0.5) < hx1.STOP - 0.2
+    solid = 10 * 0.4  # 10 coils of 0.4 mm wire
+    assert solid + 1.0 < hx1.SPRING_REST - hx1.STOP + hw.TACT_TRAVEL
 
 
 def test_hx1_light_ring_clears_cells():

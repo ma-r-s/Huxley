@@ -71,6 +71,17 @@ and fit-checked); 1S2P contact bridges. Section renders (switch, open back)
 added for build reference; the 3D viewer's "See inside" now looks like the
 x-ray render.
 
+**Parts-only pass (2026-10-10)**: Mario sent photos of his whole inventory
+and asked to use nothing else. PTT is now his 12 x 12 tactile switch with a
+SciWil 0.4 x 4 x 15 spring in series (lever -> spring -> plunger -> stem):
+progressive press then click, tolerance-insensitive, no adjuster screw;
+lever pin M2 x 16 + nut; board on M2 x 8 into M2 heat-set inserts. Found
+and flagged: the board has no cell protection and his green 18650s look
+unprotected, so a 1S protection board is the one missing part; the BAT
+socket is 1.25 mm pitch (his kit is 2.5 mm XH). Open: he expected the LED
+face toward a frosted back; that conflicts with the mics on the other face
+and the cells sharing depth with the board. Three options put to him.
+
 **Decisions waiting on Mario**: (resolved: HX-1 Duo is the build, speaker at the bottom is fine); dock yes/no; volume buttons
 yes/no; plus measurements of the speaker cable, the 18650 he will use and a
 look at the mic ports.

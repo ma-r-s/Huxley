@@ -81,14 +81,26 @@ power-path MOSFETs, but I found no cell-protection IC (no DW01-class part).
 - **Antenna.** Keep metal (the 18650 can, the speaker magnet) at least ~10 mm
   from the ceramic antenna at the -x edge. Every concept does.
 
-## Scavenged parts (assumed until measured)
+## Mario's parts (assumed until measured)
 
 | Part | Assumed | Constant |
 |---|---|---|
-| Mouse microswitch body | 12.8 × 5.8 × 6.5 mm, button 2.8 × 1.6 × 0.8, pretravel 0.3, overtravel 0.5 | `MS_*` |
-| Pen spring | Ø4.0, cut to 12 mm free length, ~11 mm installed | `SPRING_*`, `SPRING_REST` |
-| Adjuster screw | M2, self-tapping into the lever | `SCREW_PROUD` |
-| Lever pin | Ø2 × 21 mm (M2 × 20 screw) | `_bar`, `pin` |
+| 12 x 12 tactile switch | body 12 x 12 x 4.0, round stem Ø3.5 standing 3.3 proud, actuation ~2 N / 0.25 mm | `TACT_*` |
+| Series spring (SciWil) | 0.4 wire x 4 OD x 15 free, 10 coils, ~0.59 N/mm | `SERIES_SPRING_*` |
+| Lever pin | M2 x 16 screw + nut | `_bar`, `pin` |
+| KCD1-101 rocker | 21 x 15 bezel, 19 x 13 cutout, ~18 deep incl. terminals (not placed yet) | - |
+| 18650 cells | green wrap, probably Sony/Murata VTC: unprotected, flat top, 65 mm | `CELL_*` (bay still 74) |
+
+## Battery protection
+
+The board's charger (ETA6098) only manages charging. Nothing on the board
+limits a short circuit or stops a deep discharge: the schematic shows no
+protection IC (no DW01-class part), only the charger and two power-path
+MOSFETs. Waveshare's own LiPo has its protection board inside the pack, which
+is why the board omits it. Bare 18650s therefore need a 1S protection board
+(DW01 + 8205 class) between the cells and the BAT socket, or protected
+cells. Firmware can add a low-voltage shutdown via `BAT_ADC` (GPIO1), which
+covers deep discharge but not shorts.
 
 ## Still to measure (Mario)
 
@@ -98,5 +110,6 @@ power-path MOSFETs, but I found no cell-protection IC (no DW01-class part).
    holder with leads, or a cell with solder tabs. Does the kit include the
    1.25 mm battery pigtail?
 3. A glance at the mics: is there a pinhole on top of each metal can?
-4. The mouse switch he pulls: body L × W × H and button height.
-5. The pen spring: outer diameter and free length.
+4. The tactile switch: body height and stem height/diameter, and its
+   actuation force if known.
+5. The cells' label (model) and length; the KCD1-101's body depth.

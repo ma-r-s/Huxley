@@ -46,29 +46,26 @@ hand); USB-C exits the left side in a deep pocket; KEY1 to KEY3 sit at the top
 edge (candidate volume buttons); the bottom 5 mm under the cells is free for
 dock contacts.
 
-## The talk switch: a mouse microswitch
+## The talk switch: 12 x 12 tactile button + series spring
 
-Mario has no keyboard switch, so HX-1 uses what every drawer of old
-electronics has: the click switch from a mouse (Omron D2F/D2FC class, about
-12.8 × 5.8 × 6.5 mm, three legs, wire COM + NO). It clicks crisply but only
-moves ~0.5 mm, so the travel comes from the lever:
+Built only from Mario's parts drawer (2026-10-10): his 12 x 12 mm tactile
+button (green cap not used) and a 0.4 x 4 x 15 mm spring from the SciWil kit.
 
-- **Pen spring** (ballpoint-pen spring cut to ~12 mm, Ø4) in a pocket above
-  the switch pushes the lever out and gives the spring-loaded feel.
-- **M2 adjuster screw** through the lever's top end clicks the switch. Its
-  protrusion (`SCREW_PROUD`, 0.7 mm) sets the click at ~2.9 mm of the 3.3 mm
-  stroke at the switch; at the thumb that is about 2.5 mm of travel, then the
-  click.
-- **Stop post** next to the spring ends the stroke at 3.3 mm, so the switch is
-  never pressed past its overtravel (a test asserts this).
-- **Rest stop**: the lever's tail below the pin lies on the wall; the spring
-  holds it there.
-- Fallbacks: a lever/endstop microswitch (3D-printer spares), or a 12 × 12 mm
-  dev-kit push button in the same pocket with a spacer.
-
-Wiring: two thin wires from the switch to the 2×9 header's through-hole tails
-on the board's back (one free GPIO, GPIO3 to GPIO9, plus GND), routed behind
-the light ring and above the right cell.
+- The orange lever is pinned at its bottom end (M2 x 16 screw + M2 nut).
+- Its top end presses a **spring in series** with the switch: lever ->
+  spring -> printed plunger -> switch stem. The press feels progressive
+  (spring-loaded) until the spring reaches the switch's actuation force,
+  then the switch clicks. The click point no longer depends on print
+  accuracy, so there is no adjuster screw.
+- Nominal (2 N switch): click after ~3.0 mm at the switch axis, ~1.9 mm under
+  the thumb; the stop post ends the stroke at 3.8 mm. A stiff switch (2.6 N)
+  still clicks with one 0.5 mm washer under the plunger flange; for a
+  firmer, shorter press use the 0.4 x 4 x 10 spring. Tests assert the click
+  always lands before the stop and the spring never goes solid.
+- The two wires go from two legs on the same end of the switch (5 mm apart:
+  check with a multimeter which pair switches) to the 2x9 header's
+  through-hole tails on the board's back (one free GPIO, GPIO3 to GPIO9,
+  plus GND).
 
 ## The light: frosted ring + frosted cap
 
@@ -93,11 +90,19 @@ same voltage (within ~0.05 V) before they are joined.
 
 ## Parts list
 
+Only Mario's inventory (photos 2026-10-10): Kadrick M2-M5 button-head
+screws, nuts and washers; FFVRVSS M2-M5 heat-set inserts + tool; SciWil
+compression springs (0.3-0.8 wire, 2-8 mm OD); Noxtren JST-XH + Dupont kit
+with 1 m ribbon cable; KCD1-101 rocker; 12 x 12 tactile button; two green
+18650s; the board and its speaker (lead ~75 mm, leaves at the rim).
+
 Printed: front and back shell (grey), speaker panel (black), lever (orange),
-top cap and light ring (frosted PLA), switch cradle. Have: board, speaker, two
-18650s. Scavenge: a mouse microswitch, a ballpoint-pen spring, two springs and
-two flat contacts from an old AA holder, an M2 × ~6 screw (adjuster), a 2 mm
-pin (an M2 × 20 screw works), thin wire, the board's battery plug lead.
+top cap and light ring (frosted PLA), switch cradle and plunger. Board: 3 x
+M2 x 8 + washers into M2 x 2 inserts. Lever pin: M2 x 16 + nut. Switch:
+12 x 12 tact + 0.4 x 4 x 15 spring. Wires: ribbon cable (double the
+conductors for the battery). Not in the inventory and needed: a 1S Li-ion
+protection board (the board has none; see MEASUREMENTS), and a 1.25 mm 2-pin
+plug for the BAT socket unless the leads are soldered straight to it.
 
 ## Layout
 

@@ -239,32 +239,8 @@ def place(parts: list[Part], loc: Location, prefix: str = "") -> list[Part]:
     return [Part(prefix + p.name, loc * p.shape, p.kind) for p in parts]
 
 
-# --- Mouse microswitch PTT (Omron D2F / D2FC class, from any old mouse) -------
-# Not measured: the common mouse-switch envelope. Mario measures his before print.
-MS_L, MS_W, MS_H = 12.8, 5.8, 6.5  # body length, width, height (button side up)
-MS_BUTTON = (2.8, 1.6, 0.8)  # button footprint (along L, along W) and height above body
-MS_PRETRAVEL, MS_OVERTRAVEL = 0.3, 0.5
-MS_PINS = 3.5
-
-# Return spring: a ballpoint-pen spring.
-SPRING_D, SPRING_FREE = 4.0, 12.0
-
-
-def microswitch() -> list[Part]:
-    """Local frame: body bottom at z = -MS_H, top (button side) at z = 0, button up +z,
-    length along x."""
-    body = Pos(0, 0, -MS_H / 2) * Box(MS_L, MS_W, MS_H)
-    bl, bw, bh = MS_BUTTON
-    button = Pos(0, 0, bh / 2) * Box(bl, bw, bh)
-    pins = None
-    for x in (-5.0, 0.0, 5.0):
-        p = Pos(x, 0, -MS_H - MS_PINS / 2) * Box(0.6, 3.0, MS_PINS)
-        pins = p if pins is None else pins + p
-    return [
-        Part("ms_body", body, "black"),
-        Part("ms_button", button, "white"),
-        Part("ms_pins", pins, "metal"),
-    ]
+# Spring drawing helper (the series spring's OD).
+SPRING_D = 4.0
 
 
 def spring(length: float) -> Part:
@@ -287,3 +263,32 @@ def cable(points: list[tuple[float, float, float]], d: float = 1.4):
     start = path.location_at(0)
     profile = Plane(origin=start.position, z_dir=path.tangent_at(0)) * Circle(d / 2)
     return sweep(profile, path=path)
+
+
+# --- 12 x 12 tactile switch PTT (Mario's, from his dev-kit drawer) ------------
+# Assumed generic 12x12x7.3 until measured: body 12 x 12 x 4.0, round stem
+# 3.5 mm across standing 3.3 mm proud, 4 legs. Actuation ~1.6-2.6 N, 0.25 mm.
+TACT_W, TACT_BODY, TACT_STEM_D, TACT_STEM_H = 12.0, 4.0, 3.5, 3.3
+TACT_TRAVEL, TACT_FORCE = 0.25, 2.0
+TACT_LEGS = 3.5
+
+# Series spring from the SciWil kit: 0.4 wire x 4 OD x 15 free, 10 coils.
+SERIES_SPRING_D, SERIES_SPRING_FREE, SERIES_SPRING_K = 4.0, 15.0, 0.59  # N/mm (304 SS, 8 active)
+
+
+def tact_switch() -> list[Part]:
+    """Local frame: body base at z = 0, stem up +z (stem top at TACT_BODY + TACT_STEM_H)."""
+    body = Pos(0, 0, TACT_BODY / 2) * Box(TACT_W, TACT_W, TACT_BODY)
+    plate = Pos(0, 0, TACT_BODY - 0.15) * Box(TACT_W - 0.6, TACT_W - 0.6, 0.3)
+    stem = Pos(0, 0, TACT_BODY + TACT_STEM_H / 2) * Cylinder(TACT_STEM_D / 2, TACT_STEM_H)
+    legs = None
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            leg = Pos(sx * 6.25, sy * 2.5, -TACT_LEGS / 2) * Box(0.7, 1.0, TACT_LEGS)
+            legs = leg if legs is None else legs + leg
+    return [
+        Part("tact_body", body, "black"),
+        Part("tact_plate", plate, "metal"),
+        Part("tact_stem", stem, "black"),
+        Part("tact_legs", legs, "metal"),
+    ]

@@ -11,9 +11,10 @@ Packing (see README "HX-1"):
 - Board on top puts the ceramic antenna at the top of the device, out of
   the hand; three of the board's side keys end up on the top edge.
 - PTT: an orange lever on the right side (right thumb), pinned at its bottom
-  end inside a tilted wall channel. Its top end carries an M2 adjuster screw
-  that clicks a mouse microswitch housed above the right cell; a cut-down
-  ballpoint-pen spring gives the travel and pushes it back.
+  end inside a tilted wall channel. Its top end compresses a spring that
+  pushes a printed plunger onto a 12 x 12 tactile switch housed above the
+  right cell (spring in series: progressive press, then the click, and the
+  click point does not depend on print accuracy).
 - Light: a frosted ring sits on the board's 7 rear RGB LEDs and carries their
   light up into a frosted top cap, so the top of the device glows.
 The internal assembly sits 1 mm left of centre (X0) so the right wall has room
@@ -64,19 +65,28 @@ CAP_Z = 97.0  # frosted top cap from here up
 
 # PTT lever on the right side.
 X_OUT = W / 2
-PIVOT_Z, MS_Z, SPRING_Z, SWITCH_Y = 50.0, 86.0, 92.8, 2.5
+PIVOT_Z, TS_Z, SWITCH_Y = 50.0, 89.5, 2.5
 PIVOT_X = X_OUT - 1.0  # pin sits inside the wall, between the channel's side walls
-STOP = 3.3  # lever travel at the switch before it lands on the stop post
-PRESS_DEG = math.degrees(math.atan(STOP / (MS_Z - PIVOT_Z)))
+STOP = 3.8  # lever travel at the switch axis before it lands on the stop post
+PRESS_DEG = math.degrees(math.atan(STOP / (TS_Z - PIVOT_Z)))
 BAR_T, BAR_W = 3.0, 18.0
 BAR_Z0, BAR_Z1 = PIVOT_Z - 7.0, 98.0  # tail below the pin is the rest stop
-MS_BUTTON_X = 30.6  # microswitch button tip at rest
-MS_TOP_X = MS_BUTTON_X - hw.MS_BUTTON[2]
-SCREW_PROUD = 0.7  # adjuster screw tip past the lever's inner face: click at ~2.9 mm
-SPRING_REST = 11.0
 CLEAR = 0.4
-# Microswitch: button +X, length along Y, width along Z.
-MS_LOC = Location((MS_TOP_X, SWITCH_Y, MS_Z)) * Rot(0, 90, 0) * Rot(0, 0, 90)
+# Series spring between the lever's inner face and the plunger flange.
+SPRING_REST = hw.SERIES_SPRING_FREE - 0.4  # 0.4 mm preload holds the lever on its rest stop
+FLANGE_X = X_OUT - SPRING_REST  # plunger flange face (spring seat)
+PLUNGER_TIP_X = FLANGE_X - 1.0 - 2.5  # 1 mm flange + 2.5 mm shaft onto the stem
+# Tactile switch: stem +X, base toward the board's centre line.
+TS_BASE_X = PLUNGER_TIP_X - hw.TACT_BODY - hw.TACT_STEM_H
+TS_LOC = Location((TS_BASE_X, SWITCH_Y, TS_Z)) * Rot(0, 90, 0)
+
+
+def click_travel(force: float = hw.TACT_FORCE, shim: float = 0.0) -> float:
+    """Lever travel at the switch axis until the spring reaches the switch's
+    actuation force. `shim` = washers under the plunger flange (adds preload)."""
+    preload = (hw.SERIES_SPRING_FREE - SPRING_REST + shim) * hw.SERIES_SPRING_K
+    return max(0.0, (force - preload) / hw.SERIES_SPRING_K)
+
 
 # Light ring (frosted PLA) on the board's rear LEDs, in board coordinates.
 RING_R0, RING_R1 = 20.8, 29.0  # inner edge clears the header tails the PTT wires use
@@ -106,7 +116,7 @@ def _bar(grow: float = 0.0):
         slab = fillet(slab.edges().filter_by(Axis.X), 3.0)
         slab = fillet(slab.edges().group_by(Axis.X)[-1], 0.8)
     knuckle = (
-        Pos(PIVOT_X, SWITCH_Y, PIVOT_Z) * Rot(90, 0, 0) * Cylinder(2.0 + g, BAR_W - 2.0 + 2 * g)
+        Pos(PIVOT_X, SWITCH_Y, PIVOT_Z) * Rot(90, 0, 0) * Cylinder(2.0 + g, BAR_W - 6.0 + 2 * g)  # 12 mm knuckle: an M2 x 16 + nut spans it
     )
     web = bbox_solid(
         PIVOT_X - g,
@@ -119,7 +129,9 @@ def _bar(grow: float = 0.0):
     bar = slab + knuckle + web
     if g == 0:
         bar += Pos(X_OUT + BAR_T, SWITCH_Y, 74.0) * Rot(0, 90, 0) * Cylinder(1.4, 1.6)  # thumb dot
-        bar -= Pos(X_OUT + 0.5, SWITCH_Y, SPRING_Z) * Rot(0, 90, 0) * Cylinder(2.4, 1.2)  # seat
+        bar += (
+            Pos(X_OUT - 0.75, SWITCH_Y, TS_Z) * Rot(0, 90, 0) * Cylinder(1.4, 1.5)
+        )  # spring locator
     return bar
 
 
@@ -244,73 +256,53 @@ def build() -> Concept:
         s = _pressed(_bar(grow=CLEAR), k / 10)
         channel = s if channel is None else channel + s
     body -= channel
-    pin = Pos(PIVOT_X, SWITCH_Y, PIVOT_Z) * Rot(90, 0, 0) * Cylinder(1.0, BAR_W + 3.0)
+    pin = Pos(PIVOT_X, SWITCH_Y, PIVOT_Z) * Rot(90, 0, 0) * Cylinder(1.0, BAR_W - 3.0)  # M2 x 16 screw as the pin
     bar = _bar() - Pos(PIVOT_X, SWITCH_Y, PIVOT_Z) * Rot(90, 0, 0) * Cylinder(1.1, 40)
 
-    # Mouse microswitch in a sleeve above the right cell; the lever's M2
-    # adjuster screw clicks it. Pen spring in a pocket above it; a post stops
-    # the lever at STOP so the switch never takes more than its overtravel.
-    ms_parts = hw.place(hw.microswitch(), MS_LOC)
-    ms_env = ms_parts[0].shape + ms_parts[1].shape
-    sleeve = MS_LOC * (
-        bbox_solid(
-            -hw.MS_L / 2 - 1.2,
-            hw.MS_L / 2 + 1.2,
-            -hw.MS_W / 2 - 1.2,
-            hw.MS_W / 2 + 1.2,
-            -hw.MS_H,
-            0,
-        )
-        - bbox_solid(-hw.MS_L / 2, hw.MS_L / 2, -hw.MS_W / 2, hw.MS_W / 2, -10, 1)
+    # 12 x 12 tactile switch in a cradle above the right cell. The lever
+    # compresses the series spring, the spring pushes the plunger onto the
+    # stem; a post stops the lever at STOP, after the click.
+    ts_parts = hw.place(hw.tact_switch(), TS_LOC)
+    ts_env = ts_parts[0].shape + ts_parts[2].shape
+    half = hw.TACT_W / 2
+    cradle = TS_LOC * (
+        bbox_solid(-half - 1.2, half + 1.2, -half - 1.2, half + 1.2, -1.5, hw.TACT_BODY)
+        - bbox_solid(-half - 0.1, half + 0.1, -half - 0.1, half + 0.1, 0, 10)
     )
-    tie = bbox_solid(
-        MS_TOP_X - 4.0,
-        X_OUT - T + 0.1,
-        SWITCH_Y + hw.MS_L / 2 + 0.1,
-        SWITCH_Y + hw.MS_L / 2 + 1.2,
-        MS_Z - 4.1,
-        MS_Z + 4.1,
-    )
-    ms_cradle = ((sleeve + tie) & inner) - _pressed_union()
-    spring_x0 = X_OUT - SPRING_REST
-    spring_boss = (
-        Pos((spring_x0 - 1.0 + X_OUT - T + 0.1) / 2, SWITCH_Y, SPRING_Z)
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            cradle -= TS_LOC * Pos(sx * 6.25, sy * 2.5, 0) * Box(1.4, 1.6, 5)  # leg holes
+    tube_x0 = TS_BASE_X + hw.TACT_BODY
+    tube = (
+        Pos((tube_x0 + X_OUT - T + 0.1) / 2, SWITCH_Y, TS_Z)
         * Rot(0, 90, 0)
-        * (Cylinder(3.4, X_OUT - T + 0.1 - spring_x0 + 1.0))
+        * Cylinder(3.6, X_OUT - T + 0.1 - tube_x0)
     )
-    spring_boss -= (
-        Pos(X_OUT - 5.0, SWITCH_Y, SPRING_Z)
+    tube -= (
+        Pos(FLANGE_X - 1.2, SWITCH_Y, TS_Z) * Rot(0, 90, 0) * Cylinder(3.3, 2 * 30)
+    )  # flange+spring
+    tube -= (
+        Pos(PLUNGER_TIP_X, SWITCH_Y, TS_Z) * Rot(0, 90, 0) * Cylinder(2.4, 2 * 4.0)
+    )  # shaft bore
+    ts_cradle = ((cradle + tube) & inner) - _pressed_union()
+    body -= (
+        Pos((tube_x0 + X_OUT) / 2, SWITCH_Y, TS_Z)
         * Rot(0, 90, 0)
-        * Cylinder(hw.SPRING_D / 2 + 0.3, 2 * (X_OUT - 5.0 - spring_x0))
+        * Cylinder(3.65, X_OUT - tube_x0)
     )
-    stop_x = X_OUT - STOP * (SPRING_Z - PIVOT_Z) / (MS_Z - PIVOT_Z) - 0.05
+    # The lever travels slightly further at the post's top edge than at its axis.
+    stop_x = X_OUT - STOP * (TS_Z + 1.4 - PIVOT_Z) / (TS_Z - PIVOT_Z) - 0.05
     stop_post = (
-        Pos((spring_x0 + stop_x) / 2, SWITCH_Y + 6.0, SPRING_Z)
+        Pos((tube_x0 + 4 + stop_x) / 2, SWITCH_Y + 7.0, TS_Z)
         * Rot(0, 90, 0)
-        * Cylinder(1.4, stop_x - spring_x0)
+        * Cylinder(1.4, stop_x - tube_x0 - 4)
     )
-    body = body + spring_boss - channel + stop_post
-    body -= MS_LOC * bbox_solid(  # pocket for the switch body and button in the backing
-        -hw.MS_L / 2 - 0.2,
-        hw.MS_L / 2 + 0.2,
-        -hw.MS_W / 2 - 0.2,
-        hw.MS_W / 2 + 0.2,
-        -hw.MS_H - 0.2,
-        2.0,
-    )
+    body += stop_post
+    plunger = Pos(FLANGE_X - 0.5, SWITCH_Y, TS_Z) * Rot(0, 90, 0) * Cylinder(3.0, 1.0)
+    plunger += Pos(PLUNGER_TIP_X + 1.25, SWITCH_Y, TS_Z) * Rot(0, 90, 0) * Cylinder(2.2, 2.5)
+    plunger += Pos(FLANGE_X + 0.75, SWITCH_Y, TS_Z) * Rot(0, 90, 0) * Cylinder(1.4, 1.5)
     spring = hw.spring(SPRING_REST)
-    spring = Part(
-        "spring", Pos(spring_x0, SWITCH_Y, SPRING_Z) * Rot(0, 90, 0) * spring.shape, "metal"
-    )
-    screw = (
-        Pos(X_OUT - SCREW_PROUD, SWITCH_Y, MS_Z)
-        * Rot(0, 90, 0)
-        * (
-            Pos(0, 0, (BAR_T + 0.6 + SCREW_PROUD) / 2) * Cylinder(1.0, BAR_T + 0.6 + SCREW_PROUD)
-            + Pos(0, 0, BAR_T + SCREW_PROUD + 0.6 + 0.65) * Cylinder(1.9, 1.3)
-        )
-    )
-    bar -= Pos(X_OUT + BAR_T / 2, SWITCH_Y, MS_Z) * Rot(0, 90, 0) * Cylinder(0.8, 10)
+    spring = Part("spring", Pos(FLANGE_X, SWITCH_Y, TS_Z) * Rot(0, 90, 0) * spring.shape, "metal")
 
     # Frosted light ring on the LEDs (clamped by the board screws) + frosted cap.
     ring = BOARD_LOC * _light_ring()
@@ -387,15 +379,24 @@ def build() -> Concept:
             d=1.2,
         ),
     }
-    ms_pins_x = MS_TOP_X - hw.MS_H - hw.MS_PINS
+    legs_x = TS_BASE_X - hw.TACT_LEGS
+    legs_z = TS_Z - 6.25
     tail_y = PCB_BOTTOM_Y + 1.5
-    for name, (pin_dy, hx) in {"cable_ptt_a": (-5.0, -7.62), "cable_ptt_b": (0.0, -10.16)}.items():
+    for name, (leg_y, hx) in {
+        "cable_ptt_a": (SWITCH_Y - 2.5, -7.62),
+        "cable_ptt_b": (SWITCH_Y + 2.5, -10.16),
+    }.items():
         tx, tz = to_device(hx, 13.82 if hx > -9 else 16.36)
         cables[name] = hw.cable(
             [
-                (ms_pins_x, SWITCH_Y + pin_dy, MS_Z),
-                (ms_pins_x - 3.0, SWITCH_Y + pin_dy * 0.6, MS_Z),
-                (tx + 3.0, -2.0, tz + 3.0),
+                (legs_x, leg_y, legs_z),
+                (legs_x - 0.5, min(leg_y, 1.2) - 0.5, legs_z - 0.8),  # behind the cradle
+                (legs_x + 1.4, -1.8, CELL_TOP - 0.6),  # under the cradle, beside the bridge
+                (
+                    TS_BASE_X + hw.TACT_BODY + 0.8,
+                    -3.0,
+                    CELL_TOP - 0.2,
+                ),  # clear of the cradle floor
                 (tx + 0.4, -3.6, tz + 0.8),  # stay behind the ring until inside its hole
                 (tx, tail_y + 1.5, tz + 0.3),
                 (tx, tail_y, tz),
@@ -412,11 +413,11 @@ def build() -> Concept:
         Part("standoffs", standoffs, "shell_inner"),
         Part("speaker_ring", spk_ring, "shell_inner"),
         Part("mic_boots", boots, "shell_inner"),
-        Part("ms_cradle", ms_cradle, "shell_inner"),
+        Part("ts_cradle", ts_cradle, "shell_inner"),
+        Part("plunger", plunger, "shell_inner"),
         Part("light_pipe", pipe, "clear"),
         Part("ptt_bar", bar, "accent"),
         Part("ptt_pin", pin, "screw"),
-        Part("ptt_screw", screw, "screw"),
         spring,
         *board,
         *spk,
@@ -424,7 +425,7 @@ def build() -> Concept:
         *cells,
         Part("bridge_top", bridge_top, "metal"),
         Part("bridge_bottom", bridge_bot, "metal"),
-        *ms_parts,
+        *ts_parts,
         Part("cable_spk", cables["cable_spk"], "wire_black"),
         Part("cable_bat_pos", cables["cable_bat_pos"], "wire_red"),
         Part("cable_bat_neg", cables["cable_bat_neg"], "wire_black"),
@@ -441,7 +442,7 @@ def build() -> Concept:
         "speaker": SPK_LOC * hw.speaker()[0].shape,
         "cell_0": bays[0],
         "cell_1": bays[1],
-        "microswitch": ms_env,
+        "tact_switch": ts_env,
         "spring": spring.shape,
         "bar_sweep": sweep,
         "bridge_top": bridge_top,
@@ -454,7 +455,7 @@ def build() -> Concept:
         "speaker_ring": spk_ring,
         "mic_boots": boots,
         "light_pipe": pipe,
-        "ms_cradle": ms_cradle,
+        "ts_cradle": ts_cradle,
         "light_ring": ring,
     }
     allowed = {
@@ -462,7 +463,8 @@ def build() -> Concept:
         ("board", "mic_boots"),
         ("board", "light_pipe"),
         ("board", "light_ring"),  # sits on the LEDs, inside the generic 2.5 mm keep-out
-        ("microswitch", "ms_cradle"),
+        ("tact_switch", "ts_cradle"),
+        ("spring", "ts_cradle"),  # guided in its tube
         ("spring", "body"),  # seated in its pocket
         ("spring", "bar_sweep"),  # it is what the lever compresses
         ("bar_sweep", "spring"),
