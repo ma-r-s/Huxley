@@ -78,11 +78,23 @@ In another terminal:
 cd clients/pwa && bun dev
 ```
 
-Open `http://localhost:5173`. You should see:
+Open `http://localhost:5174`. You should see:
 
 - Status: **"Conectado — mantén el botón para hablar"**
 - State badge: **CONVERSING**
 - A large button labeled **"Mantén presionado para hablar"**
+
+### On your phone, as an installed app
+
+Phones only grant the microphone over HTTPS. Tailscale Serve gives the dev server a private HTTPS address reachable only from your tailnet (phone needs the Tailscale app, signed in):
+
+```bash
+tailscale serve --bg --https=8443 http://127.0.0.1:5174
+```
+
+Open `https://<mac-name>.<tailnet>.ts.net:8443` in Safari, then Share → Add to Home Screen. It launches full screen with the Huxley icon. Vite proxies `/ws` to the server, so the page and the voice socket share one origin.
+
+The server takes **one client at a time**: a newer connection evicts the older one (`client_evicted` in the log). Close the PWA on the desktop while testing on the phone, or the two keep kicking each other off. Turn the address off with `tailscale serve --https=8443 off`.
 
 ## Smoke test 1 — info tool path (`get_current_time`)
 
