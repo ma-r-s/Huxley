@@ -77,9 +77,16 @@ starting points for his Bambu Lab P2S with PLA and a 0.4 mm nozzle:
 | Bought part into a printed pocket | 0.30 + crush ribs | `PART`: always goes in; 0.8 mm ribs crush 0.15 to take up the slack |
 | Heat-set insert bores | M2 3.2, M3 4.0 | `INSERT_BORE` (confirm against the kit's inserts) |
 
-No P2S-specific tolerance data is published yet, so the first print should be a
-small coupon with these fits; any correction goes into `fits.py` and every
-part follows.
+No P2S-specific tolerance data is published yet, so the first print is the
+**fit coupon** (`uv run python -m huxcase.coupon` writes `out/coupon_plate.stl`
+and `out/coupon_peg.stl`; 25 cc, print the plate flat and the peg standing,
+as exported). It has the 6 mm peg's clearance ladder (0.10 to 0.30 per side)
+twice: as vertical holes and as horizontal bores into the front face. It also
+has a pocket for the 12 x 12 switch with the real crush ribs, M2 and M3 insert
+bores, and an M2 pivot hole. Report per row the tightest hole the peg goes
+into by hand and stays (`SNUG`), and the tightest where it slides and turns
+freely (`SLIDE`, `SLIDE_HBORE`). Corrections go into `fits.py` and every part
+follows.
 
 ## The talk switch: 12 x 12 tactile button + series spring
 
@@ -180,6 +187,7 @@ huxcase/hardware.py      measured board / speaker / cell / holder / switches (si
 huxcase/concept.py       Concept container + collision (fit) check + cavity volume
 huxcase/concepts/hx*.py  one module per concept, Z up, front face at -Y (hx1.py = HX-1, hx1_classic.py = rev A)
 huxcase/export.py        build all, refuse on collision, write out/
+huxcase/fits.py          every clearance (P2S, PLA, 0.4 nozzle); huxcase/coupon.py prints a test of them
 render/render.py         Blender Cycles renders from out/*.glb: hero, back, x-ray, plus section views (switch, open back)
 tests/                   fit check per concept + board model vs the official STEP
 MEASUREMENTS.md          every dimension with its source
