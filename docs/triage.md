@@ -5075,7 +5075,7 @@ Result: StrictMode dev runs the same lifecycle, but only one server-side connect
 
 ## T1.26: GPT-Live, reshape Huxley around it, or use it as a skill?
 
-**Status**: `queued` (2026-10-10, needs Mario's product call) · **Effort**: experiment ~1 day / <$5; skill ~1 week; core reshape several weeks
+**Status**: `queued` (2026-10-10, Mario leaning toward GPT-Live as the single core; awaiting go for a design plan) · **Effort**: core reshape several weeks
 
 **Question (Mario, 2026-10-10).** OpenAI's GPT-Live (openai.com/index/introducing-gpt-live, July 2026) is full duplex and does tool work through delegation. Should Huxley reshape into "a hardware device that uses GPT-Live plus tool calls" while keeping everything Huxley does?
 
@@ -5099,6 +5099,12 @@ Result: StrictMode dev runs the same lifecycle, but only one server-side connect
 | Billed | 13s of session ($0.011) + backend tokens | ~950 tokens |
 
 Two findings that matter for B: `coral` works on GPT-Live (it's not limited to the listed voices), and **GPT-Live streams output audio continuously, silence included** (RMS 0 for the first 3s and the last 5s of a 12.6s stream). Huxley's coordinator treats arriving audio as "model speaking"; that assumption breaks.
+
+**Follow-up probe: client delegation (Huxley as the backend), same question.** Huxley answers the instant `session.delegation.created` arrives (no backend model).
+- GPT-Live decides the user finished at +0.54 to +0.69s; Huxley's answer lands at the same moment.
+- Default prompt: GPT-Live still says a filler line first and speaks the time at +3.4 to +4.4s (3 runs). The delay is its pacing, not the backend.
+- Prompt "if the result arrives before you start speaking, say it directly": answer at +1.37s and +2.35s (2 runs), still with a short filler ("Un momento... Son las 15:42"). Roughly at parity with Realtime's +1.27s.
+- **Correction:** the first probe's "Realtime is 2.4s faster" was mostly GPT-Live's default filler pacing, not an architectural cost. Mario's direction (2026-10-10): one abstraction, not modes. With client delegation that's viable: GPT-Live is the single voice, Huxley's skills are the backend.
 
 **Options and critic notes** (fresh Plan agent, cold brief, 2026-10-10):
 - **A. Device talks to GPT-Live directly, Huxley as sideband.** Rejected. Breaks "one audio pipe out": audiobook, radio, earcons and Telegram calls would need mixing in ESP32 firmware, which has no Opus/DTLS/AEC today (`clients/firmware/components/hux_net`, `hux_audio`). Hard-codes an OpenAI endpoint into hardware, against "Not Alexa" in `vision.md`.
