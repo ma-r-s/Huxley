@@ -59,6 +59,18 @@ const playback = new AudioPlayback();
 // OS microphone indicator goes off.
 const MIC_LINGER_MS = 5000;
 
+/** Call mode streams the mic continuously; (re)open it if it isn't. */
+function ensureCallMic(trigger: string): void {
+  if (mic.active && mic.hasStream) return;
+  void mic
+    .open()
+    .then(() => {
+      mic.active = true;
+      mic.onEvent?.("call_mic_recovered", { trigger });
+    })
+    .catch(() => undefined);
+}
+
 export function App() {
   const ws = useWs();
   const { t, i18n } = useTranslation();
@@ -398,6 +410,9 @@ export function App() {
   const activatePtt = useCallback(() => {
     setPttPendingStart(false);
     pttPendingRef.current = false;
+    // A superseded press may have scheduled an idle after this press's
+    // open() cancelled it; it would mute the mic mid-turn.
+    mic.cancelIdle();
     mic.active = true;
     setPttHeld(true);
     pttHeldRef.current = true;
@@ -426,14 +441,11 @@ export function App() {
     setMicError(null);
     ws.sendClientEvent("ptt_press", { mic_stream: mic.hasStream });
     // Both audio contexts must be started before the first await: iOS only
-    // honors resume() inside the gesture itself.
-    const playbackUnlocked = playback.unlock();
+    // honors resume() inside the gesture itself. Playback isn't awaited:
+    // its sounds queue until it runs.
+    void playback.unlock();
     try {
       await mic.open();
-      await Promise.race([
-        playbackUnlocked,
-        new Promise<void>((resolve) => setTimeout(resolve, 1000)),
-      ]);
     } catch (err) {
       // iOS refuses to (re)acquire the mic from a press: only a finger lift
       // counts as a gesture. The release of this press primes it (see the
@@ -448,8 +460,14 @@ export function App() {
     // turn now would latch PTT on with no release coming: the orb stuck in
     // "listening" and the server waiting for a commit that never arrives.
     if (!fingerDownRef.current || pressIdRef.current !== pressId) {
-      ws.sendClientEvent("ptt_released_during_mic_open", {});
-      mic.scheduleIdle(MIC_LINGER_MS, "released_during_open");
+      ws.sendClientEvent("ptt_released_during_mic_open", {
+        superseded: pressIdRef.current !== pressId,
+      });
+      // Only the latest press may schedule the mute; a superseded one
+      // would land it under the newer press's turn.
+      if (pressIdRef.current === pressId) {
+        mic.scheduleIdle(MIC_LINGER_MS, "released_during_open");
+      }
       return;
     }
     // T1.13: preload the persona-swap earcon now that the AudioContext
@@ -509,6 +527,12 @@ export function App() {
     const unlock = () => {
       void playback.unlock();
       mic.prime();
+      // A call (skill_continuous) that started before the mic could be
+      // acquired (no gesture yet, or iOS ended the track in background)
+      // gets its mic on the first tap.
+      if (visibilityDepsRef.current.inputMode === "skill_continuous") {
+        ensureCallMic("gesture");
+      }
     };
     const opts = { capture: true, passive: true } as const;
     for (const type of ["pointerup", "touchend", "click", "keydown"] as const) {
@@ -556,6 +580,9 @@ export function App() {
       const deps = visibilityDepsRef.current;
       if (document.visibilityState === "hidden") {
         hiddenAt = now - Math.max(0, frozenMs - 1000);
+        // No finger can be down on a hidden app; a press still awaiting
+        // the mic must not start its turn when we come back.
+        fingerDownRef.current = false;
         if (pttHeldRef.current || pttPendingRef.current) deps.releasePtt();
         // Mute, don't release: a released stream makes iOS ask for mic
         // permission again on return and refuses to re-open it from a
@@ -566,6 +593,7 @@ export function App() {
         const sinceHidden = hiddenAt === null ? 0 : now - hiddenAt;
         hiddenAt = null;
         deps.refresh(Math.max(sinceHidden, frozenMs));
+        if (deps.inputMode === "skill_continuous") ensureCallMic("foreground");
       }
     };
     document.addEventListener("visibilitychange", onVisibility);

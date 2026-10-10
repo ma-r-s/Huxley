@@ -56,6 +56,9 @@ export class MicCapture {
   private source: MediaStreamAudioSourceNode | null = null;
   private acquiring: Promise<void> | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  // Presses currently inside open(). prime()'s post-acquire mute must not
+  // land under one of them (it would disable the track mid-turn).
+  private openCount = 0;
 
   /** Set to true while PTT button is held — gates frame transmission. */
   active = false;
@@ -120,7 +123,7 @@ export class MicCapture {
       void this.acquire("gesture")
         .then(() => {
           // Primed between turns: keep it muted until someone presses.
-          if (!this.active) this.idle("primed");
+          if (!this.active && this.openCount === 0) this.idle("primed");
         })
         .catch(() => undefined);
     }
@@ -131,16 +134,28 @@ export class MicCapture {
    * acquired without a gesture (caller asks the user to press again).
    */
   async open(): Promise<void> {
-    this.cancelIdle();
-    const ctx = this.ensureContext();
-    if (ctx.state !== "running") void ctx.resume().catch(() => undefined);
-    if (!this.hasStream) await this.acquire("press");
-    this.setTrackEnabled(true);
-    if (ctx.state !== "running") {
-      await Promise.race([ctx.resume().catch(() => undefined), sleep(1000)]);
-    }
-    if (ctx.state !== "running") {
-      this.onEvent?.("mic_ctx_not_running", { state: ctx.state });
+    this.openCount += 1;
+    try {
+      this.cancelIdle();
+      const ctx = this.ensureContext();
+      if (ctx.state !== "running") void ctx.resume().catch(() => undefined);
+      if (!this.hasStream) await this.acquire("press");
+      this.cancelIdle();
+      this.setTrackEnabled(true);
+      // Always resume, even if the state reads "running": an idle() just
+      // before this press may have a suspend() still in flight, and a
+      // resume() queued after it is what leaves the context running.
+      // Not awaited: frames flow as soon as the context runs, and waiting
+      // here only delayed the turn (a fresh page's resume takes ~1 s to
+      // settle, which cut off the first words).
+      void ctx.resume().catch(() => undefined);
+      setTimeout(() => {
+        if (this.active && ctx.state !== "running") {
+          this.onEvent?.("mic_ctx_not_running", { state: ctx.state });
+        }
+      }, 1000);
+    } finally {
+      this.openCount -= 1;
     }
   }
 
@@ -170,6 +185,11 @@ export class MicCapture {
         const node = await this.workletReady!;
         this.source = ctx.createMediaStreamSource(stream);
         this.source.connect(node);
+        // Deliberately NOT switching back to "playback" here: measured on
+        // the simulator, a press then waits ~1 s (the full resume timeout)
+        // before the mic context runs, versus ~90 ms under
+        // play-and-record. Whether play-and-record makes replies quieter
+        // on a real iPhone is open; check by ear.
         this.onEvent?.("mic_acquired", {
           trigger,
           ms: Math.round(performance.now() - t0),
@@ -231,16 +251,12 @@ export class MicCapture {
     this.stream = null;
   }
 
-  private cancelIdle(): void {
+  cancelIdle(): void {
     if (this.idleTimer !== null) {
       clearTimeout(this.idleTimer);
       this.idleTimer = null;
     }
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function bufferToBase64(buffer: ArrayBuffer): string {

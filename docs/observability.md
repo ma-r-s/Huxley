@@ -48,7 +48,10 @@ PWA client events worth knowing when debugging a phone (added 2026-10-10):
 | `client.mic_acquired` / `client.mic_acquire_failed` | Stream obtained (`trigger=press` or `gesture`) or refused (`name=NotAllowedError` etc.). |
 | `client.mic_idle` / `client.mic_released` | Track muted between turns or while in the background / stream stopped (unmount). |
 | `client.ptt_released_during_mic_open` | Finger lifted while the mic was still opening; the press was cancelled cleanly. |
-| `client.playback_suspended` / `client.playback_resumed` / `client.playback_resume_blocked` | Speaker context slept when idle / woke for new audio / iOS refused to wake it (audio would be lost). |
+| `client.playback_suspended` / `client.playback_resumed` / `client.playback_resume_blocked` | Speaker context slept when idle / woke for new audio / a wake-up didn't take within 1.5 s (expected on the very first press of a launch; the finger lift unlocks it and queued audio then plays). |
+| `client.playback_pending_dropped` | Audio that had queued while the speaker was asleep was thrown away by a press. Should be rare; a reminder lost this way is a bug. |
+| `client.mic_ctx_not_running` | 1 s into a turn the mic context still isn't running, so frames aren't flowing. |
+| `client.call_mic_recovered` | A call (skill-owned mic) got its mic back after starting without one (no gesture yet, or iOS ended the track in the background). |
 | `client.foreground_reconnect` | The app came back after `away_ms` and replaced a socket iOS may have killed. |
 
 ## Context fields

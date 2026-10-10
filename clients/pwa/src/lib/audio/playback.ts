@@ -30,6 +30,9 @@ export class AudioPlayback {
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingChunks: string[] = [];
   private waking: Promise<void> | null = null;
+  // True while an idle suspend() is in flight: the state still reads
+  // "running" but anything scheduled now would sit in a sleeping context.
+  private suspending = false;
 
   /** Telemetry hook (forwarded to the server log as client events). */
   onEvent: PlaybackEvent | null = null;
@@ -76,13 +79,25 @@ export class AudioPlayback {
     );
   }
 
+  private running(): boolean {
+    return this.ctx?.state === "running" && !this.suspending;
+  }
+
   private armIdleSuspend(): void {
     this.cancelIdleSuspend();
-    if (!this.ctx || this.ctx.state !== "running" || !this.isIdle()) return;
+    if (!this.running() || !this.isIdle()) return;
     this.idleTimer = setTimeout(() => {
       this.idleTimer = null;
-      if (!this.ctx || this.ctx.state !== "running" || !this.isIdle()) return;
-      void this.ctx.suspend().then(() => this.onEvent?.("playback_suspended"));
+      const ctx = this.ctx;
+      if (!ctx || !this.running() || !this.isIdle()) return;
+      this.suspending = true;
+      void ctx
+        .suspend()
+        .catch(() => undefined)
+        .then(() => {
+          this.suspending = false;
+          this.onEvent?.("playback_suspended");
+        });
     }, IDLE_SUSPEND_MS);
   }
 
@@ -90,13 +105,22 @@ export class AudioPlayback {
   private whenRunning(fn: () => void): void {
     if (!this.ctx) return;
     this.cancelIdleSuspend();
-    if (this.ctx.state === "running") {
+    if (this.running() && !this.waking) {
       fn();
+      this.armIdleSuspend();
       return;
     }
     void this.wake().then(() => {
       if (this.ctx?.state === "running") fn();
+      this.armIdleSuspend();
     });
+  }
+
+  /** Schedule everything that queued while the context was asleep. */
+  private flushPending(): void {
+    if (!this.running() || this.pendingChunks.length === 0) return;
+    const queued = this.pendingChunks.splice(0);
+    for (const chunk of queued) this.schedule(chunk);
   }
 
   private wake(): Promise<void> {
@@ -104,14 +128,18 @@ export class AudioPlayback {
     const ctx = this.ctx;
     if (!ctx) return Promise.resolve();
     const before = ctx.state;
-    this.waking = ctx
-      .resume()
-      .catch(() => undefined)
+    // Bounded: a resume() issued outside a gesture can stay pending
+    // forever on iOS, and a `waking` that never clears queued every later
+    // chunk behind it (a whole spoken reply was lost this way).
+    this.waking = Promise.race([
+      ctx.resume().catch(() => undefined),
+      new Promise<void>((resolve) => setTimeout(resolve, 1500)),
+    ])
       .then(() => {
         if (ctx.state === "running") {
           this.onEvent?.("playback_resumed", { from: before });
-          const queued = this.pendingChunks.splice(0);
-          for (const chunk of queued) this.schedule(chunk);
+          this.flushPending();
+          this.armIdleSuspend();
         } else {
           this.onEvent?.("playback_resume_blocked", {
             from: before,
@@ -129,6 +157,14 @@ export class AudioPlayback {
   async init(): Promise<void> {
     if (this.ctx) return;
     this.ctx = new AudioContext({ sampleRate: 24000 });
+    // Whatever ends up starting the context (a later gesture's resume, the
+    // wake path), queued audio plays the moment it runs.
+    this.ctx.onstatechange = () => {
+      if (this.ctx?.state === "running" && !this.suspending) {
+        this.flushPending();
+        this.armIdleSuspend();
+      }
+    };
     // Tell iOS this is media playback — without this, WebAudio output is
     // routed through the ringer volume bus, which tops out well below the
     // media volume the user actually has cranked up. The mic flips this to
@@ -189,22 +225,22 @@ export class AudioPlayback {
     }
     const ctx = this.ctx;
     if (!ctx) return Promise.resolve();
-    if (ctx.state === "running") {
+    if (this.running() && !this.waking) {
       this.armIdleSuspend();
       return Promise.resolve();
     }
-    // Every unlock re-arms the idle sleep: a tap that plays nothing must
-    // not leave the context running (iOS shows it as audio activity).
-    return ctx
-      .resume()
-      .catch(() => undefined)
-      .then(() => this.armIdleSuspend());
+    // Always issue our own resume() here, synchronously inside the gesture,
+    // even when a wake is already in flight: that earlier resume may have
+    // been issued outside a gesture (a press) and will never settle.
+    // `onstatechange` flushes the queue once the context runs.
+    void ctx.resume().catch(() => undefined);
+    return this.wake();
   }
 
   play(base64: string): void {
     if (!this.ctx) return;
     this.cancelIdleSuspend();
-    if (this.ctx.state !== "running" || this.waking) {
+    if (!this.running() || this.waking) {
       // Keep arrival order: everything queues behind the wake-up.
       this.pendingChunks.push(base64);
       void this.wake();
@@ -371,6 +407,11 @@ export class AudioPlayback {
       }
     }
     this.activeSources = [];
+    if (this.pendingChunks.length > 0) {
+      // Audio that never got to play (a wake-up iOS refused). Dropped on
+      // purpose: a press means the user is talking now.
+      this.onEvent?.("playback_pending_dropped", { chunks: this.pendingChunks.length });
+    }
     this.pendingChunks = [];
     this.nextTime = 0;
     this.stopThinkingTone();
