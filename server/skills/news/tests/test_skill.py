@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import wave
+from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 from typing import TYPE_CHECKING
 
 import pytest
@@ -55,12 +57,15 @@ def _google_news_rss(items: list[tuple[str, str]] | None = None) -> str:
             ("Headline one - El Foo", "El Foo"),
             ("Headline two - El Bar", "El Bar"),
         ]
+    # Relative to now: a fixed date aged past `max_age_hours` and silently
+    # emptied the feed (two tests broke ~41 days after they were written).
+    pub_date = format_datetime(datetime.now(UTC) - timedelta(hours=1), usegmt=True)
     item_xml = "\n".join(
         f"""
         <item>
             <title>{title}</title>
             <description>&lt;a href="..."&gt;{title}&lt;/a&gt;</description>
-            <pubDate>Tue, 17 Apr 2026 22:00:00 GMT</pubDate>
+            <pubDate>{pub_date}</pubDate>
         </item>
         """
         for title, _ in items
@@ -85,7 +90,7 @@ def _make_ctx(
         "longitude": -73.626,
         "country_code": "CO",
         "language_code": "es",
-        "max_age_hours": 999,  # tests use fixed pubDate; don't filter on age
+        "max_age_hours": 999,  # fixture items are 1h old; stay well inside the window
     }
     if extra:
         config.update(extra)
