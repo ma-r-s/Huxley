@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 from huxley.config import Settings
 from huxley.persona import PersonaError
@@ -18,7 +18,13 @@ def main() -> None:
     # secrets like HUXLEY_TELEGRAM_API_ID aren't framework config and
     # shouldn't be; they need to land in os.environ so skill setup code
     # can read them.
-    load_dotenv()
+    #
+    # `usecwd=True` is load-bearing: the bare `load_dotenv()` walks up from
+    # THIS FILE's directory, so in a source checkout every instance loaded
+    # the repo's `server/runtime/.env` (its persona, its API key) no matter
+    # which directory it was started from. That silently broke the
+    # one-directory-per-human multi-instance layout in docs/architecture.md.
+    load_dotenv(find_dotenv(usecwd=True))
 
     try:
         config = Settings()
