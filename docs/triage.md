@@ -5128,7 +5128,7 @@ Two findings that matter for B: `coral` works on GPT-Live (it's not limited to t
 
 ## T1.27: Huxley on Mario's iPhone (PWA fixes, native shell, native audio)
 
-**Status**: `in_progress` (2026-10-10, native audio built and simulator-verified; awaiting Mario's phone test) · **Effort**: ~1 day so far
+**Status**: `done` (2026-10-10, `49a833f2` server, `bfdb70f7` native audio) · **Effort**: ~1 day
 
 **Problem.** Mario wants to use Huxley from his iPhone as if it were the product. As a home-screen PWA it had: a white band at the top, transcripts out of view, a mic prompt on every launch, a permanent Dynamic Island live activity, stalls and stuck "thinking". As a Capacitor app (commit `ef8e8389`) the band and the per-launch prompt went away, but replies played from the earpiece ("like a phone call") and the island still showed a live activity while Huxley spoke.
 
@@ -5145,7 +5145,9 @@ Two findings that matter for B: `coral` works on GPT-Live (it's not limited to t
 - [x] Simulator: native mic prompt once, `client.mic_acquired native=True`, frames flow, reply plays, no web-audio events.
 - [x] `bun run ios:test`: resampler keeps length, pitch, level and continuity for 48k, 48k small buffers, 44.1k, 16k and stereo input; two mutated copies (flush per chunk, wrong output rate) fail it.
 - [x] Server: 0.7 s native press commits (`user_audio_ms=490`); regression tests for large and small chunks. 564 runtime tests, ruff, mypy green.
-- [ ] Mario on the phone: replies from the main speaker, no island live activity, a short "Sí" goes through.
+- [x] Mario on the phone (iPhone 15 Pro, 19:38 UTC): "Working well." Log: `mic_acquired native=True ms=160`, first frame 262 ms after the press, 1.2 s press committed (`audio_ms=1199`, 12 chunks; the old rule would have rejected it), `native_capture_summary peak=17948`, transcript "¿Escuchas?" exact, reply played.
+
+**Open (not blocking).** Press to first frame is ~260 ms on the phone (engine built per press, 100 ms hardware buffers). A word spoken the instant the button goes down could lose its first syllable. Candidate fix: keep the capture engine prepared between presses and ask for shorter IO buffers.
 
 **Docs**: `verifying.md` (native audio section), `observability.md` (native client events), `protocol.md` + `turns.md` + web `turns.mdx` / `connect-a-client.mdx` (133 ms rule).
 
