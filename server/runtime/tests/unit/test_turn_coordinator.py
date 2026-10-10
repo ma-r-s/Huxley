@@ -1507,10 +1507,13 @@ class TestInjectTurn:
         assert not pump_task.done()
         assert coordinator.current_turn is None  # turn ended, only stream remains
 
+        mocks["send_audio_clear"].reset_mock()
         await coordinator.inject_turn("Hora de pastilla.")
 
-        # Content pump was cancelled by FM-mediated BACKGROUND/MUST_PAUSE.
+        # Content pump was cancelled by FM-mediated BACKGROUND/MUST_PAUSE,
+        # and the book audio still buffered on the client is flushed.
         assert pump_task.done()
+        mocks["send_audio_clear"].assert_awaited()
         # Coordinator now holds a DIALOG activity + synthetic turn.
         assert coordinator.current_turn is not None
         assert coordinator.current_turn.source.value == "injected"
@@ -1755,6 +1758,27 @@ class TestInjectTurnQueue:
         assert ("send_conversation_message", "Recordatorio de pastilla.") in provider.sent
         assert coordinator.current_turn is not None
         assert coordinator.current_turn.source.value == "injected"
+
+    async def test_queued_request_after_spoken_answer_keeps_client_audio(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        """The model streams an answer far faster than real time, so when
+        the turn ends the client is still playing it. A queued inject that
+        drains then must not send audio_clear: that cut a spoken answer to
+        its first word (2026-10-10). Nothing was preempted, so the
+        narration just queues behind the answer."""
+        await _commit_turn(coordinator)
+        await coordinator.inject_turn("Llama a music_control resume.", dedup_key="k")
+        await coordinator.on_audio_delta(b"Es Northern Sky, de Nick Drake." * 100)
+        mocks["send_audio_clear"].reset_mock()
+        await coordinator.on_audio_done()
+        await coordinator.on_response_done()
+
+        assert ("send_conversation_message", "Llama a music_control resume.") in provider.sent
+        mocks["send_audio_clear"].assert_not_awaited()
 
     async def test_queued_request_held_when_turn_ends_with_content(
         self,

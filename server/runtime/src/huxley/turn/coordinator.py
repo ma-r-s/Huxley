@@ -1533,18 +1533,32 @@ class TurnCoordinator:
             observer=DialogObserver(interface_name=interface_name, on_stop=_on_stop),
         )
 
+        # Was anything producing audio that this turn preempts? Only then
+        # does the client's buffer hold audio that must not trail into the
+        # narration. Otherwise the buffer holds the tail of the previous
+        # turn's spoken answer (the model streams far faster than real
+        # time), and clearing it guillotines that answer: a queued inject
+        # drained at turn end used to cut "Es Northern Sky, de Nick
+        # Drake" to "Es..." (2026-10-10). Without a clear, the narration
+        # queues behind the answer on the client.
+        content = self._content_obs
+        preempts_audio = (
+            content is not None and content.task is not None and not content.task.done()
+        ) or self._claim_obs is not None
         await self._log.ainfo(
             "coord.inject_turn",
             prompt_len=len(prompt),
             interface=interface_name,
             dedup_key=dedup_key,
+            preempts_audio=preempts_audio,
         )
         await self._focus_manager.acquire(activity)
         await self._focus_manager.wait_drained()
-        # Any content stream is now cancelled + pump dead. Flush any
-        # chunks still in the client's audio queue so preempted book
-        # audio doesn't trail into the injected narration.
-        await self._send_audio_clear()
+        if preempts_audio:
+            # The content stream is now cancelled + pump dead. Flush the
+            # chunks still in the client's audio queue so preempted book
+            # audio doesn't trail into the injected narration.
+            await self._send_audio_clear()
         # Clear any stale FACTORY owner on SpeakingState (Stage 1f fix).
         # The preempted pump raised CancelledError without releasing its
         # speaker-owner label, so without this the client sees one

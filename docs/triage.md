@@ -5254,6 +5254,8 @@ Also: paused from an app for 3 s frees the speaker; a call longer than the patie
 
 **Voice smoke (Mario, phone app, 2026-10-10).** Play, interrupt, "siguiente", "pausa" all worked. "¿Qué canción es esta?" failed: the model said "déjame ver" and the music came back with no answer. Cause in the log: whats_playing returned the resume `AudioStream`, and a tool with an AudioStream gets no follow-up round (`has_audio_stream=True`, `follow_up=False`), so its output was never spoken. Fix 1 (info tool + "say it, then call music_control(resume)") failed again for Mario: once the model resumed without saying the title, once it answered from memory without calling the tool. Measured with a two-turn scripted voice test on the test server (`song_smoke.py`, TTS'd questions through the real server and Realtime model): 2 of 3. Fix 2: the answer turn does one thing (say an exact line, "«Es X, de Y.»"), and the skill queues `inject_turn("call music_control resume, say nothing")`, which the coordinator drains after the answer turn: 5 of 5, music back ~1-1.5 s after the answer. Persona prompt and tool description: always call whats_playing, even if said before.
 
+Mario's retry: he heard "Es..." and then the music. The transcript was complete, so the scripted test (which only read transcripts) missed it. Cause: a framework bug, filed and fixed as T1.31. With it fixed: 4 of 4 runs said the full line, the music came back, and no `audio_clear` reached the client after speech (the test now counts them; against the old code it counts 1).
+
 **Remaining.** Mario re-tries the song question on the phone.
 
 ---
@@ -5279,5 +5281,23 @@ Also: paused from an app for 3 s frees the speaker; a call longer than the patie
 **Risks to weigh.** The model must reliably call stop for "silencio", "apaga", or the media comes back against the user's wish (worst for a blind user who can't see why). Calls (InputClaim) and very long questions need a patience bound. Audiobook position semantics on resume.
 
 **Decision needed from Mario.** Should media come back on its own after a question? (Product behavior across audiobooks, radio and music.)
+
+---
+
+## T1.31: A queued inject_turn cut off the end of the previous spoken answer
+
+**Status**: `done` (2026-10-10) · **Effort**: ~1h
+
+**Problem.** `_fire_injected_turn` always sent `audio_clear` to flush preempted content audio. But the Realtime model streams its answer far faster than real time (a ~2 s sentence arrives in ~0.3 s), so when a turn ends the client is still playing it. A queued inject drained at that turn end flushed the answer: Mario heard "Es..." instead of "Es Northern Sky, de Nick Drake." Any queued inject did this (a timer or reminder that fires while the user is asking something), not just Spotify's.
+
+**Validation.** Server log 2026-10-10 23:26: answer audio sent 08.81-09.10, inject dequeued and fired 09.11, music resumed 10.02; Mario heard only "Es...". Scripted voice test against the old code: 1 `audio_clear` after the answer's speech.
+
+**Fix.** Send `audio_clear` only when the inject actually preempts something producing audio (a running content stream or a claim). Otherwise the narration queues behind the answer on the client. `coord.inject_turn` logs `preempts_audio`.
+
+**Tests.** `test_queued_request_after_spoken_answer_keeps_client_audio` (fails with the unconditional clear); `test_inject_preempts_active_content_stream` now also asserts the clear still happens when content is preempted. Runtime suite 565 green, mypy, ruff. Voice test 4 of 4 with no clears.
+
+**Docs.** None affected (verified: no current doc describes the unconditional clear; `decisions.md` and older triage entries describe a related, already-fixed guillotine historically).
+
+**Lesson.** Test what the user hears, not what the model said: a transcript is complete even when the audio was cut. The voice test now counts `audio_clear` after speech.
 
 ---
