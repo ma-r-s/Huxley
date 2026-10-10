@@ -21,6 +21,7 @@ interface StartCaptureResult {
   start_ms: number;
   warm_session: boolean;
   warm_engine: boolean;
+  retried: boolean;
   inputRate: number;
 }
 
@@ -32,8 +33,10 @@ interface HuxleyAudioPlugin {
   playEffect(options: { data: string }): Promise<void>;
   setLoopingEffect(options: { data?: string }): Promise<void>;
   setVolume(options: { level: number }): Promise<void>;
+  reset(): Promise<void>;
   addListener(
-    event: "frame" | "playbackIdle" | "captureEnded" | "event",
+    event:
+      "frame" | "playbackIdle" | "captureEnded" | "captureAvailable" | "event",
     cb: (payload: Record<string, unknown>) => void,
   ): Promise<{ remove: () => Promise<void> }>;
 }
@@ -112,6 +115,12 @@ export class NativeCapture {
   active = false;
   onFrame: ((base64: string) => void) | null = null;
   onEvent: EventFn | null = null;
+  /**
+   * iOS gave the audio back after taking it (a declined call, Siri, an
+   * alarm). A call in progress (skill_continuous) reopens its mic here;
+   * otherwise it would stay deaf until the next tap.
+   */
+  onAvailable: ((reason: string) => void) | null = null;
   /** Always releases between turns natively; kept for interface parity. */
   releaseWhenIdle = true;
 
@@ -138,6 +147,9 @@ export class NativeCapture {
     // The plugin stopped recording on its own: a phone call, Siri, the
     // app leaving the screen, or a route change it couldn't follow. A call
     // (skill_continuous) then sees `hasStream` false and reopens the mic.
+    void HuxleyAudio.addListener("captureAvailable", (payload) => {
+      this.onAvailable?.(String(payload.reason ?? "unknown"));
+    });
     void HuxleyAudio.addListener("captureEnded", (payload) => {
       this.capturing = false;
       this.onEvent?.("mic_capture_ended", {
@@ -178,6 +190,7 @@ export class NativeCapture {
             start_ms: r.start_ms,
             warm_session: r.warm_session,
             warm_engine: r.warm_engine,
+            retried: r.retried,
             native: true,
           });
           // Released while the engine was starting: stop it now.
@@ -292,6 +305,10 @@ export class NativePlayback {
   private playhead = 0;
 
   constructor() {
+    // A fresh page: anything the previous page left playing or recording
+    // (a web view reload keeps the plugin alive) is stopped, and chunk
+    // numbering starts over on both sides.
+    void HuxleyAudio.reset();
     void HuxleyAudio.addListener("playbackIdle", (payload) => {
       if (Number(payload.seq) !== this.seq) return;
       this.busy = false;

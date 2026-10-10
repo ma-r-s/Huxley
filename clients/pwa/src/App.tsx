@@ -542,7 +542,11 @@ export function App() {
     }
     // The mic may still hold the end of the last word (natively up to one
     // 100 ms block): release the turn only once that has been sent.
-    pttStopPendingRef.current = mic.finish().then(() => ws.pttStop());
+    // Never rejects: the next press awaits it.
+    pttStopPendingRef.current = mic
+      .finish()
+      .then(() => ws.pttStop())
+      .catch(() => undefined);
     mic.scheduleIdle(MIC_LINGER_MS, "linger_elapsed");
   }, [ws]);
 
@@ -631,9 +635,20 @@ export function App() {
       }
     };
     document.addEventListener("visibilitychange", onVisibility);
+    // Native app: iOS can take the mic mid-call while the app stays on
+    // screen (Siri, an alarm, a declined phone call); no visibility change
+    // follows, so the plugin says when the mic can be reopened.
+    if (mic instanceof NativeCapture) {
+      mic.onAvailable = (reason) => {
+        if (visibilityDepsRef.current.inputMode === "skill_continuous") {
+          ensureCallMic(reason);
+        }
+      };
+    }
     return () => {
       clearInterval(beat);
       document.removeEventListener("visibilitychange", onVisibility);
+      if (mic instanceof NativeCapture) mic.onAvailable = null;
     };
   }, []);
 

@@ -33,6 +33,7 @@ public class HuxleyAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "playEffect", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setLoopingEffect", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setVolume", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "reset", returnType: CAPPluginReturnPromise),
     ]
 
     private let queue = DispatchQueue(label: "huxley.audio")
@@ -40,17 +41,20 @@ public class HuxleyAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     // Playback: three nodes so they never cut each other. `voice` is the
     // reply queue; `tone` the one-shot UI sounds (a press must not cut its
     // own ready tone when it clears the reply); `loop` the thinking pulse.
-    private let playEngine = AVAudioEngine()
-    private let voice = AVAudioPlayerNode()
-    private let tone = AVAudioPlayerNode()
-    private let loop = AVAudioPlayerNode()
+    // Rebuilt only if the iOS audio daemon restarts (media services reset).
+    private var playEngine = AVAudioEngine()
+    private var voice = AVAudioPlayerNode()
+    private var tone = AVAudioPlayerNode()
+    private var loop = AVAudioPlayerNode()
+    private var volume: Float = 1
     private let floatFormat = AVAudioFormat(
         commonFormat: .pcmFormatFloat32, sampleRate: 24_000, channels: 1, interleaved: false)!
     private var pendingBuffers = 0
     private var generation = 0
     private var loopActive = false
-    // Highest chunk sequence number JS has handed us. `playbackIdle`
-    // carries it so JS can drop an idle that a newer chunk has overtaken.
+    // Sequence number of the latest chunk JS handed us (bridge calls arrive
+    // in order). `playbackIdle` carries it so JS can drop an idle that a
+    // newer chunk has overtaken.
     private var lastSeq = 0
     // When the scheduled voice audio should have finished, for the watchdog.
     private var playheadEnd = DispatchTime.now()
@@ -68,21 +72,12 @@ public class HuxleyAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     private var stopFallback: DispatchWorkItem?
 
     override public func load() {
-        queue.sync {
-            for node in [voice, tone, loop] {
-                playEngine.attach(node)
-                playEngine.connect(node, to: playEngine.mainMixerNode, format: floatFormat)
-            }
-            playEngine.prepare()
-        }
+        queue.sync { buildPlayback() }
         queue.async { [weak self] in self?.warmUp("load") }
         let center = NotificationCenter.default
         center.addObserver(
             self, selector: #selector(handleInterruption),
             name: AVAudioSession.interruptionNotification, object: nil)
-        center.addObserver(
-            self, selector: #selector(handlePlayEngineReset),
-            name: .AVAudioEngineConfigurationChange, object: playEngine)
         center.addObserver(
             self, selector: #selector(handleMediaServicesReset),
             name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
@@ -92,6 +87,24 @@ public class HuxleyAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         center.addObserver(
             self, selector: #selector(appDidEnterBackground),
             name: UIApplication.didEnterBackgroundNotification, object: nil)
+    }
+
+    private func buildPlayback() {
+        NotificationCenter.default.removeObserver(
+            self, name: .AVAudioEngineConfigurationChange, object: playEngine)
+        playEngine = AVAudioEngine()
+        voice = AVAudioPlayerNode()
+        tone = AVAudioPlayerNode()
+        loop = AVAudioPlayerNode()
+        for node in [voice, tone, loop] {
+            playEngine.attach(node)
+            playEngine.connect(node, to: playEngine.mainMixerNode, format: floatFormat)
+            node.volume = volume
+        }
+        playEngine.prepare()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handlePlayEngineReset),
+            name: .AVAudioEngineConfigurationChange, object: playEngine)
     }
 
     private func emit(_ name: String, _ data: [String: Any] = [:]) {
@@ -136,7 +149,13 @@ public class HuxleyAudioPlugin: CAPPlugin, CAPBridgedPlugin {
                 try prepareCapture()
             }
             emit("native_audio_warm", ["reason": reason, "ms": Self.ms(since: started)])
+            if reason != "load" && reason != "foreground" {
+                // A call (skill_continuous) whose mic iOS stopped can reopen
+                // it now; the foreground case is covered by the page itself.
+                notifyListeners("captureAvailable", data: ["reason": reason])
+            }
         } catch {
+            sessionActive = false
             emit("native_audio_warm_failed", ["reason": reason, "error": "\(error)"])
         }
     }
@@ -185,6 +204,7 @@ public class HuxleyAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         if hadVoice { notifyIdle() }
         loop.stop()
         loopActive = false
+        tone.stop()
         if captureEngine?.isRunning == true || sink.press != nil {
             finishCapture(cutShort: true)
             notifyListeners("captureEnded", data: ["reason": reason])
@@ -209,14 +229,15 @@ public class HuxleyAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc private func handleMediaServicesReset(_ note: Notification) {
-        // The audio daemon restarted; every engine is invalid. Rare. Logged
-        // so it's diagnosable; the capture engine is rebuilt on next use.
+        // The audio daemon restarted; every engine is invalid. Rare. Both
+        // engines are rebuilt.
         queue.async { [weak self] in
             guard let self else { return }
             self.emit("native_media_services_reset")
             self.sessionActive = false
             self.haltAll(reason: "media_services_reset")
             self.teardownCapture()
+            self.buildPlayback()
             if self.foreground { self.warmUp("media_services_reset") }
         }
     }
@@ -278,7 +299,7 @@ public class HuxleyAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         let b64 = call.getString("data")
         queue.async { [weak self] in
             guard let self else { return }
-            self.lastSeq = max(self.lastSeq, seq)
+            self.lastSeq = seq
             guard let b64, let buffer = self.floatBuffer(fromBase64: b64) else {
                 // JS marked itself busy when it sent this; don't leave it
                 // waiting for an idle that would never come.
@@ -289,6 +310,7 @@ public class HuxleyAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             do {
                 try self.ensurePlaying()
             } catch {
+                self.sessionActive = false
                 if self.pendingBuffers == 0 { self.notifyIdle() }
                 self.emit("native_play_failed", ["error": "\(error)"])
                 call.reject("playback failed: \(error)")
@@ -357,6 +379,7 @@ public class HuxleyAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         queue.async { [weak self] in
             guard let self else { return }
             do { try self.ensurePlaying() } catch {
+                self.sessionActive = false
                 call.reject("effect failed: \(error)")
                 return
             }
@@ -373,6 +396,7 @@ public class HuxleyAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self else { return }
             if let b64, let buffer = self.floatBuffer(fromBase64: b64) {
                 do { try self.ensurePlaying() } catch {
+                    self.sessionActive = false
                     call.reject("loop failed: \(error)")
                     return
                 }
@@ -392,6 +416,7 @@ public class HuxleyAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         let level = Float(max(0, min(100, call.getDouble("level") ?? 100))) / 100
         queue.async { [weak self] in
             guard let self else { return }
+            self.volume = level
             for node in [self.voice, self.tone, self.loop] { node.volume = level }
             call.resolve()
         }
@@ -407,8 +432,18 @@ public class HuxleyAudioPlugin: CAPPlugin, CAPBridgedPlugin {
                 "pending": self.pendingBuffers, "loop": self.loopActive,
             ])
             guard self.pendingBuffers > 0 || self.loopActive else { return }
+            // The reply paused while the route switched (Bluetooth can take
+            // over a second): push the watchdog back by what's left.
+            let remaining = self.playheadEnd > DispatchTime.now()
+                ? Double(self.playheadEnd.uptimeNanoseconds - DispatchTime.now().uptimeNanoseconds) / 1e9
+                : 0
             do { try self.ensurePlaying() } catch {
+                self.sessionActive = false
                 self.emit("native_audio_restart_failed", ["error": "\(error)"])
+            }
+            if self.pendingBuffers > 0 {
+                self.playheadEnd = DispatchTime.now()
+                self.armWatchdog(adding: remaining)
             }
         }
     }
@@ -416,8 +451,10 @@ public class HuxleyAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     // MARK: - Capture
 
     /// Build the capture engine once. The tap stays installed; a press only
-    /// starts the engine. The engine's input runs only between start and
-    /// stop, so the mic indicator is off between presses.
+    /// starts the engine. The input runs only between start and stop, so
+    /// the mic is off between presses. Not prepare()d ahead: start() does
+    /// it in a few ms, and a prepared input unit is not worth the doubt
+    /// about whether it holds the mic.
     @discardableResult
     private func prepareCapture() throws -> AVAudioEngine {
         if let engine = captureEngine { return engine }
@@ -438,7 +475,6 @@ public class HuxleyAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         NotificationCenter.default.addObserver(
             self, selector: #selector(handleCaptureReset),
             name: .AVAudioEngineConfigurationChange, object: engine)
-        engine.prepare()
         captureEngine = engine
         return engine
     }
@@ -493,18 +529,28 @@ public class HuxleyAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         let started = DispatchTime.now()
         let warmSession = sessionActive
         let warmEngine = captureEngine != nil
+        var retried = false
         do {
             try activateSession()
             let sessionMs = Self.ms(since: started)
-            let engine = try prepareCapture()
+            var engine = try prepareCapture()
             let buildMs = Self.ms(since: started) - sessionMs
-            let format = engine.inputNode.outputFormat(forBus: 0)
-            guard let resampler = PCM16Resampler(from: format) else {
-                throw CaptureError.noInput
-            }
-            sink.press = Press(resampler: resampler)
             let startAt = DispatchTime.now()
-            try engine.start()
+            var format = engine.inputNode.outputFormat(forBus: 0)
+            sink.press = try Press(format: format)
+            do {
+                try engine.start()
+            } catch {
+                // The engine was built for a route that has since changed
+                // (headset unplugged while idle). Rebuild once and retry.
+                emit("native_capture_retry", ["error": "\(error)"])
+                retried = true
+                teardownCapture()
+                engine = try prepareCapture()
+                format = engine.inputNode.outputFormat(forBus: 0)
+                sink.press = try Press(format: format)
+                try engine.start()
+            }
             call.resolve([
                 "ms": Self.ms(since: started),
                 "session_ms": sessionMs,
@@ -512,12 +558,12 @@ public class HuxleyAudioPlugin: CAPPlugin, CAPBridgedPlugin {
                 "start_ms": Self.ms(since: startAt),
                 "warm_session": warmSession,
                 "warm_engine": warmEngine,
+                "retried": retried,
                 "inputRate": format.sampleRate,
             ])
         } catch {
             sink.press = nil
-            // A failed start can leave the engine unusable (the route
-            // changed under it): rebuild it next time.
+            sessionActive = false
             teardownCapture()
             if error as? CaptureError == .noInput {
                 call.reject("no usable microphone input", "NotFoundError")
@@ -560,9 +606,9 @@ public class HuxleyAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         stopFallback = nil
         if let engine = captureEngine {
             engine.stop()
-            // Re-allocate now so the next press's start is cheap. Prepared
-            // is not running: the mic stays off until start().
-            engine.prepare()
+            // Drop whatever the tap had gathered after the last delivered
+            // block, so it can't open the next press.
+            engine.reset()
         }
         if let press = sink.press {
             sink.press = nil
@@ -573,6 +619,27 @@ public class HuxleyAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         pendingStop?.resolve()
         pendingStop = nil
         deactivateIfIdle()
+    }
+
+    /// The page (re)loaded: whatever the previous page left running is
+    /// orphaned (its listeners are gone). Stop it and start the sequence
+    /// over, or every idle would carry the old page's numbers.
+    @objc func reset(_ call: CAPPluginCall) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            if self.sink.press != nil { self.finishCapture(cutShort: true) }
+            self.clearVoice()
+            self.loop.stop()
+            self.loopActive = false
+            self.tone.stop()
+            if self.playEngine.isRunning {
+                self.loop.play()
+                self.tone.play()
+            }
+            self.lastSeq = 0
+            self.schedulePauseIfIdle()
+            call.resolve()
+        }
     }
 
     @objc private func handleCaptureReset(_ note: Notification) {
@@ -607,7 +674,8 @@ private final class Press {
     private let lock = NSLock()
     private var stopFlag = false
 
-    init(resampler: PCM16Resampler) {
+    init(format: AVAudioFormat) throws {
+        guard let resampler = PCM16Resampler(from: format) else { throw CaptureError.noInput }
         self.resampler = resampler
     }
 

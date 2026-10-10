@@ -5164,8 +5164,14 @@ Critic (fresh agent, cold brief) found 7 real bugs; all fixed:
 7. A rejected `play()` left JS busy forever. Now it emits idle.
 Also: the category check includes options (play-and-record without `defaultToSpeaker` routes to the earpiece); a route change restarts the thinking loop; deactivation errors are logged; the tap uses `format: nil` (a fixed format can raise an uncatchable exception); removed Capacitor's template storyboard, which built a second, unused bridge controller.
 
-DoD round 2:
-- [x] Simulator: warm press 6-16 ms; drained summaries; re-press ordering; background and return re-warms (183 ms, off the press path); no native error events.
+Second critic (fresh agent, on round 2): the drain is sound (the last frame reaches JS before `stopCapture` resolves; a stop can't hang or resolve twice). It found 3 real bugs plus hardening, all fixed in round 3:
+1. After a web-view reload (iOS kills WebKit's process, Capacitor reloads the page) the plugin kept the old high sequence number, so every idle was ignored and the orb stuck on "speaking". Now sequence numbers are taken in order (`lastSeq = seq`) and the page calls a new `reset()` on load, which also stops anything the old page left recording or playing.
+2. A route change while idle (headset unplugged) left the warm engine stale: the next press failed with "access denied". Now a failed start rebuilds the engine once and retries (`mic_acquired retried=True`, `native_capture_retry`).
+3. A call whose mic iOS took in the foreground (Siri, an alarm, a declined call) stayed deaf until the next tap. Now the plugin emits `captureAvailable` when the session comes back and the app reopens the call's mic.
+Hardening: a rejected release promise can't block later presses; failures clear `sessionActive`; the watchdog is pushed back after a route change; going to the background stops the tone node; a media-services reset rebuilds the playback engine (it stayed dead before); the capture engine is `reset()` after each stop (no leftover samples opening the next press) and no longer `prepare()`d ahead (start is 6 ms without it, and a prepared input unit is not worth the doubt about the mic indicator).
+
+DoD round 2 + 3:
+- [x] Simulator: warm press 6-16 ms (6 ms without `prepare()`); drained summaries; second press records after the engine `reset()`; re-press ordering; background and return re-warms (183 ms, off the press path); no native error events; `client.device shell=native_app audio=native`.
 - [x] `bun run ios:test` 6/6 (new: format switch mid-press), `bun run check` green.
 - [ ] Mario on the phone: press feels instant, last word not clipped, orange mic dot off between presses, ready tone audible when interrupting a reply.
 
