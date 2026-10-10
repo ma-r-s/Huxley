@@ -452,9 +452,10 @@ public class HuxleyAudioPlugin: CAPPlugin, CAPBridgedPlugin {
 
     /// Build the capture engine once. The tap stays installed; a press only
     /// starts the engine. The input runs only between start and stop, so
-    /// the mic is off between presses. Not prepare()d ahead: start() does
-    /// it in a few ms, and a prepared input unit is not worth the doubt
-    /// about whether it holds the mic.
+    /// the mic is off between presses. prepare()d ahead (and again after
+    /// each stop), as Apple advises for a responsive input start: on an
+    /// iPhone 15 Pro an unprepared start took ~100 ms, all of it before
+    /// recording begins. Prepared is allocated, not running.
     @discardableResult
     private func prepareCapture() throws -> AVAudioEngine {
         if let engine = captureEngine { return engine }
@@ -475,6 +476,7 @@ public class HuxleyAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         NotificationCenter.default.addObserver(
             self, selector: #selector(handleCaptureReset),
             name: .AVAudioEngineConfigurationChange, object: engine)
+        engine.prepare()
         captureEngine = engine
         return engine
     }
@@ -607,11 +609,18 @@ public class HuxleyAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         if let engine = captureEngine {
             engine.stop()
             // Drop whatever the tap had gathered after the last delivered
-            // block, so it can't open the next press.
+            // block, so it can't open the next press; then re-allocate so
+            // the next start is quick.
             engine.reset()
+            engine.prepare()
         }
         if let press = sink.press {
             sink.press = nil
+            // The converter's held-back tail: the very end of the press.
+            // Sent before the stop resolves, so it precedes ptt_stop.
+            if let tail = press.resampler.flush() {
+                notifyListeners("frame", data: ["data": tail.base64EncodedString()])
+            }
             var data = press.resampler.stats
             data["drained"] = !cutShort
             emit("native_capture_summary", data)

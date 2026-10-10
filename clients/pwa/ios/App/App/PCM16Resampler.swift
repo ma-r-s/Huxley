@@ -5,7 +5,8 @@ import AVFoundation
 /// format: PCM16 mono 24 kHz little-endian.
 ///
 /// One instance per press: the converter's filter state carries across
-/// buffers, so consecutive chunks join without clicks. If the input format
+/// buffers, so consecutive chunks join without clicks, and `flush()` at the
+/// end releases the last few ms the converter holds back. If the input format
 /// changes mid-press (a headset plugged in), it rebuilds the converter for
 /// the new format. It also keeps the per-press numbers the plugin logs on
 /// release (frames in/out, peak), which tell a silent mic from a broken
@@ -18,6 +19,11 @@ final class PCM16Resampler {
 
     private(set) var inputFormat: AVAudioFormat
     private var converter: AVAudioConverter
+    // One conversion at a time: the tap thread converts, the audio queue
+    // flushes at the end of the press.
+    private let conversion = NSLock()
+    private var finished = false
+    // Guards the stats and `inputFormat`, read from the audio queue.
     private let lock = NSLock()
     private var formatChanges = 0
     private var chunks = 0
@@ -35,39 +41,69 @@ final class PCM16Resampler {
 
     /// One hardware buffer in, PCM16 bytes out; nil when nothing came out.
     func convert(_ buffer: AVAudioPCMBuffer) -> Data? {
+        conversion.lock()
+        defer { conversion.unlock() }
+        guard !finished else { return nil }
+        var data = Data()
         if buffer.format != inputFormat {
+            // Release what the old converter still holds, then switch.
+            if let tail = run(nil) { data.append(tail) }
             guard let fresh = AVAudioConverter(from: buffer.format, to: Self.outputFormat)
-            else { return nil }
+            else { return data.isEmpty ? nil : data }
             lock.lock()
             inputFormat = buffer.format
             converter = fresh
             formatChanges += 1
             lock.unlock()
         }
-        let ratio = Self.outputFormat.sampleRate / buffer.format.sampleRate
-        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
-        guard let out = AVAudioPCMBuffer(pcmFormat: Self.outputFormat, frameCapacity: capacity)
+        if let body = run(buffer) { data.append(body) }
+        return data.isEmpty ? nil : data
+    }
+
+    /// End of the press. The converter holds back its last few ms (~15 ms
+    /// at 48 kHz: its filter wants input past them); this releases them.
+    /// Nothing converts after a flush.
+    func flush() -> Data? {
+        conversion.lock()
+        defer { conversion.unlock() }
+        guard !finished else { return nil }
+        finished = true
+        return run(nil)
+    }
+
+    /// Convert one buffer, or with nil, drain the converter.
+    private func run(_ input: AVAudioPCMBuffer?) -> Data? {
+        let frames = input.map {
+            Double($0.frameLength) * Self.outputFormat.sampleRate / $0.format.sampleRate
+        } ?? 2048
+        guard let out = AVAudioPCMBuffer(
+            pcmFormat: Self.outputFormat, frameCapacity: AVAudioFrameCount(frames) + 32)
         else { return nil }
-        // Hand over this buffer once, then report "no more for now" so the
-        // converter keeps its state for the next call instead of flushing.
+        // Hand over the buffer once, then "no more for now" so the converter
+        // keeps its state for the next call; with no buffer, "end of stream"
+        // so it releases what it held back.
         var fed = false
         var error: NSError?
         converter.convert(to: out, error: &error) { _, status in
-            if fed {
-                status.pointee = .noDataNow
-                return nil
+            if let input, !fed {
+                fed = true
+                status.pointee = .haveData
+                return input
             }
-            fed = true
-            status.pointee = .haveData
-            return buffer
+            status.pointee = input == nil ? .endOfStream : .noDataNow
+            return nil
+        }
+        if let input {
+            lock.lock()
+            chunks += 1
+            inFrames += Int(input.frameLength)
+            lock.unlock()
         }
         guard error == nil, out.frameLength > 0, let samples = out.int16ChannelData?[0]
         else { return nil }
         var chunkPeak = 0
         for i in 0..<Int(out.frameLength) { chunkPeak = max(chunkPeak, abs(Int(samples[i]))) }
         lock.lock()
-        chunks += 1
-        inFrames += Int(buffer.frameLength)
         outFrames += Int(out.frameLength)
         peak = max(peak, chunkPeak)
         lock.unlock()

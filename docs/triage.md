@@ -5173,7 +5173,9 @@ Hardening: a rejected release promise can't block later presses; failures clear 
 DoD round 2 + 3:
 - [x] Simulator: warm press 6-16 ms (6 ms without `prepare()`); drained summaries; second press records after the engine `reset()`; re-press ordering; background and return re-warms (183 ms, off the press path); no native error events; `client.device shell=native_app audio=native`.
 - [x] `bun run ios:test` 6/6 (new: format switch mid-press), `bun run check` green.
-- [ ] Mario on the phone: press feels instant, last word not clipped, orange mic dot off between presses, ready tone audible when interrupting a reply.
+- [x] Mario on the phone (21:02-21:16): "Sí." transcribed exact with the drain (`flush_ms=48`). Without `prepare()` the warm start was 101 ms, all before recording; with it 5-7 ms (first press after launch 109 ms). Orange dot: stays lit while tapping every ~300 ms, goes off when he stops (iOS lingers it a few seconds by design), so a prepared input engine doesn't hold the mic. ~100 ms taps correctly rejected as too short.
+- [x] Round 4: the resampler held back its last ~15 ms per press (4800 frames in, 2040 out, not 2400); `flush()` at release sends it before `ptt_stop`. `ios:test` now demands exact length (a copy without the flush fails, 136 frames short).
+- [ ] Mario: interrupt a reply mid-sentence and hear the ready tone.
 
 **Follow-up (product question, not started).** No background-audio mode: locking the phone stops a reply or an audiobook. Enabling it means keeping the WebSocket alive in the background too (it lives in WebKit, which iOS suspends), so it's a bigger change. Only worth it if the phone becomes a real client, not just a dev one.
 

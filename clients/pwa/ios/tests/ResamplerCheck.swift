@@ -77,9 +77,12 @@ struct ResamplerCheck {
                 if let data = resampler.convert(buf) { outFrames += data.count / 2 }
             }
         }
+        if let tail = resampler.flush() { outFrames += tail.count / 2 }
         var problems: [String] = []
-        if abs(outFrames - 48_000) > 480 {
-            problems.append("length \(outFrames), expected about 48000")
+        // The old converter's tail is released at the switch, the new one's
+        // at the flush: nothing lost on either side.
+        if abs(outFrames - 48_000) > 4 {
+            problems.append("length \(outFrames), expected 48000")
         }
         if resampler.stats["format_changes"] as? Int != 1 {
             problems.append("format_changes \(resampler.stats["format_changes"] ?? "nil"), expected 1")
@@ -113,12 +116,22 @@ struct ResamplerCheck {
             }
             pos += n
         }
+        let beforeFlush = out.count
+        if let tail = resampler.flush() {
+            tail.withUnsafeBytes { raw in
+                out.append(contentsOf: raw.bindMemory(to: Int16.self).map { Int16(littleEndian: $0) })
+            }
+        }
 
         var problems: [String] = []
         let expected = Int(24_000 * seconds)
-        // A few ms of converter latency is fine; a lost or doubled chunk is not.
-        if abs(out.count - expected) > 240 {
-            problems.append("length \(out.count), expected about \(expected)")
+        // After the flush every input frame has come out: within a frame
+        // or two of rounding. A held-back tail or a lost chunk is not.
+        if abs(out.count - expected) > 2 {
+            problems.append("length \(out.count), expected \(expected) (\(beforeFlush) before flush)")
+        }
+        if resampler.convert(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 480)!) != nil {
+            problems.append("converted after flush")
         }
         // Skip the converter's start-up ramp before measuring.
         let body = Array(out.dropFirst(240))
