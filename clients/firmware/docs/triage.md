@@ -22,7 +22,45 @@ excerpts via relative paths (store evidence under
 
 ## Active
 
-Nothing in flight — v0.3 planning is the next step.
+### F-0010: Walkie enclosure (HX series) · in_progress 2026-10-10
+
+3D-printed case for the board, its speaker, an 18650 and a spring-loaded,
+very tactile push-to-talk. Code and docs:
+[`../enclosure/`](../enclosure/README.md).
+
+**Validation (Gate 1)**: Mario has the bare board and the bare speaker (the
+original Waveshare case is gone), so the device has no housing, no battery
+and no real talk button. Every dimension now comes from Waveshare's official
+STEP (found on docs.waveshare.com; the wiki does not link it), recorded in
+[`../enclosure/MEASUREMENTS.md`](../enclosure/MEASUREMENTS.md) and asserted
+against the STEP in `enclosure/tests/test_hardware.py`.
+
+**Design (Gate 2)**: four concepts (HX-1 Classic, HX-2 Baton, HX-3 Radio,
+HX-4 Can), each a build123d model that passes an automated fit check (board
+clearances, speaker, cell bay, MX switch stack vs every printed part). Renders
+and a 3D viewer are published as a private artifact for Mario's pick.
+
+**Critic notes (Gate 2)**: a cold reviewer ranked HX-1, HX-2, HX-4, HX-3.
+Findings that apply to all four: add a charging dock located by magnets
+(pogo pins to the header's `USB_5V`, bench-verify first) so a blind user
+never hunts for USB-C; expose physical volume buttons (the board's spare
+KEY1/KEY3); add touch markers (dot on the bar, ring around the mic ports);
+pick a 60 to 70 g tactile or clicky switch; real fasteners and cell
+contacts. Per concept: HX-1's antenna sits under the thumb (rotate the
+board), HX-2's trigger pivot is on the wrong end, HX-3 presses PTT when
+carried, HX-4 tips and gets gripped onto the bar.
+
+**Decisions waiting on Mario**: which concept; dock yes/no; volume buttons
+yes/no; plus measurements of the speaker cable, the 18650 he will use and a
+look at the mic ports.
+
+**Firmware impact**: PTT moves from the on-board `K2` (via TCA9555) to an
+external MX switch on a free header GPIO (GPIO3 to GPIO9; LCD is unused).
+`hux_button` in F-0003 should read a direct GPIO; keep `K2` as the bench
+fallback.
+
+**Docs touched (Gate 4)**: `enclosure/README.md`, `enclosure/MEASUREMENTS.md`,
+`firmware/README.md` (enclosure pointer), root `CLAUDE.md` (repo layout).
 
 ---
 

@@ -18,6 +18,11 @@ long-term client-repo strategy.
 - TCA9555 I/O expander. The on-board LCD, camera, and TF slot are not
   used by the firmware today and may never be.
 
+Physical device: a 3D-printed walkie case around the board, its speaker,
+an 18650 and an MX-style push-to-talk switch. Concepts, measurements from
+Waveshare's STEP, and the fit-checked CAD live in
+[`enclosure/`](enclosure/README.md).
+
 ## Architecture (at a glance)
 
 ```
@@ -113,7 +118,9 @@ reach it from the LAN, set `HUXLEY_SERVER_HOST=0.0.0.0` in
 
 - `hux_audio` component — I2S + ES8311/ES7210/TCA9555 drivers, PSRAM
   ring buffers, PCM16 @ 24 kHz mono
-- Button (`K2`) → `ptt_start` / `ptt_stop`
+- Push-to-talk → `ptt_start` / `ptt_stop`: the case uses an external MX
+  switch on a free header GPIO (GPIO3 to GPIO9); `K2` stays as the bench
+  fallback (see F-0010 in `docs/triage.md`)
 - Mic → base64-in-JSON `audio` frames while PTT held
 - Inbound `audio` → speaker playback queue
 - State LED via the onboard WS2812

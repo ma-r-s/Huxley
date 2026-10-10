@@ -52,6 +52,7 @@ Huxley/                              # repo root
 ├── clients/                         # Things that connect to the server
 │   ├── pwa/                         # React/Vite dev client (Progressive Web App)
 │   └── firmware/                    # ESP32-S3 client (will extract to huxley-firmware)
+│       └── enclosure/               #   3D-printed walkie case: build123d concepts, fit checks, renders
 ├── web/                             # Web app — landing (/) + docs (/docs/*) — Next.js/Fumadocs
 ├── docs/                            # Single source of truth
 │   ├── vision.md                    # what Huxley is
