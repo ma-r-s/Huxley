@@ -24,6 +24,10 @@ class Concept:
     shells: dict[str, Solid]
     allowed: set[tuple[str, str]] = field(default_factory=set)
     notes: dict[str, str] = field(default_factory=dict)
+    # True when every shell is a separate printed piece (a buildable design):
+    # then shells may not intersect each other either. Concept sketches leave
+    # it off, since their shells are drawn as overlapping features.
+    disjoint_shells: bool = False
 
     def size(self) -> tuple[float, float, float]:
         bb = None
@@ -47,11 +51,15 @@ def _bb_overlap(a: Solid, b: Solid) -> bool:
 
 
 def collisions(c: Concept, tol: float = 0.05) -> list[tuple[str, str, float]]:
-    """Every intersecting (envelope, envelope|shell) pair with its volume in mm^3."""
+    """Every intersecting (envelope, envelope|shell) pair with its volume in mm^3,
+    plus (shell, shell) pairs when the shells are separate printed pieces."""
     hits = []
     env = list(c.envelopes.items())
     pairs = [(a, b) for i, a in enumerate(env) for b in env[i + 1 :]]
     pairs += [(a, s) for a in env for s in c.shells.items()]
+    if c.disjoint_shells:
+        sh = list(c.shells.items())
+        pairs += [(a, b) for i, a in enumerate(sh) for b in sh[i + 1 :]]
     for (na, sa), (nb, sb) in pairs:
         if (na, nb) in c.allowed or (nb, na) in c.allowed:
             continue

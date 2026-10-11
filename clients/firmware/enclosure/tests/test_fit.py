@@ -30,11 +30,10 @@ def test_hx1_is_smaller_than_rev_a_with_twice_the_cells():
     from huxcase.concepts import hx1, hx1_classic
 
     one, duo = hx1_classic.build(), hx1.build()
-    body = lambda c: next(p.shape for p in c.parts if p.name == "shell_front").bounding_box()  # noqa: E731
     vol = lambda m: m.W * m.D * m.H  # noqa: E731
     assert sum(p.kind == "cell" for p in duo.parts) == 2 * sum(p.kind == "cell" for p in one.parts)
     assert vol(hx1) < vol(hx1_classic)
-    assert body(duo).size.Z < body(one).size.Z
+    assert duo.size()[2] < one.size()[2]
 
 
 def test_speaker_gets_a_real_back_box(concept):
@@ -54,19 +53,6 @@ def test_hx1_tact_switch_clicks_before_the_stop():
     assert hx1.click_travel(force=2.6, shim=0.5) < hx1.STOP - 0.2
     solid = 10 * 0.4  # 10 coils of 0.4 mm wire
     assert solid + 1.0 < hx1.SPRING_REST - hx1.STOP + hw.TACT_TRAVEL
-
-
-def test_hx1_light_ring_clears_the_holders():
-    """The frosted ring behind the rear LEDs must stop short of the holders'
-    front faces, or the cells would shadow the light."""
-    from huxcase.concepts import hx1
-
-    c = hx1.build()
-    ring_back_y = hx1.BOARD_TOP_Y - hx1.RING_Z1
-    holder_front_y = min(
-        e.bounding_box().min.Y for k, e in c.envelopes.items() if k.startswith("holder")
-    )
-    assert ring_back_y < holder_front_y
 
 
 def test_hx1_rocker_sits_below_the_side_surface():
@@ -118,3 +104,54 @@ def test_hx1_bought_parts_measured():
     assert hw.ROCKER_BODY[2] + hw.ROCKER_TABS == 18.6
     h = next(p.shape for p in hw.holder() if p.name == "holder").bounding_box().size
     assert (round(h.X, 2), round(h.Y, 2), round(h.Z, 2)) == (21.0, 20.5, 76.0)
+
+
+@pytest.fixture(scope="module")
+def hx1_concept():
+    from huxcase.concepts import hx1
+
+    return hx1.build()
+
+
+@pytest.mark.parametrize(
+    ("part", "ribs"),
+    [
+        ("holder_0", "tub_ribs"),
+        ("holder_1", "tub_ribs"),
+        ("holder_0", "bridge_ribs"),
+        ("holder_1", "bridge_ribs"),
+        ("tact_switch", "tub_ribs"),
+        ("speaker", "plug_ribs"),
+        ("speaker", "tub_ribs"),
+    ],
+)
+def test_hx1_crush_ribs_grip_the_bought_parts(hx1_concept, part, ribs):
+    """No glue: every bought part that would otherwise rattle is held by ribs
+    that really reach into it (the fit check only proves nothing else does)."""
+    c = hx1_concept
+    assert (c.envelopes[part] & c.shells[ribs]).volume > 0.05
+
+
+def test_hx1_lever_pin_is_captured_in_two_blind_seats(hx1_concept):
+    """The printed pin sits in a seat in the tub behind the lever and one in
+    the faceplate's tooth in front of it, so closing the case captures it."""
+    from build123d import Cylinder, Pos, Rot
+
+    from huxcase.concepts import hx1
+
+    c = hx1_concept
+
+    def collar(y0, y1):
+        r0, r1 = hx1.PIN_BORE / 2 + 0.05, hx1.PIN_BORE / 2 + 0.6
+        ring = Cylinder(r1, y1 - y0) - Cylinder(r0, y1 - y0 + 1)
+        return Pos(hx1.PIVOT_X, (y0 + y1) / 2, hx1.PIVOT_Z) * Rot(90, 0, 0) * ring
+
+    rear = collar(hx1.PIN_Y1 - 2.0, hx1.PIN_Y1)
+    front = collar(hx1.PIN_Y0, hx1.PIN_Y0 + 2.0)
+    # A seat wall all the way round each end (a collar 0.55 thick is mostly solid)...
+    assert (rear & c.shells["tub"]).volume > 0.8 * rear.volume
+    assert (front & c.shells["faceplate"]).volume > 0.8 * front.volume
+    # ...and an end wall beyond each end, so it cannot slide out.
+    cap = lambda y: Pos(hx1.PIVOT_X, y, hx1.PIVOT_Z) * Rot(90, 0, 0) * Cylinder(1.0, 0.2)  # noqa: E731
+    assert (cap(hx1.PIN_Y1 + 0.5) & c.shells["tub"]).volume > 0
+    assert (cap(hx1.PIN_Y0 - 0.5) & c.shells["faceplate"]).volume > 0

@@ -6,7 +6,8 @@ artifact host does not serve .glb), assembly.json (steps, labels, specs,
 parts list), index.html (site/index.html with the manifest inlined) and preview.html (the
 same page with a charset, for a local static server).
 
-    cd clients/firmware/enclosure && uv run python -m huxcase.site
+    cd clients/firmware/enclosure && uv run python -m huxcase.site           # everything
+    cd clients/firmware/enclosure && uv run python -m huxcase.site --page    # page edits only
 """
 
 from __future__ import annotations
@@ -25,145 +26,144 @@ from huxcase.export import CELL_G, HARDWARE_G, OUT, PLA_G_PER_CC, PRINTED
 SITE_SRC = Path(__file__).resolve().parent.parent / "site"
 SITE_OUT = OUT / "site"
 
-# Assembly order, as it is built on the bench: the front shell lies face down
-# and everything drops in from behind (device +Y). `enter` is where each step
-# starts when it flies in; `explode` is where it sits in the exploded view
-# (front to back in stacking order). Both in device mm. Parts not listed are not shown (the protection board
-# pocket is reserved, not fitted).
+# Assembly order, as it is built on the bench (rev D): the tub lies on its
+# back and its parts go in from the open front; the faceplate side (grille,
+# speaker, board) is built face down on the faceplate and closes over it last.
+# `enter` is where a step starts when it flies in; `explode` is where it sits
+# in the exploded view; `explode_parts` spreads parts of one step further
+# apart in that view. All in device mm.
 STEPS = [
     {
-        "id": "front",
-        "title": "Front shell",
-        "text": "Grey PLA with a black grille inlay. The two mic ports and the "
-        "charge light's pipe go through the face.",
-        "parts": [
-            "shell_front",
-            "face_panel",
-            "standoffs",
-            "speaker_ring",
-            "mic_boots",
-            "light_pipe",
-        ],
-        "enter": (0, 140, 0),
+        "id": "tub",
+        "title": "Tub",
+        "text": "One print, standing up: grey to 36 mm, then a filament swap to frosted "
+        "for the rest, so the light shows through the top and upper back.",
+        "parts": ["tub_*"],
+        "enter": (0, -130, 0),
         "explode": (0, 0, 0),
     },
     {
-        "id": "speaker",
-        "title": "Speaker",
-        "text": "40 mm, 5 W. Presses into its ring with the solder tabs up. "
-        "Its 97 mm lead is cut to 45 mm first.",
-        "parts": ["speaker_*"],
-        "enter": (0, 80, 0),
-        "explode": (0, 30, 0),
-    },
-    {
-        "id": "board",
-        "title": "Board",
-        "text": "The ESP32-S3 audio board, mics toward the face, on three "
-        "standoffs. The speaker plugs into its back.",
-        "parts": ["board_*"],
-        "enter": (0, 100, 0),
-        "explode": (0, 45, 10),
-    },
-    {
-        "id": "ring",
-        "title": "Light ring",
-        "text": "Frosted PLA over the seven LEDs on the board's back. It turns "
-        "seven dots into one glow and feeds the frosted back.",
-        "parts": ["light_ring"],
-        "enter": (0, 110, 0),
-        "explode": (0, 65, 10),
-    },
-    {
-        "id": "switch",
-        "title": "Talk switch",
-        "text": "The 12 × 12 button drops into a pocket with crush ribs. A "
-        "printed plunger and a 0.4 × 4 × 15 spring go in its tube.",
-        "parts": ["ts_cradle", "tact_*", "plunger", "spring"],
-        "enter": (0, 90, 0),
-        "explode": (0, 58, 22),
-    },
-    {
-        "id": "lever",
-        "title": "Lever",
-        "text": "Orange PLA, 56 mm, pinned at the bottom. Pressing it squeezes "
-        "the spring until the button clicks.",
-        "parts": ["ptt_bar", "ptt_pin"],
-        "enter": (70, 0, 0),
-        "explode": (40, 0, 0),
+        "id": "inserts",
+        "title": "Inserts",
+        "text": "Seven M3 × 5 heat-set inserts with the insert tool: six in the corner "
+        "blocks for the case screws, one in the boss on the back wall.",
+        "parts": ["inserts", "bridge_insert"],
+        "enter": (0, -50, 0),
+        "explode": (0, -24, 0),
     },
     {
         "id": "rocker",
         "title": "Power switch",
-        "text": "The KCD1-101 rocker snaps into a recess in the left side, "
-        "below the surface, so it can't be knocked off.",
+        "text": "The KCD1-101 snaps into its recess in the left side from outside. "
+        "Solder its two leads before the holders go in.",
         "parts": ["rocker_*"],
         "enter": (-70, 0, 0),
         "explode": (-40, 0, 0),
     },
     {
+        "id": "switch",
+        "title": "Talk switch",
+        "text": "Solder two wires to one pair of legs, then slide the 12 × 12 button "
+        "into its cradle from the front. Crush ribs hold it with its top on the tube.",
+        "parts": ["tact_*"],
+        "enter": (0, -60, 0),
+        "explode": (0, -30, 18),
+    },
+    {
+        "id": "plunger",
+        "title": "Plunger and spring",
+        "text": "From outside, the printed plunger goes into the tube, then the "
+        "0.4 × 4 × 15 spring on top of it.",
+        "parts": ["plunger", "spring"],
+        "enter": (60, 0, 0),
+        "explode": (30, 0, 18),
+    },
+    {
+        "id": "lever",
+        "title": "Lever",
+        "text": "Push the printed pin through the lever. Set it in 2.5 mm forward, "
+        "then slide it back so the pin enters its seat behind the channel.",
+        "parts": ["ptt_bar", "ptt_pin"],
+        "enter": (70, 0, 0),
+        "explode": (45, 0, 0),
+    },
+    {
         "id": "cells",
         "title": "Batteries",
-        "text": "Two 18650s in their holders, wired in parallel. The board "
-        "charges both over USB-C.",
+        "text": "Each holder goes in 1 mm toward the middle, then slides out under "
+        "its two lips. Crush ribs underneath and above keep it from moving.",
         "parts": ["holder_*", "cell_*"],
-        "enter": (0, 110, 0),
-        "explode": (0, 95, 0),
+        "enter": (0, -100, 0),
+        "explode": (0, -46, 0),
+    },
+    {
+        "id": "bridge",
+        "title": "Holder bridge",
+        "text": "A printed bridge across both holders, one M3 × 6 into the boss. Its "
+        "ribs press the holders onto the back wall.",
+        "parts": ["bridge", "bridge_screw"],
+        "enter": (0, -80, 0),
+        "explode": (0, -64, 0),
     },
     {
         "id": "wiring",
         "title": "Wiring",
-        "text": "Every wire runs in the channel between the holders: speaker, "
-        "battery, and the two talk-switch wires to the header.",
+        "text": "Before closing: the holder leads join in pairs, + runs through the "
+        "power switch to the board's battery pads, the talk wires to the header.",
         "parts": ["cable_*", "lead_*"],
-        "enter": (0, 60, 0),
-        "explode": (0, 78, 0),
+        "enter": (0, -40, 0),
+        "explode": (0, -56, 0),
     },
     {
-        "id": "back",
-        "title": "Back shell",
-        "text": "Grey PLA, the lower third of the back. It closes over the "
-        "speaker and the bottom of the holders.",
-        "parts": ["shell_back"],
-        "enter": (0, 120, 0),
-        "explode": (0, 135, -10),
+        "id": "front",
+        "title": "Faceplate side",
+        "text": "Built face down: the grille plug drops into its window, the speaker "
+        "onto its three tabs, the board onto three standoffs with M2 × 8 screws.",
+        "parts": ["faceplate", "grille_plug", "speaker_*", "board_*", "board_screws"],
+        "enter": (0, -150, 0),
+        "explode": (0, -108, 0),
+        "explode_parts": {
+            "speaker_*": (0, -72, 0),
+            "board_*": (0, -86, 0),
+            "board_screws": (0, -80, 0),
+            "grille_plug": (0, -126, 0),
+        },
     },
     {
-        "id": "frosted",
-        "title": "Frosted back",
-        "text": "Frosted PLA for the top and the upper back. The LEDs glow "
-        "through it, softest where the holders sit.",
-        "parts": ["frosted_back"],
-        "enter": (0, 140, 0),
-        "explode": (0, 150, 25),
+        "id": "screws",
+        "title": "Close it",
+        "text": "Six M3 × 8 through the face into the inserts. Closing the case also "
+        "captures the lever pin and clamps the speaker.",
+        "parts": ["case_screws"],
+        "enter": (0, -60, 0),
+        "explode": (0, -142, 0),
     },
 ]
 
 LABELS = [
-    ("shell_front", "Front shell"),
-    ("face_panel", "Grille inlay"),
-    ("standoffs", "Board standoffs"),
-    ("speaker_ring", "Speaker ring"),
-    ("mic_boots", "Mic boots"),
-    ("light_pipe", "Charge light pipe"),
+    ("tub_*", "Tub"),
+    ("inserts", "M3 × 5 heat-set insert"),
+    ("bridge_insert", "M3 × 5 heat-set insert"),
+    ("faceplate", "Faceplate"),
+    ("grille_plug", "Grille plug"),
     ("speaker_*", "Speaker, 40 mm 5 W"),
+    ("board_screws", "M2 × 8 screw and washer"),
     ("board_*", "ESP32-S3 audio board"),
-    ("light_ring", "Light ring"),
-    ("ts_cradle", "Switch cradle"),
     ("tact_*", "12 × 12 tact switch"),
     ("plunger", "Plunger"),
     ("spring", "Spring 0.4 × 4 × 15"),
     ("ptt_bar", "Talk lever"),
-    ("ptt_pin", "Lever pin"),
+    ("ptt_pin", "Lever pin, printed"),
     ("rocker_*", "Power switch KCD1-101"),
     ("holder_*", "18650 holder"),
     ("cell_*", "18650 cell"),
+    ("bridge_screw", "M3 × 6 screw"),
+    ("bridge", "Holder bridge"),
     ("cable_spk", "Speaker lead"),
     ("cable_bat_*", "Battery lead"),
     ("cable_ptt_*", "Talk switch wires"),
     ("lead_*", "Holder leads"),
-    ("shell_back", "Back shell"),
-    ("frosted_back", "Frosted back and top"),
+    ("case_screws", "M3 × 8 screw"),
 ]
 
 PRINT_MATERIAL = {
@@ -172,9 +172,9 @@ PRINT_MATERIAL = {
     "shell_inner": "Grey PLA",
     "accent": "Orange PLA",
     "translucent": "Frosted PLA",
-    "glow": "Frosted PLA",
-    "clear": "Frosted PLA",
 }
+# One print, two filaments.
+PRINT_MATERIAL_BY_LABEL = {"Tub": "Grey, then frosted PLA"}
 
 BOUGHT = [
     ("ESP32-S3 audio board (Waveshare)", 1),
@@ -184,8 +184,10 @@ BOUGHT = [
     ("12 × 12 tact switch", 1),
     ("Spring 0.4 × 4 × 15 (SciWil kit)", 1),
     ("KCD1-101 rocker switch", 1),
-    ("M2 × 8 screw + washer, board", 3),
-    ("M2 heat-set insert, board", 3),
+    ("M3 × 8 button head, case", 6),
+    ("M3 × 6 button head, holder bridge", 1),
+    ("M3 × 5 heat-set insert", 7),
+    ("M2 × 8 button head + flat washer, board", 3),
     ("Ribbon cable, for every run", 1),
 ]
 
@@ -261,6 +263,7 @@ def build_site() -> dict:
     # One node per (step, kind, label): the board's 30 pieces become a few meshes,
     # everything else keeps its own node so hovering names it.
     groups: dict[tuple[str, str, str], list] = {}
+    group_parts: dict[tuple[str, str, str], set[str]] = {}
     tags = {f"{p.kind}__{p.name}": p for p in shown}
     for node in scene.graph.nodes_geometry:
         tf, geom = scene.graph[node]
@@ -282,6 +285,7 @@ def build_site() -> dict:
         m = scene.geometry[geom].copy()
         m.apply_transform(tf)
         groups.setdefault((step_of[part], kind, label), []).append(m)
+        group_parts.setdefault((step_of[part], kind, label), set()).add(part)
 
     out = trimesh.Scene()
     nodes = {}
@@ -291,6 +295,10 @@ def build_site() -> dict:
         name = f"n{i:03d}"
         out.add_geometry(merged, node_name=name, geom_name=name)
         nodes[name] = {"step": step, "kind": kind, "label": label.split("|")[0]}
+        step_def = next(st for st in STEPS if st["id"] == step)
+        for pattern, vec in step_def.get("explode_parts", {}).items():
+            if any(fnmatch.fnmatchcase(p, pattern) for p in group_parts[(step, kind, label)]):
+                nodes[name]["explode"] = _to_three(vec)
     doc = _glb_to_json(trimesh.exchange.gltf.export_glb(out, include_normals=True))
     (SITE_OUT / "hx1.gltf.json").write_text(json.dumps(doc, separators=(",", ":")))
 
@@ -316,14 +324,17 @@ def build_site() -> dict:
     for p in c.parts:
         if p.kind in PRINTED or p.kind in ("shell_inner", "clear"):
             label = _label(p.name) if p.name in step_of else p.name
-            entry = printed.setdefault(label, [PRINT_MATERIAL.get(p.kind, "PLA"), 0.0])
+            material = PRINT_MATERIAL_BY_LABEL.get(label, PRINT_MATERIAL.get(p.kind, "PLA"))
+            entry = printed.setdefault(label, [material, 0.0])
             entry[1] += p.shape.volume / 1000
     printed_cc = sum(v for _, v in printed.values())
     cells = sum(1 for p in c.parts if p.kind == "cell")
     w, d, h = c.size()
     manifest = {
         "name": c.name,
-        "rev": "rev C",
+        "rev": "rev D",
+        # The board's rear LEDs: the page puts its glow light here.
+        "light_at": _to_three((hx1.X0, hx1.PCB_BOTTOM_Y + 3.0, hx1.BOARD_Z)),
         "steps": steps,
         "nodes": nodes,
         "specs": {
@@ -346,22 +357,33 @@ def build_site() -> dict:
 
     if not (SITE_SRC / "index.html").exists():
         return manifest
-    # The manifest is small: inline it so the spec sheet renders before the model loads.
+    write_pages(manifest)
+    return manifest
+
+
+def write_pages(manifest: dict) -> None:
+    """index.html (manifest inlined, so the spec sheet renders before the model
+    loads) and preview.html (the same with a charset, for a local server)."""
+    if not (SITE_SRC / "index.html").exists():
+        return
     page = (SITE_SRC / "index.html").read_text()
     page = page.replace(
         "__MANIFEST__", json.dumps(manifest, ensure_ascii=False).replace("</", "<\\/")
     )
     (SITE_OUT / "index.html").write_text(page)
-    # preview.html: the same page with the charset and viewport the publish
-    # skeleton adds, for checking it on a local static server.
     (SITE_OUT / "preview.html").write_text(
         '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, '
         'initial-scale=1, viewport-fit=cover">\n' + page
     )
-    return manifest
 
 
 def main() -> int:
+    import sys
+
+    if "--page" in sys.argv:  # page edits only: reuse the exported model and manifest
+        write_pages(json.loads((SITE_OUT / "assembly.json").read_text()))
+        print(f"wrote {SITE_OUT}/index.html")
+        return 0
     m = build_site()
     size = (SITE_OUT / "hx1.gltf.json").stat().st_size / 1e6
     print(

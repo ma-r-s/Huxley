@@ -151,7 +151,7 @@ footer p { margin: 0; max-width: 70ch; }
 
 <header class="mast">
   <span class="brand">huxley <span>/ hardware</span></span>
-  <span class="pill"><b>●</b> HX-1 · rev C<span class="wide"> · fit-checked</span></span>
+  <span class="pill"><b>●</b> HX-1 · rev D<span class="wide"> · fit-checked</span></span>
 </header>
 
 <section class="stage" id="stage" aria-label="HX-1 in 3D">
@@ -199,7 +199,7 @@ footer p { margin: 0; max-width: 70ch; }
 
   <section class="sheet" aria-labelledby="seq-h">
     <h2 id="seq-h">Build sequence</h2>
-    <p class="sub">The front shell lies face down on the bench and everything drops in from behind. Pick a step to see it on the model.</p>
+    <p class="sub">The tub lies on its back and everything goes in from its open front. The faceplate side is built face down on its own, then closes over it with six screws. Nothing is glued. Pick a step to see it on the model.</p>
     <ol class="steps" id="steps"></ol>
   </section>
 
@@ -214,7 +214,7 @@ footer p { margin: 0; max-width: 70ch; }
   </section>
 
   <footer>
-    <p>Design model, rev C. Every part is fit-checked against Waveshare's own 3D model of the board, the speaker and the measured parts. Still in design: the screws that close the case and the lever's pivot.</p>
+    <p>Rev D. Every part is fit-checked against Waveshare's own 3D model of the board, the speaker and your measured parts, and every bought part is held by printed features, screws or crush ribs, never glue. The clearances are starting values for a Bambu P2S; the fit coupon confirms them before the first full print.</p>
     <p class="mono">Source: clients/firmware/enclosure · build123d · three.js</p>
   </footer>
 </main>
@@ -444,7 +444,7 @@ let camTween = null, idleAt = performance.now();
 
 const VIEWS = {
   assembled: { pos: [0.205, 0.118, 0.305], tgt: [0, 0.05, 0] },
-  exploded: { pos: [0.39, 0.16, 0.2], tgt: [0, 0.054, -0.072] },
+  exploded: { pos: [0.64, 0.27, -0.12], tgt: [0, 0.045, 0.068] },  // parts spread toward the front
   build: { pos: [0.15, 0.31, 0.25], tgt: [0, 0.012, 0.004] },
 };
 function narrow() { return viewport.clientWidth < 640; }
@@ -514,11 +514,18 @@ function pose(now) {
       const f = easeInOut(clamp(explode * 1.45 - k * 0.042, 0, 1));
       g.position.set(s.explode[0] * f, s.explode[1] * f, s.explode[2] * f);
     }
+    // Parts of one step that spread further apart in the exploded view.
+    const f = mode === "build" ? 0 : easeInOut(clamp(explode * 1.45 - k * 0.042, 0, 1));
+    for (const o of g.children) {
+      const e = o.userData && o.userData.explode;
+      if (e) o.position.set((e[0] - s.explode[0]) * f, (e[1] - s.explode[1]) * f, (e[2] - s.explode[2]) * f);
+    }
   }
   const lieTo = mode === "build" ? 1 - easeInOut(clamp(t - N, 0, 1)) : 0;
   lie = mode === "build" ? lieTo : lie + (lieTo - lie) * 0.12;
-  pivot.rotation.x = (Math.PI / 2) * lie;
-  pivot.position.set(0, HALF_D * lie, -HALF_H * lie);
+  // Build: the tub lies on its back, open front up.
+  pivot.rotation.x = -(Math.PI / 2) * lie;
+  pivot.position.set(0, HALF_D * lie, HALF_H * lie);
   const fx = FOOT[0] * 1.5, fz = THREE.MathUtils.lerp(FOOT[1], HALF_H * 2, lie) * 1.5;
   blob.scale.set(fx, fz, 1);
   const lightTo = lightOn && (mode !== "build" || t > N + 0.45) ? 1 : 0;
@@ -640,7 +647,7 @@ function resize() {
 }
 function applyShift(force) {
   const w = viewport.clientWidth, h = viewport.clientHeight;
-  const want = narrow() ? [0, 0] : [w * (mode === "exploded" ? 0.16 : mode === "build" ? 0.07 : 0.1),
+  const want = narrow() ? [0, 0] : [w * (mode === "exploded" ? 0.19 : mode === "build" ? 0.07 : 0.1),
     mode === "build" ? $("build").offsetHeight * 0.55 : 0];
   const k = force || REDUCED ? 1 : 0.1;
   const next = [shift[0] + (want[0] - shift[0]) * k, shift[1] + (want[1] - shift[1]) * k];
@@ -689,8 +696,8 @@ window.HX = { look: (pos, tgt = [0, 0.05, 0]) => { camTween = null; controls.aut
   camera.position.set(...pos); controls.target.set(...tgt); }, setMode };
 try {
   await loadModel();
-  groups[stepIndex.ring].add(inner);
-  inner.position.set(...M.steps[stepIndex.ring].anchor).add(new THREE.Vector3(0, 0, -0.006));
+  groups[stepIndex.front].add(inner);
+  inner.position.set(...M.light_at);
   $("loading").hidden = true;
   requestAnimationFrame(frame);
 } catch (err) {

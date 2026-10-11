@@ -39,15 +39,17 @@ PART = 0.30
 CRUSH_RIB = 0.45  # rib height into the PART gap: 0.15 mm of interference, crushed on insertion
 CRUSH_RIB_W = 0.8  # two perimeters wide so it deforms instead of snapping off
 
-# Heat-set inserts (bore for the insert, clearance for the screw through the other part).
-# M3 measured by Mario (2026-10-10): 4.4 over the knurls, 3.8 smooth pilot, so a
-# 4.0 bore (between the two). Bore depth = insert length + 1 for the melt.
-# M2 assumed (3.5 OD class); the coupon checks it.
-INSERT_BORE = {"M2": 3.2, "M3": 4.0}
-INSERT_LENGTHS = {"M3": (3.0, 5.0, 7.0)}
+# Heat-set inserts: bore between the smooth tip and the knurls. From the
+# FFVRVSS kit label (2026-10-10), matching Mario's caliper reading on the M3:
+# M2 knurl 3.2 / tip 2.7, only 2 mm long; M3 knurl 4.5 / tip 3.9, 3, 5 or 7 long.
+# Bore depth = insert length + 1 for the melt.
+INSERT_BORE = {"M2": 2.8, "M3": 4.0}
+INSERT_LENGTHS = {"M2": (2.0,), "M3": (3.0, 5.0, 7.0)}
 SCREW_CLEAR = {"M2": 2.4, "M3": 3.4}
-# Mario's button-head screws, lengths in stock (M3 measured; M2 unconfirmed).
-SCREW_LENGTHS = {"M3": (6.0, 8.0, 12.0, 16.0)}
+SELF_TAP_PILOT = {"M2": 1.7}  # into plain PLA, no insert
+# Mario's Kadrick button-head kit (label photo): lengths in stock, plus nuts and
+# flat/lock washers for every size.
+SCREW_LENGTHS = {"M2": (4.0, 8.0, 12.0, 16.0), "M3": (6.0, 8.0, 12.0, 16.0)}
 
 # Printability.
 MIN_WALL = 0.8  # two perimeters of a 0.4 mm nozzle; anything thinner is not printed
