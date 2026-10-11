@@ -1,9 +1,10 @@
 # huxley-firmware
 
-ESP32-S3 client for Huxley. Speaks the WebSocket protocol defined in
-[`../docs/protocol.md`](../docs/protocol.md) — same contract as the
-browser dev client in [`../web/`](../web/) and the future
-[`huxley-web`](../docs/clients.md#what-huxley-web-is) PWA.
+ESP32-S3 client for Huxley: the walkie. Hold the talk lever, speak,
+let go, hear the answer. Speaks the WebSocket protocol defined in
+[`../../docs/protocol.md`](../../docs/protocol.md), the same contract as
+the PWA dev client in [`../pwa/`](../pwa/). Its case (HX-1) is in
+[`enclosure/`](./enclosure/).
 
 Prototyped in this repo until end-to-end voice works; will be extracted
 to its own `huxley-firmware` repository once the architecture is
@@ -21,11 +22,19 @@ long-term client-repo strategy.
 ## Architecture (at a glance)
 
 ```
-main/          app_main — NVS, event loop, app + net bring-up
+main/          app_main — NVS, event loop, bring-up in dependency order
 components/
   hux_proto/   Pure JSON <-> typed message marshalling (host-testable)
-  hux_app/     Single state owner + event queue (actor model)
-  hux_net/     Wi-Fi STA + WebSocket client
+  hux_app/     Single state owner + event queue (actor model): PTT, mic
+               ownership, server state, volume
+  hux_net/     Wi-Fi STA + WebSocket client; the audio data plane
+               (audio, audio_clear) and fragment reassembly (hux_ws_frag)
+  hux_audio/   I2S1 duplex: ES7210 mic (24 kHz) and ES8311 speaker with a
+               512 KB PSRAM playback ring
+  hux_board/   I2C bus + TCA9555 expander (buttons, speaker PA)
+  hux_button/  Talk input: GPIO7 (the case's lever) or K2, debounced
+               (hux_debounce, host-testable)
+  hux_log/     Log hook: serial + streamed to the server as client_event
 ```
 
 Invariants (see [`../CLAUDE.md`](../CLAUDE.md) for the full project
@@ -35,8 +44,8 @@ standards):
    never mutates shared state directly. No mutexes on business state.
 2. **Protocol is pure** — `hux_proto` has no I/O; compiles against cJSON
    alone so the wire layer is unit-testable on a host.
-3. **Pre-allocated audio path** (coming) — ring buffers sized at init in
-   PSRAM; no `malloc` per frame.
+3. **Pre-allocated audio path** — ring buffers sized at init in PSRAM;
+   no `malloc` per frame.
 4. **Dual-OTA partitions** reserved from day 1 — adding OTA is additive,
    not a flash-layout migration.
 
@@ -56,7 +65,7 @@ standards):
 ## First-time setup
 
 ```sh
-cd firmware
+cd clients/firmware
 cp main/secrets.example.h main/secrets.h
 # Edit main/secrets.h — fill in your Wi-Fi SSID, password, and the
 # server URI (ws://<mac-lan-ip>:8765/).
@@ -66,11 +75,16 @@ cp main/secrets.example.h main/secrets.h
 
 ```sh
 . ~/esp/esp-idf/export.sh
-cd firmware
+cd clients/firmware
 idf.py set-target esp32s3      # first time only
 idf.py build
 idf.py -p /dev/cu.usbmodem2101 flash monitor
 ```
+
+`dependencies.lock` (gitignored) pins the managed components; copy the
+one from a checkout that has run on the board (esp_codec_dev 1.4.0,
+esp_websocket_client 1.6.1, IDF 5.5.4) rather than letting the
+component manager pick newer ones.
 
 If the board doesn't enumerate as `/dev/cu.usbmodem*`, hold **BOOT**,
 tap **RESET**, release BOOT — this puts the S3 into the download-mode
@@ -82,14 +96,15 @@ Three tiers, cheapest to most expensive:
 
 ```sh
 # 1. Host unit tests — pure-C modules, no hardware needed (~1 s)
-cd firmware/tests && cmake -B build && cmake --build build --target check
+cd clients/firmware/tests && cmake -B build && cmake --build build --target check
 
-# 2. Server-side wire-contract tests — firmware ↔ server message shapes
-uv run --package huxley pytest packages/core/tests/unit/test_firmware_contract.py
+# 2. Server-side wire-contract tests — firmware <-> server message shapes,
+#    both directions (from the repo root)
+uv run --package huxley pytest server/runtime/tests/unit/test_firmware_contract.py
 
 # 3. End-to-end smoke — boots the board, waits for READY on serial
-firmware/tools/smoke.sh              # uses currently-flashed firmware
-firmware/tools/smoke.sh --flash      # reflash + smoke
+clients/firmware/tools/smoke.sh              # uses currently-flashed firmware
+clients/firmware/tools/smoke.sh --flash      # reflash + smoke
 ```
 
 Run (1) and (2) before every commit that changes firmware C or
@@ -100,22 +115,40 @@ server protocol. Run (3) before every commit that changes
 
 The Huxley server binds to `localhost` by default. For the firmware to
 reach it from the LAN, set `HUXLEY_SERVER_HOST=0.0.0.0` in
-`../packages/core/.env` (already done in this checkout).
+`../../server/runtime/.env`. One client at a time: a second connection
+evicts the first, so close the PWA tab while testing the board.
 
 ## What works today
 
-- Wi-Fi STA association with retry/backoff
-- WebSocket connect + reconnect
-- Parse + log server `hello` (validates protocol version matches)
-- Log every other inbound message by kind (no handlers yet)
+- Wi-Fi STA (power save off), WebSocket connect, keep-alive, reconnect
+- `hello` with protocol check (2); `session_ready=false` is logged
+- Talk: GPIO7 (the case's lever, header pin 2 to GND) or K2 →
+  `ptt_start`, 20 ms mic frames as `audio`, `ptt_stop`; a press clears
+  the speaker (barge-in)
+- Speaker: inbound `audio` (reassembled when fragmented) into a 512 KB
+  PSRAM ring, played through ES8311; `audio_clear` empties it in order
+- `set_volume` (the system skill), `input_mode` (mic continuous during
+  a skill's claim, e.g. a Telegram call), `state` tracked and logged
+- Logs to serial and to the server (`client_event: huxley.firmware_log`)
 
 ## What's next
 
-- `hux_audio` component — I2S + ES8311/ES7210/TCA9555 drivers, PSRAM
-  ring buffers, PCM16 @ 24 kHz mono
-- Button (`K2`) → `ptt_start` / `ptt_stop`
-- Mic → base64-in-JSON `audio` frames while PTT held
-- Inbound `audio` → speaker playback queue
+- Echo cancellation during calls (the speaker leaks into the mic)
 - State LED via the onboard WS2812
+- See `docs/triage.md`
 
-Tracked in `docs/triage.md` once the item is filed.
+## First flash after a long gap
+
+1. Server running, on the LAN (`HUXLEY_SERVER_HOST=0.0.0.0`), PWA tab
+   closed. `main/secrets.h` has the Wi-Fi and `ws://<server-ip>:8765/`.
+2. `idf.py -p /dev/cu.usbmodem2101 flash monitor` (or `tools/smoke.sh
+   --flash`, which waits for READY).
+3. Serial should show, in order: `boot version=…`, `button_task started
+   … talk=k2+gpio7`, `wifi.got_ip`, `ws.connected`, `ws.rx.hello
+   protocol=2`, `state WAITING_HELLO -> READY`, then `ws.rx.state … ->
+   CONVERSING`.
+4. Hold K2 (or touch GPIO7 to GND): `button.talk press src=k2|lever`,
+   `app.mic on`, `mic.tx.stats …`; let go: `app.ptt.final_stats …`. The
+   answer plays; `spk.alive … audio=` climbs.
+5. Say "sube el volumen": `spk.volume level=…`. A `talk.gpio7 low at
+   boot` warning means GPIO7 is held or shorted.

@@ -247,3 +247,61 @@ async def test_second_client_evicts_first() -> None:
                     break
 
     assert rec.wake_words == 1, "second client's messages must be dispatched"
+
+
+# --- Server -> firmware: the shapes the ESP32 parses ------------------------
+#
+# The firmware (`components/hux_proto/hux_proto.c`) reads these fields and
+# nothing else; `components/hux_net/hux_net.c` routes `audio` and
+# `audio_clear` by finding `"type"` in the first 100 bytes of the text,
+# without parsing. A server change that renames a field, moves `type` later
+# or changes a value's spelling would silently break the device.
+
+
+async def _recv_until(ws: Any, msg_type: str) -> tuple[str, dict[str, Any]]:
+    """Next message of `msg_type`, as (raw text, parsed)."""
+    for _ in range(50):
+        raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
+        msg = json.loads(raw)
+        if msg.get("type") == msg_type:
+            return raw, msg
+    raise AssertionError(f"no {msg_type} message")
+
+
+def _type_within_probe(raw: str) -> bool:
+    """What `hux_net.c:has_type` needs: the "type" key in the first 100 bytes."""
+    return '"type"' in raw[:100]
+
+
+@pytest.mark.asyncio
+async def test_server_frames_match_what_the_firmware_parses() -> None:
+    rec = _Recorder()
+    async with _server_on_ephemeral_port(rec) as (url, srv), connect(url) as ws:
+        hello = await _recv_hello(ws)
+        # session_ready is read as a bool; missing means ready.
+        assert hello.get("session_ready", True) in (True, False)
+
+        await srv.send_state("CONVERSING")
+        _, state = await _recv_until(ws, "state")
+        assert state["value"] in ("IDLE", "CONNECTING", "CONVERSING")
+
+        await srv.send_set_volume(40)
+        _, vol = await _recv_until(ws, "set_volume")
+        assert vol["level"] == 40 and isinstance(vol["level"], int)
+
+        await srv.send_input_mode("skill_continuous", reason="claim_started", claim_id="c1")
+        _, mode = await _recv_until(ws, "input_mode")
+        assert mode["mode"] == "skill_continuous"
+        await srv.send_input_mode("assistant_ptt", reason="claim_ended")
+        _, mode = await _recv_until(ws, "input_mode")
+        assert mode["mode"] == "assistant_ptt"
+
+        await srv.send_audio_clear()
+        raw, _ = await _recv_until(ws, "audio_clear")
+        assert _type_within_probe(raw), raw
+
+        pcm = bytes(range(256)) * 40
+        await srv.send_audio(pcm)
+        raw, audio = await _recv_until(ws, "audio")
+        assert _type_within_probe(raw), raw[:120]
+        assert base64.b64decode(audio["data"]) == pcm[: len(base64.b64decode(audio["data"]))]

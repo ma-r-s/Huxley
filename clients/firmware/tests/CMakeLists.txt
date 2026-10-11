@@ -44,6 +44,12 @@ set(HUX_NET_DIR ${CMAKE_SOURCE_DIR}/../components/hux_net)
 add_library(hux_ws_frag STATIC ${HUX_NET_DIR}/hux_ws_frag.c)
 target_include_directories(hux_ws_frag PUBLIC ${HUX_NET_DIR}/include)
 
+# -- hux_debounce (library under test) ------------------------------
+# Pure C, the talk button's debounce; lives inside hux_button.
+set(HUX_BUTTON_DIR ${CMAKE_SOURCE_DIR}/../components/hux_button)
+add_library(hux_debounce STATIC ${HUX_BUTTON_DIR}/hux_debounce.c)
+target_include_directories(hux_debounce PUBLIC ${HUX_BUTTON_DIR}/include)
+
 # -- tests -----------------------------------------------------------
 add_executable(test_hux_proto test_hux_proto.c)
 target_include_directories(test_hux_proto PRIVATE ${CMAKE_SOURCE_DIR}/helpers)
@@ -55,8 +61,13 @@ target_include_directories(test_hux_ws_frag PRIVATE ${CMAKE_SOURCE_DIR}/helpers)
 target_link_libraries(test_hux_ws_frag PRIVATE hux_ws_frag)
 add_test(NAME hux_ws_frag COMMAND test_hux_ws_frag)
 
+add_executable(test_hux_debounce test_hux_debounce.c)
+target_include_directories(test_hux_debounce PRIVATE ${CMAKE_SOURCE_DIR}/helpers)
+target_link_libraries(test_hux_debounce PRIVATE hux_debounce)
+add_test(NAME hux_debounce COMMAND test_hux_debounce)
+
 # Convenience target: `cmake --build build --target check` runs every test.
 add_custom_target(check
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-    DEPENDS test_hux_proto test_hux_ws_frag
+    DEPENDS test_hux_proto test_hux_ws_frag test_hux_debounce
 )

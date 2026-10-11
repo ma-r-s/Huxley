@@ -130,9 +130,8 @@ void app_main(void) {
         .server_uri = HUX_SERVER_URI,
     });
 
-    /* K2 press/release now drives events into `hux_app`. v0.2 wires
-     * these to the mic pipeline; v0.2.0 just surfaces the edges in
-     * the log so hardware can be verified ahead of audio. */
+    /* Talk input: the case's lever on GPIO7 or the board's K2; its
+     * press/release events drive the mic pipeline in `hux_app`. */
     hux_button_start();
 
     /* Plug the log drain into the net layer. From here on, log lines
@@ -146,6 +145,8 @@ void app_main(void) {
      * then calls this sink with raw PCM bytes. hux_audio's consumer
      * task pulls from the ring and feeds I2S TX via ES8311. */
     hux_net_set_audio_sink(hux_audio_spk_push);
+    /* `audio_clear` on the same task, in order with the audio. */
+    hux_net_set_audio_clear_sink(hux_audio_spk_clear);
 
     /* Threshold = INFO for dev: the server log becomes a full record
      * of what the board did. WARN/ERROR is the prod default once this

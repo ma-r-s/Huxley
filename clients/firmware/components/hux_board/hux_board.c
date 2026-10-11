@@ -102,16 +102,17 @@ void hux_board_init(void) {
              I2C_SDA_GPIO, I2C_SCL_GPIO, TCA9555_I2C_ADDR);
 }
 
-bool hux_board_tca_read(uint8_t pin) {
+bool hux_board_tca_read_level(uint8_t pin, bool *high) {
     if (s_tca == NULL || pin > 15) {
         return false;
     }
     uint8_t reg = (pin < 8) ? TCA_REG_INPUT_0 : TCA_REG_INPUT_1;
     uint8_t value = 0;
     if (!tca_read_reg(reg, &value)) {
-        return false; /* Fail-safe: unreadable = not pressed. */
+        return false;
     }
-    return (value >> (pin & 0x07)) & 0x01;
+    *high = (value >> (pin & 0x07)) & 0x01;
+    return true;
 }
 
 bool hux_board_tca_write(uint8_t pin, bool high) {

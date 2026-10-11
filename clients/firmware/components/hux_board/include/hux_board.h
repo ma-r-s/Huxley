@@ -43,11 +43,12 @@ extern "C" {
 void hux_board_init(void);
 
 /**
- * Read one TCA9555 input pin. Returns `true` for a logic-high line,
- * `false` for logic-low. I2C bus error or pin out of range returns
- * `false` (fail-safe: a button that can't be read is not pressed).
+ * Read one TCA9555 input pin into `*high` (true = logic high). Returns
+ * `false`, leaving `*high` alone, on an I2C error or a pin out of
+ * range, so a caller can tell an unreadable pin from a low one: the
+ * buttons are active-low, and an error read as "low" would be a press.
  */
-bool hux_board_tca_read(uint8_t pin);
+bool hux_board_tca_read_level(uint8_t pin, bool *high);
 
 /**
  * Drive one TCA9555 output pin. No-op if the pin is configured as

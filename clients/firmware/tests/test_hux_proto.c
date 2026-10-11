@@ -98,6 +98,8 @@ static void test_all_protocol_kinds(void) {
         {"stream_started", HUX_MSG_STREAM_STARTED},
         {"stream_ended",   HUX_MSG_STREAM_ENDED},
         {"dev_event",      HUX_MSG_DEV_EVENT},
+        {"audio_clear",    HUX_MSG_AUDIO_CLEAR},
+        {"server_event",   HUX_MSG_SERVER_EVENT},
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         char buf[128];
@@ -140,11 +142,80 @@ static void test_null_out_rejected(void) {
     HX_ASSERT_TRUE(!hux_proto_parse("{\"type\":\"hello\"}", 17, NULL), "NULL out rejected");
 }
 
+/* ---- payloads the firmware acts on -------------------------------- */
+
+static void test_hello_session_ready(void) {
+    hux_msg_t m;
+    HX_ASSERT_TRUE(parse("{\"type\":\"hello\",\"protocol\":2}", &m), "parses");
+    HX_ASSERT_TRUE(m.as.hello.session_ready, "missing session_ready (old server) = ready");
+    HX_ASSERT_TRUE(parse("{\"type\":\"hello\",\"protocol\":2,\"session_ready\":false,"
+                         "\"session_error\":\"persona failed\"}", &m), "parses");
+    HX_ASSERT_TRUE(!m.as.hello.session_ready, "session_ready=false");
+    HX_ASSERT_TRUE(parse("{\"type\":\"hello\",\"protocol\":2,\"session_ready\":true}", &m),
+                   "parses");
+    HX_ASSERT_TRUE(m.as.hello.session_ready, "session_ready=true");
+}
+
+static void test_state_values(void) {
+    hux_msg_t m;
+    HX_ASSERT_TRUE(parse("{\"type\":\"state\",\"value\":\"CONVERSING\"}", &m), "parses");
+    HX_ASSERT_EQ(m.as.state.value, HUX_SERVER_STATE_CONVERSING, "CONVERSING");
+    HX_ASSERT_TRUE(parse("{\"type\":\"state\",\"value\":\"IDLE\"}", &m), "parses");
+    HX_ASSERT_EQ(m.as.state.value, HUX_SERVER_STATE_IDLE, "IDLE");
+    HX_ASSERT_TRUE(parse("{\"type\":\"state\",\"value\":\"CONNECTING\"}", &m), "parses");
+    HX_ASSERT_EQ(m.as.state.value, HUX_SERVER_STATE_CONNECTING, "CONNECTING");
+    HX_ASSERT_TRUE(parse("{\"type\":\"state\",\"value\":\"PLAYING\"}", &m), "parses");
+    HX_ASSERT_EQ(m.as.state.value, HUX_SERVER_STATE_UNKNOWN, "an unknown value is UNKNOWN");
+}
+
+static void test_set_volume_level(void) {
+    /* The server's system skill sends absolute levels, clamped to 0..100. */
+    hux_msg_t m;
+    HX_ASSERT_TRUE(parse("{\"type\":\"set_volume\",\"level\":40}", &m), "parses");
+    HX_ASSERT_EQ(m.kind, HUX_MSG_SET_VOLUME, "kind");
+    HX_ASSERT_EQ(m.as.set_volume.level, 40, "level=40");
+    HX_ASSERT_TRUE(parse("{\"type\":\"set_volume\",\"level\":250}", &m), "parses");
+    HX_ASSERT_EQ(m.as.set_volume.level, 100, "clamped to 100");
+    HX_ASSERT_TRUE(parse("{\"type\":\"set_volume\",\"level\":-5}", &m), "parses");
+    HX_ASSERT_EQ(m.as.set_volume.level, 0, "clamped to 0");
+    HX_ASSERT_TRUE(parse("{\"type\":\"set_volume\",\"level\":62.6}", &m), "parses");
+    HX_ASSERT_EQ(m.as.set_volume.level, 63, "rounded");
+    HX_ASSERT_TRUE(parse("{\"type\":\"set_volume\",\"level\":\"loud\"}", &m), "parses");
+    HX_ASSERT_EQ(m.as.set_volume.level, -1, "not a number -> -1 (ignored)");
+    HX_ASSERT_TRUE(parse("{\"type\":\"set_volume\"}", &m), "parses");
+    HX_ASSERT_EQ(m.as.set_volume.level, -1, "missing -> -1 (ignored)");
+}
+
+static void test_input_mode(void) {
+    hux_msg_t m;
+    HX_ASSERT_TRUE(parse("{\"type\":\"input_mode\",\"mode\":\"skill_continuous\","
+                         "\"reason\":\"claim_started\",\"claim_id\":\"c1\"}", &m), "parses");
+    HX_ASSERT_EQ(m.kind, HUX_MSG_INPUT_MODE, "kind");
+    HX_ASSERT_TRUE(m.as.input_mode.known && m.as.input_mode.continuous, "skill_continuous");
+    HX_ASSERT_TRUE(parse("{\"type\":\"input_mode\",\"mode\":\"assistant_ptt\","
+                         "\"reason\":\"idle\",\"claim_id\":null}", &m), "parses");
+    HX_ASSERT_TRUE(m.as.input_mode.known && !m.as.input_mode.continuous, "assistant_ptt");
+    HX_ASSERT_TRUE(parse("{\"type\":\"input_mode\",\"mode\":\"assistant_gated\"}", &m),
+                   "parses");
+    HX_ASSERT_TRUE(!m.as.input_mode.known, "a future mode is not known (caller keeps its mode)");
+}
+
+static void test_audio_clear_is_not_audio(void) {
+    hux_msg_t m;
+    HX_ASSERT_TRUE(parse("{\"type\":\"audio_clear\"}", &m), "parses");
+    HX_ASSERT_EQ(m.kind, HUX_MSG_AUDIO_CLEAR, "audio_clear has its own kind");
+}
+
 /* ---- entry -------------------------------------------------------- */
 
 int main(void) {
     printf("== test_hux_proto ==\n");
     HX_RUN(test_parse_hello_v2);
+    HX_RUN(test_hello_session_ready);
+    HX_RUN(test_state_values);
+    HX_RUN(test_set_volume_level);
+    HX_RUN(test_input_mode);
+    HX_RUN(test_audio_clear_is_not_audio);
     HX_RUN(test_parse_hello_with_odd_field_order);
     HX_RUN(test_parse_hello_missing_protocol);
     HX_RUN(test_parse_not_json);

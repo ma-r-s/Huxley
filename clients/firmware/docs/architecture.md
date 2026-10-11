@@ -84,11 +84,19 @@ Two classes of inbound message, two paths:
   (cheap substring probe), parses the envelope inline, base64-decodes
   into a pre-allocated scratch, and hands the PCM view to a
   registered `hux_net_audio_sink_fn`. Zero heap per frame; `hux_app`
-  never sees audio.
+  never sees audio. `audio_clear` takes the same path (its own sink,
+  `hux_net_audio_clear_fn`), so a clear is applied in order with the
+  audio around it: through `hux_app`'s queue it could land after the
+  next reply's first chunks and wipe them. The speaker ring is reset by
+  its own reader (`spk_task`); `hux_audio_spk_clear` asks and waits.
 - **Control plane**: everything else (`state`, `status`, `input_mode`,
   `stream_started`, `claim_started`, …). Low-rate, latency-tolerant,
   needs the state machine. These flow through `hux_app`'s event
-  queue as before — cheap given the traffic.
+  queue as before — cheap given the traffic. `hux_app` acts on
+  `hello` (protocol, `session_ready`), `state` (logged; a talk press
+  while the server isn't CONVERSING says so), `set_volume` (speaker
+  gain) and `input_mode` (the mic runs while talk is held, or
+  continuously while a skill owns it, e.g. a call).
 
 ## Event flow (control plane)
 
@@ -134,10 +142,10 @@ Producers never retain references.
 ## Event flow (outbound, future)
 
 ```
-  GPIO falling edge on K2
-        │
+  talk input low: GPIO7 (the case's lever) or K2 (on the board)
+        │  polled every 10 ms, 2-sample debounce (hux_debounce)
         ▼
-  hux_button ISR ─▶ hux_app_post_event(PTT_PRESSED, from_isr=true)
+  hux_button task ─▶ hux_app_post_event(PTT_PRESSED)
                         │
                         ▼
                    app_task: state.owns_mic? yes -> send ptt_start

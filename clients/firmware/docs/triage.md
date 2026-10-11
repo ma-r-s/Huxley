@@ -22,13 +22,47 @@ excerpts via relative paths (store evidence under
 
 ## Active
 
-Nothing in flight — v0.3 planning is the next step.
+### F-0014 — Talk on GPIO7; act on `set_volume`, `input_mode`, `audio_clear` · built, awaiting bench test 2026-10-11
+
+**Problem**: the HX-1 case's talk lever closes a switch on header pin 2
+(GPIO7) to GND, but the firmware only read the board's K2. And against
+today's server three messages were logged and ignored: `set_volume`
+("sube el volumen" did nothing), `input_mode` (a Telegram call heard
+silence from the device: the mic only ran while talk was held) and
+`audio_clear` (an audiobook seek or an interrupt played the old tail
+first). Also: a failed I2C read of K2 counted as a press (the expander
+read returned "low" on error, and the button is active-low).
+**Solution** (branch `firmware-talk-gpio7`): talk = GPIO7 (pull-up) OR
+K2, through a host-tested debounce (`hux_debounce`); `hux_board_tca_read_level`
+reports errors, an unreadable K2 is not pressed. `hux_proto` parses
+`set_volume.level`, `input_mode.mode`, `state.value`,
+`hello.session_ready`, and `audio_clear`. `audio_clear` is handled on
+the data plane in order with `audio`; the speaker ring is reset by its
+reader (`spk_task`) on request. The mic runs while talk is held or
+while `input_mode` is `skill_continuous`. A release whose press was
+ignored no longer sends a stray `ptt_stop`; a WS drop stops the mic.
+**Evidence so far**: `idf.py build` clean (no warnings, 1.0 MB, 52 % of
+the app partition free); host tests green (hux_proto 92 assertions incl.
+the new payloads, hux_ws_frag, hux_debounce); server contract tests
+green both ways (new: server frames vs what the firmware parses,
+`"type"` within the probe's 100 bytes). Not yet run on the board.
+**DoD left**: Mario flashes it (README "First flash after a long gap"),
+then: talk on K2 and on GPIO7, an answer plays, "sube el volumen",
+an audiobook seek, and a Telegram call if one is set up.
+**Known gaps** (not in scope): no echo cancellation during calls; the
+speaker leaks into the mic.
+
+Note on IDs: F-0011 to F-0013 were used in code comments and commit
+messages (boot buzz, decode scratch, Wi-Fi power save) but their
+entries never landed here; F-0003 (the speaker path) shipped as v0.3.x
+and is moved to Done. The enclosure tracker (`docs/triage.md` on the
+enclosure branch) calls the talk-button work F-0011; this is it.
 
 ---
 
 ## Queued (next up, not started)
 
-### F-0003 — v0.3 speaker path
+### F-0003 — v0.3 speaker path · done (v0.3.x; see the code: hux_audio spk_task, hux_net reassembly)
 
 Inbound `audio` → I2S TX. See [`roadmap.md`](./roadmap.md#v03--speaker).
 

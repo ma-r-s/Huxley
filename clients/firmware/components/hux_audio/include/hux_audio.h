@@ -81,11 +81,15 @@ bool hux_audio_mic_is_running(void);
 void hux_audio_spk_push(const uint8_t *pcm, size_t len);
 
 /**
- * Drop everything currently in the speaker ring. Called on
- * `audio_clear` (v0.3.2) and on `stream_ended (interrupted)` to cut
- * playback immediately rather than finishing the buffered tail.
+ * Drop everything currently in the speaker ring: on `audio_clear` (from
+ * the WS client task) and on a talk press (barge-in, from the app task).
+ * The playback task does the reset itself; this waits for it, up to
+ * ~100 ms (normally one 20 ms chunk). Don't call it from that task.
  */
 void hux_audio_spk_clear(void);
+
+/** Speaker volume 0..100 (`set_volume` from the server); out of range is ignored. */
+void hux_audio_set_volume(int level);
 
 #ifdef __cplusplus
 }

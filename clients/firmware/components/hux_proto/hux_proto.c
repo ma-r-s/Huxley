@@ -24,6 +24,8 @@ static const kind_entry_t KIND_TABLE[] = {
     {"stream_started", HUX_MSG_STREAM_STARTED},
     {"stream_ended", HUX_MSG_STREAM_ENDED},
     {"dev_event", HUX_MSG_DEV_EVENT},
+    {"audio_clear", HUX_MSG_AUDIO_CLEAR},
+    {"server_event", HUX_MSG_SERVER_EVENT},
 };
 
 static hux_msg_kind_t kind_from_wire(const char *wire) {
@@ -71,6 +73,36 @@ bool hux_proto_parse(const char *json, size_t len, hux_msg_t *out) {
         case HUX_MSG_HELLO: {
             const cJSON *protocol = cJSON_GetObjectItemCaseSensitive(root, "protocol");
             out->as.hello.protocol = cJSON_IsNumber(protocol) ? (int)protocol->valuedouble : -1;
+            const cJSON *ready = cJSON_GetObjectItemCaseSensitive(root, "session_ready");
+            out->as.hello.session_ready = !cJSON_IsFalse(ready);
+            break;
+        }
+        case HUX_MSG_STATE: {
+            const cJSON *value = cJSON_GetObjectItemCaseSensitive(root, "value");
+            const char *v = cJSON_IsString(value) ? value->valuestring : NULL;
+            out->as.state.value = v == NULL                     ? HUX_SERVER_STATE_UNKNOWN
+                                  : strcmp(v, "IDLE") == 0       ? HUX_SERVER_STATE_IDLE
+                                  : strcmp(v, "CONNECTING") == 0 ? HUX_SERVER_STATE_CONNECTING
+                                  : strcmp(v, "CONVERSING") == 0 ? HUX_SERVER_STATE_CONVERSING
+                                                                 : HUX_SERVER_STATE_UNKNOWN;
+            break;
+        }
+        case HUX_MSG_SET_VOLUME: {
+            const cJSON *level = cJSON_GetObjectItemCaseSensitive(root, "level");
+            if (cJSON_IsNumber(level)) {
+                double l = level->valuedouble;
+                out->as.set_volume.level = l < 0 ? 0 : l > 100 ? 100 : (int)(l + 0.5);
+            } else {
+                out->as.set_volume.level = -1;
+            }
+            break;
+        }
+        case HUX_MSG_INPUT_MODE: {
+            const cJSON *mode = cJSON_GetObjectItemCaseSensitive(root, "mode");
+            const char *m = cJSON_IsString(mode) ? mode->valuestring : NULL;
+            bool continuous = m != NULL && strcmp(m, "skill_continuous") == 0;
+            out->as.input_mode.continuous = continuous;
+            out->as.input_mode.known = continuous || (m != NULL && strcmp(m, "assistant_ptt") == 0);
             break;
         }
         default:

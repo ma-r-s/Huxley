@@ -55,6 +55,10 @@ static char s_server_uri[128] = {0};
  * reads cross CPU cores (set from app_main, called on the WS client
  * task) so it's atomic. */
 static _Atomic(hux_net_audio_sink_fn) s_audio_sink = NULL;
+/* `audio_clear` runs on the same task as `audio`, in arrival order: a
+ * clear posted through hux_app's queue could land after the next reply's
+ * first chunks and wipe them. */
+static _Atomic(hux_net_audio_clear_fn) s_audio_clear_sink = NULL;
 /* Decode scratch — single-writer (the WS client task), so no lock is
  * needed. Sized to fit the decoded PCM of the largest message we
  * accept: WS_FRAG_BUFFER_BYTES (384 KB JSON+base64) decodes to about
@@ -171,16 +175,17 @@ static void wifi_init_sta(const char *ssid, const char *password) {
 /*  WebSocket                                                          */
 /* ------------------------------------------------------------------ */
 
-/* Cheap probe: is this message an `audio` type? Avoids parsing the
- * whole JSON on the hot path. Relies on the server always serialising
- * `"type"` early in the document. Tolerates whitespace around the
- * colon and inside the value pair so it works regardless of whether
- * the server side uses `json.dumps({"type":"audio"})` (no spaces)
- * or `json.dumps(d)` with default separators (space after `:`).
- * If this ever misses, the message falls through to the control
- * plane and is logged as `ws.rx.audio (unhandled)` — correct but
- * slow. */
-static bool looks_like_audio(const char *json, size_t len) {
+/* Cheap probe: is this message of type `value` (quotes included, e.g.
+ * "\"audio\"")? Avoids parsing the whole JSON on the hot path. Relies
+ * on the server always serialising `"type"` early in the document.
+ * Tolerates whitespace around the colon and inside the value pair so it
+ * works regardless of whether the server side uses
+ * `json.dumps({"type":"audio"})` (no spaces) or `json.dumps(d)` with
+ * default separators (space after `:`). The closing quote is part of
+ * the match, so "audio" never matches "audio_clear". If this ever
+ * misses, an `audio` message falls through to the control plane and is
+ * logged as `ws.rx.audio (unhandled)` — correct but slow. */
+static bool has_type(const char *json, size_t len, const char *value) {
     if (len < 16) {
         return false;
     }
@@ -189,8 +194,7 @@ static bool looks_like_audio(const char *json, size_t len) {
     size_t probe = len < 100 ? len : 100;
     static const char key[] = "\"type\"";
     static const size_t key_len = sizeof(key) - 1; /* 6 */
-    static const char value[] = "\"audio\"";
-    static const size_t value_len = sizeof(value) - 1; /* 7 */
+    const size_t value_len = strlen(value);
 
     for (size_t i = 0; i + key_len <= probe; i++) {
         if (memcmp(json + i, key, key_len) != 0) {
@@ -257,8 +261,17 @@ static void dispatch_audio(const char *json, size_t len) {
  * goes to the zero-copy data-plane sink; everything else gets copied
  * onto the heap and posted to hux_app's control queue. */
 static void dispatch_complete_message(const char *msg, size_t msg_len) {
-    if (looks_like_audio(msg, msg_len)) {
+    if (has_type(msg, msg_len, "\"audio\"")) {
         dispatch_audio(msg, msg_len);
+        return;
+    }
+    if (has_type(msg, msg_len, "\"audio_clear\"")) {
+        hux_net_audio_clear_fn clear =
+            atomic_load_explicit(&s_audio_clear_sink, memory_order_acquire);
+        ESP_LOGI(TAG, "ws.rx.audio_clear");
+        if (clear != NULL) {
+            clear();
+        }
         return;
     }
 
@@ -434,6 +447,10 @@ void hux_net_set_audio_sink(hux_net_audio_sink_fn sink) {
     /* Release-store pairs with the acquire-load in `dispatch_audio`
      * on the WS client task. */
     atomic_store_explicit(&s_audio_sink, sink, memory_order_release);
+}
+
+void hux_net_set_audio_clear_sink(hux_net_audio_clear_fn sink) {
+    atomic_store_explicit(&s_audio_clear_sink, sink, memory_order_release);
 }
 
 void hux_net_send_log(const hux_log_entry_t *entry) {

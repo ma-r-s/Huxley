@@ -108,6 +108,13 @@ static esp_codec_dev_handle_t s_spk_dev = NULL;
  * SPIRAM_MALLOC_ALWAYSINTERNAL threshold. */
 static StreamBufferHandle_t s_spk_ring = NULL;
 
+/* Clearing the ring: the reader (spk_task) does the reset, never another
+ * task, so a reset can't land mid-receive on the other core. A caller
+ * bumps `s_spk_clear_req` and waits until spk_task reports it done. */
+static _Atomic uint32_t s_spk_clear_req = 0;
+static _Atomic uint32_t s_spk_clear_done = 0;
+#define SPK_CLEAR_WAIT_MS 100  /* spk_task services a request within one chunk (~20 ms) */
+
 static _Atomic(hux_audio_mic_frame_fn) s_mic_sink = NULL;
 static _Atomic bool s_mic_running = false;
 
@@ -330,6 +337,17 @@ static void spk_task(void *unused) {
     for (;;) {
         size_t got_bytes = xStreamBufferReceive(
             s_spk_ring, mono16, sizeof(mono16), pdMS_TO_TICKS(SPK_CHUNK_MS));
+        uint32_t req = atomic_load_explicit(&s_spk_clear_req, memory_order_acquire);
+        if (req != atomic_load_explicit(&s_spk_clear_done, memory_order_relaxed)) {
+            /* A clear was asked for: drop this chunk and the rest of the
+             * ring. Nothing is blocked on the ring here (the writer never
+             * blocks), so the reset always succeeds. */
+            size_t dropped = got_bytes + (SPK_RING_BYTES - xStreamBufferSpacesAvailable(s_spk_ring));
+            xStreamBufferReset(s_spk_ring);
+            got_bytes = 0;
+            atomic_store_explicit(&s_spk_clear_done, req, memory_order_release);
+            ESP_LOGI(TAG, "spk.cleared dropped_bytes=%u", (unsigned)dropped);
+        }
         size_t got_samples = got_bytes / sizeof(int16_t);
 
         if (got_samples == 0) {
@@ -398,9 +416,31 @@ void hux_audio_spk_push(const uint8_t *pcm, size_t len) {
 }
 
 void hux_audio_spk_clear(void) {
-    if (s_spk_ring != NULL) {
-        xStreamBufferReset(s_spk_ring);
+    if (s_spk_ring == NULL) {
+        return;
     }
+    uint32_t want = atomic_fetch_add_explicit(&s_spk_clear_req, 1, memory_order_acq_rel) + 1;
+    TickType_t start = xTaskGetTickCount();
+    while (atomic_load_explicit(&s_spk_clear_done, memory_order_acquire) - want > UINT32_MAX / 2) {
+        /* done < want (wrap-safe): spk_task hasn't got to it yet. */
+        if (xTaskGetTickCount() - start > pdMS_TO_TICKS(SPK_CLEAR_WAIT_MS)) {
+            ESP_LOGW(TAG, "spk.clear_timeout req=%u — spk_task not running?", (unsigned)want);
+            return;
+        }
+        vTaskDelay(1);
+    }
+}
+
+void hux_audio_set_volume(int level) {
+    if (s_spk_dev == NULL || level < 0 || level > 100) {
+        return;
+    }
+    esp_err_t err = esp_codec_dev_set_out_vol(s_spk_dev, level);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "spk.volume_failed level=%d err=%s", level, esp_err_to_name(err));
+        return;
+    }
+    ESP_LOGI(TAG, "spk.volume level=%d", level);
 }
 
 static void mic_task(void *unused) {

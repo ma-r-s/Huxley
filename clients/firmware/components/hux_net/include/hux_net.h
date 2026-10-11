@@ -72,3 +72,15 @@ typedef void (*hux_net_audio_sink_fn)(const uint8_t *pcm, size_t len);
  * firmware/docs/architecture.md §"Data plane vs control plane".
  */
 void hux_net_set_audio_sink(hux_net_audio_sink_fn sink);
+
+/**
+ * Called for every inbound `audio_clear` ("drop any queued audio": the
+ * server is interrupting, seeking, or starting something new). Runs on
+ * the WebSocket client task, in order with the `audio` sink, so a clear
+ * never lands after the audio that follows it. May block briefly (the
+ * speaker ring is reset by its own reader).
+ */
+typedef void (*hux_net_audio_clear_fn)(void);
+
+/** Register the `audio_clear` handler. Pass NULL to unregister. */
+void hux_net_set_audio_clear_sink(hux_net_audio_clear_fn sink);

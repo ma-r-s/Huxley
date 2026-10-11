@@ -34,11 +34,41 @@ typedef enum {
     HUX_MSG_STREAM_STARTED,
     HUX_MSG_STREAM_ENDED,
     HUX_MSG_DEV_EVENT,
+    HUX_MSG_AUDIO_CLEAR,
+    HUX_MSG_SERVER_EVENT,
 } hux_msg_kind_t;
 
 typedef struct {
     int protocol;
+    /** T1.16: false when the server has no live session to talk to (its
+     * `session_error` says why). Missing field (older server) = true. */
+    bool session_ready;
 } hux_msg_hello_t;
+
+/** Server session state (`state.value`). */
+typedef enum {
+    HUX_SERVER_STATE_UNKNOWN = 0,
+    HUX_SERVER_STATE_IDLE,
+    HUX_SERVER_STATE_CONNECTING,
+    HUX_SERVER_STATE_CONVERSING,
+} hux_server_state_t;
+
+typedef struct {
+    hux_server_state_t value;
+} hux_msg_state_t;
+
+typedef struct {
+    /** 0..100, clamped; -1 when the field is missing or not a number. */
+    int level;
+} hux_msg_set_volume_t;
+
+typedef struct {
+    /** `mode` was one of the two known values. */
+    bool known;
+    /** `skill_continuous`: a skill owns the mic, stream it continuously.
+     * `assistant_ptt`: stream only while the talk button is held. */
+    bool continuous;
+} hux_msg_input_mode_t;
 
 /**
  * Parsed server→client message. The `kind` tag discriminates which
@@ -50,6 +80,9 @@ typedef struct {
     hux_msg_kind_t kind;
     union {
         hux_msg_hello_t hello;
+        hux_msg_state_t state;
+        hux_msg_set_volume_t set_volume;
+        hux_msg_input_mode_t input_mode;
     } as;
 } hux_msg_t;
 

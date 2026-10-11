@@ -235,6 +235,39 @@ See [`architecture.md`](./architecture.md#data-plane-vs-control-plane).
 
 ---
 
+## 2026-10-11 — Talk on GPIO7 (the case's lever) or K2
+
+**Decision**: The talk input is GPIO7 (header pin 2, internal pull-up,
+low = talk) OR the on-board K2; either one held is talk, and they post
+the same press/release events. The HX-1 case's lever closes a switch
+from GPIO7 to GND (clients/firmware/enclosure/README.md); K2 stays for
+the bare board on the bench. A K2 read that fails on the I2C bus now
+counts as not pressed (it used to read as pressed, since the button is
+active-low): an unreadable button must never open the mic.
+
+**Why GPIO7**: the LCD is unused, so header GPIO3 to GPIO9 are free;
+GPIO7 is pin 2, next to GND on 15/16. Polled with K2 in the same 10 ms
+loop rather than on an interrupt: one debounce, one code path.
+
+---
+
+## 2026-10-11 — Act on `set_volume`, `input_mode`, `audio_clear`
+
+**Decision**: The firmware now applies the server's `set_volume`
+(ES8311 gain), follows `input_mode` (mic continuous during a skill's
+claim, such as a Telegram call), and drops queued speaker audio on
+`audio_clear`, in order with the audio (data plane). Before this, all
+three were logged and ignored: "sube el volumen" did nothing, a call
+heard silence from the device, and an audiobook seek played the old
+tail first.
+
+**Not done**: echo cancellation during calls (the ES7210's reference
+channel is there for it; esp-sr's AFE would be the way), and speaking
+`status` text (no on-device TTS; the server's earcons and spoken
+replies carry it).
+
+---
+
 ## 2026-04-24 — `K2` = PTT, `K1`/`K3` reserved
 
 **Decision**: The middle button (`K2`) is the push-to-talk trigger.

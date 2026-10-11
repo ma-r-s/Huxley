@@ -34,6 +34,23 @@ typedef enum {
 static QueueHandle_t s_event_q = NULL;
 static app_state_t s_state = ST_BOOT;
 
+/* Talk + mic ownership (app task only). The mic streams while the talk
+ * button is held, or continuously while a skill owns it (`input_mode`
+ * = skill_continuous, e.g. a call). Server-authoritative: it re-sends
+ * `input_mode` on every connect. */
+static bool s_ptt_held = false;          /* a press we acted on (sent ptt_start) */
+static bool s_mic_continuous = false;    /* input_mode == skill_continuous */
+static hux_server_state_t s_server_state = HUX_SERVER_STATE_UNKNOWN;
+
+static const char *server_state_name(hux_server_state_t s) {
+    switch (s) {
+        case HUX_SERVER_STATE_IDLE:       return "IDLE";
+        case HUX_SERVER_STATE_CONNECTING: return "CONNECTING";
+        case HUX_SERVER_STATE_CONVERSING: return "CONVERSING";
+        default:                          return "UNKNOWN";
+    }
+}
+
 static const char *state_name(app_state_t s) {
     switch (s) {
         case ST_BOOT:          return "BOOT";
@@ -184,6 +201,21 @@ static void audio_sender_task(void *unused) {
     }
 }
 
+/* Start or stop the mic to match who owns it now. */
+static void mic_update(const char *why) {
+    bool want = s_ptt_held || s_mic_continuous;
+    if (want == hux_audio_mic_is_running()) {
+        return;
+    }
+    ESP_LOGI(TAG, "app.mic %s why=%s ptt=%d continuous=%d", want ? "on" : "off", why,
+             s_ptt_held, s_mic_continuous);
+    if (want) {
+        hux_audio_mic_start();
+    } else {
+        hux_audio_mic_stop();
+    }
+}
+
 /* Non-heap control-message sender. Used for tiny JSON messages
  * (ptt_start / ptt_stop / wake_word / reset) where the payload is a
  * static literal. */
@@ -195,6 +227,12 @@ static void enter_ptt(void) {
     if (s_state != ST_READY) {
         ESP_LOGW(TAG, "app.ptt.ignored_press state=%s", state_name(s_state));
         return;
+    }
+    if (s_server_state != HUX_SERVER_STATE_CONVERSING) {
+        /* The server drops audio until its session is up again (it
+         * reconnects on its own, and tones if that keeps failing). Logged
+         * so a press that got no answer explains itself. */
+        ESP_LOGW(TAG, "app.ptt.press_while_server=%s", server_state_name(s_server_state));
     }
     /* Reset per-press counters so the stats line is scoped to this
      * PTT press, not the lifetime of the firmware. */
@@ -218,16 +256,26 @@ static void enter_ptt(void) {
     hux_audio_spk_clear();
 
     /* Order is: announce -> arm mic. The server tolerates a frame or
-     * two arriving before `ptt_start` but shouldn't have to. */
+     * two arriving before `ptt_start` but shouldn't have to. During a
+     * skill's claim (a call) the mic is already on; the press tells the
+     * server to end the claim. */
     send_control("{\"type\":\"ptt_start\"}");
-    hux_audio_mic_start();
+    s_ptt_held = true;
+    mic_update("ptt_start");
 }
 
 static void leave_ptt(void) {
+    if (!s_ptt_held) {
+        /* Its press was ignored (not connected): no ptt_start went out,
+         * so no ptt_stop either. */
+        return;
+    }
     /* Stop the mic first so no more audio frames race the commit.
      * The server's PTT-stop handler commits the buffer to OpenAI —
-     * late frames would be ignored, but the log noise is worse. */
-    hux_audio_mic_stop();
+     * late frames would be ignored, but the log noise is worse. A
+     * skill still owning the mic keeps it on. */
+    s_ptt_held = false;
+    mic_update("ptt_stop");
     ESP_LOGI(TAG, "app.ptt.final_stats enq=%u enq_drop=%u tx_ok=%u tx_fail=%u",
              (unsigned)s_mic_enqueued, (unsigned)s_mic_enqueue_dropped,
              (unsigned)s_tx_sent, (unsigned)s_tx_failed);
@@ -252,6 +300,11 @@ static void handle_ws_message(hux_app_ws_message_t *msg) {
                  * until a capability-handshake negotiation lands. */
                 return;
             }
+            if (!parsed.as.hello.session_ready) {
+                /* T1.16: the server has no live session (persona failed
+                 * to load, ...). Talk presses will get no answer. */
+                ESP_LOGW(TAG, "ws.rx.hello session_ready=false: the server cannot answer yet");
+            }
             transition(ST_READY);
             /* Kick the server into CONVERSING so PTT presses work
              * immediately. `wake_word` is named legacy-style in the
@@ -259,6 +312,45 @@ static void handle_ws_message(hux_app_ws_message_t *msg) {
              * session" signal. Sending it once per connection matches
              * the web dev client's behaviour. */
             send_control("{\"type\":\"wake_word\"}");
+            break;
+
+        case HUX_MSG_STATE:
+            if (parsed.as.state.value != s_server_state) {
+                ESP_LOGI(TAG, "ws.rx.state %s -> %s", server_state_name(s_server_state),
+                         server_state_name(parsed.as.state.value));
+                s_server_state = parsed.as.state.value;
+            }
+            break;
+
+        case HUX_MSG_SET_VOLUME:
+            /* The server's system skill ("sube el volumen"): absolute 0..100. */
+            if (parsed.as.set_volume.level < 0) {
+                ESP_LOGW(TAG, "ws.rx.set_volume without a level — ignored");
+            } else {
+                hux_audio_set_volume(parsed.as.set_volume.level);
+            }
+            break;
+
+        case HUX_MSG_INPUT_MODE:
+            if (!parsed.as.input_mode.known) {
+                ESP_LOGW(TAG, "ws.rx.input_mode unknown mode — keeping %s",
+                         s_mic_continuous ? "skill_continuous" : "assistant_ptt");
+                break;
+            }
+            if (parsed.as.input_mode.continuous != s_mic_continuous) {
+                ESP_LOGI(TAG, "ws.rx.input_mode %s",
+                         parsed.as.input_mode.continuous ? "skill_continuous" : "assistant_ptt");
+                s_mic_continuous = parsed.as.input_mode.continuous;
+                mic_update("input_mode");
+            }
+            break;
+
+        case HUX_MSG_AUDIO_CLEAR:
+            /* Normally handled on the WS task, in order with the audio
+             * (hux_net). One only gets here if that probe missed it: clear
+             * anyway, late rather than never. */
+            ESP_LOGW(TAG, "ws.rx.audio_clear on the control plane (probe missed it)");
+            hux_audio_spk_clear();
             break;
 
         default:
@@ -289,6 +381,13 @@ static void dispatch(hux_app_event_t *ev) {
 
         case HUX_APP_EV_NET_WS_DISCONNECTED:
             ESP_LOGW(TAG, "net.ws.disconnected");
+            /* Nothing can be sent: stop the mic. The server re-sends its
+             * state and input_mode on the next connect; a held button
+             * has to be pressed again. */
+            s_ptt_held = false;
+            s_mic_continuous = false;
+            s_server_state = HUX_SERVER_STATE_UNKNOWN;
+            mic_update("ws_disconnected");
             /* Preserve WIFI state — if wifi is still up, we go to
              * WAITING_WS; if wifi dropped, a wifi_down event got here
              * first and we're already in WAITING_WIFI. */
