@@ -39,7 +39,7 @@ def test_island_check_finds_a_part_that_starts_in_mid_air():
     assert pr.islands(base + Pos(2.0, 0, 9) * Box(4, 4, 1)) == []  # a ledge off the wall
 
 
-SUPPORTED = ("tub_base", "tub_top", "frost_swatch")
+SUPPORTED = ("tub_base", "tub_top", "test_base", "test_top")
 
 
 @pytest.mark.parametrize(
@@ -102,6 +102,17 @@ def test_tub_halves_lap_and_rebuild_the_tub(pieces):
     # LAP_H straight, then the 45 deg top rises the lip's own depth
     lip_top = hx1.BACK_FROST_Z + hx1.LAP_H + hx1.T / 2 - hx1.LAP_GAP / 2
     assert pytest.approx(lip_top, abs=0.01) == lip.bounding_box().max.Z
+
+
+def test_tub_top_clears_the_lip(pieces):
+    """Above the shoulder the top stays LAP_GAP off the base's lip everywhere,
+    what it carries inside included: the lever's backing once sat flush on
+    the lip's inner face along 24 mm (review, 2026-10-11), and would bind."""
+    from huxcase.concepts import hx1
+    from huxcase.shapes import bbox_solid
+
+    lip = pieces["tub_base"] & bbox_solid(-60, 60, -60, 60, hx1.BACK_FROST_Z + 0.01, 60)
+    assert pieces["tub_top"].distance_to(lip) >= hx1.LAP_GAP - 0.01
 
 
 def test_print_files_are_watertight(tmp_path):

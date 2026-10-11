@@ -15,7 +15,7 @@ fit (checked in its G-code). The
 fit coupon is printed and folded in; the faceplate, grille, a pin and a
 plunger are printed (2026-10-11). Two tubs printed in one piece with an AMS
 change at 36 mm both parted at that layer, so the tub is now two pieces,
-glued; next: the frosted swatch, then the tub's plate
+glued; next: the test corner, then the tub's plate
 (`out/print/projects/4_tub_base_and_top.3mf`). Tracked as F-0010 in [`../docs/triage.md`](../docs/triage.md).
 The interactive build page (spin, explode, x-ray, build it) comes from
 `huxcase/site.py`.
@@ -66,7 +66,9 @@ contacts.
   joint like a lid's (`LAP_H`): the base keeps the inner half of its wall
   1.6 mm above the seam (then a 45 deg top, so the top's inner half prints
   over it without support), and the top's outer half comes down over it,
-  0.05 mm clear each side for the glue. The inside walls stay flush, so the
+  0.15 mm clear on that face for the glue (`fits.GLUE`); the pocket also
+  reaches 0.15 into the cavity, so the lever's backing, which the top
+  carries down past the seam, clears the lip. The inside walls stay flush, so the
   holders slide past and the faceplate's lip seats across the seam. One piece
   with an AMS change at 36 mm was tried twice (2026-10-11): the change layer
   was the weak one, supports snapped there and the case parted there when
@@ -136,6 +138,7 @@ starting points for his Bambu Lab P2S with PLA and a 0.4 mm nozzle:
 | Printed slides on printed, drawn in X/Y | 0.15 | `SLIDE`: free, no rattle (coupon: the peg slides into every vertical hole, .10 to .30) |
 | Same, bore lying horizontal on the bed | 0.20 | `SLIDE_HBORE`: horizontal holes print oval (lever-pin block: the 2.4 pin turns freely in the .20 hole) |
 | Removable but stays (faceplate lip) | 0.12 | `SNUG` |
+| Glued lap, tub base to top | 0.15 | `GLUE`: slides together dry over the 70 x 35 ring, leaves CA a film |
 | Lever swinging in its channel | 0.25 | `PIVOT` |
 | Bought part into a printed pocket | 0.30 + crush ribs | `PART`: always goes in; 0.8 mm ribs crush 0.15 to take up the slack |
 | Heat-set insert bores | M2 2.8, M3 4.0 | `INSERT_BORE`, from the FFVRVSS kit label (tip / knurl) |
@@ -197,19 +200,14 @@ guide on its wiki, and what carries over to a 2.4 mm PLA wall on a 0.4
 nozzle (`huxcase/slice.py`, `CLARITY_*`):
 
 - Dry the filament first: damp PLA leaves bubbles that scatter light.
-- Solid, in one direction: one wall, then 100 % rectilinear infill, no top
-  or bottom shells, so there is no sparse grid to show in the glow and fewer
-  boundaries between lines. Infill lines 0.5 wide; the walls keep 0.42 so
+- Solid: one wall, then 100 % rectilinear infill (its lines cross at 90 deg
+  from layer to layer), no top or bottom shells, so there is no sparse grid
+  to show in the glow and fewer boundaries between lines. Infill lines 0.5 wide; the walls keep 0.42 so
   the fine features still print.
 - Hot and slow so the lines fuse: 230 C, flow 1.01, about 40 mm/s (a cap on
   the frosted filament's flow, 4 mm3/s). The guide says 20 mm/s; that
   roughly doubles the top's time.
 
-Base and top share a plate, so these settings sit where only the top
-feels them: the heat, flow, fan and speed on the frosted filament, which
-only the top uses. The solid walls are the plate's, so the base prints
-solid too (stronger, a little slower). Not as the objects' own settings:
-Bambu Studio did not apply those for Mario.
 - Little cooling: part fan 20 to 40 %, the side fan off. The guide turns the
   fans off; PLA warps with none, and overhangs keep full fan.
 - Even layers, 0.2 as the fits are tuned. The guide's 0.1 would double the
@@ -217,8 +215,16 @@ Bambu Studio did not apply those for Mario.
 - After printing, sanding the outside evens the frost further; a clear coat
   would go glassier, which is not the aim.
 
-Print the swatch first (`5_frosted_swatch`, a corner of the real top, about
-15 minutes) and hold it to a light before the long print.
+Base and top share a plate, so these settings sit where only the top
+feels them: the heat, flow, fan and speed on the frosted filament, which
+only the top uses. The solid walls are the plate's, so the base prints
+solid too (stronger, a little slower). Not as the objects' own settings:
+Bambu Studio did not apply those for Mario.
+
+Print the test corner first (`5_test_corner`, about 20 minutes): both
+halves' back right corner round the seam, the same way and with the same
+settings. Push them together dry (they should slide on and sit flush), and
+hold the frosted one to a light.
 
 ## Power switch: KCD1-101 on the left side
 
@@ -292,8 +298,8 @@ and lead came with it (Mario, 2026-10-11), so plug it in and splice its lead.
 | --- | --- | --- | --- |
 | Faceplate | grey | face down | none |
 | Grille plug | black | face down | none |
-| Tub base | grey | standing on its floor, open front facing you | tree supports: thin strips under the outside bottom corners (their lowest millimetre leaves the bed almost flat; sand what they leave), the joint shelves and the holder pads |
-| Tub top | frosted, clarity settings | standing on its seam face, open front facing you | tree supports from the plate: under the roof, the switch cradle and its latch finger, the rocker mount and its recess, the lever pin's notch at the front right. Pull them out through the open front; the notch's and the recess's from outside (the notch has 0.4 mm of room round the tooth for what they leave). A brim outside only: it stands 68 mm tall on the lap's 1.15 mm half wall |
+| Tub base | grey | standing on its floor, open front facing you | tree supports: thin strips under the outside bottom corners (their lowest millimetre leaves the bed almost flat; sand what they leave) and the - joint's shelf |
+| Tub top | frosted, clarity settings | standing on its seam face, open front facing you | tree supports from the plate: under the roof, the holder pads and the + joint's shelves, the switch cradle and its latch finger, the rocker mount and its recess, the lever pin's notch at the front right. Pull them out through the open front; the notch's and the recess's from outside (the notch has 0.4 mm of room round the tooth for what they leave). No brim (see below) |
 | Lever | orange | outer face down | none |
 | Lever pin | grey | lying flat (three: two spares) | none |
 | Plunger | grey | standing on its tip (three lengths) | none |
@@ -330,21 +336,27 @@ print. The same sliced are in `out/print/sliced/`.
 | `1_grey_faceplate_bridge_pin_plunger` | grey | 38 min (faceplate, bridge, 3 pins, 3 plungers) |
 | `2_black_grille` | black | 30 min |
 | `3_orange_lever` | orange | 6 min |
-| `4_tub_base_and_top` | AMS: slot 1 grey, slot 4 frosted | 4 h 11 min; by object: the frosted top, then the base |
-| `5_frosted_swatch` | frosted | 14 min; a corner of the top: print it first |
+| `4_tub_base_and_top` | AMS: slot 1 grey, slot 4 frosted | 4 h 10 min; by object: the frosted top, then the base |
+| `5_test_corner` | AMS: slot 1 grey, slot 4 frosted | 19 min; both halves' corner at the seam: print it first |
 
 The tub's plate prints object by object, so the filament changes once,
 between the pieces, never inside one. The frosted top goes first, so its
 first layers come out clean (no grey left in the nozzle). The pieces sit
 95 mm apart: the toolhead (72 mm round) and the gantry (32.5 mm over the
 nozzle, lower than either piece) never pass over a finished one, which
-Bambu Studio checks. Don't press Arrange, it may undo that. Organic tree supports
-and the outside brim are the plate's (Bambu Studio did not apply an
-object's own settings for Mario), so the base gets the brim too; it peels
-off. No prime tower: by object, the AMS purges into the chute. The bridge's screw hole is skinned over on its first 0.5 mm
+Bambu Studio checks. Don't press Arrange, it may undo that. Organic tree
+supports are the plate's (Bambu Studio did not apply an object's own
+settings for Mario). No prime tower: by object, the AMS purges into the
+chute. No brim: the top stands on the lap's 1.1 mm outer half, but as a U
+70 x 35 across it will not tip, and an "outer only" brim still runs inside
+an open U (its whole outline counts as outer), along the edge that slides
+over the lip. Clean the plate first (dish soap, or isopropyl alcohol). When
+sending, check the AMS mapping (1 grey, 4 frosted) and that the frosted
+spool is PLA, dried.
+
+On plate 1 the bridge's screw hole is skinned over on its first 0.5 mm
 (`hx1.bridge_skin`), or its bridge lines would end in the air (Bambu Studio
-warns of a floating cantilever). When sending, check the AMS mapping (1
-grey, 4 frosted) and that the frosted spool is PLA, dried.
+warns of a floating cantilever).
 
 `uv run python -m huxcase.slice` rebuilds every project from out/print
 (after `printability --stl`) and checks each sliced one: one plate, the
@@ -368,8 +380,8 @@ the rest at 0.2: the fits are tuned there.
 ## Assembly
 
 On the bench first:
-1. Pull both tub pieces' supports out (see the print guide) and peel the
-   brims. Glue the top onto the base: a thin line of CA round the base's
+1. Pull both tub pieces' supports out (see the print guide). Push the top
+   onto the base dry first: it should slide down and sit flush. Then glue: a thin line of CA round the base's
    lip, very little (its fumes leave a white haze on the frosted part;
    low-bloom CA if you have it, and air moving across), then the top
    straight down over it, open fronts flush, held 30 s. Cut the wires to

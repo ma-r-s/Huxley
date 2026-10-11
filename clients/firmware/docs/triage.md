@@ -300,6 +300,25 @@ instead; check where per-filament settings land, not just that they are
 set; a profile file the slicer accepts silently is not proof it applied:
 read the layers back.
 
+**Split tub, review fixes (2026-10-11)**: a cold reviewer found (1) the
+pocket's inner edge was the inside surface exactly, so the lever's backing,
+which the top carries down past the seam, sat flush on the lip's inner face
+along 24 mm: zero clearance, it would bind or stop the top seating before
+the CA grabbed; (2) "outer only" brim still ran inside the open U, along the
+skirt's edge that slides over the lip; (3) the glue gap was 0.1 on its one
+mating face (docs said 0.05 a side), under SNUG. Fixed: the pocket reaches
+LAP_GAP into the cavity; LAP_GAP = `fits.GLUE` 0.15; no brim; a test that
+the top keeps LAP_GAP off the lip (`test_tub_top_clears_the_lip`, 0.15 now,
+0 before); a 19 min test corner of both halves at the seam (backing
+included) replaces the roof swatch, to push together dry before the long
+print. Also: zig-zag infill alternates 0/90 per layer (docs said one
+direction), and the README's per-piece support lists were wrong. Mario
+asked for the top on its back (less support): checked, it would turn the
+lever channel's front wall into a 45 mm ceiling over the lever's slot;
+kept standing. Prime tower off (it showed in his GUI), organic supports.
+Lesson: a "no overlap" test passes faces that touch; a mating joint needs a
+minimum-distance test.
+
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
 bottom is fine, holders whole, no glue but the tub's halves, plastic pivot, protected cells
 instead of a protection board, the ribbon and loose wires, the board's

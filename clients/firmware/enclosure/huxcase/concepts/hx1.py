@@ -15,13 +15,13 @@ Packing (see README "HX-1"):
   12 x 12 tactile switch above the right cell (spring in series: progressive
   press, then the click, and the click point does not depend on print
   accuracy).
-Assembly (rev E): two printed shells. The grey faceplate carries the board,
-the speaker (in a black grille plug) and the mic and light ports; the tub
-carries everything else and prints upright, grey to BACK_FROST_Z and frosted
-above, so the board's rear LEDs glow through the top and the upper back. Four
-M3 x 8 screws (two through the face, two up through the floor) close it into
-heat-set inserts; closing it also captures the lever pin and clamps the
-speaker. No glue anywhere.
+Assembly (rev E): two shells. The grey faceplate carries the board, the
+speaker (in a black grille plug) and the mic and light ports; the tub carries
+everything else: a grey base to BACK_FROST_Z and a frosted top over it, two
+prints glued in a lap joint (LAP_H), so the board's rear LEDs glow through the
+top and the upper back. Four M3 x 8 screws (two through the face, two up
+through the floor) close it into heat-set inserts; closing it also captures
+the lever pin and clamps the speaker. The tub's lap is the only glue.
 The internal assembly sits 1.2 mm left of centre (X0) so the right wall has
 room for the lever channel and the left cell still hugs its wall.
 Device frame: X right, Y back (front face at -Y), Z up.
@@ -97,10 +97,12 @@ BACK_FROST_Z = 36.0  # the tub: a grey base up to here, a frosted top above
 # half of its wall LAP_H above the seam, the top's outer half comes down
 # over it. It lines the walls up (the inside stays flush: the holders slide
 # past, the faceplate's lip seats across the seam) and adds glue area. Each
-# half is ~1.15 thick, two perimeters and more (a tongue and groove in a
-# 2.4 wall would leave 0.6 skins).
+# half is ~1.1 thick, two perimeters and more (a tongue and groove in a
+# 2.4 wall would leave 0.6 skins). The pocket also reaches LAP_GAP into the
+# cavity, so what the top carries inside (the lever's backing) clears the lip.
 LAP_H = 1.6  # 8 layers
-LAP_GAP, LAP_TOP_GAP = 0.1, 0.2  # glue gap between the halves; one layer over the lip
+LAP_GAP = fits.GLUE  # between the lip's outer face and the top's skirt
+LAP_TOP_GAP = 0.2  # one layer over the lip
 LABEL_Z = 92.8  # "huxley" and "HX-1" on the face
 
 # The two shells meet at the inside of the face. The faceplate's lip seats in
@@ -427,11 +429,11 @@ def _ramped_rib(x_face: float, out: int, y0: float, y1: float, z0: float, z1: fl
     return Pos(0, 0, z0) * extrude(prof, z1 - z0, dir=(0, 0, 1))
 
 
-def _lap(depth: float, height: float):
+def _lap(depth: float, height: float, inset: float = 0.0):
     """The inner `depth` of the side and back walls (measured from the inside
     surface) from the seam up `height`, then a 45 deg top rising to the
-    inside surface: the base's lip, or (a little deeper and taller) the
-    pocket the top leaves for it. The slope is what lets the top print its
+    inside surface: the base's lip, or (a little deeper and taller, and
+    `inset` into the cavity) the pocket the top leaves for it. The slope is what lets the top print its
     inner half over the pocket without support (a flat roof would be a
     1.25 mm ledge in mid-air all round)."""
     from build123d import Rectangle, RectangleRounded
@@ -441,7 +443,7 @@ def _lap(depth: float, height: float):
     # Corners a hair rounder than the taper is deep, so they don't shrink to
     # a point at its top (a degenerate face: an open STL).
     outer = RectangleRounded(wi + 2 * depth, di + 2 * depth, depth + 0.1)
-    hole = extrude(Rectangle(wi, di), height + depth + 0.02)
+    hole = extrude(Rectangle(wi - 2 * inset, di - 2 * inset), height + depth + 0.02)
     body = extrude(outer, height) + Pos(0, 0, height - 0.001) * extrude(outer, depth, taper=45)
     return Pos(0, cy, BACK_FROST_Z) * (body - Pos(0, 0, -0.01) * hole)
 
@@ -1262,7 +1264,8 @@ def build() -> Concept:
     half = T / 2
     lip = _lap(half - LAP_GAP / 2, LAP_H) & tub_all
     tub_base = (tub_all - frost) + lip
-    tub_top = (tub_all & frost) - (_lap(half + LAP_GAP / 2, LAP_H + LAP_TOP_GAP) & tub_all)
+    pocket = _lap(half + LAP_GAP / 2, LAP_H + LAP_TOP_GAP, inset=LAP_GAP)
+    tub_top = (tub_all & frost) - (pocket & tub_all)
     faceplate_all = _union(face_shapes.values())
     parts = [
         Part("faceplate", faceplate_all, "shell"),

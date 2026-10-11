@@ -48,7 +48,8 @@ STEPS = [
     {
         "id": "tub_top",
         "title": "Tub top, glued",
-        "text": "A thin line of CA round the base's lip, very little (its fumes leave a "
+        "text": "Dry first: the top slides down over the base's lip and sits flush. Then "
+        "a thin line of CA round the lip, very little (its fumes leave a "
         "white haze on the frosted part; low-bloom CA if you have it), then the "
         "frosted top straight down over it, open fronts flush, held 30 s. Then lay "
         "the tub on its back: everything goes in from the open front.",

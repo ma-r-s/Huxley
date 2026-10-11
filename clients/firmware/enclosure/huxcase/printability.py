@@ -47,14 +47,17 @@ POSES = (
     # The tub's frosted top, glued onto the base (hx1.LAP_H): standing on its
     # seam face, the open front toward you.
     Pose("tub_top", "standing on its seam face, the open front toward you", (0, 0, 0)),
-    # A corner of the top (roof, back and right walls, the backing), to
-    # check the frosted look before the long print.
-    Pose("frost_swatch", "standing up", (0, 0, 0)),
+    # The test corner: the back right corner of both halves round the seam,
+    # the lever's backing included (where the lip once bound). Push them
+    # together dry and hold the frosted one to a light before the long print.
+    Pose("test_base", "standing on its floor cut", (0, 0, 0)),
+    Pose("test_top", "standing on its seam face", (0, 0, 0)),
 )
 
 
-# The swatch: the top's back right top corner (x0, x1, y0, y1, z0, z1).
-FROST_SWATCH = (14.0, 36.0, 8.0, 20.0, 84.0, 105.0)
+# The test corner (x0, x1, y0, y1), and each half's slice of it in z.
+TEST_CORNER = (10.0, 36.0, -10.0, 20.0)
+TEST_BASE_Z, TEST_TOP_Z = (28.0, 40.0), (36.0, 52.0)
 
 
 def printed_pieces(c=None) -> dict[str, object]:
@@ -68,7 +71,8 @@ def printed_pieces(c=None) -> dict[str, object]:
     out["plunger_long10"] = hx1.plunger_shape(1.0)
     out["tub_base"] = by_name["tub_grey"]
     out["tub_top"] = by_name["tub_frosted"]
-    out["frost_swatch"] = by_name["tub_frosted"] & bbox_solid(*FROST_SWATCH)
+    out["test_base"] = by_name["tub_grey"] & bbox_solid(*TEST_CORNER, *TEST_BASE_Z)
+    out["test_top"] = by_name["tub_frosted"] & bbox_solid(*TEST_CORNER, *TEST_TOP_Z)
     return out
 
 
@@ -235,7 +239,8 @@ COLOUR = {
     "grille_plug": "black",
     "tub_base": "grey",
     "tub_top": "frosted (clarity settings)",
-    "frost_swatch": "frosted (clarity settings)",
+    "test_base": "grey",
+    "test_top": "frosted (clarity settings)",
     "ptt_bar": "orange",
     "ptt_pin": "grey",
     "plunger": "grey",
@@ -268,8 +273,10 @@ def export_stls(out_dir) -> list[str]:
         "HX-1 rev E print set (PLA, 0.4 nozzle, 0.20 mm layers). The tub is two pieces, "
         "glued with a lap joint: a grey base and a frosted top, on one plate printed by "
         "object (projects/4_tub_base_and_top.3mf). Both get tree supports, Everywhere, "
-        "bridges included; everything else needs none. The frosted top and its swatch "
-        "print with clarity settings (dry the filament first; print the swatch first). "
+        "bridges included; everything else needs none. The frosted top prints with "
+        "clarity settings (dry the filament first). Print the test corner first "
+        "(projects/5_test_corner.3mf): the two halves' corner at the seam, to push "
+        "together dry and to hold to a light. "
         "Projects to open and slice: projects/; the same sliced: sliced/.\n"
         + "\n".join(written)
         + "\n"

@@ -60,11 +60,12 @@ TREE_SUPPORTS = {
     "support_style": "tree_organic",
     "tree_support_wall_count": "0",
 }
-# The top stands 68 mm tall on its seam face, the lap's 1.15 mm outer half:
-# about 210 mm2 on the plate, and auto brim adds none. A brim outside only
-# (inside, it would sit where the base's lip goes); it peels off the seam's
-# outer edge, which the glue line hides.
-TOP_BRIM = {"brim_type": "outer_only", "brim_width": "5", "brim_object_gap": "0.1"}
+# No brim. The top stands 68 mm tall on its seam face, the lap's 1.1 mm
+# outer half (about 200 mm2 of a U 70 x 35 across, which will not tip). An
+# "outer only" brim still runs inside it: the U is open at the front, so its
+# whole outline is the outer one, and the brim lay along the skirt's inner
+# edge, the edge that slides over the lip (review, 2026-10-11).
+NO_BRIM = {"brim_type": "no_brim"}
 # The frosted top, for an even glow as clear as PLA gets, after Bambu's
 # translucent PLA guide (wiki: knowledge-sharing/transparent-petg): dry
 # filament first; 230 C and flow 1.01 so the lines fuse; one wall and 100 %
@@ -137,7 +138,8 @@ class Plate:
     clear: int = 0  # the filament slot printed for clarity, 0: none
 
 
-TOP, BASE, SWATCH = "hx1_10_tub_top", "hx1_03_tub_base", "hx1_11_frost_swatch"
+TOP, BASE = "hx1_10_tub_top", "hx1_03_tub_base"
+TEST_BASE, TEST_TOP = "hx1_11_test_base", "hx1_12_test_top"
 PLATES = [
     Plate(
         "1_grey_faceplate_bridge_pin_plunger",
@@ -162,7 +164,7 @@ PLATES = [
         "4_tub_base_and_top",
         (TOP, BASE),
         TREE_SUPPORTS
-        | TOP_BRIM
+        | NO_BRIM
         | CLARITY_PROCESS
         # No prime tower: by object, the AMS purges into the chute (the
         # preset's tower showed in Mario's Bambu Studio).
@@ -172,13 +174,20 @@ PLATES = [
         place={TOP: (128.0, 190.0), BASE: (128.0, 60.0)},
         clear=4,
     ),
-    # A corner of the top, ~15 min: check the look before the long print.
+    # Both halves' back right corner round the seam (printability
+    # TEST_CORNER), the same way and settings, ~20 min: push them together
+    # dry, and hold the frosted one to a light, before the long print.
     Plate(
-        "5_frosted_swatch",
-        (SWATCH,),
-        TREE_SUPPORTS | CLARITY_PROCESS,
-        (FROSTED,),
-        clear=1,
+        "5_test_corner",
+        (TEST_TOP, TEST_BASE),
+        TREE_SUPPORTS
+        | NO_BRIM
+        | CLARITY_PROCESS
+        | {"print_sequence": "by object", "enable_prime_tower": "0"},
+        AMS,
+        slots={TEST_TOP: 4, TEST_BASE: 1},
+        place={TEST_TOP: (128.0, 190.0), TEST_BASE: (128.0, 60.0)},
+        clear=4,
     ),
 ]
 # Plates whose close fits support must not touch: the top's, its seam its z 0.

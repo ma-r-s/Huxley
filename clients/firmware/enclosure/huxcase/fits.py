@@ -1,7 +1,8 @@
 """Fit clearances for Mario's printer: Bambu Lab P2S, PLA, 0.4 mm nozzle, 0.2 mm layers.
 
 Every number is a clearance PER SIDE (radial for bores), in mm. Mario's rule
-(2026-10-10): everything must fit first time and stay put by design, no glue.
+(2026-10-10): everything must fit first time and stay put by design, no glue
+(his one exception, 2026-10-11: the tub's two halves, GLUE).
 So a bought part never gets a press fit straight into PLA; it gets enough
 clearance to always go in, and crush ribs or the closing case take up the
 slack so nothing rattles.
@@ -35,6 +36,9 @@ SLIDE_HBORE = 0.20  # same, but the bore lies horizontal on the bed (oval, saggi
 # Kept above the coupon's .10: it fits the faceplate's 64 x 100 mm lip, where
 # shrinkage over the length matters more than a 6 mm hole shows.
 SNUG = 0.12  # goes together by hand and stays (cap spigot, case tongue)
+# The tub's glued lap: slides together dry (like SLIDE, over a 70 x 35 ring
+# where shrinkage counts, as for SNUG) and leaves CA a film to fill.
+GLUE = 0.15
 STACK = LAYER  # faces that meet across layers: one layer is the finest real gap
 
 # Metal pin or screw turning in a printed bore (lever pivot).
