@@ -327,6 +327,18 @@ the part (PETG welds at 0.2); bed 70 C for the top, 55 C once the base
 starts. check() asserts PETG on the frosted slot. The fits are PLA-tuned:
 the test corner (lap, backing, the rear pin seat's start) is the check.
 
+**Bambu Studio ignored the projects' settings (2026-10-11)**: opening
+the tub project in Mario's Bambu Studio (driven from here) showed supports
+off and the prime tower on; his saved copy held only the two settings he
+had changed himself, all else the presets' defaults (2 walls, 15 % grid
+infill, auto brim, Generic PETG 255 C). Cause: the GUI applies only the
+keys a project lists in `different_settings_to_system`, and ours listed
+none; the command line uses the whole config, so every check passed. It
+explains the per-object supports that "did not apply" (F-0010 earlier) and
+the grid Mario saw inside the clear test corner. Fixed: `_changed` writes
+the list, `gui_settings` checks it; verified in his GUI. Lesson: check a
+deliverable in the program the user opens it with, not only in its CLI.
+
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
 bottom is fine, holders whole, no glue but the tub's halves, plastic pivot, protected cells
 instead of a protection board, the ribbon and loose wires, the board's

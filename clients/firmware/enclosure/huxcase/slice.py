@@ -273,6 +273,39 @@ def _run(args: list[str], work: Path) -> None:
         raise RuntimeError(f"BambuStudio failed ({res.returncode}):\n{tail}")
 
 
+def _changed(plate: Plate) -> list[str]:
+    """Bambu Studio's list of what a project changes from its system presets:
+    the process, then each filament, then the printer, ";"-joined keys.
+    The GUI loads the named system presets and applies only these keys on
+    top; the command line uses the whole config. Left empty, Mario's Bambu
+    Studio printed the defaults (2026-10-11: no supports, a prime tower, 15 %
+    grid infill in the clear test corner) while every check here passed."""
+    out = [";".join(sorted(plate.settings))] + [""] * len(plate.colours) + [""]
+    if plate.clear:
+        out[plate.clear] = ";".join(sorted(CLARITY_FILAMENT))
+    return out
+
+
+def gui_settings(project: Path, plate: Plate) -> None:
+    """The project tells Bambu Studio's window about every setting it changes
+    (_changed), and each holds the value the slice here used."""
+    with zipfile.ZipFile(project) as z:
+        cfg = json.loads(z.read("Metadata/project_settings.config"))
+    diff = cfg["different_settings_to_system"]
+    assert diff == _changed(plate), f"{project.name}: changed {diff}"
+    for key, value in plate.settings.items():
+        assert cfg[key] == value, f"{project.name}: {key} {cfg[key]} != {value}"
+    if plate.clear:
+        owner = cfg["filament_self_index"]
+        for key, value in CLARITY_FILAMENT.items():
+            got = cfg[key]
+            if len(got) == len(owner):  # one per filament and nozzle variant
+                mine = [v for v, o in zip(got, owner, strict=True) if o == str(plate.clear)]
+            else:
+                mine = [got[plate.clear - 1]]
+            assert set(mine) == {value}, f"{project.name}: {key} {got}"
+
+
 def _objects(model_settings: str) -> list[tuple[str, str, str]]:
     """(object id, STL name, its whole <object> block) in model_settings.config."""
     blocks = re.findall(r'(<object id="(\d+)">.*?</object>)', model_settings, re.S)
@@ -315,6 +348,7 @@ def slice_plate(plate: Plate, print_dir: Path, out_dir: Path, proj_dir: Path) ->
             if plate.clear:
                 _clarity(cfg, plate.clear)
             cfg["curr_bed_type"] = BED
+            cfg["different_settings_to_system"] = _changed(plate)
             return json.dumps(cfg, indent=4)
 
         def model(t: str) -> str:
@@ -479,6 +513,7 @@ def main() -> int:
         stale.unlink()
     for plate in PLATES:
         out = slice_plate(plate, print_dir, out_dir, proj_dir)
+        gui_settings(proj_dir / f"{plate.name}.3mf", plate)
         print(f"{plate.name}: {check(out, plate)}")
         if plate.name in KEEP_OUT:
             piece, z0 = KEEP_OUT[plate.name]

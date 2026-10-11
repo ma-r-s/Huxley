@@ -374,7 +374,13 @@ flattened first: Bambu Studio's command line does not follow a system
 preset's full `inherits` chain or its `include`d templates (the P2S keeps
 its start, end and filament-change G-code there), and fills the gaps with
 generic defaults (until 2026-10-11 the sliced files came out with `G28` as
-their start sequence and a 200 mm bed).
+their start sequence and a 200 mm bed). And each project lists what it changes
+(`different_settings_to_system`): Bambu Studio's window loads the named
+system presets and applies only the settings listed there. Until
+2026-10-11 the list was empty, so Mario's Bambu Studio showed and printed
+the defaults (no supports, a prime tower, 15 % grid infill in the clear
+test corner) while every check of the command line's slice passed;
+`slice.gui_settings` now checks the list against what the slice used.
 
 **Variable layer height** (Mario asked, 2026-10-11): not in the projects.
 Bambu Studio's layer height file, tried, landed on the wrong object of the
