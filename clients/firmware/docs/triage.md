@@ -349,6 +349,28 @@ filament change, so no seam, no glue), standard settings, 2 h 28 min, any
 PLA tray (he picked orange, then another colour he is loading). Lesson:
 read the spool's own range before taking a guide's temperature.
 
+**Top prints on its back (2026-10-11)**: Mario, removing PETG supports from
+"inside every hole", did not believe standing was best. Measured: standing,
+the trees grew from outside through the lever's slot and the plunger's tube
+to the switch cradle (my check only counted contact layers, so it passed);
+on its back, support lands in the slot and the tube unless the top changes.
+He asked for it done on its back. Done: standing-only features out (knuckle
+roofs, channel and roof relief, pin seat's and tube's +z points), the bore's
+point toward the front, ledges filled to the back wall or sloped from what
+holds them, the USB-C opening's 1 mm strip to the seam removed, the latch
+finger thinner (it now bends across its layers, 0.37 % strain, tested). Two
+roofs have nothing under them in or out and print on support from outside:
+the wall in front of the lever's slot (0.4 relief) and the rocker hole's
+front edge (0.3). The slice check now counts any support, not just contact,
+inside zones drawn round working surfaces (pivot as a round, tooth notch,
+slot back face, stop face, bore to its mouth, pin seat, rocker clips, USB
+plug). All plates pass; red top 1 h 1 min (1 h 45 standing), tub plate
+3 h 17 (4 h 10). The base is unchanged (checked against Mario's print).
+Lessons: (1) a 45 deg slope only prints if it grows out of supported
+material: my first slot chamfer and bevels started as knife edges in mid-air
+and drew trees; (2) "no support touching" is not "no support there": count
+the bodies; (3) measure a claim the user doubts before defending it.
+
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
 bottom is fine, holders whole, no glue but the tub's halves, plastic pivot, protected cells
 instead of a protection board, the ribbon and loose wires, the board's

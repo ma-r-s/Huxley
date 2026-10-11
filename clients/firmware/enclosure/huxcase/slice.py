@@ -34,8 +34,9 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from build123d import Pos
+
 from huxcase import printability as pr
-from huxcase.concepts import hx1
 from huxcase.export import OUT
 
 APP = Path("/Applications/BambuStudio.app/Contents")
@@ -168,9 +169,9 @@ PLATES = [
     Plate("3_orange_lever", ("hx1_04_ptt_bar",), {}, (ORANGE,)),
     # The tub, both halves, by object: the frosted top first (its first
     # layers come out clean, no grey left in the nozzle), then the base.
-    # 95 mm apart in y: the toolhead (72 mm round) and the gantry, 32.5 mm
-    # over the nozzle and lower than either half, never pass over a printed
-    # one (Bambu Studio checks both).
+    # 94 mm apart in y (the top lies on its back, 68 mm deep): the toolhead
+    # (72 mm round) and the gantry, 32.5 mm over the nozzle and lower than
+    # either half, never pass over a printed one (Bambu Studio checks both).
     Plate(
         "4_tub_base_and_top",
         (TOP, BASE),
@@ -182,7 +183,7 @@ PLATES = [
         | {"print_sequence": "by object", "enable_prime_tower": "0"},
         AMS,
         slots={TOP: 4, BASE: 1},
-        place={TOP: (128.0, 190.0), BASE: (128.0, 60.0)},
+        place={TOP: (128.0, 195.0), BASE: (128.0, 50.0)},
         clear=4,
     ),
     # Both halves' back right corner round the seam (printability
@@ -202,21 +203,15 @@ PLATES = [
     ),
 ]
 PLATES.append(
-    # The whole tub in one PLA colour, standard settings: no filament change,
-    # so no seam and no glue (Mario, 2026-10-11, to have one soon). He picked
-    # orange (it matches the lever; the LEDs show only faintly through it).
-    Plate("6_tub_one_piece_pla", ("hx1_13_tub",), TREE_SUPPORTS, (ORANGE,))
-)
-PLATES.append(
     # The top alone in red PLA, standard settings, to go on the white base
     # Mario has (2026-10-11, after the clear PETG top strung).
     Plate("7_tub_top_pla", (TOP,), TREE_SUPPORTS | NO_BRIM, (RED,))
 )
-# Plates whose close fits support must not touch: the top's, its seam its z 0.
+# Plates whose close fits no support may enter: STL, its printed piece.
 KEEP_OUT = {
-    "4_tub_base_and_top": (TOP, hx1.BACK_FROST_Z),
-    "6_tub_one_piece_pla": ("hx1_13_tub", 0.0),
-    "7_tub_top_pla": (TOP, hx1.BACK_FROST_Z),
+    "4_tub_base_and_top": (TOP, "tub_top"),
+    "5_test_corner": (TEST_TOP, "test_top"),
+    "7_tub_top_pla": (TOP, "tub_top"),
 }
 
 BED = "Textured PEI Plate"  # the plate the P2S ships with; pick yours in Bambu Studio if not
@@ -460,29 +455,34 @@ def labels(project: Path) -> dict[str, str]:
 
 
 def support_in_keep_outs(
-    project: Path, contact: bool = True, z_offset: float = 0.0, label: str | None = None
+    project: Path, shape, pose: pr.Pose, label: str | None = None
 ) -> dict[str, int]:
-    """How much support the slice puts inside each of the tub's close-fitting
-    cuts (pr.support_keep_outs, device frame), in 0.5 mm samples. With
-    `contact`, only where it touches the part: every support ends on the
-    model in interface layers, top and bottom. A tree branch that passes
-    through a hole, clear of its walls, touches nothing there and comes out
-    with the rest. The G-code frame is put on the device frame by matching
-    the walls to the tub's outline (unrotated) and by
-    `z_offset`, the device z of the piece's bed face (the top's seam). On a
-    plate of several objects, `label` picks the piece's own extrusions."""
+    """How much support of any kind (branches passing through, contact
+    layers) the slice puts inside each close fit (pr.support_keep_outs,
+    device frame), in 0.5 mm samples. Only contact counted until 2026-10-11:
+    then trees grew through the lever's slot and the plunger's tube, clear of
+    their walls but there, and in PETG fused to them. The G-code frame goes
+    back to the device frame through the piece's print pose (`shape` printed
+    in `pose`), matched on its walls. On a plate of several objects, `label`
+    picks the piece's own extrusions."""
     gcode = gcode_of(project)
     half = float(re.search(r"; outer_wall_line_width = ([\d.]+)", gcode).group(1)) / 2
     pts = [p[:4] for p in extrusions(gcode) if label is None or p[4] == label]
     model = [(x, y) for x, y, z, f in pts if "wall" in f.lower() and z > 1.0]
-    gx0, gy0 = min(p[0] for p in model), min(p[1] for p in model)
-    bb = (hx1.build().shells["tub"]).bounding_box()
-    dx, dy = bb.min.X - gx0 + half, bb.min.Y - gy0 + half  # walls run a half line inside
-    kind = "Support interface" if contact else "Support"
-    sup = [(x + dx, y + dy, z + z_offset) for x, y, z, f in pts if f.startswith(kind)]
-    out = {}
-    for name, (x0, x1, y0, y1, z0, z1) in pr.support_keep_outs().items():
-        out[name] = sum(1 for x, y, z in sup if x0 <= x <= x1 and y0 <= y <= y1 and z0 <= z <= z1)
+    loc = pr.pose_location(shape, pose)
+    bb = (loc * shape).bounding_box()
+    dx = bb.min.X - min(p[0] for p in model) + half  # walls run a half line inside
+    dy = bb.min.Y - min(p[1] for p in model) + half
+    inv = loc.inverse()
+    sup = []
+    for x, y, z, f in pts:
+        if f.startswith("Support"):
+            v = (inv * Pos(x + dx, y + dy, z)).position
+            sup.append((v.X, v.Y, v.Z))
+    out = {k: 0 for k in [*pr.support_keep_outs(), *pr.support_keep_out_rounds()]}
+    for p in sup:
+        for k in pr.in_keep_out(p):
+            out[k] += 1
     return out
 
 
@@ -528,16 +528,18 @@ def main() -> int:
         d.mkdir(parents=True)
     for stale in print_dir.glob("*.3mf"):  # the AMS projects from before the split
         stale.unlink()
+    pieces = pr.printed_pieces()
+    poses = {p.piece: p for p in pr.POSES}
     for plate in PLATES:
         out = slice_plate(plate, print_dir, out_dir, proj_dir)
         gui_settings(proj_dir / f"{plate.name}.3mf", plate)
         print(f"{plate.name}: {check(out, plate)}")
         if plate.name in KEEP_OUT:
-            piece, z0 = KEEP_OUT[plate.name]
-            label = labels(out)[piece] if len(plate.stls) > 1 else None  # one object: no labels
-            found = support_in_keep_outs(out, True, z0, label)
-            print(f"    support touching close fits: {found}")
-            assert not any(found.values()), f"{out.name}: support touches {found}"
+            stl, piece = KEEP_OUT[plate.name]
+            label = labels(out)[stl] if len(plate.stls) > 1 else None  # one object: no labels
+            found = support_in_keep_outs(out, pieces[piece], poses[piece], label)
+            print(f"    support inside close fits: {found}")
+            assert not any(found.values()), f"{out.name}: support inside {found}"
     for stray in [*out_dir.glob("*.gcode"), *out_dir.glob("result.json")]:
         stray.unlink()
     return 0

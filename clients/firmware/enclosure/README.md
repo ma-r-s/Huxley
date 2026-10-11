@@ -306,7 +306,7 @@ and lead came with it (Mario, 2026-10-11), so plug it in and splice its lead.
 | Faceplate | grey | face down | none |
 | Grille plug | black | face down | none |
 | Tub base | grey | standing on its floor, open front facing you | tree supports: thin strips under the outside bottom corners (their lowest millimetre leaves the bed almost flat; sand what they leave) and the - joint's shelf |
-| Tub top | frosted PETG, clarity settings | standing on its seam face, open front facing you | tree supports from the plate: under the roof, the holder pads and the + joint's shelves, the switch cradle and its latch finger, the rocker mount and its recess, the lever pin's notch at the front right. Pull them out through the open front; the notch's and the recess's from outside (the notch has 0.4 mm of room round the tooth for what they leave). No brim (see below) |
+| Tub top | frosted PETG (clarity settings) or any PLA | on its back, the open front up | tree support from the plate outside the case: under the wall in front of the lever's slot, at the rocker hole's front edge and in its recess, and the first millimetre of the back's rounded edges; none at the lever's pivot, the back of its slot, in the plunger's tube, the pin seat, at the rocker's clips or on the USB plug's path (checked in the G-code). Pull it out sideways from outside. No brim |
 | Lever | orange | outer face down | none |
 | Lever pin | grey | lying flat (three: two spares) | none |
 | Plunger | grey | standing on its tip (three lengths) | none |
@@ -314,20 +314,47 @@ and lead came with it (Mario, 2026-10-11), so plug it in and splice its lead.
 
 `huxcase/printability.py` measures what needs support in each pose and finds
 any layer that starts in mid-air (`tests/test_printability.py` holds every
-piece to that). In the tub, support may not touch what moves or fits
-tight: the plunger bore and the lever pin's seat have 45 deg tops, and the
-lever's pivot two 45 deg roofs, so the slicer puts none there.
-Everything else that overhangs gets support, bridges included (the
-preset's setting): the top of the lever slot (raised 0.4 mm over the
-lever's end, `CHANNEL_TOP_RELIEF`, so support marks can't reach it), the
-USB-C pocket's roof (roomy round the plug's moulding), the rocker recess.
-`huxcase.slice` reads the tub's G-code and fails if any support touches
-the bore, the pivot, the pin seat, the rocker's panel hole or the USB
-plug's own path (`printability.support_keep_outs`); a tree branch may
-pass through the rocker hole or the lever slot, clear of their walls, and
-comes out with the rest. The rocker hole's top edge prints as a bare 19 mm
-bridge of its 1.2 mm land (Bambu sees nothing to support), so the hole has
-0.3 above and below the switch body (`ROCKER_HOLE_Z_CLEAR`) for some sag.
+piece to that).
+
+**Why the top prints on its back** (Mario, 2026-10-11). Standing on its seam
+it needed support under the whole roof, its foot was the lap's 1.1 mm edge,
+and the trees grew from outside in through the lever's slot and on through
+the plunger's tube to reach the switch cradle: clear of their walls, but in
+PETG they fused to them. On its back (`hx1.TOP_PRINT_UP`, the front up) it
+stands on its whole back wall, the inserts' holes and the lever pin's seat
+print upright and round, the roof's corners come out smooth, and it prints
+in about two thirds of the time.
+
+What that took. The plunger's bore points to the front (`_bore_x_front`).
+Ledges that would hang over the back wall reach down to it (the lever's
+backing, the stop block, the cradle and its web, at 45 deg over the + lead,
+the tube's underside) or slope at 45 deg from what holds them (the insert
+blocks: the right one from the side wall, the left one from the rocker's
+mount). The 1 mm strip between the USB-C opening and the seam is gone, so
+the opening reaches the seam; the faceplate's face closes it in front. Two
+roofs over a close fit have nothing under them, inside or out (a 45 deg
+slope there would start in mid-air too), so they print on support that
+grows from the plate outside the case: the wall in front of the lever's
+slot, with 0.4 mm more room there (`SLOT_RELIEF`) so what it leaves stays
+off the lever, and the rocker hole's front edge, with 0.3 mm round the
+body; the rocker's clips catch on the long sides, which stay clean. That,
+the rocker's recess and the first millimetre of the back's rounded edge
+are all the support it gets. What was there only for standing is gone: the
+45 deg roofs over the lever's pivot, the 0.4 mm over its top end, the pin
+seat's and the tube's 45 deg tops, the roof's 0.3 mm over the lip, and the
+one-piece standing tub.
+
+One part bends across its layers on its back: the latch finger that clicks
+over the talk switch runs front to back, so it stands up in the print, and
+there is no room to turn it (a flat finger would hang in mid-air). It is
+1.0 mm thick with a 0.4 mm catch, about 0.37 % strain at full catch, a
+third of what PLA's layer bond takes (tested).
+
+`huxcase.slice` reads the top's G-code and fails on any support at all,
+branches passing through included, at the lever's pivot or in the back
+half of its slot (the stop, the back face), in the plunger's tube, the pin
+seat, where the rocker's clips catch or on the USB plug's path
+(`printability.support_keep_outs`).
 
 Support blockers are gone (2026-10-11): with them on the lever slot, the
 rocker hole and the USB pocket, those overhangs printed bare and failed on
@@ -344,10 +371,9 @@ print. The same sliced are in `out/print/sliced/`.
 | `1_grey_faceplate_bridge_pin_plunger` | grey | 38 min (faceplate, bridge, 3 pins, 3 plungers) |
 | `2_black_grille` | black | 30 min |
 | `3_orange_lever` | orange | 6 min |
-| `4_tub_base_and_top` | AMS: slot 1 white PLA, slot 4 frosted PETG | 4 h 10 min; by object: the frosted top, then the base |
-| `5_test_corner` | AMS: slot 1 white PLA, slot 4 frosted PETG | 20 min; both halves' corner at the seam: print it first |
-| `6_tub_one_piece_pla` | one PLA, any tray (orange set) | 2 h 28 min; the whole tub in one piece, no seam, no glue, standard settings |
-| `7_tub_top_pla` | one PLA (red set) | 1 h 45 min; the top alone, standard settings, for a base already printed |
+| `4_tub_base_and_top` | AMS: slot 1 white PLA, slot 4 frosted PETG | 3 h 17 min; by object: the frosted top, then the base |
+| `5_test_corner` | AMS: slot 1 white PLA, slot 4 frosted PETG | 29 min; both halves' corner at the seam: print it first |
+| `7_tub_top_pla` | one PLA (red set) | 1 h 1 min (on its back); the top alone, standard settings, for a base already printed |
 
 The tub's plate prints object by object, so the filament changes once,
 between the pieces, never inside one. The frosted top goes first, so its

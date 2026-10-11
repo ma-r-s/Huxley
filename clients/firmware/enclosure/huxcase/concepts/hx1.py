@@ -36,6 +36,7 @@ from build123d import (
     Box,
     Cylinder,
     Location,
+    Plane,
     Polyline,
     Pos,
     Rectangle,
@@ -103,13 +104,22 @@ BACK_FROST_Z = 36.0  # the tub: a grey base up to here, a frosted top above
 LAP_H = 1.6  # 8 layers
 LAP_GAP = fits.GLUE  # between the lip's outer face and the top's skirt
 LAP_TOP_GAP = 0.2  # one layer over the lip
+# The top prints on its back, the open front up (Mario, 2026-10-11): standing
+# on its seam it needed support under the whole roof and through the lever's
+# slot and the plunger's tube; on its back it stands on the whole back wall,
+# its holes for the inserts and the lever pin print upright and round, the
+# plunger's bore points to the front (_bore_x_front), and ledges reach down
+# to the back wall or slope at 45 deg from what holds them. Two roofs over a
+# close fit have nothing under them and print on support from outside: the
+# wall in front of the lever's slot (_slot_front_relief) and the rocker
+# hole's front edge (ROCKER_HOLE_CLEAR_Y). The base still prints standing.
+TOP_PRINT_UP = (0, -1, 0)  # device direction that is up on the bed
 LABEL_Z = 92.8  # "huxley" and "HX-1" on the face
 
 # The two shells meet at the inside of the face. The faceplate's lip seats in
 # the tub's rim; four M3 x 8 button heads close it into 5 mm heat-set inserts.
 FACE_Y = Y_FRONT + T
 LIP_D, LIP_W = 2.0, 1.6
-ROOF_RELIEF = 0.3  # extra room over the lip under the roof (printed over support)
 # Two through the face at the top (above the holders), two up through the
 # floor at the bottom into bosses on the faceplate: nothing of the tub stands
 # in front of the holders, so they and the cells can go in from the front.
@@ -157,11 +167,11 @@ ROCKER_Y, ROCKER_Z, ROCKER_RECESS = 5.3, 93.1, 7.2  # rocker top 0.2 below the s
 # the clip ~3 mm, Mario); the panel's chamfer spans it.
 ROCKER_CATCH = (1.2, 2.8)
 ROCKER_PANEL = ROCKER_CATCH[1]
-# The hole's top edge prints as a bare 19 mm bridge of the 1.2 mm land (the
-# slicer sees nothing to support there): 0.3 above and below the body, not
-# 0.1, so a little sag still lets the switch in. Its clips still land on the
-# chamfer, 0.2 deeper.
-ROCKER_HOLE_Z_CLEAR = 0.3
+# The tub's top prints on its back (TOP_PRINT_UP): the hole's front edge is
+# then a 12 mm roof across the panel, printed on support from the recess
+# (outside): 0.3 in front of and behind the body for what that leaves, 0.1
+# above and below, where the clips land on the chamfer.
+ROCKER_HOLE_CLEAR_Y, ROCKER_HOLE_CLEAR_Z = 0.3, 0.1
 SPLICE_D = 3.5  # a parallel joint in heat-shrink
 # Mario's cells are protected 18650s (2026-10-10), each with its own circuit,
 # so no separate protection board. The battery - lead runs from the - joint
@@ -204,10 +214,15 @@ KNUCKLE_R = (
 )  # +0.1: overlaps the slab (a tangent seam meshes open)
 TOOTH_Z = (46.0, 54.0)
 TOOTH_X0 = 30.0  # in front of the right holder, so it can reach in this far
-NOTCH_CLEAR = 0.4  # the tub's notch round the tooth, above and below
-CHANNEL_TOP_RELIEF = 0.4  # over the lever's top end (the channel's top prints on support)
+NOTCH_CLEAR = fits.SLIDE  # the tub's notch round the tooth, above and below
+SLOT_RELIEF = 0.4  # in front of the lever's slot (_slot_front_relief)
 BOARD_CENTRING = (35.0, 150.0, 330.0)  # board-frame angles of the centring posts
-LATCH_ROOT_Y, LATCH_CATCH = 5.0, 0.5  # switch latch: finger root (cradle y), lip overlap
+# Switch latch: finger root (cradle y), lip overlap, finger thickness. The
+# top prints on its back, so the finger, which runs front to back, stands
+# up in the print and bends across its layers: thin and a small catch keep
+# that to ~0.37 % strain (1.5 t catch / L^2, L 12.8), a third of what PLA's
+# layer bond takes. No room to turn it: a flat finger would hang in mid-air.
+LATCH_ROOT_Y, LATCH_CATCH, LATCH_T = 5.0, 0.4, 1.0
 STOP_X0 = 26.0  # inner end of the lever's stop block
 STOP = 3.8  # lever travel at the switch axis before it lands on the stop post
 PRESS_DEG = math.degrees(math.atan(STOP / (TS_Z - PIVOT_Z)))
@@ -319,38 +334,17 @@ def _pressed_union():
     return out
 
 
-def _knuckle_roof():
-    """A 45 deg roof over the channel round the lever's knuckle: from where the
-    knuckle's clearance turns flatter than 45 deg, up to the slot the lever's
-    blade swings in. The channel's front and back walls, which locate the
-    knuckle, stay where they are."""
-    rk = KNUCKLE_R + CLEAR
-    xt, zt = PIVOT_X - rk / math.sqrt(2), PIVOT_Z + rk / math.sqrt(2)
-    xe = X_OUT - CLEAR - 0.15  # inside the blade's slot, whatever the press
-    y0, y1 = SWITCH_Y - BAR_W / 2 - CLEAR, SWITCH_Y + BAR_W / 2 + CLEAR
-    prof = make_face(
-        Polyline(
-            (xt, y0, PIVOT_Z), (xe, y0, PIVOT_Z), (xe, y0, zt + xe - xt), (xt, y0, zt), close=True
-        )
+def _slot_front_relief(chan):
+    """SLOT_RELIEF more room in front of the lever's slot, above the tooth.
+    On its back (TOP_PRINT_UP) the wall in front of the slot is the slot's
+    roof with nothing under it (a 45 deg slope there would start in mid-air
+    too), so it prints on support from outside the case; this keeps what
+    that leaves off the lever's blade. The slot's opening outside grows 0.4."""
+    b = chan.bounding_box()
+    z0 = TOOTH_Z[1] + NOTCH_CLEAR  # below, the faceplate's tooth is the slot's front
+    return bbox_solid(
+        b.min.X - 0.01, X_OUT + 1.0, CHAN_Y0 - SLOT_RELIEF, CHAN_Y0 + 0.01, z0, b.max.Z
     )
-    roof = extrude(prof, y1 - y0, dir=(0, 1, 0))
-    # The web's swept top stands above that line for its first ~1 mm (a flat
-    # strip the slicer supported, its support sitting where the lever swings):
-    # a second 45 deg roof from the web's top inner corner, fully pressed.
-    a = math.radians(PRESS_DEG)
-    cx, cz = -CLEAR, 4.0 + CLEAR  # web top inner corner (grown), from the pivot
-    xs = PIVOT_X + cx * math.cos(a) - cz * math.sin(a) - 0.05
-    zs = PIVOT_Z + cz
-    prof = make_face(
-        Polyline(
-            (xs, y0, zs - 0.05),
-            (xe, y0, zs - 0.05),
-            (xe, y0, zs + xe - xs),
-            (xs, y0, zs),
-            close=True,
-        )
-    )
-    return roof + extrude(prof, y1 - y0, dir=(0, 1, 0))
 
 
 def _profile(grow: float, depth: float, y0: float):
@@ -388,6 +382,25 @@ def _wedge_under(x_wall: float, x_in: float, y0: float, y1: float, z_top: float)
     return Location((0, y0, 0), (90, 0, 0)) * Location((0, 0, -(y1 - y0))) * solid
 
 
+def _wedge_behind(x_wall: float, x_in: float, y_face: float, z0: float, z1: float):
+    """45 deg slope behind a block that sticks out from a side wall at x_wall
+    to x_in, its back face at y_face, from z0 to z1 and behind its 45 deg
+    underside (_wedge_under) below z0: the top prints on its back
+    (TOP_PRINT_UP), where those back faces would hang in mid-air."""
+    depth = abs(x_in - x_wall)
+    prof = make_face(
+        Polyline(
+            (x_wall, y_face - 0.01), (x_in, y_face - 0.01), (x_wall, y_face + depth), close=True
+        )
+    )
+    behind = Pos(0, 0, z0 - depth) * extrude(prof, z1 - z0 + depth)
+    front = make_face(  # the block and its underside, seen from the front
+        Polyline((x_in, z0), (x_wall, z0 - depth), (x_wall, z1), (x_in, z1), close=True)
+    )
+    reach = Location((0, y_face - 0.01, 0), (90, 0, 0)) * extrude(front, -(depth + 0.02))
+    return behind & reach
+
+
 def _teardrop_y(x: float, z: float, r: float, y0: float, y1: float):
     """A cylinder along Y with a 45 deg point underneath: prints without support
     when its axis lies horizontal on the bed."""
@@ -401,21 +414,14 @@ def _teardrop_y(x: float, z: float, r: float, y0: float, y1: float):
     return _along_y(x, z, r, y0, y1) + prism
 
 
-def _teardrop_x(y: float, z: float, r: float, x0: float, x1: float):
-    """A bore along X with a 45 deg point on top: its roof prints without
-    support when it lies horizontal."""
+def _bore_x_front(y: float, z: float, r: float, x0: float, x1: float):
+    """A bore along X with a 45 deg point toward the front (-y): its front
+    side is the roof when the tub's top prints on its back (TOP_PRINT_UP),
+    and the point prints without support."""
     c = r / math.sqrt(2)
     diamond = Pos((x0 + x1) / 2, y, z) * Rot(45, 0, 0) * Box(x1 - x0, 2 * r, 2 * r)
-    point = diamond & bbox_solid(x0, x1, y - 2 * r, y + 2 * r, z + c - 0.01, z + 2 * r)
+    point = diamond & bbox_solid(x0, x1, y - 2 * r, y - c + 0.01, z - 2 * r, z + 2 * r)
     return _along_x(y, z, r, x0, x1) + point
-
-
-def _bore_y(x: float, z: float, r: float, y0: float, y1: float):
-    """A bore along Y with a 45 deg point on top (see _teardrop_x)."""
-    c = r / math.sqrt(2)
-    diamond = Pos(x, (y0 + y1) / 2, z) * Rot(0, 45, 0) * Box(2 * r, y1 - y0, 2 * r)
-    point = diamond & bbox_solid(x - 2 * r, x + 2 * r, y0, y1, z + c - 0.01, z + 2 * r)
-    return _along_y(x, z, r, y0, y1) + point
 
 
 def _ramped_rib(x_face: float, out: int, y0: float, y1: float, z0: float, z1: float):
@@ -879,6 +885,23 @@ def build() -> Concept:
             blk += _wedge_under(
                 side * (W / 2 - T + 0.1), side * BLOCK_X_IN, FACE_Y + LIP_D, BLOCK_Y1, z0
             )
+            if side > 0:
+                blk += _wedge_behind(
+                    side * (W / 2 - T + 0.1), side * BLOCK_X_IN, BLOCK_Y1, z0, sz + BLOCK_HZ
+                )
+            else:  # its back rests on the rocker's mount up to the mount's inner face;
+                # past it, slope back 45 deg from the mount (the rocker sits behind)
+                xm = -W / 2 + ROCKER_RECESS + ROCKER_PANEL
+                d = BLOCK_X_IN - xm
+                corner = make_face(
+                    Polyline(
+                        (xm, BLOCK_Y1 + 0.01),
+                        (-BLOCK_X_IN + 0.01, BLOCK_Y1 + 0.01),
+                        (-BLOCK_X_IN + 0.01, BLOCK_Y1 - abs(d)),
+                        close=True,
+                    )
+                )
+                blk -= Pos(0, 0, z0 - 12.0) * extrude(corner, sz + BLOCK_HZ - z0 + 12.1)
             for k in (0.0, 3.0, 6.0, 10.0):  # the board's path as the faceplate closes
                 blk -= Pos(0, -k, 0) * board_env
         blk &= inner
@@ -897,6 +920,19 @@ def build() -> Concept:
         H - T + 0.1,
     )
     tub += backing & inner
+    # In the top it reaches the back wall: on its back (TOP_PRINT_UP) the top
+    # stands it there, where a 1.3 mm gap would leave it hanging.
+    tub += (
+        bbox_solid(
+            cell_edge + fits.PART,
+            X_OUT - T + 0.1,
+            SWITCH_Y + 13.0 - 0.01,
+            Y_BACK - T + 0.1,
+            BACK_FROST_Z,
+            H - T + 0.1,
+        )
+        & inner
+    )
 
     holder_parts, holder_ribs, (bridge, bridge_ribs, bridge_screw, bridge_insert) = (
         _holder_retention(inner)
@@ -931,7 +967,7 @@ def build() -> Concept:
     fz0, fz1 = -0.3, 3.0
     cradle -= bbox_solid(-pocket - 2, -pocket + 0.01, -pocket - 2, LATCH_ROOT_Y, fz0 - 0.6, fz0)
     cradle -= bbox_solid(-pocket - 2, -pocket + 0.01, -pocket - 2, LATCH_ROOT_Y, fz1, fz1 + 0.6)
-    finger = bbox_solid(-pocket - 1.2, -pocket, lip_y - 1.6, LATCH_ROOT_Y, fz0, fz1)
+    finger = bbox_solid(-pocket - LATCH_T, -pocket, lip_y - 1.6, LATCH_ROOT_Y, fz0, fz1)
     lip = bbox_solid(-pocket, -half + LATCH_CATCH, lip_y - 1.6, lip_y, fz0, fz1)
     lip -= (
         Pos(-half + LATCH_CATCH, lip_y - 1.6, 0) * Rot(0, 0, 45) * Box(1.13, 1.13, 20)
@@ -939,14 +975,15 @@ def build() -> Concept:
     latch = TS_LOC * (finger + lip)
     tube_x0 = TS_BASE_X + hw.TACT_BODY
     tube = _along_x(SWITCH_Y, TS_Z, TUBE_R, tube_x0, X_OUT - T + 0.1)
-    # The bore's 45 deg point stands above the tube's round: a ridge covers it.
+    # The bore's 45 deg point stands out of the tube's round at the front
+    # (_bore_x_front): a ridge covers it.
     tube += bbox_solid(
         tube_x0,
         X_OUT - T + 0.1,
-        SWITCH_Y - 2.2,
-        SWITCH_Y + 2.2,
-        TS_Z,
-        TS_Z + TUBE_BORE * 1.42 + 0.9,
+        SWITCH_Y - TUBE_BORE * 1.42 - 0.9,
+        SWITCH_Y,
+        TS_Z - 2.2,
+        TS_Z + 2.2,
     )
     # End plate: joins the cradle's walls to the tube (they would not touch
     # otherwise) and gives the switch's top a flat face to seat on.
@@ -955,6 +992,29 @@ def build() -> Concept:
     )
     tub += (TS_LOC * cradle + tube) & inner
     latch &= inner
+    # On its back (TOP_PRINT_UP) the cradle's back and the tube's underside
+    # would hang over the back wall: fill down to it (the space behind them
+    # is empty; nothing routes there).
+    cx_lo, cx_hi = TS_BASE_X - fits.PART - 1.5, TS_BASE_X + hw.TACT_BODY + 1.2
+    yb0, yb1, zb = SWITCH_Y + pocket + 1.2 - 0.01, Y_BACK - T + 0.1, TS_Z - pocket - 1.2
+    back = make_face(  # seen from the side: down to the back wall at 45 deg, over the + lead
+        Polyline(
+            (yb0, zb), (yb1, zb + (yb1 - yb0)), (yb1, H - T + 0.1), (yb0, H - T + 0.1), close=True
+        )
+    )
+    on_side = Location(Plane(origin=(cx_lo, 0, 0), x_dir=(0, 1, 0), z_dir=(1, 0, 0)))
+    tub += (on_side * extrude(back, cx_hi - cx_lo)) & inner
+    tub += (
+        bbox_solid(
+            tube_x0 + 0.01,
+            X_OUT - T + 0.1,  # the lever's channel is cut out of it after
+            SWITCH_Y,  # and the bore
+            Y_BACK - T + 0.1,
+            TS_Z - TUBE_R * 0.72,  # the tube's underside steeper than 45 deg
+            TS_Z + TUBE_R * 0.72,
+        )
+        & inner
+    )
     # Web from the cradle to the roof: the cradle (and the holder pad under it)
     # no longer hangs on its tube alone.
     cx0, cx1 = TS_BASE_X - fits.PART - 1.5, TS_BASE_X + hw.TACT_BODY + 1.2
@@ -1003,14 +1063,14 @@ def build() -> Concept:
     rocker_cut += bbox_solid(
         panel_x - 0.1,
         panel_x + ROCKER_PANEL + 0.1,
-        ROCKER_Y - cy_ - 0.1,
-        ROCKER_Y + cy_ + 0.1,
-        ROCKER_Z - cz - ROCKER_HOLE_Z_CLEAR,
-        ROCKER_Z + cz + ROCKER_HOLE_Z_CLEAR,
+        ROCKER_Y - cy_ - ROCKER_HOLE_CLEAR_Y,
+        ROCKER_Y + cy_ + ROCKER_HOLE_CLEAR_Y,
+        ROCKER_Z - cz - ROCKER_HOLE_CLEAR_Z,
+        ROCKER_Z + cz + ROCKER_HOLE_CLEAR_Z,
     )
     chamfer = ROCKER_PANEL - ROCKER_CATCH[0]
     hole = Rectangle(
-        2 * (cz + ROCKER_HOLE_Z_CLEAR), 2 * (cy_ + 0.1)
+        2 * (cz + ROCKER_HOLE_CLEAR_Z), 2 * (cy_ + ROCKER_HOLE_CLEAR_Y)
     )  # after the turn: x -> -Z, y -> Y
     taper = extrude(hole, chamfer + 0.01, taper=-45)  # widens 45 deg as it goes in
     rocker_cut += Location((panel_x + ROCKER_CATCH[0], ROCKER_Y, ROCKER_Z), (0, 90, 0)) * taper
@@ -1032,35 +1092,25 @@ def build() -> Concept:
     latch += keeper_snaps  # snap lips: rigid stops that flex on the way in
 
     # Cuts: lever channel, plunger bore, tooth notch, rear pin seat, rocker, USB,
-    # and the band the faceplate's lip goes into. The tub prints upright, so
-    # every close-fitting cut that lies horizontal gets a 45 deg roof the
-    # slicer leaves unsupported: support left in them would bind.
-    tub -= _pressed_union()
-    tub -= _knuckle_roof()
-    # The channel's top prints over support: CHANNEL_TOP_RELIEF more room so
-    # what that leaves can't reach the lever's top end swinging in under it.
-    tub -= bbox_solid(
-        PIVOT_X - 3.0,
-        X_OUT + 1.0,
-        SWITCH_Y - BAR_W / 2 - CLEAR,
-        SWITCH_Y + BAR_W / 2 + CLEAR,
-        BAR_Z1 + CLEAR - 0.01,
-        BAR_Z1 + CLEAR + CHANNEL_TOP_RELIEF,
-    )
-    tub -= _teardrop_x(SWITCH_Y, TS_Z, TUBE_BORE, tube_x0 - 0.01, X_OUT + 1)
+    # and the band the faceplate's lip goes into. The top prints on its back
+    # (TOP_PRINT_UP: the front up), so what is a roof there gets a 45 deg
+    # slope the slicer leaves unsupported: support left in a close fit binds.
+    chan = _pressed_union()
+    tub -= chan
+    tub -= _slot_front_relief(chan)
+    tub -= _bore_x_front(SWITCH_Y, TS_Z, TUBE_BORE, tube_x0 - 0.01, X_OUT + 1)
     tub -= stem_slot
     # Stop: a block of the backing that the lever's inner face lands on after
     # the click. Added after the channel cut, which would otherwise remove it.
     stop_z0, stop_z1 = TS_Z - 2.0, TS_Z + 2.0
     stop_x = X_OUT - STOP * (stop_z1 - PIVOT_Z) / (TS_Z - PIVOT_Z) - 0.05
     # It reaches in over the right holder's top (empty at this height) for strength.
-    tub += bbox_solid(STOP_X0, stop_x, SWITCH_Y + 5.6, SWITCH_Y + 10.0, stop_z0, stop_z1)
+    tub += bbox_solid(STOP_X0, stop_x, SWITCH_Y + 5.6, Y_BACK - T + 0.1, stop_z0, stop_z1)
     tub += bbox_solid(
         stop_x - 0.01, X_OUT - T + 0.1, SWITCH_Y + 9.3, SWITCH_Y + 10.0, stop_z0, stop_z1
     )  # into the backing
-    # The tooth's notch: its roof hangs open to the front and the side, so it
-    # prints over support (pulled out from there). NOTCH_CLEAR above and below
-    # the tooth so what that leaves cannot stop the faceplate closing.
+    # The tooth's notch, open to the front and the side: the faceplate's tooth
+    # goes in as it closes, NOTCH_CLEAR above and below.
     tub -= bbox_solid(
         TOOTH_X0 - fits.SNUG,
         X_OUT + 2,
@@ -1069,19 +1119,20 @@ def build() -> Concept:
         TOOTH_Z[0] - NOTCH_CLEAR,
         TOOTH_Z[1] + NOTCH_CLEAR,
     )
-    tub -= _bore_y(PIVOT_X, PIVOT_Z, PIN_BORE / 2, CHAN_Y0, PIN_Y1 + 0.3)
+    tub -= _along_y(PIVOT_X, PIVOT_Z, PIN_BORE / 2, CHAN_Y0, PIN_Y1 + 0.3)  # upright in print
     tub -= rocker_cut
     tub -= usb_cut
+    # On its back (TOP_PRINT_UP) the 1 mm strip of wall between the USB-C
+    # opening and the faceplate's seam would be a roof over the opening with
+    # nothing under it: gone, the opening reaches the seam (the faceplate's
+    # face closes it in front).
+    tub -= bbox_solid(
+        -W / 2 - 1, -W / 2 + T + 0.1, FACE_Y - 1, USB_Y - 3.8 + 0.01, BOARD_Z - 6.8, BOARD_Z + 6.8
+    )
     # KEY1 stands 0.17 under the roof: a groove so it cannot scrape on closing.
     tub -= bbox_solid(-10.0, -4.5, FACE_Y - 1, BOARD_TOP_Y + 3.0, H - T - 0.01, H - T + 1.2)
     band = _profile(0.0, LIP_D + 0.01, FACE_Y - 0.005)
     tub -= band - _profile(-2 * fits.SNUG - LIP_W, LIP_D + 1, FACE_Y - 0.5)
-    # The roof prints over support, which leaves its underside rough: ROOF_RELIEF
-    # more room over the lip where it goes in (the faceplate is unchanged).
-    relief = _profile(ROOF_RELIEF, LIP_D + 0.5, FACE_Y - 0.01) - _profile(
-        0.0, LIP_D + 1, FACE_Y - 1
-    )
-    tub -= relief & bbox_solid(-60, 60, FACE_Y - 1, FACE_Y + LIP_D + 0.5, H - T - 1.2, H)
 
     # ---------------- lever + pin ----------------
     bar = _bar() - _along_y(PIVOT_X, PIVOT_Z, PIN_BORE / 2, -40, 40)

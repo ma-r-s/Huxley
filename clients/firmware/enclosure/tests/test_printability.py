@@ -39,7 +39,7 @@ def test_island_check_finds_a_part_that_starts_in_mid_air():
     assert pr.islands(base + Pos(2.0, 0, 9) * Box(4, 4, 1)) == []  # a ledge off the wall
 
 
-SUPPORTED = ("tub_base", "tub_top", "test_base", "test_top", "tub")
+SUPPORTED = ("tub_base", "tub_top", "test_base", "test_top")
 
 
 @pytest.mark.parametrize(
@@ -60,8 +60,10 @@ def test_nothing_starts_in_mid_air(pieces, pose):
         ("grille_plug", 200),  # its flange: 1.5 mm out
         ("faceplate", 450),  # the face's edge round-over and the counterbore steps
         ("tub_base", 450),  # the joint shelves, the pedestal ribs: tree supports
-        ("tub_top", 3300),  # roof, switch cradle and tube, rocker mount: tree supports
-        ("tub", 3750),  # the two halves' together, in one piece
+        (
+            "tub_top",
+            450,
+        ),  # on its back: the wall over the lever's slot, the rocker's recess, the back's edge
     ],
 )
 def test_overhangs_stay_within_budget(report, piece, budget):
@@ -71,16 +73,36 @@ def test_overhangs_stay_within_budget(report, piece, budget):
 
 
 def test_tub_ledges_print_without_support(report):
-    """Insert blocks, the bridge boss and the speaker post have 45 deg undersides.
-    Horizontal holes up to 6 mm (the lever pivot) print fine as they are."""
-    from huxcase.concepts import hx1
-
-    for piece, seam in (("tub_base", 0.0), ("tub_top", hx1.BACK_FROST_Z), ("tub", 0.0)):
+    """In the base (standing on its floor): the bridge boss and the speaker
+    post have 45 deg undersides. The top prints on its back (see below)."""
+    for piece, seam in (("tub_base", 0.0),):
         for k in report[piece]:
             x0, y0, z0, x1, y1, z1 = k["bbox"]
             z = z0 + seam  # posed -> device
             if 20.0 < z < 80.0 and k["narrow"] > 6.0:  # between the floor and the cradle zone
                 assert k["area"] < 10.0, (piece, k)
+
+
+def test_tub_top_on_its_back_leaves_the_close_fits_clean(pieces):
+    """Printed on its back, nothing that needs support lies inside the top's
+    close fits (support_keep_outs): the lever's slot, the plunger's tube, the
+    pin seat, the rocker's hole, the USB plug's path. Standing on its seam,
+    trees grew through the slot and the tube (Mario, 2026-10-11)."""
+    pose = next(p for p in pr.POSES if p.piece == "tub_top")
+    hits = [(p, pr.in_keep_out(p)) for p in pr.support_faces_device(pieces["tub_top"], pose)]
+    assert [h for h in hits if h[1]] == []
+
+
+def test_switch_latch_bends_well_inside_its_layers():
+    """On its back the latch finger stands up in the print, so it bends across
+    its layers: its strain at full catch (1.5 t catch / L^2) stays under 0.4 %,
+    against ~1 % that PLA's layer bond takes."""
+    from huxcase.concepts import hx1
+
+    c = hx1.build()
+    finger = max(c.shells["tub_latch"].solids(), key=lambda s: s.bounding_box().size.Y)
+    length = finger.bounding_box().size.Y
+    assert 1.5 * hx1.LATCH_T * hx1.LATCH_CATCH / length**2 < 0.004
 
 
 def test_tub_halves_lap_and_rebuild_the_tub(pieces):

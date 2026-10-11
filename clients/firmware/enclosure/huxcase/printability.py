@@ -44,17 +44,14 @@ POSES = (
     # Spare plungers, 0.5 and 1.0 mm longer (more preload, an earlier click).
     Pose("plunger_long05", "standing on its tip", (0, -90, 0)),
     Pose("plunger_long10", "standing on its tip", (0, -90, 0)),
-    # The tub's frosted top, glued onto the base (hx1.LAP_H): standing on its
-    # seam face, the open front toward you.
-    Pose("tub_top", "standing on its seam face, the open front toward you", (0, 0, 0)),
+    # The tub's top, glued onto the base (hx1.LAP_H): on its back, the open
+    # front up (hx1.TOP_PRINT_UP, the device's -y up).
+    Pose("tub_top", "on its back, the open front up", (-90, 0, 0)),
     # The test corner: the back right corner of both halves round the seam,
     # the lever's backing included (where the lip once bound). Push them
     # together dry and hold the frosted one to a light before the long print.
     Pose("test_base", "standing on its floor cut", (0, 0, 0)),
-    Pose("test_top", "standing on its seam face", (0, 0, 0)),
-    # The whole tub in one PLA colour (Mario, 2026-10-11, after a PETG top
-    # strung): no filament change, so no seam and no glue.
-    Pose("tub", "standing up, the open front toward you", (0, 0, 0)),
+    Pose("test_top", "on its back, the open front up", (-90, 0, 0)),
 )
 
 
@@ -76,8 +73,6 @@ def printed_pieces(c=None) -> dict[str, object]:
     out["tub_top"] = by_name["tub_frosted"]
     out["test_base"] = by_name["tub_grey"] & bbox_solid(*TEST_CORNER, *TEST_BASE_Z)
     out["test_top"] = by_name["tub_frosted"] & bbox_solid(*TEST_CORNER, *TEST_TOP_Z)
-    sh = c.shells
-    out["tub"] = sh["tub"] + sh["tub_latch"] + sh["tub_ribs"]
     return out
 
 
@@ -182,51 +177,97 @@ def islands(shape, pitch: float = 0.2) -> list[dict]:
     return out
 
 
+def support_faces_device(shape, pose: Pose, tolerance: float = 0.1) -> list[tuple]:
+    """Centres (device frame) of the faces that need support with `shape`
+    printed in `pose`: what support_keep_outs must stay clear of."""
+    import numpy as np
+    import trimesh
+
+    loc = pose_location(shape, pose)
+    verts, tris = (loc * shape).tessellate(tolerance, 0.3)
+    mesh = trimesh.Trimesh(
+        vertices=np.array([(v.X, v.Y, v.Z) for v in verts]), faces=np.array(tris), process=True
+    )
+    limit = -math.cos(math.radians(90.0 - MAX_OVERHANG_DEG - 1.0))
+    zmin = mesh.triangles[:, :, 2].min(axis=1)
+    bad = (mesh.face_normals[:, 2] < limit) & (zmin > BED_TOL) & (mesh.area_faces > 0.01)
+    inv = loc.inverse()
+    out = []
+    for c in mesh.triangles_center[bad]:
+        v = (inv * Pos(*c)).position
+        out.append((v.X, v.Y, v.Z))
+    return out
+
+
 def needs_support(clusters: list[dict], min_area: float = 1.0) -> list[dict]:
     """Clusters wider than a short bridge and bigger than a speck."""
     return [k for k in clusters if k["narrow"] > BRIDGE_OK and k["area"] > min_area]
 
 
 def support_keep_outs() -> dict[str, tuple[float, float, float, float, float, float]]:
-    """Close-fitting cuts in the tub where the slicer must put no support
-    (device frame: x0, x1, y0, y1, z0, z1), each a little inside its cut.
-    Support in them could not be pulled out cleanly, and what it left would
-    bind the part that moves there. slice.py checks the G-code against these."""
+    """Close fits in the tub's top where no support may go, printed on its
+    back (hx1.TOP_PRINT_UP), as boxes in the device frame (x0, x1, y0, y1,
+    z0, z1), each a little inside its cut. Support or what it leaves there
+    would bind a moving part or stop one going in. slice.py counts any
+    support in them in the G-code; the faces that need support stay out
+    (tests). Two roofs do print on support from outside the case, clear of
+    these: the wall in front of the lever's slot (relieved, hx1.SLOT_RELIEF),
+    its trees crossing the open slot, and the rocker hole's front edge (0.3 mm
+    round the body); the clips catch on its long sides."""
     m = hx1
-    chan_y = (m.CHAN_Y0 + 0.4, m.SWITCH_Y + m.BAR_W / 2 + m.CLEAR - 0.4)
+    chan_x0 = m.PIVOT_X - m.KNUCKLE_R - m.CLEAR  # the slot's inner end
+    chan_y0, chan_y1 = m.CHAN_Y0, m.SWITCH_Y + m.BAR_W / 2 + m.CLEAR
+    stop_x = m.X_OUT - m.STOP * (m.TS_Z + 2.0 - m.PIVOT_Z) / (m.TS_Z - m.PIVOT_Z) - 0.05
     panel_x = -m.W / 2 + m.ROCKER_RECESS
-    cy, cz = hw.ROCKER_BODY[0] / 2, hw.ROCKER_BODY[1] / 2
+    cz = hw.ROCKER_BODY[1] / 2
     return {
-        "plunger bore": (  # from past the stem's slot (support there comes out the front)
+        "plunger bore": (  # from past the stem's slot to where it opens into the lever's slot
             m.PLUNGER_TIP_X + 0.8,
-            m.X_OUT - 0.3,
-            m.SWITCH_Y - m.TUBE_BORE + 0.4,
+            chan_x0 - 0.3,
+            m.SWITCH_Y - m.TUBE_BORE * 1.41 + 0.4,
             m.SWITCH_Y + m.TUBE_BORE - 0.4,
             m.TS_Z - m.TUBE_BORE + 0.4,
-            m.TS_Z + m.TUBE_BORE * 1.41 - 0.4,
+            m.TS_Z + m.TUBE_BORE - 0.4,
         ),
-        "lever channel": (
-            m.PIVOT_X - m.KNUCKLE_R - m.CLEAR + 0.4,
+        "tooth's notch": (  # where the faceplate's tooth goes, in front of the pivot
+            m.TOOTH_X0 + 0.3,
             m.X_OUT - 0.3,
-            *chan_y,
-            m.PIVOT_Z - 2.0,
+            m.FACE_Y + 0.3,
+            chan_y0 - 0.3,
+            m.TOOTH_Z[0] + 0.3,
+            m.TOOTH_Z[1] - 0.3,
+        ),
+        "lever slot's back face": (  # the blade runs a fit's width from it
+            chan_x0 + 0.4,
+            m.X_OUT - 0.3,
+            chan_y1 - 1.2,
+            chan_y1 - 0.2,
+            m.TOOTH_Z[1],
             m.BAR_Z1 - 0.5,
+        ),
+        "lever's stop": (  # the face the lever lands on after the click
+            stop_x - 0.1,
+            stop_x + 0.6,
+            m.SWITCH_Y + 5.9,
+            chan_y1 - 0.4,
+            m.TS_Z - 1.7,
+            m.TS_Z + 1.7,
         ),
         "rear pin seat": (
             m.PIVOT_X - 1.0,
             m.PIVOT_X + 1.0,
-            chan_y[1] + 0.8,
+            chan_y1 + 0.4,
             m.PIN_Y1,
             m.PIVOT_Z - 1.0,
-            m.PIVOT_Z + 1.6,
+            m.PIVOT_Z + 1.0,
         ),
-        "rocker hole": (
+        "rocker clips": (  # where the clips catch, mid-length on the long sides
             panel_x + 0.2,
             panel_x + m.ROCKER_PANEL - 0.2,
-            m.ROCKER_Y - cy + 0.3,
-            m.ROCKER_Y + cy - 0.3,
-            m.ROCKER_Z - cz + 0.3,
-            m.ROCKER_Z + cz - 0.3,
+            m.ROCKER_Y - 5.0,
+            m.ROCKER_Y + 5.0,
+            m.ROCKER_Z - cz - m.ROCKER_HOLE_CLEAR_Z + 0.05,
+            m.ROCKER_Z + cz + m.ROCKER_HOLE_CLEAR_Z - 0.05,
         ),
         "USB plug": (  # where the plug's shell goes; the pocket round it is roomy
             -m.W / 2 + 0.3,
@@ -239,6 +280,36 @@ def support_keep_outs() -> dict[str, tuple[float, float, float, float, float, fl
     }
 
 
+def support_keep_out_rounds() -> dict[str, tuple[float, float, float, float, float]]:
+    """Round close fits in the top where no support may go (see
+    support_keep_outs): the lever's pivot, the knuckle's clearance round the
+    pin axis (along y): (x, z, radius, y0, y1), device frame."""
+    m = hx1
+    rk = m.KNUCKLE_R + m.CLEAR
+    return {
+        "lever pivot": (
+            m.PIVOT_X,
+            m.PIVOT_Z,
+            rk - 0.2,
+            m.CHAN_Y0 + 0.4,
+            m.SWITCH_Y + m.BAR_W / 2 + m.CLEAR - 0.4,
+        )
+    }
+
+
+def in_keep_out(p) -> list[str]:
+    """The keep-outs (boxes and rounds) a device-frame point lies in."""
+    hit = [
+        k
+        for k, (x0, x1, y0, y1, z0, z1) in support_keep_outs().items()
+        if x0 <= p[0] <= x1 and y0 <= p[1] <= y1 and z0 <= p[2] <= z1
+    ]
+    for k, (x, z, r, y0, y1) in support_keep_out_rounds().items():
+        if y0 <= p[1] <= y1 and (p[0] - x) ** 2 + (p[2] - z) ** 2 <= r * r:
+            hit.append(k)
+    return hit
+
+
 COLOUR = {
     "faceplate": "grey",
     "grille_plug": "black",
@@ -246,7 +317,6 @@ COLOUR = {
     "tub_top": "frosted PETG (clarity settings)",
     "test_base": "grey",
     "test_top": "frosted PETG (clarity settings)",
-    "tub": "any one PLA colour (the tub in one piece, no glue)",
     "ptt_bar": "orange",
     "ptt_pin": "grey",
     "plunger": "grey",
