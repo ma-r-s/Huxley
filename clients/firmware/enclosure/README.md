@@ -330,18 +330,18 @@ print. The same sliced are in `out/print/sliced/`.
 | `1_grey_faceplate_bridge_pin_plunger` | grey | 38 min (faceplate, bridge, 3 pins, 3 plungers) |
 | `2_black_grille` | black | 30 min |
 | `3_orange_lever` | orange | 6 min |
-| `4_tub_base_and_top` | AMS: slot 1 grey, slot 4 frosted | 4 h 36 min; by object: the frosted top, then the base |
-| `5_frosted_swatch` | frosted | 15 min; a corner of the top: print it first |
+| `4_tub_base_and_top` | AMS: slot 1 grey, slot 4 frosted | 4 h 11 min; by object: the frosted top, then the base |
+| `5_frosted_swatch` | frosted | 14 min; a corner of the top: print it first |
 
 The tub's plate prints object by object, so the filament changes once,
 between the pieces, never inside one. The frosted top goes first, so its
 first layers come out clean (no grey left in the nozzle). The pieces sit
 95 mm apart: the toolhead (72 mm round) and the gantry (32.5 mm over the
 nozzle, lower than either piece) never pass over a finished one, which
-Bambu Studio checks. Don't press Arrange, it may undo that. Tree supports
+Bambu Studio checks. Don't press Arrange, it may undo that. Organic tree supports
 and the outside brim are the plate's (Bambu Studio did not apply an
 object's own settings for Mario), so the base gets the brim too; it peels
-off. The bridge's screw hole is skinned over on its first 0.5 mm
+off. No prime tower: by object, the AMS purges into the chute. The bridge's screw hole is skinned over on its first 0.5 mm
 (`hx1.bridge_skin`), or its bridge lines would end in the air (Bambu Studio
 warns of a floating cantilever). When sending, check the AMS mapping (1
 grey, 4 frosted) and that the frosted spool is PLA, dried.

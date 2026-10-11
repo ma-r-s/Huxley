@@ -54,7 +54,11 @@ TREE_SUPPORTS = {
     # roof printed in mid-air and failed (Mario, 2026-10-11, with support
     # blockers on them). The close fits that support must not touch have
     # 45 deg roofs instead (hx1: plunger bore, pin seat, knuckle).
-    "tree_support_wall_count": "2",  # sturdier branches
+    # Organic branches, no walls of their own: 25 min and 7 g less on the
+    # tub's plate than hybrid ones with two walls (sliced, 2026-10-11). The
+    # walls were for branches that snapped at an AMS change, now gone.
+    "support_style": "tree_organic",
+    "tree_support_wall_count": "0",
 }
 # The top stands 68 mm tall on its seam face, the lap's 1.15 mm outer half:
 # about 210 mm2 on the plate, and auto brim adds none. A brim outside only
@@ -157,7 +161,12 @@ PLATES = [
     Plate(
         "4_tub_base_and_top",
         (TOP, BASE),
-        TREE_SUPPORTS | TOP_BRIM | CLARITY_PROCESS | {"print_sequence": "by object"},
+        TREE_SUPPORTS
+        | TOP_BRIM
+        | CLARITY_PROCESS
+        # No prime tower: by object, the AMS purges into the chute (the
+        # preset's tower showed in Mario's Bambu Studio).
+        | {"print_sequence": "by object", "enable_prime_tower": "0"},
         AMS,
         slots={TOP: 4, BASE: 1},
         place={TOP: (128.0, 190.0), BASE: (128.0, 60.0)},
@@ -409,8 +418,8 @@ def support_in_keep_outs(
 def check(project: Path, plate: Plate) -> str:
     """What every sliced plate must be: the P2S's own start sequence, no
     pause, one plate; its objects one after another in the plate's order,
-    each in its own filament; the clarity settings on the frosted filament
-    alone. Returns its print time."""
+    each in its own filament, no prime tower; the clarity settings on the
+    frosted filament alone. Returns its print time."""
     with zipfile.ZipFile(project) as z:
         plates = [n for n in z.namelist() if n.endswith(".gcode")]
     assert plates == ["Metadata/plate_1.gcode"], f"{project.name}: plates {plates}"
@@ -427,6 +436,7 @@ def check(project: Path, plate: Plate) -> str:
         loads = [int(n) for n in re.findall(r"^\s*M620 S(\d+)A", gcode, re.M) if n != "65535"]
         changes = [n for i, n in enumerate(loads) if i == 0 or n != loads[i - 1]]
         assert changes == [plate.slots[s] - 1 for s in plate.stls], f"{project.name}: {loads}"
+        assert "; enable_prime_tower = 0" in gcode, f"{project.name}: prime tower on"
     if plate.clear:
         for key in ("nozzle_temperature", "filament_max_volumetric_speed", "fan_max_speed"):
             got = re.search(rf"^; {key} = (.*)$", gcode, re.M).group(1).split(",")
