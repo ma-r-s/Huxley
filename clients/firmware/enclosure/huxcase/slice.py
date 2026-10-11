@@ -46,10 +46,11 @@ TREE_SUPPORTS = {
     "enable_support": "1",
     "support_type": "tree(auto)",
     "support_on_build_plate_only": "0",  # "Everywhere": they grow from the tub's own floor
-    # Bridges up to 20 mm print unsupported (the preset supports every bridge).
-    # The close fits also get support blockers (pr.support_blockers): this
-    # alone does not keep tree branches out of them.
-    "max_bridge_length": "20",
+    # Every bridge gets support too (the preset's max_bridge_length 0): left
+    # bare, the lever channel's top, the rocker hole's top and the USB pocket's
+    # roof printed in mid-air and failed (Mario, 2026-10-11, with support
+    # blockers on them). The close fits that support must not touch have
+    # 45 deg roofs instead (hx1: plunger bore, pin seat, knuckle).
 }
 LAYER = 0.2
 # The first frosted layer: the printer pauses before printing it.
@@ -57,7 +58,7 @@ PAUSE_Z = round(hx1.BACK_FROST_Z + LAYER, 2)
 
 GREY, BLACK, ORANGE = "#8E9089", "#161616", "#FF6A13"
 # (project, STLs from out/print, process overrides and colour, pause height or
-# None). The tub's project also gets the support blockers.
+# None).
 PLATES = [
     (
         "1_grey_faceplate_bridge_pin_plunger",
@@ -105,10 +106,14 @@ FLUSH = (
 # Object centres on the 256 x 256 bed. Printed object by object, the toolhead
 # must clear what is already done: 72 mm between objects (the P2S's extruder
 # clearance), and the tall tub, printed last, away from the rest.
-# The objects that get support (the plate has tree supports on; the rest have
-# no overhang that needs it: the bridge's screw hole is skinned, hx1.bridge_skin).
-SUPPORTED = ("tub",)
+# The objects that may get support (tree supports are on for the plate,
+# bridges included): the tub, and the grey group, whose holder bridge has a
+# 17 mm bridge across its U (skinned over its screw hole, hx1.bridge_skin).
+SUPPORTED = ("tub", "grey_parts")
 AMS_LAYOUT = {"lever": (36.0, 40.0), "grey_parts": (190.0, 40.0), "tub": (128.0, 200.0)}
+# The tub alone, for when the rest is printed (Mario, 2026-10-11).
+AMS_TUB_PROJECT = "HX1_tub_AMS"
+AMS_TUB_LAYOUT = {"tub": (128.0, 128.0)}
 
 BED = "Textured PEI Plate"  # the plate the P2S ships with; pick yours in Bambu Studio if not
 PAUSE_GCODE = "M400 U1"  # Bambu's "wait for the user" (the P2S preset leaves its pause empty)
@@ -175,47 +180,14 @@ def _run(args: list[str], work: Path) -> None:
         raise RuntimeError(f"BambuStudio failed ({res.returncode}):\n{tail}")
 
 
-def _blocker_stls(work: Path) -> list[str]:
-    """The tub's support blockers as STLs, on the bed where the tub STL is."""
-    from build123d import export_stl
-
-    from huxcase.shapes import bbox_solid
-
-    pose = next(p for p in pr.POSES if p.piece == "tub")
-    loc = pr.pose_location(pr.printed_pieces()["tub"], pose)
-    files = []
-    for name, box in pr.support_blockers().items():
-        path = work / f"blocker_{name}.stl"
-        export_stl(loc * bbox_solid(*box), str(path))
-        files.append(str(path))
-    return files
-
-
-def _as_blockers(model_settings: bytes) -> bytes:
-    """The assembled parts named blocker_* become support blockers."""
-    text = model_settings.decode()
-    parts = text.split("<part ")
-    for i in range(1, len(parts)):
-        if 'value="blocker_' in parts[i].split("</part>")[0]:
-            assert 'subtype="normal_part"' in parts[i]
-            parts[i] = parts[i].replace('subtype="normal_part"', 'subtype="support_blocker"', 1)
-    out = "<part ".join(parts)
-    assert out.count('subtype="support_blocker"') == len(pr.support_blockers())
-    return out.encode()
-
-
 def slice_plate(name, stls, overrides, pause_z, print_dir: Path, out_dir: Path) -> Path:
     """Lay the plate out with Bambu's own P2S presets, set the plate's own
-    settings (supports, bed, pause) in the project, then slice it. A plate
-    with a pause (the tub) is assembled with its support blockers."""
+    settings (supports, bed, pause) in the project, then slice it."""
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
         (work / "data").mkdir()
         presets = _presets(work)
         files = [str(print_dir / f"{s}.stl") for s in stls]
-        blockers = pause_z is not None
-        if blockers:
-            files += _blocker_stls(work)
         _run(
             [
                 *presets,
@@ -223,7 +195,6 @@ def slice_plate(name, stls, overrides, pause_z, print_dir: Path, out_dir: Path) 
                 "0",
                 "--arrange",
                 "1",
-                *(["--assemble"] if blockers else []),
                 "--outputdir",
                 str(work),
                 "--export-3mf",
@@ -245,8 +216,6 @@ def slice_plate(name, stls, overrides, pause_z, print_dir: Path, out_dir: Path) 
                     cfg["curr_bed_type"] = BED
                     cfg["machine_pause_gcode"] = PAUSE_GCODE
                     data = json.dumps(cfg, indent=4).encode()
-                if blockers and item.filename == "Metadata/model_settings.config":
-                    data = _as_blockers(data)
                 if item.filename != "Metadata/custom_gcode_per_layer.xml":
                     dst.writestr(item, data)
             if pause_z is not None:
@@ -262,7 +231,7 @@ def slice_plate(name, stls, overrides, pause_z, print_dir: Path, out_dir: Path) 
 
 def _ams_stls(work: Path) -> dict[str, Path]:
     """The AMS plate's pieces as posed STLs: the tub as two parts, grey below
-    BACK_FROST_Z and frosted above, with its support blockers; the lever; the
+    BACK_FROST_Z and frosted above; the lever; the
     small grey pieces in a row."""
     from build123d import Compound, Pos, export_stl
 
@@ -279,8 +248,6 @@ def _ams_stls(work: Path) -> dict[str, Path]:
     loc = pr.pose_location(pieces["tub"], poses["tub"])
     save("tub_grey", loc * parts["tub_grey"])
     save("tub_frosted", loc * parts["tub_frosted"])
-    for path in _blocker_stls(work):
-        out[Path(path).stem] = Path(path)
     save("lever", pr.posed(pieces["ptt_bar"], poses["ptt_bar"]))
     x, row = 0.0, []
     for name in GREY_GROUP:
@@ -309,14 +276,16 @@ def _objects(model_settings: str) -> list[tuple[str, str, str]]:
     return [(oid, re.search(r'key="name" value="([^"]+)"', b).group(1), b) for b, oid in blocks]
 
 
-def ams_project(out: Path, print_dir: Path) -> Path:
-    """The one-plate AMS project (not sliced): see the module docstring."""
+def ams_project(out: Path, print_dir: Path, layout_xy: dict | None = None) -> Path:
+    """The one-plate AMS project (not sliced): see the module docstring.
+    `layout_xy` picks the objects and their places (AMS_LAYOUT by default)."""
+    layout_xy = layout_xy or AMS_LAYOUT
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
         (work / "data").mkdir()
         presets = _presets(work, len(AMS))
         stl = _ams_stls(work)
-        tub_parts = ["tub_grey", "tub_frosted", *(n for n in stl if n.startswith("blocker_"))]
+        tub_parts = ["tub_grey", "tub_frosted"]
         _run(
             [
                 *presets,
@@ -335,7 +304,6 @@ def ams_project(out: Path, print_dir: Path) -> Path:
         )
 
         def tub_settings(t: str) -> str:
-            t = _as_blockers(t.encode()).decode()
             frosted = re.search(
                 r'<part [^>]*>\s*<metadata key="name" value="tub_frosted.stl"/>.*?</part>', t, re.S
             )
@@ -367,8 +335,7 @@ def ams_project(out: Path, print_dir: Path) -> Path:
                 "--export-3mf",
                 "plate_draft.3mf",
                 str(work / "tub.3mf"),
-                str(stl["grey_parts"]),
-                str(stl["lever"]),
+                *(str(stl[k]) for k in ("grey_parts", "lever") if k in layout_xy),
             ],
             work,
         )
@@ -386,8 +353,7 @@ def ams_project(out: Path, print_dir: Path) -> Path:
                 }
             )
             # Supports for the whole plate, not as the tub's own setting
-            # (Bambu Studio did not apply a per-object one for Mario); the
-            # lever and the grey group need none and get none (ams_check).
+            # (Bambu Studio did not apply a per-object one for Mario).
             cfg.update(TREE_SUPPORTS)
             return json.dumps(cfg, indent=4)
 
@@ -401,11 +367,11 @@ def ams_project(out: Path, print_dir: Path) -> Path:
                         'key="extruder" value="1"', f'key="extruder" value="{SLOT["orange"]}"'
                     )
                 t = t.replace(block, new)
-            assert set(ids) == set(AMS_LAYOUT), ids
+            assert set(ids) == set(layout_xy), ids
             return t
 
         def layout(t: str) -> str:
-            for key, (x, y) in AMS_LAYOUT.items():
+            for key, (x, y) in layout_xy.items():
                 item = re.search(rf'<item objectid="{ids[key]}"[^>]*transform="([^"]+)"', t)
                 z = item.group(1).split()[-1]
                 t = t.replace(
@@ -485,7 +451,9 @@ def support_in_keep_outs(project: Path, contact: bool = True, label=None) -> dic
     of its walls, touches nothing there and comes out with the rest. The
     G-code frame is put on the device frame by matching the model's walls to
     the tub's outline (the tub's object only, given its `label`; unrotated)."""
-    pts = [p[:4] for p in extrusions(gcode_of(project)) if label is None or p[4] == label]
+    every = list(extrusions(gcode_of(project)))
+    labelled = any(p[4] is not None for p in every)  # a one-object plate has no markers
+    pts = [p[:4] for p in every if label is None or not labelled or p[4] == label]
     model = [(x, y) for x, y, z, f in pts if "wall" in f.lower() and z > 1.0]
     gx0, gy0 = min(p[0] for p in model), min(p[1] for p in model)
     bb = (hx1.build().shells["tub"]).bounding_box()
@@ -523,6 +491,10 @@ def ams_check(project: Path) -> list[str]:
         slot = {v: k for k, v in SLOT.items()}
         order, used, supported = [], {}, set()  # used: object -> [(colour, z)]
         z, label, filament = 0.0, None, None
+        # A one-object plate has no object markers: everything is that object.
+        single = None if OBJECT in gcode else next(iter(names.values())).removesuffix(".stl")
+        if single is not None:
+            order.append(single)
         for ln in gcode.splitlines():
             if ln.startswith("; Z_HEIGHT:"):
                 z = float(ln.split(":")[1])
@@ -535,13 +507,25 @@ def ams_check(project: Path) -> list[str]:
                     colours.append((slot[filament], round(z, 1)))
             elif ln.startswith("; stop printing object"):
                 label = None
+            elif single is not None and ln.startswith("; FEATURE:") and label is None and filament:
+                label = single
+                used.setdefault(label, [(slot[filament], round(z, 1))])
             elif ln.startswith("; FEATURE: Support"):
                 supported.add(label)
             elif m := re.match(r"M620 S(\d+)A", ln.strip()):
                 filament = int(m.group(1)) + 1
+                if (
+                    single is not None
+                    and label is not None
+                    and used[label][-1][0] != slot[filament]
+                ):
+                    used[label].append((slot[filament], round(z, 1)))  # a change mid-object
         assert order[-1] == "tub", order
         want = {"lever": ["orange"], "grey_parts": ["grey"], "tub": ["grey", "frosted"]}
+        assert set(used) == set(order), (used, order)
         for obj, cols in want.items():
+            if obj not in used:
+                continue  # not on this plate
             got = [c for c, _ in used[obj]]
             assert got == cols, f"{obj} prints in {got}, not {cols}"
         frost_z = used["tub"][1][1]
@@ -565,10 +549,11 @@ def main() -> int:
     out_dir.mkdir(parents=True)
     for stray in out_dir.glob("*.gcode"):
         stray.unlink()
-    ams = ams_project(print_dir / f"{AMS_PROJECT}.3mf", print_dir)
-    print(f"{ams.name}: not sliced (Mario slices it); as sliced here:")
-    for line in ams_check(ams):
-        print(f"    {line}")
+    for name, layout_xy in ((AMS_PROJECT, AMS_LAYOUT), (AMS_TUB_PROJECT, AMS_TUB_LAYOUT)):
+        ams = ams_project(print_dir / f"{name}.3mf", print_dir, layout_xy)
+        print(f"{ams.name}: not sliced (Mario slices it); as sliced here:")
+        for line in ams_check(ams):
+            print(f"    {line}")
     for name, stls, overrides, pause_z in PLATES:
         out = slice_plate(name, stls, overrides, pause_z, print_dir, out_dir)
         print(f"{out.name}: {check(out, pause_z)}")

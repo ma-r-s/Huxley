@@ -145,6 +145,11 @@ ROCKER_Y, ROCKER_Z, ROCKER_RECESS = 5.3, 93.1, 7.2  # rocker top 0.2 below the s
 # the clip ~3 mm, Mario); the panel's chamfer spans it.
 ROCKER_CATCH = (1.2, 2.8)
 ROCKER_PANEL = ROCKER_CATCH[1]
+# The hole's top edge prints as a bare 19 mm bridge of the 1.2 mm land (the
+# slicer sees nothing to support there): 0.3 above and below the body, not
+# 0.1, so a little sag still lets the switch in. Its clips still land on the
+# chamfer, 0.2 deeper.
+ROCKER_HOLE_Z_CLEAR = 0.3
 SPLICE_D = 3.5  # a parallel joint in heat-shrink
 # Mario's cells are protected 18650s (2026-10-10), each with its own circuit,
 # so no separate protection board. The battery - lead runs from the - joint
@@ -188,6 +193,7 @@ KNUCKLE_R = (
 TOOTH_Z = (46.0, 54.0)
 TOOTH_X0 = 30.0  # in front of the right holder, so it can reach in this far
 NOTCH_CLEAR = 0.4  # the tub's notch round the tooth, above and below
+CHANNEL_TOP_RELIEF = 0.4  # over the lever's top end (the channel's top prints on support)
 BOARD_CENTRING = (35.0, 150.0, 330.0)  # board-frame angles of the centring posts
 LATCH_ROOT_Y, LATCH_CATCH = 5.0, 0.5  # switch latch: finger root (cradle y), lip overlap
 STOP_X0 = 26.0  # inner end of the lever's stop block
@@ -315,7 +321,24 @@ def _knuckle_roof():
             (xt, y0, PIVOT_Z), (xe, y0, PIVOT_Z), (xe, y0, zt + xe - xt), (xt, y0, zt), close=True
         )
     )
-    return extrude(prof, y1 - y0, dir=(0, 1, 0))
+    roof = extrude(prof, y1 - y0, dir=(0, 1, 0))
+    # The web's swept top stands above that line for its first ~1 mm (a flat
+    # strip the slicer supported, its support sitting where the lever swings):
+    # a second 45 deg roof from the web's top inner corner, fully pressed.
+    a = math.radians(PRESS_DEG)
+    cx, cz = -CLEAR, 4.0 + CLEAR  # web top inner corner (grown), from the pivot
+    xs = PIVOT_X + cx * math.cos(a) - cz * math.sin(a) - 0.05
+    zs = PIVOT_Z + cz
+    prof = make_face(
+        Polyline(
+            (xs, y0, zs - 0.05),
+            (xe, y0, zs - 0.05),
+            (xe, y0, zs + xe - xs),
+            (xs, y0, zs),
+            close=True,
+        )
+    )
+    return roof + extrude(prof, y1 - y0, dir=(0, 1, 0))
 
 
 def _profile(grow: float, depth: float, y0: float):
@@ -951,11 +974,13 @@ def build() -> Concept:
         panel_x + ROCKER_PANEL + 0.1,
         ROCKER_Y - cy_ - 0.1,
         ROCKER_Y + cy_ + 0.1,
-        ROCKER_Z - cz - 0.1,
-        ROCKER_Z + cz + 0.1,
+        ROCKER_Z - cz - ROCKER_HOLE_Z_CLEAR,
+        ROCKER_Z + cz + ROCKER_HOLE_Z_CLEAR,
     )
     chamfer = ROCKER_PANEL - ROCKER_CATCH[0]
-    hole = Rectangle(2 * (cz + 0.1), 2 * (cy_ + 0.1))  # after the turn: x -> -Z, y -> Y
+    hole = Rectangle(
+        2 * (cz + ROCKER_HOLE_Z_CLEAR), 2 * (cy_ + 0.1)
+    )  # after the turn: x -> -Z, y -> Y
     taper = extrude(hole, chamfer + 0.01, taper=-45)  # widens 45 deg as it goes in
     rocker_cut += Location((panel_x + ROCKER_CATCH[0], ROCKER_Y, ROCKER_Z), (0, 90, 0)) * taper
     # local +z (outward) -> device -X, local x (long side) -> device Y
@@ -981,6 +1006,16 @@ def build() -> Concept:
     # slicer leaves unsupported: support left in them would bind.
     tub -= _pressed_union()
     tub -= _knuckle_roof()
+    # The channel's top prints over support: CHANNEL_TOP_RELIEF more room so
+    # what that leaves can't reach the lever's top end swinging in under it.
+    tub -= bbox_solid(
+        PIVOT_X - 3.0,
+        X_OUT + 1.0,
+        SWITCH_Y - BAR_W / 2 - CLEAR,
+        SWITCH_Y + BAR_W / 2 + CLEAR,
+        BAR_Z1 + CLEAR - 0.01,
+        BAR_Z1 + CLEAR + CHANNEL_TOP_RELIEF,
+    )
     tub -= _teardrop_x(SWITCH_Y, TS_Z, TUBE_BORE, tube_x0 - 0.01, X_OUT + 1)
     tub -= stem_slot
     # Stop: a block of the backing that the lever's inner face lands on after

@@ -206,50 +206,13 @@ def support_keep_outs() -> dict[str, tuple[float, float, float, float, float, fl
             m.ROCKER_Z - cz + 0.3,
             m.ROCKER_Z + cz - 0.3,
         ),
-        "USB pocket": (
+        "USB plug": (  # where the plug's shell goes; the pocket round it is roomy
             -m.W / 2 + 0.3,
-            m.USB_FACE - 1.3,
-            m.USB_Y - 3.4,
-            m.USB_Y + 3.4,
-            m.BOARD_Z - 6.4,
-            m.BOARD_Z + 6.4,
-        ),
-    }
-
-
-def support_blockers() -> dict[str, tuple[float, float, float, float, float, float]]:
-    """Support blockers for the tub's slice (device frame, like the keep-outs).
-    The slicer supports every flat roof, bridges included, and tree branches
-    for one roof run through the next cavity; these stop both in the lever
-    channel, the rocker's panel hole and the USB pocket. What they leave
-    unsupported prints as short bridges and 45 deg roofs."""
-    m = hx1
-    panel_x = -m.W / 2 + m.ROCKER_RECESS
-    cy, cz = hw.ROCKER_BODY[0] / 2, hw.ROCKER_BODY[1] / 2
-    return {
-        "lever_channel": (
-            m.PIVOT_X - m.KNUCKLE_R - m.CLEAR - 0.6,
-            m.X_OUT + 0.6,
-            m.CHAN_Y0,
-            m.SWITCH_Y + m.BAR_W / 2 + m.CLEAR + 0.3,
-            m.PIVOT_Z - 3.0,
-            m.BAR_Z1 + m.CLEAR + 0.45,
-        ),
-        "rocker_hole": (
-            panel_x - 0.3,
-            panel_x + m.ROCKER_PANEL + 0.2,
-            m.ROCKER_Y - cy - 2.0,
-            m.ROCKER_Y + cy + 2.0,
-            m.ROCKER_Z - cz - 2.0,
-            m.ROCKER_Z + cz + 2.0,
-        ),
-        "usb_pocket": (
-            -m.W / 2 - 0.5,
-            m.USB_FACE + 0.3,
-            m.USB_Y - 4.3,
-            m.USB_Y + 4.3,
-            m.BOARD_Z - 7.3,
-            m.BOARD_Z + 7.3,
+            m.USB_FACE,
+            m.USB_Y - 1.6,
+            m.USB_Y + 1.6,
+            m.BOARD_Z - 4.5,
+            m.BOARD_Z + 4.5,
         ),
     }
 
@@ -290,11 +253,8 @@ def export_stls(out_dir) -> list[str]:
         "HX-1 rev E print set (PLA, 0.4 nozzle, 0.20 mm layers). Tub: tree supports, "
         "Everywhere, bridges up to 20 mm left unsupported (under its roof, the switch "
         "cradle, the rocker and holder pads, the lever pin's notch); everything else needs "
-        "none. The tub's support blockers (lever channel, rocker hole, USB pocket) are "
-        "only in the 3mf projects: slicing hx1_03_tub.stl on its own puts support in "
-        "the lever channel. AMS: HX1_one_plate_AMS.3mf; ready-sliced: sliced/.\n"
-        + "\n".join(written)
-        + "\n"
+        "none. AMS: HX1_tub_AMS.3mf (the tub alone) or HX1_one_plate_AMS.3mf (all that "
+        "is left after the first prints); ready-sliced: sliced/.\n" + "\n".join(written) + "\n"
     )
     return written
 

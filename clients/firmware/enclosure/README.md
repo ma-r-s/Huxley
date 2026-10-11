@@ -258,14 +258,28 @@ and lead came with it (Mario, 2026-10-11), so plug it in and splice its lead.
 
 `huxcase/printability.py` measures what needs support in each pose and finds
 any layer that starts in mid-air (`tests/test_printability.py` holds every
-piece to that). The tub's close fits get no support at all: the plunger bore
-and the lever pin's seat have 45 deg tops, the lever's pivot a 45 deg roof,
-and the sliced project carries support blockers on the lever channel, the
-rocker's panel hole and the USB pocket, whose tops then print as short
-bridges. `huxcase.slice` reads the tub's G-code and fails if any support
-touches those (`printability.support_keep_outs`); a tree branch may still
+piece to that). In the tub, support may not touch what moves or fits
+tight: the plunger bore and the lever pin's seat have 45 deg tops, and the
+lever's pivot two 45 deg roofs, so the slicer puts none there.
+Everything else that overhangs gets support, bridges included (the
+preset's setting): the top of the lever slot (raised 0.4 mm over the
+lever's end, `CHANNEL_TOP_RELIEF`, so support marks can't reach it), the
+USB-C pocket's roof (roomy round the plug's moulding), the rocker recess.
+`huxcase.slice` reads the tub's G-code and fails if any support touches
+the bore, the pivot, the pin seat, the rocker's panel hole or the USB
+plug's own path (`printability.support_keep_outs`); a tree branch may
 pass through the rocker hole or the lever slot, clear of their walls, and
-comes out with the rest.
+comes out with the rest. The rocker hole's top edge prints as a bare 19 mm
+bridge of its 1.2 mm land (Bambu sees nothing to support), so the hole has
+0.3 above and below the switch body (`ROCKER_HOLE_Z_CLEAR`) for some sag.
+
+Support blockers are gone (2026-10-11): with them on the lever slot, the
+rocker hole and the USB pocket, those overhangs printed bare and failed on
+Mario's first tub.
+
+**With the AMS, the tub alone**: `out/print/HX1_tub_AMS.3mf`, a Bambu Studio
+project, not sliced: open it, slice, print. Grey, then frosted from 36 mm by
+itself; about 2 h 30 min.
 
 **With the AMS, one plate**: `out/print/HX1_one_plate_AMS.3mf` is a Bambu
 Studio project, not sliced: open it, slice, print. It holds what is left after
@@ -276,7 +290,7 @@ objects and once inside the tub. Filaments: slot 1 grey, 2 black (not used
 here), 3 orange, 4 frosted. The tub is two parts, grey below 36 mm and frosted
 above, so it changes to frosted by itself, no pause. Tree supports are on
 for the whole plate (not as the tub's own setting, which Bambu Studio did
-not apply); only the tub needs and gets them, with its blockers. The
+not apply); only the tub needs and gets them. The
 bridge's screw hole is skinned over on the plate's first 0.5 mm
 (`hx1.bridge_skin`): its plate prints as a 17 mm bridge, and with the hole
 open the bridge lines would end in the air (Bambu Studio warns of a

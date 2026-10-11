@@ -255,6 +255,22 @@ the presets in `huxcase/slice.py`. The rest now goes on one AMS plate,
 frosted in slots 1 to 4, the tub as a grey and a frosted part), checked by
 slicing it here.
 
+**First tub print (2026-10-11)**: failed where the support blockers were
+(the lever slot, the rocker hole, the USB pocket): those overhangs printed
+in mid-air (read back from the G-code: overhang walls and bridges at z 54,
+87 to 100, 99 to 101 and 79 inside the blocker volumes). The checks only
+proved no support touched the close fits, never that the bare overhangs
+print. Now: no blockers, every bridge supported (the preset default); a
+second 45 deg roof over the lever's web (its flat strip drew support where
+the lever swings); the channel top raised 0.4 over the lever's end; the
+rocker hole 0.3 above and below the body (its top edge still prints as a
+bare bridge: Bambu sees nothing to support). Checked: support touches
+none of the bore, pivot, pin seat, rocker hole or USB plug path; no
+warnings. New tub-only AMS project `HX1_tub_AMS.3mf`.
+Lesson: a slicer check that support stays away from X must come with a
+check that what is left bare is printable; prefer geometry (45 deg roofs,
+relief) over blockers.
+
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
 bottom is fine, holders whole, no glue, plastic pivot, protected cells
 instead of a protection board, the ribbon and loose wires, the board's
