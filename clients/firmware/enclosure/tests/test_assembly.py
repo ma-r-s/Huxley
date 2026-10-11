@@ -44,6 +44,7 @@ def model():
         "plug": sh["grille_plug"],
         "speaker": env["speaker"],
         "board": env["board"] + env["board_screws"],
+        "protection": env["protection_pcb"],
     }
 
 
@@ -60,11 +61,24 @@ def _path(start, end=(0.0, 0.0, 0.0), via=None):
     return [*pts, end]
 
 
+def _boxes_meet(a, b) -> bool:
+    """Axis-aligned boxes intersect (BoundBox.overlaps is False when one box
+    contains the other, which made the tub invisible as an obstacle)."""
+    return (
+        a.min.X <= b.max.X
+        and b.min.X <= a.max.X
+        and a.min.Y <= b.max.Y
+        and b.min.Y <= a.max.Y
+        and a.min.Z <= b.max.Z
+        and b.min.Z <= a.max.Z
+    )
+
+
 def _overlap(shape, obstacles):
     total = 0.0
     bb = shape.bounding_box()
     for o in obstacles:
-        if bb.overlaps(o.bounding_box()):
+        if _boxes_meet(bb, o.bounding_box()):
             total += (shape & o).volume
     return total
 
@@ -86,7 +100,8 @@ def _clear(m, moving, path, installed):
 # out under their lips.
 STEPS = [
     ("rocker", (["rocker"], _path((-20.0, 0, 0)), ["tub"])),
-    ("switch", (["switch"], _path((0, -20.0, 0)), ["tub", "rocker"])),
+    ("protection board", (["protection"], _path((0, -20.0, 0)), ["tub", "rocker"])),
+    ("switch", (["switch"], _path((0, -20.0, 0)), ["tub", "rocker", "protection"])),
     ("plunger", (["plunger"], _path((20.0, 0, 0)), ["tub", "switch"])),
     ("lever", (["lever", "pin"], _path((0, -12.0, 0)), ["tub", "switch", "plunger"])),
     (

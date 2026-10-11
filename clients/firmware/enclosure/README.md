@@ -80,8 +80,8 @@ switch.
 | Plunger + spring | the tube | the spring's 1.5 mm preload between lever and plunger |
 | Lever | its printed pin | the pin sits in two blind seats (tub behind, faceplate tooth in front), captured when the case closes; 0.9 N of spring preload holds it against its stop |
 | Power switch | its panel in a recess in the left side | its own snap ears |
+| Protection board | two rails on the back wall, a ledge below | crush ribs and snap lips |
 | Joints (+ and -) | pockets on the back wall | pressed in between two shelves (in heat-shrink) |
-| Battery - lead | two hooks on the back wall | their lips |
 | Battery + lead | a clip on the bridge | its lip |
 
 Every bought part above has a hard stop within 0.5 mm in every direction
@@ -173,14 +173,17 @@ lead between the BAT pad and the + joint. The charger sits behind it too, so
 **the rocker must be ON to charge**. Power on the left, talk on the right: easy
 to tell apart by touch. A test asserts it stays below the surface.
 
-## Battery protection: recommended, not fitted
+## Battery protection: fitted
 
-The board has no cell protection (see MEASUREMENTS). Two unprotected cells in
-parallel with no fuse means a pinched wire is a short of ~20 A. Mario chose to
-skip a protection board for now; its 26 x 5 x 3.5 mm pocket stays reserved
-behind the speaker, the firmware should shut down at a safe voltage via
-`BAT_ADC` (GPIO1), and every joint goes in heat-shrink and its pocket. A
-DW01 + 8205 1S board is still the recommendation.
+The board has no cell protection (see MEASUREMENTS), and two unprotected cells
+in parallel with no fuse turn a pinched wire into a ~20 A short. Mario
+approved fitting one (2026-10-10): a 1S protection board (DW01 + 8205 class,
+up to 3.5 x 5 x 26 mm, about a dollar; **not in his stock, to buy**) stands on
+edge against the back wall behind the speaker, between two rails with crush
+ribs and snap lips, on a ledge. It sits in the battery - line: the cells' -
+joint goes to its B-, its P- goes to the board, and its B+ is tapped off the
+battery + pad (after the power switch, so it is unpowered when off, which is
+fine). The firmware still shuts down at a safe voltage via `BAT_ADC` (GPIO1).
 
 ## Cables
 
@@ -189,7 +192,9 @@ DW01 + 8205 1S board is still the recommendation.
 | Speaker | SPK plug (board back) | the speaker's solder tabs | **cut the 97 mm lead to 30 mm** and re-solder at the speaker: the route is 22 mm, and loose wire buzzes |
 | Battery + | board BAT pad | rocker, then the + joint | the clip on the bridge |
 | Holder + leads (2) | top of each holder | + joint | the joint's pocket |
-| Battery − | board BAT pad | down the back wall to the - joint | two hooks on the back wall |
+| Battery − | board BAT pad | the protection board's P- | short, across the channel |
+| Protection B− | the protection board's B- | the - joint | short, at the channel's foot |
+| Protection B+ | the battery + pad | the protection board's B+ | short, beside the - lead |
 | Holder - leads (2) | bottom of each holder | - joint | the joint's pocket |
 | PTT (2) | tact switch legs | header tails on the board back | short and direct, in front of the right holder |
 
@@ -248,7 +253,8 @@ Printed: faceplate, tub, grille plug, lever, lever pin, plunger, holder bridge
 
 Bought, all from Mario's inventory (photos 2026-10-10): the board and its
 speaker; two 18650 cells in two holders; the 12 x 12 tact switch; the SciWil
-0.4 x 4 x 15 spring; the KCD1-101 rocker; Kadrick button heads 4 x M3 x 8,
+0.4 x 4 x 15 spring; the KCD1-101 rocker; a 1S protection board (to buy);
+Kadrick button heads 4 x M3 x 8,
 1 x M3 x 6, 3 x M2 x 8 with flat washers; FFVRVSS 5 x M3 x 5 heat-set inserts;
 ribbon cable (double the conductors for the battery leads).
 

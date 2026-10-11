@@ -104,8 +104,6 @@ BRIDGE_SCREW_L = 6.0  # M3 x 6 into a 5 mm insert in a boss on the back wall
 # Wiring: the parallel joints and the long - run (see _wire_keepers).
 J_POS = (X0 - 4.0, CELL_Y + 7.0, CELL_TOP + 1.5)  # + joint: over the channel, under the rocker
 J_NEG = (X0 + 2.0, CELL_Y + 8.0, T + 1.8)  # - joint: at the channel's foot
-NEG_RUN_X, NEG_RUN_Y = X0 + 6.2, Y_BACK - T - 1.2  # - lead down the back wall
-NEG_HOOKS_Z = (32.0, 21.0)
 POS_CLIP_X, POS_CLIP_Y = X0 - 7.0, 0.8  # + lead where it crosses the bridge
 
 # Black grille: a plug that drops into a window in the face from inside. Its
@@ -121,7 +119,17 @@ SPK_TABS = (0.0, 60.0, 120.0, 180.0, 240.0, 300.0)
 # back had only 20 mm of depth behind it before the light ring.
 ROCKER_Y, ROCKER_Z, ROCKER_RECESS = 5.3, 93.1, 7.2  # rocker top 0.2 below the surface
 # Reserved pocket for a 1S protection board, in the grey bottom third behind the speaker.
-PROT_X, PROT_Y, PROT_Z = 6.0, 10.75, 23.0
+# 1S protection board (DW01 + 8205 class), standing on edge against the back
+# wall behind the speaker, between the speaker post and the right holder.
+PROT_BOX = (
+    3.1,
+    3.1 + 3.5,
+    Y_BACK - T - 0.3 - 5.0,
+    Y_BACK - T - 0.3,
+    10.0,
+    36.0,
+)  # x0 x1 y0 y1 z0 z1
+SPLICE_D = 3.5  # a parallel joint in heat-shrink
 
 # PTT lever on the right side.
 X_OUT = W / 2
@@ -300,15 +308,18 @@ def _faceplate(outer, wall, boss_box, usb_boss, inner):
     lip -= _along_y(X0, SPK_Z, hw.SPK_D / 2 + fits.PART + 2.5, FACE_Y - 1, FACE_Y + LIP_D + 1)
     lip -= _along_y(X0, BOARD_Z, hw.PCB_R + 0.3 + fits.PART, FACE_Y - 1, FACE_Y + LIP_D + 1)
     lip -= boss_box
-    # The grille plug drops in from inside: clear its path through the lip.
+    # The grille plug drops in from inside: clear its path through the lip,
+    # flange included (top and sides; there is none below the plug).
     lip -= _panel(fits.SNUG + 0.1, FACE_Y - 1, FACE_Y + LIP_D + 1)
+    flange_path = _panel(FLANGE_W + fits.SNUG + 0.1, FACE_Y - 1, FACE_Y + LIP_D + 1)
+    lip -= flange_path - bbox_solid(-60, 60, -60, 60, -10, SPK_Z + 0.5 - PANEL_H / 2)
     face += lip
     face += usb_boss
 
     # Grille window; the plug's flange sits in a recess on the inside of the
     # face (top and sides: the speaker reaches the floor, no room below).
     face -= _panel(fits.SNUG, Y_FRONT - 1, FACE_Y + 1)
-    recess = _panel(FLANGE_W + fits.SNUG, FACE_Y - FLANGE_T, FACE_Y + 0.01)
+    recess = _panel(FLANGE_W + fits.SNUG, FACE_Y - FLANGE_T - fits.STACK, FACE_Y + 0.01)
     face -= recess - bbox_solid(-60, 60, -60, 60, -10, SPK_Z + 0.5 - PANEL_H / 2)
     # Crush ribs in the window: the plug stays put when the faceplate is turned over.
     window_ribs = []
@@ -434,7 +445,7 @@ def _plug():
     """Black grille plug, with the locating tabs and clamp ring for the speaker.
     Returns (plug, crush ribs)."""
     plug = _panel(0.0, Y_FRONT, FACE_Y)
-    flange = _panel(FLANGE_W, FACE_Y - FLANGE_T + fits.STACK / 2, FACE_Y)
+    flange = _panel(FLANGE_W, FACE_Y - FLANGE_T, FACE_Y)  # 3 layers; the recess is one deeper
     flange -= bbox_solid(-60, 60, -60, 60, -10, SPK_Z + 0.5 - PANEL_H / 2 + 0.01)
     for sx, sz in SCREWS:
         flange -= _along_y(sx, sz, PAD_R + fits.SNUG, FACE_Y - 2, FACE_Y + 1)
@@ -461,26 +472,45 @@ def _plug():
 
 
 def _wire_keepers():
-    """Pockets for the two parallel joints and hooks for the long - run, all on
-    the back wall: no wire or joint is left free to buzz against the back box.
+    """Pockets for the two parallel joints and the protection board's holder,
+    all on the back wall: no joint or board is left free to buzz in the back
+    box. Returns (rigid features, snap lips, crush ribs).
 
-    The joints (in heat-shrink) press in between two shelves from the front;
-    the - lead snaps behind the hooks' lips.
+    The joints (in heat-shrink) press in between two shelves from the front,
+    past a lip; the board slides in between two rails, past their lips, onto a
+    ledge.
     """
     back = Y_BACK - T + 0.1
+    gap = SPLICE_D / 2 + fits.PART
     jx, jy, jz = J_POS
-    keep = []
-    for z0, z1 in ((jz - 4.0, jz - 3.0), (jz + 2.5, jz + 3.5)):
+    keep, snaps, ribs = [], [], []
+    for z0, z1, lz0, lz1 in (
+        (jz - gap - 1.0, jz - gap, jz - gap, jz - gap + 0.3),
+        (jz + gap, jz + gap + 1.0, jz + gap - 0.3, jz + gap),
+    ):
         keep.append(bbox_solid(jx - 5.0, jx + 5.0, jy - 2.6, back, z0, z1))
+        snaps.append(bbox_solid(jx - 5.0, jx + 5.0, jy - 2.6, jy - 1.8, lz0, lz1))  # front lip
     nx, ny, nz = J_NEG
-    keep.append(bbox_solid(nx - 5.0, nx + 1.0, ny - 2.6, back, nz + 2.7, nz + 3.7))
-    for zc in NEG_HOOKS_Z:
-        for side in (-1, 1):
-            x0, x1 = sorted((NEG_RUN_X + side * 0.7, NEG_RUN_X + side * 1.7))
-            keep.append(bbox_solid(x0, x1, NEG_RUN_Y - 1.5, back, zc - 2.0, zc + 2.0))
-            lx0, lx1 = sorted((NEG_RUN_X + side * 0.4, NEG_RUN_X + side * 0.71))  # 0.3 bump
-            keep.append(bbox_solid(lx0, lx1, NEG_RUN_Y - 1.5, NEG_RUN_Y - 0.7, zc - 2.0, zc + 2.0))
-    return _union(keep)
+    s0 = T + SPLICE_D + 2 * fits.PART  # the floor is the bottom of this pocket
+    keep.append(bbox_solid(nx - 5.0, nx + 1.0, ny - 2.6, back, s0, s0 + 1.0))
+    snaps.append(bbox_solid(nx - 5.0, nx + 1.0, ny - 2.6, ny - 1.8, s0 - 0.3, s0))
+    # Protection board holder.
+    x0, x1, y0, y1, z0, z1 = PROT_BOX
+    r0, r1 = x0 - fits.PART, x1 + fits.PART
+    rail = fits.MIN_WALL  # thin: the right holder's 1 mm inboard path passes beside it
+    for a, b in ((r0 - rail, r0), (r1, r1 + rail)):
+        keep.append(bbox_solid(a, b, y0 - 0.6, back, z0 - 1.3, z1 + 1.3))
+    ledge = bbox_solid(r0, r1, y0 - 0.3, back, z0 - 1.3, z0 - fits.PART)
+    keep.append(
+        ledge - bbox_solid(x0 + 0.5, x1 - 0.5, y0 - 1, y0 + 2.5, z0 - 2, z0)
+    )  # slot: B- lead
+    keep.append(bbox_solid(r0, r1, y0 + 2.5, back, z1 + fits.PART, z1 + 1.3))  # stop, back half
+    snaps.append(bbox_solid(r0, x0 + 0.3, y0 - 0.6, y0 - 0.05, z0 + 2, z1 - 2))  # lips
+    snaps.append(bbox_solid(x1 - 0.3, r1, y0 - 0.6, y0 - 0.05, z0 + 2, z1 - 2))
+    for zc in (z0 + 6, z1 - 6):  # crush ribs
+        ribs.append(bbox_solid(r0, x0 + 0.15, y0 + 1.5, y1 - 1.0, zc - 0.4, zc + 0.4))
+        ribs.append(bbox_solid(x1 - 0.15, r1, y0 + 1.5, y1 - 1.0, zc - 0.4, zc + 0.4))
+    return _union(keep), _union(snaps), _union(ribs)
 
 
 def _holder_retention(inner):
@@ -746,7 +776,7 @@ def build() -> Concept:
     stem_slot = bbox_solid(
         tube_x0 - 0.01,
         PLUNGER_TIP_X + 0.3,
-        SWITCH_Y - TUBE_R - 1,
+        SWITCH_Y - pocket - 2.0,  # out past the cradle's front edge
         SWITCH_Y,
         TS_Z - stem_w,
         TS_Z + stem_w,
@@ -798,7 +828,10 @@ def build() -> Concept:
         x, z = X0 + 1.8 * math.cos(a), SPK_Z + 1.8 * math.sin(a)
         tub_ribs.append(_along_y(x, z, 0.6, post_y0 - fits.CRUSH_RIB, post_y0 + 0.01))
 
-    tub += _wire_keepers()
+    keepers, keeper_snaps, keeper_ribs = _wire_keepers()
+    tub += keepers
+    tub_ribs.append(keeper_ribs)
+    latch += keeper_snaps  # snap lips: rigid stops that flex on the way in
 
     # Cuts: lever channel, plunger bore, tooth notch, rear pin seat, rocker, USB,
     # and the band the faceplate's lip goes into.
@@ -857,6 +890,11 @@ def build() -> Concept:
                 (x, lead_y, CELL_TOP - 0.5),
                 (x, lead_y + 0.5, CELL_TOP + 1.0),
                 ((x + j_pos[0]) / 2, j_pos[1] + 1.0, CELL_TOP + 1.3),
+                (
+                    j_pos[0] + (5.5 if x > j_pos[0] else -5.5),
+                    j_pos[1] + 0.2,
+                    j_pos[2],
+                ),  # level into the pocket
                 j_pos,
             ],
             d=1.5,
@@ -866,6 +904,11 @@ def build() -> Concept:
                 (x, lead_y, CELL_Z0 + 0.5),
                 (x, lead_y + 0.5, CELL_Z0 - 1.4),
                 ((x + j_neg[0]) / 2, j_neg[1] + 0.5, j_neg[2] + 0.4),
+                (
+                    j_neg[0] + (1.6 if x > j_neg[0] else -5.5),
+                    j_neg[1] + 0.1,
+                    j_neg[2],
+                ),  # level into the pocket
                 j_neg,
             ],
             d=1.5,
@@ -875,14 +918,8 @@ def build() -> Concept:
     plug_z = to_device(17.81, 0)[1]
     plug_y = PCB_BOTTOM_Y + hw.BOTTOM_CONN
     rocker_tab_x = panel_x + hw.ROCKER_BODY[2] + hw.ROCKER_TABS - 0.5
-    prot = bbox_solid(
-        X0 + PROT_X - hw.PROTECTION_PCB[1] / 2,
-        X0 + PROT_X + hw.PROTECTION_PCB[1] / 2,
-        PROT_Y - hw.PROTECTION_PCB[2] / 2,
-        PROT_Y + hw.PROTECTION_PCB[2] / 2,
-        PROT_Z - hw.PROTECTION_PCB[0] / 2,
-        PROT_Z + hw.PROTECTION_PCB[0] / 2,
-    )
+    prot = bbox_solid(*PROT_BOX)
+    px0, px1, py0, py1, pz0, pz1 = PROT_BOX
     tab_y = SPK_FRONT_Y + SPK_TAB_DEPTH + 0.6
     cables = {
         "cable_spk": hw.cable(
@@ -915,19 +952,33 @@ def build() -> Concept:
             ],
             d=1.2,
         ),
-        # - : plug -> protection board (P-) ... (B-) -> - joint, behind the speaker.
-        # - : plug -> back wall -> straight down it to the - joint, held by two
-        # hooks (no protection board fitted; its pocket stays reserved).
+        # - : plug -> protection board P- (its top), B- (its bottom) -> - joint.
         "cable_bat_neg": hw.cable(
             [
                 (bat_x - 1.2, plug_y, plug_z),
                 (bat_x - 1.5, plug_y + 3.0, plug_z - 2.0),
-                (X0 + 3.0, 9.0, BACK_FROST_Z + 12.0),
-                (NEG_RUN_X - 0.4, NEG_RUN_Y - 1.8, BACK_FROST_Z + 7.0),
-                (NEG_RUN_X, NEG_RUN_Y, BACK_FROST_Z + 2.0),
-                (NEG_RUN_X, NEG_RUN_Y, (NEG_HOOKS_Z[0] + NEG_HOOKS_Z[-1]) / 2),
-                (NEG_RUN_X, NEG_RUN_Y, NEG_HOOKS_Z[-1] - 6.0),
-                (j_neg[0] + 2.0, j_neg[1] + 0.6, j_neg[2] + 2.0),
+                (X0 + 3.0, 7.0, pz1 + 8.0),
+                (px0 + 1.0, py0 - 0.4, pz1 + 2.0),
+                (px0 + 1.0, py0 + 0.6, pz1 + 0.3),
+            ],
+            d=1.2,
+        ),
+        # B+ : the protection IC's supply, tapped off the battery + pad.
+        "cable_bat_bp": hw.cable(
+            [
+                (bat_x + 0.6, plug_y, plug_z),
+                (bat_x + 0.9, plug_y + 3.0, plug_z - 2.5),
+                (X0 + 4.5, 6.0, pz1 + 9.0),
+                (px1 - 1.0, py0 - 0.6, pz1 + 2.0),
+                (px1 - 1.0, py0 + 0.6, pz1 + 0.3),
+            ],
+            d=1.2,
+        ),
+        "cable_bat_bm": hw.cable(
+            [
+                (px0 + 1.5, py0 + 0.6, pz0 - 0.3),
+                (px0 + 1.0, py0 - 0.5, pz0 - 2.5),
+                (j_neg[0] + 2.0, j_neg[1] - 0.8, j_neg[2] + 1.2),
                 j_neg,
             ],
             d=1.2,
@@ -989,6 +1040,8 @@ def build() -> Concept:
         Part("cable_spk", cables["cable_spk"], "wire_black"),
         Part("cable_bat_pos", cables["cable_bat_pos"], "wire_red"),
         Part("cable_bat_neg", cables["cable_bat_neg"], "wire_black"),
+        Part("cable_bat_bp", cables["cable_bat_bp"], "wire_red"),
+        Part("cable_bat_bm", cables["cable_bat_bm"], "wire_black"),
         Part("cable_bat_sw", cables["cable_bat_sw"], "wire_red"),
         Part("cable_ptt_a", cables["cable_ptt_a"], "wire_white"),
         Part("cable_ptt_b", cables["cable_ptt_b"], "wire_white"),
@@ -1080,8 +1133,15 @@ def build() -> Concept:
         ("cable_bat_pos", "board"),
         ("cable_bat_neg", "board"),
         ("cable_bat_pos", "cable_bat_neg"),  # same lead out of one plug
-        ("cable_bat_neg", "lead_neg_0"),  # the - joint
-        ("cable_bat_neg", "lead_neg_1"),
+        ("cable_bat_bm", "lead_neg_0"),  # the - joint
+        ("cable_bat_bm", "lead_neg_1"),
+        ("protection_pcb", "cable_bat_neg"),  # soldered to its pads
+        ("protection_pcb", "cable_bat_bp"),
+        ("protection_pcb", "cable_bat_bm"),
+        ("protection_pcb", "tub_ribs"),  # its holder's lips and ribs
+        ("cable_bat_bp", "board"),  # leaves at the battery pad
+        ("cable_bat_bp", "cable_bat_pos"),
+        ("cable_bat_bp", "cable_bat_neg"),
         ("cable_ptt_a", "board"),  # soldered to the header tails
         ("cable_ptt_b", "board"),
         ("cable_ptt_a", "cable_ptt_b"),

@@ -61,6 +61,15 @@ STEPS = [
         "explode": (-40, 0, 0),
     },
     {
+        "id": "protection",
+        "title": "Protection board",
+        "text": "A 1S protection board (DW01 + 8205) in the battery - line: it cuts off "
+        "a short or an empty cell. Wires first, then it slides into its rails.",
+        "parts": ["protection_pcb"],
+        "enter": (0, -60, 0),
+        "explode": (0, -20, -15),
+    },
+    {
         "id": "switch",
         "title": "Talk switch",
         "text": "Solder two wires to one pair of legs, then slide the 12 × 12 button "
@@ -163,6 +172,7 @@ LABELS = [
     ("ptt_bar", "Talk lever"),
     ("ptt_pin", "Lever pin, printed"),
     ("rocker_*", "Power switch KCD1-101"),
+    ("protection_pcb", "Protection board, 1S"),
     ("holder_*", "18650 holder"),
     ("cell_*", "18650 cell"),
     ("bridge_screw", "M3 × 6 screw"),
@@ -192,6 +202,7 @@ BOUGHT = [
     ("12 × 12 tact switch", 1),
     ("Spring 0.4 × 4 × 15 (SciWil kit)", 1),
     ("KCD1-101 rocker switch", 1),
+    ("1S protection board, DW01 + 8205 (to buy)", 1),
     ("M3 × 8 button head, case", 4),
     ("M3 × 6 button head, holder bridge", 1),
     ("M3 × 5 heat-set insert", 5),
@@ -231,7 +242,7 @@ def _glb_to_json(glb: bytes) -> dict:
 
 
 # Parts the page leaves out on purpose.
-HIDDEN = {"protection_pcb"}  # reserved pocket, not fitted
+HIDDEN: set[str] = set()
 
 
 def assign_steps(names: list[str]) -> dict[str, str]:

@@ -59,11 +59,13 @@ CASES = {
     "bridge": (("tub", "screws"), ("-y",)),  # its M3 x 6 holds it from the front
     # The rocker's own snap ears hold it outward (-x); they are not modelled.
     "rocker": (("tub",), ("-x",)),
+    "protection_pcb": (("tub",), ()),
+    # The lever turns on its pin (rotation is its job); every translation is held.
+    "ptt_bar": (("tub", "pin", "faceplate"), ()),
     # The spring pushes the plunger onto the stem along x.
     "plunger": (("tub",), ("+x", "-x")),
     # Wires: the long runs sit in clips (prongs either side, a lip in front);
     # along their own length and toward the wall they are free by nature.
-    "cable_bat_neg": (("tub",), ("+y", "+z", "-z")),
     "cable_bat_pos": (("bridge",), ("+y", "+z", "-z")),
 }
 
