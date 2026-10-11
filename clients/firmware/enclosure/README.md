@@ -10,8 +10,9 @@ held by printed features, screws or crush ribs, no glue; every bought part has
 a hard stop within 0.5 mm in every direction (tested); every printed piece is
 one solid with a known print pose, and nothing starts in mid-air (tested); the
 sliced tub has no support touching a close fit (checked in its G-code). The
-fit coupon is printed and folded in; next: print the parts from
-`out/print/sliced/`. Tracked as F-0010 in [`../docs/triage.md`](../docs/triage.md).
+fit coupon is printed and folded in; the faceplate, grille, a pin and a
+plunger are printed (2026-10-11); next: the rest, on one AMS plate
+(`out/print/HX1_one_plate_AMS.3mf`). Tracked as F-0010 in [`../docs/triage.md`](../docs/triage.md).
 The interactive build page (spin, explode, x-ray, build it) comes from
 `huxcase/site.py`.
 
@@ -263,10 +264,19 @@ touches those (`printability.support_keep_outs`); a tree branch may still
 pass through the rocker hole or the lever slot, clear of their walls, and
 comes out with the rest.
 
-**Ready to print**: `out/print/sliced/` has one sliced Bambu Studio project
-per filament colour for the P2S (0.4 nozzle, 0.20 mm Standard, Bambu PLA
-Basic, Textured PEI plate; pick your plate in Bambu Studio if it differs).
-Open one and press print, or send it from Bambu Handy:
+**With the AMS, one plate**: `out/print/HX1_one_plate_AMS.3mf` is a Bambu
+Studio project, not sliced: open it, slice, print. It holds what is left after
+the first prints (the faceplate, grille, a pin and a plunger, 2026-10-11): the
+tub, the lever, and the bridge with the two longer plungers and two spare pins
+as one grey object. It prints object by object, so the AMS swaps only between
+objects and once inside the tub. Filaments: slot 1 grey, 2 black (not used
+here), 3 orange, 4 frosted. The tub is two parts, grey below 36 mm and frosted
+above, so it changes to frosted by itself, no pause. The tub alone gets tree
+supports and the support blockers. About 2 h 50 min.
+
+**Without the AMS**: `out/print/sliced/` has one sliced project per filament
+colour for the P2S (0.4 nozzle, 0.20 mm Standard, Bambu PLA Basic, Textured
+PEI plate; pick your plate in Bambu Studio if it differs):
 
 | Project | Filament | About |
 | --- | --- | --- |
@@ -275,9 +285,16 @@ Open one and press print, or send it from Bambu Handy:
 | `3_orange_lever` | orange | 7 min |
 | `4_tub_grey_then_frosted` | grey, then frosted | 2 h 28 min; tree supports; **pauses at 36.2 mm**: swap to frosted and resume |
 
-`uv run python -m huxcase.slice` rebuilds them from out/print (after
-`printability --stl`); it checks that only the tub pauses, right before its
-first frosted layer, and that no support touches the tub's close fits.
+`uv run python -m huxcase.slice` rebuilds all of them from out/print (after
+`printability --stl`). It slices the AMS project too, to check it (one plate,
+the P2S's start sequence, each object in its filament, the tub last and
+frosted from 36.2 mm, support only on the tub and none touching a close
+fit), and checks that only the per-colour tub pauses, right before its first
+frosted layer. The presets are flattened first: Bambu Studio's command line
+does not follow a system preset's full `inherits` chain or its `include`d
+templates (the P2S keeps its start, end and filament-change G-code there),
+and fills the gaps with generic defaults (until 2026-10-11 the sliced files
+came out with `G28` as their start sequence and a 200 mm bed).
 
 ## Assembly
 

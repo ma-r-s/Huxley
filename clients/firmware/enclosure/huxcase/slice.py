@@ -1,14 +1,23 @@
-"""Slice the HX-1 print set into ready-to-print Bambu Studio projects for
-Mario's P2S (0.4 nozzle, PLA): one project per filament colour, each a
-.gcode.3mf to send to the printer as it is. The tub's project pauses at the
-frosted layer for the filament swap.
+"""Bambu Studio projects for Mario's P2S (0.4 nozzle, PLA).
 
-    cd clients/firmware/enclosure && uv run python -m huxcase.slice   # out/print/sliced/
+- `out/print/HX1_one_plate_AMS.3mf`: what is left after his first prints
+  (tub, lever, bridge, spare plungers and pins) on one plate, printed object
+  by object, filaments set for his four AMS slots; the tub changes from grey
+  to frosted by itself at BACK_FROST_Z. Not sliced: he opens it, slices and
+  prints. It is sliced here too, to check it (one plate, the tub last, the
+  colour change, no support touching a close fit).
+- `out/print/sliced/`: one sliced project per filament colour, for printing
+  without the AMS; the tub's pauses at the frosted layer.
 
-Uses Bambu Studio's command line (the macOS app) and its own P2S presets.
-The command line wants complete preset files, so the presets' `inherits`
-chains are flattened here first. Run `python -m huxcase.printability --stl`
-before this: it slices the posed STLs in out/print.
+    cd clients/firmware/enclosure && uv run python -m huxcase.slice
+
+Uses Bambu Studio's command line (the macOS app). Given a system preset file,
+it neither follows the preset's `inherits` chain all the way nor reads its
+`include`d templates (the P2S keeps its start, end and filament-change
+G-code there), and silently fills the gaps with generic defaults: a 200 mm
+bed, `G28` for a start sequence. So the presets are flattened here first,
+with their includes, and loaded complete. Run `python -m huxcase.printability
+--stl` before this: it slices the posed STLs in out/print.
 """
 
 from __future__ import annotations
@@ -74,6 +83,19 @@ PLATES = [
 ]
 
 
+FROSTED = "#E4ECEE"
+# Mario's AMS, one colour per slot (2026-10-11).
+AMS = (("grey", GREY), ("black", BLACK), ("orange", ORANGE), ("frosted", FROSTED))
+SLOT = {name: i + 1 for i, (name, _) in enumerate(AMS)}
+AMS_PROJECT = "HX1_one_plate_AMS"
+# Left to print after Mario's first prints (faceplate, grille, a pin and a
+# plunger, 2026-10-11). The small grey pieces go side by side as one object.
+GREY_GROUP = ("bridge", "plunger_long05", "plunger_long10", "ptt_pin", "ptt_pin")
+# Object centres on the 256 x 256 bed. Printed object by object, the toolhead
+# must clear what is already done: 72 mm between objects (the P2S's extruder
+# clearance), and the tall tub, printed last, away from the rest.
+AMS_LAYOUT = {"lever": (36.0, 40.0), "grey_parts": (190.0, 40.0), "tub": (128.0, 200.0)}
+
 BED = "Textured PEI Plate"  # the plate the P2S ships with; pick yours in Bambu Studio if not
 PAUSE_GCODE = "M400 U1"  # Bambu's "wait for the user" (the P2S preset leaves its pause empty)
 
@@ -86,6 +108,35 @@ def _pause_xml(z: float) -> str:
         f'gcode="{PAUSE_GCODE}"/>\n<mode value="SingleExtruder"/>\n</plate>\n'
         "</custom_gcodes_per_layer>\n"
     )
+
+
+def _resolve(kind: str, name: str) -> dict:
+    """A system preset with its whole `inherits` chain and its `include`s."""
+    d = json.loads((PROFILES / kind / f"{name}.json").read_text())
+    out = _resolve(kind, d["inherits"]) if d.get("inherits") else {}
+    for inc in d.get("include", []):
+        tpl = json.loads((PROFILES / kind / f"{inc}.json").read_text())
+        out.update(
+            {k: v for k, v in tpl.items() if k not in ("name", "type", "from", "instantiation")}
+        )
+    out.update(d)
+    out.pop("include", None)
+    out["inherits"] = ""  # complete: nothing left to inherit
+    return out
+
+
+def _presets(work: Path, filaments: int = 1) -> list[str]:
+    """Command-line arguments loading the complete P2S presets from `work`."""
+    paths = {}
+    for kind, name in (("machine", MACHINE), ("process", PROCESS), ("filament", FILAMENT)):
+        paths[kind] = work / f"{kind}.json"
+        paths[kind].write_text(json.dumps(_resolve(kind, name), indent=1))
+    return [
+        "--load-settings",
+        f"{paths['machine']};{paths['process']}",
+        "--load-filaments",
+        ";".join([str(paths["filament"])] * filaments),
+    ]
 
 
 def _run(args: list[str], work: Path) -> None:
@@ -138,12 +189,7 @@ def slice_plate(name, stls, overrides, pause_z, print_dir: Path, out_dir: Path) 
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
         (work / "data").mkdir()
-        presets = [
-            "--load-settings",
-            f"{PROFILES / 'machine' / MACHINE}.json;{PROFILES / 'process' / PROCESS}.json",
-            "--load-filaments",
-            f"{PROFILES / 'filament' / FILAMENT}.json",
-        ]
+        presets = _presets(work)
         files = [str(print_dir / f"{s}.stl") for s in stls]
         blockers = pause_z is not None
         if blockers:
@@ -191,6 +237,180 @@ def slice_plate(name, stls, overrides, pause_z, print_dir: Path, out_dir: Path) 
         return out
 
 
+def _ams_stls(work: Path) -> dict[str, Path]:
+    """The AMS plate's pieces as posed STLs: the tub as two parts, grey below
+    BACK_FROST_Z and frosted above, with its support blockers; the lever; the
+    small grey pieces in a row."""
+    from build123d import Compound, Pos, export_stl
+
+    c = hx1.build()
+    parts = {p.name: p.shape for p in c.parts}
+    pieces = pr.printed_pieces(c)
+    poses = {p.piece: p for p in pr.POSES}
+    out: dict[str, Path] = {}
+
+    def save(name, shape):
+        out[name] = work / f"{name}.stl"
+        export_stl(shape, str(out[name]), tolerance=0.02, angular_tolerance=0.15)
+
+    loc = pr.pose_location(pieces["tub"], poses["tub"])
+    save("tub_grey", loc * parts["tub_grey"])
+    save("tub_frosted", loc * parts["tub_frosted"])
+    for path in _blocker_stls(work):
+        out[Path(path).stem] = Path(path)
+    save("lever", pr.posed(pieces["ptt_bar"], poses["ptt_bar"]))
+    x, row = 0.0, []
+    for name in GREY_GROUP:
+        shape = pr.posed(pieces[name], poses[name])
+        bb = shape.bounding_box()
+        row.append(Pos(x - bb.min.X, -bb.center().Y, 0) * shape)
+        x += bb.size.X + 6.0
+    group = Compound(row)
+    save("grey_parts", Pos(-group.bounding_box().center().X, 0, 0) * group)
+    return out
+
+
+def _rewrite(src: Path, dst: Path, edits: dict) -> None:
+    """Copy a 3mf, passing the named entries through edit functions (str -> str)."""
+    with zipfile.ZipFile(src) as zi, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zo:
+        for item in zi.infolist():
+            data = zi.read(item.filename)
+            if item.filename in edits:
+                data = edits[item.filename](data.decode()).encode()
+            zo.writestr(item, data)
+
+
+def _objects(model_settings: str) -> list[tuple[str, str, str]]:
+    """(object id, name, its whole <object> block) in model_settings.config."""
+    blocks = re.findall(r'(<object id="(\d+)">.*?</object>)', model_settings, re.S)
+    return [(oid, re.search(r'key="name" value="([^"]+)"', b).group(1), b) for b, oid in blocks]
+
+
+def ams_project(out: Path, print_dir: Path) -> Path:
+    """The one-plate AMS project (not sliced): see the module docstring."""
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        (work / "data").mkdir()
+        presets = _presets(work, len(AMS))
+        stl = _ams_stls(work)
+        tub_parts = ["tub_grey", "tub_frosted", *(n for n in stl if n.startswith("blocker_"))]
+        _run(
+            [
+                *presets,
+                "--orient",
+                "0",
+                "--arrange",
+                "1",
+                "--assemble",
+                "--outputdir",
+                str(work),
+                "--export-3mf",
+                "tub_draft.3mf",
+                *(str(stl[n]) for n in tub_parts),
+            ],
+            work,
+        )
+
+        def tub_settings(t: str) -> str:
+            t = _as_blockers(t.encode()).decode()
+            frosted = re.search(
+                r'<part [^>]*>\s*<metadata key="name" value="tub_frosted.stl"/>.*?</part>', t, re.S
+            )
+            block = frosted.group(0)
+            t = t.replace(
+                block,
+                block.replace(
+                    'key="extruder" value="1"', f'key="extruder" value="{SLOT["frosted"]}"'
+                ),
+            )
+            return t.replace(
+                '<metadata key="name" value="Assembly"/>', '<metadata key="name" value="tub"/>', 1
+            )
+
+        _rewrite(
+            work / "tub_draft.3mf",
+            work / "tub.3mf",
+            {"Metadata/model_settings.config": tub_settings},
+        )
+        _run(
+            [
+                *presets,
+                "--orient",
+                "0",
+                "--arrange",
+                "1",
+                "--outputdir",
+                str(work),
+                "--export-3mf",
+                "plate_draft.3mf",
+                str(work / "tub.3mf"),
+                str(stl["grey_parts"]),
+                str(stl["lever"]),
+            ],
+            work,
+        )
+        ids: dict[str, str] = {}
+
+        def project(t: str) -> str:
+            cfg = json.loads(t)
+            cfg.update(
+                {
+                    "filament_colour": [colour for _, colour in AMS],
+                    "print_sequence": "by object",
+                    "enable_prime_tower": "0",  # by object, the AMS flushes into the chute
+                    "enable_support": "0",  # only the tub gets support, as its own setting
+                    "curr_bed_type": BED,
+                }
+            )
+            return json.dumps(cfg, indent=4)
+
+        def model(t: str) -> str:
+            for oid, name, block in _objects(t):
+                key = name.removesuffix(".stl")
+                ids[key] = oid
+                new = block
+                if key == "lever":
+                    new = new.replace(
+                        'key="extruder" value="1"', f'key="extruder" value="{SLOT["orange"]}"'
+                    )
+                if key == "tub":
+                    own = "".join(
+                        f'    <metadata key="{k}" value="{v}"/>\n'
+                        for k, v in TREE_SUPPORTS.items()
+                    )
+                    new = new.replace(
+                        '<metadata key="name" value="tub"/>\n',
+                        '<metadata key="name" value="tub"/>\n' + own,
+                        1,
+                    )
+                t = t.replace(block, new)
+            assert set(ids) == set(AMS_LAYOUT), ids
+            return t
+
+        def layout(t: str) -> str:
+            for key, (x, y) in AMS_LAYOUT.items():
+                item = re.search(rf'<item objectid="{ids[key]}"[^>]*transform="([^"]+)"', t)
+                z = item.group(1).split()[-1]
+                t = t.replace(
+                    item.group(0),
+                    item.group(0).replace(item.group(1), f"1 0 0 0 1 0 0 0 1 {x} {y} {z}"),
+                )
+            return t
+
+        # model_settings first: it names the objects the layout places.
+        _rewrite(
+            work / "plate_draft.3mf",
+            work / "plate_named.3mf",
+            {"Metadata/model_settings.config": model},
+        )
+        _rewrite(
+            work / "plate_named.3mf",
+            out,
+            {"Metadata/project_settings.config": project, "3D/3dmodel.model": layout},
+        )
+    return out
+
+
 def gcode_of(project: Path) -> str:
     with zipfile.ZipFile(project) as z:
         name = next(n for n in z.namelist() if n.endswith(".gcode"))
@@ -214,34 +434,41 @@ MOVE = re.compile(r"^G[0-3] ")
 AXIS = re.compile(r"([XYE])(-?[\d.]+)")
 
 
+OBJECT = "; start printing object, unique label id:"
+
+
 def extrusions(gcode: str):
-    """(x, y, z, feature) every 0.5 mm along each extruding move."""
+    """(x, y, z, feature, object label) every 0.5 mm along each extruding move."""
     x = y = z = 0.0
-    feature = ""
+    feature, label = "", None
     for ln in gcode.splitlines():
         if ln.startswith("; Z_HEIGHT:"):
             z = float(ln.split(":")[1])
         elif ln.startswith("; FEATURE:"):
             feature = ln.split(":", 1)[1].strip()
+        elif ln.startswith(OBJECT):
+            label = ln.split(":")[1].strip()
+        elif ln.startswith("; stop printing object"):
+            label = None
         elif MOVE.match(ln):
             ax = dict(AXIS.findall(ln.split(";")[0]))
             nx, ny = float(ax.get("X", x)), float(ax.get("Y", y))
             if float(ax.get("E", 0)) > 0 and (nx, ny) != (x, y):
                 n = max(1, int(((nx - x) ** 2 + (ny - y) ** 2) ** 0.5 / 0.5))
                 for k in range(n + 1):
-                    yield x + (nx - x) * k / n, y + (ny - y) * k / n, z, feature
+                    yield x + (nx - x) * k / n, y + (ny - y) * k / n, z, feature, label
             x, y = nx, ny
 
 
-def support_in_keep_outs(project: Path, contact: bool = True) -> dict[str, int]:
+def support_in_keep_outs(project: Path, contact: bool = True, label=None) -> dict[str, int]:
     """How much support the slice puts inside each of the tub's close-fitting
     cuts (pr.support_keep_outs), in 0.5 mm samples. With `contact`, only
     where it touches the part: every support ends on the model in interface
     layers, top and bottom. A tree branch that passes through a hole, clear
     of its walls, touches nothing there and comes out with the rest. The
     G-code frame is put on the device frame by matching the model's walls to
-    the tub's outline."""
-    pts = list(extrusions(gcode_of(project)))
+    the tub's outline (the tub's object only, given its `label`; unrotated)."""
+    pts = [p[:4] for p in extrusions(gcode_of(project)) if label is None or p[4] == label]
     model = [(x, y) for x, y, z, f in pts if "wall" in f.lower() and z > 1.0]
     gx0, gy0 = min(p[0] for p in model), min(p[1] for p in model)
     bb = (hx1.build().shells["tub"]).bounding_box()
@@ -254,6 +481,64 @@ def support_in_keep_outs(project: Path, contact: bool = True) -> dict[str, int]:
     return out
 
 
+def ams_check(project: Path) -> list[str]:
+    """Slice the AMS project as Bambu Studio would, and check what it prints:
+    one plate, the P2S's own start sequence, each object in its filament,
+    the tub last and changing to frosted at its first frosted layer, support
+    only on the tub and none touching its close fits."""
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        (work / "data").mkdir()
+        sliced = work / "check.gcode.3mf"
+        _run(
+            ["--slice", "0", "--outputdir", str(work), "--export-3mf", sliced.name, str(project)],
+            work,
+        )
+        with zipfile.ZipFile(sliced) as z:
+            plates = [n for n in z.namelist() if n.endswith(".gcode")]
+            info = z.read("Metadata/slice_info.config").decode()
+        assert plates == ["Metadata/plate_1.gcode"], f"not one plate: {plates}"
+        names = dict(re.findall(r'<object identify_id="(\d+)" name="([^"]+)"', info))
+        gcode = gcode_of(sliced)
+        assert "P2S start gcode==" in gcode, "not the P2S's start sequence"
+        time = re.search(r"model printing time: ([^;\n]+)", gcode).group(1)
+        slot = {v: k for k, v in SLOT.items()}
+        order, used, supported = [], {}, set()  # used: object -> [(colour, z)]
+        z, label, filament = 0.0, None, None
+        for ln in gcode.splitlines():
+            if ln.startswith("; Z_HEIGHT:"):
+                z = float(ln.split(":")[1])
+            elif ln.startswith(OBJECT):
+                label = names[ln.split(":")[1].strip()].removesuffix(".stl")
+                if not order or order[-1] != label:
+                    order.append(label)
+                colours = used.setdefault(label, [])
+                if not colours or colours[-1][0] != slot[filament]:  # changed since its last layer
+                    colours.append((slot[filament], round(z, 1)))
+            elif ln.startswith("; stop printing object"):
+                label = None
+            elif ln.startswith("; FEATURE: Support"):
+                supported.add(label)
+            elif m := re.match(r"M620 S(\d+)A", ln.strip()):
+                filament = int(m.group(1)) + 1
+        assert order[-1] == "tub", order
+        want = {"lever": ["orange"], "grey_parts": ["grey"], "tub": ["grey", "frosted"]}
+        for obj, cols in want.items():
+            got = [c for c, _ in used[obj]]
+            assert got == cols, f"{obj} prints in {got}, not {cols}"
+        frost_z = used["tub"][1][1]
+        assert abs(frost_z - hx1.BACK_FROST_Z) <= LAYER + 1e-6, frost_z
+        assert supported == {"tub"}, supported
+        tub_id = next(k for k, v in names.items() if v == "tub")
+        touching = support_in_keep_outs(sliced, True, tub_id)
+        assert not any(touching.values()), f"support touches {touching}"
+        return [
+            f"one plate, {time}, objects in order {order}",
+            f"filaments per object (colour, from z) {used}",
+            f"support only on {sorted(supported)}, touching close fits: {touching}",
+        ]
+
+
 def main() -> int:
     print_dir = OUT / "print"
     out_dir = print_dir / "sliced"
@@ -262,6 +547,10 @@ def main() -> int:
     out_dir.mkdir(parents=True)
     for stray in out_dir.glob("*.gcode"):
         stray.unlink()
+    ams = ams_project(print_dir / f"{AMS_PROJECT}.3mf", print_dir)
+    print(f"{ams.name}: not sliced (Mario slices it); as sliced here:")
+    for line in ams_check(ams):
+        print(f"    {line}")
     for name, stls, overrides, pause_z in PLATES:
         out = slice_plate(name, stls, overrides, pause_z, print_dir, out_dir)
         print(f"{out.name}: {check(out, pause_z)}")

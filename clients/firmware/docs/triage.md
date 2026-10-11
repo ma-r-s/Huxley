@@ -244,6 +244,17 @@ the rev E tub not ready. Fixed:
 Not changed, on purpose: the faceplate (Mario may have printed it; its thin
 engraved labels may fill in, cosmetic only).
 
+**Printing (2026-10-11)**: Mario printed the faceplate, grille, a pin and a
+plunger from the STLs (all still current; the plunger has since gained a
+0.4 tip chamfer, not needed on his). Found: every sliced project until then
+was built on generic defaults (start sequence `G28`, a 200 mm bed, default
+infill and fans): the Bambu CLI does not resolve a system preset's whole
+`inherits` chain or its `include`d G-code templates. Fixed by flattening
+the presets in `huxcase/slice.py`. The rest now goes on one AMS plate,
+`HX1_one_plate_AMS.3mf` (unsliced, print by object, grey / black / orange /
+frosted in slots 1 to 4, the tub as a grey and a frosted part), checked by
+slicing it here.
+
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
 bottom is fine, holders whole, no glue, plastic pivot, protected cells
 instead of a protection board, the ribbon and loose wires, the board's
