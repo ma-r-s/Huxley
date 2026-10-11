@@ -77,8 +77,9 @@ STEPS = [
     {
         "id": "plunger",
         "title": "Plunger and spring",
-        "text": "From outside the right side: the printed plunger into its tube, then "
-        "the 0.4 × 4 × 15 spring on top of it.",
+        "text": "From outside the right side: the normal printed plunger (5.0 mm, the "
+        "shortest of the three) into its tube, then the 0.4 × 4 × 15 spring on top "
+        "of it. The longer two are for a click that comes late.",
         "parts": ["plunger", "spring"],
         "enter": (60, 0, 0),
         "explode": (30, 0, 18),
@@ -97,7 +98,8 @@ STEPS = [
         "id": "holders",
         "title": "Battery holders",
         "text": "Both holders, empty, slide straight in from the front, floor against "
-        "the back wall, springs at the bottom.",
+        "the back wall, springs at the bottom, riding over the ribs on the two "
+        "lugs on the floor.",
         "parts": ["holder_*"],
         "enter": (0, -90, 0),
         "explode": (0, -46, 0),
@@ -129,7 +131,8 @@ STEPS = [
         "id": "cells",
         "title": "Cells",
         "text": "Both protected cells, + end up, charged to the same voltage first "
-        "(within 0.05 V of each other).",
+        "(within 0.05 V of each other). If one will not snap in with its holder in "
+        "the bay, slide that holder forward on its leads, fit the cell, slide it back.",
         "parts": ["cell_*"],
         "enter": (0, -90, 0),
         "explode": (0, -46, 0),
@@ -137,9 +140,9 @@ STEPS = [
     {
         "id": "bridge",
         "title": "Holder bridge",
-        "text": "The printed bridge across, between the holders, its two clips over the "
-        "power wire and the talk pair. One M3 × 6 through its middle into the "
-        "insert: its ribs press both cells home.",
+        "text": "The printed bridge across, between the holders, its tabs down beside "
+        "the holders' + end caps, the wires loose under it. One M3 × 6 through its "
+        "middle into the insert: its ribs press both cells home.",
         "parts": ["bridge", "bridge_screw"],
         "enter": (0, -60, 0),
         "enter_parts": {"bridge_screw": (0, -100, 0)},
@@ -245,7 +248,7 @@ LABELS = [
     ("faceplate", "Faceplate"),
     ("grille_plug", "Grille plug"),
     ("speaker_*", "Speaker, 40 mm 5 W"),
-    ("board_screws", "M2 × 8 screw (washer on the top one)"),
+    ("board_screws", "M2 × 8 screw and washer"),
     ("board_*", "ESP32-S3 audio board"),
     ("tact_*", "12 × 12 tact switch"),
     ("plunger", "Plunger"),
@@ -286,7 +289,7 @@ BOUGHT = [
     ("M3 × 8 button head, case", 4),
     ("M3 × 6 button head, holder bridge", 1),
     ("M3 × 5 heat-set insert", 5),
-    ("M2 × 8 button head, board (one flat washer)", 3),
+    ("M2 × 8 button head + flat washer, board", 3),
     ("Ribbon cable, for every run", 1),
 ]
 

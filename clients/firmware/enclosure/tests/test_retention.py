@@ -44,7 +44,6 @@ def model():
         "screws": [c.envelopes["board_screws"], c.envelopes["bridge_screw"]],
         "speaker": [c.envelopes["speaker"]],
         "pcb": [parts["board_pcb"]],
-        "ptt_a": [c.envelopes["cable_ptt_a"]],
     }
     return c, parts, rigid
 
@@ -65,14 +64,10 @@ CASES = {
     "ptt_bar": (("tub", "pin", "faceplate"), ()),
     # The spring pushes the plunger onto the stem along x.
     "plunger": (("tub",), ("+x", "-x")),
-    # Wires: the long runs sit in clips (prongs either side, a lip in front);
-    # along their own length and toward the wall they are free by nature.
-    "cable_bat_pos": (("bridge",), ("+y", "+z", "-z")),
+    # Wires: the - lead's long run sits in clips on the back wall (prongs
+    # either side, a lip in front); along its own length and toward the wall
+    # it is free by nature. The other wires lie loose (Mario, 2026-10-11).
     "cable_bat_neg": (("tub",), ("+y", "+z", "-z")),
-    "cable_ptt_a": (("bridge",), ("+y", "+z", "-z")),
-    # The talk pair sits two deep in one clip: the lip holds the front wire,
-    # the front wire holds the back one.
-    "cable_ptt_b": (("bridge", "ptt_a"), ("+y", "+z", "-z")),
 }
 
 
@@ -106,3 +101,42 @@ def test_part_has_a_hard_stop_in_every_direction(model, name):
         if new <= 0.01:
             loose.append(d)
     assert loose == [], f"{name} can travel more than {MOVE} mm toward {loose}"
+
+
+@pytest.mark.parametrize("name", ["holder_0", "holder_1"])
+def test_holders_are_stopped_sideways_at_their_end_caps(model, name):
+    """The holders' side walls may be low in the middle (Mario's photos): the
+    sideways stops must work on the end caps alone, which stand full height."""
+    from build123d import Box
+    from huxcase import hardware as hw
+
+    c, parts, rigid = model
+    i = int(name[-1])
+    x = hx1.X0 + (2 * i - 1) * hx1.CELL_X
+    back = hw.CELL_D / 2 + hw.HOLDER_FLOOR  # as hardware.holder() draws them
+    caps = [
+        Pos(
+            x,
+            hx1.CELL_Y + back - hw.HOLDER_H / 2,
+            hx1.HOLDER_Z + sz * (hw.HOLDER_L - hw.HOLDER_CAP) / 2,
+        )
+        * Box(hw.HOLDER_W, hw.HOLDER_H, hw.HOLDER_CAP)
+        for sz in (-1, 1)
+    ]
+    stops = rigid["tub"] + rigid["bridge"]
+    for d in ("+x", "-x"):
+        dx = DIRS[d][0] * MOVE
+        for cap in caps:  # each end on its own: neither may swing out
+            moved = Pos(dx, 0, 0) * cap
+            new = sum(
+                ((moved & s) - cap).volume
+                if ((moved & s) & cap).volume > 1e-6
+                else (moved & s).volume
+                for s in stops
+                if (moved & s).volume > 1e-6
+            )
+            if d == ("-x" if i == 0 else "+x"):
+                continue  # outward: the side wall or the backing, any height
+            assert new > 0.01, (
+                f"{name} cap at z {cap.bounding_box().center().Z:.0f} free toward {d}"
+            )

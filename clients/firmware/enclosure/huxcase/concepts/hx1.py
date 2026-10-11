@@ -15,12 +15,13 @@ Packing (see README "HX-1"):
   12 x 12 tactile switch above the right cell (spring in series: progressive
   press, then the click, and the click point does not depend on print
   accuracy).
-Assembly (rev D): two printed shells. The grey faceplate carries the board,
+Assembly (rev E): two printed shells. The grey faceplate carries the board,
 the speaker (in a black grille plug) and the mic and light ports; the tub
 carries everything else and prints upright, grey to BACK_FROST_Z and frosted
-above, so the board's rear LEDs glow through the top and the upper back. Six
-M3 x 8 screws through the face close it into heat-set inserts; closing it
-also captures the lever pin and clamps the speaker. No glue anywhere.
+above, so the board's rear LEDs glow through the top and the upper back. Four
+M3 x 8 screws (two through the face, two up through the floor) close it into
+heat-set inserts; closing it also captures the lever pin and clamps the
+speaker. No glue anywhere.
 The internal assembly sits 1.2 mm left of centre (X0) so the right wall has
 room for the lever channel and the left cell still hugs its wall.
 Device frame: X right, Y back (front face at -Y), Z up.
@@ -35,11 +36,14 @@ from build123d import (
     Box,
     Cylinder,
     Location,
+    Polyline,
     Pos,
     Rectangle,
     Rot,
+    chamfer,
     extrude,
     fillet,
+    make_face,
 )
 
 from huxcase import fits
@@ -82,14 +86,18 @@ BOARD_Z = SPK_Z + hw.SPK_D / 2 + 0.3 + hw.PCB_R + 0.3 + 0.2
 H = BOARD_Z + hw.PCB_R + 0.3 + 0.1 + T
 # Board +x -> device -Z, board +y -> device +X, board +z (top face) -> device -Y.
 BOARD_LOC = Location((X0, BOARD_TOP_Y, BOARD_Z)) * Rot(90, 0, 0) * Rot(0, 0, -90)
+USB_Y, USB_FACE = (
+    BOARD_TOP_Y - hw.USB_C_CENTER_Z,
+    X0 + hw.USB_C_FACE_Y,
+)  # the plug's axis, its face
 BACK_FROST_Z = 36.0  # the tub prints grey up to here, then frosted (one filament swap)
 LABEL_Z = 92.8  # "huxley" and "HX-1" on the face
 
 # The two shells meet at the inside of the face. The faceplate's lip seats in
-# the tub's rim; six M3 x 8 button heads through the face close it into 5 mm
-# heat-set inserts in blocks on the tub's walls.
+# the tub's rim; four M3 x 8 button heads close it into 5 mm heat-set inserts.
 FACE_Y = Y_FRONT + T
 LIP_D, LIP_W = 2.0, 1.6
+ROOF_RELIEF = 0.3  # extra room over the lip under the roof (printed over support)
 # Two through the face at the top (above the holders), two up through the
 # floor at the bottom into bosses on the faceplate: nothing of the tub stands
 # in front of the holders, so they and the cells can go in from the front.
@@ -110,12 +118,16 @@ BRIDGE_Z = (64.5, 71.5)
 BRIDGE_T = 1.6
 CELL_BAR_T = 2.0  # the bridge's front bar, across both cells
 BRIDGE_SCREW_L = 6.0  # M3 x 6 into a 5 mm insert in a boss on the back wall
+TAB_TOP = CELL_TOP - 1.0  # the bridge's tabs reach 2 mm up the + end caps
+LUG_Y, LUG_H = (CELL_Y, CELL_Y + 6.0), 7.0  # floor lugs beside the - end caps
 
 # Wiring: the parallel joints and the long - run (see _wire_keepers).
 J_POS = (X0 - 4.0, CELL_Y + 7.0, CELL_TOP + 1.5)  # + joint: over the channel, under the rocker
 J_NEG = (X0 + 2.0, CELL_Y + 8.0, T + 1.8)  # - joint: at the channel's foot
-POS_CLIP_X, POS_CLIP_Y = X0 - 7.0, 0.8  # + lead where it crosses the bridge
-PTT_CLIP_X = 5.5  # talk pair where it crosses the bridge (same depth as the + clip)
+# Where the + lead and the talk pair cross the bridge, inside its U. They lie
+# loose (Mario, 2026-10-11); only the - lead has clips, on the back wall.
+POS_RUN_X, RUN_Y = X0 - 7.0, 0.8
+PTT_RUN_X = 5.5
 
 # Black grille: a plug that drops into a window in the face from inside. Its
 # flange sits in a recess on the inside of the face (top and sides), and the
@@ -175,6 +187,7 @@ KNUCKLE_R = (
 )  # +0.1: overlaps the slab (a tangent seam meshes open)
 TOOTH_Z = (46.0, 54.0)
 TOOTH_X0 = 30.0  # in front of the right holder, so it can reach in this far
+NOTCH_CLEAR = 0.4  # the tub's notch round the tooth, above and below
 BOARD_CENTRING = (35.0, 150.0, 330.0)  # board-frame angles of the centring posts
 LATCH_ROOT_Y, LATCH_CATCH = 5.0, 0.5  # switch latch: finger root (cradle y), lip overlap
 STOP_X0 = 26.0  # inner end of the lever's stop block
@@ -192,6 +205,9 @@ SPRING_CBORE = 1.0  # the spring's end sits in a counterbore in the lever (nothi
 FLANGE_X = X_OUT + SPRING_CBORE - SPRING_REST  # plunger flange face (spring seat)
 PLUNGER_TIP_X = FLANGE_X - 3.5  # plunger is a 3.5 mm piston, the length guides it
 PLUNGER_R = 3.0
+# Printed plungers, extra length (mm): the spring and switch are not measured, so
+# a longer one adds preload if the click comes late. Try 0.0 first.
+PLUNGER_VARIANTS = (0.0, 0.5, 1.0)
 # Plunger tube, part of the tub. The tub prints upright, so the bore lies
 # horizontal and gets the horizontal-bore fit.
 TUBE_BORE = PLUNGER_R + fits.SLIDE_HBORE
@@ -201,11 +217,24 @@ TS_BASE_X = PLUNGER_TIP_X - hw.TACT_BODY - hw.TACT_STEM_H
 TS_LOC = Location((TS_BASE_X, SWITCH_Y, TS_Z)) * Rot(0, 90, 0)
 
 
-def click_travel(force: float = hw.TACT_FORCE, shim: float = 0.0) -> float:
-    """Lever travel at the switch axis until the spring reaches the switch's
-    actuation force. `shim` = washers under the plunger flange (adds preload)."""
-    preload = (hw.SERIES_SPRING_FREE - SPRING_REST + shim) * hw.SERIES_SPRING_K
-    return max(0.0, (force - preload) / hw.SERIES_SPRING_K)
+def click_travel(force: float = hw.TACT_FORCE, longer: float = 0.0) -> float:
+    """Lever travel at the switch axis until the switch clicks: the spring
+    compresses until it pushes with the switch's actuation force, and the stem
+    moves its own TACT_TRAVEL. `longer`: a plunger printed that much longer
+    (more preload, an earlier click)."""
+    preload = (hw.SERIES_SPRING_FREE - SPRING_REST + longer) * hw.SERIES_SPRING_K
+    return max(0.0, (force - preload) / hw.SERIES_SPRING_K) + hw.TACT_TRAVEL
+
+
+def plunger_shape(longer: float = 0.0):
+    """The printed plunger: a piston from the switch's stem to the spring, and
+    a locator inside the spring. It prints standing on its tip, so the tip's
+    edge is chamfered (no elephant's foot to catch in the bore). `longer`: a
+    variant that much longer at the spring end, for more preload."""
+    end = FLANGE_X + longer
+    p = _along_x(SWITCH_Y, TS_Z, PLUNGER_R, PLUNGER_TIP_X, end)
+    p = chamfer(p.edges().group_by(Axis.X)[0], 0.4)
+    return p + _along_x(SWITCH_Y, TS_Z, 1.4, end - 0.01, end + 1.5)  # spring locator
 
 
 def to_device(x: float, y: float) -> tuple[float, float]:
@@ -272,6 +301,23 @@ def _pressed_union():
     return out
 
 
+def _knuckle_roof():
+    """A 45 deg roof over the channel round the lever's knuckle: from where the
+    knuckle's clearance turns flatter than 45 deg, up to the slot the lever's
+    blade swings in. The channel's front and back walls, which locate the
+    knuckle, stay where they are."""
+    rk = KNUCKLE_R + CLEAR
+    xt, zt = PIVOT_X - rk / math.sqrt(2), PIVOT_Z + rk / math.sqrt(2)
+    xe = X_OUT - CLEAR - 0.15  # inside the blade's slot, whatever the press
+    y0, y1 = SWITCH_Y - BAR_W / 2 - CLEAR, SWITCH_Y + BAR_W / 2 + CLEAR
+    prof = make_face(
+        Polyline(
+            (xt, y0, PIVOT_Z), (xe, y0, PIVOT_Z), (xe, y0, zt + xe - xt), (xt, y0, zt), close=True
+        )
+    )
+    return extrude(prof, y1 - y0, dir=(0, 1, 0))
+
+
 def _profile(grow: float, depth: float, y0: float):
     """The inside of the case seen from the front, grown by `grow`, as a slab
     `depth` thick starting at y0 (for the faceplate lip)."""
@@ -318,6 +364,34 @@ def _teardrop_y(x: float, z: float, r: float, y0: float, y1: float):
     )
     prism = Location((0, y0, 0), (90, 0, 0)) * Location((0, 0, -(y1 - y0))) * extrude(tri, y1 - y0)
     return _along_y(x, z, r, y0, y1) + prism
+
+
+def _teardrop_x(y: float, z: float, r: float, x0: float, x1: float):
+    """A bore along X with a 45 deg point on top: its roof prints without
+    support when it lies horizontal."""
+    c = r / math.sqrt(2)
+    diamond = Pos((x0 + x1) / 2, y, z) * Rot(45, 0, 0) * Box(x1 - x0, 2 * r, 2 * r)
+    point = diamond & bbox_solid(x0, x1, y - 2 * r, y + 2 * r, z + c - 0.01, z + 2 * r)
+    return _along_x(y, z, r, x0, x1) + point
+
+
+def _bore_y(x: float, z: float, r: float, y0: float, y1: float):
+    """A bore along Y with a 45 deg point on top (see _teardrop_x)."""
+    c = r / math.sqrt(2)
+    diamond = Pos(x, (y0 + y1) / 2, z) * Rot(0, 45, 0) * Box(2 * r, y1 - y0, 2 * r)
+    point = diamond & bbox_solid(x - 2 * r, x + 2 * r, y0, y1, z + c - 0.01, z + 2 * r)
+    return _along_y(x, z, r, y0, y1) + point
+
+
+def _ramped_rib(x_face: float, out: int, y0: float, y1: float, z0: float, z1: float):
+    """A crush rib from a face at x_face toward `out` (+1 or -1), ramping up
+    over its first mm from y0: a part sliding in along +y rides onto it."""
+    h = fits.CRUSH_RIB + 0.01
+    xa = x_face - out * 0.01
+    prof = make_face(
+        Polyline((xa, y0), (xa + out * h, y0 + 1.0), (xa + out * h, y1), (xa, y1), close=True)
+    )
+    return Pos(0, 0, z0) * extrude(prof, z1 - z0, dir=(0, 0, 1))
 
 
 def _union(shapes):
@@ -557,6 +631,18 @@ def _holder_retention(inner):
     for hx, out in ((X0 - CELL_X, -1), (X0 + CELL_X, 1)):
         hw_ = hw.HOLDER_W / 2
         walls[out] = (hx + out * (hw_ - hw.HOLDER_WALL), hx + out * hw_, hx - out * hw_)
+        # Lug on the floor beside the - end cap, channel side: with the bridge's
+        # tab at the + cap, each holder is stopped sideways at both end caps.
+        # Behind the speaker's magnet, in front of the - leads. Its crush rib
+        # ramps up at the front, so the holder rides onto it as it slides in.
+        x_face = hx - out * hw_ - out * fits.PART
+        l0, l1 = sorted((x_face, x_face - out * 1.5))
+        feats.append(bbox_solid(l0, l1, LUG_Y[0], LUG_Y[1], T - 0.1, CELL_Z0 + LUG_H))
+        ribs.append(
+            _ramped_rib(
+                x_face, out, LUG_Y[0] + 1.0, LUG_Y[1] - 0.5, CELL_Z0 + 0.5, CELL_Z0 + LUG_H - 0.5
+            )
+        )
         # Pedestals under the front half of each holder, ribs on top; pads above.
         px0, px1 = hx - hw_ + 1.5, hx + hw_ - 1.5
         feats.append(
@@ -624,24 +710,29 @@ def _holder_retention(inner):
                 )
             )
     for out in (-1, 1):
-        # tab on the channel side of the inner wall keeps the holder out
+        # Tab on the channel side of each holder keeps it out against its wall.
+        # It reaches up beside the + end cap: the caps stand full height, so the
+        # stop holds whatever height the holder's side walls are.
         w_in = walls[out][2]  # inner wall's channel-side face
         t0, t1 = sorted((w_in - out * fits.PART, w_in - out * (fits.PART + 1.2)))
         bridge += bbox_solid(t0, t1, face1 - 0.01, face1 + 4.0, bz0, bz1)
         bridge += bbox_solid(t0, t1, bar_y1 - 0.01, face0 + 0.01, bz0, bz1)  # web to the front bar
-        rx0, rx1 = sorted((w_in - out * fits.PART, w_in + out * (fits.CRUSH_RIB - fits.PART)))
-        bridge_ribs.append(bbox_solid(rx0, rx1, face1 + 1.0, face1 + 3.5, bz0 + 1, bz1 - 1))
-    bridge -= _along_y(X0, bzm, fits.SCREW_CLEAR["M3"] / 2, face0 - 1, face1 + 1)
-    # Clips for the battery + lead and the talk pair where they cross the
-    # bridge: two prongs and a lip each; the wires snap in as the bridge goes on.
-    for clip_x in (POS_CLIP_X, PTT_CLIP_X):
-        for side in (-1, 1):
-            x0, x1 = sorted((clip_x + side * 0.7, clip_x + side * 1.7))
-            bridge += bbox_solid(x0, x1, POS_CLIP_Y - 1.5, face0 + 0.01, bz0 + 1.5, bz1 - 1.5)
-            lx0, lx1 = sorted((clip_x + side * 0.4, clip_x + side * 0.71))  # 0.3 bump
-            bridge += bbox_solid(
-                lx0, lx1, POS_CLIP_Y - 1.5, POS_CLIP_Y - 0.7, bz0 + 1.5, bz1 - 1.5
+        # Above the plate, its front edge rises at 45 deg: the bridge prints
+        # front face down, so the tab grows out of the web without support.
+        rise = TAB_TOP - bz1
+        prof = make_face(
+            Polyline(
+                (t0, bar_y1, bz1 - 0.01),
+                (t0, face1 + 4.0, bz1 - 0.01),
+                (t0, face1 + 4.0, TAB_TOP),
+                (t0, bar_y1 + rise, TAB_TOP),
+                close=True,
             )
+        )
+        bridge += extrude(prof, t1 - t0, dir=(1, 0, 0))
+        rx0, rx1 = sorted((w_in - out * fits.PART, w_in + out * (fits.CRUSH_RIB - fits.PART)))
+        bridge_ribs.append(bbox_solid(rx0, rx1, face1 + 1.0, face1 + 3.5, bz0 + 1, TAB_TOP - 0.5))
+    bridge -= _along_y(X0, bzm, fits.SCREW_CLEAR["M3"] / 2, face0 - 1, face1 + 1)
     boss = _teardrop_y(X0, bzm, 4.0, face1, Y_BACK - T + 0.1)
     boss -= _along_y(X0, bzm, fits.INSERT_BORE["M3"] / 2, face1 - 0.01, face1 + INSERT_L + 1.0)
     feats.append(boss)
@@ -666,8 +757,7 @@ def build() -> Concept:
 
     # USB-C exits the left side (board -y edge). Its face sits 2.2 mm inside
     # the wall, so a boss brings the wall to it and a deep pocket takes the plug.
-    usb_y = BOARD_TOP_Y - hw.USB_C_CENTER_Z
-    usb_face = X0 + hw.USB_C_FACE_Y
+    usb_y, usb_face = USB_Y, USB_FACE
     zb0, zb1 = BOARD_Z - 8.0, BOARD_Z + 8.0
     boss = bbox_solid(-W / 2 + T - 0.05, usb_face - 0.15, FACE_Y + LIP_D, usb_y + 5.0, zb0, zb1)
     boss_box = bbox_solid(
@@ -710,7 +800,7 @@ def build() -> Concept:
         tub += pad & inner
         tub -= Pos(bx, by, 0) * Cylinder(fits.SCREW_CLEAR["M3"] / 2, 2 * (T + FLOOR_PAD) + 1)
         tub -= Pos(bx, by, 0) * Cylinder(CBORE_D / 2, 2 * CBORE_H)
-    # Insert blocks for the six case screws, on the side walls.
+    # Insert blocks for the two face screws, on the side walls.
     for sx, sz in SCREWS:
         side = 1 if sx > 0 else -1
         x0, x1 = sorted((side * BLOCK_X_IN, side * W / 2))
@@ -782,6 +872,15 @@ def build() -> Concept:
     latch = TS_LOC * (finger + lip)
     tube_x0 = TS_BASE_X + hw.TACT_BODY
     tube = _along_x(SWITCH_Y, TS_Z, TUBE_R, tube_x0, X_OUT - T + 0.1)
+    # The bore's 45 deg point stands above the tube's round: a ridge covers it.
+    tube += bbox_solid(
+        tube_x0,
+        X_OUT - T + 0.1,
+        SWITCH_Y - 2.2,
+        SWITCH_Y + 2.2,
+        TS_Z,
+        TS_Z + TUBE_BORE * 1.42 + 0.9,
+    )
     # End plate: joins the cradle's walls to the tube (they would not touch
     # otherwise) and gives the switch's top a flat face to seat on.
     cradle += bbox_solid(
@@ -805,8 +904,7 @@ def build() -> Concept:
         TS_Z - stem_w,
         TS_Z + stem_w,
     )
-    plunger = _along_x(SWITCH_Y, TS_Z, PLUNGER_R, PLUNGER_TIP_X, FLANGE_X)
-    plunger += _along_x(SWITCH_Y, TS_Z, 1.4, FLANGE_X, FLANGE_X + 1.5)  # spring locator
+    plunger = plunger_shape()
     spring = hw.spring(SPRING_REST)
     spring = Part("spring", Pos(FLANGE_X, SWITCH_Y, TS_Z) * Rot(0, 90, 0) * spring.shape, "metal")
 
@@ -844,7 +942,7 @@ def build() -> Concept:
         ROCKER_Z + cz + 0.1,
     )
     chamfer = ROCKER_PANEL - ROCKER_CATCH[0]
-    hole = Rectangle(2 * (cy_ + 0.1), 2 * (cz + 0.1))
+    hole = Rectangle(2 * (cz + 0.1), 2 * (cy_ + 0.1))  # after the turn: x -> -Z, y -> Y
     taper = extrude(hole, chamfer + 0.01, taper=-45)  # widens 45 deg as it goes in
     rocker_cut += Location((panel_x + ROCKER_CATCH[0], ROCKER_Y, ROCKER_Z), (0, 90, 0)) * taper
     # local +z (outward) -> device -X, local x (long side) -> device Y
@@ -865,9 +963,12 @@ def build() -> Concept:
     latch += keeper_snaps  # snap lips: rigid stops that flex on the way in
 
     # Cuts: lever channel, plunger bore, tooth notch, rear pin seat, rocker, USB,
-    # and the band the faceplate's lip goes into.
+    # and the band the faceplate's lip goes into. The tub prints upright, so
+    # every close-fitting cut that lies horizontal gets a 45 deg roof the
+    # slicer leaves unsupported: support left in them would bind.
     tub -= _pressed_union()
-    tub -= _along_x(SWITCH_Y, TS_Z, TUBE_BORE, tube_x0 - 0.01, X_OUT + 1)
+    tub -= _knuckle_roof()
+    tub -= _teardrop_x(SWITCH_Y, TS_Z, TUBE_BORE, tube_x0 - 0.01, X_OUT + 1)
     tub -= stem_slot
     # Stop: a block of the backing that the lever's inner face lands on after
     # the click. Added after the channel cut, which would otherwise remove it.
@@ -878,21 +979,30 @@ def build() -> Concept:
     tub += bbox_solid(
         stop_x - 0.01, X_OUT - T + 0.1, SWITCH_Y + 9.3, SWITCH_Y + 10.0, stop_z0, stop_z1
     )  # into the backing
+    # The tooth's notch: its roof hangs open to the front and the side, so it
+    # prints over support (pulled out from there). NOTCH_CLEAR above and below
+    # the tooth so what that leaves cannot stop the faceplate closing.
     tub -= bbox_solid(
         TOOTH_X0 - fits.SNUG,
         X_OUT + 2,
         FACE_Y - 1,
         CHAN_Y0 + fits.SNUG,
-        TOOTH_Z[0] - fits.SNUG,
-        TOOTH_Z[1] + fits.SNUG,
+        TOOTH_Z[0] - NOTCH_CLEAR,
+        TOOTH_Z[1] + NOTCH_CLEAR,
     )
-    tub -= _along_y(PIVOT_X, PIVOT_Z, PIN_BORE / 2, CHAN_Y0, PIN_Y1 + 0.3)
+    tub -= _bore_y(PIVOT_X, PIVOT_Z, PIN_BORE / 2, CHAN_Y0, PIN_Y1 + 0.3)
     tub -= rocker_cut
     tub -= usb_cut
     # KEY1 stands 0.17 under the roof: a groove so it cannot scrape on closing.
     tub -= bbox_solid(-10.0, -4.5, FACE_Y - 1, BOARD_TOP_Y + 3.0, H - T - 0.01, H - T + 1.2)
     band = _profile(0.0, LIP_D + 0.01, FACE_Y - 0.005)
     tub -= band - _profile(-2 * fits.SNUG - LIP_W, LIP_D + 1, FACE_Y - 0.5)
+    # The roof prints over support, which leaves its underside rough: ROOF_RELIEF
+    # more room over the lip where it goes in (the faceplate is unchanged).
+    relief = _profile(ROOF_RELIEF, LIP_D + 0.5, FACE_Y - 0.01) - _profile(
+        0.0, LIP_D + 1, FACE_Y - 1
+    )
+    tub -= relief & bbox_solid(-60, 60, FACE_Y - 1, FACE_Y + LIP_D + 0.5, H - T - 1.2, H)
 
     # ---------------- lever + pin ----------------
     bar = _bar() - _along_y(PIVOT_X, PIVOT_Z, PIN_BORE / 2, -40, 40)
@@ -971,15 +1081,15 @@ def build() -> Concept:
                 (tab_x + 0.6, tab_y + 0.6, tab_z + 1.0),
             ]
         ),
-        # + : rocker -> bridge clip -> down the channel, over the cage and
-        # behind it -> its splice at the seam junction.
+        # + : rocker -> across the bridge -> down the channel -> its splice at
+        # the seam junction.
         "cable_bat_pos": hw.cable(
             [
                 (rocker_tab_x, ROCKER_Y - hw.ROCKER_TAB_PITCH / 2, ROCKER_Z),
                 (rocker_tab_x + 0.5, ROCKER_Y - hw.ROCKER_TAB_PITCH / 2, ROCKER_Z - 1.5),
                 (rocker_tab_x + 1.5, 1.6, CELL_TOP + 1.5),
-                (POS_CLIP_X, POS_CLIP_Y, (BRIDGE_Z[0] + BRIDGE_Z[1]) / 2),
-                (POS_CLIP_X + 0.6, 3.5, 61.5),
+                (POS_RUN_X, RUN_Y, (BRIDGE_Z[0] + BRIDGE_Z[1]) / 2),
+                (POS_RUN_X + 0.6, 3.5, 61.5),
                 (-7.4, 9.5, 54.0),
                 (seam_x[0] - 0.4, 13.6, 51.3),
                 *to_seam(seam_x[0], 13.8),
@@ -1011,23 +1121,23 @@ def build() -> Concept:
             d=1.2,
         ),
     }
-    # Talk pair: switch legs -> bridge clip -> down the channel -> the seam junction.
+    # Talk pair: switch legs -> across the bridge -> down the channel -> the seam junction.
     legs_x = TS_BASE_X - hw.TACT_LEGS
     legs_z = TS_Z - 6.25
-    for name, (leg_y, pin_i, clip_y) in {
-        "cable_ptt_a": (SWITCH_Y - 2.5, 2, POS_CLIP_Y - 0.1),  # GND
-        "cable_ptt_b": (SWITCH_Y + 2.5, 3, POS_CLIP_Y + 1.0),  # talk
+    for name, (leg_y, pin_i, run_y) in {
+        "cable_ptt_a": (SWITCH_Y - 2.5, 2, RUN_Y - 0.1),  # GND
+        "cable_ptt_b": (SWITCH_Y + 2.5, 3, RUN_Y + 1.0),  # talk
     }.items():
         cables[name] = hw.cable(
             [
                 (legs_x, leg_y, legs_z),
-                (legs_x - 1.2, (leg_y + clip_y) / 2, legs_z - 1.5),
-                (PTT_CLIP_X + 0.9, clip_y, 78.0),
-                (PTT_CLIP_X, clip_y, (BRIDGE_Z[0] + BRIDGE_Z[1]) / 2),
-                (PTT_CLIP_X - 0.2, clip_y + 1.6, 62.0),
-                (seam_x[pin_i] + 1.4, 9.0 + clip_y, 54.5),
-                (seam_x[pin_i] + 0.4, 13.0 + clip_y * 0.4, 51.0),
-                *to_seam(seam_x[pin_i], 13.2 + clip_y * 0.4),
+                (legs_x - 1.2, (leg_y + run_y) / 2, legs_z - 1.5),
+                (PTT_RUN_X + 0.9, run_y, 78.0),
+                (PTT_RUN_X, run_y, (BRIDGE_Z[0] + BRIDGE_Z[1]) / 2),
+                (PTT_RUN_X - 0.2, run_y + 1.6, 62.0),
+                (seam_x[pin_i] + 1.4, 9.0 + run_y, 54.5),
+                (seam_x[pin_i] + 0.4, 13.0 + run_y * 0.4, 51.0),
+                *to_seam(seam_x[pin_i], 13.2 + run_y * 0.4),
             ],
             d=1.0,
         )

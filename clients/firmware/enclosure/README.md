@@ -5,11 +5,13 @@ its SPK-4020 speaker, two 18650s and a spring-loaded push-to-talk lever. Hold
 to talk, release to hear the answer
 ([`../../../docs/concepts.md`](../../../docs/concepts.md)).
 
-Status: **HX-1 is the build** (rev D, 2026-10-10). Every part is located and
+Status: **HX-1 is the build** (rev E, 2026-10-11). Every part is located and
 held by printed features, screws or crush ribs, no glue; every bought part has
 a hard stop within 0.5 mm in every direction (tested); every printed piece is
-one solid with a known print pose (tested). Next: Mario prints the fit coupon,
-then the parts. Tracked as F-0010 in [`../docs/triage.md`](../docs/triage.md).
+one solid with a known print pose, and nothing starts in mid-air (tested); the
+sliced tub has no support touching a close fit (checked in its G-code). The
+fit coupon is printed and folded in; next: print the parts from
+`out/print/sliced/`. Tracked as F-0010 in [`../docs/triage.md`](../docs/triage.md).
 The interactive build page (spin, explode, x-ray, build it) comes from
 `huxcase/site.py`.
 
@@ -74,7 +76,7 @@ switch.
 | Board | three standoffs + three crush-ribbed centring posts (faceplate) | 3 x M2 x 8 + washer, self-tapping into the standoffs |
 | Speaker | six crush-ribbed tabs on the grille plug | clamped between the plug's ring and a post on the tub's back wall when the case closes |
 | Grille plug (black) | its window in the face | its flange in a recess behind the face, clamped by the speaker |
-| Holders (x2) | the side walls and the bridge's tabs, crush-ribbed pedestals and pads | the bridge: one M3 x 6 into an insert on the back wall; ribs on its front bar press both cells, and so the holders, onto the back wall |
+| Holders (x2) | the side walls; sideways, at their full-height end caps: the bridge's tabs beside the + caps, floor lugs beside the - caps (crush-ribbed, so the holders' wall height does not matter); crush-ribbed pedestals and pads | the bridge: one M3 x 6 into an insert on the back wall; ribs on its front bar press both cells, and so the holders, onto the back wall |
 | Cells | the holders | the holders' springs, and the bridge's front bar in a drop |
 | 12 x 12 switch | cradle in the tub, legs in two slots | crush ribs; a latch finger snaps over its front face |
 | Plunger + spring | the tube | the spring's 1.5 mm preload between lever and plunger |
@@ -82,8 +84,7 @@ switch.
 | Power switch | its panel in a recess in the left side | its own snap ears |
 | Battery - lead | two clips on the back wall, beside the speaker post | their lips |
 | Joints (+ and -) | pockets on the back wall | pressed in between two shelves (in heat-shrink) |
-| Battery + lead, talk pair | two clips on the bridge | their lips (the talk pair sits two deep) |
-| Wires | the clips on the bridge and the back wall, the joint pockets | loose with slack between the halves, on purpose (Mario): only the heavy parts need a place |
+| Wires | the - lead in its back-wall clips, the joints in their pockets | everything else loose with slack, on purpose (Mario, 2026-10-11): only the heavy parts need a place |
 
 Every bought part above has a hard stop within 0.5 mm in every direction
 (`tests/test_retention.py`); crush ribs take up the rest so nothing rattles.
@@ -97,9 +98,12 @@ Measured 76 x 21 x 20.5 (spring (-) at the bottom, plate (+) at the top;
 `HOLDER_*`). Each one slides straight in from the front; then the bridge is
 screwed down between them. Their plastic wraps round the cell (Mario), so
 nothing grips the holders' walls: crush ribs on the bridge's front bar press
-each cell, and so its holder, onto the back wall. The fit check reserves room
-for the plastic wrapping up to 0.4 mm past the cell's widest point; past
-that it would meet the speaker's magnet (check before printing, MEASUREMENTS).
+each cell, and so its holder, onto the back wall. Sideways, each holder is
+stopped at its two end caps, which stand full height: the bridge's tabs reach
+up beside the + caps and two lugs on the floor stand beside the - caps
+(`tests/test_retention.py` checks the stops on the caps alone). The fit check
+reserves room for the plastic wrapping 0.4 mm past the cell's widest point,
+and 0.85 of the radius for the tall stretch next to each cap.
 
 The parallel joints sit off the cells: the + joint over the channel just under
 the rocker, the - joint at the channel's foot, each in its own pocket. Before
@@ -115,7 +119,7 @@ starting points for his Bambu Lab P2S with PLA and a 0.4 mm nozzle:
 | Interface | Clearance | Why |
 | --- | --- | --- |
 | Printed slides on printed, drawn in X/Y | 0.15 | `SLIDE`: free, no rattle (coupon: the peg slides into every vertical hole, .10 to .30) |
-| Same, bore lying horizontal on the bed | 0.30 | `SLIDE_HBORE`: horizontal holes print oval |
+| Same, bore lying horizontal on the bed | 0.20 | `SLIDE_HBORE`: horizontal holes print oval (lever-pin block: the 2.4 pin turns freely in the .20 hole) |
 | Removable but stays (faceplate lip) | 0.12 | `SNUG` |
 | Lever swinging in its channel | 0.25 | `PIVOT` |
 | Bought part into a printed pocket | 0.30 + crush ribs | `PART`: always goes in; 0.8 mm ribs crush 0.15 to take up the slack |
@@ -148,11 +152,14 @@ cap not used) and the 0.4 x 4 x 15 mm spring from the SciWil kit.
   (spring-loaded) until the spring reaches the switch's actuation force, then
   the switch clicks. The click point does not depend on print accuracy.
 - 1.5 mm of spring preload (0.9 N) holds the lever firmly on its rest stop.
-  Nominal (2 N switch): click after ~1.9 mm at the switch axis (~1.1 mm under
-  the thumb dimple); a block on the backing stops the stroke at 3.8 mm. A
-  stiff switch (2.6 N) still clicks with one 0.5 mm washer under the plunger.
-  Tests assert the click always lands before the stop and the spring never
-  goes solid.
+  Nominal (2 N switch): click after ~2.1 mm at the switch axis (~1.3 mm under
+  the thumb dimple); a block on the backing stops the stroke at 3.8 mm.
+  Neither the spring nor the switch is measured, so the grey plate also
+  prints two longer plungers (+0.5 and +1.0 mm: 5.5 and 6.0 long against the
+  normal 5.0). Each adds preload and brings the click earlier: a stiff switch
+  (2.6 N) still clicks with the +0.5. Tests assert the click lands before the
+  stop, the spring never goes solid, and even the +1.0 does not press the
+  switch with the lever at rest.
 - The switch slides into its cradle from the front (the stem through a slot
   in the tube) until a latch finger snaps over its front face. Solder the two
   wires to the leg pair that switches first (check with a multimeter); they
@@ -172,10 +179,13 @@ also removed two overlaps.
 ## Power switch: KCD1-101 on the left side
 
 Recessed 7.2 mm in the left side above the left holder. Its body is 18.9 x
-11.8 under the frame (measured); the panel it clips into is 2.8 mm thick with a
-45 deg chamfer round the inside of the hole, so its snap clips (catch about
-3 mm under the frame) land on the chamfer and pull the frame tight, wherever
-their catch is between 1.2 and 2.8 mm. Wired in the battery +
+11.8 under the frame (measured); the panel it clips into is 2.8 mm thick. The
+clips sit on the body's long sides, with their barbs about 3 mm under the
+frame (Mario, to the barb's middle), so the barb's slope starts nearer. The
+hole is straight for 1.2 mm, then a 45 deg chamfer opens it to the panel's
+back at 2.8 mm: wherever in that range the slope meets the edge, it pulls the
+frame tight. (Rev E fixes a chamfer that was cut turned 90 deg; a test now
+checks the roof and the panel round the hole.) Wired in the battery +
 lead between the BAT pad and the + joint. The charger sits behind it too, so
 **the rocker must be ON to charge**. Power on the left, talk on the right: easy
 to tell apart by touch. A test asserts it stays below the surface.
@@ -186,8 +196,8 @@ The board has no cell protection (see MEASUREMENTS), and two unprotected cells
 in parallel with no fuse turn a pinched wire into a ~20 A short. Mario's
 answer (2026-10-10): use his protected 18650s, each with its own protection
 circuit in the can, so no separate board. Protected cells are 2 to 4 mm
-longer than bare ones: one must go into a holder by hand and sit flat (check
-before printing). Put both cells in at the same voltage (within 0.05 V). The
+longer than bare ones: check that one sits flat in a holder. Put both cells
+in at the same voltage (within 0.05 V). The
 firmware still shuts down at a safe voltage via `BAT_ADC` (GPIO1).
 
 ## Wires between the halves: a ribbon
@@ -220,12 +230,12 @@ printed parts, measure, and add about 20 mm. Loose is fine.
 | --- | --- | --- | --- | --- |
 | Speaker | SPK plug (board back) | the speaker's solder tabs (upper right) | **26 mm** | short; turn the speaker so its tabs sit upper right |
 | Ribbon (6 wires) | battery plug lead and GPIO7, on the board | the junction in the tub | 100 mm | loose, folded into the channel when closed |
-| Rocker + | rocker tab | the junction | 80 mm | the + clip on the bridge |
+| Rocker + | rocker tab | the junction | 80 mm | loose, across the bridge |
 | Rocker in | rocker tab | + joint | 25 mm | the joint's pocket |
 | Holder + leads (2) | top of each holder | + joint | trim to fit | the joint's pocket |
 | Holder - leads (2) | bottom of each holder | - joint | trim to fit | the joint's pocket |
 | Battery - | the - joint | the junction | 75 mm | two clips on the back wall |
-| Talk pair | tact switch legs | the junction | 70 mm each | the talk clip on the bridge |
+| Talk pair | tact switch legs | the junction | 70 mm each | loose, across the bridge |
 
 The board's battery socket is 1.25 mm pitch; the board's own battery plug
 and lead came with it (Mario, 2026-10-11), so plug it in and splice its lead.
@@ -236,14 +246,22 @@ and lead came with it (Mario, 2026-10-11), so plug it in and splice its lead.
 | --- | --- | --- | --- |
 | Faceplate | grey | face down | none |
 | Grille plug | black | face down | none |
-| Tub | grey, swap to frosted at 36 mm | standing up, open front facing you | tree supports: the roof, the switch cradle and its latch, the rocker mount and its recess ceiling, the joint shelves, the tooth notch; all removed through the open front. The outside bottom edge droops slightly (no support needed) |
+| Tub | grey, swap to frosted at 36 mm | standing up, open front facing you | tree supports: under the roof, the switch cradle and its latch finger, the rocker mount and its recess, the holder pads, the joint shelves, the lever pin's notch at the front right, and thin strips under the outside bottom corners. Pull them out through the open front; the notch's and the recess's from outside (the notch has 0.4 mm of room round the tooth for what they leave) |
 | Lever | orange | outer face down | none |
-| Lever pin | grey | lying flat | none |
-| Plunger | grey | standing on its flat end | none |
+| Lever pin | grey | lying flat (three: two spares) | none |
+| Plunger | grey | standing on its tip (three lengths) | none |
 | Holder bridge | grey | front face down | none |
 
-`huxcase/printability.py` measures what needs support in each pose
-(`tests/test_printability.py` holds every piece to that).
+`huxcase/printability.py` measures what needs support in each pose and finds
+any layer that starts in mid-air (`tests/test_printability.py` holds every
+piece to that). The tub's close fits get no support at all: the plunger bore
+and the lever pin's seat have 45 deg tops, the lever's pivot a 45 deg roof,
+and the sliced project carries support blockers on the lever channel, the
+rocker's panel hole and the USB pocket, whose tops then print as short
+bridges. `huxcase.slice` reads the tub's G-code and fails if any support
+touches those (`printability.support_keep_outs`); a tree branch may still
+pass through the rocker hole or the lever slot, clear of their walls, and
+comes out with the rest.
 
 **Ready to print**: `out/print/sliced/` has one sliced Bambu Studio project
 per filament colour for the P2S (0.4 nozzle, 0.20 mm Standard, Bambu PLA
@@ -252,45 +270,50 @@ Open one and press print, or send it from Bambu Handy:
 
 | Project | Filament | About |
 | --- | --- | --- |
-| `1_grey_faceplate_bridge_pin_plunger` | grey | 40 min |
+| `1_grey_faceplate_bridge_pin_plunger` | grey | 41 min (faceplate, bridge, 3 pins, 3 plungers) |
 | `2_black_grille` | black | 36 min |
 | `3_orange_lever` | orange | 7 min |
-| `4_tub_grey_then_frosted` | grey, then frosted | 2 h 33 min; tree supports; **pauses at 36.2 mm**: swap to frosted and resume |
+| `4_tub_grey_then_frosted` | grey, then frosted | 2 h 28 min; tree supports; **pauses at 36.2 mm**: swap to frosted and resume |
 
 `uv run python -m huxcase.slice` rebuilds them from out/print (after
 `printability --stl`); it checks that only the tub pauses, right before its
-first frosted layer.
+first frosted layer, and that no support touches the tub's close fits.
 
 ## Assembly
 
 On the bench first:
-1. Cut the wires to the table above, with their slack.
+1. Pull the tub's supports out (see the print guide). Cut the wires to the
+   table above, with their slack.
 2. Talk switch: solder its two wires to the leg pair that switches first
    (check with the meter). The rocker's leads are soldered later, in the case.
 
 Tub, lying on its back:
-4. Heat-set three M3 x 5 inserts: two in the top corner blocks, one in the
+3. Heat-set three M3 x 5 inserts: two in the top corner blocks, one in the
    boss on the back wall.
-5. Rocker: snap it in from outside, with nothing on it. Its two tabs are
+4. Rocker: snap it in from outside, with nothing on it. Its two tabs are
    then reached straight from the open front, about 20 mm in above the left
    holder: solder its two leads there (before the cells go in).
-6. Talk switch: slide it into the cradle until it clicks. From outside, drop
-   the plunger into the tube, then the spring.
-7. Lever: push the pin through it, slide it in from the front along its
+5. Talk switch: slide it into the cradle until it clicks. From outside, drop
+   the normal plunger (5.0 mm, the shortest) into the tube, then the spring.
+6. Lever: push a pin through it, slide it in from the front along its
    channel (press the spring's end down with a fingertip as it passes).
-8. Holders: slide each straight in. Join the
-   + leads with the rocker's input lead, the - leads with the battery - lead;
-   put both joints in heat-shrink and press them into their pockets. Snap
-   the - lead into its two clips on the back wall.
-9. Cells in (within 0.05 V of each other, + up). Lay the + lead and the talk
-   pair over their clips, then the bridge across, M3 x 6: the clips snap
-   over the wires. The four tub wires end at the junction behind the
-   speaker's magnet.
+7. Holders: slide each straight in, riding over the ribs on the floor lugs.
+   Join the + leads with the rocker's input lead, the - leads with the
+   battery - lead; put both joints in heat-shrink and press them into their
+   pockets. Snap the - lead into its two clips on the back wall.
+8. Cells in (within 0.05 V of each other, + up). If one will not snap past
+   its holder's wrap with the holder in its bay, slide that holder forward
+   out of the bay on its leads, put the cell in, and slide it back.
+9. Lay the + lead and the talk pair loose in the channel, then the bridge
+   across, its tabs down beside the holders' + caps: M3 x 6. The four tub
+   wires end at the junction behind the speaker's magnet.
 10. Rocker ON: meter 3.6 to 4.2 V between the + and - wire ends. Rocker OFF.
 
-Faceplate, face down:
-11. Heat-set two M3 x 5 inserts in the bottom bosses. Press the grille plug
-    into its window from inside, flange inside (crush ribs hold it).
+Faceplate:
+11. Stand it on its top edge and heat-set two M3 x 5 inserts in the bottom
+    bosses (their bores open toward the bottom edge). Then lay it face down
+    and press the grille plug into its window from inside, flange inside
+    (crush ribs hold it).
 12. Cut the speaker lead to 26 mm, re-solder it, set the speaker on its tabs
     with the tabs upper right.
 13. Board onto its standoffs (USB-C to the left), 3 x M2 x 8 with washers.
@@ -304,16 +327,20 @@ Close:
 15. Rocker OFF. Fold the ribbon into the channel, swing the faceplate onto
     the tub (the lever pin's front end goes into the tooth) and fit the four
     M3 x 8: two in the face at the top, two up through the floor, snug.
-16. Test: rocker ON, the lever clicks; on USB-C the charge light comes on.
+16. Test: rocker ON, the lever clicks. If the click comes late or not at all
+    before the lever stops, swap in the 5.5 mm plunger (then the 6.0). If
+    the talk input reads pressed with the lever at rest, sand the plunger's
+    spring end down 0.5 mm. On USB-C the charge light comes on.
 
 ## Parts list
 
-Printed: faceplate, tub, grille plug, lever, lever pin, plunger, holder bridge
-(the build page lists each with its volume).
+Printed: faceplate, tub, grille plug, lever, lever pin (three: two spares),
+plunger (three lengths), holder bridge (the build page lists each with its
+volume).
 
 Bought, all from Mario's inventory (photos 2026-10-10): the board and its
-speaker; two 18650 cells in two holders; the 12 x 12 tact switch; the SciWil
-0.4 x 4 x 15 spring; the KCD1-101 rocker; two protected 18650s; the board's
+speaker; two protected 18650 cells in his two single holders; the 12 x 12
+tact switch; the SciWil 0.4 x 4 x 15 spring; the KCD1-101 rocker; the board's
 own battery plug and lead; Kadrick button heads 4 x M3 x 8, 1 x M3 x 6,
 3 x M2 x 8 with flat washers; FFVRVSS 5 x M3 x 5 heat-set inserts; the
 rainbow ribbon from the crimp kit (six conductors).
@@ -374,7 +401,9 @@ they hold.
 
 ## What these models are not (yet)
 
-HX-1 rev D is a printable design: fit-checked, retention-tested and
-printability-checked, with clearances that the fit coupon confirms on Mario's
+HX-1 rev E is a printable design: fit-checked, retention-tested and
+printability-checked, with clearances the fit coupon confirmed on Mario's
 printer. The other HX concepts are packaging sketches (form, not printable
-parts). Nothing is left to measure for HX-1; the next step is printing it.
+parts). Nothing is left to measure for HX-1. Two things are settled on the
+bench instead of by calipers: the click point (the spare plungers, step 16)
+and a cell going into its holder in the bay (step 8).

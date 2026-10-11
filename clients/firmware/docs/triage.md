@@ -220,12 +220,36 @@ magnet, with about 100 mm of slack lying loose. Done meanwhile: the joint pocket
 long (a lead a few mm off moves its joint along), the rocker goes in empty
 and its tabs are soldered in place, and wires are measured on the print.
 
+**Round 5, final review before the tub (2026-10-11)**: a fresh critic found
+the rev E tub not ready. Fixed:
+- Blocker: the rocker panel's chamfer was cut turned 90 deg (a slit through
+  the roof, the switch loose). Swapped; a test probes the roof and the panel.
+- The sliced tub had support inside close fits (plunger bore, lever pivot and
+  channel, rocker hole, USB pocket). Now: 45 deg tops on the plunger bore and
+  the lever pin's seat, a 45 deg roof over the knuckle, support blockers in
+  the tub's project for the channel, the rocker hole and the USB pocket, and
+  `huxcase.slice` fails if any support touches those
+  (`printability.support_keep_outs`; tree branches may pass through clear of
+  the walls). The tooth notch keeps its support (open to the front and side):
+  0.4 room round the tooth for what it leaves. 0.3 roof relief over the lip.
+- The bridge's wire clips printed in mid-air: deleted (wires loose, Mario's
+  rule). `printability.islands()` now finds any layer that starts on nothing;
+  every unsupported piece is tested free of them.
+- Holders stopped sideways at their full-height end caps (bridge tabs up to
+  the + caps, ribbed floor lugs at the - caps), so their unmeasured wall
+  height no longer matters; tested on the caps alone.
+- Click margin: spare plungers 0.5 and 1.0 mm longer instead of a washer that
+  is not in the kit; `click_travel` now counts the stem's 0.25; plunger tip
+  chamfered; three lever pins. Docs: README, MEASUREMENTS, build page.
+Not changed, on purpose: the faceplate (Mario may have printed it; its thin
+engraved labels may fill in, cosmetic only).
+
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
 bottom is fine, holders whole, no glue, plastic pivot, protected cells
-instead of a protection board, plug between the halves, the board's battery
-plug is there); dock yes/no; volume buttons yes/no. Measurements still
-wanted (drawn for him): holder wall top edge, rocker body and snap ears,
-switch leg spacing; and whether a protected cell fits a holder.
+instead of a protection board, the ribbon and loose wires, the board's
+battery plug is there); dock yes/no; volume buttons yes/no. Nothing left to
+measure: the click point and a cell going into its holder in the bay are
+bench checks in the README's assembly (steps 8 and 16).
 
 **Firmware impact**: PTT moves from the on-board `K2` (via TCA9555) to an
 external switch on GPIO7 (header pin 2; input, pull-up, low = talk; the LCD

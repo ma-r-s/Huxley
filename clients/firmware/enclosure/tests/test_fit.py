@@ -45,14 +45,18 @@ def test_hx1_tact_switch_clicks_before_the_stop():
     """Spring in series: the lever compresses the spring until it reaches the
     switch's actuation force. That must happen before the stop post, with
     margin, for a nominal 12x12 switch; a stiff one (2.6 N) must still click
-    with one 0.5 mm washer under the plunger flange."""
+    with the plunger printed 0.5 mm longer. Even the 1.0 mm longer plunger
+    must not press the switch with the lever at rest."""
     from huxcase import hardware as hw
     from huxcase.concepts import hx1
 
     assert hx1.click_travel() < hx1.STOP - 0.5
-    assert hx1.click_travel(force=2.6, shim=0.5) < hx1.STOP - 0.2
+    assert hx1.click_travel(force=2.6, longer=0.5) < hx1.STOP - 0.2
+    longest = max(hx1.PLUNGER_VARIANTS)
+    rest_force = (hw.SERIES_SPRING_FREE - hx1.SPRING_REST + longest) * hw.SERIES_SPRING_K
+    assert rest_force < 0.8 * hw.TACT_FORCE
     solid = 10 * 0.4  # 10 coils of 0.4 mm wire
-    assert solid + 1.0 < hx1.SPRING_REST - hx1.STOP + hw.TACT_TRAVEL
+    assert solid + 1.0 < hx1.SPRING_REST - longest - hx1.STOP + hw.TACT_TRAVEL
 
 
 def test_hx1_rocker_sits_below_the_side_surface():
@@ -62,6 +66,26 @@ def test_hx1_rocker_sits_below_the_side_surface():
     c = hx1.build()
     rocker = [p.shape for p in c.parts if p.name.startswith("rocker_")]
     assert min(r.bounding_box().min.X for r in rocker) >= -hx1.W / 2
+
+
+def test_hx1_rocker_panel_hole_runs_along_the_switch():
+    """The KCD1's clips sit on its long sides: the panel's chamfer must run
+    along Y with it, leaving the roof whole and panel above and below the hole
+    (a chamfer turned 90 deg once cut a slit through the roof)."""
+    from build123d import Box, Pos
+    from huxcase.concepts import hx1
+
+    tub = hx1.build().shells["tub"]
+
+    def solid_at(x, y, z, s=0.05):
+        return ((Pos(x, y, z) * Box(s, s, s)) & tub).volume > 0.5 * s**3
+
+    px, y, z = -hx1.W / 2 + hx1.ROCKER_RECESS, hx1.ROCKER_Y, hx1.ROCKER_Z
+    assert solid_at(-hx1.W / 2 + hx1.ROCKER_RECESS + 2.1, y, hx1.H - 1.0)  # the roof
+    assert solid_at(px + 2.0, y, z - 8.0) and solid_at(px + 2.0, y, z + 8.0)
+    assert not solid_at(px + 0.6, y + 9.4, z)  # the long side's hole edge...
+    assert solid_at(px + 0.6, y + 9.8, z)  # ...and the land the clips catch behind
+    assert not solid_at(px + 2.6, y + 10.4, z)  # the chamfer opens toward the inside
 
 
 def _route_length(tube, d: float = 1.4) -> float:

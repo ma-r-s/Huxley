@@ -59,15 +59,16 @@ the TF slot, **+y** toward the mics and the pin header, **-y** toward USB-C,
 | Total depth                      | 20.5                                                                               | STEP        |
 | Rating                           | 5 W (part name). Impedance not stated; the NS4150B amp is a 3 W / 4 Ω class-D part | STEP + SCH  |
 | Back volume in the original case | roughly 40 to 60 cc, shared with the board                                         | derived     |
-| Cable length, plug               | 97 mm, speaker to plug end (cut to 45 for HX-1)                                    | Mario       |
+| Cable length, plug               | 97 mm, speaker to plug end (cut to 26 for HX-1)                                    | Mario       |
 
 ## 18650 cell
 
 HX-1 uses Mario's two single-cell holders whole (photo 2026-10-10), so the
-holder sets the space, not the cell. Mario measured it at 76 × 21 × 20.5;
-the inside is assumed: 1.2 mm floor and side walls, 3.0 mm end caps, a bare
-flat-top cell Ø18.6 × 65, one red and one black lead per holder (`HOLDER_*`,
-`hardware.holder()`).
+holder sets the space, not the cell. Mario measured it at 76 × 21 × 20.5,
+his protected cells at 19.0 across, and 20.2 from the table to the top of a
+cell in a holder on its back: a 1.2 floor and 1.0 walls (2026-10-11). The end
+caps (3.0) and the spring (4.5) are assumed; one red and one black lead per
+holder (`HOLDER_*`, `hardware.holder()`).
 
 The older concepts (rev A, HX-2 to HX-4) still reserve a bare Ø19.4 × 74 bay
 for a protected button-top cell.
@@ -95,12 +96,14 @@ Calipers, Mario, 2026-10-10 (**MARIO**), or assumed generic (**ASSUMED**).
 | 12 x 12 tactile switch | 7.3 base to stem top; stem a 3.8 mm square | **MARIO** | `TACT_*` |
 | | body 12 x 12 x 4.0, 4 legs, ~2 N / 0.25 mm actuation | **ASSUMED** | |
 | Series spring (SciWil) | 0.4 wire x 4 OD x 15 free, 10 coils, ~0.59 N/mm | **ASSUMED** (kit label) | `SERIES_SPRING_*` |
-| Lever pin | M2 x 16 screw + nut | **ASSUMED** | `_bar`, `pin` |
+| Lever pin | printed Ø2.4 pin (since rev D, no screw) | design | `PIN_D` |
 | KCD1-101 rocker | 18.6 from the frame's underside to the tab tips | **MARIO** | `ROCKER_DEPTH` |
-| | 21 x 15 bezel, 19 x 13 body x 11.5, tabs 6 mm apart, rocker 5 mm proud | **ASSUMED** | `ROCKER_*` |
+| | body 18.9 x 11.8 under the frame; clip barbs ~3 mm under the frame | **MARIO** | `ROCKER_BODY`, `ROCKER_CATCH` |
+| | 21 x 15 bezel, body 11.5 deep, tabs 6 mm apart, rocker 5 mm proud | **ASSUMED** | `ROCKER_*` |
 | 18650 holders (2) | 76 x 21 x 20.5 outside | **MARIO** | `HOLDER_*` |
-| | 1.2 floor and walls, 3.0 end caps, 4.5 spring | **ASSUMED** | |
-| 18650 cells | green wrap, probably Sony/Murata VTC: unprotected, flat top, 65 mm | **ASSUMED** | `CELL_*` |
+| | 1.2 floor, 1.0 walls (low in the middle, tall next to the caps) | **MARIO** | `HOLDER_FLOOR`, `HOLDER_WALL` |
+| | 3.0 end caps, 4.5 spring | **ASSUMED** | |
+| 18650 cells | protected, 19.0 across | **MARIO** | `CELL_D` |
 | Speaker lead | 97 from the speaker to the end of the plug | **MARIO** | `SPK_CABLE_L` |
 | Mics | pinhole on top of each can: top-ported, as the front mic ports assume | **MARIO** | `MICS` |
 | M3 heat-set inserts | 4.4 over the knurls, 3.8 smooth pilot; 3, 5 and 7 long | **MARIO** | `fits.INSERT_*` |
@@ -108,7 +111,7 @@ Calipers, Mario, 2026-10-10 (**MARIO**), or assumed generic (**ASSUMED**).
 | Holder leads | black (-) out of the spring end cap, red (+) out of the plate end cap | **MARIO** (photo) | `lead_*` |
 
 The speaker lead is ~75 mm longer than its 22 mm route, and loose wire buzzes
-in a sealed back box, so the build cuts it to 45 mm and re-solders it at the
+in a sealed back box, so the build cuts it to 26 mm and re-solders it at the
 speaker (`SPK_LEAD_CUT`, tested).
 
 ## Battery protection
@@ -117,18 +120,20 @@ The board's charger (ETA6098) only manages charging. Nothing on the board
 limits a short circuit or stops a deep discharge: the schematic shows no
 protection IC (no DW01-class part), only the charger and two power-path
 MOSFETs. Waveshare's own LiPo has its protection board inside the pack, which
-is why the board omits it. Mario chose to skip it for now (pocket reserved in
-the case). Bare 18650s properly need a 1S protection board
-(DW01 + 8205 class) between the cells and the BAT socket, or protected
-cells. Firmware can add a low-voltage shutdown via `BAT_ADC` (GPIO1), which
-covers deep discharge but not shorts.
+is why the board omits it. Bare 18650s need a 1S protection board (DW01 +
+8205 class) between the cells and the BAT socket, or protected cells: Mario
+uses protected cells (2026-10-10), so the case has no protection board.
+Firmware can add a low-voltage shutdown via `BAT_ADC` (GPIO1), which covers
+deep discharge but not shorts.
 
 ## Fit coupon results (Mario, 2026-10-10)
 
 The 6 mm peg goes into every vertical hole on the plate (.10 to .30 per
 side) easily, the .10 with a hint of friction. `fits.SLIDE` is now 0.15.
-Not yet tried: the peg in the five side holes (front face), the lever-pin
-block, the plug coupon.
+Lever-pin block (2026-10-11): the printed pin turns freely in the .20 hole.
+Not tried: the peg in the five side holes. The one wide horizontal bore that
+needs it, the plunger's, has a 45 deg top since rev E, so its roof cannot sag
+onto the plunger. The plug coupon went with the plug.
 
 ## Talk input: GPIO7 on header pin 2
 
@@ -147,7 +152,10 @@ it clears the speaker's magnet, and to 14 mm it only grazes the 1 mm wall.
 Lever-pin block: the printed pin turns freely in the .20 hole, so horizontal
 slides are 0.20 (`fits.SLIDE_HBORE`).
 
-Nothing is left to measure.
+Nothing is left to measure. Settled on the bench instead: the click point
+(spare plungers 0.5 and 1.0 mm longer, README step 16) and a cell going into
+its holder in the bay (README step 8). The holders' wall height no longer
+matters: since rev E they are stopped sideways at their end caps.
 
 Answered 2026-10-10: the board came with its 1.25 mm battery plug and lead
 (it becomes the board's two plug pigtails); the cells are Mario's protected
