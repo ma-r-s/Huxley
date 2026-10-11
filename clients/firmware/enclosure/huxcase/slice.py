@@ -94,6 +94,11 @@ GREY_GROUP = ("bridge", "plunger_long05", "plunger_long10", "ptt_pin", "ptt_pin"
 # Object centres on the 256 x 256 bed. Printed object by object, the toolhead
 # must clear what is already done: 72 mm between objects (the P2S's extruder
 # clearance), and the tall tub, printed last, away from the rest.
+# Objects with their own tree supports (the rest print without). The grey
+# group's bridge has a 17 mm bridge across its U with the screw hole in the
+# middle: the bridge lines that end at the hole need a little support there
+# (Bambu Studio warns of a floating cantilever without it), inside the U.
+SUPPORTED = ("tub", "grey_parts")
 AMS_LAYOUT = {"lever": (36.0, 40.0), "grey_parts": (190.0, 40.0), "tub": (128.0, 200.0)}
 
 BED = "Textured PEI Plate"  # the plate the P2S ships with; pick yours in Bambu Studio if not
@@ -223,8 +228,10 @@ def slice_plate(name, stls, overrides, pause_z, print_dir: Path, out_dir: Path) 
                     cfg["curr_bed_type"] = BED
                     cfg["machine_pause_gcode"] = PAUSE_GCODE
                     data = json.dumps(cfg, indent=4).encode()
-                if blockers and item.filename == "Metadata/model_settings.config":
-                    data = _as_blockers(data)
+                if item.filename == "Metadata/model_settings.config":
+                    data = _own_supports(data.decode(), ("hx1_07_bridge",)).encode()
+                    if blockers:
+                        data = _as_blockers(data)
                 if item.filename != "Metadata/custom_gcode_per_layer.xml":
                     dst.writestr(item, data)
             if pause_z is not None:
@@ -278,6 +285,16 @@ def _rewrite(src: Path, dst: Path, edits: dict) -> None:
             if item.filename in edits:
                 data = edits[item.filename](data.decode()).encode()
             zo.writestr(item, data)
+
+
+def _own_supports(model_settings: str, names) -> str:
+    """Give the named objects (file name without .stl) their own tree supports."""
+    own = "".join(f'    <metadata key="{k}" value="{v}"/>\n' for k, v in TREE_SUPPORTS.items())
+    for _, name, block in _objects(model_settings):
+        if name.removesuffix(".stl") in names:
+            tag = f'<metadata key="name" value="{name}"/>\n'
+            model_settings = model_settings.replace(block, block.replace(tag, tag + own, 1))
+    return model_settings
 
 
 def _objects(model_settings: str) -> list[tuple[str, str, str]]:
@@ -358,7 +375,7 @@ def ams_project(out: Path, print_dir: Path) -> Path:
                     "filament_colour": [colour for _, colour in AMS],
                     "print_sequence": "by object",
                     "enable_prime_tower": "0",  # by object, the AMS flushes into the chute
-                    "enable_support": "0",  # only the tub gets support, as its own setting
+                    "enable_support": "0",  # only SUPPORTED objects get support, as their own setting
                     "curr_bed_type": BED,
                 }
             )
@@ -373,17 +390,8 @@ def ams_project(out: Path, print_dir: Path) -> Path:
                     new = new.replace(
                         'key="extruder" value="1"', f'key="extruder" value="{SLOT["orange"]}"'
                     )
-                if key == "tub":
-                    own = "".join(
-                        f'    <metadata key="{k}" value="{v}"/>\n'
-                        for k, v in TREE_SUPPORTS.items()
-                    )
-                    new = new.replace(
-                        '<metadata key="name" value="tub"/>\n',
-                        '<metadata key="name" value="tub"/>\n' + own,
-                        1,
-                    )
                 t = t.replace(block, new)
+            t = _own_supports(t, SUPPORTED)
             assert set(ids) == set(AMS_LAYOUT), ids
             return t
 
@@ -528,7 +536,7 @@ def ams_check(project: Path) -> list[str]:
             assert got == cols, f"{obj} prints in {got}, not {cols}"
         frost_z = used["tub"][1][1]
         assert abs(frost_z - hx1.BACK_FROST_Z) <= LAYER + 1e-6, frost_z
-        assert supported == {"tub"}, supported
+        assert supported <= set(SUPPORTED) and "tub" in supported, supported
         tub_id = next(k for k, v in names.items() if v == "tub")
         touching = support_in_keep_outs(sliced, True, tub_id)
         assert not any(touching.values()), f"support touches {touching}"

@@ -271,8 +271,10 @@ tub, the lever, and the bridge with the two longer plungers and two spare pins
 as one grey object. It prints object by object, so the AMS swaps only between
 objects and once inside the tub. Filaments: slot 1 grey, 2 black (not used
 here), 3 orange, 4 frosted. The tub is two parts, grey below 36 mm and frosted
-above, so it changes to frosted by itself, no pause. The tub alone gets tree
-supports and the support blockers. About 2 h 50 min.
+above, so it changes to frosted by itself, no pause. The tub gets tree
+supports and the support blockers; the bridge gets one small tree under its
+screw hole, inside its U (its 17 mm bridge is cut by the hole, and Bambu
+Studio warns of a floating cantilever without it). About 2 h 50 min.
 
 **Without the AMS**: `out/print/sliced/` has one sliced project per filament
 colour for the P2S (0.4 nozzle, 0.20 mm Standard, Bambu PLA Basic, Textured
@@ -288,8 +290,8 @@ PEI plate; pick your plate in Bambu Studio if it differs):
 `uv run python -m huxcase.slice` rebuilds all of them from out/print (after
 `printability --stl`). It slices the AMS project too, to check it (one plate,
 the P2S's start sequence, each object in its filament, the tub last and
-frosted from 36.2 mm, support only on the tub and none touching a close
-fit), and checks that only the per-colour tub pauses, right before its first
+frosted from 36.2 mm, support only on the tub and the bridge and none
+touching a close fit), and checks that only the per-colour tub pauses, right before its first
 frosted layer. The presets are flattened first: Bambu Studio's command line
 does not follow a system preset's full `inherits` chain or its `include`d
 templates (the P2S keeps its start, end and filament-change G-code there),
