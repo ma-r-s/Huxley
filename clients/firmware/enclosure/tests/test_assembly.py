@@ -45,6 +45,12 @@ def model():
         "speaker": env["speaker"],
         "board": env["board"] + env["board_screws"],
         "protection": env["protection_pcb"],
+        # Seam plug: the yoke and header ride in with the board; the housing,
+        # in its shuttle, drops into the cage on the tub side.
+        "yoke": sh["yoke"],
+        "header": env["xh_header"],
+        "shuttle": sh["shuttle"],
+        "housing": env["xh_housing"],
     }
 
 
@@ -128,13 +134,24 @@ STEPS = [
             ["tub", "holder_0", "holder_1", "switch", "lever", "pin"],
         ),
     ),
+    (
+        "plug housing into its cage",
+        (
+            ["shuttle", "housing"],
+            _path((0, -30.0, 0)),
+            ["tub", "holder_0", "holder_1", "bridge", "protection", "switch", "lever", "pin"],
+        ),
+    ),
     ("plug into faceplate", (["plug"], _path((0, 12.0, 0)), ["faceplate"])),
     ("speaker onto plug", (["speaker"], _path((0, 15.0, 0)), ["faceplate", "plug"])),
-    ("board onto standoffs", (["board"], _path((0, 12.0, 0)), ["faceplate", "plug", "speaker"])),
+    (
+        "board onto standoffs",
+        (["board", "yoke", "header"], _path((0, 12.0, 0)), ["faceplate", "plug", "speaker"]),
+    ),
     (
         "close the case",
         (
-            ["faceplate", "plug", "speaker", "board"],
+            ["faceplate", "plug", "speaker", "board", "yoke", "header"],
             _path((0, -20.0, 0)),
             [
                 "tub",
@@ -146,6 +163,9 @@ STEPS = [
                 "holder_0",
                 "holder_1",
                 "bridge",
+                "protection",
+                "shuttle",
+                "housing",
             ],
         ),
     ),

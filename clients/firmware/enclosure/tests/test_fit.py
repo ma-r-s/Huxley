@@ -155,3 +155,64 @@ def test_hx1_lever_pin_is_captured_in_two_blind_seats(hx1_concept):
     cap = lambda y: Pos(hx1.PIVOT_X, y, hx1.PIVOT_Z) * Rot(90, 0, 0) * Cylinder(1.0, 0.2)  # noqa: E731
     assert (cap(hx1.PIN_Y1 + 0.5) & c.shells["tub"]).volume > 0
     assert (cap(hx1.PIN_Y0 - 0.5) & c.shells["faceplate"]).volume > 0
+
+
+def test_hx1_seam_plug_misses_the_boards_real_parts():
+    """The yoke lies flat on the board's back and the pigtails run over it,
+    inside the blanket 2.5 mm keepout they are allowed into: they must still
+    miss every real component, except the socket a pigtail starts at."""
+    from huxcase.concepts import hx1
+
+    c = hx1.build()
+    parts = {p.name: p.shape for p in c.parts}
+    comps = [n for n in parts if n.startswith("board_") and n not in ("board_pcb", "board_screws")]
+    starts = {
+        "cable_board_pos": "board_bat_conn",
+        "cable_board_neg": "board_bat_conn",
+        "cable_spk": "board_spk_conn",
+    }
+    for name in ("yoke", "xh_header", "cable_board_pos", "cable_board_neg", "cable_board_talk"):
+        shape = c.shells.get(name) or c.envelopes[name]
+        for comp in comps:
+            if starts.get(name) != comp:
+                assert shape.distance_to(parts[comp]) >= 0.3, (name, comp)
+
+
+def test_hx1_seam_plug_lines_up_before_it_mates():
+    """As the case closes, the header's box is inside the shuttle's straight
+    bore before the housing's tip reaches it; the chamfered mouth catches it
+    wherever the shuttle floats in its cage, plus 0.4 mm of faceplate offset;
+    and the plug closes short of fully seated (never past it), with 0.3 mm of
+    stack either way."""
+    from huxcase import hardware as hw
+    from huxcase.concepts import hx1
+
+    tip = hw.XH_MATED - hw.XH_HOUSING_H + hx1.XH_SHORT  # housing tip, from the header base
+    bore = hx1.SHUTTLE_S0 + hx1.SHUTTLE_CHAMFER  # where the straight bore starts
+    assert tip - bore >= 0.5
+    assert hx1.SHUTTLE_BORE + hx1.SHUTTLE_CHAMFER >= hx1.CAGE_FLOAT + 0.4
+    assert hx1.XH_SHORT - 0.3 >= 0.3
+    assert hx1.XH_SHORT + 0.3 <= 1.2
+    assert hx1.SHUTTLE_S0 - hx1.YOKE_GRIP - 0.3 > 0  # the yoke never lands on the shuttle
+
+
+def test_hx1_lower_board_screws_still_bite():
+    """The two lower M2 x 8 stand on the 1.8 mm yoke instead of a washer:
+    they still bite 4.5 mm into their standoffs and stop short of the face."""
+    from huxcase.concepts import hx1
+
+    tip = hx1.PCB_BOTTOM_Y + hx1.YOKE_T - hx1.BOARD_SCREW_L
+    assert hx1.BOARD_TOP_Y - tip >= 4.5
+    assert tip >= hx1.Y_FRONT + 1.3
+
+
+def test_hx1_wire_cut_list_covers_every_run():
+    """Every wire's cut length covers its route plus what stripping and
+    crimping take, and leaves no more than that: slack would rattle."""
+    from huxcase.concepts import hx1
+
+    env = hx1.build().envelopes
+    runs = {n: env[n].run for n in env if n.startswith(("cable_", "lead_"))}
+    assert set(hx1.WIRE_CUTS) == set(runs) - {"cable_spk"}
+    for name, cut in hx1.WIRE_CUTS.items():
+        assert 4.0 <= cut - runs[name] <= 7.0, (name, cut, round(runs[name], 1))

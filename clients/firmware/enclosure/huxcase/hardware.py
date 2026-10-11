@@ -257,13 +257,16 @@ def spring(length: float) -> Part:
 
 
 def cable(points: list[tuple[float, float, float]], d: float = 1.4):
-    """A wire bundle swept along a smooth path through `points`."""
+    """A wire bundle swept along a smooth path through `points`. The tube's
+    `run` is the centreline length in mm, for the cut list."""
     from build123d import Plane, Spline, sweep
 
     path = Spline(*points)
     start = path.location_at(0)
     profile = Plane(origin=start.position, z_dir=path.tangent_at(0)) * Circle(d / 2)
-    return sweep(profile, path=path)
+    tube = sweep(profile, path=path)
+    tube.run = path.length
+    return tube
 
 
 # --- 12 x 12 tactile switch PTT (Mario's, from his dev-kit drawer) ------------
@@ -378,4 +381,63 @@ def holder_envelope() -> Solid:
     out = parts[0].shape
     for p in parts[1:]:
         out += p.shape
+    return out
+
+
+# --- JST-XH 2.5 mm, from Mario's crimp kit ---------------------------------------
+# Sizes from JST's XH catalogue (eXH.pdf): header B4B-XH-A, housing XHP-4,
+# terminals SXH-001T-P0.6. The housing's wire-end plate is flush with the
+# header's box when mated; the lock arms on its slotted side ride in the
+# header's two U-slots. Plate thickness and the arms are read off the drawing.
+XH_PITCH = 2.5
+XH_N = 4  # 1 BAT+, 2 BAT-, 3 talk GND, 4 talk
+XH_SPAN = XH_PITCH * (XH_N - 1)  # "A": 7.5
+XH_HEADER_L, XH_HEADER_D, XH_HEADER_H = XH_SPAN + 4.9, 5.75, 7.0  # "B": 12.4
+XH_TAIL, XH_ROW, XH_PIN = 3.4, 2.35, 0.64  # tails; pin row from the slotted face
+XH_BODY_L, XH_BODY_D = XH_SPAN + 3.2, 4.1  # housing body, "B": 10.7
+XH_PLATE_L, XH_PLATE_D, XH_PLATE_T = XH_SPAN + 4.8, 5.7, 0.85  # "C": 12.3
+XH_HOUSING_H = 7.75
+XH_MATED = 9.8  # header base to housing top, fully seated
+
+
+def xh_pin_x() -> list[float]:
+    """Pin centres along x, pin 1 first."""
+    return [(i - (XH_N - 1) / 2) * XH_PITCH for i in range(XH_N)]
+
+
+def xh_header() -> list[Part]:
+    """B?B-XH-A. Local frame: base at z = 0, mouth up +z, box centred on x = y = 0,
+    slotted face at -y."""
+    box = _bbox_solid(
+        -XH_HEADER_L / 2, XH_HEADER_L / 2, -XH_HEADER_D / 2, XH_HEADER_D / 2, 0.0, XH_HEADER_H
+    )
+    row = -XH_HEADER_D / 2 + XH_ROW
+    tails = None
+    for x in xh_pin_x():
+        t = Pos(x, row, -XH_TAIL / 2) * Box(XH_PIN, XH_PIN, XH_TAIL)
+        tails = t if tails is None else tails + t
+    assert tails is not None
+    return [Part("xh_header", box, "white"), Part("xh_tails", tails, "metal")]
+
+
+def xh_housing() -> Solid:
+    """XHP-n, fully seated, in the header's frame: body tip at z = 2.05, top at 9.8."""
+    z0, z1 = XH_MATED - XH_HOUSING_H, XH_MATED
+    slot_face = -XH_PLATE_D / 2
+    arm_t = 0.7
+    body = _bbox_solid(
+        -XH_BODY_L / 2,
+        XH_BODY_L / 2,
+        slot_face + arm_t,
+        slot_face + arm_t + XH_BODY_D,
+        z0,
+        z1,
+    )
+    plate = _bbox_solid(
+        -XH_PLATE_L / 2, XH_PLATE_L / 2, -XH_PLATE_D / 2, XH_PLATE_D / 2, z1 - XH_PLATE_T, z1
+    )
+    out = body + plate
+    for sx in (-1, 1):  # lock arms, in the header's U-slots
+        x = sx * (XH_SPAN / 2 + 0.25)
+        out += _bbox_solid(x - 0.6, x + 0.6, slot_face, slot_face + arm_t, z0 + 1.7, z1)
     return out

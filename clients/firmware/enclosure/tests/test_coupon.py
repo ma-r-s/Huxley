@@ -30,3 +30,17 @@ def test_pin_block_brackets_the_lever_pin_fit():
     block = coupon.pin_block()
     assert block.is_valid and len(block.solids()) == 1
     assert coupon.pin().is_valid
+
+
+def test_plug_pieces_print_as_single_solids_with_the_case_sizes():
+    """The plug coupon is the case's own geometry: the cage block's pocket is
+    the tub cage's pocket, the header block is the yoke's grip."""
+    from huxcase import hardware as hw
+    from huxcase.concepts import hx1
+
+    assert hx1.XH_MATED_FLOOR == hw.XH_MATED + hx1.XH_SHORT
+    for piece in (coupon.plug_header_block(), coupon.plug_cage_block()):
+        assert piece.is_valid and len(piece.solids()) == 1
+        assert piece.bounding_box().min.Z > -1e-6
+    cage = coupon.plug_cage_block().bounding_box()
+    assert abs(cage.size.X - 2 * (hx1.CAGE_POCKET[0] + 0.8 + 2.0)) < 1e-6

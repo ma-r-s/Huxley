@@ -123,17 +123,25 @@ the case). Bare 18650s properly need a 1S protection board
 cells. Firmware can add a low-voltage shutdown via `BAT_ADC` (GPIO1), which
 covers deep discharge but not shorts.
 
+## Fit coupon results (Mario, 2026-10-10)
+
+The 6 mm peg goes into every vertical hole on the plate (.10 to .30 per
+side) easily, the .10 with a hint of friction. `fits.SLIDE` is now 0.15.
+Not yet tried: the peg in the five side holes (front face), the lever-pin
+block, the plug coupon.
+
 ## Still to measure (Mario)
 
-The rev D retention leans on these; each is a quick look or caliper reading:
+The rev D retention leans on these; each is a quick caliper reading:
 
-1. **Holder side walls**: how high they reach (to the cell's centre line?) and
-   how thick they are at the top edge. The lips and the bridge grip that edge
-   (assumed 1.2 mm thick, at the cell's centre).
-2. **KCD1-101**: the body behind the frame (assumed 19 x 13) and where its two
-   snap ears sit.
-3. **12 x 12 switch legs**: spacing between the leg rows (assumed 12.5 x 5.0,
-   the common pattern); the cradle's leg slots follow it.
+1. **Holder side walls.** Lay a holder on its back, floor on the table. Measure
+   how thick one long side wall is, and how high its top edge stands above the
+   table. The lips and the bridge grip that edge (assumed 1.2 mm thick).
+2. **KCD1-101.** Just under its frame: the body's width and height (assumed
+   19 x 13). Then the distance from the underside of the frame to the tips of
+   the two springy snap clips on its sides.
+3. **12 x 12 switch legs.** Centre to centre: between the two legs on the same
+   side, and between the two sides (assumed 5.0 and 12.5); the cradle's leg
+   slots follow it.
 4. Did the board come with a 1.25 mm battery plug and lead? If not, the
-   battery leads solder to the socket's pads.
-5. The fit coupon results (see README "Fits").
+   battery pigtails solder to the socket's pads.

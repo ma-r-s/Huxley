@@ -168,15 +168,38 @@ with a front lip (G), lever play is held by spring preload only (H), and
 the retention test's blind spots (lever, wire runs, a minimum feature
 size test).
 
+**Rev D round 4: the seam plug (2026-10-10)**: Mario approved a plug
+between the halves and the protection board. The assembly test's bbox
+filter was vacuous for the tub (`BoundBox.overlaps` is False on
+containment); fixed, it found three blocked paths (switch stem slot, a
+protection rail on the right holder's path, the grille flange vs the lip),
+all fixed. The wiring went through a design agent: a blind-mate keyed
+JST-XH 4-pin from Mario's crimp kit. Changed from its proposal: the
+tub-side housing sits in a printed shuttle that floats in a cage, and the
+shuttle's chamfered mouth takes the header's box, so alignment rests only
+on JST's published outside sizes (`hw.xh_*`, from eXH.pdf), never on the
+connector's insides. Board half: B4B-XH-A in a yoke under the two lower
+board screws (STEP check: nothing on the board's back there but one rear
+LED, 0.5 clear). The + runs through the protection board's P+ (powers its
+chip, no extra B+ wire). Talk input on GPIO7 (header pin 2): the old model
+had the talk wires on the GND and 3V3 header pins. Every wire has a cut
+length from its route (`WIRE_CUTS`, tested to cover the route plus strip
+and crimp). Speaker turned 30 deg, lead 26 mm. Coupon: the peg slides into
+every vertical hole, so `SLIDE` 0.20 -> 0.15. A plug coupon (header block,
+cage block, real shuttle) tries the mate with Mario's XH parts. 98 green.
+Still open: the plug coupon result (the one fit no test proves), the
+lever-pin block and the side-hole row, a third buildability review.
+
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
-bottom is fine, holders whole, no glue, plastic pivot); battery protection
-board (recommended again with the rev D risk: two parallel unprotected cells,
-no fuse); a look at the face screws and frosted sides; dock yes/no; volume
-buttons yes/no. Measurements still wanted: holder wall top edge, rocker body
-and snap ears, switch leg spacing, coupon results.
+bottom is fine, holders whole, no glue, plastic pivot, protection board
+fitted, plug between the halves); buy the protection board (B+ B- P+ P-
+pads); dock yes/no; volume buttons yes/no. Measurements still wanted:
+holder wall top edge, rocker body and snap ears, switch leg spacing, a
+1.25 mm battery plug or not.
 
 **Firmware impact**: PTT moves from the on-board `K2` (via TCA9555) to an
-external switch on a free header GPIO (GPIO3 to GPIO9; LCD is unused).
+external switch on GPIO7 (header pin 2; input, pull-up, low = talk; the LCD
+is unused).
 `hux_button` in F-0003 should read a direct GPIO; keep `K2` as the bench
 fallback.
 
