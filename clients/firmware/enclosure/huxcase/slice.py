@@ -94,11 +94,9 @@ GREY_GROUP = ("bridge", "plunger_long05", "plunger_long10", "ptt_pin", "ptt_pin"
 # Object centres on the 256 x 256 bed. Printed object by object, the toolhead
 # must clear what is already done: 72 mm between objects (the P2S's extruder
 # clearance), and the tall tub, printed last, away from the rest.
-# Objects with their own tree supports (the rest print without). The grey
-# group's bridge has a 17 mm bridge across its U with the screw hole in the
-# middle: the bridge lines that end at the hole need a little support there
-# (Bambu Studio warns of a floating cantilever without it), inside the U.
-SUPPORTED = ("tub", "grey_parts")
+# Objects with their own tree supports; the rest print without (the bridge's
+# screw hole is skinned over for that, hx1.bridge_skin).
+SUPPORTED = ("tub",)
 AMS_LAYOUT = {"lever": (36.0, 40.0), "grey_parts": (190.0, 40.0), "tub": (128.0, 200.0)}
 
 BED = "Textured PEI Plate"  # the plate the P2S ships with; pick yours in Bambu Studio if not
@@ -142,6 +140,14 @@ def _presets(work: Path, filaments: int = 1) -> list[str]:
         "--load-filaments",
         ";".join([str(paths["filament"])] * filaments),
     ]
+
+
+def _no_warnings(out_dir: Path) -> None:
+    """The slicer's own warnings (what Bambu Studio shows in its window, such
+    as a floating cantilever) come back empty."""
+    result = json.loads((out_dir / "result.json").read_text())
+    warnings = [p.get("warning_message", "") for p in result.get("sliced_plates", [])]
+    assert not any(warnings), f"Bambu Studio warns: {warnings}"
 
 
 def _run(args: list[str], work: Path) -> None:
@@ -228,10 +234,8 @@ def slice_plate(name, stls, overrides, pause_z, print_dir: Path, out_dir: Path) 
                     cfg["curr_bed_type"] = BED
                     cfg["machine_pause_gcode"] = PAUSE_GCODE
                     data = json.dumps(cfg, indent=4).encode()
-                if item.filename == "Metadata/model_settings.config":
-                    data = _own_supports(data.decode(), ("hx1_07_bridge",)).encode()
-                    if blockers:
-                        data = _as_blockers(data)
+                if blockers and item.filename == "Metadata/model_settings.config":
+                    data = _as_blockers(data)
                 if item.filename != "Metadata/custom_gcode_per_layer.xml":
                     dst.writestr(item, data)
             if pause_z is not None:
@@ -241,6 +245,7 @@ def slice_plate(name, stls, overrides, pause_z, print_dir: Path, out_dir: Path) 
             ["--slice", "0", "--outputdir", str(out_dir), "--export-3mf", out.name, str(project)],
             work,
         )
+        _no_warnings(out_dir)
         return out
 
 
@@ -491,7 +496,7 @@ def support_in_keep_outs(project: Path, contact: bool = True, label=None) -> dic
 
 def ams_check(project: Path) -> list[str]:
     """Slice the AMS project as Bambu Studio would, and check what it prints:
-    one plate, the P2S's own start sequence, each object in its filament,
+    one plate, no slicer warnings, the P2S's own start sequence, each object in its filament,
     the tub last and changing to frosted at its first frosted layer, support
     only on the tub and none touching its close fits."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -502,6 +507,7 @@ def ams_check(project: Path) -> list[str]:
             ["--slice", "0", "--outputdir", str(work), "--export-3mf", sliced.name, str(project)],
             work,
         )
+        _no_warnings(work)
         with zipfile.ZipFile(sliced) as z:
             plates = [n for n in z.namelist() if n.endswith(".gcode")]
             info = z.read("Metadata/slice_info.config").decode()
