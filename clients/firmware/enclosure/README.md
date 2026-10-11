@@ -245,6 +245,22 @@ and lead came with it (Mario, 2026-10-11), so plug it in and splice its lead.
 `huxcase/printability.py` measures what needs support in each pose
 (`tests/test_printability.py` holds every piece to that).
 
+**Ready to print**: `out/print/sliced/` has one sliced Bambu Studio project
+per filament colour for the P2S (0.4 nozzle, 0.20 mm Standard, Bambu PLA
+Basic, Textured PEI plate; pick your plate in Bambu Studio if it differs).
+Open one and press print, or send it from Bambu Handy:
+
+| Project | Filament | About |
+| --- | --- | --- |
+| `1_grey_faceplate_bridge_pin_plunger` | grey | 40 min |
+| `2_black_grille` | black | 36 min |
+| `3_orange_lever` | orange | 7 min |
+| `4_tub_grey_then_frosted` | grey, then frosted | 2 h 33 min; tree supports; **pauses at 36.2 mm**: swap to frosted and resume |
+
+`uv run python -m huxcase.slice` rebuilds them from out/print (after
+`printability --stl`); it checks that only the tub pauses, right before its
+first frosted layer.
+
 ## Assembly
 
 On the bench first:
@@ -333,6 +349,7 @@ uv run --group dev pytest -q               # fit checks + STEP comparison (needs
   --python render/render.py -- out/ out/renders/          # add --quick for previews
 uv run python -m huxcase.site           # out/site/: the interactive HX-1 build page (spin, explode, x-ray, build)
 uv run python -m huxcase.printability --stl   # out/print/: every HX-1 piece as an STL in its print pose
+uv run python -m huxcase.slice          # out/print/sliced/: ready-to-print Bambu Studio projects (P2S)
 uv run python -m huxcase.coupon         # out/coupon_*.stl: fit coupon, lever-pin block
 ```
 
