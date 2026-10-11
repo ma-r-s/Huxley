@@ -209,7 +209,10 @@ own "PETG Translucent" preset for the P2S, and what carries over to a
   PETG of Mario's test corner), no top or bottom shells, so there is no sparse grid
   to show in the glow and fewer boundaries between lines. Infill lines 0.5 wide; the walls keep 0.42 so
   the fine features still print.
-- Hot and slow so the lines fuse: 270 C (the preset says 245), flow 1.01
+- Hot and slow so the lines fuse: 240 C, the top of the 230 to 240 C that
+  Mario's spool (ElitePETG Transparent) asks for at 50 to 100 mm/s; the
+  guide's 270 strung badly on the first clear top (2026-10-11, with the AMS
+  at 48 % humidity: dry it first). Flow 1.01
   (preset 0.95), about 40 mm/s (a cap on the frosted filament's flow,
   4 mm3/s). The guide says 20 mm/s; that roughly doubles the top's time.
 - No cooling: part fan and side fan off, as the guide says; overhangs and
@@ -343,6 +346,7 @@ print. The same sliced are in `out/print/sliced/`.
 | `3_orange_lever` | orange | 6 min |
 | `4_tub_base_and_top` | AMS: slot 1 white PLA, slot 4 frosted PETG | 4 h 10 min; by object: the frosted top, then the base |
 | `5_test_corner` | AMS: slot 1 white PLA, slot 4 frosted PETG | 20 min; both halves' corner at the seam: print it first |
+| `6_tub_one_piece_pla` | one PLA, any tray (orange set) | 2 h 28 min; the whole tub in one piece, no seam, no glue, standard settings |
 
 The tub's plate prints object by object, so the filament changes once,
 between the pieces, never inside one. The frosted top goes first, so its

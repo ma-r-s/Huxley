@@ -339,6 +339,16 @@ the grid Mario saw inside the clear test corner. Fixed: `_changed` writes
 the list, `gui_settings` checks it; verified in his GUI. Lesson: check a
 deliverable in the program the user opens it with, not only in its CLI.
 
+**Clear top strung; tub in one PLA piece (2026-10-11)**: the first clear
+top (sent from his Bambu Studio, settings verified there) strung badly.
+His spool's tag (ElitePETG Transparent): 230-240 C at 50-100 mm/s, bed
+60-70; we ran the guide's 270 at ~40 mm/s, with the AMS at 48 % humidity.
+PETG now 240; dry the spool before the next clear try. To have one soon he
+asked for PLA: `6_tub_one_piece_pla`, the whole tub as one print (no
+filament change, so no seam, no glue), standard settings, 2 h 28 min, any
+PLA tray (he picked orange, then another colour he is loading). Lesson:
+read the spool's own range before taking a guide's temperature.
+
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
 bottom is fine, holders whole, no glue but the tub's halves, plastic pivot, protected cells
 instead of a protection board, the ribbon and loose wires, the board's

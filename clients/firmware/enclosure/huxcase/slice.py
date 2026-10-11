@@ -110,8 +110,10 @@ CLARITY_PROCESS = {
     },
 }
 CLARITY_FILAMENT = {  # on the PETG preset
-    "nozzle_temperature": "270",  # preset 245
-    "nozzle_temperature_initial_layer": "270",  # preset 250
+    # Mario's spool, ElitePETG Transparent, says 230-240 C at 50-100 mm/s
+    # (its tag, 2026-10-11). The guide's 270 strung badly at our 40 mm/s.
+    "nozzle_temperature": "240",  # preset 245
+    "nozzle_temperature_initial_layer": "240",  # preset 250
     "filament_flow_ratio": "1.01",  # preset 0.95
     "fan_min_speed": "0",  # preset 10
     "fan_max_speed": "0",  # preset 30
@@ -199,8 +201,17 @@ PLATES = [
         clear=4,
     ),
 ]
+PLATES.append(
+    # The whole tub in one PLA colour, standard settings: no filament change,
+    # so no seam and no glue (Mario, 2026-10-11, to have one soon). He picked
+    # orange (it matches the lever; the LEDs show only faintly through it).
+    Plate("6_tub_one_piece_pla", ("hx1_13_tub",), TREE_SUPPORTS, (ORANGE,))
+)
 # Plates whose close fits support must not touch: the top's, its seam its z 0.
-KEEP_OUT = {"4_tub_base_and_top": (TOP, hx1.BACK_FROST_Z)}
+KEEP_OUT = {
+    "4_tub_base_and_top": (TOP, hx1.BACK_FROST_Z),
+    "6_tub_one_piece_pla": ("hx1_13_tub", 0.0),
+}
 
 BED = "Textured PEI Plate"  # the plate the P2S ships with; pick yours in Bambu Studio if not
 
@@ -517,7 +528,8 @@ def main() -> int:
         print(f"{plate.name}: {check(out, plate)}")
         if plate.name in KEEP_OUT:
             piece, z0 = KEEP_OUT[plate.name]
-            found = support_in_keep_outs(out, True, z0, labels(out)[piece])
+            label = labels(out)[piece] if len(plate.stls) > 1 else None  # one object: no labels
+            found = support_in_keep_outs(out, True, z0, label)
             print(f"    support touching close fits: {found}")
             assert not any(found.values()), f"{out.name}: support touches {found}"
     for stray in [*out_dir.glob("*.gcode"), *out_dir.glob("result.json")]:

@@ -52,6 +52,9 @@ POSES = (
     # together dry and hold the frosted one to a light before the long print.
     Pose("test_base", "standing on its floor cut", (0, 0, 0)),
     Pose("test_top", "standing on its seam face", (0, 0, 0)),
+    # The whole tub in one PLA colour (Mario, 2026-10-11, after a PETG top
+    # strung): no filament change, so no seam and no glue.
+    Pose("tub", "standing up, the open front toward you", (0, 0, 0)),
 )
 
 
@@ -73,6 +76,8 @@ def printed_pieces(c=None) -> dict[str, object]:
     out["tub_top"] = by_name["tub_frosted"]
     out["test_base"] = by_name["tub_grey"] & bbox_solid(*TEST_CORNER, *TEST_BASE_Z)
     out["test_top"] = by_name["tub_frosted"] & bbox_solid(*TEST_CORNER, *TEST_TOP_Z)
+    sh = c.shells
+    out["tub"] = sh["tub"] + sh["tub_latch"] + sh["tub_ribs"]
     return out
 
 
@@ -241,6 +246,7 @@ COLOUR = {
     "tub_top": "frosted PETG (clarity settings)",
     "test_base": "grey",
     "test_top": "frosted PETG (clarity settings)",
+    "tub": "any one PLA colour (the tub in one piece, no glue)",
     "ptt_bar": "orange",
     "ptt_pin": "grey",
     "plunger": "grey",

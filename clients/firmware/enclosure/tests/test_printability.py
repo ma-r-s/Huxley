@@ -39,7 +39,7 @@ def test_island_check_finds_a_part_that_starts_in_mid_air():
     assert pr.islands(base + Pos(2.0, 0, 9) * Box(4, 4, 1)) == []  # a ledge off the wall
 
 
-SUPPORTED = ("tub_base", "tub_top", "test_base", "test_top")
+SUPPORTED = ("tub_base", "tub_top", "test_base", "test_top", "tub")
 
 
 @pytest.mark.parametrize(
@@ -61,6 +61,7 @@ def test_nothing_starts_in_mid_air(pieces, pose):
         ("faceplate", 450),  # the face's edge round-over and the counterbore steps
         ("tub_base", 450),  # the joint shelves, the pedestal ribs: tree supports
         ("tub_top", 3300),  # roof, switch cradle and tube, rocker mount: tree supports
+        ("tub", 3750),  # the two halves' together, in one piece
     ],
 )
 def test_overhangs_stay_within_budget(report, piece, budget):
@@ -74,7 +75,7 @@ def test_tub_ledges_print_without_support(report):
     Horizontal holes up to 6 mm (the lever pivot) print fine as they are."""
     from huxcase.concepts import hx1
 
-    for piece, seam in (("tub_base", 0.0), ("tub_top", hx1.BACK_FROST_Z)):
+    for piece, seam in (("tub_base", 0.0), ("tub_top", hx1.BACK_FROST_Z), ("tub", 0.0)):
         for k in report[piece]:
             x0, y0, z0, x1, y1, z1 = k["bbox"]
             z = z0 + seam  # posed -> device
