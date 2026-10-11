@@ -203,8 +203,10 @@ own "PETG Translucent" preset for the P2S, and what carries over to a
 
 - Dry the filament first: translucent PETG is very hygroscopic, and damp
   filament leaves bubbles that scatter light.
-- Solid: one wall, then 100 % rectilinear infill (its lines cross at 90 deg
-  from layer to layer), no top or bottom shells, so there is no sparse grid
+- Solid: one wall, then 100 % infill with every layer's lines the same way
+  (Bambu's "Aligned Rectilinear", 0 deg; the guide's "Rectilinear" turns
+  90 deg a layer, and the stack showed as a crosshatch through the clear
+  PETG of Mario's test corner), no top or bottom shells, so there is no sparse grid
   to show in the glow and fewer boundaries between lines. Infill lines 0.5 wide; the walls keep 0.42 so
   the fine features still print.
 - Hot and slow so the lines fuse: 270 C (the preset says 245), flow 1.01
@@ -339,8 +341,8 @@ print. The same sliced are in `out/print/sliced/`.
 | `1_grey_faceplate_bridge_pin_plunger` | grey | 38 min (faceplate, bridge, 3 pins, 3 plungers) |
 | `2_black_grille` | black | 30 min |
 | `3_orange_lever` | orange | 6 min |
-| `4_tub_base_and_top` | AMS: slot 1 grey PLA, slot 4 frosted PETG | 4 h 8 min; by object: the frosted top, then the base |
-| `5_test_corner` | AMS: slot 1 grey PLA, slot 4 frosted PETG | 20 min; both halves' corner at the seam: print it first |
+| `4_tub_base_and_top` | AMS: slot 1 white PLA, slot 4 frosted PETG | 4 h 10 min; by object: the frosted top, then the base |
+| `5_test_corner` | AMS: slot 1 white PLA, slot 4 frosted PETG | 20 min; both halves' corner at the seam: print it first |
 
 The tub's plate prints object by object, so the filament changes once,
 between the pieces, never inside one. The frosted top goes first, so its
@@ -354,7 +356,7 @@ chute. No brim: the top stands on the lap's 1.1 mm outer half, but as a U
 70 x 35 across it will not tip, and an "outer only" brim still runs inside
 an open U (its whole outline counts as outer), along the edge that slides
 over the lip. Clean the plate first (dish soap, or isopropyl alcohol). When
-sending, check the AMS mapping (1 grey, 4 frosted) and that slot 4 is set
+sending, check the AMS mapping (1 white PLA, which Mario uses for the base instead of grey; 4 frosted PETG) and that slot 4 is set
 to PETG on the printer, its spool dried. Supports sit 0.25 off the part
 (0.2 is standard), as PETG welds to them closer. The bed runs 70 C for the
 PETG top, then 55 C for the PLA base (Bambu sets it at the change).

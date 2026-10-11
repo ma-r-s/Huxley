@@ -92,7 +92,11 @@ CLARITY_PROCESS = {
     "top_shell_layers": "0",
     "bottom_shell_layers": "0",
     "sparse_infill_density": "100%",
-    "sparse_infill_pattern": "zig-zag",  # rectilinear
+    # Every layer the same way, 0 deg. Bambu's "Rectilinear" (the guide's
+    # pick) turns 90 deg each layer, and through clear PETG the stack showed
+    # as a crosshatch in Mario's test corner (2026-10-11).
+    "sparse_infill_pattern": "alignedrectilinear",
+    "internal_solid_infill_pattern": "alignedrectilinear",
     "infill_direction": "0",
     **{
         k: "0.5"
@@ -124,7 +128,8 @@ CLARITY_FILAMENT = {  # on the PETG preset
 # tuned there and the lap is counted in layers.
 
 GREY, BLACK, ORANGE, FROSTED = "#8E9089", "#161616", "#FF6A13", "#E4ECEE"
-AMS = (GREY, BLACK, ORANGE, FROSTED)  # Mario's AMS slots 1 to 4
+WHITE = "#F4F4F2"  # the tub base: Mario's white PLA in slot 1 (2026-10-11)
+AMS = (WHITE, BLACK, ORANGE, FROSTED)  # Mario's AMS slots 1 to 4 for the tub
 
 
 @dataclass(frozen=True)
