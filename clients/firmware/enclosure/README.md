@@ -295,7 +295,9 @@ bridge's screw hole is skinned over on the plate's first 0.5 mm
 (`hx1.bridge_skin`): its plate prints as a 17 mm bridge, and with the hole
 open the bridge lines would end in the air (Bambu Studio warns of a
 floating cantilever). Purge volumes are set per colour change (`FLUSH`,
-more into frosted so the lit band stays clear). About 2 h 50 min.
+more into frosted, 600 mm3 from grey, so the lit band stays clear; no
+prime tower: for one change it would print 36 mm of tower for little gain).
+About 2 h 50 min.
 
 In Bambu Studio: File > Open Project (not geometry only); don't press
 Arrange (it pushes the tub to a second plate); slice, and check the tub

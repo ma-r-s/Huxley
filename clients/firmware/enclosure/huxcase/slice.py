@@ -96,9 +96,11 @@ GREY_GROUP = ("bridge", "plunger", "plunger_long05", "plunger_long10", "ptt_pin"
 # Purge per filament change, mm^3, [from][to] in AMS order. The command line
 # doesn't run Bambu Studio's colour-based auto-calculation, and the preset's
 # flat 280 is short for grey into frosted (about 390 by Bambu's formula): the
-# first frosted layers are the band the LEDs light. Generous into light colours.
+# first frosted layers are the band the LEDs light. Generous into light colours;
+# grey into frosted gets 600, the tub's only change (no prime tower: for one
+# change it would print 36 mm of tower on every layer for little gain).
 FLUSH = (
-    (0, 200, 350, 450),  # from grey
+    (0, 200, 350, 600),  # from grey
     (450, 0, 600, 700),  # from black
     (300, 200, 0, 550),  # from orange
     (280, 200, 280, 0),  # from frosted
