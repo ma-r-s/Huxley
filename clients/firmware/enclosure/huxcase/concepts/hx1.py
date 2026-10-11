@@ -612,14 +612,16 @@ def _wire_keepers():
 
 
 def bridge_skin():
-    """One layer across the bridge's screw hole, on its front face: printed
+    """A skin across the bridge's screw hole, on its front face: printed
     front face down, the plate is a 17 mm bridge, and with the hole open its
     lines would end in the air (Bambu Studio: floating cantilever). The
     screw pokes through it. Printed only (printability.printed_pieces); the
     assembled model has the hole open."""
     face0 = CELL_Y - fits.PART - BRIDGE_T
     bzm = (BRIDGE_Z[0] + BRIDGE_Z[1]) / 2
-    return _along_y(X0, bzm, fits.SCREW_CLEAR["M3"] / 2 + 0.05, face0, face0 + fits.LAYER)
+    # 0.5 thick: the plate's face sits off the layer grid (9.9 mm up in
+    # print), so a single 0.2 layer would hang on a tie at a slicing plane.
+    return _along_y(X0, bzm, fits.SCREW_CLEAR["M3"] / 2 + 0.05, face0, face0 + 0.5)
 
 
 def _holder_retention(inner):

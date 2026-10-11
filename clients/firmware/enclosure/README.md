@@ -8,8 +8,9 @@ to talk, release to hear the answer
 Status: **HX-1 is the build** (rev E, 2026-10-11). Every part is located and
 held by printed features, screws or crush ribs, no glue; every bought part has
 a hard stop within 0.5 mm in every direction (tested); every printed piece is
-one solid with a known print pose, and nothing starts in mid-air (tested); the
-sliced tub has no support touching a close fit (checked in its G-code). The
+one solid with a known print pose, and nothing printed without support
+starts in mid-air (tested); the sliced tub has no support touching a close
+fit (checked in its G-code). The
 fit coupon is printed and folded in; the faceplate, grille, a pin and a
 plunger are printed (2026-10-11); next: the rest, on one AMS plate
 (`out/print/HX1_one_plate_AMS.3mf`). Tracked as F-0010 in [`../docs/triage.md`](../docs/triage.md).
@@ -219,8 +220,10 @@ lip, the side fins and the lever-pin tooth), then swing it open to the left.
 - **Slack**: about 100 mm of ribbon, so the faceplate can lie open beside
   the tub. Closed, it lies loose in the channel between the holders. Mario
   (2026-10-11): the heavy parts must be held, the wires need no place.
-- **Talk input**: GPIO7, header pin 2. The firmware still reads the board's
-  KEY2 today; it needs one line to read GPIO7 instead (F-0011).
+- **Talk input**: GPIO7, header pin 2. The firmware reads it (or the
+  board's KEY2) since F-0014 on the `firmware-talk-gpio7` branch: built and
+  tested off the board, ready to flash (`clients/firmware/build/flash-talk-gpio7/FLASH.txt`
+  in the main checkout).
 
 ## Cables
 
@@ -267,15 +270,23 @@ comes out with the rest.
 **With the AMS, one plate**: `out/print/HX1_one_plate_AMS.3mf` is a Bambu
 Studio project, not sliced: open it, slice, print. It holds what is left after
 the first prints (the faceplate, grille, a pin and a plunger, 2026-10-11): the
-tub, the lever, and the bridge with the two longer plungers and two spare pins
-as one grey object. It prints object by object, so the AMS swaps only between
+tub, the lever, and the bridge with the three plungers (the 5.0 again: the
+first one predates its tip chamfer) and two spare pins as one grey object. It prints object by object, so the AMS swaps only between
 objects and once inside the tub. Filaments: slot 1 grey, 2 black (not used
 here), 3 orange, 4 frosted. The tub is two parts, grey below 36 mm and frosted
-above, so it changes to frosted by itself, no pause. Only the tub gets
-supports (tree, with its blockers). The bridge's screw hole is skinned over
-on the plate's first layer (`hx1.bridge_skin`): its plate prints as a 17 mm
-bridge, and with the hole open the bridge lines would end in the air (Bambu
-Studio warns of a floating cantilever). About 2 h 50 min.
+above, so it changes to frosted by itself, no pause. Tree supports are on
+for the whole plate (not as the tub's own setting, which Bambu Studio did
+not apply); only the tub needs and gets them, with its blockers. The
+bridge's screw hole is skinned over on the plate's first 0.5 mm
+(`hx1.bridge_skin`): its plate prints as a 17 mm bridge, and with the hole
+open the bridge lines would end in the air (Bambu Studio warns of a
+floating cantilever). Purge volumes are set per colour change (`FLUSH`,
+more into frosted so the lit band stays clear). About 2 h 50 min.
+
+In Bambu Studio: File > Open Project (not geometry only); don't press
+Arrange (it pushes the tub to a second plate); slice, and check the tub
+shows tree supports inside and no warning appears; when sending, check the
+AMS mapping (1 grey, 3 orange, 4 frosted) and that the frosted spool is PLA.
 
 **Without the AMS**: `out/print/sliced/` has one sliced project per filament
 colour for the P2S (0.4 nozzle, 0.20 mm Standard, Bambu PLA Basic, Textured
@@ -325,9 +336,11 @@ Tub, lying on its back:
 8. Cells in (within 0.05 V of each other, + up). If one will not snap past
    its holder's wrap with the holder in its bay, slide that holder forward
    out of the bay on its leads, put the cell in, and slide it back.
-9. Lay the + lead and the talk pair loose in the channel, then the bridge
-   across, its tabs down beside the holders' + caps: M3 x 6 (push it through
-   the thin printed skin over the bridge's screw hole first). The four tub
+9. The bridge across, its tabs down beside the holders' + caps, with the
+   rocker's free + lead and the talk pair held up out of its way: M3 x 6
+   (it pokes through the thin printed skin over the bridge's screw hole).
+   Then feed the + lead and the talk pair down through the bridge's U, between
+   the holders, to the junction. Laid first, they get pinched by its plate. The four tub
    wires end at the junction behind the speaker's magnet.
 10. Rocker ON: meter 3.6 to 4.2 V between the + and - wire ends. Rocker OFF.
 

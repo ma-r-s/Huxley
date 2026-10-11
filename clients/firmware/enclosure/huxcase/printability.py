@@ -290,7 +290,11 @@ def export_stls(out_dir) -> list[str]:
         "HX-1 rev E print set (PLA, 0.4 nozzle, 0.20 mm layers). Tub: tree supports, "
         "Everywhere, bridges up to 20 mm left unsupported (under its roof, the switch "
         "cradle, the rocker and holder pads, the lever pin's notch); everything else needs "
-        "none. Ready-sliced projects: sliced/.\n" + "\n".join(written) + "\n"
+        "none. The tub's support blockers (lever channel, rocker hole, USB pocket) are "
+        "only in the 3mf projects: slicing hx1_03_tub.stl on its own puts support in "
+        "the lever channel. AMS: HX1_one_plate_AMS.3mf; ready-sliced: sliced/.\n"
+        + "\n".join(written)
+        + "\n"
     )
     return written
 

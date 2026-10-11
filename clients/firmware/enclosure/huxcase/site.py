@@ -118,16 +118,6 @@ STEPS = [
         "explode": (0, -56, 0),
     },
     {
-        "id": "wires",
-        "title": "Switch wires",
-        "text": "The power switch's other wire and the talk switch's pair run down "
-        "the middle between the holders, to the junction behind the speaker's magnet.",
-        "parts": ["cable_bat_pos", "cable_ptt_*"],
-        "appear": True,
-        "enter": (0, 0, 0),
-        "explode": (0, -56, 0),
-    },
-    {
         "id": "cells",
         "title": "Cells",
         "text": "Both protected cells, + end up, charged to the same voltage first "
@@ -141,12 +131,25 @@ STEPS = [
         "id": "bridge",
         "title": "Holder bridge",
         "text": "The printed bridge across, between the holders, its tabs down beside "
-        "the holders' + end caps, the wires loose under it. One M3 × 6 through its "
-        "middle into the insert: its ribs press both cells home.",
+        "the holders' + end caps; hold the switch wires' free ends up out of its "
+        "way. One M3 × 6 through its middle into the insert (it pokes through the "
+        "thin skin over the hole): its ribs press both cells home.",
         "parts": ["bridge", "bridge_screw"],
         "enter": (0, -60, 0),
         "enter_parts": {"bridge_screw": (0, -100, 0)},
         "explode": (0, -64, 0),
+    },
+    {
+        "id": "wires",
+        "title": "Switch wires",
+        "text": "Now the power switch's other wire and the talk switch's pair: feed "
+        "each down through the bridge's U, between the holders, to the junction "
+        "behind the speaker's magnet. (Laid before the bridge, its plate would "
+        "pinch them.)",
+        "parts": ["cable_bat_pos", "cable_ptt_*"],
+        "appear": True,
+        "enter": (0, 0, 0),
+        "explode": (0, -56, 0),
     },
     {
         "id": "faceplate",

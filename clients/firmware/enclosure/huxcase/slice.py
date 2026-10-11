@@ -90,12 +90,23 @@ SLOT = {name: i + 1 for i, (name, _) in enumerate(AMS)}
 AMS_PROJECT = "HX1_one_plate_AMS"
 # Left to print after Mario's first prints (faceplate, grille, a pin and a
 # plunger, 2026-10-11). The small grey pieces go side by side as one object.
-GREY_GROUP = ("bridge", "plunger_long05", "plunger_long10", "ptt_pin", "ptt_pin")
+# The 5.0 plunger again: the one printed first predates its tip chamfer.
+GREY_GROUP = ("bridge", "plunger", "plunger_long05", "plunger_long10", "ptt_pin", "ptt_pin")
+# Purge per filament change, mm^3, [from][to] in AMS order. The command line
+# doesn't run Bambu Studio's colour-based auto-calculation, and the preset's
+# flat 280 is short for grey into frosted (about 390 by Bambu's formula): the
+# first frosted layers are the band the LEDs light. Generous into light colours.
+FLUSH = (
+    (0, 200, 350, 450),  # from grey
+    (450, 0, 600, 700),  # from black
+    (300, 200, 0, 550),  # from orange
+    (280, 200, 280, 0),  # from frosted
+)
 # Object centres on the 256 x 256 bed. Printed object by object, the toolhead
 # must clear what is already done: 72 mm between objects (the P2S's extruder
 # clearance), and the tall tub, printed last, away from the rest.
-# Objects with their own tree supports; the rest print without (the bridge's
-# screw hole is skinned over for that, hx1.bridge_skin).
+# The objects that get support (the plate has tree supports on; the rest have
+# no overhang that needs it: the bridge's screw hole is skinned, hx1.bridge_skin).
 SUPPORTED = ("tub",)
 AMS_LAYOUT = {"lever": (36.0, 40.0), "grey_parts": (190.0, 40.0), "tub": (128.0, 200.0)}
 
@@ -292,16 +303,6 @@ def _rewrite(src: Path, dst: Path, edits: dict) -> None:
             zo.writestr(item, data)
 
 
-def _own_supports(model_settings: str, names) -> str:
-    """Give the named objects (file name without .stl) their own tree supports."""
-    own = "".join(f'    <metadata key="{k}" value="{v}"/>\n' for k, v in TREE_SUPPORTS.items())
-    for _, name, block in _objects(model_settings):
-        if name.removesuffix(".stl") in names:
-            tag = f'<metadata key="name" value="{name}"/>\n'
-            model_settings = model_settings.replace(block, block.replace(tag, tag + own, 1))
-    return model_settings
-
-
 def _objects(model_settings: str) -> list[tuple[str, str, str]]:
     """(object id, name, its whole <object> block) in model_settings.config."""
     blocks = re.findall(r'(<object id="(\d+)">.*?</object>)', model_settings, re.S)
@@ -380,10 +381,14 @@ def ams_project(out: Path, print_dir: Path) -> Path:
                     "filament_colour": [colour for _, colour in AMS],
                     "print_sequence": "by object",
                     "enable_prime_tower": "0",  # by object, the AMS flushes into the chute
-                    "enable_support": "0",  # only SUPPORTED objects get support, as their own setting
                     "curr_bed_type": BED,
+                    "flush_volumes_matrix": [str(v) for row in FLUSH for v in row],
                 }
             )
+            # Supports for the whole plate, not as the tub's own setting
+            # (Bambu Studio did not apply a per-object one for Mario); the
+            # lever and the grey group need none and get none (ams_check).
+            cfg.update(TREE_SUPPORTS)
             return json.dumps(cfg, indent=4)
 
         def model(t: str) -> str:
@@ -396,7 +401,6 @@ def ams_project(out: Path, print_dir: Path) -> Path:
                         'key="extruder" value="1"', f'key="extruder" value="{SLOT["orange"]}"'
                     )
                 t = t.replace(block, new)
-            t = _own_supports(t, SUPPORTED)
             assert set(ids) == set(AMS_LAYOUT), ids
             return t
 

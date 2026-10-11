@@ -275,7 +275,7 @@ fallback.
 
 ## Queued (next up, not started)
 
-### F-0011 — Talk button on GPIO7 · queued 2026-10-10
+### F-0011 — Talk button on GPIO7 · built 2026-10-11, as F-0014 on branch `firmware-talk-gpio7`
 
 **Problem**: the HX-1 case (F-0010) wires its 12 x 12 talk switch to header
 pin 2 (GPIO7, other leg to GND through the seam plug); the firmware reads
@@ -287,6 +287,10 @@ switch.
 low = talk, the same debounce); keep KEY2 as the bench fallback when nothing
 is on GPIO7.
 **Effort**: small. Blocked on nothing; test on the bench with a jumper to GND.
+**Done (2026-10-11)** on branch `firmware-talk-gpio7` as F-0014 (the firmware
+tracker had already used F-0011): GPIO7 or K2, plus `set_volume`,
+`input_mode` and `audio_clear`, which the firmware had been ignoring. See
+the firmware tracker for the evidence and the bench test left.
 
 ### F-0003 — v0.3 speaker path
 

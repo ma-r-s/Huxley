@@ -7,7 +7,8 @@ everything installed before it. Along the way it may never overlap anything
 more than it does at rest (crush ribs and seats touch at rest by design).
 
 Crush ribs and the switch latch flex out of the way, so they are not
-obstacles. Wires and the spring are flexible and are left out.
+obstacles. The spring is left out. Wires are flexible, but a part that
+closes over them can pinch them, so the ones already laid count.
 """
 
 from __future__ import annotations
@@ -44,6 +45,15 @@ def model():
         "plug": sh["grille_plug"],
         "speaker": env["speaker"],
         "board": env["board"] + env["board_screws"],
+        # Laid before the bridge (README step 7): the holders' leads, the
+        # rocker's input lead, the battery - lead. The rocker's + lead and
+        # the talk pair go in after it, down through its U.
+        "joint_wires": env["lead_pos_0"]
+        + env["lead_pos_1"]
+        + env["lead_neg_0"]
+        + env["lead_neg_1"]
+        + env["cable_bat_sw"]
+        + env["cable_bat_neg"],
     }
 
 
@@ -122,7 +132,7 @@ STEPS = [
         (
             ["bridge"],
             _path((0, -30.0, 0)),
-            ["tub", "holder_0", "holder_1", "switch", "lever", "pin"],
+            ["tub", "holder_0", "holder_1", "switch", "lever", "pin", "joint_wires"],
         ),
     ),
     ("plug into faceplate", (["plug"], _path((0, 12.0, 0)), ["faceplate"])),
@@ -183,3 +193,13 @@ def test_tub_wires_can_be_laid_in_from_the_front(name):
         if (ray & tub).volume > 0.01:
             blocked.append((round(p.X, 1), round(p.Y, 1), round(p.Z, 1)))
     assert blocked == [], f"{name}: tub material in front of it at {blocked}"
+
+
+def test_bridge_goes_in_before_the_wires_that_cross_it():
+    """Laid first, the rocker's + lead and the talk pair are pinched by the
+    bridge's plate as it slides in (final review, 2026-10-11): the build
+    guide fits the bridge, then feeds them down through its U."""
+    from huxcase.site import STEPS as GUIDE
+
+    order = [s["id"] for s in GUIDE]
+    assert order.index("bridge") < order.index("wires")
