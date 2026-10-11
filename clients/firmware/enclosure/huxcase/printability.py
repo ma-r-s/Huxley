@@ -146,7 +146,10 @@ def export_stls(out_dir) -> list[str]:
         )
         written.append(f"{path.name}: {COLOUR[pose.piece]}, {pose.how}")
     (out / "PRINT.txt").write_text(
-        "HX-1 rev D print set (PLA, 0.4 nozzle, 0.20 mm layers)\n" + "\n".join(written) + "\n"
+        "HX-1 rev E print set (PLA, 0.4 nozzle, 0.20 mm layers). Tub: tree supports, "
+        "Everywhere (under its roof and a few ledges); everything else needs none.\n"
+        + "\n".join(written)
+        + "\n"
     )
     return written
 
