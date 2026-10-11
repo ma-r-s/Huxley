@@ -43,4 +43,6 @@ def test_plug_pieces_print_as_single_solids_with_the_case_sizes():
         assert piece.is_valid and len(piece.solids()) == 1
         assert piece.bounding_box().min.Z > -1e-6
     cage = coupon.plug_cage_block().bounding_box()
-    assert abs(cage.size.X - 2 * (hx1.CAGE_POCKET[0] + 0.8 + 2.0)) < 1e-6
+    assert abs(cage.size.X - 2 * coupon._plug_base()[0]) < 1e-6
+    # Its pillars stop the header block where the case closes.
+    assert abs(cage.max.Z - (1.2 + hx1.XH_MATED_FLOOR + coupon.PLUG_POST)) < 1e-6

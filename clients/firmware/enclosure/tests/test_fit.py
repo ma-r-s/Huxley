@@ -194,6 +194,11 @@ def test_hx1_seam_plug_lines_up_before_it_mates():
     assert hx1.XH_SHORT - 0.3 >= 0.3
     assert hx1.XH_SHORT + 0.3 <= 1.2
     assert hx1.SHUTTLE_S0 - hx1.YOKE_GRIP - 0.3 > 0  # the yoke never lands on the shuttle
+    # The faceplate's side fins reach the tub's walls before the header reaches
+    # the shuttle's mouth, so it is lined up sideways by then.
+    fins_engage = hx1.GUIDE_Y1 - hx1.FACE_Y
+    mouth = hw.XH_HEADER_H - hx1.SHUTTLE_S0
+    assert fins_engage >= mouth + 0.5
 
 
 def test_hx1_lower_board_screws_still_bite():

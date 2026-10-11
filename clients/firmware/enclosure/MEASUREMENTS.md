@@ -130,6 +130,13 @@ side) easily, the .10 with a hint of friction. `fits.SLIDE` is now 0.15.
 Not yet tried: the peg in the five side holes (front face), the lever-pin
 block, the plug coupon.
 
+## Talk input: GPIO7 on header pin 2
+
+From Waveshare's pinout (reference/pinout.jpg: pin 2 = GPIO7, 15/16 = GND)
+and the silkscreen on the board's top face (reference/onboard-resources.jpg:
+"IO7 IO6 IO5 IO4 IO3 IO20 IO19 GND 5V" over the top row). Meter it before
+soldering: GPIO7 is a plain GPIO (also the unused LCD's DC/SDA2 line).
+
 ## Still to measure (Mario)
 
 Measured 2026-10-10: KCD1-101 body 18.9 x 11.8 under the frame, its snap

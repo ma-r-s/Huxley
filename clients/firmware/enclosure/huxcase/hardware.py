@@ -258,7 +258,7 @@ def spring(length: float) -> Part:
 
 def cable(points: list[tuple[float, float, float]], d: float = 1.4):
     """A wire bundle swept along a smooth path through `points`. The tube's
-    `run` is the centreline length in mm, for the cut list."""
+    `run` is the centreline length in mm, for the cut list; `centreline` the path itself."""
     from build123d import Plane, Spline, sweep
 
     path = Spline(*points)
@@ -266,6 +266,7 @@ def cable(points: list[tuple[float, float, float]], d: float = 1.4):
     profile = Plane(origin=start.position, z_dir=path.tangent_at(0)) * Circle(d / 2)
     tube = sweep(profile, path=path)
     tube.run = path.length
+    tube.centreline = path
     return tube
 
 
@@ -396,7 +397,8 @@ def holder_envelope() -> Solid:
 # Sizes from JST's XH catalogue (eXH.pdf): header B4B-XH-A, housing XHP-4,
 # terminals SXH-001T-P0.6. The housing's wire-end plate is flush with the
 # header's box when mated; the lock arms on its slotted side ride in the
-# header's two U-slots. Plate thickness and the arms are read off the drawing.
+# header's two U-slots. The plate thickness, the arms, the U-slots and the
+# header's cavity are scaled off the drawing, not dimensioned on it.
 XH_PITCH = 2.5
 XH_N = 4  # 1 BAT+, 2 BAT-, 3 talk GND, 4 talk
 XH_SPAN = XH_PITCH * (XH_N - 1)  # "A": 7.5
@@ -413,16 +415,38 @@ def xh_pin_x() -> list[float]:
     return [(i - (XH_N - 1) / 2) * XH_PITCH for i in range(XH_N)]
 
 
+XH_FLOOR = XH_MATED - XH_HOUSING_H  # the header cavity's floor: where a seated housing's tip sits
+XH_JOINT_D, XH_JOINT_L = 1.6, 1.6  # a pigtail soldered on a tail, in heat-shrink
+
+
 def xh_header() -> list[Part]:
     """B?B-XH-A. Local frame: base at z = 0, mouth up +z, box centred on x = y = 0,
-    slotted face at -y."""
+    slotted face at -y. The box is hollow where the housing's body goes and
+    slotted where its lock arms go, so a mated pair does not overlap; the pins
+    inside are left out (they go into the housing's own cavities). The tails
+    carry the pigtails' solder joints at their ends."""
     box = _bbox_solid(
         -XH_HEADER_L / 2, XH_HEADER_L / 2, -XH_HEADER_D / 2, XH_HEADER_D / 2, 0.0, XH_HEADER_H
     )
+    slot_face = -XH_PLATE_D / 2
+    box -= _bbox_solid(
+        -XH_BODY_L / 2 - 0.1,
+        XH_BODY_L / 2 + 0.1,
+        slot_face + 0.6,
+        slot_face + 0.8 + XH_BODY_D,
+        XH_FLOOR,
+        XH_HEADER_H + 1,
+    )
+    for sx in (-1, 1):  # the U-slots in the slotted wall
+        x = sx * (XH_SPAN / 2 + 0.25)
+        box -= _bbox_solid(
+            x - 0.7, x + 0.7, -XH_HEADER_D / 2 - 1, slot_face + 0.8, 3.3, XH_HEADER_H + 1
+        )
     row = -XH_HEADER_D / 2 + XH_ROW
     tails = None
     for x in xh_pin_x():
         t = Pos(x, row, -XH_TAIL / 2) * Box(XH_PIN, XH_PIN, XH_TAIL)
+        t += Pos(x, row, -XH_TAIL + XH_JOINT_L / 2) * Cylinder(XH_JOINT_D / 2, XH_JOINT_L)
         tails = t if tails is None else tails + t
     assert tails is not None
     return [Part("xh_header", box, "white"), Part("xh_tails", tails, "metal")]

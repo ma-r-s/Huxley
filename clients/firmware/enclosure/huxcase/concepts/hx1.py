@@ -178,6 +178,11 @@ SHUTTLE_WALL, SHUTTLE_CHAMFER = 1.0, 0.7
 SHUTTLE_BORE = 0.25  # round the header's box (and the housing's plate)
 CAGE_FLOAT, CAGE_S0 = 0.4, 4.0  # shuttle float in its cage; the cage's front
 XH_JOINT = 1.0  # a soldered tail in heat-shrink, beyond the pin centre
+YOKE_PLATE = 1.4  # under the header: its tails go through, their solder joints keep it on
+SHUTTLE_LEDGE = 0.8  # in front of the housing plate's ends: keeps it in when the case opens
+# Fins on the faceplate along the inside of both side walls, below the
+# holders' fronts: they line the faceplate up sideways before the plug meets.
+GUIDE_Z, GUIDE_Y1, GUIDE_T = (12.0, 38.0), -8.8, 1.6
 SHUTTLE_OUT = (  # shuttle half sizes, header frame (x along the pins, y across)
     hw.XH_HEADER_L / 2 + SHUTTLE_BORE + SHUTTLE_WALL,
     hw.XH_HEADER_D / 2 + SHUTTLE_BORE + SHUTTLE_WALL,
@@ -475,6 +480,9 @@ def _faceplate(outer, wall, boss_box, usb_boss, inner):
     tooth -= _along_y(PIVOT_X, PIVOT_Z, front_seat, PIN_Y0 - 0.3, CHAN_Y0 + 1)
     tooth -= _along_y(PIVOT_X, PIVOT_Z, PIN_BORE / 2 + 0.5, CHAN_Y0 - 0.5, CHAN_Y0 + 1)  # lead-in
     face += tooth
+    for sx in (-1, 1):  # side guide fins
+        x0, x1 = sorted((sx * (W / 2 - T - fits.SNUG), sx * (W / 2 - T - fits.SNUG - GUIDE_T)))
+        face += bbox_solid(x0, x1, FACE_Y - 0.1, GUIDE_Y1, *GUIDE_Z)
     # Bottom screws: bosses on the faceplate behind the face, inserts from below.
     for bx, by in BOTTOM_SCREWS:
         z0 = T + FLOOR_PAD + fits.SNUG
@@ -576,8 +584,10 @@ def _ring(ix, iy, ox, oy, z0, z1):
 def yoke_grip(z0: float):
     """The yoke's hold on the plug header, in the header's frame: walls round
     its base with crush ribs, standing on two posts at its ends (clear of the
-    soldered tails) that reach down to z0, and a web under it. The fit coupon
-    prints this same piece. Returns (grip, ribs)."""
+    soldered tails) that reach down to z0, a web under it, and a plate the
+    header sits on with a hole for each tail: soldered below it, the tails
+    keep the header on when the case opens. The fit coupon prints this same
+    piece. Returns (grip, ribs)."""
     hl, hd = hw.XH_HEADER_L / 2, hw.XH_HEADER_D / 2
     gx, gy = hl + fits.PART, hd + fits.PART
     ox, oy = gx + fits.MIN_WALL, gy + fits.MIN_WALL
@@ -586,6 +596,11 @@ def yoke_grip(z0: float):
     for sx in (-1, 1):
         grip += bbox_solid(*sorted((sx * post_x0, sx * ox)), -oy, oy, z0 - 0.01, 0.0)
     grip += bbox_solid(-post_x0, post_x0, gy, oy, z0 - 0.01, 0.01)  # web under the header
+    plate = bbox_solid(-post_x0 - 0.01, post_x0 + 0.01, -oy, gy + 0.01, -YOKE_PLATE, 0.0)
+    row = -hd + hw.XH_ROW
+    for x in hw.xh_pin_x():
+        plate -= Pos(x, row, -YOKE_PLATE / 2) * Cylinder(0.6, YOKE_PLATE + 1)
+    grip += plate
     reach = fits.CRUSH_RIB - fits.PART
     ribs = []
     for x in (-hl + 2.5, hl - 2.5):
@@ -610,13 +625,22 @@ def shuttle_piece():
     reach = fits.CRUSH_RIB - fits.PART
     pl, pd = hw.XH_PLATE_L / 2, hw.XH_PLATE_D / 2
     plate_s0 = floor_s - hw.XH_PLATE_T
-    body_s0 = hw.XH_HEADER_H + XH_SHORT + 0.2  # clear of the header even fully seated
+    # Ledges in front of the plate's ends: the housing goes in from the back,
+    # body first, and its plate stops on them (clear of the header even fully
+    # seated). Crush ribs on the ledges hold the body's ends.
+    ledge_x = hw.XH_BODY_L / 2 + 0.15
+    ledge_s0 = plate_s0 - SHUTTLE_LEDGE
+    assert ledge_s0 > hw.XH_HEADER_H + XH_SHORT + 0.3
+    for sx in (-1, 1):
+        sleeve += bbox_solid(
+            *sorted((sx * ledge_x, sx * (bx + 0.01))), -by, by, ledge_s0, plate_s0
+        )
     ribs = []
     for sx in (-1, 1):  # on the plate's ends and long edges, and on the body's ends
         x0, x1 = sorted((sx * bx, sx * (pl - reach)))
         ribs.append(bbox_solid(x0, x1, -0.4, 0.4, plate_s0, floor_s))
-        x0, x1 = sorted((sx * bx, sx * (hw.XH_BODY_L / 2 - reach)))
-        ribs.append(bbox_solid(x0, x1, -0.4, 0.4, body_s0, plate_s0))
+        x0, x1 = sorted((sx * ledge_x, sx * (hw.XH_BODY_L / 2 - reach)))
+        ribs.append(bbox_solid(x0, x1, -0.4, 0.4, ledge_s0, plate_s0))
         for x in (-pl + 2.0, pl - 2.0):
             y0, y1 = sorted((sx * by, sx * (pd - reach)))
             ribs.append(bbox_solid(x - 0.4, x + 0.4, y0, y1, plate_s0, floor_s))
@@ -696,11 +720,14 @@ def _seam_plug(inner):
             XH_X + sx * (cx + 0.1), XH_X + sx * (cx - tab), y_front, y_floor + 1.2, XH_Z - kz
         )
         cage += bbox_solid(t0, t1, y_front, y_floor + 1.2, XH_Z + cz, XH_Z + kz)  # top tab
-    row_z = XH_Z + hd - hw.XH_ROW
-    floor = bbox_solid(XH_X - cx, XH_X + cx, y_floor, y_floor + 1.2, XH_Z - kz, XH_Z + kz)
-    floor -= bbox_solid(
-        XH_X - pl + 0.75, XH_X + pl - 0.75, y_floor - 1, y_floor + 2, row_z - 1.7, row_z + 1.7
-    )
+    # The floor is two ledges at the ends, under the shuttle's end walls and
+    # the housing plate's ends: the middle is open top to bottom, so the
+    # harness drops in from the front with the shuttle.
+    floor = None
+    for sx in (-1, 1):
+        x0, x1 = sorted((XH_X + sx * (pl - 0.75), XH_X + sx * cx))
+        ledge = bbox_solid(x0, x1, y_floor, y_floor + 1.2, XH_Z - kz, XH_Z + kz)
+        floor = ledge if floor is None else floor + ledge
     cage = (cage + floor) & inner
     header = [Part(p.name, XH_LOC * p.shape, p.kind) for p in hw.xh_header()]
     housing = XH_LOC * Pos(0, 0, XH_SHORT) * hw.xh_housing()
@@ -1200,7 +1227,7 @@ def build() -> Concept:
                 (POS_CLIP_X, POS_CLIP_Y, (BRIDGE_Z[0] + BRIDGE_Z[1]) / 2),
                 (POS_CLIP_X + 0.6, 3.5, 61.5),
                 (-7.4, 9.5, 54.0),
-                (-6.6, 13.6, 51.3),
+                (pin_x[0] - 0.4, 13.6, 51.3),
                 *into_housing(pin_x[0], 13.8),
             ],
             d=1.2,

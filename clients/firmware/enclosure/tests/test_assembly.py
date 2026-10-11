@@ -173,3 +173,29 @@ def test_each_part_has_a_clear_way_in(model, name, step):
     moving, path, installed = step
     blocked = _clear(model, moving, path, installed)
     assert blocked is None, f"{name}: blocked at offset {blocked[0]} by {blocked[1]} mm^3"
+
+
+# Tub-side wires, laid in from the open front before the bridge goes on.
+TUB_WIRES = ["cable_bat_pos", "cable_bat_sw", "cable_bat_neg", "cable_ptt_a", "cable_ptt_b"]
+
+
+@pytest.mark.parametrize("name", TUB_WIRES)
+def test_tub_wires_can_be_laid_in_from_the_front(name):
+    """Every tub wire, away from its two soldered or crimped ends, has nothing
+    of the tub in front of it: it can be laid into place from the open front
+    (clips snap over it; lips flex and are left out). A wire threaded behind a
+    closed wall could not be fitted once its ends are on."""
+    from build123d import Box, Pos
+
+    c = hx1.build()
+    tub = c.shells["tub"]
+    wire = c.envelopes[name]
+    path, r = wire.centreline, 0.3
+    blocked = []
+    for k in range(3, 18):
+        p = path.position_at(k / 20)
+        depth = p.Y - hx1.Y_FRONT
+        ray = Pos(p.X, hx1.Y_FRONT + depth / 2 - 0.6, p.Z) * Box(2 * r, depth - 1.2, 2 * r)
+        if (ray & tub).volume > 0.01:
+            blocked.append((round(p.X, 1), round(p.Y, 1), round(p.Z, 1)))
+    assert blocked == [], f"{name}: tub material in front of it at {blocked}"

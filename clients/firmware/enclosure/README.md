@@ -84,8 +84,8 @@ switch.
 | Joints (+ and -) | pockets on the back wall | pressed in between two shelves (in heat-shrink) |
 | Battery + lead, talk pair | two clips on the bridge | their lips (the talk pair sits two deep) |
 | Plug yoke | the two lower board screws through its bosses | clamped between the board and the screw heads |
-| Plug header | the yoke's walls round its base | crush ribs; once mated, the housing |
-| Plug housing | the shuttle | crush ribs; the cage floor behind it, the header in front |
+| Plug header | the yoke's walls round its base | crush ribs; its tails through the yoke's plate, soldered below it |
+| Plug housing | the shuttle | crush ribs; the shuttle's ledges in front of its plate, the cage floor behind |
 | Plug shuttle | its cage on the back wall (0.4 mm float), corner tabs | the header inside it once closed; the yoke 0.4 mm in front of its mouth |
 
 Every bought part above has a hard stop within 0.5 mm in every direction
@@ -200,20 +200,25 @@ plug from Mario's crimp kit, which mates by itself as the case closes. The
 faceplate lifts off with no slack wire and no soldering iron, and nothing is
 left loose inside to rattle.
 
-- **Faceplate half**: a B4B-XH-A header, its tails soldered on the bench to
-  three short pigtails from the board: the board's own battery plug lead, cut
-  short, and one wire from GPIO7. It sits in a printed **yoke** that lies
+- **Faceplate half**: a B4B-XH-A header, its tails through holes in a plate
+  on the printed **yoke** and soldered below it to three short pigtails from
+  the board (the board's own battery plug lead, cut short, and one wire from
+  GPIO7), so it cannot come off when the case opens. The yoke lies
   flat on the board's back under the two lower board screws (the yoke replaces
   their washers; the screws still bite 5 mm).
 - **Tub half**: an XHP-4 housing on four crimped harness wires, pressed into a
-  printed **shuttle** that floats 0.4 mm each way in a **cage** on the back wall.
+  printed **shuttle** from its back end until its plate stops on two ledges.
+  The shuttle floats 0.4 mm each way in a **cage** on the back wall; the
+  cage's floor is two ledges at the ends, so the harness drops in from the
+  front with it.
   As the case closes, the shuttle's chamfered mouth takes the header's box and
   lines the housing up with it before the pins meet, so only the outside sizes
-  on JST's drawing matter. The plug closes 0.8 mm short of fully seated
-  (the housing rests on the cage floor), never past it.
+  on JST's drawing matter. Before that, two fins on the faceplate along the
+  inside of the side walls have lined it up sideways. The plug closes 0.8 mm
+  short of fully seated (the housing rests on the cage floor), never past it.
 - **Pins**: 1 BAT+ (after the rocker), 2 BAT- (the cells' - joint), 3 talk
   GND, 4 talk. On the
-  board half, bridge tails 2 and 3 with solder (the board's ground is BAT-),
+  board half, link tails 2 and 3 with a short wire (the board's ground is BAT-),
   so only three pigtails are needed. Keyed, so it only goes one way; BAT+ is
   never next to the talk pin.
 - **Talk input**: GPIO7, header pin 2 (low on the header, so its pigtail is
@@ -256,7 +261,7 @@ the signal wires, two conductors together for the battery ones.
 | Lever pin | grey | lying flat | none |
 | Plunger | grey | standing on its flat end | none |
 | Holder bridge | grey | front face down | none |
-| Plug yoke | grey | board side down | none |
+| Plug yoke | grey | board side down | none (the plate under the header bridges between the posts) |
 | Plug shuttle | grey | standing on its back end, mouth up | none |
 
 `huxcase/printability.py` measures what needs support in each pose
@@ -266,14 +271,16 @@ the signal wires, two conductors together for the battery ones.
 
 On the bench first:
 1. Cut every wire to the table above.
-2. Plug header: bridge tails 2 and 3 with solder. Cut the board's battery
-   plug lead short (red 18 mm, black 19 mm) and solder red to tail 1, black to
-   tail 2; solder a 28 mm wire from the GPIO7 tail to tail 4. Heat-shrink
-   each tail. Press the header into the yoke's walls.
+2. Plug header: press it into the yoke's walls, its tails through the holes
+   in the yoke's plate. Below the plate: link tails 2 and 3 with a short wire;
+   cut the board's battery plug lead short (red 18 mm, black 19 mm) and solder
+   red to tail 1, black to tail 2; solder a 28 mm wire from the GPIO7 tail to
+   tail 4. Heat-shrink each tail.
 3. Tub harness: solder the rocker's two leads and the talk switch's two wires
    (to the leg pair that switches first). Crimp the rocker + lead, the
    battery - lead, and the talk GND and talk wires, and push them into the
-   XHP-4 housing as pins 1, 2, 3 and 4. Press the housing into the shuttle.
+   XHP-4 housing as pins 1, 2, 3 and 4. Push the housing into the shuttle
+   from its flat back end, body first, until its plate stops on the ledges.
 
 Tub, lying on its back:
 4. Heat-set three M3 x 5 inserts: two in the top corner blocks, one in the
@@ -290,7 +297,8 @@ Tub, lying on its back:
 9. Cells in (within 0.05 V of each other, + up). Lay the + lead and the talk
    pair over their clips, then the bridge across, M3 x 6: the clips snap
    over the wires.
-10. Stand the shuttle in its cage, mouth up. Rocker ON: meter 3.6 to 4.2 V
+10. Drop the shuttle into its cage, mouth up, the wires through the open
+    middle of its floor. Rocker ON: meter 3.6 to 4.2 V
     between housing pins 1 and 2. Rocker OFF.
 
 Faceplate, face down:

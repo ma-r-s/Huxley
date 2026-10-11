@@ -221,6 +221,19 @@ fallback.
 
 ## Queued (next up, not started)
 
+### F-0011 — Talk button on GPIO7 · queued 2026-10-10
+
+**Problem**: the HX-1 case (F-0010) wires its 12 x 12 talk switch to header
+pin 2 (GPIO7, other leg to GND through the seam plug); the firmware reads
+the board's KEY2 through the TCA9555 (`HUX_TCA_BTN_K2` in
+`components/hux_board/include/hux_board.h`).
+**Why**: in the case, KEY2 is inside; the lever only reaches the external
+switch.
+**Solution**: `hux_button` reads GPIO7 directly (input, internal pull-up,
+low = talk, the same debounce); keep KEY2 as the bench fallback when nothing
+is on GPIO7.
+**Effort**: small. Blocked on nothing; test on the bench with a jumper to GND.
+
 ### F-0003 — v0.3 speaker path
 
 Inbound `audio` → I2S TX. See [`roadmap.md`](./roadmap.md#v03--speaker).
