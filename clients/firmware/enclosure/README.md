@@ -347,6 +347,7 @@ print. The same sliced are in `out/print/sliced/`.
 | `4_tub_base_and_top` | AMS: slot 1 white PLA, slot 4 frosted PETG | 4 h 10 min; by object: the frosted top, then the base |
 | `5_test_corner` | AMS: slot 1 white PLA, slot 4 frosted PETG | 20 min; both halves' corner at the seam: print it first |
 | `6_tub_one_piece_pla` | one PLA, any tray (orange set) | 2 h 28 min; the whole tub in one piece, no seam, no glue, standard settings |
+| `7_tub_top_pla` | one PLA (red set) | 1 h 45 min; the top alone, standard settings, for a base already printed |
 
 The tub's plate prints object by object, so the filament changes once,
 between the pieces, never inside one. The frosted top goes first, so its

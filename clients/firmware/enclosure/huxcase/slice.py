@@ -130,7 +130,7 @@ CLARITY_FILAMENT = {  # on the PETG preset
 # tuned there and the lap is counted in layers.
 
 GREY, BLACK, ORANGE, FROSTED = "#8E9089", "#161616", "#FF6A13", "#E4ECEE"
-WHITE = "#F4F4F2"  # the tub base: Mario's white PLA in slot 1 (2026-10-11)
+WHITE, RED = "#F4F4F2", "#C12E1F"  # the tub base: Mario's white PLA in slot 1 (2026-10-11)
 AMS = (WHITE, BLACK, ORANGE, FROSTED)  # Mario's AMS slots 1 to 4 for the tub
 
 
@@ -207,10 +207,16 @@ PLATES.append(
     # orange (it matches the lever; the LEDs show only faintly through it).
     Plate("6_tub_one_piece_pla", ("hx1_13_tub",), TREE_SUPPORTS, (ORANGE,))
 )
+PLATES.append(
+    # The top alone in red PLA, standard settings, to go on the white base
+    # Mario has (2026-10-11, after the clear PETG top strung).
+    Plate("7_tub_top_pla", (TOP,), TREE_SUPPORTS | NO_BRIM, (RED,))
+)
 # Plates whose close fits support must not touch: the top's, its seam its z 0.
 KEEP_OUT = {
     "4_tub_base_and_top": (TOP, hx1.BACK_FROST_Z),
     "6_tub_one_piece_pla": ("hx1_13_tub", 0.0),
+    "7_tub_top_pla": (TOP, hx1.BACK_FROST_Z),
 }
 
 BED = "Textured PEI Plate"  # the plate the P2S ships with; pick yours in Bambu Studio if not
