@@ -135,6 +135,8 @@ def export_stls(out_dir) -> list[str]:
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    for stale in out.glob("hx1_*.stl"):  # a piece that no longer exists must not linger
+        stale.unlink()
     pieces = printed_pieces()
     written = []
     for i, pose in enumerate(POSES, 1):
