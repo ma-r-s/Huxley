@@ -240,7 +240,7 @@ See [`architecture.md`](./architecture.md#data-plane-vs-control-plane).
 **Decision**: The talk input is GPIO7 (header pin 2, internal pull-up,
 low = talk) OR the on-board K2; either one held is talk, and they post
 the same press/release events. The HX-1 case's lever closes a switch
-from GPIO7 to GND (clients/firmware/enclosure/README.md); K2 stays for
+from GPIO7 to GND (the enclosure README on its branch); K2 stays for
 the bare board on the bench. A K2 read that fails on the I2C bus now
 counts as not pressed (it used to read as pressed, since the button is
 active-low): an unreadable button must never open the mic.

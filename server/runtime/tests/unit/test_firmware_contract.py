@@ -258,12 +258,12 @@ async def test_second_client_evicts_first() -> None:
 # or changes a value's spelling would silently break the device.
 
 
-async def _recv_until(ws: Any, msg_type: str) -> tuple[str, dict[str, Any]]:
-    """Next message of `msg_type`, as (raw text, parsed)."""
+async def _recv_until(ws: Any, msg_type: str, match: Any = None) -> tuple[str, dict[str, Any]]:
+    """Next message of `msg_type` (and `match(msg)`, if given), as (raw, parsed)."""
     for _ in range(50):
         raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
         msg = json.loads(raw)
-        if msg.get("type") == msg_type:
+        if msg.get("type") == msg_type and (match is None or match(msg)):
             return raw, msg
     raise AssertionError(f"no {msg_type} message")
 
@@ -282,8 +282,9 @@ async def test_server_frames_match_what_the_firmware_parses() -> None:
         assert hello.get("session_ready", True) in (True, False)
 
         await srv.send_state("CONVERSING")
-        _, state = await _recv_until(ws, "state")
-        assert state["value"] in ("IDLE", "CONNECTING", "CONVERSING")
+        # Skip the connect burst's own state; the value is what the firmware matches.
+        _, state = await _recv_until(ws, "state", lambda m: m["value"] != "IDLE")
+        assert state["value"] == "CONVERSING"
 
         await srv.send_set_volume(40)
         _, vol = await _recv_until(ws, "set_volume")

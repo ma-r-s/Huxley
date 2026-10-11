@@ -43,8 +43,9 @@ whichever is wrong in the same commit.
 | `hux_app`               | Session state + event queue + dispatch                                   | Talks to the network or hardware directly                     |
 | `hux_net`               | Wi-Fi STA bring-up, WebSocket connect/reconnect, text frame send/receive | Holds business state, logs to the wire (delegated to hux_log) |
 | `hux_log`               | `vprintf` hook, log ring buffer, drain task, remote sink callback        | Knows about the protocol envelope (delegated to hux_net)      |
-| `hux_audio` _(future)_  | I2S + ES7210 + ES8311 + TCA9555 + PSRAM ring buffers                     | Decides when audio is allowed (that's hux_app)                |
-| `hux_button` _(future)_ | GPIO debounce, press/long-press classification                           | Decides what a press means (that's hux_app)                   |
+| `hux_audio`             | I2S + ES7210 + ES8311 + PSRAM speaker ring, volume                       | Decides when audio is allowed (that's hux_app)                |
+| `hux_board`             | I2C bus + TCA9555 (buttons, speaker PA)                                  | Knows what a pin means beyond its name                        |
+| `hux_button`            | Talk input (GPIO7 or K2), polled and debounced                           | Decides what a press means (that's hux_app)                   |
 
 **The dependency graph flows downward only.** `hux_app` requires
 `hux_proto`; `hux_net` requires `hux_app` + `hux_proto` + `hux_log`
@@ -64,9 +65,10 @@ FreeRTOS tasks, in priority order (higher = more important):
 | _esp_wifi_                 | IDF internal         | 23   | —     | Wi-Fi driver                                               |
 | _websocket_client_         | esp_websocket_client | 5    | —     | WS RX + reconnect loop; invokes our event handler          |
 | `hux_log_drain`            | `hux_log_init`       | 2    | 4 KB  | Pops log ring, calls registered sink; emits drop heartbeat |
-| `hux_audio_mic` _(future)_ | `hux_audio_start`    | 8    | 4 KB  | I2S RX, base64-encode, send `audio` frames                 |
-| `hux_audio_spk` _(future)_ | `hux_audio_start`    | 8    | 4 KB  | Pop PCM ring, I2S TX                                       |
-| `hux_button` _(future)_    | `hux_button_start`   | 4    | 2 KB  | GPIO debounce + event emit                                 |
+| `hux_mic`                  | `hux_audio_init`     | 8    | 6 KB  | I2S RX, extract Mic1, hand frames to hux_app's queue       |
+| `hux_audio_tx`             | `hux_app_start`      | 6    | 8 KB  | base64-encode queued mic frames, send `audio`              |
+| `hux_spk`                  | `hux_audio_init`     | 8    | 6 KB  | Pop the PCM ring (or silence), I2S TX; services clears     |
+| `hux_button`               | `hux_button_start`   | 4    | 3 KB  | Poll GPIO7 + K2 every 10 ms, debounce, post press/release  |
 
 **Audio tasks are prio 8 — higher than `app`.** If the state machine
 starves audio we get glitches; if audio starves the state machine we
@@ -139,7 +141,7 @@ buffer. Ownership transfers to the queue on successful post. The
 consumer (app_task) is responsible for freeing after dispatch.
 Producers never retain references.
 
-## Event flow (outbound, future)
+## Event flow (outbound)
 
 ```
   talk input low: GPIO7 (the case's lever) or K2 (on the board)

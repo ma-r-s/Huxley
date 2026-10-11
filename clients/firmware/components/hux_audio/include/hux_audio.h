@@ -88,7 +88,8 @@ void hux_audio_spk_push(const uint8_t *pcm, size_t len);
  */
 void hux_audio_spk_clear(void);
 
-/** Speaker volume 0..100 (`set_volume` from the server); out of range is ignored. */
+/** Speaker volume 0..100 (`set_volume` from the server): boots at 50
+ * (-15 dB), never below 10; out of range is ignored. */
 void hux_audio_set_volume(int level);
 
 #ifdef __cplusplus

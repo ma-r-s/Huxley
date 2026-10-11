@@ -20,7 +20,7 @@ static const char *TAG = "hux_button";
 #define TASK_PRIO         4   /* Below app_task (5); above idle. */
 
 /* The HX-1 case's talk lever closes a switch from header pin 2 (GPIO7)
- * to GND (clients/firmware/enclosure/README.md, "Talk input"). The
+ * to GND (the enclosure README, "Talk input", on its branch). The
  * on-board K2 stays a talk input too, for the bare board on the bench.
  * Either one held is "talk"; the events keep their K2 names. */
 #define TALK_GPIO         GPIO_NUM_7

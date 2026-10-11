@@ -46,9 +46,26 @@ the app partition free); host tests green (hux_proto 92 assertions incl.
 the new payloads, hux_ws_frag, hux_debounce); server contract tests
 green both ways (new: server frames vs what the firmware parses,
 `"type"` within the probe's 100 bytes). Not yet run on the board.
+Review round (fresh critic, same night): no blockers ("would flash as
+is"). Fixed: the volume scale (esp_codec_dev's default curve put 50 at
+-25 dB while the server's system skill assumes 50 to start; now 50 =
+-15 dB, the old boot loudness, boot at 50, floor 10); clears read the
+ring out instead of resetting it (a reset can race the writer's
+lock-free send and fill the ring with 0x55, a loud hum); the type probe
+decides on the first "type" key only (a nested one in a dev_event could
+clear the speaker), now in `hux_type_probe` with host tests; the
+contract test's state check; docs and comments.
+**Open product question for Mario**: during a skill's claim (a Telegram
+call) the device's mic now streams continuously, as the PWA does and as
+the protocol's mic mode says. It is the first time the device has an
+open mic without the lever held. Calls need it to be two-way; if the
+walkie-talkie rule should hold even in calls, it is one line in
+`hux_app.c` (`mic_update`).
 **DoD left**: Mario flashes it (README "First flash after a long gap"),
-then: talk on K2 and on GPIO7, an answer plays, "sube el volumen",
-an audiobook seek, and a Telegram call if one is set up.
+then: talk on K2 and on GPIO7, an answer plays, "pon el volumen al 90"
+then "al 40", an audiobook seek, and a Telegram call if one is set up.
+Also check `HUX_SERVER_URI` in `main/secrets.h`: DHCP had moved the Mac
+from .77 to .71 since April (fixed locally the night of 2026-10-11).
 **Known gaps** (not in scope): no echo cancellation during calls; the
 speaker leaks into the mic.
 

@@ -1,5 +1,5 @@
 /**
- * hux_button — the talk input: the HX-1 case's lever on GPIO7 (header
+ * hux_button: the talk input, the HX-1 case's lever on GPIO7 (header
  * pin 2, to GND) or the on-board K2 via the TCA9555. Either one held is
  * talk; they post the same press/release events.
  *
@@ -23,7 +23,7 @@ extern "C" {
 
 /**
  * Configure GPIO7 (input, pull-up) and start the polling task. Call
- * once after `hux_board_init()` — the task reads K2 through the shared
+ * once after `hux_board_init()`; the task reads K2 through the shared
  * TCA9555 and GPIO7 directly, every 10 ms.
  */
 void hux_button_start(void);

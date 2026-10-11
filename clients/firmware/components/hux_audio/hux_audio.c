@@ -66,9 +66,8 @@ static const char *TAG = "hux_audio";
  * the task writes silence so the DMA never underflows (no click /
  * pop from the PA when the stream pauses).
  *
- * Ring size: 32 KB ≈ 660 ms of 24 kHz PCM16 mono. Large enough to
- * ride out a momentary TCP / WS hiccup; small enough that a paused
- * stream doesn't produce audible "stored" audio when resumed. */
+ * Ring size: see SPK_RING_BYTES (512 KB, about 10.6 s of 24 kHz PCM16
+ * mono) for why it holds a whole reply. */
 #define SPK_SAMPLE_RATE_HZ    24000
 #define SPK_CHUNK_MS          20
 #define SPK_CHUNK_SAMPLES     (SPK_SAMPLE_RATE_HZ * SPK_CHUNK_MS / 1000) /* 480 */
@@ -83,7 +82,15 @@ static const char *TAG = "hux_audio";
 #define SPK_RING_BYTES        (512 * 1024)
 #define SPK_TASK_STACK        6144
 #define SPK_TASK_PRIO         8
-#define SPK_VOLUME_DEFAULT    70  /* 0..100, ES8311 output gain */
+/* Volume 0..100. The server's system skill sends absolute levels and
+ * assumes 50 to start with; esp_codec_dev's default curve (0 = -50 dB,
+ * 100 = 0 dB, linear) put the old boot level 70 at -15 dB, the loudness
+ * every hardware test so far used. This curve keeps -15 dB at 50, so the
+ * device boots where the server thinks it is and "sube" / "baja" go the
+ * right way from there. Below SPK_VOLUME_MIN is raised to it: a blind
+ * user can't be left with a device too quiet to hear. */
+#define SPK_VOLUME_DEFAULT    50
+#define SPK_VOLUME_MIN        10
 #define SPK_PA_SETTLE_MS      10  /* Waveshare factsheet recommended PA-on delay */
 
 static i2s_chan_handle_t s_i2s_tx = NULL;
@@ -108,8 +115,11 @@ static esp_codec_dev_handle_t s_spk_dev = NULL;
  * SPIRAM_MALLOC_ALWAYSINTERNAL threshold. */
 static StreamBufferHandle_t s_spk_ring = NULL;
 
-/* Clearing the ring: the reader (spk_task) does the reset, never another
- * task, so a reset can't land mid-receive on the other core. A caller
+/* Clearing the ring: the reader (spk_task) empties it by reading it out,
+ * never by xStreamBufferReset. A reset from any task can land mid-send
+ * (the writer copies and moves the head without a lock) and leave the
+ * ring "full" of 0x55 fill, which plays as a loud DC hum; reading out is
+ * what the reader always does, so it is safe next to a writer. A caller
  * bumps `s_spk_clear_req` and waits until spk_task reports it done. */
 static _Atomic uint32_t s_spk_clear_req = 0;
 static _Atomic uint32_t s_spk_clear_done = 0;
@@ -293,6 +303,11 @@ static esp_err_t es8311_bring_up(void) {
         .bits_per_sample = 32,
     };
     ESP_RETURN_ON_ERROR(esp_codec_dev_open(s_spk_dev, &fs), TAG, "es8311.open");
+    esp_codec_dev_vol_map_t points[] = {{0, -50.0f}, {50, -15.0f}, {100, 0.0f}};
+    esp_codec_dev_vol_curve_t curve = {.vol_map = points, .count = 3};
+    if (esp_codec_dev_set_vol_curve(s_spk_dev, &curve) != ESP_CODEC_DEV_OK) {
+        ESP_LOGW(TAG, "es8311.vol_curve_failed (default curve: 50 is quieter)");
+    }
     esp_codec_dev_set_out_vol(s_spk_dev, SPK_VOLUME_DEFAULT);
     return ESP_OK;
 }
@@ -307,8 +322,7 @@ static esp_err_t es8311_bring_up(void) {
  * setup. We expand each incoming sample to a stereo 32-bit pair
  * by `(sample << 16)` for both L and R — the codec reads the high
  * 16 bits as the audio data; the low 16 are zeros. 4x size growth.
- * Note this happens AFTER the ring drain, so the ring stays at 32 KB
- * of mono (~660 ms). */
+ * Note this happens AFTER the ring drain, so the ring holds mono. */
 static void spk_task(void *unused) {
     (void)unused;
     ESP_LOGI(TAG, "spk_task started chunk_ms=%d chunk_bytes=%d ring_bytes=%d",
@@ -339,11 +353,13 @@ static void spk_task(void *unused) {
             s_spk_ring, mono16, sizeof(mono16), pdMS_TO_TICKS(SPK_CHUNK_MS));
         uint32_t req = atomic_load_explicit(&s_spk_clear_req, memory_order_acquire);
         if (req != atomic_load_explicit(&s_spk_clear_done, memory_order_relaxed)) {
-            /* A clear was asked for: drop this chunk and the rest of the
-             * ring. Nothing is blocked on the ring here (the writer never
-             * blocks), so the reset always succeeds. */
-            size_t dropped = got_bytes + (SPK_RING_BYTES - xStreamBufferSpacesAvailable(s_spk_ring));
-            xStreamBufferReset(s_spk_ring);
+            /* A clear was asked for: drop this chunk and read the rest of
+             * the ring out (into stereo32, rewritten below anyway). */
+            size_t dropped = got_bytes;
+            size_t n;
+            while ((n = xStreamBufferReceive(s_spk_ring, stereo32, sizeof(stereo32), 0)) > 0) {
+                dropped += n;
+            }
             got_bytes = 0;
             atomic_store_explicit(&s_spk_clear_done, req, memory_order_release);
             ESP_LOGI(TAG, "spk.cleared dropped_bytes=%u", (unsigned)dropped);
@@ -424,7 +440,9 @@ void hux_audio_spk_clear(void) {
     while (atomic_load_explicit(&s_spk_clear_done, memory_order_acquire) - want > UINT32_MAX / 2) {
         /* done < want (wrap-safe): spk_task hasn't got to it yet. */
         if (xTaskGetTickCount() - start > pdMS_TO_TICKS(SPK_CLEAR_WAIT_MS)) {
-            ESP_LOGW(TAG, "spk.clear_timeout req=%u — spk_task not running?", (unsigned)want);
+            /* The request stays pending: if spk_task comes back it clears
+             * then, which may drop the start of what plays next. */
+            ESP_LOGW(TAG, "spk.clear_timeout req=%u: spk_task not running?", (unsigned)want);
             return;
         }
         vTaskDelay(1);
@@ -435,12 +453,15 @@ void hux_audio_set_volume(int level) {
     if (s_spk_dev == NULL || level < 0 || level > 100) {
         return;
     }
-    esp_err_t err = esp_codec_dev_set_out_vol(s_spk_dev, level);
+    int applied = level < SPK_VOLUME_MIN ? SPK_VOLUME_MIN : level;
+    esp_err_t err = esp_codec_dev_set_out_vol(s_spk_dev, applied);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "spk.volume_failed level=%d err=%s", level, esp_err_to_name(err));
+        ESP_LOGW(TAG, "spk.volume_failed level=%d err=%s", applied, esp_err_to_name(err));
         return;
     }
-    ESP_LOGI(TAG, "spk.volume level=%d", level);
+    /* esp_codec_dev doesn't report the codec's own I2C write, so this says
+     * what was asked of it. */
+    ESP_LOGI(TAG, "spk.volume level=%d requested=%d", applied, level);
 }
 
 static void mic_task(void *unused) {

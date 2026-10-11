@@ -18,6 +18,7 @@
 
 #include "hux_app.h"
 #include "hux_log.h"
+#include "hux_type_probe.h"
 #include "hux_ws_frag.h"
 
 static const char *TAG = "hux_net";
@@ -175,54 +176,6 @@ static void wifi_init_sta(const char *ssid, const char *password) {
 /*  WebSocket                                                          */
 /* ------------------------------------------------------------------ */
 
-/* Cheap probe: is this message of type `value` (quotes included, e.g.
- * "\"audio\"")? Avoids parsing the whole JSON on the hot path. Relies
- * on the server always serialising `"type"` early in the document.
- * Tolerates whitespace around the colon and inside the value pair so it
- * works regardless of whether the server side uses
- * `json.dumps({"type":"audio"})` (no spaces) or `json.dumps(d)` with
- * default separators (space after `:`). The closing quote is part of
- * the match, so "audio" never matches "audio_clear". If this ever
- * misses, an `audio` message falls through to the control plane and is
- * logged as `ws.rx.audio (unhandled)` — correct but slow. */
-static bool has_type(const char *json, size_t len, const char *value) {
-    if (len < 16) {
-        return false;
-    }
-    /* Bound the scan — the `"type"` key lives in the first ~50 bytes
-     * for any envelope shape we're likely to see. */
-    size_t probe = len < 100 ? len : 100;
-    static const char key[] = "\"type\"";
-    static const size_t key_len = sizeof(key) - 1; /* 6 */
-    const size_t value_len = strlen(value);
-
-    for (size_t i = 0; i + key_len <= probe; i++) {
-        if (memcmp(json + i, key, key_len) != 0) {
-            continue;
-        }
-        size_t j = i + key_len;
-        /* Skip whitespace before colon. */
-        while (j < probe && (json[j] == ' ' || json[j] == '\t')) {
-            j++;
-        }
-        if (j >= probe || json[j] != ':') {
-            continue;
-        }
-        j++;
-        /* Skip whitespace before value. */
-        while (j < probe && (json[j] == ' ' || json[j] == '\t')) {
-            j++;
-        }
-        if (j + value_len > probe) {
-            continue;
-        }
-        if (memcmp(json + j, value, value_len) == 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
 /* Full audio path. Parses the envelope, extracts `data`, decodes
  * base64 into `s_audio_scratch`, hands the view to the registered
  * sink. Runs on the WS client task; the sink must not block. */
@@ -261,11 +214,11 @@ static void dispatch_audio(const char *json, size_t len) {
  * goes to the zero-copy data-plane sink; everything else gets copied
  * onto the heap and posted to hux_app's control queue. */
 static void dispatch_complete_message(const char *msg, size_t msg_len) {
-    if (has_type(msg, msg_len, "\"audio\"")) {
+    if (hux_has_type(msg, msg_len, "\"audio\"")) {
         dispatch_audio(msg, msg_len);
         return;
     }
-    if (has_type(msg, msg_len, "\"audio_clear\"")) {
+    if (hux_has_type(msg, msg_len, "\"audio_clear\"")) {
         hux_net_audio_clear_fn clear =
             atomic_load_explicit(&s_audio_clear_sink, memory_order_acquire);
         ESP_LOGI(TAG, "ws.rx.audio_clear");

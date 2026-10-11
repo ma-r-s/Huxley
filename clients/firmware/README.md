@@ -3,8 +3,9 @@
 ESP32-S3 client for Huxley: the walkie. Hold the talk lever, speak,
 let go, hear the answer. Speaks the WebSocket protocol defined in
 [`../../docs/protocol.md`](../../docs/protocol.md), the same contract as
-the PWA dev client in [`../pwa/`](../pwa/). Its case (HX-1) is in
-[`enclosure/`](./enclosure/).
+the PWA dev client in [`../pwa/`](../pwa/). Its case (HX-1) lives in
+`clients/firmware/enclosure/` on the `enclosure-hx1-revd-r4` branch (not
+merged yet).
 
 Prototyped in this repo until end-to-end voice works; will be extracted
 to its own `huxley-firmware` repository once the architecture is
@@ -22,7 +23,7 @@ long-term client-repo strategy.
 ## Architecture (at a glance)
 
 ```
-main/          app_main — NVS, event loop, bring-up in dependency order
+main/          app_main: NVS, event loop, bring-up in dependency order
 components/
   hux_proto/   Pure JSON <-> typed message marshalling (host-testable)
   hux_app/     Single state owner + event queue (actor model): PTT, mic
@@ -44,7 +45,7 @@ standards):
    never mutates shared state directly. No mutexes on business state.
 2. **Protocol is pure** — `hux_proto` has no I/O; compiles against cJSON
    alone so the wire layer is unit-testable on a host.
-3. **Pre-allocated audio path** — ring buffers sized at init in PSRAM;
+3. **Pre-allocated audio path**: ring buffers sized at init in PSRAM;
    no `malloc` per frame.
 4. **Dual-OTA partitions** reserved from day 1 — adding OTA is additive,
    not a flash-layout migration.
@@ -98,7 +99,7 @@ Three tiers, cheapest to most expensive:
 # 1. Host unit tests — pure-C modules, no hardware needed (~1 s)
 cd clients/firmware/tests && cmake -B build && cmake --build build --target check
 
-# 2. Server-side wire-contract tests — firmware <-> server message shapes,
+# 2. Server-side wire-contract tests: firmware <-> server message shapes,
 #    both directions (from the repo root)
 uv run --package huxley pytest server/runtime/tests/unit/test_firmware_contract.py
 
@@ -140,7 +141,10 @@ evicts the first, so close the PWA tab while testing the board.
 ## First flash after a long gap
 
 1. Server running, on the LAN (`HUXLEY_SERVER_HOST=0.0.0.0`), PWA tab
-   closed. `main/secrets.h` has the Wi-Fi and `ws://<server-ip>:8765/`.
+   closed. `main/secrets.h` has the Wi-Fi and `ws://<server-ip>:8765/`:
+   check the IP is the server's today (`ipconfig getifaddr en0`); DHCP
+   moves it (a reservation in the router stops that). If `ws.connected`
+   never shows, this is the first suspect.
 2. `idf.py -p /dev/cu.usbmodem2101 flash monitor` (or `tools/smoke.sh
    --flash`, which waits for READY).
 3. Serial should show, in order: `boot version=…`, `button_task started
@@ -150,5 +154,6 @@ evicts the first, so close the PWA tab while testing the board.
 4. Hold K2 (or touch GPIO7 to GND): `button.talk press src=k2|lever`,
    `app.mic on`, `mic.tx.stats …`; let go: `app.ptt.final_stats …`. The
    answer plays; `spk.alive … audio=` climbs.
-5. Say "sube el volumen": `spk.volume level=…`. A `talk.gpio7 low at
+5. Say "pon el volumen al 90", then "al 40": `spk.volume level=…`, and
+   you hear the difference (it boots at 50, today's loudness). A `talk.gpio7 low at
    boot` warning means GPIO7 is held or shorted.

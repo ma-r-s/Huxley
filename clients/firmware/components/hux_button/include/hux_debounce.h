@@ -1,5 +1,5 @@
 /**
- * hux_debounce — the talk button's debounce and edge detection.
+ * hux_debounce: the talk button's debounce and edge detection.
  *
  * Pure: no I/O, no FreeRTOS, no IDF headers. Host-testable in the
  * firmware/tests/ tree. `hux_button` feeds it one raw sample per poll

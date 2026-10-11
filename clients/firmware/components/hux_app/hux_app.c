@@ -325,7 +325,7 @@ static void handle_ws_message(hux_app_ws_message_t *msg) {
         case HUX_MSG_SET_VOLUME:
             /* The server's system skill ("sube el volumen"): absolute 0..100. */
             if (parsed.as.set_volume.level < 0) {
-                ESP_LOGW(TAG, "ws.rx.set_volume without a level — ignored");
+                ESP_LOGW(TAG, "ws.rx.set_volume without a level, ignored");
             } else {
                 hux_audio_set_volume(parsed.as.set_volume.level);
             }
@@ -333,7 +333,7 @@ static void handle_ws_message(hux_app_ws_message_t *msg) {
 
         case HUX_MSG_INPUT_MODE:
             if (!parsed.as.input_mode.known) {
-                ESP_LOGW(TAG, "ws.rx.input_mode unknown mode — keeping %s",
+                ESP_LOGW(TAG, "ws.rx.input_mode unknown mode, keeping %s",
                          s_mic_continuous ? "skill_continuous" : "assistant_ptt");
                 break;
             }
