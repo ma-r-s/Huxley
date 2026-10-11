@@ -5,14 +5,17 @@ its SPK-4020 speaker, two 18650s and a spring-loaded push-to-talk lever. Hold
 to talk, release to hear the answer
 ([`../../../docs/concepts.md`](../../../docs/concepts.md)).
 
-Status: **HX-1 is the build** (rev C, 2026-10-10). Layout, mechanism, light,
-Mario's two 18650 holders and the cable runs are modelled and fit-checked;
-case fasteners, holder clips, print orientation and STL export are next. Tracked as F-0010 in
-[`../docs/triage.md`](../docs/triage.md).
+Status: **HX-1 is the build** (rev D, 2026-10-10). Every part is located and
+held by printed features, screws or crush ribs, no glue; every bought part has
+a hard stop within 0.5 mm in every direction (tested); every printed piece is
+one solid with a known print pose (tested). Next: Mario prints the fit coupon,
+then the parts. Tracked as F-0010 in [`../docs/triage.md`](../docs/triage.md).
+The interactive build page (spin, explode, x-ray, build it) comes from
+`huxcase/site.py`.
 
 | Model        | Shape                                  | Talk button                              |
 | ------------ | -------------------------------------- | ---------------------------------------- |
-| **HX-1**     | two 18650s in holders, 70 × 37 × 104   | 56 mm lever, right side, 12 x 12 tact    |
+| **HX-1**     | two 18650s in holders, 70 × 37 × 104   | 56 mm lever on a printed pin, 12 x 12 tact |
 | HX-1 rev A   | one 18650, 66 × 35 × 125 (superseded)  | 2u MX bar + stabiliser, left side        |
 | HX-2 Baton   | round head on a grip, 70 × 70 × 148    | hinged trigger on the grip, index finger |
 | HX-3 Radio   | landscape box + handle, 128 × 36 × 122 | squeeze bar under the handle rail        |
@@ -32,35 +35,69 @@ of them. HX-1 moves four things:
    same channel, so the cells run past the speaker instead of stacking on top
    of it: H drops from 125 to 104. The binding fit is the speaker basket's
    back rim (r 15.8 at 12.3 mm deep) against the holders' inner walls, which
-   sets the cells' depth and D = 37. Body volume is still below rev A.
-3. **No bulkhead.** The whole sealed interior is the speaker's back box:
-   about 134 cc versus 62 in rev A.
-4. **PTT on the right, as a lever.** The right cell sits right behind the
-   side wall, so a bar there cannot travel straight in. It is pinned at its
-   bottom end inside a channel in the wall; the channel floor is tilted
-   (1 mm of wall left over the holder, deep above it). To make room, the
-   case is 70 wide and the internal assembly sits 1.2 mm left of centre.
+   sets the cells' depth and D = 37.
+3. **No bulkhead.** The whole sealed interior is the speaker's back box,
+   about 136 cc versus 62 in rev A.
+4. **PTT on the right, as a lever** turning in a channel in the right wall.
+   The case is 70 wide and the internal assembly sits 1.2 mm left of centre.
 
 Side effects: the ceramic antenna is at the top of the device (out of the
 hand); USB-C exits the left side in a deep pocket; KEY1 to KEY3 sit at the top
-edge (candidate volume buttons); the bottom 5 mm under the holders is free
-for dock contacts.
+edge (candidate volume buttons); the bottom under the holders is free for dock
+contacts.
+
+## The case: two prints, six screws
+
+- **Faceplate** (grey, prints face down). The face, its 2 mm lip that seats in
+  the tub's rim (`SNUG`), the board's three standoffs and three centring
+  posts, the two mic tubes, the charge-light tube, six screw pads and the
+  tooth that holds the lever pin's front end.
+- **Tub** (prints standing up: grey to 36 mm, then one filament swap to
+  frosted). Everything else, roof included: so the LEDs glow through the top,
+  the upper back and the upper sides.
+- **Closure**: six M3 x 8 button heads through the face, flush in
+  counterbores, into M3 x 5 heat-set inserts in blocks on the tub's walls.
+  Visible, honest screws, TE style; nothing to snag.
+
+The old three-piece split (rev C) could not be fastened: its seams left no
+room for a screw boss and cut through the rocker, the lever channel and the
+switch.
+
+## What holds every part
+
+| Part | Located by | Held by |
+| --- | --- | --- |
+| Board | three standoffs + three crush-ribbed centring posts (faceplate) | 3 x M2 x 8 + washer, self-tapping into the standoffs |
+| Speaker | six crush-ribbed tabs on the grille plug | clamped between the plug's ring and a post on the tub's back wall when the case closes |
+| Grille plug (black) | its window in the face | its flange in a recess behind the face, clamped by the speaker |
+| Holders (x2) | lips on the outer walls, crush-ribbed pedestals and pads | the bridge: one M3 x 6 into an insert on the back wall; its ribs press both holders onto the back wall |
+| Cells | the holders | the holders' springs, and the bridge's front bar in a drop |
+| 12 x 12 switch | cradle in the tub, legs in two slots | crush ribs; a latch finger snaps over its front face |
+| Plunger + spring | the tube | the spring's 1.5 mm preload between lever and plunger |
+| Lever | its printed pin | the pin sits in two blind seats (tub behind, faceplate tooth in front), captured when the case closes; a dome takes up its axial play |
+| Power switch | its panel in a recess in the left side | its own snap ears |
+| Joints (+ and -) | pockets on the back wall | pressed in between two shelves (in heat-shrink) |
+| Battery - lead | two hooks on the back wall | their lips |
+| Battery + lead | a clip on the bridge | its lip |
+
+Every bought part above has a hard stop within 0.5 mm in every direction
+(`tests/test_retention.py`); crush ribs take up the rest so nothing rattles.
 
 ## The cells: Mario's holders, used whole
 
-Mario has two single-18650 holders, each with its own pair of leads, and
-wires them in parallel so the board's charger charges both (2026-10-10). The
-holders go in whole, upright, open side facing the board, floor against the
-back. Measured 76 x 21 x 20.5 (spring (-) at the bottom, plate (+) at the
-top; `HOLDER_*`). Against bare cells they cost 2 mm of width and 0.8 mm of
-depth.
+Mario has two single-18650 holders, each with its own pair of leads, and wires
+them in parallel so the board's charger charges both (2026-10-10). The holders
+go in whole, upright, open side facing the board, floor against the back.
+Measured 76 x 21 x 20.5 (spring (-) at the bottom, plate (+) at the top;
+`HOLDER_*`). Each one goes in 1 mm toward the middle, then slides out under
+its two lips; the bridge goes across both and is screwed down. The lips grip
+the holders' side walls, assumed 1.2 mm thick and as high as the cells'
+centre: check them before printing (MEASUREMENTS).
 
-The parallel joints sit off the cells, where the leads are short and nothing
-presses on them: the + joint over the channel just under the rocker, the -
-joint at the bottom of the channel next to the protection pocket. From each
-joint one lead goes on to the board. Before joining, charge both cells to the
-same voltage (within ~0.05 V); a large gap makes one cell dump current into
-the other when they meet.
+The parallel joints sit off the cells: the + joint over the channel just under
+the rocker, the - joint at the channel's foot, each in its own pocket. Before
+joining, charge both cells to the same voltage (within ~0.05 V); a large gap
+makes one cell dump current into the other when they meet.
 
 ## Fits: everything goes together first time, no glue
 
@@ -72,10 +109,10 @@ starting points for his Bambu Lab P2S with PLA and a 0.4 mm nozzle:
 | --- | --- | --- |
 | Printed slides on printed, drawn in X/Y | 0.20 | `SLIDE`: free, no rattle |
 | Same, bore lying horizontal on the bed | 0.30 | `SLIDE_HBORE`: horizontal holes print oval |
-| Removable but stays (cap, tongue) | 0.12 | `SNUG` |
-| Metal pin turning in print (lever pivot) | 0.25 | `PIVOT` |
+| Removable but stays (faceplate lip) | 0.12 | `SNUG` |
+| Lever swinging in its channel | 0.25 | `PIVOT` |
 | Bought part into a printed pocket | 0.30 + crush ribs | `PART`: always goes in; 0.8 mm ribs crush 0.15 to take up the slack |
-| Heat-set insert bores | M2 3.2, M3 4.0 | `INSERT_BORE` (confirm against the kit's inserts) |
+| Heat-set insert bores | M2 2.8, M3 4.0 | `INSERT_BORE`, from the FFVRVSS kit label (tip / knurl) |
 
 No P2S-specific tolerance data is published yet, so the first print is the
 **fit coupon** (`uv run python -m huxcase.coupon` writes `out/coupon_plate.stl`
@@ -90,95 +127,126 @@ follows.
 
 ## The talk switch: 12 x 12 tactile button + series spring
 
-Built only from Mario's parts drawer (2026-10-10): his 12 x 12 mm tactile
-button (green cap not used) and a 0.4 x 4 x 15 mm spring from the SciWil kit.
+Built only from Mario's parts drawer: his 12 x 12 mm tactile button (green
+cap not used) and the 0.4 x 4 x 15 mm spring from the SciWil kit.
 
-- The orange lever is pinned at its bottom end. (How the pin is captured
-  is being redesigned with the case split: the first model had no way to
-  fit the screw.)
+- The orange lever turns on a **printed Ø2.4 pin** (no screw, no metal pin).
+  The pin goes through the lever's knuckle; its ends sit in a blind seat in
+  the tub behind the channel and one in the faceplate's tooth in front of it,
+  so closing the case captures it. To fit it: hold the lever 2.5 mm forward,
+  press it in, slide it back into the rear seat.
 - Its top end presses a **spring in series** with the switch: lever ->
-  spring -> printed plunger -> switch stem. The plunger is a 3.5 mm piston
-  in a 1.2 mm-walled tube on the switch cradle; the switch sits in a pocket
-  with crush ribs. Mario's switch stem is a 3.8 mm square, and its corners
-  clear the tube bore (tested). The press feels progressive
-  (spring-loaded) until the spring reaches the switch's actuation force,
-  then the switch clicks. The click point no longer depends on print
-  accuracy, so there is no adjuster screw.
-- Nominal (2 N switch): click after ~3.0 mm at the switch axis, ~1.9 mm under
-  the thumb; the stop post ends the stroke at 3.8 mm. A stiff switch (2.6 N)
-  still clicks with one 0.5 mm washer under the plunger flange; for a
-  firmer, shorter press use the 0.4 x 4 x 10 spring. Tests assert the click
-  always lands before the stop and the spring never goes solid.
-- The two wires go from two legs on the same end of the switch (5 mm apart:
-  check with a multimeter which pair switches) to the 2x9 header's
-  through-hole tails on the board's back (one free GPIO, GPIO3 to GPIO9,
-  plus GND).
+  spring -> printed plunger -> switch stem. The press feels progressive
+  (spring-loaded) until the spring reaches the switch's actuation force, then
+  the switch clicks. The click point does not depend on print accuracy.
+- 1.5 mm of spring preload (0.9 N) holds the lever firmly on its rest stop.
+  Nominal (2 N switch): click after ~1.9 mm at the switch axis (~1.1 mm under
+  the thumb dimple); a block on the backing stops the stroke at 3.8 mm. A
+  stiff switch (2.6 N) still clicks with one 0.5 mm washer under the plunger.
+  Tests assert the click always lands before the stop and the spring never
+  goes solid.
+- The switch slides into its cradle from the front (the stem through a slot
+  in the tube) until a latch finger snaps over its front face. Solder the two
+  wires to the leg pair that switches first (check with a multimeter); they
+  go to the 2x9 header's through-hole tails on the board's back (one free
+  GPIO, GPIO3 to GPIO9, plus GND).
 
-## The light: frosted back, frosted cap, light ring
+## The light: the frosted tub
 
 The board's 7 WS2812B LEDs face backward, toward the cells (the mics are on
-the other face and must face the user). Mario's call (2026-10-10): print the
-top cap **and the upper two-thirds of the back** (`BACK_FROST_Z` = 36 mm up,
-including the sides' back half) in his frosted PLA. Same size as before; the
-light shows through the top and the back, strongest above the cells and in
-the channel between them, with the cells visible as soft shadows.
-
-A flat frosted ring (r 20.8 to 29, 2.5 mm) sits right on the LEDs behind the
-PCB, clamped by the board's three screws, with notches for the BAT/SPK plugs
-and the RTC socket. It spreads all 7 LEDs into a glow instead of 7 dots and
-feeds the cap. The ring's back face clears the cells by 0.5 mm (a test).
+the other face and must face the user). The tub is frosted from 36 mm up
+(`BACK_FROST_Z`): the top, the upper back and the upper sides. The light shows
+softest where the holders sit and brightest above them and in the channel.
+Rev C had a frosted ring on the LEDs to even out the glow; Mario asked why it
+was needed, and it was not: the frosted tub diffuses the light. Dropping it
+also removed two overlaps.
 
 ## Power switch: KCD1-101 on the left side
 
-Recessed 7.2 mm in the left side above the left holder, where there is
-~38 mm of depth behind the board (the back had only 20 mm before the light
-ring, so a back-mounted rocker would have stood 4 mm proud and added depth).
-Wired in the battery + lead between the BAT plug and the + joint. The
-charger sits behind it too, so **the rocker must be ON to charge**. Power on
-the left, talk on the right: easy to tell apart by touch. A test asserts it
-stays below the surface.
+Recessed 7.2 mm in the left side above the left holder. Wired in the battery +
+lead between the BAT pad and the + joint. The charger sits behind it too, so
+**the rocker must be ON to charge**. Power on the left, talk on the right: easy
+to tell apart by touch. A test asserts it stays below the surface.
 
-## Battery protection: pocket reserved, not fitted
+## Battery protection: recommended, not fitted
 
-Mario chose to skip it for now. The board has no cell protection (see
-MEASUREMENTS), so a 26 x 5 x 3.5 mm pocket in the grey bottom third, behind
-the speaker, is reserved for a 1S board (DW01 + 8205) in the - lead. Until
-then the firmware should shut the device down at a safe cell voltage via
-`BAT_ADC` (GPIO1).
+The board has no cell protection (see MEASUREMENTS). Two unprotected cells in
+parallel with no fuse means a pinched wire is a short of ~20 A. Mario chose to
+skip a protection board for now; its 26 x 5 x 3.5 mm pocket stays reserved
+behind the speaker, the firmware should shut down at a safe voltage via
+`BAT_ADC` (GPIO1), and every joint goes in heat-shrink and its pocket. A
+DW01 + 8205 1S board is still the recommendation.
 
-## Cables: the channel is the duct
+## Cables
 
-In the frosted zone the leads run close to the board (y ~0 to 2 mm), as far
-from the frosted back as possible, so they read as one soft spine.
-
-| Run | From | To | Path |
+| Run | From | To | Held by |
 | --- | --- | --- | --- |
-| Speaker | SPK plug (board back) | solder tabs on the speaker rim | straight down the channel; mount the speaker so its tabs point up. **Cut the 97 mm lead to 45 mm** and re-solder at the speaker: the route is 22 mm, and loose wire buzzes in the back box |
-| Battery + | BAT plug | rocker, then the + joint | up the channel close to the board, to the rocker above the left holder |
-| Holder + leads (2) | top of each holder | + joint over the channel | over the holder tops, under the rocker |
-| Battery − | BAT plug | protection pocket, then the - joint | down the channel; behind the speaker magnet only in the grey bottom third |
-| Holder - leads (2) | bottom of each holder | - joint at the channel's foot | under the speaker, in the grey bottom third |
-| PTT (2) | tact switch legs | header tails on the board back | down the lever channel, in front of the right holder's top cap |
+| Speaker | SPK plug (board back) | the speaker's solder tabs | **cut the 97 mm lead to 30 mm** and re-solder at the speaker: the route is 22 mm, and loose wire buzzes |
+| Battery + | board BAT pad | rocker, then the + joint | the clip on the bridge |
+| Holder + leads (2) | top of each holder | + joint | the joint's pocket |
+| Battery − | board BAT pad | down the back wall to the - joint | two hooks on the back wall |
+| Holder - leads (2) | bottom of each holder | - joint | the joint's pocket |
+| PTT (2) | tact switch legs | header tails on the board back | short and direct, in front of the right holder |
 
-The two cells are in **parallel (1S2P)**: same model, same charge.
+The board's battery socket is 1.25 mm pitch (the JST-XH kit is 2.5 mm): solder
+the battery leads to the socket's pads unless a 1.25 mm plug turns up.
+
+## Print guide
+
+| Piece | Colour | Pose on the bed | Supports |
+| --- | --- | --- | --- |
+| Faceplate | grey | face down | none |
+| Grille plug | black | face down | none |
+| Tub | grey, swap to frosted at 36 mm | standing up, open front facing you | tree supports: roof, switch cradle and tube, rocker mount; all removed through the open front |
+| Lever | orange | outer face down | none |
+| Lever pin | grey | lying flat | none |
+| Plunger | grey | standing on its flat end | none |
+| Holder bridge | grey | front face down | none |
+
+`huxcase/printability.py` measures what needs support in each pose
+(`tests/test_printability.py` holds every piece to that).
+
+## Assembly
+
+Tub, lying on its back:
+1. Heat-set the seven M3 x 5 inserts: six in the corner blocks, one in the
+   boss on the back wall.
+2. Rocker: solder two leads, heat-shrink, snap it in from outside.
+3. Talk switch: solder its two wires, slide it into the cradle until it
+   clicks. From outside, drop the plunger into the tube, then the spring.
+4. Lever: push the pin through it; set it in 2.5 mm forward, slide it back.
+5. Holders: each in 1 mm toward the middle, then out under its lips. Join the
+   + leads with the rocker's lead, the - leads with the battery - lead; put
+   both joints in heat-shrink and press them into their pockets. Clip the -
+   lead behind its two hooks.
+6. Cells in (within 0.05 V of each other, + up). Bridge across, M3 x 6.
+
+Faceplate, face down:
+7. Drop the grille plug into its window, flange inside.
+8. Cut the speaker lead to 30 mm, re-solder it, set the speaker on its tabs.
+9. Board onto its standoffs (USB-C to the left), 3 x M2 x 8 with washers. Plug
+   in the speaker. Solder the battery leads to the BAT pads and the talk
+   wires to the header tails.
+
+Close:
+10. Rocker OFF. Lower the faceplate onto the tub (the lever pin's front end
+    goes into the tooth) and fit the six M3 x 8, crosswise, snug.
+11. Test: rocker ON, the lever clicks; on USB-C the charge light comes on.
 
 ## Parts list
 
-Only Mario's inventory (photos 2026-10-10): Kadrick M2-M5 button-head
-screws, nuts and washers; FFVRVSS M2-M5 heat-set inserts + tool; SciWil
-compression springs (0.3-0.8 wire, 2-8 mm OD); Noxtren JST-XH + Dupont kit
-with 1 m ribbon cable; KCD1-101 rocker; 12 x 12 tactile button; two green
-18650s in two single-cell holders with leads; the board and its speaker
-(lead ~75 mm, leaves at the rim).
+Printed: faceplate, tub, grille plug, lever, lever pin, plunger, holder bridge
+(the build page lists each with its volume).
 
-Printed: front and back shell (grey), speaker panel (black), lever (orange),
-top cap and light ring (frosted PLA), switch cradle and plunger. Board: 3 x
-M2 x 8 + washers into M2 x 2 inserts. Lever pin: M2 x 16 + nut. Switch:
-12 x 12 tact + 0.4 x 4 x 15 spring. Wires: ribbon cable (double the
-conductors for the battery). Not in the inventory: a 1.25 mm 2-pin plug for
-the BAT socket (the JST-XH kit is 2.5 mm), unless the leads are soldered
-straight to the board's battery pads. A 1S protection board is optional
-(skipped for now, pocket reserved).
+Bought, all from Mario's inventory (photos 2026-10-10): the board and its
+speaker; two 18650 cells in two holders; the 12 x 12 tact switch; the SciWil
+0.4 x 4 x 15 spring; the KCD1-101 rocker; Kadrick button heads 6 x M3 x 8,
+1 x M3 x 6, 3 x M2 x 8 with flat washers; FFVRVSS 7 x M3 x 5 heat-set inserts;
+ribbon cable (double the conductors for the battery leads).
+
+Tools and consumables assumed: soldering iron and solder, the insert tool,
+hex keys 1.3 mm (M2) and 2.0 mm (M3), a multimeter (which switch legs switch;
+cell voltages before paralleling), and heat-shrink for the joints.
 
 ## Layout
 
@@ -188,6 +256,7 @@ huxcase/concept.py       Concept container + collision (fit) check + cavity volu
 huxcase/concepts/hx*.py  one module per concept, Z up, front face at -Y (hx1.py = HX-1, hx1_classic.py = rev A)
 huxcase/export.py        build all, refuse on collision, write out/
 huxcase/fits.py          every clearance (P2S, PLA, 0.4 nozzle); huxcase/coupon.py prints a test of them
+huxcase/printability.py  print pose per piece + what still needs support
 huxcase/site.py          the HX-1 build page: per-part glTF + assembly steps (site/index.html is the page)
 render/render.py         Blender Cycles renders from out/*.glb: hero, back, x-ray, plus section views (switch, open back)
 tests/                   fit check per concept + board model vs the official STEP
@@ -215,17 +284,21 @@ a local static server. Every HX-1 part must belong to a build step (`site.STEPS`
 
 Each concept declares packaging **envelopes**: the board with 5.9 mm top
 clearance, 2.5 mm under it and a 9 mm plug zone under the BAT/SPK connectors;
-the speaker solid; the cells (HX-1: Mario's whole holders; the older
-concepts: a Ø19.4 × 74 bay); the talk switch with its travel; the rocker; and
-every cable and lead as a swept tube. It also declares its printed **shells**. `collisions()`
-intersects every envelope with every other envelope and every shell, and the
-export refuses to write a concept that collides. Intended contacts (standoffs
-touching the PCB, the switch clipped into its plate) are listed per concept
-in `allowed`.
+the speaker solid; the cells (HX-1: Mario's whole holders); the talk switch
+with its travel; the rocker; screws and inserts; and every cable and lead as a
+swept tube. It also declares its printed **shells**. `collisions()` intersects
+every envelope with every other envelope and every shell; for HX-1
+(`disjoint_shells`) it also intersects every printed piece with every other,
+since they are separate prints. The export refuses to write a concept that
+collides. Intended contacts (the board on its standoffs, crush ribs into a
+part, a screw in its insert) are listed per concept in `allowed`, and the
+crush ribs are tested from the other side: they must really reach into what
+they hold.
 
 ## What these models are not (yet)
 
-Concept models. They prove packaging and show form, not a printable part.
-Fasteners, snap fits, battery contacts, board standoffs in the round
-concepts, print orientation and tolerances come in the detailed design of
-the chosen concept.
+HX-1 rev D is a printable design: fit-checked, retention-tested and
+printability-checked, with clearances that the fit coupon confirms on Mario's
+printer. The other HX concepts are packaging sketches (form, not printable
+parts). Still open for HX-1: the measurements in MEASUREMENTS "Still to
+measure", the coupon results, and the battery protection board (recommended).

@@ -13,7 +13,11 @@ Report, per row: the tightest hole the peg goes into by hand and stays
 (-> fits.SLIDE / fits.SLIDE_HBORE). Then: does the switch drop in and stay,
 do the inserts go in straight, does an M2 screw turn freely in the pivot hole.
 
-Run: uv run python -m huxcase.coupon   (writes out/coupon_plate.stl, out/coupon_peg.stl)
+The pin block is the lever pivot's own test: a printed Ø2.4 pin (lying flat,
+as the lever pin prints) in four horizontal holes, .15 to .30 per side. Report
+the tightest one it turns freely in without wobble (-> PIN_BORE in hx1).
+
+Run: uv run python -m huxcase.coupon   (writes out/coupon_*.stl)
 """
 
 from __future__ import annotations
@@ -78,12 +82,40 @@ def peg():
     return chamfer(out.edges().group_by(Axis.Z)[-1], 0.6)
 
 
+PIN_LADDER = (0.15, 0.20, 0.25, 0.30)  # per side, around the printed Ø2.4 lever pin
+
+
+def pin_block():
+    """The lever pin's seat, four ways: horizontal holes (as the tub prints
+    them) at four clearances, labelled on top. Print flat, as exported."""
+    from huxcase.concepts import hx1
+
+    w, d, h = 34.0, 10.0, 6.0
+    out = Pos(w / 2, d / 2, h / 2) * Box(w, d, h)
+    out = chamfer(out.edges().group_by(Axis.Z)[0], fits.FOOT_CHAMFER)
+    for i, c in enumerate(PIN_LADDER):
+        x = 4.5 + 8.3 * i
+        r = hx1.PIN_D / 2 + c
+        out -= Pos(x, d / 2, 2.6) * Rot(90, 0, 0) * Cylinder(r, d + 2)
+        out -= Pos(x, d / 2, h - 0.4) * label(f".{round(c * 100):02d}", 2.4, 1.0)
+    return out
+
+
+def pin():
+    """A test pin printed exactly like the lever pin: Ø2.4, lying flat."""
+    from huxcase.concepts import hx1
+
+    return Pos(0, 0, hx1.PIN_D / 2) * Rot(90, 0, 0) * Cylinder(hx1.PIN_D / 2, 16.0)
+
+
 def main() -> int:
     out = Path(__file__).resolve().parents[1] / "out"
     out.mkdir(exist_ok=True)
     export_stl(plate(), str(out / "coupon_plate.stl"))
     export_stl(peg(), str(out / "coupon_peg.stl"))
-    print(f"wrote {out / 'coupon_plate.stl'} and {out / 'coupon_peg.stl'}")
+    export_stl(pin_block(), str(out / "coupon_pin_block.stl"))
+    export_stl(pin(), str(out / "coupon_pin.stl"))
+    print(f"wrote coupon_plate, coupon_peg, coupon_pin_block, coupon_pin .stl in {out}")
     return 0
 
 

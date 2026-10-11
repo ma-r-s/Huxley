@@ -6,7 +6,8 @@ is not on the bed needs support. `overhangs()` measures that area and groups
 it into clusters, so a test can hold each piece to a budget and a person can
 see what still needs support.
 
-    cd clients/firmware/enclosure && uv run python -m huxcase.printability
+    cd clients/firmware/enclosure && uv run python -m huxcase.printability         # report
+    cd clients/firmware/enclosure && uv run python -m huxcase.printability --stl   # out/print/*.stl
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ class Pose:
 POSES = (
     Pose("faceplate", "face down", (90, 0, 0)),
     Pose("grille_plug", "face down", (90, 0, 0)),
-    Pose("tub", "standing up, the open front toward you; swap to frosted at 36 mm", (0, 0, 0)),
+    Pose("tub", "standing up, the open front toward you", (0, 0, 0)),
     Pose("ptt_bar", "outer face down", (0, 90, 0)),
     Pose("ptt_pin", "lying flat", (0, 0, 0)),
     Pose("plunger", "standing on its flat end", (0, -90, 0)),
@@ -114,7 +115,49 @@ def needs_support(clusters: list[dict], min_area: float = 1.0) -> list[dict]:
     return [k for k in clusters if k["narrow"] > BRIDGE_OK and k["area"] > min_area]
 
 
+COLOUR = {
+    "faceplate": "grey",
+    "grille_plug": "black",
+    "tub": "grey, then frosted from 36 mm (pause and swap at that layer)",
+    "ptt_bar": "orange",
+    "ptt_pin": "grey",
+    "plunger": "grey",
+    "bridge": "grey",
+}
+
+
+def export_stls(out_dir) -> list[str]:
+    """One STL per printed piece, already in its print pose (lands on the bed
+    the right way up), named in print order."""
+    from pathlib import Path
+
+    from build123d import export_stl
+
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    pieces = printed_pieces()
+    written = []
+    for i, pose in enumerate(POSES, 1):
+        path = out / f"hx1_{i:02d}_{pose.piece}.stl"
+        export_stl(
+            posed(pieces[pose.piece], pose), str(path), tolerance=0.02, angular_tolerance=0.15
+        )
+        written.append(f"{path.name}: {COLOUR[pose.piece]}, {pose.how}")
+    (out / "PRINT.txt").write_text(
+        "HX-1 rev D print set (PLA, 0.4 nozzle, 0.20 mm layers)\n" + "\n".join(written) + "\n"
+    )
+    return written
+
+
 def main() -> int:
+    import sys
+
+    if "--stl" in sys.argv:
+        from huxcase.export import OUT
+
+        for line in export_stls(OUT / "print"):
+            print(line)
+        return 0
     pieces = printed_pieces()
     for pose in POSES:
         clusters = needs_support(overhangs(posed(pieces[pose.piece], pose)))

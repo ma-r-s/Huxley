@@ -63,10 +63,10 @@ SPK_Z = T + 0.4 + hw.SPK_D / 2
 SPK_FRONT_Y = Y_FRONT + T + 0.5
 SPK_LOC = Location((X0, SPK_FRONT_Y, SPK_Z), (-90, 0, 0))  # local -y -> device +Z
 SPK_TAB_R, SPK_TAB_DEPTH = 15.3, 12.2  # solder tabs on the basket rim (STEP)
-# Mario's lead is 97 mm; the route is ~22 mm, and 75 mm of loose wire would
-# buzz in the back box. Cut it to this (plug to tab) and re-solder at the speaker:
-# enough slack to lift the board off its standoffs with the speaker attached.
-SPK_LEAD_CUT = 45.0
+# Mario's lead is 97 mm; the route is ~22 mm, and loose wire buzzes in the back
+# box. Cut it to this (plug to tab) and re-solder at the speaker: board and
+# speaker both sit on the faceplate, so a little slack to unplug it is enough.
+SPK_LEAD_CUT = 30.0
 BOARD_Z = SPK_Z + hw.SPK_D / 2 + 0.3 + hw.PCB_R + 0.3 + 0.2
 H = BOARD_Z + hw.PCB_R + 0.3 + 0.1 + T
 # Board +x -> device -Z, board +y -> device +X, board +z (top face) -> device -Y.
@@ -96,6 +96,13 @@ BRIDGE_T = 1.6
 CELL_BAR_T = 2.0  # the bridge's front bar, across both cells
 BRIDGE_SCREW_L = 6.0  # M3 x 6 into a 5 mm insert in a boss on the back wall
 
+# Wiring: the parallel joints and the long - run (see _wire_keepers).
+J_POS = (X0 - 4.0, CELL_Y + 7.0, CELL_TOP + 1.5)  # + joint: over the channel, under the rocker
+J_NEG = (X0 + 2.0, CELL_Y + 8.0, T + 1.8)  # - joint: at the channel's foot
+NEG_RUN_X, NEG_RUN_Y = X0 + 6.2, Y_BACK - T - 1.2  # - lead down the back wall
+NEG_HOOKS_Z = (32.0, 21.0)
+POS_CLIP_X, POS_CLIP_Y = X0 - 7.0, 0.8  # + lead where it crosses the bridge
+
 # Black grille: a plug that drops into a window in the face from inside. Its
 # flange sits in a recess on the inside of the face (top and sides), and the
 # speaker rim clamps it there; a post on the tub's back wall presses the
@@ -120,7 +127,9 @@ PIVOT_Z, TS_Z, SWITCH_Y = 50.0, 91.1, 2.5
 PIVOT_X = 32.7  # seat walls: 1.0 to the holder side, 0.8 to the outside
 PIN_D = 2.4
 PIN_BORE = PIN_D + 2 * fits.SLIDE_HBORE  # seats and lever bore lie horizontal in print
-KNUCKLE_R = PIN_BORE / 2 + fits.MIN_WALL
+KNUCKLE_R = (
+    PIN_BORE / 2 + fits.MIN_WALL + 0.1
+)  # +0.1: overlaps the slab (a tangent seam meshes open)
 TOOTH_Z = (46.0, 54.0)
 TOOTH_X0 = 30.0  # in front of the right holder, so it can reach in this far
 BOARD_CENTRING = (30.0, 150.0, 330.0)  # board-frame angles of the centring posts
@@ -206,7 +215,12 @@ def _lever_dome():
     h = 2 * CLEAR + 0.1
     r_dome = (KNUCKLE_R + PIN_BORE / 2) / 2
     y = SWITCH_Y + BAR_W / 2
-    return Pos(PIVOT_X, y, PIVOT_Z + r_dome) * Rot(-90, 0, 0) * Cylinder(0.5, h, align=None)
+    # r 0.35: stays inside the ring between the pin bore and the knuckle's edge.
+    return (
+        Pos(PIVOT_X, y - 0.01, PIVOT_Z + r_dome)
+        * Rot(-90, 0, 0)
+        * Cylinder(0.35, h + 0.01, align=None)
+    )
 
 
 def _pressed(shape, fraction: float):
@@ -410,6 +424,29 @@ def _plug():
     return plug - holes, _union(ribs)
 
 
+def _wire_keepers():
+    """Pockets for the two parallel joints and hooks for the long - run, all on
+    the back wall: no wire or joint is left free to buzz against the back box.
+
+    The joints (in heat-shrink) press in between two shelves from the front;
+    the - lead snaps behind the hooks' lips.
+    """
+    back = Y_BACK - T + 0.1
+    jx, jy, jz = J_POS
+    keep = []
+    for z0, z1 in ((jz - 4.0, jz - 3.0), (jz + 2.5, jz + 3.5)):
+        keep.append(bbox_solid(jx - 5.0, jx + 5.0, jy - 2.6, back, z0, z1))
+    nx, ny, nz = J_NEG
+    keep.append(bbox_solid(nx - 5.0, nx + 1.0, ny - 2.6, back, nz + 2.7, nz + 3.7))
+    for zc in NEG_HOOKS_Z:
+        for side in (-1, 1):
+            x0, x1 = sorted((NEG_RUN_X + side * 0.7, NEG_RUN_X + side * 1.7))
+            keep.append(bbox_solid(x0, x1, NEG_RUN_Y - 1.5, back, zc - 2.0, zc + 2.0))
+            lx0, lx1 = sorted((NEG_RUN_X + side * 0.45, NEG_RUN_X + side * 0.71))
+            keep.append(bbox_solid(lx0, lx1, NEG_RUN_Y - 1.5, NEG_RUN_Y - 0.9, zc - 2.0, zc + 2.0))
+    return _union(keep)
+
+
 def _holder_retention(inner):
     """Lips, bridge boss, pedestals and pads that hold Mario's two holders.
 
@@ -508,6 +545,13 @@ def _holder_retention(inner):
         rx0, rx1 = sorted((w_in - out * fits.PART, w_in + out * (fits.CRUSH_RIB - fits.PART)))
         bridge_ribs.append(bbox_solid(rx0, rx1, face1 + 1.0, face1 + 3.5, bz0 + 1, bz1 - 1))
     bridge -= _along_y(X0, bzm, fits.SCREW_CLEAR["M3"] / 2, face0 - 1, face1 + 1)
+    # Clip for the battery + lead where it crosses the bridge: two prongs and a
+    # lip; the lead snaps in as the bridge goes on.
+    for side in (-1, 1):
+        x0, x1 = sorted((POS_CLIP_X + side * 0.7, POS_CLIP_X + side * 1.7))
+        bridge += bbox_solid(x0, x1, POS_CLIP_Y - 1.5, face0 + 0.01, bz0 + 1.5, bz1 - 1.5)
+        lx0, lx1 = sorted((POS_CLIP_X + side * 0.45, POS_CLIP_X + side * 0.71))
+        bridge += bbox_solid(lx0, lx1, POS_CLIP_Y - 1.5, POS_CLIP_Y - 0.9, bz0 + 1.5, bz1 - 1.5)
     boss = _teardrop_y(X0, bzm, 4.0, face1, Y_BACK - T + 0.1)
     boss -= _along_y(X0, bzm, fits.INSERT_BORE["M3"] / 2, face1 - 0.01, face1 + INSERT_L + 1.0)
     feats.append(boss)
@@ -702,6 +746,8 @@ def build() -> Concept:
         x, z = X0 + 1.8 * math.cos(a), SPK_Z + 1.8 * math.sin(a)
         tub_ribs.append(_along_y(x, z, 0.6, post_y0 - fits.CRUSH_RIB, post_y0 + 0.01))
 
+    tub += _wire_keepers()
+
     # Cuts: lever channel, plunger bore, tooth notch, rear pin seat, rocker, USB,
     # and the band the faceplate's lip goes into.
     tub -= _pressed_union()
@@ -747,12 +793,7 @@ def build() -> Concept:
             for p in hw.place(hw.holder(), Location((x, CELL_Y, HOLDER_Z)))
         ]
         bays.append(Pos(x, CELL_Y, HOLDER_Z) * hw.holder_envelope())
-    j_pos = (
-        X0 - 4.0,
-        CELL_Y + 7.0,
-        CELL_TOP + 1.5,
-    )  # over the channel, under the rocker
-    j_neg = (X0 + 2.0, CELL_Y + 8.0, T + 1.8)
+    j_pos, j_neg = J_POS, J_NEG
     lead_y = CELL_Y + hw.CELL_D / 2 - 0.5
     leads = {}
     for i, x in enumerate((X0 - CELL_X, X0 + CELL_X)):
@@ -820,20 +861,18 @@ def build() -> Concept:
             d=1.2,
         ),
         # - : plug -> protection board (P-) ... (B-) -> - joint, behind the speaker.
+        # - : plug -> back wall -> straight down it to the - joint, held by two
+        # hooks (no protection board fitted; its pocket stays reserved).
         "cable_bat_neg": hw.cable(
             [
                 (bat_x - 1.2, plug_y, plug_z),
                 (bat_x - 1.5, plug_y + 3.0, plug_z - 2.0),
-                (X0 - 5.0, 1.5, BACK_FROST_Z + 6.0),
-                (X0 + PROT_X - 1.0, PROT_Y - 3.0, PROT_Z + 15.0),
-                (X0 + PROT_X, PROT_Y - 2.4, PROT_Z + hw.PROTECTION_PCB[0] / 2 - 1.0),
-            ],
-            d=1.2,
-        ),
-        "cable_bat_neg2": hw.cable(
-            [
-                (X0 + PROT_X, PROT_Y - 2.4, PROT_Z - hw.PROTECTION_PCB[0] / 2 + 1.0),
-                (X0 + PROT_X - 1.0, PROT_Y - 1.0, CELL_Z0 + 1.0),
+                (X0 + 3.0, 9.0, BACK_FROST_Z + 12.0),
+                (NEG_RUN_X - 0.4, NEG_RUN_Y - 1.8, BACK_FROST_Z + 7.0),
+                (NEG_RUN_X, NEG_RUN_Y, BACK_FROST_Z + 2.0),
+                (NEG_RUN_X, NEG_RUN_Y, (NEG_HOOKS_Z[0] + NEG_HOOKS_Z[-1]) / 2),
+                (NEG_RUN_X, NEG_RUN_Y, NEG_HOOKS_Z[-1] - 6.0),
+                (j_neg[0] + 2.0, j_neg[1] + 0.6, j_neg[2] + 2.0),
                 j_neg,
             ],
             d=1.2,
@@ -894,7 +933,6 @@ def build() -> Concept:
         Part("cable_spk", cables["cable_spk"], "wire_black"),
         Part("cable_bat_pos", cables["cable_bat_pos"], "wire_red"),
         Part("cable_bat_neg", cables["cable_bat_neg"], "wire_black"),
-        Part("cable_bat_neg2", cables["cable_bat_neg2"], "wire_black"),
         Part("cable_bat_sw", cables["cable_bat_sw"], "wire_red"),
         Part("cable_ptt_a", cables["cable_ptt_a"], "wire_white"),
         Part("cable_ptt_b", cables["cable_ptt_b"], "wire_white"),
@@ -974,18 +1012,15 @@ def build() -> Concept:
         ("lead_neg_0", "lead_neg_1"),
         ("cable_bat_sw", "lead_pos_0"),
         ("cable_bat_sw", "lead_pos_1"),
-        ("cable_bat_neg2", "lead_neg_0"),
-        ("cable_bat_neg2", "lead_neg_1"),
         ("rocker", "cable_bat_pos"),  # soldered to its tabs
         ("rocker", "cable_bat_sw"),
-        ("protection_pcb", "cable_bat_neg"),  # soldered to its pads
-        ("protection_pcb", "cable_bat_neg2"),
         ("cable_bat_pos", "cable_bat_sw"),
         ("cable_spk", "board"),  # leads start in the plug zone
         ("cable_bat_pos", "board"),
         ("cable_bat_neg", "board"),
         ("cable_bat_pos", "cable_bat_neg"),  # same lead out of one plug
-        ("cable_bat_neg", "cable_bat_neg2"),
+        ("cable_bat_neg", "lead_neg_0"),  # the - joint
+        ("cable_bat_neg", "lead_neg_1"),
         ("cable_ptt_a", "board"),  # soldered to the header tails
         ("cable_ptt_b", "board"),
         ("cable_ptt_a", "cable_ptt_b"),

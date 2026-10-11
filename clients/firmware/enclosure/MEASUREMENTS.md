@@ -125,6 +125,15 @@ covers deep discharge but not shorts.
 
 ## Still to measure (Mario)
 
-1. M2 heat-set inserts and screws, only if the final design uses them: the
-   fit coupon's M2 bore tests the assumed insert.
-2. The fit coupon results (see README "Fits").
+The rev D retention leans on these; each is a quick look or caliper reading:
+
+1. **Holder side walls**: how high they reach (to the cell's centre line?) and
+   how thick they are at the top edge. The lips and the bridge grip that edge
+   (assumed 1.2 mm thick, at the cell's centre).
+2. **KCD1-101**: the body behind the frame (assumed 19 x 13) and where its two
+   snap ears sit.
+3. **12 x 12 switch legs**: spacing between the leg rows (assumed 12.5 x 5.0,
+   the common pattern); the cradle's leg slots follow it.
+4. Did the board come with a 1.25 mm battery plug and lead? If not, the
+   battery leads solder to the socket's pads.
+5. The fit coupon results (see README "Fits").

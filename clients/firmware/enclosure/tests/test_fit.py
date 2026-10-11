@@ -71,13 +71,14 @@ def _route_length(tube, d: float = 1.4) -> float:
 
 
 def test_hx1_speaker_lead_cut_reaches_with_slack():
-    """The lead is cut to SPK_LEAD_CUT: it must cover the route plus room to
-    lift the board out, and Mario's 97 mm lead must be long enough to cut."""
+    """The lead is cut to SPK_LEAD_CUT: it must cover the route plus enough to
+    unplug it, no more (loose wire buzzes), and Mario's 97 mm lead is long
+    enough to cut."""
     from huxcase import hardware as hw
     from huxcase.concepts import hx1
 
     route = _route_length(hx1.build().envelopes["cable_spk"])
-    assert route + 15.0 <= hx1.SPK_LEAD_CUT <= hw.SPK_CABLE_L
+    assert route + 5.0 <= hx1.SPK_LEAD_CUT <= route + 10.0 <= hw.SPK_CABLE_L
 
 
 def test_hx1_plunger_tube_prints_and_clears_the_square_stem():

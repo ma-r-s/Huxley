@@ -100,7 +100,7 @@ STEPS = [
         "id": "bridge",
         "title": "Holder bridge",
         "text": "A printed bridge across both holders, one M3 × 6 into the boss. Its "
-        "ribs press the holders onto the back wall.",
+        "ribs press the holders onto the back wall; its front bar keeps the cells in.",
         "parts": ["bridge", "bridge_screw"],
         "enter": (0, -80, 0),
         "explode": (0, -64, 0),
@@ -108,8 +108,8 @@ STEPS = [
     {
         "id": "wiring",
         "title": "Wiring",
-        "text": "Before closing: the holder leads join in pairs, + runs through the "
-        "power switch to the board's battery pads, the talk wires to the header.",
+        "text": "Before closing: the holder leads join in pairs, the joints in "
+        "heat-shrink go into their pockets, the long leads into their clips.",
         "parts": ["cable_*", "lead_*"],
         "enter": (0, -40, 0),
         "explode": (0, -56, 0),
@@ -118,7 +118,7 @@ STEPS = [
         "id": "front",
         "title": "Faceplate side",
         "text": "Built face down: the grille plug drops into its window, the speaker "
-        "onto its three tabs, the board onto three standoffs with M2 × 8 screws.",
+        "onto its six tabs, the board onto three standoffs with M2 × 8 screws.",
         "parts": ["faceplate", "grille_plug", "speaker_*", "board_*", "board_screws"],
         "enter": (0, -150, 0),
         "explode": (0, -108, 0),

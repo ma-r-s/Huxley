@@ -50,3 +50,16 @@ def test_tub_ledges_print_without_support(report):
         x0, y0, z0, x1, y1, z1 = k["bbox"]
         if 20.0 < z0 < 80.0 and k["narrow"] > 6.0:  # between the floor and the cradle zone
             assert k["area"] < 10.0, k
+
+
+def test_print_files_are_watertight(tmp_path):
+    """The STLs Mario loads into Bambu Studio are closed meshes, flat on the bed."""
+    import trimesh
+
+    pr.export_stls(tmp_path)
+    files = sorted(tmp_path.glob("*.stl"))
+    assert len(files) == len(pr.POSES)
+    for f in files:
+        mesh = trimesh.load(f)
+        assert mesh.is_watertight, f.name
+        assert abs(mesh.bounds[0][2]) < 1e-3, f.name

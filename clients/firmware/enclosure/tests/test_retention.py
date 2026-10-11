@@ -61,6 +61,10 @@ CASES = {
     "rocker": (("tub",), ("-x",)),
     # The spring pushes the plunger onto the stem along x.
     "plunger": (("tub",), ("+x", "-x")),
+    # Wires: the long runs sit in clips (prongs either side, a lip in front);
+    # along their own length and toward the wall they are free by nature.
+    "cable_bat_neg": (("tub",), ("+y", "+z", "-z")),
+    "cable_bat_pos": (("bridge",), ("+y", "+z", "-z")),
 }
 
 

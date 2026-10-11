@@ -114,9 +114,44 @@ yet fixed: the lever's M2 pin has no lugs and no insertion path; goes into
 the case-split design (critic running). Speaker lead route is 22 mm, so the
 build cuts it to 45 mm (tested). 28 tests green.
 
+**Rev D: print and assemble, nothing loose (2026-10-10)**: Mario: "all that's
+left is for me to print the parts and start assembling... I don't feel or
+hear that stuff is moving around", no glue, plastic lever pivot, only his
+parts. Two cold critics. The first (case split) found the rev C split could
+not take a screw anywhere, the lever's M2 pin had no lugs or way in, and
+three printed-part overlaps that `collisions()` never checked (shell vs
+shell). The second (buildability) audited every part's location, retention
+and assembly step and found the switch could not be inserted (stem in the
+tube), cells could jump onto the LEDs in a drop, the lever stop was cut
+away by the channel sweep (my order bug), KEY1 scraped the roof, the board
+floated 0.45 on its screws, the wires and joints were free, and the
+supports. Built:
+- two shells (grey faceplate + tub grey/frosted with one filament swap),
+  6 x M3 x 8 through the face into M3 x 5 inserts; printed Ø2.4 lever pin
+  in two blind seats, captured by closing the case;
+- holders on lips + a screwed H-bridge whose front bar stops the cells;
+  switch cradle in the tub with a latch finger, tube slot and end plate;
+  six crush-ribbed speaker tabs + clamp ring + magnet post; board centring
+  posts; spring preload 1.5 mm; KEY1 relief; joint pockets, wire hooks and
+  a bridge clip, with the - lead rerouted down the back wall;
+- light ring removed (Mario asked why it was needed: the frosted tub
+  diffuses);
+- `huxcase/printability.py` (overhang check per print pose + posed STL
+  export), `tests/test_retention.py` (every bought part has a hard stop
+  within 0.5 mm in every direction), `tests/test_printability.py`
+  (one solid each, overhang budgets, watertight STLs), shell-vs-shell
+  overlap check (`disjoint_shells`). 62 green.
+Lessons: a fit check that only proves "no collision" passes floating parts
+and unassemblable ones; the one-solid, hard-stop and printability tests
+caught what collisions could not. Critic on the plan, then a second critic
+on the build, both earned their keep.
+
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
-bottom is fine, protection skipped, holders whole, no glue); dock yes/no;
-volume buttons yes/no; insert OD/length and longest M2/M3 screws.
+bottom is fine, holders whole, no glue, plastic pivot); battery protection
+board (recommended again with the rev D risk: two parallel unprotected cells,
+no fuse); a look at the face screws and frosted sides; dock yes/no; volume
+buttons yes/no. Measurements still wanted: holder wall top edge, rocker body
+and snap ears, switch leg spacing, coupon results.
 
 **Firmware impact**: PTT moves from the on-board `K2` (via TCA9555) to an
 external switch on a free header GPIO (GPIO3 to GPIO9; LCD is unused).
