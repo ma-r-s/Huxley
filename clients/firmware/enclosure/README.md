@@ -74,7 +74,7 @@ switch.
 | Board | three standoffs + three crush-ribbed centring posts (faceplate) | 3 x M2 x 8, self-tapping into the standoffs: a washer under the top one, the plug yoke under the two lower |
 | Speaker | six crush-ribbed tabs on the grille plug | clamped between the plug's ring and a post on the tub's back wall when the case closes |
 | Grille plug (black) | its window in the face | its flange in a recess behind the face, clamped by the speaker |
-| Holders (x2) | lips on the outer walls, crush-ribbed pedestals and pads | the bridge: one M3 x 6 into an insert on the back wall; its ribs press both holders onto the back wall |
+| Holders (x2) | the side walls and the bridge's tabs, crush-ribbed pedestals and pads | the bridge: one M3 x 6 into an insert on the back wall; ribs on its front bar press both cells, and so the holders, onto the back wall |
 | Cells | the holders | the holders' springs, and the bridge's front bar in a drop |
 | 12 x 12 switch | cradle in the tub, legs in two slots | crush ribs; a latch finger snaps over its front face |
 | Plunger + spring | the tube | the spring's 1.5 mm preload between lever and plunger |
@@ -97,10 +97,12 @@ Mario has two single-18650 holders, each with its own pair of leads, and wires
 them in parallel so the board's charger charges both (2026-10-10). The holders
 go in whole, upright, open side facing the board, floor against the back.
 Measured 76 x 21 x 20.5 (spring (-) at the bottom, plate (+) at the top;
-`HOLDER_*`). Each one goes in 1 mm toward the middle, then slides out under
-its two lips; the bridge goes across both and is screwed down. The lips grip
-the holders' side walls, assumed 1.2 mm thick and as high as the cells'
-centre: check them before printing (MEASUREMENTS).
+`HOLDER_*`). Each one slides straight in from the front; then the bridge is
+screwed down between them. Their plastic wraps round the cell (Mario), so
+nothing grips the holders' walls: crush ribs on the bridge's front bar press
+each cell, and so its holder, onto the back wall. The fit check reserves room
+for the plastic wrapping up to 0.4 mm past the cell's widest point; past
+that it would meet the speaker's magnet (check before printing, MEASUREMENTS).
 
 The parallel joints sit off the cells: the + joint over the channel just under
 the rocker, the - joint at the channel's foot, each in its own pocket. Before
@@ -172,7 +174,11 @@ also removed two overlaps.
 
 ## Power switch: KCD1-101 on the left side
 
-Recessed 7.2 mm in the left side above the left holder. Wired in the battery +
+Recessed 7.2 mm in the left side above the left holder. Its body is 18.9 x
+11.8 under the frame (measured); the panel it clips into is 2.8 mm thick with a
+45 deg chamfer round the inside of the hole, so its snap clips (catch about
+3 mm under the frame) land on the chamfer and pull the frame tight, wherever
+their catch is between 1.2 and 2.8 mm. Wired in the battery +
 lead between the BAT pad and the + joint. The charger sits behind it too, so
 **the rocker must be ON to charge**. Power on the left, talk on the right: easy
 to tell apart by touch. A test asserts it stays below the surface.
@@ -277,7 +283,7 @@ Tub, lying on its back:
    the plunger into the tube, then the spring.
 7. Lever: push the pin through it, slide it in from the front along its
    channel (press the spring's end down with a fingertip as it passes).
-8. Holders: each in 1 mm toward the middle, then out under its lips. Join the
+8. Holders: slide each straight in. Join the
    + leads with the rocker's input lead, the - leads with the battery - lead;
    put both joints in heat-shrink and press them into their pockets. Snap
    the - lead into its two clips on the back wall.

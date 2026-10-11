@@ -101,8 +101,7 @@ def _clear(m, moving, path, installed):
 
 
 # (what moves, its path, what is already in) in assembly order. The tub lies on
-# its back; "in from the front" is +Y. Holders go in 1 mm toward the middle, then
-# out under their lips.
+# its back; "in from the front" is +Y. Holders go straight in.
 STEPS = [
     ("rocker", (["rocker"], _path((-20.0, 0, 0)), ["tub"])),
     ("switch", (["switch"], _path((0, -20.0, 0)), ["tub", "rocker"])),
@@ -112,7 +111,7 @@ STEPS = [
         "holder_0",
         (
             ["holder_0"],
-            _path((1.0, -30.0, 0), via=[(1.0, 0, 0)]),
+            _path((0, -30.0, 0)),
             ["tub", "rocker", "switch", "lever", "pin"],
         ),
     ),
@@ -120,7 +119,7 @@ STEPS = [
         "holder_1",
         (
             ["holder_1"],
-            _path((-1.0, -30.0, 0), via=[(-1.0, 0, 0)]),
+            _path((0, -30.0, 0)),
             ["tub", "rocker", "switch", "plunger", "lever", "pin", "holder_0"],
         ),
     ),

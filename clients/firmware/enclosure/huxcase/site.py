@@ -90,8 +90,8 @@ STEPS = [
     {
         "id": "cells",
         "title": "Batteries",
-        "text": "Each holder goes in 1 mm toward the middle, then slides out under "
-        "its two lips. Crush ribs underneath and above keep it from moving.",
+        "text": "Each holder slides straight in from the front. Crush ribs underneath "
+        "and above stop its ends; the bridge comes next.",
         "parts": ["holder_*", "cell_*"],
         "enter": (0, -100, 0),
         "explode": (0, -46, 0),
@@ -99,8 +99,8 @@ STEPS = [
     {
         "id": "bridge",
         "title": "Holder bridge",
-        "text": "A printed bridge across both holders, one M3 × 6 into the boss. Its "
-        "ribs press the holders onto the back wall; its front bar keeps the cells in.",
+        "text": "A printed bridge between the holders, one M3 × 6 into the boss. Ribs "
+        "on its front bar press both cells, and so their holders, onto the back wall.",
         "parts": ["bridge", "bridge_screw"],
         "enter": (0, -80, 0),
         "explode": (0, -64, 0),

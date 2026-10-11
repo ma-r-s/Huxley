@@ -184,7 +184,15 @@ LED, 0.5 clear). Later the same day Mario chose his protected 18650s over
 a protection board, so the board, its rails and its wiring are gone; the
 battery - lead runs from the - joint up the back wall in two clips to the
 plug, and the board's own battery plug lead becomes the board pigtails.
-Talk input on GPIO7 (header pin 2): the old model
+Then Mario's readings: the holders' plastic wraps round the cell, so the
+lips and the bridge's wall-edge ribs (which assumed flat walls ending at
+the cell's centre) are gone; the bridge sits between the holders and crush
+ribs on its front bar press the cells, and so the holders, onto the back
+wall. The holder envelope now reserves a wrap up to 0.4 mm past the cell's
+widest point (more would meet the speaker's magnet: asked). Rocker body
+measured 18.9 x 11.8 (assumed 19 x 13, its hole was 1.4 mm too wide); its
+panel is 2.8 mm with a 45 deg chamfer so the clips pull it tight wherever
+their catch is. Talk input on GPIO7 (header pin 2): the old model
 had the talk wires on the GND and 3V3 header pins. Every wire has a cut
 length from its route (`WIRE_CUTS`, tested to cover the route plus strip
 and crimp). Speaker turned 30 deg, lead 26 mm. Coupon: the peg slides into

@@ -125,9 +125,8 @@ PAD_R = 4.0
 INSERT_L, INSERT_OD = 5.0, 4.4  # Mario's M3 inserts
 BLOCK_X_IN, BLOCK_Y1, BLOCK_HZ = 23.25, -5.0, 4.6
 
-# Holder retention: two lips per outer side wall, one screwed bridge across
-# both inner walls, crush-ribbed pedestals below and pads above.
-HOLDER_LIPS_Z = ((26.0, 34.0), (62.0, 70.0))
+# Holder retention: one screwed bridge pressing on both cells, tabs between
+# the holders, crush-ribbed pedestals below and pads above.
 BRIDGE_Z = (64.5, 71.5)
 BRIDGE_T = 1.6
 CELL_BAR_T = 2.0  # the bridge's front bar, across both cells
@@ -151,6 +150,10 @@ SPK_TABS = (0.0, 60.0, 120.0, 180.0, 240.0, 300.0)
 # KCD1-101 rocker on the left side, above the left cell, fully recessed: the
 # back had only 20 mm of depth behind it before the light ring.
 ROCKER_Y, ROCKER_Z, ROCKER_RECESS = 5.3, 93.1, 7.2  # rocker top 0.2 below the surface
+# Its clips' catch lies somewhere in this range under the frame (centre of
+# the clip ~3 mm, Mario); the panel's chamfer spans it.
+ROCKER_CATCH = (1.2, 2.8)
+ROCKER_PANEL = ROCKER_CATCH[1]
 SPLICE_D = 3.5  # a parallel joint in heat-shrink
 # Mario's cells are protected 18650s (2026-10-10), each with its own circuit,
 # so no separate protection board. The battery - lead runs from the - joint
@@ -713,35 +716,25 @@ def _seam_plug(inner):
 
 
 def _holder_retention(inner):
-    """Lips, bridge boss, pedestals and pads that hold Mario's two holders.
+    """Bridge, boss, pedestals and pads that hold Mario's two holders.
 
-    The holders slide in from the front (the tub's open side), 1 mm inboard to
-    pass the lips, then out under them. The bridge goes across both inner walls
-    and is screwed to a boss on the back wall: its ribs press both holders onto
-    the back wall and its tabs keep them out against the walls. Returns
-    (tub features, crush ribs, (bridge, bridge ribs, screw, insert)).
+    Their plastic wraps round the cell (Mario, 2026-10-10), so nothing grips
+    the holders' side walls: the holders slide straight in from the front, and
+    the bridge, screwed to a boss on the back wall, presses on the cells. Crush
+    ribs on its front bar push each cell, and so its holder, onto the back
+    wall; tabs between the holders keep them out against the side walls;
+    pedestals and pads stop their ends. Returns (tub features, crush ribs,
+    (bridge, bridge ribs, screw, insert)).
     """
     r = hw.CELL_D / 2
     back_gap = Y_BACK - T - (CELL_Y + r + hw.HOLDER_FLOOR)
-    edge = CELL_Y  # front edge of a holder's side walls (the cell's centre plane)
-    face1 = edge - fits.PART  # lips and bridge stand off the edge by PART...
+    face1 = CELL_Y - fits.PART  # the bridge plate's back face, on the boss
     face0 = face1 - BRIDGE_T
-    reach = edge + back_gap + (fits.CRUSH_RIB - fits.PART)  # ...their ribs push it home
-    bulge = math.sqrt(r * r - (CELL_Y - face1) ** 2)  # the cell's half width at face1
     feats, ribs = [], []
     walls = {}
     for hx, out in ((X0 - CELL_X, -1), (X0 + CELL_X, 1)):
         hw_ = hw.HOLDER_W / 2
         walls[out] = (hx + out * (hw_ - hw.HOLDER_WALL), hx + out * hw_, hx - out * hw_)
-        cell_out = hx + out * (bulge + fits.PART)  # the lip may reach this far in
-        support = (
-            -W / 2 + T - 0.1 if out < 0 else X0 + CELL_X + hw_ + fits.PART + 0.1
-        )  # into the backing
-        x0, x1 = sorted((support, cell_out))
-        for z0, z1 in HOLDER_LIPS_Z:
-            feats.append(bbox_solid(x0, x1, face0, face1, z0, z1))
-            wx0, wx1 = sorted(walls[out][:2])
-            ribs.append(bbox_solid(wx0 + 0.15, wx1 - 0.15, face1 - 0.01, reach, z0 + 1, z1 - 1))
         # Pedestals under the front half of each holder, ribs on top; pads above.
         px0, px1 = hx - hw_ + 1.5, hx + hw_ - 1.5
         feats.append(
@@ -779,14 +772,16 @@ def _holder_retention(inner):
                 top0 + 0.01,
             )
         )
-    # Bridge across both inner walls, screwed to a boss on the back wall.
-    lx_in = X0 - CELL_X + bulge + fits.PART  # left cell's inner flank, plus PART
-    rx_in = X0 + CELL_X - bulge - fits.PART
+    # Bridge plate between the holders (clear of their wrapped walls, whatever
+    # their height), screwed to a boss on the back wall.
+    lx_in = walls[-1][2] + fits.PART
+    rx_in = walls[1][2] - fits.PART
     bz0, bz1 = BRIDGE_Z
     bzm = (bz0 + bz1) / 2
     bridge = bbox_solid(lx_in, rx_in, face0, face1, bz0, bz1)
-    # Front bar across both cells: in a drop a cell can only move PART before
-    # it lands on this, instead of jumping onto the board's LEDs.
+    # Front bar across both cells, PART in front of them: crush ribs on it push
+    # each cell back_gap + 0.15 (its holder onto the wall, then the crush), and
+    # in a drop a cell lands on the bar instead of the board's LEDs.
     bar_y1 = CELL_Y - r - fits.PART
     bar = bbox_solid(
         X0 - CELL_X - r + 1.0, X0 + CELL_X + r - 1.0, bar_y1 - CELL_BAR_T, bar_y1, bz0, bz1
@@ -797,11 +792,16 @@ def _holder_retention(inner):
     )  # screw goes in through it
     bridge += bar
     bridge_ribs = []
+    push = back_gap + (fits.CRUSH_RIB - fits.PART)
+    for hx in (X0 - CELL_X, X0 + CELL_X):
+        for dx in (-1.0, 1.0):
+            surface = CELL_Y - math.sqrt(r * r - dx * dx)  # the cell's front at this x
+            bridge_ribs.append(
+                bbox_solid(
+                    hx + dx - 0.4, hx + dx + 0.4, bar_y1 - 0.01, surface + push, bz0 + 1, bz1 - 1
+                )
+            )
     for out in (-1, 1):
-        wx0, wx1 = sorted((walls[out][2], walls[out][2] + out * hw.HOLDER_WALL))
-        bridge_ribs.append(
-            bbox_solid(wx0 + 0.15, wx1 - 0.15, face1 - 0.01, reach, bz0 + 1, bz1 - 1)
-        )
         # tab on the channel side of the inner wall keeps the holder out
         w_in = walls[out][2]  # inner wall's channel-side face
         t0, t1 = sorted((w_in - out * fits.PART, w_in - out * (fits.PART + 1.2)))
@@ -988,13 +988,16 @@ def build() -> Concept:
     spring = hw.spring(SPRING_REST)
     spring = Part("spring", Pos(FLANGE_X, SWITCH_Y, TS_Z) * Rot(0, 90, 0) * spring.shape, "metal")
 
-    # KCD1-101 on the left side: a mount inside the wall gives it a 1.5 mm
-    # panel at the bottom of a 7.2 mm recess, so the rocker sits below the surface.
+    # KCD1-101 on the left side: a mount inside the wall gives it a panel at
+    # the bottom of a 7.2 mm recess, so the rocker sits below the surface. The
+    # panel is ROCKER_PANEL thick with a 45 deg chamfer round the inside of the
+    # hole: the switch's snap clips land on the chamfer wherever their catch
+    # is (Mario measured them about 3 mm under the frame) and pull it tight.
     panel_x = -W / 2 + ROCKER_RECESS
     by, bz = hw.ROCKER_BEZEL[0] / 2, hw.ROCKER_BEZEL[1] / 2  # long side along Y
     mount = bbox_solid(
         -W / 2 + T - 0.1,
-        panel_x + 1.5,
+        panel_x + ROCKER_PANEL,
         max(ROCKER_Y - by - 1.7, PCB_BOTTOM_Y + CELL_GAP + 0.1),  # stay behind the board
         ROCKER_Y + by + 1.7,
         ROCKER_Z - bz - 1.7,
@@ -1012,12 +1015,16 @@ def build() -> Concept:
     )
     rocker_cut += bbox_solid(
         panel_x - 0.1,
-        panel_x + 1.6,
+        panel_x + ROCKER_PANEL + 0.1,
         ROCKER_Y - cy_ - 0.1,
         ROCKER_Y + cy_ + 0.1,
         ROCKER_Z - cz - 0.1,
         ROCKER_Z + cz + 0.1,
     )
+    chamfer = ROCKER_PANEL - ROCKER_CATCH[0]
+    hole = Rectangle(2 * (cy_ + 0.1), 2 * (cz + 0.1))
+    taper = extrude(hole, chamfer + 0.01, taper=-45)  # widens 45 deg as it goes in
+    rocker_cut += Location((panel_x + ROCKER_CATCH[0], ROCKER_Y, ROCKER_Z), (0, 90, 0)) * taper
     # local +z (outward) -> device -X, local x (long side) -> device Y
     rocker_loc = Location((panel_x, ROCKER_Y, ROCKER_Z)) * Rot(0, -90, 0) * Rot(0, 0, 90)
     rocker = hw.place(hw.rocker(), rocker_loc)

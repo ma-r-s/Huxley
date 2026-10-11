@@ -305,7 +305,7 @@ def tact_switch() -> list[Part]:
 # panel, snap body 19 x 13 x 11.5 behind it (so the tabs stand 7.1), tabs 6 mm
 # apart, rocker ~5 mm above the bezel.
 ROCKER_BEZEL = (21.0, 15.0, 2.0)
-ROCKER_BODY = (19.0, 13.0, 11.5)
+ROCKER_BODY = (18.9, 11.8, 11.5)  # measured 2026-10-10 just under the frame
 ROCKER_DEPTH = 18.6  # measured: frame underside to tab tips
 ROCKER_TABS, ROCKER_TAB_PITCH, ROCKER_CAP = ROCKER_DEPTH - ROCKER_BODY[2], 6.0, 5.0
 
@@ -337,6 +337,9 @@ def rocker() -> list[Part]:
 # one lead out of each end cap near the floor. Holds a 65 mm flat-top cell.
 HOLDER_L, HOLDER_W, HOLDER_H = 76.0, 21.0, 20.5
 HOLDER_FLOOR, HOLDER_WALL, HOLDER_CAP = 1.2, 1.2, 3.0
+# How far the holder's plastic may wrap past the cell's widest point, toward
+# the front: the speaker's magnet sits 0.5 mm past it, between the cells.
+HOLDER_WRAP = 0.4
 HOLDER_SPRING = 4.5  # compressed spring between the - cap and the cell
 HOLDER_CELL_L = 65.0
 
@@ -373,12 +376,20 @@ def holder() -> list[Part]:
 
 
 def holder_envelope() -> Solid:
-    """Frame + cell, for the fit check (same local frame as holder())."""
+    """Frame + cell, for the fit check (same local frame as holder()). The
+    real holder's plastic wraps round the cell (Mario, 2026-10-10), not as the
+    flat walls drawn: the envelope also takes a wall's thickness round the cell
+    up to HOLDER_WRAP in front of its widest point, so nothing may stand where
+    the wrap could be."""
     parts = holder()
     out = parts[0].shape
     for p in parts[1:]:
         out += p.shape
-    return out
+    r = CELL_D / 2
+    length = HOLDER_L - 2 * HOLDER_CAP
+    wrap = Cylinder(r + HOLDER_WALL, length)
+    wrap &= _bbox_solid(-HOLDER_W, HOLDER_W, -HOLDER_WRAP, r, -length, length)
+    return out + wrap
 
 
 # --- JST-XH 2.5 mm, from Mario's crimp kit ---------------------------------------

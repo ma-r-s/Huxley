@@ -132,19 +132,19 @@ block, the plug coupon.
 
 ## Still to measure (Mario)
 
-The rev D retention leans on these; each is a quick caliper reading:
+Measured 2026-10-10: KCD1-101 body 18.9 x 11.8 under the frame, its snap
+clips centred ~3 mm under the frame; switch legs 5.0 apart on one side (the
+spacing across depends on how straight the legs are: bend them straight).
+The holder's walls are curved round the cell, so a wall thickness and edge
+height do not apply. Still wanted:
 
-1. **Holder side walls.** Lay a holder on its back, floor on the table. Measure
-   how thick one long side wall is, and how high its top edge stands above the
-   table. The lips and the bridge grip that edge (assumed 1.2 mm thick).
-2. **KCD1-101.** Just under its frame: the body's width and height (assumed
-   19 x 13). Then the distance from the underside of the frame to the tips of
-   the two springy snap clips on its sides.
-3. **12 x 12 switch legs.** Centre to centre: between the two legs on the same
-   side, and between the two sides (assumed 5.0 and 12.5); the cradle's leg
-   slots follow it.
-4. Does one protected 18650 go into a holder by hand and sit flat? (They
-   are 2 to 4 mm longer than bare cells.)
+1. **Holder wrap**: with a cell in a holder, seen from the end, does the
+   plastic rise past the cell's widest point? By how much? (Up to 0.4 mm is
+   modelled; more meets the speaker's magnet.)
+2. **Cell diameter** of one protected 18650.
+3. **Holder + cell height**: the holder on its back on the table, a cell in
+   it: table to the top of the cell. (With 2, this sets the cradle floor
+   thickness, so the bridge's ribs press the cells by the right amount.)
 
 Answered 2026-10-10: the board came with its 1.25 mm battery plug and lead
 (it becomes the board's two plug pigtails); the cells are Mario's protected
