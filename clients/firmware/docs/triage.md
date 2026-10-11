@@ -271,8 +271,37 @@ Lesson: a slicer check that support stays away from X must come with a
 check that what is left bare is printable; prefer geometry (45 deg roofs,
 relief) over blockers.
 
+**Tub in two pieces, glued (2026-10-11)**: two more one-piece tubs (AMS
+change at 36 mm) failed at the change layer: the supports snapped there, and
+what printed parted there when flexed, though it felt solid. Mario proposed
+CA glue (relaxing "no glue" for this joint only) and asked for the frosted
+part as clear and even as possible, not glass; then for both pieces on one
+plate, printed by object, and whether to use adaptive layer height.
+Built: a 45 deg lap joint at 36 mm (`hx1.LAP_H`, 0.05 glue gap a side, the
+inside walls flush); the top stands on its seam face with an outside brim
+(68 mm tall on a 1.15 mm strip, auto brim gave none); a clarity profile from
+Bambu's translucent filament guide (read on its wiki): one wall, 100 %
+rectilinear, no shells, 230 C, flow 1.01, low fan, ~40 mm/s, carried by the
+frosted filament so the base on the same plate prints at full speed; a
+15 min swatch cut from the top's corner. One plate `4_tub_base_and_top`,
+top first (clean frosted start), 95 mm apart so the toolhead and the
+gantry (32.5 mm) never pass over a finished piece (Bambu Studio validates
+it). Checked: object order, each in its filament, the clarity settings on
+the frosted filament only (they first landed on black: per-variant lists,
+`filament_self_index`), real feedrates (top 44 to 53 mm/s, base full), no
+support on the top's close fits, no warnings; all STLs watertight (the
+lap's tapered corners collapsed to a point: an open mesh). Not done:
+variable layer heights. The rough lower edges are the 8 mm bottom
+corners, whose lowest ~1 mm needs support whatever the layers; Bambu
+Studio's layer height file landed on the wrong object of the two-object
+plate in testing, so it is left to the GUI (README).
+Lessons: a filament change mid-object is a weak layer, so split the part
+instead; check where per-filament settings land, not just that they are
+set; a profile file the slicer accepts silently is not proof it applied:
+read the layers back.
+
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
-bottom is fine, holders whole, no glue, plastic pivot, protected cells
+bottom is fine, holders whole, no glue but the tub's halves, plastic pivot, protected cells
 instead of a protection board, the ribbon and loose wires, the board's
 battery plug is there); dock yes/no; volume buttons yes/no. Nothing left to
 measure: the click point and a cell going into its holder in the bay are

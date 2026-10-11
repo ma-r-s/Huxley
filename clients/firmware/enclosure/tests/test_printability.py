@@ -39,11 +39,16 @@ def test_island_check_finds_a_part_that_starts_in_mid_air():
     assert pr.islands(base + Pos(2.0, 0, 9) * Box(4, 4, 1)) == []  # a ledge off the wall
 
 
-@pytest.mark.parametrize("pose", [p for p in pr.POSES if p.piece != "tub"], ids=lambda p: p.piece)
+SUPPORTED = ("tub_base", "tub_top", "frost_swatch")
+
+
+@pytest.mark.parametrize(
+    "pose", [p for p in pr.POSES if p.piece not in SUPPORTED], ids=lambda p: p.piece
+)
 def test_nothing_starts_in_mid_air(pieces, pose):
     """The pieces printed without support have no layer that starts on
     nothing (the overhang check reads a narrow one as a short bridge). The
-    tub prints with supports, which catch its few."""
+    tub's base and top print with supports, which catch their few."""
     assert pr.islands(pr.posed(pieces[pose.piece], pose)) == []
 
 
@@ -54,7 +59,8 @@ def test_nothing_starts_in_mid_air(pieces, pose):
         ("bridge", 130),  # the back bar bridges 17 mm between its webs
         ("grille_plug", 200),  # its flange: 1.5 mm out
         ("faceplate", 450),  # the face's edge round-over and the counterbore steps
-        ("tub", 3300),  # roof, switch cradle and tube, rocker mount: tree supports
+        ("tub_base", 450),  # the joint shelves, the pedestal ribs: tree supports
+        ("tub_top", 3300),  # roof, switch cradle and tube, rocker mount: tree supports
     ],
 )
 def test_overhangs_stay_within_budget(report, piece, budget):
@@ -66,10 +72,36 @@ def test_overhangs_stay_within_budget(report, piece, budget):
 def test_tub_ledges_print_without_support(report):
     """Insert blocks, the bridge boss and the speaker post have 45 deg undersides.
     Horizontal holes up to 6 mm (the lever pivot) print fine as they are."""
-    for k in report["tub"]:
-        x0, y0, z0, x1, y1, z1 = k["bbox"]
-        if 20.0 < z0 < 80.0 and k["narrow"] > 6.0:  # between the floor and the cradle zone
-            assert k["area"] < 10.0, k
+    from huxcase.concepts import hx1
+
+    for piece, seam in (("tub_base", 0.0), ("tub_top", hx1.BACK_FROST_Z)):
+        for k in report[piece]:
+            x0, y0, z0, x1, y1, z1 = k["bbox"]
+            z = z0 + seam  # posed -> device
+            if 20.0 < z < 80.0 and k["narrow"] > 6.0:  # between the floor and the cradle zone
+                assert k["area"] < 10.0, (piece, k)
+
+
+def test_tub_halves_lap_and_rebuild_the_tub(pieces):
+    """The glued halves are the one-piece tub the fit checks use, less only
+    the glue gap; the base's lip stands inside the top's skirt, so the inside
+    walls line up."""
+    from huxcase.concepts import hx1
+
+    c = hx1.build()
+    whole = {p.name: p.shape for p in c.parts}
+    base, top = pieces["tub_base"], pieces["tub_top"]
+    assert (base & top).volume < 1e-6
+    union = base + top
+    gap = (whole["tub_grey"] + whole["tub_frosted"]).volume - union.volume
+    assert gap < 1e-6  # the parts are these pieces
+    sh = c.shells
+    one_piece = (sh["tub"] + sh["tub_latch"] + sh["tub_ribs"]).volume
+    assert 0 < one_piece - union.volume < 120.0  # just the lap's glue gap
+    lip = base & hx1._lap(hx1.T, hx1.LAP_H + 1)
+    # LAP_H straight, then the 45 deg top rises the lip's own depth
+    lip_top = hx1.BACK_FROST_Z + hx1.LAP_H + hx1.T / 2 - hx1.LAP_GAP / 2
+    assert pytest.approx(lip_top, abs=0.01) == lip.bounding_box().max.Z
 
 
 def test_print_files_are_watertight(tmp_path):

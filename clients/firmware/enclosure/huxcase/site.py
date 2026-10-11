@@ -38,13 +38,23 @@ SITE_OUT = OUT / "site"
 STEPS = [
     {
         "id": "tub",
-        "title": "Tub",
-        "text": "One print, standing up: grey to 36 mm, then a pause and a filament swap "
-        "to frosted for the rest. It is one piece, nothing to join. Lay it on its "
-        "back: everything goes in from the open front.",
-        "parts": ["tub_*"],
+        "title": "Tub base",
+        "text": "The grey base, standing up. Its walls end in a lip, the inner half of "
+        "the wall standing 1.6 mm proud: the frosted top fits down over it.",
+        "parts": ["tub_grey"],
         "enter": (0, -130, 0),
         "explode": (0, 0, 0),
+    },
+    {
+        "id": "tub_top",
+        "title": "Tub top, glued",
+        "text": "A thin line of CA round the base's lip, very little (its fumes leave a "
+        "white haze on the frosted part; low-bloom CA if you have it), then the "
+        "frosted top straight down over it, open fronts flush, held 30 s. Then lay "
+        "the tub on its back: everything goes in from the open front.",
+        "parts": ["tub_frosted"],
+        "enter": (0, 0, 40),
+        "explode": (0, 0, 12),
     },
     {
         "id": "inserts",

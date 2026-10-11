@@ -19,6 +19,7 @@ from build123d import Pos, Rot
 
 from huxcase import hardware as hw
 from huxcase.concepts import hx1
+from huxcase.shapes import bbox_solid
 
 MAX_OVERHANG_DEG = 45.0  # from vertical; PLA on a P2S prints this unsupported
 BED_TOL = 0.3  # faces this close to the bed are the first layer, not overhangs
@@ -35,7 +36,7 @@ class Pose:
 POSES = (
     Pose("faceplate", "face down", (90, 0, 0)),
     Pose("grille_plug", "face down", (90, 0, 0)),
-    Pose("tub", "standing up, the open front toward you", (0, 0, 0)),
+    Pose("tub_base", "standing up, the open front toward you", (0, 0, 0)),
     Pose("ptt_bar", "outer face down", (0, 90, 0)),
     Pose("ptt_pin", "lying flat", (0, 0, 0)),
     Pose("plunger", "standing on its tip", (0, -90, 0)),
@@ -43,7 +44,17 @@ POSES = (
     # Spare plungers, 0.5 and 1.0 mm longer (more preload, an earlier click).
     Pose("plunger_long05", "standing on its tip", (0, -90, 0)),
     Pose("plunger_long10", "standing on its tip", (0, -90, 0)),
+    # The tub's frosted top, glued onto the base (hx1.LAP_H): standing on its
+    # seam face, the open front toward you.
+    Pose("tub_top", "standing on its seam face, the open front toward you", (0, 0, 0)),
+    # A corner of the top (roof, back and right walls, the backing), to
+    # check the frosted look before the long print.
+    Pose("frost_swatch", "standing up", (0, 0, 0)),
 )
+
+
+# The swatch: the top's back right top corner (x0, x1, y0, y1, z0, z1).
+FROST_SWATCH = (14.0, 36.0, 8.0, 20.0, 84.0, 105.0)
 
 
 def printed_pieces(c=None) -> dict[str, object]:
@@ -55,7 +66,9 @@ def printed_pieces(c=None) -> dict[str, object]:
     out["bridge"] = by_name["bridge"] + hx1.bridge_skin()  # the screw pokes through it
     out["plunger_long05"] = hx1.plunger_shape(0.5)
     out["plunger_long10"] = hx1.plunger_shape(1.0)
-    out["tub"] = by_name["tub_grey"] + by_name["tub_frosted"]
+    out["tub_base"] = by_name["tub_grey"]
+    out["tub_top"] = by_name["tub_frosted"]
+    out["frost_swatch"] = by_name["tub_frosted"] & bbox_solid(*FROST_SWATCH)
     return out
 
 
@@ -220,7 +233,9 @@ def support_keep_outs() -> dict[str, tuple[float, float, float, float, float, fl
 COLOUR = {
     "faceplate": "grey",
     "grille_plug": "black",
-    "tub": "grey, then frosted from 36 mm (pause and swap at that layer)",
+    "tub_base": "grey",
+    "tub_top": "frosted (clarity settings)",
+    "frost_swatch": "frosted (clarity settings)",
     "ptt_bar": "orange",
     "ptt_pin": "grey",
     "plunger": "grey",
@@ -250,11 +265,14 @@ def export_stls(out_dir) -> list[str]:
         )
         written.append(f"{path.name}: {COLOUR[pose.piece]}, {pose.how}")
     (out / "PRINT.txt").write_text(
-        "HX-1 rev E print set (PLA, 0.4 nozzle, 0.20 mm layers). Tub: tree supports, "
-        "Everywhere, bridges up to 20 mm left unsupported (under its roof, the switch "
-        "cradle, the rocker and holder pads, the lever pin's notch); everything else needs "
-        "none. AMS: HX1_tub_AMS.3mf (the tub alone) or HX1_one_plate_AMS.3mf (all that "
-        "is left after the first prints); ready-sliced: sliced/.\n" + "\n".join(written) + "\n"
+        "HX-1 rev E print set (PLA, 0.4 nozzle, 0.20 mm layers). The tub is two pieces, "
+        "glued with a lap joint: a grey base and a frosted top, on one plate printed by "
+        "object (projects/4_tub_base_and_top.3mf). Both get tree supports, Everywhere, "
+        "bridges included; everything else needs none. The frosted top and its swatch "
+        "print with clarity settings (dry the filament first; print the swatch first). "
+        "Projects to open and slice: projects/; the same sliced: sliced/.\n"
+        + "\n".join(written)
+        + "\n"
     )
     return written
 

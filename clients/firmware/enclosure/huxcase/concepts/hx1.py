@@ -90,7 +90,17 @@ USB_Y, USB_FACE = (
     BOARD_TOP_Y - hw.USB_C_CENTER_Z,
     X0 + hw.USB_C_FACE_Y,
 )  # the plug's axis, its face
-BACK_FROST_Z = 36.0  # the tub prints grey up to here, then frosted (one filament swap)
+BACK_FROST_Z = 36.0  # the tub: a grey base up to here, a frosted top above
+# The two print apart and are glued (Mario, 2026-10-11): a filament change
+# mid-print left the weak layer there, where supports snapped and the case
+# parted when flexed. A lap joint, like a lid: the base keeps the inner
+# half of its wall LAP_H above the seam, the top's outer half comes down
+# over it. It lines the walls up (the inside stays flush: the holders slide
+# past, the faceplate's lip seats across the seam) and adds glue area. Each
+# half is ~1.15 thick, two perimeters and more (a tongue and groove in a
+# 2.4 wall would leave 0.6 skins).
+LAP_H = 1.6  # 8 layers
+LAP_GAP, LAP_TOP_GAP = 0.1, 0.2  # glue gap between the halves; one layer over the lip
 LABEL_Z = 92.8  # "huxley" and "HX-1" on the face
 
 # The two shells meet at the inside of the face. The faceplate's lip seats in
@@ -415,6 +425,25 @@ def _ramped_rib(x_face: float, out: int, y0: float, y1: float, z0: float, z1: fl
         Polyline((xa, y0), (xa + out * h, y0 + 1.0), (xa + out * h, y1), (xa, y1), close=True)
     )
     return Pos(0, 0, z0) * extrude(prof, z1 - z0, dir=(0, 0, 1))
+
+
+def _lap(depth: float, height: float):
+    """The inner `depth` of the side and back walls (measured from the inside
+    surface) from the seam up `height`, then a 45 deg top rising to the
+    inside surface: the base's lip, or (a little deeper and taller) the
+    pocket the top leaves for it. The slope is what lets the top print its
+    inner half over the pocket without support (a flat roof would be a
+    1.25 mm ledge in mid-air all round)."""
+    from build123d import Rectangle, RectangleRounded
+
+    cy = (Y_FRONT + Y_BACK) / 2
+    wi, di = W - 2 * T, D - 2 * T  # the inside, as `inner` in build()
+    # Corners a hair rounder than the taper is deep, so they don't shrink to
+    # a point at its top (a degenerate face: an open STL).
+    outer = RectangleRounded(wi + 2 * depth, di + 2 * depth, depth + 0.1)
+    hole = extrude(Rectangle(wi, di), height + depth + 0.02)
+    body = extrude(outer, height) + Pos(0, 0, height - 0.001) * extrude(outer, depth, taper=45)
+    return Pos(0, cy, BACK_FROST_Z) * (body - Pos(0, 0, -0.01) * hole)
 
 
 def _union(shapes):
@@ -1228,12 +1257,18 @@ def build() -> Concept:
     tub_ribs_all = _union(tub_ribs)
     frost = bbox_solid(-60, 60, -60, 60, BACK_FROST_Z, 200)
     tub_all = tub + latch + tub_ribs_all
+    # Base and top, printed apart and glued: the lip is tub material handed
+    # to the base; the top leaves room round it for the glue.
+    half = T / 2
+    lip = _lap(half - LAP_GAP / 2, LAP_H) & tub_all
+    tub_base = (tub_all - frost) + lip
+    tub_top = (tub_all & frost) - (_lap(half + LAP_GAP / 2, LAP_H + LAP_TOP_GAP) & tub_all)
     faceplate_all = _union(face_shapes.values())
     parts = [
         Part("faceplate", faceplate_all, "shell"),
         Part("grille_plug", plug + plug_ribs, "shell_dark"),
-        Part("tub_grey", tub_all - frost, "shell"),
-        Part("tub_frosted", tub_all & frost, "translucent"),
+        Part("tub_grey", tub_base, "shell"),
+        Part("tub_frosted", tub_top, "translucent"),
         *rocker,
         Part("ptt_bar", bar, "accent"),
         Part("ptt_pin", pin, "shell_inner"),
