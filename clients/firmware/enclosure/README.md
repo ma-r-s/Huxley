@@ -233,8 +233,11 @@ XH parts. That is the one fit the tests cannot prove.
 
 ## Cables
 
-Every wire is cut to its route in the model plus what stripping and crimping
-take (`WIRE_CUTS` in `hx1.py`; a test keeps them in step). Ribbon cable for
+Every wire is cut to its route plus what stripping and crimping take. The
+table is the model's estimate (`WIRE_CUTS` in `hx1.py`; a test keeps it in step
+with the routes); before cutting, lay a piece of solder wire along the real
+route through the printed clips and measure that. The joint pockets are 14
+and 11 mm long, so a lead a few mm off just moves its joint along. Ribbon cable for
 the signal wires, two conductors together for the battery ones.
 
 | Run | From | To | Cut to | Held by |
@@ -276,8 +279,9 @@ On the bench first:
    cut the board's battery plug lead short (red 18 mm, black 19 mm) and solder
    red to tail 1, black to tail 2; solder a 28 mm wire from the GPIO7 tail to
    tail 4. Heat-shrink each tail.
-3. Tub harness: solder the rocker's two leads and the talk switch's two wires
-   (to the leg pair that switches first). Crimp the rocker + lead, the
+3. Tub harness: solder the talk switch's two wires (to the leg pair that
+   switches first); the rocker's two leads are soldered later, in the case
+   (step 5). Crimp the rocker + lead, the
    battery - lead, and the talk GND and talk wires, and push them into the
    XHP-4 housing as pins 1, 2, 3 and 4. Push the housing into the shuttle
    from its flat back end, body first, until its plate stops on the ledges.
@@ -285,7 +289,9 @@ On the bench first:
 Tub, lying on its back:
 4. Heat-set three M3 x 5 inserts: two in the top corner blocks, one in the
    boss on the back wall.
-5. Rocker: snap it in from outside.
+5. Rocker: snap it in from outside, with nothing on it. Its two tabs are
+   then reached straight from the open front, about 20 mm in above the left
+   holder: solder its two leads there (before the cells go in).
 6. Talk switch: slide it into the cradle until it clicks. From outside, drop
    the plunger into the tube, then the spring.
 7. Lever: push the pin through it, slide it in from the front along its

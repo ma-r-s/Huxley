@@ -201,6 +201,19 @@ cage block, real shuttle) tries the mate with Mario's XH parts. 98 green.
 Still open: the plug coupon result (the one fit no test proves), the
 lever-pin block and the side-hole row, a third buildability review.
 
+**Open, for Mario (2026-10-10)**: the review's last plug problems (the
+shuttle can leave its cage when the case opens; the 0.8 mm-short depth
+sits at the housing's lock hook) have one robust fix from a design agent:
+seat the plug fully against two small springs behind the housing, on a
+follower plate, with a frame screwed over the shuttle's ears (M2 x 6 into
+M2 inserts), and the header's tails bent under its plate; the springs are
+chosen after weighing the plug's mating force on the coupon. Alternative:
+no plug, a ribbon folded into a pocket at the seam (fewer parts, nothing
+to align, but the faceplate stays tethered and opens like a book).
+Recommended: the ribbon. Done meanwhile: the joint pockets are 14 and 11 mm
+long (a lead a few mm off moves its joint along), the rocker goes in empty
+and its tabs are soldered in place, and wires are measured on the print.
+
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
 bottom is fine, holders whole, no glue, plastic pivot, protected cells
 instead of a protection board, plug between the halves, the board's battery

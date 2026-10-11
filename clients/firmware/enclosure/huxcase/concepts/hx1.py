@@ -552,7 +552,9 @@ def _wire_keepers():
     box. Returns (rigid features, snap lips, crush ribs).
 
     The joints (in heat-shrink) press in between two shelves from the front,
-    past a lip; the lead snaps in between two prongs, past their lips.
+    past a lip; the pockets are 14 and 11 mm long so a lead cut a few mm off
+    just moves its joint along. The lead snaps in between two prongs, past
+    their lips.
     """
     back = Y_BACK - T + 0.1
     gap = SPLICE_D / 2 + fits.PART
@@ -562,12 +564,12 @@ def _wire_keepers():
         (jz - gap - 1.0, jz - gap, jz - gap, jz - gap + 0.3),
         (jz + gap, jz + gap + 1.0, jz + gap - 0.3, jz + gap),
     ):
-        keep.append(bbox_solid(jx - 5.0, jx + 5.0, jy - 2.6, back, z0, z1))
-        snaps.append(bbox_solid(jx - 5.0, jx + 5.0, jy - 2.6, jy - 1.8, lz0, lz1))  # front lip
+        keep.append(bbox_solid(jx - 5.0, jx + 9.0, jy - 2.6, back, z0, z1))
+        snaps.append(bbox_solid(jx - 5.0, jx + 9.0, jy - 2.6, jy - 1.8, lz0, lz1))  # front lip
     nx, ny, nz = J_NEG
     s0 = T + SPLICE_D + 2 * fits.PART  # the floor is the bottom of this pocket
-    keep.append(bbox_solid(nx - 5.0, nx + 1.0, ny - 2.6, back, s0, s0 + 1.0))
-    snaps.append(bbox_solid(nx - 5.0, nx + 1.0, ny - 2.6, ny - 1.8, s0 - 0.3, s0))
+    keep.append(bbox_solid(nx - 8.0, nx + 3.0, ny - 2.6, back, s0, s0 + 1.0))
+    snaps.append(bbox_solid(nx - 8.0, nx + 3.0, ny - 2.6, ny - 1.8, s0 - 0.3, s0))
     for cz in NEG_CLIPS_Z:
         for side in (-1, 1):
             x0, x1 = sorted((NEG_RUN_X + side * 0.7, NEG_RUN_X + side * 1.7))
@@ -1246,8 +1248,8 @@ def build() -> Concept:
         "cable_bat_neg": hw.cable(
             [
                 j_neg,
-                (j_neg[0] + 1.8, j_neg[1] + 0.7, j_neg[2] + 0.2),
-                (NEG_RUN_X - 0.4, neg_y - 0.4, j_neg[2] + 3.3),
+                (NEG_RUN_X - 0.6, j_neg[1] + 0.9, j_neg[2] + 0.2),  # under the pocket's shelf
+                (NEG_RUN_X, neg_y - 0.3, j_neg[2] + 4.0),
                 (NEG_RUN_X, neg_y, NEG_CLIPS_Z[0]),
                 (NEG_RUN_X, neg_y, NEG_CLIPS_Z[1]),
                 (NEG_RUN_X - 1.2, neg_y - 0.6, 36.0),
