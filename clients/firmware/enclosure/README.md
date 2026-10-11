@@ -71,7 +71,7 @@ switch.
 
 | Part | Located by | Held by |
 | --- | --- | --- |
-| Board | three standoffs + three crush-ribbed centring posts (faceplate) | 3 x M2 x 8, self-tapping into the standoffs: a washer under the top one, the plug yoke under the two lower |
+| Board | three standoffs + three crush-ribbed centring posts (faceplate) | 3 x M2 x 8 + washer, self-tapping into the standoffs |
 | Speaker | six crush-ribbed tabs on the grille plug | clamped between the plug's ring and a post on the tub's back wall when the case closes |
 | Grille plug (black) | its window in the face | its flange in a recess behind the face, clamped by the speaker |
 | Holders (x2) | the side walls and the bridge's tabs, crush-ribbed pedestals and pads | the bridge: one M3 x 6 into an insert on the back wall; ribs on its front bar press both cells, and so the holders, onto the back wall |
@@ -83,10 +83,7 @@ switch.
 | Battery - lead | two clips on the back wall, beside the speaker post | their lips |
 | Joints (+ and -) | pockets on the back wall | pressed in between two shelves (in heat-shrink) |
 | Battery + lead, talk pair | two clips on the bridge | their lips (the talk pair sits two deep) |
-| Plug yoke | the two lower board screws through its bosses | clamped between the board and the screw heads |
-| Plug header | the yoke's walls round its base | crush ribs; its tails through the yoke's plate, soldered below it |
-| Plug housing | the shuttle | crush ribs; the shuttle's ledges in front of its plate, the cage floor behind |
-| Plug shuttle | its cage on the back wall (0.4 mm float), corner tabs | the header inside it once closed; the yoke 0.4 mm in front of its mouth |
+| Wires | the clips on the bridge and the back wall, the joint pockets | loose with slack between the halves, on purpose (Mario): only the heavy parts need a place |
 
 Every bought part above has a hard stop within 0.5 mm in every direction
 (`tests/test_retention.py`); crush ribs take up the rest so nothing rattles.
@@ -193,65 +190,45 @@ longer than bare ones: one must go into a holder by hand and sit flat (check
 before printing). Put both cells in at the same voltage (within 0.05 V). The
 firmware still shuts down at a safe voltage via `BAT_ADC` (GPIO1).
 
-## The seam plug: no wire crosses the seam
+## Wires between the halves: a ribbon
 
-Every wire between the board and the tub goes through one keyed JST-XH 4-pin
-plug from Mario's crimp kit, which mates by itself as the case closes. The
-faceplate lifts off with no slack wire and no soldering iron, and nothing is
-left loose inside to rattle.
+Six conductors of the rainbow ribbon from Mario's crimp kit join the faceplate
+to the tub: two for +, two for -, one for talk, one for talk ground. They are
+soldered at both ends, so the faceplate stays attached and opens like a book:
+take out the four M3 screws, pull it straight out about 10 mm (to clear the
+lip, the side fins and the lever-pin tooth), then swing it open to the left.
 
-- **Faceplate half**: a B4B-XH-A header, its tails through holes in a plate
-  on the printed **yoke** and soldered below it to three short pigtails from
-  the board (the board's own battery plug lead, cut short, and one wire from
-  GPIO7), so it cannot come off when the case opens. The yoke lies
-  flat on the board's back under the two lower board screws (the yoke replaces
-  their washers; the screws still bite 5 mm).
-- **Tub half**: an XHP-4 housing on four crimped harness wires, pressed into a
-  printed **shuttle** from its back end until its plate stops on two ledges.
-  The shuttle floats 0.4 mm each way in a **cage** on the back wall; the
-  cage's floor is two ledges at the ends, so the harness drops in from the
-  front with it.
-  As the case closes, the shuttle's chamfered mouth takes the header's box and
-  lines the housing up with it before the pins meet, so only the outside sizes
-  on JST's drawing matter. Before that, two fins on the faceplate along the
-  inside of the side walls have lined it up sideways. The plug closes 0.8 mm
-  short of fully seated (the housing rests on the cage floor), never past it.
-- **Pins**: 1 BAT+ (after the rocker), 2 BAT- (the cells' - joint), 3 talk
-  GND, 4 talk. On the
-  board half, link tails 2 and 3 with a short wire (the board's ground is BAT-),
-  so only three pigtails are needed. Keyed, so it only goes one way; BAT+ is
-  never next to the talk pin.
-- **Talk input**: GPIO7, header pin 2 (low on the header, so its pigtail is
-  short). The firmware still reads the board's KEY2 today; it needs one line
-  to read GPIO7 instead (input, pull-up, low = talk).
-- **Service**: take out the four M3 screws and lift the faceplate straight off.
-  The housing and shuttle may come out with it: pull them off the header and
-  stand the shuttle back in its cage.
-
-Before the case: print the plug coupon (see Commands) and try it with your own
-XH parts. That is the one fit the tests cannot prove.
+- **Faceplate end**: cut the board's own battery plug lead short and splice
+  it to the ribbon (red to the two + conductors, black to the two - and the
+  talk ground), heat-shrink each splice; the talk conductor goes to the GPIO7
+  tail on the board's back (header pin 2).
+- **Tub end**: a junction in the channel behind the speaker's magnet, where
+  the tub's four wires (rocker +, battery -, the talk pair) splice to the
+  ribbon, in heat-shrink.
+- **Slack**: about 100 mm of ribbon, so the faceplate can lie open beside
+  the tub. Closed, it lies loose in the channel between the holders. Mario
+  (2026-10-11): the heavy parts must be held, the wires need no place.
+- **Talk input**: GPIO7, header pin 2. The firmware still reads the board's
+  KEY2 today; it needs one line to read GPIO7 instead (F-0011).
 
 ## Cables
 
-Every wire is cut to its route plus what stripping and crimping take. The
-table is the model's estimate (`WIRE_CUTS` in `hx1.py`; a test keeps it in step
-with the routes); before cutting, lay a piece of solder wire along the real
-route through the printed clips and measure that. The joint pockets are 14
-and 11 mm long, so a lead a few mm off just moves its joint along. Ribbon cable for
-the signal wires, two conductors together for the battery ones.
+Lengths with slack: lay a piece of solder wire along the route on the
+printed parts, measure, and add about 20 mm. Loose is fine.
 
-| Run | From | To | Cut to | Held by |
+| Run | From | To | About | Held by |
 | --- | --- | --- | --- | --- |
 | Speaker | SPK plug (board back) | the speaker's solder tabs (upper right) | **26 mm** | short; turn the speaker so its tabs sit upper right |
-| Board + | the board's battery plug, red wire | header tail 1 | 18 mm | the plug in the board's BAT socket; soldered at the header, on the bench |
-| Board - | the same plug, black wire | header tail 2 | 19 mm | same |
-| Board talk | GPIO7 (header pin 2) tail | header tail 4 | 28 mm | soldered both ends, on the bench |
-| Rocker + | rocker tab | housing pin 1 | 62 mm | the + clip on the bridge; crimped |
-| Rocker in | rocker tab | + joint | 21 mm | the joint's pocket |
-| Holder + leads (2) | top of each holder | + joint | 24, 32 mm | the joint's pocket |
-| Holder - leads (2) | bottom of each holder | - joint | 30, 26 mm | the joint's pocket |
-| Battery - | the - joint | housing pin 2 | 58 mm | two clips on the back wall; crimped |
-| Talk pair | tact switch legs | housing pins 3 (GND), 4 | 53 mm each | the talk clip on the bridge; crimped |
+| Ribbon (6 wires) | battery plug lead and GPIO7, on the board | the junction in the tub | 100 mm | loose, folded into the channel when closed |
+| Rocker + | rocker tab | the junction | 80 mm | the + clip on the bridge |
+| Rocker in | rocker tab | + joint | 25 mm | the joint's pocket |
+| Holder + leads (2) | top of each holder | + joint | trim to fit | the joint's pocket |
+| Holder - leads (2) | bottom of each holder | - joint | trim to fit | the joint's pocket |
+| Battery - | the - joint | the junction | 75 mm | two clips on the back wall |
+| Talk pair | tact switch legs | the junction | 70 mm each | the talk clip on the bridge |
+
+The board's battery socket is 1.25 mm pitch; the board's own battery plug
+and lead came with it (Mario, 2026-10-11), so plug it in and splice its lead.
 
 ## Print guide
 
@@ -264,8 +241,6 @@ the signal wires, two conductors together for the battery ones.
 | Lever pin | grey | lying flat | none |
 | Plunger | grey | standing on its flat end | none |
 | Holder bridge | grey | front face down | none |
-| Plug yoke | grey | board side down | none (the plate under the header bridges between the posts) |
-| Plug shuttle | grey | standing on its back end, mouth up | none |
 
 `huxcase/printability.py` measures what needs support in each pose
 (`tests/test_printability.py` holds every piece to that).
@@ -273,18 +248,9 @@ the signal wires, two conductors together for the battery ones.
 ## Assembly
 
 On the bench first:
-1. Cut every wire to the table above.
-2. Plug header: press it into the yoke's walls, its tails through the holes
-   in the yoke's plate. Below the plate: link tails 2 and 3 with a short wire;
-   cut the board's battery plug lead short (red 18 mm, black 19 mm) and solder
-   red to tail 1, black to tail 2; solder a 28 mm wire from the GPIO7 tail to
-   tail 4. Heat-shrink each tail.
-3. Tub harness: solder the talk switch's two wires (to the leg pair that
-   switches first); the rocker's two leads are soldered later, in the case
-   (step 5). Crimp the rocker + lead, the
-   battery - lead, and the talk GND and talk wires, and push them into the
-   XHP-4 housing as pins 1, 2, 3 and 4. Push the housing into the shuttle
-   from its flat back end, body first, until its plate stops on the ledges.
+1. Cut the wires to the table above, with their slack.
+2. Talk switch: solder its two wires to the leg pair that switches first
+   (check with the meter). The rocker's leads are soldered later, in the case.
 
 Tub, lying on its back:
 4. Heat-set three M3 x 5 inserts: two in the top corner blocks, one in the
@@ -302,43 +268,41 @@ Tub, lying on its back:
    the - lead into its two clips on the back wall.
 9. Cells in (within 0.05 V of each other, + up). Lay the + lead and the talk
    pair over their clips, then the bridge across, M3 x 6: the clips snap
-   over the wires.
-10. Drop the shuttle into its cage, mouth up, the wires through the open
-    middle of its floor. Rocker ON: meter 3.6 to 4.2 V
-    between housing pins 1 and 2. Rocker OFF.
+   over the wires. The four tub wires end at the junction behind the
+   speaker's magnet.
+10. Rocker ON: meter 3.6 to 4.2 V between the + and - wire ends. Rocker OFF.
 
 Faceplate, face down:
 11. Heat-set two M3 x 5 inserts in the bottom bosses. Press the grille plug
     into its window from inside, flange inside (crush ribs hold it).
 12. Cut the speaker lead to 26 mm, re-solder it, set the speaker on its tabs
     with the tabs upper right.
-13. Board onto its standoffs (USB-C to the left), the battery plug in its BAT
-    socket, the yoke behind it on
-    the two lower holes: M2 x 8 through the yoke there, M2 x 8 with a washer
-    at the top. Plug in the speaker.
+13. Board onto its standoffs (USB-C to the left), 3 x M2 x 8 with washers.
+    Plug in the speaker and the battery plug.
+14. With the faceplate lying open beside the tub: splice the ribbon to the
+    battery plug lead and solder its talk wire to the GPIO7 tail; splice its
+    other end to the tub's four wires at the junction. Heat-shrink every
+    splice.
 
 Close:
-14. Rocker OFF. Turn the faceplate over onto the tub (the lever pin's front
-    end goes into the tooth, the header into the shuttle's mouth) and fit the
-    four M3 x 8: two in the face at the top, two up through the floor, snug.
-15. Test: rocker ON, the lever clicks; on USB-C the charge light comes on.
+15. Rocker OFF. Fold the ribbon into the channel, swing the faceplate onto
+    the tub (the lever pin's front end goes into the tooth) and fit the four
+    M3 x 8: two in the face at the top, two up through the floor, snug.
+16. Test: rocker ON, the lever clicks; on USB-C the charge light comes on.
 
 ## Parts list
 
-Printed: faceplate, tub, grille plug, lever, lever pin, plunger, holder bridge,
-plug yoke, plug shuttle (the build page lists each with its volume).
+Printed: faceplate, tub, grille plug, lever, lever pin, plunger, holder bridge
+(the build page lists each with its volume).
 
 Bought, all from Mario's inventory (photos 2026-10-10): the board and its
 speaker; two 18650 cells in two holders; the 12 x 12 tact switch; the SciWil
 0.4 x 4 x 15 spring; the KCD1-101 rocker; two protected 18650s; the board's
-own battery plug and lead; from the JST-XH kit, a B4B-XH-A header, an XHP-4
-housing and four SXH terminals;
-Kadrick button heads 4 x M3 x 8,
-1 x M3 x 6, 3 x M2 x 8 and one flat washer; FFVRVSS 5 x M3 x 5 heat-set inserts;
-ribbon cable (double the conductors for the battery leads).
+own battery plug and lead; Kadrick button heads 4 x M3 x 8, 1 x M3 x 6,
+3 x M2 x 8 with flat washers; FFVRVSS 5 x M3 x 5 heat-set inserts; the
+rainbow ribbon from the crimp kit (six conductors).
 
-Tools and consumables assumed: soldering iron and solder, the insert tool, the
-XH crimper,
+Tools and consumables assumed: soldering iron and solder, the insert tool,
 hex keys 1.3 mm (M2) and 2.0 mm (M3), a multimeter (which switch legs switch;
 cell voltages before paralleling), and heat-shrink for the joints.
 
@@ -369,7 +333,7 @@ uv run --group dev pytest -q               # fit checks + STEP comparison (needs
   --python render/render.py -- out/ out/renders/          # add --quick for previews
 uv run python -m huxcase.site           # out/site/: the interactive HX-1 build page (spin, explode, x-ray, build)
 uv run python -m huxcase.printability --stl   # out/print/: every HX-1 piece as an STL in its print pose
-uv run python -m huxcase.coupon         # out/coupon_*.stl: fit coupon, lever-pin block, plug coupon
+uv run python -m huxcase.coupon         # out/coupon_*.stl: fit coupon, lever-pin block
 ```
 
 `out/` is gitignored; everything in it regenerates from the code. The build page is published as a
@@ -396,6 +360,4 @@ they hold.
 HX-1 rev D is a printable design: fit-checked, retention-tested and
 printability-checked, with clearances that the fit coupon confirms on Mario's
 printer. The other HX concepts are packaging sketches (form, not printable
-parts). Still open for HX-1: the measurements in MEASUREMENTS "Still to
-measure", the coupon results (lever-pin block, plug coupon), and a protected
-cell tried in a holder.
+parts). Nothing is left to measure for HX-1; the next step is printing it.

@@ -35,14 +35,11 @@ from build123d import (
     Box,
     Cylinder,
     Location,
-    Plane,
-    Polyline,
     Pos,
     Rectangle,
     Rot,
     extrude,
     fillet,
-    make_face,
 )
 
 from huxcase import fits
@@ -76,29 +73,11 @@ SPK_Z = T + 0.4 + hw.SPK_D / 2
 SPK_FRONT_Y = Y_FRONT + T + 0.5
 SPK_LOC = Location((X0, SPK_FRONT_Y, SPK_Z), (-90, 0, 0))  # local -y -> device +Z
 SPK_TAB_R, SPK_TAB_DEPTH = 15.3, 12.2  # solder tabs on the basket rim (STEP)
-SPK_TAB_DEG = 60.0  # turn the speaker so its tabs sit upper right, clear of the seam plug
+SPK_TAB_DEG = 60.0  # turn the speaker so its tabs sit upper right, clear of the seam wires
 # Mario's lead is 97 mm; the route is ~20 mm, and loose wire buzzes in the back
 # box. Cut it to this (plug to tab) and re-solder at the speaker: board and
 # speaker both sit on the faceplate, so a little slack to unplug it is enough.
 SPK_LEAD_CUT = 26.0
-# Cut list, mm: each wire is its route in the model plus 5 (2.5 stripped at a
-# soldered end), plus 1 more at a crimped end (3.5 goes into the terminal).
-# Holder leads are trimmed to the joint. Nothing is left over to rattle; a test
-# keeps these in step with the routes.
-WIRE_CUTS = {
-    "cable_bat_pos": 62,  # rocker -> plug pin 1 (crimped)
-    "cable_bat_sw": 21,  # rocker -> + joint
-    "cable_bat_neg": 58,  # - joint -> plug pin 2 (crimped)
-    "cable_ptt_a": 53,  # talk switch -> plug pin 3 (crimped)
-    "cable_ptt_b": 53,  # talk switch -> plug pin 4 (crimped)
-    "cable_board_pos": 18,  # the board's battery plug, + wire -> header tail 1
-    "cable_board_neg": 19,  # the board's battery plug, - wire -> header tail 2
-    "cable_board_talk": 28,  # board GPIO7 (header pin 2) -> header tail 4
-    "lead_pos_0": 24,
-    "lead_pos_1": 32,
-    "lead_neg_0": 30,
-    "lead_neg_1": 26,
-}
 BOARD_Z = SPK_Z + hw.SPK_D / 2 + 0.3 + hw.PCB_R + 0.3 + 0.2
 H = BOARD_Z + hw.PCB_R + 0.3 + 0.1 + T
 # Board +x -> device -Z, board +y -> device +X, board +z (top face) -> device -Y.
@@ -160,38 +139,15 @@ SPLICE_D = 3.5  # a parallel joint in heat-shrink
 # up the back wall to the plug, in two clips beside the speaker post.
 NEG_RUN_X, NEG_CLIPS_Z = X0 + 6.0, (14.0, 28.0)
 
-# Seam plug: a JST-XH 4-pin pair from Mario's kit joins the faceplate's wires
-# to the tub's as the case closes, so no wire crosses the seam and the
-# faceplate comes off without an iron. Faceplate side: the header, soldered
-# on the bench, in a printed yoke clamped under the board's two lower screws.
-# Tub side: the housing on crimped wires cut to length, pressed into a printed
-# shuttle that floats in a cage on the back wall. The shuttle's chamfered
-# mouth takes the header's box and so lines the housing up with it; only the
-# outside sizes on JST's drawing matter, none of the connector's insides.
-XH_X, XH_Y, XH_Z = X0, 0.6, 45.2  # header base centre; its mouth faces +Y
-XH_LOC = Location((XH_X, XH_Y, XH_Z)) * Rot(-90, 0, 0)  # local +z -> +Y, slotted face up
-XH_SHORT = 0.8  # the housing rests on the cage floor this far short of fully seated
-YOKE_T = 1.8  # yoke bosses under the two lower board screws (they replace the washers)
-YOKE_GRIP = 0.8  # yoke walls round the header's base
-SHUTTLE_S0 = YOKE_GRIP + 0.4  # shuttle mouth, from the header base: 0.4 off the yoke
-SHUTTLE_WALL, SHUTTLE_CHAMFER = 1.0, 0.7
-SHUTTLE_BORE = 0.25  # round the header's box (and the housing's plate)
-CAGE_FLOAT, CAGE_S0 = 0.4, 4.0  # shuttle float in its cage; the cage's front
-XH_JOINT = 1.0  # a soldered tail in heat-shrink, beyond the pin centre
-YOKE_PLATE = 1.4  # under the header: its tails go through, their solder joints keep it on
-SHUTTLE_LEDGE = 0.8  # in front of the housing plate's ends: keeps it in when the case opens
+# Wires between the halves: six conductors of Mario's rainbow ribbon (two each
+# for + and -, talk, talk ground) from the board to a junction in the channel
+# where the tub's wires meet them, spliced in heat-shrink. Loose with slack on
+# purpose (Mario, 2026-10-11: the heavy parts are held, the wires need no
+# place), so the faceplate swings open like a book on them.
+SEAM = (X0, 12.6, 46.0)  # the junction, behind the speaker's magnet
 # Fins on the faceplate along the inside of both side walls, below the
-# holders' fronts: they line the faceplate up sideways before the plug meets.
+# holders' fronts: they line the faceplate up sideways as it closes.
 GUIDE_Z, GUIDE_Y1, GUIDE_T = (12.0, 38.0), -8.8, 1.6
-SHUTTLE_OUT = (  # shuttle half sizes, header frame (x along the pins, y across)
-    hw.XH_HEADER_L / 2 + SHUTTLE_BORE + SHUTTLE_WALL,
-    hw.XH_HEADER_D / 2 + SHUTTLE_BORE + SHUTTLE_WALL,
-)
-CAGE_POCKET = (SHUTTLE_OUT[0] + CAGE_FLOAT, SHUTTLE_OUT[1] + CAGE_FLOAT)
-CAGE_TAB = 1.8  # the tabs that catch the shuttle's corners
-XH_MATED_FLOOR = (
-    hw.XH_MATED + XH_SHORT
-)  # cage floor, from the header base: the housing's top rests here
 
 # PTT lever on the right side.
 X_OUT = W / 2
@@ -243,12 +199,6 @@ def click_travel(force: float = hw.TACT_FORCE, shim: float = 0.0) -> float:
 def to_device(x: float, y: float) -> tuple[float, float]:
     """Board (x, y) -> device (x, z) on the board plane."""
     return X0 + y, BOARD_Z - x
-
-
-def yoke_screws() -> list[tuple[float, float]]:
-    """The board's two lower screw holes, device (x, z): the yoke clamps under them."""
-    holes = [to_device(*h) for h in hw.HOLES]
-    return sorted(h for h in holes if h[1] < BOARD_Z)
 
 
 def _bar(grow: float = 0.0):
@@ -433,15 +383,11 @@ def _faceplate(outer, wall, boss_box, usb_boss, inner):
         x, z = to_device(hx, hy)
         so = _along_y(x, z, 2.6, FACE_Y, BOARD_TOP_Y)
         standoffs.append(so - _along_y(x, z, pilot_r, Y_FRONT + 1.3, 0))
-        # The two lower screws clamp the seam plug's yoke instead of a washer.
-        under = YOKE_T if z < BOARD_Z else BOARD_WASHER
-        y_head = PCB_BOTTOM_Y + under
+        y_head = PCB_BOTTOM_Y + BOARD_WASHER
+        washer = _along_y(x, z, 2.5, PCB_BOTTOM_Y, y_head)
         head = _along_y(x, z, 1.9, y_head, y_head + 1.3)
         shank = _along_y(x, z, 1.0, y_head - BOARD_SCREW_L, y_head)
-        screw = head + shank
-        if z >= BOARD_Z:
-            screw += _along_y(x, z, 2.5, PCB_BOTTOM_Y, y_head)  # washer
-        board_screws.append(screw)
+        board_screws.append(washer + head + shank)
 
     # Three posts round the board's edge centre it on its screws (Ø2.9 holes
     # let an M2 wander 0.45), so USB-C cannot catch on the tub when it closes.
@@ -577,171 +523,6 @@ def _wire_keepers():
             lx0, lx1 = sorted((NEG_RUN_X + side * 0.4, NEG_RUN_X + side * 0.71))  # 0.3 bump
             snaps.append(bbox_solid(lx0, lx1, back - 2.2, back - 1.4, cz - 2.0, cz + 2.0))
     return _union(keep), _union(snaps), _union(ribs)
-
-
-def _ring(ix, iy, ox, oy, z0, z1):
-    return bbox_solid(-ox, ox, -oy, oy, z0, z1) - bbox_solid(-ix, ix, -iy, iy, z0 - 1, z1 + 1)
-
-
-def yoke_grip(z0: float):
-    """The yoke's hold on the plug header, in the header's frame: walls round
-    its base with crush ribs, standing on two posts at its ends (clear of the
-    soldered tails) that reach down to z0, a web under it, and a plate the
-    header sits on with a hole for each tail: soldered below it, the tails
-    keep the header on when the case opens. The fit coupon prints this same
-    piece. Returns (grip, ribs)."""
-    hl, hd = hw.XH_HEADER_L / 2, hw.XH_HEADER_D / 2
-    gx, gy = hl + fits.PART, hd + fits.PART
-    ox, oy = gx + fits.MIN_WALL, gy + fits.MIN_WALL
-    post_x0 = hw.XH_SPAN / 2 + XH_JOINT
-    grip = _ring(gx, gy, ox, oy, 0.0, YOKE_GRIP)
-    for sx in (-1, 1):
-        grip += bbox_solid(*sorted((sx * post_x0, sx * ox)), -oy, oy, z0 - 0.01, 0.0)
-    grip += bbox_solid(-post_x0, post_x0, gy, oy, z0 - 0.01, 0.01)  # web under the header
-    plate = bbox_solid(-post_x0 - 0.01, post_x0 + 0.01, -oy, gy + 0.01, -YOKE_PLATE, 0.0)
-    row = -hd + hw.XH_ROW
-    for x in hw.xh_pin_x():
-        plate -= Pos(x, row, -YOKE_PLATE / 2) * Cylinder(0.6, YOKE_PLATE + 1)
-    grip += plate
-    reach = fits.CRUSH_RIB - fits.PART
-    ribs = []
-    for x in (-hl + 2.5, hl - 2.5):
-        for sy in (-1, 1):
-            y0, y1 = sorted((sy * gy, sy * (hd - reach)))
-            ribs.append(bbox_solid(x - 0.4, x + 0.4, y0, y1, 0.0, YOKE_GRIP))
-    for sx in (-1, 1):
-        x0, x1 = sorted((sx * gx, sx * (hl - reach)))
-        ribs.append(bbox_solid(x0, x1, -0.4, 0.4, 0.0, YOKE_GRIP))
-    return grip, _union(ribs)
-
-
-def shuttle_piece():
-    """The shuttle, in the header's frame as it sits closed. Returns (sleeve, ribs)."""
-    hl, hd = hw.XH_HEADER_L / 2, hw.XH_HEADER_D / 2
-    floor_s = XH_MATED_FLOOR
-    bx, by = hl + SHUTTLE_BORE, hd + SHUTTLE_BORE
-    sox, soy = SHUTTLE_OUT
-    sleeve = _ring(bx, by, sox, soy, SHUTTLE_S0, floor_s)
-    c = SHUTTLE_CHAMFER
-    sleeve -= extrude(Pos(0, 0, SHUTTLE_S0) * Rectangle(2 * (bx + c), 2 * (by + c)), c, taper=45)
-    reach = fits.CRUSH_RIB - fits.PART
-    pl, pd = hw.XH_PLATE_L / 2, hw.XH_PLATE_D / 2
-    plate_s0 = floor_s - hw.XH_PLATE_T
-    # Ledges in front of the plate's ends: the housing goes in from the back,
-    # body first, and its plate stops on them (clear of the header even fully
-    # seated). Crush ribs on the ledges hold the body's ends.
-    ledge_x = hw.XH_BODY_L / 2 + 0.15
-    ledge_s0 = plate_s0 - SHUTTLE_LEDGE
-    assert ledge_s0 > hw.XH_HEADER_H + XH_SHORT + 0.3
-    for sx in (-1, 1):
-        sleeve += bbox_solid(
-            *sorted((sx * ledge_x, sx * (bx + 0.01))), -by, by, ledge_s0, plate_s0
-        )
-    ribs = []
-    for sx in (-1, 1):  # on the plate's ends and long edges, and on the body's ends
-        x0, x1 = sorted((sx * bx, sx * (pl - reach)))
-        ribs.append(bbox_solid(x0, x1, -0.4, 0.4, plate_s0, floor_s))
-        x0, x1 = sorted((sx * ledge_x, sx * (hw.XH_BODY_L / 2 - reach)))
-        ribs.append(bbox_solid(x0, x1, -0.4, 0.4, ledge_s0, plate_s0))
-        for x in (-pl + 2.0, pl - 2.0):
-            y0, y1 = sorted((sx * by, sx * (pd - reach)))
-            ribs.append(bbox_solid(x - 0.4, x + 0.4, y0, y1, plate_s0, floor_s))
-    return sleeve, _union(ribs)
-
-
-def _seam_plug(inner):
-    """The two halves of the seam plug and what holds them.
-
-    Built in the header's frame (XH_LOC): x along the pins, z from the header
-    base toward the tub, slotted face at -y (device up). Returns (yoke, yoke
-    ribs, shuttle, shuttle ribs, tub cage, header parts, housing).
-    """
-    hl, hd = hw.XH_HEADER_L / 2, hw.XH_HEADER_D / 2
-    floor_s = XH_MATED_FLOOR
-
-    # Yoke (faceplate side): walls grip the header's base on crush ribs, its
-    # ends sit on two posts, and a plate on the board's back joins the posts
-    # to the two lower screw bosses. The pigtails leave from the open top.
-    plate_z = PCB_BOTTOM_Y + YOKE_T - XH_Y  # the plate's top, in this frame
-    yoke, yoke_ribs = yoke_grip(plate_z)
-    ox, oy = hl + fits.PART + fits.MIN_WALL, hd + fits.PART + fits.MIN_WALL
-    post_x0 = hw.XH_SPAN / 2 + XH_JOINT
-    yoke = XH_LOC * yoke
-    # The plate, in device coordinates: bosses on the two lower screws, an arm
-    # from each to its post, and a pad behind the posts (kept under the rear
-    # LED at the board's bottom).
-    y0, y1 = PCB_BOTTOM_Y, PCB_BOTTOM_Y + YOKE_T
-    z_lo, z_hi = XH_Z - oy, XH_Z + oy
-    led_z = BOARD_Z - hw.LED_R - 1.6 - 0.5  # 0.5 under the rear LED at the bottom
-    plate = bbox_solid(XH_X - ox, XH_X + ox, y0, y1, z_lo, led_z)
-    for sx in (-1, 1):
-        plate += bbox_solid(*sorted((XH_X + sx * post_x0, XH_X + sx * ox)), y0, y1, z_lo, z_hi)
-    screws = yoke_screws()
-    for hx, hz in screws:
-        tx, tz = XH_X + (1 if hx > XH_X else -1) * (ox - 1.3), XH_Z
-        ang = math.degrees(math.atan2(tz - hz, tx - hx))
-        length = math.hypot(tx - hx, tz - hz)
-        arm = Pos((hx + tx) / 2, (y0 + y1) / 2, (hz + tz) / 2) * Rot(0, -ang, 0)
-        plate += arm * Box(length, YOKE_T, 3.4)
-        plate += _along_y(hx, hz, 2.5, y0, y1)
-    for hx, hz in screws:
-        plate -= _along_y(hx, hz, fits.SCREW_CLEAR["M2"] / 2, y0 - 1, y1 + 1)
-    yoke += plate
-
-    # Shuttle (tub side): a sleeve round the housing, the header's box size
-    # inside, with a chamfered mouth that reaches past the housing's tip.
-    shuttle, shuttle_ribs = shuttle_piece()
-    pl = hw.XH_PLATE_L / 2
-
-    # Cage (part of the tub): the shuttle stands on its floor and floats
-    # CAGE_FLOAT inside two end walls, its corners caught by tabs above and
-    # below. Everything prints standing up: the end walls reach back to the
-    # wall with 45 deg undersides, the bottom tabs sit on 45 deg wedges, the top
-    # tabs are short enough to bridge.
-    cx, cz = CAGE_POCKET  # pocket half sizes (device x, z)
-    kx, kz = cx + fits.MIN_WALL, cz + fits.MIN_WALL
-    y_front, y_floor = XH_Y + CAGE_S0, XH_Y + floor_s
-    y_back = Y_BACK - T + 0.1
-    tab, wedge = CAGE_TAB, 2.0
-    z_bot = XH_Z - kz - wedge  # the end walls' front-bottom edge
-    cage = None
-    for sx in (-1, 1):
-        w0, w1 = sorted((XH_X + sx * cx, XH_X + sx * kx))
-        pts = [
-            (y_front, z_bot),
-            (y_front, XH_Z + kz),
-            (y_back, XH_Z + kz),
-            (y_back, z_bot - (y_back - y_front)),
-        ]
-        end = extrude(Plane.YZ.location * make_face(Polyline(*pts, close=True)), w1 - w0)
-        end = Pos(w0, 0, 0) * end
-        cage = end if cage is None else cage + end
-        t0, t1 = sorted((XH_X + sx * cx, XH_X + sx * (cx - tab)))
-        cage += bbox_solid(t0, t1, y_front, y_floor + 1.2, XH_Z - kz, XH_Z - cz)  # bottom tab
-        cage += _wedge_under(
-            XH_X + sx * (cx + 0.1), XH_X + sx * (cx - tab), y_front, y_floor + 1.2, XH_Z - kz
-        )
-        cage += bbox_solid(t0, t1, y_front, y_floor + 1.2, XH_Z + cz, XH_Z + kz)  # top tab
-    # The floor is two ledges at the ends, under the shuttle's end walls and
-    # the housing plate's ends: the middle is open top to bottom, so the
-    # harness drops in from the front with the shuttle.
-    floor = None
-    for sx in (-1, 1):
-        x0, x1 = sorted((XH_X + sx * (pl - 0.75), XH_X + sx * cx))
-        ledge = bbox_solid(x0, x1, y_floor, y_floor + 1.2, XH_Z - kz, XH_Z + kz)
-        floor = ledge if floor is None else floor + ledge
-    cage = (cage + floor) & inner
-    header = [Part(p.name, XH_LOC * p.shape, p.kind) for p in hw.xh_header()]
-    housing = XH_LOC * Pos(0, 0, XH_SHORT) * hw.xh_housing()
-    return (
-        yoke,
-        XH_LOC * yoke_ribs,
-        XH_LOC * shuttle,
-        XH_LOC * shuttle_ribs,
-        cage,
-        header,
-        housing,
-    )
 
 
 def _holder_retention(inner):
@@ -1070,8 +851,6 @@ def build() -> Concept:
     tub += keepers
     tub_ribs.append(keeper_ribs)
     latch += keeper_snaps  # snap lips: rigid stops that flex on the way in
-    yoke, yoke_ribs, shuttle, shuttle_ribs, cage, xh_header, xh_housing = _seam_plug(inner)
-    tub += cage
 
     # Cuts: lever channel, plunger bore, tooth notch, rear pin seat, rocker, USB,
     # and the band the faceplate's lip goes into.
@@ -1156,29 +935,18 @@ def build() -> Concept:
             ],
             d=1.5,
         )
-    # Cable runs. Faceplate side: pigtails from the board to the plug header,
-    # soldered on the bench (the battery pair is the board's own battery plug
-    # lead, cut short). Tub side: a harness cut to length, crimped into the
-    # plug housing.
-    bat_x = to_device(17.81, -6.04)[0]
+    # Cable runs (tub side). The ribbon from the board to the seam junction is
+    # loose with slack and not modelled.
     spk_x = to_device(17.81, 5.19)[0]
     plug_z = to_device(17.81, 0)[1]
     plug_y = PCB_BOTTOM_Y + hw.BOTTOM_CONN
     rocker_tab_x = panel_x + hw.ROCKER_BODY[2] + hw.ROCKER_TABS - 0.5
-    pin_x = [XH_X + x for x in hw.xh_pin_x()]
-    row_z = XH_Z + hw.XH_HEADER_D / 2 - hw.XH_ROW
-    tail_y = XH_Y - hw.XH_TAIL + 0.4  # pigtails lap the last 0.4 of each tail
-    top_y = XH_Y + hw.XH_MATED + XH_SHORT  # housing top, on the cage floor
+    seam_x = [SEAM[0] + k * 2.5 for k in (-1.5, -0.5, 0.5, 1.5)]  # +, -, talk GND, talk
     neg_y = Y_BACK - T - 0.65  # the - lead against the back wall, in its clips
-    gpio7 = to_device(10.16, 13.82)  # header pin 2: GPIO7, the talk input
 
-    def into_header(x):
-        """Last points of a pigtail: down the open top of the yoke onto a tail."""
-        return [(x, -3.8, 48.6), (x, -3.9, 47.0), (x, -3.2, row_z + 0.3), (x, tail_y, row_z)]
-
-    def into_housing(x, y_in=13.6):
-        """Last points of a harness wire: up behind the cage floor, into the housing."""
-        return [(x, y_in, row_z + 1.6), (x, top_y + 1.4, row_z), (x, top_y + 0.1, row_z)]
+    def to_seam(x, y_in=13.6):
+        """Last points of a tub wire: down behind where its splice sits."""
+        return [(x, y_in, SEAM[2] + 1.6), (x, SEAM[1], SEAM[2])]
 
     cables = {
         "cable_spk": hw.cable(
@@ -1190,37 +958,8 @@ def build() -> Concept:
                 (tab_x + 0.6, tab_y + 0.6, tab_z + 1.0),
             ]
         ),
-        "cable_board_pos": hw.cable(
-            [
-                (bat_x - 0.6, plug_y, plug_z),
-                (bat_x - 0.6, plug_y + 1.1, plug_z - 0.9),
-                (pin_x[0], -2.4, 51.2),
-                *into_header(pin_x[0]),
-            ],
-            d=1.0,
-        ),
-        "cable_board_neg": hw.cable(
-            [
-                (bat_x + 0.6, plug_y, plug_z),
-                (bat_x + 0.6, plug_y + 1.1, plug_z - 0.9),
-                (pin_x[1], -2.4, 51.2),
-                *into_header(pin_x[1]),
-            ],
-            d=1.0,
-        ),
-        "cable_board_talk": hw.cable(
-            [
-                (gpio7[0], PCB_BOTTOM_Y + 1.5, gpio7[1]),
-                (gpio7[0], PCB_BOTTOM_Y + 2.6, gpio7[1] - 1.4),
-                (gpio7[0] - 1.0, -5.3, 57.0),
-                (9.6, -4.6, 51.8),
-                (5.6, -4.0, 50.0),
-                *into_header(pin_x[3]),
-            ],
-            d=1.0,
-        ),
         # + : rocker -> bridge clip -> down the channel, over the cage and
-        # behind its floor -> plug pin 1.
+        # behind it -> its splice at the seam junction.
         "cable_bat_pos": hw.cable(
             [
                 (rocker_tab_x, ROCKER_Y - hw.ROCKER_TAB_PITCH / 2, ROCKER_Z),
@@ -1229,8 +968,8 @@ def build() -> Concept:
                 (POS_CLIP_X, POS_CLIP_Y, (BRIDGE_Z[0] + BRIDGE_Z[1]) / 2),
                 (POS_CLIP_X + 0.6, 3.5, 61.5),
                 (-7.4, 9.5, 54.0),
-                (pin_x[0] - 0.4, 13.6, 51.3),
-                *into_housing(pin_x[0], 13.8),
+                (seam_x[0] - 0.4, 13.6, 51.3),
+                *to_seam(seam_x[0], 13.8),
             ],
             d=1.2,
         ),
@@ -1244,7 +983,7 @@ def build() -> Concept:
             d=1.2,
         ),
         # - : the - joint -> up the back wall in two clips -> under and
-        # behind the cage -> plug pin 2.
+        # behind it -> its splice at the seam junction.
         "cable_bat_neg": hw.cable(
             [
                 j_neg,
@@ -1253,13 +992,13 @@ def build() -> Concept:
                 (NEG_RUN_X, neg_y, NEG_CLIPS_Z[0]),
                 (NEG_RUN_X, neg_y, NEG_CLIPS_Z[1]),
                 (NEG_RUN_X - 1.2, neg_y - 0.6, 36.0),
-                (pin_x[1] + 3.0, 14.6, 41.5),
-                *into_housing(pin_x[1], 14.2),
+                (seam_x[1] + 3.0, 14.6, 41.5),
+                *to_seam(seam_x[1], 14.2),
             ],
             d=1.2,
         ),
     }
-    # Talk pair: switch legs -> bridge clip -> down the channel -> plug pins 3 and 4.
+    # Talk pair: switch legs -> bridge clip -> down the channel -> the seam junction.
     legs_x = TS_BASE_X - hw.TACT_LEGS
     legs_z = TS_Z - 6.25
     for name, (leg_y, pin_i, clip_y) in {
@@ -1273,9 +1012,9 @@ def build() -> Concept:
                 (PTT_CLIP_X + 0.9, clip_y, 78.0),
                 (PTT_CLIP_X, clip_y, (BRIDGE_Z[0] + BRIDGE_Z[1]) / 2),
                 (PTT_CLIP_X - 0.2, clip_y + 1.6, 62.0),
-                (pin_x[pin_i] + 1.4, 9.0 + clip_y, 54.5),
-                (pin_x[pin_i] + 0.4, 13.0 + clip_y * 0.4, 51.0),
-                *into_housing(pin_x[pin_i], 13.2 + clip_y * 0.4),
+                (seam_x[pin_i] + 1.4, 9.0 + clip_y, 54.5),
+                (seam_x[pin_i] + 0.4, 13.0 + clip_y * 0.4, 51.0),
+                *to_seam(seam_x[pin_i], 13.2 + clip_y * 0.4),
             ],
             d=1.0,
         )
@@ -1307,10 +1046,6 @@ def build() -> Concept:
         *cells,
         *[Part(n, c, "wire_red" if "pos" in n else "wire_black") for n, c in leads.items()],
         *ts_parts,
-        Part("yoke", yoke + yoke_ribs, "shell_inner"),
-        Part("shuttle", shuttle + shuttle_ribs, "shell_inner"),
-        *xh_header,
-        Part("xh_housing", xh_housing, "white"),
         *[
             Part(
                 n,
@@ -1337,8 +1072,6 @@ def build() -> Concept:
         "bar_sweep": sweep,
         **leads,
         "rocker": rocker[2].shape + rocker[3].shape,
-        "xh_header": xh_header[0].shape + xh_header[1].shape,
-        "xh_housing": xh_housing,
         **fasteners,
         "bridge_screw": bridge_screw,
         "bridge_insert": bridge_insert,
@@ -1358,10 +1091,6 @@ def build() -> Concept:
         "ptt_pin": pin,
         "bridge": bridge,
         "bridge_ribs": bridge_ribs,
-        "yoke": yoke,
-        "yoke_ribs": yoke_ribs,
-        "shuttle": shuttle,
-        "shuttle_ribs": shuttle_ribs,
     }
     allowed = {
         # one print
@@ -1419,23 +1148,6 @@ def build() -> Concept:
         ("cable_ptt_a", "tact_switch"),  # soldered to its legs
         ("cable_ptt_b", "tact_switch"),
         ("cable_spk", "speaker"),  # soldered to the tab
-        # seam plug
-        ("xh_header", "xh_housing"),  # mated
-        ("xh_header", "yoke_ribs"),  # crush ribs
-        ("xh_housing", "shuttle_ribs"),
-        ("board", "yoke"),  # flat on the board's back (test_fit checks the real parts)
-        ("board_screws", "yoke"),  # through its bosses
-        ("cable_board_pos", "board"),  # pigtails start at the battery socket...
-        ("cable_board_neg", "board"),
-        ("cable_board_talk", "board"),  # ...and the GPIO7 tail
-        ("cable_board_pos", "cable_board_neg"),  # same socket
-        ("cable_board_pos", "xh_header"),  # soldered to its tails
-        ("cable_board_neg", "xh_header"),
-        ("cable_board_talk", "xh_header"),
-        ("cable_bat_pos", "xh_housing"),  # crimped into it
-        ("cable_bat_neg", "xh_housing"),
-        ("cable_ptt_a", "xh_housing"),
-        ("cable_ptt_b", "xh_housing"),
     }
     occupied = [envelopes["speaker"], *bays, boss, backing, face_shapes["faceplate_standoffs"]]
     occupied += [p.shape for p in board if p.name == "board_pcb"]

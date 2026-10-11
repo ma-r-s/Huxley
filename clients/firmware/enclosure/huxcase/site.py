@@ -109,29 +109,19 @@ STEPS = [
         "id": "wiring",
         "title": "Wiring",
         "text": "The holder leads join in pairs, the joints in heat-shrink go into "
-        "their pockets, and the harness wires snap into the clips on the bridge "
-        "and the back wall.",
+        "their pockets, and the long leads into the clips on the bridge and the "
+        "back wall, down to the splices by the back wall.",
         "parts": ["cable_bat_*", "cable_ptt_*", "lead_*"],
         "enter": (0, -40, 0),
         "explode": (0, -56, 0),
-    },
-    {
-        "id": "plug",
-        "title": "Plug, tub half",
-        "text": "The four harness wires, crimped and cut to length, go into the "
-        "JST-XH housing in pin order. Press it into the printed shuttle and stand "
-        "that in its cage on the back wall: it floats there until the case closes.",
-        "parts": ["shuttle", "xh_housing"],
-        "enter": (0, -70, 0),
-        "explode": (0, -34, 0),
     },
     {
         "id": "front",
         "title": "Faceplate side",
         "text": "Built face down: two inserts in its bottom bosses, the grille plug "
         "into its window, the speaker on its six tabs, the board on three M2 × 8. "
-        "The two lower screws also clamp the plug yoke, its header already soldered "
-        "to the board's three pigtails on the bench.",
+        "Then the six-wire ribbon from the board, spliced to the tub's wires with "
+        "slack, so the faceplate swings open like a book.",
         "parts": [
             "faceplate",
             "face_inserts",
@@ -140,9 +130,6 @@ STEPS = [
             "board_*",
             "board_screws",
             "cable_spk",
-            "cable_board_*",
-            "yoke",
-            "xh_*",
         ],
         "enter": (0, -150, 0),
         "explode": (0, -108, 0),
@@ -151,9 +138,6 @@ STEPS = [
             "board_*": (0, -86, 0),
             "board_screws": (0, -80, 0),
             "grille_plug": (0, -126, 0),
-            "yoke": (0, -66, 0),
-            "xh_*": (0, -60, 0),
-            "cable_board_*": (0, -74, 0),
             "cable_spk": (0, -72, 0),
         },
     },
@@ -190,13 +174,7 @@ LABELS = [
     ("bridge", "Holder bridge"),
     ("cable_spk", "Speaker lead"),
     ("cable_bat_*", "Battery lead"),
-    ("cable_board_*", "Board pigtails"),
     ("cable_ptt_*", "Talk switch wires"),
-    ("yoke", "Plug yoke"),
-    ("shuttle", "Plug shuttle"),
-    ("xh_header", "JST-XH 4-pin header"),
-    ("xh_tails", "JST-XH 4-pin header"),
-    ("xh_housing", "JST-XH 4-pin housing"),
     ("lead_*", "Holder leads"),
     ("case_screws", "M3 × 8 screw"),
 ]
@@ -219,7 +197,6 @@ BOUGHT = [
     ("12 × 12 tact switch", 1),
     ("Spring 0.4 × 4 × 15 (SciWil kit)", 1),
     ("KCD1-101 rocker switch", 1),
-    ("JST-XH 4-pin header, housing, 4 terminals (XH kit)", 1),
     ("M3 × 8 button head, case", 4),
     ("M3 × 6 button head, holder bridge", 1),
     ("M3 × 5 heat-set insert", 5),

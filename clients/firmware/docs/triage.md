@@ -212,7 +212,11 @@ no plug, a ribbon folded into a pocket at the seam (fewer parts, nothing
 to align, but the faceplate stays tethered and opens like a book).
 Recommended: the ribbon. **Mario chose the ribbon (2026-10-11)**: the faceplate
 opens like a book about its left front edge; a ribbon service loop lies in a
-slot along the left wall; plan under review before it is built. Done meanwhile: the joint pockets are 14 and 11 mm
+slot along the left wall. Then simpler still (Mario, 2026-10-11): the
+heavy parts must be held, the wires need no place. So the plug, yoke, shuttle
+and cage are gone; six ribbon conductors are spliced from the board's battery
+plug lead and GPIO7 to the tub's wires at a junction behind the speaker's
+magnet, with about 100 mm of slack lying loose. Done meanwhile: the joint pockets are 14 and 11 mm
 long (a lead a few mm off moves its joint along), the rocker goes in empty
 and its tabs are soldered in place, and wires are measured on the print.
 

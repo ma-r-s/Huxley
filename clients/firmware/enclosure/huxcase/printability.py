@@ -39,8 +39,6 @@ POSES = (
     Pose("ptt_pin", "lying flat", (0, 0, 0)),
     Pose("plunger", "standing on its flat end", (0, -90, 0)),
     Pose("bridge", "front face down", (90, 0, 0)),
-    Pose("yoke", "board side down", (90, 0, 0)),
-    Pose("shuttle", "standing on its back end, mouth up", (-90, 0, 0)),
 )
 
 
@@ -51,8 +49,6 @@ def printed_pieces(c=None) -> dict[str, object]:
     out = {name: by_name[name] for name in ("faceplate", "grille_plug", "ptt_bar", "ptt_pin")}
     out["plunger"] = by_name["plunger"]
     out["bridge"] = by_name["bridge"]
-    out["yoke"] = by_name["yoke"]
-    out["shuttle"] = by_name["shuttle"]
     out["tub"] = by_name["tub_grey"] + by_name["tub_frosted"]
     return out
 
@@ -127,8 +123,6 @@ COLOUR = {
     "ptt_pin": "grey",
     "plunger": "grey",
     "bridge": "grey",
-    "yoke": "grey",
-    "shuttle": "grey",
 }
 
 

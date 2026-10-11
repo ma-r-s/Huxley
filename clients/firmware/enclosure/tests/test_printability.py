@@ -22,7 +22,7 @@ def test_every_piece_has_a_pose_and_is_one_solid():
         assert len(shape.solids()) == 1, name
 
 
-@pytest.mark.parametrize("piece", ["ptt_pin", "plunger", "shuttle"])
+@pytest.mark.parametrize("piece", ["ptt_pin", "plunger"])
 def test_small_parts_need_no_support(report, piece):
     assert report[piece] == []
 
@@ -32,7 +32,6 @@ def test_small_parts_need_no_support(report, piece):
     [
         ("ptt_bar", 60),  # the pin bore's roof and the dimple's floor: tiny bridges
         ("bridge", 130),  # the back bar bridges 17 mm between its webs
-        ("yoke", 70),  # the plate under the header bridges 9.5 mm between the posts
         ("grille_plug", 200),  # its flange: 1.5 mm out
         ("faceplate", 450),  # the face's edge round-over and the counterbore steps
         ("tub", 3300),  # roof, switch cradle and tube, rocker mount: tree supports

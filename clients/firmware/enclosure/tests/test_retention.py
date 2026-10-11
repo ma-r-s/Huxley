@@ -44,11 +44,6 @@ def model():
         "screws": [c.envelopes["board_screws"], c.envelopes["bridge_screw"]],
         "speaker": [c.envelopes["speaker"]],
         "pcb": [parts["board_pcb"]],
-        "yoke": [sh["yoke"]],
-        "shuttle": [sh["shuttle"]],
-        # The mated plug: each half stops the other.
-        "header": [c.envelopes["xh_header"]],
-        "housing": [c.envelopes["xh_housing"]],
         "ptt_a": [c.envelopes["cable_ptt_a"]],
     }
     return c, parts, rigid
@@ -78,11 +73,6 @@ CASES = {
     # The talk pair sits two deep in one clip: the lip holds the front wire,
     # the front wire holds the back one.
     "cable_ptt_b": (("bridge", "ptt_a"), ("+y", "+z", "-z")),
-    # Seam plug, case closed.
-    "yoke": (("pcb", "screws"), ()),
-    "xh_header": (("yoke", "housing"), ()),
-    "xh_housing": (("shuttle", "tub", "header"), ()),
-    "shuttle": (("tub", "yoke", "header"), ()),
 }
 
 
