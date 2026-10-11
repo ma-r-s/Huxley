@@ -309,9 +309,6 @@ ROCKER_BODY = (19.0, 13.0, 11.5)
 ROCKER_DEPTH = 18.6  # measured: frame underside to tab tips
 ROCKER_TABS, ROCKER_TAB_PITCH, ROCKER_CAP = ROCKER_DEPTH - ROCKER_BODY[2], 6.0, 5.0
 
-# 1S Li-ion protection board (DW01 + 8205 class): reserved, not fitted.
-PROTECTION_PCB = (26.0, 5.0, 3.5)
-
 
 def rocker() -> list[Part]:
     """Local frame: panel (outer face of the wall it clips into) at z = 0,

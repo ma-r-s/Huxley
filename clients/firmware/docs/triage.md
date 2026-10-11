@@ -180,8 +180,11 @@ shuttle's chamfered mouth takes the header's box, so alignment rests only
 on JST's published outside sizes (`hw.xh_*`, from eXH.pdf), never on the
 connector's insides. Board half: B4B-XH-A in a yoke under the two lower
 board screws (STEP check: nothing on the board's back there but one rear
-LED, 0.5 clear). The + runs through the protection board's P+ (powers its
-chip, no extra B+ wire). Talk input on GPIO7 (header pin 2): the old model
+LED, 0.5 clear). Later the same day Mario chose his protected 18650s over
+a protection board, so the board, its rails and its wiring are gone; the
+battery - lead runs from the - joint up the back wall in two clips to the
+plug, and the board's own battery plug lead becomes the board pigtails.
+Talk input on GPIO7 (header pin 2): the old model
 had the talk wires on the GND and 3V3 header pins. Every wire has a cut
 length from its route (`WIRE_CUTS`, tested to cover the route plus strip
 and crimp). Speaker turned 30 deg, lead 26 mm. Coupon: the peg slides into
@@ -191,11 +194,11 @@ Still open: the plug coupon result (the one fit no test proves), the
 lever-pin block and the side-hole row, a third buildability review.
 
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
-bottom is fine, holders whole, no glue, plastic pivot, protection board
-fitted, plug between the halves); buy the protection board (B+ B- P+ P-
-pads); dock yes/no; volume buttons yes/no. Measurements still wanted:
-holder wall top edge, rocker body and snap ears, switch leg spacing, a
-1.25 mm battery plug or not.
+bottom is fine, holders whole, no glue, plastic pivot, protected cells
+instead of a protection board, plug between the halves, the board's battery
+plug is there); dock yes/no; volume buttons yes/no. Measurements still
+wanted (drawn for him): holder wall top edge, rocker body and snap ears,
+switch leg spacing; and whether a protected cell fits a holder.
 
 **Firmware impact**: PTT moves from the on-board `K2` (via TCA9555) to an
 external switch on GPIO7 (header pin 2; input, pull-up, low = talk; the LCD

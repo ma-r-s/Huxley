@@ -86,15 +86,13 @@ SPK_LEAD_CUT = 26.0
 # Holder leads are trimmed to the joint. Nothing is left over to rattle; a test
 # keeps these in step with the routes.
 WIRE_CUTS = {
-    "cable_bat_pos": 73,  # rocker -> protection board P+
+    "cable_bat_pos": 62,  # rocker -> plug pin 1 (crimped)
     "cable_bat_sw": 21,  # rocker -> + joint
-    "cable_bat_bm": 14,  # protection board B- -> - joint
-    "cable_seam_pos": 25,  # P+ -> plug pin 1 (crimped)
-    "cable_seam_neg": 25,  # P- -> plug pin 2 (crimped)
+    "cable_bat_neg": 58,  # - joint -> plug pin 2 (crimped)
     "cable_ptt_a": 53,  # talk switch -> plug pin 3 (crimped)
     "cable_ptt_b": 53,  # talk switch -> plug pin 4 (crimped)
-    "cable_board_pos": 18,  # board battery socket + -> header tail 1
-    "cable_board_neg": 19,  # board battery socket - -> header tail 2
+    "cable_board_pos": 18,  # the board's battery plug, + wire -> header tail 1
+    "cable_board_neg": 19,  # the board's battery plug, - wire -> header tail 2
     "cable_board_talk": 28,  # board GPIO7 (header pin 2) -> header tail 4
     "lead_pos_0": 24,
     "lead_pos_1": 32,
@@ -153,18 +151,11 @@ SPK_TABS = (0.0, 60.0, 120.0, 180.0, 240.0, 300.0)
 # KCD1-101 rocker on the left side, above the left cell, fully recessed: the
 # back had only 20 mm of depth behind it before the light ring.
 ROCKER_Y, ROCKER_Z, ROCKER_RECESS = 5.3, 93.1, 7.2  # rocker top 0.2 below the surface
-# Reserved pocket for a 1S protection board, in the grey bottom third behind the speaker.
-# 1S protection board (DW01 + 8205 class), standing on edge against the back
-# wall behind the speaker, between the speaker post and the right holder.
-PROT_BOX = (
-    3.1,
-    3.1 + 3.5,
-    Y_BACK - T - 0.3 - 5.0,
-    Y_BACK - T - 0.3,
-    10.0,
-    36.0,
-)  # x0 x1 y0 y1 z0 z1
 SPLICE_D = 3.5  # a parallel joint in heat-shrink
+# Mario's cells are protected 18650s (2026-10-10), each with its own circuit,
+# so no separate protection board. The battery - lead runs from the - joint
+# up the back wall to the plug, in two clips beside the speaker post.
+NEG_RUN_X, NEG_CLIPS_Z = X0 + 6.0, (14.0, 28.0)
 
 # Seam plug: a JST-XH 4-pin pair from Mario's kit joins the faceplate's wires
 # to the tub's as the case closes, so no wire crosses the seam and the
@@ -174,7 +165,7 @@ SPLICE_D = 3.5  # a parallel joint in heat-shrink
 # shuttle that floats in a cage on the back wall. The shuttle's chamfered
 # mouth takes the header's box and so lines the housing up with it; only the
 # outside sizes on JST's drawing matter, none of the connector's insides.
-XH_X, XH_Y, XH_Z = -0.95, 0.6, 45.2  # header base centre; its mouth faces +Y
+XH_X, XH_Y, XH_Z = X0, 0.6, 45.2  # header base centre; its mouth faces +Y
 XH_LOC = Location((XH_X, XH_Y, XH_Z)) * Rot(-90, 0, 0)  # local +z -> +Y, slotted face up
 XH_SHORT = 0.8  # the housing rests on the cage floor this far short of fully seated
 YOKE_T = 1.8  # yoke bosses under the two lower board screws (they replace the washers)
@@ -545,13 +536,12 @@ def _plug():
 
 
 def _wire_keepers():
-    """Pockets for the two parallel joints and the protection board's holder,
-    all on the back wall: no joint or board is left free to buzz in the back
+    """Pockets for the two parallel joints and clips for the battery - lead,
+    all on the back wall: no joint or wire is left free to buzz in the back
     box. Returns (rigid features, snap lips, crush ribs).
 
     The joints (in heat-shrink) press in between two shelves from the front,
-    past a lip; the board slides in between two rails, past their lips, onto a
-    ledge.
+    past a lip; the lead snaps in between two prongs, past their lips.
     """
     back = Y_BACK - T + 0.1
     gap = SPLICE_D / 2 + fits.PART
@@ -567,22 +557,12 @@ def _wire_keepers():
     s0 = T + SPLICE_D + 2 * fits.PART  # the floor is the bottom of this pocket
     keep.append(bbox_solid(nx - 5.0, nx + 1.0, ny - 2.6, back, s0, s0 + 1.0))
     snaps.append(bbox_solid(nx - 5.0, nx + 1.0, ny - 2.6, ny - 1.8, s0 - 0.3, s0))
-    # Protection board holder.
-    x0, x1, y0, y1, z0, z1 = PROT_BOX
-    r0, r1 = x0 - fits.PART, x1 + fits.PART
-    rail = fits.MIN_WALL  # thin: the right holder's 1 mm inboard path passes beside it
-    for a, b in ((r0 - rail, r0), (r1, r1 + rail)):
-        keep.append(bbox_solid(a, b, y0 - 0.6, back, z0 - 1.3, z1 + 1.3))
-    ledge = bbox_solid(r0, r1, y0 - 0.3, back, z0 - 1.3, z0 - fits.PART)
-    keep.append(
-        ledge - bbox_solid(x0 + 0.5, x1 - 0.5, y0 - 1, y0 + 2.5, z0 - 2, z0)
-    )  # slot: B- lead
-    keep.append(bbox_solid(r0, r1, y0 + 2.5, back, z1 + fits.PART, z1 + 1.3))  # stop, back half
-    snaps.append(bbox_solid(r0, x0 + 0.3, y0 - 0.6, y0 - 0.05, z0 + 2, z1 - 2))  # lips
-    snaps.append(bbox_solid(x1 - 0.3, r1, y0 - 0.6, y0 - 0.05, z0 + 2, z1 - 2))
-    for zc in (z0 + 6, z1 - 6):  # crush ribs
-        ribs.append(bbox_solid(r0, x0 + 0.15, y0 + 1.5, y1 - 1.0, zc - 0.4, zc + 0.4))
-        ribs.append(bbox_solid(x1 - 0.15, r1, y0 + 1.5, y1 - 1.0, zc - 0.4, zc + 0.4))
+    for cz in NEG_CLIPS_Z:
+        for side in (-1, 1):
+            x0, x1 = sorted((NEG_RUN_X + side * 0.7, NEG_RUN_X + side * 1.7))
+            keep.append(bbox_solid(x0, x1, back - 2.6, back, cz - 2.0, cz + 2.0))
+            lx0, lx1 = sorted((NEG_RUN_X + side * 0.4, NEG_RUN_X + side * 0.71))  # 0.3 bump
+            snaps.append(bbox_solid(lx0, lx1, back - 2.2, back - 1.4, cz - 2.0, cz + 2.0))
     return _union(keep), _union(snaps), _union(ribs)
 
 
@@ -688,8 +668,7 @@ def _seam_plug(inner):
     # CAGE_FLOAT inside two end walls, its corners caught by tabs above and
     # below. Everything prints standing up: the end walls reach back to the
     # wall with 45 deg undersides, the bottom tabs sit on 45 deg wedges, the top
-    # tabs are short enough to bridge. The right end wall stands on the
-    # protection board's right rail.
+    # tabs are short enough to bridge.
     cx, cz = CAGE_POCKET  # pocket half sizes (device x, z)
     kx, kz = cx + fits.MIN_WALL, cz + fits.MIN_WALL
     y_front, y_floor = XH_Y + CAGE_S0, XH_Y + floor_s
@@ -1101,7 +1080,7 @@ def build() -> Concept:
     tab = Pos(tab_x, tab_y, tab_z) * Rot(0, 90 - SPK_TAB_DEG, 0) * Box(3.0, 1.0, 2.0)
     # Mario's two single-18650 holders, + end up, floor toward the back. Their
     # own leads join in parallel: + above the holders (on to the rocker), -
-    # below them (on to the protection pocket).
+    # below them (on to the plug).
     cells, bays = [], []
     for i, x in enumerate((X0 - CELL_X, X0 + CELL_X)):
         cells += [
@@ -1142,22 +1121,19 @@ def build() -> Concept:
             d=1.5,
         )
     # Cable runs. Faceplate side: pigtails from the board to the plug header,
-    # soldered on the bench. Tub side: a harness cut to length, crimped into
-    # the plug housing; the + runs through the protection board's P+ pad,
-    # which also powers its chip.
+    # soldered on the bench (the battery pair is the board's own battery plug
+    # lead, cut short). Tub side: a harness cut to length, crimped into the
+    # plug housing.
     bat_x = to_device(17.81, -6.04)[0]
     spk_x = to_device(17.81, 5.19)[0]
     plug_z = to_device(17.81, 0)[1]
     plug_y = PCB_BOTTOM_Y + hw.BOTTOM_CONN
     rocker_tab_x = panel_x + hw.ROCKER_BODY[2] + hw.ROCKER_TABS - 0.5
-    prot = bbox_solid(*PROT_BOX)
-    px0, px1, py0, py1, pz0, pz1 = PROT_BOX
     pin_x = [XH_X + x for x in hw.xh_pin_x()]
     row_z = XH_Z + hw.XH_HEADER_D / 2 - hw.XH_ROW
     tail_y = XH_Y - hw.XH_TAIL + 0.4  # pigtails lap the last 0.4 of each tail
     top_y = XH_Y + hw.XH_MATED + XH_SHORT  # housing top, on the cage floor
-    pad_y, pad_z = py0 + 1.0, pz1 + 0.3  # protection board pads, its top end
-    p_pos, p_neg = (px0 + 1.0, pad_y, pad_z), (px1 - 1.0, pad_y, pad_z)
+    neg_y = Y_BACK - T - 0.65  # the - lead against the back wall, in its clips
     gpio7 = to_device(10.16, 13.82)  # header pin 2: GPIO7, the talk input
 
     def into_header(x):
@@ -1207,8 +1183,8 @@ def build() -> Concept:
             ],
             d=1.0,
         ),
-        # + : rocker -> bridge clip -> down the channel, over and behind the
-        # cage -> the protection board's P+ pad.
+        # + : rocker -> bridge clip -> down the channel, over the cage and
+        # behind its floor -> plug pin 1.
         "cable_bat_pos": hw.cable(
             [
                 (rocker_tab_x, ROCKER_Y - hw.ROCKER_TAB_PITCH / 2, ROCKER_Z),
@@ -1218,10 +1194,7 @@ def build() -> Concept:
                 (POS_CLIP_X + 0.6, 3.5, 61.5),
                 (-7.4, 9.5, 54.0),
                 (-6.6, 13.6, 51.3),
-                (-6.0, 14.4, 46.0),
-                (-2.5, 14.6, 41.0),
-                (p_pos[0] - 1.5, p_pos[1] + 1.1, p_pos[2] + 1.9),
-                p_pos,
+                *into_housing(pin_x[0], 13.8),
             ],
             d=1.2,
         ),
@@ -1234,32 +1207,18 @@ def build() -> Concept:
             ],
             d=1.2,
         ),
-        # Protection board P+ / P- -> plug pins 1 and 2.
-        "cable_seam_pos": hw.cable(
+        # - : the - joint -> up the back wall in two clips -> under and
+        # behind the cage -> plug pin 2.
+        "cable_bat_neg": hw.cable(
             [
-                p_pos,
-                (p_pos[0] - 0.4, p_pos[1] + 0.9, p_pos[2] + 1.8),
-                (0.5, 13.4, 40.6),
-                *into_housing(pin_x[0]),
-            ],
-            d=1.0,
-        ),
-        "cable_seam_neg": hw.cable(
-            [
-                p_neg,
-                (p_neg[0] - 0.4, p_neg[1] + 1.1, p_neg[2] + 1.8),
-                (2.0, 14.2, 41.0),
-                *into_housing(pin_x[1], 14.2),
-            ],
-            d=1.0,
-        ),
-        # B- : the - joint -> the protection board's bottom pad.
-        "cable_bat_bm": hw.cable(
-            [
-                (px0 + 1.5, py0 + 0.6, pz0 - 0.3),
-                (px0 + 1.0, py0 - 0.5, pz0 - 2.5),
-                (j_neg[0] + 2.0, j_neg[1] - 0.8, j_neg[2] + 1.2),
                 j_neg,
+                (j_neg[0] + 1.8, j_neg[1] + 0.7, j_neg[2] + 0.2),
+                (NEG_RUN_X - 0.4, neg_y - 0.4, j_neg[2] + 3.3),
+                (NEG_RUN_X, neg_y, NEG_CLIPS_Z[0]),
+                (NEG_RUN_X, neg_y, NEG_CLIPS_Z[1]),
+                (NEG_RUN_X - 1.2, neg_y - 0.6, 36.0),
+                (pin_x[1] + 3.0, 14.6, 41.5),
+                *into_housing(pin_x[1], 14.2),
             ],
             d=1.2,
         ),
@@ -1295,7 +1254,6 @@ def build() -> Concept:
         Part("tub_grey", tub_all - frost, "shell"),
         Part("tub_frosted", tub_all & frost, "translucent"),
         *rocker,
-        Part("protection_pcb", prot, "pcb_green"),
         Part("ptt_bar", bar, "accent"),
         Part("ptt_pin", pin, "shell_inner"),
         Part("plunger", plunger, "shell_inner"),
@@ -1343,7 +1301,6 @@ def build() -> Concept:
         "bar_sweep": sweep,
         **leads,
         "rocker": rocker[2].shape + rocker[3].shape,
-        "protection_pcb": prot,
         "xh_header": xh_header[0].shape + xh_header[1].shape,
         "xh_housing": xh_housing,
         **fasteners,
@@ -1420,14 +1377,8 @@ def build() -> Concept:
         ("rocker", "cable_bat_sw"),
         ("cable_bat_pos", "cable_bat_sw"),
         ("cable_spk", "board"),  # leads start in the plug zone
-        ("cable_bat_bm", "lead_neg_0"),  # the - joint
-        ("cable_bat_bm", "lead_neg_1"),
-        ("protection_pcb", "cable_bat_pos"),  # soldered to its pads
-        ("protection_pcb", "cable_bat_bm"),
-        ("protection_pcb", "cable_seam_pos"),
-        ("protection_pcb", "cable_seam_neg"),
-        ("cable_bat_pos", "cable_seam_pos"),  # both on P+
-        ("protection_pcb", "tub_ribs"),  # its holder's lips and ribs
+        ("cable_bat_neg", "lead_neg_0"),  # the - joint
+        ("cable_bat_neg", "lead_neg_1"),
         ("cable_ptt_a", "cable_ptt_b"),  # a pair
         ("cable_ptt_a", "tact_switch"),  # soldered to its legs
         ("cable_ptt_b", "tact_switch"),
@@ -1445,8 +1396,8 @@ def build() -> Concept:
         ("cable_board_pos", "xh_header"),  # soldered to its tails
         ("cable_board_neg", "xh_header"),
         ("cable_board_talk", "xh_header"),
-        ("cable_seam_pos", "xh_housing"),  # crimped into it
-        ("cable_seam_neg", "xh_housing"),
+        ("cable_bat_pos", "xh_housing"),  # crimped into it
+        ("cable_bat_neg", "xh_housing"),
         ("cable_ptt_a", "xh_housing"),
         ("cable_ptt_b", "xh_housing"),
     }

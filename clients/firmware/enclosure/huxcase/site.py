@@ -61,15 +61,6 @@ STEPS = [
         "explode": (-40, 0, 0),
     },
     {
-        "id": "protection",
-        "title": "Protection board",
-        "text": "A 1S protection board (DW01 + 8205) in the battery - line: it cuts off "
-        "a short or an empty cell. Wires first, then it slides into its rails.",
-        "parts": ["protection_pcb"],
-        "enter": (0, -60, 0),
-        "explode": (0, -20, -15),
-    },
-    {
         "id": "switch",
         "title": "Talk switch",
         "text": "Solder two wires to one pair of legs, then slide the 12 × 12 button "
@@ -118,8 +109,9 @@ STEPS = [
         "id": "wiring",
         "title": "Wiring",
         "text": "The holder leads join in pairs, the joints in heat-shrink go into "
-        "their pockets, and the harness wires snap into the clips on the bridge.",
-        "parts": ["cable_bat_*", "cable_seam_*", "cable_ptt_*", "lead_*"],
+        "their pockets, and the harness wires snap into the clips on the bridge "
+        "and the back wall.",
+        "parts": ["cable_bat_*", "cable_ptt_*", "lead_*"],
         "enter": (0, -40, 0),
         "explode": (0, -56, 0),
     },
@@ -192,14 +184,12 @@ LABELS = [
     ("ptt_bar", "Talk lever"),
     ("ptt_pin", "Lever pin, printed"),
     ("rocker_*", "Power switch KCD1-101"),
-    ("protection_pcb", "Protection board, 1S"),
     ("holder_*", "18650 holder"),
     ("cell_*", "18650 cell"),
     ("bridge_screw", "M3 × 6 screw"),
     ("bridge", "Holder bridge"),
     ("cable_spk", "Speaker lead"),
     ("cable_bat_*", "Battery lead"),
-    ("cable_seam_*", "Battery lead"),
     ("cable_board_*", "Board pigtails"),
     ("cable_ptt_*", "Talk switch wires"),
     ("yoke", "Plug yoke"),
@@ -224,12 +214,11 @@ PRINT_MATERIAL_BY_LABEL = {"Tub": "Grey, then frosted PLA"}
 BOUGHT = [
     ("ESP32-S3 audio board (Waveshare)", 1),
     ("Speaker 40 mm 5 W, with the board", 1),
-    ("18650 cell", 2),
+    ("18650 cell, protected", 2),
     ("Single-18650 holder with leads", 2),
     ("12 × 12 tact switch", 1),
     ("Spring 0.4 × 4 × 15 (SciWil kit)", 1),
     ("KCD1-101 rocker switch", 1),
-    ("1S protection board, DW01 + 8205, B+ B- P+ P- pads (to buy)", 1),
     ("JST-XH 4-pin header, housing, 4 terminals (XH kit)", 1),
     ("M3 × 8 button head, case", 4),
     ("M3 × 6 button head, holder bridge", 1),

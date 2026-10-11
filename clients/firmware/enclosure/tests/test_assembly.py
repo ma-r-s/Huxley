@@ -44,7 +44,6 @@ def model():
         "plug": sh["grille_plug"],
         "speaker": env["speaker"],
         "board": env["board"] + env["board_screws"],
-        "protection": env["protection_pcb"],
         # Seam plug: the yoke and header ride in with the board; the housing,
         # in its shuttle, drops into the cage on the tub side.
         "yoke": sh["yoke"],
@@ -106,8 +105,7 @@ def _clear(m, moving, path, installed):
 # out under their lips.
 STEPS = [
     ("rocker", (["rocker"], _path((-20.0, 0, 0)), ["tub"])),
-    ("protection board", (["protection"], _path((0, -20.0, 0)), ["tub", "rocker"])),
-    ("switch", (["switch"], _path((0, -20.0, 0)), ["tub", "rocker", "protection"])),
+    ("switch", (["switch"], _path((0, -20.0, 0)), ["tub", "rocker"])),
     ("plunger", (["plunger"], _path((20.0, 0, 0)), ["tub", "switch"])),
     ("lever", (["lever", "pin"], _path((0, -12.0, 0)), ["tub", "switch", "plunger"])),
     (
@@ -139,7 +137,7 @@ STEPS = [
         (
             ["shuttle", "housing"],
             _path((0, -30.0, 0)),
-            ["tub", "holder_0", "holder_1", "bridge", "protection", "switch", "lever", "pin"],
+            ["tub", "holder_0", "holder_1", "bridge", "switch", "lever", "pin"],
         ),
     ),
     ("plug into faceplate", (["plug"], _path((0, 12.0, 0)), ["faceplate"])),
@@ -163,7 +161,6 @@ STEPS = [
                 "holder_0",
                 "holder_1",
                 "bridge",
-                "protection",
                 "shuttle",
                 "housing",
             ],

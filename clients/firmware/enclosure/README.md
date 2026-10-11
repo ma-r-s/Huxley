@@ -80,7 +80,7 @@ switch.
 | Plunger + spring | the tube | the spring's 1.5 mm preload between lever and plunger |
 | Lever | its printed pin | the pin sits in two blind seats (tub behind, faceplate tooth in front), captured when the case closes; 0.9 N of spring preload holds it against its stop |
 | Power switch | its panel in a recess in the left side | its own snap ears |
-| Protection board | two rails on the back wall, a ledge below | crush ribs and snap lips |
+| Battery - lead | two clips on the back wall, beside the speaker post | their lips |
 | Joints (+ and -) | pockets on the back wall | pressed in between two shelves (in heat-shrink) |
 | Battery + lead, talk pair | two clips on the bridge | their lips (the talk pair sits two deep) |
 | Plug yoke | the two lower board screws through its bosses | clamped between the board and the screw heads |
@@ -177,18 +177,14 @@ lead between the BAT pad and the + joint. The charger sits behind it too, so
 **the rocker must be ON to charge**. Power on the left, talk on the right: easy
 to tell apart by touch. A test asserts it stays below the surface.
 
-## Battery protection: fitted
+## Battery protection: in the cells
 
 The board has no cell protection (see MEASUREMENTS), and two unprotected cells
-in parallel with no fuse turn a pinched wire into a ~20 A short. Mario
-approved fitting one (2026-10-10): a 1S protection board (DW01 + 8205 class,
-up to 3.5 x 5 x 26 mm, with B+, B-, P+ and P- pads, about a dollar; **not in
-his stock, to buy**) stands on edge against the back wall behind the speaker,
-between two rails with crush ribs and snap lips, on a ledge. The cells' -
-joint goes to its B- (bottom), its P- to the plug. The + runs through it too:
-the rocker's lead lands on P+ and a short wire goes on from P+ to the plug.
-B+ and P+ are one piece of copper, so that also powers its chip, with no
-extra wire (it is unpowered when the rocker is off, which is fine). The
+in parallel with no fuse turn a pinched wire into a ~20 A short. Mario's
+answer (2026-10-10): use his protected 18650s, each with its own protection
+circuit in the can, so no separate board. Protected cells are 2 to 4 mm
+longer than bare ones: one must go into a holder by hand and sit flat (check
+before printing). Put both cells in at the same voltage (within 0.05 V). The
 firmware still shuts down at a safe voltage via `BAT_ADC` (GPIO1).
 
 ## The seam plug: no wire crosses the seam
@@ -199,7 +195,8 @@ faceplate lifts off with no slack wire and no soldering iron, and nothing is
 left loose inside to rattle.
 
 - **Faceplate half**: a B4B-XH-A header, its tails soldered on the bench to
-  three short pigtails from the board. It sits in a printed **yoke** that lies
+  three short pigtails from the board: the board's own battery plug lead, cut
+  short, and one wire from GPIO7. It sits in a printed **yoke** that lies
   flat on the board's back under the two lower board screws (the yoke replaces
   their washers; the screws still bite 5 mm).
 - **Tub half**: an XHP-4 housing on four crimped harness wires, pressed into a
@@ -208,7 +205,8 @@ left loose inside to rattle.
   lines the housing up with it before the pins meet, so only the outside sizes
   on JST's drawing matter. The plug closes 0.8 mm short of fully seated
   (the housing rests on the cage floor), never past it.
-- **Pins**: 1 BAT+ (after the rocker), 2 BAT-, 3 talk GND, 4 talk. On the
+- **Pins**: 1 BAT+ (after the rocker), 2 BAT- (the cells' - joint), 3 talk
+  GND, 4 talk. On the
   board half, bridge tails 2 and 3 with solder (the board's ground is BAT-),
   so only three pigtails are needed. Keyed, so it only goes one way; BAT+ is
   never next to the talk pin.
@@ -231,19 +229,15 @@ the signal wires, two conductors together for the battery ones.
 | Run | From | To | Cut to | Held by |
 | --- | --- | --- | --- | --- |
 | Speaker | SPK plug (board back) | the speaker's solder tabs (upper right) | **26 mm** | short; turn the speaker so its tabs sit upper right |
-| Board + | battery socket + | header tail 1 | 18 mm | soldered both ends, on the bench |
-| Board - | battery socket - | header tail 2 | 19 mm | same |
-| Board talk | GPIO7 (header pin 2) tail | header tail 4 | 28 mm | same |
-| Rocker + | rocker tab | protection board P+ | 73 mm | the + clip on the bridge |
+| Board + | the board's battery plug, red wire | header tail 1 | 18 mm | the plug in the board's BAT socket; soldered at the header, on the bench |
+| Board - | the same plug, black wire | header tail 2 | 19 mm | same |
+| Board talk | GPIO7 (header pin 2) tail | header tail 4 | 28 mm | soldered both ends, on the bench |
+| Rocker + | rocker tab | housing pin 1 | 62 mm | the + clip on the bridge; crimped |
 | Rocker in | rocker tab | + joint | 21 mm | the joint's pocket |
 | Holder + leads (2) | top of each holder | + joint | 24, 32 mm | the joint's pocket |
 | Holder - leads (2) | bottom of each holder | - joint | 30, 26 mm | the joint's pocket |
-| Protection B- | B- | the - joint | 14 mm | short, at the channel's foot |
-| Plug 1, 2 | P+, P- | housing pins 1, 2 | 25 mm each | crimped; behind the cage |
-| Talk pair | tact switch legs | housing pins 3 (GND), 4 | 53 mm each | the talk clip on the bridge |
-
-The board's battery socket is 1.25 mm pitch (the JST-XH kit is 2.5 mm): solder
-the two board pigtails to the socket's pads unless a 1.25 mm plug turns up.
+| Battery - | the - joint | housing pin 2 | 58 mm | two clips on the back wall; crimped |
+| Talk pair | tact switch legs | housing pins 3 (GND), 4 | 53 mm each | the talk clip on the bridge; crimped |
 
 ## Print guide
 
@@ -266,28 +260,27 @@ the two board pigtails to the socket's pads unless a 1.25 mm plug turns up.
 
 On the bench first:
 1. Cut every wire to the table above.
-2. Plug header: bridge tails 2 and 3 with solder. Solder the board's three
-   pigtails to the battery socket's pads (meter which is +) and the GPIO7
-   tail, and their other ends to header tails 1, 2 and 4. Heat-shrink each
-   tail. Press the header into the yoke's walls.
+2. Plug header: bridge tails 2 and 3 with solder. Cut the board's battery
+   plug lead short (red 18 mm, black 19 mm) and solder red to tail 1, black to
+   tail 2; solder a 28 mm wire from the GPIO7 tail to tail 4. Heat-shrink
+   each tail. Press the header into the yoke's walls.
 3. Tub harness: solder the rocker's two leads and the talk switch's two wires
-   (to the leg pair that switches first). Solder the rocker + lead, the P+
-   wire and the P- wire to the protection board's top pads, the B- wire to
-   its bottom pad. Crimp the P+, P-, talk GND and talk wires and push them
-   into the XHP-4 housing as pins 1, 2, 3 and 4. Press the housing into the
-   shuttle.
+   (to the leg pair that switches first). Crimp the rocker + lead, the
+   battery - lead, and the talk GND and talk wires, and push them into the
+   XHP-4 housing as pins 1, 2, 3 and 4. Press the housing into the shuttle.
 
 Tub, lying on its back:
 4. Heat-set three M3 x 5 inserts: two in the top corner blocks, one in the
    boss on the back wall.
-5. Rocker: snap it in from outside. Protection board: slide it into its rails.
+5. Rocker: snap it in from outside.
 6. Talk switch: slide it into the cradle until it clicks. From outside, drop
    the plunger into the tube, then the spring.
 7. Lever: push the pin through it, slide it in from the front along its
    channel (press the spring's end down with a fingertip as it passes).
 8. Holders: each in 1 mm toward the middle, then out under its lips. Join the
-   + leads with the rocker's input lead, the - leads with the B- wire; put
-   both joints in heat-shrink and press them into their pockets.
+   + leads with the rocker's input lead, the - leads with the battery - lead;
+   put both joints in heat-shrink and press them into their pockets. Snap
+   the - lead into its two clips on the back wall.
 9. Cells in (within 0.05 V of each other, + up). Lay the + lead and the talk
    pair over their clips, then the bridge across, M3 x 6: the clips snap
    over the wires.
@@ -299,7 +292,8 @@ Faceplate, face down:
     into its window from inside, flange inside (crush ribs hold it).
 12. Cut the speaker lead to 26 mm, re-solder it, set the speaker on its tabs
     with the tabs upper right.
-13. Board onto its standoffs (USB-C to the left) with the yoke behind it on
+13. Board onto its standoffs (USB-C to the left), the battery plug in its BAT
+    socket, the yoke behind it on
     the two lower holes: M2 x 8 through the yoke there, M2 x 8 with a washer
     at the top. Plug in the speaker.
 
@@ -316,8 +310,8 @@ plug yoke, plug shuttle (the build page lists each with its volume).
 
 Bought, all from Mario's inventory (photos 2026-10-10): the board and its
 speaker; two 18650 cells in two holders; the 12 x 12 tact switch; the SciWil
-0.4 x 4 x 15 spring; the KCD1-101 rocker; a 1S protection board with B+,
-B-, P+ and P- pads (to buy); from the JST-XH kit, a B4B-XH-A header, an XHP-4
+0.4 x 4 x 15 spring; the KCD1-101 rocker; two protected 18650s; the board's
+own battery plug and lead; from the JST-XH kit, a B4B-XH-A header, an XHP-4
 housing and four SXH terminals;
 Kadrick button heads 4 x M3 x 8,
 1 x M3 x 6, 3 x M2 x 8 and one flat washer; FFVRVSS 5 x M3 x 5 heat-set inserts;
@@ -383,4 +377,5 @@ HX-1 rev D is a printable design: fit-checked, retention-tested and
 printability-checked, with clearances that the fit coupon confirms on Mario's
 printer. The other HX concepts are packaging sketches (form, not printable
 parts). Still open for HX-1: the measurements in MEASUREMENTS "Still to
-measure", the coupon results, and the battery protection board (recommended).
+measure", the coupon results (lever-pin block, plug coupon), and a protected
+cell tried in a holder.

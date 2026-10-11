@@ -143,5 +143,9 @@ The rev D retention leans on these; each is a quick caliper reading:
 3. **12 x 12 switch legs.** Centre to centre: between the two legs on the same
    side, and between the two sides (assumed 5.0 and 12.5); the cradle's leg
    slots follow it.
-4. Did the board come with a 1.25 mm battery plug and lead? If not, the
-   battery pigtails solder to the socket's pads.
+4. Does one protected 18650 go into a holder by hand and sit flat? (They
+   are 2 to 4 mm longer than bare cells.)
+
+Answered 2026-10-10: the board came with its 1.25 mm battery plug and lead
+(it becomes the board's two plug pigtails); the cells are Mario's protected
+18650s, so there is no protection board.
