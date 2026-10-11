@@ -137,21 +137,17 @@ and the silkscreen on the board's top face (reference/onboard-resources.jpg:
 "IO7 IO6 IO5 IO4 IO3 IO20 IO19 GND 5V" over the top row). Meter it before
 soldering: GPIO7 is a plain GPIO (also the unused LCD's DC/SDA2 line).
 
-## Still to measure (Mario)
+## Cells and holders (Mario, 2026-10-11)
 
-Measured 2026-10-10: KCD1-101 body 18.9 x 11.8 under the frame, its snap
-clips centred ~3 mm under the frame; switch legs 5.0 apart on one side (the
-spacing across depends on how straight the legs are: bend them straight).
-The holder's walls are curved round the cell, so a wall thickness and edge
-height do not apply. Still wanted:
+Protected cells: 19.0 across. In a holder on its back: 20.2 from the table to
+the top of the cell, so the holder floor is 1.2 and its walls 1.0. Photos: the
+walls are low along the middle and wrap high round the cell for a stretch
+next to each end cap. That stretch is not measured, on purpose: up to 10 mm
+it clears the speaker's magnet, and to 14 mm it only grazes the 1 mm wall.
+Lever-pin block: the printed pin turns freely in the .20 hole, so horizontal
+slides are 0.20 (`fits.SLIDE_HBORE`).
 
-1. **Holder wrap**: with a cell in a holder, seen from the end, does the
-   plastic rise past the cell's widest point? By how much? (Up to 0.4 mm is
-   modelled; more meets the speaker's magnet.)
-2. **Cell diameter** of one protected 18650.
-3. **Holder + cell height**: the holder on its back on the table, a cell in
-   it: table to the top of the cell. (With 2, this sets the cradle floor
-   thickness, so the bridge's ribs press the cells by the right amount.)
+Nothing is left to measure.
 
 Answered 2026-10-10: the board came with its 1.25 mm battery plug and lead
 (it becomes the board's two plug pigtails); the cells are Mario's protected

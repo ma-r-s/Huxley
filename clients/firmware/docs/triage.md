@@ -210,7 +210,9 @@ M2 inserts), and the header's tails bent under its plate; the springs are
 chosen after weighing the plug's mating force on the coupon. Alternative:
 no plug, a ribbon folded into a pocket at the seam (fewer parts, nothing
 to align, but the faceplate stays tethered and opens like a book).
-Recommended: the ribbon. Done meanwhile: the joint pockets are 14 and 11 mm
+Recommended: the ribbon. **Mario chose the ribbon (2026-10-11)**: the faceplate
+opens like a book about its left front edge; a ribbon service loop lies in a
+slot along the left wall; plan under review before it is built. Done meanwhile: the joint pockets are 14 and 11 mm
 long (a lead a few mm off moves its joint along), the rocker goes in empty
 and its tabs are soldered in place, and wires are measured on the print.
 

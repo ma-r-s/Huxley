@@ -29,7 +29,9 @@ LAYER = 0.2
 # Coupon, 2026-10-10: Mario's 6 mm peg slid into every vertical hole, .10 to
 # .30 per side, the .10 with a hint of friction. So .15 is free and true.
 SLIDE = 0.15  # slides or rotates freely; both faces drawn in X/Y (vertical walls/bores)
-SLIDE_HBORE = 0.30  # same, but the bore lies horizontal on the bed (oval, sagging roof)
+# Lever-pin block, 2026-10-11: the printed 2.4 mm pin turns freely in the .20
+# hole (horizontal, as the tub and the lever print it).
+SLIDE_HBORE = 0.20  # same, but the bore lies horizontal on the bed (oval, sagging roof)
 # Kept above the coupon's .10: it fits the faceplate's 64 x 100 mm lip, where
 # shrinkage over the length matters more than a 6 mm hole shows.
 SNUG = 0.12  # goes together by hand and stays (cap spigot, case tongue)

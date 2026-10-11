@@ -813,8 +813,8 @@ def _holder_retention(inner):
     # in a drop a cell lands on the bar instead of the board's LEDs.
     bar_y1 = CELL_Y - r - fits.PART
     bar = bbox_solid(
-        X0 - CELL_X - r + 1.0, X0 + CELL_X + r - 1.0, bar_y1 - CELL_BAR_T, bar_y1, bz0, bz1
-    )
+        X0 - CELL_X - 7.0, X0 + CELL_X + 7.0, bar_y1 - CELL_BAR_T, bar_y1, bz0, bz1
+    )  # across both cells' fronts, clear of the USB boss
     bar += bbox_solid(X0 - 4.0, X0 + 4.0, bar_y1 - CELL_BAR_T, bar_y1, bzm - 5.0, bzm + 5.0)
     bar -= _along_y(
         X0, bzm, CBORE_D / 2, bar_y1 - CELL_BAR_T - 1, bar_y1 + 1

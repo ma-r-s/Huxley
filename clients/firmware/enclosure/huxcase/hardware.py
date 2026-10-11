@@ -79,8 +79,9 @@ SPK_PROFILE = (  # (depth from front, radius) along the axis
 )
 
 # --- 18650 -------------------------------------------------------------------
-# Not measured: worst-case protected button-top cell. Bare cells are 65 mm.
-CELL_D = 18.6
+# Mario's protected cells, measured 2026-10-11: 19.0 across (bare 18650s are
+# 18.4); in a holder on its back, 20.2 from the table to the top of the cell.
+CELL_D = 19.0
 CELL_L = 70.0
 CELL_BAY_D = 19.4  # printed cradle bore
 CELL_BAY_L = 74.0  # cell + spring contact at one end + flat contact at the other
@@ -337,10 +338,15 @@ def rocker() -> list[Part]:
 # caps with the spring (-) at one end and the flat contact (+) at the other;
 # one lead out of each end cap near the floor. Holds a 65 mm flat-top cell.
 HOLDER_L, HOLDER_W, HOLDER_H = 76.0, 21.0, 20.5
-HOLDER_FLOOR, HOLDER_WALL, HOLDER_CAP = 1.2, 1.2, 3.0
-# How far the holder's plastic may wrap past the cell's widest point, toward
-# the front: the speaker's magnet sits 0.5 mm past it, between the cells.
+HOLDER_FLOOR, HOLDER_WALL, HOLDER_CAP = 20.2 - CELL_D, (HOLDER_W - CELL_D) / 2, 3.0
+# Mario's photos (2026-10-11): the side walls are low along the middle and
+# tall for a stretch next to each end cap. Middle: they may wrap HOLDER_WRAP
+# past the cell's widest point. Next to the caps: wrapped up to
+# HOLDER_TALL_WRAP for HOLDER_TALL_L. Not measured, on purpose: up to 10 mm
+# the speaker's magnet clears it; to 14 mm it only grazes that 1 mm wall
+# (a few tenths), which flexes out of the way.
 HOLDER_WRAP = 0.4
+HOLDER_TALL_L, HOLDER_TALL_WRAP = 10.0, 0.85 * CELL_D / 2
 HOLDER_SPRING = 4.5  # compressed spring between the - cap and the cell
 HOLDER_CELL_L = 65.0
 
@@ -390,7 +396,15 @@ def holder_envelope() -> Solid:
     length = HOLDER_L - 2 * HOLDER_CAP
     wrap = Cylinder(r + HOLDER_WALL, length)
     wrap &= _bbox_solid(-HOLDER_W, HOLDER_W, -HOLDER_WRAP, r, -length, length)
-    return out + wrap
+    out += wrap
+    # The tall stretches next to the caps, wrapped round the cell (Mario's
+    # end photo) up to HOLDER_TALL_WRAP in front of its widest point.
+    inner = HOLDER_L / 2 - HOLDER_CAP
+    for sz in (-1, 1):
+        z0, z1 = sorted((sz * inner, sz * (inner - HOLDER_TALL_L)))
+        tall = Pos(0, 0, (z0 + z1) / 2) * Cylinder(r + HOLDER_WALL, z1 - z0)
+        out += tall & _bbox_solid(-HOLDER_W, HOLDER_W, -HOLDER_TALL_WRAP, r, z0, z1)
+    return out
 
 
 # --- JST-XH 2.5 mm, from Mario's crimp kit ---------------------------------------
