@@ -136,7 +136,6 @@ def test_hx1_lever_pin_is_captured_in_two_blind_seats(hx1_concept):
     """The printed pin sits in a seat in the tub behind the lever and one in
     the faceplate's tooth in front of it, so closing the case captures it."""
     from build123d import Cylinder, Pos, Rot
-
     from huxcase.concepts import hx1
 
     c = hx1_concept
