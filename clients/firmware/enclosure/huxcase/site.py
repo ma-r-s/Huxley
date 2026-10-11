@@ -26,18 +26,22 @@ from huxcase.export import CELL_G, HARDWARE_G, OUT, PLA_G_PER_CC, PRINTED
 SITE_SRC = Path(__file__).resolve().parent.parent / "site"
 SITE_OUT = OUT / "site"
 
-# Assembly order, as it is built on the bench (rev D): the tub lies on its
-# back and its parts go in from the open front; the faceplate side (grille,
-# speaker, board) is built face down on the faceplate and closes over it last.
-# `enter` is where a step starts when it flies in; `explode` is where it sits
-# in the exploded view; `explode_parts` spreads parts of one step further
-# apart in that view. All in device mm.
+# Assembly order, as it is built on the bench. The tub lies on its back and
+# its parts go in from the open front. The faceplate side is built face down
+# beside it, opened like a book about its left front edge (`side: "face"`:
+# those parts sit in the opened pose while they go in), and swings closed in
+# the "close" step. `enter` is where a step's parts start when they fly in
+# (device mm; for the faceplate side, in the faceplate's own frame);
+# `enter_parts` overrides it per part, so screws come in along their axes.
+# `appear` steps (wires) just appear. `explode` is where a step sits in the
+# exploded view; `explode_parts` spreads parts of one step further apart there.
 STEPS = [
     {
         "id": "tub",
         "title": "Tub",
-        "text": "One print, standing up: grey to 36 mm, then a filament swap to frosted "
-        "for the rest, so the light shows through the top and upper back.",
+        "text": "One print, standing up: grey to 36 mm, then a pause and a filament swap "
+        "to frosted for the rest. It is one piece, nothing to join. Lay it on its "
+        "back: everything goes in from the open front.",
         "parts": ["tub_*"],
         "enter": (0, -130, 0),
         "explode": (0, 0, 0),
@@ -45,26 +49,27 @@ STEPS = [
     {
         "id": "inserts",
         "title": "Inserts",
-        "text": "Three M3 × 5 heat-set inserts with the insert tool: two in the top "
-        "corner blocks, one in the boss on the back wall. Two more go in the faceplate.",
+        "text": "Three M3 × 5 heat-set inserts with the insert tool, pressed straight "
+        "down: two in the top corner blocks, one in the boss on the back wall.",
         "parts": ["inserts", "bridge_insert"],
-        "enter": (0, -50, 0),
+        "enter": (0, -30, 0),
         "explode": (0, -24, 0),
     },
     {
         "id": "rocker",
         "title": "Power switch",
-        "text": "The KCD1-101 snaps into its recess in the left side from outside. "
-        "Solder its two leads before the holders go in.",
+        "text": "The KCD1-101 snaps into its recess in the left side from outside, with "
+        "nothing on it yet.",
         "parts": ["rocker_*"],
-        "enter": (-70, 0, 0),
+        "enter": (-60, 0, 0),
         "explode": (-40, 0, 0),
     },
     {
         "id": "switch",
         "title": "Talk switch",
-        "text": "Solder two wires to one pair of legs, then slide the 12 × 12 button "
-        "into its cradle from the front. Crush ribs hold it with its top on the tube.",
+        "text": "First solder two wires to the pair of legs that switches (check with "
+        "the meter). Then slide it into its cradle from the front until the latch "
+        "clicks over it.",
         "parts": ["tact_*"],
         "enter": (0, -60, 0),
         "explode": (0, -30, 18),
@@ -72,8 +77,8 @@ STEPS = [
     {
         "id": "plunger",
         "title": "Plunger and spring",
-        "text": "From outside, the printed plunger goes into the tube, then the "
-        "0.4 × 4 × 15 spring on top of it.",
+        "text": "From outside the right side: the printed plunger into its tube, then "
+        "the 0.4 × 4 × 15 spring on top of it.",
         "parts": ["plunger", "spring"],
         "enter": (60, 0, 0),
         "explode": (30, 0, 18),
@@ -81,74 +86,154 @@ STEPS = [
     {
         "id": "lever",
         "title": "Lever",
-        "text": "Push the printed pin through the lever, then slide it in from the "
-        "front along its channel until the pin drops into its seat at the back.",
+        "text": "Push the printed pin through the lever. Slide it in from the front "
+        "along its channel (press the spring's end down as it passes) until the "
+        "pin drops into its seat at the back.",
         "parts": ["ptt_bar", "ptt_pin"],
-        "enter": (70, 0, 0),
+        "enter": (0, -60, 0),
         "explode": (45, 0, 0),
     },
     {
+        "id": "holders",
+        "title": "Battery holders",
+        "text": "Both holders, empty, slide straight in from the front, floor against "
+        "the back wall, springs at the bottom.",
+        "parts": ["holder_*"],
+        "enter": (0, -90, 0),
+        "explode": (0, -46, 0),
+    },
+    {
+        "id": "joints",
+        "title": "Battery wiring",
+        "text": "Solder the power switch's two wires to its tabs (reach in from the "
+        "front, above the left holder). Join both holders' + leads to its input "
+        "wire at the top, both - leads to the battery - wire at the bottom; "
+        "heat-shrink the joints and press them into their pockets. Clip the - wire "
+        "up the back wall.",
+        "parts": ["lead_*", "cable_bat_sw", "cable_bat_neg"],
+        "appear": True,
+        "enter": (0, 0, 0),
+        "explode": (0, -56, 0),
+    },
+    {
+        "id": "wires",
+        "title": "Switch wires",
+        "text": "The power switch's other wire and the talk switch's pair run down "
+        "the middle between the holders, to the junction behind the speaker's magnet.",
+        "parts": ["cable_bat_pos", "cable_ptt_*"],
+        "appear": True,
+        "enter": (0, 0, 0),
+        "explode": (0, -56, 0),
+    },
+    {
         "id": "cells",
-        "title": "Batteries",
-        "text": "Each holder slides straight in from the front. Crush ribs underneath "
-        "and above stop its ends; the bridge comes next.",
-        "parts": ["holder_*", "cell_*"],
-        "enter": (0, -100, 0),
+        "title": "Cells",
+        "text": "Both protected cells, + end up, charged to the same voltage first "
+        "(within 0.05 V of each other).",
+        "parts": ["cell_*"],
+        "enter": (0, -90, 0),
         "explode": (0, -46, 0),
     },
     {
         "id": "bridge",
         "title": "Holder bridge",
-        "text": "A printed bridge between the holders, one M3 × 6 into the boss. Ribs "
-        "on its front bar press both cells, and so their holders, onto the back wall.",
+        "text": "The printed bridge across, between the holders, its two clips over the "
+        "power wire and the talk pair. One M3 × 6 through its middle into the "
+        "insert: its ribs press both cells home.",
         "parts": ["bridge", "bridge_screw"],
-        "enter": (0, -80, 0),
+        "enter": (0, -60, 0),
+        "enter_parts": {"bridge_screw": (0, -100, 0)},
         "explode": (0, -64, 0),
     },
     {
-        "id": "wiring",
-        "title": "Wiring",
-        "text": "The holder leads join in pairs, the joints in heat-shrink go into "
-        "their pockets, and the long leads into the clips on the bridge and the "
-        "back wall, down to the splices by the back wall.",
-        "parts": ["cable_bat_*", "cable_ptt_*", "lead_*"],
-        "enter": (0, -40, 0),
-        "explode": (0, -56, 0),
+        "id": "faceplate",
+        "title": "Faceplate",
+        "text": "Now the other half. The faceplate lies face down beside the tub, its "
+        "left edge at the tub's left edge: it will close over it like a book.",
+        "parts": ["faceplate"],
+        "side": "face",
+        "enter": (0, 70, 0),
+        "explode": (0, -108, 0),
     },
     {
-        "id": "front",
-        "title": "Faceplate side",
-        "text": "Built face down: two inserts in its bottom bosses, the grille plug "
-        "into its window, the speaker on its six tabs, the board on three M2 × 8. "
-        "Then the six-wire ribbon from the board, spliced to the tub's wires with "
-        "slack, so the faceplate swings open like a book.",
-        "parts": [
-            "faceplate",
-            "face_inserts",
-            "grille_plug",
-            "speaker_*",
-            "board_*",
-            "board_screws",
-            "cable_spk",
-        ],
-        "enter": (0, -150, 0),
-        "explode": (0, -108, 0),
-        "explode_parts": {
-            "speaker_*": (0, -72, 0),
-            "board_*": (0, -86, 0),
-            "board_screws": (0, -80, 0),
-            "grille_plug": (0, -126, 0),
-            "cable_spk": (0, -72, 0),
-        },
+        "id": "face_inserts",
+        "title": "Faceplate inserts",
+        "text": "Two M3 × 5 heat-set inserts into the two bosses at the bottom of the "
+        "faceplate (the bottom case screws go into them).",
+        "parts": ["face_inserts"],
+        "side": "face",
+        "enter": (0, 0, -30),
+        "explode": (0, -100, -16),
+    },
+    {
+        "id": "grille",
+        "title": "Grille",
+        "text": "The black grille plug presses into its window from the inside, flange "
+        "down. Crush ribs in the window hold it.",
+        "parts": ["grille_plug"],
+        "side": "face",
+        "enter": (0, 40, 0),
+        "explode": (0, -126, 0),
+    },
+    {
+        "id": "speaker",
+        "title": "Speaker",
+        "text": "Cut the speaker's lead to 26 mm and re-solder it to the speaker. The "
+        "speaker sits in the plug's six tabs, its solder tabs to the upper right.",
+        "parts": ["speaker_*", "cable_spk"],
+        "side": "face",
+        "enter": (0, 50, 0),
+        "enter_parts": {"cable_spk": (0, 50, 0)},
+        "explode": (0, -72, 0),
+    },
+    {
+        "id": "board",
+        "title": "Board",
+        "text": "The board onto its three standoffs, USB-C to the left, three M2 × 8 "
+        "with washers. Plug in the speaker and the board's battery plug.",
+        "parts": ["board_*"],
+        "side": "face",
+        "enter": (0, 60, 0),
+        "enter_parts": {"board_screws": (0, 100, 0)},
+        "explode": (0, -86, 0),
+        "explode_parts": {"board_screws": (0, -80, 0)},
+    },
+    {
+        "id": "ribbon",
+        "title": "Ribbon",
+        "text": "Six wires off the rainbow ribbon. At the board: two spliced to the "
+        "battery plug's red wire, two to its black, one soldered to GPIO7 (header "
+        "pin 2), one to black for the talk ground. At the tub: spliced to the four "
+        "wires at the junction. Heat-shrink every splice; leave it loose.",
+        "parts": ["ribbon_open"],
+        "appear": True,
+        "build_only": True,
+        "hide_after": "close",
+        "enter": (0, 0, 0),
+        "explode": (0, 0, 0),
+    },
+    {
+        "id": "close",
+        "title": "Close it",
+        "text": "Power switch off. Swing the faceplate over onto the tub, tuck the "
+        "ribbon into the middle, and push the faceplate straight home: the lever "
+        "pin's front end goes into the tooth.",
+        "parts": ["ribbon_closed"],
+        "appear": True,
+        "late": True,
+        "enter": (0, 0, 0),
+        "explode": (0, 0, 0),
     },
     {
         "id": "screws",
-        "title": "Close it",
-        "text": "Two M3 × 8 through the face at the top, two up through the floor. "
-        "Closing it also captures the lever pin and clamps the speaker.",
-        "parts": ["case_screws"],
-        "enter": (0, -60, 0),
+        "title": "Case screws",
+        "text": "Two M3 × 8 through the face at the top, two up through the floor into "
+        "the faceplate's inserts. Snug, not tight.",
+        "parts": ["case_screws_*"],
+        "enter": (0, -40, 0),
+        "enter_parts": {"case_screws_floor": (0, 0, -40)},
         "explode": (0, -142, 0),
+        "explode_parts": {"case_screws_floor": (0, -100, -40)},
     },
 ]
 
@@ -176,7 +261,8 @@ LABELS = [
     ("cable_bat_*", "Battery lead"),
     ("cable_ptt_*", "Talk switch wires"),
     ("lead_*", "Holder leads"),
-    ("case_screws", "M3 × 8 screw"),
+    ("case_screws_*", "M3 × 8 screw"),
+    ("ribbon_*", "Ribbon, 6 wires"),
 ]
 
 PRINT_MATERIAL = {
@@ -312,6 +398,11 @@ def build_site() -> dict:
         for pattern, vec in step_def.get("explode_parts", {}).items():
             if any(fnmatch.fnmatchcase(p, pattern) for p in group_parts[(step, kind, label)]):
                 nodes[name]["explode"] = _to_three(vec)
+        enter = step_def["enter"]
+        for pattern, vec in step_def.get("enter_parts", {}).items():
+            if any(fnmatch.fnmatchcase(p, pattern) for p in group_parts[(step, kind, label)]):
+                enter = vec
+        nodes[name]["enter"] = _to_three(enter)
     doc = _glb_to_json(trimesh.exchange.gltf.export_glb(out, include_normals=True))
     (SITE_OUT / "hx1.gltf.json").write_text(json.dumps(doc, separators=(",", ":")))
 
@@ -330,6 +421,11 @@ def build_site() -> dict:
                 "enter": _to_three(step["enter"]),
                 "explode": _to_three(step["explode"]),
                 "anchor": _to_three(mid),
+                "side": step.get("side", "tub"),
+                "appear": bool(step.get("appear")),
+                "late": bool(step.get("late")),
+                "build_only": bool(step.get("build_only")),
+                "hide_after": step.get("hide_after"),
             }
         )
 
@@ -345,9 +441,12 @@ def build_site() -> dict:
     w, d, h = c.size()
     manifest = {
         "name": c.name,
-        "rev": "rev D",
+        "rev": "rev E",
         # The board's rear LEDs: the page puts its glow light here.
         "light_at": _to_three((hx1.X0, hx1.PCB_BOTTOM_Y + 3.0, hx1.BOARD_Z)),
+        # The faceplate opens like a book: pulled out, then swung about its left front edge.
+        "hinge": _to_three((hx1.HINGE[0], hx1.HINGE[1], 0.0)),
+        "pull": round(hx1.BOOK_PULL / 1000, 5),
         "steps": steps,
         "nodes": nodes,
         "specs": {

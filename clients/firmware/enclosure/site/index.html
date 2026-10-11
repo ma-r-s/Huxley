@@ -151,7 +151,7 @@ footer p { margin: 0; max-width: 70ch; }
 
 <header class="mast">
   <span class="brand">huxley <span>/ hardware</span></span>
-  <span class="pill"><b>●</b> HX-1 · rev D<span class="wide"> · fit-checked</span></span>
+  <span class="pill"><b>●</b> HX-1 · rev E<span class="wide"> · fit-checked</span></span>
 </header>
 
 <section class="stage" id="stage" aria-label="HX-1 in 3D">
@@ -199,7 +199,7 @@ footer p { margin: 0; max-width: 70ch; }
 
   <section class="sheet" aria-labelledby="seq-h">
     <h2 id="seq-h">Build sequence</h2>
-    <p class="sub">The tub lies on its back and everything goes in from its open front. The faceplate side is built face down on its own, then closes over it with six screws. Nothing is glued. Pick a step to see it on the model.</p>
+    <p class="sub">The tub lies on its back and everything goes in from its open front. The faceplate side is built face down beside it, then swings over onto it like a book and closes with four screws. Nothing is glued. Pick a step to see it on the model.</p>
     <ol class="steps" id="steps"></ol>
   </section>
 
@@ -214,7 +214,7 @@ footer p { margin: 0; max-width: 70ch; }
   </section>
 
   <footer>
-    <p>Rev D. Every part is fit-checked against Waveshare's own 3D model of the board, the speaker and your measured parts, and every bought part is held by printed features, screws or crush ribs, never glue. The clearances are starting values for a Bambu P2S; the fit coupon confirms them before the first full print.</p>
+    <p>Rev E. Every part is fit-checked against Waveshare's own 3D model of the board, the speaker and your measured parts, and every heavy part is held by printed features, screws or crush ribs, never glue; the wires lie loose with slack. The clearances come from the fit coupon printed on your Bambu P2S.</p>
     <p class="mono">Source: clients/firmware/enclosure · build123d · three.js</p>
   </footer>
 </main>
@@ -365,7 +365,13 @@ const CASE_KINDS = new Set(["shell", "shell_dark", "translucent"]);
 const pivot = new THREE.Group(), model = new THREE.Group();
 pivot.add(model);
 scene.add(pivot);
-const groups = M.steps.map(() => { const g = new THREE.Group(); model.add(g); return g; });
+// The faceplate side opens like a book: its steps hang off `book`, which turns
+// about the faceplate's left front edge (pulled straight out first).
+const book = new THREE.Group(), bookInner = new THREE.Group();
+const HINGE = new THREE.Vector3(...M.hinge);
+model.add(book); book.add(bookInner);
+bookInner.position.copy(HINGE).multiplyScalar(-1);
+const groups = M.steps.map((s) => { const g = new THREE.Group(); (s.side === "face" ? bookInner : model).add(g); return g; });
 const stepIndex = Object.fromEntries(M.steps.map((s, i) => [s.id, i]));
 const meshes = [];
 let HALF_D = 0.0185, HALF_H = 0.052, FOOT = [0.07, 0.037];
@@ -445,7 +451,7 @@ let camTween = null, idleAt = performance.now();
 const VIEWS = {
   assembled: { pos: [0.205, 0.118, 0.305], tgt: [0, 0.05, 0] },
   exploded: { pos: [0.64, 0.27, -0.12], tgt: [0, 0.045, 0.068] },  // parts spread toward the front
-  build: { pos: [0.15, 0.31, 0.25], tgt: [0, 0.012, 0.004] },
+  build: { pos: [0.08, 0.36, 0.3], tgt: [-0.036, 0.012, 0.004] },  // the tub and the faceplate open beside it
 };
 function narrow() { return viewport.clientWidth < 640; }
 function goTo(name, instant = false) {
@@ -501,24 +507,42 @@ $("t-light").addEventListener("click", () => { lightOn = !lightOn; $("t-light").
 
 /* ---------- pose: where every step group sits at this moment ---------- */
 const tmp = new THREE.Vector3();
+const K_CLOSE = M.steps.findIndex((s) => s.id === "close");
 function pose(now) {
+  // The book: open (pulled out, swung flat beside the tub) while the faceplate
+  // side is built, then it swings closed and slides home in the close step.
+  let angle = 0, pull = 0;
+  if (mode === "build" && K_CLOSE >= 0) {
+    const u = clamp((t - K_CLOSE) / 0.85, 0, 1);
+    angle = -Math.PI * (1 - easeInOut(clamp(u / 0.75, 0, 1)));
+    pull = M.pull * (1 - easeInOut(clamp((u - 0.75) / 0.25, 0, 1)));
+  }
+  book.position.set(HINGE.x, HINGE.y, HINGE.z + pull);
+  book.rotation.y = angle;
   for (let k = 0; k < N; k++) {
     const g = groups[k], s = M.steps[k];
     if (mode === "build") {
+      // Each part flies in along its own way in (screws along their axes);
+      // wires just appear.
       const u = clamp((t - k) / 0.68, 0, 1);
-      g.visible = t > k + 1e-4;
-      const f = 1 - easeOut(u);
-      g.position.set(s.enter[0] * f, s.enter[1] * f, s.enter[2] * f);
+      const gone = s.hide_after && t > stepIndex[s.hide_after] + 0.02;
+      g.visible = t > k + (s.late ? 0.85 : 1e-4) && !gone;
+      const f = s.appear ? 0 : 1 - easeOut(u);
+      g.position.set(0, 0, 0);
+      for (const o of g.children) {
+        const e = (o.userData && o.userData.enter) || s.enter;
+        o.position.set(e[0] * f, e[1] * f, e[2] * f);
+      }
     } else {
-      g.visible = true;
+      g.visible = !s.build_only;
       const f = easeInOut(clamp(explode * 1.45 - k * 0.042, 0, 1));
       g.position.set(s.explode[0] * f, s.explode[1] * f, s.explode[2] * f);
-    }
-    // Parts of one step that spread further apart in the exploded view.
-    const f = mode === "build" ? 0 : easeInOut(clamp(explode * 1.45 - k * 0.042, 0, 1));
-    for (const o of g.children) {
-      const e = o.userData && o.userData.explode;
-      if (e) o.position.set((e[0] - s.explode[0]) * f, (e[1] - s.explode[1]) * f, (e[2] - s.explode[2]) * f);
+      // Parts of one step that spread further apart in the exploded view.
+      for (const o of g.children) {
+        const e = o.userData && o.userData.explode;
+        if (e) o.position.set((e[0] - s.explode[0]) * f, (e[1] - s.explode[1]) * f, (e[2] - s.explode[2]) * f);
+        else o.position.set(0, 0, 0);
+      }
     }
   }
   const lieTo = mode === "build" ? 1 - easeInOut(clamp(t - N, 0, 1)) : 0;
@@ -557,7 +581,7 @@ function updateCallouts() {
   const pts = [];
   for (const i of show) {
     tmp.copy(anchors[i]).add(groups[i].position);
-    model.localToWorld(tmp);
+    groups[i].parent.localToWorld(tmp);
     tmp.project(camera);
     if (tmp.z > 1) continue;
     pts.push({ i, x: (tmp.x * 0.5 + 0.5) * w, y: (-tmp.y * 0.5 + 0.5) * h });
@@ -696,7 +720,7 @@ window.HX = { look: (pos, tgt = [0, 0.05, 0]) => { camTween = null; controls.aut
   camera.position.set(...pos); controls.target.set(...tgt); }, setMode };
 try {
   await loadModel();
-  groups[stepIndex.front].add(inner);
+  groups[stepIndex.board].add(inner);  // the glow travels with the board
   inner.position.set(...M.light_at);
   $("loading").hidden = true;
   requestAnimationFrame(frame);

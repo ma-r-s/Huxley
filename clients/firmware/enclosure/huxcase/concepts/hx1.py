@@ -145,6 +145,18 @@ NEG_RUN_X, NEG_CLIPS_Z = X0 + 6.0, (14.0, 28.0)
 # purpose (Mario, 2026-10-11: the heavy parts are held, the wires need no
 # place), so the faceplate swings open like a book on them.
 SEAM = (X0, 12.6, 46.0)  # the junction, behind the speaker's magnet
+# Opening like a book: pull the faceplate straight out BOOK_PULL (clears the
+# lip, the side fins and the lever-pin tooth), then swing it open about its
+# left front edge.
+HINGE, BOOK_PULL = (-W / 2, Y_FRONT), 10.0
+
+
+def book_open(p: tuple[float, float, float]) -> tuple[float, float, float]:
+    """Where a faceplate-side point lies with the faceplate opened flat beside the tub."""
+    x, y, z = p
+    return (2 * HINGE[0] - x, 2 * HINGE[1] - BOOK_PULL - y, z)
+
+
 # Fins on the faceplate along the inside of both side walls, below the
 # holders' fronts: they line the faceplate up sideways as it closes.
 GUIDE_Z, GUIDE_Y1, GUIDE_T = (12.0, 38.0), -8.8, 1.6
@@ -937,6 +949,7 @@ def build() -> Concept:
         )
     # Cable runs (tub side). The ribbon from the board to the seam junction is
     # loose with slack and not modelled.
+    bat_x = to_device(17.81, -6.04)[0]
     spk_x = to_device(17.81, 5.19)[0]
     plug_z = to_device(17.81, 0)[1]
     plug_y = PCB_BOTTOM_Y + hw.BOTTOM_CONN
@@ -1019,6 +1032,41 @@ def build() -> Concept:
             d=1.0,
         )
 
+    screws4 = fasteners["case_screws"].solids()
+    face_screws = [sc for sc in screws4 if sc.bounding_box().center().Z > H / 2]
+    floor_screws = [sc for sc in screws4 if sc.bounding_box().center().Z <= H / 2]
+    assert len(face_screws) == len(floor_screws) == 2
+    # The ribbon from the board to the junction, for the build page only (it
+    # lies loose, so the fit check leaves it out): closed, and with the
+    # faceplate opened flat beside the tub while it is soldered.
+    plug_top = (bat_x, plug_y, plug_z)
+    ribbon_closed = hw.cable(
+        [
+            plug_top,
+            (bat_x, plug_y + 1.2, plug_z - 1.0),
+            (bat_x + 2.2, 2.0, plug_z - 4.6),
+            (X0 - 1.8, 6.0, SEAM[2] + 1.0),
+            (X0 + 2.5, 9.5, SEAM[2] - 4.0),
+            (X0 + 4.0, 12.0, SEAM[2] - 2.0),
+            (X0 + 2.0, 13.0, SEAM[2] + 0.5),
+            SEAM,
+        ],
+        d=1.2,
+    )
+    ribbon_open = hw.cable(
+        [
+            SEAM,
+            (X0 - 2.0, 4.0, SEAM[2]),
+            (X0 - 5.0, -5.0, SEAM[2] - 0.5),
+            (-20.0, -5.0, SEAM[2] - 0.5),
+            (-30.0, -10.0, SEAM[2] - 0.5),
+            (-34.0, -17.0, SEAM[2] - 0.5),
+            (-38.0, -24.0, SEAM[2] + 1.0),
+            (-50.0, -36.0, SEAM[2] + 5.0),
+            book_open(plug_top),
+        ],
+        d=1.2,
+    )
     tub_ribs_all = _union(tub_ribs)
     frost = bbox_solid(-60, 60, -60, 60, BACK_FROST_Z, 200)
     tub_all = tub + latch + tub_ribs_all
@@ -1037,7 +1085,9 @@ def build() -> Concept:
         Part("bridge_screw", bridge_screw, "screw"),
         Part("bridge_insert", bridge_insert, "metal"),
         Part("board_screws", fasteners["board_screws"], "screw"),
-        Part("case_screws", fasteners["case_screws"], "screw"),
+        # The case screws by the way they go in: through the face, up through the floor.
+        Part("case_screws_face", _union(face_screws), "screw"),
+        Part("case_screws_floor", _union(floor_screws), "screw"),
         Part("inserts", fasteners["inserts"], "metal"),
         Part("face_inserts", fasteners["face_inserts"], "metal"),
         *board,
@@ -1058,6 +1108,8 @@ def build() -> Concept:
             )
             for n, c in cables.items()
         ],
+        Part("ribbon_closed", ribbon_closed, "wire_red"),
+        Part("ribbon_open", ribbon_open, "wire_red"),
     ]
 
     sweep = _union(_pressed(_bar(), k / 10) for k in range(0, 11))
