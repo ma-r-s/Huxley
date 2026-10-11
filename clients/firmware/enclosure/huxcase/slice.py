@@ -40,11 +40,10 @@ from huxcase.export import OUT
 
 APP = Path("/Applications/BambuStudio.app/Contents")
 PROFILES = APP / "Resources/profiles/BBL"
-MACHINE, PROCESS, FILAMENT = (
-    "Bambu Lab P2S 0.4 nozzle",
-    "0.20mm Standard @BBL P2S",
-    "Bambu PLA Basic @BBL P2S",
-)
+MACHINE, PROCESS = "Bambu Lab P2S 0.4 nozzle", "0.20mm Standard @BBL P2S"
+# Mario's frosted spool is transparent PETG (2026-10-11); the rest are PLA.
+# Bambu's own preset for translucent PETG on the P2S is the starting point.
+PLA, PETG = "Bambu PLA Basic @BBL P2S", "Bambu PETG Translucent @BBL P2S 0.4 nozzle"
 TREE_SUPPORTS = {
     "enable_support": "1",
     "support_type": "tree(auto)",
@@ -59,6 +58,10 @@ TREE_SUPPORTS = {
     # walls were for branches that snapped at an AMS change, now gone.
     "support_style": "tree_organic",
     "tree_support_wall_count": "0",
+    # PETG welds to its supports at the standard 0.2 gap; 0.25 lets the
+    # top's come away (the grey base's too, no harm).
+    "support_top_z_distance": "0.25",
+    "support_bottom_z_distance": "0.25",
 }
 # No brim. The top stands 68 mm tall on its seam face, the lap's 1.1 mm
 # outer half (about 200 mm2 of a U 70 x 35 across, which will not tip). An
@@ -66,15 +69,16 @@ TREE_SUPPORTS = {
 # whole outline is the outer one, and the brim lay along the skirt's inner
 # edge, the edge that slides over the lip (review, 2026-10-11).
 NO_BRIM = {"brim_type": "no_brim"}
-# The frosted top, for an even glow as clear as PLA gets, after Bambu's
-# translucent PLA guide (wiki: knowledge-sharing/transparent-petg): dry
-# filament first; 230 C and flow 1.01 so the lines fuse; one wall and 100 %
-# rectilinear infill in one direction, no top or bottom shells (no sparse
-# grid to show in the glow, fewer line boundaries); wide infill lines; slow;
-# little cooling. Kept from the standard profile: 0.2 layers (the fits are
-# tuned there) but for the roof's curve (ROOF_LAYER), the walls' 0.42 lines
-# (fine features keep printing), and some fan (the guide warns PLA warps with
-# none; overhangs keep full fan).
+# The frosted top, for an even glow as clear as its PETG gets, after Bambu's
+# translucent PLA/PETG guide (wiki: knowledge-sharing/transparent-petg, its
+# PETG settings read off its screenshots, 2026-10-11): dry filament first;
+# 270 C (the top of PETG's range) and flow 1.01 so the lines fuse; part fan
+# and side fan off (overhangs and bridges still get the preset's 90 %); one
+# wall and 100 % rectilinear infill, no top or bottom shells (no sparse grid
+# to show in the glow, fewer line boundaries); wide infill lines; slow. Kept
+# from the standard profile: 0.2 layers (the fits are tuned there; the guide
+# says 0.1, about twice the time) and the walls' 0.42 lines (fine features
+# keep printing).
 #
 # The base and the top share one plate (Mario, 2026-10-11), so the process
 # is the plate's: the base prints solid too (stronger, a little slower).
@@ -101,13 +105,13 @@ CLARITY_PROCESS = {
         )
     },
 }
-CLARITY_FILAMENT = {
-    "nozzle_temperature": "230",
-    "nozzle_temperature_initial_layer": "230",
-    "filament_flow_ratio": "1.01",
-    "fan_min_speed": "20",
-    "fan_max_speed": "40",
-    "additional_cooling_fan_speed": "0",  # the P2S's side fan, 70 % in the preset
+CLARITY_FILAMENT = {  # on the PETG preset
+    "nozzle_temperature": "270",  # preset 245
+    "nozzle_temperature_initial_layer": "270",  # preset 250
+    "filament_flow_ratio": "1.01",  # preset 0.95
+    "fan_min_speed": "0",  # preset 10
+    "fan_max_speed": "0",  # preset 30
+    "additional_cooling_fan_speed": "0",  # the side fan, already off in the preset
     "filament_max_volumetric_speed": f"{0.5 * 0.2 * CLARITY_SPEED:g}",
 }
 # No variable layer heights (Mario asked, 2026-10-11): Bambu Studio's layer
@@ -226,17 +230,19 @@ def _resolve(kind: str, name: str) -> dict:
     return out
 
 
-def _presets(work: Path, filaments: int = 1) -> list[str]:
-    """Command-line arguments loading the complete P2S presets from `work`."""
+def _presets(work: Path, colours: tuple[str, ...] = ("",)) -> list[str]:
+    """Command-line arguments loading the complete P2S presets from `work`,
+    one filament per colour: PETG for the frosted one, PLA for the rest."""
     paths = {}
-    for kind, name in (("machine", MACHINE), ("process", PROCESS), ("filament", FILAMENT)):
-        paths[kind] = work / f"{kind}.json"
-        paths[kind].write_text(json.dumps(_resolve(kind, name), indent=1))
+    wanted = [("machine", MACHINE), ("process", PROCESS), ("filament", PLA), ("filament", PETG)]
+    for kind, name in wanted:
+        paths[name] = work / f"{kind}_{len(paths)}.json"
+        paths[name].write_text(json.dumps(_resolve(kind, name), indent=1))
     return [
         "--load-settings",
-        f"{paths['machine']};{paths['process']}",
+        f"{paths[MACHINE]};{paths[PROCESS]}",
         "--load-filaments",
-        ";".join([str(paths["filament"])] * filaments),
+        ";".join(str(paths[PETG if c == FROSTED else PLA]) for c in colours),
     ]
 
 
@@ -282,7 +288,7 @@ def slice_plate(plate: Plate, print_dir: Path, out_dir: Path, proj_dir: Path) ->
         files = [str(print_dir / f"{s}.stl") for s in plate.stls]
         _run(
             [
-                *_presets(work, len(plate.colours)),
+                *_presets(work, plate.colours),
                 "--orient",
                 "0",
                 "--arrange",
@@ -427,8 +433,8 @@ def support_in_keep_outs(
 def check(project: Path, plate: Plate) -> str:
     """What every sliced plate must be: the P2S's own start sequence, no
     pause, one plate; its objects one after another in the plate's order,
-    each in its own filament, no prime tower; the clarity settings on the
-    frosted filament alone. Returns its print time."""
+    each in its own filament, no prime tower; PETG on the frosted slot and
+    the clarity settings on it alone. Returns its print time."""
     with zipfile.ZipFile(project) as z:
         plates = [n for n in z.namelist() if n.endswith(".gcode")]
     assert plates == ["Metadata/plate_1.gcode"], f"{project.name}: plates {plates}"
@@ -447,6 +453,9 @@ def check(project: Path, plate: Plate) -> str:
         assert changes == [plate.slots[s] - 1 for s in plate.stls], f"{project.name}: {loads}"
         assert "; enable_prime_tower = 0" in gcode, f"{project.name}: prime tower on"
     if plate.clear:
+        kinds = re.split(r"[;,]", re.search(r"^; filament_type = (.*)$", gcode, re.M).group(1))
+        want = ["PETG" if c == FROSTED else "PLA" for c in plate.colours]
+        assert kinds == want, f"{project.name}: filament types {kinds}"
         for key in ("nozzle_temperature", "filament_max_volumetric_speed", "fan_max_speed"):
             got = re.search(rf"^; {key} = (.*)$", gcode, re.M).group(1).split(",")
             mine = [i + 1 for i, v in enumerate(got) if v == CLARITY_FILAMENT[key]]

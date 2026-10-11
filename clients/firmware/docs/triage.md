@@ -319,6 +319,14 @@ kept standing. Prime tower off (it showed in his GUI), organic supports.
 Lesson: a "no overlap" test passes faces that touch; a mating joint needs a
 minimum-distance test.
 
+**Frosted top in PETG (2026-10-11)**: Mario's frosted spool is transparent
+PETG, not PLA. Slot 4 now loads Bambu's "PETG Translucent @BBL P2S" preset,
+with the guide's PETG values (read off its screenshots): 270 C, flow 1.01,
+part and side fans off (overhangs and bridges keep 90 %); supports 0.25 off
+the part (PETG welds at 0.2); bed 70 C for the top, 55 C once the base
+starts. check() asserts PETG on the frosted slot. The fits are PLA-tuned:
+the test corner (lap, backing, the rear pin seat's start) is the check.
+
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
 bottom is fine, holders whole, no glue but the tub's halves, plastic pivot, protected cells
 instead of a protection board, the ribbon and loose wires, the board's

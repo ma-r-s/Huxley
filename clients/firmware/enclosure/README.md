@@ -194,22 +194,24 @@ Rev C had a frosted ring on the LEDs to even out the glow; Mario asked why it
 was needed, and it was not: the frosted tub diffuses the light. Dropping it
 also removed two overlaps.
 
-The top prints for clarity (Mario asked for it "as even and as transparent
-as possible", not glass, 2026-10-11). From Bambu Lab's translucent filament
-guide on its wiki, and what carries over to a 2.4 mm PLA wall on a 0.4
-nozzle (`huxcase/slice.py`, `CLARITY_*`):
+The top prints in Mario's transparent PETG (2026-10-11; PETG is amorphous,
+so it gets clearer than PLA), for clarity: he asked for it "as even and as
+transparent as possible", not glass. From Bambu Lab's translucent PLA/PETG
+guide on its wiki (its PETG values read off its screenshots), on Bambu's
+own "PETG Translucent" preset for the P2S, and what carries over to a
+2.4 mm wall on a 0.4 nozzle (`huxcase/slice.py`, `CLARITY_*`):
 
-- Dry the filament first: damp PLA leaves bubbles that scatter light.
+- Dry the filament first: translucent PETG is very hygroscopic, and damp
+  filament leaves bubbles that scatter light.
 - Solid: one wall, then 100 % rectilinear infill (its lines cross at 90 deg
   from layer to layer), no top or bottom shells, so there is no sparse grid
   to show in the glow and fewer boundaries between lines. Infill lines 0.5 wide; the walls keep 0.42 so
   the fine features still print.
-- Hot and slow so the lines fuse: 230 C, flow 1.01, about 40 mm/s (a cap on
-  the frosted filament's flow, 4 mm3/s). The guide says 20 mm/s; that
-  roughly doubles the top's time.
-
-- Little cooling: part fan 20 to 40 %, the side fan off. The guide turns the
-  fans off; PLA warps with none, and overhangs keep full fan.
+- Hot and slow so the lines fuse: 270 C (the preset says 245), flow 1.01
+  (preset 0.95), about 40 mm/s (a cap on the frosted filament's flow,
+  4 mm3/s). The guide says 20 mm/s; that roughly doubles the top's time.
+- No cooling: part fan and side fan off, as the guide says; overhangs and
+  bridges still get the preset's 90 %.
 - Even layers, 0.2 as the fits are tuned. The guide's 0.1 would double the
   time again.
 - After printing, sanding the outside evens the frost further; a clear coat
@@ -299,7 +301,7 @@ and lead came with it (Mario, 2026-10-11), so plug it in and splice its lead.
 | Faceplate | grey | face down | none |
 | Grille plug | black | face down | none |
 | Tub base | grey | standing on its floor, open front facing you | tree supports: thin strips under the outside bottom corners (their lowest millimetre leaves the bed almost flat; sand what they leave) and the - joint's shelf |
-| Tub top | frosted, clarity settings | standing on its seam face, open front facing you | tree supports from the plate: under the roof, the holder pads and the + joint's shelves, the switch cradle and its latch finger, the rocker mount and its recess, the lever pin's notch at the front right. Pull them out through the open front; the notch's and the recess's from outside (the notch has 0.4 mm of room round the tooth for what they leave). No brim (see below) |
+| Tub top | frosted PETG, clarity settings | standing on its seam face, open front facing you | tree supports from the plate: under the roof, the holder pads and the + joint's shelves, the switch cradle and its latch finger, the rocker mount and its recess, the lever pin's notch at the front right. Pull them out through the open front; the notch's and the recess's from outside (the notch has 0.4 mm of room round the tooth for what they leave). No brim (see below) |
 | Lever | orange | outer face down | none |
 | Lever pin | grey | lying flat (three: two spares) | none |
 | Plunger | grey | standing on its tip (three lengths) | none |
@@ -327,8 +329,9 @@ rocker hole and the USB pocket, those overhangs printed bare and failed on
 Mario's first tub.
 
 **The projects**, in `out/print/projects/`: Bambu Studio projects for the
-P2S (0.4 nozzle, 0.20 mm Standard, Bambu PLA Basic, Textured PEI plate;
-pick your plate if it differs), not sliced: File > Open Project, slice,
+P2S (0.4 nozzle, 0.20 mm Standard, Bambu PLA Basic, and Bambu PETG
+Translucent for the frosted slot; Textured PEI plate, pick yours if it
+differs), not sliced: File > Open Project, slice,
 print. The same sliced are in `out/print/sliced/`.
 
 | Project | Filament | About |
@@ -336,8 +339,8 @@ print. The same sliced are in `out/print/sliced/`.
 | `1_grey_faceplate_bridge_pin_plunger` | grey | 38 min (faceplate, bridge, 3 pins, 3 plungers) |
 | `2_black_grille` | black | 30 min |
 | `3_orange_lever` | orange | 6 min |
-| `4_tub_base_and_top` | AMS: slot 1 grey, slot 4 frosted | 4 h 10 min; by object: the frosted top, then the base |
-| `5_test_corner` | AMS: slot 1 grey, slot 4 frosted | 19 min; both halves' corner at the seam: print it first |
+| `4_tub_base_and_top` | AMS: slot 1 grey PLA, slot 4 frosted PETG | 4 h 8 min; by object: the frosted top, then the base |
+| `5_test_corner` | AMS: slot 1 grey PLA, slot 4 frosted PETG | 20 min; both halves' corner at the seam: print it first |
 
 The tub's plate prints object by object, so the filament changes once,
 between the pieces, never inside one. The frosted top goes first, so its
@@ -351,8 +354,10 @@ chute. No brim: the top stands on the lap's 1.1 mm outer half, but as a U
 70 x 35 across it will not tip, and an "outer only" brim still runs inside
 an open U (its whole outline counts as outer), along the edge that slides
 over the lip. Clean the plate first (dish soap, or isopropyl alcohol). When
-sending, check the AMS mapping (1 grey, 4 frosted) and that the frosted
-spool is PLA, dried.
+sending, check the AMS mapping (1 grey, 4 frosted) and that slot 4 is set
+to PETG on the printer, its spool dried. Supports sit 0.25 off the part
+(0.2 is standard), as PETG welds to them closer. The bed runs 70 C for the
+PETG top, then 55 C for the PLA base (Bambu sets it at the change).
 
 On plate 1 the bridge's screw hole is skinned over on its first 0.5 mm
 (`hx1.bridge_skin`), or its bridge lines would end in the air (Bambu Studio
@@ -383,7 +388,9 @@ On the bench first:
 1. Pull both tub pieces' supports out (see the print guide). Push the top
    onto the base dry first: it should slide down and sit flush. Then glue: a thin line of CA round the base's
    lip, very little (its fumes leave a white haze on the frosted part;
-   low-bloom CA if you have it, and air moving across), then the top
+   low-bloom CA if you have it, and air moving across; scuff the lip and
+   the inside of the top's skirt with fine sandpaper first, CA grips PETG
+   better on a rough face), then the top
    straight down over it, open fronts flush, held 30 s. Cut the wires to
    the table above, with their slack.
 2. Talk switch: solder its two wires to the leg pair that switches first

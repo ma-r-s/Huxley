@@ -238,9 +238,9 @@ COLOUR = {
     "faceplate": "grey",
     "grille_plug": "black",
     "tub_base": "grey",
-    "tub_top": "frosted (clarity settings)",
+    "tub_top": "frosted PETG (clarity settings)",
     "test_base": "grey",
-    "test_top": "frosted (clarity settings)",
+    "test_top": "frosted PETG (clarity settings)",
     "ptt_bar": "orange",
     "ptt_pin": "grey",
     "plunger": "grey",
@@ -270,7 +270,8 @@ def export_stls(out_dir) -> list[str]:
         )
         written.append(f"{path.name}: {COLOUR[pose.piece]}, {pose.how}")
     (out / "PRINT.txt").write_text(
-        "HX-1 rev E print set (PLA, 0.4 nozzle, 0.20 mm layers). The tub is two pieces, "
+        "HX-1 rev E print set (PLA, the frosted top in PETG; 0.4 nozzle, 0.20 mm layers). "
+        "The tub is two pieces, "
         "glued with a lap joint: a grey base and a frosted top, on one plate printed by "
         "object (projects/4_tub_base_and_top.3mf). Both get tree supports, Everywhere, "
         "bridges included; everything else needs none. The frosted top prints with "
