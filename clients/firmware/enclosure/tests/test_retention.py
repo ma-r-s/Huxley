@@ -37,7 +37,7 @@ def model():
     ]
     rigid = {
         "faceplate": faceplate,
-        "tub": [sh["tub"]],
+        "tub": [sh["tub"], sh["tub_latch"]],
         "bridge": [sh["bridge"]],
         "plug": [sh["grille_plug"]],
         "pin": [sh["ptt_pin"]],

@@ -45,8 +45,8 @@ STEPS = [
     {
         "id": "inserts",
         "title": "Inserts",
-        "text": "Seven M3 × 5 heat-set inserts with the insert tool: six in the corner "
-        "blocks for the case screws, one in the boss on the back wall.",
+        "text": "Three M3 × 5 heat-set inserts with the insert tool: two in the top "
+        "corner blocks, one in the boss on the back wall. Two more go in the faceplate.",
         "parts": ["inserts", "bridge_insert"],
         "enter": (0, -50, 0),
         "explode": (0, -24, 0),
@@ -81,8 +81,8 @@ STEPS = [
     {
         "id": "lever",
         "title": "Lever",
-        "text": "Push the printed pin through the lever. Set it in 2.5 mm forward, "
-        "then slide it back so the pin enters its seat behind the channel.",
+        "text": "Push the printed pin through the lever, then slide it in from the "
+        "front along its channel until the pin drops into its seat at the back.",
         "parts": ["ptt_bar", "ptt_pin"],
         "enter": (70, 0, 0),
         "explode": (45, 0, 0),
@@ -117,9 +117,16 @@ STEPS = [
     {
         "id": "front",
         "title": "Faceplate side",
-        "text": "Built face down: the grille plug drops into its window, the speaker "
-        "onto its six tabs, the board onto three standoffs with M2 × 8 screws.",
-        "parts": ["faceplate", "grille_plug", "speaker_*", "board_*", "board_screws"],
+        "text": "Built face down: two inserts in its bottom bosses, the grille plug "
+        "into its window, the speaker on its six tabs, the board on three M2 × 8.",
+        "parts": [
+            "faceplate",
+            "face_inserts",
+            "grille_plug",
+            "speaker_*",
+            "board_*",
+            "board_screws",
+        ],
         "enter": (0, -150, 0),
         "explode": (0, -108, 0),
         "explode_parts": {
@@ -132,8 +139,8 @@ STEPS = [
     {
         "id": "screws",
         "title": "Close it",
-        "text": "Six M3 × 8 through the face into the inserts. Closing the case also "
-        "captures the lever pin and clamps the speaker.",
+        "text": "Two M3 × 8 through the face at the top, two up through the floor. "
+        "Closing it also captures the lever pin and clamps the speaker.",
         "parts": ["case_screws"],
         "enter": (0, -60, 0),
         "explode": (0, -142, 0),
@@ -144,6 +151,7 @@ LABELS = [
     ("tub_*", "Tub"),
     ("inserts", "M3 × 5 heat-set insert"),
     ("bridge_insert", "M3 × 5 heat-set insert"),
+    ("face_inserts", "M3 × 5 heat-set insert"),
     ("faceplate", "Faceplate"),
     ("grille_plug", "Grille plug"),
     ("speaker_*", "Speaker, 40 mm 5 W"),
@@ -184,9 +192,9 @@ BOUGHT = [
     ("12 × 12 tact switch", 1),
     ("Spring 0.4 × 4 × 15 (SciWil kit)", 1),
     ("KCD1-101 rocker switch", 1),
-    ("M3 × 8 button head, case", 6),
+    ("M3 × 8 button head, case", 4),
     ("M3 × 6 button head, holder bridge", 1),
-    ("M3 × 5 heat-set insert", 7),
+    ("M3 × 5 heat-set insert", 5),
     ("M2 × 8 button head + flat washer, board", 3),
     ("Ribbon cable, for every run", 1),
 ]

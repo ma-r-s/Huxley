@@ -50,14 +50,18 @@ contacts.
 
 - **Faceplate** (grey, prints face down). The face, its 2 mm lip that seats in
   the tub's rim (`SNUG`), the board's three standoffs and three centring
-  posts, the two mic tubes, the charge-light tube, six screw pads and the
-  tooth that holds the lever pin's front end.
+  posts, the USB-C boss (it travels with the board), the two mic tubes, the
+  charge-light tube, two screw pads at the top, two insert bosses at the
+  bottom and the tooth that holds the lever pin's front end.
 - **Tub** (prints standing up: grey to 36 mm, then one filament swap to
   frosted). Everything else, roof included: so the LEDs glow through the top,
   the upper back and the upper sides.
-- **Closure**: six M3 x 8 button heads through the face, flush in
-  counterbores, into M3 x 5 heat-set inserts in blocks on the tub's walls.
-  Visible, honest screws, TE style; nothing to snag.
+- **Closure**: four M3 x 8 button heads, all flush in counterbores. Two go
+  through the face at the top into inserts in the tub's top corner blocks
+  (above the holders). Two go up through the floor into inserts in bosses on
+  the faceplate. Nothing of the tub stands in front of the holders, so they
+  and the cells go in from the front (an assembly test proves every part's
+  way in).
 
 The old three-piece split (rev C) could not be fastened: its seams left no
 room for a screw boss and cut through the rocker, the lever channel and the
@@ -74,7 +78,7 @@ switch.
 | Cells | the holders | the holders' springs, and the bridge's front bar in a drop |
 | 12 x 12 switch | cradle in the tub, legs in two slots | crush ribs; a latch finger snaps over its front face |
 | Plunger + spring | the tube | the spring's 1.5 mm preload between lever and plunger |
-| Lever | its printed pin | the pin sits in two blind seats (tub behind, faceplate tooth in front), captured when the case closes; a dome takes up its axial play |
+| Lever | its printed pin | the pin sits in two blind seats (tub behind, faceplate tooth in front), captured when the case closes; 0.9 N of spring preload holds it against its stop |
 | Power switch | its panel in a recess in the left side | its own snap ears |
 | Joints (+ and -) | pockets on the back wall | pressed in between two shelves (in heat-shrink) |
 | Battery - lead | two hooks on the back wall | their lips |
@@ -133,8 +137,9 @@ cap not used) and the 0.4 x 4 x 15 mm spring from the SciWil kit.
 - The orange lever turns on a **printed Ø2.4 pin** (no screw, no metal pin).
   The pin goes through the lever's knuckle; its ends sit in a blind seat in
   the tub behind the channel and one in the faceplate's tooth in front of it,
-  so closing the case captures it. To fit it: hold the lever 2.5 mm forward,
-  press it in, slide it back into the rear seat.
+  so closing the case captures it. To fit it: pin through the lever, slide
+  the lever in from the front along its channel until the pin drops into the
+  rear seat. The spring sits in a counterbore in the lever.
 - Its top end presses a **spring in series** with the switch: lever ->
   spring -> printed plunger -> switch stem. The press feels progressive
   (spring-loaded) until the spring reaches the switch's actuation force, then
@@ -197,7 +202,7 @@ the battery leads to the socket's pads unless a 1.25 mm plug turns up.
 | --- | --- | --- | --- |
 | Faceplate | grey | face down | none |
 | Grille plug | black | face down | none |
-| Tub | grey, swap to frosted at 36 mm | standing up, open front facing you | tree supports: roof, switch cradle and tube, rocker mount; all removed through the open front |
+| Tub | grey, swap to frosted at 36 mm | standing up, open front facing you | tree supports: the roof, the switch cradle and its latch, the rocker mount and its recess ceiling, the joint shelves, the tooth notch; all removed through the open front. The outside bottom edge droops slightly (no support needed) |
 | Lever | orange | outer face down | none |
 | Lever pin | grey | lying flat | none |
 | Plunger | grey | standing on its flat end | none |
@@ -209,12 +214,13 @@ the battery leads to the socket's pads unless a 1.25 mm plug turns up.
 ## Assembly
 
 Tub, lying on its back:
-1. Heat-set the seven M3 x 5 inserts: six in the corner blocks, one in the
+1. Heat-set three M3 x 5 inserts: two in the top corner blocks, one in the
    boss on the back wall.
 2. Rocker: solder two leads, heat-shrink, snap it in from outside.
 3. Talk switch: solder its two wires, slide it into the cradle until it
    clicks. From outside, drop the plunger into the tube, then the spring.
-4. Lever: push the pin through it; set it in 2.5 mm forward, slide it back.
+4. Lever: push the pin through it, slide it in from the front along its
+   channel (press the spring's end down with a fingertip as it passes).
 5. Holders: each in 1 mm toward the middle, then out under its lips. Join the
    + leads with the rocker's lead, the - leads with the battery - lead; put
    both joints in heat-shrink and press them into their pockets. Clip the -
@@ -222,15 +228,17 @@ Tub, lying on its back:
 6. Cells in (within 0.05 V of each other, + up). Bridge across, M3 x 6.
 
 Faceplate, face down:
-7. Drop the grille plug into its window, flange inside.
+7. Heat-set two M3 x 5 inserts in the bottom bosses. Press the grille plug
+   into its window from inside, flange inside (crush ribs hold it).
 8. Cut the speaker lead to 30 mm, re-solder it, set the speaker on its tabs.
 9. Board onto its standoffs (USB-C to the left), 3 x M2 x 8 with washers. Plug
    in the speaker. Solder the battery leads to the BAT pads and the talk
    wires to the header tails.
 
 Close:
-10. Rocker OFF. Lower the faceplate onto the tub (the lever pin's front end
-    goes into the tooth) and fit the six M3 x 8, crosswise, snug.
+10. Rocker OFF. Turn the faceplate over onto the tub (the lever pin's front
+    end goes into the tooth) and fit the four M3 x 8: two in the face at the
+    top, two up through the floor, snug.
 11. Test: rocker ON, the lever clicks; on USB-C the charge light comes on.
 
 ## Parts list
@@ -240,8 +248,8 @@ Printed: faceplate, tub, grille plug, lever, lever pin, plunger, holder bridge
 
 Bought, all from Mario's inventory (photos 2026-10-10): the board and its
 speaker; two 18650 cells in two holders; the 12 x 12 tact switch; the SciWil
-0.4 x 4 x 15 spring; the KCD1-101 rocker; Kadrick button heads 6 x M3 x 8,
-1 x M3 x 6, 3 x M2 x 8 with flat washers; FFVRVSS 7 x M3 x 5 heat-set inserts;
+0.4 x 4 x 15 spring; the KCD1-101 rocker; Kadrick button heads 4 x M3 x 8,
+1 x M3 x 6, 3 x M2 x 8 with flat washers; FFVRVSS 5 x M3 x 5 heat-set inserts;
 ribbon cable (double the conductors for the battery leads).
 
 Tools and consumables assumed: soldering iron and solder, the insert tool,

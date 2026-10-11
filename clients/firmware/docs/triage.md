@@ -146,6 +146,28 @@ and unassemblable ones; the one-solid, hard-stop and printability tests
 caught what collisions could not. Critic on the plan, then a second critic
 on the build, both earned their keep.
 
+**Rev D round 3: a way in for every part (2026-10-10)**: the second
+buildability pass moved each part along its insertion path and found rev D
+could not be built at all, although every test passed: the holders hit the
+z 8 and z 40 screw blocks on the way in (and the cells, the USB boss), the
+lever had no path, the grille plug could not pass the lip, the BOOT key
+scraped a block while closing. Fixed: four screws instead of six (two
+through the face at the top, two up through the floor into faceplate
+bosses), so nothing of the tub stands in front of the holders; the USB boss
+moved to the faceplate (it travels with the board); full-width lever web
+and a spring counterbore so the lever slides in from the front; lip cut on
+the plug's path and crush ribs in its window (it stays when the faceplate
+is turned over); top blocks cleared along the board's closing path; a web
+from the cradle to the roof; the stop joined to the full backing;
+printable clip lips. New `tests/test_assembly.py` sweeps every part along
+its real path in assembly order and was checked against the previous model
+(it catches the holder and lever blocks). 74 green.
+Still open from the review: wiring across the halves (F: a Dupont pair or
+modelled service loops: Mario's call), joint pockets sized to the splice
+with a front lip (G), lever play is held by spring preload only (H), and
+the retention test's blind spots (lever, wire runs, a minimum feature
+size test).
+
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
 bottom is fine, holders whole, no glue, plastic pivot); battery protection
 board (recommended again with the rev D risk: two parallel unprotected cells,
