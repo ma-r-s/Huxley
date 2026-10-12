@@ -47,7 +47,7 @@ compounding.
 
 **Verified when**: forcing a panic on the board produces a coredump
 we can decode on the host, AND server log shows matching
-`client.huxley.firmware_log level=E` entries timestamp-aligned with
+`client.huxley.firmware_log client_level=E` entries timestamp-aligned with
 serial.
 
 ---

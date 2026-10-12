@@ -72,6 +72,22 @@ logger = structlog.get_logger()
 
 PROTOCOL_VERSION = 2
 
+# Keys the log pipeline owns: structlog's own (`event`, `level`,
+# `timestamp`, `logger`, `exc_info`, `stack_info`) and the server's bound
+# `conn_id`. A client_event field with one of these names would replace
+# or crash the server's value (the firmware's `level: "W"` was logged as
+# "info"; a field named `event` raised TypeError), so it is logged as
+# `client_<key>` instead. Skill handlers still get the data unchanged.
+_RESERVED_LOG_KEYS = frozenset(
+    {"event", "level", "timestamp", "logger", "exc_info", "stack_info", "conn_id"}
+)
+
+
+def client_event_log_fields(data: dict[str, Any]) -> dict[str, Any]:
+    """`data` of a client_event, with log-reserved keys renamed `client_<key>`."""
+    return {(f"client_{k}" if k in _RESERVED_LOG_KEYS else k): v for k, v in data.items()}
+
+
 # T1.21 — keep the last N connection records (after they close) so the
 # `get_diag` frame can return a recent-history snapshot. Bounded so a
 # long-running server can't grow unbounded.
@@ -857,7 +873,7 @@ class AudioServer:
                 event = str(msg.get("event", "unknown"))
                 raw_data = msg.get("data")
                 data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
-                await logger.ainfo(f"client.{event}", **data)
+                await logger.ainfo(f"client.{event}", **client_event_log_fields(data))
                 await self._dispatch_client_event(event, data)
             case other:
                 await logger.awarning("server.rx.unknown", msg_type=other)

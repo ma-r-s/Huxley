@@ -115,7 +115,10 @@ def board_lines(offset: int, until: float, stop=None) -> tuple[int, str]:
             except ValueError:
                 continue
             if e.get("event") == "client.huxley.firmware_log":
-                text = f"{e.get('level', '?')[:1].upper()} {e.get('tag')}: {e.get('line')}"
+                # The board's level is `client_level` (the server's own
+                # `level` is always "info"); older logs carry it as `level`.
+                level = e.get("client_level") or e.get("level", "?")
+                text = f"{level[:1].upper()} {e.get('tag')}: {e.get('line')}"
                 print("  " + text, flush=True)
                 if stop and re.search(stop, text):
                     return f.tell(), text
