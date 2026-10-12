@@ -6,7 +6,7 @@ import atexit
 import copy
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 import structlog
@@ -31,26 +31,30 @@ def _close_log_file() -> None:
 
 # Per-run rotation: at startup, the previous run's log is renamed to
 # logs/huxley_<that-run's-mtime>.log so the live file is always the
-# current run only. Bounded to KEEP_RUNS archives.
-KEEP_RUNS = 10
+# current run only. Archives are the deployment's history (what was said,
+# played and measured, read back by dev.py link and the caregiver view),
+# so they are kept unless the operator sets an age limit. A count limit
+# lost real use: ten restarts in one day erased the day before (T1.43).
+_ARCHIVE_TS_FORMAT = "%Y%m%dT%H%M%S"
 
 
-def _rotate_per_run(log_file: Path) -> None:
-    """Archive the previous run's log + prune old archives.
+def _rotate_per_run(log_file: Path, keep_days: int = 0, now: datetime | None = None) -> None:
+    """Archive the previous run's log + prune archives older than keep_days.
 
     Convention: `logs/huxley.log` is always the current run. On startup,
     if it exists, rename it to `logs/huxley_<iso-timestamp>.log` (the
-    timestamp is the file's last-modified time — i.e. when the previous
-    run last wrote to it). Then delete oldest archives beyond KEEP_RUNS.
+    timestamp is the file's last-modified time -- i.e. when the previous
+    run last wrote to it). Then, if `keep_days` > 0, delete archives whose
+    timestamp is more than `keep_days` days before `now`. 0 keeps all.
 
-    Failures here are logged but do not crash startup — losing one log
+    Failures here are logged but do not crash startup -- losing one log
     rotation is far less bad than failing to boot the server.
     """
     log_file.parent.mkdir(parents=True, exist_ok=True)
 
     if log_file.exists():
         try:
-            ts = datetime.fromtimestamp(log_file.stat().st_mtime).strftime("%Y%m%dT%H%M%S")
+            ts = datetime.fromtimestamp(log_file.stat().st_mtime).strftime(_ARCHIVE_TS_FORMAT)
             archive = log_file.parent / f"huxley_{ts}.log"
             # Avoid clobber if multiple restarts happen within one second.
             n = 1
@@ -62,12 +66,20 @@ def _rotate_per_run(log_file: Path) -> None:
             print(f"[huxley] log rotation failed (will append): {exc}", file=sys.stderr)
             return
 
-    # Prune old archives (sort by name — embedded ISO timestamp gives
-    # chronological order naturally).
+    if keep_days <= 0:
+        return
+    # Age comes from the name (the previous run's last write), not the
+    # file's mtime, which a copy or a backup restore would reset.
+    cutoff = (now or datetime.now()) - timedelta(days=keep_days)
     try:
-        archives = sorted(log_file.parent.glob("huxley_*.log"))
-        for old in archives[:-KEEP_RUNS]:
-            old.unlink()
+        for archive in log_file.parent.glob("huxley_*.log"):
+            stamp = archive.stem.removeprefix("huxley_")[: len("YYYYMMDDTHHMMSS")]
+            try:
+                written = datetime.strptime(stamp, _ARCHIVE_TS_FORMAT)
+            except ValueError:
+                continue  # not one of ours: leave it alone
+            if written < cutoff:
+                archive.unlink()
     except OSError as exc:
         print(f"[huxley] log archive prune failed: {exc}", file=sys.stderr)
 
@@ -77,6 +89,7 @@ def setup_logging(
     level: str = "INFO",
     json_output: bool = False,
     log_file: Path | None = None,
+    log_keep_days: int = 0,
 ) -> None:
     """Configure structlog for the application.
 
@@ -86,6 +99,8 @@ def setup_logging(
         log_file: If set, also write JSON log lines to this file (always JSON for easy
             parsing). The file is per-run: each call to `setup_logging` archives any
             existing file at this path and starts fresh. See `_rotate_per_run`.
+        log_keep_days: Delete archived run logs older than this many days at
+            startup. 0 (the default) keeps every archive.
     """
     log_level = getattr(logging, level.upper(), logging.INFO)
 
@@ -103,8 +118,8 @@ def setup_logging(
         renderer = structlog.dev.ConsoleRenderer()
 
     if log_file is not None:
-        # Per-run rotation: previous run's file → logs/huxley_<ts>.log.
-        _rotate_per_run(log_file)
+        # Per-run rotation: previous run's file -> logs/huxley_<ts>.log.
+        _rotate_per_run(log_file, keep_days=log_keep_days)
         global _log_file_handle
         _close_log_file()  # close any handle from a previous setup_logging call
         _log_file_handle = log_file.open("w", encoding="utf-8")

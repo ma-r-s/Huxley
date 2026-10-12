@@ -236,7 +236,7 @@ question.
 Over days of real use: `python3 tools/dev.py link [hours]` prints, per half
 hour, the seconds the speaker played, the gaps it played as silence
 (`spk.underrun`, rebuffering included) and their share, the median rssi
-and the server's largest backlog, from every server log (the 10 archives
+and the server's largest backlog, from every server log (every archive
 and `logs/keep/`). Wi-Fi itself: `wifi.associated` says the channel, its
 width (`second`, `bw_mhz`) and the PHY; `dev.py cmd wifiscan` lists every
 AP the board hears; `dev.py cmd wifibw 20|40` tries a width until restart

@@ -221,6 +221,7 @@ class Runtime:
             level=self._config.log_level,
             json_output=self._config.log_json,
             log_file=log_file,
+            log_keep_days=self._config.log_keep_days,
         )
         await logger.ainfo("huxley_starting")
         if lock_error is not None:

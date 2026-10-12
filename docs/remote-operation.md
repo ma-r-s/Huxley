@@ -120,7 +120,9 @@ walkie --2.4 GHz--> their router --> wss://<host> (Cloudflare edge) --tunnel--> 
   forces it (he may listen to books for hours), checks `/health` and the
   running commit, rolls back to the previous tag if it fails. Prompt changes
   ship the same way, after replaying recorded presses on the dev server.
-- Logs by date, never pruned (about 5 GB a year raw, far less gzipped).
+- Logs kept: done 2026-10-12 (archives are no longer pruned to 10 runs;
+  `HUXLEY_LOG_KEEP_DAYS` sets an age limit, 0 keeps all; about 5 GB a year
+  raw, far less gzipped).
 - Backups: a nightly timer copies the DB, the Telegram session, secrets,
   recordings and firmware ELFs to the Mac and an encrypted cloud copy. A
   restore drill: rebuild production on the Mac and repoint the tunnel in

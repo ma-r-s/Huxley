@@ -65,3 +65,5 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_json: bool = False
     log_file: Path | None = None  # If set, also write JSON logs to this path
+    # Archived run logs older than this are deleted at startup; 0 keeps all.
+    log_keep_days: int = Field(default=0, ge=0)
