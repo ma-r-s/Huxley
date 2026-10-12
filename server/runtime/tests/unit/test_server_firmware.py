@@ -203,7 +203,7 @@ class TestManifest:
         ("headers", "reason"),
         [
             ({}, "missing"),
-            ({"Authorization": "Bearer nope"}, "wrong"),
+            ({"Authorization": "Bearer nope"}, "bad_token"),
             ({"Authorization": TOKEN}, "missing"),
         ],
     )

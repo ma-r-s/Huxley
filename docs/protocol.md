@@ -10,12 +10,37 @@ Any client that implements this protocol is a valid Huxley client. The framework
 - **Default URL**: `ws://localhost:8765`
 - **Audio format**: PCM16, 24 kHz, mono, little-endian
 - **Encoding**: audio bytes are base64-encoded inside JSON message payloads. A client that asks for Opus (`?audio=opus`) gets binary messages instead, one Opus packet of that same PCM each: see [Opus audio](#opus-audio-audioopus).
-- **Concurrency**: one active client at a time. A second connection **evicts the older client** by closing it with code `1001 — Replaced by new client`, then accepts the new one. Rationale in [decision: one client at a time](./decisions.md#2026-04-12--one-websocket-client-at-a-time) — a fresh connect is almost always a browser reload or a re-flashed device, and should win over a stale socket. Frames still arriving from the evicted socket while its close drains are dropped (`server.rx.dropped_from_evicted_client`), and its exit never disturbs the newer client.
+- **Concurrency**: one active client at a time. A second connection **evicts the older client** by closing it with code `1001 — Replaced by new client`, then accepts the new one. Rationale in [decision: one client at a time](./decisions.md#2026-04-12--one-websocket-client-at-a-time) — a fresh connect is almost always a browser reload or a re-flashed device, and should win over a stale socket. Frames still arriving from the evicted socket while its close drains are dropped (`server.rx.dropped_from_evicted_client`), and its exit never disturbs the newer client. In production a connection that isn't the device never evicts the device (409, unless local with `?evict=1`): [Authentication and roles](#authentication-and-roles).
 - **Query parameters at handshake** (all optional):
   - `?lang=<code>` — selects the persona's translation for this session (e.g. `es-CO`, `en`). The server resolves the persona for that language; an unsupported code falls back to the persona's default silently.
   - `?persona=<name>` — **T1.13.** Selects which persona this connection is for. `<name>` is the persona's **directory basename** under `./personas/<name>/` (the canonical id, NOT the YAML's `name:` field which is a human label — see `available_personas` in `hello` for both fields). The server swaps the active `Application` to that persona before sending hello, so the hello payload reflects the new persona. The runtime threads the connection's `?lang=<code>` into the swap so the new OpenAI session opens in the requested language from the start, avoiding a "default-language-then-disconnect-and-reconnect" cascade. Omit the param to keep the currently-active persona; on first connection, the server uses `HUXLEY_PERSONA` env or falls back per [persona resolution](#persona-selection-via-query-param-t113). An unknown name is logged and the connection still establishes on the previous persona — the picker UI can detect the mismatch via `hello.current_persona` and surface a retry. Persona-switch is exclusively a reconnect operation; there is no in-band `select_persona` message. Rationale: [decision: hot persona swap via reconnect](./decisions.md#2026-05-01--hot-persona-swap-via-reconnect-not-in-band-t113).
   - `?audio=opus`: audio in both directions as binary Opus packets instead of base64 PCM in JSON. Announced back in `hello.audio_params`. Without it (the PWA), nothing on this page changes. See [Opus audio](#opus-audio-audioopus).
 - **Plain HTTP on the same port**: `GET /health` ([below](#http-health)), and the firmware and admin routes ([`/firmware` and `/admin`](#http-firmware-and-admin)) when the server runs with a firmware directory (the runtime always does). Any other plain HTTP request gets the WebSocket handshake's refusal (`426`), as before.
+- **Authentication**: none in dev. In production (`HUXLEY_DEVICE_TOKEN` set) an upgrade needs the device token unless it comes from loopback or Tailscale directly, the token's connection may send only what the firmware sends, and nothing but the device replaces a connected device: [Authentication and roles](#authentication-and-roles).
+
+### Authentication and roles
+
+**Status**: built 2026-10-12 ([remote-operation.md](./remote-operation.md) decision 4, W2 server half).
+
+**Production mode** is on when `HUXLEY_DEVICE_TOKEN` is set (production's `.env` sets it). Without it nothing on this page changes: every connection is `dev` and may send everything.
+
+In production every WebSocket upgrade is classified by where it came from:
+
+- **external**: it carries a reverse proxy's header (`Cf-Connecting-Ip`, `Cf-Ray`, `X-Forwarded-For`, `Forwarded`, `X-Real-Ip`, `Tailscale-Funnel-Request`). The Cloudflare tunnel connects from loopback, so its address means nothing; its headers give it away.
+- **local**: loopback or Tailscale (`127.0.0.0/8`, `::1`, `100.64.0.0/10`, `fd7a:115c:a1e0::/48`) with none of those headers.
+- **other**: anything else (the house LAN).
+
+and given a role:
+
+| Role | Who | May send |
+| --- | --- | --- |
+| `device` | Any source with `Authorization: Bearer <HUXLEY_DEVICE_TOKEN>` on the upgrade (constant-time compare over digests). | What the firmware sends: `audio` (JSON, and binary Opus), `ptt_start`, `ptt_stop`, `wake_word`, `client_event`, `ping`. Anything else is dropped and logged once per type per connection (`server.rx.refused_for_role`). `?persona=` is ignored: the device stays on the configured persona. Only a `device` connection gets console lines (`/admin/dev-cmd`). |
+| `local` | Local without the token (Mario's tools over Tailscale, the PWA on the box). | Everything, as in dev. |
+| none | External or other without a valid token. | Nothing: the upgrade gets HTTP `401` (`WWW-Authenticate: Bearer`) and is closed (`server.auth.refused`, reason `missing` or `bad_token`; no token is ever logged). |
+
+**Eviction** (production): a connection that isn't `device` never replaces a connected `device`: its upgrade gets `409`, unless it is local and its URL has `?evict=1`. A `device` may replace a `device` (the walkie reconnecting). If the walkie connects while another upgrade is finishing its handshake, that connection is closed with `1008` instead (`late=true` in the log).
+
+`/health` and `/admin/*` stay local-only and refuse anything relayed by a proxy, token or not; `/firmware/*` takes the token from any source ([`/firmware` and `/admin`](#http-firmware-and-admin)).
 
 ## HTTP: `/health`
 
@@ -178,7 +203,7 @@ and it applies to both directions. **A client that asked for Opus must check it.
 
 Everything rides the existing `client_event` / `server_event` channels: no new message types. A hardware client that nobody can reach must keep two things working in every state, including a `protocol` mismatch in `hello` (today that parks the walkie): sending `device.hello`, and acting on the update channel below. That is what lets a rolled-back image take the next update.
 
-**Authentication.** `Authorization: Bearer <device token>` on the WebSocket upgrade and on the firmware download, never a query parameter (query strings land in logs). Behind the Cloudflare tunnel, the same two requests also carry `CF-Access-Client-Id` and `CF-Access-Client-Secret`. The device keeps all three in NVS (rotatable over the live link) with compiled fallbacks.
+**Authentication.** `Authorization: Bearer <device token>` on the WebSocket upgrade (it makes the connection the `device`, [roles](#authentication-and-roles)) and on the firmware download, never a query parameter (query strings land in logs). Behind the Cloudflare tunnel, the same two requests also carry `CF-Access-Client-Id` and `CF-Access-Client-Secret`. The device keeps all three in NVS (rotatable over the live link) with compiled fallbacks.
 
 ### Device to server (`client_event`)
 

@@ -19,10 +19,18 @@ The production server for grandpa's walkie runs on the shared Orange Pi
 - Health: `curl -s localhost:8765/health` on the Pi (JSON; `ok` is true
   when the persona runs and its OpenAI session is up; `commit` is the
   running checkout). From the Mac over Tailscale only if
-  `HUXLEY_SERVER_HOST` binds the Pi's Tailscale address: `0.0.0.0` would
-  also open the unauthenticated voice socket, admin messages included, to
-  the house LAN until the device token (W2). Other sources and proxied
-  requests get 404; the Cloudflare tunnel must not route `/health`.
+  `HUXLEY_SERVER_HOST` binds the Pi's Tailscale address (or `0.0.0.0`:
+  with the device token set, LAN clients without it get 401 on the voice
+  socket). Other sources and proxied requests get 404; the Cloudflare
+  tunnel must not route `/health`.
+- Production role: production's `.env` sets `HUXLEY_DEVICE_TOKEN` (32+
+  random characters; the walkie carries the same token). With it set the
+  voice socket wants the token from anything relayed by a proxy or from
+  outside loopback and Tailscale (401), the walkie's connection may send
+  only what the firmware sends, and the PWA works from the Pi itself or
+  over Tailscale only. A PWA never knocks the walkie off: its connect gets
+  409 while the walkie is connected, unless its URL adds `&evict=1`.
+  Details: [`docs/protocol.md`](../../docs/protocol.md#authentication-and-roles).
   Fields in [`docs/protocol.md`](../../docs/protocol.md#http-health).
 - Firmware updates (T1.43 W4; routes in
   [`docs/protocol.md`](../../docs/protocol.md#http-firmware-and-admin)): the

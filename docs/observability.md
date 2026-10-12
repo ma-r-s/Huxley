@@ -473,13 +473,26 @@ grep '"recorder.segment"' logs/huxley.log | jq -r 'select(.path) | "\(.start) \(
 
 **Not in v1**: turn ids on `transcript` and cost lines (to join a file to its transcript, match times); what the walkie actually played (the file is what was sent; its discarded ms on `audio_clear` are not reported yet); call transcription.
 
+## Authentication and roles
+
+The production role on the voice socket ([protocol](./protocol.md#authentication-and-roles)). Production mode is `HUXLEY_DEVICE_TOKEN` set; in dev none of these lines appear and `client_connected` says `role=dev`. No line carries a token, only whether one came (`token`: `valid`, `missing`, `bad_token`).
+
+| Event | When | Key fields |
+| --- | --- | --- |
+| `server.auth.refused` (warn) | An upgrade from outside loopback and Tailscale, or relayed by a proxy, without a valid device token: answered 401. With `late=true`: refused after its handshake (socket closed 1008). | `reason` (`missing`, `bad_token`), `remote`, `external`, `source` (`external`, `other`), `forwarded_for` |
+| `server.auth.accepted` | A production connection was let in. `ignored_persona`: the device asked for a `?persona=` it doesn't get. | `role` (`device`, `local`), `source`, `token`, `ignored_persona` |
+| `server.auth.evict_refused` (warn) | A connection that isn't the device would have replaced the connected device: answered 409 (or closed 1008 with `late=true`). A local client passes with `?evict=1`. | `role`, `remote`, `device_conn_id` |
+| `server.rx.refused_for_role` (warn) | The device sent a message type its role may not send (anything but `audio`, `ptt_start`, `ptt_stop`, `wake_word`, `client_event`, `ping`); dropped. Once per type per connection. | `role`, `msg_type` |
+
+Who tried to get in through the tunnel: `grep '"server.auth.refused"' logs/huxley.log | jq -r '"\(.timestamp) \(.reason) \(.forwarded_for)"'`.
+
 ## Firmware updates and the remote console
 
 The server half of W4 ([protocol](./protocol.md#http-firmware-and-admin), `huxley.server.firmware`). Every line is `firmware.*`; the walkie's own events also arrive as `client.device.hello`, `client.firmware.status` and `client.dev.cmd_result`, as every `client_event` does. No line ever carries a token (presented or configured), and a console line is logged by its first word only (arguments can be passwords).
 
 | Event | When | Key fields |
 | --- | --- | --- |
-| `firmware.auth_refused` (warn) | A `/firmware/*` request without the device token (`missing`, `wrong`), or with `HUXLEY_DEVICE_TOKEN` unset (`unconfigured`, answered 503). | `reason`, `path`, `remote`, `forwarded_for` (`Cf-Connecting-Ip` / `X-Forwarded-For`: who it was behind the tunnel) |
+| `firmware.auth_refused` (warn) | A `/firmware/*` request without the device token (`missing`, `bad_token`), or with `HUXLEY_DEVICE_TOKEN` unset (`unconfigured`, answered 503). | `reason`, `path`, `remote`, `forwarded_for` (`Cf-Connecting-Ip` / `X-Forwarded-For`: who it was behind the tunnel) |
 | `firmware.manifest_served` | The manifest went out. `pending_boot=true`: it counts for the accept flow. | `version`, `bytes` (the image's size), `elf_sha`, `remote`, `forwarded_for`, `conn_id` (the walkie's socket, if connected), `pending_boot` |
 | `firmware.manifest_none` / `firmware.manifest_unavailable` (error) | Nothing offered (404) / the offer names an image that is missing or isn't that version (404). | `remote` / `version`, `reason` |
 | `firmware.image_served` | An image went out (whole, in one answer). | `version`, `bytes`, `remote`, `forwarded_for`, `conn_id` |
@@ -511,7 +524,7 @@ The server half of W4 ([protocol](./protocol.md#http-firmware-and-admin), `huxle
 | `firmware.image_send_aborted` | Shutdown cut image downloads still draining. | `reason`, `count` |
 | `firmware.http_failed` / `firmware.event_failed` (error, traceback) | A route or an event handler raised (answered 500 / the receive loop goes on). | `path` / `event_name` |
 
-`audio_server_listening` says where images are read from (`firmware_dir`) and whether the device token is set (`device_token_set`); `client_connected` says whether the connection's upgrade carried it (`device_token`).
+`audio_server_listening` says where images are read from (`firmware_dir`) and whether the device token is set (`device_token_set`); `client_connected` carries the connection's `role`.
 
 **An update, end to end**: `grep -E '"firmware\.|"client\.(device\.hello|firmware\.status)' logs/huxley.log`. A healthy one reads `firmware.offered`, `firmware.update_sent`, `firmware.status` (`downloading`, `verifying`, `rebooting`), the new image's `firmware.pending_boot` and `accept_withheld reason=selftest_pending`, `firmware.status phase=selftest`, `firmware.manifest_served`, `firmware.reconnect_forced`, `client_disconnected close_code=1012`, `firmware.accept_sent`, `firmware.status phase=accepted`, then a hello with `slot_state=valid` (`firmware.pending_ended`).
 

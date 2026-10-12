@@ -67,6 +67,12 @@ import websockets
 import websockets.http11
 from websockets.asyncio.server import ServerConnection, serve
 
+from huxley.server.auth import (
+    HeaderLookup,
+    bearer_token_state,
+    configured_token,
+    forwarded_for,
+)
 from huxley.server.firmware import (
     ADMIN_PREFIX,
     MIN_TOKEN_CHARS,
@@ -211,6 +217,58 @@ def _local_refusal(
     return None
 
 
+# Roles on the voice socket (docs/protocol.md "Authentication and roles";
+# remote-operation.md decision 4). Production mode = a device token is
+# configured; without one every connection is `dev`, as before roles.
+ROLE_DEVICE = "device"
+ROLE_LOCAL = "local"
+ROLE_DEV = "dev"
+# What the firmware sends; a `device` connection may send nothing else
+# (binary Opus audio is dispatched before this check and always allowed).
+DEVICE_MESSAGE_TYPES = frozenset(
+    {"audio", "ptt_start", "ptt_stop", "wake_word", "client_event", "ping"}
+)
+
+
+@dataclass(frozen=True)
+class _Access:
+    """What an upgrade may do: its `role` (None: refused), where it came
+    from (`source`: external, local, other; empty in dev mode) and its
+    device token (`token`: valid, missing, bad_token)."""
+
+    role: str | None
+    source: str = ""
+    token: str = ""
+
+
+def request_source(remote: object, headers: HeaderLookup) -> str:
+    """`external`: relayed by a reverse proxy (the Cloudflare tunnel
+    arrives from loopback, so its address means nothing); `local`:
+    loopback or Tailscale, direct; `other`: anything else (the LAN)."""
+    if any(headers.get_all(h) for h in _PROXY_HEADERS):
+        return "external"
+    return "local" if health_source_allowed(remote) else "other"
+
+
+class _NoHeaders:
+    """No headers at all (a test double without a request)."""
+
+    def get_all(self, key: str) -> list[str]:
+        del key
+        return []
+
+
+_NO_HEADERS = _NoHeaders()
+
+
+def _wants_evict(target: str) -> bool:
+    """`?evict=1` in the upgrade's URL."""
+    try:
+        return parse_qs(urlparse(target).query).get("evict") == ["1"]
+    except ValueError:
+        return False
+
+
 def _http_response(connection: ServerConnection, answer: HttpAnswer) -> Response:
     """A plain HTTP answer as the handshake's response: never upgraded,
     never cached. An image's answer gets no close deadline (websockets
@@ -333,9 +391,14 @@ class _ConnInfo:
     # `shell`: `firmware`, `browser`, `home_screen`, `native_app`; a
     # `device.hello` means `firmware`). None until it says. `/health`.
     shell: str | None = None
-    # The upgrade carried `Authorization: Bearer <HUXLEY_DEVICE_TOKEN>`.
-    # Only such a connection gets console lines (`/admin/dev-cmd`).
-    device_token_ok: bool = False
+    # What this connection may do (docs/protocol.md "Authentication and
+    # roles"): `device` (its upgrade carried the device token: the
+    # firmware's messages only), `local` (production, loopback or
+    # Tailscale without the token: everything), `dev` (no token configured:
+    # everything, as before roles). Only `device` gets console lines.
+    role: str = "dev"
+    # Message types refused for this role, each logged once.
+    refused_types: set[str] = field(default_factory=set)
 
     def to_diag(self) -> dict[str, Any]:
         """Serialize to the wire-format the `diag_state` frame uses.
@@ -576,6 +639,9 @@ class AudioServer:
             if firmware_dir is not None
             else None
         )
+        # Production mode: a device token is configured. Without one every
+        # connection keeps today's full behaviour (dev).
+        self._device_token = configured_token(device_token)
         # Connections still writing a firmware image (aborted at shutdown,
         # so the listener's close doesn't wait out a slow download).
         self._long_sends: set[ServerConnection] = set()
@@ -719,6 +785,9 @@ class AudioServer:
             return self._health_response(connection, request, get_health)
         if self._firmware is not None and path is not None and is_firmware_path(path):
             return await self._firmware_response(connection, request, path, self._firmware)
+        refused = self._upgrade_refusal(connection, request)
+        if refused is not None:
+            return refused
         del connection
         try:
             parsed = urlparse(request.path)
@@ -833,20 +902,108 @@ class AudioServer:
         if aborted:
             logger.info("firmware.image_send_aborted", reason="shutdown", count=aborted)
 
-    def _device_token_on_upgrade(self, ws: ServerConnection) -> bool:
-        """Whether this connection's own upgrade request carried the device
-        token. Read from the connection's request, never from a field shared
-        between handshakes (two upgrades can interleave)."""
-        if self._firmware is None:
-            return False
+    # --- production role (docs/protocol.md "Authentication and roles") ---
+
+    def _access(self, remote: object, headers: HeaderLookup) -> _Access:
+        """The role an upgrade from `remote` with `headers` gets. Dev mode
+        (no device token configured): `dev`, everything as before."""
+        if self._device_token is None:
+            return _Access(ROLE_DEV)
+        source = request_source(remote, headers)
+        token = bearer_token_state(headers, self._device_token)
+        if token == "valid":
+            return _Access(ROLE_DEVICE, source, token)
+        if source == "local":
+            return _Access(ROLE_LOCAL, source, token)
+        return _Access(None, source, token)
+
+    def _evicts_device(self, access: _Access, target: str) -> bool:
+        """Production: a connection that isn't the device would replace a
+        connected device without a local `?evict=1`."""
+        current = self._conn
+        return (
+            self._device_token is not None
+            and current is not None
+            and current.role == ROLE_DEVICE
+            and access.role != ROLE_DEVICE
+            and not (access.source == "local" and _wants_evict(target))
+        )
+
+    def _upgrade_refusal(self, connection: ServerConnection, request: Request) -> Response | None:
+        """Production: refuse an upgrade with no role (401) or one that would
+        evict the connected device (409). None: the handshake goes on."""
+        if self._device_token is None:
+            return None
+        access = self._access(connection.remote_address, request.headers)
+        remote = str(connection.remote_address)
+        if access.role is None:
+            # Never the token: only whether one came and whether it matched.
+            logger.warning(
+                "server.auth.refused",
+                reason=access.token,
+                remote=remote,
+                external=access.source == "external",
+                source=access.source,
+                forwarded_for=forwarded_for(request.headers),
+            )
+            response = connection.respond(HTTPStatus.UNAUTHORIZED, "device token required\n")
+            response.headers["WWW-Authenticate"] = "Bearer"
+            return response
+        if self._evicts_device(access, request.path):
+            logger.warning(
+                "server.auth.evict_refused",
+                role=access.role,
+                remote=remote,
+                device_conn_id=self._conn.conn_id if self._conn is not None else None,
+                note="the walkie is connected; a local client may replace it with ?evict=1",
+            )
+            return connection.respond(
+                HTTPStatus.CONFLICT, "the walkie is connected; add ?evict=1 to replace it\n"
+            )
+        return None
+
+    def _connection_access(self, ws: ServerConnection) -> _Access:
+        """The role of an accepted connection, from its own request (never a
+        field shared between handshakes: two upgrades can interleave)."""
         request = getattr(ws, "request", None)  # None on test doubles
-        return request is not None and self._firmware.token_matches(request.headers)
+        headers: HeaderLookup = request.headers if request is not None else _NO_HEADERS
+        return self._access(ws.remote_address, headers)
+
+    async def _admit(self, ws: ServerConnection, access: _Access, conn_id: str) -> bool:
+        """Last check before a connection becomes current: `_upgrade_refusal`
+        decided on the HTTP request, but the device may have connected while
+        this handshake finished. False (logged, socket closed 1008) when the
+        connection has no role or would evict the device."""
+        target = getattr(getattr(ws, "request", None), "path", "/")
+        if access.role is not None and not self._evicts_device(access, target):
+            return True
+        reason = "no_role" if access.role is None else "evicts_device"
+        await logger.awarning(
+            "server.auth.evict_refused" if access.role is not None else "server.auth.refused",
+            reason=reason,
+            role=access.role,
+            remote=str(ws.remote_address),
+            late=True,
+            new_conn_id=conn_id,
+        )
+        with contextlib.suppress(Exception):
+            await ws.close(1008, "the walkie is connected" if access.role else "unauthorized")
+        return False
+
+    def _refuse_for_role(self, conn: _ConnInfo, msg_type: object) -> None:
+        """A message this connection's role may not send: dropped, said once
+        per type per connection."""
+        name = str(msg_type)[:40]
+        if name in conn.refused_types:
+            return
+        conn.refused_types.add(name)
+        logger.warning("server.rx.refused_for_role", role=conn.role, msg_type=name)
 
     def device_token_presented(self, conn_id: str) -> bool:
         """Whether connection `conn_id` (the current one) opened with the
-        device token."""
+        device token (its role is `device`)."""
         conn = self._conn
-        return conn is not None and conn.conn_id == conn_id and conn.device_token_ok
+        return conn is not None and conn.conn_id == conn_id and conn.role == ROLE_DEVICE
 
     def device_busy(self) -> bool:
         """A press, the model speaking, or a skill holding the mic (a call)."""
@@ -939,6 +1096,9 @@ class AudioServer:
         # the same id and structured log lines (which bind it via
         # contextvars below) can be filtered by the operator.
         conn_id = uuid.uuid4().hex[:8]
+        access = self._connection_access(ws)
+        if not await self._admit(ws, access, conn_id):
+            return
         if self._conn is not None:
             # Evict the old client rather than rejecting the new one.
             # A new connection means either a browser reload or a freshly-
@@ -974,6 +1134,10 @@ class AudioServer:
         self._pending_language = None
         self._pending_persona = None
         self._pending_audio = None
+        ignored_persona: str | None = None
+        if access.role == ROLE_DEVICE and selected_persona is not None:
+            # The device is pinned to the configured persona (decision 4).
+            ignored_persona, selected_persona = selected_persona, None
 
         # Build the conn record + bind contextvars BEFORE the first
         # log line so every event in this handler carries `conn_id`
@@ -990,7 +1154,7 @@ class AudioServer:
             requested_persona=selected_persona,
             requested_language=selected_language,
             ws=ws,
-            device_token_ok=self._device_token_on_upgrade(ws),
+            role=access.role or ROLE_DEV,
         )
         # The audio format is fixed before the connection becomes current,
         # so every audio frame it ever gets (even one racing the hello) is
@@ -1013,8 +1177,16 @@ class AudioServer:
             language=selected_language,
             persona=selected_persona,
             audio_format=conn.audio_format,
-            device_token=conn.device_token_ok,
+            role=conn.role,
         )
+        if access.role in (ROLE_DEVICE, ROLE_LOCAL):
+            await logger.ainfo(
+                "server.auth.accepted",
+                role=access.role,
+                source=access.source,
+                token=access.token,
+                ignored_persona=ignored_persona,
+            )
         self._log_recording_skipped(conn)
         if self._no_client_drop_sends:
             # What was sent into the void while nobody was connected.
@@ -1188,6 +1360,11 @@ class AudioServer:
                 self._conn.rx_types[msg_type_for_hist] = (
                     self._conn.rx_types.get(msg_type_for_hist, 0) + 1
                 )
+            # Production: the device's token buys the firmware's messages
+            # only (no admin, no sessions, no persona or language games).
+            if self._conn.role == ROLE_DEVICE and msg_type_for_hist not in DEVICE_MESSAGE_TYPES:
+                self._refuse_for_role(self._conn, msg_type_for_hist)
+                return
         match msg.get("type"):
             case "audio":
                 pcm = base64.b64decode(msg.get("data", ""))

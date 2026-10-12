@@ -30,7 +30,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
-import hmac
 import ipaddress
 import json
 import re
@@ -43,6 +42,13 @@ from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import parse_qs
 
 import structlog
+
+from huxley.server.auth import (
+    HeaderLookup,
+    bearer_token_state,
+    configured_token,
+    forwarded_for,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -139,12 +145,6 @@ def valid_version(version: object) -> bool:
 def is_firmware_path(path: str) -> bool:
     """The paths this module answers (everything else keeps its handling)."""
     return path.startswith((FIRMWARE_PREFIX, ADMIN_PREFIX))
-
-
-class HeaderLookup(Protocol):
-    """What this module reads of a request's headers (websockets' Headers)."""
-
-    def get_all(self, key: str) -> list[str]: ...
 
 
 class DeviceLink(Protocol):
@@ -454,15 +454,6 @@ def _as_float(value: object) -> float | None:
     return float(value)
 
 
-def _forwarded_for(headers: HeaderLookup) -> str | None:
-    """The original client behind a proxy (cloudflared adds both), if any."""
-    for name in ("Cf-Connecting-Ip", "X-Forwarded-For"):
-        values = headers.get_all(name)
-        if values:
-            return values[0].split(",")[0].strip()[:64]
-    return None
-
-
 def admin_host_allowed(host: str | None) -> bool:
     """True for a `Host` a person types to reach this server locally: an IP
     literal, `localhost`, a one-label name or a Tailscale `*.ts.net` name.
@@ -507,7 +498,7 @@ class FirmwareService:
     def __init__(self, directory: Path, device_token: SecretStr | None, link: DeviceLink) -> None:
         self._store = FirmwareStore(directory)
         # An empty token is no token: never open.
-        self._token = device_token if device_token and device_token.get_secret_value() else None
+        self._token = configured_token(device_token)
         self._link = link
         self._devices: dict[str, _Device] = {}
         self._last_device_id: str | None = None
@@ -532,20 +523,8 @@ class FirmwareService:
         return self._store.directory
 
     def token_matches(self, headers: HeaderLookup) -> bool:
-        """True when `headers` carry exactly one `Authorization: Bearer
-        <device token>`. Constant time over digests (no length leak);
-        never raises, never logs."""
-        if self._token is None:
-            return False
-        values = headers.get_all("Authorization")
-        scheme, _, presented = values[0].partition(" ") if len(values) == 1 else ("", "", "")
-        presented = presented.strip()
-        if scheme.lower() != "bearer" or not presented or not presented.isascii():
-            return False
-        expected = self._token.get_secret_value().encode("utf-8", "surrogateescape")
-        return hmac.compare_digest(
-            hashlib.sha256(presented.encode()).digest(), hashlib.sha256(expected).digest()
-        )
+        """True when `headers` carry the device token (`huxley.server.auth`)."""
+        return bearer_token_state(headers, self._token) == "valid"
 
     def close(self) -> None:
         """The server is stopping: end every dev-cmd wait now (its answer is
@@ -561,7 +540,7 @@ class FirmwareService:
 
     async def device_http(self, path: str, headers: HeaderLookup, remote: str) -> HttpAnswer:
         """`GET /firmware/...`: the device token first, then the route."""
-        forwarded = _forwarded_for(headers)
+        forwarded = forwarded_for(headers)
         refused = self._check_token(headers, path, remote, forwarded)
         if refused is not None:
             return refused
@@ -588,11 +567,9 @@ class FirmwareService:
                 note="HUXLEY_DEVICE_TOKEN is not set: firmware routes refuse everyone (503)",
             )
             return _error(HTTPStatus.SERVICE_UNAVAILABLE, "device token not configured")
-        if self.token_matches(headers):
+        reason = bearer_token_state(headers, self._token)
+        if reason == "valid":
             return None
-        values = headers.get_all("Authorization")
-        has_bearer = len(values) == 1 and values[0].lower().startswith("bearer ")
-        reason = "wrong" if has_bearer and values[0][7:].strip() else "missing"
         logger.warning(
             "firmware.auth_refused",
             reason=reason,

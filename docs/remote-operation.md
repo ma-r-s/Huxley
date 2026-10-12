@@ -1,7 +1,7 @@
 # Running the walkie from afar
 
 **Status**: plan, 2026-10-12, reviewed by two critics (server and firmware).
-Built so far: log retention, persona at boot and `/health` (W1), recording v1 (W3), the server half of firmware updates and the remote console (W4). Triage: [T1.43](./triage.md) (this plan), [T1.42](./triage.md)
+Built so far: log retention, persona at boot and `/health` (W1), recording v1 (W3), the server half of firmware updates and the remote console (W4), the production role on the voice socket (W2). Triage: [T1.43](./triage.md) (this plan), [T1.42](./triage.md)
 (the caregiver's view, its front page).
 
 **The ask** (Mario, 2026-10-12): the walkie goes to grandpa at his retirement
@@ -150,6 +150,7 @@ walkie --2.4 GHz--> their router --> wss://<host> (Cloudflare edge) --tunnel--> 
   overlapping second token; alert before expiry), device token, the
   production role (decision 4). Tailscale key expiry off on the box. One
   existing tunnel's token is in a container's command line: move it to an env file.
+- **Production role, server half built 2026-10-12** (branch `t143-ota-server`; [protocol](./protocol.md#authentication-and-roles)): with `HUXLEY_DEVICE_TOKEN` set, an upgrade relayed by a proxy or from outside loopback and Tailscale needs the token (401 without it); the token's connection is the `device` (the firmware's messages only, `?persona=` ignored); local connections keep everything but never evict the device without `?evict=1` (409). Not yet: the Cloudflare tunnel and its Access token, the walkie sending the token on its upgrade (firmware), token rotation over the live link.
 
 ### W3. Recording
 
