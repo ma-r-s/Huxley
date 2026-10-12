@@ -13,6 +13,8 @@ members = [
     "server/skills/stocks",
     "server/skills/spotify",
 ]
+# Standalone CAD project (build123d), not part of the server workspace.
+exclude = ["clients/firmware/enclosure"]
 
 [tool.uv.sources]
 huxley-sdk = { workspace = true }
