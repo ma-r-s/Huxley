@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from huxcase import site
 from huxcase.concepts import hx1
 
@@ -35,3 +36,38 @@ def test_the_websites_copy_loads_its_glb_and_links_back():
     assert '"model": "/hx1/hx1.glb"' in page
     assert '</script>"' not in page  # inlined data can't close its own tag
     assert "M.model" in page and "M.home" in page  # and the page reads both
+    assert "M.downloads" in page and 'id="downloads"' in page
+
+
+def test_the_print_files_pack_the_same_every_time(tmp_path):
+    """The website keeps the zips in git: an unchanged set must pack to the
+    same bytes, each with PRINT.txt, the coupon with the STLs."""
+    import zipfile
+
+    src = tmp_path / "out" / "print"
+    (src / "projects").mkdir(parents=True)
+    (src / "hx1_01_faceplate.stl").write_bytes(b"solid a")
+    (src / "PRINT.txt").write_text("how to print")
+    (src / "projects" / "1_white.3mf").write_bytes(b"3mf")
+    (src.parent / "coupon_plate.stl").write_bytes(b"solid c")
+    first = site.pack_print_files(tmp_path / "a", src)
+    site.pack_print_files(tmp_path / "b", src)
+    for d in first:
+        name = d["href"].rsplit("/", 1)[1]
+        assert (tmp_path / "a" / name).read_bytes() == (tmp_path / "b" / name).read_bytes()
+    names = {
+        d["href"]: zipfile.ZipFile(tmp_path / "a" / d["href"].rsplit("/", 1)[1]).namelist()
+        for d in first
+    }
+    assert sorted(names["/hx1/hx1-stl.zip"]) == [
+        "PRINT.txt",
+        "coupon_plate.stl",
+        "hx1_01_faceplate.stl",
+    ]
+    assert sorted(names["/hx1/hx1-bambu-p2s.zip"]) == ["PRINT.txt", "projects/1_white.3mf"]
+
+
+def test_the_print_files_must_exist(tmp_path):
+    with pytest.raises(SystemExit, match="slice"):
+        (tmp_path / "print").mkdir()
+        site.pack_print_files(tmp_path / "web", tmp_path / "print")

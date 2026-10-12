@@ -17,6 +17,7 @@ import base64
 import fnmatch
 import json
 import struct
+import zipfile
 from pathlib import Path
 
 from build123d import Compound, export_gltf
@@ -27,6 +28,8 @@ from huxcase.export import CELL_G, HARDWARE_G, OUT, PLA_G_PER_CC, PRINTED
 
 SITE_SRC = Path(__file__).resolve().parent.parent / "site"
 SITE_OUT = OUT / "site"
+PRINT_OUT = OUT / "print"
+ZIP_TIME = (2026, 1, 1, 0, 0, 0)  # fixed, so an unchanged set packs to the same bytes
 
 # Assembly order, as it is built on the bench. The tub lies on its back and
 # its parts go in from the open front. The faceplate side is built face down
@@ -564,14 +567,66 @@ def write_pages(manifest: dict) -> None:
     (SITE_OUT / "preview.html").write_text(HEAD + page)
 
 
+def _zip(dest: Path, files: list[tuple[str, Path]]) -> None:
+    """files as (name in the zip, source)."""
+    with zipfile.ZipFile(dest, "w") as z:
+        for name, f in sorted(files):
+            info = zipfile.ZipInfo(name, ZIP_TIME)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            z.writestr(info, f.read_bytes(), compresslevel=9)
+
+
+def pack_print_files(out_dir: Path, src: Path = PRINT_OUT) -> list[dict]:
+    """The print files for the website's build page, each zipped with
+    PRINT.txt: every piece as an STL in its print pose plus the fit coupon
+    (any printer), and the Bambu Studio projects (a P2S). Built from out/
+    (printability --stl, coupon and slice first)."""
+    stls = sorted(src.glob("hx1_*.stl"))
+    coupon = sorted(src.parent.glob("coupon_*.stl"))
+    projects = sorted((src / "projects").glob("*.3mf"))
+    guide = src / "PRINT.txt"
+    needs = {
+        "printability --stl": stls and guide.exists(),
+        "coupon": coupon,
+        "slice": projects,
+    }
+    missing = [run for run, got in needs.items() if not got]
+    if missing:
+        raise SystemExit(f"the print files are missing; run first: {', '.join(missing)}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = []
+    # PRINT.txt names the projects as projects/<plate>.3mf: so does the zip.
+    for name, label, files in (
+        (
+            "hx1-bambu-p2s.zip",
+            "Bambu Studio projects (P2S)",
+            [(f"projects/{f.name}", f) for f in projects],
+        ),
+        ("hx1-stl.zip", "STL files, any printer", [(f.name, f) for f in [*stls, *coupon]]),
+    ):
+        _zip(out_dir / name, [*files, ("PRINT.txt", guide)])
+        size = (out_dir / name).stat().st_size
+        out.append(
+            {
+                "href": f"/hx1/{name}",
+                "label": label,
+                "files": len(files),
+                "mb": round(size / 1e6, 1),
+            }
+        )
+    return out
+
+
 def write_web(out_dir: Path) -> tuple[Path, Path, Path]:
     """The website's copy (web/: the /hx-1 page): the model as a binary GLB,
     which a normal host serves, and a trimmed manifest: per node its kind,
     label, braille letter and where it sits in the exploded view, plus the
     light, the specs, and what the page's scroll story moves (the talk lever's
     pivot and travel, its spring, where "hola." points). And the build page
-    for /hx-1/build: this page, loading the website's GLB and linking back.
-    Built from out/site (run without --web first)."""
+    for /hx-1/build: this page, loading the website's GLB, linking back, and
+    offering the print files (pack_print_files). Built from out/site (run
+    without --web first) and out/print."""
     doc = json.loads((SITE_OUT / "hx1.gltf.json").read_text())
     m = json.loads((SITE_OUT / "assembly.json").read_text())
     uri = doc["buffers"][0]["uri"]
@@ -625,7 +680,8 @@ def write_web(out_dir: Path) -> tuple[Path, Path, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "hx1.glb").write_bytes(glb)
     (out_dir / "hx1-model.json").write_text(json.dumps(model, indent=1) + "\n")
-    build = _page({**m, "model": "/hx1/hx1.glb", "home": "/hx-1"})
+    downloads = pack_print_files(out_dir)
+    build = _page({**m, "model": "/hx1/hx1.glb", "home": "/hx-1", "downloads": downloads})
     build = build.replace("<title>HX-1</title>", "<title>Build HX-1 · huxley</title>", 1)
     (out_dir / "build.html").write_text(HEAD + build)
     return out_dir / "hx1.glb", out_dir / "hx1-model.json", out_dir / "build.html"

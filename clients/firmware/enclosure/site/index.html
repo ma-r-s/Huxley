@@ -104,6 +104,12 @@ h1 .dash { color: var(--accent); }
 section.sheet { padding-block: clamp(40px, 7vw, 88px) 0; display: grid; gap: 22px; }
 h2 { margin: 0; font: 700 clamp(30px, 4vw, 46px)/1 var(--font-display); letter-spacing: -0.035em; text-wrap: balance; }
 .sub { margin: 0; color: var(--ink-2); max-width: 60ch; }
+.downloads { display: flex; flex-wrap: wrap; gap: 10px; }
+.dl { display: inline-flex; align-items: baseline; gap: 10px; padding: 12px 18px; border: 1px solid var(--ink); border-radius: 999px;
+  color: var(--ink); text-decoration: none; font-weight: 600; }
+.dl small { font: 400 10.5px var(--font-mono); letter-spacing: 0.04em; color: var(--ink-2); }
+.dl.primary { background: var(--ink); color: var(--bg); }
+.dl.primary small { color: inherit; opacity: 0.75; }
 .specs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--ink); }
 .spec { padding: 16px 16px 18px 0; border-bottom: 1px solid var(--rule); display: grid; gap: 4px; align-content: start; min-width: 0; }
 .spec .k { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--ink-2); }
@@ -198,6 +204,12 @@ footer a { color: inherit; text-underline-offset: 2px; }
     <div class="specs" id="specs"></div>
   </section>
 
+  <section class="sheet" aria-labelledby="dl-h" id="print" hidden>
+    <h2 id="dl-h">Print it</h2>
+    <p class="sub">Every printed piece, posed the way it prints. The fits were tuned on a Bambu P2S with a 0.4 mm nozzle: on another printer, print the fit coupon first. PRINT.txt in each download says which piece goes in which colour, and on which plate.</p>
+    <div class="downloads" id="downloads"></div>
+  </section>
+
   <section class="sheet" aria-labelledby="seq-h">
     <h2 id="seq-h">Build sequence</h2>
     <p class="sub">The tub lies on its back and everything goes in from its open front. The faceplate side is built face down beside it, then swings over onto it like a book and closes with four screws. Only the tub's two halves are glued. Pick a step to see it on the model.</p>
@@ -241,6 +253,11 @@ const STEP_S = 1.15; // seconds per step while playing
 const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const $ = (id) => document.getElementById(id);
 if (M.home) $("brand").href = M.home; // the website's copy links back to its page
+if (M.downloads) { // and offers the print files
+  $("downloads").innerHTML = M.downloads.map((d, i) =>
+    `<a class="dl${i ? "" : " primary"}" href="${d.href}" download>${d.label} <small>${d.files} files · ${d.mb} MB</small></a>`).join("");
+  $("print").hidden = false;
+}
 const pad = (n) => String(n).padStart(2, "0");
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const easeOut = (t) => 1 - Math.pow(1 - t, 3);

@@ -668,11 +668,15 @@ uv run python -m huxcase.coupon         # out/coupon_*.stl: fit coupon, lever-pi
 private artifact from `out/site/` (index.html + hx1.gltf.json); `preview.html` is the same page for
 a local static server. Every HX-1 part must belong to a build step (`site.STEPS`, tested).
 
-The website (`web/`) keeps its own copy, committed: after a change to the model, the steps or
-`site/index.html`, run `site` then `site --web <dir>` and copy `hx1.glb` and `build.html` into
+The website (`web/`) keeps its own copy, committed: after a change to the model, the steps,
+`site/index.html` or any print file, run `site`, `printability --stl`, `coupon` and `slice`, then
+`site --web <dir>`, and copy `hx1.glb`, `build.html`, `hx1-stl.zip` and `hx1-bambu-p2s.zip` into
 `web/public/hx1/` and `hx1-model.json` to `web/landing/hx1/model.json`. `/hx-1` is the scroll
 story (`web/landing/hx1/`); `/hx-1/build` serves `build.html` (a rewrite in `web/next.config.mjs`),
-the same build page loading the website's GLB. Its copy is public: it talks to any maker (tested).
+the same build page loading the website's GLB, with the print files to download: every piece as an
+STL in its print pose plus the fit coupon, and the Bambu Studio projects, each with PRINT.txt
+(`site.pack_print_files`; packed with fixed dates, so an unchanged set stays the same bytes in git).
+Its copy is public: it talks to any maker (tested).
 
 ## How the fit check works
 

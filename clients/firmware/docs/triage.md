@@ -540,7 +540,11 @@ want to lose it"). They were not: the build page lived in `out/site`
 `site.py --web` from the same template (loading the website's GLB, its
 mark linking back), linked from the /hx-1 hero ("Build one") and its "Made
 to be made" section. Its copy no longer speaks to one maker's printer
-(tested). It is English only; the ES and FR links say so.
+(tested). It is English only; the ES and FR links say so. Mario then
+asked for the print files on it: a "Print it" section offers the Bambu
+Studio projects (11 plates, 2.2 MB) and every STL with the fit coupon
+(4.1 MB), each zip with PRINT.txt; both were scanned for personal
+metadata before publishing (none: Bambu leaves Designer empty).
 
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
 bottom is fine, holders whole, no glue but the tub's halves, plastic pivot, protected cells
