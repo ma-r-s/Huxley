@@ -291,6 +291,59 @@ def test_battery_not_wired_says_so() -> None:
     assert "Battery not wired" in page
 
 
+def _battery_day() -> list[str]:
+    """Readings every minute for two hours, then the walkie off for 40
+    minutes, then back for half an hour; plus one reading from yesterday."""
+    out = [line("client.system.battery", ago(hours=30), mv=4100, pct=95, conn_id="w0")]
+    for m in range(190, 70, -1):  # 190 to 71 minutes ago
+        out.append(
+            line(
+                "client.system.battery",
+                ago(minutes=m),
+                mv=3900,
+                pct=80 - (190 - m) // 10,
+                conn_id="w1",
+            )
+        )
+    for m in range(30, 0, -1):  # after a 40 minute gap
+        out.append(line("client.system.battery", ago(minutes=m), mv=3700, pct=18, conn_id="w2"))
+    return out
+
+
+def test_battery_history_keeps_the_last_day_in_five_minute_points() -> None:
+    h = status_for(flat(DAY, *_battery_day()))["battery_history"]
+    pts = h["points"]
+    assert h["window_min"] == 24 * 60
+    assert all(p["pct"] != 95 for p in pts)  # yesterday's reading is outside the window
+    assert len(pts) <= 31  # 150 readings, one point per 5 minutes
+    assert [p["gap_before"] for p in pts].count(True) == 1  # the walkie off for 40 minutes
+    assert pts[-1]["pct"] == 18 and pts[-1]["mv"] == 3700
+    assert pts[-1]["m"] == 24 * 60 - 1
+    assert (h["low_pct"], h["crit_pct"]) == (20, 10)
+    assert all(m["label"][-3:] == ":00" for m in h["marks"])
+    assert 3 <= len(h["marks"]) <= 4  # every 6 hours
+
+
+def test_battery_chart_breaks_where_the_walkie_was_off() -> None:
+    page = render(status_for(flat(DAY, *_battery_day())))
+    chart = page.split('id="battery"')[1].split("</section>")[0]
+    assert "Battery, last 24 h" in chart
+    assert chart.count('class="ln"') == 2  # two runs
+    assert 'class="low"' in chart  # the 20 % line
+    assert '<i class="bdot warn"' in chart  # 18 % sits under the low line
+    assert ">18 %<" in chart
+    assert "18 % (3.70 V)" in chart  # a half-hour tip
+    assert chart.count("data-tip=") <= 48
+
+
+def test_battery_chart_empty_states() -> None:
+    chart = render(status_for(DAY)).split('id="battery"')[1].split("</section>")[0]
+    assert ">no readings<" in chart and 'class="ln"' not in chart
+    lines = flat(DAY, fw(ago(minutes=30), "w1", "battery.not_wired probe=gpio6"))
+    chart = render(status_for(lines)).split('id="battery"')[1].split("</section>")[0]
+    assert ">not wired<" in chart
+
+
 def test_server_up_but_not_ready() -> None:
     status = status_for(DAY, health_ok=False)
     assert status["tiles"]["server"]["ready"] is False

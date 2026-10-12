@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from huxley_watch.activity import KINDS, Segment
-from huxley_watch.facts import gaps_since, half_hours, wifi_bars
+from huxley_watch.facts import _int, gaps_since, half_hours, wifi_bars
 from huxley_watch.rules import balance_estimate, day_month, rule_books, spent_today
 from huxley_watch.text import short, short_when
 
@@ -96,6 +96,7 @@ def build(
         "books": _books(i),
         "credit": credit(i, items),
         "gaps": _gaps(i),
+        "battery_history": battery_history(i),
         "calls": _calls(segments, midnight - timedelta(days=WEEK_DAYS - 1)),
         "alerts": alerts_channel,
         "logs_from": short_when(i.logs_from, now, tz) if i.logs_from else None,
@@ -477,4 +478,61 @@ def fallback_status(
             }
             for it in items
         ],
+    }
+
+
+BATTERY_WINDOW = timedelta(hours=24)
+BATTERY_GAP = timedelta(minutes=15)  # longer between readings: the walkie was off
+
+
+def battery_history(i: Inputs) -> dict[str, Any]:
+    """The walkie's battery over the last 24 h, from its own readings
+    (client_event system.battery, about once a minute while connected).
+    Points carry minutes since the window's start; a gap of more than 15
+    minutes between readings breaks the line (the walkie was off or away)."""
+    start = i.now - BATTERY_WINDOW
+    raw: list[tuple[datetime, int, int | None]] = []
+    for e in i.events:
+        if e.name != "client.system.battery" or e.ts < start:
+            continue
+        pct = _int(e.get("pct"))
+        if pct is None:
+            continue
+        raw.append((e.ts, max(0, min(100, pct)), _int(e.get("mv"))))
+    # One point per 5 minutes is plenty for a day (the last reading wins).
+    buckets: dict[int, tuple[datetime, int, int | None]] = {}
+    for ts, pct, mv in raw:
+        buckets[int((ts - start).total_seconds() // 300)] = (ts, pct, mv)
+    points: list[dict[str, Any]] = []
+    prev: datetime | None = None
+    for key in sorted(buckets):
+        ts, pct, mv = buckets[key]
+        points.append(
+            {
+                "m": round((ts - start).total_seconds() / 60, 1),
+                "pct": pct,
+                "mv": mv,
+                "at": ts.astimezone(i.tz).strftime("%H:%M"),
+                "gap_before": prev is not None and ts - prev > BATTERY_GAP,
+            }
+        )
+        prev = ts
+    first_hour = (start.astimezone(i.tz) + timedelta(hours=1)).replace(
+        minute=0, second=0, microsecond=0
+    )
+    marks = []
+    t = first_hour
+    while t < i.now:
+        if t.hour % 6 == 0:
+            marks.append(
+                {"m": round((t - start).total_seconds() / 60, 1), "label": t.strftime("%H:%M")}
+            )
+        t += timedelta(hours=1)
+    return {
+        "window_min": int(BATTERY_WINDOW.total_seconds() // 60),
+        "points": points,
+        "marks": marks,
+        "low_pct": i.th.battery_low_pct,
+        "crit_pct": i.th.battery_crit_pct,
+        "wired": i.battery.wired,
     }

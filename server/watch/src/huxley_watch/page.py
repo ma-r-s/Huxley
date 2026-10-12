@@ -203,6 +203,11 @@ details.bgroup[open]>summary{opacity:.7}
 .chip.crit{background:color-mix(in srgb,var(--crit) 16%,transparent)}
 .plot.cbat{height:150px}.plot.cspend{height:72px;margin-top:24px}
 .cline{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.plot.bat{height:120px}.bline .ln{fill:none;stroke:var(--good);stroke-width:2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
+.bline .area{fill:var(--good);fill-opacity:.1;stroke:none}.bline .low{stroke:var(--warn);stroke-width:1.5;stroke-dasharray:4 4;vector-effect:non-scaling-stroke}
+.bdot{position:absolute;width:10px;height:10px;margin:0 0 -5px -5px;border-radius:50%;background:var(--good);box-shadow:0 0 0 2px var(--card);pointer-events:none}
+.bdot.warn{background:var(--warn)}.bdot.crit{background:var(--crit)}
+.blab{position:absolute;transform:translate(8px,50%);font-size:12px;font-weight:600;color:var(--ink);white-space:nowrap;pointer-events:none}
 .cline .area{fill:var(--credit);fill-opacity:.1;stroke:none}
 .cline .ln,.cline .proj{fill:none;stroke:var(--credit);stroke-width:2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
 .cline .proj{stroke-dasharray:5 4}
@@ -653,6 +658,72 @@ def _money_ticks(top: float, step: float) -> str:
     return "".join(out)
 
 
+def _battery_chart(h: dict[str, Any]) -> str:
+    """The walkie's battery over the last 24 h: one line (breaks where the
+    walkie was off), the low threshold dashed, the latest reading labelled,
+    a tip on every half hour."""
+    pts = h["points"]
+    if not pts:
+        what = "not wired" if h.get("wired") is False else "no readings"
+        return f'<div class="plot bat"><div class="nodata">{_t(what)}</div></div>'
+    total = float(h["window_min"])
+
+    def xy(p: dict[str, Any]) -> str:
+        return f"{p['m'] / total * 1000:.1f},{100 - p['pct']:.2f}"
+
+    runs: list[list[dict[str, Any]]] = []
+    for p in pts:
+        if not runs or p["gap_before"]:
+            runs.append([])
+        runs[-1].append(p)
+    lines = []
+    for run in runs:
+        path = " L".join(xy(p) for p in run)
+        if len(run) == 1:
+            path = (
+                f"{xy(run[0])} L{(run[0]['m'] / total * 1000) + 2:.1f},{100 - run[0]['pct']:.2f}"
+            )
+        x0, x1 = run[0]["m"] / total * 1000, run[-1]["m"] / total * 1000
+        lines.append(
+            f'<path class="area" d="M{x0:.1f},100 L{path} L{x1:.1f},100 Z"/><path class="ln" d="M{path}"/>'
+        )
+    low = 100 - float(h["low_pct"])
+    svg = (
+        '<svg class="cline bline" viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">'
+        f'<line class="low" x1="0" y1="{low:.1f}" x2="1000" y2="{low:.1f}"/>{"".join(lines)}</svg>'
+    )
+    last = pts[-1]
+    cls = "crit" if last["pct"] < h["crit_pct"] else "warn" if last["pct"] < h["low_pct"] else ""
+    left = last["m"] / total * 100
+    marks = (
+        f'<i class="bdot {cls}" style="left:{left:.2f}%;bottom:{last["pct"]:.0f}%"></i>'
+        f'<span class="blab" style="left:{left:.2f}%;bottom:{last["pct"]:.0f}%">{last["pct"]} %</span>'
+    )
+    ticks = "".join(
+        f'<div class="ytick" style="bottom:{v}%"><span>{v} %</span></div>' for v in (0, 50, 100)
+    )
+    cols = []
+    for k in range(48):
+        lo, hi = k * total / 48, (k + 1) * total / 48
+        inside = [p for p in pts if lo <= p["m"] < hi]
+        if inside:
+            p = inside[-1]
+            volts = f" ({p['mv'] / 1000:.2f} V)" if p.get("mv") else ""
+            cols.append(
+                f'<div class="ccol" data-tip="{_a(p["at"] + ": " + str(p["pct"]) + " %" + volts)}"></div>'
+            )
+        else:
+            cols.append('<div class="ccol"></div>')
+    xl = "".join(
+        f'<span style="left:{m["m"] / total * 100:.2f}%">{_t(m["label"])}</span>'
+        for m in h["marks"]
+    )
+    return (
+        f'<div class="plot bat">{ticks}{svg}{marks}<div class="ccols">{"".join(cols)}</div></div>'
+        f'<div class="xlab">{xl}</div>'
+    )
+
+
 def _x(x: float, n: int) -> float:
     """Days since the 1st, as a share of the month (0-100)."""
     return max(0.0, min(100.0, x / n * 100))
@@ -981,6 +1052,7 @@ def render(status: dict[str, Any]) -> str:
 <section class="card"><h2>Audiobook hours, {_t(month)}</h2>{_gauge(status["books"])}</section>
 </div>
 <section class="card section" id="credit">{_credit(status["credit"])}</section>
+<section class="card section" id="battery"><h2>Battery, last 24 h</h2>{_battery_chart(status["battery_history"])}</section>
 <div class="grid two section">
 <section class="card"><h2>Audio gaps per half hour</h2>{_gaps(status["gaps"])}</section>
 <section class="card"><h2>Calls</h2>{_calls(status["calls"])}</section>
