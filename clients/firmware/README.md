@@ -4,8 +4,7 @@ ESP32-S3 client for Huxley: the walkie. Hold the talk lever, speak,
 let go, hear the answer. Speaks the WebSocket protocol defined in
 [`../../docs/protocol.md`](../../docs/protocol.md), the same contract as
 the PWA dev client in [`../pwa/`](../pwa/). Its case (HX-1) lives in
-`clients/firmware/enclosure/` on the `enclosure-hx1-revd-r4` branch (not
-merged yet).
+[`enclosure/`](enclosure/README.md).
 
 Prototyped in this repo until end-to-end voice works; will be extracted
 to its own `huxley-firmware` repository once the architecture is
@@ -19,6 +18,11 @@ long-term client-repo strategy.
 
 - TCA9555 I/O expander. The on-board LCD, camera, and TF slot are not
   used by the firmware today and may never be.
+
+Physical device: a 3D-printed walkie case around the board, its speaker,
+two 18650s in holders and a spring-loaded push-to-talk lever. Concepts, measurements from
+Waveshare's STEP, and the fit-checked CAD live in
+[`enclosure/`](enclosure/README.md).
 
 ## Architecture (at a glance)
 

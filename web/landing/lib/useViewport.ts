@@ -26,26 +26,40 @@ const SSR_DEFAULT: Viewport = {
   isDesktop: true,
 };
 
+// Breakpoints by media query, the width CSS uses. Not innerWidth: on a
+// phone that is the zoomed-out visual width, which grows to fit anything
+// that overflows. The server renders the desktop layout, which overflows a
+// phone, so innerWidth read 701 at 390 px and the landing stayed in its
+// desktop layout (2026-10-12).
+const MQ_MOBILE = `(max-width: ${BP_MOBILE - 0.02}px)`;
+const MQ_TABLET = `(max-width: ${BP_TABLET - 0.02}px)`;
+
 function snapshot(): Viewport {
-  const w = window.innerWidth;
+  const mobile = window.matchMedia(MQ_MOBILE).matches;
+  const tablet = !mobile && window.matchMedia(MQ_TABLET).matches;
   return {
-    width: w,
-    isMobile: w < BP_MOBILE,
-    isTablet: w >= BP_MOBILE && w < BP_TABLET,
-    isDesktop: w >= BP_TABLET,
+    width: document.documentElement.clientWidth,
+    isMobile: mobile,
+    isTablet: tablet,
+    isDesktop: !mobile && !tablet,
   };
 }
 
 export function useViewport(): Viewport {
   const [vp, setVp] = useState<Viewport | null>(null);
   useEffect(() => {
-    setVp(snapshot());
-    const onResize = () => setVp(snapshot());
-    window.addEventListener("resize", onResize, { passive: true });
-    window.addEventListener("orientationchange", onResize);
+    // Only the breakpoints matter: re-render when one is crossed, not on
+    // every resize (a phone's toolbar resizes the window as it scrolls).
+    const update = () =>
+      setVp((prev) => {
+        const next = snapshot();
+        return prev && prev.isMobile === next.isMobile && prev.isTablet === next.isTablet ? prev : next;
+      });
+    update();
+    const queries = [MQ_MOBILE, MQ_TABLET].map((q) => window.matchMedia(q));
+    for (const q of queries) q.addEventListener("change", update);
     return () => {
-      window.removeEventListener("resize", onResize);
-      window.removeEventListener("orientationchange", onResize);
+      for (const q of queries) q.removeEventListener("change", update);
     };
   }, []);
   return vp ?? SSR_DEFAULT;

@@ -61,10 +61,12 @@ export function BalNav() {
         background: "var(--hux-coral)",
       }}
     >
-      <Wordmark
-        size={isMobile ? 26 : 32}
-        subtle={isMobile ? undefined : t("nav.wordmarkSubtle")}
-      />
+      <a href="/" aria-label="huxley" style={{ color: "inherit", textDecoration: "none" }}>
+        <Wordmark
+          size={isMobile ? 26 : 32}
+          subtle={isMobile ? undefined : t("nav.wordmarkSubtle")}
+        />
+      </a>
       <div
         style={{
           display: "flex",
@@ -73,22 +75,28 @@ export function BalNav() {
         }}
       >
         <LangToggle />
+        <a style={chipGhost} href="/hx-1">
+          {t("nav.hx1")}
+        </a>
         {!isMobile && (
           <a style={chipGhost} href="/docs">
             {t("nav.docs")}
           </a>
         )}
-        <a style={chipSolid} href="https://github.com/ma-r-s/Huxley">
-          {t("nav.github")} {!isMobile && "↗"}
-        </a>
+        {/* Phones: the footer links the repo; the nav keeps HX-1 and fits 360 px. */}
+        {!isMobile && (
+          <a style={chipSolid} href="https://github.com/ma-r-s/Huxley">
+            {t("nav.github")} ↗
+          </a>
+        )}
       </div>
     </nav>
   );
 }
 
 // Segmented language picker — drives i18next + persists to localStorage
-// (the i18next LanguageDetector handles the persistence; we just call
-// changeLanguage and React re-renders via the t() hook).
+// (I18nProvider saves the choice; we just call changeLanguage and React
+// re-renders via the t() hook).
 function LangToggle() {
   const { i18n } = useTranslation();
   const current = (i18n.resolvedLanguage as LangCode) || "en";
@@ -229,6 +237,7 @@ export function SectionHead({ eyebrow, title, subtitle }: SectionHeadProps) {
             lineHeight: 1.02,
             letterSpacing: "-0.015em",
             margin: 0,
+            textWrap: "balance",
           }}
         >
           {title}

@@ -2,7 +2,8 @@
   "nav": {
     "wordmarkSubtle": "v0.9 · pre-1.0",
     "docs": "Docs",
-    "github": "GitHub"
+    "github": "GitHub",
+    "hx1": "HX-1"
   },
   "hero": {
     "pill": "Personal voice assistants · Self-hosted Python · MIT",
@@ -285,5 +286,102 @@
     "linkIssues": "Issues",
     "linkDiscussions": "Discussions",
     "linkDocs": "Docs"
+  },
+  "hx1": {
+    "titleLine1": "Hold to talk.",
+    "titleLine2": "Let go to listen.",
+    "subtitle": "A voice assistant for people who can't use a smartphone. No screen, no app, no wake word. One lever.",
+    "ctaHow": "What it does",
+    "ctaBuild": "Build one",
+    "viewer": {
+      "aria": "HX-1, a small walkie-talkie: a white front with ten raised dots that spell “hola” in braille and a small black badge with HX-1 in orange, a black speaker grille below them, a red base, and an orange lever down its right side.",
+      "loading": "Loading the model",
+      "failed": "The 3D model didn't load. Reload the page to try again."
+    },
+    "inside": {
+      "eyebrow": "What's inside",
+      "title": "About $50. Prints at home.",
+      "specs": {
+        "size": "Size",
+        "weight": "Weight",
+        "battery": "Battery",
+        "speaker": "Speaker",
+        "board": "Board",
+        "print": "Print time"
+      }
+    },
+    "how": {
+      "eyebrow": "What it does",
+      "title": "Everything by voice.",
+      "subtitle": "HX-1 is the microphone and the speaker. A Huxley server at home does the rest: the persona, its skills, and OpenAI's realtime voice model.",
+      "steps": [
+        {
+          "k": "Calls",
+          "v": "Contacts call it on Telegram and it picks up by itself. Say a name to call them."
+        },
+        {
+          "k": "Messages",
+          "v": "New messages are read aloud as they arrive. Reply by voice."
+        },
+        {
+          "k": "Books, music, radio",
+          "v": "Audiobooks and music from a Spotify Premium account, and live radio."
+        },
+        {
+          "k": "Reminders",
+          "v": "If nobody confirms a medication reminder, it repeats three times: 5, 10 and 30 minutes apart."
+        },
+        {
+          "k": "News and answers",
+          "v": "Headlines, the weather, and whatever a web search can answer."
+        },
+        {
+          "k": "What it needs",
+          "v": "Wi-Fi, a computer that stays on and an OpenAI API key. Calls need a spare SIM for Telegram; books and music need Spotify Premium."
+        }
+      ],
+      "linkPersonas": "About personas",
+      "linkFirmware": "The firmware"
+    },
+    "made": {
+      "eyebrow": "Make one",
+      "title": "Print one. Give it to someone.",
+      "body1": "About six hours on a Bambu P2S, about $50 of parts per unit, some soldering, glue and eight screws. The build guide shows all 21 steps in 3D, with print files for any printer.",
+      "body2": "Case, firmware and server are MIT-licensed. Whoever builds it runs the server and edits the persona, a YAML file; it ships with Abuelo, slow and warm, in Spanish. Whoever uses it only holds the lever. OpenAI charges about $4 per thousand answers, and nothing while idle.",
+      "guide": "The build guide",
+      "link": "The enclosure source"
+    },
+    "partNames": {
+      "tub_base": "Base",
+      "tub_top": "Clear back",
+      "faceplate": "Front",
+      "grille_plug": "Speaker grille",
+      "holder_bridge": "Battery holder bridge",
+      "holder_leads": "Battery holder leads",
+      "lever_pin_printed": "Lever pin",
+      "ribbon_6_wires": "Ribbon cable",
+      "speaker_40_mm_5_w": "Speaker, 40 mm",
+      "power_switch_kcd1_101": "Power switch",
+      "braille_dot_glued": "Braille dot, glued",
+      "hx_1_badge_glued": "HX-1 badge, glued"
+    },
+    "story": {
+      "aria": "HX-1 up close: its face, its lever, and what is inside.",
+      "gap": {
+        "eyebrow": "The gap",
+        "title": "Every smart speaker assumes a phone.",
+        "body": "Echo, Nest and HomePod are set up from a phone app and listen all day for their wake word. HumanWare's Victor Reader Stream costs $499 and runs from a keypad. HX-1 needs neither."
+      },
+      "lever": {
+        "eyebrow": "One lever",
+        "title": "Hold. Talk. Let go.",
+        "body": "Outside calls, the microphone is on only while the lever is held. It answers when you let go, however long you pause.",
+        "ask": "Any messages?",
+        "answer": "One: “I'll call you at six.”"
+      },
+      "inside": {
+        "body": "An ESP32-S3 audio board, a 40 mm speaker and two 18650 cells in a printed case. On batteries, it works anywhere its home Wi-Fi reaches."
+      }
+    }
   }
 }
