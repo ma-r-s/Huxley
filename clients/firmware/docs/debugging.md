@@ -215,11 +215,12 @@ the server there sent its hello, so a typo can't strand the board.
 | `server keep <uri> [min]`  | moves: saved at the first hello there (`ws.server_saved`, `ws.server_proven mode=keep`); no hello within `min` (15) and it goes back |
 | `server reset`             | forgets the saved address, back to the compiled one |
 
-At boot, `ws.server boot= source=nvs|compiled`. A saved address with no
-hello for 10 min hands over to the compiled one, alternating every 10
-min until one answers (`ws.server fallback to=`, then `ws.server_proven
-mode=fallback`); the saved one is never overwritten by a fallback, and
-the next boot tries it first again.
+At boot, `ws.server boot= source=nvs|compiled`. A saved address is
+watched: its hello logs `ws.server_proven mode=watch source=nvs`; no
+hello for 10 min and it hands over to the compiled one, alternating
+every 10 min until one answers (`ws.server fallback to=`, then
+`mode=watch source=compiled`). A fallback never overwrites the saved
+address, and the next boot tries it first again.
 
 ## Choppy audio or dropped connections: measure both ends
 

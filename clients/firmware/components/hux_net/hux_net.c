@@ -104,7 +104,8 @@ typedef enum {
     SRV_HOME,     /* on the proven address: nothing pending */
     SRV_TEMP,     /* `server <uri> [min]`: tests; reverts by time, never saved */
     SRV_KEEP,     /* `server keep <uri>`: saved at the first hello, else reverts */
-    SRV_FALLBACK, /* the saved address went quiet: alternating with the compiled one */
+    SRV_FALLBACK, /* watching the saved address after boot; no hello and it
+                   * alternates with the compiled one ("watch" in the log) */
 } srv_mode_t;
 static _Atomic int s_srv_mode = SRV_HOME;
 /* What the library connects to: the server URI plus `audio=opus` (F-0024,
@@ -853,13 +854,14 @@ void hux_net_hello_ok(void) {
             esp_timer_stop(s_server_revert);
         }
         atomic_store(&s_srv_mode, SRV_HOME);
-        ESP_LOGI(TAG, "ws.server_proven uri=%s mode=%s", s_server_uri,
-                 mode == SRV_KEEP ? "keep" : "fallback");
+        ESP_LOGI(TAG, "ws.server_proven uri=%s mode=%s source=%s", s_server_uri,
+                 mode == SRV_KEEP ? "keep" : "watch",
+                 strcmp(s_server_uri, s_compiled_uri) == 0 ? "compiled" : "nvs");
     }
 }
 
 void hux_net_server_status(void) {
-    static const char *const MODES[] = {"home", "temp", "keep", "fallback"};
+    static const char *const MODES[] = {"home", "temp", "keep", "watch"};
     ESP_LOGI(TAG, "ws.server now=%s home=%s compiled=%s mode=%s", s_server_uri, s_home_uri,
              s_compiled_uri, MODES[atomic_load(&s_srv_mode) & 3]);
 }
