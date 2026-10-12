@@ -5189,7 +5189,7 @@ DoD round 2 + 3:
 
 ## T1.28: Spotify skill (play music from a household Spotify Premium account)
 
-**Status**: `in_progress` (2026-10-10, skill built and tested on the Mac with Soloist in Docker; waiting on the one-time pairing, then voice smoke) · **Effort**: ~2-3 days
+**Status**: `done` (2026-10-12; `7d97f0ee`, `4b765bd2`, `0ab5480b`, `52c1fd27`, coordinator fix `8f8c33ad`) · **Effort**: ~2-3 days
 
 **Problem.** Mario wants Huxley to play music from Spotify ("pon algo de Los Panchos"), using a Premium Family member account he set aside for it. A Spotify skill was never built: in T1.14 it was only rejected as the marketplace's *reference* skill (hourly token expiry made the v1 demo fragile), not as a skill.
 
@@ -5256,7 +5256,9 @@ Also: paused from an app for 3 s frees the speaker; a call longer than the patie
 
 Mario's retry: he heard "Es..." and then the music. The transcript was complete, so the scripted test (which only read transcripts) missed it. Cause: a framework bug, filed and fixed as T1.31. With it fixed: 4 of 4 runs said the full line, the music came back, and no `audio_clear` reached the client after speech (the test now counts them; against the old code it counts 1).
 
-**Remaining.** Mario re-tries the song question on the phone.
+**In real use (server log, 2026-10-10 23:36 to 2026-10-12 08:49).** Three song questions on the phone after the fix: "Es Cristiano Hipócrita, de Apostoles del Rap.", "Es Música para calmar la ansiedad de los perros, ...", "Es Smooth Operator - Single Version, de Sade.", each followed by the resume turn (`preempts_audio=False`, so no clear cut the answer) and `music_control(resume)`. Spotify also played 37 times over two days, including from the ESP32 client.
+
+**Watch.** 2026-10-12 08:41 (ESP32 client): after "pausa", the user said "Ponlo." and the model answered "¿Dijiste 'pausa'? Listo, dejé en pausa." A misheard or misread resume; one instance. If it repeats, look at the transcription on the device's mic and the persona's resume phrasing.
 
 ---
 
