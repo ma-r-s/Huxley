@@ -166,11 +166,14 @@ static void super_task(void *arg) {
 /* From the watchdog's interrupt, just before it panics: which tasks it
  * caught, into the black box (the supervisor itself, or an idle task a
  * spinning task starved). */
-static char s_wdt_msg[96];
+static char s_wdt_msg[160];
 static size_t s_wdt_len;
 
 static void wdt_msg(void *opaque, const char *msg) {
     (void)opaque;
+    if (strncmp(msg, "Task watchdog got triggered", 27) == 0) {
+        return; /* IDF's fixed preamble: only the task names matter */
+    }
     size_t n = strlen(msg);
     if (s_wdt_len + n >= sizeof(s_wdt_msg)) {
         n = sizeof(s_wdt_msg) - 1 - s_wdt_len;
