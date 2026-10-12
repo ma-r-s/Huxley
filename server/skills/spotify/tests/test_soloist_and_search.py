@@ -242,6 +242,68 @@ class TestSearch:
         match = await search.find("boleros", "playlist")
         assert match is not None and match.uri == "spotify:playlist:p"
 
+    async def test_candidates_are_the_runners_up_without_repeats(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        _token(httpx_mock)
+        httpx_mock.add_response(
+            method="GET",
+            json={
+                "artists": {
+                    "items": [
+                        {"uri": "spotify:artist:a", "name": "Gilberto A"},
+                        None,
+                        {"uri": "spotify:artist:a", "name": "Gilberto A"},
+                        {"uri": "spotify:artist:b", "name": "Gilberto B"},
+                        {"uri": "spotify:artist:c", "name": "Gilberto C"},
+                        {"uri": "spotify:artist:d", "name": "Gilberto D"},
+                    ]
+                }
+            },
+        )
+        search = SpotifySearch("id", "secret", http=httpx.AsyncClient())
+
+        found = await search.candidates("gilberto", "artist")
+
+        assert [m.uri for m in found] == [
+            "spotify:artist:a",
+            "spotify:artist:b",
+            "spotify:artist:c",
+        ]
+
+    async def test_song_and_artist_puts_the_song_first(self, httpx_mock: HTTPXMock) -> None:
+        """A song AND an artist must play the song, not the artist
+        (2026-10-12: a song request played the artist instead)."""
+        _token(httpx_mock)
+        flim = {"name": "Flim", "artists": [_artist("x", "Aphex Twin")]}
+        httpx_mock.add_response(
+            method="GET",
+            json={
+                "artists": {"items": [_artist("x", "Aphex Twin") | {"uri": "spotify:artist:x"}]},
+                "tracks": {
+                    "items": [
+                        flim | {"uri": "spotify:track:1"},
+                        flim | {"uri": "spotify:track:2"},  # the same song again
+                    ]
+                },
+                "albums": {"items": [{"uri": "spotify:album:1", "name": "Come to Daddy"}]},
+            },
+        )
+        search = SpotifySearch("id", "secret", http=httpx.AsyncClient())
+
+        found = await search.candidates("flim aphex twin")
+
+        assert [(m.kind, m.title) for m in found] == [
+            ("track", "Flim"),
+            ("album", "Come to Daddy"),
+            ("artist", "Aphex Twin"),
+        ]
+
+    async def test_empty_query_asks_spotify_nothing(self, httpx_mock: HTTPXMock) -> None:
+        search = SpotifySearch("id", "secret", http=httpx.AsyncClient())
+        assert await search.candidates("  ") == []
+        assert httpx_mock.get_requests() == []
+
     async def test_token_is_reused_then_renewed_on_401(self, httpx_mock: HTTPXMock) -> None:
         _token(httpx_mock, "t1")
         httpx_mock.add_response(method="GET", json={"tracks": {"items": []}})

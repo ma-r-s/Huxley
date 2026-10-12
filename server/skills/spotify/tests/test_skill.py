@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import wave
 from typing import TYPE_CHECKING, Any
@@ -52,6 +53,7 @@ async def _skill(
     pcm: PcmServer,
     *,
     match: Match | None = ARTIST,
+    others: list[Match] | None = None,
     earcon: bool = False,
     client: SoloistClient | None = None,
 ) -> tuple[SpotifySkill, Any, Recorded]:
@@ -61,7 +63,7 @@ async def _skill(
     if earcon:
         _earcon(tmp_path)
         config.update(start_sound="radio_start", sounds_path="sounds")
-    skill = SpotifySkill(client=client, search=FakeSearch(match))  # type: ignore[arg-type]
+    skill = SpotifySkill(client=client, search=FakeSearch(match, others))  # type: ignore[arg-type]
     await skill.setup(make_ctx(tmp_path, recorded, config=config))
     return skill, client, recorded
 
@@ -135,6 +137,29 @@ class TestPlay:
         # Volume is pinned only once playback is confirmed.
         assert client.commands() == ["play", "set_volume", "pause"]
         assert client.sent[0]["uri"] == "spotify:artist:panchos"
+
+    async def test_runners_up_go_back_as_alternatives(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        """After "no, the other one" the model can pick a runner-up instead
+        of repeating the same guess (2026-10-12: "Gilberto" played the
+        wrong Gilberto; the right one was the second artist result)."""
+        other = Match(uri="spotify:artist:b", kind="artist", title="B", artist="B")
+        skill, _, _ = await _skill(tmp_path, pcm_server, others=[other])
+
+        result = await skill.handle("play_music", {"query": "a", "kind": "artist"})
+
+        payload = json.loads(result.output)
+        assert payload["playing"] == "Los Panchos"
+        assert payload["alternatives"] == [{"title": "B", "by": "B", "kind": "artist"}]
+        assert isinstance(result.side_effect, AudioStream)
+
+    async def test_kind_reaches_the_search(self, tmp_path: Path, pcm_server: PcmServer) -> None:
+        skill, _, _ = await _skill(tmp_path, pcm_server)
+        search = skill._search
+        assert isinstance(search, FakeSearch)
+        await skill.handle("play_music", {"query": "song artist", "kind": "track"})
+        assert search.queries == [("song artist", "track")]
 
     async def test_first_chunks_while_soloist_turns_active_are_not_a_takeover(
         self, tmp_path: Path, pcm_server: PcmServer
@@ -359,6 +384,54 @@ class TestFailures:
         assert result.side_effect is None
 
 
+class TestNothingNamed:
+    """Music asked for with nothing named ("pon musica") got a clarifying
+    question (2026-10-12). It now continues what played last, and asks
+    only when nothing ever played. No default genre or artist: that would
+    be a taste assumption."""
+
+    @pytest.mark.parametrize("args", [{}, {"query": ""}, {"query": "  "}])
+    async def test_continues_what_played_last(
+        self, tmp_path: Path, pcm_server: PcmServer, args: dict[str, str]
+    ) -> None:
+        skill, client, _ = await _skill(tmp_path, pcm_server)
+        search = skill._search
+        assert isinstance(search, FakeSearch)
+        client.state.context_uri = "spotify:artist:last"
+
+        result = await skill.handle("play_music", args)
+
+        assert json.loads(result.output) == {"ok": True, "action": "resume"}
+        stream = result.side_effect
+        assert isinstance(stream, AudioStream)
+        task, _ = await _consume_until(stream, 1)
+        await _cancel(task)
+        play = next(c for c in client.sent if c["command"] == "play")
+        assert "uri" not in play  # resume what Soloist has, not a new search
+        assert search.queries == []
+
+    async def test_asks_when_nothing_ever_played(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, client, _ = await _skill(tmp_path, pcm_server)
+        client.state.context_uri = None
+
+        result = await skill.handle("play_music", {})
+
+        payload = json.loads(result.output)
+        assert payload["reason"] == "nothing_to_resume"
+        assert "qué artista o canción" in payload["say"]
+        assert result.side_effect is None
+        assert client.sent == []
+
+    async def test_player_offline_still_wins(self, tmp_path: Path, pcm_server: PcmServer) -> None:
+        skill, client, _ = await _skill(tmp_path, pcm_server)
+        client.state.connected = False
+        client.state.context_uri = "spotify:artist:last"
+        payload = json.loads((await skill.handle("play_music", {})).output)
+        assert payload["reason"] == "player_offline"
+
+
 SIN_TI = {
     "uri": "spotify:track:sinti",
     "entity_type": "track",
@@ -530,3 +603,37 @@ class TestSetup:
         names = [t.name for t in skill.tools]
         assert names == ["play_music", "music_control", "whats_playing"]
         assert "nunca inventes" in skill.tools[0].description
+
+    async def test_query_may_be_omitted(self, tmp_path: Path, pcm_server: PcmServer) -> None:
+        skill, _, _ = await _skill(tmp_path, pcm_server)
+        play = skill.tools[0]
+        assert play.parameters["required"] == []
+        assert "query" in play.parameters["properties"]
+
+    @pytest.mark.parametrize("lang", ["es", "en", "fr"])
+    async def test_tool_texts_name_no_example_music(
+        self, tmp_path: Path, pcm_server: PcmServer, lang: str
+    ) -> None:
+        """Example nouns became the model's guess when it misheard: a
+        request for Los Destellos searched "boleros" and played Los Panchos
+        (2026-10-12)."""
+        skill, _, recorded = await _skill(tmp_path, pcm_server)
+        await skill.reconfigure(dataclasses.replace(make_ctx(tmp_path, recorded), language=lang))
+        texts = json.dumps(
+            [(t.description, t.parameters) for t in skill.tools], ensure_ascii=False
+        ).lower()
+        for noun in ("bolero", "panchos", "bésame"):
+            assert noun not in texts, (lang, noun)
+
+    @pytest.mark.parametrize(
+        ("lang", "keep_going"),
+        [("es", "sigue con la canción"), ("en", "keep going"), ("fr", "continue")],
+    )
+    async def test_keep_going_is_resume_not_next(
+        self, tmp_path: Path, pcm_server: PcmServer, lang: str, keep_going: str
+    ) -> None:
+        """'Sigue con la cancion' skipped to the next song (2026-10-12)."""
+        skill, _, recorded = await _skill(tmp_path, pcm_server)
+        await skill.reconfigure(dataclasses.replace(make_ctx(tmp_path, recorded), language=lang))
+        control = skill.tools[1].description
+        assert control.index(keep_going) < control.index("'next'")

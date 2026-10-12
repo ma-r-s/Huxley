@@ -52,6 +52,34 @@ def _artists(entry: dict[str, Any]) -> str | None:
     return ", ".join(names) or None
 
 
+# A mixed search's sections, in the order a song beats an album beats a
+# playlist beats an artist (an artist wins only by exact name).
+_ANY_ORDER = (
+    ("tracks", "track"),
+    ("albums", "album"),
+    ("playlists", "playlist"),
+    ("artists", "artist"),
+)
+
+
+def _distinct(matches: list[Match], limit: int) -> list[Match]:
+    """First `limit` matches, skipping repeats: the same URI, or the same
+    title by the same artist (a remaster, a single next to its album)."""
+    seen: set[tuple[str, str]] = set()
+    uris: set[str] = set()
+    kept: list[Match] = []
+    for match in matches:
+        key = (_fold(match.title), _fold(match.artist or ""))
+        if match.uri in uris or key in seen:
+            continue
+        uris.add(match.uri)
+        seen.add(key)
+        kept.append(match)
+        if len(kept) == limit:
+            break
+    return kept
+
+
 class SpotifySearch:
     def __init__(
         self,
@@ -75,45 +103,53 @@ class SpotifySearch:
 
     async def find(self, query: str, kind: str = "any") -> Match | None:
         """Best match for `query`, or None if Spotify has nothing."""
+        found = await self.candidates(query, kind, limit=1)
+        return found[0] if found else None
+
+    async def candidates(self, query: str, kind: str = "any", *, limit: int = 3) -> list[Match]:
+        """Up to `limit` distinct matches for `query`, best first; [] if
+        Spotify has nothing. The runners-up go back to the model, so after
+        "no, the other one" it can pick one instead of repeating the guess."""
         query = query.strip()
         if not query:
-            return None
+            return []
         if kind not in KINDS:
             kind = "any"
-        if kind == "any":
-            data = await self._search(query, "track,artist,album,playlist", limit=5)
-            # "Los Panchos" names an artist; "Sin ti" a song. Only treat
-            # the query as an artist when it is the artist's name.
-            artist = self._first(data, "artists", "artist")
-            if artist and _fold(artist.title) == _fold(query):
-                return artist
-            for section, found in (
-                ("tracks", "track"),
-                ("albums", "album"),
-                ("playlists", "playlist"),
-                ("artists", "artist"),
-            ):
-                match = self._first(data, section, found)
-                if match:
-                    return match
-            return None
-        data = await self._search(query, kind, limit=5)
-        return self._first(data, f"{kind}s", kind)
+        if kind != "any":
+            data = await self._search(query, kind, limit=5)
+            return _distinct(self._all(data, f"{kind}s", kind), limit)
+        data = await self._search(query, "track,artist,album,playlist", limit=5)
+        sections = {found: self._all(data, section, found) for section, found in _ANY_ORDER}
+        # "Los Panchos" names an artist; "Sin ti" a song. Only treat
+        # the query as an artist when it is the artist's name.
+        artists = sections["artist"]
+        if artists and _fold(artists[0].title) == _fold(query):
+            best = "artist"
+        else:
+            best = next((k for _, k in _ANY_ORDER if sections[k]), "")
+        if not best:
+            return []
+        # The best section first, then the others in their usual order.
+        ordered = sections[best] + [m for _, k in _ANY_ORDER if k != best for m in sections[k]]
+        return _distinct(ordered, limit)
 
-    def _first(self, data: dict[str, Any], section: str, kind: str) -> Match | None:
+    def _all(self, data: dict[str, Any], section: str, kind: str) -> list[Match]:
+        matches: list[Match] = []
         # Playlist results can contain nulls (removed playlists).
         for entry in data.get(section, {}).get("items", []):
             if entry and entry.get("uri"):
                 name = str(entry.get("name") or "")
                 owner = (entry.get("owner") or {}).get("display_name")
                 by = name if kind == "artist" else _artists(entry) or owner
-                return Match(
-                    uri=str(entry["uri"]),
-                    kind=kind,
-                    title=name,
-                    artist=str(by) if by else None,
+                matches.append(
+                    Match(
+                        uri=str(entry["uri"]),
+                        kind=kind,
+                        title=name,
+                        artist=str(by) if by else None,
+                    )
                 )
-        return None
+        return matches
 
     async def _search(self, query: str, types: str, *, limit: int) -> dict[str, Any]:
         params: dict[str, str | int] = {"q": query, "type": types, "limit": limit}
