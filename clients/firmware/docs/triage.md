@@ -68,7 +68,8 @@ IO_MUX: `button.talk press src=lever`, Mic1 streamed 22 frames, release
 ended the turn); answers play (reply audio reaches the codec, 0 write
 errors, verified electrically by the loopback self-test); "pon el volumen
 al 80" by injected speech -> `set_volume 80` -> ES8311 register 0xB5;
-`audio_clear` by barge-in. **Left for a hand**: K2 (behind the I2C
+`audio_clear` by barge-in; "pon la radio" streamed 27 s at real time
+with no underrun, "para la radio" cleared it 81 ms after the press. **Left for a hand**: K2 (behind the I2C
 expander, JTAG can't press it; its reads never failed in hours of
 polling) and a real Telegram call (`input_mode`).
 **Known gaps** (not in scope): no echo cancellation during calls; the
@@ -136,6 +137,15 @@ would trade places forever.
 **Verified**: a test client took the server: `ws.rx.close code=1001
 eviction=1`, paused; a talk press played the offline cue and the board
 was READY 62 ms later.
+**Review round** (fresh critic, same night; all fixed, bench 9/9 after):
+a FINISH reaching the app after a press had restarted the client could
+loop stop/start forever (the client's liveness is now one flag, set by a
+start and cleared by the task's own FINISH; `resume` never stops a live
+task); a Wi-Fi reconnect restarted an evicted (paused) client (only the
+first IP starts it now; the app owns every later start/stop); a redial
+queued before the eviction could leave the app READY on the stopped
+client (the pause posts a disconnect after it); a client that couldn't
+restart is restarted by the next press.
 
 ### F-0017: Barge-in played the old reply over the user for 1.5-2.5 s · fixed 2026-10-11
 
@@ -151,6 +161,11 @@ for its shape.
 **Verified**: press 25 s into a story with the 4 MB ring full: 4.2 MB
 marked stale, 167 KB in flight dropped, `audio_clear` 612 ms after the
 press, the new answer played.
+**Review round**: a chunk the WS task was still writing into a full ring
+when the press cleared it landed after the clear and played; spk_task now
+plays nothing while the hold is on, and `audio_clear` clears before it
+ends the hold. The hold's expiry could wipe a newer press's hold: one
+atomic word (press time | 1), expired with compare-and-swap.
 
 ### F-0018: Smaller defects found on the bench · fixed 2026-10-11
 
@@ -163,7 +178,8 @@ press, the new answer played.
 - **Wi-Fi gave up after 5 retries** (`wifi.retries_exhausted`, then never
   again): a router reboot left the walkie offline until power-cycled. Now
   5 quick tries, then 1, 2, 4 ... 30 s, forever (`hux_wifi_retry`, host
-  test); the disconnect reason is logged.
+  test); the disconnect reason is logged. On the board with an SSID that
+  doesn't exist: reason 201, retries at 0 x5, 1, 2, 4, 8, 16, 30, 30 s.
 - **Joined the first AP heard, not the strongest**: on the mesh the board
   sat at -26, -60 and -87 dBm on three boots a metre from a node. Full
   scan, strongest first (~3 s more at boot); `wifi.associated` logs the
@@ -173,6 +189,11 @@ press, the new answer played.
   (READY at 2.2 s, was 4.1 s, before the full scan).
 - **I2S underflow replayed the last buffer** (a stutter or buzz if
   spk_task is ever late): `auto_clear` sends zeros instead.
+- **A press while offline couldn't stop playback** (the ring can hold a
+  whole reply from before the drop), and its cue waited for the ring to
+  drain: it clears the ring, then plays the cue (critic). Known edge: if
+  the server was still sending the reply, it sends the rest after the
+  reconnect (it never heard that press).
 - **Stack headroom**: `hux_button` had 532 B left of 3 KB (now 4 KB),
   the WS task 1.2 KB of 4 KB before its first reply (now 6 KB), the log
   drain 688 B of 4 KB after a 12-turn soak (now 6 KB). `info` reports
@@ -195,7 +216,9 @@ RSSI, time since the last inbound data). Also new on the wire: `client_event
 device` on every connect (firmware version, reset reason, boot counter,
 RSSI, volume: the server log now says which firmware is talking) and
 `mic peak_dbfs` in each press's stats. `tools/bench.py` runs the whole
-bench check list and prints PASS/FAIL.
+bench check list and prints PASS/FAIL. Review: a `say` whose press was
+ignored left its clip armed for the next real press; the console disarms
+it when the say ends.
 
 Note on IDs: F-0011 to F-0013 were used in code comments and commit
 messages (boot buzz, decode scratch, Wi-Fi power save) but their

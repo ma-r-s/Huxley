@@ -60,8 +60,16 @@ static esp_timer_handle_t s_wifi_retry_timer = NULL;
 /* The WS client starts on the first IP, not at boot: started earlier its
  * first connect fails ("Host is unreachable", logged as an error on every
  * boot) and the next try waits out the 2 s reconnect timer. Only the
- * system event task touches this. */
-static bool s_ws_started = false;
+ * system event task touches s_ws_first_start; later IPs (Wi-Fi came back)
+ * leave the client alone, or a Wi-Fi blip would undo an eviction pause.
+ * Every later start or stop is the app task's (hux_net_pause / resume).
+ *
+ * s_ws_alive: the client's task exists. Set by a successful start, cleared
+ * by its own FINISH (dispatched by the task just before it exits, so it is
+ * clear before stop() returns). A FINISH reaching the app late can't
+ * restart a client that is already running again. */
+static bool s_ws_first_start = false;
+static _Atomic bool s_ws_alive = false;
 /* The last CLOSE frame the server sent (WS task): an eviction ("Replaced
  * by new client", 1001) is told apart from a restart or a ping timeout. */
 static bool s_close_was_eviction = false;
@@ -199,10 +207,11 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
         esp_timer_stop(s_wifi_retry_timer); /* a pending retry is moot now */
         xEventGroupSetBits(s_wifi_events, WIFI_CONNECTED_BIT);
         post_app(HUX_APP_EV_NET_WIFI_UP);
-        if (!s_ws_started && s_ws != NULL) {
+        if (!s_ws_first_start && s_ws != NULL) {
             /* From here on esp_websocket_client reconnects on its own. */
             esp_err_t err = esp_websocket_client_start(s_ws);
-            s_ws_started = err == ESP_OK;
+            s_ws_first_start = err == ESP_OK;
+            atomic_store(&s_ws_alive, err == ESP_OK);
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "ws.start_failed err=%s (retried on the next IP)",
                          esp_err_to_name(err));
@@ -456,6 +465,7 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
              * the app restarts it. Before enable_close_reconnect, every
              * server close ended here, silently (F-0015). */
             ESP_LOGW(TAG, "ws.finished: the client task exited");
+            atomic_store(&s_ws_alive, false);
             post_app(HUX_APP_EV_NET_WS_FINISHED);
             break;
         default:
@@ -538,26 +548,26 @@ void hux_net_start(const hux_net_config_t *cfg) {
 }
 
 void hux_net_pause(void) {
-    if (s_ws == NULL || !s_ws_started) {
+    if (s_ws == NULL || !atomic_load(&s_ws_alive)) {
         return;
     }
-    /* From the app task (never the WS task: stop waits for it to exit). */
+    /* From the app task (never the WS task: stop waits for it to exit,
+     * and its FINISH clears s_ws_alive on the way out). */
     esp_err_t err = esp_websocket_client_stop(s_ws);
-    s_ws_started = false;
     ESP_LOGI(TAG, "ws.paused err=%s", esp_err_to_name(err));
 }
 
 void hux_net_resume(void) {
-    if (s_ws == NULL) {
-        return;
-    }
-    if (s_ws_started) {
-        /* The task ended on its own (FINISH): stop() just cleans up. */
-        esp_websocket_client_stop(s_ws);
+    if (s_ws == NULL || atomic_load(&s_ws_alive)) {
+        return; /* already running: nothing to do (never stop a live task here) */
     }
     esp_err_t err = esp_websocket_client_start(s_ws);
-    s_ws_started = err == ESP_OK;
+    atomic_store(&s_ws_alive, err == ESP_OK);
     ESP_LOGI(TAG, "ws.resumed err=%s", esp_err_to_name(err));
+}
+
+bool hux_net_is_running(void) {
+    return atomic_load(&s_ws_alive);
 }
 
 uint32_t hux_net_rx_age_ms(void) {

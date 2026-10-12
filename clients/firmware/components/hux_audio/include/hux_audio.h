@@ -140,6 +140,10 @@ void hux_audio_selftest(int hz);
  */
 int hux_audio_inject(int clip);
 
+/** Disarm a clip `hux_audio_inject` armed that no mic session took (the
+ * press was ignored): it must never leak into a later, real press. */
+void hux_audio_inject_cancel(void);
+
 /** Speaker amplifier on/off (TCA9555 P8). Off: everything still plays
  * through the codec, nothing is heard. On at boot. */
 void hux_audio_pa(bool on);

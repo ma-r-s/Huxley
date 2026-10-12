@@ -135,8 +135,9 @@ static StreamBufferHandle_t s_spk_ring = NULL;
  * would play over the user. From the press until the server's
  * `audio_clear` (it marks where the old audio ends) inbound audio is
  * dropped. Set by the app task, checked by the WS task in spk_push. */
-static _Atomic bool s_spk_hold = false;
-static _Atomic uint32_t s_spk_hold_since_ms = 0;
+/* One word, so the expiry below can't wipe a newer press's hold: 0 = no
+ * hold, else (the press's uptime_ms | 1). */
+static _Atomic uint32_t s_spk_hold = 0;
 static uint32_t s_spk_hold_dropped = 0; /* WS task only */
 #define SPK_HOLD_MAX_MS 3000  /* the clear comes in ~1.5 s; never mute longer */
 #define SPK_PUSH_POLL_MS 20    /* ring full: re-check the hold this often */
@@ -441,6 +442,13 @@ static void spk_task(void *unused) {
          * the DMA write below paces the loop, as it does for audio. */
         bool tone_due = tone_left > 0 || uxQueueMessagesWaiting(s_tone_q) > 0;
         size_t got_bytes = 0;
+        if (atomic_load_explicit(&s_spk_hold, memory_order_acquire) != 0) {
+            /* Barge-in hold: whatever is in the ring is the interrupted
+             * reply, including a chunk the WS task was still writing when
+             * the press cleared the ring (it waits for room and lands after
+             * the clear). Never play during a hold. */
+            discard_left = xStreamBufferBytesAvailable(s_spk_ring);
+        }
         if (discard_left > 0) {
             /* Stale audio from a clear: read out (into stereo32, rewritten
              * below) up to SPK_DISCARD_PER_CHUNK per pass, silence meanwhile,
@@ -581,17 +589,19 @@ void hux_audio_spk_push(const uint8_t *pcm, size_t len) {
     if (s_spk_ring == NULL || pcm == NULL || len == 0) {
         return;
     }
-    if (atomic_load_explicit(&s_spk_hold, memory_order_acquire)) {
-        uint32_t held = uptime_ms() - atomic_load_explicit(&s_spk_hold_since_ms,
-                                                           memory_order_relaxed);
+    uint32_t hold = atomic_load_explicit(&s_spk_hold, memory_order_acquire);
+    if (hold != 0) {
+        uint32_t held = uptime_ms() - (hold & ~1u);
         if (held < SPK_HOLD_MAX_MS) {
             s_spk_hold_dropped += len;
             return; /* the interrupted reply's tail */
         }
-        atomic_store_explicit(&s_spk_hold, false, memory_order_release);
-        ESP_LOGW(TAG, "spk.hold expired after_ms=%u dropped_bytes=%u: no audio_clear came",
-                 (unsigned)held, (unsigned)s_spk_hold_dropped);
-        s_spk_hold_dropped = 0;
+        /* Only this hold: a press since then set a new word and keeps it. */
+        if (atomic_compare_exchange_strong(&s_spk_hold, &hold, 0)) {
+            ESP_LOGW(TAG, "spk.hold expired after_ms=%u dropped_bytes=%u: no audio_clear came",
+                     (unsigned)held, (unsigned)s_spk_hold_dropped);
+            s_spk_hold_dropped = 0;
+        }
     }
     /* Backpressure: a full ring makes the WS task wait for room instead
      * of dropping audio. While it waits it doesn't read the socket, TCP's
@@ -604,7 +614,7 @@ void hux_audio_spk_push(const uint8_t *pcm, size_t len) {
     size_t off = 0;
     uint32_t waited_ms = 0;
     while (off < len) {
-        if (atomic_load_explicit(&s_spk_hold, memory_order_acquire)) {
+        if (atomic_load_explicit(&s_spk_hold, memory_order_acquire) != 0) {
             s_spk_hold_dropped += len - off;
             return;
         }
@@ -644,27 +654,36 @@ void hux_audio_spk_clear(void) {
 }
 
 void hux_audio_spk_hold(void) {
-    atomic_store_explicit(&s_spk_hold_since_ms, uptime_ms(), memory_order_relaxed);
-    atomic_store_explicit(&s_spk_hold, true, memory_order_release);
+    atomic_store_explicit(&s_spk_hold, uptime_ms() | 1u, memory_order_release);
     ESP_LOGI(TAG, "spk.hold on: dropping the interrupted reply until audio_clear");
 }
 
 void hux_audio_spk_unhold(const char *why) {
-    if (atomic_exchange_explicit(&s_spk_hold, false, memory_order_acq_rel)) {
+    uint32_t hold = atomic_exchange_explicit(&s_spk_hold, 0, memory_order_acq_rel);
+    if (hold != 0) {
         ESP_LOGI(TAG, "spk.hold off by=%s held_ms=%u", why,
-                 (unsigned)(uptime_ms() -
-                            atomic_load_explicit(&s_spk_hold_since_ms, memory_order_relaxed)));
+                 (unsigned)(uptime_ms() - (hold & ~1u)));
     }
 }
 
 void hux_audio_on_audio_clear(void) {
-    /* On the WS task: the hold's dropped count is ours to read here. */
-    if (atomic_load_explicit(&s_spk_hold, memory_order_acquire)) {
+    /* On the WS task, the ring's only writer: nothing is written while
+     * this runs. Clear first, hold still on (spk_task plays nothing), then
+     * end the hold: un-holding first would let spk_task play a stale chunk
+     * in the moment before it sees the clear. */
+    bool held = atomic_load_explicit(&s_spk_hold, memory_order_acquire) != 0;
+    hux_audio_spk_clear();
+    if (held) {
         ESP_LOGI(TAG, "spk.hold dropped_bytes=%u", (unsigned)s_spk_hold_dropped);
         s_spk_hold_dropped = 0;
         hux_audio_spk_unhold("audio_clear");
     }
-    hux_audio_spk_clear();
+}
+
+void hux_audio_inject_cancel(void) {
+    if (atomic_exchange_explicit(&s_inject_armed, false, memory_order_acq_rel)) {
+        ESP_LOGI(TAG, "mic.inject cancelled clip=%d (no mic session took it)", s_inject_clip);
+    }
 }
 
 void hux_audio_set_volume(int level) {

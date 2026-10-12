@@ -271,11 +271,16 @@ static void play_offline_cue(void) {
 
 static void enter_ptt(void) {
     if (s_state != ST_READY) {
-        ESP_LOGW(TAG, "app.ptt.ignored_press state=%s evicted=%d cue=offline",
-                 state_name(s_state), s_evicted);
+        ESP_LOGW(TAG, "app.ptt.ignored_press state=%s evicted=%d client_running=%d cue=offline",
+                 state_name(s_state), s_evicted, hux_net_is_running());
+        /* Stop whatever is still playing (the ring can hold a whole reply
+         * from before the drop), then the cue: a clear drops queued tones,
+         * and tones only play once the ring is empty. */
+        hux_audio_spk_clear();
         play_offline_cue();
-        if (s_evicted) {
-            /* The user wants the walkie back: take the server again. */
+        if (s_evicted || !hux_net_is_running()) {
+            /* The user wants the walkie back: take the server again (or
+             * restart a client that ended and couldn't restart itself). */
             s_evicted = false;
             hux_net_resume();
         }
@@ -478,10 +483,20 @@ static void dispatch(hux_app_event_t *ev) {
                           "next talk press");
             s_evicted = true;
             hux_net_pause();
+            /* The library redials 2 s after a close: a CONNECTED and a hello
+             * from that redial may already be queued behind this event.
+             * This disconnect lands after them, so the app doesn't end up
+             * READY on the client it just stopped. */
+            {
+                hux_app_event_t down = {.kind = HUX_APP_EV_NET_WS_DISCONNECTED};
+                hux_app_post_event(&down, false);
+            }
             break;
 
         case HUX_APP_EV_NET_WS_FINISHED:
-            if (!s_evicted) {
+            /* A FINISH can arrive after a press already restarted the
+             * client: resume() does nothing while one is running. */
+            if (!s_evicted && !hux_net_is_running()) {
                 ESP_LOGW(TAG, "net.ws.finished unexpectedly: restarting the client");
                 hux_net_resume();
             }

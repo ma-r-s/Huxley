@@ -104,6 +104,7 @@ static void handle_line(char *line) {
             hux_button_set_serial_talk(true);
             vTaskDelay(pdMS_TO_TICKS(ms + SAY_TAIL_MS));
             hux_button_set_serial_talk(false);
+            hux_audio_inject_cancel(); /* a press that was ignored left it armed */
             ESP_LOGI(TAG, "console.say released clip=%s held_ms=%d", argv[1], ms + SAY_TAIL_MS);
         }
     } else if (strcmp(cmd, "pa") == 0 && argc > 1) {

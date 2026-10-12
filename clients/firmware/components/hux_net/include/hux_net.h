@@ -36,10 +36,15 @@ int hux_net_rssi(void);
  * Stop the WebSocket client (no reconnects) / start it again. For an
  * eviction: another client took the server, and the walkie waits for its
  * talk button before taking it back. Call from the app task, never from
- * the WebSocket task. `resume` also restarts a client whose task ended.
+ * the WebSocket task. `resume` also restarts a client whose task ended;
+ * it does nothing while the client is running.
  */
 void hux_net_pause(void);
 void hux_net_resume(void);
+
+/** The WebSocket client's task is running (it connects or reconnects on
+ * its own). False after a pause, or if it ended unexpectedly. */
+bool hux_net_is_running(void);
 
 /** Milliseconds since the last inbound WebSocket data, UINT32_MAX if none. */
 uint32_t hux_net_rx_age_ms(void);
