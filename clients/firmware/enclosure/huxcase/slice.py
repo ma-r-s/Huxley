@@ -1,6 +1,6 @@
 """Bambu Studio projects for Mario's P2S (0.4 nozzle, PLA), one per filament
 colour, and the tub's two halves on one plate printed by object (frosted top,
-then grey base, Mario's AMS slots): `out/print/projects/<n>_<what>.3mf`, not
+then the red base, Mario's AMS slots): `out/print/projects/<n>_<what>.3mf`, not
 sliced (he opens one, slices, prints), and the same sliced in
 `out/print/sliced/`, which is what this checks: one plate, the P2S's own
 start sequence, no slicer warnings, objects in order and in their filaments,
@@ -135,8 +135,11 @@ CLARITY_FILAMENT = {  # on the PETG preset
 # tuned there and the lap is counted in layers.
 
 GREY, BLACK, ORANGE, FROSTED = "#8E9089", "#161616", "#FF6A13", "#E4ECEE"
-WHITE, RED = "#F4F4F2", "#C12E1F"  # the tub base: Mario's white PLA in slot 1 (2026-10-11)
-AMS = (WHITE, BLACK, ORANGE, FROSTED)  # Mario's AMS slots 1 to 4 for the tub
+WHITE, RED = "#F4F4F2", "#C12E1F"
+# The final colours (Mario, 2026-10-12): a white faceplate, a red base, the
+# clear PETG top, the black grille, the orange lever. His AMS slots 1 to 4:
+# A1 the clear PETG, A2 black, A3 orange, A4 red (Bambu Studio, 2026-10-12).
+AMS = (FROSTED, BLACK, ORANGE, RED)
 TPU_BLACK = "#101010"  # the external spool
 FILAMENT = {FROSTED: (PETG, "PETG"), TPU_BLACK: (TPU, "TPU")}  # by colour; the rest PLA
 
@@ -165,7 +168,7 @@ TOP, BASE = "hx1_10_tub_top", "hx1_03_tub_base"
 TEST_BASE, TEST_TOP = "hx1_11_test_base", "hx1_12_test_top"
 PLATES = [
     Plate(
-        "1_grey_faceplate_bridge_pin_plunger",
+        "1_white_faceplate_bridge_pin_plunger",
         (
             "hx1_01_faceplate",
             "hx1_07_bridge",
@@ -175,6 +178,7 @@ PLATES = [
             "hx1_09_plunger_long10",
         ),
         {},
+        (WHITE,),
     ),
     Plate("2_black_grille", ("hx1_02_grille_plug",), {}, (BLACK,)),
     Plate("3_orange_lever", ("hx1_04_ptt_bar",), {}, (ORANGE,)),
@@ -193,9 +197,9 @@ PLATES = [
         # preset's tower showed in Mario's Bambu Studio).
         | {"print_sequence": "by object", "enable_prime_tower": "0"},
         AMS,
-        slots={TOP: 4, BASE: 1},
+        slots={TOP: 1, BASE: 4},
         place={TOP: (128.0, 195.0), BASE: (128.0, 50.0)},
-        clear=4,
+        clear=1,
     ),
     # Both halves' back right corner round the seam (printability
     # TEST_CORNER), the same way and settings, ~20 min: push them together
@@ -208,9 +212,9 @@ PLATES = [
         | CLARITY_PROCESS
         | {"print_sequence": "by object", "enable_prime_tower": "0"},
         AMS,
-        slots={TEST_TOP: 4, TEST_BASE: 1},
+        slots={TEST_TOP: 1, TEST_BASE: 4},
         place={TEST_TOP: (128.0, 190.0), TEST_BASE: (128.0, 60.0)},
-        clear=4,
+        clear=1,
     ),
 ]
 PLATES.append(
@@ -228,6 +232,11 @@ PLATES.append(
     # The top alone in red PLA, standard settings, to go on the white base
     # Mario has (2026-10-11, after the clear PETG top strung).
     Plate("7_tub_top_pla", (TOP,), TREE_SUPPORTS | NO_BRIM, (RED,))
+)
+PLATES.append(
+    # The base alone in red PLA, standing, for the final colours with a top
+    # already printed (2026-10-12).
+    Plate("11_tub_base_red", (BASE,), TREE_SUPPORTS | NO_BRIM, (RED,))
 )
 # The TPU bumper (huxcase.bumper): on its front, no supports (every wall
 # vertical; the windows over USB-C and the rocker are short bridges). Solid:

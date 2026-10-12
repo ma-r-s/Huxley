@@ -443,6 +443,16 @@ at a reset boots download mode (F-0020). Every edge button now has 0.6 mm
 clearance to a part that changes how the device boots is a tested number,
 not whatever the envelope left.
 
+**Final colours, merged, on the website (2026-10-12)**: Mario's final
+colours are a white faceplate, a red base, the clear PETG top, the black
+grille and the orange lever. The black TPU case and tactile front dots are
+designed elsewhere. The build page shows them (site.SITE_KIND). The print
+set follows: plate 1 white, the tub plate expects A1 clear PETG and A4 red,
+and a new `11_tub_base_red` (34 min) covers a base alone. The enclosure
+branch is merged into main and pushed (a791d4f0) together with the
+website's /hx-1 page, which shows HX-1 in 3D (`huxcase.site --web`). The
+TPU front test ring fit "really, really good"; the full bumper is next.
+
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
 bottom is fine, holders whole, no glue but the tub's halves, plastic pivot, protected cells
 instead of a protection board, the ribbon and loose wires, the board's

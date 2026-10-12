@@ -356,18 +356,18 @@ def in_keep_out(p) -> list[str]:
 
 
 COLOUR = {
-    "faceplate": "grey",
+    "faceplate": "white",
     "grille_plug": "black",
-    "tub_base": "grey",
-    "tub_top": "frosted PETG (clarity settings)",
-    "test_base": "grey",
-    "test_top": "frosted PETG (clarity settings)",
+    "tub_base": "red",
+    "tub_top": "clear PETG (clarity settings)",
+    "test_base": "red",
+    "test_top": "clear PETG (clarity settings)",
     "ptt_bar": "orange",
-    "ptt_pin": "grey",
-    "plunger": "grey",
-    "bridge": "grey",
-    "plunger_long05": "grey",
-    "plunger_long10": "grey",
+    "ptt_pin": "white",
+    "plunger": "white",
+    "bridge": "white",
+    "plunger_long05": "white",
+    "plunger_long10": "white",
     "bumper": "TPU, from the external spool",
     "bumper_ring": "TPU, from the external spool",
 }
@@ -393,11 +393,12 @@ def export_stls(out_dir) -> list[str]:
         )
         written.append(f"{path.name}: {COLOUR[pose.piece]}, {pose.how}")
     (out / "PRINT.txt").write_text(
-        "HX-1 rev E print set (PLA, the frosted top in PETG; 0.4 nozzle, 0.20 mm layers). "
-        "The tub is two pieces, "
-        "glued with a lap joint: a grey base and a frosted top, on one plate printed by "
-        "object (projects/4_tub_base_and_top.3mf). Both get tree supports, Everywhere, "
-        "bridges included; everything else needs none. The frosted top prints with "
+        "HX-1 rev E print set (PLA, the top in clear PETG; 0.4 nozzle, 0.20 mm layers). "
+        "The final colours: a white faceplate, a red base, the clear top, the black grille, "
+        "the orange lever. The tub is two pieces, "
+        "glued with a lap joint: the red base and the clear top, on one plate printed by "
+        "object (projects/4_tub_base_and_top.3mf), or each alone (11 and 8). Both get tree "
+        "supports, Everywhere, bridges included; everything else needs none. The clear top prints with "
         "clarity settings (dry the filament first). Print the test corner first "
         "(projects/5_test_corner.3mf): the two halves' corner at the seam, to push "
         "together dry and to hold to a light. "

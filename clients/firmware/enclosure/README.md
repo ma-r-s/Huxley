@@ -439,26 +439,27 @@ print. The same sliced are in `out/print/sliced/`.
 
 | Project | Filament | About |
 | --- | --- | --- |
-| `1_grey_faceplate_bridge_pin_plunger` | grey | 38 min (faceplate, bridge, 3 pins, 3 plungers) |
+| `1_white_faceplate_bridge_pin_plunger` | white | 38 min (faceplate, bridge, 3 pins, 3 plungers) |
 | `2_black_grille` | black | 30 min |
 | `3_orange_lever` | orange | 6 min |
-| `4_tub_base_and_top` | AMS: slot 1 white PLA, slot 4 frosted PETG | 4 h 35 min; by object: the frosted top, then the base |
-| `5_test_corner` | AMS: slot 1 white PLA, slot 4 frosted PETG | 31 min; both halves' corner at the seam: print it first |
+| `4_tub_base_and_top` | AMS: slot 1 clear PETG, slot 4 red PLA | 4 h 35 min; by object: the clear top, then the base |
+| `5_test_corner` | AMS: slot 1 clear PETG, slot 4 red PLA | 31 min; both halves' corner at the seam: print it first |
 | `7_tub_top_pla` | one PLA (red set) | 1 h (on its back); the top alone, standard settings, for a base already printed |
-| `8_tub_top_clear` | one PETG (frosted set) | 3 h 52 min (on its back); the top alone, clear, for a base already printed: dry the spool first |
+| `8_tub_top_clear` | one PETG (clear) | 3 h 52 min (on its back); the top alone, clear, for a base already printed: dry the spool first |
+| `11_tub_base_red` | one PLA (red) | 34 min; the base alone, standing, for a top already printed |
 | `9_bumper_tpu` | TPU 95A (external spool) | 2 h 14 min; solid, no supports |
 | `10_bumper_test_ring` | TPU 95A (external spool) | 37 min; the bumper's front 8 mm: does the outline fit, does the front lip seat |
 
 The tub's plate prints object by object, so the filament changes once,
-between the pieces, never inside one. The frosted top goes first, so its
-first layers come out clean (no grey left in the nozzle). The pieces sit
+between the pieces, never inside one. The clear top goes first, so its
+first layers come out clean (no red left in the nozzle). The pieces sit
 94 mm apart: the toolhead (72 mm round) and the gantry (32.5 mm over the
 nozzle, lower than either piece) never pass over a finished one, which
 Bambu Studio checks. Don't press Arrange, it may undo that. Organic tree
 supports are the plate's (Bambu Studio did not apply an object's own
 settings for Mario). No prime tower: by object, the AMS purges into the
 chute. No brim: the top lies on its whole back wall. Clean the plate first (dish soap, or isopropyl alcohol). When
-sending, check the AMS mapping (1 white PLA, which Mario uses for the base instead of grey; 4 frosted PETG) and that slot 4 is set
+sending, check the AMS mapping (1 clear PETG, 4 red PLA for the base) and that slot 1 is set
 to PETG on the printer, its spool dried. Supports sit 0.25 off the part
 (0.2 is standard), as PETG welds to them closer. The bed runs 70 C for the
 PETG top, then 55 C for the PLA base (Bambu sets it at the change).
