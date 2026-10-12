@@ -1,5 +1,6 @@
 #include "hux_link.h"
 
+#include <stdio.h>
 #include <string.h>
 
 uint32_t hux_link_backoff_ms(uint32_t attempt, uint32_t r) {
@@ -88,4 +89,32 @@ const char *hux_ladder_name(hux_ladder_step_t step) {
         default:
             return "none";
     }
+}
+
+bool hux_link_uri_complete(const char *uri, char *out, size_t cap) {
+    if (uri == NULL || cap == 0) {
+        return false;
+    }
+    const char *port = NULL;
+    size_t skip = 0;
+    if (strncmp(uri, "wss://", 6) == 0) {
+        port = "443";
+        skip = 6;
+    } else if (strncmp(uri, "ws://", 5) == 0) {
+        port = "80";
+        skip = 5;
+    } else {
+        return false;
+    }
+    const char *host = uri + skip;
+    size_t host_len = strcspn(host, ":/");
+    const char *rest = host + host_len; /* ":port/path", "/path" or "" */
+    int n;
+    if (*rest == ':') {
+        n = snprintf(out, cap, "%s%s", uri, strchr(rest, '/') ? "" : "/");
+    } else {
+        n = snprintf(out, cap, "%.*s:%s%s", (int)(skip + host_len), uri, port,
+                     *rest == '/' ? rest : "/");
+    }
+    return n > 0 && (size_t)n < cap;
 }

@@ -49,3 +49,9 @@ const char *hux_ladder_name(hux_ladder_step_t step);
  * the old port or path when a new address leaves one out, and a saved
  * address it can't parse would fail every boot (F-0027 review). */
 bool hux_link_uri_ok(const char *uri, size_t max);
+
+/** `uri` with its scheme's port filled in when it has none (443 for
+ * `wss://`, 80 for `ws://`) and `/` when it has no path, into `out`;
+ * then hux_link_uri_ok decides. False if it doesn't fit or isn't ws/wss.
+ * "wss://walkie.example.com" -> "wss://walkie.example.com:443/". */
+bool hux_link_uri_complete(const char *uri, char *out, size_t cap);

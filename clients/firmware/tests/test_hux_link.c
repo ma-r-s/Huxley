@@ -2,6 +2,8 @@
  * Host unit tests for `hux_link`: the backoff and the escalation ladder
  * the walkie climbs alone while it can't reach the server (F-0027).
  */
+#include <string.h>
+
 #include "test_helpers.h"
 
 #include "hux_link.h"
@@ -69,6 +71,23 @@ static void test_uri_ok(void) {
     HX_ASSERT_TRUE(hux_link_uri_ok("ws://h:80/abcd", 16), "just fits");
 }
 
+static void test_uri_complete(void) {
+    char out[128];
+    HX_ASSERT_TRUE(hux_link_uri_complete("wss://walkie.example.com/", out, sizeof(out)), "wss");
+    HX_ASSERT_TRUE(strcmp(out, "wss://walkie.example.com:443/") == 0, "443 filled in");
+    HX_ASSERT_TRUE(hux_link_uri_complete("wss://walkie.example.com", out, sizeof(out)), "no path");
+    HX_ASSERT_TRUE(strcmp(out, "wss://walkie.example.com:443/") == 0, "443 and / filled in");
+    HX_ASSERT_TRUE(hux_link_uri_complete("ws://192.168.68.75:8765/", out, sizeof(out)), "lan");
+    HX_ASSERT_TRUE(strcmp(out, "ws://192.168.68.75:8765/") == 0, "a full one is unchanged");
+    HX_ASSERT_TRUE(hux_link_uri_complete("ws://h:8765", out, sizeof(out)), "port, no path");
+    HX_ASSERT_TRUE(strcmp(out, "ws://h:8765/") == 0, "/ added");
+    HX_ASSERT_TRUE(hux_link_uri_complete("ws://h/ws?x=1", out, sizeof(out)), "path, no port");
+    HX_ASSERT_TRUE(strcmp(out, "ws://h:80/ws?x=1") == 0, "80 before the path");
+    HX_ASSERT_TRUE(hux_link_uri_ok(out, sizeof(out)), "and it then passes the check");
+    HX_ASSERT_TRUE(!hux_link_uri_complete("http://h/", out, sizeof(out)), "only ws and wss");
+    HX_ASSERT_TRUE(!hux_link_uri_complete("wss://a-very-long-host.example.com/", out, 20), "too long");
+}
+
 static void test_ladder_climbs_in_order(void) {
     HX_ASSERT_EQ(hux_ladder_due(0, HUX_LADDER_NONE), HUX_LADDER_NONE, "just lost: wait");
     HX_ASSERT_EQ(hux_ladder_due(119, HUX_LADDER_NONE), HUX_LADDER_NONE, "under 2 min");
@@ -104,6 +123,7 @@ int main(void) {
     HX_RUN(test_backoff_never_overflows);
     HX_RUN(test_backoff_at_the_cap_is_spread);
     HX_RUN(test_uri_ok);
+    HX_RUN(test_uri_complete);
     HX_RUN(test_ladder_climbs_in_order);
     HX_RUN(test_ladder_each_step_once);
     HX_RUN(test_ladder_late_check_takes_the_highest);

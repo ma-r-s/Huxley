@@ -6,6 +6,7 @@
 
 #include "cJSON.h"
 #include "esp_attr.h"
+#include "esp_crt_bundle.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_random.h"
@@ -883,6 +884,9 @@ static bool ws_start(const char *uri) {
          * (4 KB) had 1.2 KB left before the first reply arrived. */
         .task_stack = 6144,
         .headers = s_auth_header[0] != '\0' ? s_auth_header : NULL,
+        /* wss:// (the Cloudflare tunnel, T1.43): the Mozilla CA bundle
+         * checks the server's certificate. Unused on ws://. */
+        .crt_bundle_attach = esp_crt_bundle_attach,
     };
     s_ws = esp_websocket_client_init(&cfg);
     if (s_ws == NULL) {
@@ -934,8 +938,10 @@ void hux_net_start(const hux_net_config_t *cfg) {
     }
     ESP_LOGI(TAG, "ws.token present=%d", s_auth_header[0] != '\0'); /* never the value */
     /* WS client created first; the GOT_IP handler starts it. */
-    strlcpy(s_compiled_uri, cfg->server_uri, sizeof(s_compiled_uri));
-    strlcpy(s_home_uri, cfg->server_uri, sizeof(s_home_uri));
+    if (!hux_link_uri_complete(cfg->server_uri, s_compiled_uri, sizeof(s_compiled_uri))) {
+        strlcpy(s_compiled_uri, cfg->server_uri, sizeof(s_compiled_uri));
+    }
+    strlcpy(s_home_uri, s_compiled_uri, sizeof(s_home_uri));
     char saved[sizeof(s_home_uri)];
     server_load_saved(saved, sizeof(saved));
     if (saved[0] != '\0' && !hux_link_uri_ok(saved, sizeof(s_home_uri))) {
@@ -1066,13 +1072,14 @@ static void server_switch(const char *uri, uint32_t revert_s, srv_mode_t mode) {
     if (s_ws == NULL) {
         return;
     }
-    if (!hux_link_uri_ok(uri, sizeof(s_server_uri))) {
-        ESP_LOGE(TAG, "ws.server_refused uri=%s why=invalid (ws[s]://host:port/path)",
+    char full[sizeof(s_server_uri)];
+    if (!hux_link_uri_complete(uri, full, sizeof(full)) || !hux_link_uri_ok(full, sizeof(full))) {
+        ESP_LOGE(TAG, "ws.server_refused uri=%s why=invalid (ws[s]://host[:port]/path)",
                  uri != NULL ? uri : "(null)");
         return;
     }
     link_lock();
-    server_switch_locked(uri, revert_s, mode);
+    server_switch_locked(full, revert_s, mode);
     link_unlock();
 }
 
