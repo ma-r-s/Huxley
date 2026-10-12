@@ -111,6 +111,9 @@ class _InjectedRequest:
     # (its place behind what the client still had queued). A press before
     # then means it was never heard.
     plays_at: float | None = None
+    # Its turn dispatched a tool (the "call X now, say nothing" pattern):
+    # it did its job even with no audio, so a press doesn't say it again.
+    ran_tool: bool = False
     attempts: int = 0
 
 
@@ -723,6 +726,8 @@ class TurnCoordinator:
         audio_stream = result.side_effect if isinstance(result.side_effect, AudioStream) else None
         has_audio_stream = audio_stream is not None
         self.current_turn.tool_calls += 1
+        if self._inflight is not None and self.current_turn.source is TurnSource.INJECTED:
+            self._inflight.ran_tool = True
         await self._log.ainfo(
             "coord.tool_dispatch",
             state=self.current_turn.state.value,
@@ -1742,16 +1747,20 @@ class TurnCoordinator:
             self._absence_task = None
             if task is not None and not task.done():
                 task.cancel()
-            await self._drain_waiting("client_present")
-            if self._client_absent:
-                self._client_absent = False
-                await self._release_content_hold(_HOLD_NO_CLIENT)
-            elif obs is not None and obs.announced:
-                # Back within the grace: the stream never paused, but this
-                # client has not been told it plays.
-                await self._send_stream_started(
-                    obs.interface_name, obs.stream.label, obs.stream.preroll_ms
-                )
+            try:
+                await self._drain_waiting("client_present")
+            finally:
+                # Whatever the drain did, the no-client hold must not
+                # outlive the absence (the same rule as the session hold).
+                if self._client_absent:
+                    self._client_absent = False
+                    await self._release_content_hold(_HOLD_NO_CLIENT)
+                elif obs is not None and obs.announced:
+                    # Back within the grace: the stream never paused, but
+                    # this client has not been told it plays.
+                    await self._send_stream_started(
+                        obs.interface_name, obs.stream.label, obs.stream.preroll_ms
+                    )
             return
         if self._client_absent or self._absence_task is not None:
             return
@@ -2470,6 +2479,7 @@ class TurnCoordinator:
         if self._expire_if_due(request, where=why):
             return False
         request.plays_at = None
+        request.ran_tool = False
         self._injected_queue.insert(0, request)
         self._arm_expiry(request)
         return True
@@ -2580,7 +2590,7 @@ class TurnCoordinator:
         did its job. A drained turn queues behind the previous answer, and
         the press empties the client's buffer, so it may never have
         started."""
-        if turn is not None and turn.tool_calls > 0:
+        if request.ran_tool or (turn is not None and turn.tool_calls > 0):
             return True
         return request.plays_at is not None and time.monotonic() >= request.plays_at
 

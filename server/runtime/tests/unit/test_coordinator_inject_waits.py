@@ -505,6 +505,30 @@ class TestCutOff:
         await _speak(coordinator)  # the user's turn ends
         assert len(_said(provider)) == 2
 
+    async def test_a_press_after_a_tool_only_turn_does_not_run_it_again(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider, server: _Server
+    ) -> None:
+        """ "Call resume now, say nothing" after an answer: the turn only runs
+        a tool, then awaits its confirmation behind the answer's tail. A
+        press then must not put it back (it would resume the music again
+        after the user's turn)."""
+        await server.connect(coordinator)
+        await _press(coordinator)
+        await coordinator.inject_turn("Llama a resume, no digas nada.")
+        await coordinator.on_audio_delta(b"\x00" * 96_000)  # a 2 s answer
+        await coordinator.on_audio_done()
+        await coordinator.on_response_done()  # the inject fires
+        await coordinator.on_tool_call("c1", "music_control", {"action": "resume"})
+        await coordinator.on_response_done()  # the tool's round
+        await coordinator.on_response_done()  # the follow-up: says nothing
+        assert coordinator._unconfirmed is not None
+
+        await coordinator.on_ptt_start()  # during the answer's tail
+
+        assert coordinator._unconfirmed is None
+        assert coordinator._injected_queue == []
+        assert _said(provider) == ["Llama a resume, no digas nada."]
+
     async def test_a_cut_off_turn_past_its_expiry_is_not_said_again(
         self, coordinator: TurnCoordinator, provider: StubVoiceProvider, server: _Server
     ) -> None:
@@ -646,6 +670,44 @@ class TestContent:
         assert runs == 1, "the book waits for the narration"
         await _speak(coordinator)
         await _until(lambda: runs == 2)
+
+    async def test_the_no_client_hold_is_released_even_if_the_waiting_turn_fails(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+        server: _Server,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A hold left behind would keep the book paused through every
+        later press."""
+        monkeypatch.setattr(TurnCoordinator, "_CLIENT_ABSENT_GRACE_S", 0.01)
+
+        async def _book() -> AsyncIterator[bytes]:
+            while True:
+                yield b"\x00" * 480
+                await asyncio.sleep(0.005)
+
+        await server.connect(coordinator)
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output="{}", side_effect=AudioStream(factory=_book, patience=timedelta(minutes=30))
+        )
+        await _press(coordinator)
+        await coordinator.on_tool_call("c1", "play", {})
+        await coordinator.on_response_done()
+        await server.leave(coordinator)
+        await _until(lambda: coordinator._client_absent)
+        await coordinator.inject_turn("pastilla")
+        monkeypatch.setattr(
+            provider, "send_conversation_message", AsyncMock(side_effect=ConnectionError)
+        )
+
+        with pytest.raises(ConnectionError):
+            await server.connect(coordinator)
+
+        obs = coordinator._content_obs
+        assert obs is not None
+        assert "no_client" not in obs.holds
 
 
 class TestWithdrawAndShutdown:
