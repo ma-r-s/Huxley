@@ -121,6 +121,47 @@ static esp_err_t coredump_get(httpd_req_t *req) {
     return httpd_resp_send_chunk(req, NULL, 0);
 }
 
+/* The bench clips (tools/clips.py) into the storage partition, over
+ * Wi-Fi: no USB to change what `say <n>` says. No restart; the next
+ * `say` maps the new clips. */
+static esp_err_t clips_post(httpd_req_t *req) {
+    if (!authorized(req)) {
+        return ESP_OK;
+    }
+    const esp_partition_t *p =
+        esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "storage");
+    size_t len = req->content_len;
+    if (p == NULL || len < 8 || len > p->size) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no storage partition, or bad size");
+        return ESP_OK;
+    }
+    if (!hux_audio_clips_release()) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "a clip is playing");
+        return ESP_OK;
+    }
+    size_t erase = (len + 4095) & ~(size_t)4095;
+    esp_err_t err = esp_partition_erase_range(p, 0, erase);
+    static char chunk[4096];
+    size_t done = 0;
+    while (err == ESP_OK && done < len) {
+        int r = httpd_req_recv(req, chunk, len - done < sizeof(chunk) ? len - done : sizeof(chunk));
+        if (r <= 0) {
+            err = ESP_FAIL;
+            break;
+        }
+        err = esp_partition_write(p, done, chunk, (size_t)r);
+        done += (size_t)r;
+    }
+    ESP_LOG_LEVEL(err == ESP_OK ? ESP_LOG_INFO : ESP_LOG_ERROR, TAG,
+                  "dev.clips bytes=%u of %u err=%s", (unsigned)done, (unsigned)len,
+                  esp_err_to_name(err));
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "write failed");
+        return ESP_OK;
+    }
+    return httpd_resp_sendstr(req, "ok\n");
+}
+
 void hux_dev_start(const char *token) {
     if (token == NULL || strlen(token) < 16 || strcmp(token, "change-me") == 0) {
         /* The repo is public: the example token must never open a board. */
@@ -146,10 +187,11 @@ void hux_dev_start(const char *token) {
         {.uri = "/info", .method = HTTP_GET, .handler = info_get},
         {.uri = "/cmd", .method = HTTP_POST, .handler = cmd_post},
         {.uri = "/coredump", .method = HTTP_GET, .handler = coredump_get},
+        {.uri = "/clips", .method = HTTP_POST, .handler = clips_post},
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         httpd_register_uri_handler(srv, &uris[i]);
     }
-    ESP_LOGI(TAG, "dev.start port=%d (GET /info, POST /cmd, GET /coredump; token required)",
+    ESP_LOGI(TAG, "dev.start port=%d (GET /info, POST /cmd, GET /coredump, POST /clips; token required)",
              cfg.server_port);
 }

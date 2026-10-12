@@ -7,6 +7,7 @@ and crash dumps. No USB cable, no opening the case.
     python3 tools/dev.py cmd selftest         # any console command (hux_console.h)
     python3 tools/dev.py log                  # follow the board's log lines
     python3 tools/dev.py coredump             # fetch + decode the last crash
+    python3 tools/dev.py clips                # build/clips.bin -> the bench clips
 
 Finds the board's IP in the Huxley server's log (its last `client.device`
 from the firmware), or --host IP. The token is HUX_DEV_TOKEN in
@@ -283,7 +284,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("what", choices=["info", "flash", "cmd", "log", "coredump"])
+    ap.add_argument("what", choices=["info", "flash", "cmd", "log", "coredump", "clips"])
     ap.add_argument("args", nargs="*")
     ap.add_argument("--host", help="the board's IP (default: from the server log)")
     ap.add_argument("--force", action="store_true", help="flash even if it runs this version")
@@ -306,6 +307,15 @@ def main() -> int:
     elif a.what == "log":
         with contextlib.suppress(KeyboardInterrupt):
             board_lines(log_tail_from(), float("inf"))
+    elif a.what == "clips":
+        # tools/clips.py's output, into the storage partition (`say <n>`).
+        clips = FW / "build" / "clips.bin"
+        if not clips.exists():
+            sys.exit("no build/clips.bin: python3 tools/clips.py")
+        data = clips.read_bytes()
+        offset = log_tail_from()
+        print(request(host, "/clips", data, timeout=120).decode().strip(), len(data), "bytes")
+        board_lines(offset, time.time() + 3)
     elif a.what == "coredump":
         out = Path(a.args[0] if a.args else "/tmp/huxley-debug/coredump.bin")
         return cmd_coredump(host, out, a.elf)

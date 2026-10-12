@@ -13,6 +13,8 @@
  *                    results are log lines, in the Huxley server's log
  *   GET  /coredump   the core dump partition, raw, for
  *                    `idf.py coredump-info -c <file>`
+ *   POST /clips      the bench clips (tools/clips.py) into the storage
+ *                    partition; no restart, the next `say` uses them
  *
  * Updates are `ota <url>` (hux_ota: esp_https_ota + ESP-IDF app rollback).
  * tools/dev.py drives all of it.

@@ -1026,6 +1026,17 @@ void hux_audio_selftest(int hz) {
     atomic_store_explicit(&s_selftest_hz, (uint32_t)hz, memory_order_release);
 }
 
+bool hux_audio_clips_release(void) {
+    if (atomic_load_explicit(&s_inject_armed, memory_order_acquire)) {
+        return false; /* the mic task may be reading it now */
+    }
+    if (s_clips_map != NULL) {
+        esp_partition_munmap(s_clips_map_handle);
+        s_clips_map = NULL;
+    }
+    return true;
+}
+
 int hux_audio_inject(int clip) {
     if (s_clips == NULL) {
         s_clips = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY,

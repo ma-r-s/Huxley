@@ -11,7 +11,8 @@ PCM16 mono 24 kHz, the wire format, in the `storage` partition:
 
 Usage (macOS: `say` and ffmpeg):
     python3 tools/clips.py                 # writes build/clips.bin
-    esptool.py --chip esp32s3 -p PORT write_flash 0x420000 build/clips.bin
+    python3 tools/dev.py clips             # onto the board over Wi-Fi
+    (or USB: esptool.py --chip esp32s3 -p PORT write_flash 0x420000 build/clips.bin)
 
 Edit CLIPS to change what the board "says"; the index is the `say` number.
 """
@@ -33,6 +34,16 @@ CLIPS = [
     "Pon la radio.",  # 4: a stream
     "Para la radio.",  # 5: stop the stream
     "¿Qué día es hoy?",  # 6
+    # 2026-10-12, the requests that failed in real use (bench.py hearing):
+    "Pon música de Adele.",  # 7: was played as Sade
+    "Pon Weird Fishes de Radiohead.",  # 8: was "Voltages de Radio Alta"
+    "Pon Blu Radio.",  # 9: a station; was played as Adele
+    "Pausa.",  # 10
+    "Sigue con la canción.",  # 11: resume, was next
+    "Ponlo.",  # 12: resume what was playing, was "pause the book"
+    "¿Qué audiolibros tienes?",  # 13: the whole list, was 5 of 19
+    "Pon el segundo.",  # 14: from that list
+    "Para la música.",  # 15
 ]
 TAIL_SILENCE_MS = 200
 
@@ -82,7 +93,10 @@ def main() -> None:
     for i, (text, pcm) in enumerate(zip(CLIPS, pcms)):
         print(f"  say {i}: {len(pcm) / 48000:4.1f} s  {text}")
     print(f"wrote {out} ({len(image)} bytes)")
-    print(f"flash: esptool.py --chip esp32s3 -p PORT write_flash {STORAGE_OFFSET:#x} {out}")
+    print(
+        "to the board: python3 tools/dev.py clips (Wi-Fi), or esptool write_flash "
+        f"{STORAGE_OFFSET:#x} {out} (USB)"
+    )
 
 
 if __name__ == "__main__":

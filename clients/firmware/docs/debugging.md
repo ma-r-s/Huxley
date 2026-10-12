@@ -183,6 +183,7 @@ one it doesn't start, `dev.off`). `tools/dev.py` wraps it:
 | `GET /info`      | `info`               | version, uptime, reset reason, heap, PSRAM, ring, volume, RSSI, slot and its state, `last_invalid` (the image it rolled back from) |
 | `POST /cmd`      | `cmd <line>`, `flash` | one console command (same as on USB); replies `ok`, results go to the log |
 | `GET /coredump`  | `coredump`           | the core dump partition, raw                                |
+| `POST /clips`    | `clips`              | `build/clips.bin` (tools/clips.py) into the storage partition, for `say <n>`; no restart |
 
 The board's log already streams to the server (`client.huxley.firmware_log`),
 so `dev.py cmd` and `dev.py log` print the board's own lines from

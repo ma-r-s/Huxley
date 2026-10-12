@@ -144,6 +144,11 @@ int hux_audio_inject(int clip);
  * press was ignored): it must never leak into a later, real press. */
 void hux_audio_inject_cancel(void);
 
+/** Before the clips partition is rewritten (developer door, POST /clips):
+ * cancel any injection and unmap it; the next `say` maps it again.
+ * False if a clip is playing right now. */
+bool hux_audio_clips_release(void);
+
 /** Speaker amplifier on/off (TCA9555 P8). Off: everything still plays
  * through the codec, nothing is heard. On at boot, unless quiet. `on`
  * also ends a quiet period. */
