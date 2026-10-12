@@ -5529,7 +5529,7 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 
 ## T1.42: The caregiver's view: insight and alerts, never an event log
 
-**Status**: `queued` (2026-10-12, Mario's brief) · **Effort**: L
+**Status**: `queued` (2026-10-12, Mario's brief) · **Owner**: the "Huxley improvement plan" session (handed over 2026-10-12 at Mario's request: diagnostics, monitoring and alerting architecture live there; features and firmware stay in the firmware session) · **Effort**: L
 
 **Brief** (Mario): alerts and a beautiful, text-light way of knowing what's going on, so he can fix things from his home: audio cutting up on the device ("check what may be going on"), the Orange Pi down, the device out of battery, something unusual, OpenAI credits out or running low, audiobook hours low (buy more), the internet was down, the device not seen in a couple of days; and how the device is being used. **Not wanted**: a complex dashboard, individual events cluttering the board, everything shown with the important part buried; only what tells him something is going on.
 
