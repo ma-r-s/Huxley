@@ -5272,18 +5272,25 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 
 ---
 
-## T1.30: Resume the interrupted media after a question (proposal, needs Mario)
+## T1.30: Resume the interrupted media after a question
 
-**Status**: `queued` (2026-10-10, proposal; product decision, then plan + critic) · **Effort**: ~1-2 days
+**Status**: `done` (2026-10-12, merge `09c736c6`: `2dd8c901`, `14ee088e`, `c0885fb1`) · **Effort**: ~1 day
 
-**Problem.** A press during an audiobook, radio or Spotify stops the media for good (`coordinator.interrupt()` → stream `NONE`); after "¿qué hora es?" the user must say "sigue". Proactive turns (`inject_turn`) already *park* media (MUST_PAUSE with patience) and resume it afterward. T1.28's whats_playing had to work around this with a queued resume turn.
+**Problem.** A press during an audiobook, radio or Spotify stopped the media for good (`coordinator.interrupt()` → stream `NONE`). 2026-10-12 real use: 35 presses stopped media, 12 of them not about media (volume x6, "¿me escuchas?" x2, a Telegram message, "¿en qué capítulo vamos?"); Mario re-asked 6 times ("sigue con la radio", "continúa la canción"); turning the volume down killed the music it was for; the model claimed media was playing after it had stopped. Also: media kept streaming to nobody while the walkie was disconnected (the Beatles ran 33 min, the board was there for ~16), and a provider reconnect stopped media.
 
-**Proposal.** A user press parks the current media like an injected turn does. When the turn ends with no new content and no `CancelMedia`, the parked media resumes; a new `AudioStream` replaces it; "pausa"/"para" (`CancelMedia`) ends it. Covers every media skill at once, and whats_playing's workaround goes away.
+**Decision.** This was a proposal waiting on Mario (should media come back on its own?). On 2026-10-12 night Mario asked for everything that failed that day to be fixed, scope "everything"; built, and flagged in the morning report as the behavior change to judge (revert: the merge commit).
 
-**Risks to weigh.** The model must reliably call stop for "silencio", "apaga", or the media comes back against the user's wish (worst for a blind user who can't see why). Calls (InputClaim) and very long questions need a patience bound. Audiobook position semantics on resume.
+**Fix.** A press pauses content (a hold); the turn's end resumes it after the answer has played, unless the turn ran CancelMedia, started other media, was only the persona's stop words ("para", "ya basta", "apaga la música"), or held it over 30 min. No client for 5 s pauses it until a client reconnects. A provider reconnect leaves it alone; a press during an outage stops it (the user stays in control). The model gets a note before the commit. Audiobooks rewind 2 s plus a tenth of the pause on resume; earcons only on the first run; a finished stream never restarts; Spotify's whats_playing workaround removed. ADR 2026-10-12 supersedes io-plane rule 5.
 
-**Decision needed from Mario.** Should media come back on its own after a question? (Product behavior across audiobooks, radio and music.)
+**T1.30's listed risks.** Stop words: covered by the transcript check even when the model doesn't call the tool, erring toward silence. Calls and long questions: 30 min bound; calls keep their own patience. Audiobook position: rewind on resume.
 
+**Critic.** Earcons replayed on resume; `model_speaking=false` before `audio_clear` (the walkie would play music over the question); a press during an outage did nothing; absence had no cap; a reminder dropping the new stream let the old one back; shutdown leaked audio to a new persona; the drain estimate needed a playhead: all fixed. Tests checked against seven deliberately broken versions.
+
+**Tests.** `test_coordinator_content_holds.py` (34), observer holds, server presence, skills. On the walkie: `bench.py --wifi --steps resume`.
+
+**Left.** Whether the model calls the stop tool for "para" (watch `coord.content_released resumed=true` right after a stop request); a reminder at a press's end still kills the radio (radio has no patience: Mario's call); reminders spoken while no client is connected are lost; only abuelos has localized strings.
+
+**Lesson.** Arm the resume where the turn is cleared, not at each known end path.
 ---
 
 ## T1.31: A queued inject_turn cut off the end of the previous spoken answer
@@ -5350,6 +5357,24 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 
 **Behavior choice for Mario.** "Pon música" with nothing named continues the last music Spotify had loaded; asks only if nothing was ever played; never picks a default genre or artist. Same for "pon un libro".
 
-**Left.** The model's hearing of English titles in Spanish speech (`gpt-realtime-2.1-mini`); the full model may hear better at a higher price per response (Mario's call, T1.25).
+**Left.** The model's hearing and tool discipline (`gpt-realtime-2.1-mini`). Measured 2026-10-12 night on `hearing` (11 requests, injected speech): mini 49/55 over five runs (misses: the Weird Fishes title as "irfixes"/"Creep"/"High Hopes", "Ponlo" answered "ya sigo con la música" with no tool call, "para la radio" with no call); `gpt-realtime-2.1` 22/22 over two runs, at $0.0139 per response vs $0.003 (about 4.6x; yesterday's use was ~$0.80/day on mini). A general persona rule now says: no "sigo"/"pongo"/"listo" without the tool call in the same turn. Model choice is Mario's (T1.25).
+
+---
+
+## T1.35: Silent presses answered, presses unanswered, the 60-minute expiry, log gaps
+
+**Status**: `done` (2026-10-12, merge `c6eb7ca3`: `16eb46cc`, `c2ce78f7`, `59161739`, `57aeb543`, `29269ae5`, `0d70921c`) · **Effort**: ~1 day
+
+**Validation.** 2026-10-12 06:44-06:45Z: 11 presses committed with nothing said, transcribed as "Subtítulos realizados por la comunidad de Amara.org" and answered; 3x `conversation_already_has_active_response` after a cancelled response's late `response.done` ended the next turn, and those presses got no answer. `session_expired` at 07:31 and 08:31 (the 55-min timer cancelled its own disconnect; on 10-11 the session expired every hour). Board log lines arrived as `info` whatever their level (structlog overwrote the client's `level`). Tool outputs and OpenAI close codes weren't logged.
+
+**Fix.** Silent-press gate (`turn/press_level.py`: peak under -40 dBFS outside the first 100 / last 60 ms is not committed; every `coord.ptt_stop` logs `peak_dbfs`/`rms_dbfs`); a cancel generation in `response.metadata`, events of cancelled responses dropped, a new request waits for the live one (5 s backstop, `session.tx.response_create_forced`); session refresh at the first idle moment after 50 min (`session_refresh_minutes`; not during a call; the summary computed while the session is up, 10 s cap); tool outputs (300 chars) and close codes logged; client-event fields that clash with the log's own keys become `client_<key>` (`client_level`).
+
+**Evidence on the walkie.** `bench.py --wifi --steps silent`: before (server of 2026-10-12 03:49) the empty press (peak -55 dBFS, rms -67) was transcribed as "Subtítulos realizados por la comunidad de Amara..."; after: see the morning run.
+
+**Critic.** No blockers; should-fix items done in `0d70921c` (a suspend dropping a held-back create, a lost done, the refresh's dead window, a click defeating the gate).
+
+**Left.** A refresh can land seconds after a book starts (T1.30 made the reconnect leave media alone); the client still sees the session drop and come back once per refresh; an old `HUXLEY_CONVERSATION_MAX_MINUTES` in `.env` is silently ignored. Watch for `session.rx.metadata_rejected`.
+
+**Lesson.** A timer that disconnects from inside the task it would cancel never fires: test what happens after `cancel()`.
 
 ---

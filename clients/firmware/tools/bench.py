@@ -82,6 +82,8 @@ SERVER_EVENTS = {
     "transcript",
     "coord.press_silent",
     "session.rx.tool_call",
+    "coord.content_released",
+    "coord.content_resumed",
 }
 PROXY_PORT = 8775
 
@@ -682,6 +684,33 @@ def main() -> int:
                 not drops and bool(sent) and bool(got),
                 f"reconnects={len(drops)} gaps={len(gaps)} silent_ms={silent} "
                 f"(downlink {args.slow_kbps} KB/s for {args.slow_s:.0f} s)",
+            )
+        elif step == "resume":
+            # T1.30: a question during music pauses it and the music comes
+            # back after the answer; "para la musica" leaves it stopped
+            # (2026-10-12: 35 presses stopped media for good, 6 re-asks).
+            m2 = b.mark()
+            b.send("say 7")  # "Pon musica de Adele."
+            if not b.expect(r"ws\.rx\.stats", 30, m2):
+                result("resume", False, "the music never started")
+                return
+            time.sleep(4)
+            m3 = b.mark()
+            b.send("say 0")  # "Que hora es?"
+            back = b.expect(r"\[server\] coord\.content_resumed", 40, m3)
+            got = b.expect(r"ws\.rx\.stats", 10, b.mark()) if back else None
+            time.sleep(3)
+            m4 = b.mark()
+            b.send("say 15")  # "Para la musica."
+            stop_call = b.expect(r"\[server\] session\.rx\.tool_call name=music_control", 25, m4)
+            time.sleep(12)
+            again = b.grep(r"\[server\] coord\.content_resumed", m4)
+            ok = bool(back and got and not again)
+            result(
+                "resume",
+                ok,
+                f"music back after the question: {bool(back)} (audio arriving: {bool(got)}); "
+                f"stopped by 'para la musica': {not again} (tool called: {bool(stop_call)})",
             )
         elif step == "hearing":
             # Yesterday's failed requests, spoken by the clips: each must
