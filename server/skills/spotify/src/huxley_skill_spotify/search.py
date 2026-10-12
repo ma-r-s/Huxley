@@ -213,7 +213,7 @@ class SpotifySearch:
         if kind == "track":
             return _distinct(await self._tracks_as_heard(query), limit)
         if kind != "any":
-            data = await self._search(query, kind, limit=5)
+            data = await self._search(query, kind, limit=max(5, limit))
             return _distinct(self._all(data, f"{kind}s", kind), limit)
         data = await self._search(query, "track,artist,album,playlist", limit=5)
         sections = {found: self._all(data, section, found) for section, found in _ANY_ORDER}

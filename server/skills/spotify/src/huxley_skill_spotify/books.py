@@ -85,6 +85,8 @@ _NUMBER_WORDS = {
 _NUMBER_WORDS["primero"] = _NUMBER_WORDS["primer"] = _NUMBER_WORDS["first"] = 1
 # A place kept before "desde el principio" is for undoing it soon after.
 SAVED_PLACE_DAYS = 30
+# A book Spotify refused is checked again after this long.
+UNAVAILABLE_DAYS = 30
 
 
 def find_chapter(book: BookInfo, spoken: str) -> int | None:
@@ -193,6 +195,39 @@ class Shelf:
                 rows.append(row)
         rows.sort(key=lambda r: float(r.get("at") or 0), reverse=True)
         return rows[:limit]
+
+    # Books a quick check found Spotify will play here, or won't (T1.40):
+    # recommendations only offer books that can be listened to.
+    async def mark_ok(self, uri: str, title: str, author: str | None) -> None:
+        await self._set(
+            f"book:ok:{_book_id(uri)}",
+            {"uri": uri, "title": title, "author": author, "at": time.time()},
+        )
+
+    async def playable(self, uri: str) -> bool:
+        """It played here, or a check found it plays: it's included."""
+        return await self.played(uri) or await self._get(f"book:ok:{_book_id(uri)}") is not None
+
+    async def any_playable(self, besides: str) -> str | None:
+        """A book known to play, other than `besides`: the control that
+        tells "this book isn't available" from "no hours left"."""
+        for prefix in ("book:played:", "book:ok:"):
+            for _, raw in await self._storage.list_settings(prefix):
+                try:
+                    uri = json.loads(raw).get("uri")
+                except (ValueError, AttributeError):
+                    continue
+                if uri and uri != besides:
+                    return str(uri)
+        return None
+
+    async def mark_unavailable(self, uri: str) -> None:
+        await self._set(f"book:no:{_book_id(uri)}", time.time())
+
+    async def unavailable(self, uri: str) -> bool:
+        """Spotify refused it here within the last month (a plan can change)."""
+        at = await self._get(f"book:no:{_book_id(uri)}")
+        return isinstance(at, int | float) and time.time() - at < UNAVAILABLE_DAYS * 86_400
 
     # Books that ended: replaying one isn't a refusal.
     async def finished(self, uri: str) -> bool:

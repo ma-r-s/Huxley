@@ -27,9 +27,9 @@ _THEN = {
 # was starting, so the fact comes first.
 _SPOKEN: dict[str, dict[str, tuple[str, str]]] = {
     "es": {
-        "book_must_buy": (
-            "el libro NO está sonando, Spotify no lo deja poner con este plan.",
-            "Ese libro hay que comprarlo aparte; no lo puedo poner. ¿Busco otro libro?",
+        "book_unavailable": (
+            "el libro NO está sonando, Spotify no lo deja escuchar.",
+            "Ese libro no está disponible para escuchar. ¿Busco otro libro?",
         ),
         "book_no_hours": (
             "el libro NO está sonando, ya se usaron las horas de libros de este mes.",
@@ -59,9 +59,9 @@ _SPOKEN: dict[str, dict[str, tuple[str, str]]] = {
         ),
     },
     "en": {
-        "book_must_buy": (
-            "the book is NOT playing, Spotify won't play it on this plan.",
-            "That book has to be bought separately; I can't play it. Shall I find another book?",
+        "book_unavailable": (
+            "the book is NOT playing, Spotify won't let it be heard.",
+            "That book isn't available to listen to. Shall I find another book?",
         ),
         "book_no_hours": (
             "the book is NOT playing, this month's book hours are used up.",
@@ -91,9 +91,9 @@ _SPOKEN: dict[str, dict[str, tuple[str, str]]] = {
         ),
     },
     "fr": {
-        "book_must_buy": (
-            "le livre NE joue PAS, Spotify ne le permet pas avec cet abonnement.",
-            "Ce livre doit être acheté à part ; je ne peux pas le lancer. J'en cherche un autre ?",
+        "book_unavailable": (
+            "le livre NE joue PAS, Spotify ne permet pas de l'écouter.",
+            "Ce livre n'est pas disponible à l'écoute. J'en cherche un autre ?",
         ),
         "book_no_hours": (
             "le livre NE joue PAS, les heures de livres du mois sont épuisées.",
@@ -143,6 +143,9 @@ _SAY: dict[str, dict[str, str]] = {
         "search_not_configured": "Todavía no puedo buscar libros en Spotify. ¿Pongo la radio?",
         "books_none": "Todavía no se ha escuchado ningún libro aquí. ¿De qué autor o de "
         "qué tema busco?",
+        "none_available": "No encontré libros de eso que se puedan escuchar. ¿Busco otro "
+        "autor o tema?",
+        "no_hours": "Este mes ya no quedan horas para escuchar libros. ¿Pongo la radio?",
         "status": "Es {title}, de {author}. Va en {chapter}: faltan {chapter_left} para "
         "terminar el capítulo y {book_left} para terminar el libro.",
     },
@@ -163,6 +166,9 @@ _SAY: dict[str, dict[str, str]] = {
         "search_not_configured": "I can't search Spotify for books yet. Shall I put the radio on?",
         "books_none": "No book has been listened to here yet. Which author or subject "
         "shall I look for?",
+        "none_available": "I found no books on that which can be listened to. Shall I try "
+        "another author or subject?",
+        "no_hours": "There are no book hours left this month. Shall I put the radio on?",
         "status": "It's {title}, by {author}. It's on {chapter}: {chapter_left} left in the "
         "chapter and {book_left} left in the book.",
     },
@@ -185,6 +191,9 @@ _SAY: dict[str, dict[str, str]] = {
         "Je mets la radio ?",
         "books_none": "Aucun livre n'a encore été écouté ici. Quel auteur ou quel sujet "
         "je cherche ?",
+        "none_available": "Je n'ai trouvé aucun livre là-dessus qu'on puisse écouter. Je "
+        "cherche un autre auteur ou sujet ?",
+        "no_hours": "Il ne reste plus d'heures de livres ce mois-ci. Je mets la radio ?",
         "status": "C'est {title}, de {author}. On en est à {chapter} : il reste "
         "{chapter_left} pour finir le chapitre et {book_left} pour finir le livre.",
     },

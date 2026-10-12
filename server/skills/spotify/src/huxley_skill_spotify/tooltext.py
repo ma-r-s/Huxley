@@ -92,13 +92,19 @@ TEXT: dict[str, dict[str, str]] = {
         "control_chapter": "Para 'go_to_chapter': el número o el nombre del capítulo, "
         "tal como lo dijo.",
         "find_books": (
-            "Busca audiolibros en Spotify para recomendar o elegir: '¿qué libros me "
-            "recomiendas?', '¿qué libros hay de <autor>?', '¿qué libros he "
-            "escuchado?', '¿de qué trata?'. Sin `query` da los libros que ya se han "
-            "escuchado aquí. Después haz exactamente lo que diga `then`."
+            "Busca audiolibros en Spotify para recomendar o elegir: '¿qué libros "
+            "tienes?', '¿qué libros hay?', '¿qué me recomiendas para leer?', '¿qué "
+            "libros hay de <autor>?', '¿qué libros he escuchado?', '¿de qué trata?'. "
+            "Solo devuelve libros que se pueden escuchar aquí. Sin `query` da los "
+            "libros ya escuchados. Después haz exactamente lo que diga `then`."
         ),
-        "find_query": "Autor, tema o título tal como lo dijo. Vacío para los libros ya "
-        "escuchados.",
+        "find_query": (
+            "Un autor, un tema o un título, en pocas palabras. Si el pedido es general "
+            "('algo bueno', 'autores importantes', 'recomiéndame algo'), NO pases la "
+            "frase: pasa un tema o género concreto ('novela clásica', 'literatura "
+            "latinoamericana', 'cuentos', 'historia') o un autor conocido. Vacío para "
+            "los libros ya escuchados."
+        ),
     },
     "en": {
         "play_music": (
@@ -176,11 +182,19 @@ TEXT: dict[str, dict[str, str]] = {
         "control_chapter": "For 'go_to_chapter': the chapter's number or name, as said.",
         "find_books": (
             "Look for Spotify audiobooks to recommend or choose from: 'what books do "
-            "you recommend?', 'what books are there by <author>?', 'which books have "
-            "I listened to?', 'what is it about?'. Without `query` it gives the books "
-            "already listened to here. Then do exactly what `then` says."
+            "you have?', 'what books are there?', 'what do you recommend to read?', "
+            "'what books are there by <author>?', 'which books have I listened to?', "
+            "'what is it about?'. It only returns books that can be listened to here. "
+            "Without `query` it gives the books already listened to. Then do exactly "
+            "what `then` says."
         ),
-        "find_query": "Author, subject or title as said. Empty for books already listened to.",
+        "find_query": (
+            "An author, a subject or a title, in a few words. For a general request "
+            "('something good', 'important authors', 'recommend me something'), do NOT "
+            "pass the sentence: pass a concrete subject or genre ('classic novel', "
+            "'short stories', 'history') or a well-known author. Empty for books "
+            "already listened to."
+        ),
     },
     "fr": {
         "play_music": (
@@ -256,10 +270,17 @@ TEXT: dict[str, dict[str, str]] = {
         "control_chapter": "Pour 'go_to_chapter' : le numéro ou le nom du chapitre, tel que dit.",
         "find_books": (
             "Cherche des livres audio Spotify à recommander ou à choisir : 'quels "
-            "livres tu me conseilles ?', 'quels livres de <auteur> ?', 'quels livres "
-            "j'ai écoutés ?', 'de quoi ça parle ?'. Sans `query`, donne les livres "
-            "déjà écoutés ici. Ensuite fais exactement ce que dit `then`."
+            "livres tu as ?', 'quels livres tu me conseilles ?', 'quels livres de "
+            "<auteur> ?', 'quels livres j'ai écoutés ?', 'de quoi ça parle ?'. Ne "
+            "donne que des livres qu'on peut écouter ici. Sans `query`, donne les "
+            "livres déjà écoutés. Ensuite fais exactement ce que dit `then`."
         ),
-        "find_query": "Auteur, sujet ou titre tel que dit. Vide pour les livres déjà écoutés.",
+        "find_query": (
+            "Un auteur, un sujet ou un titre, en quelques mots. Pour une demande "
+            "générale ('quelque chose de bien', 'de grands auteurs'), NE passe PAS la "
+            "phrase : passe un sujet ou un genre précis ('roman classique', "
+            "'nouvelles', 'histoire') ou un auteur connu. Vide pour les livres déjà "
+            "écoutés."
+        ),
     },
 }

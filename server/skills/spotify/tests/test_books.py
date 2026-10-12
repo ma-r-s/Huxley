@@ -14,6 +14,8 @@ import contextlib
 import json
 from typing import TYPE_CHECKING, Any
 
+import pytest
+
 from huxley_sdk import AudioStream
 from huxley_skill_spotify import skill as skill_module
 from huxley_skill_spotify.books import Place, Shelf
@@ -24,8 +26,6 @@ from .conftest import FakeSearch, FakeSoloist, PcmServer, Recorded, make_ctx
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
 CHAPTERS = (
     Chapter("spotify:episode:c0", "Créditos iniciales", 17_000),
@@ -65,6 +65,21 @@ GUIDE = Match(
 SONG = Match(uri="spotify:track:sinti", kind="track", title="Sin Ti", artist="Los Panchos")
 
 
+PEDRO = Match(
+    uri="spotify:show:pedro",
+    kind="audiobook",
+    title="Pedro Páramo",
+    artist="Juan Rulfo",
+    languages=("es",),
+)
+
+
+@pytest.fixture(autouse=True)
+def _quick_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A book check waits 1.6 s for Spotify to refuse; tests don't."""
+    monkeypatch.setattr(skill_module, "PROBE_OK_S", 0.15)
+
+
 class BookSoloist(FakeSoloist):
     """FakeSoloist that knows one book's chapters (see the module doc)."""
 
@@ -74,6 +89,8 @@ class BookSoloist(FakeSoloist):
         self.resume_position = position
         self.index: int | None = None
         self.skips_ignored = False
+        # Books Spotify won't play: "playing", then idle at once.
+        self.refused: set[str] = set()
 
     def on_chapter(self, index: int, position: int = 0) -> None:
         self.index = index
@@ -96,7 +113,12 @@ class BookSoloist(FakeSoloist):
 
     def send(self, command: str, *, generation: int | None = None, **fields: Any) -> None:
         super().send(command, generation=generation, **fields)
-        if command == "play" and fields.get("uri") == BOOK_INFO.uri and self.start_playing:
+        if command == "play" and fields.get("uri") in self.refused:
+            # As measured: "playing" first, then Spotify stops it.
+            asyncio.get_running_loop().call_later(
+                0.01, lambda: asyncio.ensure_future(self._update(status="idle"))
+            )
+        elif command == "play" and fields.get("uri") == BOOK_INFO.uri and self.start_playing:
             self.on_chapter(self.resume, self.resume_position)
         elif self.skips_ignored or self.index is None:
             return
@@ -287,6 +309,65 @@ class TestRecommendations:
         )
         assert len(skill._search.queries) == 1  # type: ignore[union-attr]
 
+    async def test_only_books_spotify_will_play_are_offered(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        """Mario: a recommendation must be something he can play. Unknown
+        books are tried for a moment; what Spotify refuses is left out and
+        remembered; what was loaded is put back, paused."""
+        skill, client, _, shelf = await _skill(tmp_path, pcm_server, others=[CORONEL, PEDRO])
+        client.refused = {CORONEL.uri}
+        client.load(1, 60_000)  # the book he paused to ask
+        result = await skill.handle("find_books", {"query": "novela latinoamericana"})
+
+        assert [b["title"] for b in _out(result)["books"]] == [BOOK.title, PEDRO.title]
+        assert await shelf.unavailable(CORONEL.uri)
+        assert await shelf.playable(PEDRO.uri)
+        assert [c.get("uri") for c in _plays(client)][-1] == BOOK_INFO.uri  # put back
+        assert client.commands()[-1] == "pause"
+
+    async def test_a_known_book_refused_too_means_no_hours_not_unavailable(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, client, _, shelf = await _skill(tmp_path, pcm_server, match=CORONEL)
+        await shelf.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
+        client.refused = {CORONEL.uri, BOOK.uri}  # every book: the hours ran out
+        result = await skill.handle("find_books", {"query": "coronel"})
+
+        assert _out(result)["reason"] == "no_hours"
+        assert "«Este mes ya no quedan horas para escuchar libros." in _out(result)["then"]
+        assert not await shelf.unavailable(CORONEL.uri)  # not filed as unavailable
+
+    async def test_books_already_known_are_not_tried_again(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, client, _, shelf = await _skill(tmp_path, pcm_server, others=[CORONEL])
+        await shelf.mark_ok(BOOK.uri, BOOK.title, BOOK.artist)
+        await shelf.mark_unavailable(CORONEL.uri)
+        result = await skill.handle("find_books", {"query": "garcía márquez"})
+        assert [b["title"] for b in _out(result)["books"]] == [BOOK.title]
+        assert _plays(client) == []  # nothing tried, nothing to put back
+
+    async def test_nothing_playable_is_said(self, tmp_path: Path, pcm_server: PcmServer) -> None:
+        skill, client, _, _ = await _skill(tmp_path, pcm_server, match=CORONEL)
+        client.refused = {CORONEL.uri}
+        result = await skill.handle("find_books", {"query": "coronel"})
+        assert _out(result)["reason"] == "none_available"
+
+    async def test_a_refused_book_is_not_offered_again(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        pcm_server.hold_open.set()
+        skill, client, _, shelf = await _skill(tmp_path, pcm_server, match=CORONEL)
+        client.refused = {CORONEL.uri}
+        stream = (
+            await skill.handle("play_book", {"title": "el coronel no tiene quien le escriba"})
+        ).side_effect
+        async for _ in stream.factory():  # type: ignore[union-attr]
+            pass
+        await _settle()
+        assert await shelf.unavailable(CORONEL.uri)
+
     async def test_no_query_lists_books_listened_to_here(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
@@ -315,14 +396,14 @@ class TestRefusals:
         await _settle()
         return recorded, client
 
-    async def test_a_book_never_played_here_must_be_bought(
+    async def test_a_book_never_played_here_is_not_available(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
         recorded, client = await self._refused(tmp_path, pcm_server)
-        assert [key for _, key in recorded.injected] == ["spotify:book_must_buy"]
+        assert [key for _, key in recorded.injected] == ["spotify:book_unavailable"]
         prompt = recorded.injected[0][0]
         assert "NO está sonando" in prompt
-        assert "«Ese libro hay que comprarlo aparte; no lo puedo poner." in prompt
+        assert "«Ese libro no está disponible para escuchar. ¿Busco otro libro?»" in prompt
         assert "pause" not in client.commands()
 
     async def test_a_book_that_played_here_means_the_hours_ran_out(
@@ -634,6 +715,32 @@ class TestMovingWithinAChapter:
         await _take(stream, 1)  # type: ignore[arg-type]  # the turn ends: it resumes
         seek = [c for c in client.sent if c["command"] == "seek"][-1]
         assert 57_000 <= seek["position_ms"] <= 58_000  # 2 s and a tenth of the pause
+
+
+class TestNoOldAudioAfterASeek:
+    async def test_a_resume_seeks_after_play_not_before(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        """A seek sent before "play" landed after Soloist had already played
+        about a second from its buffer: Mario heard the old spot, a cut, then
+        the new one (2026-10-12). Play first, then seek, silent until it lands."""
+        pcm_server.hold_open.set()
+        skill, client, _, _ = await _skill(tmp_path, pcm_server)
+        stream = (await skill.handle("play_book", {"title": "cien años de soledad"})).side_effect
+        await _take(stream, 2)  # type: ignore[arg-type]
+        client.load(1, 60_000)
+        client.sent.clear()
+        await _take(stream, 1)  # type: ignore[arg-type]  # the resume after a turn
+        order = client.commands()
+        assert order.index("play") < order.index("seek")
+
+    async def test_back_seeks_after_play_too(self, tmp_path: Path, pcm_server: PcmServer) -> None:
+        skill, client, _, _ = await _skill(tmp_path, pcm_server)
+        client.load(1, 60_000)
+        result = await skill.handle("book_control", {"action": "back"})
+        await _take(result.side_effect, 1)  # type: ignore[arg-type]
+        order = client.commands()
+        assert order.index("play") < order.index("seek")
 
 
 class TestFromTheBeginning:

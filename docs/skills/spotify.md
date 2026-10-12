@@ -107,10 +107,29 @@ Not every book is included: some are purchase-only, and the Web API can't
 tell which (with an app token every chapter says `payment_required`).
 Spotify refuses a book it won't play: `playing`, then `idle` 0.3 to 1.2 s
 later, no error. A fresh start idle within 3 s (`REFUSED_S`) is a
-refusal: of a book that played here before, the hours ran out
-(`book_no_hours`); otherwise it must be bought (`book_must_buy`); with
+refusal: of a book known to play here, the hours ran out
+(`book_no_hours`); otherwise it isn't available (`book_unavailable`: paid
+apart or not offered, the same to the listener); with
 `book_hours_per_month` set, a month's audio near the budget also means
-hours. The skill keeps which books played here (10 s of audio proves it),
+hours.
+
+**Recommendations only offer books that play.** `find_books` tries each
+unknown candidate for a moment (up to 5; Spotify stops one it won't play
+within 0.3-1.2 s, so one still playing after 1.6 s is in), with nothing
+reaching a speaker (Soloist's sink has no reader between streams), keeps
+the first three that play, remembers both answers (a refusal for 30
+days), and loads back what was there, paused (a book at its own place;
+music restarts its album or list). If a candidate is refused and a book
+known to play is refused too, the month's hours ran out (`no_hours`), and
+nothing is filed as unavailable. It never checks while a stream plays.
+Vague requests ("autores importantes") are searched as a concrete topic
+or author (tool text), never the whole sentence.
+
+**Seeks go after "play".** A seek sent before "play" lands after Soloist
+has played about a second from its buffer (Mario heard the old spot, a
+cut, then the new one): the resume back-up, back / forward and
+restart_chapter seek once playing, and the stream stays silent until
+Soloist reports the new spot (at most 2 s). The skill keeps which books played here (10 s of audio proves it),
 which ended, each book's place, and the seconds of book audio per month.
 
 **When a book stops**, it is always said: idle in the last chapter, or
@@ -181,7 +200,7 @@ Spotify app ─┐                        ┌─ WebSocket (control, events) ─
 | Paused from a Spotify app for 3 s             | stream ends quietly, freeing the speaker                                                      |
 | A call outlasts the 30 min patience           | narrated `patience_expired` (the music stays paused)                                          |
 | Album / playlist runs out                     | stream ends quietly                                                                           |
-| Idle within 3 s of a fresh start (refused)    | a book: `book_no_hours` if it played here before, else `book_must_buy`; music: `start_failed` |
+| Idle within 3 s of a play (refused)           | a book: `book_no_hours` if it's known to play here, else `book_unavailable`; music: `start_failed` |
 | A book stops, is taken, can't be reached      | `book_finished`, `book_cut`, `book_moved`, `book_offline`, `book_nav_failed`, `book_patience` (see Audiobooks) |
 
 "What song is this?", like any question, gets the music back after the
