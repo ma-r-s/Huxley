@@ -294,7 +294,9 @@ All in one session with the case open, because it never opens again:
 - Charging: a plain USB-C cable into a wall charger (Mario declined the
   magnetic charge-only adapter). A wall charger has no data lines, so nothing
   can pull the reset and boot lines (F-0020): **never charge it from a
-  computer**. The staff card says so.
+  computer**. The staff card says so. Try the staff's own cable in the case
+  once before handover: the pocket takes any plug within the USB-C overmold
+  limit (12.35 x 6.5 mm) with 0.6 mm spare, and some cheap cables are chunkier.
 
 ### W8. Developing from home
 
