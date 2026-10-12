@@ -349,6 +349,7 @@ await self._ctx.inject_turn("Es hora de la pastilla de las nueve.")
 
 - **Idle (no turn in progress)**: fires immediately. Any playing content stream (audiobook, radio) is preempted via FocusManager — the LLM narrates the prompt in persona voice, then the framework releases focus. The content stays stopped (a future stage will add "resume or drop" based on the stream's patience).
 - **Busy (a user or synthetic turn is in progress)**: the request is **queued**. It drains automatically when a turn ends without spawning a content stream. This protects against dropped reminders when the user happens to PTT at the moment a timer fires.
+- **No voice session (a reconnect, about every 50 minutes, or an outage)**: queued as well, and fired when the session is back.
 
 **Dedup** (optional `dedup_key`):
 

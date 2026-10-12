@@ -19,6 +19,7 @@ framework called `factory()` (2 = resumed), `chunks` how much it pumped.
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
 
@@ -660,3 +661,95 @@ class TestProviderReconnect:
         provider._connected = True
         await coordinator.on_session_connected()
         await _stays(lambda: media.runs == 1)
+
+    async def test_reminder_during_the_refresh_waits_for_the_session(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        """A timer firing in the reconnect gap was sent into no session: its
+        turn never ended, kept the music parked until the next press, and
+        queued every later inject behind it. It waits for the session now."""
+        media = await _start(coordinator, mocks, patience=timedelta(minutes=30))
+        provider._connected = False
+        await coordinator.on_session_disconnected()
+        provider.sent.clear()
+
+        await coordinator.inject_turn("Timer: the pasta")
+
+        assert coordinator.current_turn is None
+        assert provider.sent == []
+        await _flowing(media)  # the music plays on meanwhile
+
+        provider._connected = True
+        await coordinator.on_session_connected()
+
+        assert ("send_conversation_message", "Timer: the pasta") in provider.sent
+        assert coordinator.current_turn is not None
+        await _until(lambda: coordinator.current_media_task is None)  # parked
+        await _answer(coordinator)  # the narration ends
+        await _until(lambda: media.runs == 2)
+
+    async def test_reminder_and_press_in_the_gap_narrate_before_the_music(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        """The session back fires the reminder first: the music the press
+        paused must not start for a tick before the narration."""
+        media = await _start(coordinator, mocks, patience=timedelta(minutes=30))
+        provider._connected = False
+        await coordinator.on_session_disconnected()
+        await coordinator.on_ptt_rejected()
+        await coordinator.inject_turn("Timer: the pasta")
+
+        provider._connected = True
+        await coordinator.on_session_connected()
+
+        assert ("send_conversation_message", "Timer: the pasta") in provider.sent
+        await _stays(lambda: media.runs == 1, for_s=0.1)
+        await _answer(coordinator)
+        await _until(lambda: media.runs == 2)
+
+    async def test_inject_and_wait_without_a_session_returns_queued(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider
+    ) -> None:
+        """It waited for a narration that could never come."""
+        provider._connected = False
+
+        await asyncio.wait_for(coordinator.inject_turn_and_wait("Ana is calling"), timeout=1.0)
+
+        assert coordinator.current_turn is None
+        assert [r.prompt for r in coordinator._injected_queue] == ["Ana is calling"]
+
+    async def test_stream_ending_in_the_gap_leaves_no_turn_behind(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        """A book's end prompt sent into no session left a completion turn
+        that never ended: model_speaking stuck on, injects queued behind
+        it until the next press."""
+        end = asyncio.Event()
+
+        async def gen() -> AsyncIterator[bytes]:
+            yield b"\x00\x00" * 240
+            await end.wait()
+
+        stream = AudioStream(factory=gen, on_complete_prompt="The book ended.")
+        await _turn(coordinator, mocks, stream)
+        await _until(lambda: coordinator._speaking_state.is_speaking)
+        provider._connected = False
+        await coordinator.on_session_disconnected()
+
+        end.set()  # the book ends during the reconnect
+
+        await _until(
+            lambda: coordinator._content_obs is not None and coordinator._content_obs.finished
+        )
+        assert coordinator.current_turn is None
+        assert not coordinator._speaking_state.is_speaking
+        assert ("send_conversation_message", "The book ended.") not in provider.sent

@@ -1581,17 +1581,34 @@ class TurnCoordinator:
 
     async def on_session_connected(self) -> None:
         """The voice session is up (the first connect or a reconnect).
-        Content a press paused while it was down resumes."""
+        Injects that arrived while it was down fire (the head of the
+        queue; the rest drain at its end, as at any turn end), then
+        content a press paused while it was down resumes. In that order:
+        a reminder's DIALOG parks the content first, so it doesn't start
+        for a tick before the narration."""
         obs = self._content_obs
         await logger.ainfo(
             "coord.session_connected",
             connected=self._provider.is_connected,
+            queued_injects=len(self._injected_queue),
             content=obs.interface_name if obs is not None else None,
             holds=sorted(obs.holds) if obs is not None else [],
         )
         if not self._provider.is_connected:
             return  # dropped again before we got here: still down
         self._session_down_since = None
+        claim = self._claim_obs
+        claim_live = claim is not None and not claim.is_ended
+        if self.current_turn is None and not claim_live and self._injected_queue:
+            request = self._injected_queue.pop(0)
+            await logger.ainfo(
+                "coord.inject_turn_dequeued",
+                trigger="session_connected",
+                remaining=len(self._injected_queue),
+                dedup_key=request.dedup_key,
+                priority=request.priority.value,
+            )
+            await self._fire_injected_turn(request.prompt, request.dedup_key)
         await self._release_content_hold(_HOLD_SESSION)
 
     # --- Input claim (T1.4 Stage 2 — mic-capture skills) ---
@@ -1836,6 +1853,10 @@ class TurnCoordinator:
               freshly-spawned content stream. Right for medication
               reminders and safety-critical events where "wait until
               the user PTTs again" could mean hours.
+        - If there is no voice session (the planned refresh reconnects
+          every 50 min; an outage), **queue** it too: the provider
+          drops what it can't send, so a turn fired now would never
+          end. `on_session_connected` drains the queue.
 
         Priority never barges into a live user turn — the queue always
         waits for turn-end, regardless of tier. Interrupting a user
@@ -1853,7 +1874,10 @@ class TurnCoordinator:
         handle with `wait_outcome()`, finer arbitration tiers.
         """
         if self.current_turn is not None:
-            await self._enqueue_injected(prompt, dedup_key, priority)
+            await self._enqueue_injected(prompt, dedup_key, priority, reason="turn_in_progress")
+            return
+        if not self._provider.is_connected:
+            await self._enqueue_injected(prompt, dedup_key, priority, reason="no_session")
             return
         # A **live** COMMS claim (live call, voice memo, etc.) counts as
         # "busy" for NORMAL and BLOCK_BEHIND_COMMS — respect the live
@@ -1878,7 +1902,7 @@ class TurnCoordinator:
             and not claim_obs.is_ended
             and priority is not InjectPriority.PREEMPT
         ):
-            await self._enqueue_injected(prompt, dedup_key, priority)
+            await self._enqueue_injected(prompt, dedup_key, priority, reason="claim_live")
             return
         await self._fire_injected_turn(prompt, dedup_key)
 
@@ -1916,12 +1940,15 @@ class TurnCoordinator:
         the announcement — the exact behavior the 2026-04-24 smoke
         test caught on inbound Telegram calls.
 
-        If a turn is already in progress, falls back to a plain
-        enqueue (same as `inject_turn`) and returns immediately — the
-        caller should not depend on the wait semantics in that case.
+        If a turn is already in progress, or there is no voice session,
+        falls back to a plain enqueue (same as `inject_turn`) and
+        returns immediately: the caller should not depend on the wait
+        semantics in that case. (Without a session the wait never
+        ended: nothing reached the model.)
         """
-        if self.current_turn is not None:
-            await self._enqueue_injected(prompt, dedup_key, InjectPriority.NORMAL)
+        if self.current_turn is not None or not self._provider.is_connected:
+            reason = "turn_in_progress" if self.current_turn is not None else "no_session"
+            await self._enqueue_injected(prompt, dedup_key, InjectPriority.NORMAL, reason=reason)
             return
         await self._fire_injected_turn(prompt, dedup_key)
         # _fire_injected_turn sets _injected_turn_done before returning;
@@ -1984,8 +2011,12 @@ class TurnCoordinator:
         prompt: str,
         dedup_key: str | None,
         priority: InjectPriority,
+        *,
+        reason: str,
     ) -> None:
-        """Append or dedup-replace a pending inject_turn request."""
+        """Append or dedup-replace a pending inject_turn request. `reason`
+        (logged) is why it can't fire now: `turn_in_progress`,
+        `claim_live`, `no_session`."""
         if dedup_key is not None:
             if self._current_injected_dedup_key == dedup_key:
                 await self._log.ainfo(
@@ -2008,6 +2039,7 @@ class TurnCoordinator:
         )
         await self._log.ainfo(
             "coord.inject_turn_queued",
+            reason=reason,
             queue_depth=len(self._injected_queue),
             dedup_key=dedup_key,
             priority=priority.value,
@@ -2016,7 +2048,9 @@ class TurnCoordinator:
 
     async def _fire_injected_turn(self, prompt: str, dedup_key: str | None) -> None:
         """Actually create the INJECTED turn, acquire DIALOG, send prompt.
-        Caller guarantees `self.current_turn is None`."""
+        Caller guarantees `self.current_turn is None` and a connected
+        provider (without one the prompt goes nowhere and the turn never
+        ends, holding DIALOG and every later inject)."""
         # Synthesize the Turn. Skills pass a plain string; the framework
         # wraps it in a TurnSource.INJECTED turn that the rest of the
         # coordinator treats like any other in-response turn — audio
@@ -2147,6 +2181,16 @@ class TurnCoordinator:
                 "coord.completion_prompt_skipped",
                 turn=parent_turn_id,
                 reason="turn_in_progress",
+            )
+            return False
+        if not self._provider.is_connected:
+            # The stream ended during a reconnect: the prompt would go
+            # nowhere and the synthetic turn would never end, keeping
+            # model_speaking on and every inject queued behind it.
+            await logger.ainfo(
+                "coord.completion_prompt_skipped",
+                turn=parent_turn_id,
+                reason="no_session",
             )
             return False
 

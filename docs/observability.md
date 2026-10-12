@@ -242,7 +242,7 @@ A press pauses what plays and the turn's end resumes it; no client pauses it too
 - **`coord.content_released`** — a hold was dropped. `resumed=true` means `factory()` was called again; `false` with `holds` non-empty means another reason still holds it, or focus is elsewhere (a call, an injected turn).
 - **`coord.content_resumed`** — a pump actually restarted (any path, including FocusManager parking).
 - **`coord.content_stopped`** — the stream was ended instead of resumed. `reason`: `stop_words` (the press said only stop words; `heard` is the transcript), `parked_too_long` (`held_s`), `ptt_without_session` (a press over 5 s into a voice-session outage; `down_s`).
-- **`coord.session_connected`**: the voice session is up again; releases a `session` hold. Fields: `connected` (false: it dropped again before this ran, nothing released), `content`, `holds`.
+- **`coord.session_connected`**: the voice session is up again; fires the head of the inject queue, then releases a `session` hold. Fields: `connected` (false: it dropped again before this ran, nothing happens), `queued_injects`, `content`, `holds`.
 - **`coord.client_presence`** — a client became current (`present=true`) or the last one left. The `no_client` hold follows 5 s later.
 - **`coord.content_held_note`** — the model was told, before the commit, that what played is paused.
 
@@ -250,10 +250,10 @@ A press pauses what plays and the turn's end resumes it; no client pauses it too
 
 ## Inject_turn queue events — diagnosing dropped or queued reminders
 
-When `inject_turn` is called while a user or synthetic turn is in progress, the request goes onto a FIFO queue (Stage 1d). These events tell you why a reminder fired late, was deduped, or got dropped:
+When `inject_turn` is called while a user or synthetic turn is in progress, or while the voice session is down (a reconnect), the request goes onto a FIFO queue (Stage 1d). These events tell you why a reminder fired late, was deduped, or got dropped:
 
-- **`coord.inject_turn_queued`** — request couldn't fire immediately; queued. Fields: `queue_depth`, `dedup_key`, `prev_state` (what turn was active).
-- **`coord.inject_turn_dequeued`** — a queued request is firing now (drained at a turn-end with no pending content stream). Fields: `remaining`, `dedup_key`.
+- **`coord.inject_turn_queued`** — request couldn't fire immediately; queued. Fields: `reason` (`turn_in_progress`, `claim_live`, `no_session`), `queue_depth`, `dedup_key`, `prev_state` (what turn was active).
+- **`coord.inject_turn_dequeued`** — a queued request is firing now (drained at a turn-end with no pending content stream, or `trigger=session_connected`: the session it waited for is back). Fields: `remaining`, `dedup_key`.
 - **`coord.inject_turn_deduped`** — an enqueue replaced one or more same-key entries already in the queue. Fields: `dedup_key`, `removed`.
 - **`coord.inject_turn_dropped`** — an enqueue was silently dropped because a same-key inject is currently firing. Fields: `reason=dedup_in_flight`, `dedup_key`.
 - **`coord.inject_turn_preempted_content`** — a `PREEMPT`-priority inject drained at turn-end and displaced a pending content stream (the stream request is discarded). Fields: `remaining` (queue depth after pop), `dedup_key`, `dropped_streams` (count). Only fires for priority=PREEMPT; NORMAL always waits for a quiet moment instead.

@@ -190,7 +190,7 @@ await ctx.start_input_claim(claim)
 `inject_turn_and_wait` blocks until the model finishes speaking (`response_done`). Then your code continues.
 
 <Callout type="warn">
-  If the coordinator is already busy (a turn in progress) when `inject_turn_and_wait` is called, it falls back to a plain enqueue and returns immediately. The wait semantics only hold when the call could fire its turn directly. Defensive code: don't assume the model is done speaking just because `inject_turn_and_wait` returned.
+  If the coordinator is already busy (a turn in progress, or the voice session reconnecting) when `inject_turn_and_wait` is called, it falls back to a plain enqueue and returns immediately. The wait semantics only hold when the call could fire its turn directly. Defensive code: don't assume the model is done speaking just because `inject_turn_and_wait` returned.
 </Callout>
 
 ## Background tasks
