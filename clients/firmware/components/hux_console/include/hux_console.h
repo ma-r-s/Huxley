@@ -11,7 +11,9 @@
  *   pa on | off         speaker amplifier: off plays everything, silently
  *   selftest [hz]       electrical loopback: tone out, read back on the
  *                       ADC's reference channel (default 1000 Hz)
- *   wifi off | on       stop / restart Wi-Fi (offline behaviour, reconnect)
+ *   wifi off [s] | on   stop Wi-Fi, back on by itself after s seconds
+ *                       (default 10) / restart it now
+ *   server <uri>        WebSocket to another server until reboot (netbench)
  *   wifistat            the Wi-Fi driver's buffer / RX / TX counters
  *   info                heap, PSRAM, task stack headroom, ring, volume
  *                       (and the codec's register), RSSI

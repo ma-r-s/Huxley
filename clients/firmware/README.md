@@ -178,6 +178,8 @@ clients/firmware/tools/smoke.sh --flash      # reflash + smoke
 #    Wi-Fi recovery, eviction, heap and stack headroom (~3 min)
 python3 tools/clips.py && esptool.py --chip esp32s3 -p PORT write_flash 0x420000 build/clips.bin  # once
 python tools/bench.py --reset
+python3 tools/bench.py --wifi                        # the same, case closed
+python3 tools/bench.py --wifi --steps stall,slowdown  # bad Wi-Fi on purpose (Toxiproxy)
 ```
 
 Run (1) and (2) before every commit that changes firmware C or

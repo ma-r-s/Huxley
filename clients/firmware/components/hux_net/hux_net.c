@@ -148,11 +148,12 @@ static void rx_stats_tick(uint32_t now) {
     }
     if (s_rx_audio_msgs > 0) {
         ESP_LOGI(TAG, "ws.rx.stats window_ms=%u events=%u bytes=%u msgs=%u audio_msgs=%u "
-                      "audio_ms=%u max_gap_ms=%u busy_ms=%u max_busy_ms=%u",
+                      "audio_ms=%u max_gap_ms=%u busy_ms=%u max_busy_ms=%u rssi=%d",
                  (unsigned)(now - s_rx_window_start_ms), (unsigned)s_rx_events,
                  (unsigned)s_rx_bytes, (unsigned)s_rx_msgs, (unsigned)s_rx_audio_msgs,
                  (unsigned)(s_rx_audio_bytes / 48), (unsigned)s_rx_max_gap_ms,
-                 (unsigned)(s_rx_busy_us / 1000), (unsigned)(s_rx_max_busy_us / 1000));
+                 (unsigned)(s_rx_busy_us / 1000), (unsigned)(s_rx_max_busy_us / 1000),
+                 hux_net_rssi());
     }
     s_rx_events = s_rx_bytes = s_rx_msgs = s_rx_audio_msgs = s_rx_audio_bytes = 0;
     s_rx_max_gap_ms = s_rx_busy_us = s_rx_max_busy_us = 0;
@@ -566,6 +567,24 @@ void hux_net_resume(void) {
     ESP_LOGI(TAG, "ws.resumed err=%s", esp_err_to_name(err));
 }
 
+void hux_net_set_server(const char *uri) {
+    if (s_ws == NULL || uri == NULL || uri[0] == '\0') {
+        return;
+    }
+    bool was_running = atomic_load(&s_ws_alive);
+    if (was_running) {
+        esp_websocket_client_stop(s_ws);
+    }
+    ESP_LOGW(TAG, "ws.server uri=%s was=%s (until reboot)", uri, s_server_uri);
+    strncpy(s_server_uri, uri, sizeof(s_server_uri) - 1);
+    esp_err_t err = esp_websocket_client_set_uri(s_ws, s_server_uri);
+    if (was_running) {
+        esp_err_t start = esp_websocket_client_start(s_ws);
+        atomic_store(&s_ws_alive, start == ESP_OK);
+        ESP_LOGI(TAG, "ws.server set=%s start=%s", esp_err_to_name(err), esp_err_to_name(start));
+    }
+}
+
 bool hux_net_is_running(void) {
     return atomic_load(&s_ws_alive);
 }
@@ -608,10 +627,12 @@ void hux_net_set_audio_clear_sink(hux_net_audio_clear_fn sink) {
     atomic_store_explicit(&s_audio_clear_sink, sink, memory_order_release);
 }
 
-void hux_net_send_log(const hux_log_entry_t *entry) {
-    if (entry == NULL || s_ws == NULL ||
-        !esp_websocket_client_is_connected(s_ws)) {
-        return; /* Best-effort — serial already has the line. */
+bool hux_net_send_log(const hux_log_entry_t *entry) {
+    if (entry == NULL) {
+        return true;
+    }
+    if (s_ws == NULL || !esp_websocket_client_is_connected(s_ws)) {
+        return false; /* offline: hux_log keeps it and retries */
     }
 
     /* cJSON handles quoting / escaping of anything weird in the log
@@ -621,12 +642,12 @@ void hux_net_send_log(const hux_log_entry_t *entry) {
      * at low priority and only fires for WARN+ lines. */
     cJSON *root = cJSON_CreateObject();
     if (root == NULL) {
-        return;
+        return true; /* out of memory: retrying won't help */
     }
     cJSON *data = cJSON_CreateObject();
     if (data == NULL) {
         cJSON_Delete(root);
-        return;
+        return true;
     }
     const char level_str[2] = {entry->level, '\0'};
     cJSON_AddStringToObject(data, "level", level_str);
@@ -641,9 +662,10 @@ void hux_net_send_log(const hux_log_entry_t *entry) {
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (json == NULL) {
-        return;
+        return true;
     }
 
-    (void)hux_net_send_text(json, strlen(json));
+    bool sent = hux_net_send_text(json, strlen(json));
     cJSON_free(json);
+    return sent;
 }

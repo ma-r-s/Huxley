@@ -17,7 +17,7 @@ cleared on reboot. Never commit captures.
 | `serial-stop.sh`    | Kills any active `serial-capture.sh` capture.                                                          | —              |
 | `tcpdump-ws.sh`     | Packet-captures the server's WS traffic to `/tmp/huxley-debug/ws-<ts>.pcap` for Wireshark analysis.    | `sudo` (macOS) |
 | `smoke.sh`          | Reboots the board through its console (or flashes it first), waits for READY.                         | ESP-IDF env    |
-| `bench.py`          | The bench check list, PASS/FAIL per step: boot, self-test, a turn, volume, barge-in, offline + recovery, eviction, headroom. No hand, no sound (`--loud` keeps the amp on). Log in `/tmp/huxley-debug/bench-*.log`. | ESP-IDF env (pyserial), server up |
+| `bench.py`          | The bench check list, PASS/FAIL per step: boot, self-test, a turn, volume, barge-in, offline + recovery, eviction, headroom. No hand, no sound (`--loud` keeps the amp on). `--wifi` runs it over Wi-Fi; `--wifi --steps stall,slowdown` breaks the link on purpose through Toxiproxy. Log in `/tmp/huxley-debug/bench-*.log`. | ESP-IDF env (pyserial) or `--wifi`, server up; Toxiproxy for stall/slowdown |
 | `clips.py`          | Renders the Spanish questions `say <n>` plays into the mic (macOS `say -o`, nothing is played) into `build/clips.bin` for the storage partition. | macOS, ffmpeg  |
 | `jtag_lever.py`     | Presses the case's lever (GPIO7) electrically over JTAG.                                               | OpenOCD        |
 | `jtag_snapshot.gdb` | TCP control block + every task's backtrace from a running board, no reset.                             | OpenOCD        |

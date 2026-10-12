@@ -118,6 +118,8 @@ monitor` during every session.
 - Streaming is best-effort: when the WS is down the log line goes
   only to serial. Network logs don't replace serial — they
   supplement it for the 99% case when the WS is healthy.
+  (Superseded 2026-10-12, F-0022: lines wait for the reconnect, so a
+  drop's own story reaches the server.)
 
 Default threshold in the component is WARN. The dev build overrides
 to INFO in `main.c` via `hux_log_set_remote_level('I')` so every

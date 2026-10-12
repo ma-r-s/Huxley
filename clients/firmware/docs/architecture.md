@@ -67,7 +67,7 @@ FreeRTOS tasks, in priority order (higher = more important):
 | `hux_app`                  | `hux_app_start`      | 5    | 6 KB  | Dequeues events, runs the state machine                    |
 | _esp_wifi_                 | IDF internal         | 23   | —     | Wi-Fi driver                                               |
 | _websocket_task_           | esp_websocket_client | 5    | 6 KB  | WS RX + reconnect loop; runs our handler (the data plane)  |
-| `hux_log_drain`            | `hux_log_init`       | 2    | 6 KB  | Pops log ring, calls registered sink; emits drop heartbeat |
+| `hux_log_drain`            | `hux_log_init`       | 2    | 6 KB  | Pops the log queue (256 lines, PSRAM), sends each; offline it holds the line and retries; drop heartbeat |
 | `hux_mic`                  | `hux_audio_init`     | 8    | 6 KB  | I2S RX, extract Mic1, hand frames to hux_app's queue       |
 | `hux_audio_tx`             | `hux_app_start`      | 6    | 8 KB  | base64-encode queued mic frames, send `audio`              |
 | `hux_spk`                  | `hux_audio_init`     | 8    | 6 KB  | Pop the PCM ring (or silence), I2S TX; services clears     |

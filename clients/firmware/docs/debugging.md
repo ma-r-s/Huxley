@@ -109,16 +109,15 @@ pull every firmware event from a session.
 
 **Limitations**:
 
-- Streaming is **best-effort**. During Wi-Fi / WS disconnect the
-  stream stops; those events land only on serial.
+- **Nothing is lost to a disconnect** (F-0022). Lines logged while
+  the WS is down (and the whole boot, before the first connect) wait
+  in a 256-line queue in PSRAM and arrive after the reconnect, late:
+  the server's `timestamp` is when it got the line, `ts` is the
+  board's uptime in ms when it happened. Past 256 lines the newest
+  are dropped and counted (`log.dropped`). ISR lines stay on serial.
 - The current dev build sets the threshold to `INFO` (in `main.c`:
   `hux_log_set_remote_level('I')`) — the server sees every firmware
   log line. In prod we'll bump back up to `WARN` to bound bandwidth.
-- **Early-boot lines are serial-only.** Anything that fires before
-  `ws.connected` (boot banner, NVS init, `hux_app` startup) queues
-  but fails to send — the WS isn't open yet. Read the first ~3
-  seconds on serial. Queued-replay for early boot is on the v0.2
-  roadmap.
 - A deny-list prevents logs from `websocket_client` /
   `transport_*` / `esp-tls` / `mbedtls` from streaming — the
   net-layer's own errors would recurse through the sender otherwise.
@@ -196,6 +195,28 @@ the old version reconnecting (`client.device`) without that
 `ota.confirmed`, `last_invalid` in `dev.py info` naming the image that
 crashed (`dev.py flash` prints it), and a crash dump waiting (`dev.py
 coredump`). Wrong token: `dev.denied uri=`.
+
+## Choppy audio or dropped connections: measure both ends
+
+Every second while audio flows, the server logs what it handed over
+and the board logs what it got:
+
+```
+server.tx.audio_stats window_ms=1001 audio_ms=1000 send_wait_ms=0 write_buffer=0 sock_unsent=0
+hux_net: ws.rx.stats window_ms=1003 ... audio_ms=1000 max_gap_ms=180 ... rssi=-45
+```
+
+Server `audio_ms` near `window_ms` while the board's falls short, with
+`sock_unsent` (bytes the kernel still holds for that socket) or
+`send_wait_ms` climbing: the network between them is slow. The server's
+own `audio_ms` short: the source (a skill's stream, the model) was late.
+`spk.underrun silent_ms=` is each gap the speaker played as silence.
+
+To reproduce instead of waiting for bad Wi-Fi: `python3 tools/bench.py
+--wifi --steps stall,slowdown` routes the board through Toxiproxy (the
+console's `server <uri>`, until reboot) and throttles the uplink in the
+middle of a question (`stall`) or the downlink in the middle of a stream
+(`slowdown`, which prints the two columns above side by side).
 
 ## Diagnosing WS / TCP flaps
 

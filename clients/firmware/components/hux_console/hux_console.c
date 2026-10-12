@@ -62,6 +62,14 @@ static void cmd_info(void) {
     ESP_LOGI(TAG, "info stack_free_min%s", line);
 }
 
+static esp_timer_handle_t s_wifi_back;
+
+static void wifi_back_on(void *arg) {
+    (void)arg;
+    esp_err_t err = esp_wifi_start(); /* STA_START connects */
+    ESP_LOGI(TAG, "console.wifi back on err=%s", esp_err_to_name(err));
+}
+
 void hux_console_run(char *line) {
     char *argv[4] = {0};
     int argc = 0;
@@ -86,13 +94,31 @@ void hux_console_run(char *line) {
     } else if (strcmp(cmd, "vol") == 0 && argc > 1) {
         hux_audio_set_volume(atoi(argv[1]));
     } else if (strcmp(cmd, "wifi") == 0 && argc > 1 && strcmp(argv[1], "off") == 0) {
+        /* Back on by itself after N s (default 10): issued over Wi-Fi
+         * (tools/dev.py), a plain `wifi off` would lock everyone out
+         * until a power cut. */
+        int s = argc > 2 ? atoi(argv[2]) : 10;
+        if (s < 1 || s > 600) {
+            s = 10;
+        }
         esp_err_t err = esp_wifi_stop();
-        ESP_LOGI(TAG, "console.wifi stopped err=%s", esp_err_to_name(err));
+        if (s_wifi_back == NULL) {
+            const esp_timer_create_args_t args = {.callback = wifi_back_on, .name = "wifi_back"};
+            esp_timer_create(&args, &s_wifi_back);
+        }
+        if (s_wifi_back != NULL) {
+            esp_timer_stop(s_wifi_back);
+            esp_timer_start_once(s_wifi_back, (uint64_t)s * 1000000);
+        }
+        ESP_LOGI(TAG, "console.wifi stopped err=%s back_in_s=%d", esp_err_to_name(err), s);
     } else if (strcmp(cmd, "wifi") == 0 && argc > 1 && strcmp(argv[1], "on") == 0) {
         esp_err_t err = esp_wifi_start(); /* STA_START connects */
         ESP_LOGI(TAG, "console.wifi started err=%s", esp_err_to_name(err));
     } else if (strcmp(cmd, "info") == 0) {
         cmd_info();
+    } else if (strcmp(cmd, "server") == 0 && argc > 1) {
+        /* Until reboot: tests route the board through a proxy. */
+        hux_net_set_server(argv[1]);
     } else if (strcmp(cmd, "ota") == 0 && argc > 1) {
         /* ESP-IDF's on-demand update: download, check, boot (hux_ota). */
         hux_ota_start(argv[1], argc > 2 && strcmp(argv[2], "force") == 0);
@@ -123,7 +149,8 @@ void hux_console_run(char *line) {
         hux_audio_pa(strcmp(argv[1], "on") == 0);
     } else {
         ESP_LOGW(TAG, "console.unknown %s (talk, release, say N, tone [hz] [ms], vol N, pa on|off, "
-                      "selftest [hz], wifi off|on, wifistat, info, reboot, ota <url> [force])",
+                      "selftest [hz], wifi off [s]|on, wifistat, info, server <uri>, reboot, "
+                      "ota <url> [force])",
                  cmd);
     }
 }

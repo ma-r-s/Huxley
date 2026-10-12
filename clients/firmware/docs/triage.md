@@ -300,6 +300,49 @@ and `dev.py flash` prints it when an update doesn't stick.
 HTTP, not HTTPS: fine on the home LAN, the token is the lock. The
 bootloader and partition table still need USB.
 
+### F-0022: Measure the link instead of guessing; stalls drop the connection · in_progress 2026-10-12
+
+**Problem**: Mario, playing music on the walkie (case closed, on
+battery): "It's being choppy all of a sudden." I answered from clues
+(RSSI went from -27 to -48), and Mario: "I don't want you to guess
+anything. We have complete control of the firmware and the software on
+the servers. Why don't you create a reliable way to test stuff".
+**Evidence** (server log, 2026-10-12): at 08:03:26, 08:03:35 and
+08:08:48 the board opened a new WebSocket in the middle of a talk press
+(the server evicted the old one, close 1006); the press at 08:08:46
+reached the server 2.3 s late first. From 08:04 the music arrived slower
+than real time (`ws.rx.stats` 300 ms of audio in a 1529 ms window,
+`events` well above `msgs`) and the speaker played 57 gaps of 20-940 ms.
+The board's own side of those drops never reached the server: lines
+logged while the WS is down were dropped.
+**Cause of the drops** (read, not guessed): esp_websocket_client tears
+the connection down when a send can't finish in its timeout
+(`esp_websocket_client.c:705`, `wlen == 0` -> `abort_connection`), and
+every send uses `WS_SEND_TIMEOUT_MS` = 200 ms. The mic sends ~66 KB/s; a
+link that slows below that fills the TCP buffers in a few seconds, and
+the next 200 ms wait kills the connection and the question with it.
+**Built (the harness)**:
+- Server `server.tx.audio_stats` once a second while audio flows: audio
+  handed over, time spent waiting in `ws.send`, the asyncio write
+  buffer, and the kernel's unsent bytes (`SO_NWRITE` on macOS,
+  `TIOCOUTQ` on Linux). Next to the board's `ws.rx.stats` (now with
+  `rssi`) it says whether the network or the source was slow.
+- Board log lines survive a disconnect: the sink says whether a line
+  went out, the drain task holds it and retries, 256-line queue in
+  PSRAM; boot lines (update check, Wi-Fi AP, previous crash) are queued
+  too and arrive on the first connect.
+- Console `server <uri>` (until reboot) and `wifi off [s]`, which comes
+  back by itself (from the review: over Wi-Fi a plain `wifi off` locked
+  everyone out until a power cut).
+- `tools/bench.py --wifi`: the check list over Wi-Fi (developer door +
+  server log), and two fault steps through Toxiproxy (Shopify's tool
+  for this): `stall` (uplink at 1 KB/s for 5 s mid-question; pass = no
+  reconnect, the question is heard) and `slowdown` (downlink capped
+  mid-stream; prints server-sent next to board-received per second).
+**Next**: run `stall` on today's firmware and watch it fail, fix the
+send path (a stall must not kill the connection), run it again; run
+`slowdown` to put numbers on the music gaps before changing playback.
+
 Note on IDs: F-0011 to F-0013 were used in code comments and commit
 messages (boot buzz, decode scratch, Wi-Fi power save) but their
 entries never landed here; F-0003 (the speaker path) shipped as v0.3.x

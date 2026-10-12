@@ -18,6 +18,7 @@
  */
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -38,7 +39,11 @@ typedef struct {
     char line[192];    /* Message body, truncated if longer. */
 } hux_log_entry_t;
 
-typedef void (*hux_log_sink_fn)(const hux_log_entry_t *entry);
+/* Returns true when the line is dealt with (sent, or unsendable for good),
+ * false when it couldn't go out now (offline): the drain task keeps it
+ * and tries again, so a drop's own story reaches the server once the
+ * link is back (F-0022). */
+typedef bool (*hux_log_sink_fn)(const hux_log_entry_t *entry);
 
 /**
  * Install the vprintf hook, allocate the ring, spawn the drain task.
@@ -51,9 +56,9 @@ void hux_log_init(void);
  * Register the callback that receives log lines cleared for remote
  * delivery. Pass NULL to unregister. The sink runs on the drain task.
  *
- * The sink MUST NOT block on network I/O from taking tens of seconds;
- * if a send fails, drop the line and return. Drain throughput dictates
- * how fast the ring can recover from a burst.
+ * The sink MUST NOT block on network I/O for tens of seconds; return
+ * false when offline and the line is retried. Lines logged before the
+ * sink exists (boot) wait in the queue for it.
  */
 void hux_log_set_sink(hux_log_sink_fn sink);
 

@@ -42,6 +42,11 @@ int hux_net_rssi(void);
 void hux_net_pause(void);
 void hux_net_resume(void);
 
+/** Point the WebSocket at another server until the next boot (tests:
+ * through a fault-injecting proxy, tools/netbench.py). Reconnects now.
+ * Not from the WebSocket task. */
+void hux_net_set_server(const char *uri);
+
 /** The WebSocket client's task is running (it connects or reconnects on
  * its own). False after a pause, or if it ended unexpectedly. */
 bool hux_net_is_running(void);
@@ -66,7 +71,7 @@ bool hux_net_send_text(const char *data, size_t len);
  * Drops the entry silently if the WS isn't connected — remote logging
  * is best-effort; serial already has the line.
  */
-void hux_net_send_log(const hux_log_entry_t *entry);
+bool hux_net_send_log(const hux_log_entry_t *entry);
 
 /**
  * Callback invoked for every inbound `audio` message, with the message's

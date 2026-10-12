@@ -1,14 +1,25 @@
 #!/usr/bin/env python3
 """Bench check list for the walkie: real board, real server, no hand, no sound.
 
-Drives the board through its serial console (components/hux_console) and
+Drives the board through its console (components/hux_console) and
 asserts on its own log lines. Each step prints PASS or FAIL with the line
 that decided it; the exit code is the number of failures.
 
     . ~/esp/esp-idf/export.sh            # its python has pyserial
-    python tools/bench.py --reset        # every step
+    python tools/bench.py --reset        # every step, over USB serial
     python tools/bench.py --steps turn,bargein
     python tools/bench.py --loud         # keep the speaker amp on
+    python tools/bench.py --wifi         # the same over Wi-Fi, case closed
+    python tools/bench.py --wifi --steps stall,slowdown   # network faults
+
+--wifi sends the commands through the developer door (tools/dev.py) and
+reads the board's lines from the server log, where it streams them; the
+server's own events (connects, `server.tx.audio_stats`) come in as
+`[server] ...` lines. `stall` and `slowdown` route the board through
+Toxiproxy (`brew install toxiproxy`; started if not running) and break the
+link on purpose: the uplink stops mid-press, the downlink drops below real
+time mid-stream (F-0022). Afterwards the board goes back to its server and
+the amp back on.
 
 Needs: the server running on the LAN (`server_uri` in main/secrets.h), the
 board flashed with the clips (`tools/clips.py`), no other client on the
@@ -19,21 +30,40 @@ GPIO7 over JTAG.
 
 import argparse
 import base64
+import contextlib
 import glob
+import json
 import os
 import re
 import socket
+import subprocess
 import sys
 import threading
 import time
-
-import serial
+import urllib.request
 
 STEPS = ["boot", "quiet", "selftest", "turn", "volume", "bargein", "offline", "evict", "health"]
+# Network faults, --wifi only, not in the default list (they need Toxiproxy).
+NET_STEPS = ["stall", "slowdown"]
+# Server events the Wi-Fi board sees as `[server] <event> k=v ...` lines.
+SERVER_EVENTS = {
+    "client_connected",
+    "client_disconnected",
+    "client_evicted",
+    "server.rx.ptt_start",
+    "server.rx.ptt_stop",
+    "server.tx.audio_stats",
+    "transcript",
+}
+TOXIPROXY = "http://127.0.0.1:8474"
+PROXY_PORT = 8775
 
 
 class Board:
     def __init__(self, port: str, log_path: str) -> None:
+        import serial  # only the USB board needs pyserial
+
+        self.serial_error = serial.SerialException
         self.log = open(log_path, "w", buffering=1)
         self.s = serial.Serial()
         self.s.port, self.s.baudrate, self.s.timeout = port, 115200, 0.05
@@ -51,7 +81,7 @@ class Board:
         while True:
             try:
                 buf += self.s.read(4096)
-            except serial.SerialException:
+            except self.serial_error:
                 time.sleep(0.3)  # re-enumerating after a reset
                 continue
             while b"\n" in buf:
@@ -92,6 +122,113 @@ class Board:
         rx = re.compile(pattern)
         with self.lock:
             return [line for line in self.lines[since:] if rx.search(line)]
+
+
+class WifiBoard(Board):
+    """The same board over Wi-Fi: commands through the developer door,
+    the board's lines from the server log (serial format, so every
+    pattern works on both), plus `[server] ...` lines."""
+
+    def __init__(self, host: str | None, log_path: str) -> None:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import dev  # tools/dev.py, next to this file
+
+        self.dev = dev
+        self.host = host or dev.board_ip()
+        self.log = open(log_path, "w", buffering=1)
+        self.lines = []
+        self.lock = threading.Lock()
+        self.offset = dev.log_tail_from()
+        threading.Thread(target=self._read, daemon=True).start()
+
+    @staticmethod
+    def format(e: dict) -> str | None:
+        ev = e.get("event")
+        if ev == "client.huxley.firmware_log":
+            return f"{e.get('level', '?')} ({e.get('ts', 0)}) {e.get('tag')}: {e.get('line')}"
+        if ev in SERVER_EVENTS:
+            skip = ("event", "timestamp", "level", "logger")
+            return f"[server] {ev} " + " ".join(f"{k}={v}" for k, v in e.items() if k not in skip)
+        return None
+
+    def _read(self) -> None:
+        with open(self.dev.SERVER_LOG) as f:
+            f.seek(self.offset)
+            while True:
+                raw = f.readline()
+                if not raw:
+                    time.sleep(0.1)
+                    continue
+                try:
+                    text = self.format(json.loads(raw))
+                except ValueError:
+                    continue
+                if text is None:
+                    continue
+                self.log.write(time.strftime("%H:%M:%S ") + text + "\n")
+                with self.lock:
+                    self.lines.append(text)
+
+    def send(self, cmd: str) -> None:
+        self.log.write(time.strftime("%H:%M:%S ") + f"[bench] >> {cmd}\n")
+        self.dev.request(self.host, "/cmd", cmd.encode(), timeout=30)
+
+
+def toxi(method: str, path: str, body: dict | None = None) -> dict:
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(TOXIPROXY + path, data=data, method=method)
+    req.add_header("Content-Type", "application/json")
+    with urllib.request.urlopen(req, timeout=5) as r:
+        raw = r.read()
+    return json.loads(raw) if raw.strip() else {}
+
+
+def proxy_up(server: str) -> str:
+    """Toxiproxy between the board and the server: listens on PROXY_PORT,
+    forwards to the server's port. Returns the URI for the board."""
+    try:
+        toxi("GET", "/version")
+    except OSError:
+        log = open("/tmp/huxley-debug/toxiproxy.log", "a")
+        subprocess.Popen(["toxiproxy-server"], stdout=log, stderr=log, start_new_session=True)
+        for _ in range(30):
+            time.sleep(0.2)
+            try:
+                toxi("GET", "/version")
+                break
+            except OSError:
+                continue
+    m = re.match(r"ws://([^:/]+):(\d+)", server)
+    port = m.group(2) if m else "8765"
+    with contextlib.suppress(OSError):
+        toxi("DELETE", "/proxies/huxley")
+    toxi(
+        "POST",
+        "/proxies",
+        {"name": "huxley", "listen": f"0.0.0.0:{PROXY_PORT}", "upstream": f"127.0.0.1:{port}"},
+    )
+    mac = m.group(1) if m else "127.0.0.1"
+    return f"ws://{mac}:{PROXY_PORT}/"
+
+
+def toxic(name: str, stream: str, kind: str, **attrs: int) -> None:
+    """stream: "upstream" = board -> server, "downstream" = server -> board."""
+    toxi(
+        "POST",
+        "/proxies/huxley/toxics",
+        {"name": name, "type": kind, "stream": stream, "attributes": attrs},
+    )
+
+
+def untoxic(name: str) -> None:
+    with contextlib.suppress(OSError):
+        toxi("DELETE", f"/proxies/huxley/toxics/{name}")
+
+
+def field(name: str, line: str) -> str:
+    """The value of `name=` in a log line, "?" if absent."""
+    m = re.search(rf"\b{name}=(\S+)", line)
+    return m.group(1) if m else "?"
 
 
 def ws_evict(uri: str, hold: float) -> str:
@@ -138,11 +275,22 @@ def main() -> int:
     ap.add_argument("--loud", action="store_true", help="leave the speaker amp on")
     ap.add_argument("--steps", default=",".join(STEPS))
     ap.add_argument("--server", default=server_uri(), help="for the eviction step")
+    ap.add_argument("--wifi", action="store_true", help="over Wi-Fi (tools/dev.py), no USB")
+    ap.add_argument("--host", help="--wifi: the board's IP (default: from the server log)")
+    ap.add_argument("--stall-s", type=float, default=5, help="stall: how long the uplink crawls")
+    ap.add_argument("--stall-kbps", type=int, default=1, help="stall: its rate, KB/s")
+    ap.add_argument("--slow-s", type=float, default=8, help="slowdown: how long")
+    ap.add_argument(
+        "--slow-kbps", type=int, default=32, help="slowdown: downlink KB/s (~64 is real time)"
+    )
     args = ap.parse_args()
-    if not args.port:
-        print("FAIL no /dev/cu.usbmodem* port: plug the board in")
+    if not args.wifi and not args.port:
+        print("FAIL no /dev/cu.usbmodem* port: plug the board in (or --wifi)")
         return 1
     steps = args.steps.split(",")
+    if not args.wifi and any(s in NET_STEPS for s in steps):
+        print("FAIL stall and slowdown need --wifi (the board talks through a proxy)")
+        return 1
     if "boot" in steps and not args.reset:
         steps.remove("boot")
     if "quiet" in steps and args.loud:
@@ -151,8 +299,10 @@ def main() -> int:
     os.makedirs("/tmp/huxley-debug", exist_ok=True)
     log_path = time.strftime("/tmp/huxley-debug/bench-%Y%m%d-%H%M%S.log")
     print(f"board log: {log_path}")
-    b = Board(args.port, log_path)
+    b: Board = WifiBoard(args.host, log_path) if args.wifi else Board(args.port, log_path)
     fails = 0
+    via_proxy = False
+    pa_off = False
 
     def result(name: str, ok: bool, why: str) -> None:
         nonlocal fails
@@ -165,9 +315,29 @@ def main() -> int:
         line = b.expect(r"info ring_used=", timeout, m)
         return line is not None
 
+    def through_proxy() -> bool:
+        """Point the board at Toxiproxy (once); True when it's connected."""
+        nonlocal via_proxy
+        if via_proxy:
+            return True
+        uri = proxy_up(args.server)
+        m = b.mark()
+        b.send(f"server {uri}")
+        ok = b.expect(r"\[server\] client_connected remote=\('127\.", 15, m)
+        ready = ok and b.expect(r"state WAITING_HELLO -> READY", 10, m)
+        via_proxy = bool(ready)
+        return via_proxy
+
+    def cancel_reply() -> None:
+        """An empty press: the server drops whatever it was saying."""
+        b.send("talk")
+        time.sleep(0.4)
+        b.send("release")
+        time.sleep(1.5)
+
     # If the board happens to be booting (just plugged in), let it get to
     # READY before the first step.
-    if "boot" not in steps:
+    if "boot" not in steps and not args.wifi:
         time.sleep(1.5)
         if b.grep(r"boot version=", 0):
             if not b.expect(r"state WAITING_HELLO -> READY", 30, 0):
@@ -175,6 +345,7 @@ def main() -> int:
                 return 1
 
     def run(step: str) -> None:
+        nonlocal pa_off
         m = b.mark()
         if step == "boot":
             b.reset()
@@ -182,6 +353,7 @@ def main() -> int:
             ours = [x for x in b.grep(r" E \(\d+\) hux_", m)]
             result("boot", line is not None and not ours, line or f"no READY in 30 s {ours[:1]}")
         elif step == "quiet":
+            pa_off = True
             b.send("pa off")
             line = b.expect(r"spk\.pa off ok=1", 3, m)
             result("quiet", line is not None, line or "the amp didn't turn off")
@@ -235,6 +407,18 @@ def main() -> int:
                 and int(held.group(1)) < 2000
             )
             result("bargein", ok, off or "no hold / no audio_clear")
+        elif step == "offline" and args.wifi:
+            # Over Wi-Fi nothing can reach it while it's off: it comes back
+            # by itself (`wifi off 8`), and the lines it logged while
+            # offline arrive after it reconnects (F-0022).
+            b.send("wifi off 8")
+            back = b.expect(r"console\.wifi back on", 30, m)
+            ready = b.expect(r"state WAITING_HELLO -> READY", 30, m)
+            result(
+                "offline",
+                bool(back and ready),
+                (ready if back and ready else None) or f"back_on={bool(back)} ready={bool(ready)}",
+            )
         elif step == "offline":
             b.send("wifi off")
             time.sleep(2)
@@ -263,6 +447,72 @@ def main() -> int:
                 bool(evicted and back),
                 f"test client {status}; " + (back or f"evicted={bool(evicted)} back={bool(back)}"),
             )
+        elif step == "stall":
+            # The uplink crawls at stall_kbps for stall_s, starting 1 s into
+            # a ~5 s question (the mic sends ~66 KB/s). The connection must
+            # survive it and the question must still get through.
+            if not through_proxy():
+                result("stall", False, "the board didn't connect through the proxy")
+                return
+            m = b.mark()
+            b.send("say 3")  # "Cuentame un cuento largo..." (~5 s)
+            time.sleep(1.0)
+            toxic("stall", "upstream", "bandwidth", rate=args.stall_kbps)
+            time.sleep(args.stall_s)
+            untoxic("stall")
+            heard = b.expect(r"\[server\] transcript role=user", 30, m)
+            stats = b.expect(r"app\.ptt\.final_stats", 5, m)
+            time.sleep(2)
+            drops = b.grep(r"\[server\] client_(connected|disconnected|evicted)", m)
+            incomplete = b.grep(r"ws\.send\.incomplete", m)
+            cancel_reply()
+            ok = bool(heard and not drops)
+            result(
+                "stall",
+                ok,
+                f"reconnects={len([d for d in drops if 'client_connected' in d])} "
+                f"send_incomplete={len(incomplete)} heard={bool(heard)} "
+                f"{(stats or '').split('final_stats ')[-1]}",
+            )
+        elif step == "slowdown":
+            # A stream (the radio) whose downlink drops to slow_kbps for
+            # slow_s. Prints, per second, what the server sent next to what
+            # the board got, so a choppy stream says whose fault it is.
+            if not through_proxy():
+                result("slowdown", False, "the board didn't connect through the proxy")
+                return
+            b.send("say 4")  # "Pon la radio."
+            if not b.expect(r"ws\.rx\.stats", 30, m):
+                result("slowdown", False, "the radio never started")
+                return
+            time.sleep(4)
+            m2 = b.mark()
+            toxic("slow", "downstream", "bandwidth", rate=args.slow_kbps)
+            time.sleep(args.slow_s)
+            untoxic("slow")
+            time.sleep(6)
+            m3 = b.mark()
+            b.send("say 5")  # "Para la radio."
+            b.expect(r"ws\.rx\.model_speaking false", 20, m3)
+            sent = [
+                f"{field('audio_ms', x)}/{field('window_ms', x)}({field('sock_unsent', x)})"
+                for x in b.grep(r"\[server\] server\.tx\.audio_stats", m2)
+            ]
+            got = [
+                f"{field('audio_ms', x)}/{field('window_ms', x)}"
+                for x in b.grep(r"ws\.rx\.stats", m2)
+            ]
+            gaps = b.grep(r"spk\.underrun", m2)
+            drops = b.grep(r"\[server\] client_(connected|disconnected|evicted)", m2)
+            print("          server sent, audio_ms/window_ms (kernel unsent):", *sent[:20])
+            print("          board got,   audio_ms/window_ms:", *got[:20])
+            silent = sum(int(field("silent_ms", g)) for g in gaps)
+            result(
+                "slowdown",
+                not drops and bool(sent) and bool(got),
+                f"reconnects={len(drops)} gaps={len(gaps)} silent_ms={silent} "
+                f"(downlink {args.slow_kbps} KB/s for {args.slow_s:.0f} s)",
+            )
         elif step == "health":
             b.send("info")
             heap = b.expect(r"info uptime_s=", 4, m)
@@ -283,6 +533,17 @@ def main() -> int:
             run(step)
         except Exception as e:  # a step that can't run is a failure, not a crash
             result(step, False, f"{type(e).__name__}: {e}")
+
+    # Leave it as we found it: its own server, the amp on.
+    if args.wifi:
+        try:
+            if via_proxy:
+                b.send(f"server {args.server}")
+                time.sleep(3)
+            if pa_off:
+                b.send("pa on")
+        except OSError as e:
+            print(f"could not restore the board ({e}): python3 tools/dev.py cmd reboot")
 
     print(f"{'all passed' if fails == 0 else f'{fails} failed'}")
     return fails

@@ -72,7 +72,8 @@ def board_ip() -> str:
     for e in server_events():
         if e.get("event") == "client_connected":
             m = re.match(r"\('([\d.]+)'", str(e.get("remote", "")))
-            if m:
+            # 127.0.0.1: the board through tools/netbench.py's proxy.
+            if m and not m.group(1).startswith("127."):
                 remote_by_conn[e.get("conn_id")] = m.group(1)
         elif e.get("event") == "client.device" and e.get("shell") == "firmware":
             ip = remote_by_conn.get(e.get("conn_id"), ip)

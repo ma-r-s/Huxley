@@ -118,9 +118,11 @@ void app_main(void) {
     /* Install the log hook FIRST, before any other ESP_LOG call, so
      * every line in this boot — including Wi-Fi driver and WS client
      * output — flows through our parse-and-stream path once a sink is
-     * registered. The sink is registered later (after hux_net), so
-     * early lines stream nowhere (just serial), which is what we want. */
+     * registered. The sink is registered later (after hux_net); early
+     * lines wait in the queue and reach the server on the first
+     * connect (F-0022), so the boot is in the server log too. */
     hux_log_init();
+    hux_log_set_remote_level('I');
 
     log_boot_banner();
 
@@ -171,10 +173,11 @@ void app_main(void) {
     hux_dev_start(NULL);
 #endif
 
-    /* Plug the log drain into the net layer. From here on, log lines
-     * at or above the remote threshold go to serial AND to the server
-     * as client_event:huxley.firmware_log payloads (best-effort —
-     * dropped silently when the WS is down). */
+    /* Plug the log drain into the net layer: log lines at or above the
+     * remote threshold go to serial AND to the server as
+     * client_event:huxley.firmware_log payloads. While the WS is down
+     * they wait (up to 256 lines; past that the newest are dropped and
+     * counted in log.dropped). */
     hux_log_set_sink(hux_net_send_log);
 
     /* Route inbound audio messages straight to the speaker ring.
@@ -185,12 +188,10 @@ void app_main(void) {
     /* `audio_clear` on the same task, in order with the audio. */
     hux_net_set_audio_clear_sink(hux_audio_on_audio_clear);
 
-    /* Threshold = INFO for dev: the server log becomes a full record
-     * of what the board did. WARN/ERROR is the prod default once this
-     * stops being a prototype; bump down then.
-     * Worst case here is ~300 B/s of JSON over Wi-Fi, which is noise
-     * next to audio frames. */
-    hux_log_set_remote_level('I');
+    /* Remote threshold is INFO (set right after hux_log_init, so boot
+     * lines qualify): the server log is a full record of what the board
+     * did. WARN/ERROR is the prod default once this stops being a
+     * prototype. Worst case ~300 B/s of JSON, noise next to audio. */
 
     /* WS transport stack stays at default INFO. Uncomment the block
      * below (and keep `CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y` in

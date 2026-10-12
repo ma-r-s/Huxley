@@ -6,11 +6,16 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
-#define LOG_QUEUE_DEPTH      32
+/* In PSRAM: ~58 KB holds the boot and 15-25 s offline (F-0022). */
+#define LOG_QUEUE_DEPTH      256
+/* Offline: how often the drain task retries the line it holds. */
+#define RETRY_TICKS          (250 / portTICK_PERIOD_MS)
 #define DRAIN_TASK_STACK     6144  /* cJSON + the WS send: 4 KB left 688 B free in a soak */
 #define DRAIN_TASK_PRIO      2
 /* vprintf hook runs on the caller's stack — Wi-Fi, LWIP, and ISR
@@ -163,14 +168,14 @@ static int hux_vprintf(const char *fmt, va_list args) {
     /* Snapshot atomic globals with acquire ordering so the values we
      * inspect are consistent with the corresponding stores on other
      * cores (notably `hux_log_set_sink` from app_main). */
-    hux_log_sink_fn sink = atomic_load_explicit(&s_sink, memory_order_acquire);
     char threshold = atomic_load_explicit(&s_remote_level, memory_order_relaxed);
 
-    /* Bail out before any queueing work if we don't have a sink yet,
-     * the queue isn't initialised, or we're running on the drain task
-     * itself (recursion guard — send-path logs from the drain task
-     * would otherwise feed themselves back into the queue). */
-    if (sink == NULL || s_queue == NULL ||
+    /* Bail out if the queue isn't initialised, we're in an ISR (the
+     * queue lives in PSRAM; ISR lines stay on serial), or we're running
+     * on the drain task itself (recursion guard: send-path logs from
+     * the drain task would otherwise feed themselves back into the
+     * queue). No sink yet is fine: boot lines wait for it. */
+    if (s_queue == NULL || xPortInIsrContext() ||
         xTaskGetCurrentTaskHandle() == s_drain_task) {
         va_end(copy);
         return n;
@@ -197,22 +202,11 @@ static int hux_vprintf(const char *fmt, va_list args) {
         return n; /* Send-path recursion blocker. */
     }
 
-    /* Non-blocking send — if the queue is full we drop the line and
+    /* Non-blocking send: if the queue is full we drop the line and
      * bump the counter; the drain task publishes the drop count on
-     * its periodic heartbeat. ISR callers (panic path, Wi-Fi driver
-     * ISRs logging errors) need the FromISR variant; `xQueueSend`
-     * from ISR is undefined behaviour on FreeRTOS. */
-    BaseType_t ok;
-    if (xPortInIsrContext()) {
-        BaseType_t hpw = pdFALSE;
-        ok = xQueueSendFromISR(s_queue, &entry, &hpw);
-        if (hpw == pdTRUE) {
-            portYIELD_FROM_ISR();
-        }
-    } else {
-        ok = xQueueSend(s_queue, &entry, 0);
-    }
-    if (ok != pdTRUE) {
+     * its periodic heartbeat. A full queue keeps the oldest lines,
+     * which is what explains an outage. */
+    if (xQueueSend(s_queue, &entry, 0) != pdTRUE) {
         atomic_fetch_add_explicit(&s_dropped, 1, memory_order_relaxed);
     }
     return n;
@@ -227,7 +221,6 @@ static void emit_drop_heartbeat(hux_log_sink_fn sink, uint32_t *last_reported) {
         return;
     }
     uint32_t since = now - *last_reported;
-    *last_reported = now;
 
     hux_log_entry_t entry = {.level = 'W', .ts_ms = 0};
     strcpy(entry.tag, "hux_log");
@@ -235,7 +228,9 @@ static void emit_drop_heartbeat(hux_log_sink_fn sink, uint32_t *last_reported) {
              "log.dropped since_last=%u total=%u",
              (unsigned)since, (unsigned)now);
     entry.ts_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
-    sink(&entry);
+    if (sink(&entry)) {
+        *last_reported = now;
+    }
 }
 
 static void drain_task(void *arg) {
@@ -248,11 +243,18 @@ static void drain_task(void *arg) {
          * visits the heartbeat branch often enough via the second
          * arm below. */
         if (xQueueReceive(s_queue, &entry, DROP_HEARTBEAT_TICKS) == pdTRUE) {
-            hux_log_sink_fn sink = atomic_load_explicit(&s_sink, memory_order_acquire);
-            if (sink != NULL) {
-                sink(&entry);
-                emit_drop_heartbeat(sink, &dropped_last_reported);
+            /* Hold the line until it goes out: offline (or before the
+             * sink exists) the queue behind it fills, and the newest
+             * lines are the ones dropped. */
+            hux_log_sink_fn sink;
+            for (;;) {
+                sink = atomic_load_explicit(&s_sink, memory_order_acquire);
+                if (sink != NULL && sink(&entry)) {
+                    break;
+                }
+                vTaskDelay(RETRY_TICKS);
             }
+            emit_drop_heartbeat(sink, &dropped_last_reported);
         } else {
             hux_log_sink_fn sink = atomic_load_explicit(&s_sink, memory_order_acquire);
             if (sink != NULL) {
@@ -266,7 +268,7 @@ void hux_log_init(void) {
     if (s_queue != NULL) {
         return; /* Idempotent — already initialised. */
     }
-    s_queue = xQueueCreate(LOG_QUEUE_DEPTH, sizeof(hux_log_entry_t));
+    s_queue = xQueueCreateWithCaps(LOG_QUEUE_DEPTH, sizeof(hux_log_entry_t), MALLOC_CAP_SPIRAM);
     configASSERT(s_queue != NULL);
 
     BaseType_t ok = xTaskCreate(drain_task, "hux_log_drain", DRAIN_TASK_STACK,
