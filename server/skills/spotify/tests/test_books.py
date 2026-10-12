@@ -19,7 +19,7 @@ import pytest
 
 from huxley_sdk import AudioStream
 from huxley_skill_spotify import skill as skill_module
-from huxley_skill_spotify.books import Place, Shelf
+from huxley_skill_spotify.books import Place, Shelf, capped_position
 from huxley_skill_spotify.search import BookInfo, Chapter, Match
 from huxley_skill_spotify.skill import SpotifySkill
 
@@ -802,6 +802,58 @@ class TestMovingWithinAChapter:
         await _take(stream, 1)  # type: ignore[arg-type]  # the turn ends: it resumes
         seek = [c for c in client.sent if c["command"] == "seek"][-1]
         assert 57_000 <= seek["position_ms"] <= 58_000  # 2 s and a tenth of the pause
+
+
+class TestAPlaceNeverRunsAhead:
+    """Soloist plays on when nobody reads its capture. A walkie switched off
+    mid-book kept the stream "playing" 16 min before the server noticed,
+    and the place jumped 16 min past what was heard (2026-10-12)."""
+
+    async def _listen_then_go(
+        self, tmp_path: Path, pcm_server: PcmServer, *, ran_ahead_ms: int
+    ) -> tuple[BookSoloist, Shelf]:
+        pcm_server.hold_open.set()
+        skill, client, _, shelf = await _skill(tmp_path, pcm_server)
+        stream = (await skill.handle("play_book", {"title": "cien años de soledad"})).side_effect
+        run = stream.factory()  # type: ignore[union-attr]
+        chunks = 0
+        async for _ in run:
+            chunks += 1
+            if chunks == 3:
+                break
+        # Nobody reads the capture any more; Soloist's clock runs on.
+        assert client.state.position_ms is not None
+        client.state.position_ms += ran_ahead_ms
+        await run.aclose()  # the server finally notices: the stream is cancelled
+        await _settle()
+        return client, shelf
+
+    async def test_a_listener_gone_long_ago_keeps_the_place_heard(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        client, shelf = await self._listen_then_go(tmp_path, pcm_server, ran_ahead_ms=900_000)
+        place = await shelf.place(BOOK.uri)
+        assert place is not None and place.chapter_uri == CHAPTERS[1].uri
+        # 60 s in, at most 300 ms sent, then 10 s back: not 16 min on.
+        assert 50_000 <= place.position_ms <= 50_300
+        # And Soloist goes back there too: a plain resume starts from it.
+        order = client.commands()
+        assert order[-1] == "seek" and "pause" in order[-3:]
+        assert client.sent[-1]["position_ms"] == place.position_ms
+
+    async def test_an_ordinary_stop_keeps_soloists_place(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        client, shelf = await self._listen_then_go(tmp_path, pcm_server, ran_ahead_ms=1_000)
+        place = await shelf.place(BOOK.uri)
+        assert place is not None and place.position_ms == 61_000
+        assert "seek" not in client.commands()
+
+
+def test_capped_position() -> None:
+    assert capped_position(65_000, 60_000) is None  # within the slack
+    assert capped_position(65_001, 60_000) == 50_000
+    assert capped_position(900_000, 4_000) == 0  # never before the start
 
 
 class TestNoOldAudioAfterASeek:

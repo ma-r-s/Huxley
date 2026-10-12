@@ -63,6 +63,7 @@ from huxley_skill_spotify.books import (
     PLAYED_AFTER_MS,
     Place,
     Shelf,
+    capped_position,
     find_chapter,
     fold,
     is_guide,
@@ -1335,12 +1336,20 @@ class SpotifySkill:
         back = rewind_ms(time.monotonic() - self._paused_at)
         return [("seek", {"position_ms": max(0, position - back)})]
 
-    async def _save_place(self, book: BookInfo) -> None:
+    def _place_now(self, book: BookInfo, sent: tuple[str, int] | None) -> tuple[Place, int] | None:
+        """Where the book is now, and how far Soloist ran ahead of the audio
+        sent (0 if it didn't). `sent` is the chapter and position the audio
+        sent so far reaches: the place never goes much past it."""
         state = self._require_client().state
         chapter = item_uri(state.item)
         if chapter is None or book.index_of(chapter) is None:
-            return
-        await self._require_shelf().set_place(book.uri, Place(chapter, position_now(state) or 0))
+            return None
+        position = position_now(state) or 0
+        if sent is not None and sent[0] == chapter:
+            capped = capped_position(position, sent[1])
+            if capped is not None:
+                return Place(chapter, capped), position - sent[1]
+        return Place(chapter, position), 0
 
     # --- Streaming ---
 
@@ -1421,6 +1430,16 @@ class SpotifySkill:
         # A resume or a chapter move of the book that's loaded is a book too.
         book_stream = book_start or (start is None and _is_book(client.state.context_uri or ""))
         audio_ms = 0
+        # Where the audio sent from this chapter started: (chapter, Soloist's
+        # position then, audio_ms then).
+        anchor: tuple[str, int, int] | None = None
+
+        def sent_until() -> tuple[str, int] | None:
+            """The chapter and position the audio sent so far reaches."""
+            if anchor is None:
+                return None
+            return anchor[0], anchor[1] + audio_ms - anchor[2]
+
         try:
             try:
                 reader, writer = await open_capture(self._pcm_host, self._pcm_port)
@@ -1589,7 +1608,8 @@ class SpotifySkill:
                             return
                     if time.monotonic() - place_at >= PLACE_EVERY_S:
                         place_at = time.monotonic()
-                        self._spawn(self._save_place(book))
+                        if (found := self._place_now(book, sent_until())) is not None:
+                            self._spawn(self._require_shelf().set_place(book.uri, found[0]))
                 if state.status == "paused":
                     # Paused from a Spotify app: let the speaker go.
                     paused_since = paused_since or time.monotonic()
@@ -1600,6 +1620,13 @@ class SpotifySkill:
                         return
                 else:
                     paused_since = None
+                if (
+                    book is not None
+                    and (now := item_uri(state.item)) is not None
+                    and (anchor is None or anchor[0] != now)
+                    and (at := position_now(state)) is not None
+                ):
+                    anchor = (now, at, audio_ms)
                 chunks += 1
                 audio_ms += CHUNK_MS
                 if book is not None and not marked and audio_ms >= PLAYED_AFTER_MS:
@@ -1635,8 +1662,23 @@ class SpotifySkill:
                 client.send("pause", generation=generation)
             if book is not None:
                 # Scheduled, not awaited: this is the cancel path.
-                if not mid_move:
-                    self._spawn(self._save_place(book))
+                found = None if mid_move else self._place_now(book, sent_until())
+                if found is not None:
+                    place, ahead = found
+                    if ahead and reason not in _NO_PAUSE:
+                        # Soloist played on with nobody listening (the walkie
+                        # went and the server noticed late): back to where
+                        # the listener was, or a resume picks up from there.
+                        client.send("seek", generation=generation, position_ms=place.position_ms)
+                    if ahead:
+                        await log.awarning(
+                            "spotify.place_capped",
+                            chapter=place.chapter_uri,
+                            ahead_ms=ahead,
+                            kept_ms=place.position_ms,
+                            audio_ms=audio_ms,
+                        )
+                    self._spawn(self._require_shelf().set_place(book.uri, place))
                 if audio_ms:
                     self._spawn(self._require_shelf().add_seconds(audio_ms / 1000))
                 if reason == "cancelled":

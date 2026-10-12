@@ -38,6 +38,14 @@ REWIND_MAX_MS = 20_000
 # This much audio proves a book plays here: a refused one stops after
 # 0.3-1.2 s (seen 2026-10-12).
 PLAYED_AFTER_MS = 10_000
+# Soloist plays on when nobody reads its capture: a walkie switched off
+# mid-book kept a stream "playing" for 16 min before the server noticed,
+# and the place jumped 16 min past what was heard (2026-10-12). A place
+# more than this ahead of the audio actually sent is not believed...
+AHEAD_SLACK_MS = 5_000
+# ...and goes back to this far before the last audio sent, as audiobook
+# apps do: some of it was still on its way when the listener went.
+AHEAD_REWIND_MS = 10_000
 
 
 def fold(text: str) -> str:
@@ -64,6 +72,15 @@ def order_books(matches: list[Match], language: str) -> list[Match]:
 
 def rewind_ms(paused_s: float) -> int:
     return int(min(REWIND_MAX_MS, REWIND_BASE_MS + paused_s * 100))
+
+
+def capped_position(position_ms: int, sent_until_ms: int) -> int | None:
+    """The place to keep when Soloist's position ran more than
+    AHEAD_SLACK_MS past the audio sent (which reaches `sent_until_ms` in
+    the same chapter); None when it didn't."""
+    if position_ms <= sent_until_ms + AHEAD_SLACK_MS:
+        return None
+    return max(0, sent_until_ms - AHEAD_REWIND_MS)
 
 
 _NUMBER = re.compile(r"\d+")
