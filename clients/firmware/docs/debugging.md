@@ -299,7 +299,9 @@ stall, both codecs and the expander answering on I2C, internal heap
 floor over 40 KB; `selftest dac_id= adc_id= expander= heap_min=`) and
 sends `phase: selftest` with the first failed check as `error`, then GETs
 `/firmware/manifest.json` with the same client settings and checks its
-`version` and `elf_sha` (`ota.manifest status= match=`). The server
+`version` and `elf_sha` (`ota.manifest status= match=`). While the image
+is pending it repeats both on every hello (`ota.verify selftest=
+manifest=`), so a server restart costs one round, not a reboot. The server
 closes the connection once (1012); after the reconnect's hello it sends
 `ota.accept {version}`, and the walkie keeps the image only if all of
 that held (`ota.accepted`, `phase: accepted`; else `ota.accept_refused
