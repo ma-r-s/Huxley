@@ -146,7 +146,7 @@ class RadioSkill:
                 name="stop_radio",
                 description=(
                     "Apaga la radio. Usa para 'apaga la radio', 'para la radio', "
-                    "'silencio', 'quita la radio', 'basta', 'ya'. La radio se pausa "
+                    "'silencio', 'quita la radio', 'basta'. La radio se pausa "
                     "sola mientras el usuario habla y vuelve sola después: para "
                     "apagarla de verdad llama siempre a esta herramienta."
                 ),

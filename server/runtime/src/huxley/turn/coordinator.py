@@ -127,7 +127,8 @@ class TurnCoordinator:
             "[Context, not said by the user: what was playing{label} is paused "
             "only while the user talks and comes back on its own after your "
             "reply. If the user asks to stop or pause it, call the tool that "
-            "does that; if they ask for something else to play, start it.]"
+            "does that; if they ask for something else to play, start it. If "
+            "they ask to keep going, call no tool: it comes back on its own.]"
         ),
         # Not labels either: what the user says to stop what plays. When
         # the words of a press are only these (at least one stop word),

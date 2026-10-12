@@ -232,13 +232,14 @@ ui_strings:
     [Contexto, no lo dijo el usuario: lo que estaba sonando{label} está en
     pausa solo mientras el usuario habla y vuelve a sonar solo después de tu
     respuesta. Si el usuario pide parar o pausar, llama a la herramienta que
-    lo hace; si pide poner otra cosa, ponla.]
+    lo hace; si pide poner otra cosa, ponla. Si pide seguir ("sigue",
+    "ponlo", "continúa"), no llames ninguna herramienta: vuelve solo.]
   # A press whose words are only these (with at least one stop word) keeps
   # what was playing stopped even if the model didn't call the stop tool:
   # "para", "ya basta", "apaga la música por favor". Accents don't matter.
   content_stop_words: >-
     para pare pausa pausala pausalo pausar silencio calla callate apaga
-    apagala apagalo apagar basta ya detente deten detener quita quitala
+    apagala apagalo apagar basta detente deten detener quita quitala
     quitalo suficiente stop
   content_filler_words: >-
     la el lo los las eso esto esa ese musica radio libro cancion audiolibro
@@ -488,7 +489,9 @@ i18n:
         [Context, not said by the user: what was playing{label} is paused
         only while the user talks and comes back on its own after your
         reply. If the user asks to stop or pause it, call the tool that
-        does that; if they ask for something else to play, start it.]
+        does that; if they ask for something else to play, start it. If
+        they ask to keep going ("go on", "continue"), call no tool: it
+        comes back on its own.]
       content_stop_words: stop pause quiet silence enough off mute
       content_filler_words: >-
         the it that this music radio book song please now ok okay turn just
@@ -737,7 +740,8 @@ i18n:
         pause seulement pendant que l'utilisateur parle et reprend tout seul
         après ta réponse. Si l'utilisateur demande d'arrêter ou de mettre en
         pause, appelle l'outil qui le fait ; s'il demande autre chose à
-        écouter, lance-le.]
+        écouter, lance-le. S'il demande de continuer (« continue »,
+        « vas-y »), n'appelle aucun outil : ça reprend tout seul.]
       content_stop_words: >-
         stop arrete arreter pause silence chut assez coupe couper eteins
         eteindre

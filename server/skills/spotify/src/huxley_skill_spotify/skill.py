@@ -337,7 +337,7 @@ class SpotifySkill:
             )
             control = (
                 "Controla la música de Spotify. action: 'pause' (pausa, para, silencio, "
-                "apágala, basta, ya; la música se pausa sola mientras el usuario habla y "
+                "apágala, basta; la música se pausa sola mientras el usuario habla y "
                 "vuelve sola después, así que para pararla de verdad llama siempre a "
                 "'pause'), "
                 "'resume' (sigue, sigue con la canción, continúa, vuelve a poner la "

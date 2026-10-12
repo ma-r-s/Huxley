@@ -287,7 +287,7 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "velocidad. Solo para libros: si lo último que sonaba es "
             "música o la radio, usa sus propios controles. El libro se "
             "pausa solo mientras el usuario habla y vuelve solo después: "
-            "para 'pausa', 'para', 'silencio', 'apágalo', 'basta' o 'ya' "
+            "para 'pausa', 'para', 'silencio', 'apágalo' o 'basta' "
             "llama siempre a la acción 'pause'. Antes de "
             "llamar esta herramienta, acusa recibo brevemente al usuario "
             "(por ejemplo: 'Listo, retrocedo 30 segundos.'). Nunca ejecutes la acción en silencio. Para "
