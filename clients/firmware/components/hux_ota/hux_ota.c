@@ -14,6 +14,7 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "hux_audio.h"
 #include "hux_link.h"
@@ -285,11 +286,17 @@ void hux_ota_boot_check(void) {
  * sends ota.accept. The image keeps itself only if all of that held. */
 static struct {
     bool started;
+    bool selftest_done;
     bool selftest_ok;
+    const char *selftest_why;
     bool manifest_ok;
-    uint32_t closes_at;
+    uint32_t closes_at; /* at the first manifest that matched: never moved */
     uint32_t connects_at;
 } s_verify;
+/* Each hello while pending: the self-test status again and the manifest
+ * fetched again, so a server restart costs one round, not a reboot (the
+ * server session's contract). */
+static SemaphoreHandle_t s_verify_hello;
 
 #define VERIFY_AFTER_S 20 /* the supervisor has watched every part this long */
 
@@ -334,29 +341,49 @@ static void verify_task(void *unused) {
     }
     const char *why = NULL;
     s_verify.selftest_ok = s_selftest == NULL || s_selftest(&why);
-    status(version, "selftest", s_verify.selftest_ok ? NULL : (why != NULL ? why : "unknown"));
-    if (s_verify.selftest_ok) {
-        char base[160];
-        char url[200];
-        char elf[10] = {0};
-        esp_app_get_elf_sha256(elf, sizeof(elf));
-        hux_net_server_uri(base, sizeof(base));
-        s_verify.manifest_ok = hux_link_http_url(base, "/firmware/manifest.json", url, sizeof(url)) &&
-                               fetch_manifest(url, version, elf);
-        /* The reconnect the accept wants comes after this point. */
-        s_verify.closes_at = hux_net_server_closes();
-        s_verify.connects_at = hux_net_connects();
+    s_verify.selftest_why = s_verify.selftest_ok ? NULL : (why != NULL ? why : "unknown");
+    s_verify.selftest_done = true;
+    char elf[10] = {0};
+    esp_app_get_elf_sha256(elf, sizeof(elf));
+    /* One round per hello (the first hello gave the semaphore already),
+     * for as long as the image is pending. */
+    while (strcmp(hux_ota_running_state(), "pending") == 0) {
+        status(version, "selftest", s_verify.selftest_why);
+        if (s_verify.selftest_ok) {
+            char base[160];
+            char url[200];
+            hux_net_server_uri(base, sizeof(base));
+            bool ok = hux_link_http_url(base, "/firmware/manifest.json", url, sizeof(url)) &&
+                      fetch_manifest(url, version, elf);
+            if (ok && !s_verify.manifest_ok) {
+                /* The reconnect the accept wants comes after this point;
+                 * later rounds don't move it (they'd race the accept). */
+                s_verify.closes_at = hux_net_server_closes();
+                s_verify.connects_at = hux_net_connects();
+            }
+            s_verify.manifest_ok = s_verify.manifest_ok || ok;
+        }
+        ESP_LOGW(TAG, "ota.verify selftest=%d manifest=%d", s_verify.selftest_ok,
+                 s_verify.manifest_ok);
+        xSemaphoreTake(s_verify_hello, portMAX_DELAY);
     }
-    ESP_LOGW(TAG, "ota.verify selftest=%d manifest=%d", s_verify.selftest_ok, s_verify.manifest_ok);
     vTaskDelete(NULL);
 }
 
 void hux_ota_after_hello(void) {
-    if (s_verify.started || strcmp(hux_ota_running_state(), "pending") != 0) {
+    if (strcmp(hux_ota_running_state(), "pending") != 0) {
         return;
     }
+    if (s_verify.started) {
+        xSemaphoreGive(s_verify_hello); /* the next round, once the self-test ran */
+        return;
+    }
+    if (s_verify_hello == NULL) {
+        s_verify_hello = xSemaphoreCreateBinary();
+    }
     s_verify.started = true;
-    if (xTaskCreate(verify_task, "hux_ota_verify", 6144, NULL, 3, NULL) != pdPASS) {
+    if (s_verify_hello == NULL ||
+        xTaskCreate(verify_task, "hux_ota_verify", 6144, NULL, 3, NULL) != pdPASS) {
         s_verify.started = false;
         ESP_LOGE(TAG, "ota.verify task_create_failed: retried at the next hello");
     }
@@ -390,5 +417,8 @@ void hux_ota_accept(const char *version) {
     esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
     ESP_LOGW(TAG, "ota.accepted slot=%s version=%s err=%s", hux_ota_running_slot(), running,
              esp_err_to_name(err));
+    if (s_verify_hello != NULL) {
+        xSemaphoreGive(s_verify_hello); /* the verify task sees "valid" and ends */
+    }
     status(running, err == ESP_OK ? "accepted" : "failed", err == ESP_OK ? NULL : "mark_valid");
 }
