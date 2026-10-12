@@ -17,6 +17,7 @@ from .logs import (
     NOW,
     ago,
     alive,
+    answer,
     bench,
     claim_ended,
     claim_started,
@@ -32,7 +33,6 @@ from .logs import (
     press,
     ptt_stop,
     radio_started,
-    speaking,
     starting,
     stream_ended,
     stream_started,
@@ -68,8 +68,7 @@ DAY = flat(
     alive(NOW - timedelta(seconds=5), "w1", 120_000),
     press(ago(hours=2, minutes=50)),
     ptt_stop(ago(hours=2, minutes=50) + timedelta(seconds=3)),
-    speaking(ago(hours=2, minutes=49), True),
-    speaking(ago(hours=2, minutes=48), False),
+    answer(ago(hours=2, minutes=49), ago(hours=2, minutes=48)),
     stream_started(ago(hours=2), "s1", "Joropo"),
     play_started(ago(hours=2), "spotify:track:x"),
     stream_ended(ago(hours=1), "s1"),
@@ -204,7 +203,7 @@ def test_books_gauge_with_and_without_allowance() -> None:
     assert '<div class="num">30 min</div>' in page
     assert "allowance not set" in page
     page = render(status_for(DAY, book_seconds=4 * 3600.0, book_hours_per_month=15.0))
-    assert '<div class="num">4.0 h</div><div class="of">of 15 h</div>' in page
+    assert '<div class="num">11 h</div><div class="of">of 15 h</div>' in page  # what's left
 
 
 def test_calls_per_person() -> None:
@@ -296,3 +295,29 @@ def test_server_up_but_not_ready() -> None:
     status = status_for(DAY, health_ok=False)
     assert status["tiles"]["server"]["ready"] is False
     assert ">not ready, 3 d, fw 5d89504f<" in render(status)
+
+
+def test_the_day_picker_sits_above_the_strip_with_the_panel_under_it() -> None:
+    status = status_for(DAY)
+    status["archive"] = {"today": "2026-10-12", "first": "2026-10-09", "prev": "2026-10-11"}
+    page = render(status)
+    picker = page.index('class="picker"')
+    assert picker < page.index('class="strip"') < page.index('id="panel"')
+    assert 'data-go="prev" data-day="2026-10-11"' in page
+    assert 'data-go="next" data-day="" aria-label="next day" disabled' in page
+    assert 'data-go="today" disabled>Today<' in page
+    assert '<span class="pd">Mon 12 Oct</span>' in page
+    assert '<symbol id="i-play"' in page  # the panels' icons
+    # Reloading would cut a recording or a past day short: the script
+    # reloads only when idle; the meta refresh is for pages without it.
+    assert '<noscript><meta http-equiv="refresh"' in page
+
+
+def test_no_previous_day_without_older_logs() -> None:
+    status = status_for(DAY)
+    status["archive"] = {"today": "2026-10-12", "first": "2026-10-12", "prev": None}
+    assert 'data-go="prev" data-day="" aria-label="previous day" disabled' in render(status)
+
+
+def test_the_huxley_lane_is_the_answer_not_the_song() -> None:
+    assert status_for(DAY)["today"]["answer"] == [[731.0, 732.0]]  # 12:11 to 12:12

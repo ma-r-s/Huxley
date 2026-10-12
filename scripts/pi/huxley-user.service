@@ -1,0 +1,32 @@
+# systemd USER unit for the production Huxley server on the Orange Pi
+# (docs/remote-operation.md W1). No sudo: lingering is on for mario
+# (`loginctl enable-linger mario`), so user units start at boot.
+#
+# Install: cp scripts/pi/huxley-user.service ~/.config/systemd/user/huxley.service
+#          systemctl --user daemon-reload && systemctl --user enable --now huxley
+# Status:  systemctl --user status huxley
+# Logs:    tail -f ~/huxley/server/runtime/logs/huxley.log
+#
+# A user unit can't raise its own priority (Nice < 0, OOMScoreAdjust < 0):
+# huxley.service (the system unit) does, and needs sudo once.
+
+[Unit]
+Description=Huxley voice agent (production)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/huxley/server/runtime
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# No RTC on the Pi: after a power cut the clock is wrong until NTP, and
+# reminders and recordings use the clock.
+ExecStartPre=/bin/sh -c 'until [ "$(timedatectl show -p NTPSynchronized --value)" = yes ]; do sleep 2; done'
+TimeoutStartSec=600
+ExecStart=%h/.local/bin/uv run --package huxley huxley
+KillSignal=SIGINT
+TimeoutStopSec=30
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

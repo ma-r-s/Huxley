@@ -141,6 +141,7 @@ Five primitives (all documented in [`io-plane.md`](./io-plane.md)):
 
 - **`AudioStream` / `PlaySound` / `CancelMedia` / `SetVolume`** — claim the speaker output stream (already shipped)
 - **Turn injection (`ctx.inject_turn`)** — a skill synthesizes a turn into the turn loop from outside the user's speech path
+  (spoken only when a client can hear it: it waits while nobody is connected and is said, in order, when someone is back, unless the skill's `expires_after` passed; `inject_turn_and_wait` reports whether it was heard)
 - **`InputClaim`** — a skill takes over the mic stream (and optionally the speaker) for a duration
 - **`ClientEvent` subscription (`ctx.subscribe_client_event`)** — skills subscribe to string-keyed control events from the client
 - **`background_task` (`ctx.background_task`)** — skills register supervised long-running tasks (schedulers, listeners)
@@ -163,6 +164,7 @@ Every `Activity` registered on a channel gets delivered a `(FocusState, MixingBe
 Live paths through `FocusManager`:
 
 - **DIALOG** — `ctx.inject_turn(prompt)` creates a synthetic INJECTED turn with a DIALOG Activity. Highest priority (100). Channel priority means DIALOG preempts every other channel; the LLM narrates the prompt; DIALOG releases when the turn ends.
+  The turn starts only when a client can hear it (no client, no voice session, a turn in progress or an earlier injected turn still playing: it waits), and one cut off by a disconnect is said again, whole ([turns.md](./turns.md#proactive-turns-wait-for-a-listener-t144)).
 - **COMMS** — an `InputClaim` side-effect (or direct `ctx.start_input_claim` call) registers an Activity on COMMS. Priority 150 means COMMS preempts CONTENT but yields to DIALOG. Single-slot by policy: a second claim raises `ClaimBusyError` so the skill rejects the peer cleanly (call-waiting stacking is explicitly out of scope). Telegram calls live here.
 - **CONTENT** — any `AudioStream` side-effect returned from a skill's `handle()` gets an Activity on CONTENT; pump runs while FOREGROUND, cancels on BACKGROUND/MUST_PAUSE (NONMIXABLE) or NONE. On BACKGROUND/MAY_DUCK (MIXABLE streams) the pump keeps running with a 100ms ramp to 0.3 gain — classic AVS ducking. Audiobooks set `patience=30min` so a COMMS claim parks the book in BACKGROUND rather than evicting it; on claim-end, FM promotes CONTENT back to FOREGROUND and the skill's factory re-reads the current position from storage to resume from where it paused. A user press doesn't go through FM: the coordinator **holds** the stream for the turn and resumes it when the turn ends without stopping or replacing it; a missing client holds it too ([ADR 2026-10-12](./decisions.md#2026-10-12-a-press-pauses-content-the-turns-end-resumes-it-t130)).
 - **Patience expiry** — when a backgrounded Activity times out, FM calls its `on_patience_expired()` hook before the final NONE/MUST_STOP so the skill can narrate the eviction (e.g., audiobooks inject_turn a "pausé tu libro por la llamada larga" message).

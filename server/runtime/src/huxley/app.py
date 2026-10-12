@@ -37,7 +37,7 @@ from huxley.storage.backup import ensure_daily_snapshot
 from huxley.storage.db import Storage
 from huxley.storage.secrets import JsonFileSecrets
 from huxley.storage.skill import NamespacedSkillStorage
-from huxley.turn import TurnCoordinator
+from huxley.turn import TurnCoordinator, turn_waits_forbidden
 from huxley.voice.openai_realtime import OpenAIRealtimeProvider
 from huxley.voice.provider import VoiceProviderCallbacks
 from huxley_sdk import AppState, InvalidTransitionError, SkillContext, SkillRegistry
@@ -199,6 +199,11 @@ class Application:
             dispatch_tool=self.skill_registry.dispatch,
             status_messages=self._resolved_persona.ui_strings or None,
             focus_manager=self.focus_manager,
+            # Proactive turns wait for a listener (T1.44), read live from the
+            # server (a client whose hello is out); delivery is confirmed by
+            # a ping to the client the turn was said to.
+            listener_epoch=lambda: self.server.listener_epoch,
+            confirm_client_received=self.server.client_received_all,
         )
 
         # `_shutting_down` gates auto-reconnect inside `_on_session_end`
@@ -425,11 +430,15 @@ class Application:
         # (`skills` excludes it), so the next boot re-checks it.
         self._setup_task_handles = {}
         try:
-            await self.skill_registry.setup_all(
-                self._build_skill_context,
-                on_skill_disabled=self._on_skill_setup_error,
-                on_teardown_error=self._on_skill_teardown_error,
-            )
+            # A skill awaiting `inject_turn_and_wait` in setup gets QUEUED
+            # instead of a wait: at boot the turn waits for the walkie,
+            # whose connection waits for this start (T1.44).
+            with turn_waits_forbidden():
+                await self.skill_registry.setup_all(
+                    self._build_skill_context,
+                    on_skill_disabled=self._on_skill_setup_error,
+                    on_teardown_error=self._on_skill_teardown_error,
+                )
         finally:
             self._setup_task_handles = None
         await self._persist_skill_schema_versions()
@@ -452,8 +461,8 @@ class Application:
             # lost audio from "the first half of what I said while holding the
             # button." Idle sessions cost zero tokens (see turns.md §7), so there's
             # no reason to stay disconnected until the user presses. If the connect
-            # fails, `_enter_connecting` catches it and drops back to IDLE; the
-            # user can retry manually.
+            # fails, `_enter_connecting` catches it, drops back to IDLE and starts
+            # the reconnect loop (T1.44).
             await self.state_machine.trigger("wake_word")
 
     async def _on_skill_setup_error(self, skill_name: str, exc: BaseException) -> None:
@@ -613,6 +622,11 @@ class Application:
             await self.server.send_status(
                 _STATUS_FAILED.get(self._resolved_persona.language_code, _STATUS_FAILED["en"])
             )
+            # A connect that fails at boot or after a client's wake_word is
+            # retried like a dropped session (T1.44): until then only a
+            # session end started the loop, and a failed boot connect sat
+            # IDLE (`/health` ok=false) until the next wake_word.
+            await self._schedule_reconnect("connect_failed")
             return
         # Content a press paused while the session was down comes back.
         await self.coordinator.on_session_connected()
@@ -629,7 +643,8 @@ class Application:
         self._resolved_persona = self.persona.resolve(language)
         self._active_language = self._resolved_persona.language_code
         self.coordinator.set_ui_strings(self._resolved_persona.ui_strings or None)
-        await self.skill_registry.reconfigure_all(self._build_skill_context)
+        with turn_waits_forbidden():
+            await self.skill_registry.reconfigure_all(self._build_skill_context)
         await logger.ainfo(
             "app.language_applied",
             language=self._resolved_persona.language_code,
@@ -702,6 +717,19 @@ class Application:
 
         if not will_reconnect:
             return
+        await self._schedule_reconnect("session_end")
+
+    async def _schedule_reconnect(self, trigger: str) -> None:
+        """Start the reconnect loop unless one already runs (an attempt
+        made by the loop itself fails into `_enter_connecting`, which
+        calls this from inside it) or the app is shutting down."""
+        if self._shutting_down:
+            return
+        task = self._reconnect_task
+        if task is not None and not task.done():
+            await logger.ainfo("app.reconnect_already_running", trigger=trigger)
+            return
+        await logger.ainfo("app.reconnect_scheduled", trigger=trigger)
         self._reconnect_task = asyncio.create_task(self._auto_reconnect())
 
     async def _auto_reconnect(self) -> None:

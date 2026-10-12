@@ -15,6 +15,7 @@ from __future__ import annotations
 from huxley_sdk.catalog import Catalog, Hit
 from huxley_sdk.registry import SkillNotFoundError, SkillRegistry, SkillUnavailableError
 from huxley_sdk.types import (
+    DEFAULT_INJECT_EXPIRY,
     AppState,
     AudioStream,
     BackgroundTaskHandle,
@@ -23,6 +24,7 @@ from huxley_sdk.types import (
     ClaimEndReason,
     ClaimHandle,
     ContentType,
+    InjectOutcome,
     InjectPriority,
     InjectTurn,
     InjectTurnAndWait,
@@ -43,6 +45,7 @@ from huxley_sdk.types import (
 )
 
 __all__ = [
+    "DEFAULT_INJECT_EXPIRY",
     "AppState",
     "AudioStream",
     "BackgroundTaskHandle",
@@ -53,6 +56,7 @@ __all__ = [
     "ClaimHandle",
     "ContentType",
     "Hit",
+    "InjectOutcome",
     "InjectPriority",
     "InjectTurn",
     "InjectTurnAndWait",

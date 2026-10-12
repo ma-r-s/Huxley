@@ -19,7 +19,9 @@ never writes**, the server's data:
 - `persona.yaml`: the timezone and `spotify.book_hours_per_month`;
 - the pid in the server's instance lock (`<logs>/huxley-<port>.lock`, for
   `huxley.port`, default 8765), to tell a stopped server from a quiet one
-  (same box only), or its `/health` once it has one.
+  (same box only), or its `/health` once it has one;
+- the recorder's Ogg Opus files (`<persona data dir>/recordings/YYYY/MM/DD/`,
+  T1.43 W3), for the archive's players (see "The archive").
 
 It never opens the voice WebSocket (a second client would evict the walkie).
 
@@ -49,7 +51,8 @@ every address (`0.0.0.0`, `::`, `0`, in any spelling) is refused unless
 ## The page
 
 Labels, numbers and charts, no sentences (Mario's approved mockup,
-2026-10-12). It renders only from the data `/status.json` serves.
+2026-10-12). It renders only from the data `/status.json` serves (the
+archive's list, from the data `/day/YYYY-MM-DD.json` serves).
 
 - **Top**: a status dot (green, amber, red) and "All good" or "N need you".
   While a test window silences alerts, a hatched dot and "Testing until
@@ -66,9 +69,11 @@ Labels, numbers and charts, no sentences (Mario's approved mockup,
   OpenAI (today's spend, or the balance left once you enter one).
 - **Today, hour by hour**: three lanes from midnight: the walkie connected
   (its connections merged, never summed); him talking (top half) and
-  Huxley speaking (bottom half); music, books, radio and calls. Test
-  windows hatched ("bench" grey, "test" amber), a dashed "now" line, a
-  tooltip on everything.
+  Huxley speaking (bottom half: the model's audio, from
+  `coord.audio_start`, never a song that holds the speaker); music, books,
+  radio and calls. Test windows hatched ("bench" grey, "test" amber), a
+  dashed "now" line, a tooltip on everything. A day picker above it and the
+  day's list under it: the archive (below).
 - **Last 7 days**: stacked hours of music, books, radio and calls, presses
   under each day, days before the logs begin as dashed "no logs".
 - **Audiobook hours**: this month's seconds against `books.hours_per_month`
@@ -79,8 +84,9 @@ Labels, numbers and charts, no sentences (Mario's approved mockup,
 - **Calls**: the week's total and one row per person.
 
 Charts are HTML and CSS, so labels stay readable at phone width; light and
-dark follow the system. One small inline script shows tooltips on hover or
-tap. Stream kinds come from the skill's own line, logged right after the
+dark follow the system. An inline script shows tooltips on hover or tap,
+and runs the archive (the picker, the panels, the players). Stream kinds
+come from the skill's own line, logged right after the
 stream starts: a `spotify.play_started` on a `spotify:show:` is a book,
 other Spotify plays music, `radio.stream_started` radio,
 `audiobooks.stream_started` a book; streams pair by `stream_id`, calls are
@@ -94,6 +100,85 @@ Only the walkie counts: presses from its connections, and answers,
 streams and calls while it was connected (one client at a time: outside
 those stretches they went to another client, or nowhere). Tests in the
 logs with the phone app or the PWA don't show up as his use.
+
+## The archive
+
+Each call and its recording, each thing said, and when something played,
+one tap from the day strip (Mario: "see each call and hear its
+recording"). One list per day in time order, read straight from that
+day's logs: nothing is paired with anything, so nothing can be paired
+wrong.
+
+- **Day picker** above the strip: previous and next day (stepping over
+  days with no logs) and Today, from the oldest line any log file holds.
+  The strip redraws for that day and its list opens; the tiles, cards,
+  week and charts stay about today.
+- **A tap on a block** (or between blocks: the nearest within about
+  14 px) opens the day's list under the strip, without leaving the page,
+  scrolled to that time with the rows there marked. A tap on a bench or
+  test band goes to its rows.
+- **The rows**, each at its own time: the time, an icon, then
+  - what was said: `transcript` lines, him or Huxley, the text (the only
+    prose on the page);
+  - a tool the model called: `session.rx.tool_call`, its name and its
+    arguments kept short;
+  - a recording: a `recorder.segment` line whose file still exists, a
+    play button, a plain progress bar (tap to seek) and its length, marked
+    mic (his press), model (Huxley) or call; a call's two legs (his side,
+    the other side) are two play rows at the call's time;
+  - what played: one row per stream (music, books, radio: title, end,
+    length) and per call (who, end, length), paired as on the strip.
+  A recording sits at its time next to whatever was said then.
+  Transcripts have no turn yet (remote-operation W3), and a time-based
+  join was tried and dropped: late transcripts (19 s after the press, in
+  the 2026-10-12 log) and out-of-order ones would pair the wrong text.
+- **Bench**: rows inside a bench window fold into one "bench" row with a
+  count, opened with a tap, never mixed into his. A "link test" window
+  hides nothing.
+- **Gaps**: a thin marker with the length where nothing happened for 10
+  minutes or more.
+- **Recordings** exist since recording was turned on (2026-10-12 18:31Z);
+  earlier days have the words and the tools, no play rows. Only the
+  walkie counts, as on the strip: its connections' recordings, and the
+  rest while it was connected.
+
+Reading a day (`daylog.py`): only the files whose lines reach that day
+(each file's first and last time are indexed, cached by size and mtime),
+and in them only the day's lines, plus what was still open at midnight
+from the start of its run (the walkie's connection, a stream, a call) and
+the ends of streams, calls and recordings up to 6 h after. Time and event
+name are read from a line's bytes before any JSON is decoded. A run can
+last weeks in one file, so where a day starts in each file is kept, with
+what was open there (a handful of lines, not the run's history): asking
+for today again reads only today's lines. It is keyed by the file's first
+line and dropped past the file's end, so a file rewritten in place (the
+runtime reopens `huxley.log` with "w" after a failed rotation) is read
+again.
+Past days are kept built (8 at most, one entry each) until their files,
+recordings or settings change; today is rebuilt each time.
+
+`/day/YYYY-MM-DD.json` is that day as the page draws it: the strip's
+markup (the same renderer as today's), the list's markup, and the picker's
+fields (date, label, previous and next day). The rows and the strip's
+numbers behind them are `Archive.view()` (tests, tools). Gzipped when the
+browser asks. A day before the logs, after today, or not a date: 404.
+
+`/audio/<YYYY/MM/DD/file.ogg>` serves a recording read-only, as
+`audio/ogg`, with byte ranges (Safari needs them). It resolves only to an
+existing `.ogg` file under the recordings dir (`huxley.recordings_dir`,
+default `recordings/` next to the persona DB): `..`, an absolute path, a
+backslash, an empty part, a `.ogg.part` and a symlink leading out of it are
+404. Players use the browser's audio element: Ogg Opus plays in Chrome,
+Edge and Firefox, and in Safari 17+ on macOS 14+ (and iOS 17+); on an older
+Safari the play button turns red.
+
+The page used to reload itself with a meta refresh; its script now reloads
+it when idle (nothing playing, and the list closed on today, or no touch
+for 15 minutes), so a recording or a past day is never cut short. A tap
+while a recording plays leaves the list as it is. Audio paused or resumed
+by the phone itself is followed. The "Stopped checking" check runs every
+30 s, and asks `/status.json` before saying so: an old page is not a
+stopped watcher. Without JavaScript the meta refresh still applies.
 
 ## The rules
 
@@ -176,15 +261,33 @@ row, ping, db, duration), `watch.item_opened`, `watch.item_cleared`,
 `watch.bench_window_capped`,
 `watch.config_invalid`, `watch.secrets_insecure`, `watch.timezone_fallback`,
 `watch.telegram_off`, `watch.ping_off`, `watch.book_budget_off`,
-`watch.cycle_failed`. Errors are logged by type, never by message: a
-message can quote a token or the ping URL.
+`watch.cycle_failed`, `watch.archive_day` (a day built: files read,
+rows, rows by kind, bytes, duration), `watch.archive_read_failed`
+(and `watch.step_failed step=archive_day` with the day and where). Errors
+are logged by type, never by message: a message can quote a token or the
+ping URL.
 
 ## Not in v0
 
-- The archive one click away (day, conversation, audio and transcript):
-  the recorder is in main now (`recorder.segment` lines); the archive is
-  next.
+- Words and recordings side by side, not joined: once `transcript` lines
+  carry a turn (remote-operation W3), a press's text can sit on its play
+  row. Call legs are not transcribed.
 - Charging: waits for the 5V divider on IO8 (W7); then the tile can say "charging".
 - The server's `/health` (T1.43 W1): until it exists, a server that hangs
   without exiting looks quiet, not down (its process is still there).
 - Rollback, update probation, Access token and 4G SIM expiry: no signal yet.
+
+## Audiobook hours
+
+Spotify has no API for the hours left (the Web API's audiobook routes are
+catalog only; the number is on the account page, in whole hours). So the
+page keeps its own count, set once in `[books]`: `hours_per_month` (the
+add-on's 15) and `renews_day` (the billing day). Hours left = allowance
+minus the book audio the walkie played since the last renewal, from the
+logs (`spotify.stream_ended` `audio_ms` of book streams, plus a book still
+playing): Spotify bills 1x content time and replays, the same thing.
+Bench runs count (a test that plays a book spends real hours). A
+confirmed refusal (`spotify.refusal_explained cause=book_no_hours`) forces
+0 and opens the card; a bare `start_refused` never does. The count is
+exact only if that Spotify account plays nowhere else.
+

@@ -37,13 +37,15 @@ static adc_cali_handle_t s_level_cali; /* that pin's 6 dB calibration */
 static SemaphoreHandle_t s_lock;
 
 /* The level (F-0025): once the divider is wired (the solder blob on R78:
- * GPIO6; held the other way round it lands on GPIO1), a reading every
- * minute while the speaker is quiet, reported on a change of percentage
- * and every 5 min. */
-#define LEVEL_TICK_MS      60000
+ * GPIO6; held the other way round it lands on GPIO1), a reading at boot,
+ * every 20 min while the speaker is quiet (a charge drops about 1 % in
+ * 15-30 min, so 20 % and 10 % are caught in time), and a fresh one at each
+ * press, sent then whatever it reads: "how much battery" is answered from
+ * now (Mario, 2026-10-12). Otherwise sent when the percentage changes. */
+#define LEVEL_READ_EVERY_MS (20 * 60 * 1000)
+#define LEVEL_NOT_WIRED_RETRY_MS (10 * 60 * 1000)
 #define LEVEL_BUSY_RETRY_MS 5000
 #define LEVEL_LOADED_AFTER_MS (5 * 60 * 1000) /* no quiet minute: read anyway */
-#define LEVEL_REPORT_MS    (5 * 60 * 1000)
 #define LEVEL_SAMPLES      32
 #define CAL_NVS_NS         "hux_bat"
 #define CAL_NVS_KEY        "cal_ppm"
@@ -53,6 +55,8 @@ static volatile int s_raw_cell_mv = -1; /* before the multimeter calibration */
 static volatile int s_cell_mv = -1;
 static volatile int s_pct = -1;
 static hux_battery_sink_fn s_sink;
+static TaskHandle_t s_level_task = NULL;
+static volatile bool s_send_next = false; /* a press asked: send this reading */
 
 bool hux_battery_init(void) {
     adc_oneshot_unit_init_cfg_t unit = {.unit_id = ADC_UNIT_1};
@@ -235,7 +239,6 @@ static uint32_t uptime_ms(void) {
 
 static void level_task(void *arg) {
     (void)arg;
-    uint32_t last_report = 0;
     uint32_t last_quiet = uptime_ms();
     bool told_not_wired = false;
     for (;;) {
@@ -244,11 +247,12 @@ static void level_task(void *arg) {
                 ESP_LOGI(TAG, "battery.not_wired: no cell on GPIO6 or GPIO1 (F-0025's blob)");
                 told_not_wired = true;
             }
-            vTaskDelay(pdMS_TO_TICKS(10 * LEVEL_TICK_MS));
+            vTaskDelay(pdMS_TO_TICKS(LEVEL_NOT_WIRED_RETRY_MS));
             continue;
         }
+        bool asked = s_send_next;
         bool busy = hux_audio_spk_ring_used() > 0;
-        if (busy && uptime_ms() - last_quiet < LEVEL_LOADED_AFTER_MS) {
+        if (!asked && busy && uptime_ms() - last_quiet < LEVEL_LOADED_AFTER_MS) {
             vTaskDelay(pdMS_TO_TICKS(LEVEL_BUSY_RETRY_MS)); /* the amp sags the cell */
             continue;
         }
@@ -264,16 +268,17 @@ static void level_task(void *arg) {
             s_raw_cell_mv = raw;
             s_cell_mv = cell;
             s_pct = pct;
-            if (changed || uptime_ms() - last_report >= LEVEL_REPORT_MS) {
-                ESP_LOGI(TAG, "battery.level mv=%d pct=%d pin=%d raw_mv=%d loaded=%d", cell, pct,
-                         PINS[s_level_pin], raw, busy);
+            if (changed || asked) {
+                ESP_LOGI(TAG, "battery.level mv=%d pct=%d pin=%d raw_mv=%d loaded=%d why=%s", cell,
+                         pct, PINS[s_level_pin], raw, busy, asked ? "press" : "changed");
                 if (s_sink != NULL) {
                     s_sink(cell, pct);
                 }
-                last_report = uptime_ms();
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(LEVEL_TICK_MS));
+        s_send_next = false;
+        /* Until the next 20 min, or a press asking for one now. */
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(LEVEL_READ_EVERY_MS));
     }
 }
 
@@ -282,7 +287,7 @@ void hux_battery_start(hux_battery_sink_fn sink) {
         return;
     }
     s_sink = sink;
-    if (xTaskCreate(level_task, "hux_bat", 4096, NULL, 2, NULL) != pdPASS) {
+    if (xTaskCreate(level_task, "hux_bat", 4096, NULL, 2, &s_level_task) != pdPASS) {
         ESP_LOGE(TAG, "battery.task_create_failed");
     }
 }
@@ -291,6 +296,14 @@ bool hux_battery_last(int *mv, int *pct) {
     *mv = s_cell_mv;
     *pct = s_pct;
     return *pct >= 0;
+}
+
+void hux_battery_read_now(void) {
+    if (s_level_task == NULL || s_level_pin < 0) {
+        return;
+    }
+    s_send_next = true;
+    xTaskNotifyGive(s_level_task);
 }
 
 void hux_battery_report_now(void) {

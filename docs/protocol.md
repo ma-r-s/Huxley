@@ -66,7 +66,9 @@ and given a role:
     "since": "2026-10-13T00:12:40+00:00"
   },
   "walkie_last_seen": "2026-10-13T00:33:12+00:00",
-  "recording": true
+  "recording": true,
+  "injects_waiting": 0,
+  "oldest_inject_wait_s": null
 }
 ```
 
@@ -81,6 +83,7 @@ and given a role:
 | `client` | The current client, `{connected: true, conn_id, audio_format, shell, since}` (`since` = when it connected), or the last one with `connected: false` (`since` = when it left); `null` if none since start. `shell` is from the client's `device` event (`firmware`, `browser`, `home_screen`, `native_app`; a `device.hello` means `firmware`), `null` until it sends one. |
 | `walkie_last_seen` | When a firmware client was last connected (now, while one is); `null` if none since the server started. In memory. |
 | `recording` | The running persona's recorder is attached ([observability](./observability.md#recordings)). |
+| `injects_waiting`, `oldest_inject_wait_s` | Proactive turns waiting for a client that can hear them, and how long the oldest has waited in seconds (`null` with none). In memory. ([turns.md](./turns.md#proactive-turns-wait-for-a-listener-t144); added T1.44.) |
 
 ## HTTP: `/firmware` and `/admin`
 
@@ -209,13 +212,13 @@ Everything rides the existing `client_event` / `server_event` channels: no new m
 
 | `event` | When | `data` |
 | --- | --- | --- |
-| `device.hello` | Right after the server's `hello`, on every connect. Replaces `device`. | `schema` (1), `protocol` (the protocol number the image speaks), `device_id` (MAC `aa:bb:..`), `board`, `version` (git describe), `elf_sha` (9 hex; decodes core dumps), `slot` (`ota_0`/`ota_1`), `slot_state` (`valid`/`pending_verify`), `reset` (`POWERON`, `SW_RESET`, `PANIC`, `TASK_WDT`, `INT_WDT`, `BROWNOUT`, `DEEPSLEEP`, ...), `boot_counter`, `uptime_s`, `audio` (`opus`/`pcm`), `caps` (list: `ota.v1`, `dev_cmd.v1`, `health.v1`, `battery.v1` as each lands; the server offers only what `caps` says), `rollback` (null or `{from_version, reason: no_server\|crash\|selftest\|manual}`), `coredump` (null or `{elf_sha, task, exc_pc}`), `net` (`{ssid, channel, rssi, bssid, source: compiled\|nvs}`), `time_to_hello_ms`, `volume` |
+| `device.hello` | Right after the server's `hello`, on every connect. Replaces `device`. | `schema` (1), `protocol` (the protocol number the image speaks), `device_id` (MAC `aa:bb:..`), `board`, `version` (git describe), `elf_sha` (9 hex; decodes core dumps), `slot` (`ota_0`/`ota_1`), `slot_state` (`valid`/`pending_verify`), `reset` (`POWERON`, `SW_RESET`, `PANIC`, `TASK_WDT`, `INT_WDT`, `BROWNOUT`, `DEEPSLEEP`, ...), `boot_counter`, `uptime_s`, `audio` (`opus`/`pcm`), `caps` (list: `ota.v1`, `dev_cmd.v1`, `health.v1`, `battery.v1` as each lands; the server offers only what `caps` says), `rollback` (null or `{from_version, reason: no_server\|crash\|selftest\|manual}`), `coredump` (null or `{elf_sha, task, exc_pc}`), `net` (`{ssid, channel, rssi, bssid, source: compiled\|nvs}`), `time_to_hello_ms` (the first hello of a boot: since boot; later ones: since the link dropped), `volume` |
 | `device.blackbox` | Right after `device.hello` when the previous boot left lines in RTC memory. | `lines` (up to ~4 KB of the last log lines before the reset), `dropped` |
 | `device.health` | Every 60 s while connected. Counters are since the previous line, so they sum. | `uptime_s`, `heap_internal_min`, `heap_internal_largest`, `psram_min`, `rssi`, `channel`, `bssid`, `wifi_disconnects` (`{reason: count}`), `tls_errors` (`{code: count}`), `reconnects`, `underruns`, `underrun_ms`, `discarded_ms`, `ws_rx_age_ms`, `ring_used_ms`, `volume`, `quiet_left_s`, `ota_state`, `battery` (`{mv, pct, charging}`, only once wired) |
-| `system.battery` | After each hello, on every change of percentage and every 5 min, once the cell is wired (F-0025). The system skill keeps the last one for `get_battery` and speaks once at 20 % and once at 10 %. | `mv` (the cell, calibrated), `pct` (0-100, from a Li-ion curve; follows a fall at once, a rise only past 5 points) |
+| `system.battery` | After each hello, with each press (a reading taken at the press) and when the percentage changes (read every 20 min), once the cell is wired (F-0025). The system skill keeps the last one for `get_battery` and speaks once at 20 % and once at 10 %. | `mv` (the cell, calibrated), `pct` (0-100, from a Li-ion curve; follows a fall at once, a rise only past 5 points) |
 | `audio.discarded` | Every time the device drops queued speaker audio. | `ms`, `why` (`server_clear` = an `audio_clear`; `press` = a local barge-in clear), `uptime_ms` |
 | `firmware.status` | During an update the server offered (`downloading`, `verifying`, `rebooting`, `failed`), and on the boot of a pending image: `selftest` when its silent self-test ends (supervisor progress for 20 s, expander and codec I2C, heap floors), `accepted` once it marked itself valid on `ota.accept`, `failed` if it refused the accept. The server logs every phase (`firmware.status`) and uses `selftest` in [the accept flow](#the-accept-flow). | `version`, `phase` (`downloading`\|`verifying`\|`rebooting`\|`failed`\|`selftest`\|`accepted`), `error` (null; for `selftest` the first failed check's name, e.g. `codec_es8311`; for `failed` the reason) |
-| `dev.cmd_result` | Reply to `dev.cmd`. | `id`, `output`, `truncated` |
+| `dev.cmd_result` | Reply to `dev.cmd`. | `id`, `output` (the lines the command logged on the app task, `L tag: text` each, up to ~1.5 KB), `truncated` (output or line cut) |
 
 ### Server to device (`server_event`)
 

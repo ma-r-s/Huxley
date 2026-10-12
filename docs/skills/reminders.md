@@ -8,7 +8,7 @@ Sister skill to [`timers`](timers.md). The split is intentional:
 | ------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
 | Time format         | relative seconds (`set_timer(seconds=300, ...)`) | absolute ISO 8601 with offset (`add_reminder(when_iso="2026-04-30T08:00:00-05:00", ...)`)             |
 | Lifetime            | one-shot                                         | one-shot or recurring (RFC 5545 RRULE — daily, weekly, weekdays-only, biweekly, monthly, COUNT, …)    |
-| Retry               | none                                             | medication kind retries up to 3× at 5 / 10 / 30 min until ack                                         |
+| Retry               | none                                             | medication kind: 3 fires until ack, the next 5 then 10 min after the previous was heard               |
 | Surface area        | one tool (`set_timer`)                           | five (`add_reminder`, `list_reminders`, `cancel_reminder`, `snooze_reminder`, `acknowledge_reminder`) |
 | Boot reconciliation | drop entries older than 1h                       | kind-aware late-window: medication=15min, appointment=2h, generic=1h                                  |
 
@@ -20,14 +20,15 @@ The user speaks naturally; the persona's system prompt routes "recuérdame en 5 
 2. The LLM reads the current time + persona timezone from the skill's `prompt_context`, computes ISO 8601 with offset for the next 8am local, and calls `add_reminder(message="tomar la pastilla del corazón", when_iso="2026-04-30T08:00:00-05:00", kind="medication", recurrence_rule="FREQ=DAILY")`.
 3. The skill writes the reminder to `SkillStorage` keyed `reminder:<id>` and wakes its scheduler.
 4. The single supervised scheduler `background_task` sleeps until the soonest pending row's `next_fire_at`.
-5. At fire time, the scheduler calls `ctx.inject_turn(prompt, priority=BLOCK_BEHIND_COMMS)`. The framework:
+5. At fire time, the scheduler commits the row as `fired` and narrates through `ctx.inject_turn_and_wait(prompt, priority=BLOCK_BEHIND_COMMS, dedup_key="reminder:<id>", expires_after=<late window left>)` in a task of its own. The framework waits for a client that can hear it (the walkie away, a server just started: T1.44), up to the reminder's late window counted from this fire's due time, and:
    - preempts any active audiobook (pump cancels, position saved, audiobook backgrounds with patience and auto-resumes after the reminder drains)
    - **queues behind any active Telegram call** (`BLOCK_BEHIND_COMMS` semantics — narrates after the call ends, never interrupts grandpa mid-conversation)
 6. The LLM narrates: _"Oye, ya es hora de tu pastilla del corazón."_
-7. User PTTs _"ya me la tomé"_. The LLM calls `acknowledge_reminder(id=...)`. The skill marks the row `acked` and (because `recurrence_rule="FREQ=DAILY"`) schedules a fresh `pending` row for tomorrow at 8.
-8. If user never acks, the skill re-fires at +5min, then +10min, then +30min. After three unacked fires, marks `missed` and (per recurrence) still schedules tomorrow's instance.
-9. If the server was down at the fire time, `setup()` reconciliation handles the row: within `late_window[kind]` → fire on next scheduler tick; beyond → mark `missed` (medication safety: don't double-dose). Either way, recurring reminders advance to the next instance so today's miss doesn't cancel tomorrow's reminder.
-10. Missed reminders surface to the LLM via `prompt_context()` until the user is told about them.
+7. User PTTs _"ya me la tomé"_. The LLM calls `acknowledge_reminder(id=...)`. The skill marks the row `acked` and (because `recurrence_rule="FREQ=DAILY"`) schedules a fresh `pending` row for tomorrow at 8. An ack while a fire still waits (behind the user's own turn) withdraws it.
+8. If user never acks, the skill re-fires 5 min after the first nag was heard, then 10 min after the second; the third fire is the last and marks the dose `missed` (per recurrence it still schedules tomorrow's instance). Retries count from the moment the framework reports a nag `DELIVERED`, not from when it was fired. Until T1.44 the retries never fired in a running process: the scheduler only fires `pending` rows and a fire left the row `fired`.
+9. Nobody could hear a fire inside its late window (`EXPIRED`): the row is marked `missed` (reason `no_listener`) and the next conversation mentions it. A one-shot kind that is heard (`DELIVERED`) becomes `acked`.
+10. If the server was down at the fire time, `setup()` reconciliation handles the row: within `late_window[kind]` → fire on next scheduler tick; beyond → mark `missed` (medication safety: don't double-dose). Either way, recurring reminders advance to the next instance so today's miss doesn't cancel tomorrow's reminder.
+11. Missed reminders surface to the LLM via `prompt_context()` until the user is told about them.
 
 ## Tools
 
@@ -108,16 +109,16 @@ skills:
 ## State machine
 
 ```
-                            ┌──(non-medication fire — ack-on-fire)──> acked
-                            │       └─ if recurring & series not exhausted: schedule next
-                            │
-pending ──(fire at next_fire_at)──> fired (medication only)
+pending ──(fire at next_fire_at)──> fired (waiting to be heard: T1.44)
    │                            │
-   │                            ├──(user PTT "ya me la tomé" → ack tool)──> acked
+   │                            ├──(non-medication, DELIVERED)──> acked
+   │                            │       └─ series already rolled at fire time
+   │                            ├──(any kind, EXPIRED: nobody heard it in its window)──> missed
+   │                            ├──(medication, DELIVERED)──> pending (next nag 5 / 10 min after hearing)
+   │                            │       └─ third fire ──> missed (budget=3 exhausted), still narrated
+   │                            ├──(user PTT "ya me la tomé" → ack tool)──> acked (a waiting fire is withdrawn)
    │                            │       └─ if recurring & series not exhausted: schedule next
-   │                            ├──(user "dame 5 más" → snooze)──> pending (ladder resets)
-   │                            └──(no ack → retry timer)──> fired → … →  missed (budget=3 exhausted)
-   │                                                                  └─ if recurring & series not exhausted: schedule next
+   │                            └──(user "dame 5 más" → snooze)──> pending (ladder resets)
    │
    ├──(boot reconciliation, past + outside late_window)──> missed
    │       └─ if recurring & series not exhausted: schedule next
@@ -142,7 +143,7 @@ The scheduler runs as a single supervised `background_task` with `restart_on_cra
 
 ### Crash safety: commit-before-inject
 
-`_fire` saves the post-fire state **before** calling `inject_turn`, mirroring the timers skill's `fired_at` pattern. Order matters for medication safety: if narration ran first and the process died before the state save, the next boot would see `state=pending` with `next_fire_at` past + within `late_window[medication]=15min`, and re-narrate. **Double-dose.** Saving first eliminates that window.
+`_fire` saves the post-fire state **before** narrating, mirroring the timers skill's `fired_at` pattern. The row stays `fired` until the framework reports the outcome (T1.44): `DELIVERED` acks a one-shot kind or schedules a medication's next nag from that moment, `EXPIRED` marks it missed, `DROPPED` (the persona stopped) leaves it `fired` for the next boot. Order matters for medication safety: if narration ran first and the process died before the state save, the next boot would see `state=pending` with `next_fire_at` past + within `late_window[medication]=15min`, and re-narrate. **Double-dose.** Saving first eliminates that window.
 
 The trade-off this introduces: a transient `inject_turn` failure (OpenAI Realtime blip) burns a retry-budget slot for medication kind without grandpa hearing anything. A sustained outage spanning all three retries marks the row `missed` with zero successful narrations. We accept that — silent miss is safer than double dose. Operators diagnose the path via the `reminders.fire_failed` log alongside the `reminders.fired` line that records each attempt's `fired_count`.
 
@@ -158,9 +159,9 @@ Per row, in order:
 4. `pending` past, within `late_window[kind]` → leave `pending`; scheduler fires on next tick (catch-up).
 5. `pending` past, beyond `late_window[kind]` → mark `missed`. Recurring rows still get the next instance scheduled.
 6. `fired` (medication, mid-retry when the process died) → if retries remain AND the next retry is within window, restore to `pending` with `next_fire_at` recomputed; else mark `missed`.
-7. `fired` (non-medication) → treated as already-narrated; transition to `acked` (we don't re-narrate appointments hours late). Recurring rows still advance.
+7. `fired` (non-medication) → not known heard (T1.44: it may have waited for the walkie when the process stopped): back to `pending` inside `late_window[kind]` (said again on the next tick), `missed` beyond it. A crash in the second between hearing it and saving `acked` repeats it once; for an appointment or a generic note that beats losing it.
 
-The bias throughout: **err on the side of NOT re-narrating** when in doubt. For medication this prevents double-dosing; for appointments it prevents stale notices.
+The bias for medication: **err on the side of NOT re-narrating** when in doubt (it prevents double-dosing). One-shot kinds lean the other way since T1.44: a reminder nobody heard is the failure that matters for a blind user.
 
 ## `prompt_context()`
 
@@ -175,7 +176,6 @@ Two purposes:
 
 - **ALERT-channel local fallback** — narrated reminders only. If OpenAI Realtime is unreachable at fire time, the `inject_turn` failure is logged and the row's state is **already advanced** (commit-before-inject — see Crash safety above), so the user gets no narration but the medication-safety property is preserved. A sustained outage across all three medication retries ends in `missed` without any successful narration. A non-narrated alert tone on the ALERT channel was discussed and explicitly punted (see [`docs/triage.md`](../triage.md) T1.8 critic notes 2026-04-29). Revisit when a real outage causes a real missed dose.
 - **Caregiver escalation** — exhausted medication retries mark `missed` and surface via `prompt_context`; they do NOT notify a caregiver via Telegram. Cannot design correctly without observing the actual failure mode (didn't hear / forgot / button confusion / dead device). Will be designed against the observed failure once we see it.
-- **TTL on `inject_turn`** — currently if a reminder fires during a 4h Telegram call, the inject queues for 4h and narrates at call-end. For a medication that's potentially wrong (the next dose may already be due). D7 in `triage.md` will close this when a real consumer surfaces the gap.
 - **Multi-device fan-out** — Huxley today is single-device per persona. AVS-style "ring on every Echo" is out of scope.
 
 ## Logging
@@ -183,7 +183,10 @@ Two purposes:
 All structured events use the `reminders.*` namespace per [observability.md](../observability.md):
 
 - `reminders.added`, `reminders.cancelled`, `reminders.snoozed`, `reminders.acked`
-- `reminders.fired` (per-fire — `id`, `kind`, `fired_count`, `message`)
+- `reminders.fired` (per-fire: `id`, `kind`, `fired_count`, `message`, `expires_in_s` (how long it may wait for a listener))
+- `reminders.delivery` (what the framework reported: `id`, `outcome` (`delivered`, `expired`, `dropped`), `fired_count`, `state`, `acted` (false: the row moved on meanwhile))
+- `reminders.retry_scheduled` (a medication nag was heard; `next_fire_at` of the next)
+- `reminders.boot_refire_undelivered` (a one-shot `fired` row said again after a restart: `late_s`)
 - `reminders.missed` (terminal — `id`, `kind`, `reason`, `scheduled_for`, `fired_count`)
 - `reminders.boot_within_window`, `reminders.boot_resumed_retry` — boot reconciliation outcomes
 - `reminders.seeded`, `reminders.seed_skipped_invalid`

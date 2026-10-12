@@ -294,9 +294,13 @@ Left:
 branch `t142-watch`): the visual page Mario approved, `/status.json`, every
 rule with a signal today, alerts (Telegram or the log, once on appearing and
 once on clearing, held at night, kept across restarts), the bench and test
-windows, the dead-man ping. Not yet: the archive (the recorder is in, the
-archive is next), battery (F-0025), rollback and probation (W4), `/health`
-(W1), Access token and SIM expiry. Not installed on the box yet.
+windows, the dead-man ping. The archive built 2026-10-12 (branch
+`t142-archive`, [README](../server/watch/README.md#the-archive)): a day
+picker over the strip, and a tap on a block opens that day's list at that
+time: what was said, the tools, the recordings (a call's two legs) and
+what played, in time order, nothing joined. Battery (F-0025) and `/health`
+(W1) are read since. Not yet: rollback and probation (W4), Access token
+and SIM expiry. Not installed on the box yet.
 
 - **`huxley-watch`**, its own process on the box: reads the logs, the
   recordings and `/health`; runs the rules every few minutes; serves the
@@ -392,6 +396,10 @@ Answered 2026-10-12: production on the shared Pi (decision 2); the home's
 Wi-Fi is a normal password network (compiled into the baseline list; check
 2.4 GHz signal in his room on the day; no 4G box unless that fails); the case
 opens once more (W7, all of it); push after a private-data scan.
+
+Frozen and dropped (2026-10-12): the UPS (frozen: money), the healthchecks.io
+dead-man check (frozen: the Pi dies with the power, which Mario knows),
+the Telegram bot (dropped: alerts live on the page, which Mario checks).
 
 Defaults until Mario says otherwise: alerts through a Telegram bot; dev on
 Mario's own Spotify login with Telegram off; offline is said when he presses,

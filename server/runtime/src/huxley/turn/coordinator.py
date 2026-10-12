@@ -37,11 +37,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import json
 import re
 import time
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -49,12 +50,14 @@ import structlog
 
 from huxley.focus.vocabulary import Activity, Channel
 from huxley_sdk import (
+    DEFAULT_INJECT_EXPIRY,
     AudioStream,
     CancelMedia,
     ClaimBusyError,
     ClaimEndReason,
     ClaimHandle,
     ContentType,
+    InjectOutcome,
     InjectPriority,
     InputClaim,
     PlaySound,
@@ -75,6 +78,9 @@ _HOLD_TURN = "turn"  # a user turn is in progress
 _HOLD_NO_CLIENT = "no_client"  # no client has been connected for a while
 _HOLD_DISPATCH = "dispatch"  # a turn's end is deciding what plays next
 _HOLD_SESSION = "session"  # a press found no voice session (a reconnect)
+# A proactive turn is still playing and another waits behind it (T1.44):
+# what the first parked stays parked until the next fires.
+_HOLD_INJECT_QUEUE = "inject_queue"
 
 _SOURCE_TO_OWNER: dict[TurnSource, SpeakingOwner] = {
     TurnSource.USER: SpeakingOwner.USER,
@@ -83,20 +89,68 @@ _SOURCE_TO_OWNER: dict[TurnSource, SpeakingOwner] = {
 }
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(eq=False, slots=True)
 class _InjectedRequest:
-    """One queued `inject_turn` request. Stage 1d: FIFO queue, dedup,
-    two-tier priority (NORMAL | PREEMPT). TTL and outcome handle arrive
-    in a later stage.
+    """One `inject_turn` request, from the call until its outcome
+    (T1.44): waiting in the queue, being said, or said and awaiting the
+    client's confirmation. Compared by identity.
     """
 
     prompt: str
     dedup_key: str | None
     priority: InjectPriority
+    # Loop time after which it is no longer worth saying (None: never).
+    # Only checked while it waits; a turn being said is never cut for it.
+    expires_at: float | None = None
+    queued_at: float = field(default_factory=time.monotonic)
+    # Resolved once, with the turn's fate (`inject_turn_and_wait` awaits it).
+    outcome: asyncio.Future[InjectOutcome] | None = None
+    # Resolves EXPIRED at `expires_at` while the request waits.
+    expiry: asyncio.TimerHandle | None = None
+    # The listener epoch it was last said to: a different listener since
+    # then means the client that heard it is gone (or replaced).
+    epoch: int | None = None
+    # Monotonic time at which the client starts playing its first audio
+    # (its place behind what the client still had queued). A press before
+    # then means it was never heard.
+    plays_at: float | None = None
+    # Its turn dispatched a tool (the "call X now, say nothing" pattern):
+    # it did its job even with no audio, so a press doesn't say it again.
+    ran_tool: bool = False
+    attempts: int = 0
+
+
+# The task in which `inject_turn_and_wait` must not wait: one running a
+# tool handler of the turn in progress (the turn ends only after the
+# handler returns) or a skill's setup / reconfigure. A task, not a flag:
+# tasks a handler spawns copy the context but are free to wait.
+_NO_WAIT_TASK: contextvars.ContextVar[asyncio.Task[Any] | None] = contextvars.ContextVar(
+    "huxley_no_turn_wait_task", default=None
+)
+
+
+def _consume_exception(task: asyncio.Task[None]) -> None:
+    """Done callback for a shielded fire whose caller gave up: its error
+    is logged by `_fire`; retrieve it so asyncio doesn't warn."""
+    if not task.cancelled():
+        task.exception()
+
+
+@contextlib.contextmanager
+def turn_waits_forbidden() -> Iterator[None]:
+    """Mark the current task as one where `inject_turn_and_wait` must not
+    wait (it queues and returns QUEUED instead). The Application wraps
+    skills' setup and reconfigure in it: waiting there at boot would hold
+    up the very connection the turn waits for."""
+    token = _NO_WAIT_TASK.set(asyncio.current_task())
+    try:
+        yield
+    finally:
+        _NO_WAIT_TASK.reset(token)
 
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Iterator
 
     from huxley.focus.manager import FocusManager
     from huxley.voice.provider import VoiceProvider
@@ -104,7 +158,14 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
-__all__ = ["Turn", "TurnCoordinator", "TurnFactory", "TurnSource", "TurnState"]
+__all__ = [
+    "Turn",
+    "TurnCoordinator",
+    "TurnFactory",
+    "TurnSource",
+    "TurnState",
+    "turn_waits_forbidden",
+]
 
 
 class TurnCoordinator:
@@ -140,6 +201,14 @@ class TurnCoordinator:
         "content_filler_words": (
             "the it that this music radio book song please now ok okay turn just all"
         ),
+        # Not a label: put before a proactive turn said again after a
+        # disconnect cut it off (T1.44). The model has the first try and
+        # its own cut-off answer in the conversation.
+        "inject_repeat_note": (
+            "[Context, not said by the user: the user did not hear this when "
+            "you tried to say it before. Say it again in full, as if for the "
+            "first time.]"
+        ),
     }
 
     def __init__(
@@ -161,6 +230,9 @@ class TurnCoordinator:
         send_stream_started: Callable[[str, str | None, int], Awaitable[None]] | None = None,
         send_stream_ended: Callable[[str, str], Awaitable[None]] | None = None,
         send_cue_audio: Callable[[bytes], Awaitable[None]] | None = None,
+        listener_epoch: Callable[[], int | None] | None = None,
+        confirm_client_received: Callable[[int, float], Awaitable[bool]] | None = None,
+        client_present: bool = True,
     ) -> None:
         # Client-facing outputs (to the WebSocket audio server).
         self._send_audio = send_audio
@@ -263,9 +335,10 @@ class TurnCoordinator:
         # The interface_name is the framework-internal handle used to
         # release via `fm.release(Channel.DIALOG, ...)`.
         self._dialog_interface_name: str | None = None
-        # FIFO queue of inject_turn requests that couldn't fire immediately
-        # (a user or synthetic turn was already in progress). Drained in
-        # `_apply_side_effects` when a turn ends without pending content.
+        # FIFO queue of inject_turn requests waiting to be said: a turn in
+        # progress, no voice session, no client, a live claim, or an
+        # earlier injected turn still playing (T1.44). Drained at turn
+        # end and whenever what blocked it clears (`_drain_waiting`).
         # Preserved across `interrupt()` and `on_session_disconnected` so
         # reminders aren't lost when the user PTTs mid-reminder.
         self._injected_queue: list[_InjectedRequest] = []
@@ -273,23 +346,32 @@ class TurnCoordinator:
         # to drop a re-enqueue with the same key while it's in-flight.
         # Cleared by `_release_dialog`.
         self._current_injected_dedup_key: str | None = None
-        # Set by `_fire_injected_turn` just before `request_response()`;
-        # signalled (set + cleared) when the injected turn completes or is
-        # interrupted. Lets `inject_turn_and_wait` block until the LLM
-        # finishes speaking without a hardcoded sleep.
-        self._injected_turn_done: asyncio.Event | None = None
-        # Monotonic time of the first audio delta the current turn sent
-        # to the client, and the cumulative byte count at 24kHz mono
-        # 16-bit (48 kB/s). Used by `inject_turn_and_wait` to estimate
-        # when the client's playback buffer will drain — `response_done`
-        # fires at server-side audio end, but the client still has
-        # queued PCM to play. Without this wait, a subsequent
-        # `start_input_claim` issues `audio_clear` and flushes the
-        # still-playing announcement tail. Both fields reset on
-        # turn-start; `audio_done` leaves them set so the drain-wait
-        # computation sees the terminal values.
-        self._turn_audio_first_sent_at: float | None = None
-        self._turn_audio_bytes_sent: int = 0
+        # Proactive turns wait for a listener (T1.44). `listener_epoch`
+        # reads the server live: the current client's epoch once its hello
+        # is out, else None. Live, not cached: an app being started (boot,
+        # a swap, a reload) is not current and misses presence calls.
+        # Without a server (tests), `on_client_presence` drives
+        # `_client_present`, and `_presence_epoch` counts departures.
+        # Either way, a turn said to an epoch that is no longer the
+        # listener was not heard.
+        self._listener_epoch = listener_epoch
+        self._client_present = client_present
+        self._presence_epoch = 0
+        # The request of the injected turn being said, and the one said
+        # but not yet confirmed (played by the client, then a ping
+        # answered: `confirm_client_received(epoch)`, the server's ping).
+        # At most one of each; the next waiting turn fires only once the
+        # unconfirmed one is settled. After a failed confirmation nothing
+        # fires into that listener again (`_failed_epoch`).
+        self._inflight: _InjectedRequest | None = None
+        self._unconfirmed: _InjectedRequest | None = None
+        self._confirm_task: asyncio.Task[None] | None = None
+        self._confirm_client_received = confirm_client_received
+        self._failed_epoch: int | None = None
+        # Drains scheduled from inside FocusManager callbacks (a claim's
+        # end), kept referenced until done.
+        self._drain_tasks: set[asyncio.Task[None]] = set()
+        self._closed = False
         # Content holds (2026-10-12, see `docs/decisions.md`). A press
         # holds the content stream for the turn and the turn's end
         # releases it (resume), after the client has played the answer:
@@ -326,9 +408,6 @@ class TurnCoordinator:
         self._session_down_since: float | None = (
             None if provider.is_connected else time.monotonic()
         )
-        self._session_up_event = asyncio.Event()
-        if self._session_down_since is None:
-            self._session_up_event.set()
 
         self._current_turn: Turn | None = None
         self.response_cancelled: bool = False
@@ -433,6 +512,11 @@ class TurnCoordinator:
             )
             return
 
+        # An injected turn the client had started playing when the user
+        # presses was heard: the user is there and chose to talk. One it
+        # hadn't started goes back to the queue (T1.44).
+        await self._settle_by_press()
+
         # Pause what is playing (or parked) for this turn; the turn's end
         # resumes it unless the turn stops or replaces it (2026-10-12).
         # Before `interrupt()`: its speaker-flag clear must not race a
@@ -489,7 +573,7 @@ class TurnCoordinator:
         # own size), so a chunk count means a different duration on each.
         audio_ms = self.current_turn.user_audio_bytes * 1000 // self._CLIENT_AUDIO_BYTES_PER_SECOND
         level = self.current_turn.user_audio_level
-        levels = {"peak_dbfs": level.peak_dbfs, "rms_dbfs": level.rms_dbfs}
+        levels = level.as_log()
         # Silence is transcribed as a Whisper hallucination ("Subtitulos ...
         # Amara.org") that the model then answers, so a silent press is
         # dropped like a tap. Threshold and reference levels: `press_level`.
@@ -501,6 +585,7 @@ class TurnCoordinator:
                     audio_ms=audio_ms,
                     measured_ms=level.measured_ms,
                     threshold_dbfs=SILENT_PEAK_DBFS,
+                    why=level.silent_why,
                     **levels,
                 )
             await self._log.ainfo(
@@ -520,6 +605,9 @@ class TurnCoordinator:
                 await self._provider.cancel_current_response()
             self.current_turn = None
             self._bind_turn()
+            # No turn follows a dropped press: a proactive turn it put back
+            # (or one waiting behind it) is due now (T1.44).
+            await self._drain_waiting("press_dropped")
             return
         self.current_turn.state = TurnState.COMMITTING
         self.response_cancelled = False
@@ -576,6 +664,7 @@ class TurnCoordinator:
         await self._send_audio_clear()
         self.current_turn = None
         self._bind_turn()
+        await self._drain_waiting("press_dropped")
 
     # --- Provider events (fired by the VoiceProvider's receive loop) ---
 
@@ -599,12 +688,12 @@ class TurnCoordinator:
                 state=self.current_turn.state.value if self.current_turn else None,
                 owner=owner.value,
             )
-            # Reset drain counters — this is a fresh audio stream, and the
-            # subsequent inject_turn_and_wait drain computation should see
-            # ONLY this stream's bytes (not leftovers from a prior turn).
-            self._turn_audio_first_sent_at = time.monotonic()
-            self._turn_audio_bytes_sent = 0
-        self._turn_audio_bytes_sent += len(pcm)
+        said = self._inflight
+        if said is not None and said.plays_at is None:
+            # Where this turn's first audio lands on the client: behind
+            # whatever it still has queued (T1.44: a press before then
+            # means the user never heard it).
+            said.plays_at = max(time.monotonic(), self._client_playhead)
         self._note_client_audio(len(pcm))
         await self._send_audio(pcm)
         await self._log.adebug("coord.audio_fwd", bytes=len(pcm))
@@ -631,11 +720,14 @@ class TurnCoordinator:
         if turn.source is TurnSource.USER and not self._wait_cue.armed:
             self._wait_cue.arm("tool", WAIT_TOOL_S, self._log)
 
+        no_wait = _NO_WAIT_TASK.set(asyncio.current_task())
         try:
             result = await self._dispatch_tool(name, args)
         except Exception as exc:
             await self._handle_tool_error(call_id, name, args, exc)
             return
+        finally:
+            _NO_WAIT_TASK.reset(no_wait)
         if self.current_turn is not turn or self.response_cancelled:
             # A press during a slow tool started a new turn: this result
             # belongs to the old one (critic, 2026-10-12). Attaching it would
@@ -649,6 +741,8 @@ class TurnCoordinator:
         audio_stream = result.side_effect if isinstance(result.side_effect, AudioStream) else None
         has_audio_stream = audio_stream is not None
         self.current_turn.tool_calls += 1
+        if self._inflight is not None and self.current_turn.source is TurnSource.INJECTED:
+            self._inflight.ran_tool = True
         await self._log.ainfo(
             "coord.tool_dispatch",
             state=self.current_turn.state.value,
@@ -803,7 +897,6 @@ class TurnCoordinator:
         was_speaking = self._speaking_state.is_speaking
         tid = self._tid()
         self._session_down_since = time.monotonic()
-        self._session_up_event.clear()
 
         # End any active claim with ERROR: a session disconnect during a
         # call isn't a natural close.
@@ -819,6 +912,11 @@ class TurnCoordinator:
             was_speaking=was_speaking,
         )
 
+        # An injected turn the drop cut short wasn't heard whole: it goes
+        # back to the head of the queue and is said again once the
+        # session is back (T1.44; it was lost before).
+        cut_off = self._inflight
+        self._inflight = None
         if self.current_turn is not None:
             self.current_turn.pending_audio_streams.clear()
             self.current_turn.pending_input_claim = None
@@ -829,9 +927,16 @@ class TurnCoordinator:
             self.current_turn = None
             # Defensive invariant — see matching pattern in `interrupt()`.
             self._current_injected_dedup_key = None
-            self._signal_injected_turn_done()
             self._bind_turn()
             await self._send_audio_clear()
+        if cut_off is not None:
+            requeued = self._requeue_head(cut_off, why="session_down")
+            await logger.ainfo(
+                "coord.inject_turn_cut_off",
+                reason="session_down",
+                dedup_key=cut_off.dedup_key,
+                requeued=requeued,
+            )
         await self._force_release_unless_content()
         # Release DIALOG so FM's stacks don't carry orphan activities
         # across the disconnect (content an injected turn parked comes
@@ -912,10 +1017,21 @@ class TurnCoordinator:
         # Invariant with `_release_dialog` (called above) but clear defensively
         # in case a future code path interrupts without going through it.
         self._current_injected_dedup_key = None
-        # Unblock any inject_turn_and_wait caller so it doesn't hang forever
-        # after an interrupt.
-        self._signal_injected_turn_done()
+        # An injected turn still attached here was cut short by something
+        # other than a press or a disconnect (those settle it first: a
+        # reset, a shutdown): not heard whole, so it goes back to the head
+        # of the queue (T1.44).
+        cut = self._inflight
+        self._inflight = None
         self._bind_turn()
+        if cut is not None:
+            requeued = self._requeue_head(cut, why="interrupt")
+            await logger.ainfo(
+                "coord.inject_turn_cut_off",
+                reason="interrupt",
+                dedup_key=cut.dedup_key,
+                requeued=requeued,
+            )
 
     # --- Internal ---
 
@@ -949,6 +1065,7 @@ class TurnCoordinator:
         streams = self.current_turn.pending_audio_streams
         claim = self.current_turn.pending_input_claim
         turn_id = self._tid()
+        said = self._inflight if self.current_turn.source is TurnSource.INJECTED else None
         self.current_turn.state = TurnState.APPLYING_FACTORIES
 
         # What the user said overrules the model's media call when it was
@@ -1009,10 +1126,13 @@ class TurnCoordinator:
             # turn-clear makes the invariant robust against future code paths
             # that might end a turn without going through _release_dialog).
             self._current_injected_dedup_key = None
-            # Signal any inject_turn_and_wait caller. Grab + clear the ref
-            # first so _dispatch_post_turn (which may fire another injected
-            # turn) sees a clean slot and a fresh event if needed.
-            self._signal_injected_turn_done()
+            # An injected turn that ended normally is said, not yet heard:
+            # it is confirmed once the client has played it (T1.44). Set
+            # before `_dispatch_post_turn`, which then leaves the queue to
+            # the confirmation.
+            if said is not None and self._inflight is said:
+                self._inflight = None
+                self._begin_confirm(said)
             self._bind_turn()
             await self._send_status(self._status["ready"])
 
@@ -1022,6 +1142,12 @@ class TurnCoordinator:
                 # reminder may drop the new stream too).
                 await self._stop_content_stream()
             await self._dispatch_post_turn(streams, claim, turn_id)
+            if self._unconfirmed is not None and self._injected_queue:
+                # The next proactive turn fires only once this one has
+                # played: what this one parked must not play in between
+                # (a stream restarted then paused again, its position skipped).
+                # Released when the confirmation settles (T1.44).
+                await self._hold_content(_HOLD_INJECT_QUEUE)
         finally:
             if held is not None:
                 await held.release_hold(_HOLD_DISPATCH)
@@ -1059,13 +1185,23 @@ class TurnCoordinator:
            drain: start the pending stream.
         5. **Quiet moment** — nothing pending: drain the head of the
            queue (FIFO, any priority).
+
+        The queue drains here only if a turn could be heard now (T1.44:
+        a client is present, the session is up, no injected turn still
+        awaits its confirmation); otherwise branches 1, 2 and 5 leave it
+        to `_drain_waiting`, run when that clears. Expired entries are
+        resolved EXPIRED as they are reached.
         """
-        preempt_index = self._find_first_with_priority(InjectPriority.PREEMPT)
+        can_drain = self._can_fire()
         has_streams = bool(streams)
         has_claim = claim is not None
         has_foreground_work = has_streams or has_claim
-        if has_foreground_work and preempt_index is not None:
-            request = self._injected_queue.pop(preempt_index)
+        request = (
+            self._pop_first_live(InjectPriority.PREEMPT)
+            if has_foreground_work and can_drain
+            else None
+        )
+        if request is not None:
             await self._log.ainfo(
                 "coord.inject_turn_preempted_content",
                 remaining=len(self._injected_queue),
@@ -1084,17 +1220,15 @@ class TurnCoordinator:
                     await logger.aexception(
                         "coord.dropped_claim_on_end_raised",
                     )
-            await self._fire_injected_turn(request.prompt, request.dedup_key)
+            await self._fire(request)
             return
         # BLOCK_BEHIND_COMMS: preempts streams but respects claims. If
         # there's a pending claim, the alert stays queued — drains at
-        # the next quiet moment (typically the synthetic turn the
-        # comms skill fires at claim-end, which has no foreground work
-        # of its own and falls through to the FIFO branch below).
-        if has_streams and not has_claim:
-            block_idx = self._find_first_with_priority(InjectPriority.BLOCK_BEHIND_COMMS)
-            if block_idx is not None:
-                request = self._injected_queue.pop(block_idx)
+        # the claim's end (`_drain_waiting("claim_ended")`) or the next
+        # quiet turn end.
+        if has_streams and not has_claim and can_drain:
+            request = self._pop_first_live(InjectPriority.BLOCK_BEHIND_COMMS)
+            if request is not None:
                 await self._log.ainfo(
                     "coord.inject_turn_preempted_content",
                     remaining=len(self._injected_queue),
@@ -1103,7 +1237,7 @@ class TurnCoordinator:
                     dropped_streams=len(streams),
                     dropped_claim=False,
                 )
-                await self._fire_injected_turn(request.prompt, request.dedup_key)
+                await self._fire(request)
                 return
         if claim is not None:
             # Claim wins over streams: a mic latch is more authoritative
@@ -1134,15 +1268,16 @@ class TurnCoordinator:
         if streams:
             await self._start_content_stream(streams[-1], turn_id)
             return
-        if self._injected_queue:
-            request = self._injected_queue.pop(0)
-            await self._log.ainfo(
-                "coord.inject_turn_dequeued",
-                remaining=len(self._injected_queue),
-                dedup_key=request.dedup_key,
-                priority=request.priority.value,
-            )
-            await self._fire_injected_turn(request.prompt, request.dedup_key)
+        await self._drain_waiting("turn_end")
+
+    def _pop_first_live(self, priority: InjectPriority) -> _InjectedRequest | None:
+        """Pop the first queued request of `priority` that hasn't expired,
+        resolving any expired one met on the way."""
+        while (index := self._find_first_with_priority(priority)) is not None:
+            request = self._injected_queue.pop(index)
+            if not self._expire_if_due(request, where="dequeue"):
+                return request
+        return None
 
     def _find_first_with_priority(self, priority: InjectPriority) -> int | None:
         """Return the index of the first queue entry with the given
@@ -1607,28 +1742,46 @@ class TurnCoordinator:
         it, so the stream resumes where it paused. Before this, frames
         were dropped at the socket while the stream ran on: 17 minutes
         of music to nobody on 2026-10-12, and an audiobook skips what
-        nobody heard."""
+        nobody heard.
+
+        Injected turns wait for a client with no grace (T1.44): one
+        leaving cuts off a turn it was hearing (said again later, whole),
+        and one arriving gets what waited, before the content it held
+        resumes (the narration's DIALOG parks it first)."""
         obs = self._content_obs
         await logger.ainfo(
             "coord.client_presence",
             present=present,
             content=obs.interface_name if obs is not None else None,
             was_absent=self._client_absent,
+            queued_injects=len(self._injected_queue),
         )
+        self._client_present = present
+        if not present:
+            self._presence_epoch += 1
+            # Audio sent to a client that left was never played: it must
+            # not stretch the next confirmation's wait.
+            self._client_playhead = 0.0
+            await self._cut_off_undelivered("client_left")
         if present:
             task = self._absence_task
             self._absence_task = None
             if task is not None and not task.done():
                 task.cancel()
-            if self._client_absent:
-                self._client_absent = False
-                await self._release_content_hold(_HOLD_NO_CLIENT)
-            elif obs is not None and obs.announced:
-                # Back within the grace: the stream never paused, but this
-                # client has not been told it plays.
-                await self._send_stream_started(
-                    obs.interface_name, obs.stream.label, obs.stream.preroll_ms
-                )
+            try:
+                await self._drain_waiting("client_present")
+            finally:
+                # Whatever the drain did, the no-client hold must not
+                # outlive the absence (the same rule as the session hold).
+                if self._client_absent:
+                    self._client_absent = False
+                    await self._release_content_hold(_HOLD_NO_CLIENT)
+                elif obs is not None and obs.announced:
+                    # Back within the grace: the stream never paused, but
+                    # this client has not been told it plays.
+                    await self._send_stream_started(
+                        obs.interface_name, obs.stream.label, obs.stream.preroll_ms
+                    )
             return
         if self._client_absent or self._absence_task is not None:
             return
@@ -1653,7 +1806,10 @@ class TurnCoordinator:
         resume, the no-client wait). First thing in `Application.shutdown`:
         the AudioServer is shared, so on a persona swap anything this app
         plays while its provider writes the summary (seconds) would reach
-        the new persona's client."""
+        the new persona's client. Injected turns not yet heard are dropped
+        (memory only: skills that persist re-fire them at their next
+        setup), and later ones are refused."""
+        self._closed = True
         self._cancel_turn_hold_release()
         task = self._absence_task
         self._absence_task = None
@@ -1661,6 +1817,7 @@ class TurnCoordinator:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        await self._drop_undelivered()
         await self._stop_content_stream()
 
     # A press this long into a session outage stops the content rather
@@ -1721,20 +1878,8 @@ class TurnCoordinator:
         if not self._provider.is_connected:
             return  # dropped again before we got here: still down
         self._session_down_since = None
-        self._session_up_event.set()
         try:
-            claim = self._claim_obs
-            claim_live = claim is not None and not claim.is_ended
-            if self.current_turn is None and not claim_live and self._injected_queue:
-                request = self._injected_queue.pop(0)
-                await logger.ainfo(
-                    "coord.inject_turn_dequeued",
-                    trigger="session_connected",
-                    remaining=len(self._injected_queue),
-                    dedup_key=request.dedup_key,
-                    priority=request.priority.value,
-                )
-                await self._fire_injected_turn(request.prompt, request.dedup_key)
+            await self._drain_waiting("session_connected")
         finally:
             # Whatever happened above, the session hold must not outlive
             # the outage: it would keep the music paused through later
@@ -1814,6 +1959,11 @@ class TurnCoordinator:
             # avoids a race where wait_end() returns before send_input_mode
             # fires.)
             end_event.set()
+            # Turns that waited behind the call are due now (T1.44). On the
+            # next tick: this runs inside the FocusManager, and firing a
+            # turn acquires DIALOG through it.
+            if self._injected_queue:
+                self._drain_soon("claim_ended")
 
         # `release_self` bound to the observer's specific interface_name
         # so the observer can drive its own unwind on error (e.g., mic
@@ -1956,7 +2106,18 @@ class TurnCoordinator:
         await self._end_input_claim(observer)
         return True
 
-    # --- Proactive speech (T1.4 Stages 1c.3 + 1d — inject_turn) ---
+    # --- Proactive speech (T1.4 Stages 1c.3 + 1d; T1.44 waiting) ---
+    #
+    # An injected turn is spoken only when someone can hear it (T1.44,
+    # docs/decisions.md "Proactive turns wait for a listener"). It waits
+    # in `_injected_queue` while there is no listener (a client whose
+    # hello is out), no voice session, a turn in progress, a live claim
+    # (except PREEMPT) or an earlier injected turn still playing, and is
+    # delivered in order once that clears, unless its `expires_after`
+    # passes first. It counts as delivered once the client it was said
+    # to has played it and answered a ping (or the user pressed into it
+    # while it played); a turn cut off by a disconnect goes back to the
+    # head of the queue and is said whole, with a note to the model.
 
     async def inject_turn(
         self,
@@ -1964,151 +2125,99 @@ class TurnCoordinator:
         *,
         dedup_key: str | None = None,
         priority: InjectPriority = InjectPriority.NORMAL,
+        expires_after: timedelta | None = DEFAULT_INJECT_EXPIRY,
     ) -> None:
         """Speak `prompt` proactively via a synthetic DIALOG turn.
 
         Behavior:
 
-        - If idle (no current turn), fire immediately. Any playing
-          content stream gets preempted via FocusManager (CONTENT →
-          BACKGROUND/MUST_PAUSE → pump cancels). Priority doesn't
-          matter from idle — both tiers behave the same.
-        - If a user or synthetic turn is already in progress, **queue**
-          the request. The queue drains in `_apply_side_effects` when
-          a turn ends — but WHAT drains depends on `priority`:
+        - If idle (no current turn, a listener, the session up), fire
+          immediately. Any playing content stream gets preempted via
+          FocusManager (CONTENT -> BACKGROUND/MUST_PAUSE -> pump
+          cancels). Priority doesn't matter from idle.
+        - Otherwise **queue** it (see the section comment for what it
+          waits for). A queued request drains when what blocked it
+          clears; at a turn's end WHAT drains depends on `priority`:
             - `NORMAL` drains only when the turn ends without a pending
-              content stream (content wins; reminder waits for the next
-              quiet moment).
+              content stream (content wins; it waits for the next quiet
+              moment).
+            - `BLOCK_BEHIND_COMMS` displaces a freshly-spawned content
+              stream but waits behind a live claim.
             - `PREEMPT` drains unconditionally, even displacing a
-              freshly-spawned content stream. Right for medication
-              reminders and safety-critical events where "wait until
-              the user PTTs again" could mean hours.
-        - If there is no voice session (the planned refresh reconnects
-          every 50 min; an outage), **queue** it too: the provider
-          drops what it can't send, so a turn fired now would never
-          end. `on_session_connected` drains the queue.
+              freshly-spawned content stream or claim.
 
-        Priority never barges into a live user turn — the queue always
-        waits for turn-end, regardless of tier. Interrupting a user
-        mid-speech is hostile; PREEMPT is about beating a content
-        stream, not the user.
+        Priority never barges into a live user turn: the queue always
+        waits for turn-end, regardless of tier.
 
-        `dedup_key` (Stage 1d.1): an opaque string identifying this
-        logical request. If a queued entry already exists with the same
-        key, the new request REPLACES it (last-writer-wins). If the
-        currently-firing injected turn has the same key, the new
-        request is silently DROPPED — duplicate narration-in-progress
-        is worse than a missed dedup. `dedup_key=None` bypasses dedup.
+        `dedup_key`: an opaque string identifying this logical request.
+        A queued entry with the same key is REPLACED in its place (the
+        replaced one resolves DROPPED). If a same-key turn is being said
+        or awaits its confirmation, the new request is DROPPED: repeating
+        it while the user hears it would only stack. `None` bypasses dedup.
 
-        Not yet shipped (future stage): `expires_after` TTL, outcome
-        handle with `wait_outcome()`, finer arbitration tiers.
+        `expires_after`: how long it stays worth saying while it waits
+        (default `DEFAULT_INJECT_EXPIRY`; `None`: until delivered).
+        Counted from this call; a turn being said is never cut for it,
+        and a turn cut off after its deadline is not said again.
         """
-        if self.current_turn is not None:
-            await self._enqueue_injected(prompt, dedup_key, priority, reason="turn_in_progress")
-            return
-        if not self._session_up:
-            await self._enqueue_injected(prompt, dedup_key, priority, reason="no_session")
-            return
-        # A **live** COMMS claim (live call, voice memo, etc.) counts as
-        # "busy" for NORMAL and BLOCK_BEHIND_COMMS — respect the live
-        # audio plane by queueing. The queue drains at turn-end, which
-        # reliably follows claim-end (either via the comms skill's own
-        # post-claim inject_turn or via the next user turn). Only
-        # PREEMPT barges through a claim; that's its whole contract.
-        #
-        # `is_ended` guard is load-bearing: during claim teardown, the
-        # skill's `on_claim_end` callback fires BEFORE the coordinator
-        # gets a chance to scrub `_claim_obs`. A skill that fires an
-        # `inject_turn` from `on_claim_end` (e.g., telegram's "la
-        # llamada terminó" narration) would otherwise queue its own
-        # announcement behind itself — the user hears nothing until
-        # the next unrelated turn ends and drains the queue. Observer's
-        # `_ended` flag is set at the top of `_end()` so by the time
-        # any skill callback runs, `is_ended` is already True and we
-        # correctly fall through to immediate fire.
-        claim_obs = self._claim_obs
-        if (
-            claim_obs is not None
-            and not claim_obs.is_ended
-            and priority is not InjectPriority.PREEMPT
-        ):
-            await self._enqueue_injected(prompt, dedup_key, priority, reason="claim_live")
-            return
-        await self._fire_injected_turn(prompt, dedup_key)
-
-    def _signal_injected_turn_done(self) -> None:
-        """Set and clear `_injected_turn_done` if one is armed.
-
-        Called from every path that clears `current_turn` (normal end,
-        interrupt, session disconnect) so `inject_turn_and_wait` callers
-        always unblock regardless of how the turn ends.
-        """
-        event = self._injected_turn_done
-        if event is not None:
-            self._injected_turn_done = None
-            event.set()
+        await self._submit(self._new_request(prompt, dedup_key, priority, expires_after))
 
     async def inject_turn_and_wait(
         self,
         prompt: str,
         *,
         dedup_key: str | None = None,
-    ) -> None:
-        """Like `inject_turn` but returns only after the client has
-        finished PLAYING the narration (not just the server finishing
-        sending it).
+        priority: InjectPriority = InjectPriority.NORMAL,
+        expires_after: timedelta | None = DEFAULT_INJECT_EXPIRY,
+    ) -> InjectOutcome:
+        """Like `inject_turn`, but returns the turn's outcome once known.
 
-        If the coordinator is idle (`current_turn is None`), fires the
-        injected turn immediately and awaits the `_injected_turn_done`
-        event (signalled when `_apply_side_effects` / `interrupt()`
-        clears the turn). At that moment the server has finished
-        sending audio deltas, but the client is still playing them out
-        of its buffer. We then sleep long enough for the buffer to
-        drain. Without the drain wait, a caller chaining
-        `inject_turn_and_wait` → `start_input_claim` would flush the
-        client buffer (via `audio_clear`) and guillotine the tail of
-        the announcement — the exact behavior the 2026-04-24 smoke
-        test caught on inbound Telegram calls.
+        `DELIVERED` returns after the client has played the narration
+        (the playhead passed, then a ping was answered), so a caller that
+        chains `start_input_claim` doesn't flush the tail of the
+        announcement with its `audio_clear` (the 2026-04-24 Telegram
+        smoke test). `EXPIRED` once `expires_after` ran out while it
+        waited; `DROPPED` if a same-key turn replaced it, this coordinator
+        closed, or the caller cancelled the wait (which withdraws a turn
+        still waiting). It waits through a turn in progress, a voice
+        reconnect and an absent client alike.
 
-        With no voice session (a reconnect), waits up to
-        `_INJECT_SESSION_WAIT_S` for it first, so a caller that sequences
-        work after the announcement (Telegram: announce the caller, then
-        bridge the call) still gets the announcement first. (Fired
-        without a session, the wait never ended: nothing reached the
-        model.)
-
-        If a turn is already in progress, or the session stays down,
-        falls back to a plain enqueue (same as `inject_turn`) and
-        returns: the caller should not depend on the wait semantics in
-        that case.
+        Awaited in the task running a tool handler of the current turn,
+        or a skill's setup / reconfigure (`turn_waits_forbidden`), it
+        cannot wait: the turn is queued and `QUEUED` returned at once.
         """
-        if self.current_turn is None and not self._session_up:
-            started = time.monotonic()
-            with contextlib.suppress(TimeoutError):
-                async with asyncio.timeout(self._INJECT_SESSION_WAIT_S):
-                    await self._session_up_event.wait()
-            await self._log.ainfo(
-                "coord.inject_and_wait_session_wait",
-                waited_ms=int((time.monotonic() - started) * 1000),
-                session_up=self._session_up,
+        request = self._new_request(prompt, dedup_key, priority, expires_after)
+        if _NO_WAIT_TASK.get() is asyncio.current_task():
+            await self._log.awarning(
+                "coord.inject_and_wait_cannot_wait",
                 dedup_key=dedup_key,
+                note="awaited in a tool handler or skill setup: waiting would deadlock; "
+                "queued, outcome not reported",
             )
-        if self.current_turn is not None or not self._session_up:
-            reason = "turn_in_progress" if self.current_turn is not None else "no_session"
-            await self._enqueue_injected(prompt, dedup_key, InjectPriority.NORMAL, reason=reason)
-            return
-        await self._fire_injected_turn(prompt, dedup_key)
-        # _fire_injected_turn sets _injected_turn_done before returning;
-        # capture it now (before any other task can clear it) and wait.
-        done = self._injected_turn_done
-        if done is not None:
-            await done.wait()
-        await self._wait_for_client_playback_drain()
+            await self._submit(request)
+            return InjectOutcome.QUEUED
+        assert request.outcome is not None
+        try:
+            await self._submit(request)
+            # Shielded: a caller giving up must not cancel the shared future.
+            return await asyncio.shield(request.outcome)
+        except asyncio.CancelledError:
+            await self._withdraw(request)
+            raise
 
-    # How long `inject_turn_and_wait` waits for a voice session that is
-    # reconnecting. The backoff is 1 s, then 3 s after a failed attempt,
-    # plus the connects: two attempts fit.
-    _INJECT_SESSION_WAIT_S: ClassVar[float] = 10.0
+    # Longest wait for the client to play an injected turn before the
+    # confirming ping (our playhead estimate; a stuck one must not hold
+    # the queue).
+    _CONFIRM_PLAYBACK_CAP_S: ClassVar[float] = 120.0
+    # How long the confirming ping may take, write included. The walkie
+    # counts a link with no room for 5 s as dead (`WS_SEND_TIMEOUT_MS`) and
+    # its pong can wait out a stalled send's tx lock; past this the server
+    # aborts the connection and the turn is said again after the
+    # reconnect.
+    _CONFIRM_PING_TIMEOUT_S: ClassVar[float] = 15.0
+    # Most times one request is fired. Re-deliveries after a disconnect
+    # need a new connection each, so this bounds a flapping link's cost.
+    _MAX_ATTEMPTS: ClassVar[int] = 5
 
     # Audio rate for the one audio channel shared with the client:
     # 24kHz sample rate * 2 bytes/sample (PCM16 mono).
@@ -2125,78 +2234,583 @@ class TurnCoordinator:
     # network variance on localhost and typical LANs.
     _PLAYBACK_DRAIN_SAFETY_MS: ClassVar[int] = 80
 
-    async def _wait_for_client_playback_drain(self) -> None:
-        """Sleep until the client is expected to have finished playing
-        whatever the coordinator sent during the just-ended audio stream.
+    def waiting_summary(self) -> tuple[int, float | None]:
+        """(turns waiting, seconds the oldest has waited) for `/health`."""
+        queue = self._injected_queue
+        if not queue:
+            return 0, None
+        oldest = min(r.queued_at for r in queue)
+        return len(queue), round(time.monotonic() - oldest, 1)
 
-        Uses the byte counters updated in `on_audio_delta`:
-        `_turn_audio_first_sent_at` (monotonic time of the first delta
-        this response) + `_turn_audio_bytes_sent` / 48000 gives a wall-
-        clock estimate of when the last sample will have been rendered
-        on the client speaker. We add `_PLAYBACK_DRAIN_SAFETY_MS` of
-        headroom to absorb the client's AudioContext scheduling floor
-        and WebSocket jitter.
+    def _listener(self) -> int | None:
+        """The epoch of the client that would hear a turn now, or None.
+        Read live from the server when it is wired (a client counts once
+        its hello is out); without one (tests), `on_client_presence`."""
+        if self._listener_epoch is not None:
+            return self._listener_epoch()
+        return self._presence_epoch if self._client_present else None
 
-        No-op when no audio was sent this stream (e.g., the LLM
-        responded with text-only or the request was cancelled before
-        audio) — `_turn_audio_first_sent_at` stays None.
-        """
-        first_sent_at = self._turn_audio_first_sent_at
-        bytes_sent = self._turn_audio_bytes_sent
-        if first_sent_at is None or bytes_sent <= 0:
-            return
-        expected_duration_s = bytes_sent / self._CLIENT_AUDIO_BYTES_PER_SECOND
-        drain_at = first_sent_at + expected_duration_s + self._PLAYBACK_DRAIN_SAFETY_MS / 1000
-        remaining = drain_at - time.monotonic()
-        if remaining <= 0:
-            return
-        await self._log.ainfo(
-            "coord.inject_and_wait_drain_sleep",
-            bytes_sent=bytes_sent,
-            expected_duration_ms=int(expected_duration_s * 1000),
-            remaining_ms=int(remaining * 1000),
-        )
-        await asyncio.sleep(remaining)
+    def _listener_ready(self) -> bool:
+        """A listener is there, and it isn't the one a confirmation just
+        failed on (nothing fires again into the same connection)."""
+        listener = self._listener()
+        return listener is not None and listener != self._failed_epoch
 
-    async def _enqueue_injected(
+    def _new_request(
         self,
         prompt: str,
         dedup_key: str | None,
         priority: InjectPriority,
-        *,
-        reason: str,
-    ) -> None:
-        """Append or dedup-replace a pending inject_turn request. `reason`
-        (logged) is why it can't fire now: `turn_in_progress`,
-        `claim_live`, `no_session`."""
-        if dedup_key is not None:
-            if self._current_injected_dedup_key == dedup_key:
-                await self._log.ainfo(
-                    "coord.inject_turn_dropped",
-                    reason="dedup_in_flight",
-                    dedup_key=dedup_key,
+        expires_after: timedelta | None,
+    ) -> _InjectedRequest:
+        loop = asyncio.get_running_loop()
+        expires_at = (
+            None
+            if expires_after is None
+            else loop.time() + max(0.0, expires_after.total_seconds())
+        )
+        return _InjectedRequest(
+            prompt=prompt,
+            dedup_key=dedup_key,
+            priority=priority,
+            expires_at=expires_at,
+            outcome=loop.create_future(),
+        )
+
+    async def _submit(self, request: _InjectedRequest) -> None:
+        """Fire `request` now if it can be heard, else queue it."""
+        if self._closed:
+            self._resolve(request, InjectOutcome.DROPPED)
+            await self._log.ainfo(
+                "coord.inject_turn_dropped", reason="shutdown", dedup_key=request.dedup_key
+            )
+            return
+        key = request.dedup_key
+        if key is not None and key in self._keys_being_said():
+            self._resolve(request, InjectOutcome.DROPPED)
+            await self._log.ainfo(
+                "coord.inject_turn_dropped", reason="dedup_in_flight", dedup_key=key
+            )
+            return
+        reason = self._wait_reason(request.priority)
+        if reason is not None:
+            await self._enqueue_injected(request, reason=reason)
+            return
+        if self._injected_queue:
+            # Idle, but older turns still wait (a live claim held them, and
+            # this one may pass it): it joins the line, and the line moves.
+            await self._enqueue_injected(request, reason="behind_queue")
+            await self._drain_waiting("inject")
+            return
+        # In the caller's task: shielded, so a skill cancelling its wait
+        # (an ack cancelling a delivery) can't leave a half-made turn
+        # holding DIALOG; the turn goes on and its outcome is settled as
+        # usual.
+        fire = asyncio.get_running_loop().create_task(
+            self._fire(request), name="coord.inject_fire"
+        )
+        fire.add_done_callback(_consume_exception)
+        await asyncio.shield(fire)
+
+    def _keys_being_said(self) -> set[str]:
+        """Dedup keys of the injected turn being said and of the one said
+        but not yet confirmed: a same-key newcomer would repeat it."""
+        keys = {self._current_injected_dedup_key}
+        if self._unconfirmed is not None:
+            keys.add(self._unconfirmed.dedup_key)
+        return {k for k in keys if k is not None}
+
+    def _wait_reason(self, priority: InjectPriority) -> str | None:
+        """Why a turn of `priority` can't be said right now, or None.
+        Synchronous: `_fire` re-checks it with no await before the turn."""
+        if self._closed:
+            return "closed"
+        if self.current_turn is not None:
+            return "turn_in_progress"
+        if not self._session_up:
+            # The provider drops what it can't send: a turn fired now would
+            # never end, holding DIALOG and every later inject.
+            return "no_session"
+        if not self._listener_ready():
+            return "no_client"
+        if self._unconfirmed is not None:
+            return "awaiting_playback"
+        # A **live** COMMS claim (live call, voice memo, etc.) counts as
+        # "busy" for NORMAL and BLOCK_BEHIND_COMMS: respect the live
+        # audio plane by queueing; the claim's end drains the queue. Only
+        # PREEMPT barges through a claim; that's its whole contract.
+        #
+        # `is_ended` guard is load-bearing: during claim teardown, the
+        # skill's `on_claim_end` callback fires BEFORE the coordinator
+        # gets a chance to scrub `_claim_obs`. A skill that fires an
+        # `inject_turn` from `on_claim_end` (e.g., telegram's "the call
+        # ended" narration) would otherwise queue its own
+        # announcement behind itself. Observer's `_ended` flag is set at
+        # the top of `_end()` so by the time any skill callback runs,
+        # `is_ended` is already True and we correctly fall through.
+        claim_obs = self._claim_obs
+        if (
+            claim_obs is not None
+            and not claim_obs.is_ended
+            and priority is not InjectPriority.PREEMPT
+        ):
+            return "claim_live"
+        return None
+
+    def _can_fire(self) -> bool:
+        """A waiting turn could be heard now (a live claim aside, which
+        only PREEMPT may pass)."""
+        return self._wait_reason(InjectPriority.PREEMPT) is None
+
+    async def _drain_waiting(self, trigger: str) -> None:
+        """Fire the next waiting turn if one can be heard now: the head of
+        the queue, or with a live claim the first PREEMPT. Called at turn
+        end and whenever a blocker clears (`trigger`: `turn_end`,
+        `client_present`, `session_connected`, `playback_confirmed`,
+        `claim_ended`, `cut_off`, `undelivered`, `press_dropped`, `inject`).
+        One at a time: the next drains once this one is confirmed.
+
+        Order: the most urgent tier first (PREEMPT, then
+        BLOCK_BEHIND_COMMS, then NORMAL), first come first served within a
+        tier, so an urgent turn with a short expiry isn't kept behind a
+        long line of routine ones until it expires. With a
+        live claim, only PREEMPT. No await between taking a request out of
+        the queue and firing it: a request out of the queue and not yet
+        fired would be invisible to `close()` and to dedup."""
+        while self._injected_queue and self._can_fire():
+            claim = self._claim_obs
+            claim_live = claim is not None and not claim.is_ended
+            tiers = (
+                (InjectPriority.PREEMPT,)
+                if claim_live
+                else (
+                    InjectPriority.PREEMPT,
+                    InjectPriority.BLOCK_BEHIND_COMMS,
+                    InjectPriority.NORMAL,
                 )
+            )
+            index = next(
+                (i for tier in tiers if (i := self._find_first_with_priority(tier)) is not None),
+                None,
+            )
+            if index is None:
                 return
-            # Remove any same-key entries already queued (last-writer-wins).
-            before = len(self._injected_queue)
-            self._injected_queue = [r for r in self._injected_queue if r.dedup_key != dedup_key]
-            if len(self._injected_queue) < before:
-                await self._log.ainfo(
-                    "coord.inject_turn_deduped",
-                    dedup_key=dedup_key,
-                    removed=before - len(self._injected_queue),
-                )
-        self._injected_queue.append(
-            _InjectedRequest(prompt=prompt, dedup_key=dedup_key, priority=priority)
+            request = self._injected_queue.pop(index)
+            if self._expire_if_due(request, where="dequeue"):
+                continue
+            # Sync log: see the docstring.
+            logger.info(
+                "coord.inject_turn_dequeued",
+                trigger=trigger,
+                remaining=len(self._injected_queue),
+                dedup_key=request.dedup_key,
+                priority=request.priority.value,
+                waited_s=round(time.monotonic() - request.queued_at, 1),
+                attempt=request.attempts + 1,
+            )
+            await self._fire(request)
+            return
+
+    def _drain_soon(self, trigger: str) -> None:
+        """`_drain_waiting` on the next loop tick: for callbacks that run
+        inside the FocusManager (a claim's end), where acquiring DIALOG
+        would deadlock."""
+        task = asyncio.get_running_loop().create_task(
+            self._drain_logged(trigger), name=f"coord.inject_drain.{trigger}"
+        )
+        self._drain_tasks.add(task)
+        task.add_done_callback(self._drain_tasks.discard)
+
+    async def _drain_logged(self, trigger: str) -> None:
+        try:
+            await self._drain_waiting(trigger)
+        except Exception:
+            await logger.aexception("coord.inject_drain_failed", trigger=trigger)
+
+    async def _enqueue_injected(self, request: _InjectedRequest, *, reason: str) -> None:
+        """Queue `request`, or put it in the place of a same-key one
+        (which resolves DROPPED). `reason` (logged) is why it can't fire
+        now: `turn_in_progress`, `no_session`, `no_client`,
+        `awaiting_playback`, `claim_live`, `behind_queue`."""
+        key = request.dedup_key
+        replaced = None
+        if key is not None:
+            for i, other in enumerate(self._injected_queue):
+                if other.dedup_key == key:
+                    self._injected_queue[i] = request
+                    replaced = other
+                    break
+        if replaced is None:
+            self._injected_queue.append(request)
+        else:
+            self._resolve(replaced, InjectOutcome.DROPPED)
+            await self._log.ainfo("coord.inject_turn_deduped", dedup_key=key, removed=1)
+        self._arm_expiry(request)
+        expires_in = (
+            None
+            if request.expires_at is None
+            else round(request.expires_at - asyncio.get_running_loop().time(), 1)
         )
         await self._log.ainfo(
             "coord.inject_turn_queued",
             reason=reason,
             queue_depth=len(self._injected_queue),
-            dedup_key=dedup_key,
-            priority=priority.value,
+            dedup_key=key,
+            priority=request.priority.value,
             prev_state=self.current_turn.state.value if self.current_turn else None,
+            expires_in_s=expires_in,
         )
+
+    async def _withdraw(self, request: _InjectedRequest) -> None:
+        """The caller of `inject_turn_and_wait` gave up: a turn still
+        waiting leaves the queue (DROPPED). One being said finishes."""
+        if request not in self._injected_queue:
+            return
+        self._injected_queue.remove(request)
+        self._resolve(request, InjectOutcome.DROPPED)
+        await logger.ainfo(
+            "coord.inject_turn_withdrawn",
+            dedup_key=request.dedup_key,
+            waited_s=round(time.monotonic() - request.queued_at, 1),
+        )
+
+    def _arm_expiry(self, request: _InjectedRequest) -> None:
+        if request.expires_at is None or request.expiry is not None:
+            return
+        request.expiry = asyncio.get_running_loop().call_at(
+            request.expires_at, self._on_expiry_due, request
+        )
+
+    @staticmethod
+    def _disarm_expiry(request: _InjectedRequest) -> None:
+        if request.expiry is not None:
+            request.expiry.cancel()
+            request.expiry = None
+
+    def _on_expiry_due(self, request: _InjectedRequest) -> None:
+        """Expiry timer: a request still waiting gives up now, so a skill
+        awaiting it learns at its deadline, not when a client returns."""
+        request.expiry = None
+        if request in self._injected_queue:
+            self._injected_queue.remove(request)
+            self._expire(request, where="queue")
+
+    def _expire_if_due(self, request: _InjectedRequest, *, where: str) -> bool:
+        """Resolve EXPIRED (and return True) if its deadline has passed."""
+        if request.expires_at is None or asyncio.get_running_loop().time() < request.expires_at:
+            return False
+        self._expire(request, where=where)
+        return True
+
+    def _expire(self, request: _InjectedRequest, *, where: str) -> None:
+        self._resolve(request, InjectOutcome.EXPIRED)
+        # Sync log: called from a timer callback.
+        logger.info(
+            "coord.inject_turn_expired",
+            where=where,
+            dedup_key=request.dedup_key,
+            priority=request.priority.value,
+            waited_s=round(time.monotonic() - request.queued_at, 1),
+            attempts=request.attempts,
+            listener=self._listener(),
+        )
+
+    def _resolve(self, request: _InjectedRequest, outcome: InjectOutcome) -> None:
+        self._disarm_expiry(request)
+        future = request.outcome
+        if future is not None and not future.done():
+            future.set_result(outcome)
+
+    def _requeue_head(self, request: _InjectedRequest, *, why: str) -> bool:
+        """A turn that wasn't heard whole goes back to the head of the
+        queue (it came first), unless it expired meanwhile. True if
+        requeued."""
+        if request.outcome is not None and request.outcome.done():
+            return False
+        if self._expire_if_due(request, where=why):
+            return False
+        request.plays_at = None
+        request.ran_tool = False
+        self._injected_queue.insert(0, request)
+        self._arm_expiry(request)
+        return True
+
+    async def _fire(self, request: _InjectedRequest) -> None:
+        """Say `request` now, if it still can be: every condition is
+        re-checked here, synchronously, right before the turn is created
+        (an await since the caller's check, a log line, may have let a
+        press in). If not, it goes back to the head of the queue."""
+        reason = self._wait_reason(request.priority)
+        if reason == "closed":
+            self._resolve(request, InjectOutcome.DROPPED)
+            await self._log.ainfo(
+                "coord.inject_turn_dropped", reason="shutdown", dedup_key=request.dedup_key
+            )
+            return
+        if reason is not None:
+            self._injected_queue.insert(0, request)
+            self._arm_expiry(request)
+            await self._log.ainfo(
+                "coord.inject_turn_fire_deferred", reason=reason, dedup_key=request.dedup_key
+            )
+            return
+        if request.attempts >= self._MAX_ATTEMPTS:
+            # Cut off, unconfirmed or silent this many times: a link that
+            # keeps flapping, a provider that keeps failing. Every attempt
+            # is a paid response; stop.
+            self._resolve(request, InjectOutcome.DROPPED)
+            await self._log.awarning(
+                "coord.inject_turn_dropped",
+                reason="too_many_attempts",
+                dedup_key=request.dedup_key,
+                attempts=request.attempts,
+            )
+            return
+        self._disarm_expiry(request)
+        request.epoch = self._listener()
+        request.attempts += 1
+        prompt = request.prompt
+        if request.attempts > 1:
+            # The model already has this prompt and its own cut-off answer
+            # in the conversation; without a word it says "as I said".
+            prompt = f"{self._status['inject_repeat_note']}\n{prompt}"
+        self._inflight = request
+        try:
+            await self._fire_injected_turn(prompt, request.dedup_key)
+        except Exception as exc:
+            # The send failed (the session closed under us). Don't leave a
+            # turn that will never end holding DIALOG: end it, and put the
+            # request back; the session's return drains it.
+            if self._inflight is request:
+                self._inflight = None
+            turn = self.current_turn
+            if turn is not None and turn.source is TurnSource.INJECTED:
+                with contextlib.suppress(Exception):
+                    await self.interrupt()
+                if self.current_turn is turn:
+                    # interrupt() itself failed midway (the dead socket
+                    # again): clear what it didn't.
+                    self.current_turn = None
+                    self._current_injected_dedup_key = None
+                    self._bind_turn()
+                    with contextlib.suppress(Exception):
+                        await self._release_dialog()
+            requeued = self._requeue_head(request, why="fire_failed")
+            await logger.awarning(
+                "coord.inject_turn_fire_failed",
+                dedup_key=request.dedup_key,
+                error=type(exc).__name__,
+                requeued=requeued,
+            )
+            raise
+
+    def _begin_confirm(self, request: _InjectedRequest) -> None:
+        """The injected turn for `request` ended normally: confirm the
+        client heard it before calling it delivered."""
+        self._unconfirmed = request
+        self._confirm_task = asyncio.get_running_loop().create_task(
+            self._confirm_delivery(request), name="coord.inject_confirm"
+        )
+
+    async def _confirm_delivery(self, request: _InjectedRequest) -> None:
+        """Wait until the client has played the turn (our playhead), then
+        ask the server whether that client received it all (a ping). The
+        model streams faster than real time, so when the turn ends on the
+        server the walkie may still have seconds of it to play; and a
+        Wi-Fi drop the server hasn't noticed yet swallows audio without an
+        error. Delivered: resolve and drain the next. Not: back to the
+        head of the queue, and nothing fires into the same connection
+        again (`_failed_epoch`)."""
+        wait_s = 0.0
+        try:
+            if request.plays_at is None and not request.ran_tool:
+                # The response said nothing and did nothing (it failed, or
+                # was empty): nothing was heard. Fired again, up to
+                # `_MAX_ATTEMPTS`, into the same connection.
+                heard, by = False, "silent"
+            else:
+                wait_s = min(
+                    max(0.0, self._client_playhead_remaining_s()), self._CONFIRM_PLAYBACK_CAP_S
+                )
+                if wait_s > 0:
+                    await asyncio.sleep(wait_s)
+                heard, by = await self._client_heard(request)
+        except Exception:
+            await logger.aexception("coord.inject_confirm_failed", dedup_key=request.dedup_key)
+            heard, by = False, "confirm_error"
+        if self._unconfirmed is not request:
+            return  # settled meanwhile: a press, the client leaving, close()
+        self._unconfirmed = None
+        self._confirm_task = None
+        waited_s = round(time.monotonic() - request.queued_at, 1)
+        try:
+            if heard:
+                self._resolve(request, InjectOutcome.DELIVERED)
+                await logger.ainfo(
+                    "coord.inject_turn_delivered",
+                    by=by,
+                    dedup_key=request.dedup_key,
+                    waited_s=waited_s,
+                    playback_ms=int(wait_s * 1000),
+                    attempts=request.attempts,
+                    epoch=request.epoch,
+                )
+                await self._drain_waiting("playback_confirmed")
+                return
+            if (
+                by not in ("silent", "confirm_error")
+                and request.epoch is not None
+                and request.epoch == self._listener()
+            ):
+                self._failed_epoch = request.epoch
+            requeued = self._requeue_head(request, why=by)
+            await logger.ainfo(
+                "coord.inject_turn_undelivered",
+                reason=by,
+                dedup_key=request.dedup_key,
+                requeued=requeued,
+                epoch=request.epoch,
+                listener=self._listener(),
+            )
+            await self._drain_waiting("undelivered")
+        finally:
+            # What this turn parked waited for the next one (T1.44); the
+            # next has fired (DIALOG parks it now) or isn't coming.
+            await self._release_content_hold(_HOLD_INJECT_QUEUE)
+
+    async def _client_heard(self, request: _InjectedRequest) -> tuple[bool, str]:
+        """(heard, how): `pong`, or `presence` with no server to ping
+        (tests); or why not: `client_left`, `no_pong`."""
+        epoch = request.epoch
+        if epoch is None or self._listener() != epoch:
+            return False, "client_left"
+        confirm = self._confirm_client_received
+        if confirm is None:
+            return True, "presence"
+        try:
+            # The server bounds its ping itself; this is the backstop.
+            async with asyncio.timeout(self._CONFIRM_PING_TIMEOUT_S + 5.0):
+                received = await confirm(epoch, self._CONFIRM_PING_TIMEOUT_S)
+        except TimeoutError:
+            await logger.awarning(
+                "coord.inject_confirm_backstop_timeout",
+                dedup_key=request.dedup_key,
+                epoch=epoch,
+            )
+            received = False
+        return (True, "pong") if received else (False, "no_pong")
+
+    def _heard_at_press(self, request: _InjectedRequest, turn: Turn | None) -> bool:
+        """At a press: had the client started playing this turn? Its first
+        audio's place on the playhead says; a turn that only ran a tool
+        did its job. A drained turn queues behind the previous answer, and
+        the press empties the client's buffer, so it may never have
+        started."""
+        if request.ran_tool or (turn is not None and turn.tool_calls > 0):
+            return True
+        return request.plays_at is not None and time.monotonic() >= request.plays_at
+
+    async def _settle_by_press(self) -> None:
+        """A press: an injected turn the client had started playing was
+        heard (the user is there and chose to talk); one it hadn't goes
+        back to the head of the queue and follows the user's turn."""
+        live = self._inflight
+        turn = self.current_turn
+        if live is not None and turn is not None and turn.source is TurnSource.INJECTED:
+            self._inflight = None  # `interrupt()` would put it back
+            await self._settle(live, heard=self._heard_at_press(live, turn), by="press")
+        said = self._unconfirmed
+        if said is not None:
+            self._unconfirmed = None
+            self._cancel_confirm_task()
+            await self._settle(said, heard=self._heard_at_press(said, None), by="press")
+            await self._release_content_hold(_HOLD_INJECT_QUEUE)
+
+    async def _settle(self, request: _InjectedRequest, *, heard: bool, by: str) -> None:
+        if heard:
+            self._resolve(request, InjectOutcome.DELIVERED)
+            await logger.ainfo(
+                "coord.inject_turn_delivered",
+                by=by,
+                dedup_key=request.dedup_key,
+                waited_s=round(time.monotonic() - request.queued_at, 1),
+                attempts=request.attempts,
+            )
+            return
+        requeued = self._requeue_head(request, why=f"{by}_before_audio")
+        await logger.ainfo(
+            "coord.inject_turn_undelivered",
+            reason=f"{by}_before_audio",
+            dedup_key=request.dedup_key,
+            requeued=requeued,
+        )
+
+    def _cancel_confirm_task(self) -> None:
+        task = self._confirm_task
+        self._confirm_task = None
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+
+    async def _cut_off_undelivered(self, reason: str) -> None:
+        """The client left (or was replaced): an injected turn it was
+        hearing, or hadn't finished playing, wasn't heard. Cut the live
+        one (cancel the response, end the turn) and put both back at the
+        head of the queue, the earlier first, to be said whole later."""
+        live = self._inflight
+        turn = self.current_turn
+        if live is not None and turn is not None and turn.source is TurnSource.INJECTED:
+            # Detached first, so `interrupt()` leaves it to us.
+            self._inflight = None
+            await self.interrupt()
+            requeued = self._requeue_head(live, why=reason)
+            await logger.ainfo(
+                "coord.inject_turn_cut_off",
+                reason=reason,
+                dedup_key=live.dedup_key,
+                requeued=requeued,
+            )
+        said = self._unconfirmed
+        if said is not None:
+            self._unconfirmed = None
+            self._cancel_confirm_task()
+            requeued = self._requeue_head(said, why=reason)
+            await logger.ainfo(
+                "coord.inject_turn_undelivered",
+                reason=reason,
+                dedup_key=said.dedup_key,
+                requeued=requeued,
+            )
+        await self._release_content_hold(_HOLD_INJECT_QUEUE)
+        # A newer client may already be there (an eviction).
+        await self._drain_waiting("cut_off")
+
+    async def _drop_undelivered(self) -> None:
+        """`close()`: resolve every turn not yet heard as DROPPED. One the
+        client finished playing (its confirmation pending) counts as
+        heard: a reload must not repeat it."""
+        said = self._unconfirmed
+        self._unconfirmed = None
+        self._cancel_confirm_task()
+        if said is not None and self._client_playhead_remaining_s() <= 0:
+            await self._settle(said, heard=True, by="close_played")
+            said = None
+        pending = [*self._injected_queue]
+        self._injected_queue = []
+        for request in (self._inflight, said):
+            if request is not None:
+                pending.append(request)
+        self._inflight = None
+        for task in list(self._drain_tasks):
+            task.cancel()
+        for request in pending:
+            self._resolve(request, InjectOutcome.DROPPED)
+        if pending:
+            await logger.ainfo(
+                "coord.inject_turn_dropped",
+                reason="shutdown",
+                count=len(pending),
+                dedup_keys=[r.dedup_key for r in pending],
+            )
 
     async def _fire_injected_turn(self, prompt: str, dedup_key: str | None) -> None:
         """Actually create the INJECTED turn, acquire DIALOG, send prompt.
@@ -2208,9 +2822,10 @@ class TurnCoordinator:
         # coordinator treats like any other in-response turn — audio
         # deltas, audio_done, response_done all flow through the same
         # handlers and clean up at the terminal barrier.
-        self.current_turn = self._turn_factory.create(
+        turn = self._turn_factory.create(
             source=TurnSource.INJECTED, initial_state=TurnState.IN_RESPONSE
         )
+        self.current_turn = turn
         self._bind_turn()
         self.response_cancelled = False
 
@@ -2270,10 +2885,17 @@ class TurnCoordinator:
         # (inject_turn from idle with no content playing).
         await self._speaking_state.force_release()
 
-        # Arm the completion event BEFORE request_response() so it is
-        # guaranteed to exist when _apply_side_effects tries to signal it.
-        # Any previous event is replaced (shouldn't happen; defensive).
-        self._injected_turn_done = asyncio.Event()
+        if self.current_turn is not turn:
+            # A press or a disconnect ended this turn while focus was being
+            # taken (they settled its request: said later, or heard). A
+            # prompt sent now would start a response nobody waits for:
+            # paid, and played as the next press's answer.
+            await logger.ainfo(
+                "coord.inject_turn_superseded",
+                dedup_key=dedup_key,
+                interface=interface_name,
+            )
+            return
 
         # Send the prompt + ask the model to respond. The model narrates
         # in persona voice; subsequent `on_audio_delta` / `on_audio_done`

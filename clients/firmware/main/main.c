@@ -53,6 +53,39 @@ static const char *TAG = "huxley";
 RTC_NOINIT_ATTR static uint32_t s_boot_magic;
 RTC_NOINIT_ATTR static uint32_t s_boot_counter;
 
+/* A pending image's silent self-test (F-0028): no sound, nothing he
+ * notices. Every part kept working (the supervisor reported no stall),
+ * both codecs and the expander answer on I2C, and memory has room. */
+#define SELFTEST_HEAP_MIN 40000
+
+static bool update_selftest(const char **why) {
+    if (hux_super_stalls() > 0) {
+        *why = "stall";
+        return false;
+    }
+    int dac = -1, adc = -1;
+    bool codecs = hux_audio_codecs_answer(&dac, &adc);
+    uint32_t reads = hux_button_tca_reads();
+    vTaskDelay(pdMS_TO_TICKS(200));
+    bool expander = hux_button_tca_reads() > reads;
+    size_t heap_min = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+    ESP_LOGW(TAG, "selftest dac_id=0x%02x adc_id=0x%02x expander=%d heap_min=%u", dac & 0xFF,
+             adc & 0xFF, expander, (unsigned)heap_min);
+    if (!codecs) {
+        *why = dac < 0 ? "codec_es8311" : "codec_es7210";
+        return false;
+    }
+    if (!expander) {
+        *why = "expander";
+        return false;
+    }
+    if (heap_min < SELFTEST_HEAP_MIN) {
+        *why = "heap";
+        return false;
+    }
+    return true;
+}
+
 static const char *reset_reason_str(esp_reset_reason_t r) {
     switch (r) {
         case ESP_RST_POWERON:   return "POWERON";
@@ -180,6 +213,7 @@ void app_main(void) {
         .wifi_ssid = HUX_WIFI_SSID,
         .wifi_password = HUX_WIFI_PASSWORD,
         .server_uri = HUX_SERVER_URI,
+        .device_token = HUX_DEVICE_TOKEN,
     });
 
     /* Talk input: the case's lever on GPIO7 or the board's K2; its
@@ -210,6 +244,13 @@ void app_main(void) {
     hux_net_set_audio_sink(hux_audio_spk_push);
     /* `audio_clear` on the same task, in order with the audio. */
     hux_net_set_audio_clear_sink(hux_audio_on_audio_clear);
+
+    /* server_event dev.cmd runs console lines; updates pulled from the
+     * server report through the app and keep themselves only after the
+     * silent self-test below (F-0028). */
+    hux_app_set_dev_cmd_runner(hux_console_run);
+    hux_ota_set_status_sink(hux_app_firmware_status);
+    hux_ota_set_selftest(update_selftest);
 
     /* The battery level once a minute, to the server through the app
      * (F-0025); without the solder blob it says not_wired once. */

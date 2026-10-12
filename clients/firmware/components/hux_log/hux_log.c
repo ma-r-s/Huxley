@@ -251,8 +251,58 @@ void hux_log_blackbox_sent(void) {
     s_prev_box = NULL;
 }
 
+/* A command's output (dev.cmd, F-0028): the lines the capturing task logs
+ * while it runs, whatever their level. */
+static portMUX_TYPE s_cap_lock = portMUX_INITIALIZER_UNLOCKED;
+static TaskHandle_t s_cap_task = NULL;
+static char *s_cap_buf = NULL;
+static size_t s_cap_size = 0;
+static size_t s_cap_len = 0;
+static bool s_cap_truncated = false;
+
+static void capture_note(const hux_log_entry_t *e) {
+    if (s_cap_task == NULL || s_cap_task != xTaskGetCurrentTaskHandle()) {
+        return;
+    }
+    char line[sizeof(e->tag) + sizeof(e->line) + 8];
+    int n = snprintf(line, sizeof(line), "%c %s: %s\n", e->level, e->tag, e->line);
+    if (n <= 0) {
+        return;
+    }
+    taskENTER_CRITICAL(&s_cap_lock);
+    if (s_cap_len + (size_t)n < s_cap_size) {
+        memcpy(s_cap_buf + s_cap_len, line, (size_t)n);
+        s_cap_len += (size_t)n;
+        s_cap_buf[s_cap_len] = '\0';
+    } else {
+        s_cap_truncated = true;
+    }
+    taskEXIT_CRITICAL(&s_cap_lock);
+}
+
+void hux_log_capture_begin(char *buf, size_t size) {
+    taskENTER_CRITICAL(&s_cap_lock);
+    s_cap_buf = buf;
+    s_cap_size = size;
+    s_cap_len = 0;
+    s_cap_truncated = false;
+    buf[0] = '\0';
+    s_cap_task = xTaskGetCurrentTaskHandle();
+    taskEXIT_CRITICAL(&s_cap_lock);
+}
+
+size_t hux_log_capture_end(bool *truncated) {
+    taskENTER_CRITICAL(&s_cap_lock);
+    s_cap_task = NULL;
+    size_t len = s_cap_len;
+    *truncated = s_cap_truncated;
+    taskEXIT_CRITICAL(&s_cap_lock);
+    return len;
+}
+
 static void enqueue(const hux_log_entry_t *entry, char threshold) {
     box_note(entry); /* whatever the remote threshold */
+    capture_note(entry);
     if (level_rank(entry->level) > level_rank(threshold)) {
         return; /* Below threshold — serial only. */
     }

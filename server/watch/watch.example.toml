@@ -13,6 +13,8 @@
 # data/<name>.db. Default: this checkout's server/personas/abuelos.
 # persona_dir = "/home/mario/Huxley/server/personas/abuelos"
 # db = "/home/mario/huxley-data/abuelos.db"   # default: <persona_dir>/data/<name>.db
+# The recorder's Ogg files, served read-only to the archive's players.
+# recordings_dir = "/home/mario/huxley-data/recordings"   # default: recordings/ next to the db
 # Only this board counts as the walkie (the twin board is a0:f2:62:e2:fb:60).
 # Default: any client whose client.device says shell=firmware.
 # walkie_mac = "44:1b:f6:85:26:80"
@@ -43,6 +45,8 @@
 # in persona.yaml; with neither, the gauge shows hours used only and only
 # Spotify's own refusals alert.
 # hours_per_month = 15
+# renews_day = 14              # the billing day: hours left = allowance minus book audio since the last renewal (from the logs)
+# since = "2026-10-12"        # when the allowance began (only shortens the first cycle)
 
 [thresholds]
 # The defaults, all tested (server/watch/tests/). Each must be more than 0.

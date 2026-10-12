@@ -9,11 +9,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
 import pytest
 
+from huxley import reconnect
 from huxley.config import Settings
 from huxley.reconnect import no_signal_tone_pcm
 from huxley.runtime import Runtime
@@ -94,3 +96,44 @@ async def test_a_failed_connect_does_not(
 
     assert app.state_machine.state is AppState.IDLE
     connected.assert_not_awaited()
+
+
+async def test_a_failed_connect_is_retried_by_the_reconnect_loop(
+    app: Application, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T1.44 part 2: a connect that fails at boot (or after a client's
+    wake_word) used to leave the app IDLE until the next wake_word; only a
+    session end started the reconnect loop. `/health` said ok=false all
+    the while."""
+    monkeypatch.setattr(reconnect, "BACKOFF_SCHEDULE_S", (0.01, 0.01, 0.01, 0.01))
+    connect = AsyncMock(side_effect=[OSError("no network"), OSError("still none"), None])
+    monkeypatch.setattr(app.provider, "connect", connect)
+    monkeypatch.setattr(app.coordinator, "on_session_connected", AsyncMock())
+
+    await app.state_machine.trigger("wake_word")  # the boot's auto-connect
+
+    deadline = asyncio.get_running_loop().time() + 2.0
+    while app.state_machine.state is not AppState.CONVERSING:
+        assert asyncio.get_running_loop().time() < deadline, "never reconnected"
+        await asyncio.sleep(0.01)
+    assert connect.await_count == 3
+
+
+async def test_a_failed_connect_inside_the_loop_starts_no_second_loop(
+    app: Application, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(reconnect, "BACKOFF_SCHEDULE_S", (0.01, 0.01, 0.01, 0.01))
+    connect = AsyncMock(side_effect=[OSError("a"), OSError("b"), OSError("c"), None])
+    monkeypatch.setattr(app.provider, "connect", connect)
+    monkeypatch.setattr(app.coordinator, "on_session_connected", AsyncMock())
+
+    await app.state_machine.trigger("wake_word")
+    first_loop = app._reconnect_task
+    assert first_loop is not None
+
+    deadline = asyncio.get_running_loop().time() + 2.0
+    while app.state_machine.state is not AppState.CONVERSING:
+        assert asyncio.get_running_loop().time() < deadline, "never reconnected"
+        assert app._reconnect_task is first_loop, "a second loop was started"
+        await asyncio.sleep(0.005)
+    assert connect.await_count == 4

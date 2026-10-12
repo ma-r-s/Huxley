@@ -256,6 +256,45 @@ class TestEviction:
             await device.close()
         assert "server.auth.evict_refused" in [e["event"] for e in logs]
 
+    async def test_a_refused_local_client_leaves_presence_and_a_delivery_alone(self) -> None:
+        """T1.44 x roles: an injected turn is being said to the walkie (its
+        audio going out, then the ping that proves it arrived) when a local
+        client tries to connect and gets 409. The walkie stays the listener
+        (no presence change, same epoch) and the delivery is confirmed."""
+        async with _serving() as (port, server, _cb):
+            presence: list[bool] = []
+
+            async def on_presence(present: bool) -> None:
+                presence.append(present)
+
+            server._on_client_presence = on_presence
+            device, hello = await _open(port, headers=AUTH)
+            await until(lambda: presence == [True])
+            epoch = server.listener_epoch
+            assert epoch is not None
+
+            async def say_and_confirm() -> bool:
+                for _ in range(10):
+                    await server.send_audio(b"\x00\x01" * 2400)  # 50 ms each
+                    await asyncio.sleep(0.01)
+                return await server.client_received_all(epoch, timeout_s=2.0)
+
+            delivery = asyncio.create_task(say_and_confirm())
+            refused = await _refused_status(port)
+            delivered = await delivery
+            frames = 0
+            with contextlib.suppress(TimeoutError):
+                while frames < 10:
+                    msg = json.loads(await asyncio.wait_for(device.recv(), timeout=1))
+                    frames += msg.get("type") == "audio"
+            assert refused == 409
+            assert delivered is True
+            assert frames == 10
+            assert presence == [True]
+            assert server.listener_epoch == epoch
+            assert server.conn_id == hello["conn_id"]
+            await device.close()
+
     async def test_unless_it_asks_with_evict(self) -> None:
         async with _serving() as (port, server, _cb):
             device, _hello = await _open(port, headers=AUTH)

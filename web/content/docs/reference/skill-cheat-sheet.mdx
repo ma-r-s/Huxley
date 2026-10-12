@@ -145,7 +145,7 @@ Available in `setup` and stored for use in handlers.
 | `ctx.storage`                               | `SkillStorage` (see below)                       |
 | `ctx.catalog()`                             | Returns a `Catalog` for fuzzy-matched search     |
 | `await ctx.inject_turn(prompt, ...)`        | Make the persona speak proactively               |
-| `await ctx.inject_turn_and_wait(prompt, ...)` | Like `inject_turn`, but blocks until the model finishes speaking. **Falls back to plain enqueue if the coordinator is busy** — do not assume the model finished just because this returned. |
+| `await ctx.inject_turn_and_wait(prompt, ...)` | Like `inject_turn`, but returns an `InjectOutcome` once the turn was heard (`DELIVERED`), its `expires_after` ran out waiting for a listener (`EXPIRED`), or it was replaced or dropped (`DROPPED`). Waits through a busy coordinator and an absent client. In a tool handler or `setup()` it can't wait and returns `QUEUED`. |
 | `await ctx.start_input_claim(claim)`        | Activate an `InputClaim`                         |
 | `await ctx.cancel_active_claim(reason=...)` | End the current claim                            |
 | `ctx.background_task(name, factory, ...)`   | Spawn a supervised async task                    |

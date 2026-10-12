@@ -1665,105 +1665,61 @@ class TestInjectTurnAndWaitPlaybackDrain:
     → `start_input_claim` would `audio_clear` and guillotine the
     announcement mid-sentence ("X te está llamando, cone—").
 
-    The drain is computed from `_turn_audio_bytes_sent /
-    _CLIENT_AUDIO_BYTES_PER_SECOND` plus `_PLAYBACK_DRAIN_SAFETY_MS` of
-    headroom; the test forges audio-delta bytes to exercise the
-    computation deterministically.
+    Since T1.44 the wait is the delivery confirmation: the client
+    playhead (pushed by every model audio delta) has passed, then the
+    client answered a ping. Without a server wired in (these tests), the
+    ping step is skipped.
     """
 
-    async def test_drain_wait_sleeps_for_audio_duration(
+    async def test_returns_after_the_audio_has_played(
         self,
         coordinator: TurnCoordinator,
     ) -> None:
-        """Feed the coordinator 1 second's worth of audio bytes. The
-        drain wait should sleep for ~1s (plus safety margin), not
-        return immediately.
-        """
+        """One second of narration: the call returns about a second after
+        the turn ends, not at once."""
         import asyncio as _asyncio
         import time as _time
 
-        # 1 second of PCM16 mono @ 24kHz = 48000 bytes.
-        one_second_bytes = 48_000
-        coordinator._turn_audio_first_sent_at = _time.monotonic()
-        coordinator._turn_audio_bytes_sent = one_second_bytes
+        from huxley_sdk import InjectOutcome
 
-        started = _time.monotonic()
-        await _asyncio.wait_for(coordinator._wait_for_client_playback_drain(), timeout=2.0)
-        elapsed_ms = (_time.monotonic() - started) * 1000
+        task = _asyncio.create_task(coordinator.inject_turn_and_wait("Llamada de Ana."))
+        for _ in range(100):
+            if coordinator.current_turn is not None:
+                break
+            await _asyncio.sleep(0.001)
+        await coordinator.on_audio_delta(b"\x00" * 48_000)  # 1 s
+        await coordinator.on_audio_done()
+        await coordinator.on_response_done()
+        ended = _time.monotonic()
 
-        # Must sleep at least the audio duration minus a tiny early-exit
-        # tolerance. The safety margin means it'll be slightly longer.
-        assert elapsed_ms >= 950, (
-            f"drain wait returned after only {elapsed_ms:.0f}ms;"
-            f" expected ≥ ~1000ms for 1s of audio"
-        )
-        # But not absurdly longer — should be under 2s.
-        assert elapsed_ms < 1500, (
-            f"drain wait took {elapsed_ms:.0f}ms; safety headroom should be ~80ms, not hundreds"
-        )
+        outcome = await _asyncio.wait_for(task, timeout=3.0)
+        elapsed_ms = (_time.monotonic() - ended) * 1000
 
-    async def test_drain_wait_is_noop_when_no_audio_sent(
+        assert outcome is InjectOutcome.DELIVERED
+        assert elapsed_ms >= 850, f"returned {elapsed_ms:.0f} ms after the turn; 1 s still played"
+        assert elapsed_ms < 1500, f"took {elapsed_ms:.0f} ms; the margin is ~80 ms"
+
+    async def test_returns_promptly_with_no_audio(
         self,
         coordinator: TurnCoordinator,
     ) -> None:
-        """If the injected turn ended with no audio (text-only response,
-        or a cancel before audio_delta), the drain wait returns
-        immediately — don't sleep for phantom bytes."""
+        """A turn that said nothing (it only ran a tool) has nothing to
+        wait for."""
+        import asyncio as _asyncio
         import time as _time
 
-        assert coordinator._turn_audio_first_sent_at is None
-        assert coordinator._turn_audio_bytes_sent == 0
+        task = _asyncio.create_task(coordinator.inject_turn_and_wait("Llama a play."))
+        for _ in range(100):
+            if coordinator.current_turn is not None:
+                break
+            await _asyncio.sleep(0.001)
+        await coordinator.on_tool_call("c1", "play", {})
+        await coordinator.on_response_done()  # the tool's round
+        await coordinator.on_response_done()  # the follow-up says nothing
+        ended = _time.monotonic()
 
-        started = _time.monotonic()
-        await coordinator._wait_for_client_playback_drain()
-        elapsed_ms = (_time.monotonic() - started) * 1000
-
-        assert elapsed_ms < 20, f"no-audio path should return immediately, took {elapsed_ms:.0f}ms"
-
-    async def test_drain_wait_is_noop_when_drain_time_already_passed(
-        self,
-        coordinator: TurnCoordinator,
-    ) -> None:
-        """Slow servers can finish response_done well after the audio
-        would have played. If `first_sent_at + duration` is already
-        past, sleep 0 — don't sleep negative."""
-        import time as _time
-
-        # 100ms of audio, but "started" 5 seconds ago.
-        coordinator._turn_audio_first_sent_at = _time.monotonic() - 5.0
-        coordinator._turn_audio_bytes_sent = 4_800  # 100ms worth
-
-        started = _time.monotonic()
-        await coordinator._wait_for_client_playback_drain()
-        elapsed_ms = (_time.monotonic() - started) * 1000
-
-        assert elapsed_ms < 20, (
-            f"past-drain path should return immediately, took {elapsed_ms:.0f}ms"
-        )
-
-    async def test_audio_delta_resets_counters_on_fresh_stream(
-        self,
-        coordinator: TurnCoordinator,
-    ) -> None:
-        """When a new audio stream begins (speaking_state transitions
-        to speaking), the byte counters reset — otherwise the drain
-        wait for stream N would include bytes from stream N-1."""
-        import time as _time
-
-        # Simulate turn N-1 having sent some bytes.
-        coordinator._turn_audio_first_sent_at = _time.monotonic() - 10.0
-        coordinator._turn_audio_bytes_sent = 100_000
-
-        # Now on_audio_delta fires for a new stream. speaking_state
-        # was released after the prior turn ended, so is_speaking is
-        # False when this first delta arrives.
-        await coordinator.on_audio_delta(bytes(2400))  # 50ms of PCM
-
-        # Counters reset: first_sent_at is "just now", bytes reflect
-        # only this stream.
-        assert coordinator._turn_audio_bytes_sent == 2400
-        assert coordinator._turn_audio_first_sent_at is not None
-        assert coordinator._turn_audio_first_sent_at > _time.monotonic() - 1.0
+        await _asyncio.wait_for(task, timeout=1.0)
+        assert (_time.monotonic() - ended) * 1000 < 200
 
 
 class TestInjectTurnQueue:
@@ -1850,7 +1806,10 @@ class TestInjectTurnQueue:
         provider: StubVoiceProvider,
     ) -> None:
         """Two queued requests drain in arrival order across consecutive
-        turn-ends."""
+        turn-ends. The second waits until the client has played the first
+        (T1.44: one injected turn at a time, confirmed before the next)."""
+        import asyncio as _asyncio
+
         await _commit_turn(coordinator)
         await coordinator.inject_turn("primero")
         await coordinator.inject_turn("segundo")
@@ -1864,10 +1823,15 @@ class TestInjectTurnQueue:
         assert [r.prompt for r in coordinator._injected_queue] == ["segundo"]
         assert coordinator.current_turn is not None  # injected turn live
 
-        # End the injected turn — `segundo` fires.
+        # End the injected turn: `segundo` fires once `primero` played.
         await coordinator.on_audio_delta(b"ok")
         await coordinator.on_audio_done()
         await coordinator.on_response_done()
+        assert ("send_conversation_message", "segundo") not in provider.sent
+        for _ in range(100):
+            if ("send_conversation_message", "segundo") in provider.sent:
+                break
+            await _asyncio.sleep(0.005)
         assert ("send_conversation_message", "segundo") in provider.sent
         assert coordinator._injected_queue == []
 
@@ -1945,7 +1909,12 @@ class TestInjectTurnQueue:
         a new inject with the same key fires immediately (not dropped).
         Previously this was only tested with A-in-flight-drops-B;
         nothing asserted that after A ends, a same-key C fires cleanly.
+
+        Since T1.44, "ends" means heard: until the client has played A, a
+        same-key C would repeat it and is dropped.
         """
+        import asyncio as _asyncio
+
         await coordinator.inject_turn("A", dedup_key="med_9am")
         assert coordinator._current_injected_dedup_key == "med_9am"
 
@@ -1954,8 +1923,13 @@ class TestInjectTurnQueue:
         await coordinator.on_audio_done()
         await coordinator.on_response_done()
 
-        # In-flight key cleared.
+        # In-flight key cleared; A awaits its confirmation, then settles.
         assert coordinator._current_injected_dedup_key is None
+        for _ in range(100):
+            if coordinator._unconfirmed is None:
+                break
+            await _asyncio.sleep(0.005)
+        assert coordinator._unconfirmed is None
 
         # Same-key C fires immediately (not dropped).
         pre_sent = len(provider.sent)

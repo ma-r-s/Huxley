@@ -70,7 +70,50 @@ The production server for grandpa's walkie runs on the shared Orange Pi
 - Spotify: the Soloist container from `server/skills/spotify/dev/`
   (`run.sh`), with Watchtower kept away from it.
 
-Status 2026-10-12: code and venv in place (runtime tests 775/775 on the
-Pi), a staging run with the `basic` persona on 127.0.0.1:8766 connected to
-OpenAI with Opus audio; the unit is written, not installed; the cutover
-from the Mac has not happened.
+Status 2026-10-12 21:03Z: **production runs here.** The walkie dials
+ws://192.168.68.75:8765/ (saved in its NVS; the firmware's compiled
+baseline follows in its next build). User units, no sudo (lingering on):
+`huxley.service` (the server, commit at /health) and `huxley-watch.service`
+(the caregiver page, http://100.75.152.70:8780 on the tailnet). Soloist is
+the `huxley-soloist` container (run.sh), logged in from the copied
+pairing. Persona data was copied from the Mac with its server stopped;
+the local audiobook library (4.8 GB, skill off) stayed on the Mac. The
+Mac's server and its Soloist container are stopped (restart=no): never
+run grandpa's persona, Telegram session or Spotify account there again.
+Open: reserve 192.168.68.75 in the router (DHCP) until the tunnel
+hostname replaces the IP; the system unit's priority settings need sudo
+once (`install.sh`), optional.
+
+Commands on the Pi:
+
+```bash
+systemctl --user status huxley huxley-watch
+systemctl --user restart huxley          # at night or when idle: the walkie reconnects in ~3 s
+curl -s http://127.0.0.1:8765/health     # ok, persona, recording, walkie_last_seen, commit
+tail -f ~/huxley/server/runtime/logs/huxley.log
+docker logs -f huxley-soloist
+```
+
+Deploy from the Mac: `git push ssh://mario@100.75.152.70/home/mario/huxley.git main`,
+then on the Pi `cd ~/huxley && git pull --ff-only && uv sync && systemctl --user restart huxley`.
+
+## On the internet: walkie.ma-r-s.com (W2)
+
+Created 2026-10-12 with the `cf` CLI (Mario's logged-in Cloudflare account):
+tunnel `huxley-walkie` (9c9efdac-b9d2-40b3-8e36-b832a9191414, remotely
+managed), routing `walkie.ma-r-s.com` -> `http://localhost:8765` with
+`/admin` and `/health` answered 404 at Cloudflare, and a proxied CNAME
+`walkie.ma-r-s.com` -> `<tunnel id>.cfargotunnel.com`. The connector's
+token is in `~/.config/huxley-tunnel/env` on the Pi (mode 600).
+`scripts/pi/tunnel.sh` starts the connector (pinned cloudflared, out of
+Watchtower). **Not started yet:** it waits for the production role
+(device token on the WebSocket upgrade) to be merged and running.
+
+Inspect or change the routing from the Mac:
+
+```bash
+cf zero-trust tunnels cloudflared configurations get 9c9efdac-b9d2-40b3-8e36-b832a9191414
+cf zero-trust tunnels cloudflared get 9c9efdac-b9d2-40b3-8e36-b832a9191414
+cf dns records list -z ma-r-s.com
+```
+

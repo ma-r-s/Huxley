@@ -49,3 +49,17 @@ const char *hux_ladder_name(hux_ladder_step_t step);
  * the old port or path when a new address leaves one out, and a saved
  * address it can't parse would fail every boot (F-0027 review). */
 bool hux_link_uri_ok(const char *uri, size_t max);
+
+/** `uri` with its scheme's port filled in when it has none (443 for
+ * `wss://`, 80 for `ws://`) and `/` when it has no path, into `out`;
+ * then hux_link_uri_ok decides. False if it doesn't fit or isn't ws/wss.
+ * "wss://walkie.example.com" -> "wss://walkie.example.com:443/". */
+bool hux_link_uri_complete(const char *uri, char *out, size_t cap);
+
+/** A download path the server sent (`/firmware/<v>.bin`, relative to the
+ * server the walkie is using, so a move from the LAN address to the
+ * tunnel never breaks it) as a full URL into `out`: `ws://host:port/...`
+ * gives `http://host:port<path>`, `wss://` gives `https://`. An absolute
+ * http(s) URL is copied as is. False on anything else or if it doesn't
+ * fit (F-0028). */
+bool hux_link_http_url(const char *ws_uri, const char *path, char *out, size_t cap);

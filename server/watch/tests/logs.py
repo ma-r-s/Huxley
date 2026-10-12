@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from huxley_watch.bench import Bench, Window
 from huxley_watch.config import Thresholds
+from huxley_watch.daylog import DAY_EVENTS
 from huxley_watch.events import Event, make_events
 from huxley_watch.rules import Inputs, make_inputs
 
@@ -183,11 +184,11 @@ def session_connected(ts: datetime) -> str:
     return line("session_connected", ts, model="gpt-realtime-2.1-mini", language="es")
 
 
-def press(ts: datetime, conn: str = "w1") -> str:
+def press(ts: datetime, conn: str = "w1", turn: str = "a2e412d8") -> str:
     return line(
         "coord.ptt_start",
         ts,
-        turn="a2e412d8",
+        turn=turn,
         had_turn=False,
         prev_state=None,
         had_media=False,
@@ -219,32 +220,46 @@ def flat(*groups: str | list[str]) -> list[str]:
 # --- what the speaker played, him and Huxley ------------------------------------
 
 
-def ptt_stop(ts: datetime, conn: str = "w1") -> str:
+def ptt_stop(
+    ts: datetime, conn: str = "w1", turn: str = "a2db089e", committed: bool = True
+) -> str:
     return line(
         "coord.ptt_stop",
         ts,
-        turn="a2db089e",
+        turn=turn,
         frames=39,
         audio_ms=2340,
-        committed=True,
+        committed=committed,
         peak_dbfs=0.0,
         rms_dbfs=-34.8,
         conn_id=conn,
     )
 
 
-def speaking(ts: datetime, value: bool) -> str:
-    return line("server.tx.model_speaking", ts, value=value)
+def speaking(ts: datetime, value: bool, conn: str | None = None) -> str:
+    """The speaker-owned flag: the model's (no conn_id) or a stream's or
+    call's pump (with one)."""
+    if conn is None:
+        return line("server.tx.model_speaking", ts, value=value)
+    return line("server.tx.model_speaking", ts, value=value, conn_id=conn)
+
+
+def audio_start(ts: datetime, turn: str = "24d007c6", owner: str = "user") -> str:
+    """The model's audio for a turn begins (logged with model_speaking true)."""
+    return line("coord.audio_start", ts, turn=turn, state="in_response", owner=owner)
+
+
+def answer(start: datetime, end: datetime, turn: str = "24d007c6") -> list[str]:
+    """Huxley speaking, as the server logs it."""
+    return [speaking(start, True), audio_start(start, turn), speaking(end, False)]
 
 
 def stream_started(ts: datetime, sid: str, label: str) -> str:
     return line("server.tx.stream_started", ts, stream_id=sid, label=label, preroll_ms=1560)
 
 
-def stream_ended(ts: datetime, sid: str) -> str:
-    return line(
-        "server.tx.stream_ended", ts, stream_id=sid, end_reason="interrupted", conn_id="w1"
-    )
+def stream_ended(ts: datetime, sid: str, reason: str = "interrupted") -> str:
+    return line("server.tx.stream_ended", ts, stream_id=sid, end_reason=reason, conn_id="w1")
 
 
 def play_started(ts: datetime, context: str) -> str:
@@ -301,3 +316,64 @@ def bench_line(start: datetime, end: datetime | None, what: str) -> str:
 
 def bench(*windows: tuple[datetime, datetime, str]) -> Bench:
     return Bench(tuple(Window(s, e, w) for s, e, w in windows))
+
+
+# --- the archive: transcripts, recordings, tools, call direction -------------
+
+
+def transcript(ts: datetime, role: str, text: str) -> str:
+    """Logged with no turn and no conn_id (remote-operation W3)."""
+    return line("transcript", ts, role=role, text=text)
+
+
+def segment(
+    source: str,
+    start: datetime,
+    end: datetime,
+    conn: str = "w1",
+    path: str | None = None,
+    ms: int = 1500,
+    claim_id: str | None = None,
+    label: str | None = None,
+) -> str:
+    """A recorder.segment line, its times with milliseconds as the recorder
+    writes them; `path` relative to the persona's data dir."""
+
+    def ms_iso(ts: datetime) -> str:
+        return ts.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.") + f"{ts.microsecond // 1000:03d}Z"
+
+    fields: dict[str, Any] = {
+        "source": source,
+        "label": label,
+        "start": ms_iso(start),
+        "end": ms_iso(end),
+        "duration_ms": ms,
+        "packets": ms // 60,
+        "bytes": ms * 2,
+        "path": path,
+        "end_reason": "ptt_stop" if source == "mic" else "model_done",
+        "cut_by_clear": False,
+        "dropped": 0,
+        "conn_id": conn,
+    }
+    if claim_id:
+        fields["claim_id"] = claim_id
+    return line("recorder.segment", end + timedelta(milliseconds=40), **fields)
+
+
+def tool_call(ts: datetime, name: str) -> str:
+    return line("session.rx.tool_call", ts, name=name, call_id="call_1eH3j8CgrUnZfIbg", args={})
+
+
+def call_placed(ts: datetime, name: str) -> str:
+    return line("telegram.call_started", ts, skill="telegram", name=name, user_id=1000000081)
+
+
+def by_time(lines: list[str]) -> list[str]:
+    """Log lines in time order, as a file holds them."""
+    return sorted(lines, key=lambda x: json.loads(x)["timestamp"])
+
+
+def day_events(lines: list[str]) -> list[Event]:
+    """Parsed as the archive reads a day (daylog.DAY_EVENTS)."""
+    return make_events(lines, DAY_EVENTS)

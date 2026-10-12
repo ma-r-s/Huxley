@@ -107,17 +107,28 @@ Not every book is included: some are purchase-only, and the Web API can't
 tell which (with an app token every chapter says `payment_required`).
 Spotify refuses a book it won't play: `playing`, then `idle` 0.3 to 1.2 s
 later, no error. A fresh start idle within 3 s (`REFUSED_S`) is a
-refusal: of a book known to play here, the hours ran out
-(`book_no_hours`); otherwise it isn't available (`book_unavailable`: paid
-apart or not offered, the same to the listener); with
-`book_hours_per_month` set, a month's audio near the budget also means
-hours.
+refusal, and why decides what he hears: with `book_hours_per_month` set,
+a month's audio near the budget is the hours (`book_no_hours`); a book
+that played here in the last 30 min means the hours are there, so this
+book isn't available (`book_unavailable`: paid apart or not offered, the
+same to the listener); a book known to play here (played, or a check's
+"ok") is explained after its stream ends by trying another book known to
+play (`spotify.refusal_explained control= control_result= cause=`): it
+plays, so this book is unavailable; it's refused too, so the hours ran
+out; no other book to try: the hours if this one really played here, else
+unavailable. Anything else is unavailable. `start_refused` logs
+`cause=checking` while the check runs: trust `refusal_explained` for
+"no hours". (2026-10-12: Siddhartha had passed a too-quick check, was
+refused, and the walkie said the month's hours were gone while three
+other books played.) A refused book is remembered for 30 days and its
+check's "ok" dropped, so it isn't offered again.
 
 **Recommendations only offer books that play.** `find_books` tries each
 unknown candidate for a moment (up to 4; Spotify stops one it won't play
 within 0.3-1.2 s: refused is "playing", the first chapter, "buffering",
-idle; accepted ends "playing" with the position moving, so a check
-decides on that plus 0.35 s, at most 1.6 s), with nothing
+idle; a check says "ok" only for a book still playing at the end of
+1.6 s, since the first "playing" comes before Spotify's verdict; a refusal
+ends it early), with nothing
 reaching a speaker (Soloist's sink has no reader between streams), keeps
 the first three that play, remembers both answers (a refusal for 30
 days), and loads back what was there, paused (a book at its own place;
@@ -207,7 +218,7 @@ Spotify app ─┐                        ┌─ WebSocket (control, events) ─
 | Paused from a Spotify app for 3 s             | stream ends quietly, freeing the speaker                                                      |
 | A call outlasts the 30 min patience           | narrated `patience_expired` (the music stays paused)                                          |
 | Album / playlist runs out                     | stream ends quietly                                                                           |
-| Idle within 3 s of a play (refused)           | a book: `book_no_hours` if it's known to play here, else `book_unavailable`; music: `start_failed` |
+| Idle within 3 s of a play (refused)           | a book: `book_no_hours` only when the budget is spent or another known book is refused too (`refusal_explained`), else `book_unavailable`; music: `start_failed` |
 | A book stops, is taken, can't be reached      | `book_finished`, `book_cut`, `book_moved`, `book_offline`, `book_nav_failed`, `book_patience` (see Audiobooks) |
 
 "What song is this?", like any question, gets the music back after the

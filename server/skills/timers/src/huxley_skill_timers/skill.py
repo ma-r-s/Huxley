@@ -34,6 +34,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from huxley_sdk import (
+    DEFAULT_INJECT_EXPIRY,
     BackgroundTaskHandle,
     InjectPriority,
     InjectTurn,
@@ -68,6 +69,11 @@ _ENTRY_VERSION = 1
 # a different latency tolerance override via `stale_restore_threshold_s`
 # in their persona.yaml.
 _DEFAULT_STALE_RESTORE_THRESHOLD = timedelta(hours=1)
+
+# Shortest wait a fired timer's narration gets for a client to hear it
+# (T1.44): the framework default, enough for a restart or a Wi-Fi blip
+# even when the timer itself was short.
+_MIN_WAIT = DEFAULT_INJECT_EXPIRY
 
 # Per-language default fire-prompt templates. The persona can still
 # override via `skills.timers.fire_prompt` (global) or
@@ -333,6 +339,12 @@ class TimersSkill:
         )
         self._handles[timer_id] = handle
 
+    def _expiry_for(self, seconds: float) -> timedelta:
+        """How long a fired timer's narration may wait for a listener:
+        about as long as the timer ran, at least `_MIN_WAIT`, at most the
+        stale threshold (the tolerance a restart-delayed timer gets)."""
+        return min(self._stale_threshold, max(_MIN_WAIT, timedelta(seconds=seconds)))
+
     async def _fire_after(self, timer_id: int, seconds: int, message: str) -> None:
         """Sleep then fire `inject_turn`.
 
@@ -379,7 +391,17 @@ class TimersSkill:
                 # conversation for a cooking timer). Right severity tier
                 # for a user-set reminder whose value is immediate
                 # narration against content but respectful of live calls.
-                await self._inject_turn(prompt, priority=InjectPriority.BLOCK_BEHIND_COMMS)
+                #
+                # Waits for a client that can hear it (T1.44) about as long
+                # as the timer ran, at least 10 min, at most the stale
+                # threshold: a 5-minute laundry timer an hour late is
+                # noise. `timer:<id>` names it in the framework's logs.
+                await self._inject_turn(
+                    prompt,
+                    priority=InjectPriority.BLOCK_BEHIND_COMMS,
+                    dedup_key=f"timer:{timer_id}",
+                    expires_after=self._expiry_for(seconds),
+                )
             except Exception:
                 # Don't let an inject_turn failure propagate out of an asyncio task
                 # and kill the event loop's exception handler. Log and move on.

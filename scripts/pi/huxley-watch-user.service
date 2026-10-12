@@ -1,0 +1,19 @@
+# systemd USER unit for huxley-watch (the caregiver's page) on the Pi.
+# Install: cp scripts/pi/huxley-watch-user.service ~/.config/systemd/user/huxley-watch.service
+#          systemctl --user daemon-reload && systemctl --user enable --now huxley-watch
+# Config:  ~/.config/huxley-watch/watch.toml (bind it to the Pi's Tailscale address).
+
+[Unit]
+Description=huxley-watch, the caregiver's page
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/huxley
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/bin/uv run --package huxley-watch huxley-watch --config %h/.config/huxley-watch/watch.toml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

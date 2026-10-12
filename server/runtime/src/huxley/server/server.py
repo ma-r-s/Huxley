@@ -435,6 +435,9 @@ class _ConnInfo:
     role: str = "dev"
     # Message types refused for this role, each logged once.
     refused_types: set[str] = field(default_factory=set)
+    # A number of its own, from a server-wide counter: who heard a
+    # proactive turn is pinned to it (`listener_epoch`, T1.44).
+    epoch: int = 0
 
     def to_diag(self) -> dict[str, Any]:
         """Serialize to the wire-format the `diag_state` frame uses.
@@ -681,10 +684,81 @@ class AudioServer:
         # Connections still writing a firmware image (aborted at shutdown,
         # so the listener's close doesn't wait out a slow download).
         self._long_sends: set[ServerConnection] = set()
+        # Counts connections: each gets the next number as its epoch.
+        self._conn_epoch = 0
 
     @property
     def has_client(self) -> bool:
         return self._conn is not None
+
+    @property
+    def listener_epoch(self) -> int | None:
+        """The current client's epoch once it can play audio (its hello is
+        out), else None. A new connection gets a new epoch, so "the client
+        that was said to" stays checkable after a reconnect (T1.44)."""
+        conn = self._conn
+        if conn is None or conn.ws is None or not conn.hello_sent:
+            return None
+        return conn.epoch
+
+    async def client_received_all(self, epoch: int, timeout_s: float) -> bool:
+        """True once the client of `epoch` has received everything sent to
+        it so far: a WebSocket ping goes out after it and TCP is ordered,
+        so the pong proves it (T1.44: an injected turn counts as delivered
+        only then). False if that client is no longer current, if its
+        socket closes first (websockets fails pending pings), or if no
+        pong comes within `timeout_s`: then the connection is aborted, so
+        the client reports gone and reconnects. A dead link the server
+        hasn't noticed accepts writes until its buffer fills and then
+        blocks them, the keepalive's ping included; the bound covers the
+        write too. A ping is a control frame every client already answers:
+        nothing new on the wire."""
+        conn = self._conn
+        if conn is None or conn.ws is None or conn.epoch != epoch or not conn.hello_sent:
+            await logger.ainfo(
+                "server.client_ping",
+                ok=False,
+                reason="not_current",
+                epoch=epoch,
+                current_conn_id=conn.conn_id if conn is not None else None,
+            )
+            return False
+        ws = conn.ws
+        started = time.monotonic()
+        try:
+            async with asyncio.timeout(timeout_s):
+                pong = await ws.ping()
+                await pong
+        except websockets.ConnectionClosed:
+            await logger.ainfo(
+                "server.client_ping",
+                ok=False,
+                reason="closed",
+                conn_id=conn.conn_id,
+                shell=conn.shell,
+                waited_ms=round((time.monotonic() - started) * 1000),
+            )
+            return False
+        except TimeoutError:
+            await logger.awarning(
+                "server.client_ping",
+                ok=False,
+                reason="timeout",
+                conn_id=conn.conn_id,
+                shell=conn.shell,
+                timeout_s=timeout_s,
+                action="abort",
+            )
+            ws.transport.abort()
+            return False
+        await logger.ainfo(
+            "server.client_ping",
+            ok=True,
+            conn_id=conn.conn_id,
+            shell=conn.shell,
+            rtt_ms=round((time.monotonic() - started) * 1000),
+        )
+        return True
 
     @property
     def conn_id(self) -> str | None:
@@ -1158,8 +1232,34 @@ class AudioServer:
             self._ptt_active = False
             if self._recorder is not None:
                 self._recorder.connection_closed(old_conn.conn_id, "evicted")
-            with contextlib.suppress(Exception):
-                await old_conn.ws.close(1001, "Replaced by new client") if old_conn.ws else None
+            # The old client is gone, whatever its socket does next: a
+            # walkie reconnecting after a Wi-Fi drop the server hadn't
+            # noticed evicts its dead socket, and what was being said to
+            # it was lost (T1.44: an injected turn is said again). The new
+            # connection reports itself present after its handshake.
+            await self._notify_presence(False)
+            old_ws = old_conn.ws
+            if old_ws is not None:
+                # Bounded: a dead socket never answers the close, and the
+                # reconnecting walkie's hello waits on this (websockets'
+                # own close timeout is 10 s).
+                try:
+                    async with asyncio.timeout(self._EVICT_CLOSE_TIMEOUT_S):
+                        await old_ws.close(1001, "Replaced by new client")
+                except TimeoutError:
+                    await logger.ainfo(
+                        "server.evicted_close_aborted",
+                        old_conn_id=old_conn.conn_id,
+                        timeout_s=self._EVICT_CLOSE_TIMEOUT_S,
+                    )
+                    old_ws.transport.abort()
+                except Exception:
+                    await logger.adebug(
+                        "server.evicted_close_failed", old_conn_id=old_conn.conn_id
+                    )
+            # Every await above lets another handshake finish: if the
+            # walkie became current meanwhile, this connection must evict
+            # it too (the loop) or, if its role may not, leave.
             if not await self._admit(ws, access, conn_id):
                 return
 
@@ -1187,6 +1287,7 @@ class AudioServer:
         # `conn` is THIS handler's record. `self._conn` is whichever client
         # is current, and a newer connection can replace it while this
         # handler is still draining. Cleanup below must only touch `conn`.
+        self._conn_epoch += 1
         conn = _ConnInfo(
             conn_id=conn_id,
             remote=str(ws.remote_address),
@@ -1195,6 +1296,7 @@ class AudioServer:
             requested_language=selected_language,
             ws=ws,
             role=access.role or ROLE_DEV,
+            epoch=self._conn_epoch,
         )
         # The audio format is fixed before the connection becomes current,
         # so every audio frame it ever gets (even one racing the hello) is
@@ -1719,6 +1821,10 @@ class AudioServer:
     # timer runs while a stream is announced, so a source that stalls
     # never gets silence padded into it.
     _OPUS_IDLE_FLUSH_S = 0.25
+
+    # How long an evicted socket gets to answer the close before it is
+    # aborted (T1.44: the reconnecting walkie's handshake waits on it).
+    _EVICT_CLOSE_TIMEOUT_S = 2.0
 
     async def send_audio(self, pcm: bytes, *, stats: bool = True) -> None:
         """`stats=False` for the coordinator's waiting cue (T1.41): its

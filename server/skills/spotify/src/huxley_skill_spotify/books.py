@@ -222,7 +222,9 @@ class Shelf:
         return None
 
     async def mark_unavailable(self, uri: str) -> None:
+        """Spotify refused it here: a check's earlier "ok" was wrong."""
         await self._set(f"book:no:{_book_id(uri)}", time.time())
+        await self._storage.delete_setting(f"book:ok:{_book_id(uri)}")
 
     async def unavailable(self, uri: str) -> bool:
         """Spotify refused it here within the last month (a plan can change)."""

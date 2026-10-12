@@ -47,6 +47,31 @@ bool hux_ota_rollback(void);
  * came from. */
 void hux_ota_boot_check(void);
 
+/** firmware.status (F-0028): `phase` is downloading, verifying, rebooting,
+ * selftest, accepted or failed; `error` names what failed, else NULL. */
+typedef void (*hux_ota_status_fn)(const char *version, const char *phase, const char *error);
+void hux_ota_set_status_sink(hux_ota_status_fn fn);
+
+/** The silent self-test a pending image runs before it can be kept:
+ * true if the walkie works, else false with `*why` naming the first check
+ * that failed. Set by main (it reaches every part). */
+typedef bool (*hux_ota_selftest_fn)(const char **why);
+void hux_ota_set_selftest(hux_ota_selftest_fn fn);
+
+/** server_event firmware.update (F-0028): download `url` (full http(s)),
+ * which must carry `version`, with `Authorization: Bearer <token>`, and
+ * boot it. Same refusals as hux_ota_start; firmware.status on every step. */
+bool hux_ota_pull(const char *url, const char *version, bool force, const char *token);
+
+/** After each hello: a pending image starts its checks (once a boot):
+ * the self-test after 20 s, then the manifest GET. */
+void hux_ota_after_hello(void);
+
+/** server_event ota.accept: keep the running image if `version` is it and
+ * its self-test passed, the manifest matched and the server's close was
+ * followed by a reconnect; else firmware.status failed with the reason. */
+void hux_ota_accept(const char *version);
+
 /** "ota_0" / "ota_1", and the image state ("valid", "pending", ...). */
 const char *hux_ota_running_slot(void);
 const char *hux_ota_running_state(void);

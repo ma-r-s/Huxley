@@ -16,13 +16,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from huxley_watch.bench import Bench
 from huxley_watch.facts import (
     BatteryState,
     battery_state,
+    book_cycle,
+    book_seconds_since,
     current_app,
     gaps_since,
     server_state,
@@ -77,6 +79,10 @@ class Inputs:
     disk_pct: float | None = None
     alert_failures: int = 0  # deliveries failed in a row
     battery: BatteryState = field(default_factory=BatteryState)
+    # The audiobook allowance's cycle (renewal to renewal), when configured;
+    # book_seconds is then the seconds played in it (from the logs).
+    book_cycle: tuple[datetime, datetime] | None = None
+    book_partial: bool = False  # the logs start after the cycle did
     health_ok: bool | None = None  # the server's /health "ok", when it answers
 
 
@@ -99,8 +105,16 @@ def make_inputs(
     alert_failures: int = 0,
     heard: Mapping[str, datetime] | None = None,
     health_ok: bool | None = None,
+    book_renews_day: int | None = None,
+    book_since: date | None = None,
 ) -> Inputs:
     """Inputs with the walkie and server facts computed from the events."""
+    cycle: tuple[datetime, datetime] | None = None
+    partial = False
+    if book_renews_day is not None:
+        cycle = book_cycle(now, tz, book_renews_day, book_since)
+        book_seconds = book_seconds_since(events, cycle[0], now)
+        partial = bool(events) and events[0].ts > cycle[0]
     return Inputs(
         events=events,
         now=now,
@@ -119,6 +133,8 @@ def make_inputs(
         disk_pct=disk_pct,
         alert_failures=alert_failures,
         battery=battery_state(events),
+        book_cycle=cycle,
+        book_partial=partial,
         health_ok=health_ok,
     )
 
@@ -172,16 +188,30 @@ def spent_today(i: Inputs) -> float:
 
 
 def book_refusal(i: Inputs) -> Event | None:
-    """This month's last 'no hours' from Spotify, unless a book has really
-    played since (more hours were bought): 30 s of book audio, not a
-    refused start. The month is UTC, as the skill counts."""
-    month = i.now.astimezone(UTC).strftime("%Y-%m")
+    """The cycle's last confirmed 'no hours' from Spotify, unless a book has
+    really played since (more hours were bought): 30 s of book audio, not a
+    refused start. Confirmed = `spotify.refusal_explained cause=book_no_hours`
+    (the skill played a control book, which was refused too) or
+    `spotify.book_hours_out`; a bare start_refused is never trusted (it
+    called an unavailable book "no hours", 2026-10-12). The cycle is the
+    configured one, else the UTC month the skill counts."""
+    if i.book_cycle is not None:
+        cycle_start = i.book_cycle[0]
+
+        def in_cycle(e: Event) -> bool:
+            return e.ts >= cycle_start
+    else:
+        month = i.now.astimezone(UTC).strftime("%Y-%m")
+
+        def in_cycle(e: Event) -> bool:
+            return e.ts.strftime("%Y-%m") == month
+
     refusal: Event | None = None
     for e in i.events:
-        if e.ts.strftime("%Y-%m") != month:
+        if not in_cycle(e):
             continue
         if e.name == "spotify.book_hours_out" or (
-            e.name == "spotify.start_refused" and e.get("cause") == "book_no_hours"
+            e.name == "spotify.refusal_explained" and e.get("cause") == "book_no_hours"
         ):
             refusal = e
         elif (
@@ -513,7 +543,7 @@ def rule_books(i: Inputs) -> Item | None:
             "Book hours left",
             "0 h",
             "Buy hours",
-            f"Spotify stopped playing audiobooks at {when(refusal.ts, i.now, i.tz)}: this month's hours ran out.",
+            f"Spotify stopped playing audiobooks at {when(refusal.ts, i.now, i.tz)}: the hours ran out.",
             why,
             "Buy more audiobook hours in Spotify.",
             "Audiobook time is fine again.",
@@ -526,7 +556,7 @@ def rule_books(i: Inputs) -> Item | None:
     if left > i.th.book_hours_low * 3600 * margin:
         return None
     sentence = (
-        f"About {hours(left)} of audiobook time left this month."
+        f"About {hours(left)} of audiobook time left until the hours renew."
         if left > 0
         else "This month's audiobook hours are used up."
     )

@@ -38,6 +38,20 @@ TAIL_MS = 60
 # a stray answer, a dropped real one costs the user's question.
 SILENT_PEAK_DBFS = -40.0
 
+# A press can also be near-silent with one loud instant in it: room noise
+# and a click, 19.6 s at peak -22.8 dBFS, answered as "Amara.org" on the
+# Pi (2026-10-12 21:05). It's dropped only if the whole press is quiet AND
+# no quarter second of it reaches speech level, so a long press with one
+# short word in it still goes through. Measured on the day's recorded
+# presses: speech averaged -19 to -43.5 dBFS over the press (234 presses
+# in the logs: never below -45.6) with its loudest 250 ms at -14 to -38.9;
+# the near-silent ones averaged -52 to -58 (that one: loudest 250 ms
+# -40.3). Loud noise (a knock at full scale) is no level's to catch.
+QUIET_RMS_DBFS = -50.0
+QUIET_WINDOW_DBFS = -38.0
+_BLOCK_SAMPLES = 1200  # 50 ms
+_WINDOW_BLOCKS = 5  # 250 ms
+
 
 def _dbfs(level: float) -> float:
     if level <= 0:
@@ -59,6 +73,11 @@ class PressLevel:
     # The most recent audio, not measured until more arrives after it:
     # whatever is still here at the release is the tail.
     held: bytes = b""
+    # The loudest 250 ms: 50 ms blocks' sums of squares, the last ones kept.
+    block_sq: float = 0.0
+    block_fill: int = 0
+    recent_blocks: tuple[float, ...] = ()
+    window_max: float = -1.0  # mean square of the loudest full window; -1: none yet
 
     def feed(self, pcm: bytes) -> None:
         """Add one frame of little-endian PCM16."""
@@ -78,6 +97,19 @@ class PressLevel:
         self.peak = max(self.peak, max(frame), -min(frame))
         self.sum_squares += math.sumprod(frame, frame)
         self.samples += len(frame)
+        i = 0
+        while i < len(frame):
+            take = min(_BLOCK_SAMPLES - self.block_fill, len(frame) - i)
+            part = frame[i : i + take]
+            self.block_sq += math.sumprod(part, part)
+            self.block_fill += take
+            i += take
+            if self.block_fill == _BLOCK_SAMPLES:
+                self.recent_blocks = (*self.recent_blocks, self.block_sq)[-_WINDOW_BLOCKS:]
+                self.block_sq, self.block_fill = 0.0, 0
+                if len(self.recent_blocks) == _WINDOW_BLOCKS:
+                    mean = sum(self.recent_blocks) / (_WINDOW_BLOCKS * _BLOCK_SAMPLES)
+                    self.window_max = max(self.window_max, mean)
 
     @property
     def measured_ms(self) -> int:
@@ -94,6 +126,31 @@ class PressLevel:
         return _dbfs(math.sqrt(self.sum_squares / self.samples))
 
     @property
+    def window_dbfs(self) -> float:
+        """The loudest 250 ms; a press shorter than that: its whole RMS."""
+        if self.window_max < 0:
+            return self.rms_dbfs
+        return _dbfs(math.sqrt(self.window_max))
+
+    @property
+    def silent_why(self) -> str | None:
+        """Why the press counts as silent ("peak" or "quiet"), or None.
+        Only on evidence: a press with nothing measured is not silent."""
+        if self.samples == 0:
+            return None
+        if self.peak_dbfs < SILENT_PEAK_DBFS:
+            return "peak"
+        if self.rms_dbfs < QUIET_RMS_DBFS and self.window_dbfs < QUIET_WINDOW_DBFS:
+            return "quiet"
+        return None
+
+    @property
     def is_silent(self) -> bool:
-        """True only on evidence: a press with nothing measured is not silent."""
-        return self.samples > 0 and self.peak_dbfs < SILENT_PEAK_DBFS
+        return self.silent_why is not None
+
+    def as_log(self) -> dict[str, float]:
+        return {
+            "peak_dbfs": self.peak_dbfs,
+            "rms_dbfs": self.rms_dbfs,
+            "window_dbfs": self.window_dbfs,
+        }

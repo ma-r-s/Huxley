@@ -263,6 +263,51 @@ crash dump waiting (`dev.py coredump`). `ota rollback` (console or
 `dev.py cmd`) boots the other slot by hand: `ota.rollback to slot=`.
 Wrong token: `dev.denied uri=`.
 
+### The console through the server (F-0028)
+
+At the home the port-80 door won't be reachable, so the server can send
+`server_event dev.cmd {id, line}`: the app task runs the line like the
+serial console (`hux_console_run`) and answers `client_event
+dev.cmd_result {id, output, truncated}`, `output` being what the command
+logged on that task (lines from other tasks, like a `hang` or the
+speaker's, go only to the log). Logs: `app.dev_cmd id=`,
+`app.dev_cmd_result id= bytes= truncated= sent=`. The server's side is
+`POST /admin/dev-cmd` (loopback and Tailscale only). Every connection
+also carries `Authorization: Bearer <HUX_DEVICE_TOKEN>` on the upgrade
+(`ws.token present=1` at boot; the value is never logged), and the hello
+is now `device.hello` (`app.device_hello sent= time_to_hello_ms=`). After a reconnect the hello also says what the walkie played out of its
+ring after the link dropped (`played_after_drop_ms`), what it still had
+queued (`ring_left_ms`, thrown away then: the server's state is newer)
+and when it dropped (`drop_uptime_ms`); the server repeats a cut
+narration only if it wasn't heard (T1.44; `app.after_drop played_ms=
+discarded_ms=`).
+
+### Updates through the server (F-0028)
+
+The server offers an image with `server_event firmware.update {version,
+url, force}`; `url` is relative to the server in use (`/firmware/<v>.bin`
+on the LAN address or the tunnel alike). The walkie refuses below 40 %
+battery unless forced (`app.update_refused why=battery_low`), and while
+it plays or listens; otherwise it downloads with `Authorization: Bearer
+<device token>` (https via the CA bundle), checks the image is this
+project and the offered version, and restarts into it, reporting
+`client_event firmware.status {version, phase, error}`: `downloading`,
+`verifying`, `rebooting`, or `failed` with `begin|image|download|verify|
+busy|bad_url|battery_low`. The new image boots pending: after its first
+hello and 20 s of running it runs a **silent** self-test (no supervisor
+stall, both codecs and the expander answering on I2C, internal heap
+floor over 40 KB; `selftest dac_id= adc_id= expander= heap_min=`) and
+sends `phase: selftest` with the first failed check as `error`, then GETs
+`/firmware/manifest.json` with the same client settings and checks its
+`version` and `elf_sha` (`ota.manifest status= match=`). The server
+closes the connection once (1012); after the reconnect's hello it sends
+`ota.accept {version}`, and the walkie keeps the image only if all of
+that held (`ota.accepted`, `phase: accepted`; else `ota.accept_refused
+reason=version|not_pending|selftest|manifest|no_reconnect` and `phase:
+failed`). Without the accept, the next restart goes back to the previous
+image. The developer door's push (`dev.py flash`, `ota confirm`) still
+works on the LAN.
+
 ### Moving the server (F-0027)
 
 The address in `secrets.h` is compiled into every image; a saved one in
@@ -275,11 +320,14 @@ the server there sent its hello, so a typo can't strand the board.
 | `server <uri> [min]`       | temporary (tests, proxies): back after `min` (15) or a reboot, never saved |
 | `server keep <uri> [min]`  | moves: saved at the first hello there (`ws.server_saved`, `ws.server_proven mode=keep`); no hello within `min` (15) and it goes back (`ws.server_revert to= why=timeout home_proven=`) |
 
-An address must be `ws://` or `wss://`, a host, an explicit port and a
-path (`ws://192.168.68.71:8765/`), or it's refused (`ws.server_refused
-why=invalid`): the library keeps the old port or path when a new address
-leaves one out, and a saved address it can't parse would fail every
-boot. One it refuses anyway leaves the old one in place
+An address is `ws://` or `wss://`, a host, a port and a path; a missing
+port becomes the scheme's (443 for `wss://`, 80 for `ws://`) and a
+missing path `/` before anything else (`hux_link_uri_complete`), since
+the library keeps the old port or path when a new address leaves one
+out. Anything else is refused (`ws.server_refused why=invalid`): a saved
+address it can't parse would fail every boot. `wss://` checks the
+server's certificate against the Mozilla CA bundle (the Cloudflare
+tunnel, T1.43). One it refuses anyway leaves the old one in place
 (`why=set_uri`). A saved address that is invalid or fails at boot is
 erased and the compiled one used (`ws.server_saved_invalid`,
 `ws.server_saved_unusable`). Only a hello from a connection opened
@@ -301,8 +349,10 @@ Nobody at the home can restart the walkie, so it climbs by itself.
 A disconnect logs `ws.backoff why=disconnected|closed|finished
 attempt= next_in_ms=` (it replaced `ws.disconnected`): 2 s doubling,
 jittered 75 to 125 %, 45 to 60 s at the cap (`hux_link.c`,
-host-tested); a hello resets it, and a new IP gets a fast try
-(`ws.retry_fast why=new_ip`). Trust `ws.backoff`, not the library's own
+host-tested); a hello resets it, and a new IP while the server is lost restarts the client at once
+(`ws.retry_fast why=new_ip`, then `ws.start why=new_ip`: the library
+sleeps half its retry delay between checks, so a lower delay alone
+reconnected 25 s after the IP). Trust `ws.backoff`, not the library's own
 `Reconnect after N ms` (it prints the delay from before the change). Only the first three attempts of an
 outage and every tenth log (`ws.error` too): the lines wait in the
 256-line queue until the server is back. The first disconnect of an
@@ -511,10 +561,12 @@ reading, F-0025), `battery cal <mv>` (a multimeter's reading of the
 cell: every later reading is scaled to match, saved in NVS,
 `battery.calibrated cal_ppm=`). The level task finds the wired pin once
 (`battery.wired gpio=`, or `battery.not_wired` once and a look every
-10 min), reads the median of 32 samples at 6 dB every minute while the
-speaker is quiet (anyway after 5 min with no quiet minute, `loaded=1`),
-and sends `system.battery {mv, pct}` on a change and every 5 min
-(`battery.level mv= pct= pin= raw_mv= loaded=`).
+10 min), then reads the median of 32 samples at 6 dB at boot, every
+20 min while the speaker is quiet (anyway after 5 min with no quiet
+moment), and at each press, and sends `system.battery {mv, pct}` when
+the percentage changes or a press asked (`battery.level mv= pct= pin=
+raw_mv= loaded= why=changed|press`); the app also sends the last one
+after each hello.
 `tools/bench.py --reset` runs the whole check list and keeps the board's
 log in `/tmp/huxley-debug/bench-*.log`.
 

@@ -29,6 +29,7 @@ from huxley_watch.rules import (
 from .logs import (
     NOW,
     TWIN_MAC,
+    TZ,
     WALKIE_MAC,
     ago,
     alive,
@@ -432,18 +433,90 @@ def test_no_balance_entered_no_item() -> None:
 
 
 def refused(ts: datetime, cause: str = "book_no_hours") -> str:
+    """A confirmed refusal: the skill played a control book (2026-10-12)."""
     return line(
-        "spotify.start_refused",
+        "spotify.refusal_explained",
         ts,
         level="warning",
         skill="spotify",
         uri="spotify:show:5YDIXaAsNFCxJdO9jidF0n",
-        resumed=False,
-        moving=False,
-        chunks=8,
+        control="spotify:show:3Qrv7kBXD3b8GSMgCNQfjF",
+        control_result="no" if cause == "book_no_hours" else "ok",
         cause=cause,
         conn_id="w1",
     )
+
+
+def test_a_bare_start_refused_is_never_no_hours() -> None:
+    """start_refused called an unavailable book 'no hours' (Siddhartha,
+    2026-10-12): only refusal_explained is trusted."""
+    bare = line(
+        "spotify.start_refused",
+        ago(hours=1),
+        level="warning",
+        skill="spotify",
+        uri="spotify:show:0977vYklBQExCa3kfZhfgW",
+        cause="book_no_hours",
+        conn_id="w1",
+    )
+    assert rule_books(inputs([BOOT, bare])) is None
+
+
+def test_book_cycle_renews_on_the_billing_day() -> None:
+    from datetime import date
+
+    from huxley_watch.facts import book_cycle
+
+    start, end = book_cycle(NOW, TZ, 14)  # NOW = 12 Oct local
+    assert (start.month, start.day, end.month, end.day) == (9, 14, 10, 14)
+    start, end = book_cycle(NOW, TZ, 14, since=date(2026, 10, 12))
+    assert (start.month, start.day) == (10, 12)  # the add-on began on the 12th
+    start, end = book_cycle(NOW + timedelta(days=3), TZ, 14)
+    assert (start.month, start.day, end.month, end.day) == (10, 14, 11, 14)
+    start, end = book_cycle(datetime(2026, 2, 20, 12, tzinfo=TZ), TZ, 31)
+    assert (start.month, start.day, end.month, end.day) == (1, 31, 2, 28)  # short month
+
+
+def test_book_seconds_since_counts_finished_and_playing_books_only() -> None:
+    from huxley_watch.facts import book_seconds_since
+
+    lines = [
+        line("spotify.play_started", ago(hours=3), skill="spotify", context="spotify:show:a"),
+        line("spotify.stream_ended", ago(hours=2), skill="spotify", book="A", audio_ms=1_800_000),
+        line("spotify.play_started", ago(hours=2), skill="spotify", context="spotify:artist:x"),
+        line(
+            "spotify.stream_ended",
+            ago(hours=1),
+            skill="spotify",
+            reason="cancelled",
+            audio_ms=900_000,
+        ),
+        line("spotify.play_started", ago(minutes=10), skill="spotify", context="spotify:show:b"),
+    ]
+    evs = inputs(lines).events
+    used = book_seconds_since(evs, ago(hours=4), NOW)
+    assert used == 1800 + 600  # the music isn't counted; book B has played 10 min
+    assert book_seconds_since(evs, ago(minutes=30), NOW) == 600
+
+
+def test_books_left_from_the_cycle() -> None:
+    lines = [
+        BOOT,
+        line("spotify.play_started", ago(hours=3), skill="spotify", context="spotify:show:a"),
+        line(
+            "spotify.stream_ended",
+            ago(hours=1),
+            skill="spotify",
+            book="A",
+            audio_ms=13.5 * 3_600_000,
+        ),
+    ]
+    from datetime import date
+
+    i = inputs(lines, book_hours_per_month=15.0, book_renews_day=14, book_since=date(2026, 10, 1))
+    item = rule_books(i)
+    assert item is not None and item.big == "1.5 h"
+    assert i.book_cycle is not None
 
 
 def book_played(ts: datetime, audio_ms: int) -> str:
@@ -462,9 +535,7 @@ def book_played(ts: datetime, audio_ms: int) -> str:
 def test_books_refused_for_hours_opens_and_a_book_playing_clears() -> None:
     item = rule_books(inputs(flat(BOOT, refused(ago(hours=2)))))
     assert item is not None
-    assert (
-        item.sentence == "Spotify stopped playing audiobooks at 13:00: this month's hours ran out."
-    )
+    assert item.sentence == "Spotify stopped playing audiobooks at 13:00: the hours ran out."
     assert (
         rule_books(inputs(flat(BOOT, refused(ago(hours=2)), book_played(ago(hours=1), 600_000))))
         is None
@@ -488,7 +559,7 @@ def test_books_hours_out_line_and_last_month_ignored() -> None:
 def test_books_low_from_the_db_and_the_budget() -> None:
     item = rule_books(inputs([BOOT], book_seconds=14 * 3600, book_hours_per_month=15.0))
     assert item is not None
-    assert item.sentence == "About 1 h of audiobook time left this month."
+    assert item.sentence == "About 1 h of audiobook time left until the hours renew."
     assert rule_books(inputs([BOOT], book_seconds=5 * 3600, book_hours_per_month=15.0)) is None
     used = rule_books(inputs([BOOT], book_seconds=15.2 * 3600, book_hours_per_month=15.0))
     assert used is not None

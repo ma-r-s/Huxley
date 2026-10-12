@@ -19,3 +19,9 @@
  * device. Make one: openssl rand -hex 16 (16-64 chars; the firmware
  * refuses "change-me" and short ones, and won't build without one). */
 #define HUX_DEV_TOKEN     "change-me"
+
+/* The device token: Authorization: Bearer on the WebSocket upgrade and on
+ * the /firmware/ downloads (F-0028). The same value as HUXLEY_DEVICE_TOKEN in
+ * server/runtime/.env; mint one with
+ * python3 -c "import secrets; print(secrets.token_urlsafe(32))" */
+#define HUX_DEVICE_TOKEN  "change-me"

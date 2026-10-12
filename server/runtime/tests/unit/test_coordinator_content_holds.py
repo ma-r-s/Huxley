@@ -31,6 +31,7 @@ from huxley.voice.stub import StubVoiceProvider
 from huxley_sdk import (
     AudioStream,
     CancelMedia,
+    InjectOutcome,
     InjectPriority,
     InputClaim,
     SetVolume,
@@ -784,20 +785,24 @@ class TestProviderReconnect:
         await _answer(coordinator)
         await asyncio.wait_for(task, timeout=1.0)
 
-    async def test_inject_and_wait_queues_if_the_session_stays_down(
-        self,
-        coordinator: TurnCoordinator,
-        provider: StubVoiceProvider,
-        monkeypatch: pytest.MonkeyPatch,
+    async def test_inject_and_wait_expires_if_the_session_stays_down(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider
     ) -> None:
-        monkeypatch.setattr(TurnCoordinator, "_INJECT_SESSION_WAIT_S", 0.05)
+        """It waits for the session as long as the caller's expiry allows
+        (T1.44; it used to give up after 10 s and queue silently)."""
         provider._connected = False
         await coordinator.on_session_disconnected()
 
-        await asyncio.wait_for(coordinator.inject_turn_and_wait("Ana is calling"), timeout=1.0)
+        outcome = await asyncio.wait_for(
+            coordinator.inject_turn_and_wait(
+                "Ana is calling", expires_after=timedelta(seconds=0.05)
+            ),
+            timeout=1.0,
+        )
 
+        assert outcome is InjectOutcome.EXPIRED
         assert coordinator.current_turn is None
-        assert [r.prompt for r in coordinator._injected_queue] == ["Ana is calling"]
+        assert coordinator._injected_queue == []
 
     async def test_reminder_after_a_server_close_waits_too(
         self, coordinator: TurnCoordinator, provider: StubVoiceProvider

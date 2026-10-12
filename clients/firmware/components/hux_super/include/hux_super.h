@@ -16,6 +16,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -23,6 +24,9 @@ extern "C" {
 
 /** Start the supervisor. After every part it watches has started. */
 void hux_super_start(void);
+
+/** Stalls reported this boot (an update's self-test wants none, F-0028). */
+uint32_t hux_super_stalls(void);
 
 /** Log the parts' counters and the boot's stall history (console `super`). */
 void hux_super_status(void);
