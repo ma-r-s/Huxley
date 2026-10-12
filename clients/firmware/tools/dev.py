@@ -191,6 +191,8 @@ def cmd_flash(host: str, force: bool) -> int:
         )
         return 0
     print(f"not updated: the board runs {info.get('version')}")
+    if info.get("last_invalid"):
+        print(f"rolled back from {info['last_invalid']}: python3 tools/dev.py coredump")
     return 1
 
 

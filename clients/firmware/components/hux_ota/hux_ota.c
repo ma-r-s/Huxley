@@ -1,6 +1,7 @@
 #include "hux_ota.h"
 
 #include <stdatomic.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_app_desc.h"
@@ -130,6 +131,12 @@ bool hux_ota_start(const char *url, bool force) {
     return true;
 }
 
+static char s_last_invalid[64];
+
+const char *hux_ota_last_invalid(void) {
+    return s_last_invalid;
+}
+
 static void selftest_done(void *arg) {
     (void)arg;
     /* Ran HUX_OTA_SELFTEST_S without crashing: keep this image. */
@@ -142,6 +149,12 @@ void hux_ota_boot_check(void) {
     const char *state = hux_ota_running_state();
     ESP_LOGI(TAG, "ota.boot slot=%s state=%s version=%s", hux_ota_running_slot(), state,
              app->version);
+    const esp_partition_t *bad = esp_ota_get_last_invalid_partition();
+    esp_app_desc_t bad_desc;
+    if (bad && esp_ota_get_partition_description(bad, &bad_desc) == ESP_OK) {
+        snprintf(s_last_invalid, sizeof(s_last_invalid), "%s %s", bad->label, bad_desc.version);
+        ESP_LOGW(TAG, "ota.last_invalid %s (rolled back from it)", s_last_invalid);
+    }
     if (strcmp(state, "pending") == 0) {
         esp_timer_handle_t t;
         const esp_timer_create_args_t args = {.callback = selftest_done, .name = "ota_selftest"};

@@ -36,6 +36,11 @@ void hux_ota_boot_check(void);
 const char *hux_ota_running_slot(void);
 const char *hux_ota_running_state(void);
 
+/** The image the bootloader rejected, as "<slot> <version>" (a rollback:
+ * it crashed before confirming itself), or "" if none. Stays until that
+ * slot is written again. */
+const char *hux_ota_last_invalid(void);
+
 #ifdef __cplusplus
 }
 #endif

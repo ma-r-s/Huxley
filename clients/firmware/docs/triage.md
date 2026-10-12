@@ -294,8 +294,9 @@ main.c:118` with the test image's ELF (picked by hash, not the running
 one); flashing the running version prints `not updated: ... ota.refused`
 and exits 1.
 **Gaps**: after that rollback the old image reported `reset=SW_RESET`,
-not `PANIC`: only the missing `ota.confirmed` and the waiting dump tell
-a rollback apart (worth a `rollback` field in `client_event device`).
+not `PANIC`, so the reset reason can't tell a rollback apart; `/info`
+now has `last_invalid` (the slot and version the bootloader rejected)
+and `dev.py flash` prints it when an update doesn't stick.
 HTTP, not HTTPS: fine on the home LAN, the token is the lock. The
 bootloader and partition table still need USB.
 

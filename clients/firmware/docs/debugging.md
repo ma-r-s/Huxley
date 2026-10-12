@@ -181,7 +181,7 @@ one it doesn't start, `dev.off`). `tools/dev.py` wraps it:
 
 | Endpoint         | `dev.py`             | What                                                        |
 | ---------------- | -------------------- | ----------------------------------------------------------- |
-| `GET /info`      | `info`               | version, uptime, reset reason, heap, PSRAM, ring, volume, RSSI, slot and its state |
+| `GET /info`      | `info`               | version, uptime, reset reason, heap, PSRAM, ring, volume, RSSI, slot and its state, `last_invalid` (the image it rolled back from) |
 | `POST /cmd`      | `cmd <line>`, `flash` | one console command (same as on USB); replies `ok`, results go to the log |
 | `GET /coredump`  | `coredump`           | the core dump partition, raw                                |
 
@@ -193,8 +193,9 @@ IP. Update events: `ota.start`, `ota.image`, `ota.progress kb=`,
 `ota.pending` happen before Wi-Fi is up (serial only), and
 `ota.confirmed slot=` reaches the server 30 s in. A rollback shows as
 the old version reconnecting (`client.device`) without that
-`ota.confirmed`, and a crash dump waiting (`dev.py coredump`); `dev.py
-info` then says which slot runs. Wrong token: `dev.denied uri=`.
+`ota.confirmed`, `last_invalid` in `dev.py info` naming the image that
+crashed (`dev.py flash` prints it), and a crash dump waiting (`dev.py
+coredump`). Wrong token: `dev.denied uri=`.
 
 ## Diagnosing WS / TCP flaps
 

@@ -52,7 +52,7 @@ static esp_err_t info_get(httpd_req_t *req) {
                      "{\"version\":\"%s\",\"uptime_s\":%u,\"reset_reason\":%d,"
                      "\"heap_internal\":%u,\"heap_internal_min\":%u,\"psram\":%u,"
                      "\"ring_used\":%u,\"volume\":%d,\"rssi\":%d,\"ws_rx_age_ms\":%u,"
-                     "\"slot\":\"%s\",\"slot_state\":\"%s\"}\n",
+                     "\"slot\":\"%s\",\"slot_state\":\"%s\",\"last_invalid\":\"%s\"}\n",
                      esp_app_get_description()->version,
                      (unsigned)(esp_timer_get_time() / 1000000), (int)esp_reset_reason(),
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
@@ -60,7 +60,7 @@ static esp_err_t info_get(httpd_req_t *req) {
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
                      (unsigned)hux_audio_spk_ring_used(), hux_audio_get_volume(), hux_net_rssi(),
                      (unsigned)hux_net_rx_age_ms(), hux_ota_running_slot(),
-                     hux_ota_running_state());
+                     hux_ota_running_state(), hux_ota_last_invalid());
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, buf, n);
 }
