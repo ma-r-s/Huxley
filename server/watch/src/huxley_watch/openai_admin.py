@@ -59,9 +59,10 @@ def describe(exc: BaseException) -> str:
 
 
 def get_json(url: str, key: str, opener: Callable[..., Any], timeout_s: float) -> dict[str, Any]:
-    request = urllib.request.Request(
-        url, headers={"Authorization": f"Bearer {key}", "Accept": "application/json"}
-    )
+    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    # Unredirected: urllib copies ordinary headers onto a redirect, to any
+    # host; the key must only ever go to api.openai.com.
+    request.add_unredirected_header("Authorization", f"Bearer {key}")
     with opener(request, timeout=timeout_s) as resp:
         body = resp.read(8_000_000)
     obj = json.loads(body)
@@ -118,10 +119,13 @@ def _iso(ts: datetime | None) -> str | None:
 
 
 def _ts(value: object) -> datetime | None:
+    """A cached time, always aware (a naive one is read as UTC): comparing
+    a naive time with an aware one raises, every cycle."""
     try:
-        return datetime.fromisoformat(str(value)) if value else None
+        ts = datetime.fromisoformat(str(value)) if value else None
     except ValueError:
         return None
+    return ts.replace(tzinfo=UTC) if ts is not None and ts.tzinfo is None else ts
 
 
 def _dump(admin: Admin, attempted: datetime, project_id: str | None) -> dict[str, Any]:
@@ -192,7 +196,8 @@ class AdminReader:
             self._admin, self._attempted, self._project = _load(raw)
         except FileNotFoundError:
             return
-        except (OSError, ValueError, TypeError, KeyError) as exc:
+        except Exception as exc:  # any damage: start over, read the API now
+            self._admin, self._attempted, self._project = None, None, None
             self.log.warning("watch.openai_cache_unreadable", error=type(exc).__name__)
 
     def read(self, key: str | None, project_id: str | None, now: datetime) -> Admin | None:
@@ -222,12 +227,20 @@ class AdminReader:
             admin = replace(admin, fetched_at=now, buckets=tuple(buckets), costs_error=None)
         except Exception as exc:  # any failure: the estimate takes over
             admin = replace(admin, costs_error=describe(exc))
+        # Each limit on its own: one failing keeps the other's fresh answer.
+        # A failed one keeps its last good value (or none: the config's).
+        errors: list[str] = []
         try:
-            org = fetch_limit(key, None, self.opener)
-            proj = fetch_limit(key, project_id, self.opener) if project_id else None
-            admin = replace(admin, org_limit_usd=org, project_limit_usd=proj, limit_error=None)
-        except Exception as exc:  # the configured limit takes over
-            admin = replace(admin, limit_error=describe(exc))
+            admin = replace(admin, org_limit_usd=fetch_limit(key, None, self.opener))
+        except Exception as exc:
+            errors.append(f"org {describe(exc)}")
+        if project_id:
+            try:
+                proj = fetch_limit(key, project_id, self.opener)
+                admin = replace(admin, project_limit_usd=proj)
+            except Exception as exc:
+                errors.append(f"project {describe(exc)}")
+        admin = replace(admin, limit_error=", ".join(errors) or None)
         self._admin, self._attempted, self._project = admin, now, project_id
         self._save(admin, now, project_id)
         fields = {

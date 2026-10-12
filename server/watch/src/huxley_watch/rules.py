@@ -102,6 +102,7 @@ class Inputs:
     # computation for the rules and the page, so card and alert agree.
     budget: Budget | None = None
     admin: Admin | None = None  # the Admin API's last answer, with an admin key
+    budget_error: str | None = None  # the budget couldn't be computed (by type)
 
 
 def make_inputs(
@@ -137,14 +138,19 @@ def make_inputs(
         book_seconds = book_seconds_since(events, cycle[0], now)
         partial = bool(events) and events[0].ts > cycle[0]
     logs_from = events[0].ts if events else None
-    month = budget(
-        events,
-        now,
-        admin=admin,
-        project_id=openai_project_id,
-        config_limit=monthly_limit_usd,
-        logs_from=logs_from,
-    )
+    month: Budget | None = None
+    budget_error: str | None = None
+    try:
+        month = budget(
+            events,
+            now,
+            admin=admin,
+            project_id=openai_project_id,
+            config_limit=monthly_limit_usd,
+            logs_from=logs_from,
+        )
+    except Exception as exc:  # an odd cached answer must not cost the alerts
+        budget_error = type(exc).__name__
     return Inputs(
         events=events,
         now=now,
@@ -168,6 +174,7 @@ def make_inputs(
         health_ok=health_ok,
         budget=month,
         admin=admin,
+        budget_error=budget_error,
     )
 
 
@@ -618,8 +625,10 @@ def rule_spend_today(i: Inputs) -> Item | None:
 
 def rule_balance(i: Inputs) -> Item | None:
     """The balance you entered minus the spend since: only while no
-    monthly limit is known (the budget rules say it better)."""
-    if i.budget is not None and i.budget.limit_usd is not None:
+    monthly limit is known (the budget rules say it better). One already
+    open is judged to the end: dropping it would send a false "fine"."""
+    limited = i.budget is not None and i.budget.limit_usd is not None
+    if limited and "openai.balance" not in i.was_open:
         return None
     est = balance_estimate(i)
     if est is None or i.balance_usd is None:

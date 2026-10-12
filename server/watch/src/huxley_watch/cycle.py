@@ -217,6 +217,8 @@ class Watcher:
             alert_failures=self.state.failures,
             heard=result.heard,
         )
+        if inputs.budget_error is not None:
+            self.log.error("watch.step_failed", step="budget", error=inputs.budget_error)
         items = evaluate(inputs)
         quiet = in_range(now.astimezone(cfg.timezone).time(), cfg.quiet_start, cfg.quiet_end)
 

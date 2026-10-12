@@ -91,11 +91,12 @@ def test_budget_left_pace_and_the_day_it_runs_out() -> None:
     assert b.limit_usd == 30.0 and b.limit_source == "config"
     assert b.spent_usd == pytest.approx(11.0)  # 5 + 3 + 2 + 1; September's 4 isn't October's
     assert b.left_usd == pytest.approx(19.0)
-    # The last days that had spend (today's 1 included, zero days skipped).
-    assert b.pace_usd == pytest.approx((1 + 2 + 3 + 5 + 4) / 5)
-    assert b.pace_days == 5
-    # 19 left at 3 a day: 6.3 days, before the reset in 19.2.
-    assert b.runs_out == NOW + timedelta(days=19 / 3)
+    # The last finished days that had spend (zero days skipped); today's 1
+    # is under their mean, so it doesn't pull the pace down.
+    assert b.pace_usd == pytest.approx((2 + 3 + 5 + 4) / 4)
+    assert b.pace_days == 4
+    # 19 left at 3.5 a day: 5.4 days, before the reset in 19.2.
+    assert b.runs_out == NOW + timedelta(days=19 / 3.5)
     assert b.end.date() == date(2026, 11, 1)
     assert b.partial is False  # the logs reach back past the 1st
     assert b.source == "estimate"
@@ -105,7 +106,7 @@ def test_a_budget_that_lasts_has_no_run_out() -> None:
     b = inputs(SPEND, monthly_limit_usd=100.0).budget
     assert b is not None
     assert b.runs_out is None
-    assert b.end_left_usd == pytest.approx(89.0 - 3.0 * (19 + 4 / 24))
+    assert b.end_left_usd == pytest.approx(89.0 - 3.5 * (19 + 4 / 24))
 
 
 def test_the_month_boundary_is_utc() -> None:
@@ -123,7 +124,7 @@ def test_the_month_boundary_is_utc() -> None:
     assert b.spent_usd == pytest.approx(0.5)
     assert b.left_usd == pytest.approx(29.5)
     assert [d.date for d in b.days] == [date(2026, 11, 1)]
-    assert b.pace_usd == pytest.approx(5.25)  # the pace reaches back into October
+    assert b.pace_usd == pytest.approx(10.0)  # the pace reaches back into October
     status = status_for(lines, now=now, monthly_limit_usd=30.0)
     assert status["credit"]["resets"] == "1 Dec"
     assert status["credit"]["days_in_month"] == 30
@@ -439,7 +440,7 @@ def test_an_odd_answer_is_a_shape_error_not_a_crash(tmp_path: Path) -> None:
     admin = AdminReader(tmp_path / "a.json", log, api).read(KEY, None, NOW)
     assert admin is not None
     assert admin.costs_error == "ShapeError"
-    assert admin.limit_error == "ShapeError"
+    assert admin.limit_error == "org ShapeError"
 
 
 # --- the whole cycle: the key never leaves secrets.toml ----------------------------
@@ -487,28 +488,34 @@ def test_budget_item_opens_when_the_projection_hits_zero_before_the_reset() -> N
     assert (item.id, item.label, item.big, item.chip) == (
         "openai.budget",
         "Budget runs out",
-        "19 Oct",
+        "18 Oct",
         "Raise limit or wait",
     )
     assert rule_budget(inputs(SPEND, monthly_limit_usd=100.0)) is None
     # Hysteresis: open, it clears only once the money lasts 20 % past the reset.
-    # 19.2 days to the reset at 3 a day: 57.5 more than the 11 spent. A limit
-    # of 66 runs out first; 70 lasts, but not 20 % past (69 more); 85 does.
+    # 19.2 days to the reset at 3.5 a day: 67.1 more than the 11 spent. A
+    # limit of 75 runs out first; 80 lasts, not 20 % past (80.5 more); 95 does.
     was = frozenset({"openai.budget"})
-    assert rule_budget(inputs(SPEND, monthly_limit_usd=66.0)) is not None
-    assert rule_budget(inputs(SPEND, monthly_limit_usd=70.0)) is None
-    assert rule_budget(inputs(SPEND, monthly_limit_usd=70.0, was_open=was)) is not None
-    assert rule_budget(inputs(SPEND, monthly_limit_usd=85.0, was_open=was)) is None
+    assert rule_budget(inputs(SPEND, monthly_limit_usd=75.0)) is not None
+    assert rule_budget(inputs(SPEND, monthly_limit_usd=80.0)) is None
+    assert rule_budget(inputs(SPEND, monthly_limit_usd=80.0, was_open=was)) is not None
+    assert rule_budget(inputs(SPEND, monthly_limit_usd=95.0, was_open=was)) is None
 
 
 def test_the_card_chip_is_the_budget_item() -> None:
     tight = status_for(SPEND, monthly_limit_usd=30.0)
     assert tight["credit"]["chip"] == "Raise limit or wait"
-    assert tight["credit"]["runs_out"] == "19 Oct"
+    assert tight["credit"]["runs_out"] == "18 Oct"
     assert '<span class="chip">Raise limit or wait</span>' in render(tight)
     roomy = status_for(SPEND, monthly_limit_usd=100.0)
     assert roomy["credit"]["chip"] is None
     assert 'class="chip' not in render(roomy)
+    # Inside the alert's hysteresis band the item stays open, but the card
+    # shows what the projection shows: it lasts, no chip, no $0 mark.
+    band = status_for(SPEND, monthly_limit_usd=80.0, was_open=frozenset({"openai.budget"}))
+    assert "openai.budget" in [x["id"] for x in band["items"]]
+    assert band["credit"]["chip"] is None
+    assert band["credit"]["runs_out"] is None
 
 
 def refusal(ts: datetime, code: str) -> str:
@@ -575,7 +582,7 @@ def test_status_json_carries_every_number_the_card_draws() -> None:
     c = status_for(SPEND, monthly_limit_usd=30.0)["credit"]
     assert c["mode"] == "budget"
     assert (c["limit_usd"], c["spent_usd"], c["left_usd"]) == (30.0, 11.0, 19.0)
-    assert (c["pace_usd"], c["pace_days"]) == (3.0, 5)
+    assert (c["pace_usd"], c["pace_days"]) == (3.5, 4)
     assert c["days_in_month"] == 31 and c["month"] == "October"
     assert len(c["days"]) == 12  # 1-12 Oct
     first = c["days"][0]
@@ -600,7 +607,7 @@ def test_the_card_renders_numbers_a_battery_and_bars_with_tips() -> None:
     assert '<div class="cv">$19.00</div>' in card
     assert "of $30, resets 1 Nov" in card
     assert 'class="cline"' in card and 'class="proj"' in card
-    assert "$0 on 19 Oct" in card
+    assert "$0 on 18 Oct" in card
     bars = re.findall(r'<div class="cs" data-tip="([^"]+)">', card)
     assert bars[0] == "1 Oct: $5.00 spent, server estimate"
     assert "12 Oct: $19.00 left, $1.00 spent, server estimate" in card
@@ -622,7 +629,189 @@ def test_once_prints_the_budget() -> None:
 
     text = once_summary(status_for(SPEND, monthly_limit_usd=30.0))
     assert (
-        "openai October: $19.00 of $30 left, $11.00 used (config limit, estimate), hits $0 19 Oct"
+        "openai October: $19.00 of $30 left, $11.00 used (config limit, estimate), hits $0 18 Oct"
         in text
     )
     assert "openai October: $11.00 used, no limit set" in once_summary(status_for(SPEND))
+
+
+# --- critic round 1 (fresh agent on d21465e9): bugs (failed before the fix) and gaps
+
+
+def test_a_failing_project_limit_keeps_the_org_limit_just_read(tmp_path: Path) -> None:
+    api = FakeAPI(
+        {
+            COSTS: costs_page([bucket_json(date(2026, 10, 11), {"proj_huxley": 2.0})]),
+            ORG_LIMIT: limit_json(3000),
+            PROJECT_LIMIT: http_error(404),
+        }
+    )
+    log = WatchLog(None)
+    admin = AdminReader(tmp_path / "a.json", log, api).read(KEY, "proj_huxley", NOW)
+    assert admin is not None
+    assert admin.org_limit_usd == 30.0
+    assert admin.limit_error == "project HTTP 404"
+    # Costs fine, a limit failing: no costs-failed line, the error rides the read line.
+    assert not log.events("watch.openai_costs_failed")
+    assert log.events("watch.openai_admin_read")[0]["limit_error"] == "project HTTP 404"
+
+
+@pytest.mark.parametrize(
+    "cache",
+    [
+        "[]",
+        "{not json",
+        json.dumps(
+            {
+                "attempted_at": "2026-10-12T19:30:00",
+                "fetched_at": "2026-10-12T19:30:00",
+                "buckets": [],
+            }
+        ),
+        json.dumps({"attempted_at": "2026-10-12T19:30:00+00:00", "buckets": [["x", 1, 2, {}]]}),
+    ],
+)
+def test_a_damaged_or_naive_cache_never_breaks_a_cycle(tmp_path: Path, cache: str) -> None:
+    path = tmp_path / "openai_admin.json"
+    path.write_text(cache)
+    log = WatchLog(None)
+    admin = AdminReader(path, log, good_api()).read(KEY, None, NOW)
+    assert admin is not None
+    b = inputs(SPEND, monthly_limit_usd=30.0, admin=admin).budget  # comparisons don't raise
+    assert b is not None
+
+
+def test_a_cached_time_without_a_zone_is_read_as_utc(tmp_path: Path) -> None:
+    path = tmp_path / "openai_admin.json"
+    path.write_text(
+        json.dumps(
+            {
+                "attempted_at": "2026-10-12T19:30:00",
+                "fetched_at": "2026-10-12T19:30:00",
+                "buckets": [],
+            }
+        )
+    )
+    api = good_api()
+    admin = AdminReader(path, WatchLog(None), api).read(KEY, None, NOW)
+    assert api.requests == []  # 30 min old: still fresh
+    assert admin is not None
+    assert admin.fetched_at == datetime(2026, 10, 12, 19, 30, tzinfo=UTC)
+
+
+def test_a_read_in_the_future_or_another_project_reads_again(tmp_path: Path) -> None:
+    path = tmp_path / "openai_admin.json"
+    api = good_api()
+    reader = AdminReader(path, WatchLog(None), api)
+    reader.read(KEY, None, NOW + timedelta(hours=5))  # a clock that was ahead
+    assert len(api.requests) == 2
+    reader.read(KEY, None, NOW)
+    assert len(api.requests) == 4  # attempted "in the future": not fresh
+    api.answers[PROJECT_LIMIT] = limit_json(1000, obj="project.spend_limit")
+    admin = reader.read(KEY, "proj_huxley", NOW + timedelta(minutes=1))
+    assert len(api.requests) == 7  # a new project: costs, org, project
+    assert admin is not None and admin.project_limit_usd == 10.0
+
+
+def test_the_configured_limit_is_the_organization_s() -> None:
+    """With a project set and the limits unreadable, the config's limit is
+    compared with the whole organization's spend: never more left shown
+    than OpenAI will allow."""
+    org_day = Bucket(
+        at(11, 0),
+        at(11, 0) + UTC_DAY,
+        25.0,
+        (("proj_huxley", 1.0), ("proj_other", 24.0)),
+    )
+    admin = Admin(fetched_at=NOW, buckets=(org_day,), limit_error="org HTTP 404")
+    b = inputs(SPEND, monthly_limit_usd=30.0, admin=admin, openai_project_id="proj_huxley").budget
+    assert b is not None
+    assert b.limit_source == "config" and b.project_id is None
+    assert b.days[-2].usd == 25.0  # 11 Oct, billed for the whole organization
+
+
+def test_a_project_limit_counts_only_that_project_s_spend() -> None:
+    org_day = Bucket(
+        at(11, 0),
+        at(11, 0) + UTC_DAY,
+        20.0,
+        (("proj_huxley", 2.0), ("proj_other", 18.0)),
+    )
+    admin = Admin(fetched_at=NOW, buckets=(org_day,), org_limit_usd=100.0, project_limit_usd=10.0)
+    b = inputs(flat(BOOT), admin=admin, openai_project_id="proj_huxley").budget
+    assert b is not None
+    assert b.spent_usd == pytest.approx(2.0)
+    assert b.left_usd == pytest.approx(8.0)  # 10 - 2; the org would have 80 left
+
+
+def test_the_key_never_follows_a_redirect() -> None:
+    api = FakeAPI({ORG_LIMIT: limit_json(3000)})
+    fetch_limit(KEY, None, api)
+    (request,) = api.requests
+    assert "Authorization" not in request.headers  # urllib copies these onto a redirect
+    assert request.unredirected_hdrs["Authorization"] == f"Bearer {KEY}"
+
+
+def test_a_day_that_has_barely_begun_does_not_lower_the_pace() -> None:
+    days = flat(BOOT, *[cost(at(d, 9), 3.0, 3.0) for d in range(5, 12)])
+    early = inputs(flat(days, cost(at(12, 0.1), 0.05, 0.05)), now=at(12, 0.15)).budget
+    assert early is not None and early.pace_usd == pytest.approx(3.0)
+    heavy = inputs(flat(days, cost(at(12, 9), 10.0, 10.0)), now=at(12, 10)).budget
+    assert heavy is not None
+    assert heavy.pace_usd == pytest.approx((10 + 6 * 3.0) / 7)  # over the mean: it counts
+
+
+def test_a_day_read_just_after_midnight_is_not_settled() -> None:
+    """Billing reports late: at 00:30 yesterday's bucket may be short. Until
+    6 h after its end it is the larger of billed and the estimate."""
+    lines = flat(BOOT, cost(at(11, 22), 4.0, 4.0))
+    admin = admin_with({date(2026, 10, 11): 1.0}, fetched_at=at(12, 0.5))
+    b = inputs(lines, now=at(12, 1), admin=admin).budget
+    assert b is not None
+    day = next(d for d in b.days if d.date == date(2026, 10, 11))
+    assert (day.usd, day.source) == (4.0, "mixed")
+    settled = admin_with({date(2026, 10, 11): 1.0}, fetched_at=at(12, 7))
+    b = inputs(lines, now=at(12, 7.5), admin=settled).budget
+    assert b is not None
+    day = next(d for d in b.days if d.date == date(2026, 10, 11))
+    assert (day.usd, day.source) == (1.0, "billed")
+
+
+def test_money_already_gone_shows_the_day_it_hit_zero() -> None:
+    status = status_for(SPEND, monthly_limit_usd=7.0)  # 5 on the 1st, 3 on the 5th
+    c = status["credit"]
+    assert c["left_usd"] < 0
+    assert c["runs_out"] is None and c["projection"] == []
+    assert c["ran_out"] == "5 Oct"
+    assert c["chip"] == "Raise limit or wait"
+    card = render(status).split('id="credit">', 1)[1]
+    assert '<div class="cv">5 Oct</div><div class="cc">hit $0</div>' in card
+    assert "left at reset" not in card
+
+
+@pytest.mark.parametrize("value", ["inf", "nan", "0", "-5"])
+def test_a_limit_that_isnt_a_positive_number_is_refused(tmp_path: Path, value: str) -> None:
+    from huxley_watch.config import ConfigError
+
+    cfg = setup(tmp_path, SPEND, tables=f"[openai]\nmonthly_limit_usd = {value}\n")
+    with pytest.raises(ConfigError):
+        load_config(cfg)
+
+
+def test_an_open_balance_item_is_judged_to_the_end_when_a_limit_appears() -> None:
+    kw: dict[str, Any] = {"balance_usd": 5.0, "balance_at": at(1, 0)}
+    was = frozenset({"openai.balance"})
+    # Still low: stays open (no false "fine"), though a limit is now known.
+    assert rule_balance(inputs(SPEND, monthly_limit_usd=30.0, was_open=was, **kw)) is not None
+
+
+def test_a_budget_that_cant_be_computed_costs_only_the_card() -> None:
+    naive = Admin(
+        fetched_at=datetime(2026, 10, 12, 19),
+        buckets=(Bucket(at(11, 0), at(11, 0) + UTC_DAY, 1.0),),
+    )
+    i = inputs(SPEND, monthly_limit_usd=30.0, admin=naive)
+    assert i.budget is None and i.budget_error == "TypeError"
+    status = status_for(SPEND, monthly_limit_usd=30.0, admin=naive)
+    assert status["credit"]["mode"] == "spend"
+    assert "OpenAI budget" in render(status)

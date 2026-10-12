@@ -324,12 +324,15 @@ since the 1st**. Nothing is typed in by hand.
     Admin keys), `GET /v1/organization/costs` (1-day buckets, the last 60
     days, grouped by project) once an hour, cached in
     `<state_dir>/openai_admin.json` (never the key). Used for every day
-    OpenAI has finished billing; it is the whole organization's spend (or
-    the project's, see below), so other apps on the account count too.
+    OpenAI has settled (read 6 h or more after the day ended: the route
+    reports late); it is the whole organization's spend (or the
+    project's, see below), so other apps on the account count too.
   - *server estimate*: the sum of `cost_usd` over the server's
-    `cost.response_done` lines that day. Every day without billing, and
-    the rest of today after the last read (*billed + estimate*). Bench runs
-    count: tests spend real money.
+    `cost.response_done` lines that day. Every day without billing. A day
+    not yet settled (today, or one that just ended) is *billed +
+    estimate*: the larger of what was billed at the read plus the estimate
+    since, and the day's whole estimate. Bench runs count: tests spend real
+    money.
   - Days the logs don't reach and nothing billed: "no logs" (dashed), and
     the big number says "or less".
 - **The limit**: the organization's from `GET
@@ -338,22 +341,28 @@ since the 1st**. Nothing is typed in by hand.
   project's too (`/v1/organization/projects/{id}/spend_limit`, its spend
   from the same buckets), and the one with less left wins (it bites
   first). If the API can't say (no admin key, an error, no limit
-  enforced), `[openai] monthly_limit_usd` (Mario's: 30).
-- **The pace**: the average of the last 7 days that had spend, today as it
-  stands included; days of nothing don't dilute it, so it errs toward
-  "runs out sooner". The projection runs from now at that pace.
+  enforced), `[openai] monthly_limit_usd` (Mario's: 30), taken as the
+  organization's: against its whole spend. Each limit is read on its own,
+  so one failing keeps the other's fresh answer.
+- **The pace**: the average of the last 7 finished days that had spend;
+  days of nothing don't dilute it, so it errs toward "runs out sooner".
+  Today joins once it is already over that average (a day that has barely
+  begun never lowers it). The projection runs from now at that pace.
 - **A failed read** (HTTP 404, which some accounts get on the costs route;
   401; a timeout; an odd answer) never stops a cycle: the last good answer
   stays, days after it fall back to the estimate, the limit to the config,
   and one `watch.openai_costs_failed` line with the error's type (never its
   text) goes in the log each hourly attempt. The card's header says "Admin
-  API HTTP 404" in red. The key is never logged, served or cached.
+  API HTTP 404" in red. A damaged cache file is dropped and read again. The
+  key is never logged, served or cached, and it is sent as an unredirected
+  header (urllib copies the others onto a redirect, to any host).
 
 The card: the budget left (big, "of $30, resets 1 Nov", "or less" when
-days are missing), used, the pace, and "hits $0" with its date or "left at
-reset"; the chip "Raise limit or wait" while `openai.budget` or
-`openai.limit` is open, "Top up" while `openai.quota` is (the card and the
-alert are the same rule). Under it, the battery: the budget left over the
+days are missing), used, the pace, and "hits $0" with its date, "hit $0"
+with the day it did, or "left at reset"; the chip "Raise limit or wait"
+while the projection reaches 0 before the reset (the same numbers as
+`openai.budget`, which also keeps a 20 % clearing margin) or `openai.limit`
+is open, "Top up" while `openai.quota` is. Under it, the battery: the budget left over the
 month from the limit on the 1st, falling with each day's spend, dashed
 from now at the pace to the reset, or to "$0 on <date>" if that comes
 first; the days ahead shaded. Under that, each day's spend (one series)

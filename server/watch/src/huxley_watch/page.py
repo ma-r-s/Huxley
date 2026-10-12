@@ -676,11 +676,15 @@ def _figures(c: dict[str, Any]) -> str:
             f'<div class="cf"><div class="cv">{_t(_usd(c["pace_usd"]))}</div>'
             f'<div class="cc">a day, last {days} {"day" if days == 1 else "days"}</div></div>'
         )
-    if c["mode"] == "budget" and c["runs_out"]:
+    if c["mode"] == "budget" and c.get("ran_out"):
+        figs.append(
+            f'<div class="cf"><div class="cv">{_t(c["ran_out"])}</div><div class="cc">hit $0</div></div>'
+        )
+    elif c["mode"] == "budget" and c["runs_out"]:
         figs.append(
             f'<div class="cf"><div class="cv">{_t(c["runs_out"])}</div><div class="cc">hits $0</div></div>'
         )
-    elif c["mode"] == "budget" and c["end_left_usd"] is not None:
+    elif c["mode"] == "budget" and c["end_left_usd"] is not None and (c["left_usd"] or 0) > 0:
         figs.append(
             f'<div class="cf"><div class="cv">{_t(_usd(max(0.0, c["end_left_usd"])))}</div>'
             '<div class="cc">left at reset</div></div>'

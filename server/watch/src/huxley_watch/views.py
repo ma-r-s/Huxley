@@ -201,11 +201,15 @@ def credit(i: Inputs, items: Sequence[Item]) -> dict[str, Any]:
     UTC; every number the card draws is here."""
     b = i.budget
     ids = {it.id for it in items}
+    # The chip says what the card shows: the projection reaching 0 before
+    # the reset (or a refusal for the limit); "Top up" when the credit is
+    # gone. The alert keeps its own hysteresis.
+    out = b is not None and b.left_usd is not None and (b.left_usd <= 0 or b.runs_out is not None)
     chip = (
         "Top up"
         if "openai.quota" in ids
         else "Raise limit or wait"
-        if ids & {"openai.limit", "openai.budget"}
+        if "openai.limit" in ids or out
         else None
     )
     if b is None:
@@ -216,8 +220,11 @@ def credit(i: Inputs, items: Sequence[Item]) -> dict[str, Any]:
     days: list[dict[str, Any]] = []
     line: list[list[float]] = [[0.0, limit]] if limit is not None else []
     used = 0.0
+    ran_out: str | None = None  # the day the spend passed the limit
     for k, d in enumerate(b.days):
         used += d.usd
+        if limit is not None and ran_out is None and used >= limit:
+            ran_out = f"{d.date.day} {d.date.strftime('%b')}"
         entry: dict[str, Any] = {
             "date": d.date.isoformat(),
             "label": f"{d.date.day} {d.date.strftime('%b')}",
@@ -271,8 +278,10 @@ def credit(i: Inputs, items: Sequence[Item]) -> dict[str, Any]:
         "today_usd": round(b.today_usd, 2),
         "pace_usd": _money(b.pace_usd),
         "pace_days": b.pace_days,
-        "runs_out": day_month(b.runs_out) if b.runs_out is not None else None,
+        # At this pace, before the reset (only while some is left).
+        "runs_out": day_month(b.runs_out) if runs_out_x is not None and b.runs_out else None,
         "runs_out_x": runs_out_x,
+        "ran_out": ran_out,
         "end_left_usd": _money(b.end_left_usd),
         "now_x": now_x,
         "source": b.source,

@@ -15,6 +15,7 @@ applies without a restart (the bind address needs one).
 from __future__ import annotations
 
 import ipaddress
+import math
 import os
 import stat
 import tomllib
@@ -327,8 +328,8 @@ def _load(path: Path | None) -> Config:
     if balance_usd is not None and balance_at is None:
         raise ConfigError("openai.balance_usd needs openai.balance_at (when you read it)")
     monthly_limit = _float(openai, "monthly_limit_usd")
-    if monthly_limit is not None and monthly_limit <= 0:
-        raise ConfigError("openai.monthly_limit_usd must be more than 0")
+    if monthly_limit is not None and not (0 < monthly_limit < math.inf):
+        raise ConfigError("openai.monthly_limit_usd must be a number more than 0")
     project_id = _secret(openai, "project_id")
 
     hours = _float(books, "hours_per_month")

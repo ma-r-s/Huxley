@@ -6,17 +6,19 @@ cycle; its docs name no zone, so a month here is a calendar month in UTC,
 and a day a UTC day, the same 1-day buckets its Costs API bills in.
 
 - The spend: what OpenAI billed (the Costs API, through an admin key, see
-  openai_admin.py) for every UTC day it has finished billing; the rest of
-  today, and every day when there is no admin key or the read fails, the
-  server's own estimate (the `cost_usd` of each `cost.response_done`).
-  Each day says which.
+  openai_admin.py) for every UTC day it has settled; a day not yet
+  settled is the larger of billed-plus-estimate and the estimate; every
+  day when there is no admin key or the read fails, the server's own
+  estimate (the `cost_usd` of each `cost.response_done`). Each day says
+  which.
 - The limit: the organization's (or a configured project's) enforced
   spend limit read from the Admin API; if neither can be read, `[openai]
-  monthly_limit_usd` from the config. With both an organization and a
-  project limit, the one with less left (it bites first).
-- The pace: the average of the last 7 days that had spend, today as it
-  stands included (days of nothing don't dilute it, so it errs toward
-  "runs out sooner").
+  monthly_limit_usd` from the config, as the organization's. With both an
+  organization and a project limit, the one with less left (it bites
+  first).
+- The pace: the average of the last 7 finished days that had spend (days
+  of nothing don't dilute it, so it errs toward "runs out sooner"); today
+  joins once it is already over that average.
 
 Everything here is pure: events, the Admin API's cached answer and the
 config in, numbers out. rules.py and views.py use the same numbers, so the
@@ -38,6 +40,9 @@ if TYPE_CHECKING:
 DAY = timedelta(days=1)
 PACE_DAYS = 7  # the pace averages this many finished days that had spend
 HISTORY_DAYS = 60  # days of spend kept: the month, and the pace before it
+# A billed day is taken as settled this long after it ends: the Costs API
+# reports late, so a read just after midnight can be short.
+BILLING_LAG = timedelta(hours=6)
 
 
 @dataclass(frozen=True)
@@ -217,47 +222,55 @@ def daily_spend(
     days_back: int = HISTORY_DAYS,
 ) -> list[Day]:
     """Each UTC day from `days_back - 1` days ago to today: billed where
-    OpenAI has finished billing it, else the server's estimate (a bucket
-    read mid-day counts as billed so far, the estimate after the read).
-    A day the logs don't reach and nothing billed is no data."""
+    OpenAI has settled it (BILLING_LAG after its end, at the read), else
+    the server's estimate. A day read before it settled (today, or one
+    that just ended) is the larger of billed-at-the-read plus the estimate
+    since, and the day's whole estimate: billing reports late, and neither
+    is ever more than was spent. A day the logs don't reach and nothing
+    billed is no data."""
     times, running = cost_points(events)
     today = now.astimezone(UTC).date()
-    full: dict[date, Bucket] = {}
-    part: dict[date, Bucket] = {}
-    if admin is not None and admin.fetched_at is not None:
+    read = admin.fetched_at if admin is not None else None
+    final: dict[date, Bucket] = {}
+    early: dict[date, Bucket] = {}
+    if admin is not None and read is not None:
         for b in admin.buckets:
-            if b.end <= admin.fetched_at:
-                full[b.start.date()] = b
-            elif b.start < admin.fetched_at:
-                part[b.start.date()] = b
+            day = b.start.astimezone(UTC).date()
+            if day_start(day) + DAY + BILLING_LAG <= read:
+                final[day] = b
+            elif b.start < read:
+                early[day] = b
     out = []
     for back in range(days_back - 1, -1, -1):
         d = today - timedelta(days=back)
         lo, hi = day_start(d), min(day_start(d) + DAY, now)
-        if d in full:
-            out.append(Day(d, full[d].usd(project_id), "billed"))
+        if d in final:
+            out.append(Day(d, final[d].usd(project_id), "billed"))
             continue
-        billed = 0.0
-        cut = lo
-        if d in part and admin is not None and admin.fetched_at is not None:
-            billed, cut = part[d].usd(project_id), admin.fetched_at
-        estimate = _logged(times, running, max(lo, cut), hi)
-        reached = logs_from is not None and logs_from < hi
-        if d in part:
-            out.append(Day(d, billed + estimate, "mixed" if estimate > 0 else "billed"))
-        elif reached:
-            out.append(Day(d, estimate, "estimate"))
+        whole = _logged(times, running, lo, hi)
+        if d in early and read is not None:
+            billed = early[d].usd(project_id) + _logged(times, running, max(lo, read), hi)
+            usd = max(billed, whole)
+            out.append(Day(d, usd, "billed" if usd == early[d].usd(project_id) else "mixed"))
+        elif logs_from is not None and logs_from < hi:
+            out.append(Day(d, whole, "estimate"))
         else:
             out.append(Day(d, 0.0, None))
     return out
 
 
 def pace(days: Sequence[Day], today: date) -> tuple[float | None, int]:
-    """(USD a day, days averaged): the mean of the last PACE_DAYS days that
-    had spend, today included as it stands (a day of nothing, or a day the
-    logs don't reach, doesn't dilute it)."""
-    recent = [d.usd for d in sorted(days, key=lambda d: d.date, reverse=True) if d.date <= today]
-    spent = [usd for usd in recent if usd > 0][:PACE_DAYS]
+    """(USD a day, days averaged): the mean of the last PACE_DAYS finished
+    days that had spend (a day of nothing, or one the logs don't reach,
+    doesn't dilute it). Today, unfinished, counts only once it is already
+    over that mean, or when no finished day had spend: either way the pace
+    never goes down for a day that has barely begun."""
+    finished = [d.usd for d in sorted(days, key=lambda d: d.date, reverse=True) if d.date < today]
+    spent = [usd for usd in finished if usd > 0][:PACE_DAYS]
+    now_day = next((d.usd for d in days if d.date == today), 0.0)
+    mean = sum(spent) / len(spent) if spent else 0.0
+    if now_day > mean:
+        spent = [now_day, *spent][:PACE_DAYS]
     if not spent:
         return None, 0
     return sum(spent) / len(spent), len(spent)
@@ -299,7 +312,9 @@ def budget(
     if admin is not None and project_id and admin.project_limit_usd:
         candidates.append(("project", admin.project_limit_usd, project_id))
     if not candidates and config_limit:
-        candidates.append(("config", config_limit, project_id))
+        # The organization's: against its whole spend (with a project set,
+        # the larger figure: the card never shows more left than there is).
+        candidates.append(("config", config_limit, None))
 
     chosen: tuple[str | None, float | None, str | None] = (None, None, project_id)
     days = for_scope(project_id)
