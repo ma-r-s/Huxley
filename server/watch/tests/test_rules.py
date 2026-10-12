@@ -32,6 +32,7 @@ from .logs import (
     WALKIE_MAC,
     ago,
     alive,
+    bench,
     connected,
     connection_failed,
     cost,
@@ -261,6 +262,19 @@ def test_restart_loop_opens_at_three_in_an_hour_and_ages_out() -> None:
     assert item.sentence == "The server restarted 3 times in the last hour."
     assert rule_server_restarts(inputs(lines[1:])) is None
     assert rule_server_restarts(inputs(lines, now=NOW + timedelta(minutes=20))) is None
+
+
+def test_planned_restarts_inside_marked_windows_are_not_a_loop() -> None:
+    """A deploy marked in bench.jsonl (the firmware session restarts the
+    server after each one) is planned: three of them are not a crash loop."""
+    lines = [starting(ago(minutes=50)), starting(ago(minutes=30)), starting(ago(minutes=5))]
+    marked = bench(
+        (ago(minutes=51), ago(minutes=49), "link test: restart for deploy"),
+        (ago(minutes=31), ago(minutes=29), "link test: restart for deploy"),
+    )
+    assert rule_server_restarts(inputs(lines, bench=marked)) is None
+    more = [*lines, starting(ago(minutes=3)), starting(ago(minutes=1))]
+    assert rule_server_restarts(inputs(more, bench=marked)) is not None  # 3 unplanned
 
 
 def test_server_down_after_five_minutes_and_clears_on_start() -> None:

@@ -236,7 +236,9 @@ def rule_server_down(i: Inputs) -> Item | None:
 
 def rule_server_restarts(i: Inputs) -> Item | None:
     window = timedelta(minutes=i.th.restarts_window_minutes)
-    recent = [t for t in i.server.starts if i.now - t <= window]
+    # A restart inside a marked window (bench.jsonl: a deploy, a bench or
+    # link test) was planned by whoever marked it: not a crash loop.
+    recent = [t for t in i.server.starts if i.now - t <= window and not i.bench.suppressed(t)]
     if len(recent) < i.th.restarts_max:
         return None
     label = "hour" if window == timedelta(hours=1) else span(window)
@@ -255,7 +257,7 @@ def rule_server_restarts(i: Inputs) -> Item | None:
 
 def rule_server_unclean(i: Inputs) -> Item | None:
     window = timedelta(minutes=i.th.unclean_window_minutes)
-    recent = [t for t in i.server.unclean if i.now - t <= window]
+    recent = [t for t in i.server.unclean if i.now - t <= window and not i.bench.suppressed(t)]
     if not recent:
         return None
     return Item(
