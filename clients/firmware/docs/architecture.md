@@ -74,6 +74,8 @@ FreeRTOS tasks, in priority order (higher = more important):
 | `hux_opus_dec`             | `hux_opus_init`      | 7    | 24 KB (PSRAM) | Decodes received Opus packets into the speaker ring; runs queued `audio_clear` in order |
 | `hux_super`                | `hux_super_start`    | 10   | 3 KB  | The supervisor: feeds the task watchdog only while every part keeps working (F-0027) |
 | `hux_ladder`               | `hux_net_start`      | 3    | 4 KB  | Without the server: WS restart at 2 min, Wi-Fi at 10, reboot at 60; flags a silent WS (F-0027) |
+| `hux_health`               | `hux_health_start`   | 2    | 4 KB  | The minute line, `device.health` (F-0027) |
+| `hux_bat`                  | `hux_battery_start`  | 2    | 4 KB  | The battery level once a minute, `system.battery` (F-0025) |
 | `hux_spk`                  | `hux_audio_init`     | 8    | 6 KB  | Pop the PCM ring (or silence), I2S TX; services clears     |
 | `hux_button`               | `hux_button_start`   | 4    | 4 KB  | Poll GPIO7 + K2 every 10 ms, debounce, post press/release  |
 | `hux_console`              | `hux_console_start`  | 3    | 5 KB  | Poll the USB RX FIFO every 20 ms, run bench commands       |

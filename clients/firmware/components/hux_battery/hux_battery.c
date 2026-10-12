@@ -283,6 +283,12 @@ void hux_battery_start(hux_battery_sink_fn sink) {
     }
 }
 
+bool hux_battery_last(int *mv, int *pct) {
+    *mv = s_cell_mv;
+    *pct = s_pct;
+    return *pct >= 0;
+}
+
 void hux_battery_report_now(void) {
     int mv = s_cell_mv, pct = s_pct;
     if (pct >= 0 && s_sink != NULL) {

@@ -120,6 +120,10 @@ uint32_t hux_audio_mic_turns(void);
 /** Supervisor test (console `hang spk`): the speaker task blocks for good. */
 void hux_audio_debug_hang_spk(void);
 
+/** device.health (F-0027): underruns, their silent ms, and the ms of queued
+ * audio dropped (clears, barge-in holds) since the last call. */
+void hux_audio_take_health(uint32_t *underruns, uint32_t *underrun_ms, uint32_t *discarded_ms);
+
 /**
  * Queue a local tone: a sine of `hz` (0 = a silent gap) for `ms`, faded
  * in and out. Segments play in order once the reply audio in the ring
