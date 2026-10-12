@@ -329,32 +329,42 @@ class TelegramTransport:
     async def _discard_failed_clients(self, app: object, call_py: object, *, attempt: int) -> None:
         """Release what a failed start left open, then drop the pair.
 
-        pyrogram's `Client.start()` disconnects itself when it fails
-        after connecting, but a failure inside `load_session` (the
-        database-locked case) leaves the session SQLite connection open
-        with `is_connected` False. Close whichever of the two is open so
-        the next attempt, or the old process still shutting down, is not
-        fighting this one's handle. PyTgCalls' own pool is shut down too.
-        Never raises: a cleanup error must not mask the start error.
+        Three states, by how far pyrogram got:
+        - initialized (`Client.start()` finished, then a later PyTgCalls
+          step such as `get_id` failed): a running client with its
+          handlers wired; `stop()` it (`disconnect()` refuses an
+          initialized client).
+        - connected but not initialized: pyrogram normally disconnects
+          itself here, but `disconnect()` if it didn't.
+        - neither (the database-locked case: `load_session` failed after
+          opening the session SQLite): close that handle.
+        So the next attempt, or the old process still shutting down, is
+        not fighting this one's handle. PyTgCalls' own pool is always
+        shut down. Never raises: a cleanup error must not mask the start
+        error.
         """
         try:
-            if getattr(app, "is_connected", False):
+            if getattr(app, "is_initialized", False):
+                await app.stop()  # type: ignore[attr-defined]
+            elif getattr(app, "is_connected", False):
                 await app.disconnect()  # type: ignore[attr-defined]
             else:
                 storage = getattr(app, "storage", None)
                 if getattr(storage, "conn", None) is not None:
                     await storage.close()  # type: ignore[union-attr]
-            executor = getattr(call_py, "executor", None)
-            if executor is not None:
-                executor.shutdown(wait=False)
         except Exception as exc:
             await logger.awarning(
                 "telegram.transport.discard_failed",
                 attempt=attempt,
                 error=f"{type(exc).__name__}: {exc}",
             )
-            return
-        await logger.ainfo("telegram.transport.discarded_failed_client", attempt=attempt)
+        else:
+            await logger.ainfo("telegram.transport.discarded_failed_client", attempt=attempt)
+        finally:
+            executor = getattr(call_py, "executor", None)
+            if executor is not None:
+                with contextlib.suppress(Exception):
+                    executor.shutdown(wait=False)
 
     def _wire_handlers(self, call_py: object, app: object) -> None:
         """Attach all update handlers: peer audio + ring/discard + messages.

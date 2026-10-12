@@ -183,13 +183,25 @@ class _FakeApp:
     `is_connected` flips, which is what `opened=True, connected=False`
     models."""
 
-    def __init__(self, *, opened: bool = True, connected: bool = False) -> None:
+    def __init__(
+        self, *, opened: bool = True, connected: bool = False, initialized: bool = False
+    ) -> None:
         self.storage = _FakeStorage(opened=opened)
-        self.is_connected = connected
+        self.is_connected = connected or initialized
+        self.is_initialized = initialized
         self.disconnected = False
+        self.stopped = False
 
     async def disconnect(self) -> None:
+        if self.is_initialized:
+            msg = "Can't disconnect an initialized client"
+            raise ConnectionError(msg)
         self.disconnected = True
+        self.is_connected = False
+
+    async def stop(self) -> None:
+        self.stopped = True
+        self.is_initialized = False
         self.is_connected = False
 
 
@@ -224,14 +236,17 @@ class _Builder:
         errors: list[BaseException | None],
         *,
         connected: bool = False,
+        initialized: bool = False,
     ) -> None:
         self._errors = list(errors)
         self._connected = connected
+        self._initialized = initialized
         self.pairs: list[tuple[_FakeApp, _FakeCallPy]] = []
 
     def __call__(self) -> tuple[object, object]:
         error = self._errors[len(self.pairs)]
-        pair = (_FakeApp(connected=self._connected), _FakeCallPy(error))
+        app = _FakeApp(connected=self._connected, initialized=self._initialized)
+        pair = (app, _FakeCallPy(error))
         self.pairs.append(pair)
         return pair
 
@@ -393,6 +408,26 @@ class TestT117DbLockRetry:
 
         app, _ = await transport._start_with_db_lock_retry(_build_with_broken_close)
         assert app is build.pairs[1][0]
+        # The failed pair's thread pool is shut down even though the
+        # session close raised.
+        assert build.pairs[0][1].executor.shut_down
+
+    @pytest.mark.asyncio
+    async def test_client_that_got_past_initialize_is_stopped(
+        self, transport: TelegramTransport, no_sleep: list[float]
+    ) -> None:
+        """pyrogram's start finished but a later PyTgCalls step failed:
+        the client is running with its handlers wired. `disconnect()`
+        refuses an initialized client, so it must be `stop()`ped, or it
+        keeps running (and keeps the session open) behind a disabled
+        skill."""
+        build = _Builder([RuntimeError("get_id failed")], initialized=True)
+        with pytest.raises(RuntimeError, match="get_id failed"):
+            await transport._start_with_db_lock_retry(build)
+        failed_app, failed_call_py = build.pairs[0]
+        assert failed_app.stopped
+        assert not failed_app.is_connected
+        assert failed_call_py.executor.shut_down
 
     @pytest.mark.asyncio
     async def test_connect_keeps_the_pair_that_started(
