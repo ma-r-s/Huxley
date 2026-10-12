@@ -67,6 +67,20 @@ import websockets
 import websockets.http11
 from websockets.asyncio.server import ServerConnection, serve
 
+from huxley.server.auth import (
+    MIN_TOKEN_CHARS,
+    HeaderLookup,
+    bearer_token_state,
+    configured_token,
+    forwarded_for,
+    local_origin,
+)
+from huxley.server.firmware import (
+    ADMIN_PREFIX,
+    FirmwareService,
+    HttpAnswer,
+    is_firmware_path,
+)
 from huxley.server.opus_codec import (
     AUDIO_PARAMS,
     FRAME_MS,
@@ -84,7 +98,9 @@ websockets.http11.MAX_LINE_LENGTH = 64 * 1024
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from pathlib import Path
 
+    from pydantic import SecretStr
     from websockets.http11 import Request, Response
 
     from huxley.server.recorder import Recorder
@@ -155,8 +171,20 @@ _PROXY_HEADERS = (
 )
 
 
+# websockets' opening-handshake time limit (`open_timeout`, 10 s by
+# default). It also bounds every plain HTTP answer given in
+# process_request: a firmware image must be written out, and an admin
+# dev-cmd must get its reply, inside it (huxley.server.firmware). 60 s
+# leaves a 4 MB image about 70 KB/s.
+_HANDSHAKE_TIMEOUT_S = 60.0
+
+
 def _url_path(target: str) -> str | None:
-    """The path part of a request target (no query), None if unparsable."""
+    """The path part of a request target (no query), None if unparsable or
+    not an origin-form target: `//host/health` and `http://host/health`
+    would parse to `/health` and slip past a tunnel's path rule."""
+    if not target.startswith("/") or target.startswith("//"):
+        return None
     try:
         return urlparse(target).path
     except ValueError:
@@ -174,6 +202,128 @@ def health_source_allowed(remote: object) -> bool:
     if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
         addr = addr.ipv4_mapped  # a dual-stack socket's view of an IPv4 peer
     return any(addr in net for net in _HEALTH_NETWORKS)
+
+
+def _local_refusal(
+    connection: ServerConnection, request: Request
+) -> tuple[str, str | None] | None:
+    """Why a local-only route (`/health`, `/admin/*`) is refused: a reverse
+    proxy's header (`("proxied", header)`) or a source outside loopback and
+    Tailscale (`("source", None)`). None when allowed."""
+    proxied = next((h for h in _PROXY_HEADERS if h in request.headers), None)
+    if proxied is not None:
+        return "proxied", proxied
+    if not health_source_allowed(connection.remote_address):
+        return "source", None
+    return None
+
+
+# Roles on the voice socket (docs/protocol.md "Authentication and roles";
+# remote-operation.md decision 4). Production mode = a device token is
+# configured; without one every connection is `dev`, as before roles.
+ROLE_DEVICE = "device"
+ROLE_LOCAL = "local"
+ROLE_DEV = "dev"
+# What the firmware sends; a `device` connection may send nothing else
+# (binary Opus audio is dispatched before this check and always allowed).
+DEVICE_MESSAGE_TYPES = frozenset(
+    {"audio", "ptt_start", "ptt_stop", "wake_word", "client_event", "ping"}
+)
+
+
+@dataclass(frozen=True)
+class _Access:
+    """What an upgrade may do: its `role` (None: refused), where it came
+    from (`source`: external, local, other; empty in dev mode) and its
+    device token (`token`: valid, missing, bad_token)."""
+
+    role: str | None
+    source: str = ""
+    token: str = ""
+    # Why a refused upgrade is refused when the token isn't the reason:
+    # `origin` (a web page on another site, 403).
+    refusal: str = ""
+
+
+def request_source(remote: object, headers: HeaderLookup) -> str:
+    """`external`: relayed by a reverse proxy (the Cloudflare tunnel
+    arrives from loopback, so its address means nothing); `local`:
+    loopback or Tailscale, direct; `other`: anything else (the LAN)."""
+    if any(headers.get_all(h) for h in _PROXY_HEADERS):
+        return "external"
+    return "local" if health_source_allowed(remote) else "other"
+
+
+# Distinct refused message types logged per connection (then silent).
+_MAX_REFUSED_TYPES = 32
+
+
+def _may_be_firmware(conn: _ConnInfo) -> bool:
+    """Whether this connection may speak for the walkie (identify as
+    firmware, report update status, answer console lines): the device, or
+    anyone in dev mode."""
+    return conn.role in (ROLE_DEVICE, ROLE_DEV)
+
+
+class _NoHeaders:
+    """No headers at all (a test double without a request)."""
+
+    def get_all(self, key: str) -> list[str]:
+        del key
+        return []
+
+
+_NO_HEADERS = _NoHeaders()
+
+
+def _query_params(target: str) -> tuple[str | None, str | None, str | None]:
+    """(lang, persona, audio) from an upgrade's URL; all None when the
+    query string is malformed (never block a handshake over it)."""
+    try:
+        qs = parse_qs(urlparse(target).query)
+        lang_values = qs.get("lang") or qs.get("language")
+        lang = lang_values[0].strip().lower() if lang_values else None
+        # T1.13: `?persona=<name>` selects which persona this connection
+        # is for. Trimmed but not lowercased; persona directory names are
+        # case-sensitive.
+        persona_values = qs.get("persona")
+        persona = persona_values[0].strip() if persona_values else None
+        # `?audio=opus` asks for binary Opus audio both ways instead of
+        # base64 PCM in JSON (docs/protocol.md "Opus audio").
+        audio_values = qs.get("audio")
+        audio = audio_values[0].strip().lower() if audio_values else None
+    except Exception:
+        return None, None, None
+    return lang or None, persona or None, audio or None
+
+
+def _wants_evict(target: str) -> bool:
+    """`?evict=1` in the upgrade's URL."""
+    try:
+        return parse_qs(urlparse(target).query).get("evict") == ["1"]
+    except ValueError:
+        return False
+
+
+def _http_response(connection: ServerConnection, answer: HttpAnswer) -> Response:
+    """A plain HTTP answer as the handshake's response: never upgraded,
+    never cached. An image's answer gets no close deadline (websockets
+    sets it before the drain, so the default 10 s would cut a slow
+    download's tail); the handshake limit still bounds it."""
+    response = connection.respond(answer.status, "")
+    response.body = answer.body
+    for name, value in (
+        ("Content-Length", str(len(answer.body))),
+        ("Content-Type", answer.content_type),
+        ("Cache-Control", "no-store"),
+        *answer.headers,
+    ):
+        if name in response.headers:
+            del response.headers[name]
+        response.headers[name] = value
+    if answer.long_send:
+        connection.close_timeout = None
+    return response
 
 
 # One `server.tx.audio_stats` line per this many ms while audio flows to
@@ -277,6 +427,17 @@ class _ConnInfo:
     # `shell`: `firmware`, `browser`, `home_screen`, `native_app`; a
     # `device.hello` means `firmware`). None until it says. `/health`.
     shell: str | None = None
+    # What this connection may do (docs/protocol.md "Authentication and
+    # roles"): `device` (its upgrade carried the device token: the
+    # firmware's messages only), `local` (production, loopback or
+    # Tailscale without the token: everything), `dev` (no token configured:
+    # everything, as before roles). Only `device` gets console lines.
+    role: str = "dev"
+    # Message types refused for this role, each logged once.
+    refused_types: set[str] = field(default_factory=set)
+    # A number of its own, from a server-wide counter: who heard a
+    # proactive turn is pinned to it (`listener_epoch`, T1.44).
+    epoch: int = 0
 
     def to_diag(self) -> dict[str, Any]:
         """Serialize to the wire-format the `diag_state` frame uses.
@@ -398,6 +559,12 @@ class AudioServer:
         # process); the server adds `client`, `walkie_last_seen` and
         # `recording`. None (tests, tools): `/health` is not served.
         get_health: Callable[[], dict[str, object]] | None = None,
+        # Firmware images and the admin routes (`huxley.server.firmware`),
+        # served from this directory, the device routes gated by this
+        # token. None (tests, tools): `/firmware/*` and `/admin/*` are not
+        # served.
+        firmware_dir: Path | None = None,
+        device_token: SecretStr | None = None,
     ) -> None:
         self._host = host
         self._port = port
@@ -506,10 +673,92 @@ class AudioServer:
         self._no_client_drop_sends = 0
         self._no_client_drop_bytes = 0
         self._no_client_drop_logged_s = float("-inf")
+        self._firmware: FirmwareService | None = (
+            FirmwareService(firmware_dir, device_token, link=self)
+            if firmware_dir is not None
+            else None
+        )
+        # Production mode: a device token is configured. Without one every
+        # connection keeps today's full behaviour (dev).
+        self._device_token = configured_token(device_token)
+        # Connections still writing a firmware image (aborted at shutdown,
+        # so the listener's close doesn't wait out a slow download).
+        self._long_sends: set[ServerConnection] = set()
+        # Counts connections: each gets the next number as its epoch.
+        self._conn_epoch = 0
 
     @property
     def has_client(self) -> bool:
         return self._conn is not None
+
+    @property
+    def listener_epoch(self) -> int | None:
+        """The current client's epoch once it can play audio (its hello is
+        out), else None. A new connection gets a new epoch, so "the client
+        that was said to" stays checkable after a reconnect (T1.44)."""
+        conn = self._conn
+        if conn is None or conn.ws is None or not conn.hello_sent:
+            return None
+        return conn.epoch
+
+    async def client_received_all(self, epoch: int, timeout_s: float) -> bool:
+        """True once the client of `epoch` has received everything sent to
+        it so far: a WebSocket ping goes out after it and TCP is ordered,
+        so the pong proves it (T1.44: an injected turn counts as delivered
+        only then). False if that client is no longer current, if its
+        socket closes first (websockets fails pending pings), or if no
+        pong comes within `timeout_s`: then the connection is aborted, so
+        the client reports gone and reconnects. A dead link the server
+        hasn't noticed accepts writes until its buffer fills and then
+        blocks them, the keepalive's ping included; the bound covers the
+        write too. A ping is a control frame every client already answers:
+        nothing new on the wire."""
+        conn = self._conn
+        if conn is None or conn.ws is None or conn.epoch != epoch or not conn.hello_sent:
+            await logger.ainfo(
+                "server.client_ping",
+                ok=False,
+                reason="not_current",
+                epoch=epoch,
+                current_conn_id=conn.conn_id if conn is not None else None,
+            )
+            return False
+        ws = conn.ws
+        started = time.monotonic()
+        try:
+            async with asyncio.timeout(timeout_s):
+                pong = await ws.ping()
+                await pong
+        except websockets.ConnectionClosed:
+            await logger.ainfo(
+                "server.client_ping",
+                ok=False,
+                reason="closed",
+                conn_id=conn.conn_id,
+                shell=conn.shell,
+                waited_ms=round((time.monotonic() - started) * 1000),
+            )
+            return False
+        except TimeoutError:
+            await logger.awarning(
+                "server.client_ping",
+                ok=False,
+                reason="timeout",
+                conn_id=conn.conn_id,
+                shell=conn.shell,
+                timeout_s=timeout_s,
+                action="abort",
+            )
+            ws.transport.abort()
+            return False
+        await logger.ainfo(
+            "server.client_ping",
+            ok=True,
+            conn_id=conn.conn_id,
+            shell=conn.shell,
+            rtt_ms=round((time.monotonic() - started) * 1000),
+        )
+        return True
 
     @property
     def conn_id(self) -> str | None:
@@ -592,19 +841,36 @@ class AudioServer:
             self._host,
             self._port,
             process_request=self._process_request,
+            open_timeout=_HANDSHAKE_TIMEOUT_S,
         ):
             opus_error = opus_unavailable_reason()
+            firmware = self._firmware
             await logger.ainfo(
                 "audio_server_listening",
                 url=f"ws://{self._host}:{self._port}",
                 opus_available=opus_error is None,
+                firmware_dir=str(firmware.directory) if firmware is not None else None,
+                device_token_set=firmware.token_configured if firmware is not None else None,
             )
             if opus_error is not None:
                 # Opus clients will get PCM; this says why, once, at boot.
                 await logger.awarning("server.audio.opus_unavailable", reason=opus_error)
-            await asyncio.Future()  # run until cancelled
+            token = self._device_token
+            if token is not None and len(token.get_secret_value()) < MIN_TOKEN_CHARS:
+                await logger.awarning(
+                    "server.auth.device_token_short",
+                    min_chars=MIN_TOKEN_CHARS,
+                    note="HUXLEY_DEVICE_TOKEN is guessable through the tunnel: use 32+ random chars",
+                )
+            try:
+                await asyncio.Future()  # run until cancelled
+            finally:
+                # Before serve() closes: it waits for every connection still
+                # in its handshake, and an admin dev-cmd or an image download
+                # is one (up to the 60 s handshake limit).
+                self._stop_http_waits()
 
-    def _process_request(
+    async def _process_request(
         self,
         connection: ServerConnection,
         request: Request,
@@ -620,37 +886,32 @@ class AudioServer:
 
         `GET /health` is answered here as plain HTTP, never upgraded and
         never touching the pending query params above, so it cannot
-        disturb the voice socket (see `_health_response`). Every other
-        path keeps the WebSocket handshake as before.
+        disturb the voice socket (see `_health_response`). `/firmware/*`
+        and `/admin/*` are answered the same way (`_firmware_response`).
+        Every other path keeps the WebSocket handshake as before.
         """
         get_health = self._get_health
-        if get_health is not None and _url_path(request.path) == HEALTH_PATH:
+        path = _url_path(request.path)
+        if get_health is not None and path == HEALTH_PATH:
             return self._health_response(connection, request, get_health)
+        if self._firmware is not None and path is not None and is_firmware_path(path):
+            return await self._firmware_response(connection, request, path, self._firmware)
+        refused = self._upgrade_refusal(connection, request)
+        if refused is not None:
+            return refused
         del connection
-        try:
-            parsed = urlparse(request.path)
-            qs = parse_qs(parsed.query)
-            lang_values = qs.get("lang") or qs.get("language")
-            lang = lang_values[0].strip().lower() if lang_values else None
-            self._pending_language = lang or None
-            # T1.13 — `?persona=<name>` selects which persona this
-            # connection is for. Trimmed but not lowercased; persona
-            # directory names are case-sensitive.
-            persona_values = qs.get("persona")
-            persona = persona_values[0].strip() if persona_values else None
-            self._pending_persona = persona or None
-            # `?audio=opus` asks for binary Opus audio both ways instead
-            # of base64 PCM in JSON (docs/protocol.md "Opus audio").
-            audio_values = qs.get("audio")
-            audio = audio_values[0].strip().lower() if audio_values else None
-            self._pending_audio = audio or None
-        except Exception:
-            # Never block a handshake over a malformed query string;
-            # fall back to persona default.
-            self._pending_language = None
-            self._pending_persona = None
-            self._pending_audio = None
+        self._pending_language, self._pending_persona, self._pending_audio = _query_params(
+            request.path
+        )
         return None
+
+    def _requested_params(self, ws: ServerConnection) -> tuple[str | None, str | None, str | None]:
+        """(lang, persona, audio) this connection asked for, from its own
+        request; the parked fields only for a test double without one."""
+        request = getattr(ws, "request", None)
+        if request is not None:
+            return _query_params(request.path)
+        return self._pending_language, self._pending_persona, self._pending_audio
 
     def _health_response(
         self,
@@ -663,13 +924,13 @@ class AudioServer:
         Read-only and synchronous: it never awaits, so the voice socket's
         handlers can't interleave with it."""
         remote = connection.remote_address
-        proxied = next((h for h in _PROXY_HEADERS if h in request.headers), None)
-        if proxied is not None or not health_source_allowed(remote):
+        refusal = _local_refusal(connection, request)
+        if refusal is not None:
             logger.warning(
                 "server.health_refused",
                 remote=str(remote),
-                reason="proxied" if proxied is not None else "source",
-                header=proxied,
+                reason=refusal[0],
+                header=refusal[1],
                 note="only loopback and Tailscale may read /health, never via a proxy; 404",
             )
             return connection.respond(HTTPStatus.NOT_FOUND, "Not Found\n")
@@ -688,6 +949,198 @@ class AudioServer:
         response.headers["Content-Type"] = "application/json"
         response.headers["Cache-Control"] = "no-store"
         return response
+
+    async def _firmware_response(
+        self,
+        connection: ServerConnection,
+        request: Request,
+        path: str,
+        firmware: FirmwareService,
+    ) -> Response:
+        """`/firmware/*` (the device token decides, from any source: the
+        walkie comes through the tunnel) and `/admin/*` (loopback and
+        Tailscale only, never via a proxy, like `/health`). Never touches
+        the pending query params, so the voice socket can't notice it."""
+        remote = str(connection.remote_address)
+        try:
+            if path.startswith(ADMIN_PREFIX):
+                refusal = _local_refusal(connection, request)
+                if refusal is not None:
+                    logger.warning(
+                        "firmware.admin_refused",
+                        remote=remote,
+                        reason=refusal[0],
+                        header=refusal[1],
+                        path=path[:200],
+                        note="only loopback and Tailscale may use /admin, never via a proxy; 404",
+                    )
+                    return connection.respond(HTTPStatus.NOT_FOUND, "Not Found\n")
+                query = urlparse(request.path).query
+                answer = await firmware.admin_http(path, query, request.headers)
+            else:
+                answer = await firmware.device_http(path, request.headers, remote)
+        except Exception:
+            logger.exception("firmware.http_failed", path=path[:200], remote=remote)
+            answer = HttpAnswer(HTTPStatus.INTERNAL_SERVER_ERROR, b'{"error": "internal error"}\n')
+        if answer.long_send:
+            self._long_sends = {c for c in self._long_sends if not c.transport.is_closing()}
+            self._long_sends.add(connection)
+        return _http_response(connection, answer)
+
+    def _stop_http_waits(self) -> None:
+        """Shutdown: end pending dev-cmd waits and abort image downloads
+        still draining, so closing the listener is quick."""
+        if self._firmware is not None:
+            self._firmware.close()
+        aborted = 0
+        for connection in self._long_sends:
+            if not connection.transport.is_closing():
+                connection.transport.abort()
+                aborted += 1
+        self._long_sends.clear()
+        if aborted:
+            logger.info("firmware.image_send_aborted", reason="shutdown", count=aborted)
+
+    # --- production role (docs/protocol.md "Authentication and roles") ---
+
+    def _access(self, remote: object, headers: HeaderLookup) -> _Access:
+        """The role an upgrade from `remote` with `headers` gets. Dev mode
+        (no device token configured): `dev`, everything as before."""
+        if self._device_token is None:
+            return _Access(ROLE_DEV)
+        source = request_source(remote, headers)
+        token = bearer_token_state(headers, self._device_token)
+        if token == "valid":
+            return _Access(ROLE_DEVICE, source, token)
+        if source == "local":
+            if not local_origin(headers):
+                # A page on another site, opened in a browser on the box or
+                # on the tailnet, must not get `local` (everything).
+                return _Access(None, source, token, refusal="origin")
+            return _Access(ROLE_LOCAL, source, token)
+        return _Access(None, source, token)
+
+    def _evicts_device(self, access: _Access, target: str) -> bool:
+        """Production: a connection that isn't the device would replace a
+        connected device without a local `?evict=1`."""
+        current = self._conn
+        return (
+            self._device_token is not None
+            and current is not None
+            and current.role == ROLE_DEVICE
+            and access.role != ROLE_DEVICE
+            and not (access.source == "local" and _wants_evict(target))
+        )
+
+    def _upgrade_refusal(self, connection: ServerConnection, request: Request) -> Response | None:
+        """Production: refuse an upgrade with no role (401) or one that would
+        evict the connected device (409). None: the handshake goes on."""
+        if self._device_token is None:
+            return None
+        access = self._access(connection.remote_address, request.headers)
+        remote = str(connection.remote_address)
+        if access.role is None:
+            # Never the token: only whether one came and whether it matched.
+            origin = request.headers.get_all("Origin")
+            logger.warning(
+                "server.auth.refused",
+                reason=access.refusal or access.token,
+                remote=remote,
+                external=access.source == "external",
+                source=access.source,
+                forwarded_for=forwarded_for(request.headers),
+                origin=origin[0][:100] if origin else None,
+            )
+            if access.refusal == "origin":
+                return connection.respond(HTTPStatus.FORBIDDEN, "cross-site connection refused\n")
+            response = connection.respond(HTTPStatus.UNAUTHORIZED, "device token required\n")
+            response.headers["WWW-Authenticate"] = "Bearer"
+            return response
+        if self._evicts_device(access, request.path):
+            logger.warning(
+                "server.auth.evict_refused",
+                role=access.role,
+                remote=remote,
+                device_conn_id=self._conn.conn_id if self._conn is not None else None,
+                note="the walkie is connected; a local client may replace it with ?evict=1",
+            )
+            return connection.respond(
+                HTTPStatus.CONFLICT, "the walkie is connected; add ?evict=1 to replace it\n"
+            )
+        return None
+
+    def _connection_access(self, ws: ServerConnection) -> _Access:
+        """The role of an accepted connection, from its own request (never a
+        field shared between handshakes: two upgrades can interleave)."""
+        request = getattr(ws, "request", None)  # None on test doubles
+        headers: HeaderLookup = request.headers if request is not None else _NO_HEADERS
+        return self._access(ws.remote_address, headers)
+
+    async def _admit(self, ws: ServerConnection, access: _Access, conn_id: str) -> bool:
+        """Last check before a connection becomes current: `_upgrade_refusal`
+        decided on the HTTP request, but the device may have connected while
+        this handshake finished. False (logged, socket closed 1008) when the
+        connection has no role or would evict the device."""
+        target = getattr(getattr(ws, "request", None), "path", "/")
+        if access.role is not None and not self._evicts_device(access, target):
+            return True
+        reason = "no_role" if access.role is None else "evicts_device"
+        await logger.awarning(
+            "server.auth.evict_refused" if access.role is not None else "server.auth.refused",
+            reason=reason,
+            role=access.role,
+            remote=str(ws.remote_address),
+            late=True,
+            new_conn_id=conn_id,
+        )
+        with contextlib.suppress(Exception):
+            await ws.close(1008, "the walkie is connected" if access.role else "unauthorized")
+        return False
+
+    def _refuse_for_role(self, conn: _ConnInfo, msg_type: object) -> None:
+        """A message this connection's role may not send: dropped, said once
+        per type per connection."""
+        name = str(msg_type)[:40]
+        if name in conn.refused_types or len(conn.refused_types) >= _MAX_REFUSED_TYPES:
+            return
+        conn.refused_types.add(name)
+        logger.warning("server.rx.refused_for_role", role=conn.role, msg_type=name)
+
+    def device_token_presented(self, conn_id: str) -> bool:
+        """Whether connection `conn_id` (the current one) opened with the
+        device token (its role is `device`)."""
+        conn = self._conn
+        return conn is not None and conn.conn_id == conn_id and conn.role == ROLE_DEVICE
+
+    def device_busy(self) -> bool:
+        """A press, the model speaking, or a skill holding the mic (a call)."""
+        return self._ptt_active or self._model_speaking or self.has_active_claim
+
+    # --- DeviceLink (huxley.server.firmware): the connected firmware client ---
+
+    def device_conn_id(self) -> str | None:
+        """The current connection's id when it is a firmware client."""
+        conn = self._conn
+        return conn.conn_id if conn is not None and conn.shell == "firmware" else None
+
+    async def send_device_event(self, conn_id: str, event: str, data: dict[str, Any]) -> bool:
+        """A `server_event` to connection `conn_id`, if it is still the
+        current one. True when it was written."""
+        conn = self._conn
+        if conn is None or conn.conn_id != conn_id:
+            return False
+        written = await self._send_raw({"type": "server_event", "event": event, "data": data})
+        return written > 0
+
+    async def close_device(self, conn_id: str, code: int, reason: str) -> bool:
+        """Close connection `conn_id` with `code`, if it is still the
+        current one (its `client_disconnected` line carries the code)."""
+        conn = self._conn
+        if conn is None or conn.conn_id != conn_id or conn.ws is None:
+            return False
+        conn.close_code, conn.close_reason = code, reason
+        await conn.ws.close(code, reason)
+        return True
 
     def _health_fields(self) -> dict[str, object]:
         """The server's part of `/health`: the current client (or the last
@@ -733,6 +1186,8 @@ class AudioServer:
             shell = str(data["shell"])
         else:
             return
+        if shell == "firmware" and not _may_be_firmware(conn):
+            return  # said in `_firmware_client_event`
         conn.shell = shell
         if shell == "firmware":
             self._firmware_last_seen_ms = _now_ms()
@@ -750,10 +1205,16 @@ class AudioServer:
         # the same id and structured log lines (which bind it via
         # contextvars below) can be filtered by the operator.
         conn_id = uuid.uuid4().hex[:8]
-        if self._conn is not None:
+        access = self._connection_access(ws)
+        if not await self._admit(ws, access, conn_id):
+            return
+        while self._conn is not None:
             # Evict the old client rather than rejecting the new one.
             # A new connection means either a browser reload or a freshly-
             # booted device — both should take priority over a stale socket.
+            # A loop, re-checked after each await: another connection (the
+            # walkie) can become current while the old socket closes, and
+            # must then be evicted too, or refused if this one may not.
             old_conn = self._conn
             await logger.ainfo(
                 "client_evicted",
@@ -771,20 +1232,52 @@ class AudioServer:
             self._ptt_active = False
             if self._recorder is not None:
                 self._recorder.connection_closed(old_conn.conn_id, "evicted")
-            with contextlib.suppress(Exception):
-                await old_conn.ws.close(1001, "Replaced by new client") if old_conn.ws else None
+            # The old client is gone, whatever its socket does next: a
+            # walkie reconnecting after a Wi-Fi drop the server hadn't
+            # noticed evicts its dead socket, and what was being said to
+            # it was lost (T1.44: an injected turn is said again). The new
+            # connection reports itself present after its handshake.
+            await self._notify_presence(False)
+            old_ws = old_conn.ws
+            if old_ws is not None:
+                # Bounded: a dead socket never answers the close, and the
+                # reconnecting walkie's hello waits on this (websockets'
+                # own close timeout is 10 s).
+                try:
+                    async with asyncio.timeout(self._EVICT_CLOSE_TIMEOUT_S):
+                        await old_ws.close(1001, "Replaced by new client")
+                except TimeoutError:
+                    await logger.ainfo(
+                        "server.evicted_close_aborted",
+                        old_conn_id=old_conn.conn_id,
+                        timeout_s=self._EVICT_CLOSE_TIMEOUT_S,
+                    )
+                    old_ws.transport.abort()
+                except Exception:
+                    await logger.adebug(
+                        "server.evicted_close_failed", old_conn_id=old_conn.conn_id
+                    )
+            # Every await above lets another handshake finish: if the
+            # walkie became current meanwhile, this connection must evict
+            # it too (the loop) or, if its role may not, leave.
+            if not await self._admit(ws, access, conn_id):
+                return
 
         # Pull the language and persona the client requested in its URL
-        # (captured during `_process_request`) and hand each to the
-        # respective callback. Persona-select runs FIRST so the runtime
-        # can swap to the requested persona BEFORE we serialize hello —
-        # otherwise the hello would carry the old persona's name.
-        selected_language = self._pending_language
-        selected_persona = self._pending_persona
-        requested_audio = self._pending_audio
+        # and hand each to the respective callback. Persona-select runs
+        # FIRST so the runtime can swap to the requested persona BEFORE we
+        # serialize hello; otherwise the hello would carry the old
+        # persona's name. Read from this connection's own request: the
+        # fields `_process_request` parks are shared by every handshake,
+        # and two can interleave (the walkie and a PWA after a restart).
+        selected_language, selected_persona, requested_audio = self._requested_params(ws)
         self._pending_language = None
         self._pending_persona = None
         self._pending_audio = None
+        ignored_persona: str | None = None
+        if access.role == ROLE_DEVICE and selected_persona is not None:
+            # The device is pinned to the configured persona (decision 4).
+            ignored_persona, selected_persona = selected_persona, None
 
         # Build the conn record + bind contextvars BEFORE the first
         # log line so every event in this handler carries `conn_id`
@@ -794,6 +1287,7 @@ class AudioServer:
         # `conn` is THIS handler's record. `self._conn` is whichever client
         # is current, and a newer connection can replace it while this
         # handler is still draining. Cleanup below must only touch `conn`.
+        self._conn_epoch += 1
         conn = _ConnInfo(
             conn_id=conn_id,
             remote=str(ws.remote_address),
@@ -801,6 +1295,8 @@ class AudioServer:
             requested_persona=selected_persona,
             requested_language=selected_language,
             ws=ws,
+            role=access.role or ROLE_DEV,
+            epoch=self._conn_epoch,
         )
         # The audio format is fixed before the connection becomes current,
         # so every audio frame it ever gets (even one racing the hello) is
@@ -823,7 +1319,16 @@ class AudioServer:
             language=selected_language,
             persona=selected_persona,
             audio_format=conn.audio_format,
+            role=conn.role,
         )
+        if access.role in (ROLE_DEVICE, ROLE_LOCAL):
+            await logger.ainfo(
+                "server.auth.accepted",
+                role=access.role,
+                source=access.source,
+                token=access.token,
+                ignored_persona=ignored_persona,
+            )
         self._log_recording_skipped(conn)
         if self._no_client_drop_sends:
             # What was sent into the void while nobody was connected.
@@ -997,6 +1502,14 @@ class AudioServer:
                 self._conn.rx_types[msg_type_for_hist] = (
                     self._conn.rx_types.get(msg_type_for_hist, 0) + 1
                 )
+            # Production: the device's token buys the firmware's messages
+            # only (no admin, no sessions, no persona swap). `?lang=` at
+            # connect still applies to it.
+            if self._conn.role == ROLE_DEVICE and not (
+                isinstance(msg_type_for_hist, str) and msg_type_for_hist in DEVICE_MESSAGE_TYPES
+            ):
+                self._refuse_for_role(self._conn, msg_type_for_hist)
+                return
         match msg.get("type"):
             case "audio":
                 pcm = base64.b64decode(msg.get("data", ""))
@@ -1244,6 +1757,7 @@ class AudioServer:
                 data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
                 self._note_device(event, data)
                 await logger.ainfo(f"client.{event}", **client_event_log_fields(data))
+                await self._firmware_client_event(event, data)
                 await self._dispatch_client_event(event, data)
             case other:
                 await logger.awarning("server.rx.unknown", msg_type=other)
@@ -1307,6 +1821,10 @@ class AudioServer:
     # timer runs while a stream is announced, so a source that stalls
     # never gets silence padded into it.
     _OPUS_IDLE_FLUSH_S = 0.25
+
+    # How long an evicted socket gets to answer the close before it is
+    # aborted (T1.44: the reconnecting walkie's handshake waits on it).
+    _EVICT_CLOSE_TIMEOUT_S = 2.0
 
     async def send_audio(self, pcm: bytes, *, stats: bool = True) -> None:
         """`stats=False` for the coordinator's waiting cue (T1.41): its
@@ -1724,6 +2242,25 @@ class AudioServer:
         is gated. Idempotent.
         """
         self._dispatching_enabled = False
+
+    async def _firmware_client_event(self, event: str, data: dict[str, Any]) -> None:
+        """The device contract's update and console events, to the firmware
+        service (framework plumbing, never a skill). Never raises into the
+        receive loop."""
+        conn = self._conn
+        if self._firmware is None or conn is None:
+            return
+        if not _may_be_firmware(conn):
+            # Production: only the device's own socket speaks for the
+            # walkie. A local client's `device.hello` could otherwise end a
+            # pending image's accept flow (it would then roll back).
+            if event in ("device.hello", "firmware.status", "dev.cmd_result"):
+                self._refuse_for_role(conn, f"client_event:{event}")
+            return
+        try:
+            await self._firmware.on_client_event(conn.conn_id, event, data)
+        except Exception:
+            await logger.aexception("firmware.event_failed", event_name=event)
 
     async def _dispatch_client_event(self, event: str, data: dict[str, Any]) -> None:
         """Invoke every registered handler for `event` concurrently.

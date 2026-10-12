@@ -13,8 +13,9 @@ Distinct from the timers skill:
   entry whose `scheduled_for` is far enough in the past is marked `missed`
   rather than fired (medication safety: don't double-dose at 11am if the
   8am dose was missed and the next dose is at 8pm).
-- **Acknowledgment loop** for medications: re-fires up to 3 times at
-  5 / 10 / 30 minute intervals until the LLM calls `acknowledge_reminder`.
+- **Acknowledgment loop** for medications: up to 3 fires, the next one 5
+  then 10 minutes after the previous was heard (T1.44), until the LLM calls
+  `acknowledge_reminder`.
 - **Recurrence**: `daily` / `weekly` re-schedules the next instance on
   ack OR on missed (recurrence outlasts a single missed dose).
 - **Catch-up via prompt_context**: any reminder that was marked `missed`
@@ -49,8 +50,9 @@ from dateutil.rrule import rrulestr
 
 from huxley_sdk import (
     BackgroundTaskHandle,
+    InjectOutcome,
     InjectPriority,
-    InjectTurn,
+    InjectTurnAndWait,
     SkillContext,
     SkillLogger,
     SkillStorage,
@@ -604,7 +606,11 @@ class RemindersSkill:
         sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
         self._logger: SkillLogger | None = None
-        self._inject_turn: InjectTurn | None = None
+        self._inject_turn_and_wait: InjectTurnAndWait | None = None
+        # One delivery task per fire waiting for its outcome (T1.44), by
+        # reminder id: (fired_count, handle). Cancelled by ack / cancel /
+        # snooze, which withdraws a fire still waiting for a listener.
+        self._deliveries: dict[int, tuple[int, BackgroundTaskHandle]] = {}
         self._background_task: Callable[..., BackgroundTaskHandle] | None = None
         self._storage: SkillStorage | None = None
         self._scheduler_handle: BackgroundTaskHandle | None = None
@@ -724,7 +730,7 @@ class RemindersSkill:
 
     async def setup(self, ctx: SkillContext) -> None:
         self._logger = ctx.logger
-        self._inject_turn = ctx.inject_turn
+        self._inject_turn_and_wait = ctx.inject_turn_and_wait
         self._background_task = ctx.background_task
         self._storage = ctx.storage
         self._language = ctx.language or "en"
@@ -913,9 +919,12 @@ class RemindersSkill:
         """Fired but not acked when we crashed. Resume retry or mark missed."""
         assert self._logger is not None
         if entry.kind != "medication":
-            # Non-medication kinds don't retry; if a fire was in flight
-            # we've already narrated it once, treat as terminal.
-            await self._mark_acked_or_missed_for_recurrence(entry, now=now)
+            # A one-shot kind stays `fired` until its narration is heard
+            # (T1.44), so this one may never have been: it waited for a
+            # listener when the process stopped. Say it again inside its
+            # late window, else it's missed. (A crash in the second
+            # between hearing it and saving `acked` repeats it once.)
+            await self._reconcile_undelivered(entry, now)
             return
         if entry.fired_count >= _MEDICATION_MAX_RETRIES:
             await self._mark_missed(entry, reason="boot_retries_exhausted", now=now)
@@ -945,16 +954,26 @@ class RemindersSkill:
             next_fire_at=next_at.isoformat(),
         )
 
-    async def _mark_acked_or_missed_for_recurrence(self, entry: _Entry, *, now: datetime) -> None:
-        """For non-medication fires we crashed mid-narration: record terminal,
-        then handle recurrence. We treat "we already fired once" as
-        delivered (better than re-narrating an appointment notice 4h late).
-        """
-        entry.state = _STATE_ACKED  # close out the row
-        entry.acked_at = now
+    async def _reconcile_undelivered(self, entry: _Entry, now: datetime) -> None:
+        """A one-shot fire whose narration wasn't known heard: back to
+        `pending` (the scheduler fires it on its next tick) while inside
+        its late window, else missed. Its due time is still
+        `next_fire_at` (one-shot fires don't move it); its series was
+        already rolled at fire time (idempotent anyway)."""
+        assert self._logger is not None
+        window = self._late_windows.get(entry.kind, _DEFAULT_LATE_WINDOWS[entry.kind])
+        late_by = now - entry.next_fire_at
+        if late_by > window:
+            await self._mark_missed(entry, reason="boot_undelivered_outside_window", now=now)
+            return
+        entry.state = _STATE_PENDING
         await self._save_entry(entry)
-        if entry.recurrence_rule:
-            await self._schedule_next_recurrence(entry)
+        await self._logger.ainfo(
+            "reminders.boot_refire_undelivered",
+            id=entry.id,
+            kind=entry.kind,
+            late_s=late_by.total_seconds(),
+        )
 
     async def _mark_missed(self, entry: _Entry, *, reason: str, now: datetime) -> None:
         """Transition a row to `missed` and (if recurring) schedule the next."""
@@ -1173,7 +1192,7 @@ class RemindersSkill:
             self._wakeup.clear()
 
     async def _fire(self, entry: _Entry) -> None:
-        """Commit state, then narrate.
+        """Commit state, then hand the narration to the framework.
 
         **Order matters for medication safety.** If we narrated first
         and the process died before saving the post-fire state, the
@@ -1182,14 +1201,14 @@ class RemindersSkill:
         Mirrors the timers skill's commit-then-narrate pattern
         (`fired_at` written before `inject_turn`).
 
-        **Trade-off**: a transient `inject_turn` failure (Realtime API
-        blip) burns a retry budget slot for medication without
-        narrating to the user. A sustained outage spanning all three
-        retries marks the row `missed` without grandpa hearing
-        anything. We accept that — silent miss is safer than double
-        dose. Operators diagnose via the `reminders.fire_failed` log
-        line plus the `reminders.fired` line that records each
-        attempt's `fired_count`.
+        The row stays `fired` until the framework reports what became of
+        the narration (T1.44: a turn waits for a client that can hear it,
+        up to this fire's late window): `_on_delivery` then acks a
+        one-shot kind, schedules a medication's next retry from the
+        moment it was heard, or marks it missed when nobody could hear it
+        in time. A `fired` row the process died on is re-fired by the
+        boot reconcile inside its window. While a fire waits, no retry
+        stacks on it (the scheduler only fires `pending` rows).
 
         Recurrence is also scheduled BEFORE narration: a crash between
         terminal-save and recurrence-schedule would otherwise lose
@@ -1197,27 +1216,24 @@ class RemindersSkill:
         idempotent so re-running it on boot reconcile is safe.
         """
         assert self._logger is not None
-        assert self._inject_turn is not None
         now = _utcnow()
+        # This fire's own due time (a retry's too): its late window counts
+        # from here, as the boot reconcile measures it.
+        due = entry.next_fire_at
         entry.fired_count += 1
         entry.last_fired_at = now
 
         advance_recurrence = False
-        if entry.kind == "medication":
-            if entry.fired_count >= _MEDICATION_MAX_RETRIES:
-                entry.state = _STATE_MISSED
-                entry.missed_at = now
-                advance_recurrence = bool(entry.recurrence_rule)
-            else:
-                # 1-based: index 0 is the wait BEFORE retry #2 (after
-                # the first fire). Pairs with first-fire-then-wait-5min.
-                interval = _MEDICATION_RETRY_INTERVALS[entry.fired_count - 1]
-                entry.next_fire_at = now + interval
-                entry.state = _STATE_FIRED
-        else:
-            entry.state = _STATE_ACKED
-            entry.acked_at = now
+        if entry.kind == "medication" and entry.fired_count >= _MEDICATION_MAX_RETRIES:
+            # The last nag: said, but the dose counts as missed.
+            entry.state = _STATE_MISSED
+            entry.missed_at = now
             advance_recurrence = bool(entry.recurrence_rule)
+        else:
+            entry.state = _STATE_FIRED
+            # One-shot kinds roll their series now (the next instance
+            # doesn't depend on hearing this one); medication on ack/miss.
+            advance_recurrence = entry.kind != "medication" and bool(entry.recurrence_rule)
 
         await self._save_entry(entry)
         if advance_recurrence:
@@ -1238,17 +1254,9 @@ class RemindersSkill:
             )
 
         prompt = self._fire_prompt.format(message=entry.message, kind=entry.kind)
-        try:
-            # BLOCK_BEHIND_COMMS: preempts content (audiobook pauses,
-            # narrates, audiobook resumes via patience), queues behind
-            # active calls (doesn't interrupt grandpa's phone call for
-            # a medication reminder — call ends, narration drains).
-            await self._inject_turn(prompt, priority=InjectPriority.BLOCK_BEHIND_COMMS)
-        except Exception:
-            # State already advanced. Don't roll back: rolling back
-            # creates the double-fire risk this whole pattern exists
-            # to prevent.
-            await self._logger.aexception("reminders.fire_failed", id=entry.id)
+        window = self._late_windows.get(entry.kind, _DEFAULT_LATE_WINDOWS[entry.kind])
+        expires_after = max(timedelta(0), due + window - now)
+        self._start_delivery(entry.id, entry.fired_count, prompt, expires_after)
 
         await self._logger.ainfo(
             "reminders.fired",
@@ -1257,14 +1265,108 @@ class RemindersSkill:
             fired_count=entry.fired_count,
             state=entry.state,
             message=entry.message,
+            expires_in_s=round(expires_after.total_seconds()),
         )
+
+    def _start_delivery(
+        self, rid: int, fired_count: int, prompt: str, expires_after: timedelta
+    ) -> None:
+        """Narrate in a task of its own: the outcome can take as long as
+        the late window (the walkie away), and the scheduler must not
+        wait on it."""
+        assert self._background_task is not None
+        self._cancel_delivery(rid)
+        handle = self._background_task(
+            f"deliver:{rid}:{fired_count}",
+            lambda: self._deliver(rid, fired_count, prompt, expires_after),
+            restart_on_crash=False,
+        )
+        self._deliveries[rid] = (fired_count, handle)
+
+    def _cancel_delivery(self, rid: int) -> None:
+        """Stop waiting on a fire's outcome; a fire still waiting for a
+        listener is withdrawn (ack, cancel and snooze make it moot)."""
+        pending = self._deliveries.pop(rid, None)
+        if pending is not None:
+            pending[1].cancel()
+
+    async def _deliver(
+        self, rid: int, fired_count: int, prompt: str, expires_after: timedelta
+    ) -> None:
+        assert self._logger is not None
+        assert self._inject_turn_and_wait is not None
+        try:
+            # BLOCK_BEHIND_COMMS: preempts content (audiobook pauses,
+            # narrates, audiobook resumes via patience), queues behind
+            # active calls (doesn't interrupt grandpa's phone call for
+            # a medication reminder — call ends, narration drains).
+            # `reminder:<id>` names it in the framework's log lines.
+            outcome = await self._inject_turn_and_wait(
+                prompt,
+                dedup_key=f"reminder:{rid}",
+                priority=InjectPriority.BLOCK_BEHIND_COMMS,
+                expires_after=expires_after,
+            )
+        except Exception:
+            # State already advanced. Don't roll back: rolling back
+            # creates the double-fire risk this whole pattern exists
+            # to prevent.
+            await self._logger.aexception("reminders.fire_failed", id=rid)
+            return
+        finally:
+            current = self._deliveries.get(rid)
+            if current is not None and current[0] == fired_count:
+                del self._deliveries[rid]
+        await self._on_delivery(rid, fired_count, outcome)
+
+    async def _on_delivery(self, rid: int, fired_count: int, outcome: InjectOutcome) -> None:
+        """What the framework says became of a fire's narration."""
+        assert self._logger is not None
+        entry = await self._load_entry(rid)
+        stale = entry is None or entry.state != _STATE_FIRED or entry.fired_count != fired_count
+        await self._logger.ainfo(
+            "reminders.delivery",
+            id=rid,
+            outcome=outcome.value,
+            fired_count=fired_count,
+            state=entry.state if entry is not None else None,
+            acted=not stale,
+        )
+        if stale or entry is None:
+            return  # acked, cancelled, snoozed or missed meanwhile
+        now = _utcnow()
+        if outcome is InjectOutcome.DELIVERED:
+            if entry.kind == "medication":
+                # The next nag counts from when this one was heard, not
+                # from when it was fired (it may have waited for the walkie).
+                entry.next_fire_at = now + _MEDICATION_RETRY_INTERVALS[fired_count - 1]
+                entry.state = _STATE_PENDING
+                await self._save_entry(entry)
+                self._wakeup.set()
+                await self._logger.ainfo(
+                    "reminders.retry_scheduled",
+                    id=rid,
+                    fired_count=fired_count,
+                    next_fire_at=entry.next_fire_at.isoformat(),
+                )
+            else:
+                entry.state = _STATE_ACKED
+                entry.acked_at = now
+                await self._save_entry(entry)
+        elif outcome is InjectOutcome.EXPIRED:
+            # Nobody could hear it inside its late window: missed, and the
+            # next conversation mentions it (prompt_context). A retry
+            # would be later still.
+            await self._mark_missed(entry, reason="no_listener", now=now)
+        # DROPPED (the persona shut down) / QUEUED: left `fired`; the next
+        # boot's reconcile decides.
 
     # -------------------------------------------------------------- handlers
 
     async def handle(self, tool_name: str, args: dict[str, Any]) -> ToolResult:
         if (
             self._logger is None
-            or self._inject_turn is None
+            or self._inject_turn_and_wait is None
             or self._background_task is None
             or self._storage is None
         ):
@@ -1407,6 +1509,7 @@ class RemindersSkill:
         entry.state = _STATE_CANCELLED
         entry.cancelled_at = _utcnow()
         await self._save_entry(entry)
+        self._cancel_delivery(rid)
         self._wakeup.set()
         await self._logger.ainfo("reminders.cancelled", id=rid)
         return ToolResult(output=json.dumps({"ok": True, "id": rid}))
@@ -1438,7 +1541,7 @@ class RemindersSkill:
         # the user explicitly said "give me X more" so don't keep
         # escalating during the snooze window. If the snooze itself
         # elapses without ack, the next fire counts as fire #1 again
-        # — full 5/10/30 budget restored. Both `fired_count` and
+        # -- full budget restored (3 fires). Both `fired_count` and
         # `last_fired_at` reset; otherwise the next `_fire` would
         # increment to 2 and use the 10-minute interval (review F3,
         # 2026-04-29).
@@ -1447,6 +1550,8 @@ class RemindersSkill:
             entry.fired_count = 0
             entry.last_fired_at = None
         await self._save_entry(entry)
+        # A fire still waiting for a listener is moot now.
+        self._cancel_delivery(rid)
         self._wakeup.set()
         await self._logger.ainfo(
             "reminders.snoozed",
@@ -1476,6 +1581,9 @@ class RemindersSkill:
         entry.state = _STATE_ACKED
         entry.acked_at = _utcnow()
         await self._save_entry(entry)
+        # The user says they took it while its fire still waits (behind the
+        # user's own turn): don't say it after all (T1.44).
+        self._cancel_delivery(rid)
         # Acks may close out a row that's mid-retry; wake the scheduler
         # so it doesn't sleep on a retry timer that's no longer needed.
         self._wakeup.set()
@@ -1500,6 +1608,8 @@ class RemindersSkill:
         if self._scheduler_handle is not None:
             self._scheduler_handle.cancel()
             self._scheduler_handle = None
+        for rid in list(self._deliveries):
+            self._cancel_delivery(rid)
         # Storage rows are deliberately preserved — that's how persistence
         # across restart works. Pending rows resume on next setup().
         if self._logger is not None:

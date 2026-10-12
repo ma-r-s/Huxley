@@ -27,6 +27,10 @@ skills:
     stale_restore_threshold_s: 600 # drop reminders > 10 min late
 ```
 
+## Waiting for a listener (T1.44)
+
+A fired timer's narration waits for a client that can hear it (the walkie away or reconnecting, a server just started): `inject_turn(prompt, priority=BLOCK_BEHIND_COMMS, dedup_key="timer:<id>", expires_after=...)`. The expiry is about as long as the timer ran (after a restart, what was left of it: the stored entry has only the fire time), at least 10 minutes (`DEFAULT_INJECT_EXPIRY`), at most `stale_restore_threshold_s` (1 h): a 5-minute laundry timer an hour late is noise. Past it the turn is dropped unheard (`coord.inject_turn_expired dedup_key=timer:<id>`). A restart while the turn waits loses it: `fired_at` is stamped before the narration (the double-narration guard), so the restore skips it. Timers last at most an hour, so the guard wins.
+
 ## Persistence (Stage 3b)
 
 Timers survive a server restart. The skill writes each pending timer to its namespaced `SkillStorage` as a JSON entry keyed `timer:<id>`; `setup()` enumerates those entries on boot via `ctx.storage.list_settings("timer:")` and re-registers each one with `ctx.background_task`.

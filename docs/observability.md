@@ -33,10 +33,11 @@ Every log event uses a dotted namespace + direction prefix. This makes events `g
 | `server.tx.*`  | Messages sent to the audio client                       | `server.tx.state`, `server.tx.model_speaking`, `server.tx.audio_stats` (once a second while audio flows: audio sent vs what the socket still holds; see [Opus audio](#opus-audio-the-walkies-wire-format)) |
 | `app.*`        | Application orchestration (lifecycle, guard rejections) | `app.session_end`, `app.ptt_rejected`                                                                                                               |
 | `recorder.*`   | The recorder (persona opt-in; see [Recordings](#recordings)) | `recorder.segment`, `recorder.write_failed`                                                                                                    |
+| `firmware.*`   | Firmware updates, the remote console, the admin routes (see [Firmware updates](#firmware-updates-and-the-remote-console)) | `firmware.update_sent`, `firmware.accept_sent`, `firmware.auth_refused` |
 | `<skill>.*`    | Per-skill events (skill author owns the namespace)      | `audiobooks.resolve`, `audiobooks.stream_started`, `system.volume_set`                                                                              |
 | `client.*`     | Telemetry forwarded from the audio client (web/ESP32)   | `client.silence_timer_started`, `client.thinking_tone_on`                                                                                           |
 
-A skill named `audiobooks` emits events like `audiobooks.factory_built`, `audiobooks.stream_ended`. The framework reserves `coord.`, `focus.`, `background.`, `session.`, `server.`, `app.`, `recorder.`, `client.`; everything else is skill territory.
+A skill named `audiobooks` emits events like `audiobooks.factory_built`, `audiobooks.stream_ended`. The framework reserves `coord.`, `focus.`, `background.`, `session.`, `server.`, `app.`, `recorder.`, `firmware.`, `client.`; everything else is skill territory.
 
 The `client.*` events come in via the `client_event` WebSocket message type — clients emit `{"type": "client_event", "event": "<name>", "data": {...}}` and the server logs them as `client.<name>` with the data fields spread. A data field named like one of the log line's own keys (`event`, `level`, `timestamp`, `logger`, `exc_info`, `stack_info`, `conn_id`) is logged as `client_<key>`: the firmware's `huxley.firmware_log` carries the board's level (`W`, `E`, `I`) as `client_level`, while `level` stays the server's (`info`). Pure observability — the framework takes no action. This closes the "client-side blackbox" gap; thinking-tone state, silence-timer fires, and PTT UI transitions are now visible in the same log file as the server-side flow.
 
@@ -240,7 +241,7 @@ If `coord.inject_turn` fires but no subsequent `focus.acquire channel=dialog` ap
 
 A press pauses what plays and the turn's end resumes it; no client pauses it too ([ADR 2026-10-12](./decisions.md#2026-10-12-a-press-pauses-content-the-turns-end-resumes-it-t130)). The story of one pause:
 
-- **`coord.content_held`** — the stream was paused. Fields: `reason` (`turn` = a press, `no_client`, `session` = a press while the voice session was down for 5 s or less, i.e. the planned refresh), `was_playing`, `holds` (every reason in force).
+- **`coord.content_held`**: the stream was paused. Fields: `reason` (`turn` = a press, `no_client`, `session` = a press while the voice session was down for 5 s or less, i.e. the planned refresh, `inject_queue` = a proactive turn is still playing and another waits behind it, T1.44), `was_playing`, `holds` (every reason in force).
 - **`coord.content_resume_scheduled`** — the turn ended; the resume waits `delay_ms` for the client to finish playing the answer.
 - **`coord.content_released`** — a hold was dropped. `resumed=true` means `factory()` was called again; `false` with `holds` non-empty means another reason still holds it, or focus is elsewhere (a call, an injected turn).
 - **`coord.content_resumed`** — a pump actually restarted (any path, including FocusManager parking).
@@ -256,17 +257,27 @@ A press pauses what plays and the turn's end resumes it; no client pauses it too
 
 ## Inject_turn queue events — diagnosing dropped or queued reminders
 
-When `inject_turn` is called while a user or synthetic turn is in progress, or while the voice session is down (a reconnect), the request goes onto a FIFO queue (Stage 1d). These events tell you why a reminder fired late, was deduped, or got dropped:
+An injected turn is spoken only when a client can hear it (T1.44, [turns.md](./turns.md#proactive-turns-wait-for-a-listener-t144)). It waits on a FIFO queue while there is no listener (a client whose hello is out), no voice session, a turn in progress, a live claim (except PREEMPT) or an earlier injected turn still playing, and counts as delivered once the client it was said to has played it and answered a ping. These events tell you why a reminder was said late, twice, or not at all:
 
-- **`coord.inject_turn_queued`** — request couldn't fire immediately; queued. Fields: `reason` (`turn_in_progress`, `claim_live`, `no_session`), `queue_depth`, `dedup_key`, `prev_state` (what turn was active).
-- **`coord.inject_turn_dequeued`** — a queued request is firing now (drained at a turn-end with no pending content stream, or `trigger=session_connected`: the session it waited for is back). Fields: `remaining`, `dedup_key`.
-- **`coord.inject_turn_deduped`** — an enqueue replaced one or more same-key entries already in the queue. Fields: `dedup_key`, `removed`.
-- **`coord.inject_turn_dropped`** — an enqueue was silently dropped because a same-key inject is currently firing. Fields: `reason=dedup_in_flight`, `dedup_key`.
-- **`coord.inject_turn_preempted_content`** — a `PREEMPT`-priority inject drained at turn-end and displaced a pending content stream (the stream request is discarded). Fields: `remaining` (queue depth after pop), `dedup_key`, `dropped_streams` (count). Only fires for priority=PREEMPT; NORMAL always waits for a quiet moment instead.
-- **`coord.inject_and_wait_session_wait`**: `inject_turn_and_wait` found no voice session and waited for one (up to 10 s). Fields: `waited_ms`, `session_up` (false: it queued instead), `dedup_key`.
-- **`coord.inject_turn`** — the moment a request actually fires (whether immediate from `inject_turn` itself or drained from the queue). Fields: `interface`, `prompt_len`, `dedup_key`.
+- **`coord.inject_turn_queued`**: request couldn't fire immediately; queued. Fields: `reason` (`turn_in_progress`, `claim_live`, `no_session`, `no_client`, `awaiting_playback` (the previous injected turn is still playing), `behind_queue`), `queue_depth`, `dedup_key`, `priority`, `prev_state` (what turn was active), `expires_in_s` (null: waits until heard).
+- **`coord.inject_turn_dequeued`**: a queued request is firing now. Fields: `trigger` (`turn_end`, `client_present`, `session_connected`, `playback_confirmed`, `claim_ended`, `cut_off`, `undelivered`, `press_dropped`, `inject`), `remaining`, `dedup_key`, `priority`, `waited_s`, `attempt` (2 and up: said again after a cut-off; the model gets the `inject_repeat_note` first).
+- **`coord.inject_turn_fire_deferred`**: a request was about to fire but something changed meanwhile: back at the head of the queue. Fields: `reason`, `dedup_key`.
+- **`coord.inject_turn_superseded`**: a press or a disconnect ended the turn while it was taking DIALOG focus; no prompt was sent (its request was settled by the press or the cut-off). Fields: `dedup_key`, `interface`.
+- **`coord.inject_turn_fire_failed`** (warning): sending the prompt failed (the session closed under it); the turn was ended and the request put back. Fields: `dedup_key`, `error`, `requeued`.
+- **`coord.inject_turn`**: the moment a request actually fires (whether immediate from `inject_turn` itself or drained from the queue). Fields: `interface`, `prompt_len`, `dedup_key`.
+- **`coord.inject_turn_delivered`**: heard. `by` = `pong` (the client played it and answered a ping), `press` (the user pressed while it played), `presence` (no server wired: tests), `close_played` (the persona stopped after the client played it). Fields: `dedup_key`, `waited_s` (since the call), `playback_ms`, `attempts`, `epoch`.
+- **`coord.inject_turn_undelivered`**: said, but not heard whole; back to the head of the queue (`requeued`, false if it expired meanwhile). `reason` = `client_left` (left or replaced before the confirmation), `no_pong` (the ping failed or timed out: the server aborts that connection), `press_before_audio` (a press emptied the client's buffer before it started playing), `silent` (the response said nothing and ran no tool; fired again), `confirm_error` (the confirmation raised: **`coord.inject_confirm_failed`** has the traceback). **`coord.inject_confirm_backstop_timeout`** (warning): the server's ping didn't return within its own bound plus 5 s. Fields: `dedup_key`, `epoch`, `listener`.
+- **`coord.inject_turn_cut_off`**: a turn being said was cut short and goes back to the head of the queue. `reason` = `client_left`, `session_down` (the voice session dropped mid-turn), `interrupt` (a reset). Fields: `dedup_key`, `requeued`.
+- **`coord.inject_turn_expired`**: its `expires_after` ran out before it could be heard; never said (again). Fields: `where` (`queue`: the timer fired while it waited; `dequeue`; or the cut-off reason), `dedup_key`, `priority`, `waited_s`, `attempts`, `listener` (null: nobody was connected).
+- **`coord.inject_turn_withdrawn`**: the skill cancelled its `inject_turn_and_wait` while the turn waited (an ack, a cancelled call). Fields: `dedup_key`, `waited_s`.
+- **`coord.inject_turn_deduped`**: an enqueue replaced a same-key entry already in the queue, in its place (the replaced one resolves DROPPED). Fields: `dedup_key`, `removed`.
+- **`coord.inject_turn_dropped`**: never said: `reason=dedup_in_flight` (a same-key turn is being said or awaits its confirmation), `shutdown` (the persona stopped; `count`, `dedup_keys`; or a request made after it stopped), `too_many_attempts` (warning; fired 5 times without being heard). Fields: `dedup_key`.
+- **`coord.inject_turn_preempted_content`**: a `PREEMPT`-priority inject drained at turn-end and displaced a pending content stream (the stream request is discarded). Fields: `remaining` (queue depth after pop), `dedup_key`, `dropped_streams` (count). Only fires for priority=PREEMPT; NORMAL always waits for a quiet moment instead.
+- **`coord.inject_and_wait_cannot_wait`** (warning): `inject_turn_and_wait` was awaited in a tool handler or a skill's setup/reconfigure, where waiting would deadlock; queued, returned `QUEUED`. Fields: `dedup_key`.
+- **`coord.inject_drain_failed`** (traceback): a drain scheduled after a claim's end raised.
+- **`server.client_ping`**: the confirming ping. `ok`, `rtt_ms`, `conn_id`, `shell` (which client heard it: `firmware`, `browser`, ...); or `reason` = `not_current` (that connection is gone), `closed`, `timeout` (warning; no pong in 15 s, `action=abort`: the connection is cut so the walkie reconnects). **`server.evicted_close_aborted`**: an evicted socket didn't answer the close in 2 s and was aborted.
 
-If a skill's `inject_turn` "didn't speak," look for these in order: `inject_turn_dropped` (dedup'd against in-flight), `inject_turn_queued` followed by `inject_turn_dequeued` after a delay (queued, drained later), or no events at all (caller never invoked it). If a PREEMPT reminder displaced a book, look for `inject_turn_preempted_content`.
+If a skill's `inject_turn` "didn't speak," look for these in order: `inject_turn_queued reason=no_client` with no `client_presence present=true` after it (nobody connected: `inject_turn_expired` closes the story), `inject_turn_dropped` (dedup'd against in-flight), `inject_turn_queued` followed by `inject_turn_dequeued` after a delay (queued, drained later), or no events at all (caller never invoked it). "It said it twice": an `inject_turn_undelivered` or `inject_turn_cut_off` between the two, and its `reason`. If a PREEMPT reminder displaced a book, look for `inject_turn_preempted_content`. `/health` shows `injects_waiting` and `oldest_inject_wait_s`.
 
 ## Background-task events — supervised lifecycle
 
@@ -374,7 +385,9 @@ A disabled skill stays disabled until the persona reloads or the server restarts
 | `runtime.teardown_timeout_abandoned` | A previous app's teardown outlived its bound (10 s for a swap, 20 s for a reload); the swap or reload went ahead anyway.                                                                         | `what` (`previous_swap`, `reload_old_app`) |
 | `huxley_ready` | The listener is about to start. Says whether the persona starts now or on the first connect, and which code is running. | `persona`, `persona_at_boot`, `commit`, `server` |
 | `runtime.persona_boot_started` | `HUXLEY_PERSONA_AT_BOOT`: the configured persona is starting with no client. | `persona` |
-| `runtime.persona_boot_ready` | It is running. `provider_connected=false` means the voice provider connect failed (`connection_failed` just before); the next client's `wake_word` retries it. | `persona`, `provider_connected`, `client_connected`, `elapsed_ms` |
+| `runtime.persona_boot_ready` | It is running. `provider_connected=false` means the voice provider connect failed (`connection_failed` just before); the reconnect loop retries it (`app.reconnect_scheduled trigger=connect_failed`), and so does a client's `wake_word`. | `persona`, `provider_connected`, `client_connected`, `elapsed_ms` |
+| `app.reconnect_scheduled` | The provider reconnect loop starts (1, 3, 10, 30 s, then every 60 s; a double beep before each attempt from the fourth). `trigger` = `session_end` (a session dropped) or `connect_failed` (a connect at boot or after a `wake_word` failed; T1.44: it used to wait for the next `wake_word`). Then `app.reconnect_attempt` / `app.reconnect_failed` / `app.reconnect_succeeded`. | `trigger` |
+| `app.reconnect_already_running` | A failed connect found the loop already running (the loop's own attempt, or a `wake_word` between attempts); no second loop. | `trigger` |
 | `runtime.persona_boot_failed` | (error, traceback) It did not start. The server stays up with no persona (`/health` says `persona: null`); the next client connect retries through the lazy path. | `persona`, `error`, `elapsed_ms` |
 | `runtime.persona_boot_skipped` | (warning) `HUXLEY_PERSONA_AT_BOOT` is set but `HUXLEY_PERSONA` is not (`reason=no_persona_configured`; boot is lazy), or shutdown began before the boot ran (`shutting_down`). | `reason` |
 | `runtime.connect_waits_for_persona_boot` | A client connected while the boot was running; its hello waits for the boot instead of starting a second app. | `requested` |
@@ -386,7 +399,7 @@ A server that gives up waiting for the old one (30 s) prints `[huxley] not start
 
 ### `/health`
 
-`GET /health` ([protocol](./protocol.md#http-health)) logs only what goes wrong: **`server.health_refused`** (warning) when a source other than loopback or Tailscale asked, or the request came through a reverse proxy (answered 404; `remote`, `reason` = `source` or `proxied`, `header`), **`server.health_failed`** (error, traceback) when building the answer raised (answered 500). A served request is **`server.health`** at debug (`remote`, `ok`): the watcher polls every few minutes.
+`GET /health` ([protocol](./protocol.md#http-health)) logs only what goes wrong: **`server.health_refused`** (warning) when a source other than loopback or Tailscale asked, or the request came through a reverse proxy (answered 404; `remote`, `reason` = `source` or `proxied`, `header`), **`server.health_failed`** (error, traceback) when building the answer raised (answered 500). A served request is **`server.health`** at debug (`remote`, `ok`): the watcher polls every few minutes. `injects_waiting` / `oldest_inject_wait_s` count the proactive turns waiting for a listener (T1.44): a reminder nobody has heard for a while is worth a caregiver alert.
 
 ## Voice provider session: responses, refresh, close
 
@@ -471,6 +484,61 @@ grep '"recorder.segment"' logs/huxley.log | jq -r 'select(.path) | "\(.start) \(
 **A known gap**: when something parks a live stream (an injected turn, a claim) and the model then speaks, the coordinator has sent no `stream_ended` (the client too is told the stream still plays), so that speech is logged as `source=stream` with no file. A reminder spoken over a book is the common case. The frames cannot tell it from the stream resuming; the fix is in the coordinator: announce the park as `stream_ended` and the resume as `stream_started` ([remote-operation W3](./remote-operation.md#w3-recording)).
 
 **Not in v1**: turn ids on `transcript` and cost lines (to join a file to its transcript, match times); what the walkie actually played (the file is what was sent; its discarded ms on `audio_clear` are not reported yet); call transcription.
+
+## Authentication and roles
+
+The production role on the voice socket ([protocol](./protocol.md#authentication-and-roles)). Production mode is `HUXLEY_DEVICE_TOKEN` set; in dev none of these lines appear and `client_connected` says `role=dev`. No line carries a token, only whether one came (`token`: `valid`, `missing`, `bad_token`).
+
+| Event | When | Key fields |
+| --- | --- | --- |
+| `server.auth.refused` (warn) | An upgrade from outside loopback and Tailscale, or relayed by a proxy, without a valid device token: answered 401. `reason=origin`: a local upgrade from a web page on another site (403). With `late=true`: refused after its handshake (socket closed 1008). | `reason` (`missing`, `bad_token`, `origin`), `remote`, `external`, `source` (`external`, `local`, `other`), `forwarded_for`, `origin` |
+| `server.auth.accepted` | A production connection was let in. `ignored_persona`: the device asked for a `?persona=` it doesn't get. | `role` (`device`, `local`), `source`, `token`, `ignored_persona` |
+| `server.auth.evict_refused` (warn) | A connection that isn't the device would have replaced the connected device: answered 409 (or closed 1008 with `late=true`). A local client passes with `?evict=1`. | `role`, `remote`, `device_conn_id` |
+| `server.rx.refused_for_role` (warn) | The device sent a message type its role may not send (anything but `audio`, `ptt_start`, `ptt_stop`, `wake_word`, `client_event`, `ping`); dropped. Or a `local` connection sent the walkie's own events (`msg_type=client_event:device.hello`, `client_event:firmware.status`, `client_event:dev.cmd_result`); ignored for the firmware service. Once per type per connection, at most 32. | `role`, `msg_type` |
+| `server.auth.device_token_short` (warn) | At startup: `HUXLEY_DEVICE_TOKEN` is shorter than 32 characters. | `min_chars` |
+
+Who tried to get in through the tunnel: `grep '"server.auth.refused"' logs/huxley.log | jq -r '"\(.timestamp) \(.reason) \(.forwarded_for)"'`.
+
+## Firmware updates and the remote console
+
+The server half of W4 ([protocol](./protocol.md#http-firmware-and-admin), `huxley.server.firmware`). Every line is `firmware.*`; the walkie's own events also arrive as `client.device.hello`, `client.firmware.status` and `client.dev.cmd_result`, as every `client_event` does. No line ever carries a token (presented or configured), and a console line is logged by its first word only (arguments can be passwords).
+
+| Event | When | Key fields |
+| --- | --- | --- |
+| `firmware.auth_refused` (warn) | A `/firmware/*` request without the device token (`missing`, `bad_token`), or with `HUXLEY_DEVICE_TOKEN` unset (`unconfigured`, answered 503). | `reason`, `path`, `remote`, `forwarded_for` (`Cf-Connecting-Ip` / `X-Forwarded-For`: who it was behind the tunnel) |
+| `firmware.manifest_served` | The manifest went out. `pending_boot=true`: it counts for the accept flow. | `version`, `bytes` (the image's size), `elf_sha`, `remote`, `forwarded_for`, `conn_id` (the walkie's socket, if connected), `pending_boot` |
+| `firmware.manifest_none` / `firmware.manifest_unavailable` (error) | Nothing offered (404) / the offer names an image that is missing or isn't that version (404). | `remote` / `version`, `reason` |
+| `firmware.image_served` | An image went out (whole, in one answer). | `version`, `bytes`, `remote`, `forwarded_for`, `conn_id` |
+| `firmware.image_refused` (warn) / `firmware.image_unreadable` (error) | A version that isn't the offered one or the one before (`not_offered`), or isn't a version name (`bad_version`) / the file vanished. | `version`, `reason` / `error` |
+| `firmware.admin_refused` (warn) | An `/admin/*` request from outside loopback and Tailscale (`source`) or through a proxy (`proxied`, with the `header`): 404. Or without `X-Huxley-Admin` (`no_admin_header`) or with a foreign `Host` (`host`): 403. | `reason`, `remote`, `header`, `host`, `path` |
+| `firmware.offered` | An admin offer was written to `offer.json`. | `version`, `force`, `previous`, `bytes`, `elf_sha` |
+| `firmware.offer_refused` (warn) | An admin offer was refused (bad parameters, no `.bin`, a misnamed image, no or another `.elf`). | `reason`, `version` |
+| `firmware.offer_unreadable` (error) | `offer.json` is not valid; nothing is offered until it is rewritten. | `path`, `error` |
+| `firmware.update_sent` | `firmware.update` went to the walkie. | `version`, `force`, `running`, `trigger` (`offer`, `hello`), `conn_id` |
+| `firmware.update_skipped` | It did not, and why: `same_version`, `no_ota_cap`, `no_device_token` (`HUXLEY_DEVICE_TOKEN` unset: the download would get 503), `pending_verify`, `failed_too_often`, `rolled_back`, `image_unavailable` (error); `no_offer` at debug. | `reason`, `version`, `running`, `trigger` |
+| `firmware.update_deferred` | An offer with no walkie connected (`no_device_connected`; it goes at the next hello), or the walkie left mid-send (`device_gone`). | `version`, `reason` |
+| `firmware.update_failed` (warn) | The walkie reported `failed` for a version; at 3 it is no longer offered automatically (`update_skipped reason=failed_too_often`) until an admin offer. | `version`, `failures`, `max_failures` |
+| `firmware.update_withheld` (warn) | The walkie rolled back from the offered version: not offered again automatically. Offer it from the admin route to retry. | `version`, `rollback_reason` |
+| `firmware.rollback_retry` / `firmware.rollback_overridden` | A `no_server` rollback's one automatic retry / an admin offer sent a version the walkie rolled back from. | `version`, `rollback_reason` |
+| `firmware.status` | Every `firmware.status` from the walkie, any phase (`downloading`, `verifying`, `rebooting`, `failed`, `selftest`, `accepted`). Warning for `failed` and for a failed self-test. | `version`, `phase`, `error`, `conn_id`, `pending_boot` |
+| `firmware.status_ignored` (warn) | A `selftest` status for another version than the pending image's. | `version`, `pending` |
+| `firmware.pending_boot` | A hello from a `pending_verify` image starts a new record (first hello of that boot). | `version`, `elf_sha`, `boot_counter`, `device_id` |
+| `firmware.reconnect_forced` | Self-test passed and manifest served: the walkie's socket will be closed with 1012 after `delay_s`. | `version`, `conn_id`, `trigger` (`selftest`, `manifest`, `hello`), `delay_s`, `code` |
+| `firmware.reconnect_waiting` | The forced close waits for a press, an answer or a call to end (said once per close). | `reason` (`busy`), `conn_id` |
+| `firmware.reconnect_deferred` / `firmware.reconnect_skipped` | The walkie wasn't connected when the conditions were met / it left before the close; its next hello closes again. | `version`, `reason`, `trigger` / `conn_id` |
+| `firmware.accept_sent` | `ota.accept` went out (`repeat=true`: again, for a later hello of the same boot). | `version`, `conn_id`, `repeat` |
+| `firmware.accept_withheld` | A pending image's hello got no accept, and why: `selftest_pending`, `selftest_failed` (with `selftest_error`), `no_manifest_get`, `manifest_version_mismatch` (the manifest offered another version), `elf_sha_mismatch`, `awaiting_reconnect` (the forced close is on its way), `device_gone`. | `reason`, `version`, `selftest_error`, `served`, `conn_id` |
+| `firmware.pending_ended` | The walkie reports a non-pending image again (accepted, or back on the old one). | `version`, `running`, `slot_state`, `accept_sent` |
+| `firmware.dev_cmd_sent` / `firmware.dev_cmd_done` | A console line went to the walkie / its reply came. | `id`, `cmd` (first word), `chars`, `timeout_s`, `conn_id` / `id`, `elapsed_ms`, `output_chars`, `truncated` |
+| `firmware.dev_cmd_timeout` (warn) / `firmware.dev_cmd_refused` | No reply in time (504) / refused: `bad_params`, `no_device`, `not_authenticated` (warn: the walkie's socket opened without the device token), `no_dev_cmd_cap`, `device_gone`, `shutting_down` (503). | `id`, `timeout_s` / `reason` |
+| `firmware.dev_cmd_result_unmatched` (warn) | A `dev.cmd_result` for no waiting request (it came after the timeout). | `id` |
+| `firmware.device_forgotten` | A fifth device said hello; the oldest one's state was dropped (at most 4 are kept, so made-up hellos can't grow memory). | `device_id` |
+| `firmware.image_send_aborted` | Shutdown cut image downloads still draining. | `reason`, `count` |
+| `firmware.http_failed` / `firmware.event_failed` (error, traceback) | A route or an event handler raised (answered 500 / the receive loop goes on). | `path` / `event_name` |
+
+`audio_server_listening` says where images are read from (`firmware_dir`) and whether the device token is set (`device_token_set`); `client_connected` carries the connection's `role`.
+
+**An update, end to end**: `grep -E '"firmware\.|"client\.(device\.hello|firmware\.status)' logs/huxley.log`. A healthy one reads `firmware.offered`, `firmware.update_sent`, `firmware.status` (`downloading`, `verifying`, `rebooting`), the new image's `firmware.pending_boot` and `accept_withheld reason=selftest_pending`, `firmware.status phase=selftest`, `firmware.manifest_served`, `firmware.reconnect_forced`, `client_disconnected close_code=1012`, `firmware.accept_sent`, `firmware.status phase=accepted`, then a hello with `slot_state=valid` (`firmware.pending_ended`).
 
 ## What huxley-watch reads
 

@@ -87,6 +87,9 @@ uint32_t hux_app_beats(void);
 typedef void (*hux_app_dev_cmd_fn)(char *line);
 void hux_app_set_dev_cmd_runner(hux_app_dev_cmd_fn runner);
 
+/** client_event firmware.status (F-0028): hux_ota's status sink. Any task. */
+void hux_app_firmware_status(const char *version, const char *phase, const char *error);
+
 /** Send a battery reading to the server (`client_event system.battery
  * {mv, pct}`, F-0025): hux_battery's sink. Any task. */
 void hux_app_report_battery(int cell_mv, int pct);

@@ -155,7 +155,25 @@ Use PREEMPT *only* for genuinely urgent events:
 
 If you're not sure, you don't want PREEMPT. Use BLOCK_BEHIND_COMMS.
 
-## `dedup_key` — preventing duplicates
+## When nobody is listening
+
+An injected turn is spoken only when a client can hear it. With no client connected (the device off Wi-Fi or rebooting, a server that just started), it waits, and waiting turns are said in order when a client connects, one at a time. A turn the client didn't hear whole (it disconnected mid-sentence, or before playing it all) goes back to the front of the line and is said again in full.
+
+How long a turn stays worth saying is yours to decide, with `expires_after`, counted from the call:
+
+```python
+await ctx.inject_turn(
+    "Tell the user: time to take their medication.",
+    priority=InjectPriority.BLOCK_BEHIND_COMMS,
+    expires_after=timedelta(minutes=15),  # not worth saying later than that
+)
+await ctx.inject_turn(
+    f"Tell the user {sender} wrote: {body}",
+    expires_after=None,  # say it whenever it can be heard
+)
+```
+
+The default, `DEFAULT_INJECT_EXPIRY`, is 10 minutes: enough for a server restart or a Wi-Fi blip. It only applies while the turn waits; a turn being said is never cut short for it. To learn whether the user heard it, use `inject_turn_and_wait` (below).
 
 If your skill might fire the same message multiple times in quick succession, pass `dedup_key`:
 
@@ -167,10 +185,10 @@ await ctx.inject_turn(
 )
 ```
 
-The framework dedups injections by key — if a turn with that key is already pending, the new one is dropped silently. This handles the common case of "the API gave me the same notification twice."
+The framework dedups injections by key: a waiting turn with the same key is replaced by the new one, in its place; if a turn with that key is being said (or the client is still playing it), the new one is dropped. This handles the common case of "the API gave me the same notification twice."
 
 <Callout type="warn">
-  **`dedup_key` only dedups *queued* injections, not *fired* ones.** If your first inject already fired and a second one arrives with the same key, the second still fires. For fully-debounced behavior (the same kind of notification within N seconds gets coalesced), you need a skill-side debounce buffer. See [Cookbook: Notifications](/docs/cookbook/notifications) for the pattern.
+  **Don't put one key on content that accumulates.** While turns wait for a listener, a second burst of messages under the same key would replace the first one before anyone heard it. For coalescing (the same kind of notification within N seconds becomes one), use a skill-side debounce buffer. See [Cookbook: Notifications](/docs/cookbook/notifications) for the pattern.
 </Callout>
 
 ## `inject_turn_and_wait`
@@ -178,19 +196,21 @@ The framework dedups injections by key — if a turn with that key is already pe
 Sometimes you need the injection to *finish* before doing something else. Example: announce an incoming call before bridging audio. If you bridge first and then announce, the user hears the caller's audio before they hear the announcement — confusing.
 
 ```python
-await ctx.inject_turn_and_wait(
+outcome = await ctx.inject_turn_and_wait(
     f"Llamada entrante de {caller_name}, contestando.",
     priority=InjectPriority.BLOCK_BEHIND_COMMS,
+    expires_after=timedelta(seconds=30),
 )
-# Now bridge audio.
-claim = InputClaim(on_mic_frame=..., speaker_source=..., on_claim_end=...)
-await ctx.start_input_claim(claim)
+if outcome is InjectOutcome.DELIVERED:
+    # Now bridge audio.
+    claim = InputClaim(on_mic_frame=..., speaker_source=..., on_claim_end=...)
+    await ctx.start_input_claim(claim)
 ```
 
-`inject_turn_and_wait` blocks until the model finishes speaking (`response_done`). Then your code continues.
+`inject_turn_and_wait` returns once the turn's fate is known, as an `InjectOutcome`: `DELIVERED` after the client has played it (the server confirms with a WebSocket ping), `EXPIRED` if `expires_after` ran out while it waited for a listener, `DROPPED` if a same-key turn replaced it or the persona shut down. It waits through a turn in progress, a voice reconnect and an absent client alike, so call it from a task of your own. Cancelling the call withdraws a turn still waiting.
 
 <Callout type="warn">
-  If the voice session is reconnecting, `inject_turn_and_wait` first waits up to 10 seconds for it. If the coordinator is busy (a turn in progress), or the session is still down after that wait, it falls back to a plain enqueue and returns without waiting for the narration. The wait semantics only hold when the call could fire its turn directly. Defensive code: don't assume the model is done speaking just because `inject_turn_and_wait` returned.
+  Awaited inside a tool handler of the turn in progress, or in your skill's `setup()`, it can't wait (the turn ends only after your handler returns): it queues the turn and returns `QUEUED` at once. Spawn a task if you need the outcome there.
 </Callout>
 
 ## Background tasks

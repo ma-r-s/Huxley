@@ -117,6 +117,9 @@ int hux_audio_get_volume(void);
 uint32_t hux_audio_spk_writes(void);
 uint32_t hux_audio_mic_turns(void);
 
+/** Milliseconds of server audio played since boot (silence not counted). */
+uint32_t hux_audio_played_ms(void);
+
 /** Supervisor test (console `hang spk`): the speaker task blocks for good. */
 void hux_audio_debug_hang_spk(void);
 
@@ -184,6 +187,10 @@ uint32_t hux_audio_quiet_left_s(void);
 
 /** ES8311 DAC volume register (0xBF = 0 dB, 0.5 dB steps), or -1. */
 int hux_audio_dac_volume_reg(void);
+
+/** Both codecs answer on I2C (an update's silent self-test, F-0028): their
+ * ID registers into `*dac_id` (ES8311) and `*adc_id` (ES7210), -1 if not. */
+bool hux_audio_codecs_answer(int *dac_id, int *adc_id);
 
 #ifdef __cplusplus
 }

@@ -33,6 +33,8 @@ htmlcov/
 *.db-wal
 server/runtime/logs/
 logs/
+# Firmware images the server offers (.bin + .elf + offer.json)
+server/runtime/firmware/
 
 # Persona-local data (audiobook library, sqlite DB) — large, user-provided
 server/personas/*/data/

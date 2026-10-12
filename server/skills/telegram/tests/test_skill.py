@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import pytest
 import structlog
@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 from huxley_sdk import (
     ClaimEndReason,
     ClaimHandle,
+    InjectOutcome,
+    InjectPriority,
     InputClaim,
     SkillContext,
 )
@@ -195,9 +197,10 @@ def _build_ctx(
         _turns.append(prompt)
         _calls.append({"prompt": prompt, **kwargs})
 
-    async def inject_turn_and_wait(prompt: str, **kwargs: Any) -> None:
+    async def inject_turn_and_wait(prompt: str, **kwargs: Any) -> InjectOutcome:
         _turns.append(prompt)
         _calls.append({"prompt": prompt, "wait": True, **kwargs})
+        return InjectOutcome.DELIVERED
 
     def background_task(name: str, fn: Any, **kwargs: Any) -> Any:
         raise AssertionError("telegram shouldn't use background_task yet")
@@ -744,9 +747,9 @@ class TestInbound:
 
         original_inject_and_wait = base_ctx.inject_turn_and_wait
 
-        async def ordered_inject_and_wait(prompt: str) -> None:
+        async def ordered_inject_and_wait(prompt: str, **kwargs: Any) -> InjectOutcome:
             accept_order.append("turn")
-            await original_inject_and_wait(prompt)
+            return await original_inject_and_wait(prompt, **kwargs)
 
         import dataclasses
 
@@ -1225,11 +1228,13 @@ class TestInboundMessages:
         assert len(calls) == 1
         assert "hija" in calls[0]["prompt"]
         assert "hola papa" in calls[0]["prompt"]
-        # Coalesce dedup_key + NORMAL priority (queues behind active calls).
-        assert calls[0]["dedup_key"] == "msg_burst:222"
-        from huxley_sdk import InjectPriority
-
+        # NORMAL priority (queues behind active calls), awaited until heard
+        # with no expiry and no dedup key (T1.44: a later burst under the
+        # same key would replace this one unheard).
         assert calls[0]["priority"] == InjectPriority.NORMAL
+        assert calls[0]["wait"] is True
+        assert calls[0]["expires_after"] is None
+        assert "dedup_key" not in calls[0]
 
     @pytest.mark.asyncio
     async def test_burst_from_same_contact_coalesces_into_one_inject(self, tmp_path: Path) -> None:
@@ -1318,7 +1323,7 @@ class TestInboundMessages:
         assert len(calls) == 1
         assert "desconocido" in calls[0]["prompt"]
         assert "hola" in calls[0]["prompt"]
-        assert calls[0]["dedup_key"] == "msg_burst:999"
+        assert "dedup_key" not in calls[0]
 
     @pytest.mark.asyncio
     async def test_messages_from_two_senders_fire_two_independent_injects(
@@ -1348,9 +1353,9 @@ class TestInboundMessages:
         await asyncio.sleep(0.15)
 
         assert len(calls) == 2
-        prompts_by_dedup = {c["dedup_key"]: c["prompt"] for c in calls}
-        assert "hija" in prompts_by_dedup["msg_burst:222"]
-        assert "hijo" in prompts_by_dedup["msg_burst:333"]
+        prompts = sorted(c["prompt"] for c in calls)
+        assert any("hija" in p for p in prompts)
+        assert any("hijo" in p for p in prompts)
 
     @pytest.mark.asyncio
     async def test_teardown_flushes_pending_burst(self, tmp_path: Path) -> None:
@@ -1440,8 +1445,10 @@ class TestBackfill:
         # nothing to read when the user says "yes please read them."
         assert "hija" in prompt and "hijo" in prompt
         assert "'hola'" in prompt and "'estas?'" in prompt and "'papa'" in prompt
-        # Backfill is single-shot; no dedup_key needed.
+        # Backfill is single-shot; no dedup_key needed. Unread messages
+        # stay worth saying until heard (T1.44).
         assert "dedup_key" not in backfill_calls[0]
+        assert backfill_calls[0]["expires_after"] is None
 
         # Window applied: 6 hours -> 21600s.
         assert captured[0].fetch_unread_calls
@@ -1868,3 +1875,114 @@ class TestDefaultCountryCode:
         desc_lower = add_tool.description.lower()
         assert "default country code" not in desc_lower
         assert "país por defecto" not in desc_lower
+
+
+class TestWaitingForAListener:
+    """T1.44: proactive turns wait for a client that can hear them."""
+
+    _CONFIG: ClassVar[dict[str, Any]] = {
+        "api_id": 1,
+        "api_hash": "x",
+        "userbot_phone": "+573000000073",
+        "contacts": {"mario": "+573000000073", "hija": "+573000000078"},
+        "inbound": {
+            "enabled": True,
+            "auto_answer": "contacts_only",
+            "debounce_seconds": 0.05,
+            "backfill_hours": 0,
+        },
+    }
+
+    @staticmethod
+    def _factory(captured: list[StubTransport]) -> Any:
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            t.resolve_map = {"+573000000073": 111, "+573000000078": 222}
+            captured.append(t)
+            return t
+
+        return factory
+
+    @pytest.mark.asyncio
+    async def test_an_unheard_call_announcement_hangs_up_and_tells_the_user_later(
+        self, tmp_path: Path
+    ) -> None:
+        """The walkie is away: the call is already accepted, the caller hears
+        silence. After 30 s unheard, hang up rather than bridge to nobody,
+        and queue a missed-call turn that waits until someone can hear it."""
+        import dataclasses
+        from datetime import timedelta
+
+        captured: list[StubTransport] = []
+        calls: list[dict[str, Any]] = []
+        claims: list[InputClaim] = []
+        base_ctx, _ = _build_ctx(
+            self._CONFIG, tmp_path, captured_inject_calls=calls, captured_claims=claims
+        )
+
+        async def unheard(prompt: str, **kwargs: Any) -> InjectOutcome:
+            calls.append({"prompt": prompt, "wait": True, **kwargs})
+            return InjectOutcome.EXPIRED
+
+        ctx = dataclasses.replace(base_ctx, inject_turn_and_wait=unheard)
+        skill = TelegramSkill(transport_factory=self._factory(captured))
+        await skill.setup(ctx)
+
+        await skill._on_incoming_ring(111)  # type: ignore[attr-defined]
+
+        announce, missed = calls
+        assert announce["wait"] is True
+        assert announce["priority"] == InjectPriority.BLOCK_BEHIND_COMMS
+        assert announce["expires_after"] == timedelta(seconds=30)
+        assert captured[0].accepted_calls == [111]
+        assert captured[0].ended_calls == 1, "hung up instead of bridging to nobody"
+        assert claims == []
+        assert "mario" in missed["prompt"].lower()
+        assert missed["priority"] == InjectPriority.BLOCK_BEHIND_COMMS
+        assert missed["expires_after"] is None
+
+    @pytest.mark.asyncio
+    async def test_later_messages_follow_as_one_announcement_once_the_first_is_heard(
+        self, tmp_path: Path
+    ) -> None:
+        """While a sender's announcement waits for the walkie, their later
+        messages gather and follow as one more: two announcements, not one
+        per burst, and none replaces another unheard."""
+        import dataclasses
+
+        from huxley_skill_telegram.transport import InboundMessage
+
+        captured: list[StubTransport] = []
+        prompts: list[str] = []
+        heard = asyncio.Event()
+        base_ctx, _ = _build_ctx(self._CONFIG, tmp_path)
+
+        async def waits_for_the_walkie(prompt: str, **_kwargs: Any) -> InjectOutcome:
+            prompts.append(prompt)
+            await heard.wait()
+            return InjectOutcome.DELIVERED
+
+        ctx = dataclasses.replace(base_ctx, inject_turn_and_wait=waits_for_the_walkie)
+        skill = TelegramSkill(transport_factory=self._factory(captured))
+        await skill.setup(ctx)
+
+        async def message(text: str) -> None:
+            await captured[0].on_message(
+                InboundMessage(user_id=222, sender_display="hija", text=text, timestamp=0)
+            )
+
+        await message("hola")
+        await asyncio.sleep(0.15)  # first burst flushed, waiting
+        await message("¿estás?")
+        await asyncio.sleep(0.15)
+        await message("llámame")
+        await asyncio.sleep(0.15)
+        assert len(prompts) == 1, "later messages wait for the first announcement"
+
+        heard.set()
+        await asyncio.sleep(0.2)
+
+        assert len(prompts) == 2
+        assert "hola" in prompts[0]
+        assert "estás" in prompts[1]
+        assert "llámame" in prompts[1]

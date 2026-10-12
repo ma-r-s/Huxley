@@ -330,13 +330,7 @@ class MySkill:
 See [`docs/skill-marketplace.md`](../skill-marketplace.md) for the full convention. The `huxley-skill-search` skill is the first first-party adopter (declares `config_schema` for `safesearch`).
 
 ## Proactive speech — `ctx.inject_turn`
-
-> ℹ️ **Shipped (Stages 1c.3 + 1d).** Today's API supports the queue
->
-> - dedup behaviors below. **Not yet shipped**: `expires_after` TTL,
->   `InjectedTurnHandle` with `.wait_outcome()` for outcome-driven
->   retry, multi-urgency tiers (one preempt level today; defer-to-next-
->   idle is a future addition).
+> ℹ️ **Shipped (Stages 1c.3 + 1d, T1.44).** Queue, dedup, three priority tiers, waiting for a listener with an optional `expires_after`, and `inject_turn_and_wait` reporting what became of the turn (`InjectOutcome`). Not shipped: an "acknowledged" outcome (the user reacted to it); a skill that needs one listens for its own tool call, as reminders do with `acknowledge_reminder`.
 
 Some skills need to speak without the user asking first: a medication reminder fires at 9am; a message from family arrives; an appointment is 30 minutes away. The framework's turn loop normally only runs on user PTT, but `ctx.inject_turn` lets a skill inject a synthetic turn from outside.
 
@@ -347,9 +341,25 @@ await self._ctx.inject_turn("Es hora de la pastilla de las nueve.")
 
 **Behavior**:
 
-- **Idle (no turn in progress)**: fires immediately. Any playing content stream (audiobook, radio) is preempted via FocusManager — the LLM narrates the prompt in persona voice, then the framework releases focus. The content stays stopped (a future stage will add "resume or drop" based on the stream's patience).
+- **Idle (no turn in progress, a client connected)**: fires immediately. Any playing content stream (audiobook, radio) is preempted via FocusManager: the LLM narrates the prompt in persona voice, then the framework releases focus and a stream that allows it comes back.
 - **Busy (a user or synthetic turn is in progress)**: the request is **queued**. It drains automatically when a turn ends without spawning a content stream. This protects against dropped reminders when the user happens to PTT at the moment a timer fires.
 - **No voice session (a reconnect, about every 50 minutes, or an outage)**: queued as well, and fired when the session is back.
+- **Nobody listening (the walkie off Wi-Fi or rebooting, a server just started)**: queued, and said when a client connects (T1.44). Waiting turns are said one at a time (the next starts once the client has played the previous one), the most urgent tier first (`PREEMPT`, `BLOCK_BEHIND_COMMS`, `NORMAL`) and in order within a tier.
+- **Cut off**: a turn the client didn't hear whole (it left or reconnected mid-sentence, or before playing it all; the voice session dropped) goes back to the head of the queue and is said again in full; the model is told it wasn't heard. A press while it plays counts as heard; a press before it started playing (it was queued behind an answer) puts it back, after the user's turn.
+
+**Expiry** (optional `expires_after`):
+
+```python
+from datetime import timedelta
+
+await self._ctx.inject_turn(
+    "Es hora de la pastilla de las nueve.",
+    expires_after=timedelta(minutes=15),  # not worth saying later than that
+)
+await self._ctx.inject_turn(prompt, expires_after=None)  # say it whenever it can be heard
+```
+
+How long the turn stays worth saying while it waits, counted from the call. The default, `DEFAULT_INJECT_EXPIRY` (10 minutes), covers a server restart and a Wi-Fi blip with room to spare; pass your own when your content lives longer (a message from family: `None`) or shorter. It only applies while the turn waits: a turn being said is never cut for it, and one cut off after its deadline is not said again. A turn that waited past its expiry is never said; `inject_turn_and_wait` returns `EXPIRED` so you can record the miss (the reminders skill marks the reminder missed, and the next conversation mentions it).
 
 **Dedup** (optional `dedup_key`):
 
@@ -360,7 +370,7 @@ await self._ctx.inject_turn(
 )
 ```
 
-`dedup_key` is an opaque string identifying the logical event. If a queued entry already has the same key, the new request **replaces** it (last-writer-wins). If the same key is currently firing (DIALOG already acquired with that key), the new request is **silently dropped** — repeating the same reminder while it's mid-narration would just create a confused stack. Skip `dedup_key=None` (default) to bypass dedup.
+`dedup_key` is an opaque string identifying the logical event. If a waiting entry already has the same key, the new request **replaces** it in its place (last-writer-wins; the replaced one resolves `DROPPED`). If a turn with that key is being said, or was just said and the client is still playing it, the new request is **dropped**: repeating it while the user hears it would just stack. Skip `dedup_key=None` (default) to bypass dedup. Don't use one key for content that accumulates (a second burst of messages would replace the first unheard).
 
 **Priority** (optional `priority`):
 
@@ -399,42 +409,51 @@ None of the tiers barge into a user mid-speech. The queue always waits for turn-
 
 **What `prompt` should contain**: an instruction for the LLM, not the literal words to speak. The persona prompt + the persona's voice transform your instruction into the actual utterance. For a medication reminder, `"Es hora de la pastilla de las nueve"` is fine — the LLM narrates that verbatim or close to it; for something needing more context, `"Dile al usuario que su hijo Carlos mandó un mensaje que dice '<text>', pregúntale si quiere escucharlo"` works too.
 
-**Future surface (Stage 1d, not yet shipped)**:
+**Knowing whether it was heard**: use `inject_turn_and_wait` (below), from a task of your own:
 
 ```python
-# Not yet available — preview of Stage 1d shape:
-handle = await self._ctx.inject_turn(
+outcome = await self._ctx.inject_turn_and_wait(
     "Es hora de la pastilla de las nueve.",
     dedup_key="med_9am_2026-04-18",
-    expires_after=timedelta(hours=2),
+    priority=InjectPriority.BLOCK_BEHIND_COMMS,
+    expires_after=timedelta(minutes=15),
 )
-outcome = await handle.wait_outcome()  # ACKNOWLEDGED | DELIVERED | EXPIRED | PREEMPTED | CANCELLED
-if outcome != TurnOutcome.ACKNOWLEDGED:
-    # Reschedule at higher urgency via your own background task
-    ...
+if outcome is InjectOutcome.EXPIRED:
+    ...  # nobody could hear it in time: record the miss
 ```
 
-**Don't build retry into the call itself.** If your skill needs retry-until-acknowledged semantics (medication reminders), use your own scheduler (today: plain `asyncio.create_task`; Stage 3: `ctx.background_task`) to re-call `inject_turn` on a cadence you control. Stage 1d will expose `handle.wait_outcome()` so retry can be outcome-driven; until then, retry blind.
+**Don't build retry into the call itself.** If your skill needs retry-until-acknowledged semantics (medication reminders), schedule your own retries (`ctx.background_task`), counted from the outcome: the reminders skill schedules the next nag 5 minutes after the previous one was `DELIVERED`, not after it was fired, since it may have waited for the walkie.
 
 **Who narrates**: the LLM, in persona voice. Your `prompt` is the instruction (what to say), not the rendered speech. Same pattern as audiobook's `AudioStream.on_complete_prompt`.
 
 ### Blocking variant — `ctx.inject_turn_and_wait`
 
-> ℹ️ **Shipped.** Use when you need to announce something and then immediately start audio bridging.
+> ℹ️ **Shipped.** Use when you need to know what became of the turn, or to announce something and then immediately start audio bridging.
 
 ```python
-await self._ctx.inject_turn_and_wait("Llamada de María, contestando.")
-# returns only after the LLM finishes speaking
-await self._ctx.start_input_claim(InputClaim(...))
+outcome = await self._ctx.inject_turn_and_wait(
+    "Llamada de María, contestando.",
+    priority=InjectPriority.BLOCK_BEHIND_COMMS,
+    expires_after=timedelta(seconds=30),
+)
+if outcome is InjectOutcome.DELIVERED:
+    await self._ctx.start_input_claim(InputClaim(...))
 ```
 
-`inject_turn_and_wait` fires the same injected turn as `inject_turn`, but **blocks until `response_done` fires** (the LLM has finished generating and all PCM has been sent to the client). This eliminates the hardcoded `sleep()` that would otherwise be needed between "announce the event" and "start audio bridging."
+`inject_turn_and_wait` fires the same injected turn as `inject_turn` (same `dedup_key`, `priority` and `expires_after`) and returns an `InjectOutcome` once its fate is known:
 
-**Fallback**: if the coordinator is busy (a turn is already in progress), it falls back to a plain enqueue — same as `inject_turn`. With no voice session it first waits up to 10 s for the reconnect (then announces and blocks as usual); still down after that, it enqueues too. The blocking guarantee only holds when the coordinator is idle. Design accordingly: call it from a background task where you control the timing.
+- `DELIVERED`: the client played it to the end (the server confirms it with a WebSocket ping), or the user pressed to talk while it played. Bridged audio started now doesn't cut the announcement off.
+- `EXPIRED`: `expires_after` ran out while it waited for a listener; it was never said in full.
+- `DROPPED`: a same-key turn replaced it, a same-key turn was already being said, you cancelled the wait, it went unheard 5 times (a flapping link, a failing provider), or the persona shut down.
+- `QUEUED`: only when awaited where waiting would deadlock (below): the turn is queued as with `inject_turn` and its fate isn't reported.
 
-**When to use it**: any skill that must announce an event and then immediately claim the mic or start an audio source. Without the wait, your bridged audio queues behind the announcement PCM still in the client's playback buffer, causing a perceptible delay. The `telegram` inbound-call flow uses this for exactly that reason.
+It waits through a turn in progress, a voice reconnect and an absent client alike, as long as `expires_after` allows, so call it from a task of your own (`ctx.background_task`, a transport callback task), not inline where something waits on you. **Cancelling** the call withdraws a turn still waiting (`DROPPED`); one already being said finishes. The reminders skill cancels a waiting fire when the user acks or snoozes it.
 
-**When not to use it**: routine proactive reminders. `inject_turn` (non-blocking) is correct for timers, news alerts, and anything that doesn't immediately follow up with an audio source.
+**Where it can't wait**: awaited in a tool handler of the turn in progress (the turn ends only after your handler returns) or in your `setup()` / `reconfigure()` (at boot the turn would wait for the walkie, whose connection waits for your setup), it queues the turn and returns `QUEUED` at once. Tasks you spawn from there can wait. Don't await it in a client-event handler either (it runs in the server's receive loop): spawn a task, as the system skill does.
+
+**When to use it**: any skill that must announce an event and then immediately claim the mic or start an audio source, or that acts on whether the user heard it (reminders mark an unheard one missed). The `telegram` inbound-call flow announces the caller this way, and hangs up with a "missed call" turn when nobody heard it in 30 s.
+
+**When not to use it**: fire-and-forget notices. `inject_turn` (non-blocking) is correct for timers, news alerts, and anything whose outcome you won't act on.
 
 ## Supervised background tasks — `ctx.background_task`
 

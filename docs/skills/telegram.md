@@ -10,7 +10,7 @@ The voice-call half was the first consumer of `InputClaim` with a non-trivial `s
 
 **Outbound**: User says "llama a mi hija". The LLM dispatches `call_contact(name="hija")`. The skill looks up the contact in the persona config, resolves the phone number to a Telegram user_id via the userbot, places a p2p call, and returns a `ToolResult` with `side_effect=InputClaim(...)`. The framework latches the mic and speaker to the skill at the turn's terminal barrier.
 
-**Inbound**: When a contact calls grandpa's userbot, the skill accepts immediately (any delay degrades WebRTC audio quality), announces the caller via `ctx.inject_turn_and_wait` (blocks until the LLM finishes speaking), then starts the `InputClaim` to bridge audio both ways.
+**Inbound**: When a contact calls grandpa's userbot, the skill accepts immediately (any delay degrades WebRTC audio quality), announces the caller via `ctx.inject_turn_and_wait` (`BLOCK_BEHIND_COMMS`; returns once the user has heard it), then starts the `InputClaim` to bridge audio both ways. Nobody heard it within 30 s (the walkie away, T1.44): the skill hangs up rather than bridge the caller to nobody, and queues a "missed call" turn that waits until someone can hear it.
 
 For the duration of either call:
 
@@ -31,7 +31,9 @@ When the claim ends — grandpa presses PTT, a medication reminder preempts, the
 
 **Inbound (proactive inbox)**: A Pyrogram `MessageHandler` (filters: `private & incoming` — the `incoming` filter is critical, otherwise every outbound `send_text` echoes back into the handler and triggers a feedback loop) is registered in the same `_wire_handlers` pass that wires the call observers, **before** `app.start()` so messages arriving in the first seconds aren't missed. Each inbound message is appended to a per-sender debounce buffer (`InboxBuffer`); the buffer fires `inject_turn(NORMAL, dedup_key=msg_burst:<user_id>)` after a configurable debounce window (default 2.5s) elapses with no further messages from that sender. Burst-y conversations ("hola"/"papá"/"¿estás?") collapse into ONE inject ("hija te envió 3 mensajes: '...', '...' y '...'") rather than three competing announcements.
 
-`NORMAL` priority queues behind active calls (Stage 2b focus-plane behavior), so an inbound message during a phone call doesn't interrupt the call — it'll fire on the next quiet turn-end after the call ends.
+`NORMAL` priority queues behind active calls (Stage 2b focus-plane behavior), so an inbound message during a phone call doesn't interrupt the call; it fires when the call ends.
+
+**While nobody listens (T1.44)**: an announcement waits for a client that can hear it, with no expiry (a message stays worth saying while unread; the skill never marks messages read). The flush awaits its outcome (`inject_turn_and_wait`), so while one announcement for a sender waits, that sender's later messages gather in the buffer and follow as one more announcement once it is heard: a weekend away is two announcements per sender, not one per burst. Burst announcements carry no `dedup_key`: while waiting, a second burst under the same key would replace the first one unheard. The backfill waits with no expiry too.
 
 **Backfill on connect**: On startup with `inbound.enabled`, the skill walks `get_dialogs()` for whitelisted contacts with non-zero `unread_messages_count`, fetches up to `backfill_max` (default 50) recent unread messages within the `backfill_hours` window (default 6h), groups them per-sender, and fires one summary inject ("Mientras no estabas, llegaron mensajes nuevos: hija (3) y hijo (1). ¿Te los leo?"). Closes the "server crashed at 3am, missed daughter's 4am 'are you ok?'" silent-loss gap that's particularly bad for a blind user with no notification surface.
 
@@ -51,7 +53,7 @@ The `InboxBuffer` solves this at the skill layer:
 - **Post-flush hook**: when the in-flight flush completes, if any messages accumulated during it, a fresh debounce timer schedules a follow-up burst.
 - **Result**: every message is announced exactly once, in coalesced batches sized by the user's typing cadence. No drops, no duplicate parallel announcements, no "next burst silently lost because the first burst's inject was still narrating."
 
-`dedup_key=msg_burst:<user_id>` is kept on the inject as defense-in-depth against the narrow window where two `_on_timer_fired` callbacks could race (timer + flush_all both popping the same state). The buffer is the primary mechanism; the dedup_key is the seatbelt.
+Until T1.44 the inject also carried `dedup_key=msg_burst:<user_id>` as a seatbelt against two flushes racing. Since turns wait for a listener that key would make a later burst replace an earlier one still waiting, unheard, so it is gone; the buffer's `flushing` flag already keeps a sender to one flush at a time.
 
 ## Persona config
 

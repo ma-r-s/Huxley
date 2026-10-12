@@ -122,6 +122,19 @@ typedef struct {
 /** The access point now (for device.hello); false when not associated. */
 bool hux_net_link_info(hux_net_link_t *out);
 
+/** Times the server closed the connection, and connections opened, this
+ * boot: an update's accept wants a close then a reconnect (F-0028). */
+uint32_t hux_net_server_closes(void);
+uint32_t hux_net_connects(void);
+
+/** The server address in use (`ws[s]://host:port/...`), for resolving a
+ * download path the server sent (F-0028). Not from the WS task. */
+void hux_net_server_uri(char *out, size_t cap);
+
+/** The device token sent on every upgrade, for the firmware downloads'
+ * `Authorization: Bearer` (F-0028); NULL when none. Never log it. */
+const char *hux_net_device_token(void);
+
 /** The WebSocket client's task is running (it connects or reconnects on
  * its own). False after a pause, or if it ended unexpectedly. */
 bool hux_net_is_running(void);

@@ -69,6 +69,7 @@ RTC_NOINIT_ATTR static super_rtc_t s_rtc;
 
 static _Atomic uint32_t s_timer_ticks = 0;
 static bool s_degraded = false;
+static _Atomic uint32_t s_stalls = 0; /* stalls reported this boot */
 static const char *s_last_stall = "none";
 
 static void timer_tick(void *arg) {
@@ -147,6 +148,7 @@ static void super_task(void *arg) {
             hux_super_part_t *p = &s_parts[i];
             /* Synchronous: the line is in the RTC black box before the
              * watchdog fires. */
+            atomic_fetch_add(&s_stalls, 1);
             ESP_LOGE(TAG, "super.stalled part=%s age_ms=%u done=%u pending=%u enforced=%d",
                      p->name, (unsigned)age, (unsigned)p->done, (unsigned)p->pending,
                      p->enforced);
@@ -211,6 +213,10 @@ void hux_super_test_hang(const char *part) {
     } else if (strcmp(part, "spk") == 0) {
         hux_audio_debug_hang_spk();
     }
+}
+
+uint32_t hux_super_stalls(void) {
+    return atomic_load(&s_stalls);
 }
 
 void hux_super_status(void) {

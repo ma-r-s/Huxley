@@ -6,6 +6,7 @@
 
 #include "cJSON.h"
 #include "esp_attr.h"
+#include "esp_crt_bundle.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_random.h"
@@ -143,6 +144,9 @@ static void server_revert_due(void *arg);
 static uint32_t s_srv_gen = 0;
 static uint32_t s_revert_gen = 0;
 static _Atomic uint32_t s_conn_gen = 0;
+/* The server closed the connection (a CLOSE frame): an update's accept
+ * wants one followed by a reconnect (F-0028). */
+static _Atomic uint32_t s_server_closes = 0;
 static uint32_t s_switch_conn_gen = 0;
 /* A hello arrived on s_home_uri this boot. A revert to an unproven home
  * watches it instead of trusting it. */
@@ -165,6 +169,11 @@ static void ladder_task(void *arg);
  * keep coming) stamps s_ws_event_ms: 90 s without one while the server is
  * up means the WS task is stuck, which counts as lost (F-0027). */
 static _Atomic uint32_t s_ladder_ticks = 0;
+static TaskHandle_t s_ladder_task = NULL;
+/* A new IP while the server is lost: restart the client now. The library
+ * sleeps half its retry delay between checks (up to 30 s after a long
+ * outage), so lowering the delay alone came 25 s late (2026-10-12). */
+static _Atomic bool s_kick = false;
 static _Atomic uint32_t s_ws_event_ms = 0;
 #define WS_SILENT_MS 90000
 
@@ -445,6 +454,10 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
             atomic_store(&s_ws_attempts, 0);
             esp_websocket_client_set_reconnect_timeout(s_ws, HUX_LINK_BACKOFF_MIN_MS);
             ESP_LOGI(TAG, "ws.retry_fast why=new_ip");
+            atomic_store(&s_kick, true);
+            if (s_ladder_task != NULL) {
+                xTaskNotifyGive(s_ladder_task); /* the ladder restarts it, not this task */
+            }
         }
         if (!atomic_load(&s_ws_first_start) && s_ws != NULL) {
             /* From here on esp_websocket_client reconnects on its own. Never
@@ -801,6 +814,7 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
              * missed keepalive ping). The library reconnects by itself
              * (enable_close_reconnect) but emits no DISCONNECTED: post it,
              * or the app stays READY on a dead socket. */
+            atomic_fetch_add(&s_server_closes, 1);
             ESP_LOGW(TAG, "ws.closed by_server eviction=%d", s_close_was_eviction);
             link_lost("closed");
             hux_ws_reassembler_reset(&s_reassembler);
@@ -883,6 +897,9 @@ static bool ws_start(const char *uri) {
          * (4 KB) had 1.2 KB left before the first reply arrived. */
         .task_stack = 6144,
         .headers = s_auth_header[0] != '\0' ? s_auth_header : NULL,
+        /* wss:// (the Cloudflare tunnel, T1.43): the Mozilla CA bundle
+         * checks the server's certificate. Unused on ws://. */
+        .crt_bundle_attach = esp_crt_bundle_attach,
     };
     s_ws = esp_websocket_client_init(&cfg);
     if (s_ws == NULL) {
@@ -934,8 +951,10 @@ void hux_net_start(const hux_net_config_t *cfg) {
     }
     ESP_LOGI(TAG, "ws.token present=%d", s_auth_header[0] != '\0'); /* never the value */
     /* WS client created first; the GOT_IP handler starts it. */
-    strlcpy(s_compiled_uri, cfg->server_uri, sizeof(s_compiled_uri));
-    strlcpy(s_home_uri, cfg->server_uri, sizeof(s_home_uri));
+    if (!hux_link_uri_complete(cfg->server_uri, s_compiled_uri, sizeof(s_compiled_uri))) {
+        strlcpy(s_compiled_uri, cfg->server_uri, sizeof(s_compiled_uri));
+    }
+    strlcpy(s_home_uri, s_compiled_uri, sizeof(s_home_uri));
     char saved[sizeof(s_home_uri)];
     server_load_saved(saved, sizeof(saved));
     if (saved[0] != '\0' && !hux_link_uri_ok(saved, sizeof(s_home_uri))) {
@@ -968,7 +987,7 @@ void hux_net_start(const hux_net_config_t *cfg) {
         esp_timer_start_once(s_server_revert, (uint64_t)SERVER_FALLBACK_S * 1000000);
     }
     atomic_store(&s_lost_ms, now_ms()); /* no server yet: the ladder's clock runs */
-    if (xTaskCreate(ladder_task, "hux_ladder", 4096, NULL, 3, NULL) != pdPASS) {
+    if (xTaskCreate(ladder_task, "hux_ladder", 4096, NULL, 3, &s_ladder_task) != pdPASS) {
         ESP_LOGE(TAG, "ladder.task_create_failed: no escalation this boot");
     }
     wifi_init_sta(cfg->wifi_ssid, cfg->wifi_password);
@@ -1066,13 +1085,14 @@ static void server_switch(const char *uri, uint32_t revert_s, srv_mode_t mode) {
     if (s_ws == NULL) {
         return;
     }
-    if (!hux_link_uri_ok(uri, sizeof(s_server_uri))) {
-        ESP_LOGE(TAG, "ws.server_refused uri=%s why=invalid (ws[s]://host:port/path)",
+    char full[sizeof(s_server_uri)];
+    if (!hux_link_uri_complete(uri, full, sizeof(full)) || !hux_link_uri_ok(full, sizeof(full))) {
+        ESP_LOGE(TAG, "ws.server_refused uri=%s why=invalid (ws[s]://host[:port]/path)",
                  uri != NULL ? uri : "(null)");
         return;
     }
     link_lock();
-    server_switch_locked(uri, revert_s, mode);
+    server_switch_locked(full, revert_s, mode);
     link_unlock();
 }
 
@@ -1186,8 +1206,17 @@ void hux_net_server_status(void) {
 static void ladder_task(void *arg) {
     (void)arg;
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(LADDER_TICK_MS));
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(LADDER_TICK_MS)); /* or a new IP */
         atomic_fetch_add(&s_ladder_ticks, 1);
+        if (atomic_exchange(&s_kick, false) && !atomic_load(&s_server_up) &&
+            atomic_load(&s_ws_first_start) && !atomic_load(&s_paused) &&
+            link_lock_timed(10000)) {
+            if (atomic_load(&s_ws_alive)) {
+                client_stop();
+            }
+            client_start("new_ip");
+            link_unlock();
+        }
         if (atomic_load(&s_server_up) &&
             now_ms() - atomic_load_explicit(&s_ws_event_ms, memory_order_relaxed) > WS_SILENT_MS) {
             ESP_LOGE(TAG, "ws.silent ms=%u: the WS task is stuck or the link dead",
@@ -1273,6 +1302,37 @@ bool hux_net_link_info(hux_net_link_t *out) {
     out->rssi = ap.rssi;
     memcpy(out->bssid, ap.bssid, sizeof(out->bssid));
     return true;
+}
+
+uint32_t hux_net_server_closes(void) {
+    return atomic_load(&s_server_closes);
+}
+
+uint32_t hux_net_connects(void) {
+    return atomic_load(&s_conn_gen);
+}
+
+void hux_net_server_uri(char *out, size_t cap) {
+    link_lock();
+    strlcpy(out, s_server_uri, cap);
+    link_unlock();
+}
+
+const char *hux_net_device_token(void) {
+    /* "Authorization: Bearer <token>\r\n" -> the token. */
+    static char token[72];
+    const char *p = strstr(s_auth_header, "Bearer ");
+    if (p == NULL) {
+        return NULL;
+    }
+    p += 7;
+    size_t n = strcspn(p, "\r\n");
+    if (n == 0 || n >= sizeof(token)) {
+        return NULL;
+    }
+    memcpy(token, p, n);
+    token[n] = '\0';
+    return token;
 }
 
 uint32_t hux_net_ladder_ticks(void) {

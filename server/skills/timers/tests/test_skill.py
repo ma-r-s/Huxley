@@ -8,6 +8,9 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
+import pytest
+
+from huxley_sdk import InjectPriority
 from huxley_sdk.testing import _NoopSkillStorage, make_test_context
 from huxley_skill_timers.skill import TimersSkill
 
@@ -489,4 +492,40 @@ class TestStaleThresholdConfig:
             config={"stale_restore_threshold_s": -5},
         )
         assert skill._stale_threshold == timedelta(hours=1)
+        await skill.teardown()
+
+
+class TestWaitingForAListener:
+    """T1.44: a fired timer's narration waits for a client that can hear
+    it about as long as the timer ran, at least 10 min, at most the stale
+    threshold (1 h by default)."""
+
+    @pytest.mark.parametrize(
+        ("seconds", "expected"),
+        [
+            (300, timedelta(minutes=10)),  # a 5-minute timer: the floor
+            (2400, timedelta(minutes=40)),  # as long as it ran
+            (3600, timedelta(hours=1)),  # capped by the stale threshold
+        ],
+    )
+    async def test_expiry_follows_the_timer(self, seconds: int, expected: timedelta) -> None:
+        skill, inject_mock = await _setup_skill()
+        await skill.handle("set_timer", {"seconds": seconds, "message": "la ropa"})
+        await _drain()
+
+        inject_mock.assert_awaited_once()
+        assert inject_mock.await_args is not None
+        kwargs = inject_mock.await_args.kwargs
+        assert kwargs["expires_after"] == expected
+        assert kwargs["dedup_key"] == "timer:1"
+        assert kwargs["priority"] == InjectPriority.BLOCK_BEHIND_COMMS
+        await skill.teardown()
+
+    async def test_a_stricter_persona_threshold_caps_it(self) -> None:
+        skill, inject_mock = await _setup_skill(config={"stale_restore_threshold_s": 300})
+        await skill.handle("set_timer", {"seconds": 2400, "message": "la ropa"})
+        await _drain()
+
+        assert inject_mock.await_args is not None
+        assert inject_mock.await_args.kwargs["expires_after"] == timedelta(minutes=5)
         await skill.teardown()

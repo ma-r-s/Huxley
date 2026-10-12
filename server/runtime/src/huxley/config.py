@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path  # noqa: TC003 — pydantic-settings needs the runtime symbol
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     # --- WebSocket server ---
     server_host: str = "localhost"
     server_port: int = 8765
+    # The hardware client's token: `Authorization: Bearer <token>` on the
+    # firmware routes (`/firmware/*`, docs/protocol.md "HTTP: /firmware and
+    # /admin"). Unset (or empty), those routes refuse everyone with 503.
+    # SecretStr: never printed in a repr or a log.
+    device_token: SecretStr | None = None
 
     # --- Session ---
     # OpenAI ends a Realtime session at 60 minutes. After this many

@@ -17,14 +17,14 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import timedelta
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, ClassVar, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol, runtime_checkable
 
 from huxley_sdk.catalog import Catalog
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Coroutine
-    from datetime import timedelta
     from pathlib import Path
 
 
@@ -97,6 +97,53 @@ class InjectPriority(Enum):
     NORMAL = "normal"
     BLOCK_BEHIND_COMMS = "block_behind_comms"
     PREEMPT = "preempt"
+
+
+class InjectOutcome(Enum):
+    """What became of an injected turn: returned by
+    `SkillContext.inject_turn_and_wait` (T1.44).
+
+    An injected turn is spoken only when a client can hear it. It waits
+    while no client is connected, the voice session is down, a turn is in
+    progress, a call holds the speaker (except `PREEMPT`), or an earlier
+    injected turn is still playing, and is delivered in order once that
+    clears.
+
+    - `DELIVERED`: the client played it to the end and was still there
+      (it answered a ping sent after the audio), or the user pressed to
+      talk while it played. A turn cut off by a disconnect is not
+      delivered: it goes back to the head of the queue and is said whole
+      when a client is back.
+    - `EXPIRED`: its `expires_after` ran out while it waited (or before it
+      could be said again after a cut-off). It was never said in full.
+    - `DROPPED`: never said, and won't be: a newer turn with the same
+      `dedup_key` replaced it while it waited, a turn with that key was
+      already being said, the caller cancelled the wait, it went unheard 5
+      times (a link that keeps dropping, a provider that keeps failing),
+      or the persona shut down.
+    - `QUEUED`: only when awaited inside a tool handler of the turn in
+      progress, or a skill's `setup()` / `reconfigure()`. Waiting there
+      would deadlock (the turn can't end until the handler returns), so
+      the turn is queued, as with `inject_turn`, and its fate is not
+      reported.
+    """
+
+    DELIVERED = "delivered"
+    EXPIRED = "expired"
+    DROPPED = "dropped"
+    QUEUED = "queued"
+
+
+DEFAULT_INJECT_EXPIRY: Final = timedelta(minutes=10)
+"""How long an injected turn stays worth saying while it waits, when the
+skill passes no `expires_after` (T1.44). Covers a server restart (the walkie
+reconnects in about 3 s) and its longest reconnect backoff (45-60 s) many
+times over; longer than this, the device is really away, and a notice
+nobody chose a lifetime for (a status remark, a warning) would be stale.
+Pass `expires_after=None` for a turn worth saying whenever it can be heard
+(content that stays relevant until heard), or a time of your own (how late
+it is still worth saying).
+"""
 
 
 class ContentType(Enum):
@@ -599,23 +646,28 @@ class InjectTurn(Protocol):
         *,
         dedup_key: str | None = None,
         priority: InjectPriority = InjectPriority.NORMAL,
+        expires_after: timedelta | None = DEFAULT_INJECT_EXPIRY,
     ) -> None: ...
 
 
 class InjectTurnAndWait(Protocol):
     """Structural signature for `SkillContext.inject_turn_and_wait`.
 
-    Like `InjectTurn` but the call only returns after the LLM has
-    finished generating and delivering the announcement audio. Use this
-    when you need to sequence work AFTER the LLM finishes speaking --
-    e.g., starting an audio bridge right after an inbound-call announcement
-    so `start_input_claim` doesn't preempt the announcement mid-sentence.
+    Like `InjectTurn`, but returns only once the turn's fate is known, as
+    an `InjectOutcome`: `DELIVERED` once the client has played it (so work
+    sequenced after it, like bridging a call, doesn't cut it off),
+    `EXPIRED` if `expires_after` ran out while it waited for a listener,
+    `DROPPED` if a same-key turn replaced it or the persona shut down.
+    It waits through a turn in progress, a voice reconnect and an absent
+    client alike, up to `expires_after` (10 min by default). Cancelling
+    the call withdraws a turn still waiting (it resolves DROPPED); one
+    already being said finishes.
 
-    If the coordinator is busy when called (a turn already in progress),
-    falls back to a plain enqueue and returns immediately -- callers
-    must not depend on the wait semantics in that case. For inbound-call
-    flows (where the ring arrives while the system is idle) this is always
-    the fast path.
+    Awaited in a tool handler of the turn in progress, or in a skill's
+    `setup()` / `reconfigure()`, it can't wait (the turn ends only after
+    the handler returns; setup holds up the client's connection): it
+    queues the turn and returns `QUEUED` at once. Don't await it in a
+    client-event handler either; spawn a task.
     """
 
     async def __call__(
@@ -624,7 +676,9 @@ class InjectTurnAndWait(Protocol):
         /,
         *,
         dedup_key: str | None = None,
-    ) -> None: ...
+        priority: InjectPriority = InjectPriority.NORMAL,
+        expires_after: timedelta | None = DEFAULT_INJECT_EXPIRY,
+    ) -> InjectOutcome: ...
 
 
 class BackgroundTask(Protocol):
@@ -709,12 +763,13 @@ async def _noop_inject_turn(
     *,
     dedup_key: str | None = None,
     priority: InjectPriority = InjectPriority.NORMAL,
+    expires_after: timedelta | None = DEFAULT_INJECT_EXPIRY,
 ) -> None:
     """Default `inject_turn` for `SkillContext` — used by test fixtures that
     don't wire a real coordinator. Framework-built contexts replace this
     with the real callable from the `TurnCoordinator`.
     """
-    del dedup_key, priority
+    del dedup_key, priority, expires_after
     return None
 
 
@@ -723,12 +778,15 @@ async def _noop_inject_turn_and_wait(
     /,
     *,
     dedup_key: str | None = None,
-) -> None:
-    """Default `inject_turn_and_wait` for `SkillContext` — test fixture no-op.
-    Framework-built contexts replace this with the real coordinator method.
+    priority: InjectPriority = InjectPriority.NORMAL,
+    expires_after: timedelta | None = DEFAULT_INJECT_EXPIRY,
+) -> InjectOutcome:
+    """Default `inject_turn_and_wait` for `SkillContext`, a test-fixture no-op:
+    reports the turn delivered. Framework-built contexts replace this with
+    the real coordinator method.
     """
-    del dedup_key
-    return None
+    del dedup_key, priority, expires_after
+    return InjectOutcome.DELIVERED
 
 
 @dataclass(frozen=True, slots=True)
@@ -831,28 +889,31 @@ class SkillContext:
       descriptions, inject_turn prompts, narrated errors) should branch
       on this. The framework calls `reconfigure(ctx)` on each session
       connect with a fresh context reflecting the client's choice.
-    - `inject_turn(prompt, *, dedup_key=None, priority=NORMAL)`:
-      speak proactively — framework synthesizes a DIALOG turn that
-      narrates `prompt` in the persona's voice. If idle, fires
-      immediately (preempts any playing content stream). If a user
-      or synthetic turn is active, the request is **queued**.
-      `priority` controls drain behavior at turn-end: `NORMAL`
-      waits for a quiet turn (one ending without content), `PREEMPT`
-      fires even over a pending content stream (right for medication
-      reminders and safety events). `dedup_key` (optional, opaque
-      string): replaces a same-key entry in the queue
-      (last-writer-wins); drops silently if a same-key request is
-      currently firing. `expires_after` and an outcome-tracking
-      handle are deferred to a later stage. See `docs/skills/README.md`
-      for usage pattern.
-    - `inject_turn_and_wait(prompt, *, dedup_key=None)`: like
-      `inject_turn` but only returns after the LLM finishes speaking.
-      Use when you need to sequence an action AFTER the announcement —
-      e.g., `start_input_claim` right after an inbound-call announcement
-      so the claim doesn't preempt the LLM mid-sentence. Falls back to
-      a plain enqueue (no wait) if a turn is already in progress or
-      the voice session stays down for 10 s (it waits that long for a
-      reconnect).
+    - `inject_turn(prompt, *, dedup_key=None, priority=NORMAL,
+      expires_after=DEFAULT_INJECT_EXPIRY)`: speak proactively; the framework synthesizes a
+      DIALOG turn that narrates `prompt` in the persona's voice. Spoken
+      only when a client can hear it: it waits (queued, in order) while
+      no client is connected, the voice session is down, a turn is in
+      progress, a call holds the speaker (except `PREEMPT`) or an
+      earlier injected turn is still playing. Idle with a client, it
+      fires immediately (preempts any playing content stream).
+      `priority` controls drain behavior at turn-end: `NORMAL` waits
+      for a quiet turn (one ending without content), `PREEMPT` fires
+      even over a pending content stream. `dedup_key` (optional, opaque
+      string): replaces a same-key entry waiting in the queue (in its
+      place); drops the new one if a same-key turn is being said.
+      `expires_after`: how long the turn stays worth saying while it
+      waits (default `DEFAULT_INJECT_EXPIRY`, 10 min); `None` waits until
+      it is delivered. A turn cut off by a disconnect is said again,
+      whole, unless expired. See `docs/skills/README.md` for the usage
+      pattern.
+    - `inject_turn_and_wait(prompt, *, dedup_key=None, priority=NORMAL,
+      expires_after=DEFAULT_INJECT_EXPIRY) -> InjectOutcome`: like `inject_turn` but
+      returns once the turn's fate is known: `DELIVERED` after the client
+      has played it (sequence work after the announcement, e.g.
+      `start_input_claim`, without cutting it off), `EXPIRED`, or
+      `DROPPED`. From inside a tool handler it can't wait and returns
+      `QUEUED`.
     - `background_task(name, coro_factory, *, restart_on_crash=True,
       max_restarts_per_hour=10, on_permanent_failure=None) ->
       BackgroundTaskHandle`: spawn a long-running supervised task.
