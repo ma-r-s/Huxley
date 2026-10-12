@@ -110,6 +110,8 @@ PLACE_EVERY_S = 15.0
 DEFAULT_SLEEP_MINUTES = 60.0
 # A weak title match is confirmed before spending listening hours on it.
 WEAK_TITLE = 0.45
+# The last chapter stopping this close to its end is the end of the book.
+END_MARGIN_MS = 15_000
 # Paused from a Spotify app for this long: end the stream (free the speaker).
 PAUSED_GRACE_S = 3.0
 # A fresh start that goes idle this soon was refused, not finished: an
@@ -298,14 +300,87 @@ def _is_book(uri: str) -> bool:
     return uri.startswith("spotify:show:")
 
 
+# Words around a book request that are neither title nor author.
+_FILLER = frozenset(
+    [
+        "el",
+        "la",
+        "los",
+        "las",
+        "lo",
+        "un",
+        "una",
+        "de",
+        "del",
+        "libro",
+        "audiolibro",
+        "pon",
+        "ponme",
+        "quiero",
+        "escuchar",
+        "the",
+        "a",
+        "an",
+        "of",
+        "by",
+        "book",
+        "audiobook",
+        "play",
+        "put",
+        "le",
+        "les",
+        "un",
+        "une",
+        "livre",
+    ]
+)
+
+
 def _weak_match(spoken: str, book: Match) -> bool:
-    """The best book's title is far from what was heard, and its author
-    wasn't named either: confirm before spending listening hours on it."""
-    heard = fold(spoken)
-    if title_score(heard, fold(book.title)) >= WEAK_TITLE:
+    """What was heard, minus the author's words, is far from the book's
+    title: confirm before spending listening hours on it. Only the author
+    ("el libro de García Márquez") is not weak: any of theirs will do."""
+    author = set(fold(book.artist or "").replace(",", " ").split())
+    rest = [w for w in fold(spoken).split() if w not in author and w not in _FILLER]
+    if not rest:
         return False
-    author_words = [w for w in fold(book.artist or "").replace(",", " ").split() if len(w) > 3]
-    return not any(w in heard.split() for w in author_words)
+    return title_score(" ".join(rest), fold(book.title)) < WEAK_TITLE
+
+
+_ORDINALS = {
+    "primero": 0,
+    "primer": 0,
+    "primera": 0,
+    "first": 0,
+    "premier": 0,
+    "premiere": 0,
+    "segundo": 1,
+    "segunda": 1,
+    "second": 1,
+    "deuxieme": 1,
+    "tercero": 2,
+    "tercer": 2,
+    "tercera": 2,
+    "third": 2,
+    "troisieme": 2,
+}
+_LAST = frozenset({"ultimo", "ultima", "last", "dernier", "derniere"})
+_THAT = frozenset({"ese", "esa", "eso", "este", "esta", "that", "this", "celui-la", "celle-la"})
+
+
+def _ordinal(spoken: str, count: int) -> int | None:
+    """'el segundo' -> 1, 'el último' -> count - 1, 'ese' with one item -> 0."""
+    words = fold(spoken).replace("-", " ").split()
+    if not words or len(words) > 3:
+        return None
+    for word in words:
+        if word in _ORDINALS and _ORDINALS[word] < count:
+            return _ORDINALS[word]
+        if word in _LAST:
+            return count - 1
+    if count == 1 and any(w in _THAT for w in words):
+        return 0
+    return None
 
 
 def _first_sentence(text: str, limit: int = 200) -> str:
@@ -357,6 +432,9 @@ class SpotifySkill:
         # When a book stream last ended on a press: a resume backs up by a
         # tenth of the pause.
         self._paused_at: float | None = None
+        # Whether the last stream was a book: "sigue" with Soloist idle and
+        # nothing loaded restarts the last book, not the last music.
+        self._last_was_book = False
         self._sleep_s = DEFAULT_SLEEP_MINUTES * 60
         self._hours_per_month: float | None = None
         self._language = "en"
@@ -667,6 +745,19 @@ class SpotifySkill:
             book = await self._loaded_book()
             if book is not None:
                 return await self._move_chapter(book, 1 if action == "next" else -1)
+        if action == "resume" and self._require_client().state.status == "idle":
+            # Nothing to resume (a cut, a refusal, the end): a bare play
+            # would do nothing for 10 s. Start it again by its URI.
+            again = await self._book_to_restart()
+            if again is not None:
+                return ToolResult(
+                    output=json.dumps(
+                        {"ok": True, "action": "restart", "playing": again.title},
+                        ensure_ascii=False,
+                    ),
+                    side_effect=self._stream(start=again),
+                )
+            return await self._play_last()
         before: tuple[_Command, ...] = {
             "next": (("skip_next", {}),),
             "previous": (("skip_prev", {}),),
@@ -768,11 +859,14 @@ class SpotifySkill:
                     return self._then("ask_which", title=target.title, author=target.artist or "?")
         info = await self._book_info(target.uri)
         if from_beginning:
+            finished = await shelf.finished(target.uri)
             place = await shelf.place(target.uri)
             where = info.index_of(place.chapter_uri) if info and place else None
-            if where is not None and where >= 2 and not confirmed:
+            if where is not None and where >= 2 and not (confirmed or finished):
                 return self._then("ask_whole_book")
-            if place is not None:
+            # Keep the place it leaves, unless that is the start already: a
+            # second "desde el principio" must not overwrite the real place.
+            if place is not None and not finished and (where or place.position_ms > 60_000):
                 await shelf.save_place(target.uri, place)
             await shelf.clear_finished(target.uri)
         elif await shelf.finished(target.uri):
@@ -920,11 +1014,32 @@ class SpotifySkill:
             side_effect=self._stream(goto=(target, position_ms)),
         )
 
+    async def _book_to_restart(self) -> Match | None:
+        """The book "sigue" means when Soloist has nothing playing."""
+        context = self._require_client().state.context_uri or ""
+        if _is_book(context):
+            title = self._book.title if self._book and self._book.uri == context else ""
+            return Match(uri=context, kind="audiobook", title=title, artist=None)
+        if not self._last_was_book:
+            return None
+        last = await self._require_shelf().last_book()
+        if last is None:
+            return None
+        return Match(
+            uri=str(last["uri"]),
+            kind="audiobook",
+            title=str(last.get("title") or ""),
+            artist=last.get("author"),
+        )
+
     def _from_last_list(self, spoken: str) -> Match | None:
-        """'El segundo', or a title from the list just read out."""
+        """'El segundo', 'ese', or a title from the list just read out."""
         if not self._last_list:
             return None
         spoken = spoken.strip()
+        pick = _ordinal(spoken, len(self._last_list))
+        if pick is not None:
+            return self._last_list[pick]
         if spoken.isdigit() and 1 <= int(spoken) <= len(self._last_list):
             return self._last_list[int(spoken) - 1]
         best = max(self._last_list, key=lambda m: title_score(fold(spoken), fold(m.title)))
@@ -967,7 +1082,12 @@ class SpotifySkill:
         index = book.index_of(chapter)
         position = position_now(state)
         last = len(book.chapters) - 1
-        if index is not None and index == last:
+        near_end = (
+            position is None
+            or position < 1_000  # Soloist rewinds a chapter that ran out
+            or position >= book.chapters[last].duration_ms - END_MARGIN_MS
+        )
+        if index is not None and index == last and (left or near_end):
             self._spawn(self._require_shelf().mark_finished(book.uri))
             await self._log().ainfo("spotify.book_finished", title=book.title, left=left)
             if left:
@@ -983,10 +1103,8 @@ class SpotifySkill:
             context=state.context_uri,
             left=left,
         )
-        if left:
-            return "book_left"
-        self._narrate("book_cut")
-        return "book_cut"
+        self._narrate("book_cut")  # never a silent stop
+        return "book_left" if left else "book_cut"
 
     async def _go_to(
         self, client: SoloistClient, generation: int, book: BookInfo, target: int, position: int
@@ -1020,7 +1138,9 @@ class SpotifySkill:
             )
             return False
         client.send("seek", generation=generation, position_ms=position)
-        await client.wait_until(lambda s: (s.position_ms or 0) <= position + 5_000, 2.0)
+        await client.wait_until(
+            lambda s: s.position_ms is not None and abs(s.position_ms - position) < 3_000, 2.0
+        )
         await self._log().ainfo("spotify.book_nav", chapter=book.chapters[target].name)
         return True
 
@@ -1058,7 +1178,7 @@ class SpotifySkill:
         # Flips once the first run has actually sent its play: a run
         # cancelled before that (say, during the capture connect) must
         # leave the next run to start `start`, not resume something else.
-        progress = {"played": False}
+        progress = {"played": False, "moved": goto is None}
         context = self._require_client().state.context_uri or ""
         is_book = (start is not None and start.kind == "audiobook") or (
             start is None and _is_book(context)
@@ -1069,7 +1189,8 @@ class SpotifySkill:
             run = self._run(
                 start=start if initial else None,
                 before=before if initial else (),
-                goto=goto if initial else None,
+                # A press mid-move: the resume finishes the move (critic M1).
+                goto=goto if initial or not progress["moved"] else None,
                 earcon=initial and start is not None,
                 progress=progress,
             )
@@ -1117,6 +1238,8 @@ class SpotifySkill:
         book: BookInfo | None = None
         nav: asyncio.Task[bool] | None = None
         book_start = start is not None and start.kind == "audiobook"
+        # A resume or a chapter move of the book that's loaded is a book too.
+        book_stream = book_start or (start is None and _is_book(client.state.context_uri or ""))
         audio_ms = 0
         try:
             try:
@@ -1124,7 +1247,7 @@ class SpotifySkill:
             except CaptureError as exc:
                 reason = "capture_unreachable"
                 await log.awarning("spotify.capture_failed", error=str(exc))
-                self._narrate("book_offline" if book_start else "player_offline")
+                self._narrate("book_offline" if book_stream else "player_offline")
                 return
 
             errors_before = client.state.error_count
@@ -1159,12 +1282,13 @@ class SpotifySkill:
                     error=state.last_error,
                     connected=state.connected,
                 )
-                self._narrate("book_failed" if book_start else "start_failed")
+                self._narrate("book_failed" if book_stream else "start_failed")
                 return
             # Volume belongs to the client (SetVolume); keep Soloist at full
             # so a phone can't silently turn this device down.
             client.send("set_volume", volume=100, generation=generation)
             book = await self._loaded_book()
+            self._last_was_book = book is not None or book_start
             if start is not None and book is None and not book_start:
                 self._spawn(self._require_shelf().set_last_music(start))
             if book is not None and goto is not None:
@@ -1182,6 +1306,10 @@ class SpotifySkill:
                 goto=goto,
             )
             started_at = time.monotonic()
+            # Spotify refuses a book chapter by chapter (no hours left): a
+            # stop this soon after any play, chapter change or move is a
+            # refusal, not the end or a cut (critic round 2, B1).
+            window_at = started_at
             place_at = started_at
             marked = False
             seen_active = False
@@ -1202,13 +1330,18 @@ class SpotifySkill:
                     self._narrate("book_moved" if book else "takeover")
                     return
                 if state.status == "idle":
-                    if start is not None and time.monotonic() - started_at < REFUSED_S:
+                    moving = nav is not None and not nav.done()
+                    soon = time.monotonic() - window_at < REFUSED_S
+                    if (start is not None or book is not None) and (soon or moving):
                         reason = "refused"
-                        cause = await self._refusal_cause(start.uri) if book_start else ""
+                        refused = book.uri if book is not None else start.uri if start else ""
+                        is_book = book is not None or book_start
+                        cause = await self._refusal_cause(refused) if is_book else ""
                         await log.awarning(
                             "spotify.start_refused",
-                            kind=start.kind,
-                            uri=start.uri,
+                            uri=refused,
+                            resumed=start is None,
+                            moving=moving,
                             chunks=chunks,
                             cause=cause or None,
                         )
@@ -1224,8 +1357,10 @@ class SpotifySkill:
                         continue  # silent while it moves between chapters
                     if nav.cancelled() or nav.exception() is not None or not nav.result():
                         self._narrate("book_nav_failed")
+                    progress["moved"] = True
                     nav = None
                     chapter = item_uri(client.state.item)
+                    window_at = time.monotonic()
                 if book is not None:
                     if state.context_uri and state.context_uri != book.uri:
                         # Spotify left the book by itself (autoplay at its
@@ -1233,8 +1368,9 @@ class SpotifySkill:
                         reason = await self._book_stopped(book, state, chapter, left=True)
                         return
                     current = item_uri(state.item)
-                    if current and current != chapter:
+                    if current and current != chapter and book.index_of(current) is not None:
                         chapter = current
+                        window_at = time.monotonic()
                         if self._sleep_s and time.monotonic() - requested >= self._sleep_s:
                             # No press for a long while: he may be asleep.
                             # Pause at the chapter boundary, without a word.
@@ -1252,6 +1388,8 @@ class SpotifySkill:
                     paused_since = paused_since or time.monotonic()
                     if time.monotonic() - paused_since > PAUSED_GRACE_S:
                         reason = "paused_elsewhere"
+                        if book is not None:
+                            self._narrate("book_patience")  # never a silent stop
                         return
                 else:
                     paused_since = None
@@ -1276,6 +1414,8 @@ class SpotifySkill:
         finally:
             if writer is not None:
                 writer.close()
+            # Mid-move, the chapter it's on is no place to remember.
+            mid_move = nav is not None and not nav.done()
             if nav is not None:
                 nav.cancel()
             # Never await Soloist here: this runs in the coordinator's
@@ -1285,7 +1425,8 @@ class SpotifySkill:
                 client.send("pause", generation=generation)
             if book is not None:
                 # Scheduled, not awaited: this is the cancel path.
-                self._spawn(self._save_place(book))
+                if not mid_move:
+                    self._spawn(self._save_place(book))
                 if audio_ms:
                     self._spawn(self._require_shelf().add_seconds(audio_ms / 1000))
                 if reason == "cancelled":

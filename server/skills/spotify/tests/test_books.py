@@ -209,6 +209,15 @@ class TestAskingForABook:
         assert isinstance(yes.side_effect, AudioStream)
         assert len(skill._search.queries) == 1  # type: ignore[union-attr]
 
+    async def test_the_author_named_with_a_wrong_title_is_still_confirmed(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, _, _, _ = await _skill(tmp_path, pcm_server)
+        result = await skill.handle(
+            "play_book", {"title": "crónica de una muerte anunciada de garcía márquez"}
+        )
+        assert _out(result)["reason"] == "ask_which"
+
     async def test_naming_the_author_is_enough(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
@@ -263,6 +272,19 @@ class TestRecommendations:
         assert _out(result)["playing"] == CORONEL.title
         by_title = await skill.handle("play_book", {"title": "el coronel no tiene quien"})
         assert _out(by_title)["playing"] == CORONEL.title
+        assert len(skill._search.queries) == 1  # type: ignore[union-attr]
+
+    async def test_el_segundo_said_literally_is_still_the_second(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, _, _, _ = await _skill(tmp_path, pcm_server, others=[CORONEL])
+        await skill.handle("find_books", {"query": "garcía márquez"})
+        assert _out(await skill.handle("play_book", {"title": "el segundo"}))["playing"] == (
+            CORONEL.title
+        )
+        assert _out(await skill.handle("play_book", {"title": "el último"}))["playing"] == (
+            CORONEL.title
+        )
         assert len(skill._search.queries) == 1  # type: ignore[union-attr]
 
     async def test_no_query_lists_books_listened_to_here(
@@ -332,7 +354,7 @@ class TestWhenABookStops:
         monkeypatch.setattr(skill_module, "REFUSED_S", 0.0)
         pcm_server.hold_open.set()
         skill, client, recorded, shelf = await _skill(tmp_path, pcm_server)
-        client.resume = 3  # the last chapter
+        client.resume, client.resume_position = 3, 2_000_000 - 5_000  # its last seconds
         result = await skill.handle("play_book", {"title": "cien años de soledad"})
         async for _ in result.side_effect.factory():  # type: ignore[union-attr]
             client.state.status = "idle"
@@ -344,6 +366,58 @@ class TestWhenABookStops:
         again = await skill.handle("play_book", {"title": "cien años de soledad"})
         assert _out(again)["reason"] == "finished_replay"
         assert "¿Lo pongo desde el principio?" in _out(again)["then"]
+
+    async def test_a_stop_early_in_the_last_chapter_is_a_cut_not_the_end(
+        self, tmp_path: Path, pcm_server: PcmServer, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(skill_module, "REFUSED_S", 0.0)
+        pcm_server.hold_open.set()
+        skill, client, recorded, shelf = await _skill(tmp_path, pcm_server)
+        client.resume, client.resume_position = 3, 120_000  # 2 min into 33
+        result = await skill.handle("play_book", {"title": "cien años de soledad"})
+        async for _ in result.side_effect.factory():  # type: ignore[union-attr]
+            client.state.status = "idle"
+        await _settle()
+        assert [key for _, key in recorded.injected] == ["spotify:book_cut"]
+        assert not await shelf.finished(BOOK.uri)
+
+    async def test_hours_running_out_on_a_resume_is_said_as_hours(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        """Not only a fresh start: the press's resume, "sigue" or a chapter
+        move can be the play Spotify refuses (critic round 2, B1)."""
+        pcm_server.hold_open.set()
+        skill, client, recorded, shelf = await _skill(tmp_path, pcm_server)
+        await shelf.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
+        client.load(2, 600_000)
+        result = await skill.handle("music_control", {"action": "resume"})
+        async for _ in result.side_effect.factory():  # type: ignore[union-attr]
+            client.state.status = "idle"
+        await _settle()
+        assert [key for _, key in recorded.injected] == ["spotify:book_no_hours"]
+
+    async def test_sigue_after_a_cut_starts_the_book_again(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        """A bare play to an idle Soloist does nothing for 10 s (critic B2)."""
+        skill, client, _, _ = await _skill(tmp_path, pcm_server)
+        client.load(2, 600_000, status="idle")
+        result = await skill.handle("music_control", {"action": "resume"})
+        assert _out(result)["action"] == "restart"
+        await _take(result.side_effect, 1)  # type: ignore[arg-type]
+        assert _plays(client)[-1].get("uri") == BOOK_INFO.uri
+
+    async def test_a_book_paused_from_a_phone_is_said(
+        self, tmp_path: Path, pcm_server: PcmServer, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(skill_module, "PAUSED_GRACE_S", 0.05)
+        pcm_server.hold_open.set()
+        skill, client, recorded, _ = await _skill(tmp_path, pcm_server)
+        result = await skill.handle("play_book", {"title": "cien años de soledad"})
+        async for _ in result.side_effect.factory():  # type: ignore[union-attr]
+            client.state.status = "paused"
+        await _settle()
+        assert [key for _, key in recorded.injected] == ["spotify:book_patience"]
 
     async def test_stopping_mid_book_is_a_cut(
         self, tmp_path: Path, pcm_server: PcmServer, monkeypatch: pytest.MonkeyPatch
@@ -465,6 +539,45 @@ class TestChapters:
         missing = await skill.handle("book_control", {"action": "go_to_chapter", "chapter": "9"})
         assert "«Ese libro no tiene un capítulo 9.»" in _out(missing)["then"]
 
+    async def test_a_chapter_said_in_words_is_found(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, client, _, _ = await _skill(tmp_path, pcm_server)
+        client.load(1, 5_000)
+        result = await skill.handle(
+            "book_control", {"action": "go_to_chapter", "chapter": "capítulo tres"}
+        )
+        assert _out(result)["chapter"] == "Capítulo 3"
+
+    async def test_a_press_mid_move_finishes_the_move_on_resume(
+        self, tmp_path: Path, pcm_server: PcmServer, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The move is silent; a press during it ("¿qué pasó?") must not
+        leave the book on whatever chapter it had reached (critic M1)."""
+        monkeypatch.setattr(skill_module, "NAV_SETTLE_S", 5.0)
+        monkeypatch.setattr(skill_module, "SKIP_GAP_S", 0.0)
+        pcm_server.hold_open.set()
+        skill, client, _, _ = await _skill(tmp_path, pcm_server)
+        client.load(1, 5_000)
+        client.skips_ignored = True  # the move is still going when he presses
+        stream = (
+            await skill.handle("book_control", {"action": "go_to_chapter", "chapter": "3"})
+        ).side_effect
+
+        async def run_until_pressed() -> None:
+            async for _ in stream.factory():  # type: ignore[union-attr]
+                pass
+
+        task = asyncio.create_task(run_until_pressed())
+        await asyncio.sleep(0.3)
+        task.cancel()  # the press
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        client.skips_ignored = False
+        client.load(1, 5_000)
+        await _take(stream, 1)  # type: ignore[arg-type]  # the turn ends: resume
+        assert client.index == 3
+
     async def test_a_chapter_that_cant_be_reached_is_said(
         self, tmp_path: Path, pcm_server: PcmServer, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -561,6 +674,24 @@ class TestFromTheBeginning:
         undo = await skill.handle("book_control", {"action": "go_back_to_saved_place"})
         await _take(undo.side_effect, 2)  # type: ignore[arg-type]
         assert client.index == 3 and client.state.position_ms == 300_000
+
+
+class TestStartingOverAFinishedBook:
+    async def test_a_finished_book_starts_over_without_a_second_question(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        pcm_server.hold_open.set()
+        skill, client, _, shelf = await _skill(tmp_path, pcm_server)
+        await shelf.mark_finished(BOOK.uri)
+        await shelf.set_place(BOOK.uri, Place(CHAPTERS[3].uri, 1_990_000))
+        client.resume, client.resume_position = 3, 1_990_000
+        result = await skill.handle(
+            "play_book", {"title": "cien años de soledad", "from_beginning": True}
+        )
+        await _take(result.side_effect, 2)  # type: ignore[arg-type]
+        assert client.index == 0
+        assert not await shelf.finished(BOOK.uri)
+        assert await shelf.saved_place(BOOK.uri) is None  # nothing worth undoing to
 
 
 class TestWhatsPlaying:

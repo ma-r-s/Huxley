@@ -707,7 +707,7 @@ i18n:
 
 skills:
   # audiobooks: disabled 2026-10-12 (Mario): books come from Spotify
-  # (T1.39, `play_music` kind "audiobook"). The skill and the files in
+  # (T1.39, T1.40: `play_book` and friends). The skill and the files in
   # data/audiobooks stay; to bring it back, uncomment this block and
   # restore the library instructions in system_prompt from git.
   # audiobooks:

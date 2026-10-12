@@ -473,3 +473,16 @@ class TestHeardTitle:
         assert heard_title("Weird Fishes de Radiohead", "Radiohead") == "weird fishes"
         assert title_score("irfixes", "Weird Fishes / Arpeggi") >= 0.6
         assert title_score("irfixes", "Let Down") < 0.5
+
+
+def test_position_moves_only_while_playing() -> None:
+    """A paused or buffering player stays at its anchor even if a speed
+    came with it; a track change forgets the old track's position."""
+    from huxley_skill_spotify.soloist import PlayerState, position_now
+
+    state = PlayerState(status="playing", position_ms=10_000, position_at_ms=1_000, speed=1.0)
+    assert position_now(state, now_ms=4_000) == 13_000
+    state.status = "paused"
+    assert position_now(state, now_ms=4_000) == 10_000
+    state.status = "buffering"
+    assert position_now(state, now_ms=4_000) == 10_000

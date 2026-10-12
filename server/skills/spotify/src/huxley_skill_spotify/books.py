@@ -12,6 +12,7 @@ hours budget when one is configured).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -67,6 +68,23 @@ def rewind_ms(paused_s: float) -> int:
 
 _NUMBER = re.compile(r"\d+")
 _CHAPTER_WORDS = ("capitulo", "chapter", "chapitre")
+# The tool passes the chapter "as said": "capítulo cinco".
+_NUMBER_WORDS = {
+    w: i + 1
+    for words in (
+        "uno dos tres cuatro cinco seis siete ocho nueve diez once doce trece catorce "
+        "quince dieciseis diecisiete dieciocho diecinueve veinte veintiuno veintidos "
+        "veintitres veinticuatro veinticinco veintiseis veintisiete veintiocho "
+        "veintinueve treinta",
+        "one two three four five six seven eight nine ten eleven twelve thirteen "
+        "fourteen fifteen sixteen seventeen eighteen nineteen twenty",
+        "un deux trois quatre cinq six sept huit neuf dix onze douze treize quatorze quinze seize",
+    )
+    for i, w in enumerate(words.split())
+}
+_NUMBER_WORDS["primero"] = _NUMBER_WORDS["primer"] = _NUMBER_WORDS["first"] = 1
+# A place kept before "desde el principio" is for undoing it soon after.
+SAVED_PLACE_DAYS = 30
 
 
 def find_chapter(book: BookInfo, spoken: str) -> int | None:
@@ -76,6 +94,7 @@ def find_chapter(book: BookInfo, spoken: str) -> int | None:
     wanted = fold(spoken)
     if not wanted:
         return None
+    wanted = " ".join(str(_NUMBER_WORDS.get(w, w)) for w in wanted.split())
     names = [fold(c.name) for c in book.chapters]
     for i, name in enumerate(names):
         if name == wanted:
@@ -118,6 +137,9 @@ class Shelf:
 
     def __init__(self, storage: SkillStorage) -> None:
         self._storage = storage
+        # add_seconds reads then writes: two streams ending together
+        # (a press right after a resume) must not lose one's seconds.
+        self._seconds_lock = asyncio.Lock()
 
     async def _get(self, key: str) -> Any:
         raw = await self._storage.get_setting(key)
@@ -193,12 +215,17 @@ class Shelf:
         )
 
     async def saved_place(self, uri: str) -> Place | None:
-        return self._place(await self._get(f"book:saved:{_book_id(uri)}"))
+        found = await self._get(f"book:saved:{_book_id(uri)}")
+        if isinstance(found, dict) and time.time() - float(found.get("at") or 0) > (
+            SAVED_PLACE_DAYS * 86_400
+        ):
+            return None
+        return self._place(found)
 
     async def save_place(self, uri: str, place: Place) -> None:
         await self._set(
             f"book:saved:{_book_id(uri)}",
-            {"chapter": place.chapter_uri, "position_ms": place.position_ms},
+            {"chapter": place.chapter_uri, "position_ms": place.position_ms, "at": time.time()},
         )
 
     @staticmethod
@@ -209,10 +236,11 @@ class Shelf:
 
     # Seconds of book audio heard, per calendar month.
     async def add_seconds(self, seconds: float) -> float:
-        key = f"book:seconds:{datetime.now(UTC):%Y-%m}"
-        total = float(await self._get(key) or 0) + seconds
-        await self._set(key, round(total, 1))
-        return total
+        async with self._seconds_lock:
+            key = f"book:seconds:{datetime.now(UTC):%Y-%m}"
+            total = float(await self._get(key) or 0) + seconds
+            await self._set(key, round(total, 1))
+            return total
 
     async def seconds_this_month(self) -> float:
         return float(await self._get(f"book:seconds:{datetime.now(UTC):%Y-%m}") or 0)

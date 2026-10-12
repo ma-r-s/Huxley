@@ -63,10 +63,13 @@ class PlayerState:
 
 
 def position_now(state: PlayerState, now_ms: float | None = None) -> int | None:
-    """The playback position now, from the last anchor Soloist sent."""
+    """The playback position now, from the last anchor Soloist sent. It
+    moves only while playing: a paused or buffering player is where its
+    anchor says, whatever speed came with it (critic, 2026-10-12). None
+    right after a track change, until Soloist sends the new position."""
     if state.position_ms is None:
         return None
-    if not state.speed or state.position_at_ms is None:
+    if state.status != "playing" or not state.speed or state.position_at_ms is None:
         return state.position_ms
     now = time.time() * 1000 if now_ms is None else now_ms
     return int(state.position_ms + max(0.0, now - state.position_at_ms) * state.speed)
@@ -238,7 +241,8 @@ class SoloistClient:
             case "context_changed":
                 await self._update(context_uri=(event.get("context") or {}).get("uri"))
             case "track_changed":
-                await self._update(item=event.get("item"))
+                # The old track's position doesn't apply to the new one.
+                await self._update(item=event.get("item"), position_ms=None, position_at_ms=None)
                 title, artists = describe_item(event.get("item"))
                 await self._log.ainfo("spotify.track", title=title, artists=artists)
             case "device_changed":
