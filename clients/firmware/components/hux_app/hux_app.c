@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
@@ -15,6 +16,7 @@
 
 #include "hux_audio.h"
 #include "hux_net.h"
+#include "hux_opus.h"
 #include "hux_proto.h"
 
 static const char *TAG = "hux_app";
@@ -130,7 +132,7 @@ static char    s_envelope[1700];
 /* How long the app task waits to put ptt_start/ptt_stop in a full queue
  * (a dead link drains it within WS_SEND_TIMEOUT_MS per frame). */
 #define UPLINK_CONTROL_WAIT_MS 6000
-#define AUDIO_SENDER_STACK  8192
+#define AUDIO_SENDER_STACK  (40 * 1024) /* the Opus encoder (codec README: ~40 KB); PSRAM */
 #define AUDIO_SENDER_PRIO   6                   /* mic task (8) > this > app (5) */
 
 typedef enum { UPLINK_AUDIO = 0, UPLINK_PTT_START, UPLINK_PTT_STOP } uplink_kind_t;
@@ -189,6 +191,57 @@ static void mic_sink(const int16_t *pcm, size_t samples) {
     s_mic_enqueued++;
 }
 
+/* Opus (F-0024): 20 ms mic frames gathered into one 60 ms packet. This
+ * task only. */
+EXT_RAM_BSS_ATTR static int16_t s_opus_pcm[HUX_OPUS_FRAME_SAMPLES];
+static size_t s_opus_fill;    /* samples gathered */
+EXT_RAM_BSS_ATTR static uint8_t s_opus_pkt[HUX_OPUS_MAX_PACKET];
+static uint32_t s_opus_bytes; /* sent this press, for the stats */
+
+/* Encode and send what is gathered; a short last packet is padded with
+ * silence (the end of a question must not be lost). */
+static void opus_flush(void) {
+    if (s_opus_fill == 0) {
+        return;
+    }
+    uint32_t frames = (uint32_t)(s_opus_fill / AUDIO_FRAME_SAMPLES);
+    memset(s_opus_pcm + s_opus_fill, 0, (HUX_OPUS_FRAME_SAMPLES - s_opus_fill) * sizeof(int16_t));
+    s_opus_fill = 0;
+    int n = hux_opus_encode(s_opus_pcm, s_opus_pkt, sizeof(s_opus_pkt));
+    if (n > 0 && hux_net_send_binary(s_opus_pkt, (size_t)n)) {
+        s_tx_sent += frames;
+        s_opus_bytes += (uint32_t)n;
+    } else {
+        s_tx_failed += frames;
+    }
+}
+
+/* Today's wire format, for a server that didn't agree to Opus: one 20 ms
+ * frame as base64 in a JSON `audio` message. */
+static void send_pcm_json(const audio_frame_t *frame) {
+    const size_t pcm_bytes = AUDIO_FRAME_SAMPLES * sizeof(int16_t);
+    size_t b64_len = 0;
+    int rc = mbedtls_base64_encode(s_b64_buf, sizeof(s_b64_buf), &b64_len,
+                                   (const unsigned char *)frame->pcm, pcm_bytes);
+    if (rc != 0) {
+        s_tx_failed++;
+        return;
+    }
+    int n = snprintf(s_envelope, sizeof(s_envelope),
+                     "{\"type\":\"audio\",\"data\":\"%.*s\"}",
+                     (int)b64_len, (const char *)s_b64_buf);
+    if (n <= 0 || (size_t)n >= sizeof(s_envelope)) {
+        s_tx_failed++;
+        return;
+    }
+
+    if (hux_net_send_text(s_envelope, (size_t)n)) {
+        s_tx_sent++;
+    } else {
+        s_tx_failed++;
+    }
+}
+
 static void audio_sender_task(void *unused) {
     (void)unused;
     ESP_LOGI(TAG, "audio_sender_task started depth=%d prio=%d",
@@ -203,38 +256,34 @@ static void audio_sender_task(void *unused) {
             /* In order with the frames: everything said before the release
              * is on the wire before ptt_stop. */
             bool stop = frame.kind == UPLINK_PTT_STOP;
+            if (stop) {
+                opus_flush(); /* the last partial packet, before ptt_stop */
+            } else {
+                s_opus_fill = 0; /* a new press: a fresh Opus stream */
+                s_opus_bytes = 0;
+                hux_opus_encode_reset();
+            }
             const char *msg = stop ? "{\"type\":\"ptt_stop\"}" : "{\"type\":\"ptt_start\"}";
             bool ok = hux_net_send_text(msg, strlen(msg));
             if (stop) {
-                ESP_LOGI(TAG, "mic.tx.done ptt_stop_sent=%d enq=%u enq_drop=%u tx_ok=%u tx_fail=%u",
+                ESP_LOGI(TAG, "mic.tx.done ptt_stop_sent=%d enq=%u enq_drop=%u tx_ok=%u tx_fail=%u "
+                              "opus_bytes=%u",
                          ok, (unsigned)s_mic_enqueued, (unsigned)s_mic_enqueue_dropped,
-                         (unsigned)s_tx_sent, (unsigned)s_tx_failed);
+                         (unsigned)s_tx_sent, (unsigned)s_tx_failed, (unsigned)s_opus_bytes);
             } else if (!ok) {
                 ESP_LOGW(TAG, "mic.tx.ptt_start_failed");
             }
             continue;
         }
 
-        const size_t pcm_bytes = AUDIO_FRAME_SAMPLES * sizeof(int16_t);
-        size_t b64_len = 0;
-        int rc = mbedtls_base64_encode(s_b64_buf, sizeof(s_b64_buf), &b64_len,
-                                       (const unsigned char *)frame.pcm, pcm_bytes);
-        if (rc != 0) {
-            s_tx_failed++;
-            continue;
-        }
-        int n = snprintf(s_envelope, sizeof(s_envelope),
-                         "{\"type\":\"audio\",\"data\":\"%.*s\"}",
-                         (int)b64_len, (const char *)s_b64_buf);
-        if (n <= 0 || (size_t)n >= sizeof(s_envelope)) {
-            s_tx_failed++;
-            continue;
-        }
-
-        if (hux_net_send_text(s_envelope, (size_t)n)) {
-            s_tx_sent++;
+        if (hux_net_audio_opus()) {
+            memcpy(s_opus_pcm + s_opus_fill, frame.pcm, AUDIO_FRAME_SAMPLES * sizeof(int16_t));
+            s_opus_fill += AUDIO_FRAME_SAMPLES;
+            if (s_opus_fill == HUX_OPUS_FRAME_SAMPLES) {
+                opus_flush();
+            }
         } else {
-            s_tx_failed++;
+            send_pcm_json(&frame);
         }
 
         /* Emit stats every ~500 ms of wall time — tick-based so a
@@ -250,11 +299,13 @@ static void audio_sender_task(void *unused) {
                     ? ESP_LOG_WARN
                     : ESP_LOG_INFO;
             ESP_LOG_LEVEL(lvl, TAG,
-                          "mic.tx.stats enq=%u enq_drop=%u tx_ok=%u tx_fail=%u q_waiting=%u",
+                          "mic.tx.stats enq=%u enq_drop=%u tx_ok=%u tx_fail=%u q_waiting=%u "
+                          "opus_bytes=%u enc_us=%u",
                           (unsigned)s_mic_enqueued,
                           (unsigned)s_mic_enqueue_dropped,
                           (unsigned)s_tx_sent, (unsigned)s_tx_failed,
-                          (unsigned)uxQueueMessagesWaiting(s_audio_q));
+                          (unsigned)uxQueueMessagesWaiting(s_audio_q), (unsigned)s_opus_bytes,
+                          (unsigned)hux_opus_take_enc_us());
             s_tx_last_stats_tick = now;
         }
     }
@@ -430,6 +481,10 @@ static void handle_ws_message(hux_app_ws_message_t *msg) {
                  * to load, ...). Talk presses will get no answer. */
                 ESP_LOGW(TAG, "ws.rx.hello session_ready=false: the server cannot answer yet");
             }
+            /* F-0024: Opus both ways if the server agreed to our ?audio=opus;
+             * an older server keeps base64 PCM. */
+            hux_net_set_audio_opus(parsed.as.hello.audio_opus);
+            ESP_LOGI(TAG, "app.audio format=%s", parsed.as.hello.audio_opus ? "opus" : "pcm");
             transition(ST_READY);
             send_device_info();
             /* Kick the server into CONVERSING so PTT presses work
@@ -608,8 +663,8 @@ void hux_app_start(void) {
      * window where sink runs with NULL queue. */
     s_audio_q = xQueueCreateWithCaps(AUDIO_QUEUE_DEPTH, sizeof(audio_frame_t), MALLOC_CAP_SPIRAM);
     configASSERT(s_audio_q != NULL);
-    ok = xTaskCreate(audio_sender_task, "hux_audio_tx", AUDIO_SENDER_STACK,
-                     NULL, AUDIO_SENDER_PRIO, NULL);
+    ok = xTaskCreateWithCaps(audio_sender_task, "hux_audio_tx", AUDIO_SENDER_STACK, NULL,
+                             AUDIO_SENDER_PRIO, NULL, MALLOC_CAP_SPIRAM);
     configASSERT(ok == pdPASS);
 
     /* Register the mic sink once — it stays registered for the life

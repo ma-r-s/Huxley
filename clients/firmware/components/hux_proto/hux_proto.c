@@ -75,6 +75,15 @@ bool hux_proto_parse(const char *json, size_t len, hux_msg_t *out) {
             out->as.hello.protocol = cJSON_IsNumber(protocol) ? (int)protocol->valuedouble : -1;
             const cJSON *ready = cJSON_GetObjectItemCaseSensitive(root, "session_ready");
             out->as.hello.session_ready = !cJSON_IsFalse(ready);
+            const cJSON *ap = cJSON_GetObjectItemCaseSensitive(root, "audio_params");
+            const cJSON *fmt = cJSON_GetObjectItemCaseSensitive(ap, "format");
+            const cJSON *sr = cJSON_GetObjectItemCaseSensitive(ap, "sample_rate");
+            const cJSON *ch = cJSON_GetObjectItemCaseSensitive(ap, "channels");
+            const cJSON *fd = cJSON_GetObjectItemCaseSensitive(ap, "frame_duration");
+            out->as.hello.audio_opus = cJSON_IsString(fmt) && strcmp(fmt->valuestring, "opus") == 0 &&
+                                       cJSON_IsNumber(sr) && sr->valuedouble == 24000 &&
+                                       cJSON_IsNumber(ch) && ch->valuedouble == 1 &&
+                                       cJSON_IsNumber(fd) && fd->valuedouble == 60;
             break;
         }
         case HUX_MSG_STATE: {

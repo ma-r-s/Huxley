@@ -42,6 +42,22 @@ static void test_parse_hello_missing_protocol(void) {
     HX_ASSERT_EQ(m.as.hello.protocol, -1, "missing protocol -> -1");
 }
 
+static void test_hello_audio_params(void) {
+    hux_msg_t m;
+    HX_ASSERT_TRUE(parse("{\"type\":\"hello\",\"protocol\":2,\"audio_params\":{\"format\":\"opus\","
+                         "\"sample_rate\":24000,\"channels\":1,\"frame_duration\":60}}",
+                         &m),
+                   "hello with audio_params parses");
+    HX_ASSERT_TRUE(m.as.hello.audio_opus, "opus 24 kHz mono 60 ms -> opus");
+    HX_ASSERT_TRUE(parse("{\"type\":\"hello\",\"protocol\":2}", &m), "plain hello");
+    HX_ASSERT_TRUE(!m.as.hello.audio_opus, "no audio_params -> PCM");
+    HX_ASSERT_TRUE(parse("{\"type\":\"hello\",\"audio_params\":{\"format\":\"opus\","
+                         "\"sample_rate\":16000,\"channels\":1,\"frame_duration\":60}}",
+                         &m),
+                   "16 kHz hello parses");
+    HX_ASSERT_TRUE(!m.as.hello.audio_opus, "a rate we don't speak -> PCM, not garbage");
+}
+
 /* ---- malformed ---------------------------------------------------- */
 
 static void test_parse_not_json(void) {
@@ -232,6 +248,7 @@ int main(void) {
     HX_RUN(test_audio_clear_is_not_audio);
     HX_RUN(test_parse_hello_with_odd_field_order);
     HX_RUN(test_parse_hello_missing_protocol);
+    HX_RUN(test_hello_audio_params);
     HX_RUN(test_parse_not_json);
     HX_RUN(test_parse_empty_string);
     HX_RUN(test_parse_missing_type);

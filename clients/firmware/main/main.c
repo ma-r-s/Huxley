@@ -23,6 +23,7 @@
 #include "hux_dev.h"
 #include "hux_log.h"
 #include "hux_net.h"
+#include "hux_opus.h"
 #include "hux_ota.h"
 #include "secrets.h"
 
@@ -191,6 +192,9 @@ void app_main(void) {
     hux_net_set_audio_sink(hux_audio_spk_push);
     /* `audio_clear` on the same task, in order with the audio. */
     hux_net_set_audio_clear_sink(hux_audio_on_audio_clear);
+    /* Opus (F-0024): decoded packets go to the same ring, a queued
+     * audio_clear to the same clear, in the order they came. */
+    hux_opus_init(hux_audio_spk_push, hux_audio_on_audio_clear);
 
     /* Remote threshold is INFO (set right after hux_log_init, so boot
      * lines qualify): the server log is a full record of what the board

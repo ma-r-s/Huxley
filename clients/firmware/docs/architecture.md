@@ -49,6 +49,7 @@ whichever is wrong in the same commit.
 | `hux_console`           | Bench commands on the USB serial console (talk, say, selftest, info…)    | Anything the product needs: it is a test seam                 |
 | `hux_ota`               | Updates over Wi-Fi into the other slot; keeps it on `ota confirm` (30 s+) | Decides when to update (a developer asks)                     |
 | `hux_dev`               | Developer door over Wi-Fi: `/info`, `/cmd` (console lines), `/coredump`  | Answers without the token                                     |
+| `hux_opus`              | Opus (esp_audio_codec): mic encoder, speaker decoder task + ordered queue | Decides the format (the server's hello does)                  |
 
 **The dependency graph flows downward only.** `hux_app` requires
 `hux_proto`; `hux_net` requires `hux_app` + `hux_proto` + `hux_log`
@@ -69,7 +70,8 @@ FreeRTOS tasks, in priority order (higher = more important):
 | _websocket_task_           | esp_websocket_client | 5    | 6 KB  | WS RX + reconnect loop; runs our handler (the data plane)  |
 | `hux_log_drain`            | `hux_log_init`       | 2    | 6 KB  | Pops the log queue (256 lines, PSRAM), sends each; offline it holds the line and retries; drop heartbeat |
 | `hux_mic`                  | `hux_audio_init`     | 8    | 6 KB  | I2S RX, extract Mic1, hand frames to hux_app's queue       |
-| `hux_audio_tx`             | `hux_app_start`      | 6    | 8 KB  | The uplink lane, in order: `ptt_start`, mic frames as `audio`, `ptt_stop` (10 s queue) |
+| `hux_audio_tx`             | `hux_app_start`      | 6    | 40 KB (PSRAM) | The uplink lane, in order: `ptt_start`, mic audio (60 ms Opus packets, or 20 ms base64 PCM to an older server), `ptt_stop` (10 s queue) |
+| `hux_opus_dec`             | `hux_opus_init`      | 7    | 24 KB (PSRAM) | Decodes received Opus packets into the speaker ring; runs queued `audio_clear` in order |
 | `hux_spk`                  | `hux_audio_init`     | 8    | 6 KB  | Pop the PCM ring (or silence), I2S TX; services clears     |
 | `hux_button`               | `hux_button_start`   | 4    | 4 KB  | Poll GPIO7 + K2 every 10 ms, debounce, post press/release  |
 | `hux_console`              | `hux_console_start`  | 3    | 5 KB  | Poll the USB RX FIFO every 20 ms, run bench commands       |
@@ -199,6 +201,7 @@ PSRAM (8 MB):
   WS reassembly + audio decode scratch          (384 KB + 288 KB, EXT_RAM_BSS)
   Mic uplink queue                              (480 KB: 10 s, a slow uplink delays a question, never cuts it)
   Log queue                                     (58 KB: 256 lines kept while offline)
+  Opus: packet queue + decoder/encoder state    (~72 KB queue, codec state, two task stacks)
   Wi-Fi / LWIP buffers                          (via SPIRAM_TRY_ALLOCATE_WIFI_LWIP)
   Free at boot after all that                   (~3.4 MB, `info psram=`)
 

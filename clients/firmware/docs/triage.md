@@ -431,6 +431,36 @@ counter is already there); after 3 in a row, `esp_ota_set_boot_partition`
 to the other slot if it's valid, and say so (`ota.auto_rollback`).
 **Effort**: half a day with a crash-on-press test image.
 
+### F-0024: Opus audio over the WebSocket (the walkie's link drops packets) · in_progress 2026-10-12
+
+**Problem**: playback cut for seconds ("plays half a second, cuts for 2
+or more"; 34 % of playing time was gaps at 08:00-08:30). Measured on both
+ends: the server sent on time; the walkie's 2.4 GHz link lost packets in
+episodes (ping loss up to 8.3 %, p90 up to 665 ms, against 0 % to the
+router at the same time); uncompressed PCM as base64 JSON is ~64 KB/s,
+and TCP over that loss caps far below it. Not the amp (on/off A/B: gaps
+0/57/49 s with it on, 15/0/24 s off), not the channel width (20 vs 40
+MHz A/B, no difference).
+**What others do** (Mario: "don't reinvent the wheel"): xiaozhi-esp32,
+the most used open-source ESP32 voice assistant (Espressif ships it as a
+component), sends Opus, 60 ms frames, one raw packet per binary
+WebSocket message, negotiated by `audio_params` in the hello, JSON for
+everything else on the same socket; Espressif's esp_audio_codec on the
+device, `opuslib_next` on its Python server.
+**Built (firmware)**: `?audio=opus` on the WebSocket URL (the opt-in); the
+server's hello `audio_params` {opus, 24000, 1, 60} turns it on, anything
+else stays base64 PCM; `hux_opus` (esp_audio_codec ~2.5.0): mic encoder
+VOIP 24 kbit/s complexity 3 (packets <= 280 B), 20 ms mic frames gathered
+into 60 ms packets, a short last one padded before `ptt_stop`; received
+binary packets queued (PSRAM, 2.9 s) to a decoder task that feeds the
+same speaker ring, with `audio_clear` through the same queue so it lands
+after exactly the packets before it; the queue is dropped on a
+disconnect. Stats: `mic.tx.stats opus_bytes enc_us`, `ws.rx.stats opus
+dec_us`. Verified so far: init ok, internal heap 137-146 KB free, PCM
+fallback with today's server (turn, silent, health PASS).
+**Next**: the server side (in progress), then the bench on Opus (turn,
+stall, slowdown, resume, hearing) and `dev.py link` over real use.
+
 Note on IDs: F-0011 to F-0013 were used in code comments and commit
 messages (boot buzz, decode scratch, Wi-Fi power save) but their
 entries never landed here; F-0003 (the speaker path) shipped as v0.3.x

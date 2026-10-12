@@ -1,0 +1,192 @@
+#include "hux_opus.h"
+
+#include <stdatomic.h>
+#include <string.h>
+
+#include "esp_attr.h"
+#include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "esp_opus_dec.h"
+#include "esp_opus_enc.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
+
+static const char *TAG = "hux_opus";
+
+/* Uplink is speech: VOIP mode at 24 kbit/s (xiaozhi's device encoder is
+ * VOIP too). Complexity 3: cheap on the S3, still clean speech. */
+#define ENC_BITRATE    24000
+#define ENC_COMPLEXITY 3
+#define DEC_TASK_STACK (24 * 1024) /* the codec README: ~20 KB for decoders */
+#define DEC_TASK_PRIO  7           /* below the speaker (8), above the app (5) */
+#define RX_QUEUE_DEPTH 48          /* 2.9 s of 60 ms packets, in PSRAM */
+#define RX_WAIT_MS     5000
+
+typedef enum { RX_PACKET = 0, RX_CLEAR, RX_RESET } rx_kind_t;
+
+typedef struct {
+    uint16_t kind; /* rx_kind_t */
+    uint16_t len;
+    uint8_t data[HUX_OPUS_MAX_PACKET];
+} rx_item_t;
+
+static void *s_enc;
+static void *s_dec;
+static QueueHandle_t s_rx_q;
+static hux_opus_pcm_sink_fn s_pcm_sink;
+static hux_opus_clear_sink_fn s_clear_sink;
+/* Up to 120 ms per packet (an Opus packet may hold several frames). */
+EXT_RAM_BSS_ATTR static int16_t s_dec_pcm[HUX_OPUS_SAMPLE_RATE / 1000 * 120];
+/* Staging for the queue: the decoder's, and the WebSocket task's (all
+ * three rx_* calls come from that one task). PSRAM: 1.5 KB each. */
+EXT_RAM_BSS_ATTR static rx_item_t s_dec_item;
+EXT_RAM_BSS_ATTR static rx_item_t s_ws_item;
+static _Atomic uint32_t s_enc_us, s_enc_n, s_dec_us, s_dec_n;
+
+static void decode_task(void *unused) {
+    (void)unused;
+    rx_item_t *it = &s_dec_item;
+    uint32_t errors = 0;
+    for (;;) {
+        if (xQueueReceive(s_rx_q, it, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        if (it->kind == RX_CLEAR || it->kind == RX_RESET) {
+            esp_opus_dec_reset(s_dec);
+            if (it->kind == RX_CLEAR && s_clear_sink != NULL) {
+                s_clear_sink();
+            }
+            continue;
+        }
+        esp_audio_dec_in_raw_t raw = {.buffer = it->data, .len = it->len};
+        esp_audio_dec_out_frame_t out = {.buffer = (uint8_t *)s_dec_pcm, .len = sizeof(s_dec_pcm)};
+        esp_audio_dec_info_t info = {0};
+        int64_t t0 = esp_timer_get_time();
+        esp_audio_err_t err = esp_opus_dec_decode(s_dec, &raw, &out, &info);
+        atomic_fetch_add(&s_dec_us, (uint32_t)(esp_timer_get_time() - t0));
+        atomic_fetch_add(&s_dec_n, 1);
+        if (err != ESP_AUDIO_ERR_OK) {
+            if ((errors++ % 50) == 0) { /* one line per 50: a bad stream can't flood */
+                ESP_LOGW(TAG, "opus.decode_failed err=%d len=%u needed=%u count=%u", (int)err,
+                         (unsigned)it->len, (unsigned)out.needed_size, (unsigned)errors);
+            }
+            continue;
+        }
+        if (out.decoded_size > 0 && s_pcm_sink != NULL) {
+            s_pcm_sink((const uint8_t *)s_dec_pcm, out.decoded_size);
+        }
+    }
+}
+
+bool hux_opus_init(hux_opus_pcm_sink_fn pcm_sink, hux_opus_clear_sink_fn clear_sink) {
+    s_pcm_sink = pcm_sink;
+    s_clear_sink = clear_sink;
+
+    esp_opus_enc_config_t ecfg = ESP_OPUS_ENC_CONFIG_DEFAULT();
+    ecfg.sample_rate = HUX_OPUS_SAMPLE_RATE;
+    ecfg.channel = 1;
+    ecfg.bits_per_sample = 16;
+    ecfg.bitrate = ENC_BITRATE;
+    ecfg.frame_duration = ESP_OPUS_ENC_FRAME_DURATION_60_MS;
+    ecfg.application_mode = ESP_OPUS_ENC_APPLICATION_VOIP;
+    ecfg.complexity = ENC_COMPLEXITY;
+    ecfg.enable_fec = false;
+    ecfg.enable_dtx = false;
+    ecfg.enable_vbr = true;
+    esp_audio_err_t eerr = esp_opus_enc_open(&ecfg, sizeof(ecfg), &s_enc);
+
+    esp_opus_dec_cfg_t dcfg = ESP_OPUS_DEC_CONFIG_DEFAULT();
+    dcfg.sample_rate = HUX_OPUS_SAMPLE_RATE;
+    dcfg.channel = 1;
+    dcfg.frame_duration = ESP_OPUS_DEC_FRAME_DURATION_60_MS; /* the contract: 60 ms packets */
+    dcfg.self_delimited = false;
+    esp_audio_err_t derr = esp_opus_dec_open(&dcfg, sizeof(dcfg), &s_dec);
+
+    int in_size = 0, out_size = 0;
+    if (eerr == ESP_AUDIO_ERR_OK) {
+        esp_opus_enc_get_frame_size(s_enc, &in_size, &out_size);
+    }
+    s_rx_q = xQueueCreateWithCaps(RX_QUEUE_DEPTH, sizeof(rx_item_t), MALLOC_CAP_SPIRAM);
+    BaseType_t ok = s_rx_q != NULL && derr == ESP_AUDIO_ERR_OK
+                        ? xTaskCreateWithCaps(decode_task, "hux_opus_dec", DEC_TASK_STACK, NULL,
+                                              DEC_TASK_PRIO, NULL, MALLOC_CAP_SPIRAM)
+                        : pdFAIL;
+    ESP_LOGI(TAG, "opus.init enc=%d dec=%d task=%d rate=%d frame_ms=%d enc_in=%d enc_out=%d "
+                  "bitrate=%d complexity=%d",
+             (int)eerr, (int)derr, ok == pdPASS, HUX_OPUS_SAMPLE_RATE, HUX_OPUS_FRAME_MS, in_size,
+             out_size, ENC_BITRATE, ENC_COMPLEXITY);
+    return eerr == ESP_AUDIO_ERR_OK && derr == ESP_AUDIO_ERR_OK && ok == pdPASS;
+}
+
+void hux_opus_rx_packet(const uint8_t *data, size_t len) {
+    if (s_rx_q == NULL || len == 0) {
+        return;
+    }
+    if (len > sizeof(s_ws_item.data)) {
+        ESP_LOGW(TAG, "opus.rx_too_big len=%u", (unsigned)len);
+        return;
+    }
+    s_ws_item.kind = RX_PACKET;
+    s_ws_item.len = (uint16_t)len;
+    memcpy(s_ws_item.data, data, len);
+    if (xQueueSend(s_rx_q, &s_ws_item, pdMS_TO_TICKS(RX_WAIT_MS)) != pdTRUE) {
+        ESP_LOGW(TAG, "opus.rx_dropped len=%u (decoder stuck %d ms)", (unsigned)len, RX_WAIT_MS);
+    }
+}
+
+void hux_opus_rx_clear(void) {
+    if (s_rx_q == NULL) {
+        return;
+    }
+    s_ws_item.kind = RX_CLEAR;
+    s_ws_item.len = 0;
+    if (xQueueSend(s_rx_q, &s_ws_item, pdMS_TO_TICKS(RX_WAIT_MS)) != pdTRUE) {
+        ESP_LOGE(TAG, "opus.clear_dropped (decoder stuck)");
+    }
+}
+
+void hux_opus_rx_reset(void) {
+    if (s_rx_q == NULL) {
+        return;
+    }
+    xQueueReset(s_rx_q);
+    s_ws_item.kind = RX_RESET;
+    s_ws_item.len = 0;
+    xQueueSendToFront(s_rx_q, &s_ws_item, 0);
+}
+
+int hux_opus_encode(const int16_t *pcm, uint8_t *out, size_t cap) {
+    if (s_enc == NULL) {
+        return -1;
+    }
+    esp_audio_enc_in_frame_t in = {.buffer = (uint8_t *)pcm, .len = HUX_OPUS_FRAME_SAMPLES * 2};
+    esp_audio_enc_out_frame_t o = {.buffer = out, .len = (uint32_t)cap};
+    int64_t t0 = esp_timer_get_time();
+    esp_audio_err_t err = esp_opus_enc_process(s_enc, &in, &o);
+    atomic_fetch_add(&s_enc_us, (uint32_t)(esp_timer_get_time() - t0));
+    atomic_fetch_add(&s_enc_n, 1);
+    if (err != ESP_AUDIO_ERR_OK) {
+        ESP_LOGW(TAG, "opus.encode_failed err=%d", (int)err);
+        return -1;
+    }
+    return (int)o.encoded_bytes;
+}
+
+void hux_opus_encode_reset(void) {
+    if (s_enc != NULL) {
+        esp_opus_enc_reset(s_enc);
+    }
+}
+
+uint32_t hux_opus_take_enc_us(void) {
+    uint32_t n = atomic_exchange(&s_enc_n, 0), us = atomic_exchange(&s_enc_us, 0);
+    return n ? us / n : 0;
+}
+
+uint32_t hux_opus_take_dec_us(void) {
+    uint32_t n = atomic_exchange(&s_dec_n, 0), us = atomic_exchange(&s_dec_us, 0);
+    return n ? us / n : 0;
+}

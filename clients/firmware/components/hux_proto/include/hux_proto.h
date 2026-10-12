@@ -43,6 +43,11 @@ typedef struct {
     /** T1.16: false when the server has no live session to talk to (its
      * `session_error` says why). Missing field (older server) = true. */
     bool session_ready;
+    /** F-0024: the server agreed to Opus (`audio_params` format "opus",
+     * 24000 Hz, 1 channel, 60 ms frames, the xiaozhi-esp32 contract):
+     * audio both ways is then binary WebSocket frames, one Opus packet
+     * each. False for anything else (an older server: base64 PCM). */
+    bool audio_opus;
 } hux_msg_hello_t;
 
 /** Server session state (`state.value`). */

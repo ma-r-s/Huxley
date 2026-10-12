@@ -21,6 +21,7 @@
 #include "hux_log.h"
 #include "hux_type_probe.h"
 #include "hux_wifi_retry.h"
+#include "hux_opus.h"
 #include "hux_ws_frag.h"
 
 static const char *TAG = "hux_net";
@@ -86,6 +87,17 @@ static _Atomic bool s_ws_alive = false;
 static bool s_close_was_eviction = false;
 static char s_server_uri[128] = {0};
 static char s_home_uri[128] = {0}; /* from secrets.h: where `server` reverts to */
+/* What the library connects to: the server URI plus `audio=opus` (F-0024,
+ * the client's opt-in; the server's hello confirms it). */
+static char s_ws_uri[160] = {0};
+/* The server confirmed Opus in its hello: audio_clear then goes through
+ * hux_opus's queue, in order with the binary packets before it. */
+static _Atomic bool s_audio_opus = false;
+
+static const char *ws_uri_for(const char *base) {
+    snprintf(s_ws_uri, sizeof(s_ws_uri), "%s%saudio=opus", base, strchr(base, '?') ? "&" : "?");
+    return s_ws_uri;
+}
 /* A `server <uri>` switch in progress: the stop it does ends the client's
  * task, whose FINISH would make the app resume it on the old URI. */
 static _Atomic bool s_switching = false;
@@ -164,12 +176,12 @@ static void rx_stats_tick(uint32_t now) {
     }
     if (s_rx_audio_msgs > 0) {
         ESP_LOGI(TAG, "ws.rx.stats window_ms=%u events=%u bytes=%u msgs=%u audio_msgs=%u "
-                      "audio_ms=%u max_gap_ms=%u busy_ms=%u max_busy_ms=%u rssi=%d",
+                      "audio_ms=%u max_gap_ms=%u busy_ms=%u max_busy_ms=%u rssi=%d opus=%d dec_us=%u",
                  (unsigned)(now - s_rx_window_start_ms), (unsigned)s_rx_events,
                  (unsigned)s_rx_bytes, (unsigned)s_rx_msgs, (unsigned)s_rx_audio_msgs,
                  (unsigned)(s_rx_audio_bytes / 48), (unsigned)s_rx_max_gap_ms,
                  (unsigned)(s_rx_busy_us / 1000), (unsigned)(s_rx_max_busy_us / 1000),
-                 hux_net_rssi());
+                 hux_net_rssi(), atomic_load(&s_audio_opus), (unsigned)hux_opus_take_dec_us());
     }
     s_rx_events = s_rx_bytes = s_rx_msgs = s_rx_audio_msgs = s_rx_audio_bytes = 0;
     s_rx_max_gap_ms = s_rx_busy_us = s_rx_max_busy_us = 0;
@@ -430,9 +442,14 @@ static void dispatch_complete_message(const char *msg, size_t msg_len) {
         return;
     }
     if (hux_has_type(msg, msg_len, "\"audio_clear\"")) {
+        bool opus = atomic_load(&s_audio_opus);
+        ESP_LOGI(TAG, "ws.rx.audio_clear%s", opus ? " (behind the queued opus)" : "");
+        if (opus) {
+            hux_opus_rx_clear(); /* after the packets before it, as sent */
+            return;
+        }
         hux_net_audio_clear_fn clear =
             atomic_load_explicit(&s_audio_clear_sink, memory_order_acquire);
-        ESP_LOGI(TAG, "ws.rx.audio_clear");
         if (clear != NULL) {
             clear();
         }
@@ -479,7 +496,27 @@ static void note_close_frame(const esp_websocket_event_data_t *data) {
 static void forward_ws_text(const esp_websocket_event_data_t *data) {
     if (data->op_code != 0x01 /* TEXT */) {
         if (data->op_code == 0x02) {
-            ESP_LOGW(TAG, "ws.rx.binary len=%d (unexpected)", data->data_len);
+            /* One Opus packet per binary message (F-0024). Small (~250 B),
+             * never split across events in practice; a split one is
+             * dropped rather than decoded in pieces. */
+            uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+            uint32_t last = atomic_load_explicit(&s_rx_last_ms, memory_order_relaxed);
+            if (last != 0 && now - last > s_rx_max_gap_ms) {
+                s_rx_max_gap_ms = now - last;
+            }
+            atomic_store_explicit(&s_rx_last_ms, now, memory_order_relaxed);
+            s_rx_events++;
+            s_rx_bytes += (uint32_t)data->data_len;
+            if (data->payload_offset == 0 && data->data_len == data->payload_len) {
+                s_rx_msgs++;
+                s_rx_audio_msgs++;
+                s_rx_audio_bytes += HUX_OPUS_FRAME_SAMPLES * 2; /* as PCM: audio_ms stays true */
+                hux_opus_rx_packet((const uint8_t *)data->data_ptr, (size_t)data->data_len);
+            } else {
+                ESP_LOGW(TAG, "ws.rx.binary_split off=%d len=%d/%d (dropped)",
+                         data->payload_offset, data->data_len, data->payload_len);
+            }
+            rx_stats_tick(now);
         } else if (data->op_code == 0x08) {
             note_close_frame(data);
         }
@@ -540,6 +577,8 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
             break;
         case WEBSOCKET_EVENT_DISCONNECTED:
             ESP_LOGW(TAG, "ws.disconnected");
+            atomic_store(&s_audio_opus, false); /* the next hello decides again */
+            hux_opus_rx_reset();
             /* Any half-received message is now unrecoverable; the
              * server will resend from scratch after reconnect. */
             hux_ws_reassembler_reset(&s_reassembler);
@@ -581,7 +620,7 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
 static void ws_start(const char *uri) {
     strncpy(s_server_uri, uri, sizeof(s_server_uri) - 1);
     esp_websocket_client_config_t cfg = {
-        .uri = s_server_uri,
+        .uri = ws_uri_for(s_server_uri),
         .buffer_size = WS_BUFFER_SIZE,
         .reconnect_timeout_ms = WS_RECONNECT_MS,
         /* The library's own waits: the TCP connect, ping/pong/close
@@ -696,7 +735,7 @@ void hux_net_set_server(const char *uri, uint32_t revert_s) {
     }
     ESP_LOGW(TAG, "ws.server uri=%s was=%s revert_in_s=%u", uri, s_server_uri, (unsigned)revert_s);
     strncpy(s_server_uri, uri, sizeof(s_server_uri) - 1);
-    esp_err_t err = esp_websocket_client_set_uri(s_ws, s_server_uri);
+    esp_err_t err = esp_websocket_client_set_uri(s_ws, ws_uri_for(s_server_uri));
     if (was_running) {
         esp_err_t start = esp_websocket_client_start(s_ws);
         atomic_store(&s_ws_alive, start == ESP_OK);
@@ -727,6 +766,27 @@ uint32_t hux_net_rx_age_ms(void) {
 int hux_net_rssi(void) {
     wifi_ap_record_t ap;
     return esp_wifi_sta_get_ap_info(&ap) == ESP_OK ? ap.rssi : 0;
+}
+
+void hux_net_set_audio_opus(bool on) {
+    atomic_store(&s_audio_opus, on);
+}
+
+bool hux_net_audio_opus(void) {
+    return atomic_load(&s_audio_opus);
+}
+
+bool hux_net_send_binary(const uint8_t *data, size_t len) {
+    if (s_ws == NULL || !esp_websocket_client_is_connected(s_ws)) {
+        return false;
+    }
+    int sent = esp_websocket_client_send_bin(s_ws, (const char *)data, (int)len,
+                                             pdMS_TO_TICKS(WS_SEND_TIMEOUT_MS));
+    if (sent != (int)len) {
+        ESP_LOGW(TAG, "ws.send.incomplete binary requested=%u sent=%d", (unsigned)len, sent);
+        return false;
+    }
+    return true;
 }
 
 bool hux_net_send_text(const char *data, size_t len) {

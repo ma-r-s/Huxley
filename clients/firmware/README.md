@@ -39,6 +39,8 @@ components/
   hux_console/ Bench commands on the USB serial console (talk, say, info…)
   hux_ota/     Updates over Wi-Fi (esp_https_ota) + rollback self-test
   hux_dev/     Developer door over Wi-Fi: /info, /cmd, /coredump (token)
+  hux_opus/    Opus both ways when the server agrees (xiaozhi-esp32's
+               contract): encoder for the mic, decoder task for the speaker
 ```
 
 Invariants (see [`../CLAUDE.md`](../CLAUDE.md) for the full project

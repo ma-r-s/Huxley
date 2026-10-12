@@ -15,3 +15,6 @@ dependencies:
   # register-level init sequences live inside and we call the high-level
   # open/read/write API from hux_audio.
   espressif/esp_codec_dev: "~1.4.0"
+  # Opus for the WebSocket audio (F-0024), the codec component xiaozhi-esp32
+  # (the most used open-source ESP32 voice assistant) uses on the S3.
+  espressif/esp_audio_codec: "~2.5.0"

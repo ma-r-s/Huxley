@@ -52,6 +52,16 @@ esp_err_t hux_net_set_bandwidth(int mhz);
 void hux_net_pause(void);
 void hux_net_resume(void);
 
+/** The server's hello confirmed Opus (F-0024): binary audio both ways,
+ * audio_clear queued behind the packets. Set by the app on each hello;
+ * cleared on disconnect. */
+void hux_net_set_audio_opus(bool on);
+bool hux_net_audio_opus(void);
+
+/** One binary WebSocket message (an Opus packet). Same timeout rule as
+ * hux_net_send_text. */
+bool hux_net_send_binary(const uint8_t *data, size_t len);
+
 /** Point the WebSocket at another server (tests: through bench.py's
  * proxy), until the next boot or `revert_s` seconds (0: no revert), so a
  * test that dies can't leave the walkie pointed at nothing. Reconnects
