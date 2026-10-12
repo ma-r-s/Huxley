@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from functools import cache
 
 from build123d import Pos, Rot
 
@@ -197,6 +198,7 @@ def needs_support(clusters: list[dict], min_area: float = 1.0) -> list[dict]:
     return [k for k in clusters if k["narrow"] > BRIDGE_OK and k["area"] > min_area]
 
 
+@cache  # the bore's mouth is a boolean; in_keep_out runs per support sample
 def support_keep_outs() -> dict[str, tuple[float, float, float, float, float, float]]:
     """Close fits in the tub's top where no support may go, printed on its
     back (hx1.TOP_PRINT_UP), as boxes in the device frame (x0, x1, y0, y1,
@@ -314,6 +316,7 @@ def support_keep_outs() -> dict[str, tuple[float, float, float, float, float, fl
     }
 
 
+@cache
 def support_keep_out_rounds() -> dict[str, tuple[float, float, float, float, float]]:
     """Round close fits in the top where no support may go (see
     support_keep_outs): the lever's pivot, the knuckle's clearance round the

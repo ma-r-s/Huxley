@@ -126,6 +126,7 @@ tube), cells could jump onto the LEDs in a drop, the lever stop was cut
 away by the channel sweep (my order bug), KEY1 scraped the roof, the board
 floated 0.45 on its screws, the wires and joints were free, and the
 supports. Built:
+
 - two shells (grey faceplate + tub grey/frosted with one filament swap),
   6 x M3 x 8 through the face into M3 x 5 inserts; printed Ø2.4 lever pin
   in two blind seats, captured by closing the case;
@@ -141,10 +142,10 @@ supports. Built:
   within 0.5 mm in every direction), `tests/test_printability.py`
   (one solid each, overhang budgets, watertight STLs), shell-vs-shell
   overlap check (`disjoint_shells`). 62 green.
-Lessons: a fit check that only proves "no collision" passes floating parts
-and unassemblable ones; the one-solid, hard-stop and printability tests
-caught what collisions could not. Critic on the plan, then a second critic
-on the build, both earned their keep.
+  Lessons: a fit check that only proves "no collision" passes floating parts
+  and unassemblable ones; the one-solid, hard-stop and printability tests
+  caught what collisions could not. Critic on the plan, then a second critic
+  on the build, both earned their keep.
 
 **Rev D round 3: a way in for every part (2026-10-10)**: the second
 buildability pass moved each part along its insertion path and found rev D
@@ -222,6 +223,7 @@ and its tabs are soldered in place, and wires are measured on the print.
 
 **Round 5, final review before the tub (2026-10-11)**: a fresh critic found
 the rev E tub not ready. Fixed:
+
 - Blocker: the rocker panel's chamfer was cut turned 90 deg (a slit through
   the roof, the switch loose). Swapped; a test probes the roof and the panel.
 - The sliced tub had support inside close fits (plunger bore, lever pivot and
@@ -241,8 +243,8 @@ the rev E tub not ready. Fixed:
 - Click margin: spare plungers 0.5 and 1.0 mm longer instead of a washer that
   is not in the kit; `click_travel` now counts the stem's 0.25; plunger tip
   chamfered; three lever pins. Docs: README, MEASUREMENTS, build page.
-Not changed, on purpose: the faceplate (Mario may have printed it; its thin
-engraved labels may fill in, cosmetic only).
+  Not changed, on purpose: the faceplate (Mario may have printed it; its thin
+  engraved labels may fill in, cosmetic only).
 
 **Printing (2026-10-11)**: Mario printed the faceplate, grille, a pin and a
 plunger from the STLs (all still current; the plunger has since gained a
@@ -381,6 +383,24 @@ Lessons: (1) a 45 deg slope only prints if it grows out of supported
 material: my first slot chamfer and bevels started as knife edges in mid-air
 and drew trees; (2) "no support touching" is not "no support there": count
 the bodies; (3) measure a claim the user doubts before defending it.
+
+**Clear top, second try (2026-10-12)**: Mario has the red PLA top on; he
+wants the clear one eventually and asked for it printed overnight.
+`8_tub_top_clear`: the top alone on its back, the clarity settings, PETG
+only. Reddit (his pick for research) is blocked to both the browser and
+web search, so the settings come from forum and makers' guides for clear
+PETG: 20 to 30 mm/s, 240 to 270 C, fans off, and above all a dry spool.
+Now 25 mm/s (2.5 mm3/s cap) at 245 C (the preset; a touch over the tag's
+240 for the slower speed); 3 h 52 min, 41 g, zones clean, checked in his
+Bambu Studio too. The spool dries in the AMS first: 45 C for 12 h (Bambu
+caps PETG at 45 with PLA spools inside; Mario kept them in), humidity 53 %
+at the start, 38 % after 2 h, 37 % at 06:42; its countdown lost an hour
+overnight (ends about 13:41, not 12:40). Printing when the drying ends.
+The slower clear speed also moves the tub plate to 4 h 35 min (the test
+corner to 31 min). A re-slice ran over four hours: `in_keep_out` rebuilt the
+keep-out boxes, one a boolean (the bore's mouth), for every support sample;
+cached, the whole slice takes 19 s. Lesson: a check that runs per sample
+must not build geometry.
 
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
 bottom is fine, holders whole, no glue but the tub's halves, plastic pivot, protected cells

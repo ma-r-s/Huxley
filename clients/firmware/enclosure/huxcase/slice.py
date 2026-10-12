@@ -83,9 +83,9 @@ NO_BRIM = {"brim_type": "no_brim"}
 # is the plate's: the base prints solid too (stronger, a little slower).
 # Everything that must differ goes with the frosted filament instead, which
 # only the top uses: heat, flow, fan, and speed (a volumetric cap of
-# 0.5 x 0.2 x 40 mm/s; the guide says 20, about twice the time). Not the
+# 0.5 x 0.2 x CLARITY_SPEED). Not the
 # objects' own settings: Bambu Studio did not apply those for Mario.
-CLARITY_SPEED = 40
+CLARITY_SPEED = 25  # forum and makers' guides for clear PETG: 20 to 30 mm/s (2026-10-12)
 CLARITY_PROCESS = {
     "wall_loops": "1",
     "top_shell_layers": "0",
@@ -110,9 +110,11 @@ CLARITY_PROCESS = {
 }
 CLARITY_FILAMENT = {  # on the PETG preset
     # Mario's spool, ElitePETG Transparent, says 230-240 C at 50-100 mm/s
-    # (its tag, 2026-10-11). The guide's 270 strung badly at our 40 mm/s.
-    "nozzle_temperature": "240",  # preset 245
-    "nozzle_temperature_initial_layer": "240",  # preset 250
+    # (its tag, 2026-10-11); the guide's 270 strung badly, damp, at 40 mm/s.
+    # Forum reports for clear PETG run 240-270; 245 (the preset) at 25 mm/s,
+    # a touch over the tag for the slower speed, on a dried spool.
+    "nozzle_temperature": "245",
+    "nozzle_temperature_initial_layer": "245",  # preset 250
     "filament_flow_ratio": "1.01",  # preset 0.95
     "fan_min_speed": "0",  # preset 10
     "fan_max_speed": "0",  # preset 30
@@ -201,6 +203,17 @@ PLATES = [
     ),
 ]
 PLATES.append(
+    # The top alone, clear: the frosted PETG with the clarity settings, on its
+    # back, for the white base and red top Mario has (2026-10-12).
+    Plate(
+        "8_tub_top_clear",
+        (TOP,),
+        TREE_SUPPORTS | NO_BRIM | CLARITY_PROCESS,
+        (FROSTED,),
+        clear=1,
+    )
+)
+PLATES.append(
     # The top alone in red PLA, standard settings, to go on the white base
     # Mario has (2026-10-11, after the clear PETG top strung).
     Plate("7_tub_top_pla", (TOP,), TREE_SUPPORTS | NO_BRIM, (RED,))
@@ -210,6 +223,7 @@ KEEP_OUT = {
     "4_tub_base_and_top": (TOP, "tub_top"),
     "5_test_corner": (TEST_TOP, "test_top"),
     "7_tub_top_pla": (TOP, "tub_top"),
+    "8_tub_top_clear": (TOP, "tub_top"),
 }
 
 BED = "Textured PEI Plate"  # the plate the P2S ships with; pick yours in Bambu Studio if not

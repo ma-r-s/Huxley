@@ -209,12 +209,13 @@ own "PETG Translucent" preset for the P2S, and what carries over to a
   PETG of Mario's test corner), no top or bottom shells, so there is no sparse grid
   to show in the glow and fewer boundaries between lines. Infill lines 0.5 wide; the walls keep 0.42 so
   the fine features still print.
-- Hot and slow so the lines fuse: 240 C, the top of the 230 to 240 C that
-  Mario's spool (ElitePETG Transparent) asks for at 50 to 100 mm/s; the
-  guide's 270 strung badly on the first clear top (2026-10-11, with the AMS
-  at 48 % humidity: dry it first). Flow 1.01
-  (preset 0.95), about 40 mm/s (a cap on the frosted filament's flow,
-  4 mm3/s). The guide says 20 mm/s; that roughly doubles the top's time.
+- Hot and slow so the lines fuse: 245 C (the preset), a touch over the 230
+  to 240 C that Mario's spool (ElitePETG Transparent) asks for at 50 to
+  100 mm/s, because it runs slower here; the guide's 270 strung badly on the
+  first clear top (2026-10-11, with the AMS at 48 % humidity: dry it first).
+  Flow 1.01 (preset 0.95), about 25 mm/s (a cap on the frosted filament's
+  flow, 2.5 mm3/s): the guide says 20, and makers' clear PETG reports run 20
+  to 30 mm/s.
 - No cooling: part fan and side fan off, as the guide says; overhangs and
   bridges still get the preset's 90 %.
 - Even layers, 0.2 as the fits are tuned. The guide's 0.1 would double the
@@ -376,9 +377,10 @@ print. The same sliced are in `out/print/sliced/`.
 | `1_grey_faceplate_bridge_pin_plunger` | grey | 38 min (faceplate, bridge, 3 pins, 3 plungers) |
 | `2_black_grille` | black | 30 min |
 | `3_orange_lever` | orange | 6 min |
-| `4_tub_base_and_top` | AMS: slot 1 white PLA, slot 4 frosted PETG | 3 h 16 min; by object: the frosted top, then the base |
-| `5_test_corner` | AMS: slot 1 white PLA, slot 4 frosted PETG | 29 min; both halves' corner at the seam: print it first |
+| `4_tub_base_and_top` | AMS: slot 1 white PLA, slot 4 frosted PETG | 4 h 35 min; by object: the frosted top, then the base |
+| `5_test_corner` | AMS: slot 1 white PLA, slot 4 frosted PETG | 31 min; both halves' corner at the seam: print it first |
 | `7_tub_top_pla` | one PLA (red set) | 1 h (on its back); the top alone, standard settings, for a base already printed |
+| `8_tub_top_clear` | one PETG (frosted set) | 3 h 52 min (on its back); the top alone, clear, for a base already printed: dry the spool first |
 
 The tub's plate prints object by object, so the filament changes once,
 between the pieces, never inside one. The frosted top goes first, so its
