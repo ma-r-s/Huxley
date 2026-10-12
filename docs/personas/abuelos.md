@@ -69,15 +69,8 @@ constraints:
   - confirm_if_unclear
 
 skills:
-  audiobooks:
-    library: audiobooks
-    sounds_path: ../../_shared/sounds # framework-shared earcon palette
-    sounds_enabled: true # master toggle for all earcons + completion silence
-    silence_ms: 500 # silence sent AFTER request_response to mask model latency
-    on_complete_prompt:
-      | # LLM-narrated end-of-book message; persona-overridable
-      El libro ha llegado a su fin. Felicita al usuario por haber terminado
-      el libro y preguntale si quiere que busque otro.
+  spotify: # music and, since 2026-10-12, the books (Spotify audiobooks)
+    market: CO
   system: {}
 ```
 
@@ -97,18 +90,18 @@ A morning of real use on the phone produced 88 replies; the failures behind thes
 - **Picks from a list.** "El primero", "el segundo", "el último" right after a list mean that item, in the order it was read; no "¿cuál?".
 - **Controls follow what is playing.** "Pausa", "sigue", "ponlo", "siguiente" go to the controls of the last thing put on (book, radio or music). "Sigue con la canción" is resume, not next.
 - **Music.** A song and its artist search the song. No example artists or genres anywhere in the prompt or tool descriptions: they became the model's guess when it misheard. A station from the radio list is the radio even when pronounced a bit differently; a band or song with "radio" in its name is music.
-- **"Pon música" with nothing named continues the last music played** (Spotify keeps its last context); only if nothing was ever played does the agent ask which artist or song. This is a deliberate choice: picking a default genre or artist would assume the user's taste. "Pon un libro" works the same way through `resume_last`, which names a few titles when nothing is in progress.
+- **"Pon música" with nothing named continues the last music played** (Spotify keeps its last context); only if nothing was ever played does the agent ask which artist or song. This is a deliberate choice: picking a default genre or artist would assume the user's taste. "Pon un libro" without a title gets "¿cuál?"; naming a book continues it where it was, since Spotify keeps the place in each book.
+- **Books are Spotify audiobooks (2026-10-12, T1.39).** Mario turned the local audiobooks skill off for Abuelo; `play_music` with `kind: "audiobook"` plays the book and `music_control` pauses it or moves between chapters. Spotify gives audiobook hours only to a family plan's holder, so the household account the device plays as has hours bought for it; when they run out, the walkie says so (`audiobook_refused`). Reading speed and seeking by seconds aren't available on Spotify books. The local skill's config stays in `persona.yaml`, commented out.
 
 ## Success criteria for Abuelo v1
 
 The persona is considered v1-complete when **all** of these work end-to-end via voice only, with no technical help:
 
-- Search for a book by natural phrase (_"busca el libro de García Márquez sobre el coronel"_)
-- Start playback from a search result, or have the LLM pick the obvious top match
+- Ask for a book by title or author (_"pon Cien años de soledad"_); since 2026-10-12 books are Spotify audiobooks
 - Pause / resume mid-sentence
-- Navigate forward / backward (by seconds, minutes, or chapters)
+- Navigate forward / backward by chapter (seconds and minutes were the local skill's; Spotify books don't seek)
 - Stop playback
-- Resume later (_"sigue con el libro"_) — persists across sessions
+- Resume later by naming the book again: Spotify keeps the place across sessions
 - Every negative response offers an alternative
 
 ## Non-goals for Abuelo v1

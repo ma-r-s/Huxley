@@ -5429,7 +5429,7 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 
 ## T1.39: Spotify audiobooks on the device
 
-**Status**: `blocked` (2026-10-12, on Mario: which account pays for the device's audiobook hours) · **Effort**: S
+**Status**: `in_progress` (2026-10-12; built, waiting on Mario's smoke on the walkie) · **Effort**: S
 
 **Ask** (Mario): Spotify added audiobooks to Premium; can the device play them? On 2026-10-07 Spotify started rolling audiobooks out to 180+ markets, Colombia included (rollout "over the coming months"); Premium there includes 12 hours of listening, with the Audiobooks+ add-on (15 hours) or bought titles beyond it.
 
@@ -5439,4 +5439,14 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 
 **Mario's call**: buy hours for the household account (add-on or top-up), or pair Soloist with his own account (free 12 h, but the device then shares his account: his history, and one stream at a time with his phone).
 
-**If Soloist plays them**: `play_music` gains `kind: audiobook` (search `type=audiobook`), plays the `spotify:show:` URI; resume where it left off is Spotify's (the account keeps the position). Overlap with the local audiobooks skill ("pon un audiolibro") is a routing question for Mario.
+**Unblocked**: Mario bought hours for the household account; the same silent test then played (0:09 of the credits reached). Replaying the book continued at 0:09 into chapter 1: Spotify keeps the place, nothing to store.
+
+**Mario's call**: turn the local audiobooks skill off for Abuelo (books only from Spotify).
+
+**Built**: `play_music` `kind: "audiobook"` (search `type=audiobook`, authors as `by`); a fresh start idle within 3 s is a refusal (`REFUSED_S`), spoken (`audiobook_refused` / `start_failed`) instead of ending as a finished album; `book_not_found`; `whats_playing` names book + chapter. Abuelo: `audiobooks` block commented out, the book instructions in es/en/fr now point at `play_music` / `music_control` (no speed, no seek: Spotify books have neither).
+
+**Tests**: spotify 68 (6 new: refusal spoken for a book and for music, book kind reaches search and plays the show, whats_playing names the book, book not found, search reads authors); runtime 757, with a guard that no persona prompt names a tool of a skill it doesn't enable (fails on the old abuelos prompt with the skill off).
+
+**Docs**: docs/skills/spotify.md (Audiobooks, failures), docs/personas/abuelos.md (skills, rules, v1 criteria), docs/skills/audiobooks.md (Abuelo no longer uses it).
+
+**DoD left**: Mario asks for a book on the walkie: it plays, "pausa" / "sigue" / "siguiente capítulo" work, "¿qué está sonando?" names the book.

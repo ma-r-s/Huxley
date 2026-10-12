@@ -67,3 +67,35 @@ def test_reminder_confirmations_are_not_stop_words() -> None:
     assert lists, "abuelos defines content_stop_words"
     for lang, words in lists.items():
         assert not words & set(REMINDER_CONFIRMATIONS), (lang, words & set(REMINDER_CONFIRMATIONS))
+
+
+# Disabling a skill must take its instructions with it: abuelos dropped
+# the local audiobooks skill for Spotify's audiobooks (2026-10-12, T1.39),
+# and a prompt still telling the model to call `play_audiobook` would send
+# it after a tool that no longer exists.
+def _tools_by_skill() -> dict[str, set[str]]:
+    from importlib.metadata import entry_points
+
+    found: dict[str, set[str]] = {}
+    for ep in entry_points(group="huxley.skills"):
+        try:
+            found[ep.name] = {tool.name for tool in ep.load()().tools}
+        except Exception:  # a skill that can't list tools unconfigured is not checked
+            continue
+    return found
+
+
+@pytest.mark.parametrize(
+    "path", sorted(PERSONAS.glob("*/persona.yaml")), ids=lambda p: p.parent.name
+)
+def test_prompts_name_no_tool_of_a_skill_they_do_not_enable(path: Path) -> None:
+    persona = yaml.safe_load(path.read_text(encoding="utf-8"))
+    enabled = set((persona.get("skills") or {}).keys())
+    tools = _tools_by_skill()
+    assert "audiobooks" in tools  # the check below is live, not vacuous
+    for lang, prompt in _prompts(persona).items():
+        for skill, names in tools.items():
+            if skill in enabled:
+                continue
+            for name in names:
+                assert f"`{name}`" not in prompt, (path.parent.name, lang, skill, name)
