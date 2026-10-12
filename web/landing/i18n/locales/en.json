@@ -288,14 +288,13 @@
     "linkDocs": "Docs"
   },
   "hx1": {
-    "pill": "Hardware · HX-1",
     "titleLine1": "Hold to talk.",
     "titleLine2": "Let go to listen.",
     "subtitle": "HX-1 is the walkie-talkie Huxley's first persona speaks through. It was made for an elderly blind user: no screen, no wake word, one orange lever.",
     "ctaHow": "How it works",
     "ctaBuild": "Build one",
     "viewer": {
-      "aria": "3D model of HX-1. Drag to turn it.",
+      "aria": "HX-1, a small walkie-talkie: a white front with ten raised dots that spell “hola” in braille and a small black badge with HX-1 in orange, a black speaker grille below them, a red base, and an orange lever down its right side.",
       "loading": "Loading the model",
       "failed": "The 3D model didn't load. Reload the page to try again."
     },
@@ -381,7 +380,7 @@
       "hx_1_badge_glued": "HX-1 badge, glued"
     },
     "story": {
-      "aria": "HX-1 in 3D, staying on screen while you scroll down the page.",
+      "aria": "HX-1 up close: its face, its lever, and what is inside.",
       "dots": {
         "eyebrow": "The first thing fingers find",
         "title": "Ten dots. One word.",

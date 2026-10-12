@@ -288,14 +288,13 @@
     "linkDocs": "Docs"
   },
   "hx1": {
-    "pill": "Matériel · HX-1",
     "titleLine1": "Appuyez pour parler.",
     "titleLine2": "Relâchez pour écouter.",
     "subtitle": "HX-1 est le talkie-walkie par lequel parle la première persona de Huxley. Il a été conçu pour un utilisateur âgé et aveugle : pas d'écran, pas de mot d'activation, un seul levier orange.",
     "ctaHow": "Comment ça marche",
     "ctaBuild": "Le construire",
     "viewer": {
-      "aria": "Modèle 3D du HX-1. Faites glisser pour le tourner.",
+      "aria": "HX-1, un petit talkie-walkie : une face blanche avec dix points en relief qui écrivent « hola » en braille et un petit badge noir marqué HX-1 en orange, une grille de haut-parleur noire en dessous, une base rouge et un levier orange le long du côté droit.",
       "loading": "Chargement du modèle",
       "failed": "Le modèle 3D ne s'est pas chargé. Rechargez la page pour réessayer."
     },
@@ -395,7 +394,7 @@
       "hx_1_badge_glued": "Badge HX-1, collé"
     },
     "story": {
-      "aria": "HX-1 en 3D, qui reste à l'écran pendant que vous faites défiler la page.",
+      "aria": "Le HX-1 de près : sa face, son levier et ce qu'il y a dedans.",
       "dots": {
         "eyebrow": "Ce que les doigts trouvent d'abord",
         "title": "Dix points. Un mot.",

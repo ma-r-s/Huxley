@@ -288,14 +288,13 @@
     "linkDocs": "Docs"
   },
   "hx1": {
-    "pill": "Hardware · HX-1",
     "titleLine1": "Mantén para hablar.",
     "titleLine2": "Suelta para escuchar.",
     "subtitle": "HX-1 es el walkie-talkie a través del cual habla la primera persona de Huxley. Se hizo para un usuario mayor y ciego: sin pantalla, sin palabra de activación, una sola palanca naranja.",
     "ctaHow": "Cómo funciona",
     "ctaBuild": "Constrúyelo",
     "viewer": {
-      "aria": "Modelo 3D de HX-1. Arrastra para girarlo.",
+      "aria": "HX-1, un walkie-talkie pequeño: un frente blanco con diez puntos en relieve que dicen “hola” en braille y una plaquita negra con HX-1 en naranja, una rejilla negra de altavoz debajo, una base roja y una palanca naranja a lo largo del lado derecho.",
       "loading": "Cargando el modelo",
       "failed": "El modelo 3D no cargó. Recarga la página para intentarlo de nuevo."
     },
@@ -395,7 +394,7 @@
       "hx_1_badge_glued": "Placa HX-1, pegada"
     },
     "story": {
-      "aria": "HX-1 en 3D, que se queda en pantalla mientras bajas por la página.",
+      "aria": "HX-1 de cerca: su frente, su palanca y lo que lleva dentro.",
       "dots": {
         "eyebrow": "Lo primero que encuentran los dedos",
         "title": "Diez puntos. Una palabra.",

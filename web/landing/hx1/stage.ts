@@ -31,6 +31,7 @@ export type Pose = {
   lever: number; // 0 at rest, 1 pressed to the click
   dots: number; // braille letters lit, 0..4 (a fraction fades the next one in)
   spin: number; // 0..1: how much of the slow turntable is on
+  fit: number; // 0..1: how much the model is fitted into the band (see Stage.band)
 };
 
 export type Stage = {
@@ -39,6 +40,10 @@ export type Stage = {
   project: (v: V3) => { x: number; y: number } | null; // host pixels, for labels
   anchor: (label: string) => V3 | null; // a part's centre, where it is now
   exploded: () => number; // how far apart the parts are now, 0..1 (eased toward the pose)
+  facing: () => number; // how squarely the face points at the camera, -1..1 (0 before it loads)
+  // Host pixels, top and bottom, that a pose with fit 1 fills with the whole
+  // model, turning or not (the hero: between the page's nav and its words).
+  band: (top: number, bottom: number) => void;
   hola: () => V3; // just right of the braille dots, where the "hola." bubble's tail goes
   dispose: () => void;
 };
@@ -185,8 +190,13 @@ export async function createStage(
     lever: 0,
     dots: 0,
     spin: 0,
+    fit: 0,
   };
   let want: Pose = { ...now };
+  // The model's bounding cylinder about its turning axis (set on load), and
+  // the band a fitted pose fills.
+  let ext: { r: number; h: number } | null = null;
+  let fitBand: [number, number] | null = null;
   let dragOn = false;
   let yaw = 0, // turntable angle
     yawVel = 0;
@@ -268,6 +278,11 @@ export async function createStage(
         }
         const c = box.getCenter(new THREE.Vector3());
         modelGroup.position.set(-c.x, -box.min.y, -c.z);
+        ext = {
+          r: Math.hypot((box.max.x - box.min.x) / 2, (box.max.z - box.min.z) / 2),
+          h: box.max.y - box.min.y,
+        };
+        dirty = true;
         opts.onReady?.();
         resolve();
       },
@@ -306,24 +321,33 @@ export async function createStage(
   canvas.addEventListener("pointerup", onUp);
   canvas.addEventListener("pointercancel", onUp);
 
+  let W = 1,
+    H = 1,
+    dirty = true; // draw the next frame even if nothing moved
   const resize = () => {
     const w = host.clientWidth,
       h = host.clientHeight;
     if (!w || !h) return;
+    W = w;
+    H = h;
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
+    dirty = true;
   };
   const ro = new ResizeObserver(resize);
   ro.observe(host);
   resize();
 
   const v = new THREE.Vector3();
+  const fitV = new THREE.Vector3();
+  const fitM = new THREE.Matrix4();
   const tgtV = new THREE.Vector3();
   const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
   const approach = (dt: number, rate: number) =>
     reduced ? 1 : 1 - Math.exp(-rate * dt);
 
+  let drawn: number[] = [];
   let visible = true,
     raf = 0,
     last = performance.now();
@@ -351,6 +375,7 @@ export async function createStage(
     now.lever = lerp(now.lever, want.lever, approach(dt, 9));
     now.dots = lerp(now.dots, want.dots, approach(dt, 7));
     now.spin = lerp(now.spin, want.spin, k);
+    now.fit = lerp(now.fit, want.fit, k);
 
     // The turntable: a slow turn while spin is on, and a drag's coast;
     // with spin off it comes home to face the camera the short way round.
@@ -368,8 +393,33 @@ export async function createStage(
     camera.position.set(...now.pos);
     tgtV.set(...now.tgt);
     camera.lookAt(tgtV);
-    camera.filmOffset = -now.shift * (camera.getFilmWidth() / 2) * 0.62;
+    // The shift as a share of the view's half-width (0.38 at 0.42), the same
+    // on a portrait screen as on a wide one; three.js scales a film offset
+    // by 1 / (aspect * tan(fov / 2)).
+    camera.filmOffset = -now.shift * camera.getFilmWidth() * 0.31 * (camera.aspect / 1.6);
     camera.updateProjectionMatrix();
+    // Fitted: scale and move the picture (not the camera) so the model's
+    // bounding cylinder spans the band exactly, at any window size.
+    if (now.fit > 0.001 && ext && fitBand) {
+      camera.updateMatrixWorld();
+      let lo = Infinity,
+        hi = -Infinity;
+      for (const sx of [-1, 1])
+        for (const sz of [-1, 1])
+          for (const y of [0, ext.h]) {
+            fitV.set(sx * ext.r, y, sz * ext.r).project(camera);
+            lo = Math.min(lo, fitV.y);
+            hi = Math.max(hi, fitV.y);
+          }
+      const top = 1 - (2 * fitBand[0]) / H,
+        bottom = 1 - (2 * fitBand[1]) / H;
+      const sc = Math.min(1.3, Math.max(0.4, (top - bottom) / Math.max(1e-6, hi - lo)));
+      const S = lerp(1, sc, now.fit),
+        T = lerp(0, top - sc * hi, now.fit);
+      fitM.set(S, 0, 0, 0, 0, S, 0, T, 0, 0, 1, 0, 0, 0, 0, 1);
+      camera.projectionMatrix.premultiply(fitM);
+      camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+    }
 
     const ease = (x: number) =>
       x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
@@ -396,7 +446,16 @@ export async function createStage(
       m.emissiveIntensity = 0.35 * lit;
     });
 
-    renderer.render(scene, camera);
+    // Draw only when something moved: a settled pose costs nothing.
+    const state = [...now.pos, ...now.tgt, now.shift, f, now.lever, now.dots, now.fit, yaw, W, H];
+    let moved = dirty;
+    for (let i = 0; i < state.length && !moved; i++)
+      moved = Math.abs(state[i] - drawn[i]) > 1e-7;
+    if (moved) {
+      renderer.render(scene, camera);
+      drawn = state;
+      dirty = false;
+    }
     opts.onFrame?.();
     raf = requestAnimationFrame(frame);
   }
@@ -405,10 +464,7 @@ export async function createStage(
   const toScreen = (world: InstanceType<typeof THREE.Vector3>) => {
     world.project(camera);
     if (world.z > 1) return null;
-    return {
-      x: ((world.x + 1) / 2) * host.clientWidth,
-      y: ((1 - world.y) / 2) * host.clientHeight,
-    };
+    return { x: ((world.x + 1) / 2) * W, y: ((1 - world.y) / 2) * H };
   };
 
   return {
@@ -437,6 +493,18 @@ export async function createStage(
     },
     exploded() {
       return now.explode;
+    },
+    band(top, bottom) {
+      if (fitBand && fitBand[0] === top && fitBand[1] === bottom) return;
+      fitBand = [top, bottom];
+      dirty = true;
+    },
+    facing() {
+      if (!parts.length) return 0;
+      // the face's normal (+Z, turned by the turntable) against the way to the camera
+      const dx = now.pos[0] - now.tgt[0],
+        dz = now.pos[2] - now.tgt[2];
+      return (Math.sin(yaw) * dx + Math.cos(yaw) * dz) / Math.max(1e-6, Math.hypot(dx, dz));
     },
     hola() {
       const at = model.hola_at as V3;
