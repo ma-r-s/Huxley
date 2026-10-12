@@ -26,6 +26,14 @@
 #include "hux_ota.h"
 #include "secrets.h"
 
+/* The developer door is how this walkie is updated and debugged without
+ * opening its case: a build without it would need USB forever, and the
+ * update it arrived by could never be confirmed (hux_ota). */
+#ifndef HUX_DEV_TOKEN
+#error "HUX_DEV_TOKEN missing from main/secrets.h (see secrets.example.h)"
+#endif
+_Static_assert(sizeof(HUX_DEV_TOKEN) - 1 <= 64, "HUX_DEV_TOKEN: 64 characters at most");
+
 static const char *TAG = "huxley";
 
 /* Boot-persistence stash.
@@ -167,11 +175,7 @@ void app_main(void) {
      * a while (ESP-IDF app rollback), and the developer door (HTTP) that
      * tools/dev.py uses to update and look at the board. */
     hux_ota_boot_check();
-#ifdef HUX_DEV_TOKEN
     hux_dev_start(HUX_DEV_TOKEN);
-#else
-    hux_dev_start(NULL);
-#endif
 
     /* Plug the log drain into the net layer: log lines at or above the
      * remote threshold go to serial AND to the server as

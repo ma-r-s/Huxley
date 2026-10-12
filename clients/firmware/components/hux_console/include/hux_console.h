@@ -18,6 +18,9 @@
  *   info                heap, PSRAM, task stack headroom, ring, volume
  *                       (and the codec's register), RSSI
  *   ota <url> [force]   download the image at url, check it, boot it
+ *                       (refused while playing or listening, unless force)
+ *   ota confirm         keep the image just updated to (after 30 s up)
+ *   ota rollback        boot the other slot's image
  *                       (hux_ota; `force` takes the same version again)
  *   reboot              restart in software: the safe way for a tool to
  *                       get a fresh boot (an RTS pulse can leave the chip

@@ -13,6 +13,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "hux_audio.h"
 
 static const char *TAG = "hux_ota";
 
@@ -116,6 +117,12 @@ done:
 }
 
 bool hux_ota_start(const char *url, bool force) {
+    /* An update ends in a restart: never in the middle of a reply or a
+     * question (the user would hear it cut off) unless forced. */
+    if (!force && (hux_audio_spk_ring_used() > 0 || hux_audio_mic_is_running())) {
+        ESP_LOGW(TAG, "ota.not_started (in use: playing or listening; ota <url> force)");
+        return false;
+    }
     if (url == NULL || url[0] == '\0' || atomic_exchange(&s_busy, true)) {
         ESP_LOGW(TAG, "ota.not_started (%s)", url == NULL || url[0] == '\0' ? "no url" : "busy");
         return false;
@@ -137,11 +144,48 @@ const char *hux_ota_last_invalid(void) {
     return s_last_invalid;
 }
 
-static void selftest_done(void *arg) {
-    (void)arg;
-    /* Ran HUX_OTA_SELFTEST_S without crashing: keep this image. */
+bool hux_ota_confirm(void) {
+    if (strcmp(hux_ota_running_state(), "pending") != 0) {
+        ESP_LOGW(TAG, "ota.confirm_refused state=%s (nothing pending)", hux_ota_running_state());
+        return false;
+    }
+    int64_t up_s = esp_timer_get_time() / 1000000;
+    if (up_s < HUX_OTA_SELFTEST_S) {
+        ESP_LOGW(TAG, "ota.confirm_refused uptime_s=%d (needs %d)", (int)up_s, HUX_OTA_SELFTEST_S);
+        return false;
+    }
     esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
-    ESP_LOGW(TAG, "ota.confirmed slot=%s err=%s", hux_ota_running_slot(), esp_err_to_name(err));
+    ESP_LOGW(TAG, "ota.confirmed slot=%s uptime_s=%d err=%s", hux_ota_running_slot(), (int)up_s,
+             esp_err_to_name(err));
+    return err == ESP_OK;
+}
+
+bool hux_ota_rollback(void) {
+    if (strcmp(hux_ota_running_state(), "pending") == 0) {
+        ESP_LOGW(TAG, "ota.rollback from pending slot=%s", hux_ota_running_slot());
+        vTaskDelay(pdMS_TO_TICKS(300)); /* let the line out */
+        esp_ota_mark_app_invalid_rollback_and_reboot(); /* returns only on failure */
+        ESP_LOGE(TAG, "ota.rollback_failed (no valid image in the other slot)");
+        return false;
+    }
+    const esp_partition_t *other = esp_ota_get_next_update_partition(NULL);
+    esp_app_desc_t desc;
+    esp_ota_img_states_t st;
+    bool usable = other != NULL && esp_ota_get_partition_description(other, &desc) == ESP_OK &&
+                  (esp_ota_get_state_partition(other, &st) != ESP_OK || st == ESP_OTA_IMG_VALID);
+    if (!usable) {
+        ESP_LOGE(TAG, "ota.rollback_refused (the other slot has no valid image)");
+        return false;
+    }
+    esp_err_t err = esp_ota_set_boot_partition(other);
+    ESP_LOGW(TAG, "ota.rollback to slot=%s version=%s err=%s", other->label, desc.version,
+             esp_err_to_name(err));
+    if (err != ESP_OK) {
+        return false;
+    }
+    vTaskDelay(pdMS_TO_TICKS(300));
+    esp_restart();
+    return true;
 }
 
 void hux_ota_boot_check(void) {
@@ -156,12 +200,8 @@ void hux_ota_boot_check(void) {
         ESP_LOGW(TAG, "ota.last_invalid %s (rolled back from it)", s_last_invalid);
     }
     if (strcmp(state, "pending") == 0) {
-        esp_timer_handle_t t;
-        const esp_timer_create_args_t args = {.callback = selftest_done, .name = "ota_selftest"};
-        if (esp_timer_create(&args, &t) == ESP_OK) {
-            esp_timer_start_once(t, (uint64_t)HUX_OTA_SELFTEST_S * 1000000);
-            ESP_LOGW(TAG, "ota.pending: confirming in %d s unless it crashes first",
-                     HUX_OTA_SELFTEST_S);
-        }
+        ESP_LOGW(TAG, "ota.pending: kept only after `ota confirm` (tools/dev.py flash, after %d s); "
+                      "a restart before that boots the previous image",
+                 HUX_OTA_SELFTEST_S);
     }
 }

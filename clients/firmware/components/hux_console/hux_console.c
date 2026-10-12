@@ -119,6 +119,10 @@ void hux_console_run(char *line) {
     } else if (strcmp(cmd, "server") == 0 && argc > 1) {
         /* Until reboot: tests route the board through a proxy. */
         hux_net_set_server(argv[1]);
+    } else if (strcmp(cmd, "ota") == 0 && argc > 1 && strcmp(argv[1], "confirm") == 0) {
+        hux_ota_confirm();
+    } else if (strcmp(cmd, "ota") == 0 && argc > 1 && strcmp(argv[1], "rollback") == 0) {
+        hux_ota_rollback();
     } else if (strcmp(cmd, "ota") == 0 && argc > 1) {
         /* ESP-IDF's on-demand update: download, check, boot (hux_ota). */
         hux_ota_start(argv[1], argc > 2 && strcmp(argv[2], "force") == 0);
@@ -150,7 +154,7 @@ void hux_console_run(char *line) {
     } else {
         ESP_LOGW(TAG, "console.unknown %s (talk, release, say N, tone [hz] [ms], vol N, pa on|off, "
                       "selftest [hz], wifi off [s]|on, wifistat, info, server <uri>, reboot, "
-                      "ota <url> [force])",
+                      "ota <url> [force] | confirm | rollback)",
                  cmd);
     }
 }

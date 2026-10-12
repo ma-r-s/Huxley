@@ -279,7 +279,7 @@ good image when the server is down; this one doesn't.
 **Built**: `hux_ota` (on-demand `esp_https_ota` into the other slot;
 refuses another project's image and the running version unless forced;
 a new image confirms itself after 30 s up, else the bootloader boots
-the old one), `hux_dev` (port 80, token in `X-Huxley-Token`: `GET
+the old one; revised after review, see below), `hux_dev` (port 80, token in `X-Huxley-Token`: `GET
 /info`, `POST /cmd` = any console command, `GET /coredump`), console
 `reboot` and `ota <url> [force]`, `tools/dev.py` (finds the board in the
 server log, serves `build/`, follows the board's lines, keeps each
@@ -299,6 +299,23 @@ now has `last_invalid` (the slot and version the bootloader rejected)
 and `dev.py flash` prints it when an update doesn't stick.
 HTTP, not HTTPS: fine on the home LAN, the token is the lock. The
 bootloader and partition table still need USB.
+**Review** (fresh critic, 2026-10-12), acted on: the 30 s timer kept
+images that couldn't take the next update (dead door, bad Wi-Fi
+settings, a hang): now `dev.py flash` confirms over the door after 30 s
+(`ota confirm`), so a kept image is one that was reached and updated
+over Wi-Fi; `dev.py flash` printed "done" while still pending and
+matched versions by string (an uncommitted `X-dirty` build matched the
+old image reconnecting): it now compares the ELF hash in `/info`
+(`elf_sha`), checks the slot changed and waits for `valid`; a remote
+`wifi off` locked everyone out (now `wifi off [s]` comes back); `ota`
+rebooted the walkie mid-reply (refused while playing or listening unless
+`force`); the image server shared all of `build/` (the ELF holds the
+Wi-Fi password and the token): only the image now; the door accepted
+`change-me` and could take every socket: weak tokens refused, a build
+without one is an error, 3 sockets; `ota rollback` added. Not acted on
+yet: an automatic go-back after N crashes in a row past the confirm
+(medium; filed as F-0023), core dumps never erased after reading
+(low).
 
 ### F-0022: Measure the link instead of guessing; stalls drop the connection · in_progress 2026-10-12
 
@@ -342,6 +359,16 @@ the next 200 ms wait kills the connection and the question with it.
 **Next**: run `stall` on today's firmware and watch it fail, fix the
 send path (a stall must not kill the connection), run it again; run
 `slowdown` to put numbers on the music gaps before changing playback.
+
+### F-0023: Go back by itself after repeated crashes past the confirm · queued
+
+**Problem** (from the F-0021 review): an image that passes its 30 s and
+is confirmed, then crashes on every talk press, crash-loops for good;
+`ota rollback` needs someone to reach the door between crashes.
+**Solution**: count panics with short uptime in RTC memory (the boot
+counter is already there); after 3 in a row, `esp_ota_set_boot_partition`
+to the other slot if it's valid, and say so (`ota.auto_rollback`).
+**Effort**: half a day with a crash-on-press test image.
 
 Note on IDs: F-0011 to F-0013 were used in code comments and commit
 messages (boot buzz, decode scratch, Wi-Fi power save) but their

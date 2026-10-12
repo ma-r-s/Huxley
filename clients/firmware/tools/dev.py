@@ -15,8 +15,11 @@ it streams to the server; `cmd` and `flash` print them.
 
 `flash` is ESP-IDF's on-demand update: this tool serves the image over
 HTTP, the board downloads it with esp_https_ota, checks it, and boots it.
-A new image confirms itself after 30 s; if it crashes first, the
-bootloader goes back to the previous one (ESP-IDF app rollback).
+The new image stays "pending" until this tool, after 30 s and over
+Wi-Fi, tells it `ota confirm`; a restart before that (a crash, a power
+cut) boots the previous one (ESP-IDF app rollback). The board refuses an
+update while it's playing or listening: --force overrides that and
+allows the version already running. `cmd ota rollback` goes back by hand.
 """
 
 import argparse
@@ -147,17 +150,45 @@ def local_ip_towards(host: str) -> str:
     return ip
 
 
+def info(host: str) -> dict:
+    return json.loads(request(host, "/info"))
+
+
+def wait_info(host: str, until: float) -> dict | None:
+    """/info as soon as the board answers (it's rebooting), None at `until`."""
+    while time.time() < until:
+        try:
+            return info(host)
+        except OSError:
+            time.sleep(1)
+    return None
+
+
 def cmd_flash(host: str, force: bool) -> int:
+    """Send the image, check the board runs exactly it (the ELF hash, not a
+    version string: uncommitted builds share one), wait out the self-test
+    and confirm it. Anything short of that and the board goes back to the
+    previous image on its next restart."""
     if not IMAGE.exists():
         sys.exit(f"no {IMAGE}: run idf.py build")
     version = image_version(IMAGE)
-    if ELF.exists():
+    sha = elf_sha9(ELF) if ELF.exists() else None
+    if sha:
         ELF_ARCHIVE.mkdir(exist_ok=True)
-        shutil.copyfile(ELF, ELF_ARCHIVE / f"{version}-{elf_sha9(ELF)}.elf")
+        shutil.copyfile(ELF, ELF_ARCHIVE / f"{version}-{sha}.elf")
+    before = info(host)
 
-    class Quiet(http.server.SimpleHTTPRequestHandler):
+    class OnlyTheImage(http.server.SimpleHTTPRequestHandler):
+        # Just the image: build/ also holds the ELF and other files with
+        # the Wi-Fi password and the token in them.
         def __init__(self, *a, **kw):
             super().__init__(*a, directory=str(IMAGE.parent), **kw)
+
+        def do_GET(self):
+            if self.path != f"/{IMAGE.name}":
+                self.send_error(404)
+                return
+            super().do_GET()
 
         def log_message(self, *a):
             pass
@@ -168,7 +199,7 @@ def cmd_flash(host: str, force: bool) -> int:
             if not isinstance(sys.exc_info()[1], ConnectionError):
                 super().handle_error(request, client_address)
 
-    httpd = Server(("0.0.0.0", 0), Quiet)
+    httpd = Server(("0.0.0.0", 0), OnlyTheImage)
     port = httpd.server_address[1]
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     url = f"http://{local_ip_towards(host)}:{port}/{IMAGE.name}"
@@ -176,24 +207,44 @@ def cmd_flash(host: str, force: bool) -> int:
     offset, t0 = log_tail_from(), time.time()
     request(host, "/cmd", f"ota {url}{' force' if force else ''}".encode())
     offset, why = board_lines(
-        offset,
-        t0 + 120,
-        stop=rf"ota\.failed|ota\.refused|ota\.not_started|device {re.escape(version)}",
+        offset, t0 + 120, stop=r"ota\.failed|ota\.refused|ota\.not_started|^device "
     )
     httpd.shutdown()
     if re.search(r"ota\.(failed|refused|not_started)", why):
         print(f"not updated: {why}")
         return 1
-    info = json.loads(request(host, "/info"))
-    if info.get("version") == version:
-        print(
-            f"done in {time.time() - t0:.0f} s: running {version} in {info.get('slot')} "
-            f"({info.get('slot_state')}; it confirms itself after 30 s)"
-        )
+
+    now = wait_info(host, time.time() + 60)
+    same = (now or {}).get("elf_sha", "") == sha if sha else (now or {}).get("version") == version
+    if not now or not same or now.get("slot") == before.get("slot"):
+        print(f"not updated: the board runs {(now or before).get('version')}")
+        if (now or {}).get("last_invalid"):
+            print(f"rolled back from {now['last_invalid']}: python3 tools/dev.py coredump")
+        return 1
+    if now.get("slot_state") != "pending":
+        print(f"running {version} in {now.get('slot')} ({now.get('slot_state')})")
         return 0
-    print(f"not updated: the board runs {info.get('version')}")
-    if info.get("last_invalid"):
-        print(f"rolled back from {info['last_invalid']}: python3 tools/dev.py coredump")
+
+    # The self-test: it must keep running (no reset) and stay reachable
+    # for HUX_OTA_SELFTEST_S, then it's told to keep itself.
+    wait = max(0, 31 - int(now.get("uptime_s", 0)))
+    print(f"running {version} in {now.get('slot')}, pending: confirming in {wait} s")
+    time.sleep(wait)
+    later = wait_info(host, time.time() + 30)
+    if not later or later.get("elf_sha", later.get("version")) != now.get("elf_sha", version):
+        print("not confirmed: it restarted or went quiet during the self-test")
+        return 1
+    if later.get("uptime_s", 0) < now.get("uptime_s", 0):
+        print("not confirmed: it restarted during the self-test")
+        return 1
+    request(host, "/cmd", b"ota confirm")
+    for _ in range(10):
+        time.sleep(0.5)
+        done = info(host)
+        if done.get("slot_state") == "valid":
+            print(f"done in {time.time() - t0:.0f} s: {version} confirmed in {done.get('slot')}")
+            return 0
+    print(f"not confirmed: slot_state={done.get('slot_state')} (python3 tools/dev.py log)")
     return 1
 
 

@@ -47,7 +47,7 @@ whichever is wrong in the same commit.
 | `hux_board`             | I2C bus + TCA9555 (buttons, speaker PA)                                  | Knows what a pin means beyond its name                        |
 | `hux_button`            | Talk input (GPIO7 or K2), polled and debounced                           | Decides what a press means (that's hux_app)                   |
 | `hux_console`           | Bench commands on the USB serial console (talk, say, selftest, info…)    | Anything the product needs: it is a test seam                 |
-| `hux_ota`               | Updates over Wi-Fi into the other slot; confirms a new image after 30 s  | Decides when to update (a developer asks)                     |
+| `hux_ota`               | Updates over Wi-Fi into the other slot; keeps it on `ota confirm` (30 s+) | Decides when to update (a developer asks)                     |
 | `hux_dev`               | Developer door over Wi-Fi: `/info`, `/cmd` (console lines), `/coredump`  | Answers without the token                                     |
 
 **The dependency graph flows downward only.** `hux_app` requires

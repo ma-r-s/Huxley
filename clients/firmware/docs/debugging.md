@@ -188,13 +188,16 @@ The board's log already streams to the server (`client.huxley.firmware_log`),
 so `dev.py cmd` and `dev.py log` print the board's own lines from
 `server/runtime/logs/huxley.log`; that is also how it finds the board's
 IP. Update events: `ota.start`, `ota.image`, `ota.progress kb=`,
-`ota.refused`, `ota.failed`, `ota.done`; after the reboot `ota.boot` and
-`ota.pending` happen before Wi-Fi is up (serial only), and
-`ota.confirmed slot=` reaches the server 30 s in. A rollback shows as
-the old version reconnecting (`client.device`) without that
-`ota.confirmed`, `last_invalid` in `dev.py info` naming the image that
-crashed (`dev.py flash` prints it), and a crash dump waiting (`dev.py
-coredump`). Wrong token: `dev.denied uri=`.
+`ota.refused`, `ota.failed`, `ota.not_started` (busy, or in use), `ota.done`;
+after the reboot `ota.boot`, `ota.last_invalid` and `ota.pending`
+(they arrive with the first connect), then `ota.confirmed slot=
+uptime_s=` when `dev.py flash` sends `ota confirm` (refused before 30 s:
+`ota.confirm_refused`). A rollback shows as the old version reconnecting
+(`client.device`) without `ota.confirmed`, `last_invalid` in `dev.py
+info` naming the image that crashed (`dev.py flash` prints it), and a
+crash dump waiting (`dev.py coredump`). `ota rollback` (console or
+`dev.py cmd`) boots the other slot by hand: `ota.rollback to slot=`.
+Wrong token: `dev.denied uri=`.
 
 ## Choppy audio or dropped connections: measure both ends
 

@@ -16,6 +16,6 @@
 /* Developer access over Wi-Fi (components/hux_dev, tools/dev.py): flash,
  * health, console commands, crash dumps. Every request must carry this in
  * the X-Huxley-Token header; anyone on the LAN who has it can flash the
- * device. Make one: openssl rand -hex 16. Leave it out to turn the
- * developer server off. */
+ * device. Make one: openssl rand -hex 16 (16-64 chars; the firmware
+ * refuses "change-me" and short ones, and won't build without one). */
 #define HUX_DEV_TOKEN     "change-me"

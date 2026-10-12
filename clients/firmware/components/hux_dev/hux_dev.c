@@ -47,13 +47,15 @@ static esp_err_t info_get(httpd_req_t *req) {
     if (!authorized(req)) {
         return ESP_OK;
     }
-    char buf[512];
+    char sha[10];
+    esp_app_get_elf_sha256(sha, sizeof(sha)); /* 9 hex chars, as in a core dump */
+    char buf[600];
     int n = snprintf(buf, sizeof(buf),
-                     "{\"version\":\"%s\",\"uptime_s\":%u,\"reset_reason\":%d,"
+                     "{\"version\":\"%s\",\"elf_sha\":\"%s\",\"uptime_s\":%u,\"reset_reason\":%d,"
                      "\"heap_internal\":%u,\"heap_internal_min\":%u,\"psram\":%u,"
                      "\"ring_used\":%u,\"volume\":%d,\"rssi\":%d,\"ws_rx_age_ms\":%u,"
                      "\"slot\":\"%s\",\"slot_state\":\"%s\",\"last_invalid\":\"%s\"}\n",
-                     esp_app_get_description()->version,
+                     esp_app_get_description()->version, sha,
                      (unsigned)(esp_timer_get_time() / 1000000), (int)esp_reset_reason(),
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                      (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
@@ -61,6 +63,9 @@ static esp_err_t info_get(httpd_req_t *req) {
                      (unsigned)hux_audio_spk_ring_used(), hux_audio_get_volume(), hux_net_rssi(),
                      (unsigned)hux_net_rx_age_ms(), hux_ota_running_slot(),
                      hux_ota_running_state(), hux_ota_last_invalid());
+    if (n < 0 || n >= (int)sizeof(buf)) {
+        n = (int)strlen(buf); /* truncated: still never past the buffer */
+    }
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, buf, n);
 }
@@ -117,8 +122,10 @@ static esp_err_t coredump_get(httpd_req_t *req) {
 }
 
 void hux_dev_start(const char *token) {
-    if (token == NULL || token[0] == '\0') {
-        ESP_LOGW(TAG, "dev.off: no HUX_DEV_TOKEN in secrets.h, no developer access over Wi-Fi");
+    if (token == NULL || strlen(token) < 16 || strcmp(token, "change-me") == 0) {
+        /* The repo is public: the example token must never open a board. */
+        ESP_LOGE(TAG, "dev.off: HUX_DEV_TOKEN in secrets.h missing or weak (16+ random chars); "
+                      "no developer access over Wi-Fi");
         return;
     }
     s_token = token;
@@ -126,6 +133,9 @@ void hux_dev_start(const char *token) {
     cfg.stack_size = 8192;       /* console commands run on this task */
     cfg.task_priority = 3;       /* below audio and the app */
     cfg.lru_purge_enable = true;
+    /* 3, not 7: the WebSocket and an update's download need sockets too
+     * (CONFIG_LWIP_MAX_SOCKETS is 10; idle keep-alives are purged LRU). */
+    cfg.max_open_sockets = 3;
     httpd_handle_t srv = NULL;
     esp_err_t err = httpd_start(&srv, &cfg);
     if (err != ESP_OK) {

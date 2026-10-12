@@ -8,11 +8,15 @@
  * the LAN (tools/dev.py serves them).
  *
  * Rollback is ESP-IDF's app rollback (CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE):
- * a new image boots "pending verify" and has to confirm itself; if it
- * crashes or resets first, the bootloader goes back to the previous image.
- * The self-test is "ran HUX_OTA_SELFTEST_S seconds without crashing", not
- * "reached Wi-Fi or the server": an image must not be reverted just
- * because the network was down (why Fleet turned rollback off).
+ * a new image boots "pending verify" and stays so until `ota confirm`
+ * arrives; if it crashes or resets first, the bootloader goes back to the
+ * previous image. Confirm is accepted only after HUX_OTA_SELFTEST_S of
+ * uptime, and it comes from tools/dev.py over the developer door: an
+ * image is kept only if it ran 30 s AND can be reached and updated over
+ * Wi-Fi again (code review, F-0021). A pending image keeps running on a
+ * bad network day; only a restart before the confirm reverts it, so a
+ * server outage can't throw away a good image (why Fleet turned rollback
+ * off).
  */
 #pragma once
 
@@ -25,11 +29,22 @@ extern "C" {
 #define HUX_OTA_SELFTEST_S 30
 
 /** Download `url` into the spare slot and boot it (in a task; returns at
- * once). False if an update is already running or `url` is empty. */
+ * once). False if an update is already running, `url` is empty, or the
+ * walkie is busy (playing or listening) and not `force`. `force` also
+ * allows the version already running. */
 bool hux_ota_start(const char *url, bool force);
 
-/** At boot: log the running slot, and if this image is pending verify,
- * confirm it after HUX_OTA_SELFTEST_S seconds. */
+/** Keep the running image (it was pending verify). Refused before
+ * HUX_OTA_SELFTEST_S of uptime. */
+bool hux_ota_confirm(void);
+
+/** Boot the other slot: undo a pending image now, or go back from a
+ * confirmed one that turned out bad, if the other slot holds a valid
+ * image. Restarts on success. */
+bool hux_ota_rollback(void);
+
+/** At boot: log the running slot, its state, and the image a rollback
+ * came from. */
 void hux_ota_boot_check(void);
 
 /** "ota_0" / "ota_1", and the image state ("valid", "pending", ...). */

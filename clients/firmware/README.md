@@ -115,8 +115,10 @@ python3 tools/dev.py coredump  # fetch and decode the last crash
 `flash` refuses a build with the version already running. The version
 is `git describe` as of the last cmake configure, so a commit gets a new
 one but an uncommitted test build keeps the old one: `--force` sends it
-anyway. A new image confirms itself after 30 s; if it crashes before
-that, the bootloader boots the previous one, and `coredump` shows why.
+anyway. The new image stays pending until `flash`, 30 s later and over
+Wi-Fi, confirms it; if it crashes or restarts before that, the
+bootloader boots the previous one, and `coredump` shows why. The board
+refuses an update while it's playing or listening (`--force`).
 The token for all of this is `HUX_DEV_TOKEN` in `main/secrets.h`. USB is
 for the first flash, the bootloader, the partition table and the bench
 clips.
