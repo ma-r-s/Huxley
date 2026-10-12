@@ -372,6 +372,9 @@ class OpenAIRealtimeProvider:
         await self._send_response_create()
 
     async def _send_response_create(self, *, deferred_ms: int | None = None) -> None:
+        # This create supersedes any held back one (e.g. a retry still
+        # pending): never two for one request.
+        self._create_deferred_at = None
         fields: dict[str, Any] = {"generation": self._generation}
         if deferred_ms is not None:
             fields["deferred_ms"] = deferred_ms

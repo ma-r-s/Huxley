@@ -260,6 +260,15 @@ class TestAlreadyActiveError:
         await provider._handle_server_event(_done("resp_Y", None))
         assert CREATE not in ws.types()
 
+    async def test_a_new_create_supersedes_a_pending_retry(self, persona: PersonaSpec) -> None:
+        provider, ws, _cb = _provider(persona)
+        await provider.commit_and_request_response()
+        await provider._handle_server_event(self._ERROR)  # retry pending
+        await provider.request_response()  # sent at once: nothing known live
+        ws.sent.clear()
+        await provider._handle_server_event(_done("resp_X", None))
+        assert CREATE not in ws.types()  # not a second create for one request
+
 
 # ------------------------------------------------------- session refresh
 
