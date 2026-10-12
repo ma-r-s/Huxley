@@ -182,13 +182,11 @@ Built:
 
 Left:
 
-- **Speech over a parked stream** (found by the critic, needs the
-  coordinator, which another session was editing): an injected turn or
-  a claim parks a live stream without `stream_ended`, so the model's
-  speech then (a reminder over a book) is logged as `stream`, with no
-  file. Fix: announce the park as `stream_ended` and the resume as
-  `stream_started` (the client is told "playing" during the narration
-  today, too). Needed before the production cutover.
+- ~~Speech over a parked stream~~: done 2026-10-12 (`coord.content_paused`):
+  an injected turn or a call that parks or evicts a playing stream now
+  sends `stream_ended`, and its resume `stream_started`, so the model's
+  speech then is recorded as `model` and the walkie stops showing
+  "playing".
 - **Turn ids**: `model` segments carry no response id or turn yet (the
   AudioServer doesn't know them); `turn` bound on `transcript` and
   `cost.response_done` lines; tokens per response logged, not only the

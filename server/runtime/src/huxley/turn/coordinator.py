@@ -1232,12 +1232,29 @@ class TurnCoordinator:
             )
             await self._announce_stream_started(obs)
 
+        async def _on_pause(stopped: bool) -> None:
+            # An injected turn or a claim took the speaker from a playing
+            # stream (focus, not a hold): paused if it may come back,
+            # stopped if it was evicted. Clients see either as ended (and a
+            # resumed one as started again), as for a press: without this
+            # the walkie was still told the book played, and the recorder
+            # filed the reminder's voice under the stream.
+            await logger.ainfo(
+                "coord.content_paused",
+                turn=turn_id,
+                interface=interface_name,
+                reason="focus",
+                stopped=stopped,
+            )
+            await self._announce_stream_ended(obs, "interrupted")
+
         obs = ContentStreamObserver(
             interface_name=interface_name,
             stream=stream,
             send_audio=_factory_send_audio,
             on_eof=_on_eof,
             on_resume=_on_resume,
+            on_pause=_on_pause,
         )
         # Set the local cache BEFORE acquire — the actor may deliver
         # FOREGROUND before wait_drained returns if the mailbox is busy,

@@ -150,6 +150,7 @@ class ContentStreamObserver:
         on_eof: Callable[[], Awaitable[None]] | None = None,
         on_natural_completion: Callable[[], Awaitable[None]] | None = None,
         on_resume: Callable[[], Awaitable[None]] | None = None,
+        on_pause: Callable[[bool], Awaitable[None]] | None = None,
     ) -> None:
         self._interface_name = interface_name
         self._stream = stream
@@ -159,6 +160,11 @@ class ContentStreamObserver:
         # Fired each time a pump spawns again after the first (a resume:
         # hold released, or FOREGROUND back after a MUST_PAUSE).
         self._on_resume = on_resume
+        # Fired when focus stops a pump that was playing: BACKGROUND/
+        # MUST_PAUSE (an injected turn or a claim took the speaker; it may
+        # come back) with False, NONE (evicted for good) with True. A hold
+        # stops the pump through `hold()` instead, and its caller says so.
+        self._on_pause = on_pause
         self._spawned = False
         # Whether the client was last told this stream plays
         # (`stream_started`) rather than stopped (`stream_ended`). Kept by
@@ -298,9 +304,15 @@ class ContentStreamObserver:
                     # but keep the Activity registered. On FOREGROUND
                     # return, _spawn_pump_if_idle calls factory() again
                     # for a fresh iterator.
+                    was_playing = self._is_pumping()
                     await self._cancel_pump()
+                    if was_playing:
+                        await self._paused_by_focus(stopped=False)
             case FocusState.NONE:
+                was_playing = self._is_pumping()
                 await self._cancel_pump()
+                if was_playing:
+                    await self._paused_by_focus(stopped=True)
                 if self._natural_eof and self._on_natural_completion is not None:
                     await self._on_natural_completion()
 
@@ -440,6 +452,20 @@ class ContentStreamObserver:
             self._finished = True
             await logger.aexception(
                 "content_stream_pump_failed",
+                interface=self._interface_name,
+            )
+
+    def _is_pumping(self) -> bool:
+        return self._task is not None and not self._task.done()
+
+    async def _paused_by_focus(self, *, stopped: bool) -> None:
+        if self._on_pause is None:
+            return
+        try:
+            await self._on_pause(stopped)
+        except Exception:
+            await logger.aexception(
+                "content_stream_pause_callback_failed",
                 interface=self._interface_name,
             )
 

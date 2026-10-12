@@ -454,6 +454,51 @@ class TestContentStreamObserverHolds:
         on_resume.assert_awaited_once()  # the first spawn is not a resume
         await obs.on_focus_changed(FocusState.NONE, MixingBehavior.MUST_STOP)
 
+    async def test_focus_pause_of_a_playing_pump_calls_on_pause(self) -> None:
+        stream, _ = self._counting()
+        on_pause = AsyncMock()
+        obs = ContentStreamObserver(
+            interface_name="i", stream=stream, send_audio=AsyncMock(), on_pause=on_pause
+        )
+        await obs.on_focus_changed(FocusState.FOREGROUND, MixingBehavior.PRIMARY)
+        await asyncio.sleep(0.02)
+
+        await obs.on_focus_changed(FocusState.BACKGROUND, MixingBehavior.MUST_PAUSE)
+
+        on_pause.assert_awaited_once_with(False)
+        await obs.on_focus_changed(FocusState.NONE, MixingBehavior.MUST_STOP)
+        on_pause.assert_awaited_once()  # already stopped: NONE adds nothing
+
+    async def test_focus_eviction_of_a_playing_pump_calls_on_pause_stopped(self) -> None:
+        stream, _ = self._counting()
+        on_pause = AsyncMock()
+        obs = ContentStreamObserver(
+            interface_name="i", stream=stream, send_audio=AsyncMock(), on_pause=on_pause
+        )
+        await obs.on_focus_changed(FocusState.FOREGROUND, MixingBehavior.PRIMARY)
+        await asyncio.sleep(0.02)
+
+        await obs.on_focus_changed(FocusState.NONE, MixingBehavior.MUST_STOP)
+
+        on_pause.assert_awaited_once_with(True)
+
+    async def test_no_on_pause_when_held_or_ducked(self) -> None:
+        """A hold already stopped the pump (its caller announces); a duck
+        keeps it playing. Neither is a focus pause."""
+        stream, _ = self._counting()
+        on_pause = AsyncMock()
+        obs = ContentStreamObserver(
+            interface_name="i", stream=stream, send_audio=AsyncMock(), on_pause=on_pause
+        )
+        await obs.on_focus_changed(FocusState.FOREGROUND, MixingBehavior.PRIMARY)
+        await asyncio.sleep(0.02)
+        await obs.on_focus_changed(FocusState.BACKGROUND, MixingBehavior.MAY_DUCK)
+        await obs.hold("turn")
+        await obs.on_focus_changed(FocusState.BACKGROUND, MixingBehavior.MUST_PAUSE)
+
+        on_pause.assert_not_awaited()
+        await obs.on_focus_changed(FocusState.NONE, MixingBehavior.MUST_STOP)
+
     async def test_foreground_while_held_does_not_spawn(self) -> None:
         """An injected turn releasing DIALOG gives a held stream its
         FOREGROUND back: it stays stopped until the hold is released."""

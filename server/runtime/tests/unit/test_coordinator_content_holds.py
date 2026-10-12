@@ -463,6 +463,56 @@ class TestPressPausesAndResumes:
         assert label == "Radio Uno"
         assert stream_id == mocks["send_stream_ended"].await_args.args[0]
 
+    async def test_reminder_pause_and_resume_are_announced_to_the_client(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        """An injected turn takes the speaker through focus, not a hold:
+        the client must still hear stream_ended, then stream_started again
+        when the stream comes back, same stream_id, never two starts in a
+        row."""
+        from datetime import timedelta
+
+        media = await _start(coordinator, mocks, patience=timedelta(minutes=30))
+        assert mocks["send_stream_started"].await_count == 1
+
+        await coordinator.inject_turn("a reminder")
+        await _until(lambda: mocks["send_stream_ended"].await_count == 1)
+        (ended_id, reason), _ = mocks["send_stream_ended"].await_args
+        assert reason == "interrupted"
+        await _answer(coordinator)
+        await _until(lambda: media.runs == 2)
+
+        await _until(lambda: mocks["send_stream_started"].await_count == 2)
+        assert mocks["send_stream_started"].await_args.args[0] == ended_id
+        assert mocks["send_stream_ended"].await_count == 1
+
+    async def test_reminder_that_evicts_the_stream_announces_its_end(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        """No patience: the reminder stops the stream for good. The client
+        must still be told it ended, once."""
+        media = await _start(coordinator, mocks)
+
+        await coordinator.inject_turn("a reminder")
+        await _until(lambda: mocks["send_stream_ended"].await_count == 1)
+        await _answer(coordinator)
+
+        await _stays(lambda: media.runs == 1)
+        assert mocks["send_stream_ended"].await_count == 1
+        assert mocks["send_stream_started"].await_count == 1
+
+    async def test_call_pause_is_announced_to_the_client(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        from datetime import timedelta
+
+        await _start(coordinator, mocks, patience=timedelta(minutes=30))
+        await coordinator.start_input_claim(InputClaim(on_mic_frame=AsyncMock()))
+        await _until(lambda: coordinator.current_media_task is None)
+
+        await _until(lambda: mocks["send_stream_ended"].await_count == 1)
+        assert mocks["send_stream_ended"].await_args.args[1] == "interrupted"
+
     async def test_press_during_a_call_resumes_what_the_call_parked(
         self, coordinator: TurnCoordinator, mocks: dict[str, Any]
     ) -> None:
