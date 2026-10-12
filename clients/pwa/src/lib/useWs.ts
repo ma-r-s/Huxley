@@ -54,9 +54,8 @@ const PING_MAX_MISSES = 3;
 // after a StrictMode + eviction race).
 const HELLO_WATCHDOG_MS = 3000;
 
-// 1500 ms threshold before the auditory thinking-tone fires.
 // Visual "thinking" state fires immediately on ptt_stop (see thinkingActive).
-const SILENCE_TIMEOUT_MS = 1500;
+// The auditory waiting cue is the server's (T1.41).
 
 let _id = 0;
 const nextId = () => _id++;
@@ -308,7 +307,7 @@ export function useWs() {
   // a no-op call without waiting for state to flush).
   const currentPersonaRef = useRef<string | null>(null);
 
-  // Silence timer (auditory thinking tone — fires after SILENCE_TIMEOUT_MS)
+  // Silence timer: only cancelled now (the waiting cue is the server's, T1.41)
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const thinkingToneActiveRef = useRef(false);
 
@@ -389,21 +388,6 @@ export function useWs() {
           had_tone: hadTone,
         });
       }
-    },
-    [sendClientEvent],
-  );
-
-  const startSilenceTimer = useCallback(
-    (trigger: string) => {
-      if (silenceTimerRef.current !== null)
-        clearTimeout(silenceTimerRef.current);
-      sendClientEvent("silence_timer_started", { trigger });
-      silenceTimerRef.current = setTimeout(() => {
-        silenceTimerRef.current = null;
-        thinkingToneActiveRef.current = true;
-        sendClientEvent("thinking_tone_on", { reason: "silence_timeout" });
-        onThinkingToneStartRef.current?.();
-      }, SILENCE_TIMEOUT_MS);
     },
     [sendClientEvent],
   );
@@ -751,8 +735,10 @@ export function useWs() {
               }
               break;
             case "audio":
+              // Not the end of "thinking": the server's waiting cue (T1.41)
+              // arrives as audio too. model_speaking:true, audio_clear or a
+              // press end it.
               cancelSilenceTimer("audio_arrived");
-              setThinkingActiveSync(false);
               onAudioRef.current?.(msg.data);
               break;
             case "audio_clear":
@@ -1116,12 +1102,12 @@ export function useWs() {
       sendClientEvent("ptt_hangup_no_silence_timer");
       // Claim hangup — no listening turn, no audio coming; skip both timers.
     } else {
-      // Normal PTT — model will respond; start visual thinking immediately,
-      // and start the 1500 ms auditory tone timer separately.
+      // Normal PTT — model will respond; show "thinking" now. The sound for
+      // a long wait comes from the server (T1.41: it knows when a tool is
+      // running), so the client no longer plays its own tone.
       setThinkingActiveSync(true);
-      startSilenceTimer("ptt_stop");
     }
-  }, [sendRaw, sendClientEvent, setThinkingActiveSync, startSilenceTimer]);
+  }, [sendRaw, sendClientEvent, setThinkingActiveSync]);
 
   const wakeWord = useCallback(() => {
     cancelSilenceTimer("wake_word");
