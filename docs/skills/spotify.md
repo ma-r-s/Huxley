@@ -7,11 +7,33 @@ server's one audio channel, never through a separate speaker.
 
 ## What it does
 
-| Tool            | Args                                                                  | Returns                                                                                      |
-| --------------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `play_music`    | `query: string`, `kind?: any \| track \| artist \| album \| playlist` | `{ ok, playing, by, kind }` + `AudioStream`, or `{ ok: false, reason, say }`                 |
+| Tool            | Args                                                                   | Returns                                                                                                                         |
+| --------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `play_music`    | `query?: string`, `kind?: any \| track \| artist \| album \| playlist` | `{ ok, playing, by, kind, alternatives? }` + `AudioStream`; no query: `{ ok, action: "resume" }` + `AudioStream`; or `{ ok: false, reason, say }` |
 | `music_control` | `action: pause \| resume \| next \| previous`                         | pause: `CancelMedia`; the others: `AudioStream` (resume)                                     |
 | `whats_playing` | (none)                                                                | `{ ok, title, by, then }` (info tool; a queued turn resumes the music), or `nothing_playing` |
+
+**Search returns up to three distinct candidates.** The best plays; the
+other two go back as `alternatives` (`title`, `by`, `kind`). They are
+not spoken (a stream tool gets no follow-up round) but stay in the
+conversation, so after _"no, the other one"_ the model can pick one
+instead of repeating the same guess. Repeats (same URI, or the same
+title by the same artist) are skipped. A mixed (`any`) search puts the
+best section first: a song beats an album beats a playlist beats an
+artist, and an artist wins only when the query is its exact name.
+
+**No query** (the user asked for music without saying which): continue
+what Soloist has loaded (it keeps its last context across restarts).
+Paused: the same stream as `music_control(resume)`. Idle (it ran out; a
+single song ends that way): start that context again by its URI, since
+a bare `play` may have nothing to resume. If nothing was ever loaded,
+it answers `nothing_to_resume` and the model asks which artist or song.
+This is a deliberate persona-neutral choice: the skill never picks a
+default genre or artist, because that would assume the user's taste.
+
+The tool descriptions name no example artists or genres: when the model
+misheard, it used them as its guess (2026-10-12: a request for one band
+searched the example genre and played the example artist).
 
 An artist plays as the artist (`spotify:artist:...`), like the play
 button on an artist page: their popular songs, then more. Soloist's docs
@@ -78,6 +100,7 @@ Spotify app ─┐                        ┌─ WebSocket (control, events) ─
 | Soloist not paired                            | `player_not_paired`; offers radio                                                             |
 | Web API app missing or failing                | `search_not_configured` / `search_failed`; offers radio                                       |
 | Nothing found                                 | `not_found`; asks for another song or artist                                                  |
+| No query and nothing ever played              | `nothing_to_resume`; asks which artist or song                                                |
 | Soloist doesn't start playing within 10 s     | stream ends, narrated `start_failed`                                                          |
 | Someone picks another device in a Spotify app | stream ends, narrated `takeover` (no pause sent)                                              |
 | The audio feed drops mid-song                 | stream ends, narrated `interrupted`                                                           |
@@ -135,7 +158,9 @@ In short:
 
 `spotify.setup_complete`, `spotify.ws_state` (connected / retrying),
 `spotify.auth_state` (logged in, active), `spotify.playback` (status,
-context), `spotify.track`, `spotify.play_requested` (query, match, uri),
+context), `spotify.track`, `spotify.play_requested` (query, the kind asked and
+the kind matched, match, uri, `alternatives`), `spotify.play_last`
+(context and `restart` for a request with no query),
 `spotify.play_started` (`latency_ms`, context), `spotify.start_failed`,
 `spotify.stream_ended` (`reason`: cancelled, finished, takeover,
 paused_elsewhere, capture_closed, start_failed, player_offline),

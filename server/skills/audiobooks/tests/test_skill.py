@@ -321,8 +321,13 @@ class TestResumeLast:
         result = await audiobooks_skill.handle("resume_last", {})
         data = json.loads(result.output)
         assert data["resumed"] is False
-        assert "No tiene ningún libro a medias" in data["message"]
+        assert "No hay ningún libro a medias" in data["message"]
         assert not isinstance(result.side_effect, AudioStream)
+        # "Pon un libro" with nothing in progress: a few titles to pick
+        # from, not a bare "search for something?".
+        assert 0 < len(data["results"]) <= 5
+        assert {"id", "title", "author"} <= set(data["results"][0])
+        assert data["total"] == len(audiobooks_skill._catalog)
 
     async def test_resume_last_picks_up_previously_played_book(
         self,
@@ -564,6 +569,28 @@ class TestToolsExposed:
     def test_resume_last_tool_is_exposed(self, audiobooks_skill: AudiobooksSkill) -> None:
         names = [t.name for t in audiobooks_skill.tools]
         assert "resume_last" in names
+
+    def test_search_says_an_empty_query_lists_everything(
+        self, audiobooks_skill: AudiobooksSkill
+    ) -> None:
+        # "Cuales tienes?" searched "audiolibros disponibles" and got 5 of
+        # 19 books (2026-10-12); the model didn't know "" lists them all.
+        search = next(t for t in audiobooks_skill.tools if t.name == "search_audiobooks")
+        assert "`query` vacío" in search.description
+        assert "Vacío" in search.parameters["properties"]["query"]["description"]
+
+    def test_play_resolves_a_pick_from_the_list_just_read(
+        self, audiobooks_skill: AudiobooksSkill
+    ) -> None:
+        # "Ponle el segundo" after a list got "which one?" (2026-10-12).
+        play = next(t for t in audiobooks_skill.tools if t.name == "play_audiobook")
+        assert "'el segundo'" in play.description
+        assert "no preguntes cuál" in play.description
+
+    def test_control_is_for_books_only(self, audiobooks_skill: AudiobooksSkill) -> None:
+        # "Ponlo" with music playing paused the book instead (2026-10-12).
+        control = next(t for t in audiobooks_skill.tools if t.name == "audiobook_control")
+        assert "Solo para libros" in control.description
 
 
 class TestSoundPalette:

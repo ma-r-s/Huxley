@@ -152,11 +152,11 @@ If your skill could surface adult or profane content (search results, news headl
 
 ### `echo_short_input`
 
-Prompt-level only — no skill action required. The model echoes very short inputs back to the user before acting. Your tool descriptions should be precise enough that even a single-word input like _"libros"_ resolves unambiguously.
+Prompt-level only, no skill action required. The model echoes very short inputs back to the user before acting, except clear short commands (_"pausa"_, _"siguiente"_), asking for something by name (_"pon la radio"_, _"pon <nombre>"_) and answers to a question it just asked, which run directly. Your tool descriptions should list the short phrases that map to each action (_"sigue"_ is `resume`, not `next`) so a single word resolves unambiguously.
 
 ### `confirm_if_unclear`
 
-Prompt-level only — no skill action required. The model asks one clarifying question if it isn't confident it understood the request before calling a tool. Your tool descriptions should document unambiguous trigger phrases so the model can act directly on clear input.
+Prompt-level only, no skill action required. For actions that are easy to undo (playing, pausing, searching, volume) the model acts on its best guess and lets the user correct it; it asks one clarifying question first only for actions that can't be undone or reach other people. So a search tool should return its runners-up (the spotify skill's `alternatives`): after _"no"_ the model can pick one instead of repeating the same guess. Don't put example names (artists, genres) in tool descriptions: a model that misheard uses them as its guess.
 
 ### Forward-compatibility
 

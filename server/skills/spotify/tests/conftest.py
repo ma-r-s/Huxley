@@ -63,13 +63,18 @@ class FakeSoloist(SoloistClient):
 
 
 class FakeSearch:
-    def __init__(self, match: Match | None) -> None:
+    """`match` is the best result; `others` the runners-up."""
+
+    def __init__(self, match: Match | None, others: list[Match] | None = None) -> None:
         self.match = match
+        self.others = others or []
         self.queries: list[tuple[str, str]] = []
 
-    async def find(self, query: str, kind: str = "any") -> Match | None:
+    async def candidates(self, query: str, kind: str = "any", *, limit: int = 3) -> list[Match]:
         self.queries.append((query, kind))
-        return self.match
+        if self.match is None:
+            return []
+        return [self.match, *self.others][:limit]
 
     async def aclose(self) -> None:
         return None

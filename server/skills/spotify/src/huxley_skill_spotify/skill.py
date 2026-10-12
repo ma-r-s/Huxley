@@ -8,8 +8,9 @@ TCP (`capture.py`), as an `AudioStream`, the same path radio uses.
 Huxley stays the one audio pipe: Soloist never plays to a speaker.
 
 Tools:
-- `play_music(query, kind?)`: search and play a song, artist, album or
-  playlist.
+- `play_music(query?, kind?)`: search and play a song, artist, album or
+  playlist (the runners-up go back as `alternatives`). No query: continue
+  what played last.
 - `music_control(action)`: pause, resume, next, previous.
 - `whats_playing()`: what is on. An info tool: the model speaks the
   answer; if a press just stopped the music, a queued turn (drained
@@ -95,6 +96,9 @@ _SAY: dict[str, dict[str, str]] = {
             "otra canción o artista."
         ),
         "nothing_playing": "Dile al usuario que no está sonando nada en Spotify.",
+        "nothing_to_resume": (
+            "Pregúntale al usuario, en una frase corta, qué artista o canción quiere oír."
+        ),
         "start_failed": (
             "Dile al usuario, en una frase, que Spotify no pudo poner la música y "
             "ofrécele poner la radio."
@@ -123,6 +127,7 @@ _SAY: dict[str, dict[str, str]] = {
             "another song or artist."
         ),
         "nothing_playing": "Tell the user nothing is playing on Spotify.",
+        "nothing_to_resume": "Ask the user, in one short sentence, which artist or song to play.",
         "start_failed": (
             "Tell the user, in one sentence, that Spotify couldn't start the music; "
             "offer the radio."
@@ -160,6 +165,10 @@ _SAY: dict[str, dict[str, str]] = {
             "s'il veut une autre chanson ou un autre artiste."
         ),
         "nothing_playing": "Dis à l'utilisateur que rien ne joue sur Spotify.",
+        "nothing_to_resume": (
+            "Demande à l'utilisateur, en une phrase courte, quel artiste ou quelle "
+            "chanson il veut écouter."
+        ),
         "start_failed": (
             "Dis à l'utilisateur, en une phrase, que Spotify n'a pas pu lancer la "
             "musique ; propose la radio."
@@ -312,24 +321,39 @@ class SpotifySkill:
     def tools(self) -> list[ToolDefinition]:
         lang = self._lang()
         kinds = list(KINDS)
+        # No example artists or genres in these texts: the model used them
+        # as its guess when it misheard (2026-10-12), so they stay abstract.
         if lang == "es":
             play = (
                 "Pone música de Spotify: una canción, un artista, un álbum o una lista. "
-                "ANTES de llamar di algo breve como 'a ver, la busco'. Cuando el resultado "
-                "diga qué va a sonar, díselo al usuario con esas palabras; nunca inventes "
-                "el nombre de la canción ni del artista. Para emisoras de radio usa la "
-                "radio, no esto."
+                "ANTES de llamar di algo breve como 'a ver, la busco'. Los nombres pueden "
+                "estar en inglés o en cualquier idioma: pásalos tal como los oíste, sin "
+                "traducirlos ni cambiarlos por otro parecido. Si dudas del nombre, llama "
+                "igual con tu mejor suposición en vez de preguntar. Si el usuario te "
+                "corrige ('no, ...'), no repitas la misma búsqueda: prueba otra "
+                "interpretación o una de las `alternatives` del resultado anterior. Si "
+                "pidió música sin decir cuál ('pon música'), llama sin `query`: sigue con "
+                "lo último que sonó. Cuando el resultado diga qué va a sonar, díselo al "
+                "usuario con esas palabras; nunca inventes el nombre de la canción ni del "
+                "artista. Para emisoras de radio usa la radio, no esto."
             )
-            query = "Lo que pidió el usuario: título y/o artista, o un género ('boleros')."
+            query = (
+                "Los nombres tal como los dijo el usuario, sin traducir. Si nombró una "
+                "canción y su artista ('<canción> de <artista>'), pon los dos: "
+                "'<canción> <artista>'. Vacío si no dijo qué música."
+            )
             kind = (
-                "'track' si pidió una canción concreta, 'artist' si pidió 'algo de' un "
-                "artista, 'album', 'playlist' para una lista o un género, 'any' si no "
-                "está claro."
+                "'track' si nombró una canción (con o sin artista), 'artist' si pidió "
+                "'algo de' un artista sin nombrar canción, 'album', 'playlist' para una "
+                "lista o un estilo de música, 'any' si no está claro."
             )
             control = (
                 "Controla la música de Spotify. action: 'pause' (pausa, para, silencio), "
-                "'resume' (sigue, continúa, vuelve a poner la música), 'next' (siguiente, "
-                "otra canción), 'previous' (la anterior)."
+                "'resume' (sigue, sigue con la canción, continúa, vuelve a poner la "
+                "música; 'ponlo' si lo último que sonaba era música), 'next' solo si "
+                "pide OTRA canción (siguiente, otra, "
+                "cambia la canción, pasa), 'previous' (la anterior). 'Sigue' es seguir "
+                "con la misma: 'resume', no 'next'."
             )
             whats = (
                 "Dice qué está sonando en Spotify ('¿qué canción es esta?', '¿quién "
@@ -340,18 +364,33 @@ class SpotifySkill:
         elif lang == "fr":
             play = (
                 "Joue de la musique Spotify : une chanson, un artiste, un album ou une "
-                "playlist. AVANT l'appel, dis brièvement 'je cherche'. Annonce ce qui va "
-                "jouer avec les mots du résultat ; n'invente jamais le titre ni "
-                "l'artiste. Pour une station de radio, utilise la radio."
+                "playlist. AVANT l'appel, dis brièvement 'je cherche'. Les noms peuvent "
+                "être en anglais ou en toute autre langue : passe-les tels que tu les as "
+                "entendus, sans les traduire ni les remplacer par un nom proche. Si tu "
+                "doutes du nom, appelle quand même avec ta meilleure supposition au lieu "
+                "de demander. Si l'utilisateur te corrige ('non, ...'), ne refais pas la "
+                "même recherche : essaie une autre interprétation ou une des "
+                "`alternatives` du résultat précédent. S'il demande de la musique sans "
+                "dire laquelle ('mets de la musique'), appelle sans `query` : la dernière "
+                "musique reprend. Annonce ce qui va jouer avec les mots du résultat ; "
+                "n'invente jamais le titre ni l'artiste. Pour une station de radio, "
+                "utilise la radio."
             )
-            query = "Ce que l'utilisateur a demandé : titre et/ou artiste, ou un genre."
+            query = (
+                "Les noms tels que l'utilisateur les a dits, sans traduire. S'il a nommé "
+                "une chanson et son artiste ('<chanson> de <artiste>'), mets les deux : "
+                "'<chanson> <artiste>'. Vide s'il n'a pas dit quelle musique."
+            )
             kind = (
-                "'track' pour une chanson précise, 'artist' pour 'quelque chose de' un "
-                "artiste, 'album', 'playlist' pour une liste ou un genre, 'any' sinon."
+                "'track' s'il a nommé une chanson (avec ou sans artiste), 'artist' pour "
+                "'quelque chose de' un artiste sans chanson précise, 'album', 'playlist' "
+                "pour une liste ou un style de musique, 'any' sinon."
             )
             control = (
-                "Contrôle la musique Spotify. action : 'pause', 'resume' (reprendre), "
-                "'next' (suivante), 'previous' (précédente)."
+                "Contrôle la musique Spotify. action : 'pause', 'resume' (reprends, "
+                "continue, remets-la), 'next' seulement pour UNE AUTRE chanson "
+                "(suivante, une autre, change de chanson), 'previous' (précédente). "
+                "'Continue' veut dire la même chanson : 'resume', pas 'next'."
             )
             whats = (
                 "Dit ce qui joue sur Spotify ('c'est quelle chanson ?'). Appelle-la "
@@ -362,19 +401,33 @@ class SpotifySkill:
         else:
             play = (
                 "Play music from Spotify: a song, an artist, an album or a playlist. "
-                "BEFORE calling, briefly say something like 'let me find it'. When the "
-                "result says what will play, tell the user in those words; never invent "
-                "the song or artist. For radio stations use the radio, not this."
+                "BEFORE calling, briefly say something like 'let me find it'. Names may "
+                "be in any language: pass them as you heard them, without translating "
+                "them or swapping in a similar name. If you're unsure of the name, call "
+                "anyway with your best guess instead of asking. If the user corrects you "
+                "('no, ...'), don't repeat the same search: try another reading or one "
+                "of the `alternatives` from the previous result. If they asked for music "
+                "without saying which ('play some music'), call without `query`: the "
+                "last music continues. When the result says what will play, tell the "
+                "user in those words; never invent the song or artist. For radio "
+                "stations use the radio, not this."
             )
-            query = "What the user asked for: title and/or artist, or a genre ('boleros')."
+            query = (
+                "The names as the user said them, untranslated. If they named a song "
+                "and its artist ('<song> by <artist>'), include both: '<song> <artist>'. "
+                "Empty if they didn't say which music."
+            )
             kind = (
-                "'track' for a specific song, 'artist' for 'something by' an artist, "
-                "'album', 'playlist' for a list or a genre, 'any' if unclear."
+                "'track' if they named a song (with or without the artist), 'artist' for "
+                "'something by' an artist with no song named, 'album', 'playlist' for a "
+                "list or a style of music, 'any' if unclear."
             )
             control = (
                 "Control the Spotify music. action: 'pause' (pause, stop, quiet), "
-                "'resume' (continue, play again), 'next' (next, another song), "
-                "'previous' (the previous one)."
+                "'resume' (continue, keep going, play again; 'play it' if music was the "
+                "last thing playing), 'next' only for "
+                "ANOTHER song (next, another one, skip), 'previous' (the previous one). "
+                "'Keep going' means the same song: 'resume', not 'next'."
             )
             whats = (
                 "Says what is playing on Spotify ('what song is this?', 'who sings "
@@ -392,7 +445,8 @@ class SpotifySkill:
                         "query": {"type": "string", "description": query},
                         "kind": {"type": "string", "enum": kinds, "description": kind},
                     },
-                    "required": ["query"],
+                    # No query means "some music": the last thing continues.
+                    "required": [],
                 },
             ),
             ToolDefinition(
@@ -428,27 +482,71 @@ class SpotifySkill:
         blocked = self._unavailable()
         if blocked:
             return await self._fail(blocked, query=query)
+        if not query.strip():
+            return await self._play_last()
         if self._search is None:
             return await self._fail("search_not_configured", query=query)
         try:
-            match = await self._search.find(query, kind)
+            found = await self._search.candidates(query, kind)
         except SearchError as exc:
             await self._log().awarning("spotify.search_failed", query=query, error=str(exc))
             return await self._fail("search_failed", query=query)
-        if match is None:
+        if not found:
             return await self._fail("not_found", query=query)
+        match, others = found[0], found[1:]
         await self._log().ainfo(
             "spotify.play_requested",
             query=query,
+            asked_kind=kind,
             kind=match.kind,
             title=match.title,
             artist=match.artist,
             uri=match.uri,
+            alternatives=[f"{m.title} / {m.artist}" for m in others],
         )
-        payload = {"ok": True, "playing": match.title, "by": match.artist, "kind": match.kind}
+        payload: dict[str, Any] = {
+            "ok": True,
+            "playing": match.title,
+            "by": match.artist,
+            "kind": match.kind,
+        }
+        if others:
+            # Not spoken now (a stream tool gets no follow-up round); it
+            # stays in the conversation for "no, the other one".
+            payload["alternatives"] = [
+                {"title": m.title, "by": m.artist, "kind": m.kind} for m in others
+            ]
         return ToolResult(
             output=json.dumps(payload, ensure_ascii=False),
             side_effect=self._stream(start=match),
+        )
+
+    async def _play_last(self) -> ToolResult:
+        """Music asked for with nothing named: continue what Soloist had
+        loaded last (it keeps it across restarts). Persona-neutral: no
+        default genre or artist is ever guessed. With nothing loaded,
+        ask instead of failing after the 10 s start timeout."""
+        state = self._require_client().state
+        context = state.context_uri
+        if not context:
+            return await self._fail("nothing_to_resume")
+        # Paused: a bare play resumes it. Idle: it ran out (a single song
+        # ends that way), so start that context again by its URI rather
+        # than send a bare play Soloist may have nothing to resume for.
+        finished = state.status == "idle"
+        await self._log().ainfo("spotify.play_last", context=context, restart=finished)
+        if not finished:
+            return ToolResult(
+                output=json.dumps({"ok": True, "action": "resume"}),
+                side_effect=self._stream(),
+            )
+        parts = context.split(":")
+        kind = parts[1] if len(parts) == 3 and parts[1] in KINDS else "any"
+        title, by = describe_item(state.item)
+        again = Match(uri=context, kind=kind, title=title or "Spotify", artist=by)
+        return ToolResult(
+            output=json.dumps({"ok": True, "action": "restart"}),
+            side_effect=self._stream(start=again),
         )
 
     async def _music_control(self, action: str) -> ToolResult:

@@ -142,7 +142,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "search_match_msg": "Encontré estos libros.",
         "not_found": "No encuentro '{query}'. ¿Quiere que le diga qué libros tengo?",
         "probe_failed": "No pude abrir ese libro. Déjeme intentarlo otra vez.",
-        "no_resume": "No tiene ningún libro a medias. ¿Busco algo?",
+        "no_resume": "No hay ningún libro a medias. Estos son algunos de la biblioteca.",
         "no_active_book": "No hay ningún libro activo. ¿Quiere que busque uno?",
         "missing_book": "No encuentro ese libro en la biblioteca.",
         "no_in_progress": "No tiene ningún libro empezado. ¿Quiere que le busque uno?",
@@ -172,7 +172,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "search_match_msg": "I found these books.",
         "not_found": "I can't find '{query}'. Want me to list what I have?",
         "probe_failed": "I couldn't open that book. Let me try again.",
-        "no_resume": "You don't have any book in progress. Want me to find one?",
+        "no_resume": "No book is in progress. These are a few from the library.",
         "no_active_book": "There's no active book. Would you like me to find one?",
         "missing_book": "I can't find that book in the library.",
         "no_in_progress": "You haven't started any book. Want me to find one?",
@@ -202,7 +202,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "search_match_msg": "J'ai trouvé ces livres.",
         "not_found": "Je ne trouve pas « {query} ». Veux-tu que je te dise ce que j'ai ?",
         "probe_failed": "Je n'ai pas pu ouvrir ce livre. Laisse-moi réessayer.",
-        "no_resume": "Tu n'as aucun livre en cours. Veux-tu que j'en cherche un ?",
+        "no_resume": "Aucun livre en cours. En voici quelques-uns de la bibliothèque.",
         "no_active_book": "Aucun livre actif. Veux-tu que je t'en trouve un ?",
         "missing_book": "Je ne trouve pas ce livre dans la bibliothèque.",
         "no_in_progress": "Tu n'as commencé aucun livre. Veux-tu que j'en cherche un ?",
@@ -229,9 +229,15 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
     "es": {
         "search_audiobooks": (
             "Busca audiolibros en la biblioteca local del usuario. "
-            "Devuelve una lista de libros que coinciden con la búsqueda."
+            "Devuelve una lista de libros que coinciden con la búsqueda. "
+            "Para saber qué libros hay ('¿qué libros tienes?', '¿cuáles "
+            "hay?'), pasa `query` vacío: devuelve la biblioteca (hasta 20 "
+            "libros; `total` dice cuántos hay)."
         ),
-        "search_query_param": "Texto de búsqueda (título, autor, o parte del nombre)",
+        "search_query_param": (
+            "Texto de búsqueda (título, autor, o parte del nombre). Vacío "
+            "para listar todos los libros."
+        ),
         "play_audiobook": (
             "Reproduce un audiolibro. Puedes pasarle el ID exacto (de "
             "search_audiobooks), o simplemente el título o el autor — la "
@@ -240,6 +246,9 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "Si el usuario dice 'desde el principio', 'desde el inicio', "
             "'empieza de nuevo', 'vuelve al inicio', 'empieza de cero' o "
             "algo parecido, pasa `from_beginning: true`. "
+            "Si el usuario elige de una lista que acabas de leer ('el "
+            "segundo', 'el último', 'ese'), pasa el título de ese libro, "
+            "contando en el orden en que los dijiste; no preguntes cuál. "
             "Antes de reproducir, acusa recibo brevemente al usuario "
             "(por ejemplo: 'Ahí le pongo {título}.'). Nunca empieces el "
             "libro en silencio."
@@ -257,17 +266,20 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
         "resume_last": (
             "Reanuda el audiolibro que el usuario escuchó por última vez, "
             "desde donde lo dejó. Úsalo cuando el usuario diga 'sigue con "
-            "el libro', 'el libro de anoche', 'continúa el libro' y "
-            "similares, sin mencionar un título específico. Antes de "
+            "el libro', 'el libro de anoche', 'continúa el libro', 'pon "
+            "un libro' y similares, sin mencionar un título específico. "
+            "Si no hay ninguno a medias, dile al usuario algunos títulos "
+            "de la biblioteca. Antes de "
             "reanudar, acusa recibo brevemente ('Sigo con {título} donde "
             "lo dejó.')."
         ),
         "audiobook_control": (
             "Controla la reproducción del audiolibro actual: pausar, "
             "reanudar, retroceder, adelantar, detener, o cambiar la "
-            "velocidad. Antes de llamar esta herramienta, acusa recibo "
-            "brevemente al usuario (por ejemplo: 'Listo, retrocedo 30 "
-            "segundos.'). Nunca ejecutes la acción en silencio. Para "
+            "velocidad. Solo para libros: si lo último que sonaba es "
+            "música o la radio, usa sus propios controles. Antes de "
+            "llamar esta herramienta, acusa recibo brevemente al usuario "
+            "(por ejemplo: 'Listo, retrocedo 30 segundos.'). Nunca ejecutes la acción en silencio. Para "
             "retroceder/adelantar, el valor por defecto es 30 segundos. "
             "Para `set_speed`, usa `speed` entre 0.5 (mitad de velocidad) "
             "y 2.0 (doble); 1.0 es la velocidad normal. Sugerencias: "
@@ -295,15 +307,23 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
     "en": {
         "search_audiobooks": (
             "Search the user's local audiobook library. "
-            "Returns a list of books matching the query."
+            "Returns a list of books matching the query. To say which "
+            "books there are ('what books do you have?', 'which ones?'), "
+            "pass an empty `query`: it returns the library (up to 20 "
+            "books; `total` says how many there are)."
         ),
-        "search_query_param": "Search text (title, author, or part of the name)",
+        "search_query_param": (
+            "Search text (title, author, or part of the name). Empty to list every book."
+        ),
         "play_audiobook": (
             "Play an audiobook. Pass the exact id (from search_audiobooks) "
             "or just the title or author — the skill fuzzy-matches. "
             "Resumes from the last saved position unless `from_beginning` "
             "is set. If the user says 'from the start', 'start over', "
             "'begin again' or similar, pass `from_beginning: true`. "
+            "If the user picks from a list you just read ('the second "
+            "one', 'the last one', 'that one'), pass that book's title, "
+            "counting in the order you said them; don't ask which. "
             "Before playback, briefly acknowledge the user (e.g. 'Playing "
             "{title} for you.'). Never start the book silently."
         ),
@@ -319,13 +339,16 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
         "resume_last": (
             "Resume the audiobook the user was last listening to, from "
             "where they left off. Use when the user says 'keep going with "
-            "the book', 'continue my book' and similar without naming a "
-            "title. Before resuming, briefly acknowledge (e.g. 'Resuming "
-            "{title} where you left off.')."
+            "the book', 'continue my book', 'put on a book' and similar "
+            "without naming a title. If none is in progress, tell the user "
+            "a few titles from the library. Before resuming, briefly "
+            "acknowledge (e.g. 'Resuming {title} where you left off.')."
         ),
         "audiobook_control": (
             "Control current audiobook playback: pause, resume, rewind, "
-            "forward, stop, or change speed. Before calling this tool, "
+            "forward, stop, or change speed. Books only: if the last thing "
+            "playing was music or the radio, use their own controls. "
+            "Before calling this tool, "
             "briefly acknowledge the user (e.g. 'Going back 30 seconds.'). "
             "Never perform the action silently. Rewind/forward defaults to "
             "30 seconds. For `set_speed`, use `speed` between 0.5 (half) "
@@ -351,9 +374,15 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
         "search_audiobooks": (
             "Recherche des livres audio dans la bibliothèque locale de "
             "l'utilisateur. Renvoie une liste de livres correspondant à "
-            "la recherche."
+            "la recherche. Pour dire quels livres il y a ('quels livres "
+            "as-tu ?', 'lesquels ?'), passe une `query` vide : elle "
+            "renvoie la bibliothèque (jusqu'à 20 livres ; `total` dit "
+            "combien il y en a)."
         ),
-        "search_query_param": "Texte de recherche (titre, auteur, ou partie du nom)",
+        "search_query_param": (
+            "Texte de recherche (titre, auteur, ou partie du nom). Vide "
+            "pour lister tous les livres."
+        ),
         "play_audiobook": (
             "Lit un livre audio. Passe l'identifiant exact (de "
             "search_audiobooks) ou simplement le titre ou l'auteur — la "
@@ -361,7 +390,11 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "depuis la dernière position sauvegardée sauf indication "
             "contraire. Si l'utilisateur dit 'depuis le début', "
             "'recommence', 'reprends au début', passe "
-            "`from_beginning: true`. Avant de lancer, accuse brièvement "
+            "`from_beginning: true`. Si l'utilisateur choisit dans une "
+            "liste que tu viens de lire ('le deuxième', 'le dernier', "
+            "'celui-là'), passe le titre de ce livre, en comptant dans "
+            "l'ordre où tu les as dits ; ne demande pas lequel. "
+            "Avant de lancer, accuse brièvement "
             "réception (par exemple : 'Je te mets {title}.'). Ne commence "
             "jamais le livre en silence."
         ),
@@ -377,13 +410,17 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
         "resume_last": (
             "Reprend le livre audio que l'utilisateur écoutait en dernier, "
             "là où il s'est arrêté. À utiliser quand l'utilisateur dit "
-            "'reprends le livre', 'continue le livre' et similaires sans "
-            "mentionner de titre. Avant de reprendre, accuse brièvement "
+            "'reprends le livre', 'continue le livre', 'mets un livre' et "
+            "similaires sans mentionner de titre. S'il n'y en a aucun en "
+            "cours, dis à l'utilisateur quelques titres de la "
+            "bibliothèque. Avant de reprendre, accuse brièvement "
             "réception ('Je reprends {title} où tu t'es arrêté.')."
         ),
         "audiobook_control": (
             "Contrôle la lecture du livre audio en cours : pause, reprise, "
             "retour en arrière, avance, arrêt, ou changement de vitesse. "
+            "Seulement pour les livres : si ce qui jouait en dernier est "
+            "de la musique ou la radio, utilise leurs propres commandes. "
             "Avant d'appeler cet outil, accuse brièvement réception (par "
             "exemple : 'Je reviens 30 secondes en arrière.'). N'exécute "
             "jamais l'action en silence. Pour reculer/avancer, la valeur "
@@ -1241,10 +1278,22 @@ class AudiobooksSkill:
         """Resume the most-recently-played book from its saved position."""
         last_id = await self._storage_req.get_setting(LAST_BOOK_KEY)
         if not last_id:
+            catalog = self._catalog_req
+            if len(catalog) == 0:
+                return ToolResult(
+                    output=json.dumps(
+                        {"resumed": False, "results": [], "message": self._t("library_empty")},
+                        ensure_ascii=False,
+                    )
+                )
+            # "Pon un libro" with nothing in progress: name a few so the
+            # user can pick, instead of a bare "search for something?".
             return ToolResult(
                 output=json.dumps(
                     {
                         "resumed": False,
+                        "results": [_hit_summary(h) for h in list(catalog)[:5]],
+                        "total": len(catalog),
                         "message": self._t("no_resume"),
                     },
                     ensure_ascii=False,
