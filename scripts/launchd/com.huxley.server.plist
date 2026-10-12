@@ -34,7 +34,8 @@
         <key>PATH</key>
         <string>/Users/mario/.local/bin:/usr/local/bin:/usr/bin:/bin</string>
         <!-- Structured JSON log with per-run rotation (see logging.py).
-             Last 10 runs archived as huxley_<ISO timestamp>.log. -->
+             Each run archived as huxley_<ISO timestamp>.log, kept unless
+             HUXLEY_LOG_KEEP_DAYS sets an age limit. -->
         <key>HUXLEY_LOG_FILE</key>
         <string>/Users/mario/Library/Logs/Huxley/huxley.log</string>
     </dict>
