@@ -74,7 +74,7 @@ ToolResult(
 - **`side_effect`** _(optional)_ is a `SideEffect` the framework runs around the model's response. Skills with no side effect leave it `None`. Available kinds:
   - `AudioStream(factory, on_complete_prompt?, completion_silence_ms?, content_type?)` — long-running PCM stream (audiobook playback). Factory fires at the turn's terminal barrier. `content_type` defaults to `ContentType.NONMIXABLE` (spoken-word — an injected turn hard-cancels the stream). Set to `ContentType.MIXABLE` for music / ambience so the framework ducks it under an injected turn instead of cutting it. Today all shipped content is NONMIXABLE; MIXABLE is wired end-to-end and ready for the first music skill.
   - `PlaySound(pcm)` — short one-shot chime that plays just before the model's response audio (used by info tools that want a sonic intro — e.g. news chime). See [`docs/sounds.md`](../sounds.md).
-  - `CancelMedia()` — stop the running media task immediately (pause/stop tools).
+  - `CancelMedia()` — stop the running media task immediately and for good (pause/stop tools). A press only pauses the stream and the framework resumes it after the turn, so a stop tool must return this even though the stream is already silent.
   - `SetVolume(level)` — forward a volume change to the client.
 
 ### Info tools vs side-effect tools
@@ -87,7 +87,9 @@ ToolResult(
 
 The model is told (via the tool description) to **pre-narrate** the side effect — e.g. _"Putting on the book for you."_ or _"a ver, un momento"_ — _before_ calling the tool. The framework guarantees the narration plays before the factory does.
 
-The flip side: an audio-stream tool gets **no follow-up round**, so nothing in its `output` is ever spoken. If the user needs to hear the tool's answer ("what song is this?"), return it as an info tool (`side_effect=None`). If audio should follow, don't ask the model to do both in one reply (it sometimes skips the speech and goes straight to the tool: measured 1 in 3); instead queue `ctx.inject_turn("call <stream tool> now, say nothing")`. The coordinator drains it once the answer's turn has ended, so the stream starts after the spoken answer. The spotify skill's `whats_playing` does this (5 of 5 in a live voice test).
+The flip side: an audio-stream tool gets **no follow-up round**, so nothing in its `output` is ever spoken. If the user needs to hear the tool's answer ("what song is this?"), return it as an info tool (`side_effect=None`). The stream the question's press paused comes back after the answer on its own. If a *new* stream should follow an answer, don't ask the model to do both in one reply (it sometimes skips the speech and goes straight to the tool: measured 1 in 3); instead queue `ctx.inject_turn("call <stream tool> now, say nothing")`. The coordinator drains it once the answer's turn has ended, so the stream starts after the spoken answer.
+
+**Your factory is called again to resume.** The framework pauses a playing stream by cancelling its iterator (your `finally` runs) when the user presses to talk, while no client is connected, or while a call or an injected turn holds the speaker, and calls `factory()` again afterward. Read live state on every call (a saved position), restart a live feed, and play a start earcon only on the first call. A call after the stream finished on its own never happens.
 
 ### Loading sound files
 

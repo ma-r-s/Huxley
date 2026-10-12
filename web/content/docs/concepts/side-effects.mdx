@@ -12,7 +12,7 @@ Five side-effect types, plus the null case (`None`) when no special audio behavi
 | `None`          | Model narrates `output`. That's the whole response.       | Pure info tools (time, weather text)   |
 | `PlaySound`     | One-shot PCM blob plays *immediately*, before model audio | Earcons, "got it" chimes               |
 | `AudioStream`   | Long-form audio via async iterator, after model finishes  | Audiobooks, radio, music, podcasts     |
-| `CancelMedia`   | Cancel any active media task                              | "Stop the book"                        |
+| `CancelMedia`   | End the active media task for good (a press only pauses it) | "Stop the book"                        |
 | `SetVolume`     | Push a volume change to the client                        | "Turn it up"                           |
 | `InputClaim`    | Replace mic + speaker with skill-controlled streams       | Phone calls, intercom, voice tutoring  |
 

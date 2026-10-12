@@ -147,6 +147,16 @@ class AudioStream(SideEffect):
     the skill's `handle()` can return quickly and the audio lives in
     the coordinator's media task lifecycle.
 
+    **The factory may be called again: that is a resume.** The framework
+    pauses a playing stream by cancelling its iterator (your `finally`
+    runs: save the position, pause the player) whenever the user presses
+    to talk, while no client is connected, or while another channel
+    holds the speaker; when that ends, it calls `factory()` again. Each
+    call must pick up from live state (a saved position) or restart a
+    live feed, and play a start earcon only on the first call. A turn
+    that stops the stream (`CancelMedia`) or starts another one ends it
+    for good, as does the iterator finishing on its own.
+
     `on_complete_prompt`: when the stream ends naturally (not cancelled), the
     coordinator sends this text as a user-role conversation item and triggers
     a model response. Use it for end-of-content announcements — e.g., when a
@@ -202,7 +212,9 @@ class AudioStream(SideEffect):
     # `content_type` (0 for NONMIXABLE, 5min for MIXABLE). Audiobooks
     # set this to 30 minutes so a typical phone call parks the book;
     # radio is NONMIXABLE (the default) with no patience, so a
-    # preemption stops it.
+    # preemption stops it. Patience is about other channels (an
+    # injected turn, a call); a press pauses and resumes every stream
+    # whatever its patience.
     patience: timedelta | None = None
 
 
@@ -214,6 +226,10 @@ class CancelMedia(SideEffect):
     to cancel `current_media_task` immediately when the tool call is processed
     — not deferred to the terminal barrier — so the stream halts before the
     model's confirmation speech plays.
+
+    It ends the stream for good. A press only pauses what plays and the
+    framework resumes it when the turn ends, so a pause/stop tool must
+    return this even though the press already silenced the stream.
     """
 
     kind: ClassVar[str] = "cancel_media"

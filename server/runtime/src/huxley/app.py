@@ -479,6 +479,11 @@ class Application:
         """Tear down all subsystems in reverse order."""
         await logger.ainfo("huxley_shutting_down")
         self._shutting_down = True
+        # Stop content and the coordinator's timers first: the AudioServer
+        # is shared, and the summary written on disconnect below takes
+        # seconds, during which a persona swap's new client is already
+        # connected. Content no longer stops on a session drop (2026-10-12).
+        await self.coordinator.close()
         # First: stop dispatching client_event to skills. A handler
         # firing mid-shutdown could route through a coordinator /
         # FocusManager we're about to stop. Inbound messages still
@@ -680,6 +685,10 @@ class Application:
         )
 
     async def _on_transcript(self, role: str, text: str) -> None:
+        if role == "user":
+            # What the press said decides whether paused content resumes
+            # (a bare "para" keeps it stopped). First, before any await.
+            self.coordinator.on_user_transcript(text)
         # Lazily start (or resume) the session row on the first
         # transcript. The 30-minute resume window collapses
         # fragmenting reconnects (auto-reconnect, language switch,
@@ -803,6 +812,13 @@ class Application:
         """Mic frame from client — forward to the coordinator."""
         await self.coordinator.on_user_audio_frame(pcm)
 
+    async def on_client_presence(self, present: bool) -> None:
+        """A client became current (True) or the last one left (False).
+        The coordinator pauses content while nobody listens."""
+        if self._shutting_down:
+            return
+        await self.coordinator.on_client_presence(present)
+
     async def on_ptt_start(self) -> None:
         if self.state_machine.state != AppState.CONVERSING:
             await logger.ainfo(
@@ -812,6 +828,8 @@ class Application:
             await self.server.send_status(
                 _STATUS_WAIT.get(self._resolved_persona.language_code, _STATUS_WAIT["en"])
             )
+            # No session to talk to; the press still stops what plays.
+            await self.coordinator.on_ptt_rejected()
             return
         await self.coordinator.on_ptt_start()
 

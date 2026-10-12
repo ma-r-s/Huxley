@@ -121,6 +121,24 @@ class ContentStreamObserver:
     coordinator wires this to `focus_manager.release(channel,
     interface_name)` so a NONE delivery follows and the observer can
     distinguish "cancelled" from "completed."
+
+    **Holds** (2026-10-12) are a second, focus-independent reason not
+    to play: the coordinator holds the stream while a user turn is in
+    progress (`"turn"`) or while no client is connected
+    (`"no_client"`). `hold(reason)` cancels the pump (the factory's
+    `finally` saves its position) and leaves the Activity where it is
+    in the FocusManager; `release_hold(reason)` respawns the pump
+    (calling `factory()` again, which resumes) once no hold is left and
+    focus allows playing. The pump runs iff focus allows it
+    (FOREGROUND, or BACKGROUND/MAY_DUCK), no hold is in force, and the
+    stream has not finished.
+
+    **Finished**: once the pump exits on its own (natural EOF or an
+    error), the stream is done for good. A later FOREGROUND (say,
+    after an injected turn releases DIALOG) or a hold release does not
+    call `factory()` again: replaying a finished book from position 0,
+    or resuming Spotify after the user moved it to another device,
+    would be wrong.
     """
 
     def __init__(
@@ -131,14 +149,33 @@ class ContentStreamObserver:
         send_audio: Callable[[bytes], Awaitable[None]],
         on_eof: Callable[[], Awaitable[None]] | None = None,
         on_natural_completion: Callable[[], Awaitable[None]] | None = None,
+        on_resume: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._interface_name = interface_name
         self._stream = stream
         self._send_audio = send_audio
         self._on_eof = on_eof
         self._on_natural_completion = on_natural_completion
+        # Fired each time a pump spawns again after the first (a resume:
+        # hold released, or FOREGROUND back after a MUST_PAUSE).
+        self._on_resume = on_resume
+        self._spawned = False
+        # Whether the client was last told this stream plays
+        # (`stream_started`) rather than stopped (`stream_ended`). Kept by
+        # the coordinator, which sends both, so a pause and a stop don't
+        # both announce the end.
+        self.announced = False
         self._task: asyncio.Task[None] | None = None
         self._natural_eof = False
+        # Last focus delivered by the FocusManager (None: not yet).
+        self._focus: FocusState | None = None
+        self._behavior: MixingBehavior | None = None
+        # Coordinator-owned reasons to keep the pump stopped. See the
+        # class docstring.
+        self._holds: set[str] = set()
+        self._held_since: float | None = None
+        # The pump exited on its own (EOF or error): never respawn.
+        self._finished = False
 
         # --- Gain envelope state (T1.4 Stage 1b — duck) ---
         # Steady-state gain when no ramp is active. Changes settle here
@@ -163,7 +200,74 @@ class ContentStreamObserver:
         """The stable `interface_name` this observer was constructed with."""
         return self._interface_name
 
+    @property
+    def stream(self) -> AudioStream:
+        """The `AudioStream` this observer plays (label, patience, ...)."""
+        return self._stream
+
+    @property
+    def holds(self) -> frozenset[str]:
+        """The coordinator's reasons currently keeping the pump stopped."""
+        return frozenset(self._holds)
+
+    @property
+    def finished(self) -> bool:
+        """True once the pump exited on its own (EOF or error)."""
+        return self._finished
+
+    @property
+    def is_live(self) -> bool:
+        """Something to play now or later: not finished, not evicted
+        (the FocusManager has not delivered NONE)."""
+        return not self._finished and self._focus is not FocusState.NONE
+
+    @property
+    def is_playing(self) -> bool:
+        """The pump task is running right now."""
+        return self._task is not None and not self._task.done()
+
+    async def hold(self, reason: str) -> bool:
+        """Keep the pump stopped for `reason` until `release_hold(reason)`.
+
+        Cancels a running pump (the factory's `finally` runs: positions
+        saved, players paused). The Activity stays registered, so focus
+        changes keep being tracked while held. Idempotent per reason.
+        Returns True iff a pump was running and got stopped.
+        """
+        was_playing = self.is_playing
+        if not self._holds:
+            self._held_since = time.monotonic()
+        self._holds.add(reason)
+        await self._cancel_pump()
+        return was_playing
+
+    @property
+    def held_for_s(self) -> float:
+        """Seconds since the first of the current holds (0 if not held)."""
+        if self._held_since is None:
+            return 0.0
+        return time.monotonic() - self._held_since
+
+    async def release_hold(self, reason: str) -> bool:
+        """Drop `reason`. When no hold is left and focus allows playing,
+        spawn a fresh pump (`factory()` again, which resumes). Returns
+        True iff a pump was spawned."""
+        self._holds.discard(reason)
+        if self._holds:
+            return False
+        self._held_since = None
+        if not self._focus_allows_playing():
+            return False
+        return await self._spawn_pump_if_idle()
+
+    def _focus_allows_playing(self) -> bool:
+        if self._focus is FocusState.FOREGROUND:
+            return True
+        return self._focus is FocusState.BACKGROUND and self._behavior is MixingBehavior.MAY_DUCK
+
     async def on_focus_changed(self, new_focus: FocusState, behavior: MixingBehavior) -> None:
+        self._focus = new_focus
+        self._behavior = behavior
         match new_focus:
             case FocusState.FOREGROUND:
                 # If we were ducked (MAY_DUCK) and come back to FG, ramp
@@ -173,9 +277,11 @@ class ContentStreamObserver:
                 # a fresh pump gets spawned here calling factory() again).
                 # The skill's factory closure is responsible for reading
                 # current position state on each invocation so the resume
-                # picks up where the prior pump left off.
+                # picks up where the prior pump left off. A held stream
+                # stays stopped; `release_hold` spawns it later.
                 self._start_ramp(target=1.0)
-                await self._spawn_pump_if_idle()
+                if not self._holds:
+                    await self._spawn_pump_if_idle()
             case FocusState.BACKGROUND:
                 if behavior is MixingBehavior.MAY_DUCK:
                     # True duck: keep the pump running, lower the gain.
@@ -293,14 +399,30 @@ class ContentStreamObserver:
             ]
         return struct.pack(f"<{n_samples}h", *scaled)
 
-    async def _spawn_pump_if_idle(self) -> None:
+    async def _spawn_pump_if_idle(self) -> bool:
+        """Spawn the pump unless one is running or the stream finished.
+        Returns True iff a new pump task was created."""
         if self._task is not None and not self._task.done():
-            return  # already pumping — duplicate FOREGROUND
+            return False  # already pumping — duplicate FOREGROUND
+        if self._finished:
+            # Ended on its own: calling factory() again would replay it.
+            return False
         self._natural_eof = False
+        resumed = self._spawned
+        self._spawned = True
         self._task = asyncio.create_task(
             self._pump(),
             name=f"content_pump:{self._interface_name}",
         )
+        if resumed and self._on_resume is not None:
+            try:
+                await self._on_resume()
+            except Exception:
+                await logger.aexception(
+                    "content_stream_resume_callback_failed",
+                    interface=self._interface_name,
+                )
+        return True
 
     async def _pump(self) -> None:
         try:
@@ -309,11 +431,13 @@ class ContentStreamObserver:
                 # is active and gain is 1.0, this is a no-op (fast path).
                 await self._send_audio(self._apply_gain(chunk))
             self._natural_eof = True
+            self._finished = True
             if self._on_eof is not None:
                 await self._on_eof()
         except asyncio.CancelledError:
             raise
         except Exception:
+            self._finished = True
             await logger.aexception(
                 "content_stream_pump_failed",
                 interface=self._interface_name,
