@@ -1144,7 +1144,7 @@ class TurnCoordinator:
             if self._unconfirmed is not None and self._injected_queue:
                 # The next proactive turn fires only once this one has
                 # played: what this one parked must not play in between
-                # (a Spotify play then a pause, book time skipped).
+                # (a stream restarted then paused again, its position skipped).
                 # Released when the confirmation settles (T1.44).
                 await self._hold_content(_HOLD_INJECT_QUEUE)
         finally:
@@ -2371,8 +2371,8 @@ class TurnCoordinator:
 
         Order: the most urgent tier first (PREEMPT, then
         BLOCK_BEHIND_COMMS, then NORMAL), first come first served within a
-        tier, so a call announcement or a medication reminder isn't kept
-        behind a weekend of message announcements past its expiry. With a
+        tier, so an urgent turn with a short expiry isn't kept behind a
+        long line of routine ones until it expires. With a
         live claim, only PREEMPT. No await between taking a request out of
         the queue and firing it: a request out of the queue and not yet
         fired would be invisible to `close()` and to dedup."""

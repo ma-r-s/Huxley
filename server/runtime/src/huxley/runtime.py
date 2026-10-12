@@ -1369,7 +1369,7 @@ class Runtime:
         app = self.current_app
         provider_connected = app is not None and app.provider.is_connected
         # Proactive turns waiting for a listener (T1.44): an old wait is a
-        # reminder nobody has heard, worth a caregiver alert.
+        # proactive turn nobody has heard, worth a caregiver alert.
         waiting, oldest_wait_s = (
             app.coordinator.waiting_summary() if app is not None else (0, None)
         )

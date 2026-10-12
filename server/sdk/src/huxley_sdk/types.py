@@ -141,7 +141,8 @@ reconnects in about 3 s) and its longest reconnect backoff (45-60 s) many
 times over; longer than this, the device is really away, and a notice
 nobody chose a lifetime for (a status remark, a warning) would be stale.
 Pass `expires_after=None` for a turn worth saying whenever it can be heard
-(a message from family), or a time of your own (a reminder's late window).
+(content that stays relevant until heard), or a time of your own (how late
+it is still worth saying).
 """
 
 
