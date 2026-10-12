@@ -134,12 +134,13 @@ Firmware (ESP-IDF must be sourced first):
 . ~/esp/esp-idf/export.sh
 cd clients/firmware
 idf.py build                                              # compile for ESP32-S3
-idf.py -p /dev/cu.usbmodem2101 flash monitor              # flash + serial
+idf.py -p /dev/cu.usbmodem1101 flash monitor              # flash + serial (port: ls /dev/cu.usbmodem*)
 
 # Tests (see clients/firmware/README.md §Tests for when to run which tier):
 cd clients/firmware/tests && cmake -B build && cmake --build build --target check
 uv run --package huxley pytest server/runtime/tests/unit/test_firmware_contract.py
 clients/firmware/tools/smoke.sh                           # end-to-end boot-to-READY
+python clients/firmware/tools/bench.py --reset            # bench check list on the board: no hand, no sound (~3 min)
 ```
 
 ## Rules

@@ -12,7 +12,8 @@
 #   firmware/tools/smoke.sh --timeout 30
 set -euo pipefail
 
-PORT="/dev/cu.usbmodem2101"
+# The port follows the USB socket (usbmodem1101, usbmodem2101, ...).
+PORT="$(ls /dev/cu.usbmodem* 2>/dev/null | head -n 1 || true)"
 TIMEOUT_SEC=20
 FLASH=false
 

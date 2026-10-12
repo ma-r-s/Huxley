@@ -4,7 +4,7 @@
 # capture running in the background.
 #
 # Usage:
-#   ./serial-capture.sh            # uses /dev/cu.usbmodem2101
+#   ./serial-capture.sh            # the first /dev/cu.usbmodem* (the board)
 #   ./serial-capture.sh /dev/cu.usbmodem...  # explicit port
 #
 # Output files:
@@ -13,7 +13,7 @@
 #   /tmp/huxley-debug/serial.pid                   (for serial-stop.sh)
 set -euo pipefail
 
-PORT="${1:-/dev/cu.usbmodem2101}"
+PORT="${1:-$(ls /dev/cu.usbmodem* 2>/dev/null | head -n 1 || true)}"
 OUTDIR="/tmp/huxley-debug"
 mkdir -p "$OUTDIR"
 

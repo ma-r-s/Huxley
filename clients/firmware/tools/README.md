@@ -13,6 +13,19 @@ cleared on reboot. Never commit captures.
 | `serial-capture.sh` | Tails the board's USB-CDC to `/tmp/huxley-debug/serial-<ts>.log`. Non-interactive; runs in background. | —              |
 | `serial-stop.sh`    | Kills any active `serial-capture.sh` capture.                                                          | —              |
 | `tcpdump-ws.sh`     | Packet-captures the server's WS traffic to `/tmp/huxley-debug/ws-<ts>.pcap` for Wireshark analysis.    | `sudo` (macOS) |
+| `smoke.sh`          | Resets (or flashes) the board, waits for READY.                                                        | ESP-IDF env    |
+| `bench.py`          | The bench check list, PASS/FAIL per step: boot, self-test, a turn, volume, barge-in, offline + recovery, eviction, headroom. No hand, no sound (`--loud` keeps the amp on). Log in `/tmp/huxley-debug/bench-*.log`. | ESP-IDF env (pyserial), server up |
+| `clips.py`          | Renders the Spanish questions `say <n>` plays into the mic (macOS `say -o`, nothing is played) into `build/clips.bin` for the storage partition. | macOS, ffmpeg  |
+| `jtag_lever.py`     | Presses the case's lever (GPIO7) electrically over JTAG.                                               | OpenOCD        |
+| `jtag_snapshot.gdb` | TCP control block + every task's backtrace from a running board, no reset.                             | OpenOCD        |
+
+OpenOCD for the two JTAG tools, in its no-reset mode (see
+[`../docs/debugging.md`](../docs/debugging.md#jtag-the-boards-built-in-usb-jtag)):
+
+```sh
+. ~/esp/esp-idf/export.sh
+openocd -c "set ESP_FLASH_SIZE 0" -f board/esp32s3-builtin.cfg &
+```
 
 Typical debugging session:
 
@@ -24,7 +37,8 @@ tail -f /tmp/huxley-debug/serial-latest.log
 # Terminal 2 — wire-level WS traffic (needs sudo)
 ./firmware/tools/tcpdump-ws.sh
 
-# Now press K2 on the board, reproduce the issue.
+# Now press K2 on the board (or type `talk` / `release` on the serial
+# console, or run tools/bench.py), reproduce the issue.
 # Stop:
 ./firmware/tools/serial-stop.sh
 # tcpdump stops with Ctrl+C in Terminal 2.
