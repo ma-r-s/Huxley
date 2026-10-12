@@ -14,6 +14,8 @@
  *   wifi off [s] | on   stop Wi-Fi, back on by itself after s seconds
  *                       (default 10) / restart it now
  *   server <uri>        WebSocket to another server until reboot (netbench)
+ *   quiet [s]           amp off for s seconds, kept through restarts
+ *                       (0 ends it; no s: how long is left)
  *   wifistat            the Wi-Fi driver's buffer / RX / TX counters
  *   info                heap, PSRAM, task stack headroom, ring, volume
  *                       (and the codec's register), RSSI

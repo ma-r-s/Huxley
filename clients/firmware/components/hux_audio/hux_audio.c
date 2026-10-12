@@ -12,6 +12,8 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_partition.h"
+#include "esp_rtc_time.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/stream_buffer.h"
@@ -860,6 +862,68 @@ static void mic_task(void *unused) {
     }
 }
 
+/* Quiet: amp off until an RTC-clock deadline. RTC slow memory and the
+ * RTC clock survive software restarts (an update's, a crash's), so a
+ * quiet night stays quiet through them; a power cut clears both. */
+#define QUIET_MAGIC 0x51554945 /* 'QUIE' */
+RTC_NOINIT_ATTR static uint32_t s_quiet_magic;
+RTC_NOINIT_ATTR static uint64_t s_quiet_until_us;
+static esp_timer_handle_t s_quiet_timer;
+
+static void quiet_over(void *arg) {
+    (void)arg;
+    s_quiet_magic = 0;
+    bool ok = hux_board_tca_write(HUX_TCA_AUDIO_PA_EN, true);
+    ESP_LOGW(TAG, "spk.quiet over: pa on ok=%d", ok);
+}
+
+static void quiet_arm(uint64_t us) {
+    if (s_quiet_timer == NULL) {
+        const esp_timer_create_args_t args = {.callback = quiet_over, .name = "spk_quiet"};
+        if (esp_timer_create(&args, &s_quiet_timer) != ESP_OK) {
+            return;
+        }
+    }
+    esp_timer_stop(s_quiet_timer);
+    esp_timer_start_once(s_quiet_timer, us);
+}
+
+uint32_t hux_audio_quiet_left_s(void) {
+    uint64_t now = esp_rtc_get_time_us();
+    if (s_quiet_magic != QUIET_MAGIC || now >= s_quiet_until_us) {
+        return 0;
+    }
+    return (uint32_t)((s_quiet_until_us - now) / 1000000);
+}
+
+/* At boot: still inside a quiet period? Then the amp stays off and the
+ * timer is armed for what's left. */
+static bool quiet_resume(void) {
+    uint32_t left = hux_audio_quiet_left_s();
+    if (left == 0) {
+        s_quiet_magic = 0;
+        return false;
+    }
+    quiet_arm((uint64_t)left * 1000000);
+    ESP_LOGW(TAG, "spk.quiet kept through the restart: pa off for %u s more", (unsigned)left);
+    return true;
+}
+
+void hux_audio_quiet(uint32_t seconds) {
+    if (seconds == 0) {
+        if (s_quiet_timer != NULL) {
+            esp_timer_stop(s_quiet_timer);
+        }
+        quiet_over(NULL);
+        return;
+    }
+    s_quiet_until_us = esp_rtc_get_time_us() + (uint64_t)seconds * 1000000;
+    s_quiet_magic = QUIET_MAGIC;
+    bool ok = hux_board_tca_write(HUX_TCA_AUDIO_PA_EN, false);
+    quiet_arm((uint64_t)seconds * 1000000);
+    ESP_LOGW(TAG, "spk.quiet pa off for %u s (then on by itself) ok=%d", (unsigned)seconds, ok);
+}
+
 void hux_audio_init(void) {
     if (s_mic_dev != NULL) {
         return; /* Idempotent. */
@@ -899,7 +963,9 @@ void hux_audio_init(void) {
          * first audio packet arrives without the start-pop.
          * spk_task starts writing silence immediately after, which
          * satisfies the "first I2S frame" part. */
-        hux_board_tca_write(HUX_TCA_AUDIO_PA_EN, true);
+        if (!quiet_resume()) {
+            hux_board_tca_write(HUX_TCA_AUDIO_PA_EN, true);
+        }
         vTaskDelay(pdMS_TO_TICKS(SPK_PA_SETTLE_MS));
 
         ok = xTaskCreate(spk_task, "hux_spk", SPK_TASK_STACK,
@@ -965,6 +1031,12 @@ int hux_audio_inject(int clip) {
 }
 
 void hux_audio_pa(bool on) {
+    if (on && s_quiet_magic == QUIET_MAGIC) {
+        if (s_quiet_timer != NULL) {
+            esp_timer_stop(s_quiet_timer);
+        }
+        s_quiet_magic = 0; /* an explicit `pa on` ends the quiet */
+    }
     bool ok = hux_board_tca_write(HUX_TCA_AUDIO_PA_EN, on);
     ESP_LOGI(TAG, "spk.pa %s ok=%d", on ? "on" : "off", ok);
 }

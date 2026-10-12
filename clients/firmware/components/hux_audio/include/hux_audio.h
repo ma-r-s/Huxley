@@ -145,8 +145,17 @@ int hux_audio_inject(int clip);
 void hux_audio_inject_cancel(void);
 
 /** Speaker amplifier on/off (TCA9555 P8). Off: everything still plays
- * through the codec, nothing is heard. On at boot. */
+ * through the codec, nothing is heard. On at boot, unless quiet. `on`
+ * also ends a quiet period. */
 void hux_audio_pa(bool on);
+
+/** Amp off for `seconds`, then on by itself; survives restarts and
+ * updates in between (the end time is kept in RTC memory; a power cut
+ * ends it). 0 ends it now. For nights with the board on the bench. */
+void hux_audio_quiet(uint32_t seconds);
+
+/** Seconds of quiet left, 0 if none. */
+uint32_t hux_audio_quiet_left_s(void);
 
 /** ES8311 DAC volume register (0xBF = 0 dB, 0.5 dB steps), or -1. */
 int hux_audio_dac_volume_reg(void);

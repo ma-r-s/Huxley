@@ -151,9 +151,14 @@ void hux_console_run(char *line) {
         }
     } else if (strcmp(cmd, "pa") == 0 && argc > 1) {
         hux_audio_pa(strcmp(argv[1], "on") == 0);
+    } else if (strcmp(cmd, "quiet") == 0) {
+        if (argc > 1) {
+            hux_audio_quiet((uint32_t)strtoul(argv[1], NULL, 10));
+        }
+        ESP_LOGI(TAG, "console.quiet left_s=%u", (unsigned)hux_audio_quiet_left_s());
     } else {
         ESP_LOGW(TAG, "console.unknown %s (talk, release, say N, tone [hz] [ms], vol N, pa on|off, "
-                      "selftest [hz], wifi off [s]|on, wifistat, info, server <uri>, reboot, "
+                      "selftest [hz], wifi off [s]|on, wifistat, info, server <uri>, quiet [s], reboot, "
                       "ota <url> [force] | confirm | rollback)",
                  cmd);
     }
