@@ -17,9 +17,14 @@ static const char *TAG = "hux_battery";
 #define WIRED_MAX_MV   1500 /* a 4.5 V cell, above any Li-ion */
 #define PULLED_MIN_MV  150  /* the divider holds the pin up against the ~45K pull-down */
 
+/* Every ADC1 pin the firmware leaves free: the schematic's BAT_ADC options
+ * (GPIO1, GPIO6) and Waveshare's Arduino demo's (GPIO8). Never GPIO7 (the
+ * talk lever) or GPIO10 (I2C). */
+static const int PINS[] = {1, 2, 3, 4, 5, 6, 8, 9};
+#define NPINS (int)(sizeof(PINS) / sizeof(PINS[0]))
+
 static adc_oneshot_unit_handle_t s_adc;
-static adc_cali_handle_t s_cali[2]; /* per channel: the S3 calibrates each one */
-static const int PINS[2] = {1, 6};
+static adc_cali_handle_t s_cali[NPINS]; /* per channel: the S3 calibrates each one */
 
 bool hux_battery_init(void) {
     adc_oneshot_unit_init_cfg_t unit = {.unit_id = ADC_UNIT_1};
@@ -29,7 +34,7 @@ bool hux_battery_init(void) {
         s_adc = NULL;
         return false;
     }
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < NPINS; i++) {
         adc_unit_t u;
         adc_channel_t ch;
         if (adc_oneshot_io_to_channel(PINS[i], &u, &ch) != ESP_OK) {
@@ -45,8 +50,11 @@ bool hux_battery_init(void) {
             s_cali[i] = NULL;
         }
     }
-    ESP_LOGI(TAG, "battery.init cali_gpio1=%d cali_gpio6=%d", s_cali[0] != NULL,
-             s_cali[1] != NULL);
+    int cali = 0;
+    for (int i = 0; i < NPINS; i++) {
+        cali += s_cali[i] != NULL;
+    }
+    ESP_LOGI(TAG, "battery.init pins=%d calibrated=%d", NPINS, cali);
     return true;
 }
 
@@ -78,7 +86,7 @@ static bool sample(int i, int *mean, int *lo, int *hi) {
 }
 
 void hux_battery_probe(void) {
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < NPINS; i++) {
         int f, flo, fhi, p, plo, phi;
         gpio_num_t pin = (gpio_num_t)PINS[i];
         bool ok = sample(i, &f, &flo, &fhi);
