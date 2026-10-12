@@ -31,6 +31,8 @@ class MySkill:
 - **`handle`** — dispatch entry point. Route on `tool_name`.
 - **`setup`** / **`teardown`** — lifecycle hooks. Load catalogs in `setup`, persist state in `teardown`.
 
+**If `setup` raises**, the framework logs `skill.setup_failed`, disables your skill, and starts the persona without it: one broken skill never takes the others down. The disabled skill's `teardown()` runs right away and the `ctx.background_task`s its setup started are cancelled, so write `teardown` to be safe after a `setup` that raised partway or never ran (check what `setup` assigned; don't `assert` it). Its tools stay in the session, because the persona prompt may name them and a model told about a capability with no tool behind it can claim it acted; a call to one gets an error tool output that the model apologizes for out loud. The skill stays disabled until the persona reloads or the server restarts. For failures you expect (missing credentials, a service that is down), prefer logging and degrading inside `setup` over raising: the telegram skill does that for missing credentials.
+
 ## Anatomy of a tool definition
 
 ```python

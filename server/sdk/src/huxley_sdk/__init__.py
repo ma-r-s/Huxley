@@ -13,7 +13,7 @@ Internal framework modules import from `huxley_sdk.types` and
 from __future__ import annotations
 
 from huxley_sdk.catalog import Catalog, Hit
-from huxley_sdk.registry import SkillNotFoundError, SkillRegistry
+from huxley_sdk.registry import SkillNotFoundError, SkillRegistry, SkillUnavailableError
 from huxley_sdk.types import (
     AppState,
     AudioStream,
@@ -69,6 +69,7 @@ __all__ = [
     "SkillRegistry",
     "SkillSecrets",
     "SkillStorage",
+    "SkillUnavailableError",
     "ToolDefinition",
     "ToolResult",
     "WakeWordDetectorProtocol",

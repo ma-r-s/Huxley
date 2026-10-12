@@ -723,3 +723,21 @@ Considered alternatives:
 
 - Evaluate future voice providers against PTT first. Gemini Live qualifies on paper (manual `activityStart`/`activityEnd`); untested.
 - The one GPT-Live idea worth borrowing, handing slow work to a stronger background model and announcing the result later, needs its own plan.
+
+---
+
+## 2026-10-12: A failed skill setup disables the skill, not the persona; one server per port
+
+**Context**: A server was restarted while the old process was still shutting down (5.6 s, 3.5 s of it the session summary). The old process had closed its listener, so the new one bound the port, but the Telegram session file was still locked. The Telegram retry reused a PyTgCalls object that could not start twice, `SkillRegistry.setup_all` propagated the error, and the whole Abuelo persona failed to load: the walkie had no assistant for about 55 s and said nothing. Options for the failed skill: drop its tools from the session, or keep them and answer calls with an error.
+
+**Decision**:
+
+- `setup_all(on_skill_disabled=...)` disables a skill whose setup raised, tears it down at once, cancels the supervised tasks its setup started, and sets up the rest. Its tools stay offered: the persona prompt names tools such as `call_contact`, and a model told about a capability with no tool behind it can claim it acted when nothing happened, which a blind user cannot catch. A call raises `SkillUnavailableError`, which the existing tool-error path turns into a spoken apology. Its `data_schema_version` is not persisted.
+- A same-persona reload stops the old app before starting the new one, amending [hot persona swap](#2026-05-01--hot-persona-swap-via-reconnect-not-in-band-t113)'s pre-validation for that case only; if the new start fails, the old `PersonaSpec` is started again.
+- One server per port per working directory: `flock` on `logs/huxley-<port>.lock`, a 30 s wait for the previous holder, and a 20 s shutdown deadline (a daemon timer that exits the process) so a hung process cannot block the next start forever. Keyed by port, not by persona, so the documented same-directory A/B run on another port keeps working.
+
+**Consequences**:
+
+- A disabled skill stays disabled until the persona reloads or the server restarts. For Telegram that also means no inbound calls or messages in that time; a background reconnect in the skill is the follow-up.
+- Two servers on different ports can still open the same persona and its Telegram session; a lock on the persona data dir would close that.
+- A same-persona reload now has a gap of a few seconds (old shutdown, then new start) instead of overlapping.

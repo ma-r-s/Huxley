@@ -34,6 +34,7 @@ import contextlib
 import os
 import signal
 import sys
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -41,6 +42,7 @@ import structlog
 
 from huxley.app import Application
 from huxley.installer import InstallEvent, InstallResult, install_skill
+from huxley.instance_lock import InstanceLock, acquire_instance_lock, lock_path_for_port
 from huxley.logging import setup_logging
 from huxley.marketplace import fetch_marketplace
 from huxley.persona import (
@@ -68,6 +70,14 @@ logger = structlog.get_logger()
 
 class Runtime:
     """Process-level orchestrator. See module docstring."""
+
+    # How long a starting server waits for the previous one on the same
+    # port to exit (see `huxley.instance_lock`). Longer than
+    # `_SHUTDOWN_TIMEOUT_S`, the most a well-behaved old process takes.
+    _INSTANCE_LOCK_TIMEOUT_S = 30.0
+    # Cap on the final app shutdown in `run()`. A normal one takes a few
+    # seconds (2026-10-12: 5.6 s, 3.5 s of it the session summary).
+    _SHUTDOWN_TIMEOUT_S = 20.0
 
     def __init__(self, config: Settings) -> None:
         self._config = config
@@ -148,6 +158,9 @@ class Runtime:
         self._last_session_error: str | None = None
         self._shutdown_event = asyncio.Event()
         self._shutting_down = False
+        # Held for the life of the process (set in `run()`); dropping the
+        # reference would close the file and release the lock.
+        self._instance_lock: InstanceLock | None = None
 
     # ── Lifecycle ───────────────────────────────────────────────────────
 
@@ -167,7 +180,41 @@ class Runtime:
 
         If ``HUXLEY_PERSONA`` IS set in the environment, it still wins
         — the env var becomes the default the lazy fallback picks.
+
+        **One server per port**: before anything else, take the instance
+        lock (`huxley.instance_lock`), waiting up to
+        `_INSTANCE_LOCK_TIMEOUT_S` for a previous server on the same port
+        and working directory to finish shutting down. Taken before
+        `setup_logging` so a start that has to give up does not rotate
+        away the log of the process it was waiting for; the wait and a
+        give-up go to stderr, the outcome to the new log
+        (`runtime.instance_lock_acquired`).
         """
+        lock_path = lock_path_for_port(self._config.server_port, Path.cwd())
+
+        def _say_waiting(holder_pid: int | None) -> None:
+            print(
+                f"[huxley] another server (pid {holder_pid}) still holds {lock_path}; "
+                f"waiting up to {self._INSTANCE_LOCK_TIMEOUT_S:.0f} s for it to exit",
+                file=sys.stderr,
+                flush=True,
+            )
+
+        lock_error: OSError | None = None
+        waited_s, previous_pid = 0.0, None
+        try:
+            self._instance_lock, waited_s, previous_pid = await acquire_instance_lock(
+                lock_path,
+                timeout_s=self._INSTANCE_LOCK_TIMEOUT_S,
+                on_wait=_say_waiting,
+            )
+        except OSError as exc:
+            # The lock file can't be created or locked (read-only
+            # directory, a filesystem without flock). Run unguarded rather
+            # than not at all; said loudly below.
+            lock_error = exc
+            print(f"[huxley] instance lock unavailable: {exc}", file=sys.stderr, flush=True)
+
         log_file = self._config.log_file or Path("logs/huxley.log")
         setup_logging(
             level=self._config.log_level,
@@ -175,6 +222,21 @@ class Runtime:
             log_file=log_file,
         )
         await logger.ainfo("huxley_starting")
+        if lock_error is not None:
+            await logger.awarning(
+                "runtime.instance_lock_unavailable",
+                path=str(lock_path),
+                error=f"{type(lock_error).__name__}: {lock_error}",
+                note="running without the one-server-per-port guard",
+            )
+        else:
+            await logger.ainfo(
+                "runtime.instance_lock_acquired",
+                path=str(lock_path),
+                pid=os.getpid(),
+                waited_ms=round(waited_s * 1000),
+                previous_pid=previous_pid,
+            )
 
         # Validate at least one persona exists so we fail loudly NOW
         # (rather than on the first WS connect, which surfaces in the
@@ -207,19 +269,19 @@ class Runtime:
         await self._shutdown_event.wait()
 
         await logger.ainfo("huxley_shutting_down")
+        # A restarted server waits on this process's instance lock, so a
+        # shutdown that hangs (the session summary is an LLM call with no
+        # timeout of its own) would keep the next server from ever
+        # starting. A daemon timer, not `wait_for`: it also covers the
+        # listener close, cancellations that get swallowed, and
+        # `asyncio.run`'s own teardown and thread joins after `run()`.
+        self._arm_shutdown_deadline()
         self._shutting_down = True
         server_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await server_task
 
-        # Drain any pending teardown task before tearing down current.
-        if self._teardown_task is not None and not self._teardown_task.done():
-            with contextlib.suppress(Exception):
-                await self._teardown_task
-
-        if self.current_app is not None:
-            with contextlib.suppress(Exception):
-                await self.current_app.shutdown()
+        await self._shutdown_apps()
 
         await logger.ainfo("huxley_stopped")
 
@@ -242,6 +304,38 @@ class Runtime:
             # a bug in execv doesn't leave a zombie process.
             msg = "os.execv returned unexpectedly"
             raise RuntimeError(msg)
+
+    def _arm_shutdown_deadline(self) -> None:
+        """Start the shutdown deadline (`_SHUTDOWN_TIMEOUT_S`). Daemon, so
+        it never keeps a finished process alive; `os.execv` replaces the
+        process, so it cannot fire into a restarted server."""
+        timer = threading.Timer(self._SHUTDOWN_TIMEOUT_S, self._shutdown_deadline_expired)
+        timer.daemon = True
+        timer.start()
+
+    def _shutdown_deadline_expired(self) -> None:
+        """Runs on the timer thread: shutdown took too long. Log, then
+        finish the restart if one was requested, else exit 1."""
+        logger.error(
+            "runtime.shutdown_timeout",
+            timeout_s=self._SHUTDOWN_TIMEOUT_S,
+            restart=self._restart_after_shutdown,
+            note="exiting without a clean shutdown so the next server can start",
+        )
+        if self._restart_after_shutdown:
+            with contextlib.suppress(OSError):
+                os.execv(sys.argv[0], sys.argv)
+        os._exit(1)
+
+    async def _shutdown_apps(self) -> None:
+        """Drain any in-flight teardown, then shut the current app down."""
+        if self._teardown_task is not None and not self._teardown_task.done():
+            with contextlib.suppress(Exception):
+                await self._teardown_task
+
+        if self.current_app is not None:
+            with contextlib.suppress(Exception):
+                await self.current_app.shutdown()
 
     def _signal_shutdown(self) -> None:
         self._shutdown_event.set()
@@ -306,7 +400,13 @@ class Runtime:
         `force=True` bypasses the same-persona short-circuit. Used by
         `_reload_current_persona()` (Phase B) to apply persona.yaml /
         secrets edits via a fresh load + setup_all without a process
-        restart.
+        restart. A same-persona reload is the one exception to
+        pre-validation: the persona.yaml load and the Application
+        constructor still run first, but the old app is then stopped
+        BEFORE the new one starts, because both would hold the same
+        per-persona resources (SQLite DB, skill sessions). If the new
+        start fails, the old PersonaSpec is started again
+        (`_restore_after_failed_reload`) and the exception propagates.
         """
         async with self._swap_lock:
             old_app = self.current_app
@@ -331,25 +431,11 @@ class Runtime:
             # `_TEARDOWN_TIMEOUT_S` (round 2 §10) so a stuck teardown
             # doesn't block subsequent swaps forever — log + abandon.
             if self._teardown_task is not None and not self._teardown_task.done():
-                try:
-                    # `shield` so the wait_for timeout doesn't cancel the
-                    # underlying teardown — we still want it to complete
-                    # in the background; we just stop waiting on it.
-                    await asyncio.wait_for(
-                        asyncio.shield(self._teardown_task),
-                        timeout=self._TEARDOWN_TIMEOUT_S,
-                    )
-                except TimeoutError:
-                    await logger.awarning(
-                        "runtime.teardown_timeout_abandoned",
-                        timeout_s=self._TEARDOWN_TIMEOUT_S,
-                        note="previous teardown still running; proceeding anyway",
-                    )
-                except Exception:
-                    # Teardown raised — already logged inside
-                    # `_teardown_app`. Don't block the new swap on a
-                    # botched cleanup.
-                    pass
+                await self._wait_bounded(
+                    self._teardown_task,
+                    what="previous_swap",
+                    timeout_s=self._TEARDOWN_TIMEOUT_S,
+                )
             self._teardown_task = None
 
             await logger.ainfo(
@@ -365,19 +451,52 @@ class Runtime:
                 await logger.aexception("runtime.persona_load_failed", persona=name)
                 raise
 
+            # The constructor opens nothing, but it already resolves the
+            # persona's skills (entry points, tool-name collisions), so a
+            # broken persona fails here with the old app untouched.
             new_app = Application(
                 self._config,
                 new_persona,
                 audio_server=self.audio_server,
                 language=language,
             )
+
+            # Same-persona reload (only reachable with `force`): the old
+            # and new app would share this persona's SQLite DB, any skill
+            # session a live client keeps locked (so that skill's new setup
+            # could never start; see docs/skills/telegram.md) and every
+            # other per-persona resource. Stop the old one first; pre-validation
+            # cannot hold here. `_shim_persona_select` waits on
+            # `_swap_lock`, so a connect during the gap does not mistake
+            # `current_app is None` for a fresh boot.
+            reloading = old_app is not None and old_app.persona.data_dir.parent.name == name
+            if old_app is not None and reloading:
+                await logger.ainfo("runtime.reload_stopping_old_app", persona=name)
+                self.current_app = None
+                # Kept in `_teardown_task` so a teardown that outlives the
+                # bound stays referenced and later swaps / shutdown wait on it.
+                self._teardown_task = asyncio.create_task(self._teardown_app(old_app))
+                # Longer bound than a swap's: starting the new app while the
+                # old one still holds the persona's files is the very thing
+                # this ordering avoids.
+                await self._wait_bounded(
+                    self._teardown_task,
+                    what="reload_old_app",
+                    timeout_s=self._SHUTDOWN_TIMEOUT_S,
+                )
+
             try:
                 await new_app.start(auto_connect=auto_connect)
             except Exception:
-                # Cleanup partial init; OLD app (if any) untouched.
+                # Cleanup partial init; OLD app (if any) untouched, unless
+                # this was a reload, which already stopped it.
                 with contextlib.suppress(Exception):
                     await new_app.shutdown()
                 await logger.aexception("runtime.persona_start_failed", persona=name)
+                if old_app is not None and reloading:
+                    await self._restore_after_failed_reload(
+                        old_app, auto_connect=auto_connect, language=language
+                    )
                 raise
 
             self.current_app = new_app
@@ -399,8 +518,68 @@ class Runtime:
             except Exception:
                 await logger.aexception("skills_state.swap_push_failed")
 
-            if old_app is not None:
+            if old_app is not None and not reloading:
                 self._teardown_task = asyncio.create_task(self._teardown_app(old_app))
+
+    async def _wait_bounded(
+        self, task: asyncio.Task[None], *, what: str, timeout_s: float
+    ) -> None:
+        """Await a teardown for at most `timeout_s`.
+
+        `shield` so the timeout doesn't cancel the underlying teardown:
+        it still completes in the background; we just stop waiting on it
+        (critic round 2 finding 10: a stuck teardown must not block every later
+        swap). A teardown that raised was already logged inside
+        `_teardown_app`; don't block the swap on a botched cleanup.
+        """
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=timeout_s)
+        except TimeoutError:
+            await logger.awarning(
+                "runtime.teardown_timeout_abandoned",
+                what=what,
+                timeout_s=timeout_s,
+                note="previous teardown still running; proceeding anyway",
+            )
+        except Exception:
+            pass
+
+    async def _restore_after_failed_reload(
+        self,
+        old_app: Application,
+        *,
+        auto_connect: bool,
+        language: str | None,
+    ) -> None:
+        """A reload stopped the old app, then the new one failed to start.
+        Bring the persona back as it was before the edit (the PersonaSpec
+        the old app ran) so the user is not left with no assistant. If
+        that fails too, record the error for the next hello."""
+        name = old_app.persona.data_dir.parent.name
+        app: Application | None = None
+        try:
+            app = Application(
+                self._config,
+                old_app.persona,
+                audio_server=self.audio_server,
+                language=language,
+            )
+            await app.start(auto_connect=auto_connect)
+        except Exception as exc:
+            if app is not None:
+                with contextlib.suppress(Exception):
+                    await app.shutdown()
+            self._last_session_error = (
+                f"persona '{name}' failed to reload: {exc.__class__.__name__}"
+            )
+            await logger.aexception("runtime.reload_restore_failed", persona=name)
+            return
+        self.current_app = app
+        await logger.awarning(
+            "runtime.reload_restored_previous",
+            persona=name,
+            note="the edit did not apply; running the persona as it was before it",
+        )
 
     async def _teardown_app(self, app: Application) -> None:
         try:
@@ -420,8 +599,9 @@ class Runtime:
         exactly what's needed — the only thing missing is the
         same-persona short-circuit, which `force=True` bypasses.
 
-        Audio-wise this is heavier than just notifying skills:
-        the OpenAI session disconnects + reconnects (~1-2s gap). For
+        Audio-wise this is heavier than just notifying skills: the old
+        app shuts down first (session summary included, a few seconds),
+        then the new one connects. For
         Phase B's config-time use case that's acceptable; mid-call
         config edits aren't a supported flow. Phase D (auto-install)
         uses a different path because the venv changes mid-run.
@@ -851,6 +1031,16 @@ class Runtime:
         Eager-connects (`auto_connect=True`) so the user's first PTT
         after the swap reaches a CONVERSING session instead of being
         rejected by the IDLE-state guard. Critic round 2 §4."""
+        # A swap or same-persona reload in flight can have
+        # `current_app` at None for a few seconds (the reload stops the
+        # old app before starting the new one). Wait for it, so this
+        # connect doesn't take the lazy-boot path and swap to the
+        # default persona once the reload commits. The hello goes out
+        # after this returns, so the client just waits for it.
+        if self._swap_lock.locked():
+            async with self._swap_lock:
+                pass
+
         # Lazy-boot path: no current_app yet. Pick a name (env var
         # default if no query param was supplied) and bring it up.
         if self.current_app is None:

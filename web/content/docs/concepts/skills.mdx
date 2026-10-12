@@ -102,6 +102,7 @@ Stuff worth noticing:
 - `handle` is the dispatch. The framework gives you `tool_name` and `args` (already parsed JSON); you return a `ToolResult`.
 - `ToolResult.output` is JSON the model narrates. `side_effect` is optional; here we use it to actually push a volume change to the client.
 - `teardown` is for cleanup — kill background tasks, close files. Most skills don't need anything here.
+- If `setup` raises, the persona still starts: the framework disables that one skill, calls its `teardown` right away (so make `teardown` safe when `setup` didn't finish), and answers calls to its tools with an error the model says out loud.
 
 ## Tools and the LLM
 

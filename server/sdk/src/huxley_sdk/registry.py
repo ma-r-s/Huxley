@@ -7,11 +7,17 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from huxley_sdk.types import Skill, SkillContext, ToolResult
+    from huxley_sdk.types import Skill, SkillContext, ToolDefinition, ToolResult
 
 
 class SkillNotFoundError(Exception):
     """Raised when a tool call cannot be routed to any registered skill."""
+
+
+class SkillUnavailableError(Exception):
+    """Raised when a tool call routes to a skill that was disabled because
+    its `setup()` raised. The framework turns it into an error tool output
+    the model speaks, like any other failing tool call."""
 
 
 class SkillRegistry:
@@ -32,11 +38,21 @@ class SkillRegistry:
     def __init__(self) -> None:
         self._skills: dict[str, Skill] = {}
         self._tool_to_skill: dict[str, str] = {}
+        # Tool list each skill reported at registration. Used for disabled
+        # skills so a half-set-up skill's `tools` property is never called.
+        self._registered_tools: dict[str, list[ToolDefinition]] = {}
+        # Skills whose setup() raised under
+        # `setup_all(on_skill_disabled=...)`. Already torn down; they stay
+        # registered (tools still offered) but are skipped everywhere
+        # else; see `setup_all`.
+        self._disabled: set[str] = set()
 
     def register(self, skill: Skill) -> None:
         """Register a skill. Its tools become available for dispatch."""
         self._skills[skill.name] = skill
-        for tool in skill.tools:
+        tools = list(skill.tools)
+        self._registered_tools[skill.name] = tools
+        for tool in tools:
             if tool.name in self._tool_to_skill:
                 existing = self._tool_to_skill[tool.name]
                 msg = (
@@ -47,10 +63,19 @@ class SkillRegistry:
             self._tool_to_skill[tool.name] = skill.name
 
     def get_all_tool_definitions(self) -> list[dict[str, Any]]:
-        """Return all tool schemas in OpenAI API format for session.update."""
+        """Return all tool schemas in OpenAI API format for session.update.
+
+        Includes the tools of disabled skills on purpose: the persona's
+        prompt may name them, and a model told about a capability with no
+        tool behind it can claim it acted when nothing happened. Calling
+        one raises `SkillUnavailableError` in `dispatch`, which the
+        framework turns into an error the model says out loud. A disabled
+        skill's tools come from the list it reported at registration.
+        """
         definitions: list[dict[str, Any]] = []
-        for skill in self._skills.values():
-            definitions.extend(tool.to_api_format() for tool in skill.tools)
+        for name, skill in self._skills.items():
+            tools = self._registered_tools[name] if name in self._disabled else skill.tools
+            definitions.extend(tool.to_api_format() for tool in tools)
         return definitions
 
     async def dispatch(self, tool_name: str, args: dict[str, Any]) -> ToolResult:
@@ -64,6 +89,9 @@ class SkillRegistry:
         if skill_name is None:
             msg = f"No skill registered for tool '{tool_name}'"
             raise SkillNotFoundError(msg)
+        if skill_name in self._disabled:
+            msg = f"Skill '{skill_name}' is disabled (its setup failed); tool '{tool_name}'"
+            raise SkillUnavailableError(msg)
         return await self._skills[skill_name].handle(tool_name, args)
 
     def get_prompt_context(self) -> str:
@@ -84,7 +112,7 @@ class SkillRegistry:
         confirmed to use the new shape.
         """
         parts: list[str] = []
-        for skill in self._skills.values():
+        for skill in self.skills:  # disabled skills contribute nothing
             getter = getattr(skill, "prompt_context", None)
             if callable(getter):
                 ctx = getter()
@@ -95,15 +123,40 @@ class SkillRegistry:
     async def setup_all(
         self,
         build_context: Callable[[str], SkillContext],
+        *,
+        on_skill_disabled: Callable[[str, BaseException], Awaitable[None]] | None = None,
+        on_teardown_error: Callable[[str, BaseException], Awaitable[None]] | None = None,
     ) -> None:
         """Call setup(ctx) on all registered skills.
 
         `build_context` receives the skill name and returns its `SkillContext`.
         The framework supplies this callable; it knows how to wire each skill's
         logger / storage namespace / config.
+
+        With `on_skill_disabled`, one skill's failing setup never stops
+        the rest. The skill is disabled, `on_skill_disabled(name, exc)` is
+        awaited, the skill's `teardown()` runs right away (so tasks or
+        handlers its partial setup started stop now; a raising teardown
+        goes to `on_teardown_error`), and the loop moves on. A disabled
+        skill drops out of `skills`, `skill_names`, `get_prompt_context`,
+        `reconfigure_all` and `teardown_all`; its tools stay offered but
+        `dispatch` raises `SkillUnavailableError` for them. Without
+        `on_skill_disabled` the first failure propagates and nothing is
+        disabled, so a caller that can't report a failure never loses it.
+        2026-10-12: one skill's failed setup took a whole persona down
+        for 55 s before this.
         """
         for name, skill in self._skills.items():
-            await skill.setup(build_context(name))
+            try:
+                await skill.setup(build_context(name))
+            except Exception as exc:
+                if on_skill_disabled is None:
+                    raise
+                self._disabled.add(name)
+                try:
+                    await on_skill_disabled(name, exc)
+                finally:
+                    await self._teardown_one(name, skill, on_teardown_error)
 
     async def reconfigure_all(
         self,
@@ -120,9 +173,12 @@ class SkillRegistry:
         Uses `getattr` so skills from before `reconfigure` was added to
         the Protocol continue to work — if absent, it's a silent no-op.
         Remove the fallback once all first-party skills confirm they
-        inherit the default.
+        inherit the default. Disabled skills are skipped: their setup
+        never completed, so there is nothing consistent to refresh.
         """
         for name, skill in self._skills.items():
+            if name in self._disabled:
+                continue
             reconf = getattr(skill, "reconfigure", None)
             if callable(reconf):
                 await reconf(build_context(name))
@@ -149,7 +205,21 @@ class SkillRegistry:
         could leave skills B+C up while A's teardown threw, with their
         background tasks still running until `task_supervisor.stop()`
         cancelled them later in the shutdown — silent inconsistency.
+
+        Disabled skills are skipped: `setup_all` tore them down when it
+        disabled them.
         """
+        for name, skill in self._skills.items():
+            if name in self._disabled:
+                continue
+            await self._teardown_one(name, skill, on_error)
+
+    async def _teardown_one(
+        self,
+        name: str,
+        skill: Skill,
+        on_error: Callable[[str, BaseException], Awaitable[None]] | None,
+    ) -> None:
         # T1.18 — `teardown` is optional per the Skill Protocol's
         # documented contract ("Optional methods (`prompt_context`,
         # `setup`, `teardown`) have empty defaults"). The Protocol
@@ -162,27 +232,34 @@ class SkillRegistry:
         # raising AttributeError mid-shutdown — which previously
         # aborted the loop and left later skills' background tasks /
         # clients dangling until the supervisor cancelled them.
-        for name, skill in self._skills.items():
-            teardown = getattr(skill, "teardown", None)
-            if not callable(teardown):
-                continue
-            try:
-                await teardown()
-            except Exception as exc:
-                if on_error is not None:
-                    await on_error(name, exc)
+        teardown = getattr(skill, "teardown", None)
+        if not callable(teardown):
+            return
+        try:
+            await teardown()
+        except Exception as exc:
+            if on_error is not None:
+                await on_error(name, exc)
 
     @property
     def skill_names(self) -> list[str]:
-        return list(self._skills.keys())
+        """Names of the working skills (registered and not disabled)."""
+        return [name for name in self._skills if name not in self._disabled]
+
+    @property
+    def disabled_skill_names(self) -> list[str]:
+        """Names of skills disabled because their setup raised."""
+        return [name for name in self._skills if name in self._disabled]
 
     @property
     def tool_names(self) -> list[str]:
+        """Every registered tool, including those of disabled skills
+        (they are still offered; see `get_all_tool_definitions`)."""
         return list(self._tool_to_skill.keys())
 
     @property
     def skills(self) -> list[Skill]:
-        """All registered skills in declaration order. Used by the
-        framework for cross-skill discovery (e.g., finding the call-
-        hooks provider in `Application._wire_call_hooks_if_any`)."""
-        return list(self._skills.values())
+        """Working skills (not disabled) in declaration order. Used by the
+        framework for cross-skill discovery and for persisting each
+        skill's data_schema_version after a successful setup."""
+        return [skill for name, skill in self._skills.items() if name not in self._disabled]

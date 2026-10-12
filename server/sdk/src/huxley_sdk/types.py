@@ -986,7 +986,12 @@ class Skill(Protocol):
         ...
 
     async def setup(self, ctx: SkillContext) -> None:  # pragma: no cover - default no-op
-        """Called once at startup with the skill's context. Default no-op."""
+        """Called once at startup with the skill's context. Default no-op.
+
+        If it raises, the framework disables this skill and starts the
+        persona without it: `teardown()` runs right away, and the tools
+        stay offered but answer with an error the model speaks.
+        """
         return None
 
     async def reconfigure(self, ctx: SkillContext) -> None:  # pragma: no cover - default no-op
@@ -1006,7 +1011,12 @@ class Skill(Protocol):
         return None
 
     async def teardown(self) -> None:  # pragma: no cover - default no-op
-        """Called on shutdown. Default no-op."""
+        """Called on shutdown. Default no-op.
+
+        Must be safe when `setup()` raised partway or never ran (a
+        persona that failed to start tears down every skill), so guard
+        on what setup assigned instead of asserting it.
+        """
         return None
 
     def prompt_context(self) -> str:  # pragma: no cover - default empty

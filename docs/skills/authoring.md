@@ -106,6 +106,8 @@ Optional methods (`reconfigure`, `teardown`, `prompt_context`) are no-ops by def
 
 `teardown` is the lifecycle hook for cleanup: cancel background tasks, close persistent network clients, flush pending writes. If your skill doesn't hold any of those (the StocksSkill reference is one such case — it opens a fresh `httpx.AsyncClient` per call inside an `async with`), you can omit it entirely.
 
+If `setup` raises, the framework disables your skill (its tools answer with an error the model says out loud) and starts the persona without it, then calls `teardown` right away. So `teardown` must work after a `setup` that raised partway or never ran: guard on what `setup` assigned instead of asserting it. See [Writing a Skill](./README.md#the-skill-protocol).
+
 ### `name`
 
 The string users write in `persona.yaml` to enable your skill. **Must match the entry-point key in `pyproject.toml`.** Changing it later is a breaking change for every user.

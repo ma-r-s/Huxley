@@ -131,6 +131,14 @@ The file is written atomically by the skill whenever `add_contact` or `remove_co
 
 **Telegram resolution caveat**: Telegram only lets the userbot resolve a phone to a `user_id` if that person has previously sent the userbot at least one message. Cold-adding a number will store the contact and allow outbound calls (resolution retried at call time), but inbound caller recognition won't work until they initiate contact first.
 
+## Startup and the session lock
+
+Pyrogram keeps the session file (`<persona.data_dir>/huxley_userbot.session`, SQLite) write-locked for as long as a client runs: it only commits on stop. A second client on the same session fails to open it with `database is locked` until the first one stops.
+
+- **Retry**: `TelegramTransport.connect()` retries on that error with backoffs of 0.2, 0.5 and 1.0 s (about 6.5 s in all: each attempt also waits out pyrogram's 1 s SQLite busy timeout). Each attempt builds a fresh pyrogram `Client` + `PyTgCalls` pair and closes what a failed attempt opened: PyTgCalls marks itself running before pyrogram opens the session, so a PyTgCalls whose start failed can never start again (`PyTgCallsAlreadyRunning`, the 2026-10-12 restart incident). A pair whose pyrogram client had already started is stopped, not just disconnected. Look for `telegram.session_db_lock.retry`, `telegram.transport.discarded_failed_client` (or `telegram.transport.discard_failed` if the cleanup itself raised) and `telegram.session_db_lock.exhausted`.
+- **Who held the lock**: on 2026-10-12, a server process that was still shutting down. A new server now waits for the old one on the same port to exit (see [architecture](../architecture.md#runtime-topology)), and a same-persona reload stops the old app before starting the new one, so neither should reach the retry any more.
+- **If it still fails**: the framework disables the skill (`skill.setup_failed`) and the persona runs without it. `call_contact`, `send_message` and the contact tools answer with an error the model apologizes for, and inbound calls and messages are not received, until the persona reloads or the server restarts.
+
 ## Architecture — how the audio actually flows
 
 See `docs/research/telegram-voice.md` §"Bidirectional live-PCM on p2p" for the full spike story and every gotcha. Short version:
@@ -194,6 +202,7 @@ dependencies = [
 
 ## Not yet implemented
 
+- **Reconnect after a failed startup**: if the connect in `setup()` fails (network down at boot, Telegram outage), the skill is disabled until the next reload or restart. Catching that in `setup()` and reconnecting in the background would keep the contact tools working and bring inbound back on its own.
 - **Multiple concurrent calls** — transport enforces a single-call invariant. Second `call_contact` during an active call would currently fail inside `place_call` with a clean `TransportError`; a better shape would be to end the previous one first (opinion: probably not what grandpa wants either way — he'd get double-billed in mind-space).
 - **Contact disambiguation** — two contacts named "hija" → only the last-loaded wins. Fine for v1 (unlikely with the target user), but might want a "did you mean…" flow later.
 - **`read_unread` / `reply_to_last` tools** — deferred from T1.11 v1. The LLM can already say "Carlos te dijo: '...', ¿quieres responder?" from the inject preview and call `send_message`. Add these only if real usage shows the preview is insufficient.
