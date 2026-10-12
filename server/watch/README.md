@@ -276,3 +276,18 @@ ping URL.
 - The server's `/health` (T1.43 W1): until it exists, a server that hangs
   without exiting looks quiet, not down (its process is still there).
 - Rollback, update probation, Access token and 4G SIM expiry: no signal yet.
+
+## Audiobook hours
+
+Spotify has no API for the hours left (the Web API's audiobook routes are
+catalog only; the number is on the account page, in whole hours). So the
+page keeps its own count, set once in `[books]`: `hours_per_month` (the
+add-on's 15) and `renews_day` (the billing day). Hours left = allowance
+minus the book audio the walkie played since the last renewal, from the
+logs (`spotify.stream_ended` `audio_ms` of book streams, plus a book still
+playing): Spotify bills 1x content time and replays, the same thing.
+Bench runs count (a test that plays a book spends real hours). A
+confirmed refusal (`spotify.refusal_explained cause=book_no_hours`) forces
+0 and opens the card; a bare `start_refused` never does. The count is
+exact only if that Spotify account plays nowhere else.
+

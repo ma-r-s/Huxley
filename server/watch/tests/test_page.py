@@ -203,7 +203,7 @@ def test_books_gauge_with_and_without_allowance() -> None:
     assert '<div class="num">30 min</div>' in page
     assert "allowance not set" in page
     page = render(status_for(DAY, book_seconds=4 * 3600.0, book_hours_per_month=15.0))
-    assert '<div class="num">4.0 h</div><div class="of">of 15 h</div>' in page
+    assert '<div class="num">11 h</div><div class="of">of 15 h</div>' in page  # what's left
 
 
 def test_calls_per_person() -> None:

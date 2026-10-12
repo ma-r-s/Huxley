@@ -187,6 +187,8 @@ class Watcher:
             logs_problem=logs_problem,
             book_seconds=db.book_seconds,
             book_hours_per_month=cfg.book_hours_per_month,
+            book_renews_day=cfg.book_renews_day,
+            book_since=cfg.book_since,
             balance_usd=cfg.balance_usd,
             balance_at=cfg.balance_at,
             disk_pct=self._fenced("disk", lambda: disk_pct(disk_path), None),

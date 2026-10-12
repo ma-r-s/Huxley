@@ -18,7 +18,7 @@ import os
 import stat
 import tomllib
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, time
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -95,6 +95,10 @@ class Config:
     balance_usd: float | None = None
     balance_at: datetime | None = None
     book_hours_per_month: float | None = None
+    # The audiobook allowance renews on this day of the month (Spotify's
+    # billing day); None: calendar months, as the skill's own counter.
+    book_renews_day: int | None = None
+    book_since: date | None = None  # when the allowance began (first cycle only)
     telegram_token: str | None = None
     telegram_chat_id: str | None = None
     ping_url: str | None = None
@@ -320,6 +324,25 @@ def _load(path: Path | None) -> Config:
             except (TypeError, ValueError):
                 hours = None
 
+    renews_day: int | None = None
+    if books.get("renews_day") is not None:
+        try:
+            renews_day = int(books["renews_day"])
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"books.renews_day: not a day: {books['renews_day']!r}") from exc
+        if not 1 <= renews_day <= 31:
+            raise ConfigError(f"books.renews_day: 1-31, got {renews_day}")
+    book_since: date | None = None
+    if books.get("since") is not None:
+        value = books["since"]
+        if isinstance(value, date):
+            book_since = value
+        else:
+            try:
+                book_since = date.fromisoformat(str(value))
+            except ValueError as exc:
+                raise ConfigError(f"books.since: not a date: {value!r}") from exc
+
     known = {f for f in Thresholds.__dataclass_fields__}
     th_kwargs: dict[str, Any] = {}
     for key, value in thresholds_raw.items():
@@ -370,6 +393,8 @@ def _load(path: Path | None) -> Config:
         balance_usd=balance_usd,
         balance_at=balance_at,
         book_hours_per_month=hours,
+        book_renews_day=renews_day,
+        book_since=book_since,
         telegram_token=_secret(secrets, "telegram_bot_token"),
         telegram_chat_id=_secret(secrets, "telegram_chat_id"),
         ping_url=ping,

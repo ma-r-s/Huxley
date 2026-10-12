@@ -503,9 +503,43 @@ def _week(w: dict[str, Any]) -> str:
     )
 
 
+def _gauge_left(b: dict[str, Any], allowance: float, left_s: float) -> str:
+    """A fuel gauge: what's left of the cycle's hours, refilled on renewal."""
+    frac = max(0.0, min(left_s / 3600 / allowance, 1.0))
+    color = "crit" if left_s <= 0 else "warn" if left_s < b["low_h"] * 3600 else "book"
+    cx, cy, r = 150, 140, 110
+
+    def point(f: float) -> tuple[float, float]:
+        a = math.pi * (1 - f)
+        return cx + r * math.cos(a), cy - r * math.sin(a)
+
+    def arc(f0: float, f1: float, col: str) -> str:
+        (x0, y0), (x1, y1) = point(f0), point(f1)
+        return (
+            f'<path d="M{x0:.1f} {y0:.1f} A{r} {r} 0 0 1 {x1:.1f} {y1:.1f}" fill="none" '
+            f'stroke="var(--{col})" stroke-width="18" stroke-linecap="round"/>'
+        )
+
+    hours_left = left_s / 3600
+    num = ("~" if b.get("partial") else "") + (
+        f"{hours_left:.1f} h" if hours_left < 10 else f"{hours_left:.0f} h"
+    )
+    of = f"of {allowance:g} h" + (f", renews {b['renews']}" if b.get("renews") else "")
+    fill = arc(0, max(frac, 0.02), color) if frac > 0 else ""
+    return (
+        f'<div class="gauge" data-left-s="{left_s:.0f}" data-allowance-h="{allowance:g}">'
+        f'<svg viewBox="0 0 300 170" role="img" aria-label="{_a(num + " left " + of)}">'
+        f"{arc(0, 1, 'grid')}{fill}</svg>"
+        f'<div class="num">{_t(num)}</div><div class="of">{_t(of)}</div></div>'
+    )
+
+
 def _gauge(b: dict[str, Any]) -> str:
     used_s = b["used_s"]
     allowance = b["allowance_h"]
+    left_s = b.get("left_s")
+    if allowance and left_s is not None:
+        return _gauge_left(b, float(allowance), 0.0 if b.get("out") else float(left_s))
     frac = 0.02 if not allowance or used_s is None else min(used_s / 3600 / allowance, 1.0)
     frac = max(frac, 0.02)
     cx, cy, r = 150, 140, 110

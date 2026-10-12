@@ -16,7 +16,7 @@ from huxley_watch.events import FIRMWARE_LOG
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
-    from datetime import datetime
+    from datetime import date, datetime
     from pathlib import Path
     from zoneinfo import ZoneInfo
 
@@ -383,6 +383,58 @@ def server_health_ok(url: str) -> bool | None:
         return None
     ok = body.get("ok") if isinstance(body, dict) else None
     return ok if isinstance(ok, bool) else None
+
+
+def book_cycle(
+    now: datetime, tz: ZoneInfo, renews_day: int, since: date | None = None
+) -> tuple[datetime, datetime]:
+    """The audiobook allowance's current cycle: from the last renewal (local
+    midnight on `renews_day`, clamped to short months) to the next one.
+    `since` (when the allowance began) starts the first cycle later."""
+    import calendar
+    from datetime import datetime as _dt
+
+    def renewal(year: int, month: int) -> datetime:
+        day = min(renews_day, calendar.monthrange(year, month)[1])
+        return _dt(year, month, day, tzinfo=tz)
+
+    local = now.astimezone(tz)
+    this = renewal(local.year, local.month)
+    if this <= local:
+        start = this
+        y, m = (local.year + 1, 1) if local.month == 12 else (local.year, local.month + 1)
+        end = renewal(y, m)
+    else:
+        end = this
+        y, m = (local.year - 1, 12) if local.month == 1 else (local.year, local.month - 1)
+        start = renewal(y, m)
+    if since is not None:
+        began = _dt(since.year, since.month, since.day, tzinfo=tz)
+        if began > start:
+            start = began
+    return start, end
+
+
+def book_seconds_since(events: Sequence[Event], start: datetime, now: datetime) -> float:
+    """Audiobook audio played since `start`, as Spotify bills it (1x content
+    time; the walkie has no speed control): each finished book stream's
+    `audio_ms`, plus the time a book still playing has run. Bench windows
+    count too: a test that plays a book spends real hours."""
+    used = 0.0
+    open_at: datetime | None = None
+    for e in events:
+        if e.ts < start:
+            continue
+        if e.name == "spotify.play_started":
+            ctx = str(e.get("context") or "")
+            open_at = e.ts if ctx.startswith("spotify:show:") else None
+        elif e.name == "spotify.stream_ended":
+            if e.get("book"):
+                used += max(0.0, float(e.get("audio_ms") or 0)) / 1000.0
+            open_at = None
+    if open_at is not None:
+        used += max(0.0, (now - open_at).total_seconds())
+    return used
 
 
 APP_START = ("huxley_starting", "runtime.persona_swap_started", "runtime.reload_stopping_old_app")

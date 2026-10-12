@@ -69,6 +69,7 @@ KEEP_EVENTS = frozenset(
         "spotify.unavailable",
         "spotify.start_refused",
         "spotify.book_hours_out",
+        "spotify.refusal_explained",
         "spotify.stream_ended",
         "spotify.play_started",  # its context says book (spotify:show:) or music
         # what the speaker played: streams and calls by id, and their kind

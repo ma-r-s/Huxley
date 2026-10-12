@@ -45,6 +45,8 @@
 # in persona.yaml; with neither, the gauge shows hours used only and only
 # Spotify's own refusals alert.
 # hours_per_month = 15
+# renews_day = 14              # the billing day: hours left = allowance minus book audio since the last renewal (from the logs)
+# since = "2026-10-12"        # when the allowance began (only shortens the first cycle)
 
 [thresholds]
 # The defaults, all tested (server/watch/tests/). Each must be more than 0.

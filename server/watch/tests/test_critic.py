@@ -175,11 +175,13 @@ def test_spend_today_clears_at_local_midnight() -> None:
 
 def test_a_refused_book_start_doesnt_clear_the_hours_alert() -> None:
     refused = line(
-        "spotify.start_refused",
+        "spotify.refusal_explained",
         ago(hours=2),
         level="warning",
         skill="spotify",
         uri="spotify:show:x",
+        control="spotify:show:y",
+        control_result="no",
         cause="book_no_hours",
     )
     retry = line(
