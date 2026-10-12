@@ -51,6 +51,28 @@ standards):
 4. **Dual-OTA partitions** reserved from day 1 — adding OTA is additive,
    not a flash-layout migration.
 
+## Wiring the talk button
+
+The case's lever (or any push button) closes two wires: one to **GND**,
+one to **IO7** (GPIO7). Both are on the 2 x 9 pin header at the board's
+edge, at opposite ends. Board face up, USB-C at the top, the labels
+printed above the header read, left to right:
+
+```
+IO7  IO6  IO5  IO4  IO3  IO20 IO19 GND  5V
+EX3  EX2  EX1  IO9  IO8  SDA  SCL  GND  3V3
+```
+
+Each column is two pins, one per label line. **GND**: either pin of the
+second column from the right (both are GND). **IO7**: the far-left
+column, whose other pin is EX3 (an expander input: touching it to GND is
+harmless). Which way round doesn't matter: it's a switch. **Never the
+far-right column** (5V, 3V3): a button there shorts the battery or puts
+5 V on the chip. Check it: the serial log says `button.talk press
+src=lever` on a press, and `talk.gpio7 low at boot` if IO7 is held or
+shorted. Source: Waveshare's pinout (`enclosure/reference/pinout.jpg`:
+GPIO7 = header pin 2, GND = pins 15 and 16).
+
 ## Prerequisites
 
 - ESP-IDF **v5.5** installed. Clone + install:

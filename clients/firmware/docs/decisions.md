@@ -245,9 +245,12 @@ the bare board on the bench. A K2 read that fails on the I2C bus now
 counts as not pressed (it used to read as pressed, since the button is
 active-low): an unreadable button must never open the mic.
 
-**Why GPIO7**: the LCD is unused, so header GPIO3 to GPIO9 are free;
-GPIO7 is pin 2, next to GND on 15/16. Polled with K2 in the same 10 ms
-loop rather than on an interrupt: one debounce, one code path.
+**Why GPIO7**: the LCD is unused, so header GPIO3 to GPIO9 are free.
+GPIO7 is header pin 2, at the opposite end of the header from GND (pins
+15/16), not next to it as this entry first said (corrected 2026-10-12
+from Waveshare's pinout; README "Wiring the talk button"). Polled with
+K2 in the same 10 ms loop rather than on an interrupt: one debounce, one
+code path.
 
 ---
 
