@@ -8,6 +8,6 @@ It replaces the ad hoc coordination previously scattered across
 
 from __future__ import annotations
 
-from huxley.turn.coordinator import Turn, TurnCoordinator, TurnState
+from huxley.turn.coordinator import Turn, TurnCoordinator, TurnState, turn_waits_forbidden
 
-__all__ = ["Turn", "TurnCoordinator", "TurnState"]
+__all__ = ["Turn", "TurnCoordinator", "TurnState", "turn_waits_forbidden"]

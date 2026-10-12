@@ -365,10 +365,17 @@ class TestOn:
 
 
 class TestHealthFields:
-    def _app(self, *, connected: bool, state: str = "CONVERSING") -> Any:
+    def _app(
+        self,
+        *,
+        connected: bool,
+        state: str = "CONVERSING",
+        waiting: tuple[int, float | None] = (0, None),
+    ) -> Any:
         return SimpleNamespace(
             provider=SimpleNamespace(is_connected=connected),
             state_machine=SimpleNamespace(state=SimpleNamespace(name=state)),
+            coordinator=SimpleNamespace(waiting_summary=lambda: waiting),
             persona=SimpleNamespace(data_dir=Path("/x/personas/abuelos/data")),
             skill_registry=SimpleNamespace(
                 skill_names=["audiobooks", "reminders"], disabled_skill_names=["telegram"]
@@ -396,6 +403,18 @@ class TestHealthFields:
             "stocks": "disabled",
             "telegram": "failed",
         }
+        assert health["injects_waiting"] == 0
+        assert health["oldest_inject_wait_s"] is None
+
+    def test_turns_waiting_for_a_listener_show(self) -> None:
+        """T1.44: a reminder nobody has heard for a while is worth an alert
+        on the caregiver's page."""
+        runtime = Runtime(Settings(openai_api_key="test-key"))
+        runtime._installed_skills = []
+        runtime.current_app = self._app(connected=True, waiting=(2, 754.2))
+        health = runtime._get_health()
+        assert health["injects_waiting"] == 2
+        assert health["oldest_inject_wait_s"] == 754.2
 
 
 class TestGitCommit:

@@ -12,6 +12,8 @@ Every audio-coordination bug in April 2026 — _book-jumps-in_, _double-ack_, _s
 
 Every user interaction is a **Turn**. A Turn owns one ordering: all of the model's speech (across as many chained OpenAI responses as the model needs to handle info tools) plays first, then any tool-produced audio streams fire in declaration order. The coordinator forwards both kinds of chunks to the same `server.send_audio` pipe in that order — there is no parallel mixing, no per-source queue, no channel abstraction. Tools never touch playback; they return a `ToolResult` with an optional `side_effect` (today an `AudioStream(factory=...)`) that the coordinator invokes at the right moment. Interrupts atomically flush the client queue and cancel the OpenAI response; a press pauses any long-running media task, and the turn's end resumes it (see "Content holds"). A **waiting cue** from the server fills a real wait (a reply slower than 2.5 s, a tool that runs on after the model's "un momento") so a blind user never hears dead air (T1.41; see "The waiting cue" below).
 
+A proactive (injected) turn is said only when a client can hear it, and said again if a disconnect cuts it off (T1.44; see "Proactive turns wait for a listener" below).
+
 ## Why v3 is smaller than v2
 
 v2 proposed named audio channels (`speech`, `media`, cut to just those two after the first critic pass), per-channel client queues, an `AudioRouter`, a required `channel` field on the `audio` WebSocket message, and an `EffectKind` enum with `START_STREAM`/`CLEAR_STREAM`/`NONE` values. All of this was architected for a **future** use case (concurrent audio sources — music under news, priority preemption, selective channel flushing) that has no v1 consumer. The actual v1 problem is one-dimensional **sequencing**: _"speech first, then tool audio, in the same turn."_ Sequencing is a coordinator responsibility; it doesn't need a channel model. v3 keeps every substantive bug fix from v2 and cuts the channel ceremony.
@@ -404,6 +406,51 @@ One soft struck note (D5 with two quiet partials, 4 ms attack, fast decay, about
 
 Not covered: the moment between a turn's end and a stream's first audio (a Spotify start). The PWA no longer plays its own tone; it keeps the visual "thinking" state until `model_speaking: true`, `audio_clear` or a press.
 
+## Proactive turns wait for a listener (T1.44)
+
+An injected turn (`ctx.inject_turn`, `inject_turn_and_wait`) is spoken only when someone can hear it. Before 2026-10-12 it went ahead with no client connected and was spoken to nobody: a reminder at boot with `HUXLEY_PERSONA_AT_BOOT`, or whenever the walkie dropped off Wi-Fi. See the [ADR](./decisions.md#2026-10-12-proactive-turns-wait-for-a-listener-t144).
+
+### When it waits
+
+In `TurnCoordinator._injected_queue`, while any of these holds (checked again, with no await, right before the turn is created):
+
+- no listener: no client whose hello is out. Read live from the server (`AudioServer.listener_epoch`, a number per connection), not cached: an app being started (boot, a swap, a reload) is not current and misses presence calls;
+- no voice session (a reconnect);
+- a turn in progress;
+- an earlier injected turn still playing on the client (below);
+- a live claim, except for PREEMPT.
+
+Content keeps its 5 s grace before it pauses (`_client_absent`); a turn has no stop/start cost to ride out, so it waits at once.
+
+### When it is said
+
+The head of the queue fires when what blocked it clears: a client arrives (`on_client_presence(True)`, before the no-client content hold is released, so the narration's DIALOG parks the content first), the session connects, the previous turn is confirmed heard, a claim ends (scheduled on the next tick: a claim's end runs inside the FocusManager), a cut-off finishes, or a turn ends (where the priority branches above still apply). In order, one at a time; a turn put back goes to the head.
+
+### Heard, or not
+
+A turn that ends normally is said, not yet heard: the model streams faster than real time, so the walkie may still have seconds of it to play, and a Wi-Fi drop the server hasn't noticed swallows audio without an error. It is confirmed once the client's playhead (the estimate content holds use) has passed and the client it was said to answers a WebSocket ping (TCP is ordered: the pong proves everything before it arrived). The ping is bounded at 15 s, write included; on timeout the server aborts the connection so the walkie reconnects. Until then the next waiting turn doesn't fire, so a drop or a press during one turn can't swallow the next one queued behind it in the client's buffer. `inject_turn_and_wait` returns at that confirmation, which is also what keeps a chained `start_input_claim` from cutting the announcement off.
+
+Not heard, and back to the head of the queue, said again whole with a note to the model (`inject_repeat_note`, persona-translatable: "the user did not hear this; say it again in full"):
+
+- the client left or was replaced (an eviction counts: a reconnecting walkie evicts its dead socket) while the turn was being said (the response is cancelled) or before its confirmation;
+- the ping failed or timed out; nothing fires into that connection again;
+- the voice session dropped mid-turn;
+- a press before the turn's audio had started playing (it was queued behind the previous answer, and the press empties the client's buffer); it follows the user's turn. A press while it plays counts as heard.
+
+### Expiry, dedup, persistence
+
+- `expires_after` (default 10 min, `DEFAULT_INJECT_EXPIRY`; `None` waits until heard) counts from the call and only while the turn waits: a turn being said is never cut for it, and one cut off after its deadline is EXPIRED, not said again. An expiry timer resolves it at its deadline.
+- A queued turn with the same `dedup_key` is replaced in its place; a same key being said or awaiting its confirmation drops the newcomer.
+- Cancelling `inject_turn_and_wait` withdraws a turn still waiting.
+- Memory only: a restart loses waiting turns, and skills that persist re-fire from their own storage at setup (reminders do; timers don't, by design). `close()` drops what waits (DROPPED) and counts a turn the client finished playing as heard.
+
+### What doesn't change
+
+- No new earcon: a turn delivered late sounds like one delivered on time (proactive earcons were deferred at T1.2 and never built).
+- The waiting cue never arms for injected turns (only `TurnSource.USER`, at commit and at a tool call); a cut-off ends the turn through the `current_turn` setter, which disarms it like every other path.
+- Nothing new on the wire: the ping is an RFC 6455 control frame every client already answers. `/health` adds `injects_waiting` and `oldest_inject_wait_s`.
+
+Logs: [observability.md](./observability.md#inject_turn-queue-events--diagnosing-dropped-or-queued-reminders).
 ## Open questions
 
 Deferred explicitly, with reason:

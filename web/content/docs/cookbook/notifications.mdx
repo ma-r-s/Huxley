@@ -218,11 +218,15 @@ Telegram supports voice calls. The pattern there is different: `inject_turn_and_
 
 ```python
 async def _on_inbound_call(self, caller_name: str, peer_id: str):
-    # Step 1: Announce. Block until announcement finishes.
-    await self._ctx.inject_turn_and_wait(
+    # Step 1: Announce. Block until the user has heard it; the caller
+    # hears silence meanwhile, so don't wait long for a listener.
+    outcome = await self._ctx.inject_turn_and_wait(
         f"Llamada entrante de {caller_name}, contestando.",
         priority=InjectPriority.BLOCK_BEHIND_COMMS,
+        expires_after=timedelta(seconds=30),
     )
+    if outcome is not InjectOutcome.DELIVERED:
+        return await self._hang_up_and_report_missed(peer_id, caller_name)
 
     # Step 2: Bridge audio.
     claim = InputClaim(

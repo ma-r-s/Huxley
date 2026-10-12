@@ -41,7 +41,9 @@ Any client that implements this protocol is a valid Huxley client. The framework
     "since": "2026-10-13T00:12:40+00:00"
   },
   "walkie_last_seen": "2026-10-13T00:33:12+00:00",
-  "recording": true
+  "recording": true,
+  "injects_waiting": 0,
+  "oldest_inject_wait_s": null
 }
 ```
 
@@ -56,6 +58,7 @@ Any client that implements this protocol is a valid Huxley client. The framework
 | `client` | The current client, `{connected: true, conn_id, audio_format, shell, since}` (`since` = when it connected), or the last one with `connected: false` (`since` = when it left); `null` if none since start. `shell` is from the client's `device` event (`firmware`, `browser`, `home_screen`, `native_app`; a `device.hello` means `firmware`), `null` until it sends one. |
 | `walkie_last_seen` | When a firmware client was last connected (now, while one is); `null` if none since the server started. In memory. |
 | `recording` | The running persona's recorder is attached ([observability](./observability.md#recordings)). |
+| `injects_waiting`, `oldest_inject_wait_s` | Proactive turns waiting for a client that can hear them, and how long the oldest has waited in seconds (`null` with none). In memory. ([turns.md](./turns.md#proactive-turns-wait-for-a-listener-t144); added T1.44.) |
 
 ## Message format
 

@@ -1368,6 +1368,11 @@ class Runtime:
         voice provider session is connected."""
         app = self.current_app
         provider_connected = app is not None and app.provider.is_connected
+        # Proactive turns waiting for a listener (T1.44): an old wait is a
+        # reminder nobody has heard, worth a caregiver alert.
+        waiting, oldest_wait_s = (
+            app.coordinator.waiting_summary() if app is not None else (0, None)
+        )
         return {
             "ok": provider_connected,
             "pid": os.getpid(),
@@ -1384,6 +1389,8 @@ class Runtime:
                 else None
             ),
             "skills": self._skills_health(app),
+            "injects_waiting": waiting,
+            "oldest_inject_wait_s": oldest_wait_s,
         }
 
     def _skills_health(self, app: Application | None) -> dict[str, str]:

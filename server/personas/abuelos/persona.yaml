@@ -235,6 +235,12 @@ ui_strings:
   content_filler_words: >-
     la el lo los las eso esto esa ese musica radio libro cancion audiolibro
     spotify por favor porfa ahora mismo oye bueno vale y de todo
+  # Not shown to anyone: put before a proactive turn said again because
+  # the user didn't hear it (the connection dropped while it was said).
+  inject_repeat_note: >-
+    [Contexto, no lo dijo el usuario: el usuario no oyó esto cuando lo
+    dijiste antes; se cortó la conexión. Dilo otra vez completo, como si
+    fuera la primera vez.]
 
 # Per-language overrides. Swap the client's language via the web UI's
 # language selector and the session re-resolves to these fields. Skills
@@ -474,6 +480,10 @@ i18n:
       content_filler_words: >-
         the it that this music radio book song please now ok okay turn just
         all
+      inject_repeat_note: >-
+        [Context, not said by the user: the user did not hear this when you
+        said it before; the connection dropped. Say it again in full, as if
+        for the first time.]
 
   fr:
     transcription_language: fr
@@ -710,6 +720,10 @@ i18n:
       content_filler_words: >-
         la le les ca cela musique radio livre chanson s il te plait vous
         maintenant ok bon tout de
+      inject_repeat_note: >-
+        [Contexte, pas dit par l'utilisateur : l'utilisateur n'a pas entendu
+        ceci quand tu l'as dit ; la connexion a coupé. Redis-le en entier,
+        comme si c'était la première fois.]
 
 skills:
   # audiobooks: disabled 2026-10-12 (Mario): books come from Spotify

@@ -72,7 +72,7 @@ class ScaleSkill:
 
 ### ~~Proactive notifications~~ → `ctx.inject_turn` is live
 
-Resolved (T1.4 Stage 1c.3, 2026-04-18). `ctx.inject_turn(prompt, *, dedup_key=?, priority=?)` is the primitive skills use to speak without a user turn. Three priority tiers (`NORMAL` / `BLOCK_BEHIND_COMMS` / `PREEMPT`) let a skill choose how urgently to barge over content or calls. `inject_turn_and_wait` blocks until the LLM finishes speaking for skills that need to time a follow-up (e.g., announce-then-bridge-audio on inbound call). See [`skills/README.md`](./skills/README.md#priority-optional-priority) for the guide.
+Resolved (T1.4 Stage 1c.3, 2026-04-18). `ctx.inject_turn(prompt, *, dedup_key=?, priority=?)` is the primitive skills use to speak without a user turn. Three priority tiers (`NORMAL` / `BLOCK_BEHIND_COMMS` / `PREEMPT`) let a skill choose how urgently to barge over content or calls. `inject_turn_and_wait` blocks until the turn was heard (or expired, or was dropped) for skills that need to time a follow-up (e.g., announce-then-bridge-audio on inbound call). Since T1.44 a proactive turn waits for a client that can hear it, up to the skill's `expires_after`. See [`skills/README.md`](./skills/README.md#priority-optional-priority) for the guide.
 
 ### ~~Live phone calls through Huxley~~ → `InputClaim` is live on COMMS
 
