@@ -5410,3 +5410,19 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 **Open.** The Wi-Fi: if gaps stay high with 20 MHz, the router's 2.4 GHz can go to 20 MHz on ch 1 or 6 (Mario's router), or the server onto Ethernet. Bandwidth: the walkie gets PCM as base64 JSON, ~64 KB/s; Opus would need ~3-4 KB/s and would have ridden out the first stall (protocol + firmware decoder: a plan, not a patch). Model misses (Genesis, the empty press's offer, the volume question) stay with mini (Mario's choice).
 
 ---
+
+## T1.38: Opus audio for the walkie (server side of firmware F-0024)
+
+**Status**: `done` (2026-10-12, merge `2fdc6a88`: `53cc0a87`, `23eb8f33`); on the board after the next idle window · **Effort**: M
+
+**Problem.** Base64 PCM at ~64 KB/s doesn't survive the walkie's 2.4 GHz link (ping loss up to 8.3 %, p90 up to 665 ms in episodes; the Mac's link 0 % meanwhile): TCP delivers a fraction of it and playback cut for seconds (T1.37). Mario: do it the way others do.
+
+**Design (borrowed).** xiaozhi-esp32's WebSocket protocol: the client opts in (`?audio=opus`), the server's hello carries `audio_params` {opus, 24000, 1, 60}, audio both ways is one raw Opus packet per binary message, JSON stays for the rest. `opuslib_next` (what xiaozhi's Python server uses) over the system libopus. PCM clients (the PWA) unchanged.
+
+**Built.** Server encoder AUDIO, VBR, 32 kbit/s (~240 B per 60 ms packet, ~4 KB/s); a sound's partial last frame is padded and sent before `model_speaking:false` / `stream_ended`, or after 250 ms idle outside a stream (100 ms would race real-time 100 ms chunks); `audio_clear` drops pending audio and resets the encoder first; no binary before the hello; the decoder resets on `ptt_start`; bad packets logged and dropped. `server.tx.audio_stats` gains bytes sent. Review: a PCM send in flight could leak JSON audio to a walkie that just switched (fixed).
+
+**Tests.** `test_server_opus.py`, `test_firmware_contract.py` additions, all on the real libopus; Opus-mode tests fail on the old server; runtime 752.
+
+**Open.** libopus on the Orange Pi (`apt install libopus0`), not verified there. On the board: bench (turn, bargein, stall, slowdown, resume) and `dev.py link` against this morning's 34 %.
+
+---
