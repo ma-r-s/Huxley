@@ -67,6 +67,10 @@ class Thresholds:
     unclean_window_minutes: float = 60.0
     # The box's disk.
     disk_pct: float = 80.0
+    # Walkie battery: warn under low, critical under crit, cleared at clear.
+    battery_low_pct: float = 20.0
+    battery_crit_pct: float = 10.0
+    battery_clear_pct: float = 30.0
     # Alert deliveries failed in a row before the page says so.
     alert_failures: int = 3
 

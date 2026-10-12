@@ -62,7 +62,7 @@ Labels, numbers and charts, no sentences (Mario's approved mockup,
   action chip ("42 h", "Walkie offline", "Check charger").
 - **Tiles**: walkie (online since, or away and last seen), Wi-Fi (rssi and
   bars), audio gaps over the last 3 h (meter against the threshold),
-  server (up, uptime, the walkie's firmware), battery (not wired yet),
+  server (up, or "not ready" when its `/health` says so; uptime, the walkie's firmware), battery (percent and volts from `client.system.battery`; "not wired" or "not reported" until a reading),
   OpenAI (today's spend, or the balance left once you enter one).
 - **Today, hour by hour**: three lanes from midnight: the walkie connected
   (its connections merged, never summed); him talking (top half) and
@@ -104,6 +104,7 @@ card.
 | Item                   | Opens when                                                                                                     | Clears when                                           |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
 | `walkie.offline`       | the walkie (client.device shell=firmware) away 15 min of daytime (07:00-22:00), or 2 days at all               | it connects                                           |
+| `battery.low`          | the walkie's last `system.battery` reading is under 20 % (critical under 10 %)                                 | back at 30 % (an old reading keeps it open)           |
 | `audio.gaps`           | gaps 5 % or more of the speaker's playing time over 3 h (at least 2 min played)                                | under 60 % of that threshold                          |
 | `server.down`          | the server's process is gone, or its last line is a stop with no app ready after it, for 5 min                 | it runs                                               |
 | `server.restarts`      | 3 starts within an hour                                                                                        | fewer in the last hour                                |
@@ -122,7 +123,7 @@ card.
 
 Every threshold is in `[thresholds]`. With the server down, "walkie
 offline" is not said (nothing can connect; the server is the problem).
-Battery is never an alert until the board can measure it (F-0025).
+Battery alerts come from the walkie's own readings (`client.system.battery`, F-0025: after each hello, on every change of percent, every 5 min). With no reading there is no alert.
 
 ## Test windows
 
@@ -183,7 +184,7 @@ message can quote a token or the ping URL.
 - The archive one click away (day, conversation, audio and transcript):
   the recorder is in main now (`recorder.segment` lines); the archive is
   next.
-- Battery: waits for the hardware fix (F-0025).
+- Charging: waits for the 5V divider on IO8 (W7); then the tile can say "charging".
 - The server's `/health` (T1.43 W1): until it exists, a server that hangs
   without exiting looks quiet, not down (its process is still there).
 - Rollback, update probation, Access token and 4G SIM expiry: no signal yet.

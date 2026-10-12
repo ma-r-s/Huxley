@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING
 
 from huxley_watch.bench import Bench
 from huxley_watch.facts import (
+    BatteryState,
+    battery_state,
     current_app,
     gaps_since,
     server_state,
@@ -74,6 +76,8 @@ class Inputs:
     balance_at: datetime | None = None
     disk_pct: float | None = None
     alert_failures: int = 0  # deliveries failed in a row
+    battery: BatteryState = field(default_factory=BatteryState)
+    health_ok: bool | None = None  # the server's /health "ok", when it answers
 
 
 def make_inputs(
@@ -94,6 +98,7 @@ def make_inputs(
     disk_pct: float | None = None,
     alert_failures: int = 0,
     heard: Mapping[str, datetime] | None = None,
+    health_ok: bool | None = None,
 ) -> Inputs:
     """Inputs with the walkie and server facts computed from the events."""
     return Inputs(
@@ -113,6 +118,8 @@ def make_inputs(
         balance_at=balance_at,
         disk_pct=disk_pct,
         alert_failures=alert_failures,
+        battery=battery_state(events),
+        health_ok=health_ok,
     )
 
 
@@ -653,6 +660,39 @@ def rule_disk(i: Inputs) -> Item | None:
     )
 
 
+BATTERY_STALE = timedelta(hours=2)  # older says nothing about now
+
+
+def rule_battery(i: Inputs) -> Item | None:
+    """Low battery, from the walkie's own readings (it sends one on every
+    change of percent and every 5 min). Hysteresis: opens under low, clears
+    only back at clear (a charge, not a wobble). A reading too old to judge
+    keeps an open item open (no false "charged")."""
+    b, key = i.battery, "battery.low"
+    was = key in i.was_open
+    if b.pct is None or b.at is None:
+        return None
+    stale = i.now - b.at > BATTERY_STALE
+    if stale and not was:
+        return None
+    limit = i.th.battery_clear_pct if was else i.th.battery_low_pct
+    if b.pct >= limit:
+        return None
+    crit = b.pct < i.th.battery_crit_pct
+    return Item(
+        key,
+        "Battery low",
+        f"{b.pct} %",
+        "Charge it",
+        f"The walkie's battery is at {b.pct} %.",
+        "When it runs out he can't use it, and reminders and calls can't reach him.",
+        "Ask someone there to plug it into its wall charger (never a computer).",
+        "The walkie's battery is charged again.",
+        since=b.at,
+        severity="crit" if crit else "warn",
+    )
+
+
 def rule_alerts_failing(i: Inputs) -> Item | None:
     """Alerts that can't be delivered can't say so through Telegram: the
     page carries it."""
@@ -676,6 +716,7 @@ RULES: tuple[Rule, ...] = (
     rule_logs,
     rule_server_down,
     rule_walkie_offline,
+    rule_battery,
     rule_openai_quota,
     rule_openai_down,
     rule_server_restarts,

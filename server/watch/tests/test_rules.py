@@ -7,9 +7,11 @@ from typing import Any
 
 from huxley_watch.config import Thresholds
 from huxley_watch.rules import (
+    Item,
     evaluate,
     rule_audio_gaps,
     rule_balance,
+    rule_battery,
     rule_books,
     rule_disk,
     rule_logs,
@@ -599,3 +601,39 @@ def test_a_healthy_day_has_no_items() -> None:
         evaluate(inputs(lines, book_seconds=3600.0, book_hours_per_month=15.0, disk_pct=40.0))
         == []
     )
+
+
+# --- battery ----------------------------------------------------------------
+
+
+def _battery(pct: int, at: datetime) -> str:
+    return line("client.system.battery", at, mv=3500 + pct * 7, pct=pct, conn_id="w1")
+
+
+def _battery_item(lines: list[str], was_open: frozenset[str] = frozenset()) -> Item | None:
+    return rule_battery(inputs(lines, was_open=was_open))
+
+
+def test_battery_opens_under_20_and_is_critical_under_10() -> None:
+    assert _battery_item([_battery(25, ago(minutes=2))]) is None
+    low = _battery_item([_battery(18, ago(minutes=2))])
+    assert low is not None and low.big == "18 %" and low.severity == "warn"
+    crit = _battery_item([_battery(7, ago(minutes=2))])
+    assert crit is not None and crit.severity == "crit"
+
+
+def test_battery_clears_only_back_at_30() -> None:
+    was = frozenset({"battery.low"})
+    assert _battery_item([_battery(24, ago(minutes=2))], was) is not None  # a wobble
+    assert _battery_item([_battery(31, ago(minutes=2))], was) is None  # charged
+
+
+def test_battery_old_reading_opens_nothing_but_keeps_an_open_item() -> None:
+    old = [_battery(12, ago(hours=3))]
+    assert _battery_item(old) is None
+    assert _battery_item(old, frozenset({"battery.low"})) is not None  # no false "charged"
+
+
+def test_battery_takes_the_last_reading() -> None:
+    lines = [_battery(15, ago(minutes=20)), _battery(40, ago(minutes=2))]
+    assert _battery_item(lines) is None

@@ -64,4 +64,7 @@
 # book_hours_low = 2.0
 # spotify_down_minutes = 10     # Soloist unreachable this long
 # disk_pct = 80
+# battery_low_pct = 20          # walkie battery: alert under this...
+# battery_crit_pct = 10         # ...critical under this...
+# battery_clear_pct = 30        # ...cleared once back at this
 # alert_failures = 3            # deliveries failed in a row before the page says so

@@ -125,10 +125,19 @@ def _tiles(i: Inputs) -> dict[str, Any]:
         },
         "server": {
             "running": s.running,
+            "ready": i.health_ok,
             "up": short(now - s.started_at) if s.running and s.started_at else None,
             "firmware": w.version,
         },
-        "battery": {"wired": False},
+        "battery": {
+            "wired": i.battery.wired,
+            "pct": i.battery.pct,
+            "mv": i.battery.mv,
+            "at": short_when(i.battery.at, now, tz) if i.battery.at else None,
+            "stale": i.battery.at is not None and now - i.battery.at > timedelta(minutes=30),
+            "low_pct": i.th.battery_low_pct,
+            "crit_pct": i.th.battery_crit_pct,
+        },
         "openai": {
             "today_usd": round(spent_today(i), 2),
             "balance_left_usd": round(est[0], 2) if est else None,

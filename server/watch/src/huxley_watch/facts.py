@@ -345,6 +345,46 @@ def server_alive(logs_dir: Path, health_url: str | None = None, port: int = 8765
     return True
 
 
+@dataclass(frozen=True)
+class BatteryState:
+    """The walkie's cell, from its `system.battery` client events (F-0025)."""
+
+    pct: int | None = None
+    mv: int | None = None
+    at: datetime | None = None  # when the last reading arrived
+    wired: bool | None = None  # False: the board said battery.not_wired and never reported
+
+
+def battery_state(events: Sequence[Event]) -> BatteryState:
+    reading: Event | None = None
+    not_wired = False
+    for e in events:
+        if e.name == "client.system.battery":
+            reading = e
+        elif e.name == FIRMWARE_LOG and str(e.get("line") or "").startswith("battery.not_wired"):
+            not_wired = True
+    if reading is not None:
+        return BatteryState(_int(reading.get("pct")), _int(reading.get("mv")), reading.ts, True)
+    return BatteryState(wired=False if not_wired else None)
+
+
+def server_health_ok(url: str) -> bool | None:
+    """The server's own verdict (`/health` "ok": persona up and the voice
+    session connected). None when it doesn't answer, answers non-2xx (a
+    server from before /health), or says nothing about it: never a guess."""
+    import json
+
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            if not 200 <= int(resp.status) < 300:
+                return None
+            body = json.loads(resp.read(65536))
+    except Exception:
+        return None
+    ok = body.get("ok") if isinstance(body, dict) else None
+    return ok if isinstance(ok, bool) else None
+
+
 APP_START = ("huxley_starting", "runtime.persona_swap_started", "runtime.reload_stopping_old_app")
 
 

@@ -24,7 +24,7 @@ from huxley_watch.bench import Bench, BenchReader
 from huxley_watch.config import Config, ConfigError, in_range, load_config
 from huxley_watch.db import DbRead, read_db
 from huxley_watch.events import LogReader
-from huxley_watch.facts import server_alive
+from huxley_watch.facts import server_alive, server_health_ok
 from huxley_watch.page import render, render_fallback
 from huxley_watch.rules import evaluate, make_inputs
 from huxley_watch.views import build, fallback_status, mark_stale
@@ -168,6 +168,7 @@ class Watcher:
                 self.log.info("watch.db_available", path=str(cfg.db_path))
             self._db_problem = db.problem
         alive = self._fenced("server_alive", lambda: self._alive(cfg), None)
+        health_ok = self._fenced("server_health", lambda: _health_ok(cfg), None) if alive else None
         disk_path = cfg.logs_dir if cfg.logs_dir.is_dir() else cfg.state_dir.parent
 
         inputs = make_inputs(
@@ -177,6 +178,7 @@ class Watcher:
             cfg.thresholds,
             walkie_mac=cfg.walkie_mac,
             server_alive=alive,
+            health_ok=health_ok,
             was_open=frozenset(self.state.open),
             bench=bench,
             logs_problem=logs_problem,
@@ -274,6 +276,14 @@ class Watcher:
             (self.cfg.state_dir / "status.json").write_bytes(body)
         except OSError as exc:
             self.log.warning("watch.page_write_failed", error=type(exc).__name__)
+
+
+def _health_ok(cfg: Config) -> bool | None:
+    """The server's own verdict from `/health` (same box: loopback is
+    allowed). Only ever shown, never turned into "down": a server from
+    before /health answers 426 and reads as None."""
+    url = cfg.health_url or f"http://127.0.0.1:{cfg.server_port}/health"
+    return server_health_ok(url)
 
 
 def _alive(cfg: Config) -> bool | None:

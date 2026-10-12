@@ -24,7 +24,9 @@ from .logs import (
     device,
     disconnected,
     flat,
+    fw,
     inputs,
+    line,
     play_started,
     playing,
     press,
@@ -127,14 +129,15 @@ def test_tiles() -> None:
     assert t["wifi"] == {"rssi": -48, "bars": 4}
     assert t["audio"]["gap_pct"] == 9.1
     assert t["audio"]["over"] is True
-    assert t["server"] == {"running": True, "up": "3 d", "firmware": "5d89504f"}
-    assert t["battery"] == {"wired": False}
+    assert t["server"] == {"running": True, "ready": None, "up": "3 d", "firmware": "5d89504f"}
+    assert t["battery"]["pct"] is None
+    assert t["battery"]["wired"] is None  # nothing either way: "not reported"
     assert t["openai"]["balance_left_usd"] is None
     page = render(status)
     labels = re.findall(r'<div class="lab">(?:<i[^>]*></i>)?([^<]+)</div>', page)
     assert labels == ["Walkie", "Wi-Fi", "Audio gaps", "Server", "Battery", "OpenAI today"]
     assert '<div class="val">9.1 %</div>' in page
-    assert "not wired" in page
+    assert ">not reported<" in page  # no reading and no not_wired line
 
 
 def test_today_strip_lanes_match_the_status() -> None:
@@ -267,3 +270,29 @@ def test_the_page_on_disk_checks_its_own_age() -> None:
     assert 'data-checked="2026-10-12T20:00:00+00:00"' in page
     assert 'data-interval="300"' in page
     assert "Stopped checking" in page.split("<script>")[1]  # the inline check
+
+
+def test_battery_tile_shows_the_reading() -> None:
+    lines = flat(DAY, line("client.system.battery", ago(minutes=3), mv=3870, pct=62, conn_id="w1"))
+    status = status_for(lines)
+    b = status["tiles"]["battery"]
+    assert (b["pct"], b["mv"], b["wired"], b["stale"]) == (62, 3870, True, False)
+    page = render(status)
+    assert ">62 %<" in page
+    assert ">3.87 V<" in page
+    assert "Battery not wired" not in page
+
+
+def test_battery_not_wired_says_so() -> None:
+    lines = flat(DAY, fw(ago(minutes=30), "w1", "battery.not_wired probe=gpio6"))
+    status = status_for(lines)
+    assert status["tiles"]["battery"]["wired"] is False
+    page = render(status)
+    assert ">not wired<" in page
+    assert "Battery not wired" in page
+
+
+def test_server_up_but_not_ready() -> None:
+    status = status_for(DAY, health_ok=False)
+    assert status["tiles"]["server"]["ready"] is False
+    assert ">not ready, 3 d, fw 5d89504f<" in render(status)

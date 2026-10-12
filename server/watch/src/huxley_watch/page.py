@@ -233,11 +233,36 @@ def _tiles(t: dict[str, Any]) -> str:
     sub = ", ".join(x for x in (sv["up"], f"fw {sv['firmware']}" if sv["firmware"] else "") if x)
     if sv["running"] is None:
         server = _tile("Server", "?", sub, "mute")
+    elif sv["running"] and sv.get("ready") is False:
+        # Up, but its own /health says the persona or the voice session isn't.
+        server = _tile("Server", "Up", ", ".join(x for x in ("not ready", sub) if x), "warn")
     else:
         server = _tile(
             "Server", "Up" if sv["running"] else "Down", sub, "good" if sv["running"] else "crit"
         )
-    battery = _tile("Battery", "-", "not wired", extra='<div class="meter hatch"></div>')
+    bt = t["battery"]
+    if bt["pct"] is not None:
+        pct = max(0, min(100, int(bt["pct"])))
+        color = "crit" if pct < bt["crit_pct"] else "warn" if pct < bt["low_pct"] else "good"
+        bsub = (
+            f"at {bt['at']}"
+            if bt["stale"] and bt["at"]
+            else (f"{bt['mv'] / 1000:.2f} V" if bt["mv"] else "")
+        )
+        battery = _tile(
+            "Battery",
+            f"{pct} %",
+            bsub,
+            extra=f'<div class="meter" data-tip="{_a(bt["at"] or "")}">'
+            f'<i style="width:{max(3, pct)}%;background:var(--{color})"></i></div>',
+        )
+    else:
+        battery = _tile(
+            "Battery",
+            "-",
+            "not wired" if bt["wired"] is False else "not reported",
+            extra='<div class="meter hatch"></div>',
+        )
     oa = t["openai"]
     if oa["balance_left_usd"] is not None:
         days = f", {oa['days_left']:.0f} d" if oa["days_left"] is not None else ""
@@ -459,6 +484,9 @@ def render(status: dict[str, Any]) -> str:
         ["online", "talk", "answer", "music", "book", "radio", "call", "bench", "test"]
     )
     legend_week = _legend(["music", "book", "radio", "call", "presses"])
+    battery_note = (
+        "<span>Battery not wired</span>" if status["tiles"]["battery"]["wired"] is False else ""
+    )
     body = f"""{opening}
 <div class="body">
 {_cards(status["items"])}
@@ -472,7 +500,7 @@ def render(status: dict[str, Any]) -> str:
 <section class="card"><h2>Audio gaps per half hour</h2>{_gaps(status["gaps"])}</section>
 <section class="card"><h2>Calls</h2>{_calls(status["calls"])}</section>
 </div>
-<div class="note"><span>{_t(alerts)}</span><span>{_t(logs_from)}</span><span>Battery not wired</span><a href="status.json" style="color:inherit">status.json</a></div>
+<div class="note"><span>{_t(alerts)}</span><span>{_t(logs_from)}</span>{battery_note}<a href="status.json" style="color:inherit">status.json</a></div>
 </div>
 </main>"""
     return _document(interval, body)

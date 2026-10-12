@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 FIRMWARE_LOG = "client.huxley.firmware_log"
 # The board's lines worth keeping: the speaker's chunk counter and gaps
 # (dev.py link's method), its health line (rssi) and boots.
-FIRMWARE_PREFIXES = ("spk.alive", "spk.underrun", "info ", "ws.rx.stats", "boot ")
+FIRMWARE_PREFIXES = ("spk.alive", "spk.underrun", "info ", "ws.rx.stats", "boot ", "battery.")
 FIRMWARE_KEEP = timedelta(hours=13)  # the gaps chart's 12 h (>= the rule's window)
 
 KEEP_EVENTS = frozenset(
@@ -52,6 +52,7 @@ KEEP_EVENTS = frozenset(
         "client_disconnected",
         "client_evicted",
         "client.device",
+        "client.system.battery",
         FIRMWARE_LOG,
         # OpenAI
         "session_connected",
