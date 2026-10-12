@@ -1494,13 +1494,16 @@ class RemindersSkill:
     # -------------------------------------------------------------- teardown
 
     async def teardown(self) -> None:
-        assert self._logger is not None
+        # Must be safe when setup() never ran or raised: the framework
+        # tears down every skill of a persona that failed to start, and
+        # a skill disabled by a failed setup still gets its teardown.
         if self._scheduler_handle is not None:
             self._scheduler_handle.cancel()
             self._scheduler_handle = None
         # Storage rows are deliberately preserved — that's how persistence
         # across restart works. Pending rows resume on next setup().
-        await self._logger.ainfo("reminders.teardown_complete")
+        if self._logger is not None:
+            await self._logger.ainfo("reminders.teardown_complete")
 
     # --------------------------------------------------------- prompt_context
 

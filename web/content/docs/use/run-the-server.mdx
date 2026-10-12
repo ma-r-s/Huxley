@@ -24,6 +24,10 @@ HUXLEY_PERSONA=basic HUXLEY_SERVER_PORT=8766 uv run huxley
 
 You can A/B-test two personas by pointing two PWA tabs at the two ports.
 
+### Restarting
+
+Stop the server (`Ctrl-C` or `kill`) and start it again right away. A new server waits up to 30 seconds for the previous one on the same port to finish shutting down (it saves a session summary first) before it starts, so the two never hold the persona's database and Telegram session at the same time. It prints what it is waiting for to stderr. If the old process is still there after 30 seconds, the new one exits with `not starting: another Huxley server (pid N) ...`; stop that pid and start again.
+
 ## Environment variables
 
 The server reads a small set of env vars. The full list lives in [Reference: Environment Variables](/docs/reference/environment-variables); the ones you'll touch most:

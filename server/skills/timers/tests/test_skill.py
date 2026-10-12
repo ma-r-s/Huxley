@@ -154,6 +154,14 @@ class TestTeardown:
         await skill.teardown()
         await skill.teardown()  # second call must not raise
 
+    async def test_teardown_without_setup_is_a_noop(self) -> None:
+        """A persona whose start failed tears down every skill, including
+        ones whose setup never ran (2026-10-12 restart incident: an
+        `assert self._logger` here added a second error to the log)."""
+        skill = TimersSkill()
+        await skill.teardown()
+        assert skill._handles == {}
+
 
 class TestPromptContext:
     async def test_empty_when_no_timers(self) -> None:

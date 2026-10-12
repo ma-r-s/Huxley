@@ -581,7 +581,9 @@ class TimersSkill:
         await self._storage.delete_setting(f"{_STORAGE_PREFIX}{timer_id}")
 
     async def teardown(self) -> None:
-        assert self._logger is not None
+        # Must be safe when setup() never ran or raised: the framework
+        # tears down every skill of a persona that failed to start, and
+        # a skill disabled by a failed setup still gets its teardown.
         # Cancel any pending timers before the framework's TaskSupervisor
         # stops everything globally. Per-handle cancel here gives the
         # `_fire_after` finally a chance to clear `_handles` cleanly;
@@ -601,7 +603,8 @@ class TimersSkill:
         # wouldn't fire — see the matching pattern in
         # huxley.background.TaskSupervisor.stop.
         self._handles.clear()
-        await self._logger.ainfo("timers.teardown_complete", cancelled=len(pending))
+        if self._logger is not None:
+            await self._logger.ainfo("timers.teardown_complete", cancelled=len(pending))
 
     def prompt_context(self) -> str:
         """Give the LLM awareness of any active timers.

@@ -50,6 +50,10 @@ Logs at `~/Library/Logs/Huxley/` are kept; remove manually if you want.
 - `ThrottleInterval=10` → minimum 10s between restart attempts (prevents tight
   crash-loops from burning CPU when there's a permanent failure like a missing
   API key)
+- A new server waits up to 30 s for a previous server on the same port to exit
+  (lock at `server/runtime/logs/huxley-<port>.lock`). If one is still running
+  after that, it exits 1 with `not starting: ...` in `huxley.stderr.log`, and
+  KeepAlive tries again after the throttle interval.
 
 ## When this isn't enough
 

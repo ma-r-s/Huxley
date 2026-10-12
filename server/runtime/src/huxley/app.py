@@ -41,12 +41,13 @@ from huxley.voice.provider import VoiceProviderCallbacks
 from huxley_sdk import AppState, InvalidTransitionError, SkillContext, SkillRegistry
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Coroutine
     from typing import Any
 
     from huxley.config import Settings
     from huxley.persona import PersonaSpec, ResolvedPersona
     from huxley.server.server import AudioServer
+    from huxley_sdk import BackgroundTaskHandle, PermanentFailure
 
 logger = structlog.get_logger()
 
@@ -211,6 +212,10 @@ class Application:
         # conversation per the 30-minute idle window). Cleared when
         # `_on_session_end` finalizes the row. T1.12.
         self._active_session_id: int | None = None
+        # Supervised tasks each skill started, recorded only while
+        # `start()` runs `setup_all` (None otherwise), so a skill disabled
+        # by a failed setup can have its tasks cancelled.
+        self._setup_task_handles: dict[str, list[BackgroundTaskHandle]] | None = None
 
     @property
     def active_language(self) -> str | None:
@@ -324,6 +329,29 @@ class Application:
         ) -> None:
             self.server.register_client_event_subscriber(skill_name, key, handler)
 
+        # Same signature as `TaskSupervisor.start`; while skills are being
+        # set up it also records which skill started which task, so a
+        # skill whose setup fails has its tasks cancelled
+        # (`_on_skill_setup_error`) instead of running on behind it.
+        def _background_task(
+            name: str,
+            coro_factory: Callable[[], Coroutine[Any, Any, None]],
+            *,
+            restart_on_crash: bool = True,
+            max_restarts_per_hour: int = 10,
+            on_permanent_failure: Callable[[PermanentFailure], Awaitable[None]] | None = None,
+        ) -> BackgroundTaskHandle:
+            handle = self.task_supervisor.start(
+                name,
+                coro_factory,
+                restart_on_crash=restart_on_crash,
+                max_restarts_per_hour=max_restarts_per_hour,
+                on_permanent_failure=on_permanent_failure,
+            )
+            if self._setup_task_handles is not None:
+                self._setup_task_handles.setdefault(skill_name, []).append(handle)
+            return handle
+
         return SkillContext(
             logger=structlog.get_logger().bind(skill=skill_name),
             storage=NamespacedSkillStorage(self.storage, skill_name),
@@ -333,7 +361,7 @@ class Application:
             language=resolved.language_code,
             inject_turn=self.coordinator.inject_turn,
             inject_turn_and_wait=self.coordinator.inject_turn_and_wait,
-            background_task=self.task_supervisor.start,
+            background_task=_background_task,
             start_input_claim=self.coordinator.start_input_claim,
             cancel_active_claim=self.coordinator.cancel_active_claim,
             subscribe_client_event=_subscribe_client_event,
@@ -376,7 +404,21 @@ class Application:
         # succeeds — a torn setup leaves stored at the old version, so
         # next boot re-warns the same way.
         await self._check_skill_schema_versions()
-        await self.skill_registry.setup_all(self._build_skill_context)
+        # One skill's failing setup must not take the persona down: the
+        # registry disables that skill, tears it down, and sets up the
+        # rest. Its tools stay offered and answer with an error the model
+        # says out loud (coordinator `_handle_tool_error`), so the failure
+        # has an audio surface. Its schema version is not persisted
+        # (`skills` excludes it), so the next boot re-checks it.
+        self._setup_task_handles = {}
+        try:
+            await self.skill_registry.setup_all(
+                self._build_skill_context,
+                on_skill_disabled=self._on_skill_setup_error,
+                on_teardown_error=self._on_skill_teardown_error,
+            )
+        finally:
+            self._setup_task_handles = None
         await self._persist_skill_schema_versions()
 
         self.state_machine.on_enter(AppState.CONNECTING, self._enter_connecting)
@@ -386,6 +428,7 @@ class Application:
             "huxley_app_ready",
             persona=self.persona.name,
             skills=self.skill_registry.skill_names,
+            disabled_skills=self.skill_registry.disabled_skill_names,
             tools=self.skill_registry.tool_names,
         )
 
@@ -397,6 +440,40 @@ class Application:
             # fails, `_enter_connecting` catches it and drops back to IDLE; the
             # user can retry manually.
             await self.state_machine.trigger("wake_word")
+
+    async def _on_skill_setup_error(self, skill_name: str, exc: BaseException) -> None:
+        """A skill's setup() raised; the registry has disabled it and
+        tears it down right after this returns.
+
+        Drop any client_event subscriptions it made before failing and
+        cancel the supervised tasks it started, so a disabled skill never
+        receives events or keeps working behind the user's back; then log
+        the failure with the traceback. The persona keeps running
+        without it.
+        """
+        self.server.unregister_client_event_subscribers(skill_name)
+        handles = (self._setup_task_handles or {}).pop(skill_name, [])
+        for handle in handles:
+            handle.cancel()
+        await logger.aexception(
+            "skill.setup_failed",
+            skill=skill_name,
+            exception_class=type(exc).__name__,
+            error=str(exc),
+            persona=self.persona.data_dir.parent.name,
+            cancelled_tasks=[handle.name for handle in handles],
+            note="skill disabled; persona runs without it; its tools answer with an error",
+            exc_info=exc,
+        )
+
+    async def _on_skill_teardown_error(self, skill_name: str, exc: BaseException) -> None:
+        # SDK can't depend on structlog; framework supplies the
+        # logging callback so a buggy skill's teardown is loud
+        # without blocking the rest. Round-3 review (2026-04-29):
+        # before this, an unguarded `for x: await x.teardown()`
+        # let one raising skill leave B+C up with live background
+        # tasks until task_supervisor.stop() cancelled them.
+        await logger.aexception("skill.teardown_failed", skill=skill_name, exc_info=exc)
 
     async def shutdown(self) -> None:
         """Tear down all subsystems in reverse order."""
@@ -432,20 +509,15 @@ class Application:
         # a handler we're about to dismantle, or — worse — a client
         # message racing the shutdown could fire a handler whose
         # backing skill is already half-destructed. Cheap because the
-        # registry is a single dict.
-        for name in self.skill_registry.skill_names:
+        # registry is a single dict. Disabled skills included (idempotent;
+        # `_on_skill_setup_error` already dropped theirs).
+        for name in [
+            *self.skill_registry.skill_names,
+            *self.skill_registry.disabled_skill_names,
+        ]:
             self.server.unregister_client_event_subscribers(name)
 
-        async def _on_teardown_error(skill_name: str, exc: BaseException) -> None:
-            # SDK can't depend on structlog; framework supplies the
-            # logging callback so a buggy skill's teardown is loud
-            # without blocking the rest. Round-3 review (2026-04-29):
-            # before this, an unguarded `for x: await x.teardown()`
-            # let one raising skill leave B+C up with live background
-            # tasks until task_supervisor.stop() cancelled them.
-            await logger.aexception("skill.teardown_failed", skill=skill_name, exc_info=exc)
-
-        await self.skill_registry.teardown_all(on_error=_on_teardown_error)
+        await self.skill_registry.teardown_all(on_error=self._on_skill_teardown_error)
         # Cancel any background tasks the skills had supervised. Skills
         # got first crack at clean cancellation via their own teardown
         # (which can call `handle.cancel()` for tasks they want to stop

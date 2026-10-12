@@ -99,6 +99,10 @@ Runtime (process singleton)
 5. **Atomic ref swap**: `self.current_app = new_app`. Single Python assignment.
 6. **Background teardown**: `asyncio.create_task(self._teardown_app(old_app))`. The user is unblocked immediately; the old app's provider summary write, skill teardowns, storage close happen out of band.
 
+**Same-persona reload** (`force=True`, used when a skill's config or secret is edited from the PWA) is the one exception to pre-validation. Two apps on one persona would share its SQLite DB and its Telegram session, which a live client keeps write-locked, so the new Telegram setup could never start. The reload loads `persona.yaml` and builds the new `Application` first (a broken file or missing skill still fails with the old app untouched), then stops the old app (waiting up to 20 s, with `current_app = None` meanwhile), then starts the new one. If that start fails, the old `PersonaSpec` is started again so the user is not left without an assistant. A connect that arrives during the gap waits on `_swap_lock` instead of taking the lazy-boot path.
+
+**A skill whose `setup()` raises does not fail the start.** `Application.start` passes `on_skill_disabled` to `SkillRegistry.setup_all`: the skill is logged (`skill.setup_failed`), disabled, and torn down at once, the supervised tasks its setup started are cancelled, and the rest set up. Its tools stay in the session and answer with `SkillUnavailableError`, which the coordinator turns into a spoken apology like any failing tool (see [skills/README.md](./skills/README.md#the-skill-protocol)). Before this, one failed Telegram setup took a whole persona down for 55 s (2026-10-12).
+
 Eager-connect on swap (`auto_connect=True`) is correct: idle Realtime sessions cost $0, and the state machine has no IDLE→CONNECTING transition on PTT — so a "lazy" swap would leave the new persona unreachable until the user reset the connection.
 
 **Shared AudioServer + dying-app gating**: AudioServer is process-singleton, shared between `current_app` and any previous Application still running its background teardown. An Application's `_on_state_transition` handler relays state changes through `self.server.send_state(...)` — which routes to whatever WS the AudioServer currently has, i.e. the NEW persona's connection. Without gating, the OLD app's teardown-time CONVERSING→IDLE transition would leak `state: IDLE` to the new client, firing the PWA's unexpected-session-drop error tone and zeroing the appState the PTT handler dispatches on. Application's outbound paths (`_on_state_transition`, etc.) gate on `_shutting_down` to suppress this leak. The dying app can't speak to the wire; the runtime already swapped current_app to the new persona.
@@ -124,6 +128,8 @@ Eager-connect on swap (`auto_connect=True`) is correct: idle Realtime sessions c
 
 Production uses one launchd plist per instance with different `WorkingDirectory`. Privacy is filesystem-enforced; the two processes share nothing.
 
+**One server per port per working directory.** Before it logs or listens, `Runtime.run` takes an exclusive `flock` on `logs/huxley-<port>.lock` (`huxley/instance_lock.py`). A server started while the previous one on the same port is still shutting down waits for it (up to 30 s, printing to stderr), so the two never hold the persona's files at once. The old process closes its listener at the start of its shutdown, so the free port alone proved nothing: on 2026-10-12 a restart overlapped a 5.6 s shutdown and the new server found the Telegram session locked. The kernel drops the lock when a process exits for any reason, and the `os.execv` restart path releases it on exec. Shutdown has a 20 s deadline (a daemon timer armed when it starts; past it the process exits 1, or finishes a requested restart), so a hung old process cannot block the next start forever; past 30 s the new process exits 1 with a message on stderr. If the lock file can't be created or locked, the server runs unguarded and logs `runtime.instance_lock_unavailable`. Instances on different ports (the A/B runs below) do not wait for each other.
+
 ### Per-skill secrets and schema versions (T1.14)
 
 Each `SkillContext` carries two storage handles routed at the persona's data dir:
@@ -133,7 +139,7 @@ Each `SkillContext` carries two storage handles routed at the persona's data dir
 
 Both are constructed inline in `Application._build_skill_context` (one `JsonFileSecrets` per skill, pointed at its own dir). Privacy between personas is filesystem-enforced via the data dir; privacy between skills sharing a persona is `persona.yaml`'s `skills:` enable list (a skill not listed never imports its setup code, regardless of what's installed in the workspace venv).
 
-Per-skill `data_schema_version` is persisted in the persona's existing `schema_meta` table under `skill_version:<name>`. `Application.start` runs `_check_skill_schema_versions` (read-only, logs `skill.schema.upgrade_needed` / `downgrade_detected` warnings on mismatch) BEFORE `setup_all`, then runs `_persist_skill_schema_versions` AFTER `setup_all` succeeds. The split means a torn skill setup leaves stored at the OLD version so the next boot re-warns the same way.
+Per-skill `data_schema_version` is persisted in the persona's existing `schema_meta` table under `skill_version:<name>`. `Application.start` runs `_check_skill_schema_versions` (read-only, logs `skill.schema.upgrade_needed` / `downgrade_detected` warnings on mismatch) BEFORE `setup_all`, then runs `_persist_skill_schema_versions` AFTER `setup_all`, for the skills whose setup succeeded (a skill disabled by a failed setup is skipped). The split means a torn skill setup leaves stored at the OLD version so the next boot re-warns the same way.
 
 ## State machine
 
@@ -376,6 +382,7 @@ Dependencies flow **downward**. `huxley_sdk/types.py` is the universal leaf — 
 | Concern                           | File                                                             |
 | --------------------------------- | ---------------------------------------------------------------- |
 | Process root / persona swap       | `server/runtime/src/huxley/runtime.py`                           |
+| Restart lock (one server/port)    | `server/runtime/src/huxley/instance_lock.py`                     |
 | Per-persona orchestrator          | `server/runtime/src/huxley/app.py`                               |
 | WebSocket audio server            | `server/runtime/src/huxley/server/server.py`                     |
 | State machine + transitions       | `server/runtime/src/huxley/state/machine.py`                     |

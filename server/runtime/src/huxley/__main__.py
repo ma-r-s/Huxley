@@ -39,11 +39,16 @@ def main() -> None:
 
     # Lazy import so configuration errors above surface quickly without
     # paying the framework's import cost.
+    from huxley.instance_lock import InstanceLockTimeoutError
     from huxley.runtime import Runtime
 
     runtime = Runtime(config)
     try:
         asyncio.run(runtime.run())
+    except InstanceLockTimeoutError as e:
+        # Exit non-zero so launchd's KeepAlive tries again later.
+        print(f"[huxley] not starting: {e}", file=sys.stderr)
+        sys.exit(1)
     except PersonaError as e:
         print(f"Persona error: {e}", file=sys.stderr)
         print(

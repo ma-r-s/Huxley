@@ -33,7 +33,9 @@ import contextlib
 from typing import TYPE_CHECKING, Any
 
 import pytest
+import structlog
 
+from huxley.app import Application
 from huxley.config import Settings
 from huxley.persona import PersonaError
 from huxley.runtime import Runtime
@@ -79,6 +81,40 @@ def runtime_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Runtime:
         _write_persona(personas_dir, name)
     monkeypatch.chdir(tmp_path)
     return Runtime(Settings(openai_api_key="test-key"))
+
+
+def _record_app_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    fail_starts: int = 0,
+    fail_after: int = 0,
+    hold_shutdown: asyncio.Event | None = None,
+) -> list[tuple[str, int]]:
+    """Swap the runtime's `Application` for a subclass that records
+    start / shutdown order. The first `fail_after` starts succeed, the
+    next `fail_starts` raise, later ones succeed. With `hold_shutdown`,
+    every shutdown waits for that event before running."""
+    events: list[tuple[str, int]] = []
+    starts = {"n": 0}
+
+    class _Recording(Application):
+        async def start(self, *, auto_connect: bool = True) -> None:
+            starts["n"] += 1
+            if fail_after < starts["n"] <= fail_after + fail_starts:
+                msg = "start failed (test)"
+                raise RuntimeError(msg)
+            events.append(("start", id(self)))
+            await super().start(auto_connect=auto_connect)
+
+        async def shutdown(self) -> None:
+            if hold_shutdown is not None:
+                await hold_shutdown.wait()
+            events.append(("shutdown_begin", id(self)))
+            await super().shutdown()
+            events.append(("shutdown_end", id(self)))
+
+    monkeypatch.setattr("huxley.runtime.Application", _Recording)
+    return events
 
 
 async def _drain_teardown(runtime: Runtime) -> None:
@@ -295,6 +331,7 @@ class TestReloadCurrentPersona:
     async def test_force_bypasses_same_persona_shortcircuit(self, runtime_in_tmp: Runtime) -> None:
         await runtime_in_tmp._switch_to_persona("alpha", auto_connect=False)
         first = runtime_in_tmp.current_app
+        assert first is not None
         # Without force, same-name is a no-op (Application identity
         # preserved) — see test_same_persona_is_noop above.
         # WITH force, the existing app is torn down + a freshly-built
@@ -303,10 +340,110 @@ class TestReloadCurrentPersona:
         assert runtime_in_tmp.current_app is not first
         assert runtime_in_tmp.current_app is not None
         assert runtime_in_tmp.current_app.persona.name == "alpha"
-        # The previous app was scheduled for teardown, not leaked.
+        # The previous app was torn down before the new one started,
+        # not leaked and not left running in the background.
+        assert first._shutting_down
         assert runtime_in_tmp._teardown_task is not None
-        await _drain_teardown(runtime_in_tmp)
+        assert runtime_in_tmp._teardown_task.done()
         await runtime_in_tmp.current_app.shutdown()
+
+    async def test_reload_stops_old_app_before_new_one_starts(
+        self, runtime_in_tmp: Runtime, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A same-persona reload must not run two apps on one persona:
+        they would share the SQLite DB and the Telegram session, which a
+        live client keeps write-locked, so the new Telegram setup could
+        never start (it would be disabled for the rest of the run).
+
+        These reload tests drive `_switch_to_persona(force=True,
+        auto_connect=False)`, the call `_reload_current_persona` makes
+        minus the provider connect, so nothing reaches the network."""
+        events = _record_app_lifecycle(monkeypatch)
+        await runtime_in_tmp._switch_to_persona("alpha", auto_connect=False)
+        first = runtime_in_tmp.current_app
+        await runtime_in_tmp._switch_to_persona("alpha", auto_connect=False, force=True)
+        second = runtime_in_tmp.current_app
+        assert second is not None
+        assert second is not first
+
+        assert events == [
+            ("start", id(first)),
+            ("shutdown_begin", id(first)),
+            ("shutdown_end", id(first)),
+            ("start", id(second)),
+        ]
+        await second.shutdown()
+
+    async def test_failed_reload_restores_the_previous_persona(
+        self, runtime_in_tmp: Runtime, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The old app is already gone when the new one fails to start.
+        The runtime brings the persona back as it was before the edit
+        instead of leaving the user with no assistant, and the failure
+        still propagates so `_reload_current_persona` logs it."""
+        _record_app_lifecycle(monkeypatch, fail_starts=1, fail_after=1)
+        await runtime_in_tmp._switch_to_persona("alpha", auto_connect=False)
+        first = runtime_in_tmp.current_app
+        assert first is not None
+
+        with (
+            structlog.testing.capture_logs() as logs,
+            pytest.raises(RuntimeError, match="start failed"),
+        ):
+            await runtime_in_tmp._switch_to_persona("alpha", auto_connect=False, force=True)
+
+        restored = runtime_in_tmp.current_app
+        assert restored is not None
+        assert restored is not first
+        assert restored.persona is first.persona  # the pre-edit spec
+        assert "runtime.reload_restored_previous" in [e["event"] for e in logs]
+        assert runtime_in_tmp._get_hello_extras()["session_ready"] is True
+        await restored.shutdown()
+
+    async def test_failed_reload_and_restore_marks_session_not_ready(
+        self, runtime_in_tmp: Runtime, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _record_app_lifecycle(monkeypatch, fail_starts=2, fail_after=1)
+        await runtime_in_tmp._switch_to_persona("alpha", auto_connect=False)
+
+        with pytest.raises(RuntimeError, match="start failed"):
+            await runtime_in_tmp._switch_to_persona("alpha", auto_connect=False, force=True)
+
+        assert runtime_in_tmp.current_app is None
+        extras = runtime_in_tmp._get_hello_extras()
+        assert extras["session_ready"] is False
+        assert "alpha" in str(extras["session_error"])
+
+    async def test_connect_during_reload_waits_instead_of_lazy_booting(
+        self, runtime_in_tmp: Runtime, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """While a reload runs, `current_app` is None. A connect in that
+        gap must wait for the reload, not take the lazy-boot path and
+        swap to the default persona (alpha) afterwards."""
+        release = asyncio.Event()
+        _record_app_lifecycle(monkeypatch, hold_shutdown=release)
+        await runtime_in_tmp._switch_to_persona("beta", auto_connect=False)
+
+        reload_task = asyncio.create_task(
+            runtime_in_tmp._switch_to_persona("beta", auto_connect=False, force=True)
+        )
+        for _ in range(50):
+            if runtime_in_tmp.current_app is None:
+                break
+            await asyncio.sleep(0.01)
+        assert runtime_in_tmp.current_app is None  # inside the gap
+
+        connect_task = asyncio.create_task(runtime_in_tmp._shim_persona_select(None, None))
+        await asyncio.sleep(0.05)
+        assert not connect_task.done()  # waiting on the reload
+        release.set()
+        await reload_task
+        await connect_task
+
+        assert runtime_in_tmp.current_app is not None
+        assert runtime_in_tmp.current_app.persona.data_dir.parent.name == "beta"
+        await runtime_in_tmp.current_app.shutdown()
+        await _drain_teardown(runtime_in_tmp)
 
     async def test_reload_helper_is_noop_when_no_current_app(
         self, runtime_in_tmp: Runtime

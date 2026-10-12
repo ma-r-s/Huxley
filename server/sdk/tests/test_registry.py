@@ -12,6 +12,7 @@ from huxley_sdk import (
     SkillContext,
     SkillNotFoundError,
     SkillRegistry,
+    SkillUnavailableError,
     ToolDefinition,
     ToolResult,
 )
@@ -207,6 +208,185 @@ class TestLifecycle:
         assert len(errors) == 1
         assert errors[0][0] == "raises"
         assert isinstance(errors[0][1], RuntimeError)
+
+
+class _BrokenSetupSkill(FakeSkill):
+    """A skill whose setup raises, like Telegram's on 2026-10-12 when
+    its session DB was still locked by the previous server process.
+    Records lifecycle calls so the tests can show a disabled skill is
+    torn down once and otherwise left alone. Its `tools` property
+    raises once setup has failed, like a skill whose tool list depends
+    on state setup never finished building."""
+
+    def __init__(self, *, teardown_error: Exception | None = None) -> None:
+        super().__init__(
+            name="broken",
+            tools=[ToolDefinition(name="broken_tool", description="Broken")],
+        )
+        self.reconfigure_called = False
+        self.teardown_calls = 0
+        self.events: list[str] | None = None
+        self._teardown_error = teardown_error
+
+    @property
+    def tools(self) -> list[ToolDefinition]:
+        if self.setup_called:
+            msg = "tools need setup state"
+            raise AttributeError(msg)
+        return self._tools
+
+    async def setup(self, ctx: SkillContext) -> None:
+        self.setup_called = True
+        msg = "database is locked"
+        raise RuntimeError(msg)
+
+    async def reconfigure(self, ctx: SkillContext) -> None:
+        self.reconfigure_called = True
+
+    def prompt_context(self) -> str:
+        return "broken skill context"
+
+    async def teardown(self) -> None:
+        self.teardown_calls += 1
+        if self.events is not None:
+            self.events.append("broken.teardown")
+        if self._teardown_error is not None:
+            raise self._teardown_error
+
+
+class _OrderedSkill(FakeSkill):
+    """FakeSkill that records its setup into a shared event list."""
+
+    def __init__(self, name: str, events: list[str]) -> None:
+        super().__init__(name=name, tools=[ToolDefinition(name=f"t_{name}", description="")])
+        self._events = events
+
+    async def setup(self, ctx: SkillContext) -> None:
+        self._events.append(f"{self.name}.setup")
+        await super().setup(ctx)
+
+
+async def _ignore(_name: str, _exc: BaseException) -> None:
+    return None
+
+
+class TestSetupIsolation:
+    """One skill's failing setup must not take the persona down: with
+    `on_skill_disabled`, the registry disables that skill, tears it
+    down, and sets up the rest."""
+
+    @staticmethod
+    def _registry(
+        broken: _BrokenSetupSkill | None = None,
+    ) -> tuple[SkillRegistry, FakeSkill, _BrokenSetupSkill, FakeSkill]:
+        registry = SkillRegistry()
+        before = FakeSkill(name="before", tools=[ToolDefinition(name="t_before", description="")])
+        broken = broken or _BrokenSetupSkill()
+        after = FakeSkill(name="after", tools=[ToolDefinition(name="t_after", description="")])
+        for skill in (before, broken, after):
+            registry.register(skill)
+        return registry, before, broken, after
+
+    async def test_failing_setup_disables_only_that_skill(self) -> None:
+        registry, before, broken, after = self._registry()
+        disabled: list[tuple[str, BaseException]] = []
+
+        async def _on_disabled(name: str, exc: BaseException) -> None:
+            disabled.append((name, exc))
+
+        await registry.setup_all(_ctx, on_skill_disabled=_on_disabled)
+
+        # Skills on both sides of the failure were set up.
+        assert before.setup_called
+        assert after.setup_called
+        assert broken.setup_called
+        assert [(name, str(exc)) for name, exc in disabled] == [("broken", "database is locked")]
+        assert registry.skill_names == ["before", "after"]
+        assert registry.disabled_skill_names == ["broken"]
+        assert registry.skills == [before, after]
+
+    async def test_disabled_skill_is_torn_down_at_once_and_only_once(self) -> None:
+        """Tasks or handlers a partial setup started stop right away, not
+        at shutdown; `teardown_all` then leaves the skill alone."""
+        events: list[str] = []
+        registry = SkillRegistry()
+        broken = _BrokenSetupSkill()
+        broken.events = events
+        registry.register(_OrderedSkill("first", events))
+        registry.register(broken)
+        registry.register(_OrderedSkill("last", events))
+
+        await registry.setup_all(_ctx, on_skill_disabled=_ignore)
+        assert events == ["first.setup", "broken.teardown", "last.setup"]
+
+        await registry.teardown_all()
+        assert broken.teardown_calls == 1
+
+    async def test_raising_teardown_of_disabled_skill_is_reported(self) -> None:
+        registry, _, _, after = self._registry(
+            _BrokenSetupSkill(teardown_error=RuntimeError("teardown boom"))
+        )
+        teardown_errors: list[tuple[str, BaseException]] = []
+
+        async def _on_teardown_error(name: str, exc: BaseException) -> None:
+            teardown_errors.append((name, exc))
+
+        await registry.setup_all(
+            _ctx, on_skill_disabled=_ignore, on_teardown_error=_on_teardown_error
+        )
+
+        assert [(name, str(exc)) for name, exc in teardown_errors] == [("broken", "teardown boom")]
+        assert after.setup_called
+
+    async def test_teardown_runs_even_if_the_disabled_handler_raises(self) -> None:
+        registry, _, broken, _ = self._registry()
+
+        async def _raising(_name: str, _exc: BaseException) -> None:
+            msg = "handler boom"
+            raise RuntimeError(msg)
+
+        with pytest.raises(RuntimeError, match="handler boom"):
+            await registry.setup_all(_ctx, on_skill_disabled=_raising)
+        assert broken.teardown_calls == 1
+        assert registry.disabled_skill_names == ["broken"]
+
+    async def test_disabled_skill_tools_stay_offered_but_raise_unavailable(self) -> None:
+        """The tools stay in session.update (the persona prompt may name
+        them) and a call answers with SkillUnavailableError, which the
+        coordinator turns into a spoken apology. The definitions come
+        from registration, so the broken skill's `tools` is not called."""
+        registry, _, broken, _ = self._registry()
+
+        await registry.setup_all(_ctx, on_skill_disabled=_ignore)
+
+        offered = [d["name"] for d in registry.get_all_tool_definitions()]
+        assert offered == ["t_before", "broken_tool", "t_after"]
+        assert "broken_tool" in registry.tool_names
+        with pytest.raises(SkillUnavailableError, match="broken"):
+            await registry.dispatch("broken_tool", {})
+        assert broken.handle_calls == []
+        # Working skills still dispatch.
+        result = await registry.dispatch("t_after", {})
+        assert result.output == '{"ok": true}'
+
+    async def test_disabled_skill_skipped_by_prompt_and_reconfigure(self) -> None:
+        registry, _, broken, _ = self._registry()
+
+        await registry.setup_all(_ctx, on_skill_disabled=_ignore)
+        await registry.reconfigure_all(_ctx)
+
+        assert registry.get_prompt_context() == ""
+        assert not broken.reconfigure_called
+
+    async def test_without_handler_the_failure_propagates(self) -> None:
+        """No handler, no isolation: a caller that can't report the
+        failure must not have it swallowed."""
+        registry, _, broken, after = self._registry()
+        with pytest.raises(RuntimeError, match="database is locked"):
+            await registry.setup_all(_ctx)
+        assert not after.setup_called
+        assert registry.disabled_skill_names == []
+        assert broken.teardown_calls == 0
 
 
 class TestPromptContext:

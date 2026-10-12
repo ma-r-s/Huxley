@@ -193,7 +193,7 @@ When you add a new feature or fix a bug, ask: **"if this breaks in production, w
 
 A session that ends with "I had to ask what you did because the log didn't show enough" is a defect — capture the missing event, don't paper over it.
 
-**Server restart discipline**: after any commit that changes server runtime behavior, the previously-running process is stale. Kill it and restart yourself before asking Mario to smoke test. "I committed it" ≠ "it's running on the new code." See Definition of Done above.
+**Server restart discipline**: after any commit that changes server runtime behavior, the previously-running process is stale. Kill it and restart yourself before asking Mario to smoke test. "I committed it" ≠ "it's running on the new code." See Definition of Done above. The new server waits (up to 30 s) for the old one on the same port to finish shutting down (lock at `server/runtime/logs/huxley-<port>.lock`), so start it right after the kill; don't dodge the wait with another port, two servers on one persona fight over its files.
 
 ### Critic pattern
 

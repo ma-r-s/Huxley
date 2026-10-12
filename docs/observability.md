@@ -327,6 +327,28 @@ When a skill's `handle()` raises, the coordinator catches it (see `docs/triage.m
 
 The session does not die. A structured error `tool_output` is sent back to OpenAI with a Spanish apology hint, and the model produces an audible acknowledgement on the next response round. Look for `coord.tool_error` first when a tool call seems to disappear silently.
 
+When a skill's `setup()` raises, the persona still starts without that skill:
+
+- `skill.setup_failed` (error, with traceback): `skill`, `exception_class`, `error`, `persona`, `cancelled_tasks` (supervised tasks its setup had started, now cancelled). The skill is disabled and torn down right away (a raising teardown logs `skill.teardown_failed`).
+- `huxley_app_ready` lists the working skills in `skills` and the disabled ones in `disabled_skills`; `tools` still includes the disabled skills' tools.
+- A later call to one of those tools logs `coord.tool_error` with `exception_class=SkillUnavailableError` and gets the same spoken apology as any failing tool.
+
+A disabled skill stays disabled until the persona reloads or the server restarts. If a user says "it couldn't call" after a restart, grep `skill.setup_failed` in that run's log first.
+
+## Startup, restarts and reloads
+
+| Event                                | When                                                                                                                                                                                             | Key fields                                 |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------ |
+| `runtime.instance_lock_acquired`     | Second line of every run. The server took `logs/huxley-<port>.lock`. `previous_pid` set means it had to wait for an older server on the same port to exit; the wait itself is printed to stderr. | `path`, `pid`, `waited_ms`, `previous_pid` |
+| `runtime.shutdown_timeout`           | Shutdown (listener, app, interpreter exit) took longer than 20 s; a timer thread exits 1 without finishing, or finishes a requested restart, so the next server can start.                      | `timeout_s`, `restart`                     |
+| `runtime.instance_lock_unavailable`  | The lock file could not be created or locked (read-only directory, no `flock`); the server runs without the one-server-per-port guard.                                                            | `path`, `error`                            |
+| `runtime.reload_stopping_old_app`    | A same-persona reload (skill config or secret edited from the PWA) is stopping the running app before starting the new one.                                                                      | `persona`                                  |
+| `runtime.reload_restored_previous`   | The reloaded app failed to start; the persona is running again as it was before the edit.                                                                                                        | `persona`                                  |
+| `runtime.reload_restore_failed`      | That restore failed too; no app is loaded until the next connect. The next hello says `session_ready=false`.                                                                                     | `persona`                                  |
+| `runtime.teardown_timeout_abandoned` | A previous app's teardown outlived its bound (10 s for a swap, 20 s for a reload); the swap or reload went ahead anyway.                                                                          | `what` (`previous_swap`, `reload_old_app`) |
+
+A server that gives up waiting for the old one (30 s) prints `[huxley] not starting: ...` to stderr and exits 1; under launchd that line is in `huxley.stderr.log` and KeepAlive starts it again later. It does not rotate the log first, so the stuck process's log is kept.
+
 ## Session readiness — diagnosing "told ready when not"
 
 Three runtime-level events bracket every WS connection's session-readiness lifecycle. They were added in T1.16 after a class of bugs where the server emitted a normal-looking hello + `state: IDLE` even when `_shim_persona_select` had silently failed — leaving the PWA showing "Hold to talk" while every PTT silently dropped because `current_app is None`.
