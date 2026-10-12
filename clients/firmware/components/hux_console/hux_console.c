@@ -30,7 +30,7 @@ static const char *TAG = "hux_console";
  * run our code (the WS client task runs the audio data plane). */
 static const char *const TASKS[] = {
     "hux_app", "hux_audio_tx", "hux_mic", "hux_spk", "hux_button", "hux_log_drain",
-    "hux_console", "websocket_task", "sys_evt", "tiT", "esp_timer", NULL,
+    "hux_console", "websocket_task", "sys_evt", "tiT", "esp_timer", "hux_opus_dec", NULL,
 };
 
 static void cmd_info(void) {

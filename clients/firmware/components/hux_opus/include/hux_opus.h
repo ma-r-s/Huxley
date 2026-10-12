@@ -30,11 +30,17 @@ extern "C" {
 #define HUX_OPUS_MAX_PACKET    1500
 
 typedef void (*hux_opus_pcm_sink_fn)(const uint8_t *pcm, size_t len);
-typedef void (*hux_opus_clear_sink_fn)(void);
+typedef void (*hux_opus_marker_fn)(void);
 
 /** Open the encoder and decoder, start the decoder task. Decoded PCM goes
- * to `pcm_sink` (the speaker ring), a queued clear calls `clear_sink`. */
-bool hux_opus_init(hux_opus_pcm_sink_fn pcm_sink, hux_opus_clear_sink_fn clear_sink);
+ * to `pcm_sink` (the speaker ring), a queued clear calls `clear_sink`, a
+ * queued release calls `unhold_sink`. False if any of it failed: then the
+ * client must not ask the server for Opus. */
+bool hux_opus_init(hux_opus_pcm_sink_fn pcm_sink, hux_opus_marker_fn clear_sink,
+                   hux_opus_marker_fn unhold_sink);
+
+/** Opened, and its decoder task is running. */
+bool hux_opus_ready(void);
 
 /** From the WebSocket task: one received packet, decoded in order. Waits
  * (up to 5 s) for room: a full speaker pushes back on TCP as before. */
@@ -43,8 +49,20 @@ void hux_opus_rx_packet(const uint8_t *data, size_t len);
 /** From the WebSocket task: `audio_clear`, in order with the packets. */
 void hux_opus_rx_clear(void);
 
-/** The connection dropped: what is queued belongs to it, drop it. */
+/** Any task: release the barge-in hold once the packets queued before
+ * this call have been decoded (model_speaking false with no audio_clear:
+ * an earlier release would let the old reply's tail play). */
+void hux_opus_rx_unhold(void);
+
+/** Any task: the connection dropped or a new one began: what is queued
+ * belongs to the old one, drop it and reset the decoder. */
 void hux_opus_rx_reset(void);
+
+/** Packets waiting to be decoded, decode errors so far, the decoder
+ * task's smallest free stack (bytes). For the stats lines. */
+uint32_t hux_opus_rx_waiting(void);
+uint32_t hux_opus_dec_errors(void);
+uint32_t hux_opus_dec_stack_free(void);
 
 /** From the mic sender only: one 60 ms frame of 24 kHz mono PCM16 in,
  * one Opus packet out. Returns its size, or -1. */

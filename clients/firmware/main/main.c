@@ -123,6 +123,12 @@ static void log_boot_banner(void) {
     }
 }
 
+/* The barge-in hold released from the Opus queue (model_speaking false
+ * after the packets queued before it). */
+static void unhold_after_queue(void) {
+    hux_audio_spk_unhold("model_speaking_false");
+}
+
 void app_main(void) {
     /* Install the log hook FIRST, before any other ESP_LOG call, so
      * every line in this boot — including Wi-Fi driver and WS client
@@ -158,6 +164,11 @@ void app_main(void) {
      * ES8311 for playback on the same duplex channel. */
     hux_audio_init();
 
+    /* Opus (F-0024), before the network: the WebSocket asks the server
+     * for it only if the codec is up. Decoded packets go to the same ring,
+     * a queued audio_clear / release to the same calls, in order. */
+    hux_opus_init(hux_audio_spk_push, hux_audio_on_audio_clear, unhold_after_queue);
+
     hux_net_start(&(hux_net_config_t){
         .wifi_ssid = HUX_WIFI_SSID,
         .wifi_password = HUX_WIFI_PASSWORD,
@@ -192,9 +203,7 @@ void app_main(void) {
     hux_net_set_audio_sink(hux_audio_spk_push);
     /* `audio_clear` on the same task, in order with the audio. */
     hux_net_set_audio_clear_sink(hux_audio_on_audio_clear);
-    /* Opus (F-0024): decoded packets go to the same ring, a queued
-     * audio_clear to the same clear, in the order they came. */
-    hux_opus_init(hux_audio_spk_push, hux_audio_on_audio_clear);
+
 
     /* Remote threshold is INFO (set right after hux_log_init, so boot
      * lines qualify): the server log is a full record of what the board

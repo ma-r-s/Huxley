@@ -95,6 +95,9 @@ static char s_ws_uri[160] = {0};
 static _Atomic bool s_audio_opus = false;
 
 static const char *ws_uri_for(const char *base) {
+    if (!hux_opus_ready()) {
+        return base; /* no codec: never ask for Opus (F-0024 review) */
+    }
     snprintf(s_ws_uri, sizeof(s_ws_uri), "%s%saudio=opus", base, strchr(base, '?') ? "&" : "?");
     return s_ws_uri;
 }
@@ -176,12 +179,15 @@ static void rx_stats_tick(uint32_t now) {
     }
     if (s_rx_audio_msgs > 0) {
         ESP_LOGI(TAG, "ws.rx.stats window_ms=%u events=%u bytes=%u msgs=%u audio_msgs=%u "
-                      "audio_ms=%u max_gap_ms=%u busy_ms=%u max_busy_ms=%u rssi=%d opus=%d dec_us=%u",
+                      "audio_ms=%u max_gap_ms=%u busy_ms=%u max_busy_ms=%u rssi=%d opus=%d dec_us=%u "
+                      "dec_q=%u dec_err=%u dec_stack=%u",
                  (unsigned)(now - s_rx_window_start_ms), (unsigned)s_rx_events,
                  (unsigned)s_rx_bytes, (unsigned)s_rx_msgs, (unsigned)s_rx_audio_msgs,
                  (unsigned)(s_rx_audio_bytes / 48), (unsigned)s_rx_max_gap_ms,
                  (unsigned)(s_rx_busy_us / 1000), (unsigned)(s_rx_max_busy_us / 1000),
-                 hux_net_rssi(), atomic_load(&s_audio_opus), (unsigned)hux_opus_take_dec_us());
+                 hux_net_rssi(), atomic_load(&s_audio_opus), (unsigned)hux_opus_take_dec_us(),
+                 (unsigned)hux_opus_rx_waiting(), (unsigned)hux_opus_dec_errors(),
+                 (unsigned)hux_opus_dec_stack_free());
     }
     s_rx_events = s_rx_bytes = s_rx_msgs = s_rx_audio_msgs = s_rx_audio_bytes = 0;
     s_rx_max_gap_ms = s_rx_busy_us = s_rx_max_busy_us = 0;
@@ -400,6 +406,15 @@ esp_err_t hux_net_set_bandwidth(int mhz) {
  * base64 into `s_audio_scratch`, hands the view to the registered
  * sink. Runs on the WS client task; the sink must not block. */
 static void dispatch_audio(const char *json, size_t len) {
+    if (atomic_load(&s_audio_opus)) {
+        /* Once Opus is agreed all audio is binary: the decoder task is the
+         * ring's only writer (a second writer corrupts a stream buffer). */
+        static uint32_t dropped;
+        if ((dropped++ % 50) == 0) {
+            ESP_LOGW(TAG, "ws.rx.audio_json_in_opus_mode dropped=%u", (unsigned)dropped);
+        }
+        return;
+    }
     hux_net_audio_sink_fn sink =
         atomic_load_explicit(&s_audio_sink, memory_order_acquire);
     if (sink == NULL) {
@@ -511,7 +526,13 @@ static void forward_ws_text(const esp_websocket_event_data_t *data) {
                 s_rx_msgs++;
                 s_rx_audio_msgs++;
                 s_rx_audio_bytes += HUX_OPUS_FRAME_SAMPLES * 2; /* as PCM: audio_ms stays true */
+                int64_t t0 = esp_timer_get_time();
                 hux_opus_rx_packet((const uint8_t *)data->data_ptr, (size_t)data->data_len);
+                uint32_t busy = (uint32_t)(esp_timer_get_time() - t0); /* a full queue waits */
+                s_rx_busy_us += busy;
+                if (busy > s_rx_max_busy_us) {
+                    s_rx_max_busy_us = busy;
+                }
             } else {
                 ESP_LOGW(TAG, "ws.rx.binary_split off=%d len=%d/%d (dropped)",
                          data->payload_offset, data->data_len, data->payload_len);
@@ -572,6 +593,11 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
     esp_websocket_event_data_t *ev = (esp_websocket_event_data_t *)data;
     switch (id) {
         case WEBSOCKET_EVENT_CONNECTED:
+            /* A new connection: its hello decides the format again, and
+             * nothing queued from the last one may play (the library can
+             * close without DISCONNECTED: CLOSED, FINISH). */
+            atomic_store(&s_audio_opus, false);
+            hux_opus_rx_reset();
             ESP_LOGI(TAG, "ws.connected uri=%s", s_server_uri);
             post_app(HUX_APP_EV_NET_WS_CONNECTED);
             break;

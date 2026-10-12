@@ -509,8 +509,14 @@ static void handle_ws_message(hux_app_ws_message_t *msg) {
                 hux_audio_set_stream_active(s_model_speaking);
                 ESP_LOGI(TAG, "ws.rx.model_speaking %s", s_model_speaking ? "true" : "false");
                 if (!s_model_speaking) {
-                    /* It ended before our press reached it: no audio_clear. */
-                    hux_audio_spk_unhold("model_speaking_false");
+                    /* It ended before our press reached it: no audio_clear.
+                     * With Opus the old reply's packets may still be queued
+                     * for the decoder: release after them, not before. */
+                    if (hux_net_audio_opus()) {
+                        hux_opus_rx_unhold();
+                    } else {
+                        hux_audio_spk_unhold("model_speaking_false");
+                    }
                 }
             }
             break;

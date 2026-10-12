@@ -12,6 +12,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 static const char *TAG = "hux_opus";
@@ -25,7 +26,7 @@ static const char *TAG = "hux_opus";
 #define RX_QUEUE_DEPTH 48          /* 2.9 s of 60 ms packets, in PSRAM */
 #define RX_WAIT_MS     5000
 
-typedef enum { RX_PACKET = 0, RX_CLEAR, RX_RESET } rx_kind_t;
+typedef enum { RX_PACKET = 0, RX_CLEAR, RX_RESET, RX_UNHOLD } rx_kind_t;
 
 typedef struct {
     uint16_t kind; /* rx_kind_t */
@@ -37,13 +38,20 @@ static void *s_enc;
 static void *s_dec;
 static QueueHandle_t s_rx_q;
 static hux_opus_pcm_sink_fn s_pcm_sink;
-static hux_opus_clear_sink_fn s_clear_sink;
+static hux_opus_marker_fn s_clear_sink;
+static hux_opus_marker_fn s_unhold_sink;
+static TaskHandle_t s_dec_task;
+static SemaphoreHandle_t s_ctl_lock; /* s_ctl_item: unhold/reset from any task */
+static _Atomic uint32_t s_dec_errors;
 /* Up to 120 ms per packet (an Opus packet may hold several frames). */
 EXT_RAM_BSS_ATTR static int16_t s_dec_pcm[HUX_OPUS_SAMPLE_RATE / 1000 * 120];
-/* Staging for the queue: the decoder's, and the WebSocket task's (all
- * three rx_* calls come from that one task). PSRAM: 1.5 KB each. */
+/* Staging for the queue (PSRAM, 1.5 KB each): the decoder's; the
+ * WebSocket task's (packets, clears); and one for the markers any task may
+ * send (unhold from the app; reset from whichever task the library runs
+ * its disconnect on), under s_ctl_lock. */
 EXT_RAM_BSS_ATTR static rx_item_t s_dec_item;
 EXT_RAM_BSS_ATTR static rx_item_t s_ws_item;
+EXT_RAM_BSS_ATTR static rx_item_t s_ctl_item;
 static _Atomic uint32_t s_enc_us, s_enc_n, s_dec_us, s_dec_n;
 
 static void decode_task(void *unused) {
@@ -52,6 +60,12 @@ static void decode_task(void *unused) {
     uint32_t errors = 0;
     for (;;) {
         if (xQueueReceive(s_rx_q, it, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        if (it->kind == RX_UNHOLD) {
+            if (s_unhold_sink != NULL) {
+                s_unhold_sink();
+            }
             continue;
         }
         if (it->kind == RX_CLEAR || it->kind == RX_RESET) {
@@ -69,6 +83,7 @@ static void decode_task(void *unused) {
         atomic_fetch_add(&s_dec_us, (uint32_t)(esp_timer_get_time() - t0));
         atomic_fetch_add(&s_dec_n, 1);
         if (err != ESP_AUDIO_ERR_OK) {
+            atomic_fetch_add(&s_dec_errors, 1);
             if ((errors++ % 50) == 0) { /* one line per 50: a bad stream can't flood */
                 ESP_LOGW(TAG, "opus.decode_failed err=%d len=%u needed=%u count=%u", (int)err,
                          (unsigned)it->len, (unsigned)out.needed_size, (unsigned)errors);
@@ -81,9 +96,11 @@ static void decode_task(void *unused) {
     }
 }
 
-bool hux_opus_init(hux_opus_pcm_sink_fn pcm_sink, hux_opus_clear_sink_fn clear_sink) {
+bool hux_opus_init(hux_opus_pcm_sink_fn pcm_sink, hux_opus_marker_fn clear_sink,
+                   hux_opus_marker_fn unhold_sink) {
     s_pcm_sink = pcm_sink;
     s_clear_sink = clear_sink;
+    s_unhold_sink = unhold_sink;
 
     esp_opus_enc_config_t ecfg = ESP_OPUS_ENC_CONFIG_DEFAULT();
     ecfg.sample_rate = HUX_OPUS_SAMPLE_RATE;
@@ -109,16 +126,29 @@ bool hux_opus_init(hux_opus_pcm_sink_fn pcm_sink, hux_opus_clear_sink_fn clear_s
     if (eerr == ESP_AUDIO_ERR_OK) {
         esp_opus_enc_get_frame_size(s_enc, &in_size, &out_size);
     }
-    s_rx_q = xQueueCreateWithCaps(RX_QUEUE_DEPTH, sizeof(rx_item_t), MALLOC_CAP_SPIRAM);
-    BaseType_t ok = s_rx_q != NULL && derr == ESP_AUDIO_ERR_OK
-                        ? xTaskCreateWithCaps(decode_task, "hux_opus_dec", DEC_TASK_STACK, NULL,
-                                              DEC_TASK_PRIO, NULL, MALLOC_CAP_SPIRAM)
-                        : pdFAIL;
-    ESP_LOGI(TAG, "opus.init enc=%d dec=%d task=%d rate=%d frame_ms=%d enc_in=%d enc_out=%d "
+    bool ok = eerr == ESP_AUDIO_ERR_OK && derr == ESP_AUDIO_ERR_OK &&
+              in_size == HUX_OPUS_FRAME_SAMPLES * 2 && out_size <= HUX_OPUS_MAX_PACKET;
+    if (ok) {
+        s_ctl_lock = xSemaphoreCreateMutex();
+        s_rx_q = xQueueCreateWithCaps(RX_QUEUE_DEPTH, sizeof(rx_item_t), MALLOC_CAP_SPIRAM);
+        ok = s_ctl_lock != NULL && s_rx_q != NULL &&
+             xTaskCreateWithCaps(decode_task, "hux_opus_dec", DEC_TASK_STACK, NULL, DEC_TASK_PRIO,
+                                 &s_dec_task, MALLOC_CAP_SPIRAM) == pdPASS;
+        if (!ok && s_rx_q != NULL) {
+            vQueueDeleteWithCaps(s_rx_q); /* no reader: nothing may queue into it */
+            s_rx_q = NULL;
+        }
+    }
+    ESP_LOG_LEVEL(ok ? ESP_LOG_INFO : ESP_LOG_ERROR, TAG,
+                  "opus.init ok=%d enc=%d dec=%d rate=%d frame_ms=%d enc_in=%d enc_out=%d "
                   "bitrate=%d complexity=%d",
-             (int)eerr, (int)derr, ok == pdPASS, HUX_OPUS_SAMPLE_RATE, HUX_OPUS_FRAME_MS, in_size,
-             out_size, ENC_BITRATE, ENC_COMPLEXITY);
-    return eerr == ESP_AUDIO_ERR_OK && derr == ESP_AUDIO_ERR_OK && ok == pdPASS;
+                  ok, (int)eerr, (int)derr, HUX_OPUS_SAMPLE_RATE, HUX_OPUS_FRAME_MS, in_size,
+                  out_size, ENC_BITRATE, ENC_COMPLEXITY);
+    return ok;
+}
+
+bool hux_opus_ready(void) {
+    return s_rx_q != NULL && s_dec_task != NULL;
 }
 
 void hux_opus_rx_packet(const uint8_t *data, size_t len) {
@@ -148,14 +178,42 @@ void hux_opus_rx_clear(void) {
     }
 }
 
+static void send_ctl(rx_kind_t kind, bool to_front) {
+    if (s_rx_q == NULL || xSemaphoreTake(s_ctl_lock, pdMS_TO_TICKS(RX_WAIT_MS)) != pdTRUE) {
+        return;
+    }
+    s_ctl_item.kind = (uint16_t)kind;
+    s_ctl_item.len = 0;
+    BaseType_t ok = to_front ? xQueueSendToFront(s_rx_q, &s_ctl_item, 0)
+                             : xQueueSend(s_rx_q, &s_ctl_item, pdMS_TO_TICKS(RX_WAIT_MS));
+    xSemaphoreGive(s_ctl_lock);
+    if (ok != pdTRUE) {
+        ESP_LOGE(TAG, "opus.ctl_dropped kind=%d (decoder stuck)", (int)kind);
+    }
+}
+
+void hux_opus_rx_unhold(void) {
+    send_ctl(RX_UNHOLD, false);
+}
+
 void hux_opus_rx_reset(void) {
     if (s_rx_q == NULL) {
         return;
     }
     xQueueReset(s_rx_q);
-    s_ws_item.kind = RX_RESET;
-    s_ws_item.len = 0;
-    xQueueSendToFront(s_rx_q, &s_ws_item, 0);
+    send_ctl(RX_RESET, true);
+}
+
+uint32_t hux_opus_rx_waiting(void) {
+    return s_rx_q != NULL ? (uint32_t)uxQueueMessagesWaiting(s_rx_q) : 0;
+}
+
+uint32_t hux_opus_dec_errors(void) {
+    return atomic_load(&s_dec_errors);
+}
+
+uint32_t hux_opus_dec_stack_free(void) {
+    return s_dec_task != NULL ? (uint32_t)uxTaskGetStackHighWaterMark(s_dec_task) : 0;
 }
 
 int hux_opus_encode(const int16_t *pcm, uint8_t *out, size_t cap) {
