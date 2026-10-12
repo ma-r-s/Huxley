@@ -213,6 +213,39 @@ class TestSearch:
         (request,) = [r for r in httpx_mock.get_requests() if r.method == "GET"]
         assert request.url.params["type"] == "artist"
 
+    async def test_audiobook_kind_searches_books_and_reads_authors(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        _token(httpx_mock)
+        httpx_mock.add_response(
+            method="GET",
+            json={
+                "audiobooks": {
+                    "items": [
+                        {
+                            "uri": "spotify:show:1oVPQwdET6CETd7KFZAghH",
+                            "name": "Cien años de soledad",
+                            "authors": [{"name": "Gabriel García Márquez"}],
+                            "narrators": [{"name": "Juan Pablo Raba"}],
+                        }
+                    ]
+                }
+            },
+        )
+        search = SpotifySearch("id", "secret", market="CO", http=httpx.AsyncClient())
+
+        match = await search.find("cien años de soledad", "audiobook")
+
+        assert match is not None
+        assert (match.kind, match.uri, match.title, match.artist) == (
+            "audiobook",
+            "spotify:show:1oVPQwdET6CETd7KFZAghH",
+            "Cien años de soledad",
+            "Gabriel García Márquez",
+        )
+        (request,) = [r for r in httpx_mock.get_requests() if r.method == "GET"]
+        assert request.url.params["type"] == "audiobook"
+
     async def test_song_query_plays_the_track(self, httpx_mock: HTTPXMock) -> None:
         _token(httpx_mock)
         httpx_mock.add_response(

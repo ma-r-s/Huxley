@@ -1,7 +1,7 @@
 # Skill: spotify
 
-Plays music from a household Spotify Premium account on any Huxley
-device. Persona-agnostic; same `AudioStream` path as
+Plays music, and audiobooks, from a household Spotify Premium account
+on any Huxley device. Persona-agnostic; same `AudioStream` path as
 [radio](./radio.md): Spotify's audio reaches the client through the
 server's one audio channel, never through a separate speaker.
 
@@ -9,7 +9,7 @@ server's one audio channel, never through a separate speaker.
 
 | Tool            | Args                                                                   | Returns                                                                                                                         |
 | --------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `play_music`    | `query?: string`, `kind?: any \| track \| artist \| album \| playlist` | `{ ok, playing, by, kind, alternatives? }` + `AudioStream`; no query: `{ ok, action: "resume" }` + `AudioStream`; or `{ ok: false, reason, say }` |
+| `play_music`    | `query?: string`, `kind?: any \| track \| artist \| album \| playlist \| audiobook` | `{ ok, playing, by, kind, alternatives? }` + `AudioStream`; no query: `{ ok, action: "resume" }` + `AudioStream`; or `{ ok: false, reason, say }` |
 | `music_control` | `action: pause \| resume \| next \| previous`                         | pause: `CancelMedia`; the others: `AudioStream` (resume)                                     |
 | `whats_playing` | (none)                                                                | `{ ok, title, by, then }` (info tool; the music resumes after the answer), or `nothing_playing` |
 
@@ -32,6 +32,23 @@ top title is far from it (under 0.5) and another is close (0.6 or more,
 0.2 ahead), that one plays. If none of the top five is close, the
 artist's own tracks are searched too. A clear title keeps Spotify's
 order.
+
+**Audiobooks** (`kind: "audiobook"`, 2026-10-12, T1.39): a search of
+Spotify's audiobook catalog (`type=audiobook`; `by` is the author). A
+book is a `spotify:show:` URI whose chapters are episodes, and Soloist
+plays it like an album. Spotify keeps the account's place in each book,
+so asking for the same book again continues it (verified: a replay
+started at 0:09 of the credits and ran on into chapter 1). `next` /
+`previous` move between chapters; `whats_playing` says the book and the
+chapter ("Cien años de soledad, Capítulo 1"), since a chapter's own name
+is only "Capítulo 1". A mixed (`any`) search never returns books, so a
+song that shares a book's title stays a song. Books cost listening
+hours: Spotify gives a Premium Familiar plan's hours to its holder only,
+so a device signed in as another member needs hours bought for that
+account. With none left, Soloist reports `playing` and then `idle` 0.3 s
+later, with no error; any fresh start that goes idle within 3 s
+(`REFUSED_S`) is a refusal, spoken as `audiobook_refused` for a book and
+`start_failed` for music, never taken for the end of the album.
 
 **No query** (the user asked for music without saying which): continue
 what Soloist has loaded (it keeps its last context across restarts).
@@ -120,6 +137,8 @@ Spotify app ─┐                        ┌─ WebSocket (control, events) ─
 | Paused from a Spotify app for 3 s             | stream ends quietly, freeing the speaker                                                      |
 | A call outlasts the 30 min patience           | narrated `patience_expired` (the music stays paused)                                          |
 | Album / playlist runs out                     | stream ends quietly                                                                           |
+| Idle within 3 s of a fresh start (refused)    | narrated `audiobook_refused` (book: hours may be used up) or `start_failed` (music)           |
+| Book not found                                | `book_not_found`; asks for another book                                                       |
 
 "What song is this?", like any question, gets the music back after the
 answer. Not after "pausa" (`CancelMedia`), and not after it moved to

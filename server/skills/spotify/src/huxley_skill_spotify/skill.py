@@ -8,9 +8,10 @@ TCP (`capture.py`), as an `AudioStream`, the same path radio uses.
 Huxley stays the one audio pipe: Soloist never plays to a speaker.
 
 Tools:
-- `play_music(query?, kind?)`: search and play a song, artist, album or
-  playlist (the runners-up go back as `alternatives`). No query: continue
-  what played last.
+- `play_music(query?, kind?)`: search and play a song, artist, album,
+  playlist or audiobook (the runners-up go back as `alternatives`). No
+  query: continue what played last. A book continues where the account
+  left it (Spotify keeps the place).
 - `music_control(action)`: pause, resume, next, previous.
 - `whats_playing()`: what is on. An info tool: the model speaks the
   answer, and the music comes back after it like after any turn.
@@ -69,6 +70,10 @@ DEFAULT_PCM = "127.0.0.1:4712"
 START_TIMEOUT_S = 10.0
 # Paused from a Spotify app for this long: end the stream (free the speaker).
 PAUSED_GRACE_S = 3.0
+# A fresh start that goes idle this soon was refused, not finished: an
+# audiobook on an account with no listening time reports "playing", then
+# "idle" 0.3 s later, with no error (seen 2026-10-12).
+REFUSED_S = 3.0
 
 # What the model should tell the user, per failure. Instructions, not
 # literal text: the persona phrases them.
@@ -104,6 +109,13 @@ _SAY: dict[str, dict[str, str]] = {
         "takeover": (
             "Dile al usuario, en una frase, que la música de Spotify pasó a sonar en otro aparato."
         ),
+        "book_not_found": (
+            "Dile al usuario que no encontraste ese libro en Spotify y pregúntale si quiere otro."
+        ),
+        "audiobook_refused": (
+            "Dile al usuario, en una frase, que Spotify no dejó poner el libro; "
+            "puede que se hayan acabado las horas de audiolibros de este mes."
+        ),
         "interrupted": (
             "Dile al usuario, en una frase, que la música de Spotify se cortó y "
             "pregúntale si quiere que la vuelvas a poner."
@@ -132,6 +144,13 @@ _SAY: dict[str, dict[str, str]] = {
         ),
         "takeover": (
             "Tell the user, in one sentence, that the Spotify music moved to another device."
+        ),
+        "book_not_found": (
+            "Tell the user you didn't find that book on Spotify and ask if they'd like another."
+        ),
+        "audiobook_refused": (
+            "Tell the user, in one sentence, that Spotify wouldn't play the book; "
+            "this month's audiobook hours may have run out."
         ),
         "interrupted": (
             "Tell the user, in one sentence, that the Spotify music cut out and ask "
@@ -174,6 +193,14 @@ _SAY: dict[str, dict[str, str]] = {
         "takeover": (
             "Dis à l'utilisateur, en une phrase, que la musique Spotify est passée "
             "sur un autre appareil."
+        ),
+        "book_not_found": (
+            "Dis à l'utilisateur que tu n'as pas trouvé ce livre sur Spotify et "
+            "demande s'il en veut un autre."
+        ),
+        "audiobook_refused": (
+            "Dis à l'utilisateur, en une phrase, que Spotify n'a pas voulu lancer le "
+            "livre ; les heures de livres audio du mois sont peut-être épuisées."
         ),
         "interrupted": (
             "Dis à l'utilisateur, en une phrase, que la musique Spotify s'est coupée "
@@ -220,6 +247,9 @@ class SpotifySkill:
         # Keyword-only injection points for tests.
         self._client = client
         self._search = search
+        # The last audiobook started: whats_playing names it, since a
+        # chapter's own title is only "Capítulo 3".
+        self._book: Match | None = None
         self._language = "en"
         self._ctx: SkillContext | None = None
         self._logger: SkillLogger | None = None
@@ -313,7 +343,8 @@ class SpotifySkill:
         # as its guess when it misheard (2026-10-12), so they stay abstract.
         if lang == "es":
             play = (
-                "Pone música de Spotify: una canción, un artista, un álbum o una lista. "
+                "Pone música de Spotify: una canción, un artista, un álbum o una lista; "
+                "también audiolibros (`kind: 'audiobook'`), que siguen donde se quedaron. "
                 "ANTES de llamar di algo breve como 'a ver, la busco'. Los nombres pueden "
                 "estar en inglés o en cualquier idioma: pásalos tal como los oíste, sin "
                 "traducirlos ni cambiarlos por otro parecido. Si dudas del nombre, llama "
@@ -333,7 +364,8 @@ class SpotifySkill:
             kind = (
                 "'track' si nombró una canción (con o sin artista), 'artist' si pidió "
                 "'algo de' un artista sin nombrar canción, 'album', 'playlist' para una "
-                "lista o un estilo de música, 'any' si no está claro."
+                "lista o un estilo de música, 'audiobook' si pidió un libro (con el "
+                "título y el autor si lo dijo), 'any' si no está claro."
             )
             control = (
                 "Controla la música de Spotify. action: 'pause' (pausa, para, silencio, "
@@ -355,7 +387,8 @@ class SpotifySkill:
         elif lang == "fr":
             play = (
                 "Joue de la musique Spotify : une chanson, un artiste, un album ou une "
-                "playlist. AVANT l'appel, dis brièvement 'je cherche'. Les noms peuvent "
+                "playlist ; aussi des livres audio (`kind: 'audiobook'`), qui reprennent "
+                "où ils en étaient. AVANT l'appel, dis brièvement 'je cherche'. Les noms peuvent "
                 "être en anglais ou en toute autre langue : passe-les tels que tu les as "
                 "entendus, sans les traduire ni les remplacer par un nom proche. Si tu "
                 "doutes du nom, appelle quand même avec ta meilleure supposition au lieu "
@@ -375,7 +408,8 @@ class SpotifySkill:
             kind = (
                 "'track' s'il a nommé une chanson (avec ou sans artiste), 'artist' pour "
                 "'quelque chose de' un artiste sans chanson précise, 'album', 'playlist' "
-                "pour une liste ou un style de musique, 'any' sinon."
+                "pour une liste ou un style de musique, 'audiobook' pour un livre (titre "
+                "et auteur s'il l'a dit), 'any' sinon."
             )
             control = (
                 "Contrôle la musique Spotify. action : 'pause', 'resume' (reprends, "
@@ -391,7 +425,8 @@ class SpotifySkill:
             )
         else:
             play = (
-                "Play music from Spotify: a song, an artist, an album or a playlist. "
+                "Play music from Spotify: a song, an artist, an album or a playlist; "
+                "audiobooks too (`kind: 'audiobook'`), which continue where they left off. "
                 "BEFORE calling, briefly say something like 'let me find it'. Names may "
                 "be in any language: pass them as you heard them, without translating "
                 "them or swapping in a similar name. If you're unsure of the name, call "
@@ -411,7 +446,8 @@ class SpotifySkill:
             kind = (
                 "'track' if they named a song (with or without the artist), 'artist' for "
                 "'something by' an artist with no song named, 'album', 'playlist' for a "
-                "list or a style of music, 'any' if unclear."
+                "list or a style of music, 'audiobook' for a book (title, and author if "
+                "they said it), 'any' if unclear."
             )
             control = (
                 "Control the Spotify music. action: 'pause' (pause, stop, quiet), "
@@ -483,7 +519,8 @@ class SpotifySkill:
             await self._log().awarning("spotify.search_failed", query=query, error=str(exc))
             return await self._fail("search_failed", query=query)
         if not found:
-            return await self._fail("not_found", query=query)
+            reason = "book_not_found" if kind == "audiobook" else "not_found"
+            return await self._fail(reason, query=query)
         match, others = found[0], found[1:]
         await self._log().ainfo(
             "spotify.play_requested",
@@ -578,6 +615,10 @@ class SpotifySkill:
                     ensure_ascii=False,
                 )
             )
+        book = self._book
+        if book is not None and state.context_uri == book.uri:
+            # A chapter's own name is only "Capítulo 3": say the book too.
+            title, artists = f"{book.title}, {title}", book.artist
         payload: dict[str, Any] = {"ok": True, "title": title, "by": artists}
         # An info tool: the model speaks the answer in a follow-up round
         # (a tool with an AudioStream gets none). The press that asked
@@ -690,6 +731,9 @@ class SpotifySkill:
                 context=state.context_uri,
             )
 
+            if start is not None and start.kind == "audiobook":
+                self._book = start
+            started_at = time.monotonic()
             seen_active = False
             paused_since: float | None = None
             chunks = 0
@@ -708,6 +752,15 @@ class SpotifySkill:
                     self._narrate("takeover")
                     return
                 if state.status == "idle":
+                    if start is not None and time.monotonic() - started_at < REFUSED_S:
+                        reason = "refused"
+                        await log.awarning(
+                            "spotify.start_refused", kind=start.kind, uri=start.uri, chunks=chunks
+                        )
+                        self._narrate(
+                            "audiobook_refused" if start.kind == "audiobook" else "start_failed"
+                        )
+                        return
                     reason = "finished"
                     return
                 if state.status == "paused":
@@ -733,7 +786,13 @@ class SpotifySkill:
             # Never await Soloist here: this runs in the coordinator's
             # cancel path. Queue the pause; a newer stream drops it. Not
             # when the music moved, was paused elsewhere, or ended.
-            if reason not in ("takeover", "finished", "paused_elsewhere", "capture_unreachable"):
+            if reason not in (
+                "takeover",
+                "finished",
+                "refused",
+                "paused_elsewhere",
+                "capture_unreachable",
+            ):
                 client.send("pause", generation=generation)
             await log.ainfo(
                 "spotify.stream_ended",

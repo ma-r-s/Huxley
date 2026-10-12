@@ -23,7 +23,9 @@ import httpx
 TOKEN_URL = "https://accounts.spotify.com/api/token"
 SEARCH_URL = "https://api.spotify.com/v1/search"
 
-KINDS = ("any", "track", "artist", "album", "playlist")
+# "audiobook" is asked for by name only; a mixed ("any") search never
+# returns books, so a song with a book's title stays a song.
+KINDS = ("any", "track", "artist", "album", "playlist", "audiobook")
 
 
 class SearchError(Exception):
@@ -32,10 +34,13 @@ class SearchError(Exception):
 
 @dataclass(frozen=True)
 class Match:
-    """What to play: a track, album, playlist or artist URI. Soloist
-    plays an artist URI natively (verified 2026-10-10, though its docs
-    only list track/album/playlist/episode), the way the Spotify apps'
-    play-artist button does."""
+    """What to play: a track, album, playlist, artist or audiobook URI.
+    Soloist plays an artist URI natively (verified 2026-10-10, though its
+    docs only list track/album/playlist/episode), the way the Spotify
+    apps' play-artist button does. An audiobook is a `spotify:show:`
+    URI whose chapters are episodes; Spotify keeps the listener's place
+    in it, so playing it again continues (verified 2026-10-12). `artist`
+    holds a book's authors."""
 
     uri: str
     kind: str
@@ -50,7 +55,9 @@ def _fold(text: str) -> str:
 
 
 def _artists(entry: dict[str, Any]) -> str | None:
-    names = [a.get("name") for a in entry.get("artists") or [] if a and a.get("name")]
+    """Who made it: a song's or album's artists, a book's authors."""
+    people = entry.get("artists") or entry.get("authors") or []
+    names = [a.get("name") for a in people if a and a.get("name")]
     return ", ".join(names) or None
 
 
