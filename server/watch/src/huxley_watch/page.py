@@ -10,15 +10,22 @@ days (stacked hours, presses), the month's audiobook gauge, audio gaps per
 half hour on a continuous axis with the threshold, and calls per person.
 
 Charts are HTML and CSS rather than SVG text, so labels stay readable at
-phone width; the gauge alone is SVG. Self-contained: no external file;
-one small inline script turns `data-tip` into a tooltip (hover or tap).
+phone width; the gauge alone is SVG. Self-contained: no external file.
+The inline script turns `data-tip` into a tooltip (hover or tap), and
+runs the archive: the day picker above the strip (it swaps in another
+day's strip from /day/YYYY-MM-DD.json), the day's list under it (a click
+on a block scrolls it to that time and marks the rows there), the players
+(audio/...), and the reload, done only when nothing is open or playing.
 """
 
 from __future__ import annotations
 
 import html
 import math
+from datetime import date
 from typing import Any
+
+from huxley_watch.icons import icon, sprite
 
 KIND_LABEL = {
     "online": "Walkie connected",
@@ -146,14 +153,57 @@ b.pdot{display:inline-block;width:7px;height:7px;border-radius:50%;background:va
 .person .ticks{display:flex;gap:3px}.person .ticks i{width:8px;height:18px;border-radius:2px;background:var(--call);display:inline-block}
 .note{color:var(--mute);font-size:12px;margin-top:14px;display:flex;gap:16px;flex-wrap:wrap}
 #tip{position:fixed;pointer-events:none;background:var(--card);color:var(--ink);box-shadow:0 0 0 1px var(--ring),0 6px 18px rgba(0,0,0,.12);border-radius:8px;padding:6px 9px;font-size:12px;display:none;z-index:9;max-width:260px}
+.ico{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none;display:block}
+.picker{display:flex;align-items:center;gap:6px;margin:0 0 10px}
+.pk{appearance:none;border:0;background:var(--page);color:var(--ink);border-radius:999px;height:28px;min-width:28px;padding:0 10px;display:inline-grid;place-items:center;font:inherit;font-size:12px;cursor:pointer;box-shadow:0 0 0 1px var(--ring)}
+.pk:disabled{opacity:.35;cursor:default}.pk .ico{width:14px;height:14px}
+.pd{font-size:13px;font-weight:600;min-width:9ch;text-align:center;font-variant-numeric:tabular-nums}
+.picker.err .pd{color:var(--crit)}
+.lane[data-lane="voices"],.lane[data-lane="media"],.band{cursor:pointer}
+.seg.sel{box-shadow:0 0 0 2px var(--card),0 0 0 3.5px var(--ink);z-index:2}
+.panel{margin-top:14px;border-top:1px solid var(--grid);padding-top:8px;position:relative}
+.panel .x{position:absolute;right:0;top:10px;padding:0;z-index:3}
+.pbody{max-height:min(70vh,640px);overflow:auto;overscroll-behavior:contain;padding-right:36px}
+.rows{display:grid;gap:2px}
+.li{display:grid;grid-template-columns:64px 22px minmax(0,1fr);align-items:center;gap:8px;padding:4px 6px;border-radius:7px;min-height:30px}
+.li.near{background:color-mix(in srgb,var(--ink) 7%,transparent)}
+.li .at{font-size:12px;color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
+.ic{display:grid;place-items:center;color:var(--ink2)}.ic.w-him{color:var(--talk)}.ic.w-huxley{color:var(--answer)}.ic.w-call{color:var(--call)}
+.ic .sw{width:12px;height:12px}
+.tx{font-size:14px;overflow-wrap:anywhere}
+.ic.w-huxley+.tx{color:var(--ink2)}
+.tl{font-size:13px;color:var(--ink2);overflow-wrap:anywhere}.tl .tn{font-weight:600;font-family:ui-monospace,Menlo,monospace;font-size:12px}.tl .arg{color:var(--mute)}
+.pl{display:flex;align-items:center;gap:10px;min-width:0}
+.pl .name{font-size:13px;color:var(--ink2)}
+.st{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px}.st .name{font-weight:600}
+.sw{width:12px;height:12px;border-radius:3px;display:inline-block;flex:none}
+.sw.hatch{background:repeating-linear-gradient(45deg,var(--mute) 0 2px,transparent 2px 4px)}
+.fig{font-variant-numeric:tabular-nums;color:var(--ink2)}
+.dash{width:14px;border-top:1.5px solid var(--mute);display:inline-block}
+.play{appearance:none;border:0;padding:0;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;flex:none;background:var(--ink);color:var(--card);cursor:pointer}
+.play .ico{width:12px;height:12px}.play .i-pause,.play.on .i-play{display:none}.play.on .i-pause{display:block}
+.play.bad{background:var(--crit)}
+.track{position:relative;flex:1;max-width:220px;height:5px;border-radius:3px;background:var(--grid);cursor:pointer;overflow:hidden}
+.prog{position:absolute;left:0;top:0;height:100%;width:0;background:var(--ink);display:block}
+.len{font-size:12px;color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
+.gap{display:flex;align-items:center;gap:8px;margin:6px 0 6px 72px;font-size:11px}
+.gap::before,.gap::after{content:"";flex:1;border-top:1px dashed var(--grid)}.gap::before{flex:0 0 18px}
+.gap .fig{color:var(--mute)}
+details.bgroup>summary{list-style:none;cursor:pointer}details.bgroup>summary::-webkit-details-marker{display:none}
+details.bgroup>summary .fig{color:var(--mute)}
+details.bgroup>.li{opacity:.45;filter:grayscale(1)}
+details.bgroup[open]>summary{opacity:.7}
+@media (max-width:480px){.li{grid-template-columns:52px 20px minmax(0,1fr);gap:6px}.li .at{font-size:11px}.pbody{padding-right:30px}}
 """
 
-SCRIPT = """
+SCRIPT = (
+    """
 (function(){var m=document.querySelector("main");var at=Date.parse(m.getAttribute("data-checked"));
 var every=parseFloat(m.getAttribute("data-interval"))||300;
-if(at&&Date.now()>at+(3*every+60)*1000&&m.className.indexOf("stale")<0){m.className+=" stale";
+function stale(){if(at&&Date.now()>at+(3*every+60)*1000&&m.className.indexOf("stale")<0){m.className+=" stale";
 var d=m.querySelector(".dot");d.className="dot stale";m.querySelector("h1").textContent="Stopped checking";
-m.querySelector(".when").textContent="at "+m.getAttribute("data-checked-local")}})();
+m.querySelector(".when").textContent="at "+m.getAttribute("data-checked-local")}}
+stale();setInterval(stale,30000)})();
 (function(){var tip=document.getElementById("tip");
 function show(e){var t=e.target.closest&&e.target.closest("[data-tip]");if(!t){tip.style.display="none";return}
 tip.textContent=t.getAttribute("data-tip");tip.style.display="block";
@@ -161,6 +211,61 @@ var x=Math.min(e.clientX+12,innerWidth-tip.offsetWidth-8);tip.style.left=x+"px";
 document.addEventListener("pointermove",show);document.addEventListener("pointerdown",show);
 document.addEventListener("pointerleave",function(){tip.style.display="none"})})();
 """
+    + """
+(function(){var sec=document.getElementById("day");if(!sec)return;
+var pk=sec.querySelector(".picker"),panel=document.getElementById("panel"),body=panel.querySelector(".pbody");
+var today=pk.getAttribute("data-today"),cur=today,shown="",days={},got={},playing=null;
+function q(s){return sec.querySelector(s)}
+function load(d,cb){if(days[d]&&(d!==today||Date.now()-got[d]<60000))return cb(days[d]);
+fetch("day/"+d+".json",{cache:"no-store"}).then(function(r){if(!r.ok)throw new Error(r.status);return r.json()})
+.then(function(j){days[d]=j;got[d]=Date.now();pk.classList.remove("err");cb(j)}).catch(function(){pk.classList.add("err")})}
+function unsel(){var s=q(".seg.sel");if(s)s.classList.remove("sel");body.querySelectorAll(".near").forEach(function(x){x.classList.remove("near")})}
+function list(j,fresh){if(fresh||shown!==j.date+j.list_html.length){stop();body.innerHTML=j.list_html;shown=j.date+j.list_html.length}panel.hidden=false}
+function close(){stop();panel.hidden=true;unsel()}
+function set(k,v){var b=pk.querySelector('[data-go="'+k+'"]');b.disabled=!v;b.setAttribute("data-day",v||"")}
+function go(d){if(!d)return;load(d,function(j){cur=d;unsel();q(".strip").outerHTML=j.strip_html;
+q("#dayname").textContent=j.is_today?"Today":j.label;q(".pd").textContent=j.label;
+set("prev",j.prev);set("next",j.next);pk.querySelector('[data-go="today"]').disabled=j.is_today;
+list(j,true);body.scrollTop=0})}
+function scrollTo(el){body.scrollTop+=el.getBoundingClientRect().top-body.getBoundingClientRect().top-8;
+var r=panel.getBoundingClientRect();if(r.top>innerHeight-160||r.bottom<0)panel.scrollIntoView({behavior:"smooth",block:"nearest"})}
+function near(s,e,pad){var hit=[],best=null,d=1e9;body.querySelectorAll(".li[data-t]").forEach(function(x){var t=+x.getAttribute("data-t");
+if(t>=s-pad&&t<=e+pad)hit.push(x);var v=Math.min(Math.abs(t-s),Math.abs(t-e));if(v<d){d=v;best=x}});
+if(!hit.length&&best)hit=[best];hit.slice(0,80).forEach(function(x){x.classList.add("near");var g=x.parentNode;
+if(g.tagName==="DETAILS"&&x.tagName!=="SUMMARY")g.open=true});if(hit.length)scrollTo(hit[0])}
+sec.addEventListener("click",function(ev){var t=ev.target,b=t.closest(".picker button");
+if(b){go(b.getAttribute("data-go")==="today"?today:b.getAttribute("data-day"));return}
+if(t.closest(".panel .x")){close();return}
+var band=t.closest(".strip .band"),seg=t.closest(".strip .seg"),lane=t.closest(".strip .lane");
+if(!band&&!lane)return;var box=q(".strip .lanes").getBoundingClientRect(),per=1440/box.width;
+var m=(ev.clientX-box.left)*per,s=m,e=m,pad=14*per;
+if(band){s=+band.getAttribute("data-ws");e=+band.getAttribute("data-we");pad=0.5}
+else if(seg){s=+seg.getAttribute("data-s");e=+seg.getAttribute("data-e");pad=1}
+load(cur,function(j){list(j,false);unsel();if(seg&&!band)seg.classList.add("sel");near(s,e,pad)})});
+document.addEventListener("keydown",function(e){if(e.key==="Escape"&&!panel.hidden)close()});
+function fmt(x){x=Math.max(0,Math.round(x||0));var h=Math.floor(x/3600),mm=Math.floor(x%3600/60),ss=x%60;
+return(h?h+":"+(mm<10?"0":"")+mm:mm)+":"+(ss<10?"0":"")+ss}
+function dur(p){var d=p.a.duration;return isFinite(d)&&d>0?d:p.ms/1000}
+function stop(){if(!playing)return;playing.a.pause();playing.b.classList.remove("on");playing=null}
+panel.addEventListener("click",function(ev){var b=ev.target.closest("button.play");
+if(!b){var tr=ev.target.closest(".track");if(tr&&playing&&playing.host.contains(tr)){var r=tr.getBoundingClientRect();
+playing.a.currentTime=Math.max(0,(ev.clientX-r.left)/r.width)*dur(playing)}return}
+if(playing&&playing.b===b){stop();return}stop();
+var host=b.closest(".li"),bar=host.querySelector(".prog"),len=host.querySelector(".len");
+var p={a:b._a||new Audio(b.getAttribute("data-src")),b:b,host:host,ms:+b.getAttribute("data-ms")||0};
+if(!b._a){b._a=p.a;p.a.addEventListener("timeupdate",function(){var d=dur(p);
+if(bar)bar.style.width=(d?Math.min(100,p.a.currentTime/d*100):0)+"%";if(len)len.textContent=fmt(p.a.currentTime)+" / "+fmt(d)});
+p.a.addEventListener("ended",function(){if(playing&&playing.a===p.a)stop();if(bar)bar.style.width="0"});
+p.a.addEventListener("error",function(){b.classList.remove("on");b.classList.add("bad");if(playing&&playing.a===p.a)playing=null})}
+playing=p;b.classList.add("on");var pr=p.a.play();if(pr&&pr.catch)pr.catch(function(){b.classList.remove("on");b.classList.add("bad");
+if(playing===p)playing=null})});
+var every=(parseFloat(document.querySelector("main").getAttribute("data-interval"))||300)*1000,touched=Date.now();
+["pointerdown","keydown","wheel","touchstart"].forEach(function(n){document.addEventListener(n,function(){touched=Date.now()},{passive:true})});
+function tick(){var idle=Date.now()-touched>15*60000;
+if(!playing&&(idle||(panel.hidden&&cur===today)))location.reload();else setTimeout(tick,30000)}
+setTimeout(tick,every)})();
+"""
+)
 
 
 def _legend(kinds: list[str]) -> str:
@@ -284,7 +389,11 @@ def _seg(kind: str, s: float, e: float, label: str = "") -> str:
     )
 
 
-def _today(d: dict[str, Any]) -> str:
+def strip_html(d: dict[str, Any]) -> str:
+    """A day's strip (views.strip): today's on the page, any day's in
+    /day/YYYY-MM-DD.json for the archive. Blocks carry their minutes
+    (data-s, data-e; bands data-ws, data-we) for the click that opens a
+    panel."""
     online = "".join(_seg("online", s, e) for s, e in d["online"])
     voices = "".join(_seg("talk", s, e) for s, e in d["talk"]) + "".join(
         _seg("answer", s, e) for s, e in d["answer"]
@@ -292,13 +401,18 @@ def _today(d: dict[str, Any]) -> str:
     media = "".join(_seg(m["kind"], m["s"], m["e"], m["label"]) for m in d["media"])
     bands = "".join(
         f'<i class="band {_a(w["kind"])}" style="left:{_pct(w["s"])};width:{_pct(w["e"] - w["s"])}" '
+        f'data-ws="{w["s"]}" data-we="{w["e"]}" '
         f'data-tip="{_a(w["kind"] + ": " + w["what"] + ", " + _hm(w["s"]) + " to " + _hm(w["e"]))}"></i>'
         for w in d["windows"]
     )
     vlines = "".join(
         f'<span class="vline" style="left:{_pct(h * 60)}"></span>' for h in range(3, 24, 3)
     )
-    now = f'<span class="now" style="left:{_pct(d["now_min"])}" data-tip="now {_hm(d["now_min"])}"></span>'
+    now = (
+        f'<span class="now" style="left:{_pct(d["now_min"])}" data-tip="now {_hm(d["now_min"])}"></span>'
+        if d.get("now_min") is not None
+        else ""
+    )
     hours = "".join(
         f'<span class="{"odd" if h % 6 else ""}" style="left:{_pct(h * 60)}">{h:02d}:00</span>'
         for h in range(0, 25, 3)
@@ -310,6 +424,29 @@ def _today(d: dict[str, Any]) -> str:
         f'<div class="lane" data-lane="media">{media}</div>{bands}{now}</div>'
         f'<div class="hours">{hours}</div></div>'
     )
+
+
+def _day(today: dict[str, Any], bounds: dict[str, Any] | None) -> str:
+    """The day section: the picker above the strip, the strip, and under it
+    the day's list (daylist.py's markup from /day/YYYY-MM-DD.json), shown
+    by a click on a block, which scrolls it to that time."""
+    label = date.fromisoformat(today["date"]).strftime("%a %d %b")
+    prev = (bounds or {}).get("prev") or ""
+    picker = (
+        f'<div class="picker" data-today="{_a(today["date"])}">'
+        f'<button class="pk" type="button" data-go="prev" data-day="{_a(prev)}" '
+        f'aria-label="previous day"{"" if prev else " disabled"}>{icon("prev")}</button>'
+        f'<span class="pd">{_t(label)}</span>'
+        f'<button class="pk" type="button" data-go="next" data-day="" aria-label="next day" disabled>'
+        f"{icon('next')}</button>"
+        f'<button class="pk" type="button" data-go="today" disabled>Today</button></div>'
+    )
+    panel = (
+        '<div class="panel" id="panel" hidden>'
+        f'<button class="pk x" type="button" aria-label="close">{icon("close")}</button>'
+        '<div class="pbody"></div></div>'
+    )
+    return f"{picker}{strip_html(today)}{panel}"
 
 
 def _axis(top: float) -> tuple[float, float]:
@@ -461,12 +598,13 @@ def _document(interval: str, body: str) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="{interval}">
+<noscript><meta http-equiv="refresh" content="{interval}"></noscript>
 <meta name="color-scheme" content="light dark">
 <title>The walkie</title>
 <style>{CSS}</style>
 </head>
 <body>
+{sprite()}
 {body}
 <div id="tip"></div>
 <script>{SCRIPT}</script>
@@ -491,7 +629,7 @@ def render(status: dict[str, Any]) -> str:
 <div class="body">
 {_cards(status["items"])}
 {_tiles(status["tiles"])}
-<section class="card section"><h2>Today, hour by hour {legend_today}</h2>{_today(status["today"])}</section>
+<section class="card section" id="day"><h2><span><span id="dayname">Today</span>, hour by hour</span> {legend_today}</h2>{_day(status["today"], status.get("archive"))}</section>
 <div class="grid two section">
 <section class="card"><h2>Last 7 days {legend_week}</h2>{_week(status["week"])}</section>
 <section class="card"><h2>Audiobook hours, {_t(month)}</h2>{_gauge(status["books"])}</section>

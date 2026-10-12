@@ -12,16 +12,19 @@ import json
 import shutil
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from huxley_watch.activity import presses, segments
 from huxley_watch.alerts import AlertState, Sender, deliver, load_state, plan, save_state
 from huxley_watch.bench import Bench, BenchReader
 from huxley_watch.config import Config, ConfigError, in_range, load_config
+from huxley_watch.dayview import Archive
 from huxley_watch.db import DbRead, read_db
 from huxley_watch.events import LogReader
 from huxley_watch.facts import server_alive, server_health_ok
@@ -31,7 +34,6 @@ from huxley_watch.views import build, fallback_status, mark_stale
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
     from huxley_watch.rules import Item
     from huxley_watch.wlog import WatchLog
@@ -85,6 +87,7 @@ class Watcher:
         self.html = b""
         self.json = b"{}"
         self.lock = threading.Lock()
+        self.archive = Archive(log)
         self._notes_logged: set[tuple[str, str]] = set()
         self._db_problem: str | None = None
         self._log_notes()
@@ -214,6 +217,7 @@ class Watcher:
                 host = urllib.parse.urlsplit(url).hostname
                 self.log.warning("watch.ping_failed", host=host, error=error)
 
+        days = self._fenced("archive", lambda: self.archive.bounds(cfg, now), None)
         try:
             w = inputs.walkie
             status = build(
@@ -223,6 +227,7 @@ class Watcher:
                 presses(result.events, bench, w.conns),
                 alerts_channel=self.sender.channel,
                 interval_s=cfg.interval_s,
+                archive=days,
             )
             page = render(status).encode("utf-8")
         except Exception as exc:  # one odd value must not cost the alerts or the page
@@ -251,6 +256,22 @@ class Watcher:
             duration_ms=round((time.monotonic() - started) * 1000),
         )
         return status
+
+    def day(self, which: str, now: datetime | None = None) -> bytes | None:
+        """The archive's day as JSON (web.py's /day/YYYY-MM-DD.json); None
+        for a day outside the logs, or one that failed to build (logged)."""
+        try:
+            return self.archive.day(self.cfg, which, now)
+        except Exception as exc:
+            frame = traceback.extract_tb(exc.__traceback__)[-1]
+            self.log.error(
+                "watch.step_failed",
+                step="archive_day",
+                day=which,
+                error=type(exc).__name__,
+                at=f"{Path(frame.filename).name}:{frame.lineno}",
+            )
+            return None
 
     def current(self, now: datetime | None = None) -> tuple[bytes, bytes]:
         """The page and JSON to serve now: rebuilt as "stopped checking"

@@ -82,6 +82,9 @@ class Config:
     db_path: Path
     state_dir: Path
     timezone: ZoneInfo
+    # The recorder's Ogg files (T1.43 W3): <persona data dir>/recordings.
+    # The archive serves files from here only.
+    recordings_dir: Path | None = None
     walkie_mac: str | None = None
     interval_s: float = 300.0
     lookback_days: float = 40.0
@@ -277,6 +280,11 @@ def _load(path: Path | None) -> Config:
         if "db" in huxley
         else persona_dir / "data" / f"{persona_dir.name}.db"
     )
+    recordings_dir = (
+        _path(huxley["recordings_dir"], base)
+        if "recordings_dir" in huxley
+        else db_path.parent / "recordings"
+    )
     persona = read_persona(persona_dir)
     tz = _timezone(watch.get("timezone"), str(persona.get("timezone") or ""), notes)
 
@@ -351,6 +359,7 @@ def _load(path: Path | None) -> Config:
         db_path=db_path,
         state_dir=_path(watch.get("state_dir", DEFAULT_STATE), base),
         timezone=tz,
+        recordings_dir=recordings_dir,
         walkie_mac=str(mac).lower() if mac else None,
         interval_s=60.0 * (interval or 5.0),
         lookback_days=lookback or 40.0,

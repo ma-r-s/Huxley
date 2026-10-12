@@ -2,6 +2,11 @@
 Huxley speaking, and what the speaker played (music, books, radio,
 calls). Pure, from the log events; bench windows cut out.
 
+Huxley speaking runs from `coord.audio_start` (the model's audio for a
+turn, an injected one included) to the next `server.tx.model_speaking`
+false. That flag alone is not an answer: streams and calls raise it too
+(a song would draw as Huxley talking for its whole length).
+
 Streams are paired by `stream_id` (`server.tx.stream_started` ->
 `server.tx.stream_ended`). The coordinator says `stream_started` again
 for a stream already playing (a client back within its grace period),
@@ -53,7 +58,7 @@ class Segment:
         return (self.end - self.start).total_seconds()
 
 
-def _kind_of(e: Event) -> str | None:
+def kind_of(e: Event) -> str | None:
     if e.name == "spotify.play_started":
         return "book" if str(e.get("context") or "").startswith("spotify:show:") else "music"
     if e.name == "radio.stream_started":
@@ -125,10 +130,13 @@ def segments(
         elif name == "coord.ptt_stop" and press is not None:
             out.append(Segment("talk", press, e.ts))
             press = None
-        elif name == "server.tx.model_speaking":
-            if e.get("value") and speaking is None:
+        elif name == "coord.audio_start":
+            if speaking is None:
                 speaking = e.ts
-            elif not e.get("value") and speaking is not None:
+        elif name == "server.tx.model_speaking":
+            # The flag says the speaker is owned (a stream or a call raises
+            # it too), so only its fall ends an answer begun above.
+            if not e.get("value") and speaking is not None:
                 out.append(Segment("answer", speaking, e.ts))
                 speaking = None
         elif name == "server.tx.stream_started" and e.get("stream_id"):
@@ -148,7 +156,7 @@ def segments(
             out.append(Segment("call", call[0], e.ts, call[1]))
             call = None
         else:
-            kind = _kind_of(e)
+            kind = kind_of(e)
             if kind is not None:
                 # The newest stream still waiting for its kind, if recent.
                 while unnamed and e.ts - unnamed[-1][1] > KIND_WINDOW:
