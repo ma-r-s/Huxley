@@ -569,10 +569,31 @@ def test_refused_for_money_hides_can_t_reach_and_budget_hit_hides_runs_out() -> 
     assert "openai.budget" not in found
 
 
-def test_the_entered_balance_is_only_used_without_a_limit() -> None:
+def test_credit_counts_even_with_a_monthly_limit() -> None:
+    """Prepaid credit and the month's budget are separate stops: $3.16 of
+    credit ran out long before a $30 budget would (2026-10-12)."""
     kw: dict[str, Any] = {"balance_usd": 5.0, "balance_at": at(1, 0)}
     assert rule_balance(inputs(SPEND, **kw)) is not None
-    assert rule_balance(inputs(SPEND, monthly_limit_usd=30.0, **kw)) is None
+    assert rule_balance(inputs(SPEND, monthly_limit_usd=30.0, **kw)) is not None
+
+
+def test_the_card_and_tile_show_the_credit_when_it_runs_out_first() -> None:
+    kw: dict[str, Any] = {"balance_usd": 5.0, "balance_at": at(1, 0), "monthly_limit_usd": 30.0}
+    status = status_for(SPEND, **kw)
+    c = status["credit"]
+    assert c["balance_left_usd"] is not None and c["balance_left_usd"] < c["left_usd"]
+    t = status["tiles"]["openai"]
+    assert t["balance_left_usd"] == c["balance_left_usd"]
+    assert t["budget_left_usd"] == c["left_usd"]
+    page = render(status)
+    assert "credit left" in page
+    assert ">OpenAI credit<" in page  # the tile leads with what runs out first
+
+
+def test_without_a_balance_the_tile_shows_the_budget() -> None:
+    status = status_for(SPEND, monthly_limit_usd=30.0)
+    assert status["credit"]["balance_left_usd"] is None
+    assert "credit left" not in render(status)
 
 
 # --- the card: numbers, a battery, bars, no sentences --------------------------------

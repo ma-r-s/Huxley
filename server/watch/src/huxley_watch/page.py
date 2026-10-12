@@ -196,7 +196,7 @@ details.bgroup[open]>summary{opacity:.7}
 @media (max-width:480px){.li{grid-template-columns:52px 20px minmax(0,1fr);gap:6px}.li .at{font-size:11px}.pbody{padding-right:30px}}
 .tag{font-weight:400;color:var(--mute);font-size:12px}.tag.bad{color:var(--crit)}
 .cfigs{display:flex;align-items:flex-end;gap:12px 28px;flex-wrap:wrap;margin:2px 0 14px}
-.cf .cv{font-size:22px;font-weight:620;letter-spacing:-.01em;white-space:nowrap}.cf.hero .cv{font-size:44px;font-weight:650;line-height:1}
+.cf .cv{font-size:22px;font-weight:620;letter-spacing:-.01em;white-space:nowrap}.cf.warn .cv{color:var(--warn-ink, var(--warn))}.cf.hero .cv{font-size:44px;font-weight:650;line-height:1}
 .cf .cc{font-size:12px;color:var(--ink2);margin-top:3px;white-space:nowrap}
 .cf .cq{font-size:13px;font-weight:400;color:var(--mute);margin-left:6px;letter-spacing:0}
 .chip{margin-left:auto;align-self:center;font-size:12px;background:color-mix(in srgb,var(--warn) 22%,transparent);padding:5px 9px;border-radius:999px;white-space:nowrap}
@@ -405,10 +405,21 @@ def _tiles(t: dict[str, Any]) -> str:
             extra='<div class="meter hatch"></div>',
         )
     oa = t["openai"]
-    if oa.get("budget_left_usd") is not None:
+    credit_first = oa.get("balance_left_usd") is not None and (
+        oa.get("budget_left_usd") is None or oa["balance_left_usd"] < oa["budget_left_usd"]
+    )
+    if credit_first:
+        days = f", {oa['days_left']:.0f} d" if oa["days_left"] is not None else ""
+        openai = _tile(
+            "OpenAI credit",
+            f"${max(0.0, oa['balance_left_usd']):.2f}" + ("?" if oa["partial"] else ""),
+            f"left{days}",
+            "warn" if (oa["days_left"] is not None and oa["days_left"] < 7) else "",
+        )
+    elif oa.get("budget_left_usd") is not None:
         openai = _tile(
             "OpenAI",
-            _usd(oa["budget_left_usd"]) + ("?" if oa["partial"] else ""),
+            _usd(oa["budget_left_usd"]) + ("?" if oa["budget_partial"] else ""),
             f"of {_usd(oa['limit_usd'], whole=True)} this month",
         )
     elif oa["balance_left_usd"] is not None:
@@ -664,6 +675,18 @@ def _figures(c: dict[str, Any]) -> str:
         figs.append(
             f'<div class="cf hero"><div class="cv">{_t(_usd(c["spent_usd"]))}{hedge}</div>'
             f'<div class="cc">{_t(c["month"])}, limit not set</div></div>'
+        )
+    if c.get("balance_left_usd") is not None:
+        # The money actually in the account: it can run out before the
+        # month's budget does (prepaid credit), so it stands next to it.
+        bleft = max(0.0, c["balance_left_usd"])
+        bdays = c.get("balance_days")
+        warn = " warn" if bdays is not None and bdays < 7 else ""
+        sub_txt = "credit left" + (f", {bdays:.0f} d" if bdays is not None else "")
+        bhedge = '<span class="cq">or less</span>' if c.get("balance_partial") else ""
+        figs.append(
+            f'<div class="cf{warn}"><div class="cv">{_t(_usd(bleft))}{bhedge}</div>'
+            f'<div class="cc">{_t(sub_txt)}</div></div>'
         )
     if c["mode"] == "budget":
         figs.append(

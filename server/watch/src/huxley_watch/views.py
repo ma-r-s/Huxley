@@ -167,23 +167,20 @@ def _tiles(i: Inputs) -> dict[str, Any]:
 
 
 def _openai_tile(i: Inputs) -> dict[str, Any]:
-    """This month's budget left when a limit is known; else the balance
-    you entered (the secondary mode); else today's spend."""
+    """Both limits that can stop the walkie: this month's budget left
+    (when a limit is known) and the prepaid credit left (when a balance
+    was read: the money actually in the account). The tile shows the one
+    that runs out first; else today's spend."""
     b = i.budget
-    if b is not None and b.limit_usd is not None and b.left_usd is not None:
-        return {
-            "today_usd": round(spent_today(i), 2),
-            "budget_left_usd": round(max(0.0, b.left_usd), 2),
-            "limit_usd": b.limit_usd,
-            "balance_left_usd": None,
-            "days_left": None,
-            "partial": b.partial,
-        }
+    known = b is not None and b.limit_usd is not None and b.left_usd is not None
     est = balance_estimate(i)
     return {
         "today_usd": round(spent_today(i), 2),
-        "budget_left_usd": None,
-        "limit_usd": None,
+        "budget_left_usd": round(max(0.0, b.left_usd), 2)
+        if known and b and b.left_usd is not None
+        else None,
+        "limit_usd": b.limit_usd if known and b else None,
+        "budget_partial": bool(known and b and b.partial),
         "balance_left_usd": round(est[0], 2) if est else None,
         "days_left": round(est[1], 1) if est and est[1] is not None else None,
         "partial": bool(est and est[2]),
@@ -262,7 +259,14 @@ def credit(i: Inputs, items: Sequence[Item]) -> dict[str, Any]:
         mode = "balance"  # the entered balance: the tile and its rule only
     else:
         mode = "spend"
+    est = balance_estimate(i)
+    balance = {
+        "balance_left_usd": round(est[0], 2) if est else None,
+        "balance_days": round(est[1], 1) if est and est[1] is not None else None,
+        "balance_partial": bool(est and est[2]),
+    }
     return {
+        **balance,
         "mode": mode,
         "month": b.start.strftime("%B"),
         "month_start": b.start.date().isoformat(),

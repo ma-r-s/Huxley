@@ -627,9 +627,9 @@ def rule_balance(i: Inputs) -> Item | None:
     """The balance you entered minus the spend since: only while no
     monthly limit is known (the budget rules say it better). One already
     open is judged to the end: dropping it would send a false "fine"."""
-    limited = i.budget is not None and i.budget.limit_usd is not None
-    if limited and "openai.balance" not in i.was_open:
-        return None
+    # Credit and the monthly budget are separate stops: prepaid credit can
+    # run out long before the month's limit (2026-10-12: $3.16 left of
+    # credit, $27 of budget). So this rule runs whenever a balance is known.
     est = balance_estimate(i)
     if est is None or i.balance_usd is None:
         return None
