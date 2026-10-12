@@ -286,9 +286,12 @@ All in one session with the case open, because it never opens again:
   any holes or print anything else"). Staff can't reach the board's buttons,
   so a hung walkie has to recover by itself: the supervisor watchdog, the
   escalation ladder and a remote reboot (W5), with the black box saying why.
-  Staff have no restart at all: the rocker isn't reachable with the case
-  closed either. Short of opening the case, a walkie hung beyond the
-  firmware's reach waits for its battery to run flat.
+  Whether staff can restart it at all depends on the power rocker: the
+  case design puts it fingertip-reachable in a recess in the left wall,
+  the line above says it isn't; Mario is checking his walkie (2026-10-12).
+  If it is, the restart is unplug, rocker off, wait, on, plug back in, and
+  the card says to always leave it on (off, the cell never charges).
+  Either way the firmware must cover every hang.
 - Check the cell has a protection board.
 - Partition table: OTA slots 2 MB to 4 MB each (image 1.3 MB, 10 MB free),
   NVS 24 KB to 64 KB, coredump 64 KB to 256 KB. Final bootloader. Last USB
