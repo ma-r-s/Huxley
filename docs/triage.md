@@ -5591,4 +5591,4 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 
 **Firmware items** (the firmware session files them as F-entries when Mario says go): W4 and W5 of the doc, plus W7's partition table and tests.
 
-**Progress**: logs kept (5721956f).
+**Progress**: logs kept (5721956f); device contract schema 1 in protocol.md (106b408a); the Pi has the code, a venv (runtime 775/775 there) and a verified-but-uninstalled unit (62b42aa8); main pushed to origin after a private-data scan (Mario OK'd the retirement-home wording); recorder (W3) in progress on a worktree branch; firmware F-0026..F-0028 filed by the firmware session.
