@@ -149,6 +149,12 @@ void hux_audio_inject_cancel(void);
  * also ends a quiet period. */
 void hux_audio_pa(bool on);
 
+/** The server is sending a reply or a stream (its model_speaking). A ring
+ * that runs dry meanwhile is a dropout (the network fell behind): the
+ * speaker then rebuffers, waiting for SPK_REBUFFER_MS of audio before it
+ * plays again, so a slow link gives a few pauses instead of stutter. */
+void hux_audio_set_stream_active(bool active);
+
 /** Amp off for `seconds`, then on by itself; survives restarts and
  * updates in between (the end time is kept in RTC memory; a power cut
  * ends it). 0 ends it now. For nights with the board on the bench. */

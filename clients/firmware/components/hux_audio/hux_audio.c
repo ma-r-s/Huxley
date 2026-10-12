@@ -149,6 +149,19 @@ static uint32_t s_spk_push_max_wait_ms = 0; /* WS task only; reported by the hea
 static _Atomic uint32_t s_spk_clear_req = 0;
 static _Atomic uint32_t s_spk_clear_done = 0;
 #define SPK_GAP_MAX_CHUNKS 50  /* 1 s: a silence shorter than this mid-reply is a dropout */
+/* Rebuffering (F-0022): after the ring runs dry mid-reply, play silence
+ * until this much is buffered (or the reply ends, or SPK_REBUFFER_MAX_MS),
+ * as streaming players do. Measured with bench.py --wifi --steps slowdown:
+ * the downlink at 40% of real time for 8 s gave 25 dropouts before. */
+#define SPK_REBUFFER_MS     1000
+#define SPK_REBUFFER_BYTES  (SPK_REBUFFER_MS * 48)  /* 24 kHz mono PCM16 */
+#define SPK_REBUFFER_MAX_MS 4000
+
+static _Atomic bool s_stream_active = false;
+
+void hux_audio_set_stream_active(bool active) {
+    atomic_store_explicit(&s_stream_active, active, memory_order_release);
+}
 #define SPK_CLEAR_WAIT_MS 100  /* spk_task services a request within one chunk (~20 ms) */
 
 /* Local tones: the "can't reach the server" cue (hux_app) and the bench
@@ -437,6 +450,8 @@ static void spk_task(void *unused) {
     uint32_t silent_run = 0;
     uint32_t underruns = 0;
     bool had_audio = false;
+    bool rebuffering = false;
+    uint32_t rebuffer_start_ms = 0;
     uint32_t write_errs = 0;
 
     for (;;) {
@@ -470,8 +485,23 @@ static void spk_task(void *unused) {
                 ESP_LOGI(TAG, "spk.discard done");
             }
         } else {
-            got_bytes = xStreamBufferReceive(s_spk_ring, mono16, sizeof(mono16),
-                                             tone_due ? 0 : pdMS_TO_TICKS(SPK_CHUNK_MS));
+            if (rebuffering) {
+                size_t avail = xStreamBufferBytesAvailable(s_spk_ring);
+                bool active = atomic_load_explicit(&s_stream_active, memory_order_acquire);
+                uint32_t waited = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS) - rebuffer_start_ms;
+                if (avail >= SPK_REBUFFER_BYTES || !active || waited >= SPK_REBUFFER_MAX_MS) {
+                    rebuffering = false;
+                    underruns++;
+                    ESP_LOGW(TAG, "spk.underrun silent_ms=%u count=%u rebuffered ring_ms=%u why=%s",
+                             (unsigned)waited, (unsigned)underruns, (unsigned)(avail / 48),
+                             avail >= SPK_REBUFFER_BYTES ? "buffered" : !active ? "reply_end" : "max_wait");
+                    silent_run = 0; /* counted here, not again when audio resumes */
+                }
+            }
+            if (!rebuffering) {
+                got_bytes = xStreamBufferReceive(s_spk_ring, mono16, sizeof(mono16),
+                                                 tone_due ? 0 : pdMS_TO_TICKS(SPK_CHUNK_MS));
+            }
         }
         uint32_t req = atomic_load_explicit(&s_spk_clear_req, memory_order_acquire);
         if (req != atomic_load_explicit(&s_spk_clear_done, memory_order_relaxed)) {
@@ -486,6 +516,7 @@ static void spk_task(void *unused) {
             xQueueReset(s_tone_q);
             tone_left = 0;
             had_audio = false; /* what plays next is a new reply, not a resumed one */
+            rebuffering = false;
             atomic_store_explicit(&s_spk_clear_done, req, memory_order_release);
             ESP_LOGI(TAG, "spk.cleared dropped_bytes=%u tones=%u", (unsigned)stale, tones);
         }
@@ -531,6 +562,12 @@ static void spk_task(void *unused) {
             memset(stereo32, 0, sizeof(stereo32));
             got_samples = SPK_CHUNK_SAMPLES;
             silence_chunks++;
+            if (!rebuffering && had_audio && silent_run == 0 &&
+                atomic_load_explicit(&s_stream_active, memory_order_acquire)) {
+                /* Ran dry mid-reply: wait for a cushion before playing on. */
+                rebuffering = true;
+                rebuffer_start_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+            }
             silent_run++;
         } else {
             if (had_audio && silent_run > 0 && silent_run <= SPK_GAP_MAX_CHUNKS) {

@@ -101,6 +101,7 @@ void hux_console_run(char *line) {
         if (s < 1 || s > 600) {
             s = 10;
         }
+        vTaskDelay(pdMS_TO_TICKS(300)); /* let the developer door's "ok" out first */
         esp_err_t err = esp_wifi_stop();
         if (s_wifi_back == NULL) {
             const esp_timer_create_args_t args = {.callback = wifi_back_on, .name = "wifi_back"};

@@ -143,6 +143,12 @@ static bool parse_log_line(const char *s, hux_log_entry_t *out) {
         end++;
     }
     size_t line_len = (size_t)(end - s);
+    if (line_len == 0) {
+        /* The Wi-Fi driver writes "I (123) wifi:" and its text in two
+         * calls; the text has no header to parse. An empty line says
+         * nothing, so it isn't streamed (about 30 per boot). */
+        return false;
+    }
     if (line_len >= sizeof(out->line)) {
         line_len = sizeof(out->line) - 1;
     }

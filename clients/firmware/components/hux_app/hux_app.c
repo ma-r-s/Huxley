@@ -152,6 +152,12 @@ static uint32_t s_tx_last_stats_tick = 0;
 /* Loudest mic sample this press (absolute). Near 0 = the mic heard
  * nothing; near 32767 = clipping. Written by mic_sink, read at release. */
 static uint32_t s_mic_peak = 0;
+/* Samples at full scale (clipped) and the sum of squares, for this
+ * press: a peak of 0 dBFS alone can't tell one click from a clipped
+ * question (F-0022 audit: 76 of 80 presses peaked at 0 dBFS). */
+static uint32_t s_mic_clipped = 0;
+static uint64_t s_mic_sumsq = 0; /* integer: the S3 has no double FPU */
+static uint32_t s_mic_samples = 0;
 
 /* Who this device is, sent as `client_event: device` on every connect
  * (the PWA sends the same event) so the server log says which firmware is
@@ -167,7 +173,12 @@ static void mic_sink(const int16_t *pcm, size_t samples) {
         if (a > s_mic_peak) {
             s_mic_peak = a;
         }
+        if (a >= 32767) {
+            s_mic_clipped++;
+        }
+        s_mic_sumsq += (uint64_t)((int32_t)pcm[i] * (int32_t)pcm[i]);
     }
+    s_mic_samples += (uint32_t)samples;
     audio_frame_t frame;
     frame.kind = UPLINK_AUDIO;
     memcpy(frame.pcm, pcm, samples * sizeof(int16_t));
@@ -338,6 +349,9 @@ static void enter_ptt(void) {
     s_tx_failed = 0;
     s_tx_last_stats_tick = 0;
     s_mic_peak = 0;
+    s_mic_clipped = 0;
+    s_mic_sumsq = 0;
+    s_mic_samples = 0;
 
     /* Barge-in: drain any buffered model speech immediately so the
      * user hears their own input, not the previous reply finishing
@@ -383,9 +397,13 @@ static void leave_ptt(void) {
      * trail enq by the frames still in flight (mic.tx.done has the
      * totals, when ptt_stop goes out behind them). */
     int peak_dbfs = s_mic_peak == 0 ? -96 : (int)lroundf(20.0f * log10f((float)s_mic_peak / 32768.0f));
-    ESP_LOGI(TAG, "app.ptt.final_stats enq=%u enq_drop=%u tx_ok=%u tx_fail=%u peak=%u peak_dbfs=%d",
+    double ms = s_mic_samples > 0 ? s_mic_sumsq / (double)s_mic_samples : 0.0;
+    int rms_dbfs = ms <= 0.0 ? -96 : (int)lround(10.0 * log10(ms / (32768.0 * 32768.0)));
+    ESP_LOGI(TAG, "app.ptt.final_stats enq=%u enq_drop=%u tx_ok=%u tx_fail=%u peak=%u peak_dbfs=%d "
+                  "rms_dbfs=%d clipped=%u",
              (unsigned)s_mic_enqueued, (unsigned)s_mic_enqueue_dropped,
-             (unsigned)s_tx_sent, (unsigned)s_tx_failed, (unsigned)s_mic_peak, peak_dbfs);
+             (unsigned)s_tx_sent, (unsigned)s_tx_failed, (unsigned)s_mic_peak, peak_dbfs, rms_dbfs,
+             (unsigned)s_mic_clipped);
     uplink_control(UPLINK_PTT_STOP);
 }
 
@@ -433,6 +451,7 @@ static void handle_ws_message(hux_app_ws_message_t *msg) {
         case HUX_MSG_MODEL_SPEAKING:
             if (parsed.as.model_speaking.known && parsed.as.model_speaking.value != s_model_speaking) {
                 s_model_speaking = parsed.as.model_speaking.value;
+                hux_audio_set_stream_active(s_model_speaking);
                 ESP_LOGI(TAG, "ws.rx.model_speaking %s", s_model_speaking ? "true" : "false");
                 if (!s_model_speaking) {
                     /* It ended before our press reached it: no audio_clear. */
@@ -507,6 +526,7 @@ static void dispatch(hux_app_event_t *ev) {
             s_mic_continuous = false;
             s_server_state = HUX_SERVER_STATE_UNKNOWN;
             s_model_speaking = false;
+            hux_audio_set_stream_active(false);
             hux_audio_spk_unhold("ws_disconnected");
             mic_update("ws_disconnected");
             /* Preserve WIFI state — if wifi is still up, we go to

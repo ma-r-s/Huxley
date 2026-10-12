@@ -364,9 +364,32 @@ and `ptt_stop` go through that one queue in order: `ptt_stop` used to
 leave from the app task and overtake frames still queued, so a backlog
 cut the end off the question. `mic.tx.done` logs when `ptt_stop` really
 goes out, with the press's totals.
-**Next**: run `stall` on the build before the fix and watch it fail,
-then on the fix; run `slowdown` to put numbers on the music gaps before
-changing playback.
+**Results** (2026-10-12 night, case closed, amp off, over Wi-Fi):
+- `stall` (uplink stopped 3 s, 1 s into a 5 s question). Before the fix
+  (856c5385): FAIL, `ws.send.incomplete requested=1306 sent=0`, a
+  reconnect, the question never heard (the field failure, reproduced).
+  After (83e58a54): PASS, 0 reconnects, backlog peaked at 86 frames and
+  drained, 287/287 frames sent, `ptt_stop` after the last, the question
+  heard word for word.
+- First try of `stall` through Toxiproxy passed on the broken build: on
+  macOS (no root) its sockets autotune to megabytes, the Mac swallowed
+  ~250 KB and the board never felt the stall. `bench.py` now has its own
+  proxy (LinkProxy) with fixed 8 KB socket buffers.
+- `slowdown` (downlink at 32 KB/s, ~40% of real time, for 8 s, radio):
+  the server sent on time (1100 ms per ~1050 ms window), the board got
+  400-500 ms per second: the network, measured. 25 dropouts (3.4 s of
+  silence). With rebuffering (after a dropout mid-reply, wait for 1 s of
+  audio before playing on): 2 pauses (2.2 s, 1.5 s; 3.7 s total).
+- Full `bench.py --wifi --reset`: boot, selftest, turn, volume, bargein,
+  health pass; offline and evict failed on the bench's side (a `wifi
+  off` cut its own HTTP reply; eviction lines arrive only after the
+  reconnect): both fixed in the bench/console.
+- Also found: a silent press transcribes as "Subtitulos realizados por la
+  comunidad de Amara.org" (Whisper on silence) and gets answered (server,
+  fixed separately); board log levels arrive as `info` (the server's
+  structlog overwrites the client's `level`; server fix); ~30 empty
+  `wifi:` lines per boot (the Wi-Fi blob logs header and text apart):
+  no longer streamed.
 
 ### F-0023: Go back by itself after repeated crashes past the confirm · queued
 

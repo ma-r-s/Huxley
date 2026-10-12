@@ -213,13 +213,22 @@ Server `audio_ms` near `window_ms` while the board's falls short, with
 `sock_unsent` (bytes the kernel still holds for that socket) or
 `send_wait_ms` climbing: the network between them is slow. The server's
 own `audio_ms` short: the source (a skill's stream, the model) was late.
-`spk.underrun silent_ms=` is each gap the speaker played as silence.
+`spk.underrun silent_ms=` is each gap the speaker played as silence;
+with `rebuffered` it was a deliberate pause: the ring ran dry mid-reply,
+so the speaker waited for 1 s of audio (`why=buffered`), the end of the
+reply (`reply_end`) or 4 s (`max_wait`) before playing on, instead of
+stuttering. In the test rig the server's backlog sits in the Mac's
+loopback, so `sock_unsent` stays flat there; in the field (board on
+Wi-Fi) the backlog is in the server's socket and `sock_unsent` grows.
 
 The uplink side of a press: `mic.tx.stats` every 500 ms (`q_waiting` is
 the backlog in the 10 s queue), `app.ptt.final_stats` at the release,
 and `mic.tx.done` when `ptt_stop` actually goes out behind the last
 frame, with the press's totals (`enq` = frames captured, `tx_ok` =
-sent, `enq_drop` = lost to a full queue).
+sent, `enq_drop` = lost to a full queue). `final_stats` also has
+`rms_dbfs` (loudness of the whole press) and `clipped` (samples at full
+scale): a peak of 0 dBFS alone can't tell one click from a clipped
+question.
 
 To reproduce instead of waiting for bad Wi-Fi: `python3 tools/bench.py
 --wifi --steps stall,slowdown` routes the board through Toxiproxy (the
