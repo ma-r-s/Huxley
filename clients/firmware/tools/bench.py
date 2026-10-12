@@ -40,7 +40,18 @@ import sys
 import threading
 import time
 
-STEPS = ["boot", "quiet", "selftest", "turn", "volume", "bargein", "offline", "evict", "health"]
+STEPS = [
+    "boot",
+    "quiet",
+    "selftest",
+    "turn",
+    "volume",
+    "bargein",
+    "silent",
+    "offline",
+    "evict",
+    "health",
+]
 # Network faults, --wifi only, not in the default list (they route the board
 # through LinkProxy).
 NET_STEPS = ["stall", "slowdown"]
@@ -53,6 +64,7 @@ SERVER_EVENTS = {
     "server.rx.ptt_stop",
     "server.tx.audio_stats",
     "transcript",
+    "coord.press_silent",
 }
 PROXY_PORT = 8775
 
@@ -418,6 +430,28 @@ def main() -> int:
                 and int(held.group(1)) < 2000
             )
             result("bargein", ok, off or "no hold / no audio_clear")
+        elif step == "silent":
+            # A press with nothing said (the amp is the only thing that
+            # could make noise and the mic hears the room): the server
+            # must not commit it. On silence the transcription
+            # hallucinates ("Subtitulos realizados por la comunidad de
+            # Amara.org") and the model answers that (2026-10-12).
+            time.sleep(2)
+            m2 = b.mark()
+            b.send("talk")
+            time.sleep(1.2)
+            b.send("release")
+            stats = b.expect(r"app\.ptt\.final_stats", 5, m2)
+            time.sleep(4)
+            heard = b.grep(r"\[server\] transcript role=user", m2)
+            answered = b.grep(r"ws\.rx\.model_speaking true", m2)
+            gated = b.grep(r"\[server\] coord\.press_silent", m2)
+            result(
+                "silent",
+                not heard and not answered,
+                f"gated={bool(gated)} transcript={heard[0][:80] if heard else None} "
+                f"{re.split('final_stats ', stats or '')[-1]}",
+            )
         elif step == "offline" and args.wifi:
             # Over Wi-Fi nothing can reach it while it's off: it comes back
             # by itself (`wifi off 8`), and the lines it logged while
