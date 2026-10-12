@@ -483,7 +483,12 @@ concept: client_event already carries device telemetry to skills.
 **Probe result** (c9a022d2 on the walkie, 2026-10-12): GPIO1 floats at
 2632 mV (spread 725) and drops to 0 pulled down; GPIO6 2594 mV (spread
 351), pulled 3 mV. Both `not_wired`: a wired divider would read ~1.3 V
-and hold ~0.5 V. No software path gives a level (the charger's STAT only
+and hold ~0.5 V. Mario: the original firmware showed a level with
+nothing soldered. Waveshare's Arduino demo for this board reads GPIO8
+(x3); its factory image and xiaozhi's board code read nothing. Probe
+widened to every free ADC1 pin (1f1d57c3): GPIO 1-6, 8, 9 all float
+(2373-3030 mV, spread 192-748) and fall to 0-38 mV pulled down. No pin
+carries the cell on this board. No software path gives a level (the charger's STAT only
 drives the LED; the 3.3 V rail is regulated until the cell is empty).
 **Blocked on Mario**: open the case and either bridge R78's pads 1 and 3
 (BAT_ADC to GPIO6, the board's own 1 % divider), or wire 200K from the
