@@ -5608,7 +5608,7 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 
 ## T1.44: Before the first client: proactive turns and the provider connect
 
-**Status**: `queued` (2026-10-12, found by the critic of persona at boot, T1.43 W1) · **Effort**: M
+**Status**: `in_progress` (2026-10-12, branch `t144-inject-waits`; found by the critic of persona at boot, T1.43 W1) · **Effort**: M
 
 **Problem.** With `HUXLEY_PERSONA_AT_BOOT=true` the persona runs before the walkie reconnects, which surfaces two gaps that lazy boot hid:
 
@@ -5620,3 +5620,100 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 **Solution sketch.** (1) A framework mechanism, not a reminders tweak: proactive turns wait while no client is present and are delivered when one is back, with the skill keeping the say on staleness (a deadline the coordinator honours, or a "nobody heard it" signal so the skill re-fires). Needs design and a critic. (2) Run the existing reconnect loop when a connect fails at boot or on `wake_word` (its no-signal beep goes nowhere without a client), or retry from `Runtime._boot_persona`.
 
 **Validation.** Code citations above; the critic's scratch probe of 2026-10-12 (reminder fired at setup with no client connected).
+
+### Design (Gate 2)
+
+Walkie numbers from the firmware owner (measured): a server restart reconnects in about 3 s, a long outage backs off to 45-60 s between tries (a new IP retries fast), and the firmware reboots after 60 min without a server. Most of the time the walkie isn't connected it is reconnecting. So a few minutes of waiting covers a restart or a Wi-Fi blip; anything longer means the walkie is really away, and each skill's own expiry decides. The live server's `/health` says `ok: false` for about 3.5 s after a start, until the walkie's hello: normal, not a fault.
+
+**The rule.** An injected turn is spoken only when someone can hear it. It waits while there is no client, no voice session, a turn in progress, a live claim (except PREEMPT), or an earlier injected turn still playing on the client. When the blocker clears it is delivered, in order, unless its expiry passed first. Delivered means the client played it to the end and was still connected afterwards (or the user pressed into it). A turn cut off by a disconnect, a replaced connection or a session drop goes back to the head of the queue and is said whole later.
+
+**Skill surface (SDK, backward compatible).** One optional parameter and one return value:
+
+- `inject_turn(prompt, *, dedup_key=None, priority=NORMAL, expires_after: timedelta | None = None) -> None`
+- `inject_turn_and_wait(prompt, *, dedup_key=None, priority=NORMAL, expires_after=None) -> InjectOutcome` (gains `priority` and `expires_after`; returned None before)
+- `InjectOutcome`: `DELIVERED`, `EXPIRED` (still waiting when `expires_after` ran out), `DROPPED` (replaced by a same-key turn, a same-key turn already being said, or the persona shut down), and `QUEUED`, only for a call from inside a tool handler of the turn in progress: waiting there would deadlock (the turn can't end until the handler returns), so it queues and returns at once, as the old fallback did.
+
+`expires_after` counts from the call and only applies while the turn waits; a turn being said is never cut for it, and a turn cut off after its deadline is EXPIRED, not said again. `None` (the default) waits until delivered or the process ends: today's queue never expired, and the product rule leaves staleness to the skill. `inject_turn_and_wait` now waits for the outcome in every case (busy, no session, no client) instead of falling back to a plain enqueue; its 10 s session wait goes away.
+
+**Where it waits.** `TurnCoordinator._injected_queue`, as today. `_InjectedRequest` gains `expires_at` (monotonic), `queued_at`, an outcome future and an expiry timer that resolves EXPIRED at the deadline (so a waiting skill learns at once, not when the client returns).
+
+**How presence gates it.** The coordinator keeps `_client_present`, set at once by `on_client_presence` (content keeps its 5 s grace through `_client_absent`; a turn has no stop/start cost to ride out). Its first value is `AudioServer.has_client`, so a persona started at boot begins absent. The server also reports a client replaced by a new connection as gone (presence False, then True after the new handshake): a Wi-Fi drop the server hasn't noticed yet ends with the walkie reconnecting and evicting the dead socket, and what was being said to that socket was lost.
+
+**When it drains.** At turn end, as today, plus `_drain_waiting(trigger)` when the client comes back, the session connects (exists), the previous turn's playback is confirmed, or a claim ends (scheduled with `create_task`: a claim's end runs inside the FocusManager). Drain: idle, session up, client present, nothing unconfirmed: fire the head; with a live claim, only the first PREEMPT. On a client's return the drain runs before the no-client content hold is released, so the narration's DIALOG parks the content first (the order `on_session_connected` already uses).
+
+**Confirming delivery.** When an injected turn ends, its request becomes `_unconfirmed`. A task waits until the client's playhead has passed (`_client_playhead`, the estimate content holds already use, capped at 120 s), then pings the client (a WebSocket ping: the pong proves it received everything sent before it; websockets resolves a pong for any earlier ping and fails pending pings with `ConnectionClosed` when the socket closes, and its keepalive closes a dead socket in 20-40 s). Pong: DELIVERED. Socket closed, client gone or replaced (a presence epoch that changed): back to the head of the queue. A pong that never comes within 60 s (the socket is alive by keepalive, yet unanswered) counts as delivered with a warning, since saying it again would repeat it. While a turn is unconfirmed the next waiting turn doesn't fire: deliveries are serialized, so a drop or a press during turn A can't swallow turn B queued behind it in the client's buffer. A press while unconfirmed confirms it (the user is there). `inject_turn_and_wait` returns at confirmation, which replaces its old drain sleep (`_wait_for_client_playback_drain` and its byte counters go).
+
+**A disconnect mid-delivery.** Client gone while an injected turn is being said: cancel the response, release DIALOG, end the turn (the `current_turn` setter disarms the WaitCue), put the request back at the head. Session drop mid-turn: the same; `on_session_disconnected` aborted the turn and lost the request until now (the planned 50-min refresh during a reminder lost it). A press interrupting an injected turn stays DELIVERED: the user heard it start and chose to talk.
+
+**Order and dedup.** FIFO by first arrival; a turn put back goes to the head. A queued turn with the same `dedup_key` is replaced in place, keeping its place (a reminder's retry stays ahead of a later message), and the replaced one resolves DROPPED. A same key being said or awaiting confirmation drops the newcomer (today's rule; the confirmation window counts as being said). The priority branches at turn end are unchanged.
+
+**The earcon.** None exists today: proactive earcons were deferred at T1.2 (sound sourcing) and never shipped, so a turn delivered late sounds like one delivered on time: the model's voice. Not added here: which sound is a taste call, so it is a follow-up, not a T1.44 dependency.
+
+**Persistence.** Memory only, unchanged: a restart loses waiting turns. Skills that persist re-fire from their own storage at setup. After this change that holds for every reminder kind: non-medication rows stay `fired` until DELIVERED, and the boot reconcile re-fires a `fired` non-medication row inside its late window instead of closing it as acked (a crash in the second between delivery and the save could repeat it; generic and appointment only). Medication already resumed its retries from `fired`. Timers: no (the `fired_at` guard against double narration skips a fired timer on restore; timers last at most an hour; documented). Telegram: the unread backfill on connect re-announces unread messages (6 h).
+
+**Skills.**
+
+- reminders: each fire goes through `inject_turn_and_wait` in its own supervised task (the scheduler loop must not block), with `dedup_key=f"reminder:{id}"` (a retry replaces a waiting fire), `priority=BLOCK_BEHIND_COMMS` and `expires_after = due + late_window[kind] - now`, `due` being this fire's own due time (a retry's too, as the boot reconcile measures it). DELIVERED: non-medication becomes `acked`. EXPIRED: non-medication becomes `missed` (prompt_context brings it up in the next conversation: the audible trail); medication is logged and its retries go on (its last fire already marks it missed). DROPPED: nothing (a retry took over, or shutdown).
+- telegram: message bursts and the unread backfill wait with no expiry ("while unread": the skill never marks messages read, so an announcement stays worth saying until heard) and bursts drop their `dedup_key` (while waiting, a second burst under the same key would replace the first one unheard; the InboxBuffer already prevents double flushes). The inbound call announcement waits at most 30 s (the call is already accepted and the caller hears silence); anything but DELIVERED hangs up and queues a "missed call" turn with no expiry.
+- timers: `expires_after` = the skill's stale threshold (1 h default, the tolerance it already applies to a timer delayed by a restart), `dedup_key=f"timer:{id}"` so the coordinator's log lines name the timer. No outcome handling needed.
+
+**Logs.** `coord.inject_turn_queued` gains reasons `no_client` and `awaiting_playback` and `expires_in_s`; new `coord.inject_turn_expired` (dedup_key, priority, waited_s), `coord.inject_turn_cut_off` (dedup_key, reason `client_left`/`session_down`, requeued), `coord.inject_turn_delivered` (dedup_key, waited_s, by `pong`/`press`/`pong_timeout`), `coord.inject_turn_undelivered` (dedup_key, reason, requeued); `coord.inject_turn_dequeued` gains `trigger`; `coord.inject_turn_dropped` gains reasons `replaced` and `shutdown`; `coord.inject_and_wait_in_tool` (warning, the QUEUED guard). Server: `server.client_ping` (ok, rtt_ms or reason). App: `app.reconnect_scheduled` (trigger `connect_failed`/`session_end`) and `app.reconnect_already_running`.
+
+**WaitCue (T1.41).** Injected turns never arm it: arming stays limited to `TurnSource.USER` at commit and tool call. Every disarm point stays; the new cut-off path ends the turn through the `current_turn` setter, which disarms. `test_coordinator_wait_cue.py` runs unchanged.
+
+**Part 2: the failed connect.** `_enter_connecting`'s failure path schedules `_auto_reconnect` (the loop in `huxley/reconnect.py`) unless shutting down or a loop already runs (an attempt from inside the loop fails into the same path and finds itself running). A walkie's `wake_word` still triggers an immediate attempt; the loop stops once the state leaves IDLE. Its no-signal beep goes nowhere without a client (dropped and counted, as today).
+
+**Wire.** No protocol message changes. The ping is an RFC 6455 control frame both clients already answer (browsers by spec; the walkie's esp_websocket_client answers the server's keepalive pings today).
+
+**Revised after the critic (these override the paragraphs above where they differ):**
+
+- **Presence is read live, not cached.** The server owns a listener epoch: a number per connection, reported only once that connection's hello is out (`AudioServer.listener_epoch`, None otherwise). The coordinator reads it whenever it gates, fires or confirms; `on_client_presence` stays as the trigger for cutting off and draining. The confirming ping goes to the epoch the turn was said to (`client_received_all(epoch)`): a pong from a newer connection proves nothing about audio sent to the old one. After a failed confirmation nothing fires again until the epoch changes.
+- **No pong is not delivered.** The whole ping (including the write, which waits on a full send buffer) is bounded at 15 s (the walkie's own send timeout is 5 s); on timeout the server aborts the connection, which reports the client gone, and the turn goes back to the queue. An eviction's close of the old socket is bounded at 2 s, then aborted.
+- **A press counts as heard only if the turn's audio had started playing** (its first audio's place on the client's playhead) or the turn ran a tool; otherwise it goes back to the head of the queue and follows the user's turn. Only `on_ptt_start` resolves DELIVERED; `interrupt()` (reset, shutdown) puts a live injected turn back instead.
+- **Default expiry: 10 minutes.** `expires_after` defaults to `DEFAULT_INJECT_EXPIRY` (10 min, exported by the SDK); `None` waits until heard. Ten minutes covers a 3 s restart and the walkie's 45-60 s backoff many times over (the firmware owner: "a wait of a few minutes covers a restart or a Wi-Fi blip"), and a notice no skill thought about (a battery warning, a Spotify notice) is not read out hours later. Reminders, timers and Telegram pass their own.
+- **No await between the gate and the turn.** `_fire` re-checks every condition synchronously just before creating the turn (a press during an awaited log line used to be overwritten); a failed check puts the request back at the head. The queue also drains after a cut-off and after a failed confirmation (guarded by the epoch rule).
+- **Said again, with a note.** A re-delivered turn carries a persona-translatable note (`inject_repeat_note`: the user did not hear it, say it again in full), so the model doesn't answer "as I said".
+- **Cancelling `inject_turn_and_wait` withdraws a turn still waiting** (DROPPED, `coord.inject_turn_withdrawn`); one already being said finishes.
+- **The deadlock guard is by task**, not a context flag copied into every task a handler spawns: `inject_turn_and_wait` returns QUEUED only when awaited in the very task running a tool handler, or a skill's `setup()` / `reconfigure()` (waiting in setup at boot would hold the swap lock the walkie's connection waits on).
+- **Medication retries count from the hearing.** Found while checking the retry chain: the scheduler only fires `pending` rows and a medication fire leaves the row `fired`, so the 5/10 min retries never fired in a running process (only after a restart's reconcile). Now a fire waits for its outcome: DELIVERED schedules the next retry from that moment (`pending`), EXPIRED marks the dose missed (a retry would be past its window too), DROPPED leaves it `fired` for the next boot. No fire stacks on a waiting one.
+- **Telegram:** a burst's flush awaits its outcome, so while one announcement for a sender waits, that sender's later messages gather in the inbox buffer and follow as one more announcement when it is heard (at most two per sender, no dedup key needed). The call announcement and the missed-call turn are `BLOCK_BEHIND_COMMS` (with NORMAL a stream started by the turn in progress would win).
+- **Timers:** expiry = the timer's own duration, at least 10 min, at most the stale threshold (1 h).
+- **`/health`** gains `injects_waiting` and `oldest_inject_wait_s`, for huxley-watch.
+- `close()` counts an unconfirmed turn whose playback had ended as delivered (a reload must not repeat it), anything else DROPPED. The client playhead resets when a client leaves.
+
+### Critic notes (Gate 2)
+
+One fresh critic, 2026-10-12, read the design, the code and the brief. Findings and responses:
+
+- **B1, "no pong in 60 s = delivered" is backwards; `ping()` itself can hang** on a full send buffer (websockets waits on `drain()` with no limit, so the keepalive's timeout never starts); eviction's close can hang the reconnecting walkie's handshake. _Taken_: bounded ping, timeout = abort + not delivered; eviction close bounded then aborted. `TCP_USER_TIMEOUT` and a 10/10 keepalive: filed as a follow-up (transport hardening that also stops content playing into a dead socket; turns are covered by the bounded ping).
+- **B2, a cached presence flag goes stale** (notifications reach only `current_app`; an app started during boot, a swap or a reload misses them), which loops paid responses into no client; `has_client` is true before the hello; the ping went to whichever connection is current. _Taken_: live listener epoch from the server, hello required, confirm by epoch, no refire on the same epoch after a failure.
+- **B3, a press before the turn's audio started counted as heard** (a drained turn queues behind the previous answer, and the press empties the buffer); `interrupt()` also runs on reset and shutdown. _Taken_ as above.
+- **Level-triggered drain / single dispatcher task.** _Partly_: the race it points at (an await between the gate and the turn) is fixed by the synchronous re-check in `_fire`, and the missing trigger (a cut-off finishing after the client came back) by draining after every requeue. A dispatcher task was not added: one more task to own and cancel, for no case the re-check misses.
+- **The default of waiting forever is unsafe for untouched skills.** _Taken_: 10-minute default, `None` for "until heard". A queue depth cap was not added: every first-party producer is bounded (reminders by rows, Telegram at two per sender, timers by timers); depth is logged and in `/health`.
+- **Re-delivery into the same conversation.** _Partly_: the repeat note instead of deleting conversation items (a provider API surface for a wording problem). No cap on attempts: after a failure nothing fires until a new connection, so attempts are bounded by the walkie's reconnects and the expiry. Waiting for a "stable" connection (first message after hello) was not added: the PWA may send nothing, and the epoch rule already stops tight loops.
+- **The deadlock guard leaks** through copied context; setup and client-event handlers can deadlock too; raise instead of QUEUED. _Partly_: guard by task identity, extended to setup and reconfigure. QUEUED kept: the old fallback returned at once there, so raising would break a caller the SDK documented as merely wrong. Client-event handlers run as gathered tasks the guard can't see: documented (await nothing long there; the system skill already spawns its own task).
+- **Cancel should withdraw.** _Taken._
+- **Medication retries count fires, not hearings.** _Taken_, and the runtime retry bug fixed with it.
+- **Telegram**: keep the burst key and merge (taken in another form: the awaited flush gathers later messages into one follow-up announcement); "while unread" isn't a real expiry and backfill repeats heard messages (true; marking messages read on DELIVERED would show read ticks to the family: **Mario's call**, not done); call and missed-call priorities (taken).
+- **Which client is the listener**: Mario's PWA evicting the walkie would hear and confirm grandpa's reminder. `server.client_ping` logs the connection id and its shell. Counting only the firmware client as the listener for a device persona is **Mario's call**, not done.
+- **`/health` for huxley-watch.** _Taken._
+- Nits taken: playhead reset on presence loss; presence false at eviction before the close; timers' expiry by duration; `close()` by playhead; the SDK no-op returns DELIVERED. Not taken: the last medication fire being marked missed before it is said (predates T1.44, unchanged).
+
+### Definition of Done (locked 2026-10-12)
+
+- An injected turn with no client connected is not spoken and is spoken once a client connects (regression test that fails on the old code).
+- A waiting turn whose `expires_after` passes resolves EXPIRED and is never said; the 10-minute default applies when none is given; `None` waits until heard.
+- Several waiting turns are said in order, one at a time (the next after the previous is confirmed).
+- `dedup_key` while waiting: replaced in place (the old one DROPPED); a same key being said or awaiting confirmation drops the newcomer.
+- A client leaving or replaced mid-turn, or before playback is confirmed, re-delivers the turn whole (with the repeat note); an unanswered or timed-out ping does too; a session drop mid-turn re-delivers; a press into a playing turn counts as heard, a press before its audio started re-delivers it after the user's turn.
+- Presence is read live from the server (hello'd connection, epoch); a not-yet-current app can't loop turns into no client.
+- The WaitCue never arms for injects (`test_coordinator_wait_cue.py` green, plus tests through the new paths).
+- A live claim when the client returns: NORMAL and BLOCK_BEHIND_COMMS wait for the claim's end, PREEMPT goes through, the claim's end drains.
+- Cancelling `inject_turn_and_wait` withdraws a waiting turn; from a tool handler or setup it returns QUEUED without deadlocking.
+- Part 2: a failed connect at boot starts the reconnect loop, which connects on a later attempt; no second loop while one runs.
+- Reminders: late-window expiry per fire; non-medication acked on DELIVERED, missed on EXPIRED, re-fired by boot within its window if still `fired`; medication retries scheduled from DELIVERED and actually firing at runtime, missed on EXPIRED; ack, cancel and snooze withdraw a waiting fire.
+- Telegram: bursts and backfill wait until heard, a sender's later messages follow as one announcement; the call announcement waits 30 s (BLOCK_BEHIND_COMMS), otherwise hangs up and queues a missed-call turn.
+- Timers: expiry = duration, at least 10 min, at most the stale threshold.
+- SDK backward compatible (old calls type-check; nothing bumped on PyPI). `/health` additive fields only. No protocol message changes.
+- ruff, ruff format --check, mypy --strict, the touched packages' tests and the full runtime suite green.
+- Docs in the same commit set: turns.md, concepts.md, skills/README.md, observability.md, skills/reminders.md, skills/telegram.md, skills/timers.md, decisions.md (ADR), triage (this entry, D7).
