@@ -837,6 +837,14 @@ class TestTeardown:
         raw = await storage.get_setting("reminder:1")
         assert raw is not None
 
+    async def test_teardown_without_setup_is_a_noop(self) -> None:
+        """A persona whose start failed tears down every skill, including
+        ones whose setup never ran (2026-10-12 restart incident: an
+        `assert self._logger` here added a second error to the log)."""
+        skill = RemindersSkill()
+        await skill.teardown()
+        assert skill._scheduler_handle is None
+
 
 class TestDefaultLateWindows:
     def test_medication_window_tighter_than_appointment(self) -> None:
