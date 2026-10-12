@@ -461,7 +461,7 @@ fallback with today's server (turn, silent, health PASS).
 **Next**: the server side (in progress), then the bench on Opus (turn,
 stall, slowdown, resume, hearing) and `dev.py link` over real use.
 
-### F-0025: Say how much battery is left · blocked 2026-10-12 (needs the case opened)
+### F-0025: Say how much battery is left · deferred 2026-10-12 (Mario: not now; needs the case opened)
 
 **Ask** (Mario): "a way so the device can tell me how much battery is
 left." Nothing reads the battery today.
@@ -499,6 +499,10 @@ drives the LED; the 3.3 V rail is regulated until the cell is empty).
 cell's + to header IO6 and 100K from IO6 to GND. Either lands on GPIO6;
 `battery` then says `gpio=6 ... verdict=wired`, and the design above
 gets built.
+**Where it stopped**: R78 and R53 are 0603 pads on the board's bottom
+(the BAT / SPK side), ~2 mm apart (Waveshare's STEP: R78 x 19.4-21.0,
+y 31.7-32.5; R53 y 33.6-34.4, board coordinates). Next: map them onto
+Waveshare's bottom photo for Mario, or take option B (no map needed).
 
 Note on IDs: F-0011 to F-0013 were used in code comments and commit
 messages (boot buzz, decode scratch, Wi-Fi power save) but their
