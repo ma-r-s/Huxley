@@ -842,19 +842,17 @@ skills:
   # PEER_ID_INVALID.
   telegram:
     # Persona ships for a Colombian user. When add_contact receives a
-    # phone with no international prefix (e.g. "300 000 00 76"), the
+    # phone with no international prefix (e.g. "310 000 00 73"), the
     # skill prepends "+57" instead of just "+". Surfaced in the
     # add_contact tool description so the LLM reads the full +57...
     # number back for confirmation. Override in the conversation if
     # the user asks to save an international contact ("mi amiga en
     # España" → +34...).
     default_country_code: "+57"
-    contacts:
-      # Target phone from spikes/ (Mario's personal Telegram) — lets us
-      # end-to-end test the skill by dialing Mario from the userbot.
-      # Replace with real family phones for production. Names are
-      # lowercased at load.
-      mario: "+573000000078"
+    # Real contacts live in data/contacts.json (gitignored: this repo is
+    # public), which the skill merges over this map; add_contact writes
+    # there too. Names are lowercased at load.
+    contacts: {}
     inbound:
       enabled: true
       auto_answer: contacts_only

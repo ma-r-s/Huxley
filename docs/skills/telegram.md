@@ -61,7 +61,7 @@ The `skills.telegram:` block in `persona.yaml`:
 skills:
   telegram:
     contacts:
-      hija: "+57 300 000 0078"
+      hija: "+57 300 000 0081"
       hijo: "+573001234567"
     inbound:
       enabled: true # listens for incoming calls AND messages
@@ -71,6 +71,8 @@ skills:
       backfill_hours: 6 # 0 disables; window for unread-on-connect backfill
       backfill_max: 50 # 0 disables; cap on backfill messages per session
 ```
+
+Real contacts go in `contacts.json` in the persona's data dir (`server/personas/<persona>/data/`, gitignored), not in `persona.yaml`: the skill merges the file over this map (the file wins on a name), and `add_contact` writes there. A public persona file holds no real number.
 
 ### Credentials (`api_id`, `api_hash`, `userbot_phone`)
 
