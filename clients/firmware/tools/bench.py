@@ -55,6 +55,22 @@ STEPS = [
 # Network faults, --wifi only, not in the default list (they route the board
 # through LinkProxy).
 NET_STEPS = ["stall", "slowdown"]
+# The requests that failed in real use on 2026-10-12, as clips (tools/
+# clips.py), and the tool call each must produce now: (clip, what was
+# said, tool, regex its args must match or None, regex they must not).
+HEARING = [
+    (7, "Pon musica de Adele", "play_music", r"(?i)adele", r"(?i)sade"),
+    (10, "Pausa", "music_control", r"pause", None),
+    (11, "Sigue con la cancion", "music_control", r"resume", r"next"),
+    (10, "Pausa", "music_control", r"pause", None),
+    (12, "Ponlo", "music_control", r"resume", None),
+    (8, "Pon Weird Fishes de Radiohead", "play_music", r"(?i)weird fishes", None),
+    (9, "Pon Blu Radio", "play_station", r"(?i)blu", None),
+    (5, "Para la radio", "stop_radio", None, None),
+    (13, "Que audiolibros tienes?", "search_audiobooks", r"query': ''|^\{\}$|args=\{\}", None),
+    (14, "Pon el segundo", "play_audiobook", None, None),
+    (10, "Pausa", "audiobook_control", r"pause", None),
+]
 # Server events the Wi-Fi board sees as `[server] <event> k=v ...` lines.
 SERVER_EVENTS = {
     "client_connected",
@@ -65,6 +81,7 @@ SERVER_EVENTS = {
     "server.tx.audio_stats",
     "transcript",
     "coord.press_silent",
+    "session.rx.tool_call",
 }
 PROXY_PORT = 8775
 
@@ -664,6 +681,31 @@ def main() -> int:
                 f"reconnects={len(drops)} gaps={len(gaps)} silent_ms={silent} "
                 f"(downlink {args.slow_kbps} KB/s for {args.slow_s:.0f} s)",
             )
+        elif step == "hearing":
+            # Yesterday's failed requests, spoken by the clips: each must
+            # call the right tool with the right arguments (the server log's
+            # session.rx.tool_call). Needs Spotify up; the amp stays as is.
+            rows, fails_here = [], 0
+            for clip, said, tool, want, avoid in HEARING:
+                m2 = b.mark()
+                b.send(f"say {clip}")
+                call = b.expect(r"\[server\] session\.rx\.tool_call ", 25, m2)
+                name = field("name", call or "")
+                args_txt = (call or "").split("args=", 1)[-1].split(" level=")[0] if call else ""
+                ok = bool(
+                    call
+                    and name == tool
+                    and (want is None or re.search(want, args_txt))
+                    and (avoid is None or not re.search(avoid, args_txt))
+                )
+                fails_here += not ok
+                rows.append(
+                    f"{'ok ' if ok else 'BAD'} {said!r}: {name or 'no tool call'} {args_txt[:60]}"
+                )
+                time.sleep(7)  # its reply / the stream starting
+            for r in rows:
+                print("          " + r)
+            result("hearing", fails_here == 0, f"{len(HEARING) - fails_here}/{len(HEARING)} right")
         elif step == "health":
             b.send("info")
             heap = b.expect(r"info uptime_s=", 4, m)

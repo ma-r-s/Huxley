@@ -13,7 +13,14 @@ import httpx
 import pytest
 import websockets
 
-from huxley_skill_spotify.search import SEARCH_URL, TOKEN_URL, SearchError, SpotifySearch
+from huxley_skill_spotify.search import (
+    SEARCH_URL,
+    TOKEN_URL,
+    SearchError,
+    SpotifySearch,
+    heard_title,
+    title_score,
+)
 from huxley_skill_spotify.soloist import SoloistClient, describe_item
 
 if TYPE_CHECKING:
@@ -339,3 +346,97 @@ class TestSearch:
 
     def test_search_url_is_the_web_api(self) -> None:
         assert SEARCH_URL == "https://api.spotify.com/v1/search"
+
+
+def _rh(name: str, uri: str) -> dict[str, Any]:
+    return {"uri": uri, "name": name, "artists": [_artist("r", "Radiohead")]}
+
+
+class TestHeardTitle:
+    """2026-10-12: "Pon Weird Fishes de Radiohead" reached play_music as
+    "irfixes Radiohead"; Spotify ranked "Let Down" first and Weird Fishes
+    second, and Let Down played."""
+
+    async def test_garbled_title_plays_the_song_it_sounds_like(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        _token(httpx_mock)
+        httpx_mock.add_response(
+            method="GET",
+            json={
+                "tracks": {
+                    "items": [
+                        _rh("Let Down", "spotify:track:ld"),
+                        _rh("Weird Fishes / Arpeggi", "spotify:track:wf"),
+                        _rh("High and Dry", "spotify:track:hd"),
+                    ]
+                }
+            },
+        )
+        search = SpotifySearch("id", "secret", http=httpx.AsyncClient())
+
+        found = await search.candidates("irfixes Radiohead", "track")
+
+        assert [m.title for m in found] == ["Weird Fishes / Arpeggi", "Let Down", "High and Dry"]
+        assert len([r for r in httpx_mock.get_requests() if r.method == "GET"]) == 1
+
+    async def test_title_missing_from_the_top_five_is_found_among_the_artists(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        _token(httpx_mock)
+        httpx_mock.add_response(
+            method="GET",
+            json={"tracks": {"items": [_rh("Let Down", "spotify:track:ld")]}},
+        )
+        httpx_mock.add_response(
+            method="GET",
+            json={
+                "tracks": {
+                    "items": [
+                        _rh("Creep", "spotify:track:cr"),
+                        _rh("Weird Fishes / Arpeggi", "spotify:track:wf"),
+                    ]
+                }
+            },
+        )
+        search = SpotifySearch("id", "secret", http=httpx.AsyncClient())
+
+        found = await search.candidates("nuyer fiches de Radiohead", "track")
+
+        assert found[0].title == "Weird Fishes / Arpeggi"
+        second = [r for r in httpx_mock.get_requests() if r.method == "GET"][1]
+        assert second.url.params["q"] == 'artist:"Radiohead"'
+
+    async def test_a_clear_title_keeps_spotifys_order(self, httpx_mock: HTTPXMock) -> None:
+        _token(httpx_mock)
+        httpx_mock.add_response(
+            method="GET",
+            json={
+                "tracks": {
+                    "items": [
+                        {
+                            "uri": "spotify:track:a",
+                            "name": "Sin Ti",
+                            "artists": [_artist("p", "Los Panchos")],
+                        },
+                        {
+                            "uri": "spotify:track:b",
+                            "name": "Sin Ti",
+                            "artists": [_artist("q", "Other")],
+                        },
+                    ]
+                }
+            },
+        )
+        search = SpotifySearch("id", "secret", http=httpx.AsyncClient())
+
+        found = await search.candidates("sin ti", "track")
+
+        assert [m.uri for m in found] == ["spotify:track:a", "spotify:track:b"]
+        assert len([r for r in httpx_mock.get_requests() if r.method == "GET"]) == 1
+
+    def test_scores(self) -> None:
+        assert heard_title("irfixes Radiohead", "Radiohead") == "irfixes"
+        assert heard_title("Weird Fishes de Radiohead", "Radiohead") == "weird fishes"
+        assert title_score("irfixes", "Weird Fishes / Arpeggi") >= 0.6
+        assert title_score("irfixes", "Let Down") < 0.5

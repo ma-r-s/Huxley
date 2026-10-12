@@ -11,9 +11,11 @@ can't play.
 
 from __future__ import annotations
 
+import re
 import time
 import unicodedata
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from typing import Any
 
 import httpx
@@ -80,6 +82,58 @@ def _distinct(matches: list[Match], limit: int) -> list[Match]:
     return kept
 
 
+# Words that join a title to its artist in a spoken request ("Weird
+# Fishes de Radiohead"), not part of either.
+_JOINERS = {"de", "del", "by", "of", "von", "di", "da"}
+# Re-rank only when the top result's title is clearly not what was heard
+# and another one clearly is (SequenceMatcher ratios, letters only).
+_TITLE_POOR = 0.5
+_TITLE_GOOD = 0.6
+_TITLE_MARGIN = 0.2
+
+
+def _letters(text: str) -> str:
+    return re.sub(r"[^a-z]", "", _fold(text))
+
+
+def heard_title(query: str, artist: str | None) -> str:
+    """The query without the artist's words: what was heard of the title."""
+    drop = set(_fold(artist or "").replace(",", " ").split()) | _JOINERS
+    return " ".join(w for w in _fold(query).split() if w not in drop)
+
+
+def title_score(heard: str, title: str) -> float:
+    """How close what was heard is to a title, by letters, against the
+    whole title and each part of it ("Weird Fishes / Arpeggi")."""
+    h = _letters(heard)
+    if not h:
+        return 0.0
+    parts = [title, *re.split(r"[/(\-]", title)]
+    return max(
+        (SequenceMatcher(None, h, _letters(p)).ratio() for p in parts if _letters(p)),
+        default=0.0,
+    )
+
+
+def rerank_by_title(query: str, tracks: list[Match]) -> list[Match]:
+    """Spoken English titles arrive garbled ("Weird Fishes de Radiohead"
+    searched as "irfixes Radiohead", 2026-10-12): the artist still matches
+    but Spotify ranks another of their songs first. When the top title is
+    far from what was heard and another is close, that one goes first."""
+    if len(tracks) < 2:
+        return tracks
+    scores = [title_score(heard_title(query, m.artist), m.title) for m in tracks]
+    best = max(range(len(tracks)), key=scores.__getitem__)
+    if (
+        best != 0
+        and scores[0] < _TITLE_POOR
+        and scores[best] >= _TITLE_GOOD
+        and scores[best] - scores[0] >= _TITLE_MARGIN
+    ):
+        return [tracks[best], *tracks[:best], *tracks[best + 1 :]]
+    return tracks
+
+
 class SpotifySearch:
     def __init__(
         self,
@@ -115,6 +169,8 @@ class SpotifySearch:
             return []
         if kind not in KINDS:
             kind = "any"
+        if kind == "track":
+            return _distinct(await self._tracks_as_heard(query), limit)
         if kind != "any":
             data = await self._search(query, kind, limit=5)
             return _distinct(self._all(data, f"{kind}s", kind), limit)
@@ -132,6 +188,23 @@ class SpotifySearch:
         # The best section first, then the others in their usual order.
         ordered = sections[best] + [m for _, k in _ANY_ORDER if k != best for m in sections[k]]
         return _distinct(ordered, limit)
+
+    async def _tracks_as_heard(self, query: str) -> list[Match]:
+        """A song request: Spotify's tracks, re-ranked by the heard title.
+        If none of them is close but they share an artist, that artist's
+        own tracks are searched too (a garbled title can miss the top
+        five entirely)."""
+        data = await self._search(query, "track", limit=5)
+        tracks = self._all(data, "tracks", "track")
+        if not tracks:
+            return []
+        top_artist = tracks[0].artist
+        heard = heard_title(query, top_artist)
+        if top_artist and heard and max(title_score(heard, t.title) for t in tracks) < _TITLE_GOOD:
+            first = top_artist.split(",")[0].strip()
+            more = await self._search(f'artist:"{first}"', "track", limit=10)
+            tracks = tracks + self._all(more, "tracks", "track")
+        return rerank_by_title(query, tracks)
 
     def _all(self, data: dict[str, Any], section: str, kind: str) -> list[Match]:
         matches: list[Match] = []

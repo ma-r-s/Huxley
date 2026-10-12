@@ -22,6 +22,17 @@ title by the same artist) are skipped. A mixed (`any`) search puts the
 best section first: a song beats an album beats a playlist beats an
 artist, and an artist wins only when the query is its exact name.
 
+**A song (`kind: track`) is matched by how its title sounds.** Spoken
+English titles reach the tool garbled while the artist survives
+("Weird Fishes de Radiohead" searched as "irfixes Radiohead"; Spotify
+ranked "Let Down" first and Let Down played, 2026-10-12). The query
+minus the artist's words is compared, letter by letter, with each
+result's title (and each part of it, "Weird Fishes / Arpeggi"); when the
+top title is far from it (under 0.5) and another is close (0.6 or more,
+0.2 ahead), that one plays. If none of the top five is close, the
+artist's own tracks are searched too. A clear title keeps Spotify's
+order.
+
 **No query** (the user asked for music without saying which): continue
 what Soloist has loaded (it keeps its last context across restarts).
 Paused: the same stream as `music_control(resume)`. Idle (it ran out; a
