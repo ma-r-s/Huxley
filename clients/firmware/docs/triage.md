@@ -247,7 +247,13 @@ power cut resets the expander too, which is why only that helped; on
 the bench nothing on port 0 moved. Fix (88baa3aa): both ports are read
 every 10 ms and at boot; port-0 changes are logged (`tca.port0 change`).
 Verified: GPIO0 sampled high over JTAG before the flash; `flash.sh`'s
-watchdog reset booted the app by itself, case closed.
+watchdog reset booted the app by itself, case closed. Not all of it:
+the next flash (1cd6e68c) landed in download mode again: GPIO0 read high
+in the ROM but had been latched low at the reset, so something still
+pulls it low at the instant of a reset right after flashing (unknown;
+the same reset a minute later booted). `flash.sh` now checks whether
+the ROM still answers and resets again, up to 8 times; the flash after
+that came back by itself in 13 s.
 **Also**: `tools/flash.sh` flashes and ends with esptool's watchdog reset
 (a full reset that re-reads the pins) and `--unstick` boots a stuck
 board from the Mac; `tools/serial_log.py` (and `serial-capture.sh`,

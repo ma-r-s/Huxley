@@ -38,6 +38,23 @@ case "${1:-}" in
         cd "$FW_DIR/build"
         "${ESPTOOL[@]}" -b 921600 --before default_reset --after watchdog_reset \
             write_flash @flash_args ${extra[@]+"${extra[@]}"}
+        # Measured 2026-10-12 on the walkie in its case: the reset right after
+        # a flash can still land in download mode, while the same reset a few
+        # seconds later boots. So check: if the ROM still answers, the board
+        # is stuck, reset it again. A running app doesn't answer, which ends
+        # the loop.
+        for try in 1 2 3 4 5 6 7 8; do
+            sleep 4
+            if "${ESPTOOL[@]}" --connect-attempts 1 --before no_reset --after watchdog_reset \
+                   read_mac >/dev/null 2>&1; then
+                echo "still in download mode: watchdog reset again ($try)"
+            else
+                echo "the board is running its app"
+                exit 0
+            fi
+        done
+        echo "error: still in download mode after 8 resets; power-cycle it" >&2
+        exit 1
         ;;
     *)
         sed -n '2,/^set/p' "$0" | sed 's/^# \{0,1\}//' | sed '$d'
