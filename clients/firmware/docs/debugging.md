@@ -277,6 +277,32 @@ also carries `Authorization: Bearer <HUX_DEVICE_TOKEN>` on the upgrade
 (`ws.token present=1` at boot; the value is never logged), and the hello
 is now `device.hello` (`app.device_hello sent= time_to_hello_ms=`).
 
+### Updates through the server (F-0028)
+
+The server offers an image with `server_event firmware.update {version,
+url, force}`; `url` is relative to the server in use (`/firmware/<v>.bin`
+on the LAN address or the tunnel alike). The walkie refuses below 40 %
+battery unless forced (`app.update_refused why=battery_low`), and while
+it plays or listens; otherwise it downloads with `Authorization: Bearer
+<device token>` (https via the CA bundle), checks the image is this
+project and the offered version, and restarts into it, reporting
+`client_event firmware.status {version, phase, error}`: `downloading`,
+`verifying`, `rebooting`, or `failed` with `begin|image|download|verify|
+busy|bad_url|battery_low`. The new image boots pending: after its first
+hello and 20 s of running it runs a **silent** self-test (no supervisor
+stall, both codecs and the expander answering on I2C, internal heap
+floor over 40 KB; `selftest dac_id= adc_id= expander= heap_min=`) and
+sends `phase: selftest` with the first failed check as `error`, then GETs
+`/firmware/manifest.json` with the same client settings and checks its
+`version` and `elf_sha` (`ota.manifest status= match=`). The server
+closes the connection once (1012); after the reconnect's hello it sends
+`ota.accept {version}`, and the walkie keeps the image only if all of
+that held (`ota.accepted`, `phase: accepted`; else `ota.accept_refused
+reason=version|not_pending|selftest|manifest|no_reconnect` and `phase:
+failed`). Without the accept, the next restart goes back to the previous
+image. The developer door's push (`dev.py flash`, `ota confirm`) still
+works on the LAN.
+
 ### Moving the server (F-0027)
 
 The address in `secrets.h` is compiled into every image; a saved one in

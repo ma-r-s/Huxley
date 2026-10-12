@@ -118,3 +118,35 @@ bool hux_link_uri_complete(const char *uri, char *out, size_t cap) {
     }
     return n > 0 && (size_t)n < cap;
 }
+
+bool hux_link_http_url(const char *ws_uri, const char *path, char *out, size_t cap) {
+    if (ws_uri == NULL || path == NULL || cap == 0) {
+        return false;
+    }
+    int n;
+    if (strncmp(path, "http://", 7) == 0 || strncmp(path, "https://", 8) == 0) {
+        n = snprintf(out, cap, "%s", path);
+        return n > 0 && (size_t)n < cap;
+    }
+    if (path[0] != '/') {
+        return false;
+    }
+    const char *scheme;
+    size_t skip;
+    if (strncmp(ws_uri, "wss://", 6) == 0) {
+        scheme = "https://";
+        skip = 6;
+    } else if (strncmp(ws_uri, "ws://", 5) == 0) {
+        scheme = "http://";
+        skip = 5;
+    } else {
+        return false;
+    }
+    const char *authority = ws_uri + skip;
+    size_t len = strcspn(authority, "/?#");
+    if (len == 0) {
+        return false;
+    }
+    n = snprintf(out, cap, "%s%.*s%s", scheme, (int)len, authority, path);
+    return n > 0 && (size_t)n < cap;
+}

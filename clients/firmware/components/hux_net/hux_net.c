@@ -144,6 +144,9 @@ static void server_revert_due(void *arg);
 static uint32_t s_srv_gen = 0;
 static uint32_t s_revert_gen = 0;
 static _Atomic uint32_t s_conn_gen = 0;
+/* The server closed the connection (a CLOSE frame): an update's accept
+ * wants one followed by a reconnect (F-0028). */
+static _Atomic uint32_t s_server_closes = 0;
 static uint32_t s_switch_conn_gen = 0;
 /* A hello arrived on s_home_uri this boot. A revert to an unproven home
  * watches it instead of trusting it. */
@@ -802,6 +805,7 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
              * missed keepalive ping). The library reconnects by itself
              * (enable_close_reconnect) but emits no DISCONNECTED: post it,
              * or the app stays READY on a dead socket. */
+            atomic_fetch_add(&s_server_closes, 1);
             ESP_LOGW(TAG, "ws.closed by_server eviction=%d", s_close_was_eviction);
             link_lost("closed");
             hux_ws_reassembler_reset(&s_reassembler);
@@ -1280,6 +1284,37 @@ bool hux_net_link_info(hux_net_link_t *out) {
     out->rssi = ap.rssi;
     memcpy(out->bssid, ap.bssid, sizeof(out->bssid));
     return true;
+}
+
+uint32_t hux_net_server_closes(void) {
+    return atomic_load(&s_server_closes);
+}
+
+uint32_t hux_net_connects(void) {
+    return atomic_load(&s_conn_gen);
+}
+
+void hux_net_server_uri(char *out, size_t cap) {
+    link_lock();
+    strlcpy(out, s_server_uri, cap);
+    link_unlock();
+}
+
+const char *hux_net_device_token(void) {
+    /* "Authorization: Bearer <token>\r\n" -> the token. */
+    static char token[72];
+    const char *p = strstr(s_auth_header, "Bearer ");
+    if (p == NULL) {
+        return NULL;
+    }
+    p += 7;
+    size_t n = strcspn(p, "\r\n");
+    if (n == 0 || n >= sizeof(token)) {
+        return NULL;
+    }
+    memcpy(token, p, n);
+    token[n] = '\0';
+    return token;
 }
 
 uint32_t hux_net_ladder_ticks(void) {

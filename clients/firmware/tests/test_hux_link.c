@@ -88,6 +88,25 @@ static void test_uri_complete(void) {
     HX_ASSERT_TRUE(!hux_link_uri_complete("wss://a-very-long-host.example.com/", out, 20), "too long");
 }
 
+static void test_http_url(void) {
+    char out[160];
+    HX_ASSERT_TRUE(hux_link_http_url("ws://192.168.68.75:8765/?audio=opus", "/firmware/a.bin", out,
+                                     sizeof(out)),
+                   "lan");
+    HX_ASSERT_TRUE(strcmp(out, "http://192.168.68.75:8765/firmware/a.bin") == 0, "http on ws");
+    HX_ASSERT_TRUE(hux_link_http_url("wss://walkie.example.com:443/", "/firmware/manifest.json",
+                                     out, sizeof(out)),
+                   "tunnel");
+    HX_ASSERT_TRUE(strcmp(out, "https://walkie.example.com:443/firmware/manifest.json") == 0,
+                   "https on wss");
+    HX_ASSERT_TRUE(hux_link_http_url("ws://h:1/", "https://cdn.example.com/x.bin", out, sizeof(out)),
+                   "absolute");
+    HX_ASSERT_TRUE(strcmp(out, "https://cdn.example.com/x.bin") == 0, "copied as is");
+    HX_ASSERT_TRUE(!hux_link_http_url("ws://h:1/", "firmware/x.bin", out, sizeof(out)), "relative w/o /");
+    HX_ASSERT_TRUE(!hux_link_http_url("tcp://h:1/", "/x", out, sizeof(out)), "not ws");
+    HX_ASSERT_TRUE(!hux_link_http_url("ws://h:1/", "/a-long-path", out, 12), "too long");
+}
+
 static void test_ladder_climbs_in_order(void) {
     HX_ASSERT_EQ(hux_ladder_due(0, HUX_LADDER_NONE), HUX_LADDER_NONE, "just lost: wait");
     HX_ASSERT_EQ(hux_ladder_due(119, HUX_LADDER_NONE), HUX_LADDER_NONE, "under 2 min");
@@ -124,6 +143,7 @@ int main(void) {
     HX_RUN(test_backoff_at_the_cap_is_spread);
     HX_RUN(test_uri_ok);
     HX_RUN(test_uri_complete);
+    HX_RUN(test_http_url);
     HX_RUN(test_ladder_climbs_in_order);
     HX_RUN(test_ladder_each_step_once);
     HX_RUN(test_ladder_late_check_takes_the_highest);

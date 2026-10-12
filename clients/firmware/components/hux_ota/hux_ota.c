@@ -4,7 +4,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "cJSON.h"
 #include "esp_app_desc.h"
+#include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_https_ota.h"
 #include "esp_log.h"
@@ -14,6 +16,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "hux_audio.h"
+#include "hux_link.h"
+#include "hux_net.h"
 
 static const char *TAG = "hux_ota";
 
@@ -23,6 +27,34 @@ static const char *TAG = "hux_ota";
 static _Atomic bool s_busy = false;
 static char s_url[256];
 static bool s_force = false;
+/* A pull from the server (firmware.update, F-0028): the version it offered,
+ * the "Bearer <token>" for the download, where firmware.status goes. Empty
+ * for the developer door's push. */
+static char s_expect[48];
+static char s_bearer[96];
+static hux_ota_status_fn s_status = NULL;
+static hux_ota_selftest_fn s_selftest = NULL;
+
+void hux_ota_set_status_sink(hux_ota_status_fn fn) {
+    s_status = fn;
+}
+
+void hux_ota_set_selftest(hux_ota_selftest_fn fn) {
+    s_selftest = fn;
+}
+
+static void status(const char *version, const char *phase, const char *error) {
+    ESP_LOGW(TAG, "ota.status version=%s phase=%s error=%s", version, phase,
+             error != NULL ? error : "-");
+    if (s_status != NULL) {
+        s_status(version, phase, error);
+    }
+}
+
+static esp_err_t add_auth(esp_http_client_handle_t client) {
+    return s_bearer[0] != '\0' ? esp_http_client_set_header(client, "Authorization", s_bearer)
+                               : ESP_OK;
+}
 
 static const char *state_name(esp_ota_img_states_t s) {
     switch (s) {
@@ -57,6 +89,10 @@ static esp_err_t validate(const esp_app_desc_t *incoming) {
                  running->project_name);
         return ESP_FAIL;
     }
+    if (s_expect[0] != '\0' && strncmp(incoming->version, s_expect, sizeof(incoming->version)) != 0) {
+        ESP_LOGE(TAG, "ota.refused version=%s expected=%s", incoming->version, s_expect);
+        return ESP_FAIL;
+    }
     if (!s_force && strncmp(incoming->version, running->version, sizeof(incoming->version)) == 0) {
         ESP_LOGW(TAG, "ota.refused version=%s is already running (ota <url> force)",
                  incoming->version);
@@ -69,23 +105,29 @@ static esp_err_t validate(const esp_app_desc_t *incoming) {
 static void ota_task(void *unused) {
     (void)unused;
     int64_t t0 = esp_timer_get_time();
-    ESP_LOGW(TAG, "ota.start url=%s from_slot=%s", s_url, hux_ota_running_slot());
+    const char *v = s_expect[0] != '\0' ? s_expect : "?";
+    ESP_LOGW(TAG, "ota.start url=%s from_slot=%s auth=%d", s_url, hux_ota_running_slot(),
+             s_bearer[0] != '\0');
+    status(v, "downloading", NULL);
     esp_http_client_config_t http = {
         .url = s_url,
         .timeout_ms = 10000,
         .keep_alive_enable = true,
+        .crt_bundle_attach = esp_crt_bundle_attach, /* https through the tunnel */
     };
-    esp_https_ota_config_t cfg = {.http_config = &http};
+    esp_https_ota_config_t cfg = {.http_config = &http, .http_client_init_cb = add_auth};
     esp_https_ota_handle_t h = NULL;
     esp_err_t err = esp_https_ota_begin(&cfg, &h);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "ota.failed step=begin err=%s", esp_err_to_name(err));
+        status(v, "failed", "begin");
         goto done;
     }
     esp_app_desc_t desc;
     err = esp_https_ota_get_img_desc(h, &desc);
     if (err != ESP_OK || validate(&desc) != ESP_OK) {
         esp_https_ota_abort(h);
+        status(v, "failed", "image");
         goto done;
     }
     size_t last_kb = 0;
@@ -99,16 +141,20 @@ static void ota_task(void *unused) {
     if (err != ESP_OK || !esp_https_ota_is_complete_data_received(h)) {
         ESP_LOGE(TAG, "ota.failed step=download err=%s", esp_err_to_name(err));
         esp_https_ota_abort(h);
+        status(v, "failed", "download");
         goto done;
     }
+    status(v, "verifying", NULL);
     err = esp_https_ota_finish(h); /* checks the image, sets it to boot next */
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "ota.failed step=finish err=%s", esp_err_to_name(err));
+        status(v, "failed", "verify");
         goto done;
     }
     ESP_LOGW(TAG, "ota.done version=%s ms=%u: restarting into it", desc.version,
              (unsigned)((esp_timer_get_time() - t0) / 1000));
-    vTaskDelay(pdMS_TO_TICKS(300)); /* let the log line reach the server */
+    status(desc.version, "rebooting", NULL);
+    vTaskDelay(pdMS_TO_TICKS(500)); /* let the lines reach the server */
     esp_restart();
 
 done:
@@ -116,7 +162,33 @@ done:
     vTaskDelete(NULL);
 }
 
+static bool start(const char *url, bool force);
+
 bool hux_ota_start(const char *url, bool force) {
+    s_expect[0] = '\0'; /* the developer door's push: no offer, no token */
+    s_bearer[0] = '\0';
+    return start(url, force);
+}
+
+bool hux_ota_pull(const char *url, const char *version, bool force, const char *token) {
+    if (atomic_load(&s_busy)) {
+        ESP_LOGW(TAG, "ota.pull_refused why=busy version=%s", version);
+        return false; /* the running update reports its own status */
+    }
+    snprintf(s_expect, sizeof(s_expect), "%s", version != NULL ? version : "");
+    if (token != NULL && token[0] != '\0') {
+        snprintf(s_bearer, sizeof(s_bearer), "Bearer %s", token);
+    } else {
+        s_bearer[0] = '\0';
+    }
+    if (!start(url, force)) {
+        status(s_expect[0] != '\0' ? s_expect : "?", "failed", "busy");
+        return false;
+    }
+    return true;
+}
+
+static bool start(const char *url, bool force) {
     /* An update ends in a restart: never in the middle of a reply or a
      * question (the user would hear it cut off) unless forced. */
     if (!force && (hux_audio_spk_ring_used() > 0 || hux_audio_mic_is_running())) {
@@ -204,4 +276,119 @@ void hux_ota_boot_check(void) {
                       "a restart before that boots the previous image",
                  HUX_OTA_SELFTEST_S);
     }
+}
+
+/* --- Keeping a pulled image (F-0028, the accept flow agreed with the
+ * server session): after its first hello a pending image runs its silent
+ * self-test, then GETs the manifest with the update client's settings;
+ * the server closes the connection once (1012) and, on the next hello,
+ * sends ota.accept. The image keeps itself only if all of that held. */
+static struct {
+    bool started;
+    bool selftest_ok;
+    bool manifest_ok;
+    uint32_t closes_at;
+    uint32_t connects_at;
+} s_verify;
+
+#define VERIFY_AFTER_S 20 /* the supervisor has watched every part this long */
+
+static bool fetch_manifest(const char *url, const char *version, const char *elf) {
+    esp_http_client_config_t http = {
+        .url = url,
+        .timeout_ms = 10000,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+    };
+    esp_http_client_handle_t c = esp_http_client_init(&http);
+    if (c == NULL) {
+        return false;
+    }
+    add_auth(c);
+    char body[512] = {0};
+    int status_code = -1;
+    int len = 0;
+    if (esp_http_client_open(c, 0) == ESP_OK) {
+        esp_http_client_fetch_headers(c);
+        status_code = esp_http_client_get_status_code(c);
+        len = esp_http_client_read_response(c, body, sizeof(body) - 1);
+    }
+    esp_http_client_cleanup(c);
+    bool match = false;
+    cJSON *root = len > 0 ? cJSON_Parse(body) : NULL;
+    if (root != NULL) {
+        const cJSON *v = cJSON_GetObjectItemCaseSensitive(root, "version");
+        const cJSON *e = cJSON_GetObjectItemCaseSensitive(root, "elf_sha");
+        match = cJSON_IsString(v) && strcmp(v->valuestring, version) == 0 && cJSON_IsString(e) &&
+                strcmp(e->valuestring, elf) == 0;
+        cJSON_Delete(root);
+    }
+    ESP_LOGW(TAG, "ota.manifest url=%s status=%d bytes=%d match=%d", url, status_code, len, match);
+    return status_code == 200 && match;
+}
+
+static void verify_task(void *unused) {
+    (void)unused;
+    const char *version = esp_app_get_description()->version;
+    while (esp_timer_get_time() < (int64_t)VERIFY_AFTER_S * 1000000) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    const char *why = NULL;
+    s_verify.selftest_ok = s_selftest == NULL || s_selftest(&why);
+    status(version, "selftest", s_verify.selftest_ok ? NULL : (why != NULL ? why : "unknown"));
+    if (s_verify.selftest_ok) {
+        char base[160];
+        char url[200];
+        char elf[10] = {0};
+        esp_app_get_elf_sha256(elf, sizeof(elf));
+        hux_net_server_uri(base, sizeof(base));
+        s_verify.manifest_ok = hux_link_http_url(base, "/firmware/manifest.json", url, sizeof(url)) &&
+                               fetch_manifest(url, version, elf);
+        /* The reconnect the accept wants comes after this point. */
+        s_verify.closes_at = hux_net_server_closes();
+        s_verify.connects_at = hux_net_connects();
+    }
+    ESP_LOGW(TAG, "ota.verify selftest=%d manifest=%d", s_verify.selftest_ok, s_verify.manifest_ok);
+    vTaskDelete(NULL);
+}
+
+void hux_ota_after_hello(void) {
+    if (s_verify.started || strcmp(hux_ota_running_state(), "pending") != 0) {
+        return;
+    }
+    s_verify.started = true;
+    if (xTaskCreate(verify_task, "hux_ota_verify", 6144, NULL, 3, NULL) != pdPASS) {
+        s_verify.started = false;
+        ESP_LOGE(TAG, "ota.verify task_create_failed: retried at the next hello");
+    }
+}
+
+void hux_ota_accept(const char *version) {
+    const char *running = esp_app_get_description()->version;
+    const char *state = hux_ota_running_state();
+    const char *why = NULL;
+    if (strcmp(version, running) != 0) {
+        why = "version";
+    } else if (strcmp(state, "valid") == 0) {
+        status(running, "accepted", NULL); /* already kept: say so again */
+        return;
+    } else if (strcmp(state, "pending") != 0) {
+        why = "not_pending";
+    } else if (!s_verify.selftest_ok) {
+        why = "selftest";
+    } else if (!s_verify.manifest_ok) {
+        why = "manifest";
+    } else if (!(hux_net_server_closes() > s_verify.closes_at &&
+                 hux_net_connects() > s_verify.connects_at)) {
+        why = "no_reconnect";
+    }
+    if (why != NULL) {
+        ESP_LOGW(TAG, "ota.accept_refused reason=%s offered=%s running=%s state=%s", why, version,
+                 running, state);
+        status(running, "failed", why);
+        return;
+    }
+    esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+    ESP_LOGW(TAG, "ota.accepted slot=%s version=%s err=%s", hux_ota_running_slot(), running,
+             esp_err_to_name(err));
+    status(running, err == ESP_OK ? "accepted" : "failed", err == ESP_OK ? NULL : "mark_valid");
 }

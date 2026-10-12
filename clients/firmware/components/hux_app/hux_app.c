@@ -22,6 +22,7 @@
 #include "hux_audio.h"
 #include "hux_battery.h"
 #include "hux_log.h"
+#include "hux_link.h"
 #include "hux_net.h"
 #include "hux_opus.h"
 #include "hux_ota.h"
@@ -380,7 +381,9 @@ static void send_device_hello(void) {
     esp_app_get_elf_sha256(elf, sizeof(elf));
     cJSON_AddStringToObject(d, "elf_sha", elf);
     cJSON_AddStringToObject(d, "slot", hux_ota_running_slot());
-    cJSON_AddStringToObject(d, "slot_state", hux_ota_running_state());
+    const char *state = hux_ota_running_state();
+    cJSON_AddStringToObject(d, "slot_state",
+                            strcmp(state, "pending") == 0 ? "pending_verify" : state);
     cJSON_AddStringToObject(d, "reset", s_device.reset ? s_device.reset : "?");
     cJSON_AddNumberToObject(d, "boot_counter", s_device.boot_counter);
     cJSON_AddNumberToObject(d, "uptime_s", now / 1000);
@@ -388,6 +391,7 @@ static void send_device_hello(void) {
     cJSON *caps = cJSON_AddArrayToObject(d, "caps");
     cJSON_AddItemToArray(caps, cJSON_CreateString("health.v1"));
     cJSON_AddItemToArray(caps, cJSON_CreateString("dev_cmd.v1"));
+    cJSON_AddItemToArray(caps, cJSON_CreateString("ota.v1"));
     int mv = 0, pct = 0;
     if (hux_battery_last(&mv, &pct)) {
         cJSON_AddItemToArray(caps, cJSON_CreateString("battery.v1"));
@@ -597,6 +601,52 @@ static void run_dev_cmd(hux_msg_server_event_t *se) {
     cJSON_Delete(root);
 }
 
+/* client_event firmware.status {version, phase, error} (F-0028): from the
+ * update task, the verify task or here. Any task. */
+void hux_app_firmware_status(const char *version, const char *phase, const char *error) {
+    cJSON *root = cJSON_CreateObject();
+    cJSON *data = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "type", "client_event");
+    cJSON_AddStringToObject(root, "event", "firmware.status");
+    cJSON_AddStringToObject(data, "version", version);
+    cJSON_AddStringToObject(data, "phase", phase);
+    if (error != NULL) {
+        cJSON_AddStringToObject(data, "error", error);
+    } else {
+        cJSON_AddNullToObject(data, "error");
+    }
+    cJSON_AddItemToObject(root, "data", data);
+    char *json = cJSON_PrintUnformatted(root);
+    if (json != NULL) {
+        (void)hux_net_send_text(json, strlen(json));
+    }
+    cJSON_free(json);
+    cJSON_Delete(root);
+}
+
+/* server_event firmware.update {version, url, force}: the url is relative
+ * to the server in use (the tunnel or the LAN); never on a low cell. */
+#define UPDATE_MIN_BATTERY_PCT 40
+
+static void pull_update(hux_msg_server_event_t *se) {
+    int mv = 0, pct = 0;
+    if (hux_battery_last(&mv, &pct) && pct < UPDATE_MIN_BATTERY_PCT && !se->force) {
+        ESP_LOGW(TAG, "app.update_refused version=%s why=battery_low pct=%d", se->version, pct);
+        hux_app_firmware_status(se->version, "failed", "battery_low");
+        return;
+    }
+    char base[160];
+    char url[200];
+    hux_net_server_uri(base, sizeof(base));
+    if (!hux_link_http_url(base, se->url, url, sizeof(url))) {
+        ESP_LOGW(TAG, "app.update_refused version=%s why=bad_url url=%s", se->version, se->url);
+        hux_app_firmware_status(se->version, "failed", "bad_url");
+        return;
+    }
+    ESP_LOGI(TAG, "app.update version=%s url=%s force=%d", se->version, url, se->force);
+    hux_ota_pull(url, se->version, se->force, hux_net_device_token());
+}
+
 static void handle_ws_message(hux_app_ws_message_t *msg) {
     /* Static: the app task's stack is tight, and only this task parses. */
     static hux_msg_t parsed;
@@ -629,6 +679,7 @@ static void handle_ws_message(hux_app_ws_message_t *msg) {
             transition(ST_READY);
             send_device_hello();
             send_blackbox();
+            hux_ota_after_hello(); /* a pending image starts its checks (F-0028) */
             hux_battery_report_now(); /* the server's skill gets a level at once */
             /* Kick the server into CONVERSING so PTT presses work
              * immediately. `wake_word` is named legacy-style in the
@@ -692,9 +743,15 @@ static void handle_ws_message(hux_app_ws_message_t *msg) {
                 case HUX_SERVER_EV_DEV_CMD:
                     run_dev_cmd(&parsed.as.server_event);
                     break;
+                case HUX_SERVER_EV_FIRMWARE_UPDATE:
+                    pull_update(&parsed.as.server_event);
+                    break;
+                case HUX_SERVER_EV_OTA_ACCEPT:
+                    ESP_LOGI(TAG, "app.ota_accept version=%s", parsed.as.server_event.version);
+                    hux_ota_accept(parsed.as.server_event.version);
+                    break;
                 default:
-                    /* firmware.update and ota.accept land with F-0028's update. */
-                    ESP_LOGI(TAG, "ws.rx.server_event name=%s (not handled yet)",
+                    ESP_LOGI(TAG, "ws.rx.server_event name=%s (not handled)",
                              parsed.as.server_event.name);
                     break;
             }

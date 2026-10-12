@@ -1196,6 +1196,22 @@ void hux_audio_pa(bool on) {
     ESP_LOGI(TAG, "spk.pa %s ok=%d", on ? "on" : "off", ok);
 }
 
+bool hux_audio_codecs_answer(int *dac_id, int *adc_id) {
+    /* 0xFD: each chip's ID register (ES8311 0x83, ES7210 0x72 on the
+     * datasheets); only that the chip answers on I2C is the test. */
+    *dac_id = -1;
+    *adc_id = -1;
+    int v = 0;
+    if (s_spk_ctrl_if != NULL && s_spk_ctrl_if->read_reg(s_spk_ctrl_if, 0xFD, 1, &v, 1) == 0) {
+        *dac_id = v & 0xFF;
+    }
+    v = 0;
+    if (s_mic_ctrl_if != NULL && s_mic_ctrl_if->read_reg(s_mic_ctrl_if, 0xFD, 1, &v, 1) == 0) {
+        *adc_id = v & 0xFF;
+    }
+    return *dac_id >= 0 && *adc_id >= 0;
+}
+
 int hux_audio_dac_volume_reg(void) {
     int v = 0;
     if (s_spk_ctrl_if == NULL ||
