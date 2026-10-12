@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -89,8 +90,9 @@ class BookSoloist(FakeSoloist):
         self.resume_position = position
         self.index: int | None = None
         self.skips_ignored = False
-        # Books Spotify won't play: "playing", then idle at once.
+        # Books Spotify won't play: "playing", then idle after `refuse_after`.
         self.refused: set[str] = set()
+        self.refuse_after = 0.01
 
     def on_chapter(self, index: int, position: int = 0) -> None:
         self.index = index
@@ -114,9 +116,12 @@ class BookSoloist(FakeSoloist):
     def send(self, command: str, *, generation: int | None = None, **fields: Any) -> None:
         super().send(command, generation=generation, **fields)
         if command == "play" and fields.get("uri") in self.refused:
-            # As measured: "playing" first, then Spotify stops it.
+            # As measured: "playing" first, with its first chapter and the
+            # position moving, then Spotify stops it.
+            self.state.item = {"uri": "spotify:episode:refused-first-chapter"}
+            self.state.speed = 1.0
             asyncio.get_running_loop().call_later(
-                0.01, lambda: asyncio.ensure_future(self._update(status="idle"))
+                self.refuse_after, lambda: asyncio.ensure_future(self._update(status="idle"))
             )
         elif command == "play" and fields.get("uri") == BOOK_INFO.uri and self.start_playing:
             self.on_chapter(self.resume, self.resume_position)
@@ -427,6 +432,73 @@ class TestRefusals:
         recorded, _ = await self._refused(tmp_path, pcm_server, config={"played_before": True})
         assert [key for _, key in recorded.injected] == ["spotify:book_no_hours"]
         assert "«Este mes ya no quedan horas para escuchar libros." in recorded.injected[0][0]
+
+    async def test_a_book_refused_after_a_recent_play_is_unavailable_not_hours(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        """Siddhartha, 2026-10-12: a check had said it played, Spotify then
+        refused it, and the refusal was read as "no hours left" while other
+        books played fine. A book that played lately means the hours are
+        there: it's this book."""
+        pcm_server.hold_open.set()
+        skill, client, recorded, shelf = await _skill(tmp_path, pcm_server)
+        await shelf.mark_ok(BOOK.uri, BOOK.title, BOOK.artist)  # the check's "ok"
+        skill._hours_ok_at = time.monotonic()  # another book played a moment ago
+        result = await skill.handle("play_book", {"title": "cien años de soledad"})
+        async for _ in result.side_effect.factory():  # type: ignore[union-attr]
+            client.state.status = "idle"
+        await _settle()
+        assert [key for _, key in recorded.injected] == ["spotify:book_unavailable"]
+        assert await shelf.unavailable(BOOK.uri)
+        assert not await shelf.playable(BOOK.uri)  # the wrong "ok" is gone
+
+    async def test_a_known_book_refused_is_explained_by_another_that_plays(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        """No recent play to go by: after the stream ends, a book known to
+        play is tried. It plays, so the hours are there: this book isn't."""
+        pcm_server.hold_open.set()
+        skill, client, recorded, shelf = await _skill(tmp_path, pcm_server)
+        await shelf.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
+        await shelf.mark_played(PEDRO.uri, PEDRO.title, PEDRO.artist)  # the control
+        result = await skill.handle("play_book", {"title": "cien años de soledad"})
+        async for _ in result.side_effect.factory():  # type: ignore[union-attr]
+            client.state.status = "idle"
+        await _settle()
+        await asyncio.sleep(0.3)  # the control check after the stream
+        assert [key for _, key in recorded.injected] == ["spotify:book_unavailable"]
+        assert PEDRO.uri in [c.get("uri") for c in _plays(client)]
+        assert client.commands()[-1] == "pause"  # the control is not left playing
+        assert await shelf.unavailable(BOOK.uri)
+
+    async def test_a_known_book_refused_and_the_control_too_is_the_hours(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        pcm_server.hold_open.set()
+        skill, client, recorded, shelf = await _skill(tmp_path, pcm_server)
+        await shelf.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
+        await shelf.mark_played(PEDRO.uri, PEDRO.title, PEDRO.artist)
+        client.refused = {PEDRO.uri}
+        result = await skill.handle("play_book", {"title": "cien años de soledad"})
+        async for _ in result.side_effect.factory():  # type: ignore[union-attr]
+            client.state.status = "idle"
+        await _settle()
+        await asyncio.sleep(0.3)
+        assert [key for _, key in recorded.injected] == ["spotify:book_no_hours"]
+        assert not await shelf.unavailable(BOOK.uri)
+
+    async def test_a_check_is_not_fooled_by_the_first_playing(
+        self, tmp_path: Path, pcm_server: PcmServer, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Spotify says "playing" before it decides; a refusal can come a
+        moment later. Only a book still playing at the end is offered."""
+        monkeypatch.setattr(skill_module, "PROBE_OK_S", 0.6)
+        skill, client, _, shelf = await _skill(tmp_path, pcm_server, match=CORONEL)
+        client.refused = {CORONEL.uri}
+        client.refuse_after = 0.45  # past the old early "ok" and its 0.35 s confirm
+        result = await skill.handle("find_books", {"query": "coronel"})
+        assert _out(result)["reason"] == "none_available"
+        assert not await shelf.playable(CORONEL.uri)
 
     async def test_the_configured_budget_spent_means_the_hours_ran_out(
         self, tmp_path: Path, pcm_server: PcmServer
