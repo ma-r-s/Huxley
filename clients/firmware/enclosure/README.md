@@ -325,9 +325,9 @@ Tails 3 to 8 (GPIO4, 5, 6, 9 and EXIO0, 1) are right behind the bar, with
 
 ## Bumper: TPU, for falls and a strap
 
-Mario's mother's idea (2026-10-12): a TPU case that protects it from falls,
-with a loop so his grandfather can hang it from his neck or his wrist
-(`huxcase/bumper.py`, `tests/test_bumper.py`). One piece, pulled on from the
+A TPU case that protects it from falls, with a loop so its user can hang it
+from the neck or the wrist (2026-10-12; `huxcase/bumper.py`,
+`tests/test_bumper.py`). One piece, pulled on from the
 back, off again to open the case.
 
 - **Thin sides, thick corners** (Mario's call): 1.5 mm on the flat sides,

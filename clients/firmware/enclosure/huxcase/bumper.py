@@ -1,7 +1,6 @@
 """HX-1's TPU bumper: a band round the case's four narrow sides with lips
-over the front and back, and a strap loop on top (2026-10-12, Mario's
-mother's idea: protect it from falls, and let his grandfather hang it from
-his neck or his wrist).
+over the front and back, and a strap loop on top (2026-10-12): it protects
+the walkie from falls and lets its user hang it from the neck or the wrist.
 
 It prints on its front, the front lip flat on the bed, so every wall
 stands vertical and nothing needs support. The front lip is the seat: it

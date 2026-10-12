@@ -402,7 +402,7 @@ keep-out boxes, one a boolean (the bore's mouth), for every support sample;
 cached, the whole slice takes 19 s. Lesson: a check that runs per sample
 must not build geometry.
 
-**TPU bumper (2026-10-12)**: Mario's mother's idea, a TPU case against falls
+**TPU bumper (2026-10-12)**: a TPU case against falls
 with a loop for the neck or the wrist (`huxcase/bumper.py`). A cold critic
 reviewed v0 (a 3 mm band, a rim round the lever, printed on its back)
 before it was built. Its findings:
