@@ -85,5 +85,6 @@ module = [
     "pytgcalls.*",
     "ntgcalls.*",
     "dateutil.*",
+    "opuslib_next.*",  # no type hints; wrapped by huxley.server.opus_codec
 ]
 ignore_missing_imports = true

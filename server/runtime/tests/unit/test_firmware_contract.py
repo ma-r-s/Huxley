@@ -20,13 +20,18 @@ import asyncio
 import base64
 import contextlib
 import json
+import math
 import socket
+import struct
 from typing import Any
 
 import pytest
 import websockets
 from websockets.asyncio.client import connect
 
+from huxley.server import opus_codec
+from huxley.server import server as server_mod
+from huxley.server.opus_codec import OpusUnavailableError, opus_unavailable_reason
 from huxley.server.server import AudioServer
 
 
@@ -313,3 +318,140 @@ async def test_server_frames_match_what_the_firmware_parses() -> None:
         raw, audio = await _recv_until(ws, "audio")
         assert _type_within_probe(raw), raw[:120]
         assert base64.b64decode(audio["data"]) == pcm[: len(base64.b64decode(audio["data"]))]
+
+
+# --- Opus audio (`?audio=opus`) --------------------------------------------
+#
+# The walkie asks for Opus: hello announces `audio_params` and audio goes
+# both ways as binary messages, one raw 60 ms Opus packet each
+# (xiaozhi-esp32 binary protocol version 1). Everything else stays JSON.
+# Without the query parameter nothing changes (the PWA).
+
+_NO_OPUS = opus_unavailable_reason()
+_needs_opus = pytest.mark.skipif(
+    _NO_OPUS is not None,
+    reason=f"libopus not loadable ({_NO_OPUS}); brew install opus / apt install libopus0",
+)
+_AUDIO_PARAMS = {"format": "opus", "sample_rate": 24000, "channels": 1, "frame_duration": 60}
+
+
+def _sine_pcm(ms: int) -> bytes:
+    n = 24 * ms
+    return struct.pack(
+        f"<{n}h", *(int(8000 * math.sin(2 * math.pi * 440 * i / 24000)) for i in range(n))
+    )
+
+
+@pytest.mark.asyncio
+async def test_hello_without_audio_opt_in_is_unchanged() -> None:
+    rec = _Recorder()
+    async with _server_on_ephemeral_port(rec) as (url, _srv), connect(url) as ws:
+        hello = await _recv_hello(ws)
+    assert set(hello) == {"type", "protocol", "language", "conn_id"}
+
+
+@pytest.mark.asyncio
+@_needs_opus
+async def test_hello_with_opus_opt_in_announces_audio_params() -> None:
+    rec = _Recorder()
+    async with (
+        _server_on_ephemeral_port(rec) as (url, _srv),
+        connect(url + "?lang=es&audio=opus") as ws,
+    ):
+        hello = await _recv_hello(ws)
+    assert hello["audio_params"] == _AUDIO_PARAMS
+    assert hello["language"] == "es"  # other query params still work
+
+
+@pytest.mark.asyncio
+@_needs_opus
+async def test_opus_audio_both_ways() -> None:
+    lib = opus_codec._load()
+    rec = _Recorder()
+    async with (
+        _server_on_ephemeral_port(rec) as (url, srv),
+        connect(url + "?audio=opus") as ws,
+    ):
+        await _recv_hello(ws)
+
+        # Mic: one press, 600 ms as ten binary packets.
+        mic = _sine_pcm(600)
+        enc = lib.Encoder(24000, 1, lib.APPLICATION_AUDIO)
+        packets = [enc.encode(mic[i * 2880 : (i + 1) * 2880], 1440) for i in range(10)]
+        await ws.send(json.dumps({"type": "ptt_start"}))
+        for p in packets:
+            await ws.send(p)
+        await ws.send(json.dumps({"type": "ptt_stop"}))
+        for _ in range(50):
+            await asyncio.sleep(0.02)
+            if rec.ptt_stops >= 1:
+                break
+        dec = lib.Decoder(24000, 1)
+        assert rec.audio_frames == [dec.decode(p, 2880) for p in packets]
+
+        # Speaker: 1 s of reply then its end. 17 packets (ceil(1000/60)),
+        # binary only, before the `model_speaking: false` text frame.
+        await srv.send_audio(_sine_pcm(1000))
+        await srv.send_model_speaking(False)
+        got: list[bytes] = []
+        while True:
+            msg = await asyncio.wait_for(ws.recv(), timeout=1.0)
+            if isinstance(msg, bytes):
+                got.append(msg)
+                continue
+            parsed = json.loads(msg)
+            assert parsed["type"] != "audio", "no JSON audio to an opus client"
+            if parsed["type"] == "model_speaking":
+                assert parsed["value"] is False
+                break
+        assert len(got) == 17
+        dec = lib.Decoder(24000, 1)
+        assert all(len(dec.decode(p, 2880)) == 2880 for p in got)
+
+
+@pytest.mark.asyncio
+@_needs_opus
+async def test_opus_client_bad_packet_and_json_audio() -> None:
+    """A packet libopus rejects is dropped; the socket stays up, and the
+    client may still send JSON `audio`."""
+    rec = _Recorder()
+    async with (
+        _server_on_ephemeral_port(rec) as (url, _srv),
+        connect(url + "?audio=opus") as ws,
+    ):
+        await _recv_hello(ws)
+        await ws.send(json.dumps({"type": "ptt_start"}))
+        await ws.send(b"\x03\x00")
+        pcm = bytes(range(256)) * 15
+        await ws.send(json.dumps({"type": "audio", "data": base64.b64encode(pcm).decode()}))
+        await ws.send(json.dumps({"type": "wake_word"}))
+        for _ in range(50):
+            await asyncio.sleep(0.02)
+            if rec.wake_words >= 1:
+                break
+    assert rec.wake_words == 1
+    assert rec.audio_frames == [pcm]
+
+
+@pytest.mark.asyncio
+async def test_opus_requested_but_unavailable_falls_back_to_pcm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No libopus on the host: the client gets PCM and a hello without
+    `audio_params`, which is how it can tell."""
+
+    def _missing() -> None:
+        raise OpusUnavailableError("no libopus")
+
+    monkeypatch.setattr(server_mod, "OpusEncoderStream", _missing)
+    rec = _Recorder()
+    async with (
+        _server_on_ephemeral_port(rec) as (url, srv),
+        connect(url + "?audio=opus") as ws,
+    ):
+        hello = await _recv_hello(ws)
+        assert "audio_params" not in hello
+        pcm = bytes(range(256)) * 10
+        await srv.send_audio(pcm)
+        _, audio = await _recv_until(ws, "audio")
+        assert base64.b64decode(audio["data"]) == pcm
