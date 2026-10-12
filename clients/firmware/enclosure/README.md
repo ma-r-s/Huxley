@@ -248,6 +248,26 @@ lead between the BAT pad and the + joint. The charger sits behind it too, so
 **the rocker must be ON to charge**. Power on the left, talk on the right: easy
 to tell apart by touch. A test asserts it stays below the surface.
 
+## Reset pinhole: a paperclip, on the left side
+
+So the staff at the retirement home can restart a hung walkie without
+opening it (`docs/remote-operation.md` W7, 2026-10-12). The board's edge
+buttons are side switches, pressed along the board's radius, so the hole
+comes in through the case's left side, a little in front of the power
+rocker, in the board's plane. It's a 1.5 mm bore through the tub top's
+corner block (prints about 1.3, for a 0.8 to 1.2 mm paperclip), with
+7.3 mm of guide and a 45 deg mouth to find it. It ends in a pocket 0.6 mm
+from RESET's plunger; push about 8 mm in until it clicks. BOOT, the next
+button round, is 6.7 mm off the line and can't be reached (BOOT held at a
+reset boots download mode, F-0020). The bumper has a 3.2 mm hole over it.
+`tests/test_reset_pinhole.py`: a 1 mm clip from outside touches nothing
+but RESET.
+
+The tub stands 0.6 mm off every edge button's plunger (`hx1.KEY_CLEAR`).
+Until 2026-10-12 its corner block was shaped round the board with no
+clearance, touching BOOT's plunger: a top printed a hair proud could have
+held BOOT in.
+
 ## Battery protection: in the cells
 
 The board has no cell protection (see MEASUREMENTS), and two unprotected cells
@@ -321,6 +341,7 @@ back, off again to open the case.
   (it springs back on 0.9 N). It stands 1.5 mm proud of the thin side: a
   table pushes it 1.3 mm at most at the switch, short of the 2.1 mm click.
   In a side drop it swings in on its spring and the band takes the hit.
+- **The reset pinhole** has a 3.2 mm hole over it (see below).
 - **The rocker** stays recessed in a straight window (hard to flip by
   accident: off means no charging). **USB-C** has a funnel along the
   plug's long side, so a plug aimed by feel slides in.

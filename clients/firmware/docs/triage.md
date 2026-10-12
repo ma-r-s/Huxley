@@ -406,29 +406,43 @@ must not build geometry.
 with a loop for the neck or the wrist (`huxcase/bumper.py`). A cold critic
 reviewed v0 (a 3 mm band, a rim round the lever, printed on its back)
 before it was built. Its findings:
+
 - the rim and a flush band would sink the lever below its surroundings, so
   presses miss the 2.1 mm click and TPU can drag on a lever that springs
   back on 0.9 N;
 - on its back the lever's window was a 58 mm bridge;
 - the lips rolled off the case's round edge under a jerk;
 - the loop at x -10 hung 8 deg tilted.
-v1 took its fixes: it prints on its front, the lever sits in a U open to
-the back, the front lip is the seat and the back lip the way in, and the
-loop sits near the centre of mass. Then Mario asked for corner protection
-rather than width: v2 has 1.5 mm sides and 4.2 mm corners (outer R3 over
-the case's R8), 73 x 107, about 30 g. No supports, 2 h 14 min on Bambu's
-TPU 95A preset (Mario's spool is Overture TPU 95A, standard flow); a 37 min
-front ring (8 mm) tests the fit. Mario asked about forces and infill: at
-277 g a 1.2 m drop is about 3.3 J; bare PLA stops in about 0.25 mm (13 kN),
-a 4.2 mm TPU corner squashes about 2 mm (about 4 kN). Measured how far the
-TPU stands past the case per drop direction: 5 mm at the vertices (I first
-guessed they were the weak spot; measuring showed the case's doubly rounded
-corners leave the most TPU there), 4.2 at the corners, 2.8 along the face
-edges, 1.5 on the flats. Solid, no infill: the sections are too thin for
-it, and a softer corner bottoms out sooner. 2.5 mm lips gained under 1 mm
-at the edges for 2 mm more depth: kept 1.5. A risk it can't fix: worn on the chest, an arm or a hug can
-press the lever; the server's silent-press gate (T1.35) drops presses with
-no speech.
+  v1 took its fixes: it prints on its front, the lever sits in a U open to
+  the back, the front lip is the seat and the back lip the way in, and the
+  loop sits near the centre of mass. Then Mario asked for corner protection
+  rather than width: v2 has 1.5 mm sides and 4.2 mm corners (outer R3 over
+  the case's R8), 73 x 107, about 30 g. No supports, 2 h 14 min on Bambu's
+  TPU 95A preset (Mario's spool is Overture TPU 95A, standard flow); a 37 min
+  front ring (8 mm) tests the fit. Mario asked about forces and infill: at
+  277 g a 1.2 m drop is about 3.3 J; bare PLA stops in about 0.25 mm (13 kN),
+  a 4.2 mm TPU corner squashes about 2 mm (about 4 kN). Measured how far the
+  TPU stands past the case per drop direction: 5 mm at the vertices (I first
+  guessed they were the weak spot; measuring showed the case's doubly rounded
+  corners leave the most TPU there), 4.2 at the corners, 2.8 along the face
+  edges, 1.5 on the flats. Solid, no infill: the sections are too thin for
+  it, and a softer corner bottoms out sooner. 2.5 mm lips gained under 1 mm
+  at the edges for 2 mm more depth: kept 1.5. A risk it can't fix: worn on
+  the chest, an arm or a hug can press the lever; the server's silent-press
+  gate (T1.35) drops presses with no speech.
+
+**Reset pinhole and button clearance (2026-10-12)**: the firmware session's
+W7 (docs/remote-operation.md: the case opens once more before it goes to the
+retirement home) asked for a paperclip pinhole to RESET. The board's edge
+buttons are side-actuated (hw.KEYS; Waveshare's photo: clockwise from USB-C,
+RESET, BOOT, K3, K2, K1), so the bore runs in the board's plane through the
+left wall and the tub top's corner block: 1.5 mm, 7.3 mm of guide, BOOT 6.7
+mm off the line. Only the tub top and the bumper change. Found on the way:
+the corner block touched BOOT's plunger (0.00 mm; the block was cut round
+the board's outline, buttons included). Every edge button now has 0.6 mm
+(`hx1.KEY_CLEAR`). The clear top's project carries both. Lesson: clearance
+to a part that changes how the device boots is a tested number, not
+whatever the envelope left.
 
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
 bottom is fine, holders whole, no glue but the tub's halves, plastic pivot, protected cells

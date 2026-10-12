@@ -206,6 +206,15 @@ def needs_support(clusters: list[dict], min_area: float = 1.0) -> list[dict]:
     return [k for k in clusters if k["narrow"] > BRIDGE_OK and k["area"] > min_area]
 
 
+def _reset_bore_box() -> tuple[float, float, float, float, float, float]:
+    """The reset pinhole's bore (hx1._reset_pinhole), as a box inside its
+    cut: from the plunger's pocket to the wall's mouth."""
+    tip, u = hx1.key_line("RESET")
+    a, b = tip + u * (hx1.KEY_CLEAR + 0.3), tip + u * (hx1.reset_mouth_s() - 1.0)
+    r = hx1.RESET_BORE / 2 - 0.25
+    return (min(a.X, b.X), max(a.X, b.X), tip.Y - r, tip.Y + r, min(a.Z, b.Z), max(a.Z, b.Z))
+
+
 @cache  # the bore's mouth is a boolean; in_keep_out runs per support sample
 def support_keep_outs() -> dict[str, tuple[float, float, float, float, float, float]]:
     """Close fits in the tub's top where no support may go, printed on its
@@ -313,6 +322,7 @@ def support_keep_outs() -> dict[str, tuple[float, float, float, float, float, fl
             m.BACK_FROST_Z + 0.1,
             m.BACK_FROST_Z + m.LAP_H,
         ),
+        "reset pinhole": _reset_bore_box(),
         "USB plug": (  # where the plug's shell goes; the pocket round it is roomy
             -m.W / 2 + 0.3,
             m.USB_FACE,

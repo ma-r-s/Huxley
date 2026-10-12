@@ -53,6 +53,7 @@ FRONT_LIP_WIDE_TO_Z = 90.0  # the face screws' heads reach down to z 93.4
 BACK_LIP = 2.0
 CASE_EDGE_R = 3.0
 WINDOW_R = 2.0  # window corners: TPU tears from a sharp one
+RESET_HOLE = 3.2  # over the case's reset pinhole (hx1._reset_pinhole), a paperclip through both
 
 # The lever's bar: 18 wide in y round SWITCH_Y, z 43..99, out to x 38.
 LEVER_Y0 = m.SWITCH_Y - m.BAR_W / 2  # its front face, y -6.5
@@ -180,6 +181,14 @@ def _rocker_window():
     return fillet(_at(w.edges().filter_by(Axis.X), Axis.Y, y0), WINDOW_R)
 
 
+def _reset_hole():
+    tip, u = m.key_line("RESET")
+    s0 = m.reset_mouth_s() - 1.0
+    length = WALL + 4.0
+    pl = Plane(origin=tip + u * (s0 + length / 2), z_dir=u)
+    return pl.location * Cylinder(RESET_HOLE / 2, length)
+
+
 def _loop():
     top = _top()
     hz = top + LOOP_LIFT + LOOP_HOLE / 2
@@ -218,7 +227,7 @@ def _loop():
 def bumper():
     inner = _inner()
     band = _outer() - inner - _front_window() - _back_window()
-    band = band - _lever_u() - _usb_window() - _rocker_window()
+    band = band - _lever_u() - _usb_window() - _rocker_window() - _reset_hole()
     # The floor screws' heads sit where the floor starts curving into its R8
     # corners, a hair proud of the curve: a pocket under each.
     for x, y in m.BOTTOM_SCREWS:
