@@ -455,3 +455,97 @@ async def test_opus_requested_but_unavailable_falls_back_to_pcm(
         await srv.send_audio(pcm)
         _, audio = await _recv_until(ws, "audio")
         assert base64.b64decode(audio["data"]) == pcm
+
+
+class _StuckDrain:
+    """Makes the server's next `drain()` (websockets' flow-control wait,
+    after the frame is already written) block until `release()`: a slow
+    link, on the real library."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from websockets.asyncio.connection import Connection
+        from websockets.asyncio.server import ServerConnection
+
+        real = Connection.drain
+        self.armed = False
+        self.stuck = asyncio.Event()
+        self._gate = asyncio.Event()
+
+        async def drain(conn: Any) -> None:
+            if self.armed and isinstance(conn, ServerConnection):
+                self.armed = False
+                self.stuck.set()
+                await self._gate.wait()
+            await real(conn)
+
+        monkeypatch.setattr(Connection, "drain", drain)
+
+    def arm(self) -> None:
+        self.armed = True
+        self.stuck.clear()
+        self._gate.clear()
+
+    def release(self) -> None:
+        self._gate.set()
+
+
+async def _frames_until(ws: Any, msg_type: str) -> list[Any]:
+    """Every frame (bytes, or parsed JSON) up to and including `msg_type`,
+    skipping the connect burst's state/input_mode."""
+    out: list[Any] = []
+    while True:
+        raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
+        if isinstance(raw, bytes):
+            out.append(raw)
+            continue
+        msg = json.loads(raw)
+        if msg["type"] in ("state", "input_mode"):
+            continue
+        out.append(msg)
+        if msg["type"] == msg_type:
+            return out
+
+
+@pytest.mark.asyncio
+@_needs_opus
+async def test_opus_order_and_clear_under_real_flow_control(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The server's packet order rests on websockets writing a frame
+    before it waits on flow control. Checked on the real library, so an
+    upgrade that changes it fails here: two senders at once still give
+    encoder order, and a clear while a send is stuck lets nothing stale
+    through."""
+    stuck = _StuckDrain(monkeypatch)
+    lib = opus_codec._load()
+    rec = _Recorder()
+    async with (
+        _server_on_ephemeral_port(rec) as (url, srv),
+        connect(url + "?audio=opus") as ws,
+    ):
+        await _recv_hello(ws)
+        a, b = _sine_pcm(180), _sine_pcm(120)[::-1]
+        stuck.arm()
+        task_a = asyncio.create_task(srv.send_audio(a))
+        await asyncio.wait_for(stuck.stuck.wait(), timeout=1.0)
+        await srv.send_audio(b)  # drains A1, A2 then B0, B1
+        stuck.release()
+        await task_a
+        await srv.send_set_volume(1)  # end marker
+        frames = await _frames_until(ws, "set_volume")
+        ref = lib.Encoder(24000, 1, lib.APPLICATION_AUDIO)
+        ref.bitrate = 32000
+        ref.vbr = 1
+        both = a + b
+        assert frames[:-1] == [ref.encode(both[i * 2880 : (i + 1) * 2880], 1440) for i in range(5)]
+
+        stuck.arm()
+        task_c = asyncio.create_task(srv.send_audio(_sine_pcm(600)))
+        await asyncio.wait_for(stuck.stuck.wait(), timeout=1.0)
+        await srv.send_audio_clear()
+        stuck.release()
+        await task_c
+        await srv.send_set_volume(2)
+        frames = await _frames_until(ws, "set_volume")
+        assert [type(f) for f in frames] == [bytes, dict, dict]
+        assert frames[1] == {"type": "audio_clear"}

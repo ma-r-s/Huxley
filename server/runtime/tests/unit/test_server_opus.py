@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import math
 import operator
@@ -311,6 +312,78 @@ async def test_audio_clear_drops_packets_not_yet_written() -> None:
     assert json.loads(ws.sent[1]) == {"type": "audio_clear"}
 
 
+async def test_a_cancelled_sender_drops_what_it_had_queued() -> None:
+    """A pause cancels the task sending a sound while it is stuck in flow
+    control. Its other packets and its partial frame are stale: dropped,
+    encoder reset, so they never play ahead of the next sound (a cancelled
+    PCM send's other chunks never go out either)."""
+    srv, ws, _ = _server()
+    conn = srv._conn
+    assert conn is not None and conn.opus_tx is not None
+    ws.gate = asyncio.Event()
+    sender = asyncio.create_task(srv.send_audio(_sine(200)))  # 3 packets + 20 ms
+    await _until(lambda: len(ws.sent) == 1)
+    sender.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await sender
+    assert not conn.opus_out
+    assert conn.opus_tx.pending_bytes == 0
+    await srv.send_model_speaking(False)
+    assert [type(m) for m in ws.sent] == [bytes, str]
+    nxt = _sine(60, start=999)
+    await srv.send_audio(nxt)
+    assert ws.packets[-1] == _ref_encoder().encode(nxt, FRAME_SAMPLES)
+
+
+async def test_idle_timer_waits_for_a_sender_stuck_in_flow_control() -> None:
+    """A producer blocked on a slow link is not idle: its tail must not
+    be padded while it waits."""
+    srv, ws, _ = _server()
+    srv._OPUS_IDLE_FLUSH_S = 0.02
+    conn = srv._conn
+    assert conn is not None
+    gate = asyncio.Event()
+    ws.gate = gate
+    sender = asyncio.create_task(srv.send_audio(_sine(100)))  # 1 packet + 40 ms
+    await _until(lambda: len(ws.sent) == 1)
+    await asyncio.sleep(0.08)  # well past the timer
+    assert conn.opus_flush_timer is None
+    assert len(ws.packets) == 1
+    gate.set()
+    await sender
+    assert conn.opus_flush_timer is not None  # armed once the writes are done
+
+
+async def test_no_idle_flush_while_a_stream_plays() -> None:
+    """A stream's own end flushes it; a source that stalls past the timer
+    must not get silence padded into the music."""
+    srv, ws, _ = _server()
+    srv._OPUS_IDLE_FLUSH_S = 0.02
+    conn = srv._conn
+    assert conn is not None
+    await srv.send_stream_started("s1", "Radio")
+    await srv.send_audio(_sine(100))
+    assert conn.opus_flush_timer is None
+    await asyncio.sleep(0.08)
+    assert len(ws.packets) == 1
+    await srv.send_stream_ended("s1", "natural")
+    assert len(ws.packets) == 2
+    assert json.loads(ws.sent[-1])["type"] == "stream_ended"
+
+
+async def test_a_late_idle_flush_does_not_pad_new_pcm() -> None:
+    """The timer fired, but PCM came in before its task ran: not idle."""
+    srv, ws, _ = _server()
+    conn = srv._conn
+    assert conn is not None
+    await srv.send_audio(_sine(100))  # 40 ms pending, timer armed
+    await srv.send_audio(_sine(10))  # 50 ms pending, timer re-armed
+    srv._opus_idle_flush_due(conn)  # as if the old timer had just fired
+    assert conn.opus_flush_task is not None
+    await conn.opus_flush_task
+    assert len(ws.packets) == 1
+
+
 async def test_concurrent_senders_keep_encoder_order() -> None:
     """Two tasks sending at once (the decoder needs packets in order)."""
     srv, ws, _ = _server()
@@ -411,6 +484,33 @@ async def test_opus_client_json_audio_is_still_accepted() -> None:
 
 
 # --- PCM clients: unchanged -------------------------------------------------
+
+
+async def test_pcm_send_stops_when_an_opus_client_takes_over() -> None:
+    """The walkie connects while a long sound is going to a PCM client:
+    the rest of that sound must not reach the walkie as JSON audio."""
+    srv, ws, _ = _server(opus=False)
+    gate = asyncio.Event()
+    ws.gate = gate
+    sender = asyncio.create_task(srv.send_audio(_sine(1000)))  # 4 JSON chunks
+    await _until(lambda: len(ws.sent) == 1)
+    walkie = _WS()
+    new = _ConnInfo(
+        conn_id="c2",
+        remote="walkie",
+        connected_at_ms=0,
+        requested_persona=None,
+        requested_language=None,
+        ws=walkie,  # type: ignore[arg-type]
+    )
+    new.opus_tx = OpusEncoderStream()
+    new.opus_rx = OpusDecoderStream()
+    new.audio_format = "opus"
+    srv._conn = new
+    gate.set()
+    await sender
+    assert walkie.sent == []
+    assert len(ws.sent) == 1
 
 
 async def test_pcm_client_gets_json_audio_and_its_binary_is_not_decoded() -> None:

@@ -6,9 +6,10 @@ the server's `hello` announces the parameters as `audio_params`. See
 docs/protocol.md "Opus audio".
 
 This module holds the codec state only: PCM in, packets out, and back.
-`AudioServer` owns when to flush, reset and send. libopus is loaded
-lazily, on the first opus connection, so a server without it still
-serves PCM clients (and logs why an opus client got PCM).
+`AudioServer` owns when to flush, reset and send. libopus is loaded on
+first use (the server probes it at boot to log whether it is there) and
+a failure is never fatal: a server without it still serves PCM clients,
+and an opus client gets PCM with the reason logged.
 """
 
 from __future__ import annotations
@@ -22,7 +23,8 @@ FRAME_MS = 60
 FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000  # 1440
 FRAME_BYTES = FRAME_SAMPLES * 2 * CHANNELS  # 2880
 # Outbound carries music as well as speech, hence APPLICATION_AUDIO; 32
-# kbit/s VBR is ~240 bytes per 60 ms packet (~4 KB/s against 48 KB/s PCM).
+# kbit/s VBR is ~240 bytes per 60 ms packet: ~4 KB/s, against 48 KB/s of
+# PCM (64 KB/s once base64'd into JSON).
 BITRATE = 32000
 # Longest packet Opus allows is 120 ms. A decode buffer this big never
 # truncates, whatever frame size a client picks.

@@ -203,6 +203,7 @@ class _ConnInfo:
     # an earcon nothing follows). Restarted by every `send_audio`.
     opus_flush_timer: asyncio.TimerHandle | None = None
     opus_flush_task: asyncio.Task[None] | None = None
+    opus_last_push_s: float = 0.0  # time.monotonic() of the last send_audio
     opus_rx_errors: int = 0
     # Set once `hello` is out. An opus client gets no binary before its
     # hello (it learns the format there), so audio for it until then is
@@ -1035,11 +1036,13 @@ class AudioServer:
     _AUDIO_CHUNK_BYTES = 12 * 1024
 
     # Opus only: how long no new PCM means "this sound is over", so its
-    # partial frame goes out zero-padded. Above the 100 ms cadence of the
-    # real-time streams (audiobooks, radio, Spotify all send 100 ms
-    # chunks): at ~100 ms the timer would race every chunk and pad
-    # silence into the music. Replies and streams don't wait for it:
-    # `model_speaking: false` and `stream_ended` flush at once.
+    # partial frame goes out zero-padded (an earcon nothing follows).
+    # Above the 100 ms cadence of the real-time streams (audiobooks,
+    # radio, Spotify all send 100 ms chunks): at ~100 ms the timer would
+    # race every chunk. Replies and streams don't use it at all:
+    # `model_speaking: false` and `stream_ended` flush at once, and no
+    # timer runs while a stream is announced, so a source that stalls
+    # never gets silence padded into it.
     _OPUS_IDLE_FLUSH_S = 0.25
 
     async def send_audio(self, pcm: bytes) -> None:
@@ -1053,6 +1056,12 @@ class AudioServer:
                 await logger.adebug("server.tx.opus_before_hello_dropped", pcm_bytes=len(pcm))
             return
         for offset in range(0, len(pcm), self._AUDIO_CHUNK_BYTES):
+            # `_send` goes to whichever client is current. If an opus
+            # client took over mid-send (the walkie reconnecting), the
+            # rest of this PCM must not reach it as JSON audio.
+            current = self._conn
+            if current is not None and current.opus_tx is not None:
+                return
             chunk = pcm[offset : offset + self._AUDIO_CHUNK_BYTES]
             t0 = time.monotonic()
             wire = await self._send({"type": "audio", "data": base64.b64encode(chunk).decode()})
@@ -1066,16 +1075,23 @@ class AudioServer:
     ) -> None:
         """Encode whole 60 ms frames now, keep the remainder for the next
         call (or a flush), and write the packets."""
+        conn.opus_last_push_s = time.monotonic()
+        self._cancel_opus_idle_flush(conn)
         try:
             conn.opus_out.extend(encoder.push(pcm))
         except Exception as exc:
             await self._opus_encode_failed(conn, exc, pcm_bytes=len(pcm))
             return
-        if encoder.pending_bytes:
-            self._arm_opus_idle_flush(conn)
-        else:
-            self._cancel_opus_idle_flush(conn)
         await self._drain_opus(conn, pcm_bytes=len(pcm))
+        # Armed after the writes: a sender stuck in flow control is not
+        # idle. Not while a stream is announced (see _OPUS_IDLE_FLUSH_S).
+        if (
+            encoder.pending_bytes
+            and self._conn is conn
+            and conn.opus_tx is encoder
+            and self._active_stream_id is None
+        ):
+            self._arm_opus_idle_flush(conn)
 
     async def _drain_opus(self, conn: _ConnInfo, *, pcm_bytes: int) -> None:
         """Write queued packets, one binary message each, in queue order.
@@ -1084,25 +1100,45 @@ class AudioServer:
         next packet, and `ws.send` writes the frame before it waits on
         flow control, so the wire order is the encoder order however
         many tasks send audio at once. Same pacing as the PCM path: each
-        send waits out websockets' backpressure, then yields."""
+        send waits out websockets' backpressure, then yields.
+
+        Cancelled mid-way (a barge-in or a pause cancels the task sending
+        a sound), the sound was cut: what it still had queued is dropped
+        and the encoder reset, as a cancelled PCM send's other chunks
+        never go out. Otherwise a pause with no `audio_clear` would play
+        the leftover ahead of the next sound."""
         sends = wire = 0
         wait_ms = 0.0
-        while conn.opus_out and self._conn is conn and conn.ws is not None:
-            packet = conn.opus_out.popleft()
-            t0 = time.monotonic()
-            try:
+        try:
+            while conn.opus_out and self._conn is conn and conn.ws is not None:
+                packet = conn.opus_out.popleft()
+                t0 = time.monotonic()
                 await conn.ws.send(packet)
-            except websockets.ConnectionClosed:
-                conn.opus_out.clear()
-                break
-            wait_ms += (time.monotonic() - t0) * 1000
-            sends += 1
-            wire += len(packet)
-            conn.frames_tx += 1
-            conn.bytes_tx += len(packet)
-            conn.last_tx_at_ms = _now_ms()
-            conn.tx_types["opus"] = conn.tx_types.get("opus", 0) + 1
-            await asyncio.sleep(0)
+                wait_ms += (time.monotonic() - t0) * 1000
+                sends += 1
+                wire += len(packet)
+                conn.frames_tx += 1
+                conn.bytes_tx += len(packet)
+                conn.last_tx_at_ms = _now_ms()
+                conn.tx_types["opus"] = conn.tx_types.get("opus", 0) + 1
+                await asyncio.sleep(0)
+        except websockets.ConnectionClosed:
+            conn.opus_out.clear()
+        except asyncio.CancelledError:
+            dropped_packets = len(conn.opus_out)
+            conn.opus_out.clear()
+            dropped_pcm = 0
+            if conn.opus_tx is not None:
+                with contextlib.suppress(Exception):
+                    dropped_pcm = conn.opus_tx.reset()
+            self._cancel_opus_idle_flush(conn)
+            # Sync call: no await between a cancellation and its re-raise.
+            logger.debug(
+                "server.tx.opus_cancelled",
+                dropped_packets=dropped_packets,
+                dropped_pcm_ms=dropped_pcm // _PCM_BYTES_PER_MS,
+            )
+            raise
         if self._conn is conn:
             await self._tx_audio_stats(pcm_bytes, wait_ms, sends=sends, wire_bytes=wire)
 
@@ -1113,6 +1149,8 @@ class AudioServer:
         `_OPUS_IDLE_FLUSH_S`)."""
         if conn is None or conn.opus_tx is None:
             return
+        if reason == "idle" and time.monotonic() - conn.opus_last_push_s < self._OPUS_IDLE_FLUSH_S:
+            return  # PCM came in after the timer fired: not idle after all
         self._cancel_opus_idle_flush(conn)
         tail_ms = conn.opus_tx.pending_bytes // _PCM_BYTES_PER_MS
         try:
@@ -1124,8 +1162,7 @@ class AudioServer:
             return
         conn.opus_out.append(packet)
         await self._drain_opus(conn, pcm_bytes=0)
-        # An `idle` flush in the middle of music means the source stalled
-        # past the timer and up to `pad_ms` of silence went into it.
+        # One line per sound end: `pad_ms` of silence closed this sound.
         await logger.ainfo(
             "server.tx.opus_flush", reason=reason, tail_ms=tail_ms, pad_ms=FRAME_MS - tail_ms
         )
@@ -1178,7 +1215,7 @@ class AudioServer:
         """Count outbound audio; once a second, log what went out.
         `audio_ms` is PCM duration handed to `send_audio`, whatever the
         encoding; `bytes_sent` is what went on the wire for it (JSON +
-        base64 for PCM, Opus packets for opus: ~48 KB/s vs ~4 KB/s).
+        base64 for PCM, Opus packets for opus: ~64 KB/s vs ~4 KB/s).
         `sends` counts WebSocket messages. `send_wait_ms` is time spent
         in `ws.send` (websockets waits there when its buffer is over the
         high-water mark: the network isn't keeping up); `sock_unsent` is
