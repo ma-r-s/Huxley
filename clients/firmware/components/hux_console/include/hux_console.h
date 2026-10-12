@@ -15,6 +15,9 @@
  *   wifistat            the Wi-Fi driver's buffer / RX / TX counters
  *   info                heap, PSRAM, task stack headroom, ring, volume
  *                       (and the codec's register), RSSI
+ *   reboot              restart in software: the safe way for a tool to
+ *                       get a fresh boot (an RTS pulse can leave the chip
+ *                       in download mode until a power cut)
  *
  * Each command is logged as `console.cmd ...` (and so streamed to the
  * server), so a bench press never passes for a real one in the logs.

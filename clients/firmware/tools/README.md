@@ -10,10 +10,12 @@ cleared on reboot. Never commit captures.
 
 | Script              | What it does                                                                                           | Needs          |
 | ------------------- | ------------------------------------------------------------------------------------------------------ | -------------- |
-| `serial-capture.sh` | Tails the board's USB-CDC to `/tmp/huxley-debug/serial-<ts>.log`. Non-interactive; runs in background. | —              |
+| `flash.sh`          | Flashes `build/` and boots it with a watchdog reset (`--clips` adds the bench clips; `--unstick` boots a board stuck in download mode). Use it instead of `idf.py flash`. | ESP-IDF env |
+| `serial_log.py`     | Logs the console without resetting the board (DTR/RTS held still), follows it across USB sockets, sends commands from a FIFO. | pyserial (ESP-IDF env) |
+| `serial-capture.sh` | Runs `serial_log.py` in the background into `/tmp/huxley-debug/serial-<ts>.log`; commands via `/tmp/huxley-debug/console.fifo`. | ESP-IDF env |
 | `serial-stop.sh`    | Kills any active `serial-capture.sh` capture.                                                          | —              |
 | `tcpdump-ws.sh`     | Packet-captures the server's WS traffic to `/tmp/huxley-debug/ws-<ts>.pcap` for Wireshark analysis.    | `sudo` (macOS) |
-| `smoke.sh`          | Resets (or flashes) the board, waits for READY.                                                        | ESP-IDF env    |
+| `smoke.sh`          | Reboots the board through its console (or flashes it first), waits for READY.                         | ESP-IDF env    |
 | `bench.py`          | The bench check list, PASS/FAIL per step: boot, self-test, a turn, volume, barge-in, offline + recovery, eviction, headroom. No hand, no sound (`--loud` keeps the amp on). Log in `/tmp/huxley-debug/bench-*.log`. | ESP-IDF env (pyserial), server up |
 | `clips.py`          | Renders the Spanish questions `say <n>` plays into the mic (macOS `say -o`, nothing is played) into `build/clips.bin` for the storage partition. | macOS, ffmpeg  |
 | `jtag_lever.py`     | Presses the case's lever (GPIO7) electrically over JTAG.                                               | OpenOCD        |

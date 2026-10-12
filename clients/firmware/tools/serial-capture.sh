@@ -1,23 +1,22 @@
 #!/usr/bin/env bash
-# Capture the board's USB-CDC serial output to a timestamped file under
-# /tmp/huxley-debug/. Non-interactive; returns immediately with the
-# capture running in the background.
+# Capture the board's USB console to a timestamped file under
+# /tmp/huxley-debug/, in the background, without resetting the board
+# (tools/serial_log.py holds the USB control lines still).
 #
 # Usage:
-#   ./serial-capture.sh            # the first /dev/cu.usbmodem* (the board)
-#   ./serial-capture.sh /dev/cu.usbmodem...  # explicit port
+#   ./serial-capture.sh
 #
 # Output files:
 #   /tmp/huxley-debug/serial-YYYYmmdd-HHMMSS.log   (per-session)
 #   /tmp/huxley-debug/serial-latest.log            (symlink to newest)
 #   /tmp/huxley-debug/serial.pid                   (for serial-stop.sh)
+#   /tmp/huxley-debug/console.fifo                 (echo info > it: a console command)
 set -euo pipefail
 
-PORT="${1:-$(ls /dev/cu.usbmodem* 2>/dev/null | head -n 1 || true)}"
 OUTDIR="/tmp/huxley-debug"
 mkdir -p "$OUTDIR"
 
-# Reap any prior capture on the same port so we don't split bytes.
+# Reap any prior capture so we don't split bytes.
 if [[ -f "$OUTDIR/serial.pid" ]]; then
     OLD_PID=$(cat "$OUTDIR/serial.pid" 2>/dev/null || true)
     if [[ -n "${OLD_PID:-}" ]] && kill -0 "$OLD_PID" 2>/dev/null; then
@@ -26,28 +25,19 @@ if [[ -f "$OUTDIR/serial.pid" ]]; then
     fi
 fi
 
-if [[ ! -e "$PORT" ]]; then
-    echo "error: port $PORT not found. Plug the board in?" >&2
-    exit 1
-fi
-
-# 115200 8N1 raw, no echo — matches ESP-IDF console default.
-stty -f "$PORT" 115200 cs8 -cstopb -parenb raw -echo
-
 OUT="$OUTDIR/serial-$(date +%Y%m%d-%H%M%S).log"
-cat "$PORT" >"$OUT" 2>&1 &
+python "$(dirname "$0")/serial_log.py" "$OUT" --cmd "$OUTDIR/console.fifo" 2>/dev/null &
 PID=$!
 disown "$PID" 2>/dev/null || true
 echo "$PID" >"$OUTDIR/serial.pid"
-
 ln -sfn "$(basename "$OUT")" "$OUTDIR/serial-latest.log"
 
-cat <<EOF
-serial capture started
-  pid:    $PID
-  port:   $PORT
-  out:    $OUT
-  latest: $OUTDIR/serial-latest.log
-follow live:   tail -f $OUTDIR/serial-latest.log
-stop:          $(dirname "$0")/serial-stop.sh
-EOF
+cat <<MSG
+serial capture started (no reset)
+  pid:     $PID
+  out:     $OUT
+  latest:  $OUTDIR/serial-latest.log
+follow:    tail -f $OUTDIR/serial-latest.log
+command:   echo info > $OUTDIR/console.fifo
+stop:      $(dirname "$0")/serial-stop.sh
+MSG

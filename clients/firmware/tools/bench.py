@@ -37,7 +37,10 @@ class Board:
         self.log = open(log_path, "w", buffering=1)
         self.s = serial.Serial()
         self.s.port, self.s.baudrate, self.s.timeout = port, 115200, 0.05
-        self.s.dtr = self.s.rts = False  # opening must not reset the chip
+        # Held high and never changed: on the S3's USB-Serial/JTAG a reset
+        # needs RTS high with DTR low, and a reset at the wrong moment can
+        # leave the chip in download mode (tools/flash.sh --unstick).
+        self.s.dtr = self.s.rts = True
         self.s.open()
         self.lines: list[str] = []
         self.lock = threading.Lock()
@@ -67,9 +70,8 @@ class Board:
         self.s.write(cmd.encode() + b"\n")
 
     def reset(self) -> None:
-        self.s.rts = True
-        time.sleep(0.1)
-        self.s.rts = False
+        # Through the firmware (esp_restart), never the USB reset lines.
+        self.send("reboot")
 
     def expect(self, pattern: str, timeout: float, since: int) -> str | None:
         """First line after `since` matching `pattern`, or None at timeout."""
@@ -163,8 +165,8 @@ def main() -> int:
         line = b.expect(r"info ring_used=", timeout, m)
         return line is not None
 
-    # Opening the port can reset the board (macOS toggles the lines): if
-    # it is booting, let it get to READY before the first step.
+    # If the board happens to be booting (just plugged in), let it get to
+    # READY before the first step.
     if "boot" not in steps:
         time.sleep(1.5)
         if b.grep(r"boot version=", 0):

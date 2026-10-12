@@ -6,8 +6,8 @@ PIDFILE="/tmp/huxley-debug/serial.pid"
 
 if [[ ! -f "$PIDFILE" ]]; then
     # Sweep anyway in case the pidfile was lost.
-    pkill -f "cat /dev/cu.usbmodem" 2>/dev/null || true
-    echo "no serial.pid; swept stray cats."
+    pkill -f "serial_log.py" 2>/dev/null || true
+    echo "no serial.pid; swept stray loggers."
     exit 0
 fi
 

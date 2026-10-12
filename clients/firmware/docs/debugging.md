@@ -53,22 +53,31 @@ The primary channel. Every log line always hits serial regardless of
 level. Connect:
 
 ```sh
-# With idf.py (needs a real terminal):
-. ~/esp/esp-idf/export.sh
-cd firmware
-idf.py -p /dev/cu.usbmodem1101 monitor
+tools/serial-capture.sh          # background, into /tmp/huxley-debug
+tail -f /tmp/huxley-debug/serial-latest.log
+echo info > /tmp/huxley-debug/console.fifo    # a console command
 ```
 
-Or without:
+Don't attach `idf.py monitor`, `cat`, or a terminal program to the
+board's port: they toggle DTR/RTS, and on the S3's USB-Serial/JTAG an
+RTS reset doesn't re-read the boot pins, so the chip can land in
+download mode and stay there (2026-10-12, inside the closed case). The
+repo's loggers hold the lines still. Decode a backtrace by hand:
+`xtensa-esp32s3-elf-addr2line -pfiaC -e build/huxley-firmware.elf <addrs>`,
+or read the coredump (below).
 
-```sh
-stty -f /dev/cu.usbmodem1101 115200 cs8 -cstopb -parenb raw -echo
-cat /dev/cu.usbmodem1101
-```
+### Stuck in download mode
 
-`idf.py monitor` is strictly better — it decodes panic backtraces to
-source lines and handles resets gracefully. Use `cat` only when
-scripting.
+Symptom: silent, no Wi-Fi, no server connection; the console prints
+`rst:0x15 (USB_UART_CHIP_RESET),boot:0x0 (DOWNLOAD(USB/UART0))` and
+`waiting for download`. Cause: a host reset the chip over USB with the
+boot pin overridden low, and every later RTS or JTAG reset keeps the
+latched download mode (esptool docs: the USB-Serial/JTAG's RTS is a
+core reset that "does not re-sample the boot strapping pins"). Fix,
+from the Mac: `tools/flash.sh --unstick` (esptool's watchdog reset, a
+full system reset that re-reads them). A power cut fixes it too. The
+S3 has no switch to refuse a host's reset (later Espressif chips do);
+`RTC_CNTL_USB_RESET_DISABLE` doesn't do it.
 
 ### Huxley server log (via WebSocket)
 

@@ -220,6 +220,32 @@ bench check list and prints PASS/FAIL. Review: a `say` whose press was
 ignored left its clip armed for the next real press; the console disarms
 it when the say ends.
 
+### F-0020: The walkie got stuck in download mode inside its closed case · fixed 2026-10-12
+
+**Problem**: plugged into the Mac after running on battery, the walkie
+went silent: `rst:0x15 (USB_UART_CHIP_RESET),boot:0x0
+(DOWNLOAD(USB/UART0))`, `waiting for download`. Every reset after that
+(esptool's RTS reset, my logger's, a JTAG reset) came back the same;
+only a power cut (rocker off, USB out) brought it back, and Mario had
+to open the case.
+**Cause** (esptool docs, "Advanced Options"; Espressif staff on
+esp32.com): on the S3's USB-Serial/JTAG the host's RTS line is a core
+reset that doesn't re-read the boot pins, so a chip a host once reset
+with the boot pin overridden low stays in download mode. Opening the
+port with DTR/RTS toggling (my logger, `idf.py monitor`, terminals) can
+do that, and `idf.py flash` ends with an RTS reset. GPIO0 read high
+throughout (esptool `read_mem` of GPIO_IN): the case doesn't press BOOT.
+The S3 can't refuse a host's reset in software (C6 and later can;
+`RTC_CNTL_USB_RESET_DISABLE` doesn't, per a forum report).
+**Fix**: `tools/flash.sh` flashes and ends with esptool's watchdog reset
+(a full reset that re-reads the pins) and `--unstick` boots a stuck
+board from the Mac; `tools/serial_log.py` (and `serial-capture.sh`,
+`bench.py`, `smoke.sh` on top of it) hold DTR and RTS still; the console
+has `reboot` (esp_restart) so tools never reset the board over USB. The
+README, debugging guide and CLAUDE.md say not to use `idf.py flash` /
+`monitor` on this board. On battery or a plain charger nothing drives
+those lines: a walkie in use can't get there.
+
 Note on IDs: F-0011 to F-0013 were used in code comments and commit
 messages (boot buzz, decode scratch, Wi-Fi power save) but their
 entries never landed here; F-0003 (the speaker path) shipped as v0.3.x

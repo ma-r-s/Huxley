@@ -102,20 +102,34 @@ cp main/secrets.example.h main/secrets.h
 cd clients/firmware
 idf.py set-target esp32s3      # first time only
 idf.py build
-idf.py -p /dev/cu.usbmodem1101 flash monitor
+tools/flash.sh                 # flash and boot it (not `idf.py flash`)
+tools/serial-capture.sh        # log the console without resetting it
 ```
 
+**Flash with `tools/flash.sh`, never `idf.py flash`; don't use `idf.py
+monitor` or a plain terminal on the board's port.** On the S3's built-in
+USB the host's RTS line resets the chip without re-reading its boot
+pins, so a chip that slipped into download mode stays there ("waiting
+for download", silent, dead to the user) until a power cut. `idf.py
+flash` ends with exactly that reset, and terminals toggle the lines when
+they open the port. `flash.sh` ends with esptool's watchdog reset (a
+full reset that re-reads the pins); the repo's loggers and `bench.py`
+hold the lines still and restart the board through its console
+(`reboot`). If it ever happens anyway: `tools/flash.sh --unstick`, from
+the Mac, case closed. On battery or a plain charger nothing drives those
+lines, so a walkie in use can't get there.
+
 The port name follows the USB socket (`usbmodem1101`, `usbmodem2101`,
-…): `ls /dev/cu.usbmodem*`.
+…): `ls /dev/cu.usbmodem*`; `tools/` finds it.
 
 `dependencies.lock` (gitignored) pins the managed components; copy the
 one from a checkout that has run on the board (esp_codec_dev 1.4.0,
 esp_websocket_client 1.6.1, IDF 5.5.4) rather than letting the
 component manager pick newer ones.
 
-If the board doesn't enumerate as `/dev/cu.usbmodem*`, hold **BOOT**,
-tap **RESET**, release BOOT — this puts the S3 into the download-mode
-bootloader.
+If the board doesn't enumerate as `/dev/cu.usbmodem*` at all, hold
+**BOOT**, tap **RESET**, release BOOT: the S3 enters the download-mode
+bootloader, and `tools/flash.sh` gets it out with a new image.
 
 ## Tests
 
@@ -188,9 +202,8 @@ evicts the first, so close the PWA tab while testing the board.
    check the IP is the server's today (`ipconfig getifaddr en0`); DHCP
    moves it (a reservation in the router stops that). If `ws.connected`
    never shows, this is the first suspect.
-2. `idf.py -p /dev/cu.usbmodem1101 flash monitor` (or `tools/smoke.sh
-   --flash`, which waits for READY; check the port with `ls
-   /dev/cu.usbmodem*`).
+2. `tools/flash.sh`, then `tools/serial-capture.sh` (or `tools/smoke.sh
+   --flash`, which waits for READY).
 3. Serial should show, in order: `boot version=…`, `button_task started
    … talk=k2+gpio7`, `wifi.got_ip`, `ws.connected`, `ws.rx.hello
    protocol=2`, `state WAITING_HELLO -> READY`, then `ws.rx.state … ->

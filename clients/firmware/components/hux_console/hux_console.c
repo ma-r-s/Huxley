@@ -6,6 +6,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
@@ -91,6 +92,13 @@ static void handle_line(char *line) {
         ESP_LOGI(TAG, "console.wifi started err=%s", esp_err_to_name(err));
     } else if (strcmp(cmd, "info") == 0) {
         cmd_info();
+    } else if (strcmp(cmd, "reboot") == 0) {
+        /* A software restart: boots the app again, whatever the USB lines
+         * are doing. Tools use it instead of pulsing RTS, which on this
+         * chip can land it in download mode until a power cut. */
+        ESP_LOGW(TAG, "console.reboot");
+        vTaskDelay(pdMS_TO_TICKS(100)); /* let the log line out */
+        esp_restart();
     } else if (strcmp(cmd, "wifistat") == 0) {
         /* The Wi-Fi driver's own counters (buffers, RX/TX, hardware). */
         esp_wifi_statis_dump(WIFI_STATIS_BUFFER | WIFI_STATIS_RXTX | WIFI_STATIS_HW);
@@ -111,7 +119,7 @@ static void handle_line(char *line) {
         hux_audio_pa(strcmp(argv[1], "on") == 0);
     } else {
         ESP_LOGW(TAG, "console.unknown %s (talk, release, say N, tone [hz] [ms], vol N, pa on|off, "
-                      "selftest [hz], wifi off|on, wifistat, info)",
+                      "selftest [hz], wifi off|on, wifistat, info, reboot)",
                  cmd);
     }
 }

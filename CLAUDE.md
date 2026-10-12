@@ -134,7 +134,9 @@ Firmware (ESP-IDF must be sourced first):
 . ~/esp/esp-idf/export.sh
 cd clients/firmware
 idf.py build                                              # compile for ESP32-S3
-idf.py -p /dev/cu.usbmodem1101 flash monitor              # flash + serial (port: ls /dev/cu.usbmodem*)
+clients/firmware/tools/flash.sh                           # flash + boot (never `idf.py flash`: it can strand the S3 in download mode)
+clients/firmware/tools/serial-capture.sh                  # console log without resetting the board (never idf.py monitor)
+clients/firmware/tools/flash.sh --unstick                 # board silent, "waiting for download": boot it from the Mac
 
 # Tests (see clients/firmware/README.md §Tests for when to run which tier):
 cd clients/firmware/tests && cmake -B build && cmake --build build --target check
