@@ -125,6 +125,12 @@ def walkie_state(
             version = str(e.get("version")) if e.get("version") else version
             value = _int(e.get("rssi"))
             rssi = value if value is not None else rssi
+        elif name == "client.device.health" and e.conn in conns:
+            # The walkie's minute line: it is alive on this connection.
+            if e.conn in live:
+                heard[e.conn] = e.ts
+            value = _int(e.get("rssi"))
+            rssi = value if value is not None else rssi
         elif name == "client_disconnected":
             close(e.conn, e.ts)
         elif name == "client_evicted":

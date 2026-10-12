@@ -49,6 +49,7 @@ CONTEXT_EVENTS = frozenset(
         "huxley_starting",
         "client_connected",
         "client.device",
+        "client.device.hello",
         "client_disconnected",
         "client_evicted",
         "server.tx.stream_started",

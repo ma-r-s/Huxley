@@ -52,6 +52,8 @@ KEEP_EVENTS = frozenset(
         "client_disconnected",
         "client_evicted",
         "client.device",
+        "client.device.hello",  # replaced `device` in firmware 4f8d4907+ (protocol schema 1)
+        "client.device.health",  # the walkie's minute line
         "client.system.battery",
         FIRMWARE_LOG,
         # OpenAI
@@ -160,6 +162,26 @@ def to_event(obj: dict[str, Any], raw: str, keep: frozenset[str] = KEEP_EVENTS) 
             ts=ts,
             name=name,
             f={"line": str(obj.get("line")), "conn_id": obj.get("conn_id")},
+            key=hash(raw.strip()),
+        )
+    if name == "client.device.hello":
+        # The schema-1 hello (protocol.md "Device contract") replaced the
+        # old `device` event: read as one, so every rule that knows the
+        # walkie by `client.device` keeps knowing it.
+        raw_net = obj.get("net")
+        net: dict[str, Any] = raw_net if isinstance(raw_net, dict) else {}
+        return Event(
+            ts=ts,
+            name="client.device",
+            f={
+                "shell": "firmware",
+                "mac": obj.get("device_id"),
+                "version": obj.get("version"),
+                "rssi": net.get("rssi"),
+                "board": obj.get("board"),
+                "slot_state": obj.get("slot_state"),
+                "conn_id": obj.get("conn_id"),
+            },
             key=hash(raw.strip()),
         )
     fields: dict[str, Any] = {}

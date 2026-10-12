@@ -722,3 +722,27 @@ def test_battery_old_reading_opens_nothing_but_keeps_an_open_item() -> None:
 def test_battery_takes_the_last_reading() -> None:
     lines = [_battery(15, ago(minutes=20)), _battery(40, ago(minutes=2))]
     assert _battery_item(lines) is None
+
+
+def test_the_schema1_hello_identifies_the_walkie() -> None:
+    """Firmware 4f8d4907+ sends device.hello, not device: the page called
+    a connected walkie offline for hours (2026-10-12)."""
+    hello = line(
+        "client.device.hello",
+        ago(minutes=30),
+        schema=1,
+        protocol=2,
+        device_id="44:1b:f6:85:26:80",
+        board="esp32s3-audio-board",
+        version="4dddec8c-otatest",
+        slot_state="pending_verify",
+        net={"ssid": "x", "channel": 9, "rssi": -29, "bssid": "y", "source": "compiled"},
+        conn_id="w9",
+    )
+    health = line("client.device.health", ago(minutes=1), rssi=-31, conn_id="w9")
+    lines = [BOOT, line("client_connected", ago(minutes=30), conn_id="w9"), hello, health]
+    i = inputs(lines, walkie_mac="44:1b:f6:85:26:80")
+    assert i.walkie.online is True
+    assert i.walkie.version == "4dddec8c-otatest"
+    assert i.walkie.rssi == -31
+    assert rule_walkie_offline(i) is None
