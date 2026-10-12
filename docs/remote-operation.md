@@ -274,8 +274,12 @@ All in one session with the case open, because it never opens again:
   at two points against a multimeter; median of idle samples, a Li-ion
   table with hysteresis, 6 dB attenuation (`hux_battery.c:43` uses 12 dB).
   Good for warnings, not a precise %.
-- Charging detection: an inline 100K/100K divider from header 5V to IO5 in
+- Charging detection: an inline 100K/100K divider from header 5V to IO8 in
   the harness, no board soldering (decided): the only way to know it's charging.
+  IO8, not IO5: the tails of IO4/5/6/9 sit 0.7 mm from the holder bridge's
+  bar, so a wire there gets crushed; IO8's clears it dressed upward (case
+  session, 2026-10-12). A bridge failure's fallback divider goes to IO3 the
+  same way.
 - Remove R15 (the 0 ohm link from the expander's INT# to GPIO0; the firmware
   never uses INT#): no reset can ever boot download mode again.
 - A pinhole to the board's RST button (designed by the case session): staff
