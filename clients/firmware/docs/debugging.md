@@ -234,10 +234,15 @@ scale): a peak of 0 dBFS alone can't tell one click from a clipped
 question.
 
 To reproduce instead of waiting for bad Wi-Fi: `python3 tools/bench.py
---wifi --steps stall,slowdown` routes the board through Toxiproxy (the
-console's `server <uri>`, until reboot) and throttles the uplink in the
-middle of a question (`stall`) or the downlink in the middle of a stream
-(`slowdown`, which prints the two columns above side by side).
+--wifi --steps stall,slowdown` routes the board through the bench's own
+proxy (the console's `server <uri> [min]`, back by itself after 15 min
+or a reboot) and stops the uplink in the middle of a question, then
+again with a WebSocket ping injected mid-stall (`stall`), or throttles
+the downlink in the middle of a stream (`slowdown`, which prints the two
+columns above side by side). The proxy's sockets have fixed 8 KB
+buffers so a stall reaches the board as it would over the air; Toxiproxy
+was tried first and doesn't do that on macOS without root (its buffers
+autotune to megabytes and swallowed the stall).
 
 ## Diagnosing WS / TCP flaps
 
