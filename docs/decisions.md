@@ -740,6 +740,6 @@ Considered alternatives:
 
 **Context**: OpenAI ends a Realtime session at 60 minutes (`session_expired`), mid-turn if that's when it lands. The 55-minute timer meant to pre-empt it restarted on every mic frame and cancelled its own disconnect, so it never worked.
 
-**Decision**: Time the session from its start. After `session_refresh_minutes` (50) the provider disconnects with a summary at the first idle moment: no response live or pending, no fresh user audio, the last reply done playing (estimated from the audio sent), 3 s without traffic. The app's auto-reconnect opens the next session. A planned refresh goes through the same path as any other disconnect.
+**Decision**: Time the session from its start. After `session_refresh_minutes` (50) the provider disconnects with a summary at the first idle moment: no call holding the mic, no response live or pending, no fresh user audio, the last reply done playing (estimated from the audio sent), 3 s without traffic. The app's auto-reconnect opens the next session. A planned refresh goes through the same path as any other disconnect.
 
 **Consequences**: The client sees CONVERSING, IDLE, CONNECTING, CONVERSING once every ~50 minutes, as it did on every expiry (the PWA plays its drop tone). What happens to a playing book on a reconnect is the coordinator's business, unchanged here. A session with no idle moment for its last 10 minutes still expires.

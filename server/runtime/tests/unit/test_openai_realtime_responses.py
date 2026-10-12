@@ -354,6 +354,32 @@ class TestSessionRefresh:
         provider._last_activity_at = now - 1
         assert provider._refresh_blocker(now) == "recent_traffic"
 
+    async def test_no_refresh_during_a_call(self, persona: PersonaSpec) -> None:
+        """A claim (call) suspends the provider; a refresh would hang it up."""
+        provider, _ws, _cb = _provider(persona)
+        await provider.suspend()
+        now = provider._last_activity_at + 100
+        assert provider._refresh_blocker(now) == "input_claimed"
+        await provider.resume()
+        assert provider._refresh_blocker(now) is None
+
+    async def test_server_close_stops_the_sessions_refresh_task(
+        self, persona: PersonaSpec
+    ) -> None:
+        """After OpenAI closes the socket (e.g. `session_expired` while the
+        refresh waited for idle), the old refresh task must not fire during
+        the auto-reconnect and close the new session."""
+        provider, ws, _cb = _provider(persona)
+        refresh = asyncio.create_task(asyncio.sleep(3600))
+        provider._refresh_task = refresh
+        receive = asyncio.create_task(provider._receive_loop())
+        await asyncio.sleep(0)
+        ws.finish(1000, "session expired")
+        await receive
+        await asyncio.sleep(0)
+        assert refresh.cancelled()
+        assert provider._refresh_task is None
+
     async def test_reply_audio_counts_as_playing(self, persona: PersonaSpec) -> None:
         provider, _ws, _cb = _provider(persona)
         await provider._handle_server_event(_created("r1", 0))

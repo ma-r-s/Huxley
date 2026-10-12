@@ -749,6 +749,14 @@ class OpenAIRealtimeProvider:
         except Exception:
             await logger.aexception("session_receive_error")
         finally:
+            # The server closed this session (no `disconnect()`, which clears
+            # `_ws` first): its refresh task must not outlive it. Due and
+            # polling, it would otherwise go idle 3 s after the close and
+            # disconnect whatever `_ws` is by then, possibly the session
+            # the auto-reconnect is opening.
+            if self._ws is ws and self._refresh_task is not None:
+                self._refresh_task.cancel()
+                self._refresh_task = None
             # Read AND clear the pending summary so a subsequent natural
             # close (e.g. a quick auto-reconnect that immediately exits
             # again) doesn't carry the previous session's summary into a
@@ -763,6 +771,10 @@ class OpenAIRealtimeProvider:
 
     def _refresh_blocker(self, now: float) -> str | None:
         """Why the session can't be refreshed at `now`; None when idle."""
+        # A skill holds the mic (a call): a disconnect ends the claim with
+        # ERROR, i.e. hangs up the call. Wait until it's over.
+        if self._suspended:
+            return "input_claimed"
         if self._active_response_id is not None:
             return "response_active"
         if self._create_deferred_at is not None:
