@@ -22,6 +22,10 @@ import httpx
 
 TOKEN_URL = "https://accounts.spotify.com/api/token"
 SEARCH_URL = "https://api.spotify.com/v1/search"
+AUDIOBOOK_URL = "https://api.spotify.com/v1/audiobooks/{id}"
+CHAPTERS_URL = "https://api.spotify.com/v1/audiobooks/{id}/chapters"
+# Spotify's page size for chapters; a long book has a few pages.
+_CHAPTER_PAGE = 50
 
 # "audiobook" is asked for by name only; a mixed ("any") search never
 # returns books, so a song with a book's title stays a song.
@@ -46,6 +50,35 @@ class Match:
     kind: str
     title: str
     artist: str | None
+    # Books only: the edition's languages and Spotify's description.
+    languages: tuple[str, ...] = ()
+    about: str = ""
+
+
+@dataclass(frozen=True)
+class Chapter:
+    """One chapter of a book, as the Web API lists it. `name` is what the
+    book calls it ("Capítulo 5", "Créditos iniciales", "Primera Parte"),
+    which is what to say and to match: the index counts short parts too."""
+
+    uri: str
+    name: str
+    duration_ms: int
+
+
+@dataclass(frozen=True)
+class BookInfo:
+    uri: str
+    title: str
+    author: str | None
+    description: str
+    chapters: tuple[Chapter, ...]
+
+    def index_of(self, chapter_uri: str | None) -> int | None:
+        for i, chapter in enumerate(self.chapters):
+            if chapter.uri == chapter_uri:
+                return i
+        return None
 
 
 def _fold(text: str) -> str:
@@ -158,6 +191,7 @@ class SpotifySearch:
         self._http = http or httpx.AsyncClient(timeout=5.0)
         self._token: str | None = None
         self._token_expires = 0.0
+        self._books: dict[str, BookInfo] = {}
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -227,26 +261,69 @@ class SpotifySearch:
                         kind=kind,
                         title=name,
                         artist=str(by) if by else None,
+                        languages=tuple(str(x) for x in entry.get("languages") or ()),
+                        about=str(entry.get("description") or "") if kind == "audiobook" else "",
                     )
                 )
         return matches
 
+    async def book(self, uri: str) -> BookInfo:
+        """A book's title, author, description and every chapter, cached:
+        a book's chapters don't change while it's being listened to."""
+        cached = self._books.get(uri)
+        if cached is not None:
+            return cached
+        book_id = uri.rsplit(":", 1)[-1]
+        data = await self._get(AUDIOBOOK_URL.format(id=book_id), {})
+        page = data.get("chapters") or {}
+        items = list(page.get("items") or [])
+        total = int(page.get("total") or len(items))
+        while len(items) < total:
+            more = await self._get(
+                CHAPTERS_URL.format(id=book_id), {"offset": len(items), "limit": _CHAPTER_PAGE}
+            )
+            got = [c for c in more.get("items") or [] if c]
+            if not got:
+                break
+            items.extend(got)
+        chapters = tuple(
+            Chapter(
+                uri=str(c["uri"]),
+                name=str(c.get("name") or ""),
+                duration_ms=int(c.get("duration_ms") or 0),
+            )
+            for c in items
+            if c and c.get("uri")
+        )
+        info = BookInfo(
+            uri=uri,
+            title=str(data.get("name") or ""),
+            author=_artists(data),
+            description=str(data.get("description") or ""),
+            chapters=chapters,
+        )
+        self._books[uri] = info
+        return info
+
     async def _search(self, query: str, types: str, *, limit: int) -> dict[str, Any]:
-        params: dict[str, str | int] = {"q": query, "type": types, "limit": limit}
+        return await self._get(SEARCH_URL, {"q": query, "type": types, "limit": limit})
+
+    async def _get(self, url: str, params: dict[str, str | int]) -> dict[str, Any]:
+        params = dict(params)
         if self._market:
             params["market"] = self._market
         for attempt in range(2):
             token = await self._access_token(force=attempt > 0)
             try:
                 response = await self._http.get(
-                    SEARCH_URL, params=params, headers={"Authorization": f"Bearer {token}"}
+                    url, params=params, headers={"Authorization": f"Bearer {token}"}
                 )
             except httpx.HTTPError as exc:
-                raise SearchError(f"search request failed: {type(exc).__name__}") from exc
+                raise SearchError(f"request failed: {type(exc).__name__}") from exc
             if response.status_code == 401 and attempt == 0:
                 continue  # token revoked or expired early: renew once
             if response.status_code != 200:
-                raise SearchError(f"search answered {response.status_code}")
+                raise SearchError(f"{url.rsplit('/', 1)[-1]} answered {response.status_code}")
             try:
                 result: dict[str, Any] = response.json()
             except ValueError as exc:

@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -49,11 +50,47 @@ class PlayerState:
     item: dict[str, Any] | None = None
     # What is loaded: a track, album, playlist or artist URI.
     context_uri: str | None = None
+    # Where playback was at Soloist's wall clock `position_at_ms`, moving
+    # at `speed` (0 while paused). Interpolate with `position_now`.
+    position_ms: int | None = None
+    position_at_ms: int | None = None
+    speed: float = 0.0
     last_error: str | None = None
     # Bumped on every `error` event, so a waiter can tell a new error
     # from one it already saw.
     error_count: int = 0
     extra: dict[str, Any] = field(default_factory=dict)
+
+
+def position_now(state: PlayerState, now_ms: float | None = None) -> int | None:
+    """The playback position now, from the last anchor Soloist sent."""
+    if state.position_ms is None:
+        return None
+    if not state.speed or state.position_at_ms is None:
+        return state.position_ms
+    now = time.time() * 1000 if now_ms is None else now_ms
+    return int(state.position_ms + max(0.0, now - state.position_at_ms) * state.speed)
+
+
+def item_uri(item: dict[str, Any] | None) -> str | None:
+    uri = (item or {}).get("uri")
+    return str(uri) if uri else None
+
+
+def item_duration_ms(item: dict[str, Any] | None) -> int | None:
+    """A track's or chapter's length, at `decorations.playback.duration_ms`."""
+    duration = ((item or {}).get("decorations") or {}).get("playback", {}).get("duration_ms")
+    return int(duration) if isinstance(duration, int | float) else None
+
+
+def _position_fields(position: Any) -> dict[str, Any]:
+    if not isinstance(position, dict) or "position_ms" not in position:
+        return {}
+    return {
+        "position_ms": int(position.get("position_ms") or 0),
+        "position_at_ms": int(position.get("timestamp_ms") or time.time() * 1000),
+        "speed": float(position.get("speed") or 0.0),
+    }
 
 
 def _identity(entity: dict[str, Any]) -> str | None:
@@ -192,7 +229,10 @@ class SoloistClient:
                     item=event.get("item", self.state.item),
                     is_active=bool(event.get("is_active", self.state.is_active)),
                     context_uri=(event.get("context") or {}).get("uri", self.state.context_uri),
+                    **_position_fields(event.get("position")),
                 )
+            case "position_sync":
+                await self._update(**_position_fields(event.get("position")))
             case "playback_changed":
                 await self._update(status=str(event.get("status") or self.state.status))
             case "context_changed":

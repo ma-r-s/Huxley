@@ -9,9 +9,12 @@ server's one audio channel, never through a separate speaker.
 
 | Tool            | Args                                                                   | Returns                                                                                                                         |
 | --------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `play_music`    | `query?: string`, `kind?: any \| track \| artist \| album \| playlist \| audiobook` | `{ ok, playing, by, kind, alternatives? }` + `AudioStream`; no query: `{ ok, action: "resume" }` + `AudioStream`; or `{ ok: false, reason, say }` |
-| `music_control` | `action: pause \| resume \| next \| previous`                         | pause: `CancelMedia`; the others: `AudioStream` (resume)                                     |
-| `whats_playing` | (none)                                                                | `{ ok, title, by, then }` (info tool; the music resumes after the answer), or `nothing_playing` |
+| `play_music`    | `query?: string`, `kind?: any \| track \| artist \| album \| playlist` | `{ ok, playing, by, kind, alternatives? }` + `AudioStream`; no query: `{ ok, action: "resume" }` + `AudioStream`; or `{ ok: false, reason, say }` |
+| `music_control` | `action: pause \| resume \| next \| previous`                         | pause: `CancelMedia`; the others: `AudioStream` (resume). In a book, next / previous are chapters |
+| `whats_playing` | (none)                                                                | `{ ok, title, by, then }`, for a book `{ ok, book, by, chapter, then }` (info tool; what played resumes after the answer), or `nothing_playing` |
+| `play_book`     | `title?`, `from_beginning?`, `confirmed?`                            | `{ ok, playing, by, kind: "audiobook" }` + `AudioStream`, or `{ ok: false, reason, then }` |
+| `book_control`  | `action: back \| forward \| restart_chapter \| go_to_chapter \| go_back_to_saved_place`, `seconds?`, `chapter?` | `AudioStream` (resume), or `{ ok: false, reason, then }` |
+| `find_books`    | `query?`                                                              | `{ ok, books: [{ n, title, by, length?, about?, listened_here }], then }` |
 
 **Search returns up to three distinct candidates.** The best plays; the
 other two go back as `alternatives` (`title`, `by`, `kind`). They are
@@ -32,30 +35,6 @@ top title is far from it (under 0.5) and another is close (0.6 or more,
 0.2 ahead), that one plays. If none of the top five is close, the
 artist's own tracks are searched too. A clear title keeps Spotify's
 order.
-
-**Audiobooks** (`kind: "audiobook"`, 2026-10-12, T1.39): a search of
-Spotify's audiobook catalog (`type=audiobook`; `by` is the author). A
-book is a `spotify:show:` URI whose chapters are episodes, and Soloist
-plays it like an album. Spotify keeps the account's place in each book,
-so asking for the same book again continues it (verified: a replay
-started at 0:09 of the credits and ran on into chapter 1). `next` /
-`previous` move between chapters; `whats_playing` says the book and the
-chapter ("Cien años de soledad, Capítulo 1"), since a chapter's own name
-is only "Capítulo 1". A mixed (`any`) search never returns books, so a
-song that shares a book's title stays a song. Books cost listening
-hours: Spotify gives a Premium Familiar plan's hours to its holder only,
-so a device signed in as another member needs hours bought for that
-account. With none left, Soloist reports `playing` and then `idle` 0.3 s
-later, with no error; any fresh start that goes idle within 3 s
-(`REFUSED_S`) is a refusal, spoken as `audiobook_refused` for a book and
-`start_failed` for music, never taken for the end of the album. Not
-every book is included with Premium: some are purchase-only ("El
-extranjero" shows "Comprar" in the app and was refused the same way),
-and the Web API doesn't say which, so the spoken line names both causes.
-These two narrations contradict the tool's own `ok: true`, so they state
-the fact ("the book is NOT playing") and give the exact line to say:
-told only to "tell the user Spotify wouldn't play it", the model said
-the book was playing (live, 2026-10-12).
 
 **No query** (the user asked for music without saying which): continue
 what Soloist has loaded (it keeps its last context across restarts).
@@ -84,6 +63,64 @@ item's title is at `decorations.identity.name` and its artists at
 started device turns `is_active` only a moment after playback starts. So
 a start counts only when the new context is playing, and a takeover only
 when the device was active and then wasn't.
+
+## Audiobooks (T1.39, T1.40)
+
+Built for the least technical listener: every request a person makes of a
+book, and every way a book stops, answered in exact words (a stated fact
+plus the line to say: told only to "tell the user Spotify wouldn't play
+it", the model said the book was playing, 2026-10-12). Book logic lives in
+`books.py`, the words in `lines.py`.
+
+**How a book plays.** A book is a `spotify:show:` URI whose chapters are
+episodes. Spotify keeps the account's place in each book, so asking for it
+again continues it. Measured on Soloist (silently, 2026-10-12): in the
+book, `skip_next` goes to the next chapter at 0:00; `skip_prev` at a
+chapter's start goes back one, mid-chapter restarts it; a skip while
+paused starts playback, a `seek` while paused stays paused. Playing a
+chapter's own URI drops the book (it plays alone and stops), so chapters
+are always reached by stepping inside the book, and the stream stays
+silent until the target chapter is on. Chapters are matched by their name
+("5" finds "Capítulo 5"), since short parts ("Créditos iniciales",
+"Primera Parte") make the index drift.
+
+**Requests.** `play_book(title)` searches books (reading guides dropped,
+the persona's language first); a title far from what was heard, with no
+author named, is confirmed first (`ask_which`), since a wrong book costs
+listening hours. No title: the last book. "El segundo" after
+`find_books` is the second book read. `from_beginning` past the second
+chapter asks book or chapter (`ask_whole_book`), keeps the place it
+leaves, and `book_control(go_back_to_saved_place)` undoes it; it is also
+how to erase a book's progress. A finished book asks before starting
+over. `music_control` next / previous move chapters (the ends are said);
+`book_control` back / forward seek inside the chapter (30 s by default),
+`restart_chapter`, `go_to_chapter`. `whats_playing` says the book, the
+chapter and what's left of each. `find_books(query)` reads at most three,
+numbered, with length and a sentence about each; with no query, the books
+listened to here. A resumed book backs up 2 s plus a tenth of the pause
+(at most 20 s) so it doesn't start mid-word. "Pon música" after a book
+plays the last music, not the book (kept apart in storage).
+
+**Hours.** Spotify gives a Premium Familiar plan's audiobook hours to its
+holder only; the account the device plays as needs hours bought for it.
+Not every book is included: some are purchase-only, and the Web API can't
+tell which (with an app token every chapter says `payment_required`).
+Spotify refuses a book it won't play: `playing`, then `idle` 0.3 to 1.2 s
+later, no error. A fresh start idle within 3 s (`REFUSED_S`) is a
+refusal: of a book that played here before, the hours ran out
+(`book_no_hours`); otherwise it must be bought (`book_must_buy`); with
+`book_hours_per_month` set, a month's audio near the budget also means
+hours. The skill keeps which books played here (10 s of audio proves it),
+which ended, each book's place, and the seconds of book audio per month.
+
+**When a book stops**, it is always said: idle in the last chapter, or
+Spotify moving on to something else after it, is the end
+(`book_finished`, and the book is remembered as finished); idle anywhere
+else is a cut (`book_cut`); another device taking it, Spotify not
+answering, a chapter that can't be reached and a long call each have a
+line. Falling asleep: with no press for `book_sleep_minutes` (60), the
+book pauses at the next chapter boundary, without a word. Reading speed
+can't change (Soloist has no command for it).
 
 ## How it works
 
@@ -144,8 +181,8 @@ Spotify app ─┐                        ┌─ WebSocket (control, events) ─
 | Paused from a Spotify app for 3 s             | stream ends quietly, freeing the speaker                                                      |
 | A call outlasts the 30 min patience           | narrated `patience_expired` (the music stays paused)                                          |
 | Album / playlist runs out                     | stream ends quietly                                                                           |
-| Idle within 3 s of a fresh start (refused)    | narrated `audiobook_refused` (book: hours may be used up) or `start_failed` (music)           |
-| Book not found                                | `book_not_found`; asks for another book                                                       |
+| Idle within 3 s of a fresh start (refused)    | a book: `book_no_hours` if it played here before, else `book_must_buy`; music: `start_failed` |
+| A book stops, is taken, can't be reached      | `book_finished`, `book_cut`, `book_moved`, `book_offline`, `book_nav_failed`, `book_patience` (see Audiobooks) |
 
 "What song is this?", like any question, gets the music back after the
 answer. Not after "pausa" (`CancelMedia`), and not after it moved to
@@ -163,6 +200,8 @@ Persona's `skills.spotify` block (all optional):
 | `start_sound`      | (none)                | Earcon role before the music (first start only)        |
 | `sounds_path`      | `sounds`              | Earcon directory, relative to the persona data dir     |
 | `patience_minutes` | `30`                  | How long paused music waits to come back               |
+| `book_sleep_minutes` | `60`                | No press this long: a book pauses at the next chapter (0: off) |
+| `book_hours_per_month` | (none)            | The device account's audiobook hours, if known: a refusal near it is "hours" |
 
 Secrets, in `<persona data>/secrets/spotify/values.json` (gitignored):
 `client_id`, `client_secret` (Web API app, for search) and

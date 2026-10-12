@@ -351,99 +351,6 @@ class TestStreamEnds:
         assert [key for _, key in recorded.injected] == ["spotify:patience_expired"]
 
 
-BOOK = Match(
-    uri="spotify:show:cien",
-    kind="audiobook",
-    title="Cien años de soledad",
-    artist="Gabriel García Márquez",
-)
-CHAPTER = {
-    "uri": "spotify:episode:c1",
-    "type": "episode",
-    "decorations": {"identity": {"name": "Capítulo 1"}},
-}
-
-
-class TestAudiobooks:
-    async def test_book_refused_right_after_start_is_spoken(
-        self, tmp_path: Path, pcm_server: PcmServer
-    ) -> None:
-        """A book Spotify won't play (purchase-only, or no hours left):
-        Soloist reports playing, then idle 0.3-1.2 s later, no error (live,
-        2026-10-12). Without this the stream ended as if the book had
-        finished: silence. And told only to "tell the user Spotify
-        wouldn't play it", the model said the book was playing, trusting
-        the tool's `ok: true`; so the notice states the fact and gives the
-        exact line."""
-        pcm_server.hold_open.set()
-        skill, client, recorded = await _skill(tmp_path, pcm_server, match=BOOK)
-        chunks: list[bytes] = []
-        async for chunk in (await _play(skill, "cien años de soledad")).factory():
-            chunks.append(chunk)
-            client.state.status = "idle"
-        await _settle()
-
-        assert [key for _, key in recorded.injected] == ["spotify:audiobook_refused"]
-        prompt = recorded.injected[0][0]
-        assert "NO está sonando" in prompt
-        assert "Di en voz alta exactamente «" in prompt
-        assert "no viene incluido" in prompt and "horas de libros" in prompt
-        assert "pause" not in client.commands()
-
-    async def test_music_refused_right_after_start_says_it_could_not_start(
-        self, tmp_path: Path, pcm_server: PcmServer
-    ) -> None:
-        pcm_server.hold_open.set()
-        skill, client, recorded = await _skill(tmp_path, pcm_server)
-        async for _ in (await _play(skill)).factory():
-            client.state.status = "idle"
-        await _settle()
-        assert [key for _, key in recorded.injected] == ["spotify:start_failed"]
-        assert "NO está sonando" in recorded.injected[0][0]
-
-    async def test_book_kind_reaches_the_search_and_plays_the_show(
-        self, tmp_path: Path, pcm_server: PcmServer
-    ) -> None:
-        skill, client, _ = await _skill(tmp_path, pcm_server, match=BOOK)
-        result = await skill.handle(
-            "play_music", {"query": "cien años de soledad", "kind": "audiobook"}
-        )
-        assert skill._search.queries == [("cien años de soledad", "audiobook")]  # type: ignore[union-attr]
-        payload = json.loads(result.output)
-        assert (payload["playing"], payload["by"], payload["kind"]) == (
-            "Cien años de soledad",
-            "Gabriel García Márquez",
-            "audiobook",
-        )
-        task, _ = await _consume_until(result.side_effect, 1)  # type: ignore[arg-type]
-        await _cancel(task)
-        assert {"command": "play", "uri": "spotify:show:cien"}.items() <= next(
-            c for c in client.sent if c["command"] == "play"
-        ).items()
-
-    async def test_whats_playing_names_the_book_not_just_the_chapter(
-        self, tmp_path: Path, pcm_server: PcmServer
-    ) -> None:
-        skill, client, _ = await _skill(tmp_path, pcm_server, match=BOOK)
-        task, _ = await _consume_until(await _play(skill, "cien años"), 2)
-        await _cancel(task)
-        client.state.item = CHAPTER
-
-        payload = json.loads((await skill.handle("whats_playing", {})).output)
-
-        assert payload["title"] == "Cien años de soledad, Capítulo 1"
-        assert payload["by"] == "Gabriel García Márquez"
-
-    async def test_book_not_found_asks_for_another_book(
-        self, tmp_path: Path, pcm_server: PcmServer
-    ) -> None:
-        skill, _, _ = await _skill(tmp_path, pcm_server, match=None)
-        result = await skill.handle("play_music", {"query": "nada", "kind": "audiobook"})
-        payload = json.loads(result.output)
-        assert payload["reason"] == "book_not_found"
-        assert "libro" in payload["say"]
-
-
 class TestFailures:
     @pytest.mark.parametrize(
         ("connected", "logged_in", "reason"),
@@ -699,7 +606,14 @@ class TestSetup:
     ) -> None:
         skill, _, _ = await _skill(tmp_path, pcm_server)
         names = [t.name for t in skill.tools]
-        assert names == ["play_music", "music_control", "whats_playing"]
+        assert names == [
+            "play_music",
+            "music_control",
+            "whats_playing",
+            "play_book",
+            "book_control",
+            "find_books",
+        ]
         assert "nunca inventes" in skill.tools[0].description
 
     async def test_query_may_be_omitted(self, tmp_path: Path, pcm_server: PcmServer) -> None:

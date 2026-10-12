@@ -20,6 +20,7 @@ import pytest
 
 from huxley_sdk.testing import make_test_context
 from huxley_skill_spotify.capture import CHUNK_BYTES
+from huxley_skill_spotify.search import SearchError
 from huxley_skill_spotify.soloist import SoloistClient
 
 if TYPE_CHECKING:
@@ -27,7 +28,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from huxley_sdk import SkillContext
-    from huxley_skill_spotify.search import Match
+    from huxley_skill_spotify.search import BookInfo, Match
 
 
 class FakeSoloist(SoloistClient):
@@ -63,12 +64,24 @@ class FakeSoloist(SoloistClient):
 
 
 class FakeSearch:
-    """`match` is the best result; `others` the runners-up."""
+    """`match` is the best result; `others` the runners-up. `books` are
+    what `book(uri)` answers (chapters and all)."""
 
-    def __init__(self, match: Match | None, others: list[Match] | None = None) -> None:
+    def __init__(
+        self,
+        match: Match | None,
+        others: list[Match] | None = None,
+        books: dict[str, BookInfo] | None = None,
+    ) -> None:
         self.match = match
         self.others = others or []
+        self.books = books or {}
         self.queries: list[tuple[str, str]] = []
+
+    async def book(self, uri: str) -> BookInfo:
+        if uri not in self.books:
+            raise SearchError(f"no book {uri}")
+        return self.books[uri]
 
     async def candidates(self, query: str, kind: str = "any", *, limit: int = 3) -> list[Match]:
         self.queries.append((query, kind))
