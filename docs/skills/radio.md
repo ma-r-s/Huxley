@@ -101,6 +101,10 @@ Used by `resume_radio` to restart the same station after a stop.
 **Position is NOT tracked** — radio is live, "resume from second 3247" is
 meaningless. `resume_radio` is just a shortcut for `play_station(<last_id>)`.
 
+A press pauses the station and the turn's end restarts the same live feed
+by calling the factory again, without the start chime
+([ADR 2026-10-12](../decisions.md#2026-10-12-a-press-pauses-content-the-turns-end-resumes-it-t130)). `stop_radio` (`CancelMedia`) is what keeps it off.
+
 ## Persona prompt
 
 Radio needs the same anti-hallucination rule that news + audiobooks have.

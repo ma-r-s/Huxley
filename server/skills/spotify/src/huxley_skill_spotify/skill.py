@@ -13,14 +13,14 @@ Tools:
   what played last.
 - `music_control(action)`: pause, resume, next, previous.
 - `whats_playing()`: what is on. An info tool: the model speaks the
-  answer; if a press just stopped the music, a queued turn (drained
-  after the answer) has it call `music_control(resume)`. It can't return
-  the resume stream itself: a tool with an AudioStream gets no follow-up
-  round, so the answer would never be spoken.
+  answer, and the music comes back after it like after any turn.
 
-A press always stops the music first (the coordinator cancels the
-stream), so next/previous act and then return a resume stream; the
-factory's `finally` queues a pause without awaiting it.
+A press pauses the music (the framework holds the stream: the factory's
+`finally` queues a Soloist pause without awaiting it) and resumes it
+when the turn ends, by calling the factory again, which sends "play".
+A turn that runs `music_control(pause)` (CancelMedia) or starts another
+stream ends it instead; next/previous act and then return a resume
+stream.
 
 Config (persona's `skills.spotify` block), all optional:
 - `soloist_ws` (default `ws://127.0.0.1:9090`), `pcm` (default
@@ -69,8 +69,6 @@ DEFAULT_PCM = "127.0.0.1:4712"
 START_TIMEOUT_S = 10.0
 # Paused from a Spotify app for this long: end the stream (free the speaker).
 PAUSED_GRACE_S = 3.0
-# "What song is this?" resumes the music only if a press stopped it this recently.
-RESUME_WINDOW_S = 120.0
 
 # What the model should tell the user, per failure. Instructions, not
 # literal text: the persona phrases them.
@@ -192,8 +190,8 @@ _ACTIONS = ("pause", "resume", "next", "previous")
 
 # whats_playing's instruction: one thing only, say this exact line. Asking
 # for "say it, then call music_control(resume)" in the same reply got the
-# resume without the line 1 time in 3 (live, 2026-10-10); one action per
-# reply is reliable. The resume comes from a separate queued turn.
+# resume without the line 1 time in 3 (live, 2026-10-10). The framework
+# resumes the music after the turn now (2026-10-12), so no call is needed.
 _SAY_SONG = {
     "es": "«Es {title}, de {by}.»",
     "en": '"It\'s {title}, by {by}."',
@@ -203,13 +201,6 @@ _THEN = {
     "es": "Di en voz alta exactamente {line} No llames a ninguna herramienta.",
     "en": "Say out loud exactly {line} Do not call any tool.",
     "fr": "Dis à voix haute exactement {line} N'appelle aucun outil.",
-}
-# Queued with inject_turn; the coordinator drains it once the answer's
-# turn has ended, so the music comes back after the spoken answer.
-_RESUME_AFTER_ANSWER = {
-    "es": "Llama ahora a music_control con action 'resume'. No digas nada.",
-    "en": "Call music_control with action 'resume' now. Say nothing.",
-    "fr": "Appelle maintenant music_control avec action 'resume'. Ne dis rien.",
 }
 
 
@@ -240,9 +231,6 @@ class SpotifySkill:
         # stream (it runs in the coordinator's media path). Held so they
         # aren't garbage collected mid-flight.
         self._tasks: set[asyncio.Task[None]] = set()
-        # When a press last stopped the music (None after an explicit
-        # pause or when it moved elsewhere). Drives whats_playing's resume.
-        self._interrupted_at: float | None = None
 
     @property
     def name(self) -> str:
@@ -348,7 +336,10 @@ class SpotifySkill:
                 "lista o un estilo de música, 'any' si no está claro."
             )
             control = (
-                "Controla la música de Spotify. action: 'pause' (pausa, para, silencio), "
+                "Controla la música de Spotify. action: 'pause' (pausa, para, silencio, "
+                "apágala, basta, ya; la música se pausa sola mientras el usuario habla y "
+                "vuelve sola después, así que para pararla de verdad llama siempre a "
+                "'pause'), "
                 "'resume' (sigue, sigue con la canción, continúa, vuelve a poner la "
                 "música; 'ponlo' si lo último que sonaba era música), 'next' solo si "
                 "pide OTRA canción (siguiente, otra, "
@@ -556,10 +547,10 @@ class SpotifySkill:
             )
         await self._log().ainfo("spotify.control", action=action)
         if action == "pause":
-            # The press already cancelled the stream (its finally queued a
-            # pause); this covers a pause asked while nothing streamed. An
-            # explicit pause also means "don't bring it back on its own".
-            self._interrupted_at = None
+            # The press already paused the stream (its finally queued a
+            # pause); CancelMedia ends it so the framework doesn't resume it
+            # after the turn, and the command covers a pause asked while
+            # nothing streamed.
             self._require_client().send("pause")
             return ToolResult(
                 output=json.dumps({"ok": True, "action": "pause"}), side_effect=CancelMedia()
@@ -588,24 +579,12 @@ class SpotifySkill:
                 )
             )
         payload: dict[str, Any] = {"ok": True, "title": title, "by": artists}
-        # The press that asked stopped the music. It comes back after the
-        # answer only if a press just interrupted it here: not after
-        # "pausa", and not if it moved to another device. This tool must
-        # not return the resume stream itself: a tool with an AudioStream
-        # gets no follow-up round, so the answer would never be spoken.
-        # So: the model speaks the answer (follow-up round), and a queued
-        # turn, drained after that, asks it to call music_control(resume).
+        # An info tool: the model speaks the answer in a follow-up round
+        # (a tool with an AudioStream gets none). The press that asked
+        # paused the music; the framework resumes it after the answer.
         lang = self._lang()
         line = _SAY_SONG[lang].format(title=title, by=artists or "?")
-        interrupted = self._interrupted_at
-        resume = (
-            interrupted is not None
-            and time.monotonic() - interrupted < RESUME_WINDOW_S
-            and self._unavailable() is None
-        )
         payload["then"] = _THEN[lang].format(line=line)
-        if resume:
-            self._inject(_RESUME_AFTER_ANSWER[lang], "spotify:resume_after_answer")
         return ToolResult(output=json.dumps(payload, ensure_ascii=False))
 
     # --- Streaming ---
@@ -751,12 +730,6 @@ class SpotifySkill:
         finally:
             if writer is not None:
                 writer.close()
-            if reason == "cancelled":
-                # A press (or another stream) stopped it: "what song was
-                # that?" may bring it back. See _whats_playing.
-                self._interrupted_at = time.monotonic()
-            elif reason in ("takeover", "paused_elsewhere"):
-                self._interrupted_at = None
             # Never await Soloist here: this runs in the coordinator's
             # cancel path. Queue the pause; a newer stream drops it. Not
             # when the music moved, was paused elsewhere, or ended.

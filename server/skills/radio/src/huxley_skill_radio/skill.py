@@ -146,7 +146,9 @@ class RadioSkill:
                 name="stop_radio",
                 description=(
                     "Apaga la radio. Usa para 'apaga la radio', 'para la radio', "
-                    "'silencio', 'quita la radio'."
+                    "'silencio', 'quita la radio', 'basta', 'ya'. La radio se pausa "
+                    "sola mientras el usuario habla y vuelve sola después: para "
+                    "apagarla de verdad llama siempre a esta herramienta."
                 ),
                 parameters={"type": "object", "properties": {}},
             ),
@@ -522,8 +524,15 @@ class RadioSkill:
         inner: Callable[[], AsyncIterator[bytes]],
         chime_pcm: bytes,
     ) -> Callable[[], AsyncIterator[bytes]]:
+        # The framework calls the factory again to resume the station after
+        # pausing it (a press, no client): that restarts the live feed, but
+        # the chime only marks the first start, not every question asked.
+        started = [False]
+
         async def wrapped() -> AsyncIterator[bytes]:
-            yield chime_pcm
+            if not started[0]:
+                started[0] = True
+                yield chime_pcm
             async for chunk in inner():
                 yield chunk
 

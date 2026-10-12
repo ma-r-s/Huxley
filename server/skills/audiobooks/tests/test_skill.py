@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
 
@@ -1053,3 +1054,85 @@ class TestSpeedControl:
         assert data["ok"] is True
         assert data["playing"] is False
         assert data["speed"] == 1.2
+
+
+class TestFrameworkResume:
+    """The framework pauses the book (a press, a call, no client) and
+    resumes it by calling the same factory again (2026-10-12). Every
+    question would otherwise replay the `book_start` earcon, and a press
+    on the closing chime would restart the book from 0."""
+
+    @staticmethod
+    async def _play(
+        library_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        chunks: list[bytes],
+        sounds: dict[str, bytes],
+    ) -> tuple[MagicMock, Any, list[float]]:
+        import huxley_skill_audiobooks.skill as skill_module
+
+        now = [1000.0]
+        monkeypatch.setattr(skill_module, "time", SimpleNamespace(monotonic=lambda: now[0]))
+        player = _make_player_mock(chunks)
+        skill = AudiobooksSkill(player=player)
+        await skill.setup(_make_ctx(library_path))
+        skill._sounds = sounds
+        book = _book_at(skill, 0)
+        assert skill._storage is not None
+        await skill._storage.set_setting(_position_key(book["id"]), "100")
+        result = await skill.handle("play_audiobook", {"book_id": book["id"]})
+        assert isinstance(result.side_effect, AudioStream)
+        return player, result.side_effect.factory, now
+
+    async def test_resume_skips_the_earcon_and_rewinds_a_little(
+        self, library_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        one_second = b"x" * 48_000
+        player, factory, now = await self._play(
+            library_path, monkeypatch, [one_second] * 3, {"book_start": b"S"}
+        )
+        first = factory()
+        assert await first.__anext__() == b"S"
+        assert await first.__anext__() == one_second
+        await first.aclose()  # the press: saved at 80 + 1 s
+        now[0] += 10  # a quick question
+
+        second = factory()
+        assert await second.__anext__() == one_second, "no earcon on a resume"
+        await second.aclose()
+
+        start = player.stream.call_args_list[-1].kwargs["start_position"]
+        assert start == pytest.approx(81.0 - 3.0)  # 2 s + a tenth of the pause
+
+    async def test_long_pause_rewinds_up_to_the_full_resume_rewind(
+        self, library_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A walkie off Wi-Fi for minutes: ~20 s went to nobody before the
+        server noticed."""
+        one_second = b"x" * 48_000
+        player, factory, now = await self._play(library_path, monkeypatch, [one_second] * 3, {})
+        first = factory()
+        await first.__anext__()
+        await first.aclose()
+        now[0] += 600
+
+        second = factory()
+        await second.__anext__()
+        await second.aclose()
+
+        start = player.stream.call_args_list[-1].kwargs["start_position"]
+        assert start == pytest.approx(81.0 - RESUME_REWIND_SECONDS)
+
+    async def test_press_on_the_closing_chime_does_not_restart_the_book(
+        self, library_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        player, factory, _ = await self._play(
+            library_path, monkeypatch, [b"x" * 480], {"book_end": b"E"}
+        )
+        first = factory()
+        await first.__anext__()  # the last of the book
+        assert await first.__anext__() == b"E"
+        await first.aclose()  # the press lands on the closing chime
+
+        assert await _drain(factory) == 0
+        assert player.stream.call_count == 1

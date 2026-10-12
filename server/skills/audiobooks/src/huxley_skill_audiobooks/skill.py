@@ -77,6 +77,14 @@ LAST_BOOK_KEY = "last_id"
 # mid-sentence after an interrupt. 20s covers most sentence/paragraph lengths.
 RESUME_REWIND_SECONDS = 20.0
 
+# When the framework resumes a paused book on its own (after a press, a
+# call, or the client coming back), rewind this much plus a tenth of the
+# pause, up to RESUME_REWIND_SECONDS: ~3 s after a quick question, the
+# full 20 s after a few minutes away. A dropped walkie loses ~20 s on top
+# (the server notices the dead link late, and the book counts what it
+# sent), so a long pause wants the long rewind.
+AUTO_RESUME_MIN_REWIND_SECONDS = 2.0
+
 # Default jump amount when the user says "atrás un poco" / "adelanta un poco"
 # without specifying a time. 30s covers a typical spoken paragraph.
 DEFAULT_SEEK_SECONDS = 30.0
@@ -277,7 +285,10 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "Controla la reproducción del audiolibro actual: pausar, "
             "reanudar, retroceder, adelantar, detener, o cambiar la "
             "velocidad. Solo para libros: si lo último que sonaba es "
-            "música o la radio, usa sus propios controles. Antes de "
+            "música o la radio, usa sus propios controles. El libro se "
+            "pausa solo mientras el usuario habla y vuelve solo después: "
+            "para 'pausa', 'para', 'silencio', 'apágalo', 'basta' o 'ya' "
+            "llama siempre a la acción 'pause'. Antes de "
             "llamar esta herramienta, acusa recibo brevemente al usuario "
             "(por ejemplo: 'Listo, retrocedo 30 segundos.'). Nunca ejecutes la acción en silencio. Para "
             "retroceder/adelantar, el valor por defecto es 30 segundos. "
@@ -1095,13 +1106,14 @@ class AudiobooksSkill:
         """Build a playback factory for the coordinator's terminal barrier.
 
         The returned callable can be invoked **multiple times** over a
-        stream's lifetime — `ContentStreamObserver` re-calls it whenever
-        FocusManager re-promotes the Activity to FOREGROUND after a
-        MUST_PAUSE (e.g., a call paused the book and ended). Each call
-        reads the CURRENT saved position from storage via
-        `_get_position(book_id)` so the resumed stream picks up from
-        where the previous pump's `finally` block saved it — NOT from
-        a position captured at build time.
+        stream's lifetime: the framework calls it again to resume the book
+        after pausing it (a press, a call, no client). Each call reads the
+        CURRENT saved position from storage via `_get_position(book_id)`
+        so the resumed stream picks up from where the previous pump's
+        `finally` block saved it (NOT from a position captured at build
+        time), minus a short rewind that grows with the pause. Only the
+        first run plays the `book_start` earcon; a run after the book
+        ended (a press landed on the closing chime) plays nothing.
 
         Callers must write the desired initial position to storage
         BEFORE returning this factory inside an `AudioStream` side
@@ -1122,14 +1134,25 @@ class AudiobooksSkill:
         # Note: trailing silence buffer is owned by the coordinator (via the
         # AudioStream.completion_silence_ms field) so it can be sent AFTER the
         # request_response, overlapping with model first-token latency.
+        # Shared by every run of this factory (see the docstring).
+        runs: dict[str, float] = {"count": 0, "completed": 0, "paused_at": 0.0}
 
         async def stream() -> AsyncIterator[bytes]:
+            runs["count"] += 1
+            resumed = runs["count"] > 1
+            if runs["completed"]:
+                # Finished in an earlier run; the saved position is back at 0
+                # and replaying from there would restart the book.
+                return
             # Read the CURRENT position from storage at every invocation.
             # First call: equals whatever the tool handler wrote before
-            # returning this factory. Subsequent calls (post-cancel-and-
-            # re-FOREGROUND): equals the value the prior pump's `finally`
-            # saved, so resume picks up from there.
+            # returning this factory. Subsequent calls (a resume): equals
+            # the value the prior pump's `finally` saved, rewound a little.
             start_position = await get_position(book_id)
+            if resumed:
+                paused_s = time.monotonic() - runs["paused_at"]
+                rewind = min(RESUME_REWIND_SECONDS, AUTO_RESUME_MIN_REWIND_SECONDS + paused_s / 10)
+                start_position = max(0.0, start_position - rewind)
             skill._now_playing_id = book_id
             skill._now_playing_start_pos = start_position
             skill._now_playing_start_time = time.monotonic()
@@ -1142,9 +1165,10 @@ class AudiobooksSkill:
                 book_id=book_id,
                 start=start_position,
                 speed=speed,
+                resumed=resumed,
             )
             try:
-                if book_start_pcm:
+                if book_start_pcm and not resumed:
                     yield book_start_pcm
 
                 async for chunk in player.stream(path, start_position=start_position, speed=speed):
@@ -1155,6 +1179,7 @@ class AudiobooksSkill:
                 # trailing chime. If the user interrupts during the decoration,
                 # the position still saves as 0.0 (book is done).
                 completed = True
+                runs["completed"] = 1
 
                 if book_end_pcm:
                     yield book_end_pcm
@@ -1166,6 +1191,7 @@ class AudiobooksSkill:
                 await logger.aexception("audiobooks.stream_error", book_id=book_id, exc=str(exc))
             finally:
                 skill._now_playing_id = None
+                runs["paused_at"] = time.monotonic()
                 # `bytes_read / BYTES_PER_SECOND` is OUTPUT seconds (wall-clock).
                 # Book content advanced = output_seconds * speed. With -re
                 # throttling output to realtime, output_seconds == wall_elapsed.
