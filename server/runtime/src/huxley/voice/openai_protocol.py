@@ -76,6 +76,7 @@ class ErrorEvent:
     message: str
     type: str = ""
     code: str = ""
+    param: str = ""  # the request field at fault, when the server names one
 
 
 def parse_server_event(
@@ -106,6 +107,7 @@ def parse_server_event(
             message=error.get("message", "Unknown error"),
             type=error.get("type", ""),
             code=error.get("code", ""),
+            param=error.get("param") or "",
         )
 
     return None

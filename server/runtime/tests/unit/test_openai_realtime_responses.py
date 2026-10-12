@@ -225,6 +225,76 @@ class TestCreateAfterInterrupt:
         _mock(cb.on_audio_delta).assert_awaited_once()
         _mock(cb.on_response_done).assert_awaited_once()
 
+    async def test_call_during_a_held_back_create_still_closes_the_turn(
+        self, persona: PersonaSpec
+    ) -> None:
+        """Press 2's create is held back behind the cancelled r1 when a call
+        suspends the provider: the create is dropped, so r1's done (stale)
+        must still reach the coordinator or press 2 stays COMMITTING."""
+        provider, ws, cb = _provider(persona)
+        await provider.commit_and_request_response()
+        await provider._handle_server_event(_created("r1", 0))
+        await provider.cancel_current_response()
+        await provider.commit_and_request_response()  # held back
+        await provider.suspend()
+        ws.sent.clear()
+        await provider._handle_server_event(_done("r1", 0, status="cancelled"))
+        assert CREATE not in ws.types()
+        _mock(cb.on_response_done).assert_awaited_once()
+        # Only once.
+        await provider._handle_server_event(_done("r9", 0, status="cancelled"))
+        _mock(cb.on_response_done).assert_awaited_once()
+
+    async def test_held_back_create_is_forced_if_done_never_comes(
+        self, persona: PersonaSpec
+    ) -> None:
+        provider, ws, _cb = _provider(persona)
+        provider._DEFERRED_CREATE_MAX_S = 0.02  # type: ignore[misc]
+        await provider._handle_server_event(_created("r1", 0))
+        await provider.cancel_current_response()
+        ws.sent.clear()
+        with structlog.testing.capture_logs() as logs:
+            await provider.commit_and_request_response()
+            assert ws.types() == [COMMIT]
+            await asyncio.sleep(0.05)  # r1's done is lost
+        assert ws.types() == [COMMIT, CREATE]
+        assert any(e["event"] == "session.tx.response_create_forced" for e in logs)
+        assert provider._refresh_blocker(provider._last_activity_at + 100) is None
+
+    async def test_empty_commit_drops_the_held_back_create(self, persona: PersonaSpec) -> None:
+        provider, ws, cb = _provider(persona)
+        await provider._handle_server_event(_created("r1", 0))
+        await provider.commit_and_request_response()  # held back
+        await provider._handle_server_event(
+            {"type": "error", "error": {"code": "input_audio_buffer_commit_empty", "message": ""}}
+        )
+        _mock(cb.on_commit_failed).assert_awaited_once()
+        ws.sent.clear()
+        await provider._handle_server_event(_done("r1", 0))
+        assert CREATE not in ws.types()
+
+    async def test_rejected_metadata_turns_itself_off(self, persona: PersonaSpec) -> None:
+        """Unverifiable without the live API: if OpenAI refused
+        `response.metadata`, every press would go unanswered."""
+        provider, ws, _cb = _provider(persona)
+        await provider.commit_and_request_response()
+        ws.sent.clear()
+        await provider._handle_server_event(
+            {
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "unknown_parameter",
+                    "message": "Unknown parameter: 'response.metadata'.",
+                    "param": "response.metadata",
+                },
+            }
+        )
+        assert ws.sent == [{"type": CREATE}]  # resent, without metadata
+        ws.sent.clear()
+        await provider.request_response()
+        assert ws.sent == [{"type": CREATE}]
+
     async def test_suspend_keeps_lifecycle_events(self, persona: PersonaSpec) -> None:
         """suspend() cancels too, but its contract keeps response.done."""
         provider, _ws, cb = _provider(persona)
@@ -395,8 +465,55 @@ class TestSessionRefresh:
         await provider._handle_server_event(_delta("r1", b"\x00\x00" * 24_000 * 3))  # 3 s
         await provider._handle_server_event(_done("r1", 0))
         loop_now = provider._last_activity_at
-        assert provider._refresh_blocker(loop_now + 10) is None
-        assert provider._refresh_blocker(loop_now + 2.5) == "reply_playing"
+        # 3 s of reply plus the 10 s pause after it.
+        assert provider._refresh_blocker(loop_now + 14) is None
+        assert provider._refresh_blocker(loop_now + 12) == "reply_playing"
+
+    async def test_activity_during_the_summary_postpones_the_refresh(
+        self, persona: PersonaSpec
+    ) -> None:
+        """The summary is computed with the session still up; a press that
+        starts meanwhile wins and the refresh waits for the next idle moment."""
+        provider, ws, cb = _provider(persona, refresh_minutes=0.0005)
+        _fast_refresh(provider)
+        provider._transcript_lines.append("user: hola")
+        provider._receive_task = asyncio.create_task(provider._receive_loop())
+        calls = 0
+
+        async def summarize(*_args: Any, **_kwargs: Any) -> str:
+            nonlocal calls
+            calls += 1
+            if calls == 1:  # the user presses while the first summary runs
+                await provider.send_user_audio(b"\x00\x10" * 240)
+            await asyncio.sleep(0.01)
+            return f"resumen {calls}"
+
+        with patch("huxley.voice.openai_realtime.summarize_transcript", summarize):
+            provider._refresh_task = asyncio.create_task(provider._refresh_loop())
+            await asyncio.sleep(0.1)
+            assert not ws.closed  # the press blocked the first attempt
+            await provider.commit_and_request_response()
+            await provider._handle_server_event(_created("r1", 0))
+            await provider._handle_server_event(_done("r1", 0))
+            await _wait_until(lambda: ws.closed)
+            await _wait_until(lambda: _mock(cb.on_session_end).await_count == 1)
+        _mock(cb.on_session_end).assert_awaited_once_with("resumen 2")
+
+    async def test_slow_summary_falls_back_to_the_transcript(self, persona: PersonaSpec) -> None:
+        provider, _ws, _cb = _provider(persona)
+        provider._SUMMARY_TIMEOUT_S = 0.01  # type: ignore[misc]
+        provider._transcript_lines.extend(["user: hola", "assistant: buenas"])
+
+        async def hang(*_args: Any, **_kwargs: Any) -> str:
+            await asyncio.sleep(10)
+            return "never"
+
+        with patch("huxley.voice.openai_realtime.summarize_transcript", hang):
+            assert await provider._summarize() == "user: hola\nassistant: buenas"
+
+    def test_refresh_minutes_must_leave_room_before_the_limit(self) -> None:
+        with pytest.raises(ValueError, match="session_refresh_minutes"):
+            Settings(openai_api_key="k", session_refresh_minutes=60)
 
     async def test_connect_replaces_the_previous_sessions_refresh_task(
         self, persona: PersonaSpec

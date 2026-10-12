@@ -46,7 +46,7 @@ class Turn:
     state: TurnState
     user_audio_frames: int             # chunks received (logged)
     user_audio_bytes: int              # PCM16 bytes received; the 133 ms too-short check measures this
-    user_audio_level: PressLevel       # peak / RMS after the first 100 ms; a press peaking under -40 dBFS is silent, not committed
+    user_audio_level: PressLevel       # peak / RMS without the first 100 ms and last 60 ms (clicks); peaking under -40 dBFS = silent, not committed
     response_ids: list[str]
     pending_factories: list[Factory]   # accumulated across all responses in this turn
     needs_follow_up: bool              # per-response flag: set when a None-factory tool was called in the current response

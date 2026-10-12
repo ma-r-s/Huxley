@@ -732,7 +732,7 @@ Considered alternatives:
 
 **Decision**: The OpenAI provider stamps every `response.create` with a cancel generation in `response.metadata`; `cancel_current_response` bumps it. Events from an older generation are dropped in the provider, `response.done` included, and a `response.create` requested while a response is live waits for that response's `response.done`. Alternative rejected: matching `response.created` to creates in send order (FIFO). A create rejected without an `error.event_id` would shift the mapping and drop the current turn's answer, a worse failure than the one fixed. If the server ever stops echoing metadata, the provider degrades to the old behavior instead.
 
-**Consequences**: `VoiceProvider.cancel_current_response` now promises that no callback fires for the cancelled response. `suspend()` still lets lifecycle events through (its contract). The first press after deploying shows whether OpenAI accepts the metadata: a rejection would be a `session.rx.error` on every press.
+**Consequences**: `VoiceProvider.cancel_current_response` now promises that no callback fires for the cancelled response. `suspend()` still lets lifecycle events through (its contract). The first press after deploying shows whether OpenAI accepts the metadata; if it refuses it, the provider logs `session.rx.metadata_rejected` once, stops sending it and resends that request. A held-back request is sent anyway after 5 s (`session.tx.response_create_forced`), so a missed event can't silence later presses.
 
 ---
 
@@ -740,6 +740,6 @@ Considered alternatives:
 
 **Context**: OpenAI ends a Realtime session at 60 minutes (`session_expired`), mid-turn if that's when it lands. The 55-minute timer meant to pre-empt it restarted on every mic frame and cancelled its own disconnect, so it never worked.
 
-**Decision**: Time the session from its start. After `session_refresh_minutes` (50) the provider disconnects with a summary at the first idle moment: no call holding the mic, no response live or pending, no fresh user audio, the last reply done playing (estimated from the audio sent), 3 s without traffic. The app's auto-reconnect opens the next session. A planned refresh goes through the same path as any other disconnect.
+**Decision**: Time the session from its start. After `session_refresh_minutes` (50) the provider disconnects with a summary at the first idle moment: no call holding the mic, no response live or pending, no fresh user audio, the last reply done playing (estimated from the audio sent) 10 s ago, 10 s without traffic. The summary is computed while the session is still up (10 s cap, raw transcript tail as fallback), so a press finds no session only during the reconnect itself. The app's auto-reconnect opens the next session. A planned refresh goes through the same path as any other disconnect.
 
 **Consequences**: The client sees CONVERSING, IDLE, CONNECTING, CONVERSING once every ~50 minutes, as it did on every expiry (the PWA plays its drop tone). What happens to a playing book on a reconnect is the coordinator's business, unchanged here. A session with no idle moment for its last 10 minutes still expires.

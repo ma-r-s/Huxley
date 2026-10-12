@@ -23,8 +23,12 @@ _FLOOR_DBFS = -96.0
 # The first 100 ms are not measured: the press itself (a mechanical
 # click, the mic waking up) can peak at full scale with nothing said.
 SKIP_MS = 100
+# Nor the last 60 ms: the release click lands there. The walkie stops the
+# mic only once the release is debounced (~20-30 ms after the switch
+# opens), so the click's onset is inside the press.
+TAIL_MS = 60
 
-# A press whose loudest sample after the skip stays below this is silent.
+# A press whose loudest measured sample stays below this is silent.
 # Reference levels from the walkie's own per-press stats (2026-10-12):
 # presses with nobody talking peak at -56/-57 dBFS (one at -51), speech
 # peaks at -7 to 0 dBFS. The iOS app reports room noise as a peak of a
@@ -43,23 +47,32 @@ def _dbfs(level: float) -> float:
 
 @dataclass
 class PressLevel:
-    """Running peak and RMS of one press, after the first `SKIP_MS`."""
+    """Running peak and RMS of one press, without its first `SKIP_MS`
+    and last `TAIL_MS`."""
 
     skip_bytes: int = SKIP_MS * _BYTES_PER_MS
+    tail_bytes: int = TAIL_MS * _BYTES_PER_MS
     seen_bytes: int = 0
     peak: int = 0
     sum_squares: float = 0.0
     samples: int = 0
+    # The most recent audio, not measured until more arrives after it:
+    # whatever is still here at the release is the tail.
+    held: bytes = b""
 
     def feed(self, pcm: bytes) -> None:
         """Add one frame of little-endian PCM16."""
         start = max(0, self.skip_bytes - self.seen_bytes)
         self.seen_bytes += len(pcm)
-        end = len(pcm) - (len(pcm) - start) % 2  # whole samples only
-        if start >= end:
+        if start >= len(pcm):
+            return
+        buffered = self.held + pcm[start:]
+        cut = max(0, len(buffered) - self.tail_bytes) // 2 * 2  # whole samples
+        self.held = buffered[cut:]
+        if cut == 0:
             return
         frame = array("h")
-        frame.frombytes(pcm[start:end])
+        frame.frombytes(buffered[:cut])
         if sys.byteorder == "big":
             frame.byteswap()
         self.peak = max(self.peak, max(frame), -min(frame))

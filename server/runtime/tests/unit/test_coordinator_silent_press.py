@@ -66,9 +66,17 @@ class TestPressLevel:
         level = PressLevel()
         for frame in _frames(_click(10) + _room_noise(90) + _room_noise(400)):
             level.feed(frame)
-        assert level.measured_ms == 400
+        assert level.measured_ms == 340  # 500 ms minus the first 100 and last 60
         assert level.peak == 50
         assert level.peak_dbfs == pytest.approx(-56.3, abs=0.1)
+        assert level.is_silent
+
+    def test_release_click_in_the_last_60_ms_is_not_measured(self) -> None:
+        """The walkie's release click lands just before the mic stops."""
+        level = PressLevel()
+        for frame in _frames(_room_noise(500) + _click(10)):
+            level.feed(frame)
+        assert level.peak == 50
         assert level.is_silent
 
     def test_speech_is_not_silent(self) -> None:
@@ -81,32 +89,32 @@ class TestPressLevel:
 
     def test_soft_speech_is_not_silent(self) -> None:
         level = PressLevel()
-        level.feed(_room_noise(100) + _tone(300, 1_000))  # -30 dBFS peak
+        level.feed(_room_noise(100) + _tone(300, 1_000) + _room_noise(60))  # -30 dBFS peak
         assert not level.is_silent
 
     def test_frame_straddling_the_skip_boundary(self) -> None:
         """One 150 ms chunk (the iOS app sends up to 100 ms): only its last
         50 ms count."""
         level = PressLevel()
-        level.feed(_click(100) + _tone(50, 8_000))
+        level.feed(_click(100) + _tone(50, 8_000) + _room_noise(60))
         assert level.measured_ms == 50
         assert level.peak < 32767  # the click was skipped
 
     def test_nothing_measured_is_not_silent(self) -> None:
-        """No evidence, no drop: a press with no frames past the skip."""
+        """No evidence, no drop: a 150 ms press is all click and tail."""
         level = PressLevel()
-        level.feed(_room_noise(80))
+        level.feed(_room_noise(150))
         assert level.samples == 0
         assert not level.is_silent
 
     def test_odd_length_frame_does_not_raise(self) -> None:
-        level = PressLevel(skip_bytes=0)
+        level = PressLevel(skip_bytes=0, tail_bytes=0)
         level.feed(b"\x10\x00\x20")
         assert level.samples == 1
         assert level.peak == 16
 
     def test_digital_silence_reports_the_floor(self) -> None:
-        level = PressLevel(skip_bytes=0)
+        level = PressLevel(skip_bytes=0, tail_bytes=0)
         level.feed(b"\x00\x00" * 480)
         assert level.peak_dbfs == -96.0
         assert level.rms_dbfs == -96.0
@@ -176,7 +184,7 @@ class TestSilentPress:
 
         [silent] = [e for e in logs if e["event"] == "coord.press_silent"]
         assert silent["audio_ms"] == 600
-        assert silent["measured_ms"] == 500
+        assert silent["measured_ms"] == 440
         assert silent["peak_dbfs"] == pytest.approx(-56.3, abs=0.1)
         assert silent["threshold_dbfs"] == SILENT_PEAK_DBFS
         assert "rms_dbfs" in silent
@@ -199,8 +207,17 @@ class TestSilentPress:
     async def test_short_quiet_yes_still_commits(
         self, coordinator: TurnCoordinator, provider: StubVoiceProvider
     ) -> None:
-        """A quick, soft "si": 160 ms press, -30 dBFS after the click."""
-        await _press(coordinator, _click(20) + _room_noise(80) + _tone(60, 1_000))
+        """A quick, soft "si": 240 ms press, -30 dBFS between the clicks."""
+        await _press(
+            coordinator, _click(20) + _room_noise(80) + _tone(80, 1_000) + _room_noise(60)
+        )
+        assert ("commit_and_request_response",) in provider.sent
+
+    async def test_press_too_short_to_measure_still_commits(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider
+    ) -> None:
+        """160 ms: all of it is click and tail, nothing to judge by."""
+        await _press(coordinator, _room_noise(160))
         assert ("commit_and_request_response",) in provider.sent
 
     async def test_too_short_press_keeps_its_reason(

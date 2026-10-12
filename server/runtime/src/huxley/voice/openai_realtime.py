@@ -83,15 +83,23 @@ class OpenAIRealtimeProvider:
     # `Settings.session_refresh_minutes` the provider reconnects itself at
     # the first idle moment instead: no response live or pending, the user
     # not mid-press, the last reply done playing, and no traffic either way
-    # for `_REFRESH_QUIET_S`.
+    # for `_REFRESH_QUIET_S`. The pauses are generous: the reconnect takes
+    # a few seconds, and a follow-up question usually comes within
+    # seconds of the answer ending. There are 10 minutes of slack.
     _REFRESH_POLL_S: ClassVar[float] = 1.0
-    _REFRESH_QUIET_S: ClassVar[float] = 3.0
-    # The client plays a reply after it has all arrived; margin past the
+    _REFRESH_QUIET_S: ClassVar[float] = 10.0
+    # The client plays a reply after it has all arrived; time past the
     # estimated end of playback before the session counts as idle.
-    _REFRESH_PLAYBACK_MARGIN_S: ClassVar[float] = 1.0
+    _REFRESH_PLAYBACK_MARGIN_S: ClassVar[float] = 10.0
     # Uncommitted user audio blocks a refresh only this long after its last
     # frame, so a press abandoned without commit can't block it forever.
     _INPUT_PENDING_MAX_S: ClassVar[float] = 30.0
+    # The conversation summary carried into the next session; past this,
+    # the raw transcript tail is carried instead.
+    _SUMMARY_TIMEOUT_S: ClassVar[float] = 10.0
+    # A held-back `response.create` is sent anyway after this long, so a
+    # `response.done` that never comes can't silence every later press.
+    _DEFERRED_CREATE_MAX_S: ClassVar[float] = 5.0
 
     def __init__(
         self,
@@ -140,6 +148,10 @@ class OpenAIRealtimeProvider:
         # every `response.create` as metadata. A response from an older
         # generation is stale: the coordinator already unwound its turn.
         self._generation = 0
+        # Cleared if OpenAI ever rejects `response.metadata`; stale
+        # detection then falls back to the response live at the cancel.
+        self._send_metadata = True
+        self._deferred_watchdog: asyncio.Task[None] | None = None
         self._reset_session_state()
 
     def _reset_session_state(self) -> None:
@@ -156,6 +168,10 @@ class OpenAIRealtimeProvider:
         # One retry per create after `conversation_already_has_active_response`.
         self._create_retried = False
         self._stale_response_ids: set[str] = set()
+        # `suspend()` dropped a create held back for a live turn: let the
+        # next `response.done` through, even a stale one, so that turn
+        # closes instead of waiting in COMMITTING.
+        self._forward_next_done = False
         now = time.monotonic()
         self._session_started_at = now
         self._last_activity_at = now
@@ -312,20 +328,7 @@ class OpenAIRealtimeProvider:
             refresh_task.cancel()
 
         if save_summary and self._transcript_lines:
-            # Try LLM-backed summarization first (T1.5). Falls back to raw
-            # tail if the call fails or returns nothing — some context
-            # beats no context, and the previous behavior was raw-tail
-            # only, so the fallback degrades to prior behavior cleanly.
-            # Language pulled from the resolved persona so the summary is
-            # generated in the same language the reconnect will run in.
-            summary = await summarize_transcript(
-                self._transcript_lines,
-                self._config.openai_api_key or "",
-                language=self._resolved.language_code,
-            )
-            if summary is None:
-                summary = "\n".join(self._transcript_lines[-20:])
-            self._pending_summary = summary
+            self._pending_summary = await self._summarize()
 
         if receive_task:
             receive_task.cancel()
@@ -337,6 +340,32 @@ class OpenAIRealtimeProvider:
 
         self._transcript_lines.clear()
         await logger.ainfo("session_disconnected")
+
+    async def _summarize(self) -> str:
+        """Summary of this session for the next one's instructions.
+
+        LLM-backed summarization first (T1.5), bounded by
+        `_SUMMARY_TIMEOUT_S`; falls back to the raw transcript tail if the
+        call fails, returns nothing or takes too long. Some context beats
+        no context. Language from the resolved persona so the summary
+        matches the language the reconnect will run in.
+        """
+        summary: str | None
+        try:
+            summary = await asyncio.wait_for(
+                summarize_transcript(
+                    self._transcript_lines,
+                    self._config.openai_api_key or "",
+                    language=self._resolved.language_code,
+                ),
+                self._SUMMARY_TIMEOUT_S,
+            )
+        except TimeoutError:
+            await logger.awarning("session.summary_timeout", timeout_s=self._SUMMARY_TIMEOUT_S)
+            summary = None
+        if summary is None:
+            summary = "\n".join(self._transcript_lines[-20:])
+        return summary
 
     async def commit_and_request_response(self) -> None:
         """Commit the user's audio buffer and ask the model to respond."""
@@ -362,14 +391,34 @@ class OpenAIRealtimeProvider:
         few ms the cancel takes.
         """
         if self._active_response_id is not None:
-            if self._create_deferred_at is None:
-                self._create_deferred_at = time.monotonic()
+            self._defer_create()
             await logger.ainfo(
                 "session.tx.response_create_deferred",
                 active_response_id=self._active_response_id,
             )
             return
         await self._send_response_create()
+
+    def _defer_create(self) -> None:
+        """Hold a `response.create` until the live response is done."""
+        if self._create_deferred_at is not None:
+            return
+        deferred_at = time.monotonic()
+        self._create_deferred_at = deferred_at
+        self._deferred_watchdog = asyncio.create_task(self._force_deferred_create(deferred_at))
+
+    async def _force_deferred_create(self, deferred_at: float) -> None:
+        """Send a held-back create if its `response.done` never came."""
+        await asyncio.sleep(self._DEFERRED_CREATE_MAX_S)
+        if self._create_deferred_at != deferred_at or self._ws is None:
+            return  # sent, dropped, or the session is gone
+        await logger.awarning(
+            "session.tx.response_create_forced",
+            waited_ms=int((time.monotonic() - deferred_at) * 1000),
+            active_response_id=self._active_response_id,
+        )
+        self._active_response_id = None
+        await self._send_response_create(deferred_ms=int(self._DEFERRED_CREATE_MAX_S * 1000))
 
     async def _send_response_create(self, *, deferred_ms: int | None = None) -> None:
         # This create supersedes any held back one (e.g. a retry still
@@ -379,10 +428,10 @@ class OpenAIRealtimeProvider:
         if deferred_ms is not None:
             fields["deferred_ms"] = deferred_ms
         await logger.ainfo("session.tx.response_create", **fields)
-        await self._send(
-            ClientEventType.RESPONSE_CREATE,
-            {"response": {"metadata": {_GENERATION_KEY: str(self._generation)}}},
-        )
+        payload: dict[str, Any] = {}
+        if self._send_metadata:
+            payload["response"] = {"metadata": {_GENERATION_KEY: str(self._generation)}}
+        await self._send(ClientEventType.RESPONSE_CREATE, payload)
 
     async def cancel_current_response(self) -> None:
         """Cancel any in-progress model response.
@@ -406,6 +455,7 @@ class OpenAIRealtimeProvider:
             self._stale_response_ids.add(self._active_response_id)
         dropped_create = self._create_deferred_at is not None
         self._create_deferred_at = None
+        self._forward_next_done = False  # whatever turn needed it is unwound
         # The coordinator clears the client's playback queue with every cancel.
         self._playback_until = 0.0
         await logger.ainfo(
@@ -435,7 +485,11 @@ class OpenAIRealtimeProvider:
         # No response may start while suspended. Unlike
         # `cancel_current_response`, the cancelled response's lifecycle
         # events still reach the coordinator (see the docstring above).
-        self._create_deferred_at = None
+        # A create held back for a turn is dropped; that turn then needs
+        # a `response.done` to close, even if the live one is stale.
+        if self._create_deferred_at is not None:
+            self._create_deferred_at = None
+            self._forward_next_done = True
         # Order: cancel generation first so the server stops emitting,
         # then clear pending input buffer so an uncommitted PTT doesn't
         # leak into the resumed session.
@@ -545,8 +599,10 @@ class OpenAIRealtimeProvider:
         so the coordinator can close out a cancelled turn's state. See
         `suspend()` for the contract rationale.
 
-        Events from a response cancelled by `cancel_current_response`
-        (stale) are dropped, lifecycle events included: see that method.
+        Audio, tool calls, audio done and `response.done` from a response
+        cancelled by `cancel_current_response` (stale) are dropped: see
+        that method. Its transcript is kept: it was partly heard, and it
+        belongs in the session history and summary.
         """
         event_type = data.get("type", "")
         self._last_activity_at = time.monotonic()
@@ -623,6 +679,8 @@ class OpenAIRealtimeProvider:
                     code=parsed.code,
                     message=parsed.message,
                 )
+                # The coordinator drops this turn; no answer for it later.
+                self._create_deferred_at = None
                 await self._cb.on_commit_failed()
             elif parsed.code == "conversation_already_has_active_response":
                 # A create raced a response we hadn't heard of yet. Send
@@ -636,8 +694,19 @@ class OpenAIRealtimeProvider:
                 )
                 if retry:
                     self._create_retried = True
-                    if self._create_deferred_at is None:
-                        self._create_deferred_at = time.monotonic()
+                    self._defer_create()
+            elif self._send_metadata and "metadata" in f"{parsed.param} {parsed.message}":
+                # Not verifiable without the live API: if OpenAI ever
+                # refuses `response.metadata`, every create would fail.
+                # Stop sending it and resend this one.
+                self._send_metadata = False
+                await logger.aerror(
+                    "session.rx.metadata_rejected",
+                    code=parsed.code,
+                    message=parsed.message,
+                    param=parsed.param,
+                )
+                await self._send_response_create()
             else:
                 await logger.aerror(
                     "session.rx.error",
@@ -697,7 +766,10 @@ class OpenAIRealtimeProvider:
             waited_ms = int((time.monotonic() - self._create_deferred_at) * 1000)
             self._create_deferred_at = None
             await self._send_response_create(deferred_ms=waited_ms)
-        if not stale:
+        if stale and self._forward_next_done:
+            await logger.ainfo("session.rx.stale_done_forwarded", response_id=response_id)
+        if not stale or self._forward_next_done:
+            self._forward_next_done = False
             await self._cb.on_response_done()
 
     def _from_old_generation(self, response: dict[str, Any]) -> bool:
@@ -797,17 +869,27 @@ class OpenAIRealtimeProvider:
         60-minute limit counts the whole session, so the old activity-reset
         timer never fired in a session in use (2026-10-12 07:31 and 08:31,
         `session_expired` seconds after turns).
+
+        The summary is computed while the session is still up, so the
+        window where a press finds no session is just the reconnect; if
+        anything happened meanwhile, it waits for the next idle moment.
         """
         try:
             await asyncio.sleep(self._config.session_refresh_minutes * 60)
             due_logged = False
-            while (blocker := self._refresh_blocker(time.monotonic())) is not None:
-                if not due_logged:
-                    await logger.ainfo(
-                        "session.refresh_due", age_s=self._session_age_s(), waiting_for=blocker
-                    )
-                    due_logged = True
-                await asyncio.sleep(self._REFRESH_POLL_S)
+            while True:
+                while (blocker := self._refresh_blocker(time.monotonic())) is not None:
+                    if not due_logged:
+                        await logger.ainfo(
+                            "session.refresh_due",
+                            age_s=self._session_age_s(),
+                            waiting_for=blocker,
+                        )
+                        due_logged = True
+                    await asyncio.sleep(self._REFRESH_POLL_S)
+                summary = await self._summarize() if self._transcript_lines else None
+                if self._refresh_blocker(time.monotonic()) is None:
+                    break
             await logger.ainfo(
                 "session.refresh",
                 age_s=self._session_age_s(),
@@ -815,4 +897,5 @@ class OpenAIRealtimeProvider:
             )
         except asyncio.CancelledError:
             return
-        await self.disconnect(save_summary=True)
+        self._pending_summary = summary
+        await self.disconnect(save_summary=False)

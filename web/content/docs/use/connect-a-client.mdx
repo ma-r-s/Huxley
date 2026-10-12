@@ -92,7 +92,7 @@ A 1-second audio frame is 24,000 samples × 2 bytes = 48 KB. Typical PTT bursts 
 Send all the audio you want — the server gates what it forwards:
 
 1. Audio is only forwarded to OpenAI when `ptt_active=true` AND the session is connected AND the model isn't speaking.
-2. PTT bursts under 133 ms of audio get rejected with `too_short`. The server measures audio duration, not frame count, so chunk mic audio at whatever size suits the client. A press whose audio after the first 100 ms never peaks above -40 dBFS (nobody spoke) is rejected the same way, so don't apply gain or noise that lifts silence above that.
+2. PTT bursts under 133 ms of audio get rejected with `too_short`. The server measures audio duration, not frame count, so chunk mic audio at whatever size suits the client. A press whose audio, leaving out the first 100 ms and the last 60 ms, never peaks above -40 dBFS (nobody spoke) is rejected the same way, so don't apply gain or noise that lifts silence above that.
 3. PTT during model speech triggers an interrupt. The server cancels the in-flight response and starts listening.
 4. PTT during an `InputClaim` (a phone call) ends the claim with `USER_PTT` (the button doubles as a hangup).
 
