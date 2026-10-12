@@ -28,7 +28,8 @@ The production server for grandpa's walkie runs on the shared Orange Pi
   voice socket wants the token from anything relayed by a proxy or from
   outside loopback and Tailscale (401), the walkie's connection may send
   only what the firmware sends, and the PWA works from the Pi itself or
-  over Tailscale only. A PWA never knocks the walkie off: its connect gets
+  over Tailscale only (served from a local address: a page on another
+  site gets 403). A PWA never knocks the walkie off: its connect gets
   409 while the walkie is connected, unless its URL adds `&evict=1`.
   Details: [`docs/protocol.md`](../../docs/protocol.md#authentication-and-roles).
   Fields in [`docs/protocol.md`](../../docs/protocol.md#http-health).

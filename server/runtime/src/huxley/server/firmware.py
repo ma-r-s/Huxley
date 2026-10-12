@@ -30,7 +30,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
-import ipaddress
 import json
 import re
 import time
@@ -49,6 +48,7 @@ from huxley.server.auth import (
     configured_token,
     forwarded_for,
 )
+from huxley.server.auth import local_host_allowed as admin_host_allowed
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -92,8 +92,6 @@ _HELLO_KEYS = (
     "caps",
     "rollback",
 )
-# A token shorter than this is reported at startup (`firmware.device_token_short`).
-MIN_TOKEN_CHARS = 32
 
 # An image answer is written in one piece inside websockets' handshake
 # (process_request can't stream). Its connection gets no close timeout, so
@@ -454,28 +452,6 @@ def _as_float(value: object) -> float | None:
     return float(value)
 
 
-def admin_host_allowed(host: str | None) -> bool:
-    """True for a `Host` a person types to reach this server locally: an IP
-    literal, `localhost`, a one-label name or a Tailscale `*.ts.net` name.
-    A DNS-rebinding page arrives with its own domain name and is refused."""
-    if not host:
-        return False
-    host = host.strip().lower()
-    if host.startswith("["):
-        end = host.find("]")
-        name = host[1:end] if end > 0 else ""
-    else:
-        name, _, port = host.rpartition(":")
-        if not name or not port.isdigit():
-            name = host
-    if not name:
-        return False
-    with contextlib.suppress(ValueError):
-        ipaddress.ip_address(name)
-        return True
-    return name == "localhost" or "." not in name or name.endswith(".ts.net")
-
-
 def _one(params: dict[str, list[str]], key: str) -> str | None:
     values = params.get(key)
     return values[0] if values else None
@@ -511,12 +487,6 @@ class FirmwareService:
     @property
     def token_configured(self) -> bool:
         return self._token is not None
-
-    @property
-    def token_short(self) -> bool:
-        """A configured token shorter than MIN_TOKEN_CHARS (weak against
-        guessing through the tunnel)."""
-        return self._token is not None and len(self._token.get_secret_value()) < MIN_TOKEN_CHARS
 
     @property
     def directory(self) -> Path:

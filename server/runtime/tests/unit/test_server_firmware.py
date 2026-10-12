@@ -435,14 +435,19 @@ class TestDevCmd:
         """Anyone can claim to be firmware; only a socket opened with the
         device token gets console lines."""
         async with _serving(fwdir) as (port, server):
-            ws = await _walkie(port, server, _hello(), token=False)
             with structlog.testing.capture_logs() as logs:
+                ws = await connect(f"ws://127.0.0.1:{port}/")  # local, no token
+                await _recv_type(ws, "hello")
+                await _send_event(ws, "device.hello", _hello())
+                await until(lambda: any(e["event"] == "server.rx.refused_for_role" for e in logs))
                 reply = await _admin(port, "/admin/dev-cmd?line=info")
-            await _no_event(ws, "dev.cmd", wait_s=0.1)
-            await ws.close()
+                await _no_event(ws, "dev.cmd", wait_s=0.1)
+                await ws.close()
+            assert server.device_conn_id() is None  # it never became the walkie
         assert reply.status == 409
-        refused = [e for e in logs if e["event"] == "firmware.dev_cmd_refused"]
-        assert refused[0]["reason"] == "not_authenticated"
+        ignored = [e for e in logs if e["event"] == "server.rx.refused_for_role"]
+        assert ignored[0]["msg_type"] == "client_event:device.hello"
+        assert ignored[0]["role"] == "local"
 
     async def test_shutdown_does_not_wait_for_a_pending_dev_cmd(self, fwdir: Path) -> None:
         port = free_port()
@@ -525,7 +530,7 @@ class TestOffer:
             reply = await _admin(port, "/admin/firmware-offer?version=v2&force=1")
             assert reply.json()["sent"] is False
             assert reply.json()["reason"] == "no_device_connected"
-            ws = await connect(f"ws://127.0.0.1:{port}/")
+            ws = await connect(f"ws://127.0.0.1:{port}/", additional_headers=AUTH)
             await _recv_type(ws, "hello")
             await _send_event(ws, "device.hello", _hello(version="v1"))
             update = await _recv_event(ws, "firmware.update")
@@ -669,7 +674,9 @@ class TestRequestHygiene:
         async with _serving(fwdir) as (port, _server):
             with structlog.testing.capture_logs() as logs:
                 reply = await http_get(
-                    port, "/firmware/manifest.json", headers={"Authorization": "Bearer tökén"}
+                    port,
+                    "/firmware/manifest.json",
+                    headers={"Authorization": "Bearer t\u00f6k\u00e9n"},
                 )
         assert reply.status == 401
         assert "firmware.http_failed" not in [e["event"] for e in logs]

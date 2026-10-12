@@ -313,3 +313,172 @@ class TestLocalOnlyRoutes:
         assert health.status == 404
         assert admin.status == 404
         assert direct.status == 200
+
+
+class TestCrossSite:
+    """A web page on another site, open in a browser on the box or on the
+    tailnet, can open a WebSocket to localhost: its Origin gives it away."""
+
+    @pytest.mark.parametrize("origin", ["https://evil.example", "null", "http://127.0.0.1.nip.io"])
+    async def test_a_foreign_origin_gets_403(self, origin: str) -> None:
+        async with _serving() as (port, server, cb):
+            with structlog.testing.capture_logs() as logs:
+                status = await _refused_status(port, headers={"Origin": origin})
+            assert not server.has_client
+        assert status == 403
+        cb.list_sessions.assert_not_awaited()
+        refused = [e for e in logs if e["event"] == "server.auth.refused"]
+        assert refused[0]["reason"] == "origin"
+
+    @pytest.mark.parametrize(
+        "origin", ["http://localhost:5174", "http://100.75.152.70:5174", "http://orange:5174"]
+    )
+    async def test_the_local_pwa_still_connects(self, origin: str) -> None:
+        async with _serving() as (port, server, _cb):
+            ws, _hello = await _open(port, headers={"Origin": origin})
+            assert server._conn is not None and server._conn.role == ROLE_LOCAL
+            await ws.close()
+
+    async def test_dev_mode_does_not_check_origin(self) -> None:
+        async with _serving(token=None) as (port, _server, _cb):
+            ws, _hello = await _open(port, headers={"Origin": "https://evil.example"})
+            await ws.close()
+
+
+class TestHeaderEdges:
+    @pytest.mark.parametrize(
+        "header",
+        ["cf-connecting-ip", "cf-ray", "x-forwarded-for", "forwarded", "x-real-ip"],
+    )
+    async def test_any_proxy_header_in_any_case_even_empty_is_external(self, header: str) -> None:
+        async with _serving() as (port, _server, _cb):
+            with structlog.testing.capture_logs() as logs:
+                status = await _refused_status(port, headers={header: ""})
+        assert status == 401
+        refused = [e for e in logs if e["event"] == "server.auth.refused"]
+        assert refused[0]["external"] is True
+
+    async def test_two_authorization_headers_are_a_bad_token(self) -> None:
+        async with _serving() as (port, _server, _cb):
+            with structlog.testing.capture_logs() as logs:
+                with pytest.raises(InvalidStatus) as exc:
+                    await connect(
+                        f"ws://127.0.0.1:{port}/",
+                        additional_headers=[
+                            ("Authorization", f"Bearer {TOKEN}"),
+                            ("Authorization", f"Bearer {TOKEN}"),
+                            *TUNNEL.items(),
+                        ],
+                    )
+        assert exc.value.response.status_code == 401
+        refused = [e for e in logs if e["event"] == "server.auth.refused"]
+        assert refused[0]["reason"] == "bad_token"
+
+    async def test_a_non_string_type_from_the_device_is_just_refused(self) -> None:
+        async with _serving() as (port, _server, _cb):
+            ws, _hello = await _open(port, headers=AUTH)
+            with structlog.testing.capture_logs() as logs:
+                await ws.send(json.dumps({"type": []}))
+                await ws.send(json.dumps({"type": {"x": 1}}))
+                await ws.send(json.dumps({"no_type": True}))
+                await _pong(ws, 3)  # the connection survived
+            await ws.close()
+        refused = [e["msg_type"] for e in logs if e["event"] == "server.rx.refused_for_role"]
+        assert refused == ["[]", "{'x': 1}", "None"]
+
+
+class _GatedWS:
+    """Fake connection with its own upgrade request, whose close() waits
+    for `release` (a backgrounded tab answering the close frame late)."""
+
+    def __init__(self, name: str, path: str = "/", headers: dict[str, str] | None = None) -> None:
+        self.remote_address = ("127.0.0.1", hash(name) % 50000 + 1000)
+        self.sent: list[dict[str, Any]] = []
+        self.closed_with: int | None = None
+        self.release = asyncio.Event()
+        self._inbound: asyncio.Queue[str | None] = asyncio.Queue()
+        values = {k.lower(): [v] for k, v in (headers or {}).items()}
+
+        class _Request:
+            def __init__(self) -> None:
+                self.path = path
+                self.headers = type(
+                    "H", (), {"get_all": staticmethod(lambda k: list(values.get(k.lower(), [])))}
+                )()
+
+        self.request = _Request()
+
+    async def send(self, msg: str) -> None:
+        self.sent.append(json.loads(msg))
+
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        del reason
+        self.closed_with = code
+        await self.release.wait()
+        self._inbound.put_nowait(None)
+
+    def __aiter__(self) -> _GatedWS:
+        return self
+
+    async def __anext__(self) -> str:
+        item = await self._inbound.get()
+        if item is None:
+            raise ConnectionClosed(None, None)
+        return item
+
+
+def _bare_server(cb: Callbacks) -> AudioServer:
+    return AudioServer(
+        host="127.0.0.1",
+        port=0,
+        on_wake_word=cb.wake_word,
+        on_ptt_start=cb.ptt_start,
+        on_ptt_stop=cb.ptt_stop,
+        on_audio_frame=cb.audio_frame,
+        on_reset=cb.reset,
+        on_language_select=cb.language,
+        device_token=SecretStr(TOKEN),
+    )
+
+
+class TestHandshakeRaces:
+    async def test_the_device_arriving_during_an_eviction_is_not_displaced(self) -> None:
+        """A local client evicting another local client waits for the old
+        socket's close; the walkie connects meanwhile. The local client must
+        then be refused, not take over silently."""
+        cb = Callbacks()
+        server = _bare_server(cb)
+        old = _GatedWS("old-local")
+        tasks = [asyncio.create_task(server._handle_connection(old))]  # type: ignore[arg-type]
+        await until(lambda: server._conn is not None and server._conn.ws is old)
+        newer = _GatedWS("new-local")
+        newer.release.set()
+        tasks.append(asyncio.create_task(server._handle_connection(newer)))  # type: ignore[arg-type]
+        await until(lambda: old.closed_with == 1001)  # its close is pending now
+        device = _GatedWS("walkie", headers=AUTH)
+        device.release.set()
+        tasks.append(asyncio.create_task(server._handle_connection(device)))  # type: ignore[arg-type]
+        await until(lambda: server._conn is not None and server._conn.ws is device)
+        old.release.set()
+        await until(lambda: newer.closed_with == 1008)
+        assert server._conn is not None and server._conn.ws is device
+        assert server._conn.role == ROLE_DEVICE
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def test_query_params_come_from_the_connections_own_request(self) -> None:
+        """The parked fields are shared by every handshake; a connection
+        reads its own URL."""
+        cb = Callbacks()
+        server = _bare_server(cb)
+        server._pending_language = "fr"  # another handshake's, parked
+        server._pending_audio = "pcm"
+        ws = _GatedWS("walkie", path="/?lang=es&persona=basic", headers=AUTH)
+        task = asyncio.create_task(server._handle_connection(ws))  # type: ignore[arg-type]
+        await until(lambda: cb.language.await_count == 1)
+        assert cb.language.await_args.args == ("es",)
+        assert server._conn is not None and server._conn.requested_persona is None  # pinned
+        assert server._pending_language is None
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

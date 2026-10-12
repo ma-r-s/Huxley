@@ -634,8 +634,5 @@ class TestBoundedState:
         svc = service(fwdir, FakeLink())
         assert svc.token_matches(Headers({"Authorization": f"Bearer {TOKEN}"}))
         assert not svc.token_matches(Headers({"Authorization": "Bearer t\udcc3ken"}))
-        assert not svc.token_matches(Headers({"Authorization": "Bearer tökén"}))
+        assert not svc.token_matches(Headers({"Authorization": "Bearer t\u00f6k\u00e9n"}))
         assert not svc.token_matches(Headers())
-        assert service(fwdir, FakeLink(), token="short").token_short is True
-        assert svc.token_short is True  # 26 characters
-        assert service(fwdir, FakeLink(), token="x" * 32).token_short is False

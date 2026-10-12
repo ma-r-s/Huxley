@@ -68,14 +68,15 @@ import websockets.http11
 from websockets.asyncio.server import ServerConnection, serve
 
 from huxley.server.auth import (
+    MIN_TOKEN_CHARS,
     HeaderLookup,
     bearer_token_state,
     configured_token,
     forwarded_for,
+    local_origin,
 )
 from huxley.server.firmware import (
     ADMIN_PREFIX,
-    MIN_TOKEN_CHARS,
     FirmwareService,
     HttpAnswer,
     is_firmware_path,
@@ -239,6 +240,9 @@ class _Access:
     role: str | None
     source: str = ""
     token: str = ""
+    # Why a refused upgrade is refused when the token isn't the reason:
+    # `origin` (a web page on another site, 403).
+    refusal: str = ""
 
 
 def request_source(remote: object, headers: HeaderLookup) -> str:
@@ -250,6 +254,17 @@ def request_source(remote: object, headers: HeaderLookup) -> str:
     return "local" if health_source_allowed(remote) else "other"
 
 
+# Distinct refused message types logged per connection (then silent).
+_MAX_REFUSED_TYPES = 32
+
+
+def _may_be_firmware(conn: _ConnInfo) -> bool:
+    """Whether this connection may speak for the walkie (identify as
+    firmware, report update status, answer console lines): the device, or
+    anyone in dev mode."""
+    return conn.role in (ROLE_DEVICE, ROLE_DEV)
+
+
 class _NoHeaders:
     """No headers at all (a test double without a request)."""
 
@@ -259,6 +274,27 @@ class _NoHeaders:
 
 
 _NO_HEADERS = _NoHeaders()
+
+
+def _query_params(target: str) -> tuple[str | None, str | None, str | None]:
+    """(lang, persona, audio) from an upgrade's URL; all None when the
+    query string is malformed (never block a handshake over it)."""
+    try:
+        qs = parse_qs(urlparse(target).query)
+        lang_values = qs.get("lang") or qs.get("language")
+        lang = lang_values[0].strip().lower() if lang_values else None
+        # T1.13: `?persona=<name>` selects which persona this connection
+        # is for. Trimmed but not lowercased; persona directory names are
+        # case-sensitive.
+        persona_values = qs.get("persona")
+        persona = persona_values[0].strip() if persona_values else None
+        # `?audio=opus` asks for binary Opus audio both ways instead of
+        # base64 PCM in JSON (docs/protocol.md "Opus audio").
+        audio_values = qs.get("audio")
+        audio = audio_values[0].strip().lower() if audio_values else None
+    except Exception:
+        return None, None, None
+    return lang or None, persona or None, audio or None
 
 
 def _wants_evict(target: str) -> bool:
@@ -745,9 +781,10 @@ class AudioServer:
             if opus_error is not None:
                 # Opus clients will get PCM; this says why, once, at boot.
                 await logger.awarning("server.audio.opus_unavailable", reason=opus_error)
-            if firmware is not None and firmware.token_short:
+            token = self._device_token
+            if token is not None and len(token.get_secret_value()) < MIN_TOKEN_CHARS:
                 await logger.awarning(
-                    "firmware.device_token_short",
+                    "server.auth.device_token_short",
                     min_chars=MIN_TOKEN_CHARS,
                     note="HUXLEY_DEVICE_TOKEN is guessable through the tunnel: use 32+ random chars",
                 )
@@ -789,30 +826,18 @@ class AudioServer:
         if refused is not None:
             return refused
         del connection
-        try:
-            parsed = urlparse(request.path)
-            qs = parse_qs(parsed.query)
-            lang_values = qs.get("lang") or qs.get("language")
-            lang = lang_values[0].strip().lower() if lang_values else None
-            self._pending_language = lang or None
-            # T1.13 — `?persona=<name>` selects which persona this
-            # connection is for. Trimmed but not lowercased; persona
-            # directory names are case-sensitive.
-            persona_values = qs.get("persona")
-            persona = persona_values[0].strip() if persona_values else None
-            self._pending_persona = persona or None
-            # `?audio=opus` asks for binary Opus audio both ways instead
-            # of base64 PCM in JSON (docs/protocol.md "Opus audio").
-            audio_values = qs.get("audio")
-            audio = audio_values[0].strip().lower() if audio_values else None
-            self._pending_audio = audio or None
-        except Exception:
-            # Never block a handshake over a malformed query string;
-            # fall back to persona default.
-            self._pending_language = None
-            self._pending_persona = None
-            self._pending_audio = None
+        self._pending_language, self._pending_persona, self._pending_audio = _query_params(
+            request.path
+        )
         return None
+
+    def _requested_params(self, ws: ServerConnection) -> tuple[str | None, str | None, str | None]:
+        """(lang, persona, audio) this connection asked for, from its own
+        request; the parked fields only for a test double without one."""
+        request = getattr(ws, "request", None)
+        if request is not None:
+            return _query_params(request.path)
+        return self._pending_language, self._pending_persona, self._pending_audio
 
     def _health_response(
         self,
@@ -914,6 +939,10 @@ class AudioServer:
         if token == "valid":
             return _Access(ROLE_DEVICE, source, token)
         if source == "local":
+            if not local_origin(headers):
+                # A page on another site, opened in a browser on the box or
+                # on the tailnet, must not get `local` (everything).
+                return _Access(None, source, token, refusal="origin")
             return _Access(ROLE_LOCAL, source, token)
         return _Access(None, source, token)
 
@@ -938,14 +967,18 @@ class AudioServer:
         remote = str(connection.remote_address)
         if access.role is None:
             # Never the token: only whether one came and whether it matched.
+            origin = request.headers.get_all("Origin")
             logger.warning(
                 "server.auth.refused",
-                reason=access.token,
+                reason=access.refusal or access.token,
                 remote=remote,
                 external=access.source == "external",
                 source=access.source,
                 forwarded_for=forwarded_for(request.headers),
+                origin=origin[0][:100] if origin else None,
             )
+            if access.refusal == "origin":
+                return connection.respond(HTTPStatus.FORBIDDEN, "cross-site connection refused\n")
             response = connection.respond(HTTPStatus.UNAUTHORIZED, "device token required\n")
             response.headers["WWW-Authenticate"] = "Bearer"
             return response
@@ -994,7 +1027,7 @@ class AudioServer:
         """A message this connection's role may not send: dropped, said once
         per type per connection."""
         name = str(msg_type)[:40]
-        if name in conn.refused_types:
+        if name in conn.refused_types or len(conn.refused_types) >= _MAX_REFUSED_TYPES:
             return
         conn.refused_types.add(name)
         logger.warning("server.rx.refused_for_role", role=conn.role, msg_type=name)
@@ -1079,6 +1112,8 @@ class AudioServer:
             shell = str(data["shell"])
         else:
             return
+        if shell == "firmware" and not _may_be_firmware(conn):
+            return  # said in `_firmware_client_event`
         conn.shell = shell
         if shell == "firmware":
             self._firmware_last_seen_ms = _now_ms()
@@ -1099,10 +1134,13 @@ class AudioServer:
         access = self._connection_access(ws)
         if not await self._admit(ws, access, conn_id):
             return
-        if self._conn is not None:
+        while self._conn is not None:
             # Evict the old client rather than rejecting the new one.
             # A new connection means either a browser reload or a freshly-
             # booted device — both should take priority over a stale socket.
+            # A loop, re-checked after each await: another connection (the
+            # walkie) can become current while the old socket closes, and
+            # must then be evicted too, or refused if this one may not.
             old_conn = self._conn
             await logger.ainfo(
                 "client_evicted",
@@ -1122,15 +1160,17 @@ class AudioServer:
                 self._recorder.connection_closed(old_conn.conn_id, "evicted")
             with contextlib.suppress(Exception):
                 await old_conn.ws.close(1001, "Replaced by new client") if old_conn.ws else None
+            if not await self._admit(ws, access, conn_id):
+                return
 
         # Pull the language and persona the client requested in its URL
-        # (captured during `_process_request`) and hand each to the
-        # respective callback. Persona-select runs FIRST so the runtime
-        # can swap to the requested persona BEFORE we serialize hello —
-        # otherwise the hello would carry the old persona's name.
-        selected_language = self._pending_language
-        selected_persona = self._pending_persona
-        requested_audio = self._pending_audio
+        # and hand each to the respective callback. Persona-select runs
+        # FIRST so the runtime can swap to the requested persona BEFORE we
+        # serialize hello; otherwise the hello would carry the old
+        # persona's name. Read from this connection's own request: the
+        # fields `_process_request` parks are shared by every handshake,
+        # and two can interleave (the walkie and a PWA after a restart).
+        selected_language, selected_persona, requested_audio = self._requested_params(ws)
         self._pending_language = None
         self._pending_persona = None
         self._pending_audio = None
@@ -1361,8 +1401,11 @@ class AudioServer:
                     self._conn.rx_types.get(msg_type_for_hist, 0) + 1
                 )
             # Production: the device's token buys the firmware's messages
-            # only (no admin, no sessions, no persona or language games).
-            if self._conn.role == ROLE_DEVICE and msg_type_for_hist not in DEVICE_MESSAGE_TYPES:
+            # only (no admin, no sessions, no persona swap). `?lang=` at
+            # connect still applies to it.
+            if self._conn.role == ROLE_DEVICE and not (
+                isinstance(msg_type_for_hist, str) and msg_type_for_hist in DEVICE_MESSAGE_TYPES
+            ):
                 self._refuse_for_role(self._conn, msg_type_for_hist)
                 return
         match msg.get("type"):
@@ -2100,6 +2143,13 @@ class AudioServer:
         receive loop."""
         conn = self._conn
         if self._firmware is None or conn is None:
+            return
+        if not _may_be_firmware(conn):
+            # Production: only the device's own socket speaks for the
+            # walkie. A local client's `device.hello` could otherwise end a
+            # pending image's accept flow (it would then roll back).
+            if event in ("device.hello", "firmware.status", "dev.cmd_result"):
+                self._refuse_for_role(conn, f"client_event:{event}")
             return
         try:
             await self._firmware.on_client_event(conn.conn_id, event, data)

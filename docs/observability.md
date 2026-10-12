@@ -479,10 +479,11 @@ The production role on the voice socket ([protocol](./protocol.md#authentication
 
 | Event | When | Key fields |
 | --- | --- | --- |
-| `server.auth.refused` (warn) | An upgrade from outside loopback and Tailscale, or relayed by a proxy, without a valid device token: answered 401. With `late=true`: refused after its handshake (socket closed 1008). | `reason` (`missing`, `bad_token`), `remote`, `external`, `source` (`external`, `other`), `forwarded_for` |
+| `server.auth.refused` (warn) | An upgrade from outside loopback and Tailscale, or relayed by a proxy, without a valid device token: answered 401. `reason=origin`: a local upgrade from a web page on another site (403). With `late=true`: refused after its handshake (socket closed 1008). | `reason` (`missing`, `bad_token`, `origin`), `remote`, `external`, `source` (`external`, `local`, `other`), `forwarded_for`, `origin` |
 | `server.auth.accepted` | A production connection was let in. `ignored_persona`: the device asked for a `?persona=` it doesn't get. | `role` (`device`, `local`), `source`, `token`, `ignored_persona` |
 | `server.auth.evict_refused` (warn) | A connection that isn't the device would have replaced the connected device: answered 409 (or closed 1008 with `late=true`). A local client passes with `?evict=1`. | `role`, `remote`, `device_conn_id` |
-| `server.rx.refused_for_role` (warn) | The device sent a message type its role may not send (anything but `audio`, `ptt_start`, `ptt_stop`, `wake_word`, `client_event`, `ping`); dropped. Once per type per connection. | `role`, `msg_type` |
+| `server.rx.refused_for_role` (warn) | The device sent a message type its role may not send (anything but `audio`, `ptt_start`, `ptt_stop`, `wake_word`, `client_event`, `ping`); dropped. Or a `local` connection sent the walkie's own events (`msg_type=client_event:device.hello`, `client_event:firmware.status`, `client_event:dev.cmd_result`); ignored for the firmware service. Once per type per connection, at most 32. | `role`, `msg_type` |
+| `server.auth.device_token_short` (warn) | At startup: `HUXLEY_DEVICE_TOKEN` is shorter than 32 characters. | `min_chars` |
 
 Who tried to get in through the tunnel: `grep '"server.auth.refused"' logs/huxley.log | jq -r '"\(.timestamp) \(.reason) \(.forwarded_for)"'`.
 
@@ -519,7 +520,6 @@ The server half of W4 ([protocol](./protocol.md#http-firmware-and-admin), `huxle
 | `firmware.dev_cmd_sent` / `firmware.dev_cmd_done` | A console line went to the walkie / its reply came. | `id`, `cmd` (first word), `chars`, `timeout_s`, `conn_id` / `id`, `elapsed_ms`, `output_chars`, `truncated` |
 | `firmware.dev_cmd_timeout` (warn) / `firmware.dev_cmd_refused` | No reply in time (504) / refused: `bad_params`, `no_device`, `not_authenticated` (warn: the walkie's socket opened without the device token), `no_dev_cmd_cap`, `device_gone`, `shutting_down` (503). | `id`, `timeout_s` / `reason` |
 | `firmware.dev_cmd_result_unmatched` (warn) | A `dev.cmd_result` for no waiting request (it came after the timeout). | `id` |
-| `firmware.device_token_short` (warn) | At startup: `HUXLEY_DEVICE_TOKEN` is shorter than 32 characters. | `min_chars` |
 | `firmware.device_forgotten` | A fifth device said hello; the oldest one's state was dropped (at most 4 are kept, so made-up hellos can't grow memory). | `device_id` |
 | `firmware.image_send_aborted` | Shutdown cut image downloads still draining. | `reason`, `count` |
 | `firmware.http_failed` / `firmware.event_failed` (error, traceback) | A route or an event handler raised (answered 500 / the receive loop goes on). | `path` / `event_name` |
