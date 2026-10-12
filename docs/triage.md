@@ -5378,3 +5378,19 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 **Lesson.** A timer that disconnects from inside the task it would cancel never fires: test what happens after `cancel()`.
 
 ---
+
+## T1.36: Session gaps: a press during the refresh, injects with no session, "ya", "sigue"
+
+**Status**: `done` (2026-10-12; merge `f3ffc9b7`: `773d7771`, `b7663753`, `da125112`; `c389d108`; PWA `06517a36`) · **Effort**: ~half a day
+
+**Problem.** A fresh critic on how tonight's merges (T1.30, T1.33-T1.35) interact: (A) the 50-minute refresh counts "music playing, no model traffic" as idle, and a press in its ~3 s gap went through the rejected path that T1.30 makes stop the media for good: the book stopped and the press got no answer; (B) "ya" was both a T1.30 stop word and the reminder confirmation, so "ya" after a reminder stopped the parked book, and the tool texts called "ya" a pause; (C) a timer or reminder firing with no session never ended its turn, kept the music parked and blocked later injects; (D) "sigue" during a press's hold made the model call the resume tool, replacing the held stream (20 s rewind, earcon again); the PWA beeped its drop tone on every refresh.
+
+**Fix.** (A) a press within 5 s of a drop puts a `"session"` hold on the stream, released by the new `on_session_connected`; later presses still stop it; the walkie plays the reconnect double beep for a rejected press (it had no sound for it). (C) injects queue while the session is down and fire on connect; a book ending in the gap skips its end prompt (the chime still plays); `inject_turn_and_wait` waits up to 10 s so a Telegram call is still announced. The coordinator tracks the session itself: `provider.is_connected` stays true after a server-side close (found by the agent's critic). (B) "ya" out of the stop words and tool texts; test: reminder confirmations are never stop words. (D) the held-content note says "to keep going, call no tool". PWA: the drop tone waits 5 s.
+
+**Tests.** 14 new (A, C), the persona guard (B); runtime 711.
+
+**Open.** A press early in what becomes a long outage resumes the book when the session returns (up to T1.30's 30 min): Mario's call. Race: a new session closed by the server in the instant before `on_session_connected` can still swallow an inject.
+
+**Lesson.** Review the combination, not just each branch: four reviewed branches still met in four bugs.
+
+---
