@@ -717,3 +717,38 @@ class TestVoiceSocketUnaffected:
         async with _serving(None) as (port, _server):
             reply = await http_get(port, path, headers={**AUTH, **ADMIN})
         assert reply.status == 426
+
+
+class TestWithdraw:
+    """An old offer must not chase a walkie flashed by cable with a newer
+    build: withdraw=1 removes it (2026-10-12, found by the firmware owner)."""
+
+    async def test_withdraw_removes_the_offer(self, fwdir: Path) -> None:
+        make_image(fwdir, "v1", size=3000)
+        fw.FirmwareStore(fwdir).write_offer("v1", force=False)
+        async with _serving(fwdir) as (port, _server):
+            with structlog.testing.capture_logs() as logs:
+                reply = await _admin(port, "/admin/firmware-offer?withdraw=1")
+            manifest = await http_get(port, "/firmware/manifest.json", headers=AUTH)
+            image = await http_get(port, "/firmware/v1.bin", headers=AUTH)
+        assert reply.status == 200
+        assert reply.json()["offer"] is None
+        assert reply.json()["withdrawn"]["version"] == "v1"
+        assert not (fwdir / "offer.json").exists()
+        assert manifest.status == 404
+        assert image.status == 404
+        assert any(e["event"] == "firmware.offer_withdrawn" for e in logs)
+
+    async def test_withdraw_with_nothing_offered_is_fine(self, fwdir: Path) -> None:
+        async with _serving(fwdir) as (port, _server):
+            reply = await _admin(port, "/admin/firmware-offer?withdraw=1")
+        assert reply.status == 200
+        assert reply.json() == {"offer": None, "withdrawn": None}
+
+    def test_store_withdraw_returns_the_old_offer(self, fwdir: Path) -> None:
+        make_image(fwdir, "v2", size=1000)
+        store = fw.FirmwareStore(fwdir)
+        store.write_offer("v2", force=True)
+        old = store.withdraw_offer()
+        assert old is not None and old.version == "v2" and old.force is True
+        assert store.read_offer() is None

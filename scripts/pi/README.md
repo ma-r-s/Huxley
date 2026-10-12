@@ -48,6 +48,8 @@ The production server for grandpa's walkie runs on the shared Orange Pi
   scp huxley-firmware.bin mario@100.75.152.70:huxley/server/runtime/firmware/$VER.bin
   scp huxley-firmware.elf mario@100.75.152.70:huxley/server/runtime/firmware/$VER.elf
   ssh mario@100.75.152.70 "curl -s -H 'X-Huxley-Admin: 1' 'http://127.0.0.1:8765/admin/firmware-offer?version=$VER'"
+  # After a test, offer nothing again (an old offer is re-sent to any walkie on another version):
+  ssh mario@100.75.152.70 "curl -s -H 'X-Huxley-Admin: 1' 'http://127.0.0.1:8765/admin/firmware-offer?withdraw=1'"
   ```
 
   It answers `sent: true` when the walkie got `firmware.update` now, or

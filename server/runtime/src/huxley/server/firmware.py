@@ -296,6 +296,14 @@ class FirmwareStore:
         tmp.replace(self.directory / OFFER_FILE)
         return offer
 
+    def withdraw_offer(self) -> Offer | None:
+        """Offer nothing: remove offer.json. Returns what was offered.
+        Without this an old offer stays on file and is sent to any device
+        that reports another version, even a newer one flashed by cable."""
+        old = self.read_offer()
+        (self.directory / OFFER_FILE).unlink(missing_ok=True)
+        return old
+
     def check_offerable(self, version: str) -> ImageInfo:
         """The image for `version`, if it may be offered: an app image that
         says it is `version` (else the device would report another version
@@ -710,13 +718,29 @@ class FirmwareService:
         )
 
     async def _admin_offer(self, params: dict[str, list[str]]) -> HttpAnswer:
+        withdraw = _parse_bool(_one(params, "withdraw"), default=False)
+        if withdraw:
+            old = await asyncio.to_thread(self._store.withdraw_offer)
+            self._explicit_offer = None
+            logger.info(
+                "firmware.offer_withdrawn",
+                version=old.version if old else None,
+                previous=old.previous if old else None,
+            )
+            return _json_answer(
+                HTTPStatus.OK,
+                {"offer": None, "withdrawn": old.to_json() if old else None},
+            )
         version = _one(params, "version")
         force = _parse_bool(_one(params, "force"), default=False)
         if not valid_version(version) or force is None:
             logger.warning(
                 "firmware.offer_refused", reason="bad_params", version=str(version)[:80]
             )
-            return _error(HTTPStatus.BAD_REQUEST, "version=<letters, digits, ._+-> [force=0|1]")
+            return _error(
+                HTTPStatus.BAD_REQUEST,
+                "version=<letters, digits, ._+-> [force=0|1], or withdraw=1",
+            )
         assert version is not None
         try:
             info = await asyncio.to_thread(self._store.check_offerable, version)
