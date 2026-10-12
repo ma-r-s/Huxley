@@ -209,23 +209,31 @@ own "PETG Translucent" preset for the P2S, and what carries over to a
   PETG of Mario's test corner), no top or bottom shells, so there is no sparse grid
   to show in the glow and fewer boundaries between lines. Infill lines 0.5 wide; the walls keep 0.42 so
   the fine features still print.
-- Hot and slow so the lines fuse: 245 C (the preset), a touch over the 230
-  to 240 C that Mario's spool (ElitePETG Transparent) asks for at 50 to
-  100 mm/s, because it runs slower here; the guide's 270 strung badly on the
-  first clear top (2026-10-11, with the AMS at 48 % humidity: dry it first).
-  Flow 1.01 (preset 0.95), about 25 mm/s (a cap on the frosted filament's
-  flow, 2.5 mm3/s): the guide says 20, and makers' clear PETG reports run 20
-  to 30 mm/s.
-- No cooling: part fan and side fan off, as the guide says; overhangs and
-  bridges still get the preset's 90 %.
+- Slow, and only as hot as the spool asks: 240 C, the top of the 230 to
+  240 C on Mario's spool (ElitePETG Transparent), 245 C on the first layer
+  for the bed. About 25 mm/s (a cap on the frosted filament's flow,
+  2.5 mm3/s): the guide says 20, and makers' clear PETG reports run 20 to
+  30 mm/s. The guide's 270 C, flow 1.01 and fans off strung badly on the
+  first clear top (2026-10-11, damp, the AMS at 48 % humidity, at 40 mm/s),
+  so these went back toward the spool and Bambu's preset (2026-10-12): the
+  aim is an even glow and a print that succeeds, not glass.
+- Flow 0.98, about 3 % over the preset's calibrated 0.95 so the lines fuse.
+  The guide's 1.01 is 6 % over on a part solid in every layer; it piles up,
+  drags the nozzle and fattens the edge that slides over the base's lip.
+- Against strings: retraction 0.8 mm (the printer's own; the PETG preset's
+  0.3 barely pulls back before each of about 3000 travels), the preset's
+  gentle part fan (10 %, up to 30 % on short layers, off for the first
+  three) so a string cools and snaps, and travel kept inside the part
+  ("Avoid crossing walls"). The side fan stays off; overhangs and bridges
+  still get the preset's 90 %.
 - Even layers, 0.2 as the fits are tuned. The guide's 0.1 would double the
   time again.
 - After printing, sanding the outside evens the frost further; a clear coat
   would go glassier, which is not the aim.
 
 Base and top share a plate, so these settings sit where only the top
-feels them: the heat, flow, fan and speed on the frosted filament, which
-only the top uses. The solid walls are the plate's, so the base prints
+feels them: the heat, flow, fan, retraction and speed on the frosted
+filament, which only the top uses. The solid walls are the plate's, so the base prints
 solid too (stronger, a little slower). Not as the objects' own settings:
 Bambu Studio did not apply those for Mario.
 

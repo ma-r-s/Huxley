@@ -75,19 +75,20 @@ NO_BRIM = {"brim_type": "no_brim"}
 # The frosted top, for an even glow as clear as its PETG gets, after Bambu's
 # translucent PLA/PETG guide (wiki: knowledge-sharing/transparent-petg, its
 # PETG settings read off its screenshots, 2026-10-11): dry filament first;
-# 270 C (the top of PETG's range) and flow 1.01 so the lines fuse; part fan
-# and side fan off (overhangs and bridges still get the preset's 90 %); one
-# wall and 100 % rectilinear infill, no top or bottom shells (no sparse grid
-# to show in the glow, fewer line boundaries); wide infill lines; slow. Kept
-# from the standard profile: 0.2 layers (the fits are tuned there; the guide
-# says 0.1, about twice the time) and the walls' 0.42 lines (fine features
-# keep printing).
+# one wall and 100 % rectilinear infill, no top or bottom shells (no sparse
+# grid to show in the glow, fewer line boundaries); wide infill lines; slow.
+# Its 270 C, flow 1.01 and fans off strung the first clear top (damp, at
+# 40 mm/s), so the heat, flow and fan went back toward the spool and
+# Bambu's preset (2026-10-12): Mario asked for "even, not glass" and above
+# all a print that succeeds without strings. Kept from the standard
+# profile: 0.2 layers (the fits are tuned there; the guide says 0.1, about
+# twice the time) and the walls' 0.42 lines (fine features keep printing).
 #
 # The base and the top share one plate (Mario, 2026-10-11), so the process
 # is the plate's: the base prints solid too (stronger, a little slower).
 # Everything that must differ goes with the frosted filament instead, which
-# only the top uses: heat, flow, fan, and speed (a volumetric cap of
-# 0.5 x 0.2 x CLARITY_SPEED). Not the
+# only the top uses: heat, flow, fan, retraction and speed (a volumetric cap
+# of 0.5 x 0.2 x CLARITY_SPEED). Not the
 # objects' own settings: Bambu Studio did not apply those for Mario.
 CLARITY_SPEED = 25  # forum and makers' guides for clear PETG: 20 to 30 mm/s (2026-10-12)
 CLARITY_PROCESS = {
@@ -101,6 +102,9 @@ CLARITY_PROCESS = {
     "sparse_infill_pattern": "alignedrectilinear",
     "internal_solid_infill_pattern": "alignedrectilinear",
     "infill_direction": "0",
+    # Travel stays inside the part, so PETG's strings land inside, not across
+    # the outside faces.
+    "reduce_crossing_wall": "1",
     **{
         k: "0.5"
         for k in (
@@ -115,14 +119,27 @@ CLARITY_PROCESS = {
 CLARITY_FILAMENT = {  # on the PETG preset
     # Mario's spool, ElitePETG Transparent, says 230-240 C at 50-100 mm/s
     # (its tag, 2026-10-11); the guide's 270 strung badly, damp, at 40 mm/s.
-    # Forum reports for clear PETG run 240-270; 245 (the preset) at 25 mm/s,
-    # a touch over the tag for the slower speed, on a dried spool.
-    "nozzle_temperature": "245",
+    # 240, the tag's top: hot enough at 25 mm/s (2.5 mm3/s is little to
+    # melt), and every degree over it is more ooze. The first layer 5 over,
+    # for the bed.
+    "nozzle_temperature": "240",
     "nozzle_temperature_initial_layer": "245",  # preset 250
-    "filament_flow_ratio": "1.01",  # preset 0.95
-    "fan_min_speed": "0",  # preset 10
-    "fan_max_speed": "0",  # preset 30
+    # About 3 % over the preset's calibrated 0.95, where clear-PETG makers
+    # put it so the lines fuse. Not the guide's 1.01: 6 % over, solid for
+    # every layer, piles up and drags the nozzle (a maker's corner failed at
+    # 1.01 and printed at 0.99), and it fattens the edge that slides over
+    # the base's lip.
+    "filament_flow_ratio": "0.98",  # preset 0.95
+    # The preset's gentle fan, 10 % rising to 30 % on layers under 30 s, not
+    # the guide's off: a cooled string snaps instead of drawing out, and the
+    # top's small features hold their shape. A frosted glow hides the little
+    # clarity it costs.
+    "fan_min_speed": "10",  # preset 10
+    "fan_max_speed": "30",  # preset 30
     "additional_cooling_fan_speed": "0",  # the side fan, already off in the preset
+    # The P2S's own 0.8, not the preset's 0.3: PETG oozes, and 0.3 barely
+    # pulls the melt back before each of the ~3000 travels.
+    "filament_retraction_length": "0.8",  # preset 0.3
     "filament_max_volumetric_speed": f"{0.5 * 0.2 * CLARITY_SPEED:g}",
 }
 # No variable layer heights (Mario asked, 2026-10-11): Bambu Studio's layer

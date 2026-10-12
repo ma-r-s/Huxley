@@ -501,6 +501,21 @@ textured plate had come out invisible. Lessons:
 It is printed and glued (2026-10-12), and the build page and the website's
 /hx-1 model show it (`site.face_art_parts`).
 
+**Clear top retuned against strings (2026-10-12)**: before printing it,
+Mario pasted six Reddit threads on clear PETG and asked for the settings
+with the best chance of succeeding, no strings. Read against the slice:
+the threads' "Aligned" infill holds at 100 % here (every layer 0 deg in the
+G-code; one commenter says Bambu alternates it), but three settings were
+riskier than Bambu's own preset, and one came from it: flow 1.01 against
+its calibrated 0.95 (6 % over, solid in every layer), part fan off (its
+10/30), and retraction 0.3 (the preset's, against the P2S's 0.8; about
+3000 travels). Now 240 C (the spool's top; 245 first layer), flow 0.98,
+the preset's fan (10 % in this part, off for three layers, 90 % on
+overhangs), retraction 0.8, and "Avoid crossing walls" on. 3 h 55 min,
+zones clean. Mario's aim is an even glow, not glass, so a little clarity
+went for success. Lesson: read the base preset before overriding it; the
+override can be the risky value, and the preset can carry one too.
+
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
 bottom is fine, holders whole, no glue but the tub's halves, plastic pivot, protected cells
 instead of a protection board, the ribbon and loose wires, the board's
