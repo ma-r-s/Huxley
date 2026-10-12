@@ -5381,6 +5381,8 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 
 **Still open (2026-10-12 15:56Z)**: two quick near-silent presses passed the peak gate (peak -27.3 and -29.4 dBFS) and were transcribed as "Subtítulos realizados por la comunidad de Amara.org", Whisper's hallucination on silence, which the model answered. Peak alone can't separate these; the VAD gate in progress was stopped (agent cancelled), so this needs a fresh attempt.
 
+**Also seen (2026-10-12 18:31:53Z)**: a bench turn's injected "¿Qué hora es?" was transcribed right, but the model answered "¿Pediste que tú lo pongas?" with no `get_current_time` call (audio kept: `data/recordings/2026/10/12/183155-394f2a0a-002-model.ogg`). With the earlier "No, ¿qué hora es?" that paused a book, the realtime model sometimes misreads short questions that the transcription gets right. Watch whether it repeats on the recordings.
+
 ## T1.36: Session gaps: a press during the refresh, injects with no session, "ya", "sigue"
 
 **Status**: `done` (2026-10-12; merge `f3ffc9b7`: `773d7771`, `b7663753`, `da125112`; `c389d108`; PWA `06517a36`) · **Effort**: ~half a day
