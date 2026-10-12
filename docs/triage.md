@@ -5317,3 +5317,39 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 **Proposal.** Bound what the server queues per client: set `SO_SNDBUF` on each accepted socket (e.g. 256 KB, which turns off auto-tuning) so `drain()` reaches the coordinator, or pace forwarded model audio to a few seconds ahead of real time. Either way the coordinator's `on_audio_delta` would then block on a slow client, which needs a look at what else waits on it (the provider's receive loop). Not done because it changes the turn coordinator's timing for every client.
 
 ---
+
+## T1.33: A restart overlap took Abuelo down for 55 s
+
+**Status**: `done` (2026-10-12, merge `00a0ff44`; `a8ea1e23`, `73ac16fe`, `4c89d8ce`, `fc786f84`) · **Effort**: M
+
+**Problem.** 2026-10-12 08:49Z: the server was restarted (by hand, `uv run huxley`) while the old process was still in its 5.6 s shutdown (3.5 s summarizing). Telegram's session DB was locked; its retry reused a PyTgCalls object that can't start twice (`PyTgCallsAlreadyRunning` on every retry); `setup_all` propagated the error and the whole persona was down: the walkie had no assistant for 55 s, silently. Timers and reminders teardown then asserted (setup never ran).
+
+**Fix.** A fresh client pair per Telegram retry (verified offline against the real libraries with the session file held locked: four attempts, each "database is locked", every handle closed); a failed skill setup disables only that skill, tears it down and logs `skill.setup_failed`; its tools stay offered and answer through the tool-error path, so the model says it out loud (removing them would let the prompt's named tools be "called" with nothing happening); timers/reminders teardown safe without setup; one server per port (`logs/huxley-<port>.lock`, a new one waits up to 30 s, then exits 1) and a 20 s shutdown limit (the summary call has no timeout); same-persona reload stops the old app first (else every config edit would disable Telegram, whose running client holds the session file).
+
+**Review.** Design critic before coding, code critic after; both changed the result.
+
+**Docs.** architecture, observability, decisions, skills README/authoring/telegram, CLAUDE.md, run-the-server, launchd README.
+
+**Not done.** A disabled Telegram stays off until the next reload (no background reconnect); no lock on the persona's data folder across ports; `reconfigure_all`, prompt text and tool list can still take a session down the same way; disabled skills aren't shown in the PWA. Pre-existing: client-event dispatch is switched off on the first persona swap and never back on (no skill subscribes yet).
+
+**Lesson.** A retry must rebuild the object that failed, and test fakes must refuse a second start the way the real library does.
+
+---
+
+## T1.34: Mishearing, wrong tools and wordy replies in real use
+
+**Status**: `done` (2026-10-12, merge `1ae453eb`: `aa62b2e6..e82725a4`; `88cdff45`) · **Effort**: M
+
+**Problem.** From the 2026-10-12 log audit (Mario on the walkie, 06:44-08:41Z): the model misheard music when Whisper's transcript was right (Adele played as Sade, "Pon Blue Radio" played Adele, "Los Destellos" became the prompt's example genre and played Los Panchos, "Weird Fishes de Radiohead" answered as "Voltages de Radio Alta" twice); wrong tools ("sigue con la canción" skipped to the next song, "ponlo" paused the audiobook while Spotify played, "el segundo" unresolved, "¿cuáles tienes?" listed 5 of 19 books); 19 of 88 replies ended with an unprompted offer; "¿Dijiste 'hola'?" x7.
+
+**Why.** The persona said anything that sounds English is a transcription error; example nouns ("boleros", "Los Panchos") became the model's guesses; ask-first applied to undoable actions; "pausa" was mapped to the audiobook control; the echo constraint fired on clear commands.
+
+**Fix.** Names kept as heard in any language; no example nouns (tests guard it); best guess then act, never the same guess after "no"; controls follow what was last playing; ordinals pick from the last list; empty search lists the whole library; no echo for clear commands or answers to the assistant's own question; no closing offers. `play_music` returns two runners-up as `alternatives`. Spotify re-ranks a song search by the heard title (letters, difflib), and searches the artist's own tracks when none of the top five is close (`88cdff45`).
+
+**Evidence.** `bench.py --wifi --steps hearing` injects yesterday's requests as speech (macOS `say`, never played) and checks each tool call: 10 of 11 right on the first run. The miss, "Weird Fishes de Radiohead": run 1 the model searched "irfixes Radiohead" and Spotify played Let Down (Weird Fishes was the runner-up; fixed by the re-rank, unit-tested on those exact candidates); run 2 the model itself asked for "Creep Radiohead": a hearing limit of the realtime model (Whisper's transcript was garbled too, "nuyer fiches"), which no skill can undo.
+
+**Behavior choice for Mario.** "Pon música" with nothing named continues the last music Spotify had loaded; asks only if nothing was ever played; never picks a default genre or artist. Same for "pon un libro".
+
+**Left.** The model's hearing of English titles in Spanish speech (`gpt-realtime-2.1-mini`); the full model may hear better at a higher price per response (Mario's call, T1.25).
+
+---
