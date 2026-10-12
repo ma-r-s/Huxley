@@ -100,9 +100,12 @@ static void log_boot_banner(void) {
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     hux_app_set_device_info(&info);
 
+    /* Not ESP_RST_WDT: tools/flash.sh ends every flash with esptool's
+     * watchdog reset (F-0020); the watchdogs that catch a hang report
+     * INT_WDT / TASK_WDT. */
     if (reason == ESP_RST_PANIC || reason == ESP_RST_INT_WDT ||
-        reason == ESP_RST_TASK_WDT || reason == ESP_RST_WDT ||
-        reason == ESP_RST_BROWNOUT || reason == ESP_RST_CPU_LOCKUP) {
+        reason == ESP_RST_TASK_WDT || reason == ESP_RST_BROWNOUT ||
+        reason == ESP_RST_CPU_LOCKUP) {
         ESP_LOGE(TAG, "previous_boot_crashed reset=%s — decode with "
                       "`esp_coredump info_corefile`",
                  reset_reason_str(reason));
