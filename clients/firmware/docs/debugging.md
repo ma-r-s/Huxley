@@ -280,7 +280,9 @@ ring after the link dropped (`played_after_drop_ms`), what it still had
 queued (`ring_left_ms`, thrown away then: the server's state is newer)
 and when it dropped (`drop_uptime_ms`); the server repeats a cut
 narration only if it wasn't heard (T1.44; `app.after_drop played_ms=
-discarded_ms=`).
+discarded_ms=`). A press during the outage fixes both figures at that
+press: it ends the playback, and the spoken "no connection" it gets
+isn't the server's audio.
 
 ### Updates through the server (F-0028)
 
@@ -549,7 +551,9 @@ The serial console (`components/hux_console/include/hux_console.h`)
 takes commands typed on the USB port: `talk` / `release`, `say <n>` (a
 whole turn: clip n from flash replaces the mic; `tools/clips.py`),
 `selftest` (a tone on the DAC read back electrically on the ES7210's
-echo-reference channel), `tone`, `vol`, `pa off|on` (silent bench),
+echo-reference channel), `tone`, `prompt <name>` (a sentence stored on
+the walkie, `offline` or `battery_empty`; `prompt.play name= ms= queued=`),
+`vol`, `pa off|on` (silent bench),
 `wifi off|on`, `wifistat` (the Wi-Fi driver's buffer and RX/TX
 counters; they reach the server too, under the `wifi` tag), `wifiscan`
 (every AP the board hears: `wifi.scan.ap` lines with channel, width and

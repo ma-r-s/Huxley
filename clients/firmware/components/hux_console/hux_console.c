@@ -18,6 +18,7 @@
 #include "hux_button.h"
 #include "hux_net.h"
 #include "hux_ota.h"
+#include "hux_prompts.h"
 #include "hux_super.h"
 #include "esp_core_dump.h"
 
@@ -95,6 +96,14 @@ void hux_console_run(char *line) {
         int hz = argc > 1 ? atoi(argv[1]) : 440;
         int ms = argc > 2 ? atoi(argv[2]) : 1000;
         hux_audio_tone(hz, ms);
+    } else if (strcmp(cmd, "prompt") == 0 && argc > 1) {
+        /* A sentence stored on the walkie (hux_prompts): `prompt offline`. */
+        int id = hux_prompt_find(argv[1]);
+        if (id < 0) {
+            ESP_LOGW(TAG, "console.prompt unknown=%s", argv[1]);
+        } else {
+            (void)hux_prompt_play((hux_prompt_t)id);
+        }
     } else if (strcmp(cmd, "super") == 0) {
         hux_super_status();
     } else if (strcmp(cmd, "hang") == 0 && argc > 1) {

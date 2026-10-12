@@ -182,18 +182,37 @@ void hux_opus_rx_clear(void) {
     }
 }
 
-static void send_ctl(rx_kind_t kind, bool to_front) {
-    if (s_rx_q == NULL || xSemaphoreTake(s_ctl_lock, pdMS_TO_TICKS(RX_WAIT_MS)) != pdTRUE) {
-        return;
+/* Queue an item from any task, staged in s_ctl_item under s_ctl_lock (the
+ * WebSocket task stages in s_ws_item, so the two never trample). */
+static bool queue_item(rx_kind_t kind, const uint8_t *data, size_t len, bool to_front) {
+    if (s_rx_q == NULL || len > sizeof(s_ctl_item.data) ||
+        xSemaphoreTake(s_ctl_lock, pdMS_TO_TICKS(RX_WAIT_MS)) != pdTRUE) {
+        return false;
     }
     s_ctl_item.kind = (uint16_t)kind;
-    s_ctl_item.len = 0;
+    s_ctl_item.len = (uint16_t)len;
+    if (len > 0) {
+        memcpy(s_ctl_item.data, data, len);
+    }
     BaseType_t ok = to_front ? xQueueSendToFront(s_rx_q, &s_ctl_item, 0)
                              : xQueueSend(s_rx_q, &s_ctl_item, pdMS_TO_TICKS(RX_WAIT_MS));
     xSemaphoreGive(s_ctl_lock);
     if (ok != pdTRUE) {
         ESP_LOGE(TAG, "opus.ctl_dropped kind=%d (decoder stuck)", (int)kind);
     }
+    return ok == pdTRUE;
+}
+
+static void send_ctl(rx_kind_t kind, bool to_front) {
+    (void)queue_item(kind, NULL, 0, to_front);
+}
+
+void hux_opus_rx_fresh(void) {
+    send_ctl(RX_RESET, false);
+}
+
+bool hux_opus_play_packet(const uint8_t *data, size_t len) {
+    return len > 0 && queue_item(RX_PACKET, data, len, false);
 }
 
 void hux_opus_rx_unhold(void) {

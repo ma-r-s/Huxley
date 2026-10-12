@@ -26,6 +26,7 @@
 #include "hux_net.h"
 #include "hux_opus.h"
 #include "hux_ota.h"
+#include "hux_prompts.h"
 #include "hux_proto.h"
 
 static const char *TAG = "hux_app";
@@ -364,6 +365,11 @@ static void uplink_control(uplink_kind_t kind) {
 static uint32_t s_hellos = 0;       /* this boot */
 static uint32_t s_link_lost_ms = 0; /* the app saw the WebSocket drop */
 static uint32_t s_played_at_drop = 0; /* hux_audio_played_ms() at that drop */
+/* A press during the outage ended the playback (and plays the offline cue,
+ * which isn't the server's audio): what the next hello reports, fixed then. */
+static bool s_after_drop_frozen = false;
+static uint32_t s_after_drop_played = 0;
+static uint32_t s_after_drop_left = 0;
 
 static void send_device_hello(void) {
     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
@@ -437,7 +443,11 @@ static void send_device_hello(void) {
          * session). */
         uint32_t played = hux_audio_played_ms() - s_played_at_drop;
         uint32_t left_ms = (uint32_t)(hux_audio_spk_ring_used() / 48);
-        if (left_ms > 0) {
+        if (s_after_drop_frozen) {
+            /* The ring holds only the offline cue now: let it finish. */
+            played = s_after_drop_played;
+            left_ms = s_after_drop_left;
+        } else if (left_ms > 0) {
             hux_audio_spk_clear();
         }
         cJSON_AddNumberToObject(d, "played_after_drop_ms", played);
@@ -483,10 +493,14 @@ static void send_blackbox(void) {
 }
 
 /* The device can't reach the server (no Wi-Fi, no WebSocket, no hello
- * yet), so nobody else can tell the user: a short low falling pair of
- * tones, made here. The user can't see a light; silence would read as
- * "it heard me" or "it's broken". */
+ * yet), so nobody else can tell the user: it says so itself, a sentence
+ * stored on the walkie (F-0027), or if that can't play a short low falling
+ * pair of tones. The user can't see a light; silence would read as "it
+ * heard me" or "it's broken". */
 static void play_offline_cue(void) {
+    if (hux_prompt_play(HUX_PROMPT_OFFLINE)) {
+        return;
+    }
     hux_audio_tone(440, 120);
     hux_audio_tone(0, 60);
     hux_audio_tone(330, 220);
@@ -499,7 +513,18 @@ static void enter_ptt(void) {
         /* Stop whatever is still playing (the ring can hold a whole reply
          * from before the drop), then the cue: a clear drops queued tones,
          * and tones only play once the ring is empty. */
+        if (s_hellos > 0 && !s_after_drop_frozen) {
+            /* The press ends what the drop left playing: what was heard
+             * stops here, and what was queued is thrown away now. The
+             * next hello reports these, not the cue's own audio. */
+            s_after_drop_frozen = true;
+            s_after_drop_played = hux_audio_played_ms() - s_played_at_drop;
+            s_after_drop_left = (uint32_t)(hux_audio_spk_ring_used() / 48);
+        }
         hux_audio_spk_clear();
+        /* A barge-in hold from a press before the drop would drop the cue
+         * too; no server audio can come now that would need it. */
+        hux_audio_spk_unhold("offline_cue");
         play_offline_cue();
         if (s_evicted || !hux_net_is_running()) {
             /* The user wants the walkie back: take the server again (or
@@ -814,6 +839,7 @@ static void dispatch(hux_app_event_t *ev) {
             if (s_state != ST_WAITING_WS) {
                 s_link_lost_ms = (uint32_t)(esp_timer_get_time() / 1000);
                 s_played_at_drop = hux_audio_played_ms();
+                s_after_drop_frozen = false;
             }
             /* Once per outage: every failed retry posts this too, and an
              * outage's lines wait in the 256-line queue (hux_net logs the
