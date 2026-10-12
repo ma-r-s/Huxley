@@ -25,6 +25,7 @@
 #include "hux_link.h"
 #include "hux_log.h"
 #include "hux_type_probe.h"
+#include "hux_wifi_list.h"
 #include "hux_wifi_retry.h"
 #include "hux_opus.h"
 #include "hux_ws_frag.h"
@@ -394,6 +395,389 @@ static int bandwidth_mhz(wifi_bandwidth_t bw) {
     return bw == WIFI_BW_HT40 ? 40 : 20;
 }
 
+/* ------------------------------------------------------------------ */
+/*  The Wi-Fi list (F-0027): compiled networks + up to 4 added on site */
+/* ------------------------------------------------------------------ */
+
+#define WIFI_NVS_NS        "hux_wifi"
+#define WIFI_NVS_GOOD      "good"
+#define WIFI_RESCAN_MS     (2 * 60 * 1000)  /* no IP this long: look for a known network heard */
+#define WIFI_ROTATE_MS     (10 * 60 * 1000) /* an IP but no server this long: the next one heard */
+#define WIFI_ADD_IP_MS     30000            /* a network being added gets this long for an IP */
+#define WIFI_ADD_SERVER_MS 60000            /* then this long to reach the server (reported only) */
+#define WIFI_AUTH_FAILS    3                /* in a row: a wrong password (one can be weak signal) */
+#define WIFI_HEARD_MAX     40
+
+typedef struct {
+    char ssid[33];
+    char pass[65];
+} wifi_saved_t;
+
+static hux_wifi_net_t s_nets[HUX_WIFI_MAX];
+static int s_nnets = 0;
+static int s_cur = -1;      /* the network joined (index into s_nets) */
+static char s_good[33];     /* the one that last reached the server (NVS) */
+/* Since when there is no IP: the last join, or the moment an IP was lost. */
+static _Atomic uint32_t s_noip_ms = 0;
+static uint32_t s_rotate_ms = 0;
+/* The last hello (an add's "server reached" must come after its IP). */
+static _Atomic uint32_t s_hello_ms = 0;
+/* Saved entries an update has since compiled in: kept in NVS untouched (a
+ * rollback to an older image still finds them), not joined twice. */
+static wifi_saved_t s_shadow[HUX_WIFI_SAVED_MAX];
+static int s_nshadow = 0;
+static _Atomic bool s_have_ip = false;
+/* A scan or a join under way: the disconnect handler doesn't retry. */
+static _Atomic bool s_wifi_hold = false;
+/* An add under way (`wifi addhex`, USB only): the network on trial, the one
+ * to go back to, and what the driver said meanwhile. */
+static _Atomic bool s_add_on = false;
+static struct {
+    int idx;
+    int prev;
+    uint32_t since_ms;
+    bool saved;
+} s_add;
+static _Atomic uint32_t s_add_ip_ms = 0;
+static _Atomic int s_add_auth_fails = 0;
+static _Atomic int s_add_last_reason = 0;
+
+static int wifi_find(const char *ssid) {
+    for (int i = 0; i < s_nnets; i++) {
+        if (strcmp(s_nets[i].ssid, ssid) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static const char *net_source(int i) {
+    return i >= 0 && i < s_nnets && s_nets[i].compiled ? "compiled" : "saved";
+}
+
+static void wifi_add_compiled(const char *ssid, const char *pass) {
+    if (ssid == NULL || ssid[0] == '\0' || pass == NULL || s_nnets >= HUX_WIFI_COMPILED_MAX ||
+        wifi_find(ssid) >= 0) {
+        return;
+    }
+    hux_wifi_net_t *n = &s_nets[s_nnets++];
+    strlcpy(n->ssid, ssid, sizeof(n->ssid));
+    strlcpy(n->pass, pass, sizeof(n->pass));
+    n->compiled = true;
+}
+
+static void wifi_list_load(const hux_net_config_t *cfg) {
+    s_nnets = 0;
+    wifi_add_compiled(cfg->wifi_ssid, cfg->wifi_password);
+    wifi_add_compiled(cfg->wifi2_ssid, cfg->wifi2_password);
+    wifi_add_compiled(cfg->wifi3_ssid, cfg->wifi3_password);
+    int compiled = s_nnets;
+    s_good[0] = '\0';
+    nvs_handle_t h;
+    if (nvs_open(WIFI_NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        for (int k = 0; k < HUX_WIFI_SAVED_MAX && s_nnets < HUX_WIFI_MAX; k++) {
+            char key[4];
+            snprintf(key, sizeof(key), "w%d", k);
+            wifi_saved_t w;
+            size_t len = sizeof(w);
+            if (nvs_get_blob(h, key, &w, &len) == ESP_OK && len == sizeof(w) &&
+                memchr(w.ssid, 0, sizeof(w.ssid)) != NULL &&
+                memchr(w.pass, 0, sizeof(w.pass)) != NULL && w.ssid[0] != '\0') {
+                if (wifi_find(w.ssid) >= 0) {
+                    s_shadow[s_nshadow++] = w; /* compiled in since: keep, don't join twice */
+                } else {
+                    hux_wifi_net_t *n = &s_nets[s_nnets++];
+                    memcpy(n->ssid, w.ssid, sizeof(n->ssid));
+                    memcpy(n->pass, w.pass, sizeof(n->pass));
+                    n->compiled = false;
+                }
+            }
+            memset(&w, 0, sizeof(w));
+        }
+        size_t len = sizeof(s_good);
+        if (nvs_get_str(h, WIFI_NVS_GOOD, s_good, &len) != ESP_OK) {
+            s_good[0] = '\0';
+        }
+        nvs_close(h);
+    }
+    ESP_LOGI(TAG, "wifi.list compiled=%d saved=%d shadowed=%d good=\"%s\"", compiled,
+             s_nnets - compiled, s_nshadow, s_good);
+}
+
+/* The saved entries, rewritten as w0..w3 (a few blobs, only on a change). */
+static bool wifi_list_save(void) {
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(WIFI_NVS_NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "wifi.save_failed err=%s", esp_err_to_name(err));
+        return false;
+    }
+    int k = 0;
+    for (int i = 0; i < s_nnets && err == ESP_OK; i++) {
+        if (s_nets[i].compiled || k >= HUX_WIFI_SAVED_MAX) {
+            continue;
+        }
+        char key[4];
+        snprintf(key, sizeof(key), "w%d", k++);
+        wifi_saved_t w = {0};
+        memcpy(w.ssid, s_nets[i].ssid, sizeof(w.ssid));
+        memcpy(w.pass, s_nets[i].pass, sizeof(w.pass));
+        err = nvs_set_blob(h, key, &w, sizeof(w));
+        memset(&w, 0, sizeof(w));
+    }
+    for (int i = 0; i < s_nshadow && k < HUX_WIFI_SAVED_MAX && err == ESP_OK; i++) {
+        char key[4];
+        snprintf(key, sizeof(key), "w%d", k++);
+        err = nvs_set_blob(h, key, &s_shadow[i], sizeof(s_shadow[i]));
+    }
+    for (; k < HUX_WIFI_SAVED_MAX && err == ESP_OK; k++) {
+        char key[4];
+        snprintf(key, sizeof(key), "w%d", k);
+        esp_err_t e = nvs_erase_key(h, key);
+        if (e != ESP_OK && e != ESP_ERR_NVS_NOT_FOUND) {
+            err = e;
+        }
+    }
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "wifi.save_failed err=%s", esp_err_to_name(err));
+    }
+    return err == ESP_OK;
+}
+
+static void wifi_set_good(const char *ssid) {
+    if (strcmp(s_good, ssid) == 0) {
+        return; /* written only when it changes */
+    }
+    strlcpy(s_good, ssid, sizeof(s_good));
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(WIFI_NVS_NS, NVS_READWRITE, &h);
+    if (err == ESP_OK) {
+        err = ssid[0] != '\0' ? nvs_set_str(h, WIFI_NVS_GOOD, ssid) : nvs_erase_key(h, WIFI_NVS_GOOD);
+        if (err == ESP_OK) {
+            err = nvs_commit(h);
+        }
+        nvs_close(h);
+    }
+    ESP_LOGW(TAG, "wifi.good ssid=\"%s\" saved=%s", ssid, esp_err_to_name(err));
+}
+
+static bool wifi_apply_config(int idx) {
+    wifi_config_t wc = {0};
+    memcpy(wc.sta.ssid, s_nets[idx].ssid, strnlen(s_nets[idx].ssid, sizeof(wc.sta.ssid)));
+    memcpy(wc.sta.password, s_nets[idx].pass,
+           strnlen(s_nets[idx].pass, sizeof(wc.sta.password)));
+    wc.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK; /* WPA2 or better */
+    wc.sta.pmf_cfg.capable = true;
+    wc.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH; /* WPA3-only networks too */
+    /* Join the strongest AP with this SSID. The default fast scan joins the
+     * first one it hears: on a mesh (several APs, one SSID) the bench board
+     * landed at -26, -60 and -87 dBm on three boots a metre from the same
+     * node. A full scan costs about a second. */
+    wc.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    wc.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+    esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &wc);
+    memset(&wc, 0, sizeof(wc));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "wifi.config_failed ssid=\"%s\" err=%s", s_nets[idx].ssid,
+                 esp_err_to_name(err));
+    }
+    return err == ESP_OK;
+}
+
+/* Leave whatever network, join `idx`: a full stop and start (a fresh
+ * association and DHCP lease, as the ladder's Wi-Fi step always did).
+ * STA_START connects. The caller holds the link lock. */
+static bool wifi_join_locked(int idx, const char *why) {
+    atomic_store(&s_wifi_hold, true);
+    esp_timer_stop(s_wifi_retry_timer);
+    s_wifi_retries = 0;
+    esp_err_t stop = esp_wifi_stop();
+    /* Refused: the driver keeps the previous network's config, and so does
+     * s_cur (an add then fails with why=config). */
+    bool ok = wifi_apply_config(idx);
+    if (ok) {
+        s_cur = idx;
+    }
+    atomic_store(&s_noip_ms, now_ms());
+    atomic_store(&s_have_ip, false);
+    atomic_store(&s_wifi_hold, false);
+    esp_err_t start = esp_wifi_start();
+    ESP_LOGW(TAG, "wifi.join ssid=\"%s\" source=%s why=%s config=%d stop=%s start=%s",
+             s_nets[idx].ssid, net_source(idx), why, ok, esp_err_to_name(stop),
+             esp_err_to_name(start));
+    return ok;
+}
+
+/* What is heard from here (blocking, ~2 s). A connect in progress makes a
+ * scan fail, so without an IP the attempt is stopped first; the caller
+ * then joins or connects again. The caller holds the link lock. */
+static int wifi_scan_locked(hux_wifi_heard_t *heard, int cap) {
+    atomic_store(&s_wifi_hold, true);
+    esp_timer_stop(s_wifi_retry_timer);
+    if (!atomic_load(&s_have_ip)) {
+        esp_wifi_disconnect();
+    }
+    wifi_scan_config_t sc = {.show_hidden = true};
+    esp_err_t err = esp_wifi_scan_start(&sc, true);
+    int nh = 0;
+    if (err == ESP_OK) {
+        uint16_t found = 0;
+        esp_wifi_scan_get_ap_num(&found);
+        uint16_t n = found < WIFI_HEARD_MAX ? found : WIFI_HEARD_MAX;
+        wifi_ap_record_t *aps = calloc(n > 0 ? n : 1, sizeof(*aps));
+        if (aps != NULL) {
+            esp_wifi_scan_get_ap_records(&n, aps);
+            for (uint16_t i = 0; i < n && nh < cap; i++) {
+                memcpy(heard[nh].ssid, aps[i].ssid, 32);
+                heard[nh].ssid[32] = '\0';
+                heard[nh].rssi = aps[i].rssi;
+                nh++;
+            }
+            free(aps);
+        } else {
+            esp_wifi_clear_ap_list();
+        }
+    } else {
+        ESP_LOGW(TAG, "wifi.scan failed err=%s", esp_err_to_name(err));
+    }
+    atomic_store(&s_wifi_hold, false);
+    return err == ESP_OK ? nh : -1;
+}
+
+/* Scan, rank, and either move to `pick(order)` or stay. Caller holds the
+ * link lock. `next`: the candidate after the current one (rotation);
+ * otherwise the best. Returns whether it joined. */
+static bool wifi_choose_locked(bool next, const char *why) {
+    static hux_wifi_heard_t heard[WIFI_HEARD_MAX]; /* link lock: one user */
+    int nh = wifi_scan_locked(heard, WIFI_HEARD_MAX);
+    int order[HUX_WIFI_MAX];
+    int n = hux_wifi_rank(s_nets, s_nnets, s_good, heard, nh > 0 ? nh : 0, order, HUX_WIFI_MAX);
+    int pick = n > 0 ? order[0] : s_cur;
+    if (pick < 0) {
+        /* None heard and none current (the active one was forgotten). */
+        pick = s_good[0] != '\0' && wifi_find(s_good) >= 0 ? wifi_find(s_good) : 0;
+    }
+    if (next && n > 0) {
+        for (int i = 0; i < n; i++) {
+            if (order[i] == s_cur) {
+                pick = order[(i + 1) % n];
+                break;
+            }
+        }
+    }
+    ESP_LOGW(TAG, "wifi.choose why=%s heard=%d candidates=%d current=\"%s\" pick=\"%s\"", why, nh, n,
+             s_cur >= 0 ? s_nets[s_cur].ssid : "", pick >= 0 ? s_nets[pick].ssid : "");
+    if (pick != s_cur || (next && n > 0)) {
+        /* `next` with one heard: the same one afresh. None heard: stay. */
+        return wifi_join_locked(pick, why);
+    }
+    if (!atomic_load(&s_have_ip)) {
+        atomic_store(&s_noip_ms, now_ms()); /* staying: the next look in 2 min */
+        esp_wifi_connect();
+    }
+    return false;
+}
+
+/* The add under way, once per ladder tick: kept once it has an IP (the
+ * server is reported, not required: the Pi or the tunnel may be down that
+ * minute), dropped with the reason otherwise. */
+static void wifi_add_tick(uint32_t now) {
+    uint32_t ip_ms = atomic_load(&s_add_ip_ms);
+    if (ip_ms != 0 && !s_add.saved) {
+        if (!link_lock_timed(10000)) {
+            return; /* the next tick */
+        }
+        bool ok = wifi_list_save();
+        if (!ok) {
+            ESP_LOGW(TAG, "wifi.add failed ssid=\"%s\" why=nvs: back to \"%s\"",
+                     s_nets[s_add.idx].ssid, s_nets[s_add.prev].ssid);
+            int prev = s_add.prev;
+            memset(&s_nets[s_add.idx], 0, sizeof(s_nets[0]));
+            s_nnets--;
+            atomic_store(&s_add_on, false);
+            wifi_join_locked(prev, "add_failed");
+            link_unlock();
+            return;
+        }
+        s_add.saved = true;
+        if (!atomic_load(&s_server_up)) {
+            atomic_store(&s_lost_ms, now); /* a fresh start for the ladder */
+        }
+        atomic_store(&s_ladder_done, HUX_LADDER_NONE);
+        s_rotate_ms = now;
+        ESP_LOGW(TAG, "wifi.add saved ssid=\"%s\" ip_after_ms=%u nvs=%d", s_nets[s_add.idx].ssid,
+                 (unsigned)(ip_ms - s_add.since_ms), ok);
+        link_unlock();
+        return;
+    }
+    if (s_add.saved) {
+        if (atomic_load(&s_server_up) && (int32_t)(atomic_load(&s_hello_ms) - ip_ms) > 0) {
+            ESP_LOGW(TAG, "wifi.add server_reached ssid=\"%s\"", s_nets[s_add.idx].ssid);
+            atomic_store(&s_add_on, false);
+        } else if (now - ip_ms >= WIFI_ADD_SERVER_MS) {
+            ESP_LOGW(TAG, "wifi.add no_server ssid=\"%s\": kept (it gives an IP); the server "
+                          "didn't answer in %d s",
+                     s_nets[s_add.idx].ssid, WIFI_ADD_SERVER_MS / 1000);
+            atomic_store(&s_add_on, false);
+        }
+        return;
+    }
+    int fails = atomic_load(&s_add_auth_fails);
+    int reason = atomic_load(&s_add_last_reason);
+    const char *why = NULL;
+    if (fails >= WIFI_AUTH_FAILS) {
+        why = "wrong_password";
+    } else if (reason == WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY ||
+               reason == WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD) {
+        why = "security_too_weak"; /* open or WPA-TKIP only */
+    } else if (reason == WIFI_REASON_802_1X_AUTH_FAILED) {
+        why = "enterprise_login";
+    } else if (now - s_add.since_ms >= WIFI_ADD_IP_MS) {
+        why = reason == WIFI_REASON_NO_AP_FOUND ? "not_heard" : fails > 0 ? "auth_failed" : "no_ip";
+    }
+    if (why == NULL || !link_lock_timed(10000)) {
+        return;
+    }
+    ESP_LOGW(TAG, "wifi.add failed ssid=\"%s\" why=%s reason=%d auth_fails=%d: back to \"%s\"",
+             s_nets[s_add.idx].ssid, why, reason, fails, s_nets[s_add.prev].ssid);
+    int prev = s_add.prev;
+    memset(&s_nets[s_add.idx], 0, sizeof(s_nets[0])); /* the trial entry is the last one */
+    s_nnets--;
+    atomic_store(&s_add_on, false);
+    wifi_join_locked(prev, "add_failed");
+    link_unlock();
+}
+
+/* Once per ladder tick (5 s): an add under way, no IP for 2 min (move to a
+ * known network heard), an IP but no server since the ladder's Wi-Fi step
+ * (the next one heard every 10 min). */
+static void wifi_tick(void) {
+    uint32_t now = now_ms();
+    if (atomic_load(&s_add_on)) {
+        wifi_add_tick(now);
+        return;
+    }
+    if (!atomic_load(&s_have_ip) && s_nnets > 1 && now - atomic_load(&s_noip_ms) >= WIFI_RESCAN_MS &&
+        link_lock_timed(10000)) {
+        if (!atomic_load(&s_have_ip)) {
+            wifi_choose_locked(true, "no_ip");
+        }
+        link_unlock();
+    }
+    if (atomic_load(&s_have_ip) && !atomic_load(&s_server_up) && !atomic_load(&s_paused) &&
+        atomic_load(&s_ladder_done) >= HUX_LADDER_WIFI &&
+        atomic_load(&s_ladder_done) != HUX_LADDER_REBOOT && now - s_rotate_ms >= WIFI_ROTATE_MS &&
+        link_lock_timed(10000)) {
+        s_rotate_ms = now;
+        wifi_choose_locked(true, "no_server");
+        link_unlock();
+    }
+}
+
 static void wifi_event_handler(void *arg, esp_event_base_t base,
                                int32_t id, void *data) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
@@ -431,6 +815,25 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
          * to every 30 s. The reason code says why (201 no AP found, 15 /
          * 204 wrong password, 8 we left). */
         const wifi_event_sta_disconnected_t *d = (const wifi_event_sta_disconnected_t *)data;
+        int reason = d != NULL ? (int)d->reason : -1;
+        if (atomic_exchange(&s_have_ip, false)) {
+            atomic_store(&s_noip_ms, now_ms()); /* the 2 min count from here */
+        }
+        if (atomic_load(&s_add_on)) {
+            atomic_store(&s_add_last_reason, reason);
+            if (reason == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT || reason == WIFI_REASON_AUTH_FAIL ||
+                reason == WIFI_REASON_HANDSHAKE_TIMEOUT) {
+                atomic_fetch_add(&s_add_auth_fails, 1);
+            } else if (reason != WIFI_REASON_ASSOC_LEAVE) {
+                atomic_store(&s_add_auth_fails, 0); /* "three in a row" */
+            }
+        }
+        if (atomic_load(&s_wifi_hold)) {
+            /* A scan or a join under way: it connects when it's done. */
+            ESP_LOGI(TAG, "wifi.disconnected reason=%d held", reason);
+            post_app(HUX_APP_EV_NET_WIFI_DOWN);
+            return;
+        }
         s_wifi_retries++;
         health_count(s_h_wifi, d != NULL ? (int)d->reason : -1);
         uint32_t delay_ms = hux_wifi_retry_delay_ms(s_wifi_retries);
@@ -449,6 +852,10 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
                  hux_net_rssi());
         s_wifi_retries = 0;
         esp_timer_stop(s_wifi_retry_timer); /* a pending retry is moot now */
+        atomic_store(&s_have_ip, true);
+        if (atomic_load(&s_add_on) && s_cur == s_add.idx && atomic_load(&s_add_ip_ms) == 0) {
+            atomic_store(&s_add_ip_ms, now_ms());
+        }
         xEventGroupSetBits(s_wifi_events, WIFI_CONNECTED_BIT);
         post_app(HUX_APP_EV_NET_WIFI_UP);
         if (atomic_load(&s_ws_first_start) && !atomic_load(&s_server_up)) {
@@ -475,7 +882,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
     }
 }
 
-static void wifi_init_sta(const char *ssid, const char *password) {
+static void wifi_init_sta(int idx) {
     s_wifi_events = xEventGroupCreate();
     configASSERT(s_wifi_events != NULL);
     const esp_timer_create_args_t retry_args = {
@@ -495,22 +902,21 @@ static void wifi_init_sta(const char *ssid, const char *password) {
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL));
 
-    wifi_config_t wifi_config = {0};
-    strncpy((char *)wifi_config.sta.ssid, ssid,
-            sizeof(wifi_config.sta.ssid) - 1);
-    strncpy((char *)wifi_config.sta.password, password,
-            sizeof(wifi_config.sta.password) - 1);
-    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-    wifi_config.sta.pmf_cfg.capable = true;
-    /* Join the strongest AP with this SSID. The default fast scan joins the
-     * first one it hears: on a mesh (several APs, one SSID) the bench board
-     * landed at -26, -60 and -87 dBm on three boots a metre from the same
-     * node. A full scan costs about a second at boot. */
-    wifi_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
-    wifi_config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+    /* The driver keeps no copy of any password in flash (`nvs.net80211` in
+     * plain text otherwise): the list is the only store. */
+    wifi_config_t stored = {0};
+    if (esp_wifi_get_config(WIFI_IF_STA, &stored) == ESP_OK && stored.sta.ssid[0] != 0) {
+        /* Left by an image before this one: erase it once. */
+        esp_err_t r = esp_wifi_restore();
+        ESP_LOGW(TAG, "wifi.flash_copy_erased err=%s", esp_err_to_name(r));
+    }
+    memset(&stored, 0, sizeof(stored));
+    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    wifi_apply_config(idx);
+    s_cur = idx;
+    atomic_store(&s_noip_ms, now_ms());
     ESP_ERROR_CHECK(esp_wifi_start());
 
     /* Power save off: the radio stays awake (the walkie's biggest steady
@@ -529,17 +935,44 @@ static void wifi_init_sta(const char *ssid, const char *password) {
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     wifi_bandwidth_t bw = WIFI_BW_HT20;
     esp_wifi_get_bandwidth(WIFI_IF_STA, &bw);
-    ESP_LOGI(TAG, "wifi.init ssid=\"%s\" ps=NONE bw_mhz=%d", ssid, bandwidth_mhz(bw));
+    ESP_LOGI(TAG, "wifi.init ssid=\"%s\" source=%s ps=NONE bw_mhz=%d", s_nets[idx].ssid,
+             net_source(idx), bandwidth_mhz(bw));
 }
 
-#define WIFI_SCAN_MAX_APS 24
+#define WIFI_SCAN_MAX_APS 40
+
+static const char *auth_name(wifi_auth_mode_t m) {
+    switch (m) {
+        case WIFI_AUTH_OPEN:            return "open";
+        case WIFI_AUTH_WEP:             return "wep";
+        case WIFI_AUTH_WPA_PSK:         return "wpa";
+        case WIFI_AUTH_WPA2_PSK:        return "wpa2";
+        case WIFI_AUTH_WPA_WPA2_PSK:    return "wpa_wpa2";
+        case WIFI_AUTH_WPA2_ENTERPRISE: return "enterprise";
+        case WIFI_AUTH_WPA3_PSK:        return "wpa3";
+        case WIFI_AUTH_WPA2_WPA3_PSK:   return "wpa2_wpa3";
+        default:                        return "other";
+    }
+}
 
 void hux_net_wifi_scan(void) {
     /* Every AP the board hears, from where it sits: which neighbours
      * share its channel, and how loud they are. Blocking, ~2 s; the link
      * leaves its channel for a moment per channel scanned. */
+    link_lock();
+    atomic_store(&s_wifi_hold, true);
+    esp_timer_stop(s_wifi_retry_timer);
+    bool had_ip = atomic_load(&s_have_ip);
+    if (!had_ip) {
+        esp_wifi_disconnect(); /* a connect in progress makes a scan fail */
+    }
     wifi_scan_config_t sc = {.show_hidden = true};
     esp_err_t err = esp_wifi_scan_start(&sc, true);
+    atomic_store(&s_wifi_hold, false);
+    if (!had_ip) {
+        esp_wifi_connect();
+    }
+    link_unlock();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "wifi.scan failed err=%s", esp_err_to_name(err));
         return;
@@ -557,13 +990,128 @@ void hux_net_wifi_scan(void) {
     ESP_LOGI(TAG, "wifi.scan found=%u shown=%u", (unsigned)found, (unsigned)n);
     for (uint16_t i = 0; i < n; i++) {
         const wifi_ap_record_t *a = &aps[i];
+        char name[33];
+        memcpy(name, a->ssid, 32);
+        name[32] = '\0';
         ESP_LOGI(TAG,
                  "wifi.scan.ap bssid=%02x:%02x:%02x:%02x:%02x:%02x channel=%d second=%s "
-                 "rssi=%d ssid=\"%.32s\"",
+                 "rssi=%d auth=%s known=%d ssid=\"%s\"",
                  a->bssid[0], a->bssid[1], a->bssid[2], a->bssid[3], a->bssid[4], a->bssid[5],
-                 a->primary, second_chan_name(a->second), a->rssi, (const char *)a->ssid);
+                 a->primary, second_chan_name(a->second), a->rssi, auth_name(a->authmode),
+                 name[0] != '\0' && wifi_find(name) >= 0, name);
     }
     free(aps);
+}
+
+bool hux_net_wifi_add(const char *ssid, const char *pass) {
+    size_t sl = strlen(ssid), pl = strlen(pass);
+    ESP_LOGW(TAG, "wifi.add ssid=\"%s\" ssid_len=%u pass_len=%u", ssid, (unsigned)sl,
+             (unsigned)pl); /* never the password */
+    const char *refused = NULL;
+    bool psk_hex = pl == 64;
+    for (size_t i = 0; psk_hex && i < pl; i++) {
+        psk_hex = (pass[i] >= '0' && pass[i] <= '9') || (pass[i] >= 'a' && pass[i] <= 'f') ||
+                  (pass[i] >= 'A' && pass[i] <= 'F');
+    }
+    if (sl < 1 || sl > 32 || pl < 8 || pl > 64 || (pl == 64 && !psk_hex)) {
+        refused = "lengths"; /* a name of 1-32 bytes, a passphrase of 8-63, or a 64-hex key */
+    } else if (atomic_load(&s_add_on)) {
+        refused = "busy";
+    }
+    if (refused == NULL) {
+        link_lock();
+        int saved = 0;
+        for (int i = 0; i < s_nnets; i++) {
+            saved += !s_nets[i].compiled;
+        }
+        if (wifi_find(ssid) >= 0) {
+            refused = "known"; /* forget it first to change its password */
+        } else if (saved >= HUX_WIFI_SAVED_MAX || s_nnets >= HUX_WIFI_MAX) {
+            refused = "full";
+        } else {
+            hux_wifi_net_t *n = &s_nets[s_nnets];
+            strlcpy(n->ssid, ssid, sizeof(n->ssid));
+            strlcpy(n->pass, pass, sizeof(n->pass));
+            n->compiled = false;
+            s_add.idx = s_nnets++;
+            s_add.prev = s_cur >= 0 ? s_cur : 0;
+            s_add.since_ms = now_ms();
+            s_add.saved = false;
+            atomic_store(&s_add_ip_ms, 0);
+            atomic_store(&s_add_auth_fails, 0);
+            atomic_store(&s_add_last_reason, 0);
+            atomic_store(&s_add_on, true);
+            /* The ladder starts over: an hour of outage before the visit must
+             * not reboot it in the middle of the add. */
+            atomic_store(&s_ladder_done, HUX_LADDER_NONE);
+            if (!atomic_load(&s_server_up)) {
+                atomic_store(&s_lost_ms, now_ms());
+            }
+            s_rotate_ms = now_ms();
+            if (atomic_load(&s_srv_mode) == SRV_FALLBACK) {
+                /* The server watch starts over too: no address switch mid-add. */
+                s_revert_gen = ++s_srv_gen;
+                esp_timer_stop(s_server_revert);
+                esp_timer_start_once(s_server_revert, (uint64_t)SERVER_FALLBACK_S * 1000000);
+            }
+            if (!wifi_join_locked(s_add.idx, "add")) {
+                memset(&s_nets[s_add.idx], 0, sizeof(s_nets[0]));
+                s_nnets--;
+                atomic_store(&s_add_on, false);
+                refused = "config";
+            }
+        }
+        link_unlock();
+    }
+    if (refused != NULL) {
+        ESP_LOGW(TAG, "wifi.add refused why=%s", refused);
+        return false;
+    }
+    return true;
+}
+
+bool hux_net_wifi_forget(const char *ssid) {
+    link_lock();
+    int i = wifi_find(ssid);
+    const char *refused = i < 0                       ? "not_known"
+                          : s_nets[i].compiled        ? "compiled"
+                          : atomic_load(&s_add_on)    ? "busy"
+                                                      : NULL;
+    if (refused != NULL) {
+        link_unlock();
+        ESP_LOGW(TAG, "wifi.forget refused ssid=\"%s\" why=%s", ssid, refused);
+        return false;
+    }
+    bool active = i == s_cur;
+    memmove(&s_nets[i], &s_nets[i + 1], (size_t)(s_nnets - i - 1) * sizeof(s_nets[0]));
+    s_nnets--;
+    memset(&s_nets[s_nnets], 0, sizeof(s_nets[0]));
+    if (s_cur > i) {
+        s_cur--;
+    }
+    if (strcmp(s_good, ssid) == 0) {
+        wifi_set_good("");
+    }
+    bool ok = wifi_list_save();
+    ESP_LOGW(TAG, "wifi.forget ssid=\"%s\" active=%d nvs=%d", ssid, active, ok);
+    if (active) {
+        s_cur = -1; /* whatever slid into its slot isn't what the driver runs */
+        wifi_choose_locked(false, "forgot_active");
+    }
+    link_unlock();
+    return ok;
+}
+
+void hux_net_wifi_list(void) {
+    uint8_t mac[6] = {0};
+    esp_wifi_get_mac(WIFI_IF_STA, mac);
+    ESP_LOGI(TAG, "wifi.list mac=%02x:%02x:%02x:%02x:%02x:%02x networks=%d good=\"%s\" ip=%d",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], s_nnets, s_good,
+             atomic_load(&s_have_ip));
+    for (int i = 0; i < s_nnets; i++) {
+        ESP_LOGI(TAG, "wifi.list.net ssid=\"%s\" source=%s good=%d active=%d", s_nets[i].ssid,
+                 net_source(i), strcmp(s_nets[i].ssid, s_good) == 0, i == s_cur);
+    }
 }
 
 esp_err_t hux_net_set_bandwidth(int mhz) {
@@ -809,7 +1357,16 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
                 health_count(s_h_tls, (int)ev->error_handle.esp_tls_last_esp_err);
             }
             if (link_loud(atomic_load(&s_ws_attempts) + 1)) {
-                ESP_LOGE(TAG, "ws.error attempt=%u", (unsigned)(atomic_load(&s_ws_attempts) + 1));
+                /* Why, not only that: a home's filter, a tunnel down (an
+                 * HTTP 530) and a DNS failure must read differently. */
+                ESP_LOGE(TAG, "ws.error attempt=%u type=%d tls_err=0x%x tls_stack=0x%x sock_errno=%d "
+                              "http_status=%d",
+                         (unsigned)(atomic_load(&s_ws_attempts) + 1),
+                         ev != NULL ? (int)ev->error_handle.error_type : -1,
+                         ev != NULL ? (unsigned)ev->error_handle.esp_tls_last_esp_err : 0,
+                         ev != NULL ? (unsigned)ev->error_handle.esp_tls_stack_err : 0,
+                         ev != NULL ? ev->error_handle.esp_transport_sock_errno : 0,
+                         ev != NULL ? ev->error_handle.esp_ws_handshake_status_code : 0);
             }
             break;
         case WEBSOCKET_EVENT_CLOSED:
@@ -993,7 +1550,11 @@ void hux_net_start(const hux_net_config_t *cfg) {
     if (xTaskCreate(ladder_task, "hux_ladder", 4096, NULL, 3, &s_ladder_task) != pdPASS) {
         ESP_LOGE(TAG, "ladder.task_create_failed: no escalation this boot");
     }
-    wifi_init_sta(cfg->wifi_ssid, cfg->wifi_password);
+    wifi_list_load(cfg);
+    /* `good` directly (its own all-channel scan picks the mesh's strongest
+     * AP); elsewhere, no IP in 2 min looks for another known network. */
+    int first = s_good[0] != '\0' ? wifi_find(s_good) : -1;
+    wifi_init_sta(first >= 0 ? first : 0);
 }
 
 void hux_net_pause(void) {
@@ -1195,6 +1756,10 @@ void hux_net_hello_ok(void) {
     if (strcmp(s_server_uri, s_home_uri) == 0) {
         s_home_proven = true;
     }
+    atomic_store(&s_hello_ms, now_ms());
+    if (s_cur >= 0) {
+        wifi_set_good(s_nets[s_cur].ssid); /* reached the server through it */
+    }
     link_unlock();
 }
 
@@ -1211,6 +1776,7 @@ static void ladder_task(void *arg) {
     for (;;) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(LADDER_TICK_MS)); /* or a new IP */
         atomic_fetch_add(&s_ladder_ticks, 1);
+        wifi_tick();
         if (atomic_exchange(&s_kick, false) && !atomic_load(&s_server_up) &&
             atomic_load(&s_ws_first_start) && !atomic_load(&s_paused) &&
             link_lock_timed(10000)) {
@@ -1262,17 +1828,13 @@ static void ladder_task(void *arg) {
                 }
                 client_start("ladder");
             }
-        } else {
-            /* A full stop and start: a fresh association and DHCP lease
-             * (a stuck AP, a login page that handed out an IP). STA_START
-             * reconnects; the WebSocket follows the new IP. A pending
-             * retry would call connect in the middle of it. */
-            esp_timer_stop(s_wifi_retry_timer);
-            s_wifi_retries = 0;
-            esp_err_t stop = esp_wifi_stop();
-            esp_err_t start = esp_wifi_start();
-            ESP_LOGI(TAG, "ladder.wifi_restarted stop=%s start=%s", esp_err_to_name(stop),
-                     esp_err_to_name(start));
+        } else if (!atomic_load(&s_add_on)) {
+            /* The next known network heard, or the same one afresh: a full
+             * stop and start, a fresh association and DHCP lease (a stuck AP,
+             * a login page that handed out an IP). Again every 10 min while
+             * the server stays lost (wifi_tick). */
+            s_rotate_ms = now_ms();
+            wifi_choose_locked(true, "ladder");
         }
         link_unlock();
     }

@@ -367,8 +367,9 @@ outage and every tenth log (`ws.error` too): the lines wait in the
 256-line queue until the server is back. The first disconnect of an
 outage logs `ladder.lost why=disconnected|closed|finished`; then,
 still without a hello: `ladder.step step=ws` at 2 min (client stopped
-and started), `step=wifi` at 10 (`esp_wifi_stop`/`start`: a new
-association and DHCP lease), `step=reboot` at 60 (no lock: a hung
+and started), `step=wifi` at 10 (the next known network heard, or the
+same one afresh: `esp_wifi_stop`/`start`, a new association and DHCP
+lease; again every 10 min while the server stays lost), `step=reboot` at 60 (no lock: a hung
 holder can't stop it; an image still pending its OTA confirm goes back
 to the other slot). Each once per outage; a step that can't get the
 link lock in 10 s logs `ladder.lock_busy` and retries. Every client
@@ -377,6 +378,44 @@ start logs `ws.start why=first_ip|resume|switch|ladder err= uri=`. The hello tha
 took the server) pauses the clock until the next press. Lines from
 the outage reach the server log only after it reconnects; the
 reboot's never do (the black box, F-0027, will carry them).
+
+### The Wi-Fi list (F-0027)
+
+The walkie knows up to 3 compiled networks (`HUX_WIFI_SSID`, optional
+`HUX_WIFI2_*` / `HUX_WIFI3_*` in secrets.h: home, a phone hotspot, the
+place it lives once an update carries it) and up to 4 added on site over
+USB. Boot: `wifi.list compiled= saved= good=` and `wifi.init ssid=
+source=`; it joins `good` (the network that last reached the server,
+`wifi.good ssid=` when it changes) or the first compiled one. Without an
+IP for 2 min it scans and moves to the best known network heard
+(`wifi.choose why=no_ip heard= candidates= current= pick=`, then
+`wifi.join ssid= source= why=`); it never moves to one it doesn't hear.
+With an IP but no server, the ladder's Wi-Fi step and every 10 min after
+move to the next one heard (`why=ladder|no_server`). Every `ws.error`
+says why now: `type= tls_err= tls_stack= sock_errno= http_status=` (an
+HTTP 530 is the tunnel down; a DNS or socket error, the network's
+filter). The driver keeps no password in flash (`WIFI_STORAGE_RAM`).
+
+Adding the place's network, on site: plug the walkie into the laptop
+with a data cable and run `tools/wifi.py add` in your own terminal (the
+password is asked with no echo). It lists what the walkie hears, sends
+`wifi addhex <name hex> <password hex>`, and reports: `wifi.add
+ssid_len= pass_len=` (never the password), then `wifi.add saved` (it
+gave an IP; kept) and `server_reached` or `no_server`, or `wifi.add
+failed why=wrong_password|auth_failed|security_too_weak|enterprise_login|not_heard|no_ip`
+and back to the previous network, or `wifi.add refused
+why=lengths|busy|known|full|bad_hex`. Then it checks
+https://walkie.ma-r-s.com from the laptop and restarts the walkie to see
+it come back by itself. `wifi list` (also `tools/wifi.py list`) shows the
+networks, which is good and active, and the MAC; `wifi forget <name
+hex>`. Adding and forgetting work only on the USB console: through the
+developer door or the server they're refused (`console.wifi_addhex
+refused`). Console lines are up to 255 bytes; a longer one is refused
+whole (`console.line_too_long`), never cut, and so is a cut `dev.cmd`
+(`app.dev_cmd refused why=line_too_long`); the console's echo and the
+developer door log `<redacted>` for `wifi addhex`. NVS is only a bridge:
+the first update after the visit compiles the place's network in
+(`HUX_WIFI3_*`), since NVS is erased if it ever runs out of pages.
 
 ## Choppy audio or dropped connections: measure both ends
 

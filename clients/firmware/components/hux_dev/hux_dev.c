@@ -75,7 +75,12 @@ static esp_err_t cmd_post(httpd_req_t *req) {
         return ESP_OK;
     }
     char line[CMD_MAX_BYTES + 1] = {0};
-    int len = req->content_len < CMD_MAX_BYTES ? (int)req->content_len : CMD_MAX_BYTES;
+    if (req->content_len > CMD_MAX_BYTES) {
+        /* Never a cut line (F-0027): refused whole. */
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "line too long");
+        return ESP_OK;
+    }
+    int len = (int)req->content_len;
     int got = 0;
     while (got < len) {
         int r = httpd_req_recv(req, line + got, len - got);
@@ -92,7 +97,7 @@ static esp_err_t cmd_post(httpd_req_t *req) {
             break;
         }
     }
-    ESP_LOGI(TAG, "dev.cmd %s", line);
+    ESP_LOGI(TAG, "dev.cmd %s", hux_console_is_secret(line) ? "<redacted>" : line);
     /* Reply first: `reboot` and `ota` end this boot, `say` takes seconds. */
     httpd_resp_sendstr(req, "ok\n");
     hux_console_run(line);

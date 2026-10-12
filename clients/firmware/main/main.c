@@ -218,6 +218,14 @@ void app_main(void) {
     hux_net_start(&(hux_net_config_t){
         .wifi_ssid = HUX_WIFI_SSID,
         .wifi_password = HUX_WIFI_PASSWORD,
+#ifdef HUX_WIFI2_SSID
+        .wifi2_ssid = HUX_WIFI2_SSID,
+        .wifi2_password = HUX_WIFI2_PASSWORD,
+#endif
+#ifdef HUX_WIFI3_SSID
+        .wifi3_ssid = HUX_WIFI3_SSID,
+        .wifi3_password = HUX_WIFI3_PASSWORD,
+#endif
         .server_uri = HUX_SERVER_URI,
         .device_token = HUX_DEVICE_TOKEN,
     });

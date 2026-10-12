@@ -13,6 +13,10 @@
  *                       ADC's reference channel (default 1000 Hz)
  *   wifi off [s] | on   stop Wi-Fi, back on by itself after s seconds
  *                       (default 10) / restart it now
+ *   wifi list           the known networks (F-0027) and the MAC
+ *   wifi addhex <s> <p> add a network: name and password in hex (USB only;
+ *                       tools/wifi.py sends it; the password is never logged)
+ *   wifi forget <s>     forget one added on site (name in hex; USB only)
  *   server <uri> [min]  WebSocket to another server, back after min minutes
  *                       (default 15) or a reboot (bench.py's proxy)
  *   quiet [s]           amp off for s seconds, kept through restarts
@@ -36,6 +40,8 @@
  */
 #pragma once
 
+#include <stdbool.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -47,6 +53,9 @@ void hux_console_start(void);
  * serial console calls it, and so does hux_dev's POST /cmd over Wi-Fi.
  * Its results are log lines (serial, and the server's log). */
 void hux_console_run(char *line);
+
+/** The line carries a secret (`wifi addhex`): log it redacted. */
+bool hux_console_is_secret(const char *line);
 
 #ifdef __cplusplus
 }

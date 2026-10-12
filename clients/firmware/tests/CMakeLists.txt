@@ -52,6 +52,10 @@ target_include_directories(hux_type_probe PUBLIC ${HUX_NET_DIR}/include)
 add_library(hux_wifi_retry STATIC ${HUX_NET_DIR}/hux_wifi_retry.c)
 target_include_directories(hux_wifi_retry PUBLIC ${HUX_NET_DIR}/include)
 
+# -- hux_wifi_list (library under test): which known network to join, in hux_net.
+add_library(hux_wifi_list STATIC ${HUX_NET_DIR}/hux_wifi_list.c)
+target_include_directories(hux_wifi_list PUBLIC ${HUX_NET_DIR}/include)
+
 # -- hux_link (library under test): WS backoff + escalation ladder, in hux_net.
 add_library(hux_link STATIC ${HUX_NET_DIR}/hux_link.c)
 target_include_directories(hux_link PUBLIC ${HUX_NET_DIR}/include)
@@ -141,10 +145,16 @@ target_include_directories(test_hux_battery_cutoff PRIVATE ${CMAKE_SOURCE_DIR}/h
 target_link_libraries(test_hux_battery_cutoff PRIVATE hux_battery_cutoff)
 add_test(NAME hux_battery_cutoff COMMAND test_hux_battery_cutoff)
 
+add_executable(test_hux_wifi_list test_hux_wifi_list.c)
+target_include_directories(test_hux_wifi_list PRIVATE ${CMAKE_SOURCE_DIR}/helpers)
+target_link_libraries(test_hux_wifi_list PRIVATE hux_wifi_list)
+add_test(NAME hux_wifi_list COMMAND test_hux_wifi_list)
+
 # Convenience target: `cmake --build build --target check` runs every test.
 add_custom_target(check
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
     DEPENDS test_hux_proto test_hux_ws_frag test_hux_debounce test_hux_type_probe
             test_hux_wifi_retry test_hux_link test_hux_blackbox test_hux_super_check
             test_hux_battery_level test_hux_prompt_parse test_hux_battery_cutoff
+            test_hux_wifi_list
 )

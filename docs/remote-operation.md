@@ -263,12 +263,15 @@ Left:
 - **A supervisor task** feeds the watchdog only while each part's liveness
   counter advances (app tick, speaker progress, time since the last
   WebSocket receive or pong), logs which part stalled, then lets it reset.
-- **Wi-Fi list**: compiled baseline (the home's network, a rescue hotspot,
-  Mario's home) plus NVS entries added remotely; `wifi.add` tries the
-  network and reverts if it fails; the active and compiled networks can't be
-  removed. The rescue hotspot is a family phone's hotspot, pre-stored: anyone
-  visiting turns it on, the walkie comes back, Mario pushes the new network.
-  (iPhone hotspots need "Maximize Compatibility" for 2.4 GHz.)
+- **Wi-Fi list** (built 2026-10-12, design v2 after its critic; F-0027 in
+  clients/firmware/docs/triage.md): up to 3 compiled networks (Mario's
+  home, Mario's phone hotspot as the rescue: he is the only visitor, the
+  home's network once an update carries it) plus up to 4 added on site
+  over USB with `tools/wifi.py add` (kept once it gives an IP, else back to
+  the previous network with the reason); no remote add (when the home's
+  network changes the walkie is offline anyway). No IP for 2 min: the best
+  known network heard; an IP but no server: the next one heard every 10
+  min. (iPhone hotspots need "Maximize Compatibility" for 2.4 GHz.)
 - **Server URI in NVS**, kept only once a hello succeeds on it.
 - **Black box in RTC memory**: the last ~4 KB of log lines, reset cause,
   rollback reason; sent with the next hello (the PSRAM log queue dies with

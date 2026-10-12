@@ -18,8 +18,14 @@
 #include "hux_log.h"
 
 typedef struct {
+    /* Up to 3 compiled networks (F-0027's Wi-Fi list): the first is the
+     * default; the others NULL when not built in. */
     const char *wifi_ssid;
     const char *wifi_password;
+    const char *wifi2_ssid;
+    const char *wifi2_password;
+    const char *wifi3_ssid;
+    const char *wifi3_password;
     /** Full URI, e.g. "ws://192.168.68.83:8765/". */
     const char *server_uri;
     /** The device token (F-0028): `Authorization: Bearer` on the upgrade.
@@ -40,6 +46,18 @@ int hux_net_rssi(void);
 /** Scan every channel and log each AP heard (`wifi.scan.ap` lines):
  *  channel, width, signal. Blocking, about 2 s. */
 void hux_net_wifi_scan(void);
+
+/** The Wi-Fi list (F-0027), from the USB console only. `add`: join it now,
+ * keep it once it gives an IP (`wifi.add saved`, then `server_reached` or
+ * `no_server`), else back to the previous network (`wifi.add failed
+ * why=`). False if refused at once (`wifi.add refused why=`). The password
+ * is never logged. */
+bool hux_net_wifi_add(const char *ssid, const char *pass);
+/** Forget a network added on site (never a compiled one). */
+bool hux_net_wifi_forget(const char *ssid);
+/** Log the list (names, which is good and active, never passwords) and
+ * the MAC address. */
+void hux_net_wifi_list(void);
 
 /** Set the station's channel width (20 or 40 MHz) and rejoin the AP so
  *  it applies. Not kept across restarts. */

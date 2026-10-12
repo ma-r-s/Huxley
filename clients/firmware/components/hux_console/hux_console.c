@@ -19,6 +19,7 @@
 #include "hux_net.h"
 #include "hux_ota.h"
 #include "hux_park.h"
+#include "hux_wifi_list.h"
 #include "hux_prompts.h"
 #include "hux_super.h"
 #include "esp_core_dump.h"
@@ -28,7 +29,7 @@ static const char *TAG = "hux_console";
 #define CONSOLE_TASK_STACK 5120  /* float printf + the Wi-Fi stats dump: 4 KB left 928 B */
 #define CONSOLE_TASK_PRIO  3   /* below the button task (4) */
 #define CONSOLE_POLL_MS    20
-#define LINE_MAX_BYTES     64
+#define LINE_MAX_BYTES     256 /* a Wi-Fi name and password, in hex */
 #define SAY_TAIL_MS        300  /* held past the clip: the mic starts ~40 ms after the press */
 
 /* Tasks whose stack headroom `info` reports: ours, then the IDF ones that
@@ -76,7 +77,28 @@ static void wifi_back_on(void *arg) {
     ESP_LOGI(TAG, "console.wifi back on err=%s", esp_err_to_name(err));
 }
 
-void hux_console_run(char *line) {
+/* The next token of `p` (spaces and tabs between), its length in *n. */
+static const char *next_token(const char *p, size_t *n) {
+    while (*p == ' ' || *p == '\t') {
+        p++;
+    }
+    *n = strcspn(p, " \t");
+    return p;
+}
+
+bool hux_console_is_secret(const char *line) {
+    size_t n;
+    const char *t = next_token(line, &n);
+    if (n != 4 || strncmp(t, "wifi", 4) != 0) {
+        return false;
+    }
+    t = next_token(t + n, &n);
+    return n == 6 && strncmp(t, "addhex", 6) == 0; /* by token: any spacing */
+}
+
+/* `usb`: typed on the USB console. Adding or forgetting a network works only
+ * there (F-0027): a password never crosses the server or the LAN. */
+static void run_line(char *line, bool usb) {
     char *argv[4] = {0};
     int argc = 0;
     for (char *tok = strtok(line, " \t"); tok != NULL && argc < 4; tok = strtok(NULL, " \t")) {
@@ -86,8 +108,15 @@ void hux_console_run(char *line) {
         return;
     }
     const char *cmd = argv[0];
+    bool secret = strcmp(cmd, "wifi") == 0 && argc > 1 && strcmp(argv[1], "addhex") == 0;
     ESP_LOGI(TAG, "console.cmd %s%s%s%s%s", cmd, argc > 1 ? " " : "", argc > 1 ? argv[1] : "",
-             argc > 2 ? " " : "", argc > 2 ? argv[2] : "");
+             argc > 2 ? " " : "", secret ? "<redacted>" : argc > 2 ? argv[2] : "");
+
+    if (strcmp(cmd, "wifi") == 0 && argc > 1 &&
+        (strcmp(argv[1], "addhex") == 0 || strcmp(argv[1], "forget") == 0) && !usb) {
+        ESP_LOGW(TAG, "console.wifi_%s refused: USB console only", argv[1]);
+        return;
+    }
 
     if (strcmp(cmd, "talk") == 0) {
         hux_button_set_serial_talk(true);
@@ -135,6 +164,25 @@ void hux_console_run(char *line) {
             esp_timer_start_once(s_wifi_back, (uint64_t)s * 1000000);
         }
         ESP_LOGI(TAG, "console.wifi stopped err=%s back_in_s=%d", esp_err_to_name(err), s);
+    } else if (strcmp(cmd, "wifi") == 0 && argc > 3 && strcmp(argv[1], "addhex") == 0) {
+        /* tools/wifi.py: name and password as hex (spaces, quotes). */
+        char ssid[33], pass[65];
+        if (hux_hex_decode(argv[2], ssid, sizeof(ssid)) < 0 ||
+            hux_hex_decode(argv[3], pass, sizeof(pass)) < 0) {
+            ESP_LOGW(TAG, "wifi.add refused why=bad_hex");
+        } else {
+            (void)hux_net_wifi_add(ssid, pass);
+        }
+        memset(pass, 0, sizeof(pass));
+    } else if (strcmp(cmd, "wifi") == 0 && argc > 2 && strcmp(argv[1], "forget") == 0) {
+        char ssid[33];
+        if (hux_hex_decode(argv[2], ssid, sizeof(ssid)) < 0) {
+            ESP_LOGW(TAG, "wifi.forget refused why=bad_hex");
+        } else {
+            (void)hux_net_wifi_forget(ssid);
+        }
+    } else if (strcmp(cmd, "wifi") == 0 && argc > 1 && strcmp(argv[1], "list") == 0) {
+        hux_net_wifi_list();
     } else if (strcmp(cmd, "wifi") == 0 && argc > 1 && strcmp(argv[1], "on") == 0) {
         esp_err_t err = esp_wifi_start(); /* STA_START connects */
         ESP_LOGI(TAG, "console.wifi started err=%s", esp_err_to_name(err));
@@ -206,12 +254,16 @@ void hux_console_run(char *line) {
         ESP_LOGI(TAG, "console.quiet left_s=%u", (unsigned)hux_audio_quiet_left_s());
     } else {
         ESP_LOGW(TAG, "console.unknown %s (talk, release, say N, tone [hz] [ms], vol N, pa on|off, "
-                      "selftest [hz], wifi off [s]|on, wifistat, wifiscan, wifibw 20|40, info, "
+                      "selftest [hz], wifi off [s]|on|list|addhex <ssid> <pw>|forget <ssid>, wifistat, wifiscan, wifibw 20|40, info, "
                       "server [<uri> [min] | keep <uri> [min] | reset], quiet [s], battery [cal <mv> | cutoff on|off | park <mv> <min>], super, "
                       "hang app|spk, coredump erase, reboot, "
                       "ota <url> [force] | confirm | rollback)",
                  cmd);
     }
+}
+
+void hux_console_run(char *line) {
+    run_line(line, false); /* the developer door, the server's dev.cmd */
 }
 
 static void console_task(void *unused) {
@@ -220,6 +272,7 @@ static void console_task(void *unused) {
 
     char line[LINE_MAX_BYTES];
     size_t len = 0;
+    bool too_long = false;
     for (;;) {
         /* Straight from the USB RX FIFO, as IDF's own driverless console
          * does: stdin's read() can't see bytes without the USB driver, and
@@ -237,12 +290,22 @@ static void console_task(void *unused) {
             char c = (char)buf[i];
             if (c == '\r' || c == '\n') {
                 line[len] = '\0';
-                hux_console_run(line);
+                if (too_long) {
+                    /* Never a cut line: a password cut short would be saved. */
+                    ESP_LOGW(TAG, "console.line_too_long max=%d: refused", LINE_MAX_BYTES - 1);
+                } else {
+                    run_line(line, true);
+                }
+                memset(line, 0, sizeof(line)); /* a password doesn't linger */
                 len = 0;
+                too_long = false;
             } else if (len < sizeof(line) - 1) {
                 line[len++] = c;
+            } else {
+                too_long = true;
             }
         }
+        memset(buf, 0, sizeof(buf)); /* nor here */
     }
 }
 

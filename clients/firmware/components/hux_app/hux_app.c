@@ -650,9 +650,12 @@ void hux_app_set_dev_cmd_runner(hux_app_dev_cmd_fn runner) {
  * on this task (F-0028: the console through the server, no LAN door). */
 static void run_dev_cmd(hux_msg_server_event_t *se) {
     static char out[1536];
-    if (s_dev_cmd_runner == NULL || se->line[0] == '\0') {
+    if (s_dev_cmd_runner == NULL || se->line[0] == '\0' || se->line_truncated) {
+        /* Never run a cut line (F-0027). */
         ESP_LOGW(TAG, "app.dev_cmd refused id=%s why=%s", se->id,
-                 s_dev_cmd_runner == NULL ? "no_runner" : "empty_line");
+                 s_dev_cmd_runner == NULL ? "no_runner"
+                 : se->line_truncated     ? "line_too_long"
+                                          : "empty_line");
         return;
     }
     ESP_LOGI(TAG, "app.dev_cmd id=%s line_truncated=%d", se->id, se->line_truncated);

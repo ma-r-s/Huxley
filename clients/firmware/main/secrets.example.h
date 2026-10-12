@@ -10,7 +10,17 @@
 #define HUX_WIFI_SSID     "your-ssid"
 #define HUX_WIFI_PASSWORD "your-password"
 
-/* Full WebSocket URI. Example for LAN development: */
+/* Up to two more networks built in (F-0027's Wi-Fi list), tried when the
+ * first isn't heard: a phone hotspot to rescue the walkie on a visit, the
+ * place it lives once known (networks added on site over USB, tools/wifi.py,
+ * live in NVS until an update compiles them in). Leave them out if unused. */
+/* #define HUX_WIFI2_SSID     "a-phone-hotspot" */
+/* #define HUX_WIFI2_PASSWORD "its-password" */
+/* #define HUX_WIFI3_SSID     "where-it-lives" */
+/* #define HUX_WIFI3_PASSWORD "its-password" */
+
+/* Full WebSocket URI: the public one (wss through a tunnel) works from any
+ * network; a LAN address only at home. Example for LAN development: */
 #define HUX_SERVER_URI    "ws://192.168.1.10:8765/"
 
 /* Developer access over Wi-Fi (components/hux_dev, tools/dev.py): flash,

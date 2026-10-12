@@ -143,6 +143,7 @@ python3 clients/firmware/tools/dev.py flash               # update over Wi-Fi, n
 clients/firmware/tools/flash.sh                           # USB flash + boot, first flash only (never `idf.py flash`: it can strand the S3 in download mode)
 clients/firmware/tools/serial-capture.sh                  # console log without resetting the board (never idf.py monitor)
 clients/firmware/tools/flash.sh --unstick                 # board silent, "waiting for download": boot it from the Mac
+python3 clients/firmware/tools/wifi.py add                # on site, over USB: add the place's Wi-Fi (run it in your own terminal)
 
 # Tests (see clients/firmware/README.md §Tests for when to run which tier):
 cd clients/firmware/tests && cmake -B build && cmake --build build --target check
