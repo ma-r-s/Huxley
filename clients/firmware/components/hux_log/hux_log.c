@@ -143,12 +143,8 @@ static bool parse_log_line(const char *s, hux_log_entry_t *out) {
         end++;
     }
     size_t line_len = (size_t)(end - s);
-    if (line_len == 0) {
-        /* The Wi-Fi driver writes "I (123) wifi:" and its text in two
-         * calls; the text has no header to parse. An empty line says
-         * nothing, so it isn't streamed (about 30 per boot). */
-        return false;
-    }
+    /* Empty when the Wi-Fi driver writes "I (123) wifi:" and its text in
+     * two calls: hux_vprintf pairs them (take_continuation). */
     if (line_len >= sizeof(out->line)) {
         line_len = sizeof(out->line) - 1;
     }
@@ -158,6 +154,54 @@ static bool parse_log_line(const char *s, hux_log_entry_t *out) {
     out->level = level;
     out->ts_ms = ts;
     return true;
+}
+
+/* A header with no text ("I (123) wifi:"), waiting for the text the same
+ * task writes next. One slot: the driver writes the two back to back. */
+static portMUX_TYPE s_cont_lock = portMUX_INITIALIZER_UNLOCKED;
+static TaskHandle_t s_cont_task = NULL;
+static char s_cont_level;
+static uint32_t s_cont_ts;
+static char s_cont_tag[sizeof(((hux_log_entry_t *)0)->tag)];
+
+static void hold_header(const hux_log_entry_t *e) {
+    taskENTER_CRITICAL(&s_cont_lock);
+    s_cont_task = xTaskGetCurrentTaskHandle();
+    s_cont_level = e->level;
+    s_cont_ts = e->ts_ms;
+    memcpy(s_cont_tag, e->tag, sizeof(s_cont_tag));
+    taskEXIT_CRITICAL(&s_cont_lock);
+}
+
+/* The held header, if this task wrote it: its text is `buf`. */
+static bool take_continuation(hux_log_entry_t *out) {
+    bool ours = false;
+    taskENTER_CRITICAL(&s_cont_lock);
+    if (s_cont_task != NULL && s_cont_task == xTaskGetCurrentTaskHandle()) {
+        out->level = s_cont_level;
+        out->ts_ms = s_cont_ts;
+        memcpy(out->tag, s_cont_tag, sizeof(out->tag));
+        s_cont_task = NULL;
+        ours = true;
+    }
+    taskEXIT_CRITICAL(&s_cont_lock);
+    return ours;
+}
+
+static void enqueue(const hux_log_entry_t *entry, char threshold) {
+    if (level_rank(entry->level) > level_rank(threshold)) {
+        return; /* Below threshold — serial only. */
+    }
+    if (tag_denied(entry->tag)) {
+        return; /* Send-path recursion blocker. */
+    }
+    /* Non-blocking send: if the queue is full we drop the line and
+     * bump the counter; the drain task publishes the drop count on
+     * its periodic heartbeat. A full queue keeps the oldest lines,
+     * which is what explains an outage. */
+    if (xQueueSend(s_queue, entry, 0) != pdTRUE) {
+        atomic_fetch_add_explicit(&s_dropped, 1, memory_order_relaxed);
+    }
 }
 
 static int hux_vprintf(const char *fmt, va_list args) {
@@ -198,22 +242,38 @@ static int hux_vprintf(const char *fmt, va_list args) {
     }
 
     hux_log_entry_t entry = {0};
-    if (!parse_log_line(buf, &entry)) {
+    if (parse_log_line(buf, &entry)) {
+        if (entry.line[0] == '\0') {
+            hold_header(&entry); /* its text comes in the next call */
+        } else {
+            enqueue(&entry, threshold);
+        }
         return n;
     }
-    if (level_rank(entry.level) > level_rank(threshold)) {
-        return n; /* Below threshold — serial only. */
+    /* No header: the text of a held one (the Wi-Fi driver's lines, the
+     * `wifistat` dump), one entry per line. Anything else stays serial. */
+    if (!take_continuation(&entry)) {
+        return n;
     }
-    if (tag_denied(entry.tag)) {
-        return n; /* Send-path recursion blocker. */
-    }
-
-    /* Non-blocking send: if the queue is full we drop the line and
-     * bump the counter; the drain task publishes the drop count on
-     * its periodic heartbeat. A full queue keeps the oldest lines,
-     * which is what explains an outage. */
-    if (xQueueSend(s_queue, &entry, 0) != pdTRUE) {
-        atomic_fetch_add_explicit(&s_dropped, 1, memory_order_relaxed);
+    const char *s = buf;
+    while (*s) {
+        const char *end = s;
+        while (*end && *end != '\n' && *end != '\x1b') {
+            end++;
+        }
+        size_t len = (size_t)(end - s);
+        if (len > 0) {
+            if (len >= sizeof(entry.line)) {
+                len = sizeof(entry.line) - 1;
+            }
+            memcpy(entry.line, s, len);
+            entry.line[len] = '\0';
+            enqueue(&entry, threshold);
+        }
+        if (*end == '\x1b') {
+            while (*end && *end != 'm') end++; /* skip the colour reset */
+        }
+        s = *end ? end + 1 : end;
     }
     return n;
 }

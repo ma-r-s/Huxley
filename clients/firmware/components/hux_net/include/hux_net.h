@@ -13,6 +13,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "esp_err.h"
+
 #include "hux_log.h"
 
 typedef struct {
@@ -31,6 +33,14 @@ void hux_net_start(const hux_net_config_t *cfg);
 
 /** Signal strength of the current AP in dBm, 0 when not associated. */
 int hux_net_rssi(void);
+
+/** Scan every channel and log each AP heard (`wifi.scan.ap` lines):
+ *  channel, width, signal. Blocking, about 2 s. */
+void hux_net_wifi_scan(void);
+
+/** Set the station's channel width (20 or 40 MHz) and rejoin the AP so
+ *  it applies. Not kept across restarts. */
+esp_err_t hux_net_set_bandwidth(int mhz);
 
 /**
  * Stop the WebSocket client (no reconnects) / start it again. For an
