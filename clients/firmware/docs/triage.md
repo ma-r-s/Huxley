@@ -366,6 +366,17 @@ inside zones drawn round working surfaces (pivot as a round, tooth notch,
 slot back face, stop face, bore to its mouth, pin seat, rocker clips, USB
 plug). All plates pass; red top 1 h 1 min (1 h 45 standing), tub plate
 3 h 17 (4 h 10). The base is unchanged (checked against Mario's print).
+Review fixes (cold reviewer, same day): the left insert's wall had been
+cut to 0.6 mm by a sign error (now cut along the rocker hole's taper,
+2 mm wall); the slot relief cut a slit through solid wall (now only where
+the slot is); the latch was really 1.2 mm thick and its strain 0.58 % (the
+cradle wall is now cut to 0.8 over it, catch 0.35, 0.34 % measured to the
+catching face, thickness probed in a test); the backing roofed the glue
+pocket (now rises 45 deg off it); keep-outs extended (bore to its mouth,
+rocker clip chamfers, slot back face down to the pivot, switch cradle,
+glue pocket); the rocker hole's front edge prints as a bare 12 mm bridge,
+not on support. A seam cut twice reached the base's lip: the base's exact
+volume is now pinned in a test.
 Lessons: (1) a 45 deg slope only prints if it grows out of supported
 material: my first slot chamfer and bevels started as knife edges in mid-air
 and drew trees; (2) "no support touching" is not "no support there": count

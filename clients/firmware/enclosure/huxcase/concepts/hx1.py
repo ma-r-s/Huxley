@@ -208,7 +208,9 @@ PIVOT_Z, TS_Z, SWITCH_Y = 50.0, 91.1, 2.5
 # captures it; no screw, no metal pin.
 PIVOT_X = 32.7  # seat walls: 1.0 to the holder side, 0.8 to the outside
 PIN_D = 2.4
-PIN_BORE = PIN_D + 2 * fits.SLIDE_HBORE  # seats and lever bore lie horizontal in print
+PIN_BORE = (
+    PIN_D + 2 * fits.SLIDE_HBORE
+)  # the lever's bore and the tooth's seat lie horizontal in print
 KNUCKLE_R = (
     PIN_BORE / 2 + fits.MIN_WALL + 0.1
 )  # +0.1: overlaps the slab (a tangent seam meshes open)
@@ -217,12 +219,14 @@ TOOTH_X0 = 30.0  # in front of the right holder, so it can reach in this far
 NOTCH_CLEAR = fits.SLIDE  # the tub's notch round the tooth, above and below
 SLOT_RELIEF = 0.4  # in front of the lever's slot (_slot_front_relief)
 BOARD_CENTRING = (35.0, 150.0, 330.0)  # board-frame angles of the centring posts
-# Switch latch: finger root (cradle y), lip overlap, finger thickness. The
-# top prints on its back, so the finger, which runs front to back, stands
-# up in the print and bends across its layers: thin and a small catch keep
-# that to ~0.37 % strain (1.5 t catch / L^2, L 12.8), a third of what PLA's
-# layer bond takes. No room to turn it: a flat finger would hang in mid-air.
-LATCH_ROOT_Y, LATCH_CATCH, LATCH_T = 5.0, 0.4, 1.0
+# Switch latch: finger root (cradle y), lip overlap, finger thickness (the
+# cradle's top wall is cut to it over the finger). The top prints on its
+# back, so the finger, which runs front to back, stands up in the print and
+# bends across its layers: thin and a small catch keep that to latch_strain()
+# (1.5 t catch / L^2, L from the root to the lip's catching face, 11.15 mm),
+# ~0.34 %, about a third of what PLA's layer bond takes. No room to turn it:
+# a flat finger would hang in mid-air.
+LATCH_ROOT_Y, LATCH_CATCH, LATCH_T = 5.0, 0.35, 0.8
 STOP_X0 = 26.0  # inner end of the lever's stop block
 STOP = 3.8  # lever travel at the switch axis before it lands on the stop post
 PRESS_DEG = math.degrees(math.atan(STOP / (TS_Z - PIVOT_Z)))
@@ -248,6 +252,18 @@ TUBE_R = TUBE_BORE + 1.2  # three perimeters
 # Tactile switch: stem +X, base toward the board's centre line.
 TS_BASE_X = PLUNGER_TIP_X - hw.TACT_BODY - hw.TACT_STEM_H
 TS_LOC = Location((TS_BASE_X, SWITCH_Y, TS_Z)) * Rot(0, 90, 0)
+
+
+def latch_lip_y() -> float:
+    """The latch lip's catching face, in the cradle's frame (y): where the
+    back ribs push the switch's front face."""
+    return -hw.TACT_W / 2 - (fits.CRUSH_RIB - fits.PART)
+
+
+def latch_strain() -> float:
+    """Peak bending strain of the latch finger at full catch: 1.5 t c / L^2."""
+    length = LATCH_ROOT_Y - latch_lip_y()
+    return 1.5 * LATCH_T * LATCH_CATCH / length**2
 
 
 def click_travel(force: float = hw.TACT_FORCE, longer: float = 0.0) -> float:
@@ -342,9 +358,10 @@ def _slot_front_relief(chan):
     that leaves off the lever's blade. The slot's opening outside grows 0.4."""
     b = chan.bounding_box()
     z0 = TOOTH_Z[1] + NOTCH_CLEAR  # below, the faceplate's tooth is the slot's front
-    return bbox_solid(
+    band = bbox_solid(
         b.min.X - 0.01, X_OUT + 1.0, CHAN_Y0 - SLOT_RELIEF, CHAN_Y0 + 0.01, z0, b.max.Z
     )
+    return (Pos(0, -SLOT_RELIEF, 0) * chan) & band  # only where the slot is, at each height
 
 
 def _profile(grow: float, depth: float, y0: float):
@@ -889,15 +906,17 @@ def build() -> Concept:
                 blk += _wedge_behind(
                     side * (W / 2 - T + 0.1), side * BLOCK_X_IN, BLOCK_Y1, z0, sz + BLOCK_HZ
                 )
-            else:  # its back rests on the rocker's mount up to the mount's inner face;
-                # past it, slope back 45 deg from the mount (the rocker sits behind)
-                xm = -W / 2 + ROCKER_RECESS + ROCKER_PANEL
-                d = BLOCK_X_IN - xm
+            else:  # its back rests on the rocker's mount; past the rocker hole's
+                # 45 deg taper (which opens the mount's face there) it follows the
+                # taper's plane, so on its back it grows out of the mount
+                xt = -W / 2 + ROCKER_RECESS + ROCKER_CATCH[0]
+                yt = ROCKER_Y - hw.ROCKER_BODY[0] / 2 - ROCKER_HOLE_CLEAR_Y
+                xa, xe = xt + (yt - BLOCK_Y1), -BLOCK_X_IN + 0.01
                 corner = make_face(
                     Polyline(
-                        (xm, BLOCK_Y1 + 0.01),
-                        (-BLOCK_X_IN + 0.01, BLOCK_Y1 + 0.01),
-                        (-BLOCK_X_IN + 0.01, BLOCK_Y1 - abs(d)),
+                        (xa, BLOCK_Y1 + 0.01),
+                        (xe, BLOCK_Y1 + 0.01),
+                        (xe, yt - (xe - xt)),
                         close=True,
                     )
                 )
@@ -921,7 +940,9 @@ def build() -> Concept:
     )
     tub += backing & inner
     # In the top it reaches the back wall: on its back (TOP_PRINT_UP) the top
-    # stands it there, where a 1.3 mm gap would leave it hanging.
+    # stands it there, where a 1.3 mm gap would leave it hanging. At the seam
+    # it rises 45 deg off the lap's pocket (the base's lip goes there), which
+    # it would otherwise roof with nothing under it.
     tub += (
         bbox_solid(
             cell_edge + fits.PART,
@@ -932,6 +953,24 @@ def build() -> Concept:
             H - T + 0.1,
         )
         & inner
+    )
+    pocket_top = BACK_FROST_Z + LAP_H + LAP_TOP_GAP + T / 2 + LAP_GAP / 2
+    ypf = Y_BACK - T - LAP_GAP  # the pocket's inner edge
+    rise = make_face(
+        Polyline(
+            (ypf + 0.2, BACK_FROST_Z - 0.01),
+            (ypf + 0.2, pocket_top + 0.2),
+            (ypf - (pocket_top - BACK_FROST_Z), BACK_FROST_Z - 0.01),
+            close=True,
+        )
+    )
+    on_side = Location(
+        Plane(origin=(cell_edge + fits.PART - 0.01, 0, 0), x_dir=(0, 1, 0), z_dir=(1, 0, 0))
+    )
+    # in the top only: clear of the seam and of the base's lip in the back
+    # and right walls (their inner halves, from the inside surface out)
+    tub -= (on_side * extrude(rise, X_OUT - T + 0.12 - cell_edge - fits.PART)) & bbox_solid(
+        -60, W / 2 - T - LAP_GAP, -60, ypf, BACK_FROST_Z, 200
     )
 
     holder_parts, holder_ribs, (bridge, bridge_ribs, bridge_screw, bridge_insert) = (
@@ -963,11 +1002,13 @@ def build() -> Concept:
     # Latch: a finger cut free in the cradle's top wall, with a lip that snaps
     # over the switch's front face. The back ribs press the switch onto it.
     half = hw.TACT_W / 2
-    lip_y = -half - (fits.CRUSH_RIB - fits.PART)  # where the back ribs push the front face
+    lip_y = latch_lip_y()  # where the back ribs push the front face
     fz0, fz1 = -0.3, 3.0
     cradle -= bbox_solid(-pocket - 2, -pocket + 0.01, -pocket - 2, LATCH_ROOT_Y, fz0 - 0.6, fz0)
     cradle -= bbox_solid(-pocket - 2, -pocket + 0.01, -pocket - 2, LATCH_ROOT_Y, fz1, fz1 + 0.6)
     finger = bbox_solid(-pocket - LATCH_T, -pocket, lip_y - 1.6, LATCH_ROOT_Y, fz0, fz1)
+    # the cradle's top wall between the slots down to the finger's thickness
+    cradle -= bbox_solid(-pocket - 1.3, -pocket - LATCH_T, lip_y - 1.7, LATCH_ROOT_Y, fz0, fz1)
     lip = bbox_solid(-pocket, -half + LATCH_CATCH, lip_y - 1.6, lip_y, fz0, fz1)
     lip -= (
         Pos(-half + LATCH_CATCH, lip_y - 1.6, 0) * Rot(0, 0, 45) * Box(1.13, 1.13, 20)

@@ -306,7 +306,7 @@ and lead came with it (Mario, 2026-10-11), so plug it in and splice its lead.
 | Faceplate | grey | face down | none |
 | Grille plug | black | face down | none |
 | Tub base | grey | standing on its floor, open front facing you | tree supports: thin strips under the outside bottom corners (their lowest millimetre leaves the bed almost flat; sand what they leave) and the - joint's shelf |
-| Tub top | frosted PETG (clarity settings) or any PLA | on its back, the open front up | tree support from the plate outside the case: under the wall in front of the lever's slot, at the rocker hole's front edge and in its recess, and the first millimetre of the back's rounded edges; none at the lever's pivot, the back of its slot, in the plunger's tube, the pin seat, at the rocker's clips or on the USB plug's path (checked in the G-code). Pull it out sideways from outside. No brim |
+| Tub top | frosted PETG (clarity settings) or any PLA | on its back, the open front up | tree support from the plate outside the case: under the wall in front of the lever's slot and in the rocker's recess, and the first millimetre of the back's rounded edges; none at the lever's pivot, the slot's back face or stop, in the plunger's tube, the pin seat, at the rocker's clips, in the switch's cradle, the glue pocket or on the USB plug's path (checked in the G-code). Pull it out sideways from outside. No brim |
 | Lever | orange | outer face down | none |
 | Lever pin | grey | lying flat (three: two spares) | none |
 | Plunger | grey | standing on its tip (three lengths) | none |
@@ -329,17 +329,19 @@ What that took. The plunger's bore points to the front (`_bore_x_front`).
 Ledges that would hang over the back wall reach down to it (the lever's
 backing, the stop block, the cradle and its web, at 45 deg over the + lead,
 the tube's underside) or slope at 45 deg from what holds them (the insert
-blocks: the right one from the side wall, the left one from the rocker's
-mount). The 1 mm strip between the USB-C opening and the seam is gone, so
-the opening reaches the seam; the faceplate's face closes it in front. Two
-roofs over a close fit have nothing under them, inside or out (a 45 deg
-slope there would start in mid-air too), so they print on support that
-grows from the plate outside the case: the wall in front of the lever's
-slot, with 0.4 mm more room there (`SLOT_RELIEF`) so what it leaves stays
-off the lever, and the rocker hole's front edge, with 0.3 mm round the
-body; the rocker's clips catch on the long sides, which stay clean. That,
-the rocker's recess and the first millimetre of the back's rounded edge
-are all the support it gets. What was there only for standing is gone: the
+blocks: the right one from the side wall, the left one along the rocker
+hole's own taper, out of the rocker's mount). The 1 mm strip between the USB-C opening and the seam is gone, so
+the opening reaches the seam; the faceplate's face closes it in front. The
+backing's end at the seam rises 45 deg off the lap's pocket instead of
+roofing it. One roof over a close fit has nothing under it, inside or out
+(a 45 deg slope there would start in mid-air too), so it prints on support
+that grows from the plate outside the case: the wall in front of the
+lever's slot, with 0.4 mm more room there where the slot is
+(`SLOT_RELIEF`) so what it leaves stays off the lever. The rocker hole's
+front edge prints as a bare 12 mm bridge across its panel, with 0.3 mm
+round the body for its sag; the clips catch on the long sides, which stay
+clean. That, the rocker's recess and the first millimetre of the back's
+rounded edge are all the support it gets. What was there only for standing is gone: the
 45 deg roofs over the lever's pivot, the 0.4 mm over its top end, the pin
 seat's and the tube's 45 deg tops, the roof's 0.3 mm over the lip, and the
 one-piece standing tub.
@@ -347,14 +349,17 @@ one-piece standing tub.
 One part bends across its layers on its back: the latch finger that clicks
 over the talk switch runs front to back, so it stands up in the print, and
 there is no room to turn it (a flat finger would hang in mid-air). It is
-1.0 mm thick with a 0.4 mm catch, about 0.37 % strain at full catch, a
-third of what PLA's layer bond takes (tested).
+0.8 mm thick (the cradle's wall is cut down over it) with a 0.35 mm catch,
+0.34 % strain at full catch measured from its root to the lip's catching
+face (11.15 mm), about a third of what PLA's layer bond takes (tested,
+thickness probed on the printed shape).
 
 `huxcase.slice` reads the top's G-code and fails on any support at all,
-branches passing through included, at the lever's pivot or in the back
-half of its slot (the stop, the back face), in the plunger's tube, the pin
-seat, where the rocker's clips catch or on the USB plug's path
-(`printability.support_keep_outs`).
+branches passing through included, at the lever's pivot, in the tooth's
+notch, on the slot's back face or the lever's stop, in the plunger's tube
+to its mouth, the pin seat, where the rocker's clips catch, in the switch's
+cradle, the glue pocket or on the USB plug's path
+(`printability.support_keep_outs`, `support_keep_out_rounds`).
 
 Support blockers are gone (2026-10-11): with them on the lever slot, the
 rocker hole and the USB pocket, those overhangs printed bare and failed on
@@ -371,22 +376,19 @@ print. The same sliced are in `out/print/sliced/`.
 | `1_grey_faceplate_bridge_pin_plunger` | grey | 38 min (faceplate, bridge, 3 pins, 3 plungers) |
 | `2_black_grille` | black | 30 min |
 | `3_orange_lever` | orange | 6 min |
-| `4_tub_base_and_top` | AMS: slot 1 white PLA, slot 4 frosted PETG | 3 h 17 min; by object: the frosted top, then the base |
+| `4_tub_base_and_top` | AMS: slot 1 white PLA, slot 4 frosted PETG | 3 h 16 min; by object: the frosted top, then the base |
 | `5_test_corner` | AMS: slot 1 white PLA, slot 4 frosted PETG | 29 min; both halves' corner at the seam: print it first |
-| `7_tub_top_pla` | one PLA (red set) | 1 h 1 min (on its back); the top alone, standard settings, for a base already printed |
+| `7_tub_top_pla` | one PLA (red set) | 1 h (on its back); the top alone, standard settings, for a base already printed |
 
 The tub's plate prints object by object, so the filament changes once,
 between the pieces, never inside one. The frosted top goes first, so its
 first layers come out clean (no grey left in the nozzle). The pieces sit
-95 mm apart: the toolhead (72 mm round) and the gantry (32.5 mm over the
+94 mm apart: the toolhead (72 mm round) and the gantry (32.5 mm over the
 nozzle, lower than either piece) never pass over a finished one, which
 Bambu Studio checks. Don't press Arrange, it may undo that. Organic tree
 supports are the plate's (Bambu Studio did not apply an object's own
 settings for Mario). No prime tower: by object, the AMS purges into the
-chute. No brim: the top stands on the lap's 1.1 mm outer half, but as a U
-70 x 35 across it will not tip, and an "outer only" brim still runs inside
-an open U (its whole outline counts as outer), along the edge that slides
-over the lip. Clean the plate first (dish soap, or isopropyl alcohol). When
+chute. No brim: the top lies on its whole back wall. Clean the plate first (dish soap, or isopropyl alcohol). When
 sending, check the AMS mapping (1 white PLA, which Mario uses for the base instead of grey; 4 frosted PETG) and that slot 4 is set
 to PETG on the printer, its spool dried. Supports sit 0.25 off the part
 (0.2 is standard), as PETG welds to them closer. The bed runs 70 C for the

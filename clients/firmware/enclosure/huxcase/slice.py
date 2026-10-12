@@ -50,10 +50,10 @@ TREE_SUPPORTS = {
     "support_type": "tree(auto)",
     "support_on_build_plate_only": "0",  # "Everywhere": they grow from the part's own floor
     # Every bridge gets support too (the preset's max_bridge_length 0): left
-    # bare, the lever channel's top, the rocker hole's top and the USB pocket's
-    # roof printed in mid-air and failed (Mario, 2026-10-11, with support
-    # blockers on them). The close fits that support must not touch have
-    # 45 deg roofs instead (hx1: plunger bore, pin seat, knuckle).
+    # bare under support blockers, overhangs in the first tub printed in
+    # mid-air and failed (Mario, 2026-10-11). The top prints on its back and
+    # keeps support out of its close fits by its shape
+    # (printability.support_keep_outs, checked in the G-code).
     # Organic branches, no walls of their own: 25 min and 7 g less on the
     # tub's plate than hybrid ones with two walls (sliced, 2026-10-11). The
     # walls were for branches that snapped at an AMS change, now gone.
@@ -64,11 +64,9 @@ TREE_SUPPORTS = {
     "support_top_z_distance": "0.25",
     "support_bottom_z_distance": "0.25",
 }
-# No brim. The top stands 68 mm tall on its seam face, the lap's 1.1 mm
-# outer half (about 200 mm2 of a U 70 x 35 across, which will not tip). An
-# "outer only" brim still runs inside it: the U is open at the front, so its
-# whole outline is the outer one, and the brim lay along the skirt's inner
-# edge, the edge that slides over the lip (review, 2026-10-11).
+# No brim: the top lies on its whole back wall and the base on its floor.
+# (Standing on its seam the top had a 1.1 mm foot, and an "outer only" brim
+# still ran inside its open U, along the edge that slides over the lip.)
 NO_BRIM = {"brim_type": "no_brim"}
 # The frosted top, for an even glow as clear as its PETG gets, after Bambu's
 # translucent PLA/PETG guide (wiki: knowledge-sharing/transparent-petg, its

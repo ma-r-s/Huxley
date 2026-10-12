@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 from build123d import Pos, Rot
 
+from huxcase import fits
 from huxcase import hardware as hw
 from huxcase.concepts import hx1
 from huxcase.shapes import bbox_solid
@@ -132,6 +133,7 @@ def overhangs(shape, tolerance: float = 0.1) -> list[dict]:
                 "narrow": float(min(hi[0] - lo[0], hi[1] - lo[1])),
                 "z": float(lo[2]),
                 "bbox": [round(float(v), 1) for v in (*lo, *hi)],
+                "centres": mesh.triangles_center[faces].tolist(),
             }
         )
     return sorted(out, key=lambda d: -d["area"])
@@ -178,24 +180,15 @@ def islands(shape, pitch: float = 0.2) -> list[dict]:
 
 
 def support_faces_device(shape, pose: Pose, tolerance: float = 0.1) -> list[tuple]:
-    """Centres (device frame) of the faces that need support with `shape`
-    printed in `pose`: what support_keep_outs must stay clear of."""
-    import numpy as np
-    import trimesh
-
+    """Centres (device frame) of the faces that need support (needs_support)
+    with `shape` printed in `pose`: what support_keep_outs must stay clear of."""
     loc = pose_location(shape, pose)
-    verts, tris = (loc * shape).tessellate(tolerance, 0.3)
-    mesh = trimesh.Trimesh(
-        vertices=np.array([(v.X, v.Y, v.Z) for v in verts]), faces=np.array(tris), process=True
-    )
-    limit = -math.cos(math.radians(90.0 - MAX_OVERHANG_DEG - 1.0))
-    zmin = mesh.triangles[:, :, 2].min(axis=1)
-    bad = (mesh.face_normals[:, 2] < limit) & (zmin > BED_TOL) & (mesh.area_faces > 0.01)
     inv = loc.inverse()
     out = []
-    for c in mesh.triangles_center[bad]:
-        v = (inv * Pos(*c)).position
-        out.append((v.X, v.Y, v.Z))
+    for k in needs_support(overhangs(loc * shape, tolerance)):
+        for c in k["centres"]:
+            v = (inv * Pos(*c)).position
+            out.append((v.X, v.Y, v.Z))
     return out
 
 
@@ -210,20 +203,29 @@ def support_keep_outs() -> dict[str, tuple[float, float, float, float, float, fl
     z0, z1), each a little inside its cut. Support or what it leaves there
     would bind a moving part or stop one going in. slice.py counts any
     support in them in the G-code; the faces that need support stay out
-    (tests). Two roofs do print on support from outside the case, clear of
-    these: the wall in front of the lever's slot (relieved, hx1.SLOT_RELIEF),
-    its trees crossing the open slot, and the rocker hole's front edge (0.3 mm
-    round the body); the clips catch on its long sides."""
+    (tests). One roof prints on support from outside the case, clear of these:
+    the wall in front of the lever's slot (relieved, hx1.SLOT_RELIEF), its
+    trees crossing the open slot. The rocker hole's front edge prints as a
+    bare 12 mm bridge (0.3 mm round the body for its sag); the clips catch on
+    its long sides."""
     m = hx1
-    chan_x0 = m.PIVOT_X - m.KNUCKLE_R - m.CLEAR  # the slot's inner end
+    chan_x0 = m.PIVOT_X - m.KNUCKLE_R - m.CLEAR  # the slot's inner end, at the pivot
+    # where the plunger's bore opens into the slot: the slot's inner edge there
+    mouth = (
+        (m._pressed_union() & bbox_solid(-60, 60, -60, 60, m.TS_Z - 0.5, m.TS_Z + 0.5))
+        .bounding_box()
+        .min.X
+    )
     chan_y0, chan_y1 = m.CHAN_Y0, m.SWITCH_Y + m.BAR_W / 2 + m.CLEAR
     stop_x = m.X_OUT - m.STOP * (m.TS_Z + 2.0 - m.PIVOT_Z) / (m.TS_Z - m.PIVOT_Z) - 0.05
     panel_x = -m.W / 2 + m.ROCKER_RECESS
     cz = hw.ROCKER_BODY[1] / 2
+    flare = cz + m.ROCKER_HOLE_CLEAR_Z + (m.ROCKER_PANEL - m.ROCKER_CATCH[0])
+    pocket = hw.TACT_W / 2 + fits.PART
     return {
         "plunger bore": (  # from past the stem's slot to where it opens into the lever's slot
             m.PLUNGER_TIP_X + 0.8,
-            chan_x0 - 0.3,
+            mouth - 0.3,
             m.SWITCH_Y - m.TUBE_BORE * 1.41 + 0.4,
             m.SWITCH_Y + m.TUBE_BORE - 0.4,
             m.TS_Z - m.TUBE_BORE + 0.4,
@@ -237,12 +239,12 @@ def support_keep_outs() -> dict[str, tuple[float, float, float, float, float, fl
             m.TOOTH_Z[0] + 0.3,
             m.TOOTH_Z[1] - 0.3,
         ),
-        "lever slot's back face": (  # the blade runs a fit's width from it
+        "lever slot's back face": (  # the blade runs a fit's width from it; the knuckle bears on it
             chan_x0 + 0.4,
             m.X_OUT - 0.3,
             chan_y1 - 1.2,
             chan_y1 - 0.2,
-            m.TOOTH_Z[1],
+            m.PIVOT_Z - m.KNUCKLE_R - m.CLEAR + 0.3,
             m.BAR_Z1 - 0.5,
         ),
         "lever's stop": (  # the face the lever lands on after the click
@@ -261,13 +263,45 @@ def support_keep_outs() -> dict[str, tuple[float, float, float, float, float, fl
             m.PIVOT_Z - 1.0,
             m.PIVOT_Z + 1.0,
         ),
-        "rocker clips": (  # where the clips catch, mid-length on the long sides
+        "rocker clips": (  # mid-length on the long sides, out to the chamfer the clips catch on
             panel_x + 0.2,
-            panel_x + m.ROCKER_PANEL - 0.2,
+            panel_x + m.ROCKER_PANEL - 0.05,
             m.ROCKER_Y - 5.0,
             m.ROCKER_Y + 5.0,
-            m.ROCKER_Z - cz - m.ROCKER_HOLE_CLEAR_Z + 0.05,
-            m.ROCKER_Z + cz + m.ROCKER_HOLE_CLEAR_Z - 0.05,
+            m.ROCKER_Z - flare + 0.05,
+            m.ROCKER_Z + flare - 0.05,
+        ),
+        "switch cradle": (  # the pocket the talk switch slides into
+            m.TS_BASE_X + 0.3,
+            m.TS_BASE_X + hw.TACT_BODY - 0.3,
+            m.SWITCH_Y - pocket + 0.3,
+            m.SWITCH_Y + pocket - 0.3,
+            m.TS_Z - pocket + 0.3,
+            m.TS_Z + pocket - 0.3,
+        ),
+        "glue pocket, back": (  # where the base's lip goes
+            -m.W / 2 + m.T + 0.3,
+            m.W / 2 - m.T - 0.3,
+            m.Y_BACK - m.T - m.LAP_GAP + 0.05,
+            m.Y_BACK - m.T / 2 - 0.05,
+            m.BACK_FROST_Z + 0.1,
+            m.BACK_FROST_Z + m.LAP_H,
+        ),
+        "glue pocket, left": (
+            -m.W / 2 + m.T / 2 + 0.05,
+            -m.W / 2 + m.T + m.LAP_GAP - 0.05,
+            m.FACE_Y + m.LIP_D + 0.3,
+            m.Y_BACK - m.T - 0.3,
+            m.BACK_FROST_Z + 0.1,
+            m.BACK_FROST_Z + m.LAP_H,
+        ),
+        "glue pocket, right": (
+            m.W / 2 - m.T - m.LAP_GAP + 0.05,
+            m.W / 2 - m.T / 2 - 0.05,
+            m.FACE_Y + m.LIP_D + 0.3,
+            m.Y_BACK - m.T - 0.3,
+            m.BACK_FROST_Z + 0.1,
+            m.BACK_FROST_Z + m.LAP_H,
         ),
         "USB plug": (  # where the plug's shell goes; the pocket round it is roomy
             -m.W / 2 + 0.3,

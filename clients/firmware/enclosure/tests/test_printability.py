@@ -95,14 +95,30 @@ def test_tub_top_on_its_back_leaves_the_close_fits_clean(pieces):
 
 def test_switch_latch_bends_well_inside_its_layers():
     """On its back the latch finger stands up in the print, so it bends across
-    its layers: its strain at full catch (1.5 t catch / L^2) stays under 0.4 %,
-    against ~1 % that PLA's layer bond takes."""
+    its layers: its strain at full catch (1.5 t catch / L^2, L from the root
+    to the lip's catching face) stays under 0.4 %, against ~1 % that PLA's
+    layer bond takes. And the printed finger is that thin: the cradle's top
+    wall is cut down over it (the review caught it at 1.2, 2026-10-11)."""
+    from build123d import Vector
     from huxcase.concepts import hx1
 
+    assert hx1.latch_strain() < 0.004
     c = hx1.build()
+    printed = c.shells["tub"] + c.shells["tub_latch"]
     finger = max(c.shells["tub_latch"].solids(), key=lambda s: s.bounding_box().size.Y)
-    length = finger.bounding_box().size.Y
-    assert 1.5 * hx1.LATCH_T * hx1.LATCH_CATCH / length**2 < 0.004
+    b = finger.bounding_box()
+    x, y = (b.min.X + b.max.X) / 2, (b.min.Y + b.max.Y) / 2  # mid-length, clear of the lip
+    # its thickness runs along z (the cradle's frame turned by TS_LOC): scan it
+    zs = [b.min.Z - 1.0 + k * 0.02 for k in range(int((b.size.Z + 2.0) / 0.02))]
+    solid = [z for z in zs if printed.is_inside(Vector(x, y, z))]
+    assert max(solid) - min(solid) <= hx1.LATCH_T + 0.05, (min(solid), max(solid))
+
+
+def test_tub_base_is_the_one_mario_printed(pieces):
+    """Mario printed the base (white PLA, 2026-10-11); the top's redesign for
+    printing on its back must not touch it. Its exact volume, pinned: twice
+    a cut near the seam reached into the base's lip unnoticed."""
+    assert pieces["tub_base"].volume == pytest.approx(20188.8795, abs=0.01)
 
 
 def test_tub_halves_lap_and_rebuild_the_tub(pieces):
