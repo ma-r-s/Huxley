@@ -31,16 +31,21 @@ void hux_battery_probe(void);
 typedef void (*hux_battery_sink_fn)(int cell_mv, int pct);
 
 /**
- * Read the level once a minute (F-0025): finds the wired pin (GPIO6, else
- * GPIO1), reads the median of 32 samples while the speaker is quiet (or
- * anyway after 5 min without a quiet minute), and calls `sink` when the
- * percentage changes (the app adds one with each press and each hello). Without the solder blob it logs
+ * Read the level (F-0025) at boot, every 20 min and at each press
+ * (hux_battery_read_now): finds the wired pin (GPIO6, else GPIO1), reads
+ * the median of 32 samples (a timed one waits for the speaker to be quiet,
+ * at most 5 min), and calls `sink` when the percentage changes or a press
+ * asked. Without the solder blob it logs
  * `battery.not_wired` once and looks again every 10 min.
  */
 void hux_battery_start(hux_battery_sink_fn sink);
 
 /** Call the sink now with the last reading, if any (after a hello). */
 void hux_battery_report_now(void);
+
+/** Take a fresh reading now and send it, whatever it reads (at a press:
+ * the battery question in it is answered from now). Any task. */
+void hux_battery_read_now(void);
 
 /** The last reading; false before the first (or never wired). */
 bool hux_battery_last(int *mv, int *pct);

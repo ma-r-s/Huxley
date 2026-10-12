@@ -525,10 +525,12 @@ reading, F-0025), `battery cal <mv>` (a multimeter's reading of the
 cell: every later reading is scaled to match, saved in NVS,
 `battery.calibrated cal_ppm=`). The level task finds the wired pin once
 (`battery.wired gpio=`, or `battery.not_wired` once and a look every
-10 min), reads the median of 32 samples at 6 dB every minute while the
-speaker is quiet (anyway after 5 min with no quiet minute, `loaded=1`),
-and sends `system.battery {mv, pct}` when the percentage changes; the app adds the last reading to each press and each hello
-(`battery.level mv= pct= pin= raw_mv= loaded=`).
+10 min), then reads the median of 32 samples at 6 dB at boot, every
+20 min while the speaker is quiet (anyway after 5 min with no quiet
+moment), and at each press, and sends `system.battery {mv, pct}` when
+the percentage changes or a press asked (`battery.level mv= pct= pin=
+raw_mv= loaded= why=changed|press`); the app also sends the last one
+after each hello.
 `tools/bench.py --reset` runs the whole check list and keeps the board's
 log in `/tmp/huxley-debug/bench-*.log`.
 

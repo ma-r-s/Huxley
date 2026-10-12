@@ -25,7 +25,9 @@ allows the version already running. `cmd ota rollback` goes back by hand.
 """
 
 import argparse
+import atexit
 import contextlib
+import os
 import hashlib
 import http.server
 import json
@@ -42,10 +44,49 @@ from pathlib import Path
 
 FW = Path(__file__).resolve().parent.parent
 REPO = FW.parent.parent
-SERVER_LOG = REPO / "server" / "runtime" / "logs" / "huxley.log"
+# The server whose log tells what the board did. Production runs on the
+# Orange Pi since 2026-10-12: its log is read over ssh, mirrored into a
+# local file the rest of this tool reads as before. HUX_SERVER_LOG=<path>
+# for a server on this Mac (a dev server: never grandpa's persona here).
+PRODUCTION_LOG = "ssh://mario@100.75.152.70/home/mario/huxley/server/runtime/logs/huxley.log"
+_LOG_SOURCE = os.environ.get("HUX_SERVER_LOG", PRODUCTION_LOG)
+_REMOTE = re.match(r"ssh://([^/]+)(/.+)$", _LOG_SOURCE)
+SERVER_LOG = (
+    Path("/tmp/huxley-debug/server-log-mirror.log") if _REMOTE else Path(_LOG_SOURCE)
+)
+_MIRROR_LINES = 4000  # enough history to find the board's last hello
+
+
+def _start_mirror() -> None:
+    """Follow the remote log into SERVER_LOG for this run (ssh tail -F),
+    after its last _MIRROR_LINES lines have arrived."""
+    host, path = _REMOTE.group(1), _REMOTE.group(2)
+    SERVER_LOG.parent.mkdir(parents=True, exist_ok=True)
+    out = SERVER_LOG.open("wb")
+    proc = subprocess.Popen(
+        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host,
+         f"tail -n {_MIRROR_LINES} -F {path}"],
+        stdout=out, stderr=subprocess.DEVNULL,
+    )
+    atexit.register(proc.terminate)
+    # The history arrives in one burst: wait until it stops growing.
+    last, still = -1, 0
+    deadline = time.time() + 15
+    while time.time() < deadline and still < 3:
+        time.sleep(0.25)
+        size = SERVER_LOG.stat().st_size
+        still = still + 1 if size == last and size > 0 else 0
+        last = size
+    if proc.poll() is not None or last <= 0:
+        sys.exit(f"could not read the server log over ssh ({host}): HUX_SERVER_LOG=<path> for a local one")
+
+
+if _REMOTE:
+    _start_mirror()
+
 # Test runs on the board, so the caregiver view (huxley-watch) leaves them
 # out of grandpa's usage: one JSON line at the start ("end": null) and one
-# at the end, same "start". Never pruned.
+# at the end, same "start". Never pruned. Next to the server's log.
 BENCH_RUNS = SERVER_LOG.parent / "bench.jsonl"
 # Console commands that press or play: marked as a test for this long
 # (the answer to a press comes after it).
@@ -67,10 +108,19 @@ def mark_bench(what: str, start: float, end: float | None) -> None:
     """Append a test-run record for huxley-watch (BENCH_RUNS). Best effort:
     a test never fails because the mark couldn't be written."""
     rec = {"start": utc_iso(start), "end": utc_iso(end) if end is not None else None, "what": what}
+    line = json.dumps(rec) + "\n"
     try:
-        with BENCH_RUNS.open("a") as f:
-            f.write(json.dumps(rec) + "\n")
-    except OSError as e:
+        if _REMOTE:
+            host, path = _REMOTE.group(1), _REMOTE.group(2)
+            bench = str(Path(path).parent / "bench.jsonl")
+            subprocess.run(
+                ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host, f"cat >> {bench}"],
+                input=line.encode(), check=True, timeout=20,
+            )
+        else:
+            with BENCH_RUNS.open("a") as f:
+                f.write(line)
+    except (OSError, subprocess.SubprocessError) as e:
         print(f"(bench mark not written: {e})", file=sys.stderr)
 
 
