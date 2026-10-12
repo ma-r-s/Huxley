@@ -84,6 +84,26 @@ typedef struct {
     bool value;
 } hux_msg_model_speaking_t;
 
+/** `server_event` names the firmware acts on (docs/protocol.md "Device
+ * contract"); anything else is UNKNOWN, logged by name and ignored. */
+typedef enum {
+    HUX_SERVER_EV_UNKNOWN = 0,
+    HUX_SERVER_EV_DEV_CMD,         /* {id, line}: run a console line, reply dev.cmd_result */
+    HUX_SERVER_EV_FIRMWARE_UPDATE, /* {version, url, force} */
+    HUX_SERVER_EV_OTA_ACCEPT,      /* {version} */
+} hux_server_ev_t;
+
+typedef struct {
+    hux_server_ev_t event;
+    char name[32];    /* the event as sent (truncated), for the log */
+    char id[24];      /* dev.cmd: echoed in the result (a number arrives as its digits) */
+    char line[128];   /* dev.cmd */
+    bool line_truncated;
+    char version[48]; /* firmware.update, ota.accept */
+    char url[160];    /* firmware.update: relative to the server URI */
+    bool force;       /* firmware.update */
+} hux_msg_server_event_t;
+
 /**
  * Parsed server→client message. The `kind` tag discriminates which
  * member of `as` is populated. For kinds not yet handled the tag is set
@@ -98,6 +118,7 @@ typedef struct {
         hux_msg_set_volume_t set_volume;
         hux_msg_input_mode_t input_mode;
         hux_msg_model_speaking_t model_speaking;
+        hux_msg_server_event_t server_event;
     } as;
 } hux_msg_t;
 

@@ -1,5 +1,6 @@
 #include "hux_proto.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "cJSON.h"
@@ -110,6 +111,42 @@ bool hux_proto_parse(const char *json, size_t len, hux_msg_t *out) {
             const cJSON *value = cJSON_GetObjectItemCaseSensitive(root, "value");
             out->as.model_speaking.known = cJSON_IsBool(value);
             out->as.model_speaking.value = cJSON_IsTrue(value);
+            break;
+        }
+        case HUX_MSG_SERVER_EVENT: {
+            hux_msg_server_event_t *se = &out->as.server_event;
+            const cJSON *ev = cJSON_GetObjectItemCaseSensitive(root, "event");
+            const cJSON *data = cJSON_GetObjectItemCaseSensitive(root, "data");
+            if (cJSON_IsString(ev)) {
+                snprintf(se->name, sizeof(se->name), "%s", ev->valuestring);
+                se->event = strcmp(ev->valuestring, "dev.cmd") == 0           ? HUX_SERVER_EV_DEV_CMD
+                            : strcmp(ev->valuestring, "firmware.update") == 0 ? HUX_SERVER_EV_FIRMWARE_UPDATE
+                            : strcmp(ev->valuestring, "ota.accept") == 0      ? HUX_SERVER_EV_OTA_ACCEPT
+                                                                              : HUX_SERVER_EV_UNKNOWN;
+            }
+            if (!cJSON_IsObject(data)) {
+                break;
+            }
+            const cJSON *id = cJSON_GetObjectItemCaseSensitive(data, "id");
+            if (cJSON_IsString(id)) {
+                snprintf(se->id, sizeof(se->id), "%s", id->valuestring);
+            } else if (cJSON_IsNumber(id)) {
+                snprintf(se->id, sizeof(se->id), "%.0f", id->valuedouble);
+            }
+            const cJSON *line = cJSON_GetObjectItemCaseSensitive(data, "line");
+            if (cJSON_IsString(line)) {
+                int n = snprintf(se->line, sizeof(se->line), "%s", line->valuestring);
+                se->line_truncated = n >= (int)sizeof(se->line);
+            }
+            const cJSON *version = cJSON_GetObjectItemCaseSensitive(data, "version");
+            if (cJSON_IsString(version)) {
+                snprintf(se->version, sizeof(se->version), "%s", version->valuestring);
+            }
+            const cJSON *url = cJSON_GetObjectItemCaseSensitive(data, "url");
+            if (cJSON_IsString(url)) {
+                snprintf(se->url, sizeof(se->url), "%s", url->valuestring);
+            }
+            se->force = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(data, "force"));
             break;
         }
         case HUX_MSG_INPUT_MODE: {

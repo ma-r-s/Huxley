@@ -180,6 +180,7 @@ void app_main(void) {
         .wifi_ssid = HUX_WIFI_SSID,
         .wifi_password = HUX_WIFI_PASSWORD,
         .server_uri = HUX_SERVER_URI,
+        .device_token = HUX_DEVICE_TOKEN,
     });
 
     /* Talk input: the case's lever on GPIO7 or the board's K2; its
@@ -210,6 +211,9 @@ void app_main(void) {
     hux_net_set_audio_sink(hux_audio_spk_push);
     /* `audio_clear` on the same task, in order with the audio. */
     hux_net_set_audio_clear_sink(hux_audio_on_audio_clear);
+
+    /* server_event dev.cmd runs console lines (F-0028). */
+    hux_app_set_dev_cmd_runner(hux_console_run);
 
     /* The battery level once a minute, to the server through the app
      * (F-0025); without the solder blob it says not_wired once. */

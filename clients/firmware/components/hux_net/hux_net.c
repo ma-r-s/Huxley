@@ -823,6 +823,9 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
     }
 }
 
+/* "Authorization: Bearer <token>\r\n" for the upgrade (F-0028). */
+static char s_auth_header[96] = {0};
+
 static bool ws_start(const char *uri) {
     strlcpy(s_server_uri, uri, sizeof(s_server_uri));
     esp_websocket_client_config_t cfg = {
@@ -877,6 +880,7 @@ static bool ws_start(const char *uri) {
          * base64, the speaker ring) and logs from it. The library default
          * (4 KB) had 1.2 KB left before the first reply arrived. */
         .task_stack = 6144,
+        .headers = s_auth_header[0] != '\0' ? s_auth_header : NULL,
     };
     s_ws = esp_websocket_client_init(&cfg);
     if (s_ws == NULL) {
@@ -918,6 +922,15 @@ void hux_net_start(const hux_net_config_t *cfg) {
     configASSERT(cfg != NULL && cfg->wifi_ssid != NULL &&
                  cfg->wifi_password != NULL && cfg->server_uri != NULL);
     hux_ws_reassembler_init(&s_reassembler, s_frag_buf, sizeof(s_frag_buf));
+    if (cfg->device_token != NULL && cfg->device_token[0] != '\0') {
+        int n = snprintf(s_auth_header, sizeof(s_auth_header), "Authorization: Bearer %s\r\n",
+                         cfg->device_token);
+        if (n <= 0 || n >= (int)sizeof(s_auth_header)) {
+            s_auth_header[0] = '\0';
+            ESP_LOGE(TAG, "ws.token_too_long: none sent");
+        }
+    }
+    ESP_LOGI(TAG, "ws.token present=%d", s_auth_header[0] != '\0'); /* never the value */
     /* WS client created first; the GOT_IP handler starts it. */
     strlcpy(s_compiled_uri, cfg->server_uri, sizeof(s_compiled_uri));
     strlcpy(s_home_uri, cfg->server_uri, sizeof(s_home_uri));
@@ -1246,6 +1259,18 @@ void hux_net_take_health(hux_net_health_t *out) {
     out->channel = out->have_ap ? ap.primary : 0;
     memcpy(out->bssid, ap.bssid, sizeof(out->bssid));
     out->ws_rx_age_ms = hux_net_rx_age_ms();
+}
+
+bool hux_net_link_info(hux_net_link_t *out) {
+    wifi_ap_record_t ap = {0};
+    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
+        return false;
+    }
+    strlcpy(out->ssid, (const char *)ap.ssid, sizeof(out->ssid));
+    out->channel = ap.primary;
+    out->rssi = ap.rssi;
+    memcpy(out->bssid, ap.bssid, sizeof(out->bssid));
+    return true;
 }
 
 uint32_t hux_net_ladder_ticks(void) {
