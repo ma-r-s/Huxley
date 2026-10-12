@@ -212,9 +212,11 @@ own "PETG Translucent" preset for the P2S, and what carries over to a
   the fine features still print.
 - Slow, and only as hot as the spool asks: 240 C, the top of the 230 to
   240 C on Mario's spool (ElitePETG Transparent), 245 C on the first layer
-  for the bed. About 25 mm/s (a cap on the frosted filament's flow,
-  2.5 mm3/s): the guide says 20, and makers' clear PETG reports run 20 to
-  30 mm/s. The guide's 270 C, flow 1.01 and fans off strung badly on the
+  for the bed. Slow: a cap on the frosted filament's flow, 2.5 mm3/s,
+  runs the infill (most of the time) at 27 mm/s and the outer wall at 33
+  (measured in the G-code: Bambu counts a line's rounded ends, so the cap
+  is not 25 as a square line would give). The guide says 20, and makers'
+  clear PETG reports run 20 to 30 mm/s. The guide's 270 C, flow 1.01 and fans off strung badly on the
   first clear top (2026-10-11, damp, the AMS at 48 % humidity, at 40 mm/s),
   so these went back toward the spool and Bambu's preset (2026-10-12): the
   aim is an even glow and a print that succeeds, not glass.

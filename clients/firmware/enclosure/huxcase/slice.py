@@ -140,6 +140,9 @@ CLARITY_FILAMENT = {  # on the PETG preset
     # The P2S's own 0.8, not the preset's 0.3: PETG oozes, and 0.3 barely
     # pulls the melt back before each of the ~3000 travels.
     "filament_retraction_length": "0.8",  # preset 0.3
+    # Bambu counts a line's rounded ends (0.5 x 0.2 is 0.091 mm2, not 0.1), so
+    # this cap runs the infill at 27 mm/s and the 0.42 outer wall at 33
+    # (measured in the G-code, 2026-10-12).
     "filament_max_volumetric_speed": f"{0.5 * 0.2 * CLARITY_SPEED:g}",
 }
 # No variable layer heights (Mario asked, 2026-10-11): Bambu Studio's layer
