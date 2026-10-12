@@ -50,6 +50,15 @@ def once_summary(status: dict[str, Any]) -> str:
     )
     lines.append(f"server: {state}" + (f" ({extra})" if extra else ""))
     lines.append(f"openai today: ${t['openai']['today_usd']:.2f}")
+    c = status.get("credit") or {}
+    if c.get("mode") == "budget":
+        ends = f"hits $0 {c['runs_out']}" if c.get("runs_out") else "lasts the month"
+        lines.append(
+            f"openai {c['month']}: ${c['left_usd']:.2f} of ${c['limit_usd']:g} left, "
+            f"${c['spent_usd']:.2f} used ({c['limit_source']} limit, {c['source']}), {ends}"
+        )
+    elif c.get("month"):
+        lines.append(f"openai {c['month']}: ${c['spent_usd']:.2f} used, no limit set")
     week = ", ".join(
         f"{d['label']} {sum(d['hours'].values()):.1f} h/{d['presses']}p"
         if d["has_logs"]

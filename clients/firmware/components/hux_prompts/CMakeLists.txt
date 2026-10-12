@@ -1,0 +1,6 @@
+idf_component_register(
+    SRCS "hux_prompts.c" "hux_prompt_parse.c"
+    INCLUDE_DIRS "include"
+    PRIV_REQUIRES log hux_opus
+    EMBED_FILES "prompts/offline.hxp" "prompts/battery_empty.hxp"
+)

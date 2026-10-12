@@ -150,6 +150,16 @@ restart_chapter seek once playing, and the stream stays silent until
 Soloist reports the new spot (at most 2 s). The skill keeps which books played here (10 s of audio proves it),
 which ended, each book's place, and the seconds of book audio per month.
 
+**A place never runs ahead of what was sent.** Soloist plays on when
+nobody reads its capture: a walkie switched off mid-book kept the stream
+"playing" for 16 minutes before the server noticed, and the place jumped
+16 minutes past what was heard (2026-10-12). Each chapter's audio is
+anchored where it started (Soloist's position at the first chunk sent);
+a place more than 5 s past the anchor plus the audio sent since is kept
+at 10 s before the last audio sent instead, and at the stream's end
+Soloist is sought back there too, since a plain resume starts from
+Soloist's own position (`spotify.place_capped ahead_ms= kept_ms=`).
+
 **When a book stops**, it is always said: idle in the last chapter, or
 Spotify moving on to something else after it, is the end
 (`book_finished`, and the book is remembered as finished); idle anywhere

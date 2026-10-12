@@ -402,7 +402,7 @@ Before any real sound and on anything that ends the wait: model audio, a `PlaySo
 
 ### The sound
 
-One soft struck note (D5 with two quiet partials, 4 ms attack, fast decay, about -16 dBFS), 120 ms (two whole 60 ms Opus frames), every 1.5 s. Not the walkie's offline cue (a falling 440 / 330 Hz pair meaning "can't reach the server"): waiting must sound like "working". Its audio skips the playhead estimate and `server.tx.audio_stats` (`send_audio(stats=False)`). Logs: `coord.wait_cue_start` (reason, playhead_remaining_ms, waited_ms), `coord.wait_cue_stop` (reason, blips, cue_ms).
+One soft struck note (D5 with two quiet partials, 4 ms attack, fast decay, about -16 dBFS), 120 ms (two whole 60 ms Opus frames), every 1.5 s. Not the walkie's offline cue (now said in words, "No tengo conexión", F-0027; a falling 440 / 330 Hz pair if that can't play): waiting must sound like "working". Its audio skips the playhead estimate and `server.tx.audio_stats` (`send_audio(stats=False)`). Logs: `coord.wait_cue_start` (reason, playhead_remaining_ms, waited_ms), `coord.wait_cue_stop` (reason, blips, cue_ms).
 
 Not covered: the moment between a turn's end and a stream's first audio (a Spotify start). The PWA no longer plays its own tone; it keeps the visual "thinking" state until `model_speaking: true`, `audio_clear` or a press.
 

@@ -572,7 +572,8 @@ def main() -> int:
             b.send("talk")
             time.sleep(0.3)
             b.send("release")
-            cue = b.expect(r"cue=offline", 3, m2)
+            # Said, not toned: the stored prompt, every packet queued (F-0027).
+            cue = b.expect(r"prompt\.play name=offline ms=\d+ queued=(\d+) of \1\b", 3, m2)
             b.send("wifi on")
             back = b.expect(r"state WAITING_HELLO -> READY", 40, m2)
             result(

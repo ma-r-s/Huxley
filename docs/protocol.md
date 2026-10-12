@@ -10,12 +10,37 @@ Any client that implements this protocol is a valid Huxley client. The framework
 - **Default URL**: `ws://localhost:8765`
 - **Audio format**: PCM16, 24 kHz, mono, little-endian
 - **Encoding**: audio bytes are base64-encoded inside JSON message payloads. A client that asks for Opus (`?audio=opus`) gets binary messages instead, one Opus packet of that same PCM each: see [Opus audio](#opus-audio-audioopus).
-- **Concurrency**: one active client at a time. A second connection **evicts the older client** by closing it with code `1001 — Replaced by new client`, then accepts the new one. Rationale in [decision: one client at a time](./decisions.md#2026-04-12--one-websocket-client-at-a-time) — a fresh connect is almost always a browser reload or a re-flashed device, and should win over a stale socket. Frames still arriving from the evicted socket while its close drains are dropped (`server.rx.dropped_from_evicted_client`), and its exit never disturbs the newer client.
+- **Concurrency**: one active client at a time. A second connection **evicts the older client** by closing it with code `1001` (`Replaced by new client`), then accepts the new one. Rationale in [decision: one client at a time](./decisions.md#2026-04-12--one-websocket-client-at-a-time): a fresh connect is almost always a browser reload or a re-flashed device, and should win over a stale socket. Frames still arriving from the evicted socket while its close drains are dropped (`server.rx.dropped_from_evicted_client`), and its exit never disturbs the newer client. In production a connection that isn't the device never evicts the device (409, unless local with `?evict=1`): [Authentication and roles](#authentication-and-roles).
 - **Query parameters at handshake** (all optional):
   - `?lang=<code>` — selects the persona's translation for this session (e.g. `es-CO`, `en`). The server resolves the persona for that language; an unsupported code falls back to the persona's default silently.
   - `?persona=<name>` — **T1.13.** Selects which persona this connection is for. `<name>` is the persona's **directory basename** under `./personas/<name>/` (the canonical id, NOT the YAML's `name:` field which is a human label — see `available_personas` in `hello` for both fields). The server swaps the active `Application` to that persona before sending hello, so the hello payload reflects the new persona. The runtime threads the connection's `?lang=<code>` into the swap so the new OpenAI session opens in the requested language from the start, avoiding a "default-language-then-disconnect-and-reconnect" cascade. Omit the param to keep the currently-active persona; on first connection, the server uses `HUXLEY_PERSONA` env or falls back per [persona resolution](#persona-selection-via-query-param-t113). An unknown name is logged and the connection still establishes on the previous persona — the picker UI can detect the mismatch via `hello.current_persona` and surface a retry. Persona-switch is exclusively a reconnect operation; there is no in-band `select_persona` message. Rationale: [decision: hot persona swap via reconnect](./decisions.md#2026-05-01--hot-persona-swap-via-reconnect-not-in-band-t113).
   - `?audio=opus`: audio in both directions as binary Opus packets instead of base64 PCM in JSON. Announced back in `hello.audio_params`. Without it (the PWA), nothing on this page changes. See [Opus audio](#opus-audio-audioopus).
-- **Plain HTTP on the same port**: only `GET /health` ([below](#http-health)). Any other plain HTTP request gets the WebSocket handshake's refusal (`426`), as before.
+- **Plain HTTP on the same port**: `GET /health` ([below](#http-health)), and the firmware and admin routes ([`/firmware` and `/admin`](#http-firmware-and-admin)) when the server runs with a firmware directory (the runtime always does). Any other plain HTTP request gets the WebSocket handshake's refusal (`426`), as before.
+- **Authentication**: none in dev. In production (`HUXLEY_DEVICE_TOKEN` set) an upgrade needs the device token unless it comes from loopback or Tailscale directly, the token's connection may send only what the firmware sends, and nothing but the device replaces a connected device: [Authentication and roles](#authentication-and-roles).
+
+### Authentication and roles
+
+**Status**: built 2026-10-12 ([remote-operation.md](./remote-operation.md) decision 4, W2 server half).
+
+**Production mode** is on when `HUXLEY_DEVICE_TOKEN` is set (production's `.env` sets it). Without it nothing on this page changes: every connection is `dev` and may send everything.
+
+In production every WebSocket upgrade is classified by where it came from:
+
+- **external**: it carries a reverse proxy's header (`Cf-Connecting-Ip`, `Cf-Ray`, `X-Forwarded-For`, `Forwarded`, `X-Real-Ip`, `Tailscale-Funnel-Request`). The Cloudflare tunnel connects from loopback, so its address means nothing; its headers give it away.
+- **local**: loopback or Tailscale (`127.0.0.0/8`, `::1`, `100.64.0.0/10`, `fd7a:115c:a1e0::/48`) with none of those headers.
+- **other**: anything else (the house LAN).
+
+and given a role:
+
+| Role | Who | May send |
+| --- | --- | --- |
+| `device` | Any source with `Authorization: Bearer <HUXLEY_DEVICE_TOKEN>` on the upgrade (constant-time compare over digests). | What the firmware sends: `audio` (JSON, and binary Opus), `ptt_start`, `ptt_stop`, `wake_word`, `client_event`, `ping`. Anything else is dropped and logged once per type per connection (`server.rx.refused_for_role`, at most 32 types). `?persona=` is ignored: the device stays on the configured persona (`?lang=` and `?audio=` still apply). Only a `device` connection gets console lines (`/admin/dev-cmd`). |
+| `local` | Local without the token (Mario's tools over Tailscale, the PWA on the box), and with no `Origin` header or a local one (an IP, `localhost`, a one-label name, `*.ts.net`). | Everything, as in dev, except speaking for the walkie: its `device.hello`, `firmware.status` and `dev.cmd_result` are ignored (logged once each as `server.rx.refused_for_role`), so it can't end a pending image's accept flow. |
+| none | External or other without a valid token; or local with a foreign `Origin`. | Nothing: the upgrade gets HTTP `401` (`WWW-Authenticate: Bearer`), or `403` for the foreign `Origin` (a web page on another site, open in a browser on the box or the tailnet, opening a WebSocket to localhost: cross-site WebSocket hijacking), and is closed (`server.auth.refused`, reason `missing`, `bad_token` or `origin`; no token is ever logged). |
+
+**Eviction** (production): a connection that isn't `device` never replaces a connected `device`: its upgrade gets `409`, unless it is local and its URL has `?evict=1`. A `device` may replace a `device` (the walkie reconnecting). If the walkie connects while another upgrade is finishing its handshake, or while that connection waits for the client it evicts to close, it is closed with `1008` instead (`late=true` in the log). Each connection's `?lang=`, `?persona=` and `?audio=` are read from its own request, so two handshakes at once (the walkie and a PWA after a restart) never swap them.
+
+`/health` and `/admin/*` stay local-only and refuse anything relayed by a proxy, token or not; `/firmware/*` takes the token from any source ([`/firmware` and `/admin`](#http-firmware-and-admin)).
 
 ## HTTP: `/health`
 
@@ -59,6 +84,47 @@ Any client that implements this protocol is a valid Huxley client. The framework
 | `walkie_last_seen` | When a firmware client was last connected (now, while one is); `null` if none since the server started. In memory. |
 | `recording` | The running persona's recorder is attached ([observability](./observability.md#recordings)). |
 | `injects_waiting`, `oldest_inject_wait_s` | Proactive turns waiting for a client that can hear them, and how long the oldest has waited in seconds (`null` with none). In memory. ([turns.md](./turns.md#proactive-turns-wait-for-a-listener-t144); added T1.44.) |
+
+## HTTP: `/firmware` and `/admin`
+
+**Status**: server half built 2026-10-12 (T1.43 W4, `huxley.server.firmware`); the firmware half is the firmware session's.
+
+Plain HTTP on the voice port, answered in `process_request` like `/health`: never upgraded, `Cache-Control: no-store`, errors as `{"error": "..."}`, and the voice socket never notices (no eviction, a pending `?lang=` untouched). **GET only**: websockets refuses any other method, and any request body, with `400` before the server sees the request, so the admin routes take query parameters. Every answer must be written within the opening handshake's time limit, 60 s from the TCP accept (`open_timeout`, raised from websockets' 10 s for this): a 2 MB image needs about 35 KB/s end to end. An image's answer has no other deadline (websockets' 10 s close deadline is lifted for it). At shutdown, pending dev-cmd waits answer 503 and image downloads still draining are cut, so a restart never waits on them. Only origin-form targets (`/path`) reach these routes and `/health`: `//host/admin/...` and `http://host/admin/...` get the handshake's refusal, so a tunnel's path rule can't be sidestepped.
+
+**Files** live in `<server cwd>/firmware/` (gitignored; on the Pi `~/huxley/server/runtime/firmware/`): `<version>.bin` (the app image), `<version>.elf` (its ELF, for core dumps), and `offer.json` = `{"version", "force", "previous"}`, written by the admin route: the one version this server offers (one server, one walkie) and the one it offered before. A version is letters, digits and `._+-` (git describe fits), at most 64 characters, so no route can name a file outside the directory.
+
+### Device routes: `/firmware/*`
+
+From any source: the walkie comes through the Cloudflare tunnel, where every request is loopback, so the **device token** decides, never the address. `Authorization: Bearer <HUXLEY_DEVICE_TOKEN>`, compared in constant time (over digests, so not even its length leaks). Missing, wrong or not ASCII: `401` (`WWW-Authenticate: Bearer`). With `HUXLEY_DEVICE_TOKEN` unset every request gets `503`: never open. Each refusal logs one `firmware.auth_refused` warning; no token, presented or configured, is ever logged.
+
+| Route | Answer |
+| --- | --- |
+| `GET /firmware/manifest.json` | `200` `{"version", "url": "/firmware/<version>.bin", "size", "elf_sha"}` for the offered version; `404` when nothing is offered (or its image is missing). `elf_sha` is read from the image itself (the ELF hash esptool writes at offset 0xB0, first 9 hex digits), so it is exactly what `device.hello` reports once that image runs. |
+| `GET /firmware/<version>.bin` | `200` `application/octet-stream` with `Content-Length`: the whole image in one answer (no `Range`: `process_request` can't stream, so the answer is buffered and drained), for the offered version and the one before it only. `404` for any other version or name. |
+
+### Admin routes: `/admin/*`
+
+Loopback and Tailscale only, never through a proxy: the `/health` guard, `404` otherwise (`firmware.admin_refused`); the tunnel must not route `/admin` either. And only requests a person sends on purpose: the header `X-Huxley-Admin: 1` (a web page can make a browser GET a URL, but can't add a header without a CORS preflight, which this server never answers) and a local `Host` (an IP, `localhost`, a one-label name or a `*.ts.net` name; a DNS-rebinding page arrives with its own domain): `403` otherwise.
+
+| Route | Does | Answer |
+| --- | --- | --- |
+| `GET /admin/firmware` | Reads only. | `200` `{offer, manifest, files: [{name, bytes}], token_configured, walkie, pending}`. `walkie`: the last `device.hello` (`connected`, `conn_id`, `device_id`, `hello_at`, `version`, `elf_sha`, `slot`, `slot_state`, `rollback`, `caps`), `null` if none since start. `pending`: the accept flow of a pending image (`version`, `selftest`, `selftest_error`, `manifest_seen`, `reconnect_forced`, `accept_sent`, `waiting_for`), else `null`. |
+| `GET /admin/firmware-offer?version=<v>[&force=1]` | Checks that `<v>.bin` is an app image that says it is `<v>` (a misnamed image would be offered forever: the walkie would keep reporting another version) and that `<v>.elf` is its ELF (same hash). Writes `offer.json`, then sends `firmware.update` to the connected walkie, or at its next `device.hello` when none is. | `200` `{offer, image: {size, elf_sha}, sent, reason}`; `reason` is `sent`, `no_device_connected` (it goes at the next hello), or why not (`same_version`, `no_ota_cap`, `no_device_token`, `pending_verify`, `failed_too_often`, `rolled_back`, `image_unavailable`). `400` bad parameters, `404` no `<v>.bin`, `422` not offerable (the message says why). |
+| `GET /admin/firmware-offer?withdraw=1` | Removes `offer.json`: nothing is offered, the manifest and images answer 404, and no device is sent `firmware.update` at its next hello. Use it after a test offer, so an old offer can't chase a walkie flashed by cable with a newer build. | `200` `{offer: null, withdrawn: <the old offer or null>}`. Logs `firmware.offer_withdrawn`. |
+| `GET /admin/dev-cmd?line=<console line>[&timeout_s=10]` | Sends `server_event dev.cmd {id, line}` to the connected walkie and waits for its `dev.cmd_result` with that `id`. `line` URL-encoded, up to 256 printable characters; `timeout_s` up to 30. Only to a walkie whose WebSocket upgrade carried the device token (anyone can send `device.hello`; console lines can carry passwords). | `200` `{id, output, truncated}`; `409` no walkie connected, its socket opened without the device token, or its hello has no `dev_cmd.v1` in `caps`; `504` no reply in time; `503` the server is stopping; `400` bad parameters. |
+
+**When `firmware.update` goes out** (on an admin offer, and on every `device.hello`): something is offered, the device token is set (else the download would get 503), `caps` has `ota.v1`, the image isn't `pending_verify` (ESP-IDF refuses a new update before the accept), it runs another version (with `force`, another image: uncommitted builds share a version string, so `force` compares `elf_sha` and still never resends what runs), it has not reported `failed` for this version 3 times (`failed_too_often`), and it is not a version this device rolled back from (`rollback.from_version`). A `crash`, `selftest` or `manual` rollback is never re-offered automatically and a `no_server` one gets one retry per server run; offering a version again from the admin route clears its failures and sends it past the rollback rule until the walkie reports `downloading` it. The retry and the override are used up by `downloading`, not by the send, because the walkie installs only when idle and may reconnect first.
+
+### The accept flow
+
+A freshly updated image boots `pending_verify` and keeps itself only after the server's `ota.accept`. The server's side, kept in memory per device:
+
+1. The image's `device.hello` says `slot_state: pending_verify` (a new version, a new `boot_counter` or a lower `uptime_s` starts a new record). Then it sends `firmware.status {version, phase: "selftest", error}` (`error` null: passed).
+2. It GETs `/firmware/manifest.json` with its OTA client's exact settings.
+3. Once the self-test passed and the manifest served this image's version and `elf_sha` (in either order), the server closes the walkie's WebSocket with `1012`, about 2 s later so the manifest's answer is out first, and never during a press, an answer or a call (it waits for them to end; a playing stream is fine, it resumes after the reconnect). 1012 reconnects normally (only 1001 with the eviction reason pauses the walkie).
+4. At the next hello (a new connection, the same boot, still pending) the server sends `server_event ota.accept {version}`. Anything short of that and it sends nothing and logs why (`firmware.accept_withheld`).
+
+A server restart midway loses the record. The image stays pending, so the walkie should repeat steps 1 and 2 on every connection while pending: a restart then costs one more round, not a reboot.
 
 ## Message format
 
@@ -137,11 +203,11 @@ and it applies to both directions. **A client that asked for Opus must check it.
 
 ## Device contract (schema 1)
 
-**Status**: agreed 2026-10-12 between the server and firmware owners for [`remote-operation.md`](./remote-operation.md) (T1.43; firmware F-0026..F-0028). Not built yet: each piece lands with its capability in `caps`. Once shipped, a schema-1 field is never removed or renamed; additions are optional fields, and a breaking change means `schema: 2` with the server still accepting 1.
+**Status**: agreed 2026-10-12 between the server and firmware owners for [`remote-operation.md`](./remote-operation.md) (T1.43; firmware F-0026..F-0028). Each piece lands with its capability in `caps`. Server side of the update channel and the console built 2026-10-12 ([`/firmware` and `/admin`](#http-firmware-and-admin)). Once shipped, a schema-1 field is never removed or renamed; additions are optional fields, and a breaking change means `schema: 2` with the server still accepting 1.
 
 Everything rides the existing `client_event` / `server_event` channels: no new message types. A hardware client that nobody can reach must keep two things working in every state, including a `protocol` mismatch in `hello` (today that parks the walkie): sending `device.hello`, and acting on the update channel below. That is what lets a rolled-back image take the next update.
 
-**Authentication.** `Authorization: Bearer <device token>` on the WebSocket upgrade and on the firmware download, never a query parameter (query strings land in logs). Behind the Cloudflare tunnel, the same two requests also carry `CF-Access-Client-Id` and `CF-Access-Client-Secret`. The device keeps all three in NVS (rotatable over the live link) with compiled fallbacks.
+**Authentication.** `Authorization: Bearer <device token>` on the WebSocket upgrade (it makes the connection the `device`, [roles](#authentication-and-roles)) and on the firmware download, never a query parameter (query strings land in logs). Behind the Cloudflare tunnel, the same two requests also carry `CF-Access-Client-Id` and `CF-Access-Client-Secret`. The device keeps all three in NVS (rotatable over the live link) with compiled fallbacks.
 
 ### Device to server (`client_event`)
 
@@ -152,16 +218,16 @@ Everything rides the existing `client_event` / `server_event` channels: no new m
 | `device.health` | Every 60 s while connected. Counters are since the previous line, so they sum. | `uptime_s`, `heap_internal_min`, `heap_internal_largest`, `psram_min`, `rssi`, `channel`, `bssid`, `wifi_disconnects` (`{reason: count}`), `tls_errors` (`{code: count}`), `reconnects`, `underruns`, `underrun_ms`, `discarded_ms`, `ws_rx_age_ms`, `ring_used_ms`, `volume`, `quiet_left_s`, `ota_state`, `battery` (`{mv, pct, charging}`, only once wired) |
 | `system.battery` | After each hello, with each press (a reading taken at the press) and when the percentage changes (read every 20 min), once the cell is wired (F-0025). The system skill keeps the last one for `get_battery` and speaks once at 20 % and once at 10 %. | `mv` (the cell, calibrated), `pct` (0-100, from a Li-ion curve; follows a fall at once, a rise only past 5 points) |
 | `audio.discarded` | Every time the device drops queued speaker audio. | `ms`, `why` (`server_clear` = an `audio_clear`; `press` = a local barge-in clear), `uptime_ms` |
-| `firmware.status` | During an update the server offered. | `version`, `phase` (`downloading`\|`verifying`\|`rebooting`\|`failed`), `error` |
+| `firmware.status` | During an update the server offered (`downloading`, `verifying`, `rebooting`, `failed`), and on the boot of a pending image: `selftest` when its silent self-test ends (supervisor progress for 20 s, expander and codec I2C, heap floors), `accepted` once it marked itself valid on `ota.accept`, `failed` if it refused the accept. The server logs every phase (`firmware.status`) and uses `selftest` in [the accept flow](#the-accept-flow). | `version`, `phase` (`downloading`\|`verifying`\|`rebooting`\|`failed`\|`selftest`\|`accepted`), `error` (null; for `selftest` the first failed check's name, e.g. `codec_es8311`; for `failed` the reason) |
 | `dev.cmd_result` | Reply to `dev.cmd`. | `id`, `output` (the lines the command logged on the app task, `L tag: text` each, up to ~1.5 KB), `truncated` (output or line cut) |
 
 ### Server to device (`server_event`)
 
 | `event` | `data` | Device does |
 | --- | --- | --- |
-| `firmware.update` | `version`, `url`, `force` | Downloads the image from `url` (same host, same headers) when idle, never under 40 % battery unless charging, reports `firmware.status`, restarts. |
-| `ota.accept` | `version` | Marks the running image valid, but only after its own checks passed (self-test, hello, a manifest GET with the update client's settings, one server-initiated reconnect). Without it the image stays pending and goes back on the next restart. |
-| `dev.cmd` | `id`, `line` | Runs one console line, replies `dev.cmd_result`. |
+| `firmware.update` | `version`, `url` (relative: `/firmware/<version>.bin`), `force` | Downloads the image from `url` (same host, same headers) when idle, never under 40 % battery unless charging, reports `firmware.status`, restarts. |
+| `ota.accept` | `version` | Marks the running image valid, but only after its own checks passed (self-test, hello, a manifest GET with the update client's settings, one server-initiated reconnect; the manifest must have returned this version and `elf_sha`). Without it the image stays pending and goes back on the next restart. The server sends it per [the accept flow](#the-accept-flow). |
+| `dev.cmd` | `id`, `line` | Runs one console line, replies `dev.cmd_result`. Sent by `GET /admin/dev-cmd`. |
 
 The server logs every `client_event` as `client.<event>` already, so all of the above is in the log from the first device that sends it.
 

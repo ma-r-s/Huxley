@@ -275,7 +275,14 @@ speaker's, go only to the log). Logs: `app.dev_cmd id=`,
 `POST /admin/dev-cmd` (loopback and Tailscale only). Every connection
 also carries `Authorization: Bearer <HUX_DEVICE_TOKEN>` on the upgrade
 (`ws.token present=1` at boot; the value is never logged), and the hello
-is now `device.hello` (`app.device_hello sent= time_to_hello_ms=`).
+is now `device.hello` (`app.device_hello sent= time_to_hello_ms=`). After a reconnect the hello also says what the walkie played out of its
+ring after the link dropped (`played_after_drop_ms`), what it still had
+queued (`ring_left_ms`, thrown away then: the server's state is newer)
+and when it dropped (`drop_uptime_ms`); the server repeats a cut
+narration only if it wasn't heard (T1.44; `app.after_drop played_ms=
+discarded_ms=`). A press during the outage fixes both figures at that
+press: it ends the playback, and the spoken "no connection" it gets
+isn't the server's audio.
 
 ### Updates through the server (F-0028)
 
@@ -294,7 +301,9 @@ stall, both codecs and the expander answering on I2C, internal heap
 floor over 40 KB; `selftest dac_id= adc_id= expander= heap_min=`) and
 sends `phase: selftest` with the first failed check as `error`, then GETs
 `/firmware/manifest.json` with the same client settings and checks its
-`version` and `elf_sha` (`ota.manifest status= match=`). The server
+`version` and `elf_sha` (`ota.manifest status= match=`). While the image
+is pending it repeats both on every hello (`ota.verify selftest=
+manifest=`), so a server restart costs one round, not a reboot. The server
 closes the connection once (1012); after the reconnect's hello it sends
 `ota.accept {version}`, and the walkie keeps the image only if all of
 that held (`ota.accepted`, `phase: accepted`; else `ota.accept_refused
@@ -542,7 +551,9 @@ The serial console (`components/hux_console/include/hux_console.h`)
 takes commands typed on the USB port: `talk` / `release`, `say <n>` (a
 whole turn: clip n from flash replaces the mic; `tools/clips.py`),
 `selftest` (a tone on the DAC read back electrically on the ES7210's
-echo-reference channel), `tone`, `vol`, `pa off|on` (silent bench),
+echo-reference channel), `tone`, `prompt <name>` (a sentence stored on
+the walkie, `offline` or `battery_empty`; `prompt.play name= ms= queued=`),
+`vol`, `pa off|on` (silent bench),
 `wifi off|on`, `wifistat` (the Wi-Fi driver's buffer and RX/TX
 counters; they reach the server too, under the `wifi` tag), `wifiscan`
 (every AP the board hears: `wifi.scan.ap` lines with channel, width and

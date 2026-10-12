@@ -35,8 +35,17 @@
 # secrets = "~/.config/huxley-watch/secrets.toml"   # must be chmod 600
 
 [openai]
-# The balance you read on platform.openai.com, and when (local time).
-# Spend since then comes from the server's cost.response_done lines.
+# The month's budget: the hard monthly spend limit set on
+# platform.openai.com (Settings, Limits), USD a calendar month (UTC). With
+# an admin key in secrets.toml the limit is read from the account and wins
+# over this; this is the fallback when it can't be read.
+monthly_limit_usd = 30
+# Also read this project's limit and spend (the tighter of it and the
+# organization's wins). Default: the organization's only.
+# project_id = "proj_..."
+# Only while no monthly limit is known: the balance you read on the
+# billing page, and when (local time); spend since then comes from the
+# server's cost.response_done lines. Feeds the tile and openai.balance.
 # balance_usd = 25.0
 # balance_at = "2026-10-12 09:00"
 

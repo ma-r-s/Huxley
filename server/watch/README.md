@@ -21,7 +21,9 @@ never writes**, the server's data:
   `huxley.port`, default 8765), to tell a stopped server from a quiet one
   (same box only), or its `/health` once it has one;
 - the recorder's Ogg Opus files (`<persona data dir>/recordings/YYYY/MM/DD/`,
-  T1.43 W3), for the archive's players (see "The archive").
+  T1.43 W3), for the archive's players (see "The archive");
+- with an admin key, OpenAI's Admin API, at most once an hour: what was
+  billed and the monthly spend limit (see "OpenAI budget").
 
 It never opens the voice WebSocket (a second client would evict the walkie).
 
@@ -36,11 +38,11 @@ uv run --package huxley-watch pytest server/watch/tests
 
 With no config it watches this checkout (`server/runtime/logs`,
 `server/personas/abuelos`). Settings: [`watch.example.toml`](./watch.example.toml);
-the Telegram bot and the dead-man ping URL go in a separate
-[`secrets.toml`](./secrets.example.toml) that must be `chmod 600`. Any
-missing optional piece (Telegram, the ping, the OpenAI balance, the
-audiobook allowance, the database) turns just that piece off, with one log
-line saying so.
+the Telegram bot, the dead-man ping URL and the OpenAI admin key go in a
+separate [`secrets.toml`](./secrets.example.toml) that must be `chmod 600`.
+Any missing optional piece (Telegram, the ping, the OpenAI admin key or
+limit, the audiobook allowance, the database) turns just that piece off,
+with one log line saying so.
 
 The page binds to `127.0.0.1:8780`. To read it from a phone on the
 tailnet, set `bind` to the box's Tailscale address. Tailscale only: it
@@ -66,7 +68,8 @@ archive's list, from the data `/day/YYYY-MM-DD.json` serves).
 - **Tiles**: walkie (online since, or away and last seen), Wi-Fi (rssi and
   bars), audio gaps over the last 3 h (meter against the threshold),
   server (up, or "not ready" when its `/health` says so; uptime, the walkie's firmware), battery (percent and volts from `client.system.battery`; "not wired" or "not reported" until a reading),
-  OpenAI (today's spend, or the balance left once you enter one).
+  OpenAI (this month's budget left, see "OpenAI budget"; without a limit,
+  today's spend, or the balance you entered).
 - **Today, hour by hour**: three lanes from midnight: the walkie connected
   (its connections merged, never summed); him talking (top half) and
   Huxley speaking (bottom half: the model's audio, from
@@ -78,6 +81,8 @@ archive's list, from the data `/day/YYYY-MM-DD.json` serves).
   under each day, days before the logs begin as dashed "no logs".
 - **Audiobook hours**: this month's seconds against `books.hours_per_month`
   ("allowance not set" without one).
+- **OpenAI budget** (full width, under the gauge): the month's budget left
+  as a battery, then daily spend. See "OpenAI budget".
 - **Audio gaps per half hour**: the last 12 hours, every half hour a slot
   (nothing played: an empty slot), the 5 % threshold dashed, bars over it
   in amber. Same arithmetic as `clients/firmware/tools/dev.py link`.
@@ -196,8 +201,10 @@ card.
 | `server.unclean`       | a start with no stop since the previous one (crash, kill, power cut), within the last hour                     | an hour later                                         |
 | `skill.<name>`         | `skill.setup_failed` or `disabled_skills` in the running persona                                               | the persona starts it                                 |
 | `openai.down`          | 3 failed connects in a row (`connection_failed`; an HTTP 429 counts here, as a rate limit)                     | `session_connected`                                   |
-| `openai.quota`         | `insufficient_quota` / `billing_hard_limit_reached`                                                            | a billed answer (`cost.response_done`)                |
-| `openai.balance`       | the balance you entered minus the spend since is under USD 5 or 7 days at the last week's pace                 | 20 % past both                                        |
+| `openai.quota`         | "Credit gone": `insufficient_quota` / `credit_balance_exhausted` (prepaid credit can run out before the limit)  | a billed answer (`cost.response_done`)                |
+| `openai.limit`         | "Budget hit": `organization_spend_limit_exceeded` / `project_spend_limit_exceeded` / `organization_usage_limit_exceeded` / `billing_hard_limit_reached` | a billed answer, or the month turns (UTC)             |
+| `openai.budget`        | "Budget runs out": at the pace, this month's budget reaches 0 before it resets                                 | it lasts 20 % past the reset                          |
+| `openai.balance`       | only with no monthly limit known: the balance you entered minus the spend since is under USD 5 or 7 days at the last week's pace | 20 % past both                                        |
 | `openai.spend_today`   | the server's `bug_canary` or `kill_switch` cost threshold today                                                | local midnight                                        |
 | `books.hours`          | under 2 h of audiobook time left this month, or `spotify.book_hours_out` / `start_refused cause=book_no_hours` | 20 % past it; 30 s of a book playing; the month turns |
 | `spotify.down`         | Spotify's setup failed, Soloist unreachable 10 min, or the player logged out                                   | connected and logged in                               |
@@ -254,13 +261,18 @@ you when the pings stop, which is how you learn the box itself died.
 JSON lines in `<state_dir>/huxley-watch.log`, the server's shape:
 `watch.cycle` (open items, events read, skipped lines, walkie online,
 server alive, bench windows, quiet hours, pending alerts, failures in a
-row, ping, db, duration), `watch.item_opened`, `watch.item_cleared`,
+row, ping, db, the month's budget left, its limit and where it came from,
+spent, the spend's source, the pace, duration), `watch.item_opened`, `watch.item_cleared`,
 `watch.alert_sent`, `watch.alert_held_quiet_hours`, `watch.alert_failed`,
 `watch.alert_dropped`, `watch.ping_failed`, `watch.step_failed`,
 `watch.db_unavailable`, `watch.logs_missing`, `watch.bench_line_skipped`,
 `watch.bench_window_capped`,
 `watch.config_invalid`, `watch.secrets_insecure`, `watch.timezone_fallback`,
 `watch.telegram_off`, `watch.ping_off`, `watch.book_budget_off`,
+`watch.openai_admin_off`, `watch.openai_admin_read` (days billed, the
+limits read, `limit_error`, duration), `watch.openai_costs_failed` (the
+error's type: one line per hourly attempt), `watch.openai_cache_unreadable`,
+`watch.openai_cache_write_failed`,
 `watch.cycle_failed`, `watch.archive_day` (a day built: files read,
 rows, rows by kind, bytes, duration), `watch.archive_read_failed`
 (and `watch.step_failed step=archive_day` with the day and where). Errors
@@ -291,3 +303,73 @@ confirmed refusal (`spotify.refusal_explained cause=book_no_hours`) forces
 0 and opens the card; a bare `start_refused` never does. The count is
 exact only if that Spotify account plays nowhere else.
 
+
+## OpenAI budget
+
+Mario's ask: open the page and see whether OpenAI needs money, like a
+battery. OpenAI has no API for the prepaid balance (only the billing page
+shows it), but since 2026-07 an account can set a hard monthly spend limit
+(organization or project; at the cap the API answers 429
+`organization_spend_limit_exceeded` / `project_spend_limit_exceeded`). So
+the battery is **this month's budget left: the limit minus what was spent
+since the 1st**. Nothing is typed in by hand.
+
+- **The month** is a calendar month in UTC: OpenAI's limits reset "with the
+  next monthly cycle" and its Costs API bills in UTC days; its docs name no
+  other zone. In Bogota the budget resets at 19:00 on the last day of the
+  month, and the chart's days are UTC days.
+- **The spend**, per day, says where it came from (the tooltip):
+  - *OpenAI billed*: with an admin key (`openai_admin_key` in
+    `secrets.toml`, an `sk-admin-...` key from Organization settings >
+    Admin keys), `GET /v1/organization/costs` (1-day buckets, the last 60
+    days, grouped by project) once an hour, cached in
+    `<state_dir>/openai_admin.json` (never the key). Used for every day
+    OpenAI has settled (read 6 h or more after the day ended: the route
+    reports late); it is the whole organization's spend (or the
+    project's, see below), so other apps on the account count too.
+  - *server estimate*: the sum of `cost_usd` over the server's
+    `cost.response_done` lines that day. Every day without billing. A day
+    not yet settled (today, or one that just ended) is *billed +
+    estimate*: the larger of what was billed at the read plus the estimate
+    since, and the day's whole estimate. Bench runs count: tests spend real
+    money.
+  - Days the logs don't reach and nothing billed: "no logs" (dashed), and
+    the big number says "or less".
+- **The limit**: the organization's from `GET
+  /v1/organization/spend_limit` (`threshold_amount` in cents, only while
+  `enforcement.status` is `enforcing`); with `[openai] project_id`, that
+  project's too (`/v1/organization/projects/{id}/spend_limit`, its spend
+  from the same buckets), and the one with less left wins (it bites
+  first). If the API can't say (no admin key, an error, no limit
+  enforced), `[openai] monthly_limit_usd` (Mario's: 30), taken as the
+  organization's: against its whole spend. Each limit is read on its own,
+  so one failing keeps the other's fresh answer.
+- **The pace**: the average of the last 7 finished days that had spend;
+  days of nothing don't dilute it, so it errs toward "runs out sooner".
+  Today joins once it is already over that average (a day that has barely
+  begun never lowers it). The projection runs from now at that pace.
+- **A failed read** (HTTP 404, which some accounts get on the costs route;
+  401; a timeout; an odd answer) never stops a cycle: the last good answer
+  stays, days after it fall back to the estimate, the limit to the config,
+  and one `watch.openai_costs_failed` line with the error's type (never its
+  text) goes in the log each hourly attempt. The card's header says "Admin
+  API HTTP 404" in red. A damaged cache file is dropped and read again. The
+  key is never logged, served or cached, and it is sent as an unredirected
+  header (urllib copies the others onto a redirect, to any host).
+
+The card: the budget left (big, "of $30, resets 1 Nov", "or less" when
+days are missing), used, the pace, and "hits $0" with its date, "hit $0"
+with the day it did, or "left at reset"; the chip "Raise limit or wait"
+while the projection reaches 0 before the reset (the same numbers as
+`openai.budget`, which also keeps a 20 % clearing margin) or `openai.limit`
+is open, "Top up" while `openai.quota` is. Under it, the battery: the budget left over the
+month from the limit on the 1st, falling with each day's spend, dashed
+from now at the pace to the reset, or to "$0 on <date>" if that comes
+first; the days ahead shaded. Under that, each day's spend (one series)
+with the pace dashed over the days ahead. A tip on every day: the day,
+left, spent, and the source. `/status.json` `credit` has every number.
+
+Without a limit (no config value, nothing read), the card shows the
+month's spend and the bars, no battery. The older balance mode (`[openai]
+balance_usd` and `balance_at`, the balance read on the billing page) still
+feeds the tile and `openai.balance`, only while no limit is known.

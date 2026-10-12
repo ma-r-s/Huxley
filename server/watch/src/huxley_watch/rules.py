@@ -20,6 +20,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from huxley_watch.bench import Bench
+from huxley_watch.credit import budget
 from huxley_watch.facts import (
     BatteryState,
     battery_state,
@@ -38,10 +39,23 @@ if TYPE_CHECKING:
     from zoneinfo import ZoneInfo
 
     from huxley_watch.config import Thresholds
+    from huxley_watch.credit import Admin, Budget
     from huxley_watch.events import Event
     from huxley_watch.facts import ServerState, WalkieState
 
-QUOTA_CODES = frozenset({"insufficient_quota", "billing_hard_limit_reached"})
+# OpenAI refusing for money (docs: spend-limits guide, 2026-07). Credit:
+# the prepaid balance is gone. Limit: a monthly cap was reached, the
+# organization's or a project's we set, or OpenAI's own approved limit
+# (billing_hard_limit_reached is the old name of the same cap).
+CREDIT_CODES = frozenset({"insufficient_quota", "credit_balance_exhausted"})
+LIMIT_CODES = frozenset(
+    {
+        "organization_spend_limit_exceeded",
+        "project_spend_limit_exceeded",
+        "organization_usage_limit_exceeded",
+        "billing_hard_limit_reached",
+    }
+)
 OWN_RULE_SKILLS = frozenset({"telegram", "spotify"})  # their rules say more
 CLEAR_MARGIN = 1.2  # hysteresis: a rule with a threshold clears 20 % past it
 
@@ -84,6 +98,11 @@ class Inputs:
     book_cycle: tuple[datetime, datetime] | None = None
     book_partial: bool = False  # the logs start after the cycle did
     health_ok: bool | None = None  # the server's /health "ok", when it answers
+    # This month's OpenAI budget (credit.py): limit, spend, pace. One
+    # computation for the rules and the page, so card and alert agree.
+    budget: Budget | None = None
+    admin: Admin | None = None  # the Admin API's last answer, with an admin key
+    budget_error: str | None = None  # the budget couldn't be computed (by type)
 
 
 def make_inputs(
@@ -107,6 +126,9 @@ def make_inputs(
     health_ok: bool | None = None,
     book_renews_day: int | None = None,
     book_since: date | None = None,
+    admin: Admin | None = None,
+    monthly_limit_usd: float | None = None,
+    openai_project_id: str | None = None,
 ) -> Inputs:
     """Inputs with the walkie and server facts computed from the events."""
     cycle: tuple[datetime, datetime] | None = None
@@ -115,6 +137,20 @@ def make_inputs(
         cycle = book_cycle(now, tz, book_renews_day, book_since)
         book_seconds = book_seconds_since(events, cycle[0], now)
         partial = bool(events) and events[0].ts > cycle[0]
+    logs_from = events[0].ts if events else None
+    month: Budget | None = None
+    budget_error: str | None = None
+    try:
+        month = budget(
+            events,
+            now,
+            admin=admin,
+            project_id=openai_project_id,
+            config_limit=monthly_limit_usd,
+            logs_from=logs_from,
+        )
+    except Exception as exc:  # an odd cached answer must not cost the alerts
+        budget_error = type(exc).__name__
     return Inputs(
         events=events,
         now=now,
@@ -124,7 +160,7 @@ def make_inputs(
         server=server_state(events, server_alive),
         was_open=was_open,
         bench=bench or Bench(),
-        logs_from=events[0].ts if events else None,
+        logs_from=logs_from,
         logs_problem=logs_problem,
         book_seconds=book_seconds,
         book_hours_per_month=book_hours_per_month,
@@ -136,6 +172,9 @@ def make_inputs(
         book_cycle=cycle,
         book_partial=partial,
         health_ok=health_ok,
+        budget=month,
+        admin=admin,
+        budget_error=budget_error,
     )
 
 
@@ -434,36 +473,116 @@ def rule_openai_down(i: Inputs) -> Item | None:
     )
 
 
-def _is_quota(e: Event) -> bool:
-    """Out of credit. An HTTP 429 alone is a rate limit, not credit: it
-    counts as a failed connect (openai.down), not here."""
+def _refused(e: Event, codes: frozenset[str]) -> bool:
+    """OpenAI refused for one of these codes: an error in the session, or
+    the traceback of a failed connect. An HTTP 429 alone is a rate limit:
+    it counts as a failed connect (openai.down), not here."""
     if e.name == "session.rx.error":
-        return str(e.get("code") or "") in QUOTA_CODES
+        return str(e.get("code") or "") in codes
     if e.name == "connection_failed":
-        return "insufficient_quota" in str(e.get("exception") or "")
+        text = str(e.get("exception") or "")
+        return any(code in text for code in codes)
     return False
 
 
-def rule_openai_quota(i: Inputs) -> Item | None:
+def _last_refusal(i: Inputs, codes: frozenset[str], since: datetime | None = None) -> Event | None:
+    """The last refusal not followed by a billed answer (which proves it
+    works again), at or after `since`."""
     refusal: Event | None = None
     for e in i.events:
-        if _is_quota(e):
+        if _refused(e, codes):
             refusal = e
         elif e.name == "cost.response_done":
-            refusal = None  # a billed answer: credit works
+            refusal = None
+    if refusal is not None and since is not None and refusal.ts < since:
+        return None
+    return refusal
+
+
+def rule_openai_quota(i: Inputs) -> Item | None:
+    """Credit gone: the prepaid balance ran out (it can before the monthly
+    limit does). Clears with a billed answer."""
+    refusal = _last_refusal(i, CREDIT_CODES)
     if refusal is None:
         return None
     return Item(
         "openai.quota",
-        "OpenAI no credit",
+        "Credit gone",
         short(i.now - refusal.ts),
         "Top up",
         f"OpenAI refused to answer for lack of credit at {when(refusal.ts, i.now, i.tz)}.",
         "He hears beeps instead of answers until it's topped up.",
-        "Top up the OpenAI account, then enter the new balance in watch.toml.",
+        "Add credit on platform.openai.com (Settings, Billing).",
         "OpenAI is answering again.",
         refusal.ts,
         "crit",
+    )
+
+
+def day_month(ts: datetime) -> str:
+    """'1 Nov', in UTC: OpenAI's days and months."""
+    utc = ts.astimezone(UTC)
+    return f"{utc.day} {utc.strftime('%b')}"
+
+
+def rule_openai_limit(i: Inputs) -> Item | None:
+    """Budget hit: OpenAI refused because a monthly spend limit was
+    reached. Clears with a billed answer (the limit was raised) or when the
+    month turns (it reset)."""
+    b = i.budget
+    refusal = _last_refusal(i, LIMIT_CODES, b.start if b is not None else None)
+    if refusal is None:
+        return None
+    resets = day_month(b.end) if b is not None else "the 1st"
+    return Item(
+        "openai.limit",
+        "Budget hit",
+        short(i.now - refusal.ts),
+        "Raise limit or wait",
+        f"OpenAI refused to answer at {when(refusal.ts, i.now, i.tz)}: the monthly spend limit is reached.",
+        f"He hears beeps instead of answers until it resets on {resets} or the limit is raised.",
+        "Raise the monthly limit on platform.openai.com (Settings, Limits), or wait for the reset.",
+        "OpenAI is answering again.",
+        refusal.ts,
+        "crit",
+    )
+
+
+def rule_budget(i: Inputs) -> Item | None:
+    """At this pace the month's budget runs out before it resets. Opens
+    when the projection reaches 0 before the reset (the card's chip, from
+    the same numbers); clears once it lasts 20 % past the reset."""
+    b = i.budget
+    if b is None or b.limit_usd is None or b.left_usd is None:
+        return None
+    days, to_reset = b.days_left, b.days_to_reset
+    if days is None:
+        return None
+    margin = CLEAR_MARGIN if "openai.budget" in i.was_open else 1.0
+    if days >= to_reset * margin:
+        return None
+    resets = day_month(b.end)
+    if b.left_usd <= 0:
+        big = "$0"
+        sentence = (
+            f"This month's OpenAI budget of {usd(b.limit_usd)} is used up; it resets on {resets}."
+        )
+    else:
+        big = day_month(b.now + timedelta(days=days))
+        sentence = (
+            f"At this pace this month's OpenAI budget of {usd(b.limit_usd)} runs out on "
+            f"{big}, before it resets on {resets}: {usd(b.left_usd)} left, about "
+            f"{usd(b.pace_usd or 0)} a day."
+        )
+    return Item(
+        "openai.budget",
+        "Budget runs out",
+        big,
+        "Raise limit or wait",
+        sentence,
+        "Past the limit OpenAI refuses, and he hears beeps instead of answers until it resets.",
+        "Raise the monthly limit on platform.openai.com (Settings, Limits), or let it reset.",
+        "This month's OpenAI budget will last until it resets.",
     )
 
 
@@ -505,6 +624,12 @@ def rule_spend_today(i: Inputs) -> Item | None:
 
 
 def rule_balance(i: Inputs) -> Item | None:
+    """The balance you entered minus the spend since: only while no
+    monthly limit is known (the budget rules say it better). One already
+    open is judged to the end: dropping it would send a false "fine"."""
+    # Credit and the monthly budget are separate stops: prepaid credit can
+    # run out long before the month's limit (2026-10-12: $3.16 left of
+    # credit, $27 of budget). So this rule runs whenever a balance is known.
     est = balance_estimate(i)
     if est is None or i.balance_usd is None:
         return None
@@ -750,9 +875,11 @@ RULES: tuple[Rule, ...] = (
     rule_walkie_offline,
     rule_battery,
     rule_openai_quota,
+    rule_openai_limit,
     rule_openai_down,
     rule_server_restarts,
     rule_server_unclean,
+    rule_budget,
     rule_balance,
     rule_spend_today,
     rule_audio_gaps,
@@ -789,6 +916,9 @@ def evaluate(i: Inputs) -> list[Item]:
         # With the server stopped nothing can connect: "check it's
         # charged" would send him the wrong way.
         items = [it for it in items if keep(it, it.id == "walkie.offline")]
-    if "openai.quota" in ids:
+    if "openai.quota" in ids or "openai.limit" in ids:
+        # Refused for money says it better than "can't reach".
         items = [it for it in items if keep(it, it.id == "openai.down")]
+    if "openai.limit" in ids:
+        items = [it for it in items if keep(it, it.id == "openai.budget")]
     return items

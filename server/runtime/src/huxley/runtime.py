@@ -130,6 +130,10 @@ class Runtime:
             on_client_presence=self._shim_client_presence,
             on_device_hello=self._shim_device_hello,
             get_health=self._get_health,
+            # Firmware images live next to the server: `<cwd>/firmware/`
+            # (gitignored; scripts/pi/README.md says how to offer one).
+            firmware_dir=Path.cwd() / "firmware",
+            device_token=config.device_token,
         )
         self.current_app: Application | None = None
         # Process facts for `/health`. Wall clock for `started_at`, the

@@ -63,12 +63,12 @@ def _pct(minutes: float) -> str:
 
 CSS = """
 :root{color-scheme:light;--page:#f4f3ef;--card:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--mute:#898781;--grid:#e1e0d9;--ring:rgba(11,11,11,.08);
---music:#2a78d6;--book:#eb6834;--radio:#1baf7a;--call:#eda100;--talk:#3b3a37;--answer:#a9a79e;--online:#d9d7cd;
+--music:#2a78d6;--book:#eb6834;--radio:#1baf7a;--call:#eda100;--talk:#3b3a37;--answer:#a9a79e;--online:#d9d7cd;--credit:#4a3aa7;
 --good:#0ca30c;--warn:#fab219;--crit:#d03b3b;--stale:#898781}
 @media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])){color-scheme:dark;--page:#0d0d0d;--card:#1a1a19;--ink:#fff;--ink2:#c3c2b7;--mute:#898781;--grid:#2c2c2a;--ring:rgba(255,255,255,.08);
---music:#3987e5;--book:#d95926;--radio:#199e70;--call:#c98500;--talk:#e9e7df;--answer:#77756e;--online:#33332f}}
+--music:#3987e5;--book:#d95926;--radio:#199e70;--call:#c98500;--talk:#e9e7df;--answer:#77756e;--online:#33332f;--credit:#9085e9}}
 :root[data-theme="dark"]{color-scheme:dark;--page:#0d0d0d;--card:#1a1a19;--ink:#fff;--ink2:#c3c2b7;--mute:#898781;--grid:#2c2c2a;--ring:rgba(255,255,255,.08);
---music:#3987e5;--book:#d95926;--radio:#199e70;--call:#c98500;--talk:#e9e7df;--answer:#77756e;--online:#33332f}
+--music:#3987e5;--book:#d95926;--radio:#199e70;--call:#c98500;--talk:#e9e7df;--answer:#77756e;--online:#33332f;--credit:#9085e9}
 *{box-sizing:border-box}
 body{margin:0;background:var(--page);color:var(--ink);font:15px/1.35 system-ui,-apple-system,"Segoe UI",sans-serif}
 main{max-width:1040px;margin:0 auto;padding:20px 16px 48px}
@@ -194,6 +194,33 @@ details.bgroup>summary .fig{color:var(--mute)}
 details.bgroup>.li{opacity:.45;filter:grayscale(1)}
 details.bgroup[open]>summary{opacity:.7}
 @media (max-width:480px){.li{grid-template-columns:52px 20px minmax(0,1fr);gap:6px}.li .at{font-size:11px}.pbody{padding-right:30px}}
+.tag{font-weight:400;color:var(--mute);font-size:12px}.tag.bad{color:var(--crit)}
+.cfigs{display:flex;align-items:flex-end;gap:12px 28px;flex-wrap:wrap;margin:2px 0 14px}
+.cf .cv{font-size:22px;font-weight:620;letter-spacing:-.01em;white-space:nowrap}.cf.warn .cv{color:var(--warn-ink, var(--warn))}.cf.hero .cv{font-size:44px;font-weight:650;line-height:1}
+.cf .cc{font-size:12px;color:var(--ink2);margin-top:3px;white-space:nowrap}
+.cf .cq{font-size:13px;font-weight:400;color:var(--mute);margin-left:6px;letter-spacing:0}
+.chip{margin-left:auto;align-self:center;font-size:12px;background:color-mix(in srgb,var(--warn) 22%,transparent);padding:5px 9px;border-radius:999px;white-space:nowrap}
+.chip.crit{background:color-mix(in srgb,var(--crit) 16%,transparent)}
+.plot.cbat{height:150px}.plot.cspend{height:72px;margin-top:24px}
+.cline{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.cline .area{fill:var(--credit);fill-opacity:.1;stroke:none}
+.cline .ln,.cline .proj{fill:none;stroke:var(--credit);stroke-width:2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
+.cline .proj{stroke-dasharray:5 4}
+.cdot{position:absolute;width:10px;height:10px;margin:0 0 -5px -5px;border-radius:50%;background:var(--credit);box-shadow:0 0 0 2px var(--card);pointer-events:none}
+.cdot.zero{background:var(--card);box-shadow:inset 0 0 0 2px var(--credit),0 0 0 2px var(--card)}
+.clab{position:absolute;margin-bottom:8px;font-size:11px;color:var(--ink2);white-space:nowrap;transform:translateX(7px);pointer-events:none}
+.clab.end{transform:translateX(calc(-100% - 4px))}
+.clab.zero{transform:translate(-50%,100%);margin-bottom:-6px}.clab.zero.end{transform:translate(-100%,100%)}
+.ccols{position:absolute;inset:0;display:flex}
+.ccol{flex:1;position:relative;height:100%}
+.ccol:hover::after{content:"";position:absolute;left:50%;top:0;bottom:0;border-left:1px solid var(--mute)}
+.ahead{position:absolute;top:0;bottom:0;right:0;background:color-mix(in srgb,var(--page) 70%,transparent);border-radius:4px}
+.cbars{position:absolute;inset:0;display:flex;align-items:flex-end}
+.cbars .cs{flex:1;height:100%;display:flex;align-items:flex-end;justify-content:center}
+.cbars .cs i{display:block;width:62%;max-width:14px;border-radius:3px 3px 0 0;background:var(--credit);min-height:1px}
+.cbars .cs:hover i{opacity:.75}
+.cpace{position:absolute;border-top:1.5px dashed var(--credit);opacity:.7}
+.nodata{position:absolute;top:0;bottom:0;border:1px dashed var(--mute);border-radius:4px;display:grid;place-items:center;font-size:11px;color:var(--mute);overflow:hidden;white-space:nowrap}
 """
 
 SCRIPT = (
@@ -378,7 +405,24 @@ def _tiles(t: dict[str, Any]) -> str:
             extra='<div class="meter hatch"></div>',
         )
     oa = t["openai"]
-    if oa["balance_left_usd"] is not None:
+    credit_first = oa.get("balance_left_usd") is not None and (
+        oa.get("budget_left_usd") is None or oa["balance_left_usd"] < oa["budget_left_usd"]
+    )
+    if credit_first:
+        days = f", {oa['days_left']:.0f} d" if oa["days_left"] is not None else ""
+        openai = _tile(
+            "OpenAI credit",
+            f"${max(0.0, oa['balance_left_usd']):.2f}" + ("?" if oa["partial"] else ""),
+            f"left{days}",
+            "warn" if (oa["days_left"] is not None and oa["days_left"] < 7) else "",
+        )
+    elif oa.get("budget_left_usd") is not None:
+        openai = _tile(
+            "OpenAI",
+            _usd(oa["budget_left_usd"]) + ("?" if oa["budget_partial"] else ""),
+            f"of {_usd(oa['limit_usd'], whole=True)} this month",
+        )
+    elif oa["balance_left_usd"] is not None:
         days = f", {oa['days_left']:.0f} d" if oa["days_left"] is not None else ""
         openai = _tile(
             "OpenAI",
@@ -568,6 +612,265 @@ def _gauge(b: dict[str, Any]) -> str:
     )
 
 
+SOURCE_LABEL = {
+    "billed": "OpenAI billed",
+    "estimate": "server estimate",
+    "mixed": "billed + estimate",
+}
+LIMIT_LABEL = {"org": "org limit", "project": "project limit", "config": "limit from config"}
+
+
+def _usd(value: float | None, whole: bool = False) -> str:
+    """'$21.40'; with whole, '$30' for a round amount."""
+    if value is None:
+        return "-"
+    if whole and abs(value - round(value)) < 0.005:
+        return f"${value:.0f}"
+    return f"${value:.2f}"
+
+
+def _money_axis(top: float, steps: int = 4) -> tuple[float, float]:
+    """(axis top, step) for dollars: a round step, at most `steps` above 0."""
+    top = max(top, 0.01)
+    mag = 10 ** math.floor(math.log10(top))
+    for m in (0.1, 0.2, 0.25, 0.5, 1.0, 2.0, 2.5, 5.0, 10.0, 20.0):
+        step = m * mag
+        if top / step <= steps + 1e-9:
+            return step * math.ceil(top / step - 1e-9), step
+    return 20 * mag * steps, 20 * mag
+
+
+def _money_ticks(top: float, step: float) -> str:
+    out = []
+    n = 0
+    while n * step <= top + 1e-9:
+        v = n * step
+        label = f"${v:.0f}" if step >= 1 else f"${v:.2f}"
+        out.append(
+            f'<div class="ytick" style="bottom:{v / top * 100:.2f}%"><span>{label}</span></div>'
+        )
+        n += 1
+    return "".join(out)
+
+
+def _x(x: float, n: int) -> float:
+    """Days since the 1st, as a share of the month (0-100)."""
+    return max(0.0, min(100.0, x / n * 100))
+
+
+def _figures(c: dict[str, Any]) -> str:
+    """The numbers over the chart: the budget left (the battery), then the
+    pace, where it ends, and today; the chip when it won't last."""
+    figs = []
+    if c["mode"] == "budget":
+        left = max(0.0, c["left_usd"] or 0.0)
+        hedge = '<span class="cq">or less</span>' if c["partial"] else ""
+        cap = f"of {_usd(c['limit_usd'], whole=True)}, resets {c['resets']}"
+        figs.append(
+            f'<div class="cf hero"><div class="cv">{_t(_usd(left))}{hedge}</div>'
+            f'<div class="cc">{_t(cap)}</div></div>'
+        )
+    else:
+        hedge = '<span class="cq">or more</span>' if c["partial"] else ""
+        figs.append(
+            f'<div class="cf hero"><div class="cv">{_t(_usd(c["spent_usd"]))}{hedge}</div>'
+            f'<div class="cc">{_t(c["month"])}, limit not set</div></div>'
+        )
+    if c.get("balance_left_usd") is not None:
+        # The money actually in the account: it can run out before the
+        # month's budget does (prepaid credit), so it stands next to it.
+        bleft = max(0.0, c["balance_left_usd"])
+        bdays = c.get("balance_days")
+        warn = " warn" if bdays is not None and bdays < 7 else ""
+        sub_txt = "credit left" + (f", {bdays:.0f} d" if bdays is not None else "")
+        bhedge = '<span class="cq">or less</span>' if c.get("balance_partial") else ""
+        figs.append(
+            f'<div class="cf{warn}"><div class="cv">{_t(_usd(bleft))}{bhedge}</div>'
+            f'<div class="cc">{_t(sub_txt)}</div></div>'
+        )
+    if c["mode"] == "budget":
+        figs.append(
+            f'<div class="cf"><div class="cv">{_t(_usd(c["spent_usd"]))}</div>'
+            '<div class="cc">used</div></div>'
+        )
+    if c["pace_usd"] is not None:
+        days = c["pace_days"]
+        figs.append(
+            f'<div class="cf"><div class="cv">{_t(_usd(c["pace_usd"]))}</div>'
+            f'<div class="cc">a day, last {days} {"day" if days == 1 else "days"}</div></div>'
+        )
+    if c["mode"] == "budget" and c.get("ran_out"):
+        figs.append(
+            f'<div class="cf"><div class="cv">{_t(c["ran_out"])}</div><div class="cc">hit $0</div></div>'
+        )
+    elif c["mode"] == "budget" and c["runs_out"]:
+        figs.append(
+            f'<div class="cf"><div class="cv">{_t(c["runs_out"])}</div><div class="cc">hits $0</div></div>'
+        )
+    elif c["mode"] == "budget" and c["end_left_usd"] is not None and (c["left_usd"] or 0) > 0:
+        figs.append(
+            f'<div class="cf"><div class="cv">{_t(_usd(max(0.0, c["end_left_usd"])))}</div>'
+            '<div class="cc">left at reset</div></div>'
+        )
+    if c.get("chip"):
+        crit = " crit" if c["chip"] == "Top up" else ""
+        figs.append(f'<span class="chip{crit}">{_t(c["chip"])}</span>')
+    return f'<div class="cfigs">{"".join(figs)}</div>'
+
+
+def _day_tip(d: dict[str, Any], budget: bool) -> str:
+    if d["source"] is None:
+        return f"{d['label']}: no logs"
+    spent = f"{_usd(d['usd'])} spent, {SOURCE_LABEL[d['source']]}"
+    return (
+        f"{d['label']}: {_usd(d['left_usd'])} left, {spent}"
+        if budget
+        else f"{d['label']}: {spent}"
+    )
+
+
+def _battery(c: dict[str, Any]) -> str:
+    """The budget left over the month: from the limit on the 1st, falling
+    with each day's spend, then dashed at the pace to the reset (or to $0
+    and its date, if that comes first). One series; a tip on every day."""
+    n = c["days_in_month"]
+    line = c["line"]
+    proj = c["projection"]
+    top, step = _money_axis(max([c["limit_usd"] or 0.0] + [y for _, y in line]))
+
+    def pt(x: float, y: float) -> str:
+        return f"{_x(x, n) * 10:.1f},{100 - max(0.0, min(y, top)) / top * 100:.2f}"
+
+    path = " L".join(pt(x, y) for x, y in line)
+    area = f"M{pt(line[0][0], 0)} L{path} L{pt(line[-1][0], 0)} Z" if line else ""
+    svg = (
+        '<svg class="cline" viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">'
+        f'<path class="area" d="{area}"/><path class="ln" d="M{path}"/>'
+        + (f'<path class="proj" d="M{pt(*proj[0])} L{pt(*proj[1])}"/>' if proj else "")
+        + "</svg>"
+    )
+    marks = []
+    if line:
+        x, y = line[-1]
+        marks.append(
+            f'<i class="cdot" style="left:{_x(x, n):.2f}%;bottom:{max(0.0, y) / top * 100:.2f}%"></i>'
+        )
+    if proj:
+        x, y = proj[1]
+        if c["runs_out_x"] is not None:
+            label, cls = f"$0 on {c['runs_out']}", "clab zero" + (" end" if _x(x, n) > 85 else "")
+            marks.append(f'<i class="cdot zero" style="left:{_x(x, n):.2f}%;bottom:0%"></i>')
+        else:
+            label, cls = _usd(max(0.0, y)), "clab end"
+        marks.append(
+            f'<span class="{cls}" style="left:{_x(x, n):.2f}%;bottom:{max(0.0, y) / top * 100:.2f}%">'
+            f"{_t(label)}</span>"
+        )
+    ahead = {a["x"]: a for a in c["ahead"]}
+    cols = []
+    for k in range(n):
+        if k < len(c["days"]):
+            tip = _day_tip(c["days"][k], True)
+        elif k in ahead:
+            tip = f"{ahead[k]['label']}: {_usd(ahead[k]['left_usd'])} left, at this pace"
+        else:
+            tip = ""
+        cols.append(
+            f'<div class="ccol" data-tip="{_a(tip)}"></div>' if tip else '<div class="ccol"></div>'
+        )
+    shade = (
+        f'<div class="ahead" style="left:{_x(c["now_x"], n):.2f}%"></div>'
+        if c["now_x"] < n
+        else ""
+    )
+    return (
+        f'<div class="plot cbat" data-top="{top:g}">{shade}{_money_ticks(top, step)}'
+        f"{_nodata(c['days'], n, False)}{svg}"
+        f'{"".join(marks)}<div class="ccols">{"".join(cols)}</div></div>'
+    )
+
+
+def _spend_bars(c: dict[str, Any]) -> str:
+    """Each day's spend this month (one series), the pace dashed over the
+    days to come, days the logs don't reach as "no logs"."""
+    n = c["days_in_month"]
+    days = c["days"]
+    peak = max([d["usd"] for d in days] + [c["pace_usd"] or 0.0])
+    top, step = _money_axis(peak if peak > 0 else 1.0, steps=2)
+    slots = []
+    for k in range(n):
+        if k >= len(days):
+            slots.append('<div class="cs"></div>')
+            continue
+        d = days[k]
+        bar = (
+            f'<i style="height:{min(d["usd"], top) / top * 100:.2f}%" data-usd="{d["usd"]}"></i>'
+            if d["usd"] > 0
+            else ""
+        )
+        tip = _day_tip(d, False)
+        slots.append(f'<div class="cs" data-tip="{_a(tip)}">{bar}</div>')
+    extras = []
+    if c["pace_usd"] and len(days) < n:
+        extras.append(
+            f'<div class="cpace" style="left:{len(days) / n * 100:.2f}%;right:0;'
+            f'bottom:{min(c["pace_usd"], top) / top * 100:.2f}%" '
+            f'data-tip="{_a(f"pace {_usd(c['pace_usd'])} a day")}"></div>'
+        )
+    return (
+        f'<div class="plot cspend">{_money_ticks(top, step)}{"".join(extras)}'
+        f"{_nodata(days, n, True)}"
+        f'<div class="cbars">{"".join(slots)}</div></div>'
+    )
+
+
+def _nodata(days: list[dict[str, Any]], n: int, label: bool) -> str:
+    """Each run of days the logs don't reach and nothing billed: a dashed
+    box ("no logs" where there's room), so a flat stretch isn't read as
+    nothing spent."""
+    out, start = [], None
+    for k in range(len(days) + 1):
+        empty = k < len(days) and days[k]["source"] is None
+        if empty and start is None:
+            start = k
+        elif not empty and start is not None:
+            text = "no logs" if label and k - start >= 3 else ""
+            out.append(
+                f'<div class="nodata" style="left:{start / n * 100:.2f}%;'
+                f'width:{(k - start) / n * 100:.2f}%">{text}</div>'
+            )
+            start = None
+    return "".join(out)
+
+
+def _credit(c: dict[str, Any]) -> str:
+    """The OpenAI card: the month's budget as a battery, the spend under it."""
+    n = c.get("days_in_month") or 0
+    tags = []
+    if c.get("limit_source"):
+        tags.append(LIMIT_LABEL[c["limit_source"]])
+    if c.get("days"):
+        tags.append(SOURCE_LABEL.get(c["source"], c["source"]))
+    bad = ""
+    if c.get("billed_error") or c.get("limit_error"):
+        bad = f'<span class="tag bad">Admin API {_t(c.get("billed_error") or c.get("limit_error"))}</span>'
+    head = (
+        f"<h2><span>OpenAI budget, {_t(c.get('month', ''))}</span>"
+        + "".join(f'<span class="tag">{_t(t)}</span>' for t in tags)
+        + bad
+        + "</h2>"
+    )
+    if not n:
+        return head
+    battery = _battery(c) if c["mode"] == "budget" and c["line"] else ""
+    marks = sorted({0, 7, 14, 21, 28} & set(range(n)))
+    xl = "".join(
+        f'<span style="left:{(k + 0.5) / n * 100:.2f}%">{k + 1} {_t(c["month"][:3])}</span>'
+        for k in marks
+    )
+    return f'{head}{_figures(c)}{battery}{_spend_bars(c)}<div class="xlab">{xl}</div>'
+
+
 def _gaps(g: dict[str, Any]) -> str:
     th = float(g["threshold_pct"])
     worst = max((s["gap_pct"] or 0 for s in g["slots"]), default=0)
@@ -677,6 +980,7 @@ def render(status: dict[str, Any]) -> str:
 <section class="card"><h2>Last 7 days {legend_week}</h2>{_week(status["week"])}</section>
 <section class="card"><h2>Audiobook hours, {_t(month)}</h2>{_gauge(status["books"])}</section>
 </div>
+<section class="card section" id="credit">{_credit(status["credit"])}</section>
 <div class="grid two section">
 <section class="card"><h2>Audio gaps per half hour</h2>{_gaps(status["gaps"])}</section>
 <section class="card"><h2>Calls</h2>{_calls(status["calls"])}</section>

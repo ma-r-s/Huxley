@@ -58,6 +58,16 @@ void hux_opus_rx_unhold(void);
  * belongs to the old one, drop it and reset the decoder. */
 void hux_opus_rx_reset(void);
 
+/** Any task: reset the decoder once what is queued now has been decoded,
+ * so a clip stored on the walkie starts (and the stream after it resumes)
+ * from a clean state. */
+void hux_opus_rx_fresh(void);
+
+/** Any task: one packet of a clip stored on the walkie (hux_prompts),
+ * decoded in order after what is queued. Waits up to 5 s for room; false
+ * if the decoder isn't running or the packet couldn't be queued. */
+bool hux_opus_play_packet(const uint8_t *data, size_t len);
+
 /** Packets waiting to be decoded, decode errors so far, the decoder
  * task's smallest free stack (bytes). For the stats lines. */
 uint32_t hux_opus_rx_waiting(void);
