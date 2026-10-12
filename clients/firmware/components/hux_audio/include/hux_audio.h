@@ -122,6 +122,16 @@ uint32_t hux_audio_mic_turns(void);
  * count. */
 uint32_t hux_audio_played_ms(void);
 
+/** Milliseconds since the speaker last made a sound (ring audio or a tone;
+ * since boot if never): a battery reading is resting only after a quiet
+ * while (F-0030). */
+uint32_t hux_audio_quiet_ms(void);
+
+/** Before hux_audio_init only (the park, F-0030): put both codecs in their
+ * own power-down state over I2C; a CPU reset leaves them powered. False if
+ * a write failed or audio is already open. */
+bool hux_audio_codecs_power_down(void);
+
 /** Supervisor test (console `hang spk`): the speaker task blocks for good. */
 void hux_audio_debug_hang_spk(void);
 

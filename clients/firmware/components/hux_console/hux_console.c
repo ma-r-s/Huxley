@@ -18,6 +18,7 @@
 #include "hux_button.h"
 #include "hux_net.h"
 #include "hux_ota.h"
+#include "hux_park.h"
 #include "hux_prompts.h"
 #include "hux_super.h"
 #include "esp_core_dump.h"
@@ -188,6 +189,12 @@ void hux_console_run(char *line) {
         }
     } else if (strcmp(cmd, "pa") == 0 && argc > 1) {
         hux_audio_pa(strcmp(argv[1], "on") == 0);
+    } else if (strcmp(cmd, "battery") == 0 && argc > 2 && strcmp(argv[1], "cutoff") == 0) {
+        /* The cutoff's remote switch (F-0030), kept in NVS. */
+        hux_battery_set_cutoff(strcmp(argv[2], "off") != 0);
+    } else if (strcmp(cmd, "battery") == 0 && argc > 3 && strcmp(argv[1], "park") == 0) {
+        /* Bench (F-0030): park as if the cell read <mv>, for <minutes>. */
+        hux_park_test(atoi(argv[2]), atoi(argv[3]));
     } else if (strcmp(cmd, "battery") == 0 && argc > 2 && strcmp(argv[1], "cal") == 0) {
         hux_battery_calibrate(atoi(argv[2])); /* a multimeter's reading of the cell, mV */
     } else if (strcmp(cmd, "battery") == 0) {
@@ -200,7 +207,7 @@ void hux_console_run(char *line) {
     } else {
         ESP_LOGW(TAG, "console.unknown %s (talk, release, say N, tone [hz] [ms], vol N, pa on|off, "
                       "selftest [hz], wifi off [s]|on, wifistat, wifiscan, wifibw 20|40, info, "
-                      "server [<uri> [min] | keep <uri> [min] | reset], quiet [s], battery [cal <mv>], super, "
+                      "server [<uri> [min] | keep <uri> [min] | reset], quiet [s], battery [cal <mv> | cutoff on|off | park <mv> <min>], super, "
                       "hang app|spk, coredump erase, reboot, "
                       "ota <url> [force] | confirm | rollback)",
                  cmd);

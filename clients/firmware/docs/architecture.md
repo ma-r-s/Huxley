@@ -9,8 +9,9 @@ whichever is wrong in the same commit.
 ```
                       ┌─────────────────────────────────┐
   Board peripherals   │         app_main                │
-    I2C TCA9555       │  NVS -> netif -> event loop ->  │
-    I2S ES7210 (mic)  │  hux_app_start -> hux_net_start │
+    I2C TCA9555       │  NVS -> event loop -> board ->  │
+    I2S ES7210 (mic)  │  battery -> park (F-0030) ->    │
+                      │  hux_app_start -> hux_net_start │
     I2S ES8311 (spk)  └──────────────┬──────────────────┘
     GPIO buttons                     │
     WS2812 LED                       │
@@ -50,6 +51,7 @@ whichever is wrong in the same commit.
 | `hux_ota`               | Updates over Wi-Fi into the other slot; keeps it on `ota confirm` (30 s+) | Decides when to update (a developer asks)                     |
 | `hux_dev`               | Developer door over Wi-Fi: `/info`, `/cmd` (console lines), `/coredump`  | Answers without the token                                     |
 | `hux_opus`              | Opus (esp_audio_codec): mic encoder, speaker decoder task + ordered queue | Decides the format (the server's hello does)                  |
+| `hux_park`              | The low-battery cutoff's park: at boot, light sleep until a charger lifts the cell; the cutoff's say-arm-restart | Decides when the cell is spent (hux_battery_cutoff does)        |
 | `hux_prompts`           | Sentences stored in the firmware (Opus), said through the decoder when no server can speak | Decides when to say them (that's hux_app)                     |
 
 **The dependency graph flows downward only.** `hux_app` requires
@@ -246,7 +248,9 @@ breaking one, write a new ADR first.
 `main/` holds exactly three things:
 
 - `main.c` — the `app_main` entry point: init each subsystem in
-  dependency order.
+  dependency order. The expander and the ADC come first, then
+  `hux_park_at_boot`: a spent cell parks there before anything else
+  draws power (F-0030).
 - `secrets.h` / `secrets.example.h` — per-developer credentials,
   gitignored.
 - `idf_component.yml` — managed-component declarations (the registry

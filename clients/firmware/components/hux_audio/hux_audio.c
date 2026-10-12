@@ -4,6 +4,7 @@
 #include <stdatomic.h>
 #include <string.h>
 
+#include "driver/i2c_master.h"
 #include "driver/i2s_std.h"
 #include "esp_attr.h"
 #include "esp_check.h"
@@ -111,6 +112,9 @@ static _Atomic bool s_spk_debug_hang = false; /* console `hang spk` */
 /* Audio chunks (SPK_CHUNK_MS each) that reached the codec: what the walkie
  * played after a link drop goes in the next hello (T1.44). */
 static _Atomic uint32_t s_played_chunks = 0;
+/* Tick-ms of the last chunk with sound (ring audio or a tone): the battery
+ * reads a resting cell only after the amp has been quiet a while (F-0030). */
+static _Atomic uint32_t s_last_sound_ms = 0;
 /* device.health (F-0027): since the last take. 48 bytes = 1 ms of audio. */
 static _Atomic uint32_t s_h_underruns = 0;
 static _Atomic uint32_t s_h_underrun_ms = 0;
@@ -628,6 +632,9 @@ static void spk_task(void *unused) {
             audio_chunks++;
             /* Not s_played_chunks: a tone is the walkie's own sound, and
              * the hello's played_after_drop_ms counts server audio (T1.44). */
+            atomic_store_explicit(&s_last_sound_ms,
+                                  (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS),
+                                  memory_order_relaxed);
         } else if (got_samples == 0) {
             /* Ring empty — write a full chunk of silence so the DMA
              * stays fed. esp_codec_dev_write blocks on DMA; this
@@ -670,6 +677,9 @@ static void spk_task(void *unused) {
             got_samples = SPK_CHUNK_SAMPLES;
             audio_chunks++;
             atomic_fetch_add_explicit(&s_played_chunks, 1, memory_order_relaxed);
+            atomic_store_explicit(&s_last_sound_ms,
+                                  (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS),
+                                  memory_order_relaxed);
         }
 
         esp_err_t err = esp_codec_dev_write(
@@ -835,6 +845,11 @@ void hux_audio_take_health(uint32_t *underruns, uint32_t *underrun_ms, uint32_t 
     *underruns = atomic_exchange(&s_h_underruns, 0);
     *underrun_ms = atomic_exchange(&s_h_underrun_ms, 0);
     *discarded_ms = atomic_exchange(&s_h_discarded_bytes, 0) / 48;
+}
+
+uint32_t hux_audio_quiet_ms(void) {
+    uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    return now - atomic_load_explicit(&s_last_sound_ms, memory_order_relaxed);
 }
 
 uint32_t hux_audio_played_ms(void) {
@@ -1204,6 +1219,47 @@ void hux_audio_pa(bool on) {
     }
     bool ok = hux_board_tca_write(HUX_TCA_AUDIO_PA_EN, on);
     ESP_LOGI(TAG, "spk.pa %s ok=%d", on ? "on" : "off", ok);
+}
+
+/* The codecs' own power-down sequences (esp_codec_dev's es8311_suspend and
+ * es7210_stop), written straight on the shared bus so they work before
+ * hux_audio_init too: a CPU reset leaves both chips as they were (no reset
+ * line), analog sections and mic bias on (F-0030's critic). 7-bit
+ * addresses of ES8311_CODEC_DEFAULT_ADDR 0x30 and ES7210 0x80. */
+static const uint8_t ES8311_DOWN[][2] = {
+    {0x32, 0x00}, {0x17, 0x00}, {0x0E, 0xFF}, {0x12, 0x02}, {0x14, 0x00},
+    {0x0D, 0xFA}, {0x15, 0x00}, {0x02, 0x10}, {0x00, 0x00}, {0x00, 0x1F},
+    {0x01, 0x30}, {0x01, 0x00}, {0x45, 0x00}, {0x0D, 0xFC}, {0x02, 0x00},
+};
+static const uint8_t ES7210_DOWN[][2] = {
+    {0x47, 0xFF}, {0x48, 0xFF}, {0x49, 0xFF}, {0x4A, 0xFF}, {0x4B, 0xFF},
+    {0x4C, 0xFF}, {0x40, 0xC0}, {0x01, 0x7F}, {0x06, 0x07},
+};
+
+static int write_seq(uint16_t addr7, const uint8_t (*seq)[2], size_t n) {
+    i2c_device_config_t dc = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = addr7, .scl_speed_hz = 100000};
+    i2c_master_dev_handle_t dev;
+    if (i2c_master_bus_add_device(hux_board_i2c_bus(), &dc, &dev) != ESP_OK) {
+        return (int)n;
+    }
+    int fails = 0;
+    for (size_t i = 0; i < n; i++) {
+        fails += i2c_master_transmit(dev, seq[i], 2, 50) != ESP_OK;
+    }
+    i2c_master_bus_rm_device(dev);
+    return fails;
+}
+
+bool hux_audio_codecs_power_down(void) {
+    if (s_mic_dev != NULL) {
+        return false; /* open: esp_codec_dev owns them (call before hux_audio_init) */
+    }
+    int dac = write_seq(0x18, ES8311_DOWN, sizeof(ES8311_DOWN) / sizeof(ES8311_DOWN[0]));
+    int adc = write_seq(0x40, ES7210_DOWN, sizeof(ES7210_DOWN) / sizeof(ES7210_DOWN[0]));
+    ESP_LOG_LEVEL(dac == 0 && adc == 0 ? ESP_LOG_INFO : ESP_LOG_WARN, TAG,
+                  "codecs.power_down dac_fails=%d adc_fails=%d", dac, adc);
+    return dac == 0 && adc == 0;
 }
 
 bool hux_audio_codecs_answer(int *dac_id, int *adc_id) {

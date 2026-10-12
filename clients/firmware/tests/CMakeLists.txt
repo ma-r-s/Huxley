@@ -70,6 +70,8 @@ target_include_directories(hux_super_check PUBLIC ${HUX_SUPER_DIR}/include)
 set(HUX_BATTERY_DIR ${CMAKE_SOURCE_DIR}/../components/hux_battery)
 add_library(hux_battery_level STATIC ${HUX_BATTERY_DIR}/hux_battery_level.c)
 target_include_directories(hux_battery_level PUBLIC ${HUX_BATTERY_DIR}/include)
+add_library(hux_battery_cutoff STATIC ${HUX_BATTERY_DIR}/hux_battery_cutoff.c)
+target_include_directories(hux_battery_cutoff PUBLIC ${HUX_BATTERY_DIR}/include)
 
 # -- hux_prompt_parse (library under test): the stored prompt files.
 set(HUX_PROMPTS_DIR ${CMAKE_SOURCE_DIR}/../components/hux_prompts)
@@ -134,10 +136,15 @@ target_link_libraries(test_hux_prompt_parse PRIVATE hux_prompt_parse)
 target_compile_definitions(test_hux_prompt_parse PRIVATE HUX_PROMPTS_FILES="${HUX_PROMPTS_DIR}/prompts")
 add_test(NAME hux_prompt_parse COMMAND test_hux_prompt_parse)
 
+add_executable(test_hux_battery_cutoff test_hux_battery_cutoff.c)
+target_include_directories(test_hux_battery_cutoff PRIVATE ${CMAKE_SOURCE_DIR}/helpers)
+target_link_libraries(test_hux_battery_cutoff PRIVATE hux_battery_cutoff)
+add_test(NAME hux_battery_cutoff COMMAND test_hux_battery_cutoff)
+
 # Convenience target: `cmake --build build --target check` runs every test.
 add_custom_target(check
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
     DEPENDS test_hux_proto test_hux_ws_frag test_hux_debounce test_hux_type_probe
             test_hux_wifi_retry test_hux_link test_hux_blackbox test_hux_super_check
-            test_hux_battery_level test_hux_prompt_parse
+            test_hux_battery_level test_hux_prompt_parse test_hux_battery_cutoff
 )

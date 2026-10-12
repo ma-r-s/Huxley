@@ -54,6 +54,26 @@ bool hux_battery_last(int *mv, int *pct);
  * later reading to match, saved in NVS. */
 void hux_battery_calibrate(int measured_mv);
 
+/** The multimeter calibration is within 5 % of the divider (a reading the
+ * cutoff may believe, F-0030). */
+bool hux_battery_cal_ok(void);
+
+/** One calibrated reading of the cell now, in mV (the median of 32), or -1
+ * if the divider isn't wired. Blocks ~70 ms. For the park at boot, before
+ * the level task runs. */
+int hux_battery_read_cell_mv(void);
+
+/** Called from the level task when the cutoff is due (F-0030,
+ * hux_battery_cutoff.h): says it, arms the park and restarts; never
+ * returns. */
+/** The cutoff's remote switch (`battery cutoff on|off`, NVS; on by
+ * default): off, neither the level task nor the park at boot acts. */
+bool hux_battery_cutoff_on(void);
+void hux_battery_set_cutoff(bool on);
+
+typedef void (*hux_battery_cutoff_fn)(int cell_mv, const char *why);
+void hux_battery_set_cutoff_sink(hux_battery_cutoff_fn sink);
+
 #ifdef __cplusplus
 }
 #endif

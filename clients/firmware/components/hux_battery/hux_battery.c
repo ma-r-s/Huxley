@@ -12,6 +12,7 @@
 #include "nvs.h"
 
 #include "hux_audio.h"
+#include "hux_battery_cutoff.h"
 #include "hux_battery_level.h"
 
 static const char *TAG = "hux_battery";
@@ -57,6 +58,15 @@ static volatile int s_pct = -1;
 static hux_battery_sink_fn s_sink;
 static TaskHandle_t s_level_task = NULL;
 static volatile bool s_send_next = false; /* a press asked: send this reading */
+/* The cutoff (F-0030): its verdict on every reading, and who acts on it. */
+#define LEVEL_ZONE_EVERY_MS (2 * 60 * 1000) /* under 10 %: watch it closely */
+#define QUIET_FOR_MS        30000          /* a resting reading: the amp quiet this long */
+static hux_cutoff_t s_cutoff = {.zone_since_ms = -1};
+static hux_battery_cutoff_fn s_cutoff_sink;
+/* A remote off switch (NVS, `battery cutoff off`): a reading wrong but
+ * believable would otherwise park a full cell, offline, again and again. */
+#define CUTOFF_NVS_KEY "cutoff"
+static bool s_cutoff_on = true;
 
 bool hux_battery_init(void) {
     adc_oneshot_unit_init_cfg_t unit = {.unit_id = ADC_UNIT_1};
@@ -93,10 +103,19 @@ bool hux_battery_init(void) {
         if (nvs_get_u32(h, CAL_NVS_KEY, &ppm) == ESP_OK && ppm > 800000 && ppm < 1200000) {
             s_cal_ppm = ppm;
         }
+        uint8_t on = 1;
+        if (nvs_get_u8(h, CUTOFF_NVS_KEY, &on) == ESP_OK) {
+            s_cutoff_on = on != 0;
+        }
         nvs_close(h);
     }
-    ESP_LOGI(TAG, "battery.init pins=%d calibrated=%d cal_ppm=%u", NPINS, cali,
-             (unsigned)s_cal_ppm);
+    ESP_LOGI(TAG, "battery.init pins=%d calibrated=%d cal_ppm=%u cutoff=%s", NPINS, cali,
+             (unsigned)s_cal_ppm, s_cutoff_on ? "on" : "off");
+    if (!s_cutoff_on || !hux_battery_cal_ok()) {
+        /* Said once: the cutoff (F-0030) won't act on any reading. */
+        ESP_LOGW(TAG, "battery.cutoff_inactive why=%s cal_ppm=%u",
+                 !s_cutoff_on ? "switched_off" : "calibration", (unsigned)s_cal_ppm);
+    }
     return true;
 }
 
@@ -275,10 +294,29 @@ static void level_task(void *arg) {
                     s_sink(cell, pct);
                 }
             }
+            /* Resting: the amp quiet 30 s and no press under way (a press's
+             * reading has the mic and Wi-Fi transmit starting: loaded). */
+            bool quiet = !asked && !hux_audio_mic_is_running() &&
+                         hux_audio_quiet_ms() >= QUIET_FOR_MS;
+            int64_t now = esp_timer_get_time() / 1000;
+            hux_cutoff_why_t why = hux_cutoff_step(&s_cutoff, cell, quiet,
+                                                   hux_battery_cal_ok() && s_cutoff_on, now);
+            if (hux_cutoff_in_zone(&s_cutoff)) {
+                ESP_LOGI(TAG, "battery.zone mv=%d quiet=%d in_zone_s=%d loaded_low=%d", cell, quiet,
+                         (int)((now - s_cutoff.zone_since_ms) / 1000), s_cutoff.loaded_low);
+            }
+            if (why != HUX_CUTOFF_NONE) {
+                ESP_LOGW(TAG, "battery.cutoff_due mv=%d why=%s cal_ppm=%u", cell,
+                         hux_cutoff_why_name(why), (unsigned)s_cal_ppm);
+                if (s_cutoff_sink != NULL) {
+                    s_cutoff_sink(cell, hux_cutoff_why_name(why)); /* restarts: no return */
+                }
+            }
         }
         s_send_next = false;
-        /* Until the next 20 min, or a press asking for one now. */
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(LEVEL_READ_EVERY_MS));
+        /* Until the next 20 min (2 under 10 %), or a press asking for one now. */
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(hux_cutoff_in_zone(&s_cutoff) ? LEVEL_ZONE_EVERY_MS
+                                                                              : LEVEL_READ_EVERY_MS));
     }
 }
 
@@ -287,9 +325,47 @@ void hux_battery_start(hux_battery_sink_fn sink) {
         return;
     }
     s_sink = sink;
-    if (xTaskCreate(level_task, "hux_bat", 4096, NULL, 2, &s_level_task) != pdPASS) {
+    /* 6 KB: the cutoff (F-0030) runs on it: a TLS send, the prompt, logs. */
+    if (xTaskCreate(level_task, "hux_bat", 6144, NULL, 2, &s_level_task) != pdPASS) {
         ESP_LOGE(TAG, "battery.task_create_failed");
     }
+}
+
+bool hux_battery_cal_ok(void) {
+    return s_cal_ppm >= 950000 && s_cal_ppm <= 1050000; /* within 5 % of the divider */
+}
+
+int hux_battery_read_cell_mv(void) {
+    if (s_adc == NULL || (s_level_pin < 0 && !level_pin_find())) {
+        return -1;
+    }
+    int pin_mv = level_read_pin_mv();
+    if (pin_mv <= 0) {
+        return -1;
+    }
+    return (int)((int64_t)pin_mv * DIVIDER * s_cal_ppm / 1000000);
+}
+
+bool hux_battery_cutoff_on(void) {
+    return s_cutoff_on;
+}
+
+void hux_battery_set_cutoff(bool on) {
+    s_cutoff_on = on;
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(CAL_NVS_NS, NVS_READWRITE, &h);
+    if (err == ESP_OK) {
+        err = nvs_set_u8(h, CUTOFF_NVS_KEY, on ? 1 : 0);
+        if (err == ESP_OK) {
+            err = nvs_commit(h);
+        }
+        nvs_close(h);
+    }
+    ESP_LOGW(TAG, "battery.cutoff_switched on=%d saved=%s", on, esp_err_to_name(err));
+}
+
+void hux_battery_set_cutoff_sink(hux_battery_cutoff_fn sink) {
+    s_cutoff_sink = sink;
 }
 
 bool hux_battery_last(int *mv, int *pct) {

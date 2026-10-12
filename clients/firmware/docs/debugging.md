@@ -578,6 +578,39 @@ moment), and at each press, and sends `system.battery {mv, pct}` when
 the percentage changes or a press asked (`battery.level mv= pct= pin=
 raw_mv= loaded= why=changed|press`); the app also sends the last one
 after each hello.
+
+**The low-battery cutoff (F-0030)**, an extra layer above the cells'
+protection boards. Under 10 % (3.61 V) the level task reads every 2 min
+(`battery.zone mv= quiet= in_zone_s= loaded_low=`). After 10 min in that
+zone, a resting reading (the speaker quiet 30 s, no press under way) under 3.40 V, or three
+loaded ones under 3.25 V a minute apart, is the cutoff
+(`battery.cutoff_due why=quiet|loaded`); readings under 2.9 V, or with
+the calibration off by more than 5 %, never count. The walkie says
+"Batería agotada. Ponme a cargar.", sends `system.battery {cutoff: true}`
+(`battery.cutoff`), arms the park in RTC memory and restarts. At boot,
+right after the expander and the ADC and before anything else, an armed
+park, or a resting reading under 3.45 V (a power cycle loses RTC memory),
+parks it: the amp off and both codecs in their power-down state (a CPU
+reset leaves them powered), light sleep, a wake every 60 s to read the
+cell (`battery.parked`), the lever as a wake source. A press says the
+sentence (`battery.park_press`, at most once per 30 s, the lever read
+twice 50 ms apart); holding the lever 10 s boots anyway
+(`battery.park_escape`). Only a press that began after the lever was seen
+up in this park counts: a lever stuck down (or a shorted wire) gets
+timer-only wakes, no sentence and no escape. At 3.60 V, or a reading that
+can't be believed, it boots (`battery.resume
+why=charged|unreadable|calibration|escape|test_over parked_s= wakes=
+lever_wakes= presses= min_mv=`). It never parks an update not yet kept
+(its restarts would roll it back; `battery.park_skipped
+why=update_pending`). These lines are warnings, so the black box brings
+them with the next hello. The remote switch: `battery cutoff off|on`
+(NVS, also through `/admin/dev-cmd`; `battery.cutoff_inactive` at boot
+while it is off or the calibration is more than 5 % out). Bench: `battery
+park <mv> <minutes>` parks as if the cell read `<mv>` and boots by itself
+after that many wakes (refused during an update). While parked the USB
+serial drops each minute (light sleep switches its pad off) and no
+console runs, so a test park can't be cancelled from the Mac; a USB
+reset is a CPU reset, so a test's RTC state survives a USB flash.
 `tools/bench.py --reset` runs the whole check list and keeps the board's
 log in `/tmp/huxley-debug/bench-*.log`.
 

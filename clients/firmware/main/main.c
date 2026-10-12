@@ -28,6 +28,7 @@
 #include "hux_health.h"
 #include "hux_super.h"
 #include "hux_ota.h"
+#include "hux_park.h"
 #include "secrets.h"
 
 /* The developer door is how this walkie is updated and debugged without
@@ -185,24 +186,29 @@ void app_main(void) {
     }
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    /* App state machine first — net and button both post events into
-     * it, so the queue must exist before they start. */
-    hux_app_start();
-
     /* Shared on-board peripherals (I2C bus + TCA9555). Must run before
      * any consumer of either — buttons read it, audio enables the
      * speaker PA through it, audio registers ES7210/ES8311 on the
-     * same I2C bus. */
+     * same I2C bus. It leaves the amp off. */
     hux_board_init();
+
+    /* Cell voltage on ADC1 (Wi-Fi only uses ADC2). The console's
+     * `battery` probes whether the divider is wired at all. */
+    hux_battery_init();
+
+    /* The low-battery cutoff (F-0030): a spent cell parks here, before
+     * Wi-Fi, audio or the supervisor draw anything, until a charger lifts
+     * it; returns at once otherwise. */
+    hux_park_at_boot();
+
+    /* App state machine next — net and button both post events into
+     * it, so the queue must exist before they start. */
+    hux_app_start();
 
     /* Audio subsystem: I2S1 duplex + ES7210 mic. Task is created but
      * idle until `hux_audio_mic_start()`. v0.3 extends this to open
      * ES8311 for playback on the same duplex channel. */
     hux_audio_init();
-
-    /* Cell voltage on ADC1 (Wi-Fi only uses ADC2). The console's
-     * `battery` probes whether the divider is wired at all. */
-    hux_battery_init();
 
     /* Opus (F-0024), before the network: the WebSocket asks the server
      * for it only if the codec is up. Decoded packets go to the same ring,
@@ -254,6 +260,7 @@ void app_main(void) {
 
     /* The battery level once a minute, to the server through the app
      * (F-0025); without the solder blob it says not_wired once. */
+    hux_battery_set_cutoff_sink(hux_park_cutoff);
     hux_battery_start(hux_app_report_battery);
 
     /* The minute line for the caregiver's view (device.health, F-0027). */
