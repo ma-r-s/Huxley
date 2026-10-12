@@ -338,6 +338,19 @@ class TestRecommendations:
         assert "«Este mes ya no quedan horas para escuchar libros." in _out(result)["then"]
         assert not await shelf.unavailable(CORONEL.uri)  # not filed as unavailable
 
+    async def test_no_extra_check_when_another_book_just_played(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        """A refusal needs the "known book" check only when nothing in the
+        round played: that check cost Mario 1.6 s per search."""
+        skill, client, _, shelf = await _skill(tmp_path, pcm_server, match=CORONEL, others=[PEDRO])
+        await shelf.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
+        client.refused = {CORONEL.uri}
+        await skill.handle("find_books", {"query": "novela"})
+        tried = [c["uri"] for c in client.sent if c["command"] == "play" and "uri" in c]
+        assert BOOK_INFO.uri not in tried[:-1]  # only the put-back, if anything
+        assert await shelf.unavailable(CORONEL.uri)
+
     async def test_books_already_known_are_not_tried_again(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
@@ -379,6 +392,8 @@ class TestRecommendations:
         await shelf.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
         listed = await skill.handle("find_books", {})
         assert [b["title"] for b in _out(listed)["books"]] == [BOOK.title]
+        # Not "the books available": Mario heard it that way (2026-10-12).
+        assert "no todos los que hay" in _out(listed)["then"]
         assert skill._search.queries == []  # type: ignore[union-attr]
 
 

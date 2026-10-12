@@ -95,15 +95,19 @@ TEXT: dict[str, dict[str, str]] = {
             "Busca audiolibros en Spotify para recomendar o elegir: '¿qué libros "
             "tienes?', '¿qué libros hay?', '¿qué me recomiendas para leer?', '¿qué "
             "libros hay de <autor>?', '¿qué libros he escuchado?', '¿de qué trata?'. "
-            "Solo devuelve libros que se pueden escuchar aquí. Sin `query` da los "
-            "libros ya escuchados. Después haz exactamente lo que diga `then`."
+            "Solo devuelve libros que se pueden escuchar aquí. Llama UNA vez por pedido. "
+            "Sin `query` da solo los libros ya empezados aquí: úsalo si pregunta qué "
+            "ha escuchado; si pide qué hay o qué le recomiendas sin decir autor ni "
+            "tema, sin `query` también, y luego pregunta qué le gusta. Después haz "
+            "exactamente lo que diga `then`."
         ),
         "find_query": (
             "Un autor, un tema o un título, en pocas palabras. Si el pedido es general "
             "('algo bueno', 'autores importantes', 'recomiéndame algo'), NO pases la "
             "frase: pasa un tema o género concreto ('novela clásica', 'literatura "
-            "latinoamericana', 'cuentos', 'historia') o un autor conocido. Vacío para "
-            "los libros ya escuchados."
+            "latinoamericana', 'cuentos', 'historia') o un autor conocido. Si nombró "
+            "libros que le gustan ('como El extranjero'), pasa el autor de uno de ellos. "
+            "Vacío para los libros ya empezados."
         ),
     },
     "en": {
@@ -185,15 +189,18 @@ TEXT: dict[str, dict[str, str]] = {
             "you have?', 'what books are there?', 'what do you recommend to read?', "
             "'what books are there by <author>?', 'which books have I listened to?', "
             "'what is it about?'. It only returns books that can be listened to here. "
-            "Without `query` it gives the books already listened to. Then do exactly "
-            "what `then` says."
+            "Call it ONCE per request. Without `query` it gives only the books already "
+            "started here: use that for what they've listened to, or when they ask "
+            "what there is with no author or subject, then ask what they like. Then do "
+            "exactly what `then` says."
         ),
         "find_query": (
             "An author, a subject or a title, in a few words. For a general request "
             "('something good', 'important authors', 'recommend me something'), do NOT "
             "pass the sentence: pass a concrete subject or genre ('classic novel', "
-            "'short stories', 'history') or a well-known author. Empty for books "
-            "already listened to."
+            "'short stories', 'history') or a well-known author. If they named books "
+            "they like ('like The Stranger'), pass the author of one of them. Empty for "
+            "books already started."
         ),
     },
     "fr": {
@@ -272,15 +279,18 @@ TEXT: dict[str, dict[str, str]] = {
             "Cherche des livres audio Spotify à recommander ou à choisir : 'quels "
             "livres tu as ?', 'quels livres tu me conseilles ?', 'quels livres de "
             "<auteur> ?', 'quels livres j'ai écoutés ?', 'de quoi ça parle ?'. Ne "
-            "donne que des livres qu'on peut écouter ici. Sans `query`, donne les "
-            "livres déjà écoutés. Ensuite fais exactement ce que dit `then`."
+            "donne que des livres qu'on peut écouter ici. Appelle-la UNE fois par "
+            "demande. Sans `query`, donne seulement les livres déjà commencés ici ; "
+            "aussi s'il demande ce qu'il y a sans auteur ni sujet, puis demande ce "
+            "qu'il aime. Ensuite fais exactement ce que dit `then`."
         ),
         "find_query": (
             "Un auteur, un sujet ou un titre, en quelques mots. Pour une demande "
             "générale ('quelque chose de bien', 'de grands auteurs'), NE passe PAS la "
             "phrase : passe un sujet ou un genre précis ('roman classique', "
-            "'nouvelles', 'histoire') ou un auteur connu. Vide pour les livres déjà "
-            "écoutés."
+            "'nouvelles', 'histoire') ou un auteur connu. S'il a nommé des livres qu'il "
+            "aime ('comme L'Étranger'), passe l'auteur de l'un d'eux. Vide pour les "
+            "livres déjà commencés."
         ),
     },
 }

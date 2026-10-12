@@ -114,14 +114,21 @@ apart or not offered, the same to the listener); with
 hours.
 
 **Recommendations only offer books that play.** `find_books` tries each
-unknown candidate for a moment (up to 5; Spotify stops one it won't play
-within 0.3-1.2 s, so one still playing after 1.6 s is in), with nothing
+unknown candidate for a moment (up to 4; Spotify stops one it won't play
+within 0.3-1.2 s: refused is "playing", the first chapter, "buffering",
+idle; accepted ends "playing" with the position moving, so a check
+decides on that plus 0.35 s, at most 1.6 s), with nothing
 reaching a speaker (Soloist's sink has no reader between streams), keeps
 the first three that play, remembers both answers (a refusal for 30
 days), and loads back what was there, paused (a book at its own place;
 music restarts its album or list). If a candidate is refused and a book
 known to play is refused too, the month's hours ran out (`no_hours`), and
-nothing is filed as unavailable. It never checks while a stream plays.
+nothing is filed as unavailable; that extra check runs only when nothing
+in the round (or in the last 30 min) played. It never checks while a
+stream plays. Without a query it gives the books already started here,
+said as such (not "what there is"), and asks what the listener likes.
+The model is told to call it once per request and, when books are named
+as examples, to search their author.
 Vague requests ("autores importantes") are searched as a concrete topic
 or author (tool text), never the whole sentence.
 

@@ -252,17 +252,33 @@ def duration(lang: str, ms: int) -> str:
 
 _LISTING = {
     "es": "Léele al usuario estos libros, numerados, con el título y el autor de cada uno "
-    "(y cuánto dura si viene `length`), y pregúntale cuál quiere. Si pregunta de qué "
-    "trata uno, usa su `about`, sin inventar nada. No llames a ninguna herramienta.",
+    "(y cuánto dura si viene `length`), y pregúntale cuál quiere. Todos se pueden "
+    "escuchar aquí. Si pregunta de qué trata uno, usa su `about`, sin inventar nada. No "
+    "busques otra vez a menos que él lo pida. No llames a ninguna herramienta.",
     "en": "Read these books to the user, numbered, with each one's title and author (and "
-    "its length if `length` is there), and ask which one they want. If they ask what one "
-    "is about, use its `about`, inventing nothing. Do not call any tool.",
+    "its length if `length` is there), and ask which one they want. All of them can be "
+    "listened to here. If they ask what one is about, use its `about`, inventing nothing. "
+    "Don't search again unless they ask. Do not call any tool.",
     "fr": "Lis ces livres à l'utilisateur, numérotés, avec le titre et l'auteur de chacun "
-    "(et sa durée si `length` est là), et demande lequel il veut. S'il demande de quoi "
-    "parle l'un d'eux, utilise son `about`, sans rien inventer. N'appelle aucun outil.",
+    "(et sa durée si `length` est là), et demande lequel il veut. Tous peuvent être "
+    "écoutés ici. S'il demande de quoi parle l'un d'eux, utilise son `about`, sans rien "
+    "inventer. Ne cherche pas à nouveau sauf s'il le demande. N'appelle aucun outil.",
+}
+# Without a query: the books already started here. They are not "what there
+# is": Mario heard his one started book read as "the books available".
+_LISTING_STARTED = {
+    "es": "Estos son los libros que ya se empezaron aquí, no todos los que hay. Dile eso, "
+    "léeselos numerados con título y autor, y pregúntale si quiere seguir con uno o de "
+    "qué autor o qué tipo de libro le busco otros. No llames a ninguna herramienta.",
+    "en": "These are the books already started here, not everything there is. Say so, "
+    "read them numbered with title and author, and ask whether they want to carry on "
+    "with one, or which author or kind of book to look for. Do not call any tool.",
+    "fr": "Ce sont les livres déjà commencés ici, pas tout ce qu'il y a. Dis-le, lis-les "
+    "numérotés avec titre et auteur, et demande s'il veut continuer l'un d'eux ou quel "
+    "auteur ou quel genre de livre chercher. N'appelle aucun outil.",
 }
 
 
-def listing(lang: str) -> str:
+def listing(lang: str, *, started: bool = False) -> str:
     """For a list of books: read them out, numbered, and ask which one."""
-    return _LISTING[_lang(lang)]
+    return (_LISTING_STARTED if started else _LISTING)[_lang(lang)]

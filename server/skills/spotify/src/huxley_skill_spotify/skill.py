@@ -118,7 +118,11 @@ PROBE_LOAD_S = 4.0
 # After a seek, how long to stay silent at most waiting for it to land.
 SEEK_SETTLE_S = 2.0
 PROBE_OK_S = 1.6
-MAX_PROBES = 5
+PROBE_CONFIRM_S = 0.35
+MAX_PROBES = 4
+# A book played fine this recently: the hours aren't out, so a refusal
+# means the book isn't available, with no control check.
+HOURS_OK_FOR_S = 30 * 60
 # Paused from a Spotify app for this long: end the stream (free the speaker).
 PAUSED_GRACE_S = 3.0
 # A fresh start that goes idle this soon was refused, not finished: an
@@ -445,6 +449,8 @@ class SpotifySkill:
         # Streams playing right now: a book check never takes the player
         # from one.
         self._streams = 0
+        # When a book last played fine (a stream or a check).
+        self._hours_ok_at: float | None = None
         self._sleep_s = DEFAULT_SLEEP_MINUTES * 60
         self._hours_per_month: float | None = None
         self._language = "en"
@@ -1004,7 +1010,12 @@ class SpotifySkill:
         )
         return ToolResult(
             output=json.dumps(
-                {"ok": True, "books": entries, "then": lines.listing(lang)}, ensure_ascii=False
+                {
+                    "ok": True,
+                    "books": entries,
+                    "then": lines.listing(lang, started=not query.strip()),
+                },
+                ensure_ascii=False,
             )
         )
 
@@ -1110,8 +1121,8 @@ class SpotifySkill:
         can_check = self._streams == 0 and self._unavailable() is None
         before = (client.state.context_uri, client.state.status)
         kept: list[Match] = []
+        refused: list[Match] = []
         tried = 0
-        control_done = False
         try:
             for match in candidates:
                 if len(kept) == want:
@@ -1126,16 +1137,23 @@ class SpotifySkill:
                 tried += 1
                 result = await self._probe(match.uri)
                 if result == "ok":
+                    self._hours_ok_at = time.monotonic()
                     await shelf.mark_ok(match.uri, match.title, match.artist)
                     kept.append(match)
                 elif result == "no":
-                    if not control_done:
-                        control_done = True
-                        control = await shelf.any_playable(besides=match.uri)
-                        if control is not None and await self._probe(control) == "no":
-                            await log.awarning("spotify.book_hours_out", control=control)
-                            return [], True
-                    await shelf.mark_unavailable(match.uri)
+                    refused.append(match)
+            if refused and not self._hours_recently_ok():
+                # Nothing played this round or lately: is it the books, or
+                # the month's hours? Try one book known to play.
+                control = await shelf.any_playable(besides=refused[0].uri)
+                if control is not None:
+                    tried += 1
+                    if await self._probe(control) == "no":
+                        await log.awarning("spotify.book_hours_out", control=control)
+                        return [], True
+                    self._hours_ok_at = time.monotonic()
+            for match in refused:
+                await shelf.mark_unavailable(match.uri)
         finally:
             if tried:
                 await self._put_back(*before)
@@ -1148,12 +1166,18 @@ class SpotifySkill:
         )
         return kept, False
 
+    def _hours_recently_ok(self) -> bool:
+        return (
+            self._hours_ok_at is not None and time.monotonic() - self._hours_ok_at < HOURS_OK_FOR_S
+        )
+
     async def _probe(self, uri: str) -> str:
         """Try a book for a moment: "ok" if it keeps playing, "no" if
         Spotify stops it (it does within 0.3-1.2 s), "unknown" if it never
         loaded."""
         client = self._require_client()
         errors = client.state.error_count
+        was = item_uri(client.state.item)
         client.send("play", uri=uri)
         loaded = await client.wait_until(
             lambda s: s.context_uri == uri or s.error_count > errors or not s.connected,
@@ -1162,10 +1186,25 @@ class SpotifySkill:
         if not loaded or client.state.context_uri != uri:
             result = "unknown"
         else:
-            stopped = await client.wait_until(
-                lambda s: s.status == "idle" or s.context_uri != uri, PROBE_OK_S
+            # Refused: "playing", the first chapter, "buffering", then idle.
+            # Accepted: the same, then "playing" with the position moving.
+            # Decide on that instead of always waiting the full window.
+            def decided(s: PlayerState) -> bool:
+                if s.status == "idle" or s.context_uri != uri:
+                    return True
+                new_item = item_uri(s.item) not in (None, was)
+                return new_item and s.status == "playing" and s.speed > 0
+
+            await client.wait_until(decided, PROBE_OK_S)
+            if client.state.status == "playing":
+                # A refusal can trail the first "playing" by a moment.
+                await client.wait_until(
+                    lambda s: s.status == "idle" or s.context_uri != uri, PROBE_CONFIRM_S
+                )
+            state = client.state
+            result = (
+                "no" if state.status == "idle" else "ok" if state.context_uri == uri else "unknown"
             )
-            result = "ok" if not stopped else "no" if client.state.status == "idle" else "unknown"
         await self._log().ainfo("spotify.book_probe", uri=uri, result=result)
         return result
 
@@ -1529,6 +1568,7 @@ class SpotifySkill:
                 audio_ms += CHUNK_MS
                 if book is not None and not marked and audio_ms >= PLAYED_AFTER_MS:
                     marked = True
+                    self._hours_ok_at = time.monotonic()
                     shelf = self._require_shelf()
                     self._spawn(shelf.mark_played(book.uri, book.title, book.author))
                     self._spawn(shelf.set_last_book(book.uri, book.title, book.author))
