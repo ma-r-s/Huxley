@@ -233,6 +233,15 @@ sent, `enq_drop` = lost to a full queue). `final_stats` also has
 scale): a peak of 0 dBFS alone can't tell one click from a clipped
 question.
 
+Over days of real use: `python3 tools/dev.py link [hours]` prints, per half
+hour, the seconds the speaker played, the gaps it played as silence
+(`spk.underrun`, rebuffering included) and their share, the median rssi
+and the server's largest backlog, from every server log (the 10 archives
+and `logs/keep/`). Wi-Fi itself: `wifi.associated` says the channel, its
+width (`second`, `bw_mhz`) and the PHY; `dev.py cmd wifiscan` lists every
+AP the board hears; `dev.py cmd wifibw 20|40` tries a width until restart
+(20 is the default).
+
 To reproduce instead of waiting for bad Wi-Fi: `python3 tools/bench.py
 --wifi --steps stall,slowdown` routes the board through the bench's own
 proxy (the console's `server <uri> [min]`, back by itself after 15 min

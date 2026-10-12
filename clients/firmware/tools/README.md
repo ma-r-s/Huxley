@@ -10,7 +10,7 @@ cleared on reboot. Never commit captures.
 
 | Script              | What it does                                                                                           | Needs          |
 | ------------------- | ------------------------------------------------------------------------------------------------------ | -------------- |
-| `dev.py`            | The board over Wi-Fi, no cable: `flash` (serves `build/` and has the board update itself, with rollback), `info`, `cmd <console command>`, `log`, `coredump` (decoded with the matching ELF, kept per flashed build in `build/elf/`). Finds the board in the server log. | server up, `HUX_DEV_TOKEN` |
+| `dev.py`            | The board over Wi-Fi, no cable: `flash` (serves `build/` and has the board update itself, with rollback), `info`, `cmd <console command>`, `log`, `link` (gaps heard per half hour of real use), `coredump` (decoded with the matching ELF, kept per flashed build in `build/elf/`). Finds the board in the server log. | server up, `HUX_DEV_TOKEN` |
 | `flash.sh`          | Flashes `build/` and boots it with a watchdog reset (`--clips` adds the bench clips; `--unstick` boots a board stuck in download mode). Use it instead of `idf.py flash`. | ESP-IDF env |
 | `serial_log.py`     | Logs the console without resetting the board (DTR/RTS held still), follows it across USB sockets, sends commands from a FIFO. | pyserial (ESP-IDF env) |
 | `serial-capture.sh` | Runs `serial_log.py` in the background into `/tmp/huxley-debug/serial-<ts>.log`; commands via `/tmp/huxley-debug/console.fifo`. | ESP-IDF env |

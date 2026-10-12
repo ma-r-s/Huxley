@@ -206,6 +206,17 @@ static int bandwidth_mhz(wifi_bandwidth_t bw) {
 static void wifi_event_handler(void *arg, esp_event_base_t base,
                                int32_t id, void *data) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
+        /* 20 MHz, not 40: on 2.4 GHz a 40 MHz link spans most of the band
+         * and shares its air with everything on both halves (here five of
+         * our own mesh nodes on channel 9, 2026-10-12). The audio needs
+         * ~0.5 Mbit/s. A/B on the board, radio streaming 3 x 2.5 min per
+         * width: no difference while the network was calm (starved 31 vs
+         * 25 s of ~478 s); standard advice for a crowded 2.4 GHz band, no
+         * measured cost. `wifibw 40` tries the other until a restart. */
+        esp_err_t bw = esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20);
+        if (bw != ESP_OK) {
+            ESP_LOGW(TAG, "wifi.bandwidth default 20 MHz failed err=%s", esp_err_to_name(bw));
+        }
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED) {
         /* Which AP (a mesh has several with one SSID) and how well. */
@@ -360,6 +371,10 @@ esp_err_t hux_net_set_bandwidth(int mhz) {
     esp_err_t err = esp_wifi_set_bandwidth(WIFI_IF_STA, bw);
     ESP_LOGI(TAG, "wifi.bandwidth set_mhz=%d err=%s", bandwidth_mhz(bw), esp_err_to_name(err));
     if (err == ESP_OK) {
+        /* Let the developer door's "ok" out first: without it the reply
+         * was lost, the tool retried, and every retry rejoined again
+         * (2 minutes of reconnects per switch, 2026-10-12 A/B). */
+        vTaskDelay(pdMS_TO_TICKS(300));
         esp_wifi_disconnect();
     }
     return err;

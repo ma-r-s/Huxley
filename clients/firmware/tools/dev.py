@@ -8,6 +8,7 @@ and crash dumps. No USB cable, no opening the case.
     python3 tools/dev.py log                  # follow the board's log lines
     python3 tools/dev.py coredump             # fetch + decode the last crash
     python3 tools/dev.py clips                # build/clips.bin -> the bench clips
+    python3 tools/dev.py link [hours]         # audio dropouts per half hour, from the log
 
 Finds the board's IP in the Huxley server's log (its last `client.device`
 from the firmware), or --host IP. The token is HUX_DEV_TOKEN in
@@ -299,11 +300,93 @@ def cmd_coredump(host: str, out: Path, elf: Path | None) -> int:
     )
 
 
+def all_server_events():
+    """Every run's log (the server keeps 10 archives, plus logs/keep/),
+    oldest first, each event once."""
+    logs = SERVER_LOG.parent
+    files = [*logs.glob("keep/*.log"), *logs.glob("huxley_*.log"), SERVER_LOG]
+    seen = ""
+    for path in sorted(files, key=lambda p: p.stat().st_mtime if p.exists() else 0):
+        try:
+            with path.open() as f:
+                for line in f:
+                    try:
+                        e = json.loads(line)
+                    except ValueError:
+                        continue
+                    ts = e.get("timestamp", "")
+                    if ts and ts <= seen:
+                        continue  # a copy already read (keep/ duplicates an archive)
+                    seen = ts or seen
+                    yield e
+        except OSError:
+            continue
+
+
+def cmd_link(hours: float) -> int:
+    """What the speaker did, per half hour of real use, from every server
+    log: seconds of audio played (the board's spk.alive chunk counter),
+    seconds of gaps heard (its spk.underrun silences, rebuffering included)
+    and the gaps' share of the playing time; median rssi; the server's
+    largest send backlog. Not "how much arrived per second": replies come
+    in bursts faster than real time and play from the buffer (F-0022)."""
+    import statistics
+
+    since = time.time() - hours * 3600
+    buckets: dict[str, dict] = {}
+    last_chunks: int | None = None
+    for e in all_server_events():
+        ts = e.get("timestamp", "")
+        try:
+            t = time.mktime(time.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
+        except ValueError:
+            continue
+        line = str(e.get("line", ""))
+        chunks = None
+        if e.get("event") == "client.huxley.firmware_log" and line.startswith("spk.alive"):
+            m = re.search(r"\baudio=(\d+)", line)
+            chunks = int(m.group(1)) if m else None
+        if t < since:
+            last_chunks = chunks if chunks is not None else last_chunks
+            continue
+        local = time.localtime(t)
+        key = time.strftime("%m-%d %H:", local) + ("00" if local.tm_min < 30 else "30")
+        b = buckets.setdefault(
+            key, {"played": 0.0, "gap": 0.0, "gaps": 0, "rssi": [], "unsent": 0}
+        )
+        if chunks is not None:
+            if last_chunks is not None and chunks >= last_chunks:
+                b["played"] += (chunks - last_chunks) * 0.02  # 20 ms chunks
+            last_chunks = chunks  # a restart resets the counter: skip that step
+        elif e.get("event") == "client.huxley.firmware_log" and line.startswith("spk.underrun"):
+            m = re.search(r"silent_ms=(\d+)", line)
+            b["gap"] += int(m.group(1)) / 1000 if m else 0
+            b["gaps"] += 1
+        elif e.get("event") == "client.huxley.firmware_log" and line.startswith("ws.rx.stats"):
+            m = re.search(r"rssi=(-?\d+)", line)
+            if m:
+                b["rssi"].append(int(m.group(1)))
+        elif e.get("event") == "server.tx.audio_stats":
+            b["unsent"] = max(b["unsent"], int(e.get("sock_unsent") or 0))
+    print("half hour    played s  gaps  gap s  gap share  rssi  max server backlog")
+    for key in sorted(buckets):
+        b = buckets[key]
+        if b["played"] < 30:
+            continue  # under 30 s played: nothing to say
+        share = 100 * b["gap"] / (b["played"] + b["gap"])
+        rssi = statistics.median(b["rssi"]) if b["rssi"] else "?"
+        print(
+            f"{key}  {b['played']:8.0f}  {b['gaps']:4d}  {b['gap']:5.0f}  {share:7.1f} %"
+            f"  {rssi:>4}  {b['unsent'] // 1024} KB"
+        )
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("what", choices=["info", "flash", "cmd", "log", "coredump", "clips"])
+    ap.add_argument("what", choices=["info", "flash", "cmd", "log", "coredump", "clips", "link"])
     ap.add_argument("args", nargs="*")
     ap.add_argument("--host", help="the board's IP (default: from the server log)")
     ap.add_argument("--force", action="store_true", help="flash even if it runs this version")
@@ -326,6 +409,8 @@ def main() -> int:
     elif a.what == "log":
         with contextlib.suppress(KeyboardInterrupt):
             board_lines(log_tail_from(), float("inf"))
+    elif a.what == "link":
+        return cmd_link(float(a.args[0]) if a.args else 24)
     elif a.what == "clips":
         # tools/clips.py's output, into the storage partition (`say <n>`).
         clips = FW / "build" / "clips.bin"
