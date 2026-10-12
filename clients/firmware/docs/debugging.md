@@ -282,7 +282,9 @@ and when it dropped (`drop_uptime_ms`); the server repeats a cut
 narration only if it wasn't heard (T1.44; `app.after_drop played_ms=
 discarded_ms=`). A press during the outage fixes both figures at that
 press: it ends the playback, and the spoken "no connection" it gets
-isn't the server's audio.
+isn't the server's audio. A connection replaced with no drop seen (a
+`server` switch, the ladder restarting the client) counts from the moment
+the new one connects.
 
 ### Updates through the server (F-0028)
 

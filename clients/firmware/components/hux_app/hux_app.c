@@ -370,6 +370,17 @@ static uint32_t s_played_at_drop = 0; /* hux_audio_played_ms() at that drop */
 static bool s_after_drop_frozen = false;
 static uint32_t s_after_drop_played = 0;
 static uint32_t s_after_drop_left = 0;
+/* The drop above belongs to the connection the next hello replaces. */
+static bool s_drop_noted = false;
+
+/* The link to the server ended: what the next hello's after-drop figures
+ * count from. */
+static void note_link_lost(void) {
+    s_link_lost_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    s_played_at_drop = hux_audio_played_ms();
+    s_after_drop_frozen = false;
+    s_drop_noted = true;
+}
 
 static void send_device_hello(void) {
     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
@@ -434,6 +445,7 @@ static void send_device_hello(void) {
     cJSON_AddStringToObject(net, "source", "compiled"); /* the Wi-Fi list (F-0027) adds nvs */
     cJSON_AddItemToObject(d, "net", net);
     cJSON_AddNumberToObject(d, "time_to_hello_ms", took);
+    s_drop_noted = false;
     if (s_hellos > 1) {
         /* What it played after the link dropped, out of its ring (the
          * server sends faster than real time: a narration cut on the wire
@@ -723,7 +735,7 @@ static void handle_ws_message(hux_app_ws_message_t *msg) {
             transition(ST_READY);
             send_device_hello();
             send_blackbox();
-            hux_ota_after_hello(); /* a pending image starts its checks (F-0028) */
+            hux_ota_after_hello(hux_net_device_token()); /* a pending image's checks (F-0028) */
             hux_battery_report_now(); /* the server's skill gets a level at once */
             /* Kick the server into CONVERSING so PTT presses work
              * immediately. `wake_word` is named legacy-style in the
@@ -832,14 +844,17 @@ static void dispatch(hux_app_event_t *ev) {
 
         case HUX_APP_EV_NET_WS_CONNECTED:
             ESP_LOGI(TAG, "net.ws.connected");
+            if (!s_drop_noted && s_hellos > 0) {
+                /* A new connection with no drop seen (a server switch, the
+                 * ladder restarting the client): the old one ended now. */
+                note_link_lost();
+            }
             transition(ST_WAITING_HELLO);
             break;
 
         case HUX_APP_EV_NET_WS_DISCONNECTED:
             if (s_state != ST_WAITING_WS) {
-                s_link_lost_ms = (uint32_t)(esp_timer_get_time() / 1000);
-                s_played_at_drop = hux_audio_played_ms();
-                s_after_drop_frozen = false;
+                note_link_lost();
             }
             /* Once per outage: every failed retry posts this too, and an
              * outage's lines wait in the 256-line queue (hux_net logs the

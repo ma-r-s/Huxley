@@ -64,8 +64,9 @@ void hux_ota_set_selftest(hux_ota_selftest_fn fn);
 bool hux_ota_pull(const char *url, const char *version, bool force, const char *token);
 
 /** After each hello: a pending image starts its checks (once a boot):
- * the self-test after 20 s, then the manifest GET. */
-void hux_ota_after_hello(void);
+ * the self-test after 20 s, then the manifest GET with `Authorization:
+ * Bearer <token>` (the device token, as for the image). */
+void hux_ota_after_hello(const char *token);
 
 /** server_event ota.accept: keep the running image if `version` is it and
  * its self-test passed, the manifest matched and the server's close was

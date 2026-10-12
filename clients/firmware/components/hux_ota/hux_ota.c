@@ -171,17 +171,21 @@ bool hux_ota_start(const char *url, bool force) {
     return start(url, force);
 }
 
+static void set_bearer(const char *token) {
+    if (token != NULL && token[0] != '\0') {
+        snprintf(s_bearer, sizeof(s_bearer), "Bearer %s", token);
+    } else {
+        s_bearer[0] = '\0';
+    }
+}
+
 bool hux_ota_pull(const char *url, const char *version, bool force, const char *token) {
     if (atomic_load(&s_busy)) {
         ESP_LOGW(TAG, "ota.pull_refused why=busy version=%s", version);
         return false; /* the running update reports its own status */
     }
     snprintf(s_expect, sizeof(s_expect), "%s", version != NULL ? version : "");
-    if (token != NULL && token[0] != '\0') {
-        snprintf(s_bearer, sizeof(s_bearer), "Bearer %s", token);
-    } else {
-        s_bearer[0] = '\0';
-    }
+    set_bearer(token);
     if (!start(url, force)) {
         status(s_expect[0] != '\0' ? s_expect : "?", "failed", "busy");
         return false;
@@ -370,9 +374,15 @@ static void verify_task(void *unused) {
     vTaskDelete(NULL);
 }
 
-void hux_ota_after_hello(void) {
+void hux_ota_after_hello(const char *token) {
     if (strcmp(hux_ota_running_state(), "pending") != 0) {
         return;
+    }
+    if (!atomic_load(&s_busy)) {
+        /* The manifest GET carries the token too: a pending image booted
+         * fresh, no pull of this boot set it (the server answered 401,
+         * 2026-10-12). */
+        set_bearer(token);
     }
     if (s_verify.started) {
         xSemaphoreGive(s_verify_hello); /* the next round, once the self-test ran */
