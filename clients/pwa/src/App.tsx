@@ -340,17 +340,36 @@ export function App() {
   const prerollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Error tone on unexpected session drop ─────────────────────────────────
+  // Only if the session is still down after DROP_TONE_DELAY_MS: the server
+  // refreshes the voice session every ~50 min (T1.35) and comes back within
+  // ~3 s; beeping over the music for that would be a false alarm.
+  const DROP_TONE_DELAY_MS = 5000;
   const prevAppStateRef = useRef<AppState>("IDLE");
+  const dropToneTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const prev = prevAppStateRef.current;
     if (
       (prev === "CONNECTING" || prev === "CONVERSING") &&
       ws.appState === "IDLE"
     ) {
-      playback.playErrorTone();
+      if (dropToneTimerRef.current === null) {
+        dropToneTimerRef.current = setTimeout(() => {
+          dropToneTimerRef.current = null;
+          playback.playErrorTone();
+        }, DROP_TONE_DELAY_MS);
+      }
+    } else if (ws.appState !== "IDLE" && dropToneTimerRef.current !== null) {
+      clearTimeout(dropToneTimerRef.current); // back in time: no alarm
+      dropToneTimerRef.current = null;
     }
     prevAppStateRef.current = ws.appState;
   }, [ws.appState]);
+  useEffect(
+    () => () => {
+      if (dropToneTimerRef.current !== null) clearTimeout(dropToneTimerRef.current);
+    },
+    [],
+  );
 
   // ── Skill continuous mode: open mic unconditionally ───────────────────────
   useEffect(() => {

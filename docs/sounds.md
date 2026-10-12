@@ -380,7 +380,7 @@ The current thinking tone (`clients/pwa/src/routes/+page.svelte`) generates a 44
 
 1. **Frequency**: 440Hz sits in the 200Hz–4kHz vocal band. Correct target: below 200Hz (a low drone, like an old telephone hold tone — non-intrusive, clearly non-speech).
 2. **Silence timeout**: currently 400ms. For an elderly blind user expecting responses, 1500ms is a better threshold before the tone starts — long enough that normal LLM latency doesn't trigger it, short enough that actual silence gets flagged.
-3. **Error tone**: currently no distinct error audio. When `state: IDLE` after an error (OpenAI drops the session), a short descending two-tone chime signals the problem.
+3. **Error tone**: currently no distinct error audio. When `state: IDLE` after an error (OpenAI drops the session), a short descending two-tone chime signals the problem. The PWA plays it only if the session is still down 5 s later: the server refreshes the voice session every ~50 minutes (T1.35) and is back within ~3 s, which isn't worth an alarm over the music.
 
 These are client changes only. They do not affect the server or the WebSocket protocol. Ship after the server-side earcon work is stable.
 
