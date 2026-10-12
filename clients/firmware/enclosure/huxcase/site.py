@@ -540,29 +540,38 @@ def build_site() -> dict:
     return manifest
 
 
-def write_pages(manifest: dict) -> None:
-    """index.html (manifest inlined, so the spec sheet renders before the model
-    loads) and preview.html (the same with a charset, for a local server)."""
-    if not (SITE_SRC / "index.html").exists():
-        return
+HEAD = (
+    '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, '
+    'initial-scale=1, viewport-fit=cover">\n'
+)
+
+
+def _page(manifest: dict) -> str:
+    """site/index.html with the manifest inlined, so the spec sheet renders
+    before the model loads."""
     page = (SITE_SRC / "index.html").read_text()
-    page = page.replace(
+    return page.replace(
         "__MANIFEST__", json.dumps(manifest, ensure_ascii=False).replace("</", "<\\/")
     )
+
+
+def write_pages(manifest: dict) -> None:
+    """index.html and preview.html (the same with a charset, for a local server)."""
+    if not (SITE_SRC / "index.html").exists():
+        return
+    page = _page(manifest)
     (SITE_OUT / "index.html").write_text(page)
-    (SITE_OUT / "preview.html").write_text(
-        '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, '
-        'initial-scale=1, viewport-fit=cover">\n' + page
-    )
+    (SITE_OUT / "preview.html").write_text(HEAD + page)
 
 
-def write_web(out_dir: Path) -> tuple[Path, Path]:
+def write_web(out_dir: Path) -> tuple[Path, Path, Path]:
     """The website's copy (web/: the /hx-1 page): the model as a binary GLB,
     which a normal host serves, and a trimmed manifest: per node its kind,
     label, braille letter and where it sits in the exploded view, plus the
     light, the specs, and what the page's scroll story moves (the talk lever's
-    pivot and travel, its spring, where "hola." points). Built from out/site
-    (run without --web first)."""
+    pivot and travel, its spring, where "hola." points). And the build page
+    for /hx-1/build: this page, loading the website's GLB and linking back.
+    Built from out/site (run without --web first)."""
     doc = json.loads((SITE_OUT / "hx1.gltf.json").read_text())
     m = json.loads((SITE_OUT / "assembly.json").read_text())
     uri = doc["buffers"][0]["uri"]
@@ -616,15 +625,18 @@ def write_web(out_dir: Path) -> tuple[Path, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "hx1.glb").write_bytes(glb)
     (out_dir / "hx1-model.json").write_text(json.dumps(model, indent=1) + "\n")
-    return out_dir / "hx1.glb", out_dir / "hx1-model.json"
+    build = _page({**m, "model": "/hx1/hx1.glb", "home": "/hx-1"})
+    build = build.replace("<title>HX-1</title>", "<title>Build HX-1 · huxley</title>", 1)
+    (out_dir / "build.html").write_text(HEAD + build)
+    return out_dir / "hx1.glb", out_dir / "hx1-model.json", out_dir / "build.html"
 
 
 def main() -> int:
     import sys
 
     if "--web" in sys.argv:  # the website's copy, into the given directory
-        glb, model = write_web(Path(sys.argv[sys.argv.index("--web") + 1]))
-        print(f"wrote {glb} ({glb.stat().st_size / 1e6:.1f} MB) and {model}")
+        glb, model, build = write_web(Path(sys.argv[sys.argv.index("--web") + 1]))
+        print(f"wrote {glb} ({glb.stat().st_size / 1e6:.1f} MB), {model} and {build}")
         return 0
     if "--page" in sys.argv:  # page edits only: reuse the exported model and manifest
         write_pages(json.loads((SITE_OUT / "assembly.json").read_text()))

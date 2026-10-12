@@ -21,6 +21,11 @@ const config = {
       },
     ];
   },
+  // The HX-1 build guide is a static page that the enclosure's site.py
+  // writes (site.py --web): served as is, under the HX-1 page.
+  async rewrites() {
+    return [{ source: "/hx-1/build", destination: "/hx1/build.html" }];
+  },
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }];
   },

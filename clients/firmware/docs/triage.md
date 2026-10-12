@@ -533,6 +533,15 @@ spring now shortens with the lever. Lessons:
 - anything named on the model (part labels) waits for the model's own eased
   state, not the scroll position, or a jump names a closed case.
 
+**The build guide on the website (2026-10-12)**: Mario asked whether the
+build instructions were on the site ("if someone wants to make it, I don't
+want to lose it"). They were not: the build page lived in `out/site`
+(gitignored) and a private artifact. It is now at /hx-1/build, written by
+`site.py --web` from the same template (loading the website's GLB, its
+mark linking back), linked from the /hx-1 hero ("Build one") and its "Made
+to be made" section. Its copy no longer speaks to one maker's printer
+(tested). It is English only; the ES and FR links say so.
+
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
 bottom is fine, holders whole, no glue but the tub's halves, plastic pivot, protected cells
 instead of a protection board, the ribbon and loose wires, the board's

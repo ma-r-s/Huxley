@@ -21,9 +21,6 @@ import { chipGhost, chipSolid } from "../components/Chrome";
 import { useViewport } from "../lib/useViewport";
 import type { Pose, Stage, V3 } from "./stage";
 
-const ENCLOSURE_SRC =
-  "https://github.com/ma-r-s/Huxley/tree/main/clients/firmware/enclosure";
-
 // A part's name as a translation key: "Speaker, 40 mm 5 W" -> "speaker_40_mm_5_w".
 export const partKey = (label: string) =>
   label
@@ -493,8 +490,8 @@ export function HX1Story() {
             <a style={{ ...chipSolid, color: "var(--hux-paper)" }} href="#how">
               {t("hx1.ctaHow")}
             </a>
-            <a style={chipGhost} href={ENCLOSURE_SRC}>
-              {t("hx1.ctaSource")} ↗
+            <a style={chipGhost} href="/hx-1/build">
+              {t("hx1.ctaBuild")}
             </a>
           </div>
         </div>

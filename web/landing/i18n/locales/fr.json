@@ -293,7 +293,7 @@
     "titleLine2": "Relâchez pour écouter.",
     "subtitle": "HX-1 est le talkie-walkie par lequel parle la première persona de Huxley. Il a été conçu pour un utilisateur âgé et aveugle : pas d'écran, pas de mot d'activation, un seul levier orange.",
     "ctaHow": "Comment ça marche",
-    "ctaSource": "La CAO",
+    "ctaBuild": "Le construire",
     "viewer": {
       "aria": "Modèle 3D du HX-1. Faites glisser pour le tourner.",
       "loading": "Chargement du modèle",
@@ -363,6 +363,7 @@
       "title": "Imprimé à la maison, ajusté en logiciel.",
       "body1": "Chaque pièce imprimée sort d'une imprimante 3D de bureau : une façade blanche, une base rouge, un dos en PETG transparent au-dessus des LED de la carte, une grille noire et un levier orange. Le boîtier est modélisé en Python avec build123d.",
       "body2": "Avant toute impression, des tests vérifient chaque pièce contre les autres et contre le modèle 3D de la carte elle-même, qu'elle a un chemin pour entrer et qu'aucune couche ne commence dans le vide. Les pièces lourdes sont tenues par des formes imprimées et des vis, jamais par de la colle.",
+      "guide": "Le guide de montage (en anglais)",
       "link": "Les sources du boîtier"
     },
     "partNames": {

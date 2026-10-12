@@ -18,7 +18,8 @@ change at 36 mm both parted at that layer, so the tub is now two pieces,
 glued; next: the test corner, then the tub's plate
 (`out/print/projects/4_tub_base_and_top.3mf`). Tracked as F-0010 in [`../docs/triage.md`](../docs/triage.md).
 The interactive build page (spin, explode, x-ray, build it) comes from
-`huxcase/site.py`.
+`huxcase/site.py`; it is on the website at
+[huxley.ma-r-s.com/hx-1/build](https://huxley.ma-r-s.com/hx-1/build).
 
 | Model        | Shape                                  | Talk button                              |
 | ------------ | -------------------------------------- | ---------------------------------------- |
@@ -657,6 +658,7 @@ uv run --group dev pytest -q               # fit checks + STEP comparison (needs
 /Applications/Blender.app/Contents/MacOS/Blender --background \
   --python render/render.py -- out/ out/renders/          # add --quick for previews
 uv run python -m huxcase.site           # out/site/: the interactive HX-1 build page (spin, explode, x-ray, build)
+uv run python -m huxcase.site --web <dir>  # the website's copy, from out/site (see below)
 uv run python -m huxcase.printability --stl   # out/print/: every HX-1 piece as an STL in its print pose
 uv run python -m huxcase.slice          # out/print/projects/: Bambu Studio projects (P2S); sliced/: the same, checked
 uv run python -m huxcase.coupon         # out/coupon_*.stl: fit coupon, lever-pin block
@@ -665,6 +667,12 @@ uv run python -m huxcase.coupon         # out/coupon_*.stl: fit coupon, lever-pi
 `out/` is gitignored; everything in it regenerates from the code. The build page is published as a
 private artifact from `out/site/` (index.html + hx1.gltf.json); `preview.html` is the same page for
 a local static server. Every HX-1 part must belong to a build step (`site.STEPS`, tested).
+
+The website (`web/`) keeps its own copy, committed: after a change to the model, the steps or
+`site/index.html`, run `site` then `site --web <dir>` and copy `hx1.glb` and `build.html` into
+`web/public/hx1/` and `hx1-model.json` to `web/landing/hx1/model.json`. `/hx-1` is the scroll
+story (`web/landing/hx1/`); `/hx-1/build` serves `build.html` (a rewrite in `web/next.config.mjs`),
+the same build page loading the website's GLB. Its copy is public: it talks to any maker (tested).
 
 ## How the fit check works
 

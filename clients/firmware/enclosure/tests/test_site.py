@@ -19,3 +19,19 @@ def test_every_part_is_in_a_build_step():
 def test_step_copy_has_no_em_dashes():
     for s in site.STEPS:
         assert "—" not in s["title"] + s["text"]
+
+
+def test_the_build_page_talks_to_any_maker():
+    """The page is public (the website's /hx-1/build): no one's name, no one's printer."""
+    copy = (site.SITE_SRC / "index.html").read_text()
+    copy += "".join(s["title"] + s["text"] for s in site.STEPS)
+    for phrase in ("Mario", "your Bambu", "your measured"):
+        assert phrase not in copy
+
+
+def test_the_websites_copy_loads_its_glb_and_links_back():
+    page = site._page({"model": "/hx1/hx1.glb", "home": "/hx-1", "x": "</script>"})
+    assert "__MANIFEST__" not in page
+    assert '"model": "/hx1/hx1.glb"' in page
+    assert '</script>"' not in page  # inlined data can't close its own tag
+    assert "M.model" in page and "M.home" in page  # and the page reads both

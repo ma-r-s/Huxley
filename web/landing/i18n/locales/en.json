@@ -293,7 +293,7 @@
     "titleLine2": "Let go to listen.",
     "subtitle": "HX-1 is the walkie-talkie Huxley's first persona speaks through. It was made for an elderly blind user: no screen, no wake word, one orange lever.",
     "ctaHow": "How it works",
-    "ctaSource": "The CAD",
+    "ctaBuild": "Build one",
     "viewer": {
       "aria": "3D model of HX-1. Drag to turn it.",
       "loading": "Loading the model",
@@ -363,6 +363,7 @@
       "title": "Printed at home, fitted in software.",
       "body1": "Every printed part comes off a desktop 3D printer: a white front, a red base, a clear PETG back over the board's LEDs, a black grille and an orange lever. The case is modelled in Python with build123d.",
       "body2": "Before anything is printed, tests check every part against the others and against the board's own 3D model, check that each one has a way in, and check that no layer starts in mid-air. The heavy parts are held by printed features and screws, never glue.",
+      "guide": "The build guide",
       "link": "The enclosure source"
     },
     "partNames": {

@@ -217,8 +217,11 @@ export function HX1Page() {
         />
         <p style={body}>{t("hx1.made.body1")}</p>
         <p style={body}>{t("hx1.made.body2")}</p>
-        <div>
-          <a style={chipSolid} href={ENCLOSURE_SRC}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+          <a style={chipSolid} href="/hx-1/build">
+            {t("hx1.made.guide")}
+          </a>
+          <a style={chipGhost} href={ENCLOSURE_SRC}>
             {t("hx1.made.link")} ↗
           </a>
         </div>

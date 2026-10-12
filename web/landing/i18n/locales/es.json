@@ -293,7 +293,7 @@
     "titleLine2": "Suelta para escuchar.",
     "subtitle": "HX-1 es el walkie-talkie a través del cual habla la primera persona de Huxley. Se hizo para un usuario mayor y ciego: sin pantalla, sin palabra de activación, una sola palanca naranja.",
     "ctaHow": "Cómo funciona",
-    "ctaSource": "El CAD",
+    "ctaBuild": "Constrúyelo",
     "viewer": {
       "aria": "Modelo 3D de HX-1. Arrastra para girarlo.",
       "loading": "Cargando el modelo",
@@ -363,6 +363,7 @@
       "title": "Impreso en casa, ajustado en software.",
       "body1": "Cada pieza impresa sale de una impresora 3D de escritorio: un frente blanco, una base roja, una parte trasera de PETG transparente sobre los LED de la placa, una rejilla negra y una palanca naranja. La carcasa está modelada en Python con build123d.",
       "body2": "Antes de imprimir nada, unas pruebas comprueban cada pieza contra las demás y contra el propio modelo 3D de la placa, que cada una tenga por dónde entrar y que ninguna capa empiece en el aire. Las piezas pesadas las sujetan formas impresas y tornillos, nunca pegamento.",
+      "guide": "La guía de montaje (en inglés)",
       "link": "El código de la carcasa"
     },
     "partNames": {
