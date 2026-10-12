@@ -191,8 +191,8 @@ Personas don't rewrite the system prompt from scratch — they compose it from t
 | `confirm_destructive`  | The agent confirms before any irreversible action.                                                                                                                                       |
 | `child_safe`           | Filters profanity and adult topics.                                                                                                                                                      |
 | `no_religious_content` | Avoids initiating or deepening religious topics; redirects politely if the user brings them up.                                                                                          |
-| `echo_short_input`     | When the user says only one or two words, the agent echoes what it understood before acting — prevents acting on a mishear.                                                              |
-| `confirm_if_unclear`   | Before calling any tool, the agent evaluates whether it understood the request. If the audio was cut or the intent ambiguous, it asks one short clarifying question instead of guessing. |
+| `echo_short_input`     | When the user says only one or two words that aren't a clear command, the agent echoes what it understood before acting. Clear short commands ("pausa", "siguiente", "pon la radio") and answers to its own question run directly; silence is never echoed as invented words. |
+| `confirm_if_unclear`   | Unsure about something easy to undo (play, pause, search, volume): act on the best guess and let the user correct it. Unsure about something that can't be undone or reaches other people (send, call, delete, schedule): ask one short question first. After a "no", never repeat the same guess. |
 
 Constraint definitions live in `server/runtime/src/huxley/constraints/`. Adding one is a one-file PR.
 
