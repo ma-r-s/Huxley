@@ -834,7 +834,12 @@ class FirmwareService:
             result = await asyncio.wait_for(future, timeout_s)
         except TimeoutError:
             logger.warning("firmware.dev_cmd_timeout", id=cmd_id, timeout_s=timeout_s)
-            return _error(HTTPStatus.GATEWAY_TIMEOUT, "no reply from the walkie", id=cmd_id)
+            return _error(
+                HTTPStatus.GATEWAY_TIMEOUT,
+                "no reply from the walkie (a command that restarts its connection,"
+                " like server or reboot, never gets one back)",
+                id=cmd_id,
+            )
         except _ShuttingDownError:
             logger.info("firmware.dev_cmd_refused", reason="shutting_down", id=cmd_id)
             return _error(HTTPStatus.SERVICE_UNAVAILABLE, "the server is stopping", id=cmd_id)
@@ -858,6 +863,8 @@ class FirmwareService:
             await self._on_hello(conn_id, data)
         elif event == "firmware.status":
             self._on_status(conn_id, data)
+            if data.get("phase") == "accepted":
+                await self._on_accepted(conn_id, data)
         elif event == "dev.cmd_result":
             self._on_cmd_result(data)
 
@@ -975,6 +982,37 @@ class FirmwareService:
                 selftest_error=pending.selftest_error,
                 conn_id=conn_id,
             )
+
+    async def _on_accepted(self, conn_id: str, data: dict[str, Any]) -> None:
+        """The walkie marked its image valid (it said `accepted` after our
+        ota.accept): its record stops being pending now, not at the next
+        hello, so an offer made in between goes out at once. Before this,
+        an offer right after an accept was skipped as pending_verify until
+        the walkie happened to reconnect (2026-10-12)."""
+        device = self._device_on(conn_id)
+        if device is None:
+            return
+        version = data.get("version")
+        if device.hello.get("version") != version:
+            logger.warning(
+                "firmware.status_ignored",
+                reason="accepted_version_mismatch",
+                version=version,
+                running=device.hello.get("version"),
+            )
+            return
+        device.hello["slot_state"] = "valid"
+        if device.pending is not None:
+            logger.info(
+                "firmware.pending_ended",
+                version=device.pending.version,
+                running=version,
+                slot_state="valid",
+                accept_sent=device.pending.accept_sent,
+                via="accepted",
+            )
+            device.pending = None
+        await self._maybe_send_update(device, trigger="accepted")
 
     def _count_update_progress(self, device: _Device, version: str, phase: object) -> None:
         """What a status means for the next offers: `downloading` uses up an

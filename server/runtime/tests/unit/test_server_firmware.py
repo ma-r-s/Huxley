@@ -419,7 +419,7 @@ class TestDevCmd:
             reply = await _admin(port, "/admin/dev-cmd?line=info&timeout_s=0.2")
             await ws.close()
         assert reply.status == 504
-        assert reply.json()["error"] == "no reply from the walkie"
+        assert reply.json()["error"].startswith("no reply from the walkie")
 
     async def test_no_walkie_is_409(self, fwdir: Path) -> None:
         async with _serving(fwdir) as (port, server):
@@ -621,6 +621,35 @@ class TestAcceptFlow:
         assert disconnected[0]["close_code"] == 1012
         # A pending image is never offered an update.
         assert "firmware.update_sent" not in events
+
+    async def test_an_offer_right_after_accepted_goes_out(
+        self, fwdir: Path, quick_close: None
+    ) -> None:
+        """After `accepted` the walkie is valid at once: an offer made then
+        is sent now, not skipped as pending_verify until a reconnect
+        (2026-10-12, found by the firmware owner)."""
+        sha = make_image(fwdir, "v2")
+        fw.FirmwareStore(fwdir).write_offer("v2", force=False)
+        pending = _hello(version="v2", elf_sha=sha, slot="ota_1", slot_state="pending_verify")
+        async with _serving(fwdir) as (port, server):
+            ws1 = await _walkie(port, server, pending)
+            await _send_event(
+                ws1, "firmware.status", {"version": "v2", "phase": "selftest", "error": None}
+            )
+            await http_get(port, "/firmware/manifest.json", headers=AUTH)
+            await _closed_code(ws1)
+            ws2 = await _walkie(port, server, {**pending, "uptime_s": 31})
+            await _recv_event(ws2, "ota.accept")
+            await _send_event(
+                ws2, "firmware.status", {"version": "v2", "phase": "accepted", "error": None}
+            )
+            await asyncio.sleep(0.1)
+            make_image(fwdir, "v3")
+            reply = await _admin(port, "/admin/firmware-offer?version=v3")
+            update = await _recv_event(ws2, "firmware.update")
+            await ws2.close()
+        assert reply.json()["sent"] is True, reply.json()
+        assert update["version"] == "v3"
 
     async def test_selftest_failed(self, fwdir: Path, quick_close: None) -> None:
         sha = make_image(fwdir, "v2")
