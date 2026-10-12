@@ -156,6 +156,9 @@ static _Atomic uint32_t s_spk_clear_done = 0;
 #define SPK_REBUFFER_MS     1000
 #define SPK_REBUFFER_BYTES  (SPK_REBUFFER_MS * 48)  /* 24 kHz mono PCM16 */
 #define SPK_REBUFFER_MAX_MS 4000
+/* Dry this many chunks in a row first: a 20 ms timing blip at the edge of
+ * an empty ring shouldn't cost a 1 s pause (F-0022 review). */
+#define SPK_REBUFFER_AFTER_CHUNKS 3
 
 static _Atomic bool s_stream_active = false;
 
@@ -210,6 +213,11 @@ static int s_inject_clip = -1;
 
 static _Atomic(hux_audio_mic_frame_fn) s_mic_sink = NULL;
 static _Atomic bool s_mic_running = false;
+/* The mic task is parked (not inside a read): set at the top of its loop
+ * when the mic is off. hux_audio_mic_stop waits for it so the frame being
+ * read when the press ended reaches the sink before ptt_stop is queued
+ * behind it (F-0022 review: the last 20 ms of every question was lost). */
+static _Atomic bool s_mic_parked = true;
 
 /* Static capture scratch — zero heap on the hot path. BSS-resident,
  * single-writer (mic task). */
@@ -562,7 +570,7 @@ static void spk_task(void *unused) {
             memset(stereo32, 0, sizeof(stereo32));
             got_samples = SPK_CHUNK_SAMPLES;
             silence_chunks++;
-            if (!rebuffering && had_audio && silent_run == 0 &&
+            if (!rebuffering && had_audio && silent_run + 1 == SPK_REBUFFER_AFTER_CHUNKS &&
                 atomic_load_explicit(&s_stream_active, memory_order_acquire)) {
                 /* Ran dry mid-reply: wait for a cushion before playing on. */
                 rebuffering = true;
@@ -861,6 +869,7 @@ static void mic_task(void *unused) {
             }
         }
         if (!atomic_load_explicit(&s_mic_running, memory_order_acquire)) {
+            atomic_store_explicit(&s_mic_parked, true, memory_order_release);
             injecting = false;
             /* Idle — park for a frame period, not forever, so
              * start()/stop() transitions are responsive. */
@@ -868,6 +877,7 @@ static void mic_task(void *unused) {
             continue;
         }
 
+        atomic_store_explicit(&s_mic_parked, false, memory_order_release);
         esp_err_t err = esp_codec_dev_read(s_mic_dev, s_raw_buf, sizeof(s_raw_buf));
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "mic.read_failed err=%s", esp_err_to_name(err));
@@ -946,7 +956,12 @@ static bool quiet_resume(void) {
     return true;
 }
 
+#define QUIET_MAX_S (12 * 3600) /* a night; a typo can't mute it for years */
+
 void hux_audio_quiet(uint32_t seconds) {
+    if (seconds > QUIET_MAX_S) {
+        seconds = QUIET_MAX_S;
+    }
     if (seconds == 0) {
         if (s_quiet_timer != NULL) {
             esp_timer_stop(s_quiet_timer);
@@ -1109,6 +1124,12 @@ void hux_audio_mic_start(void) {
 
 void hux_audio_mic_stop(void) {
     atomic_store_explicit(&s_mic_running, false, memory_order_release);
+    /* Let the frame in flight (a read is 20 ms) reach the sink first. */
+    int64_t until = esp_timer_get_time() + 60 * 1000;
+    while (!atomic_load_explicit(&s_mic_parked, memory_order_acquire) &&
+           esp_timer_get_time() < until) {
+        vTaskDelay(1);
+    }
     ESP_LOGI(TAG, "mic.stop");
 }
 

@@ -57,6 +57,12 @@ static const char *TAG = "hux_net";
  * (mic sender, log drain, app control messages) are their own tasks, never
  * the WebSocket task, so the receive side keeps playing meanwhile. */
 #define WS_SEND_TIMEOUT_MS 5000
+/* The library's PONG (and its own ping) wait this long for the tx lock a
+ * stalled send holds; shorter, and a server ping during a stall aborts the
+ * connection (F-0022 review). */
+#if CONFIG_ESP_WS_CLIENT_TX_LOCK_TIMEOUT_MS <= WS_SEND_TIMEOUT_MS
+#error "CONFIG_ESP_WS_CLIENT_TX_LOCK_TIMEOUT_MS must exceed WS_SEND_TIMEOUT_MS (sdkconfig older than sdkconfig.defaults?)"
+#endif
 
 static EventGroupHandle_t s_wifi_events = NULL;
 static esp_websocket_client_handle_t s_ws = NULL;
@@ -79,6 +85,11 @@ static _Atomic bool s_ws_alive = false;
  * by new client", 1001) is told apart from a restart or a ping timeout. */
 static bool s_close_was_eviction = false;
 static char s_server_uri[128] = {0};
+static char s_home_uri[128] = {0}; /* from secrets.h: where `server` reverts to */
+/* A `server <uri>` switch in progress: the stop it does ends the client's
+ * task, whose FINISH would make the app resume it on the old URI. */
+static _Atomic bool s_switching = false;
+static esp_timer_handle_t s_server_revert;
 
 /* Audio data-plane seam — see firmware/docs/architecture.md §"Data
  * plane vs control plane". Inbound `audio` messages bypass
@@ -550,6 +561,7 @@ void hux_net_start(const hux_net_config_t *cfg) {
                  cfg->wifi_password != NULL && cfg->server_uri != NULL);
     hux_ws_reassembler_init(&s_reassembler, s_frag_buf, sizeof(s_frag_buf));
     /* WS client created first; the GOT_IP handler starts it. */
+    strncpy(s_home_uri, cfg->server_uri, sizeof(s_home_uri) - 1);
     ws_start(cfg->server_uri);
     wifi_init_sta(cfg->wifi_ssid, cfg->wifi_password);
 }
@@ -565,7 +577,7 @@ void hux_net_pause(void) {
 }
 
 void hux_net_resume(void) {
-    if (s_ws == NULL || atomic_load(&s_ws_alive)) {
+    if (s_ws == NULL || atomic_load(&s_ws_alive) || atomic_load(&s_switching)) {
         return; /* already running: nothing to do (never stop a live task here) */
     }
     esp_err_t err = esp_websocket_client_start(s_ws);
@@ -573,15 +585,28 @@ void hux_net_resume(void) {
     ESP_LOGI(TAG, "ws.resumed err=%s", esp_err_to_name(err));
 }
 
-void hux_net_set_server(const char *uri) {
-    if (s_ws == NULL || uri == NULL || uri[0] == '\0') {
+static void server_revert_task(void *arg) {
+    (void)arg;
+    ESP_LOGW(TAG, "ws.server reverting to %s (the switch timed out)", s_home_uri);
+    hux_net_set_server(s_home_uri, 0);
+    vTaskDelete(NULL);
+}
+
+static void server_revert_due(void *arg) {
+    (void)arg;
+    /* Not on the esp_timer task: the stop below waits for the WS task. */
+    xTaskCreate(server_revert_task, "ws_revert", 4096, NULL, 3, NULL);
+}
+
+void hux_net_set_server(const char *uri, uint32_t revert_s) {
+    if (s_ws == NULL || uri == NULL || uri[0] == '\0' || atomic_exchange(&s_switching, true)) {
         return;
     }
     bool was_running = atomic_load(&s_ws_alive);
     if (was_running) {
         esp_websocket_client_stop(s_ws);
     }
-    ESP_LOGW(TAG, "ws.server uri=%s was=%s (until reboot)", uri, s_server_uri);
+    ESP_LOGW(TAG, "ws.server uri=%s was=%s revert_in_s=%u", uri, s_server_uri, (unsigned)revert_s);
     strncpy(s_server_uri, uri, sizeof(s_server_uri) - 1);
     esp_err_t err = esp_websocket_client_set_uri(s_ws, s_server_uri);
     if (was_running) {
@@ -589,6 +614,17 @@ void hux_net_set_server(const char *uri) {
         atomic_store(&s_ws_alive, start == ESP_OK);
         ESP_LOGI(TAG, "ws.server set=%s start=%s", esp_err_to_name(err), esp_err_to_name(start));
     }
+    if (s_server_revert == NULL) {
+        const esp_timer_create_args_t args = {.callback = server_revert_due, .name = "ws_revert"};
+        esp_timer_create(&args, &s_server_revert);
+    }
+    if (s_server_revert != NULL) {
+        esp_timer_stop(s_server_revert);
+        if (revert_s > 0 && strcmp(s_server_uri, s_home_uri) != 0) {
+            esp_timer_start_once(s_server_revert, (uint64_t)revert_s * 1000000);
+        }
+    }
+    atomic_store(&s_switching, false);
 }
 
 bool hux_net_is_running(void) {

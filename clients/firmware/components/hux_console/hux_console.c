@@ -118,8 +118,10 @@ void hux_console_run(char *line) {
     } else if (strcmp(cmd, "info") == 0) {
         cmd_info();
     } else if (strcmp(cmd, "server") == 0 && argc > 1) {
-        /* Until reboot: tests route the board through a proxy. */
-        hux_net_set_server(argv[1]);
+        /* Tests route the board through a proxy: back by itself after
+         * N minutes (default 15) or a reboot. */
+        int min = argc > 2 ? atoi(argv[2]) : 15;
+        hux_net_set_server(argv[1], (uint32_t)(min > 0 ? min : 15) * 60);
     } else if (strcmp(cmd, "ota") == 0 && argc > 1 && strcmp(argv[1], "confirm") == 0) {
         hux_ota_confirm();
     } else if (strcmp(cmd, "ota") == 0 && argc > 1 && strcmp(argv[1], "rollback") == 0) {
@@ -159,7 +161,7 @@ void hux_console_run(char *line) {
         ESP_LOGI(TAG, "console.quiet left_s=%u", (unsigned)hux_audio_quiet_left_s());
     } else {
         ESP_LOGW(TAG, "console.unknown %s (talk, release, say N, tone [hz] [ms], vol N, pa on|off, "
-                      "selftest [hz], wifi off [s]|on, wifistat, info, server <uri>, quiet [s], reboot, "
+                      "selftest [hz], wifi off [s]|on, wifistat, info, server <uri> [min], quiet [s], reboot, "
                       "ota <url> [force] | confirm | rollback)",
                  cmd);
     }

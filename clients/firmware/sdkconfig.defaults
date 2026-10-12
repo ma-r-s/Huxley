@@ -98,6 +98,10 @@ CONFIG_LWIP_TCPIP_CORE_LOCKING=y
 # v0.3.1. With it, send and receive proceed independently — required
 # for any bidirectional audio workload over WS.
 CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK=y
+# Above WS_SEND_TIMEOUT_MS (5 s, hux_net.c): a mic send waiting for room
+# holds the tx lock that long, and the WebSocket task's PONG gives up
+# after this and aborts the connection (F-0022 review). Default 2000.
+CONFIG_ESP_WS_CLIENT_TX_LOCK_TIMEOUT_MS=6000
 
 # -- Compiler ------------------------------------------------------------
 CONFIG_COMPILER_OPTIMIZATION_PERF=y

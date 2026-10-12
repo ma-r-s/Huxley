@@ -13,7 +13,8 @@
  *                       ADC's reference channel (default 1000 Hz)
  *   wifi off [s] | on   stop Wi-Fi, back on by itself after s seconds
  *                       (default 10) / restart it now
- *   server <uri>        WebSocket to another server until reboot (netbench)
+ *   server <uri> [min]  WebSocket to another server, back after min minutes
+ *                       (default 15) or a reboot (bench.py's proxy)
  *   quiet [s]           amp off for s seconds, kept through restarts
  *                       (0 ends it; no s: how long is left)
  *   wifistat            the Wi-Fi driver's buffer / RX / TX counters

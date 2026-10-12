@@ -179,6 +179,17 @@ def cmd_flash(host: str, force: bool, image: Path = IMAGE) -> int:
         ELF_ARCHIVE.mkdir(exist_ok=True)
         shutil.copyfile(elf, ELF_ARCHIVE / f"{version}-{sha}.elf")
     before = info(host)
+    if before.get("slot_state") == "pending":
+        # Left pending by a flash that didn't finish: ESP-IDF refuses a new
+        # update until it's confirmed (ESP_ERR_OTA_ROLLBACK_INVALID_STATE).
+        if before.get("uptime_s", 0) < 31:
+            time.sleep(31 - before.get("uptime_s", 0))
+        print(
+            f"the running image ({before.get('version')}) was still pending: confirming it first"
+        )
+        request(host, "/cmd", b"ota confirm")
+        time.sleep(1)
+        before = info(host)
 
     class OnlyTheImage(http.server.SimpleHTTPRequestHandler):
         # Just the image: build/ also holds the ELF and other files with
@@ -208,8 +219,13 @@ def cmd_flash(host: str, force: bool, image: Path = IMAGE) -> int:
     print(f"flashing {version} ({image.stat().st_size // 1024} KB) to {host} from {url}")
     offset, t0 = log_tail_from(), time.time()
     request(host, "/cmd", f"ota {url}{' force' if force else ''}".encode())
+    # The old image reconnecting mid-download (a Wi-Fi blip) is not the
+    # new one booting: stop on a device line with another version, or any
+    # if both builds share a version (a forced uncommitted build).
+    old = re.escape(str(before.get("version", "")))
+    device = "^device " if before.get("version") == version else rf"^device (?!{old}$)"
     offset, why = board_lines(
-        offset, t0 + 120, stop=r"ota\.failed|ota\.refused|ota\.not_started|^device "
+        offset, t0 + 120, stop=rf"ota\.failed|ota\.refused|ota\.not_started|{device}"
     )
     httpd.shutdown()
     if re.search(r"ota\.(failed|refused|not_started)", why):

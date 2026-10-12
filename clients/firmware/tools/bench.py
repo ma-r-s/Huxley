@@ -199,6 +199,7 @@ class LinkProxy:
     def __init__(self, upstream_port: int, listen_port: int = PROXY_PORT) -> None:
         self.upstream_port = upstream_port
         self.rate = {"up": None, "down": None}  # KB/s; None = full speed, 0 = stopped
+        self.ping_due = False
         self.lsock = socket.socket()
         self.lsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.lsock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, self.BUF)
@@ -209,6 +210,12 @@ class LinkProxy:
     def set(self, direction: str, kbps: int | None) -> None:
         """direction: "up" = board -> server, "down" = server -> board."""
         self.rate[direction] = kbps
+
+    def ping(self) -> None:
+        """Slip a WebSocket ping to the board at the next frame boundary of
+        the downlink, as the server's own keepalive would (every 20 s, so
+        a test can't wait for one to land at the right moment)."""
+        self.ping_due = True
 
     def _accept(self) -> None:
         while True:
@@ -226,6 +233,9 @@ class LinkProxy:
                 threading.Thread(target=self._pump, args=(src, dst, d), daemon=True).start()
 
     def _pump(self, src: socket.socket, dst: socket.socket, direction: str) -> None:
+        # Downlink only: where the current server frame ends (after the
+        # HTTP upgrade), so a ping can go in between two frames.
+        frame_left, head, upgraded = 0, b"", direction != "down"
         try:
             while True:
                 while self.rate[direction] == 0:
@@ -236,6 +246,32 @@ class LinkProxy:
                     break
                 if rate:
                     time.sleep(len(data) / (rate * 1024))
+                if direction == "down":
+                    out = b""
+                    if not upgraded:
+                        end = data.find(b"\r\n\r\n")
+                        if end < 0:
+                            dst.sendall(data)
+                            continue
+                        out, data, upgraded = data[: end + 4], data[end + 4 :], True
+                    while data:
+                        if frame_left == 0 and not head and self.ping_due:
+                            out += b"\x89\x00"  # ping, no payload, unmasked
+                            self.ping_due = False
+                        if frame_left > 0:
+                            n = min(frame_left, len(data))
+                            out, data, frame_left = out + data[:n], data[n:], frame_left - n
+                            continue
+                        head += data[:1]
+                        data = data[1:]
+                        if len(head) >= 2:
+                            n7 = head[1] & 0x7F
+                            need = 2 + (2 if n7 == 126 else 8 if n7 == 127 else 0)
+                            if len(head) == need:
+                                size = n7 if n7 < 126 else int.from_bytes(head[2:], "big")
+                                out, frame_left, head = out + head, size, b""
+                    dst.sendall(out)
+                    continue
                 dst.sendall(data)
         except OSError:
             pass
@@ -376,6 +412,17 @@ def main() -> int:
             ours = [x for x in b.grep(r" E \(\d+\) hux_", m)]
             result("boot", line is not None and not ours, line or f"no READY in 30 s {ours[:1]}")
         elif step == "quiet":
+            # During a `quiet` period the amp is already off and `pa on`
+            # would end it: leave it alone, and don't turn it on after.
+            b.send("quiet")
+            left = b.expect(r"console\.quiet left_s=", 4, m)
+            if left and field("left_s", left) not in ("0", "?"):
+                result(
+                    "quiet",
+                    True,
+                    f"quiet period active ({field('left_s', left)} s): amp untouched",
+                )
+                return
             pa_off = True
             b.send("pa off")
             line = b.expect(r"spk\.pa off ok=1", 3, m)
@@ -540,18 +587,43 @@ def main() -> int:
             time.sleep(args.stall_s)
             proxy.set("up", None)
             heard = b.expect(r"\[server\] transcript role=user", 30, m)
-            stats = b.expect(r"mic\.tx\.done", 5, m) or b.expect(r"app\.ptt\.final_stats", 1, m)
+            stats = b.expect(r"mic\.tx\.done", 5, m)
+            time.sleep(2)
+            cancel_reply()
+            # Then a ping in the middle of a stall: the board must answer it
+            # (PONG) while a stalled mic send holds the library's tx lock.
+            # Three times in a 20 s press: uplink stopped 4.5 s, a ping
+            # 1.5 s in (by then the send is blocked), 2 s flowing.
+            m2 = b.mark()
+            b.send("talk")
+            for _ in range(3):
+                proxy.set("up", 0)
+                time.sleep(1.5)
+                proxy.ping()
+                time.sleep(3)
+                proxy.set("up", None)
+                time.sleep(2)
+            b.send("release")
+            pulsed = b.expect(r"mic\.tx\.done", 15, m2)
             time.sleep(2)
             drops = b.grep(r"\[server\] client_(connected|disconnected|evicted)", m)
             incomplete = b.grep(r"ws\.send\.incomplete", m)
-            cancel_reply()
-            ok = bool(heard and not drops)
+            whole = (
+                all(
+                    field(k, x or "") == v
+                    for x in (stats, pulsed)
+                    for k, v in (("ptt_stop_sent", "1"), ("tx_fail", "0"))
+                )
+                and field("enq_drop", stats or "") == "0"
+            )
+            ok = bool(heard and whole and not drops)
             result(
                 "stall",
                 ok,
                 f"reconnects={len([d for d in drops if 'client_connected' in d])} "
                 f"send_incomplete={len(incomplete)} heard={bool(heard)} "
-                f"{re.split(r'final_stats |mic.tx.done ', stats or '')[-1]}",
+                f"question: {re.split('mic.tx.done ', stats or '')[-1]}; "
+                f"pings in stalls: {re.split('mic.tx.done ', pulsed or '')[-1]}",
             )
         elif step == "slowdown":
             # A stream (the radio) whose downlink drops to slow_kbps for
@@ -607,22 +679,25 @@ def main() -> int:
         else:
             result(step, False, "unknown step")
 
-    for step in steps:
-        try:
-            run(step)
-        except Exception as e:  # a step that can't run is a failure, not a crash
-            result(step, False, f"{type(e).__name__}: {e}")
-
-    # Leave it as we found it: its own server, the amp on.
-    if args.wifi:
-        try:
-            if via_proxy:
-                b.send(f"server {args.server}")
-                time.sleep(3)
-            if pa_off:
-                b.send("pa on")
-        except OSError as e:
-            print(f"could not restore the board ({e}): python3 tools/dev.py cmd reboot")
+    try:
+        for step in steps:
+            try:
+                run(step)
+            except Exception as e:  # a step that can't run is a failure, not a crash
+                result(step, False, f"{type(e).__name__}: {e}")
+    finally:
+        # Leave it as we found it, even after Ctrl-C: its own server, the
+        # amp on (unless a quiet period had it off). The firmware also
+        # reverts `server` by itself after 15 min.
+        if args.wifi:
+            try:
+                if via_proxy:
+                    b.send(f"server {args.server}")
+                    time.sleep(3)
+                if pa_off:
+                    b.send("pa on")
+            except OSError as e:
+                print(f"could not restore the board ({e}): python3 tools/dev.py cmd reboot")
 
     print(f"{'all passed' if fails == 0 else f'{fails} failed'}")
     return fails

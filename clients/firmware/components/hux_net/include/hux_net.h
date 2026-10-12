@@ -42,10 +42,11 @@ int hux_net_rssi(void);
 void hux_net_pause(void);
 void hux_net_resume(void);
 
-/** Point the WebSocket at another server until the next boot (tests:
- * through a fault-injecting proxy, tools/netbench.py). Reconnects now.
- * Not from the WebSocket task. */
-void hux_net_set_server(const char *uri);
+/** Point the WebSocket at another server (tests: through bench.py's
+ * proxy), until the next boot or `revert_s` seconds (0: no revert), so a
+ * test that dies can't leave the walkie pointed at nothing. Reconnects
+ * now. Not from the WebSocket task. */
+void hux_net_set_server(const char *uri, uint32_t revert_s);
 
 /** The WebSocket client's task is running (it connects or reconnects on
  * its own). False after a pause, or if it ended unexpectedly. */
