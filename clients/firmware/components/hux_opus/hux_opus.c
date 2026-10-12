@@ -53,6 +53,9 @@ EXT_RAM_BSS_ATTR static rx_item_t s_dec_item;
 EXT_RAM_BSS_ATTR static rx_item_t s_ws_item;
 EXT_RAM_BSS_ATTR static rx_item_t s_ctl_item;
 static _Atomic uint32_t s_enc_us, s_enc_n, s_dec_us, s_dec_n;
+/* Items the decode task took off s_rx_q (packets and markers): the
+ * supervisor's "work done" for the decoder (F-0027). */
+static _Atomic uint32_t s_rx_taken = 0;
 
 static void decode_task(void *unused) {
     (void)unused;
@@ -62,6 +65,7 @@ static void decode_task(void *unused) {
         if (xQueueReceive(s_rx_q, it, portMAX_DELAY) != pdTRUE) {
             continue;
         }
+        atomic_fetch_add(&s_rx_taken, 1);
         if (it->kind == RX_UNHOLD) {
             if (s_unhold_sink != NULL) {
                 s_unhold_sink();
@@ -242,6 +246,11 @@ void hux_opus_encode_reset(void) {
 uint32_t hux_opus_take_enc_us(void) {
     uint32_t n = atomic_exchange(&s_enc_n, 0), us = atomic_exchange(&s_enc_us, 0);
     return n ? us / n : 0;
+}
+
+void hux_opus_rx_progress(uint32_t *done, uint32_t *pending) {
+    *done = atomic_load(&s_rx_taken);
+    *pending = s_rx_q != NULL ? (uint32_t)uxQueueMessagesWaiting(s_rx_q) : 0;
 }
 
 uint32_t hux_opus_take_dec_us(void) {

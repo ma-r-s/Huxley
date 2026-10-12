@@ -1,6 +1,7 @@
 #include "hux_app.h"
 
 #include <math.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -145,6 +146,10 @@ typedef struct {
 } audio_frame_t;
 
 static QueueHandle_t s_audio_q = NULL;
+/* The supervisor's counters (F-0027): uplink items taken off s_audio_q,
+ * and app loop wakes (at least one a second, an event or the timeout). */
+static _Atomic uint32_t s_uplink_done = 0;
+static _Atomic uint32_t s_app_beats = 0;
 
 /* Per-PTT counters. mic_sink writes, audio_sender_task writes, app
  * task reads at release — single-writer per counter, no locks. */
@@ -254,6 +259,7 @@ static void audio_sender_task(void *unused) {
         if (xQueueReceive(s_audio_q, &frame, portMAX_DELAY) != pdTRUE) {
             continue;
         }
+        atomic_fetch_add(&s_uplink_done, 1);
         if (frame.kind != UPLINK_AUDIO) {
             /* In order with the frames: everything said before the release
              * is on the wire before ptt_stop. */
@@ -649,6 +655,13 @@ static void dispatch(hux_app_event_t *ev) {
             }
             break;
 
+        case HUX_APP_EV_DEBUG_HANG:
+            ESP_LOGW(TAG, "app.debug_hang: the app task stops here (supervisor test)");
+            for (;;) {
+                vTaskDelay(portMAX_DELAY);
+            }
+            break;
+
         case HUX_APP_EV_NET_WS_FINISHED:
             /* A FINISH can arrive after a press already restarted the
              * client: resume() does nothing while one is running. */
@@ -683,9 +696,11 @@ static void app_task(void *unused) {
 
     hux_app_event_t ev;
     for (;;) {
-        if (xQueueReceive(s_event_q, &ev, portMAX_DELAY) == pdTRUE) {
+        /* A 1 s timeout so the supervisor sees the loop alive while idle. */
+        if (xQueueReceive(s_event_q, &ev, pdMS_TO_TICKS(1000)) == pdTRUE) {
             dispatch(&ev);
         }
+        atomic_fetch_add(&s_app_beats, 1);
     }
 }
 
@@ -722,6 +737,15 @@ void hux_app_set_device_info(const hux_app_device_info_t *info) {
     if (info != NULL) {
         s_device = *info;
     }
+}
+
+uint32_t hux_app_beats(void) {
+    return atomic_load(&s_app_beats);
+}
+
+void hux_app_uplink_progress(uint32_t *done, uint32_t *pending) {
+    *done = atomic_load(&s_uplink_done);
+    *pending = s_audio_q != NULL ? (uint32_t)uxQueueMessagesWaiting(s_audio_q) : 0;
 }
 
 bool hux_app_post_event(const hux_app_event_t *event, bool from_isr) {

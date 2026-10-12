@@ -103,6 +103,11 @@ static const char *TAG = "hux_audio";
 #define SPK_VOLUME_MIN        10
 #define SPK_PA_SETTLE_MS      10  /* Waveshare factsheet recommended PA-on delay */
 static _Atomic int s_volume = SPK_VOLUME_DEFAULT; /* level applied, for reports */
+/* The supervisor's counters (F-0027): successful speaker writes, and mic
+ * passes that did their job (a read, or an idle frame while off). */
+static _Atomic uint32_t s_spk_writes = 0;
+static _Atomic uint32_t s_mic_turns = 0;
+static _Atomic bool s_spk_debug_hang = false; /* console `hang spk` */
 /* The level survives a reboot (F-0027): at the home a remote restart
  * mustn't leave him at 50 after he asked for more. */
 #define VOLUME_NVS_NS  "hux_audio"
@@ -505,6 +510,12 @@ static void spk_task(void *unused) {
     uint32_t write_errs = 0;
 
     for (;;) {
+        if (atomic_load_explicit(&s_spk_debug_hang, memory_order_relaxed)) {
+            ESP_LOGW(TAG, "spk.debug_hang: the speaker task stops here (supervisor test)");
+            for (;;) {
+                vTaskDelay(portMAX_DELAY);
+            }
+        }
         /* Wait for reply audio up to a chunk, unless a tone is due: then
          * the DMA write below paces the loop, as it does for audio. */
         bool tone_due = tone_left > 0 || uxQueueMessagesWaiting(s_tone_q) > 0;
@@ -648,7 +659,9 @@ static void spk_task(void *unused) {
 
         esp_err_t err = esp_codec_dev_write(
             s_spk_dev, stereo32, got_samples * 2 * sizeof(int32_t));
-        if (err != ESP_OK) {
+        if (err == ESP_OK) {
+            atomic_fetch_add_explicit(&s_spk_writes, 1, memory_order_relaxed);
+        } else {
             ESP_LOGW(TAG, "spk.write_failed err=%s", esp_err_to_name(err));
             write_errs++;
             /* Don't spin: throttle so a broken codec doesn't burn CPU. */
@@ -797,6 +810,18 @@ void hux_audio_set_volume(int level) {
     ESP_LOGI(TAG, "spk.volume level=%d requested=%d", applied, level);
 }
 
+void hux_audio_debug_hang_spk(void) {
+    atomic_store_explicit(&s_spk_debug_hang, true, memory_order_relaxed);
+}
+
+uint32_t hux_audio_spk_writes(void) {
+    return atomic_load_explicit(&s_spk_writes, memory_order_relaxed);
+}
+
+uint32_t hux_audio_mic_turns(void) {
+    return atomic_load_explicit(&s_mic_turns, memory_order_relaxed);
+}
+
 int hux_audio_get_volume(void) {
     return atomic_load_explicit(&s_volume, memory_order_relaxed);
 }
@@ -922,6 +947,7 @@ static void mic_task(void *unused) {
             /* Idle — park for a frame period, not forever, so
              * start()/stop() transitions are responsive. */
             vTaskDelay(pdMS_TO_TICKS(FRAME_MS));
+            atomic_fetch_add_explicit(&s_mic_turns, 1, memory_order_relaxed);
             continue;
         }
 
@@ -932,6 +958,7 @@ static void mic_task(void *unused) {
             vTaskDelay(pdMS_TO_TICKS(FRAME_MS));
             continue;
         }
+        atomic_fetch_add_explicit(&s_mic_turns, 1, memory_order_relaxed);
 
         /* A clip armed before this press replaces the mic for the press. */
         if (!injecting && atomic_exchange_explicit(&s_inject_armed, false, memory_order_acq_rel)) {

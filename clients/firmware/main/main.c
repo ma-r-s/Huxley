@@ -25,6 +25,7 @@
 #include "hux_log.h"
 #include "hux_net.h"
 #include "hux_opus.h"
+#include "hux_super.h"
 #include "hux_ota.h"
 #include "secrets.h"
 
@@ -208,6 +209,10 @@ void app_main(void) {
     hux_net_set_audio_sink(hux_audio_spk_push);
     /* `audio_clear` on the same task, in order with the audio. */
     hux_net_set_audio_clear_sink(hux_audio_on_audio_clear);
+
+    /* Last: the supervisor watches every part started above and feeds the
+     * task watchdog only while they all keep working (F-0027). */
+    hux_super_start();
 
 
     /* Remote threshold is INFO (set right after hux_log_init, so boot

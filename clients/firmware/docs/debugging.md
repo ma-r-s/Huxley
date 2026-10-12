@@ -155,6 +155,44 @@ If you see `reset=PANIC`, the previous boot crashed. Check:
    boot banner as `last_panic: <reason> pc=0xXXXXXXXX`.
 2. Coredump — see below.
 
+## The supervisor: hangs end in a restart (F-0027)
+
+Nobody at the home can restart the walkie, so `hux_super` (priority 10)
+feeds the task watchdog only while every part keeps finishing work, and
+the watchdog panics (`CONFIG_ESP_TASK_WDT_PANIC`, 10 s): a core dump of
+every task, then a restart. A part is stalled when it has work waiting
+and finishes none past its limit (`hux_super_check.c`, host-tested), not
+when its loop stops turning: a wedged decoder leaves the speaker loop
+writing silence.
+
+| Part        | Work done                                   | Waiting          | Limit |
+| ----------- | ------------------------------------------- | ---------------- | ----- |
+| `app`       | loop wakes (1 s queue timeout)              | always           | 30 s  |
+| `esp_timer` | a 1 s periodic timer's ticks                | always           | 10 s  |
+| `ladder`    | its 5 s ticks (it blocks in a stuck stop)   | always           | 60 s  |
+| `uplink`    | items taken off the mic queue               | queue depth      | 15 s  |
+| `speaker`   | successful codec writes (every 20 ms)       | always           | 10 s  |
+| `mic`       | reads, or idle frames while off             | always           | 10 s  |
+| `decoder`   | items taken off its queue                   | queue depth      | 10 s  |
+| `button`    | successful expander reads (every 10 ms)     | always           | 10 s  |
+
+A stall logs `super.stalled part= age_ms= done= pending= enforced=`
+(in the black box before the reset), and the watchdog's interrupt adds
+`twdt.fired tasks=`. The next boot logs `super.boot reset= last_stall=
+at_s= early_in_a_row= degraded=`. Three stalls in a row within 10 min of
+boot make a **degraded** boot: the audio parts only log, the app, the
+timer task and the ladder (the repair path) stay enforced, so a part
+that wedges on every boot can't keep an update out. A WebSocket with no
+event for 90 s while the server is up (the client pings every 10 s)
+logs `ws.silent` and counts as lost for the ladder.
+
+Console: `super` (each part's done/pending, the stall history); `hang
+app|spk` blocks that part for good (bench only: it restarts the walkie);
+`coredump erase`. The dump is never overwritten
+(`CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE`: a reset loop would wear its
+sectors), so read it (`dev.py coredump`) and erase it, or the next
+crash leaves none.
+
 ## Coredump — reading a crash
 
 When the board panics with coredumps enabled, it writes a binary

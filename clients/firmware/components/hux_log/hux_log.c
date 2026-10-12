@@ -235,6 +235,12 @@ static void box_take_previous(void) {
     hux_blackbox_reset(&s_box);
 }
 
+void hux_log_blackbox_note_isr(const char *line) {
+    taskENTER_CRITICAL_ISR(&s_box_lock);
+    hux_blackbox_put(&s_box, line, strlen(line));
+    taskEXIT_CRITICAL_ISR(&s_box_lock);
+}
+
 const char *hux_log_blackbox(uint32_t *dropped) {
     *dropped = s_prev_dropped;
     return s_prev_box;

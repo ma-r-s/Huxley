@@ -112,3 +112,12 @@ CONFIG_COMPILER_WARN_WRITE_STRINGS=y
 # boots the previous one. Plain http:// for images served on the LAN.
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
+
+# The supervisor (F-0027): the task watchdog panics (a core dump, then a
+# restart) instead of only logging; 10 s gives the supervisor's stall line
+# time to land. Nobody at the home can restart a hung walkie.
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+# A dump is kept until read and erased (`coredump erase`): a reset loop
+# must not rewrite the same sectors thousands of times a day.
+CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE=y

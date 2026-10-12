@@ -81,6 +81,10 @@ const char *hux_log_blackbox(uint32_t *dropped);
 /** The black box reached the server: free it. */
 void hux_log_blackbox_sent(void);
 
+/** Put one line straight into this boot's black box, from an interrupt
+ * (the task watchdog's, just before it panics). */
+void hux_log_blackbox_note_isr(const char *line);
+
 #ifdef __cplusplus
 }
 #endif

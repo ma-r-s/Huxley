@@ -42,11 +42,16 @@ static _Atomic bool s_serial_talk = false;
 static uint16_t s_last_inputs = 0;
 static uint32_t s_port0_changes = 0;
 
+/* Successful expander reads: the supervisor's "work done" here (F-0027).
+ * A dead I2C bus takes K2 and the amp's enable with it. */
+static _Atomic uint32_t s_tca_reads = 0;
+
 static bool k2_pressed(void) {
     uint16_t in = 0;
     if (!hux_board_tca_read_inputs(&in)) {
         return false;
     }
+    atomic_fetch_add_explicit(&s_tca_reads, 1, memory_order_relaxed);
     uint8_t p0 = in & 0xFF;
     uint8_t was = s_last_inputs & 0xFF;
     if (s_port0_changes > 0 && p0 != was && (s_port0_changes < 20 || s_port0_changes % 100 == 0)) {
@@ -99,6 +104,10 @@ static void button_task(void *unused) {
         talk_poll();
         vTaskDelay(pdMS_TO_TICKS(POLL_INTERVAL_MS));
     }
+}
+
+uint32_t hux_button_tca_reads(void) {
+    return atomic_load_explicit(&s_tca_reads, memory_order_relaxed);
 }
 
 void hux_button_set_serial_talk(bool held) {

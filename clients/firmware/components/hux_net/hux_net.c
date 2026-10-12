@@ -160,6 +160,13 @@ static _Atomic int s_ladder_done = HUX_LADDER_NONE;
 static _Atomic uint32_t s_ws_attempts = 0;
 #define LADDER_TICK_MS 5000
 static void ladder_task(void *arg);
+/* The supervisor watches the ladder's ticks (it blocks in a stop if the
+ * WS task is stuck). Any WS event (the client pings every 10 s, so pongs
+ * keep coming) stamps s_ws_event_ms: 90 s without one while the server is
+ * up means the WS task is stuck, which counts as lost (F-0027). */
+static _Atomic uint32_t s_ladder_ticks = 0;
+static _Atomic uint32_t s_ws_event_ms = 0;
+#define WS_SILENT_MS 90000
 
 /* Audio data-plane seam — see firmware/docs/architecture.md §"Data
  * plane vs control plane". Inbound `audio` messages bypass
@@ -731,6 +738,7 @@ static void forward_ws_text(const esp_websocket_event_data_t *data) {
 static void ws_event_handler(void *arg, esp_event_base_t base,
                              int32_t id, void *data) {
     esp_websocket_event_data_t *ev = (esp_websocket_event_data_t *)data;
+    atomic_store_explicit(&s_ws_event_ms, now_ms(), memory_order_relaxed);
     switch (id) {
         case WEBSOCKET_EVENT_CONNECTED:
             /* A new connection: its hello decides the format again, and
@@ -1137,6 +1145,13 @@ static void ladder_task(void *arg) {
     (void)arg;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(LADDER_TICK_MS));
+        atomic_fetch_add(&s_ladder_ticks, 1);
+        if (atomic_load(&s_server_up) &&
+            now_ms() - atomic_load_explicit(&s_ws_event_ms, memory_order_relaxed) > WS_SILENT_MS) {
+            ESP_LOGE(TAG, "ws.silent ms=%u: the WS task is stuck or the link dead",
+                     (unsigned)(now_ms() - atomic_load(&s_ws_event_ms)));
+            link_lost("silent");
+        }
         if (atomic_load(&s_server_up) || atomic_load(&s_paused) || s_ws == NULL) {
             continue;
         }
@@ -1187,6 +1202,10 @@ static void ladder_task(void *arg) {
         }
         link_unlock();
     }
+}
+
+uint32_t hux_net_ladder_ticks(void) {
+    return atomic_load(&s_ladder_ticks);
 }
 
 bool hux_net_is_running(void) {

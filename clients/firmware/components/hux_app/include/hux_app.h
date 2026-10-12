@@ -27,6 +27,8 @@ typedef enum {
     HUX_APP_EV_NET_WS_EVICTED,
     /* The WebSocket client's task ended (it no longer reconnects). */
     HUX_APP_EV_NET_WS_FINISHED,
+    /* Supervisor test (console `hang app`): the app task blocks for good. */
+    HUX_APP_EV_DEBUG_HANG,
     /* Button events. K1/K3 will land as their own kinds when a
      * consumer appears — see hux_button.c. */
     HUX_APP_EV_BUTTON_K2_PRESSED,
@@ -75,3 +77,8 @@ typedef struct {
 
 /** Set once at boot, before Wi-Fi starts. */
 void hux_app_set_device_info(const hux_app_device_info_t *info);
+
+/** The supervisor's view (F-0027): app loop wakes (one a second at least),
+ * and the uplink's items taken / waiting. */
+uint32_t hux_app_beats(void);
+void hux_app_uplink_progress(uint32_t *done, uint32_t *pending);

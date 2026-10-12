@@ -18,6 +18,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -36,6 +37,10 @@ void hux_button_start(void);
  * with the lever and K2 before the debounce, so it is the same button.
  */
 void hux_button_set_serial_talk(bool held);
+
+/** Successful expander reads (every 10 ms poll): the supervisor's view of
+ * the button task and the I2C bus (F-0027). */
+uint32_t hux_button_tca_reads(void);
 
 #ifdef __cplusplus
 }

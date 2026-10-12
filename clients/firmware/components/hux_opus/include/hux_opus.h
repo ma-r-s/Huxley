@@ -76,6 +76,10 @@ void hux_opus_encode_reset(void);
 uint32_t hux_opus_take_enc_us(void);
 uint32_t hux_opus_take_dec_us(void);
 
+/** The supervisor's view (F-0027): items the decoder took off its queue,
+ * ever, and how many wait now. */
+void hux_opus_rx_progress(uint32_t *done, uint32_t *pending);
+
 #ifdef __cplusplus
 }
 #endif

@@ -84,6 +84,10 @@ void hux_net_hello_ok(void);
 /** Log the current, proven and compiled addresses and the mode. */
 void hux_net_server_status(void);
 
+/** The ladder task's ticks (one per 5 s): the supervisor's view of it
+ * (F-0027). */
+uint32_t hux_net_ladder_ticks(void);
+
 /** The WebSocket client's task is running (it connects or reconnects on
  * its own). False after a pause, or if it ended unexpectedly. */
 bool hux_net_is_running(void);

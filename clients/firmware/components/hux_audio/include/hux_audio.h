@@ -111,6 +111,15 @@ void hux_audio_set_volume(int level);
 /** The volume level applied last (0..100). */
 int hux_audio_get_volume(void);
 
+/** The supervisor's view (F-0027): successful speaker writes (the loop
+ * writes every 20 ms, audio or silence), and mic passes that did their
+ * job (a read while capturing, an idle frame while not). */
+uint32_t hux_audio_spk_writes(void);
+uint32_t hux_audio_mic_turns(void);
+
+/** Supervisor test (console `hang spk`): the speaker task blocks for good. */
+void hux_audio_debug_hang_spk(void);
+
 /**
  * Queue a local tone: a sine of `hz` (0 = a silent gap) for `ms`, faded
  * in and out. Segments play in order once the reply audio in the ring

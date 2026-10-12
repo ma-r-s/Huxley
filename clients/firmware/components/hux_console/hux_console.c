@@ -18,6 +18,8 @@
 #include "hux_button.h"
 #include "hux_net.h"
 #include "hux_ota.h"
+#include "hux_super.h"
+#include "esp_core_dump.h"
 
 static const char *TAG = "hux_console";
 
@@ -93,6 +95,15 @@ void hux_console_run(char *line) {
         int hz = argc > 1 ? atoi(argv[1]) : 440;
         int ms = argc > 2 ? atoi(argv[2]) : 1000;
         hux_audio_tone(hz, ms);
+    } else if (strcmp(cmd, "super") == 0) {
+        hux_super_status();
+    } else if (strcmp(cmd, "hang") == 0 && argc > 1) {
+        hux_super_test_hang(argv[1]); /* bench only: the walkie restarts */
+    } else if (strcmp(cmd, "coredump") == 0 && argc > 1 && strcmp(argv[1], "erase") == 0) {
+        /* The dump is never overwritten (a reset loop would wear its
+         * sectors): erase it once it has been read (dev.py coredump). */
+        esp_err_t err = esp_core_dump_image_erase();
+        ESP_LOGW(TAG, "coredump.erased err=%s", esp_err_to_name(err));
     } else if (strcmp(cmd, "vol") == 0 && argc > 1) {
         hux_audio_set_volume(atoi(argv[1]));
     } else if (strcmp(cmd, "wifi") == 0 && argc > 1 && strcmp(argv[1], "off") == 0) {
@@ -178,7 +189,8 @@ void hux_console_run(char *line) {
     } else {
         ESP_LOGW(TAG, "console.unknown %s (talk, release, say N, tone [hz] [ms], vol N, pa on|off, "
                       "selftest [hz], wifi off [s]|on, wifistat, wifiscan, wifibw 20|40, info, "
-                      "server [<uri> [min] | keep <uri> [min] | reset], quiet [s], battery, reboot, "
+                      "server [<uri> [min] | keep <uri> [min] | reset], quiet [s], battery, super, "
+                      "hang app|spk, coredump erase, reboot, "
                       "ota <url> [force] | confirm | rollback)",
                  cmd);
     }
