@@ -220,8 +220,15 @@ class Application:
         # by a failed setup can have its tasks cancelled.
         self._setup_task_handles: dict[str, list[BackgroundTaskHandle]] | None = None
         # The persona's recorder while it runs (`recording: {enabled:
-        # true}`), attached to the shared AudioServer. None when off.
+        # true}`). The runtime hands it to the shared AudioServer when
+        # this app becomes current (`AudioServer.set_recorder`). None
+        # when off.
         self._recorder: Recorder | None = None
+
+    @property
+    def recorder(self) -> Recorder | None:
+        """This persona's running recorder, None when it does not record."""
+        return self._recorder
 
     @property
     def active_language(self) -> str | None:
@@ -548,9 +555,12 @@ class Application:
         await self.storage.close()
 
     async def _start_recorder(self) -> None:
-        """Record this persona's conversations if its `recording:` block
-        says so. A recorder that can't start is logged and skipped: the
-        persona runs, unrecorded, rather than not at all."""
+        """Start this persona's recorder if its `recording:` block says
+        so. Not attached here: the runtime attaches it when this app
+        becomes current, so while a swap is starting this app the old
+        persona's audio never lands in this persona's recordings (nor
+        the reverse). A recorder that can't start is logged and skipped:
+        the persona runs, unrecorded, rather than not at all."""
         if not self.persona.recording.enabled:
             return
         recorder = Recorder(self.persona.data_dir)
@@ -565,12 +575,12 @@ class Application:
             )
             return
         self._recorder = recorder
-        self.server.attach_recorder(recorder)
 
     async def _stop_recorder(self) -> None:
         """Last step of shutdown: close open segments, flush, stop the
         writer thread. Detaches only if this app's recorder is still the
-        attached one (a swap's new persona may have attached its own)."""
+        attached one (a swap has already handed the server to the new
+        persona's recorder, or to none)."""
         recorder, self._recorder = self._recorder, None
         if recorder is None:
             return

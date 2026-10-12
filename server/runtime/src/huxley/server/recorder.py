@@ -19,11 +19,13 @@ and `claim_ended`: a skill's claim, its speaker audio), `stream` (between
 `stream_started` and `stream_ended`), `model` (while `model_speaking` is
 true), else `sound` (earcons, the waiting cue, tones). The mic has one
 segment per press (`ptt_start` to `ptt_stop`), one per claim, and one for
-packets outside both (closed after 2 s without any).
+packets outside both (closed after 2 s without any; timeline only, as
+they are no one's voice: the tail a client still sends before it hears a
+claim ended, say).
 
-**Files** only for voices: mic, `model` and `claim` segments, as Ogg Opus
-under `<data_dir>/recordings/YYYY/MM/DD/` (UTC). `stream` and `sound`
-segments are timeline only. Every segment ends in one `recorder.segment`
+**Files** only for voices: mic (presses, claims), `model` and `claim`
+segments, as Ogg Opus under `<data_dir>/recordings/YYYY/MM/DD/` (UTC).
+`stream` and `sound` segments are timeline only. Every segment ends in one `recorder.segment`
 log line. Files are written as `.ogg.part` and renamed on close (fsynced),
 so a power cut leaves at worst a truncated, playable `.part`.
 
@@ -31,10 +33,21 @@ so a power cut leaves at worst a truncated, playable `.part`.
 packets can reach the wire a few ms before its `stream_started` /
 `claim_started` (the pump runs while the coordinator announces it), and
 `model_speaking` is already true for them (it means "something owns the
-speaker"). A `model` segment younger than `_RETAG_WINDOW_S` when a stream
-or claim starts is therefore that stream's or claim's start: it is
-retagged (its file dropped for a stream, kept and renamed for a claim)
-instead of leaving a stray `model` file with an earcon in it.
+speaker"). A `model` segment younger than `_RETAG_WINDOW_S` and holding
+at most `_RETAG_MAX_SAMPLES` of audio when a stream or claim starts is
+therefore that stream's or claim's start: it is retagged (its file
+dropped for a stream, kept and renamed for a claim) instead of leaving a
+stray `model` file with an earcon in it. The audio cap matters because
+model audio arrives faster than real time: a whole short answer can be
+written within the window, and real speech must not be dropped.
+
+**A gap it cannot absorb.** When something parks a live stream (an
+injected turn, a claim) and the model then speaks, the coordinator has
+sent no `stream_ended`: the client is told the stream still plays, and
+that speech is tagged `stream`, with no file. The frames cannot tell it from
+the stream resuming; the fix belongs in the coordinator (announce the
+park as `stream_ended`, the resume as `stream_started`). See
+docs/remote-operation.md W3.
 
 **Threading.** The event loop only stamps and enqueues (`Recorder` methods
 never block and never raise). One background thread runs the segmenting
@@ -86,6 +99,9 @@ _MAX_QUEUED_PACKETS = 3000
 # A `model` segment this young when a stream or claim starts is that
 # stream's or claim's first audio (see the module docstring).
 _RETAG_WINDOW_S = 0.5
+# ...and holding at most this much audio (48 kHz samples, 1 s). The race
+# leaves a packet or two; a longer segment is real speech.
+_RETAG_MAX_SAMPLES = 48000
 # A `sound` segment, or mic packets outside a press or claim, end after
 # this long without a packet: nothing else announces their end.
 _IDLE_CLOSE_S = 2.0
@@ -146,6 +162,7 @@ class _Segment:
     invalid: int = 0
     cut_by_clear: bool = False
     retagged_from: str | None = None
+    retagged_samples: int = 0
     error: str | None = None
     fh: BinaryIO | None = None
     writer: OggOpusWriter | None = None
@@ -331,6 +348,7 @@ class _Timeline:
             seg.source == SOURCE_MODEL
             and source in (SOURCE_STREAM, SOURCE_CLAIM)
             and ev.t_mono - seg.opened_mono <= _RETAG_WINDOW_S
+            and seg.samples <= _RETAG_MAX_SAMPLES
         ):
             self._retag(seg, source, label, stream_id, claim_id, key)
             return
@@ -354,6 +372,7 @@ class _Timeline:
         key: tuple[object, ...],
     ) -> None:
         seg.retagged_from = seg.source
+        seg.retagged_samples = seg.samples
         seg.source, seg.label, seg.stream_id, seg.claim_id, seg.key = (
             source,
             label,
@@ -386,7 +405,17 @@ class _Timeline:
         if self._mic is not None and self._mic.key != key:
             self._close_mic("next_source")
         if self._mic is None:
-            self._mic = self._new_segment(ev, ev.conn_id, SOURCE_MIC, label, None, claim_id, key)
+            self._mic = self._new_segment(
+                ev,
+                ev.conn_id,
+                SOURCE_MIC,
+                label,
+                None,
+                claim_id,
+                key,
+                # Packets outside a press or claim: timeline only.
+                audio=key != ("unsolicited",),
+            )
         self._append(self._mic, ev)
 
     def _new_segment(
@@ -398,6 +427,8 @@ class _Timeline:
         stream_id: str | None,
         claim_id: str | None,
         key: tuple[object, ...],
+        *,
+        audio: bool = True,
     ) -> _Segment:
         seq = self._seq.get(conn_id, 0) + 1
         self._seq[conn_id] = seq
@@ -410,7 +441,7 @@ class _Timeline:
             claim_id=claim_id,
             key=key,
             opened_mono=ev.t_mono,
-            audio=source in _AUDIO_SOURCES,
+            audio=audio and source in _AUDIO_SOURCES,
             last_mono=ev.t_mono,
         )
 
@@ -586,6 +617,7 @@ class _Timeline:
             fields["invalid"] = seg.invalid
         if seg.retagged_from is not None:
             fields["retagged_from"] = seg.retagged_from
+            fields["retagged_ms"] = seg.retagged_samples // 48
         if seg.error is not None:
             fields["error"] = seg.error
         logger.info("recorder.segment", **fields)
@@ -793,8 +825,11 @@ class Recorder:
             if event.packet is not None:
                 with self._lock:
                     self._queued_packets -= 1
-            self._safely(timeline.handle, event)
+            # Idle first, at the event's time: a segment that went quiet
+            # before this event ends as `idle`, not as whatever the
+            # event does to it.
             self._safely(timeline.tick, event.t_mono)
+            self._safely(timeline.handle, event)
         self._safely(timeline.close_all, "shutdown")
         logger.info(
             "recorder.stopped",

@@ -32,7 +32,7 @@ from huxley.server.opus_codec import (
 )
 from huxley.server.recorder import Recorder
 from huxley.server.server import AudioServer, _ConnInfo
-from tests.unit.test_recorder import _ogg_packets
+from tests.unit.ogg_reader import data_packets
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -172,7 +172,7 @@ async def _until(cond: Any, timeout_s: float = 2.0) -> None:
 async def test_speaker_packets_are_recorded_as_written_in_wire_order() -> None:
     srv, ws, _ = _server()
     rec = _fake_recorder()
-    srv.attach_recorder(rec)
+    srv.set_recorder(rec)
     rec.reset_mock()
     await srv.send_model_speaking(True)
     await srv.send_audio(_sine(1000))
@@ -194,7 +194,7 @@ async def test_audio_dropped_by_a_clear_is_never_recorded() -> None:
     the clear comes; the rest was never sent, so it is not recorded."""
     srv, ws, _ = _server()
     rec = _fake_recorder()
-    srv.attach_recorder(rec)
+    srv.set_recorder(rec)
     rec.reset_mock()
     gate = asyncio.Event()
     ws.gate = gate
@@ -211,7 +211,7 @@ async def test_audio_dropped_by_a_clear_is_never_recorded() -> None:
 async def test_a_pcm_client_is_never_tapped() -> None:
     srv, ws, _ = _server(opus=False)
     rec = _fake_recorder()
-    srv.attach_recorder(rec)
+    srv.set_recorder(rec)
     await srv.send_audio(_sine(200))
     assert ws.sent  # the PCM client got its JSON audio
     rec.speaker_packet.assert_not_called()
@@ -224,7 +224,7 @@ async def test_a_pcm_client_is_never_tapped() -> None:
 async def test_mic_packets_are_recorded_before_decoding_even_rejected_ones() -> None:
     srv, _ws, on_audio_frame = _server()
     rec = _fake_recorder()
-    srv.attach_recorder(rec)
+    srv.set_recorder(rec)
     rec.reset_mock()
     good = OpusEncoderStream().push(_sine(60))[0]
     await srv._dispatch(json.dumps({"type": "ptt_start"}))
@@ -247,7 +247,7 @@ async def test_mic_packets_are_recorded_before_decoding_even_rejected_ones() -> 
 async def test_stream_and_claim_frames_reach_the_recorder_in_order() -> None:
     srv, ws, _ = _server()
     rec = _fake_recorder()
-    srv.attach_recorder(rec)
+    srv.set_recorder(rec)
     rec.reset_mock()
     await srv.send_stream_started("s1", "Radio", 0)
     await srv.send_audio(_sine(100))  # 1 packet + 40 ms pending
@@ -273,7 +273,7 @@ async def test_a_recorder_attached_mid_activity_starts_from_what_plays() -> None
     await srv.send_claim_started("k1", "comms", "Ana")
     await srv._dispatch(json.dumps({"type": "ptt_start"}))
     rec = _fake_recorder()
-    srv.attach_recorder(rec)
+    srv.set_recorder(rec)
     assert rec.mock_calls == [
         call.model_speaking(True),
         call.stream_started("s1", "Book"),
@@ -288,8 +288,8 @@ async def test_only_the_attached_recorder_is_detached() -> None:
     old one shuts down; the old one's detach must not undo it."""
     srv, _ws, _ = _server()
     old, new = _fake_recorder(), _fake_recorder()
-    srv.attach_recorder(old)
-    srv.attach_recorder(new)
+    srv.set_recorder(old)
+    srv.set_recorder(new)
     old.detached.assert_called_once()
     assert srv.detach_recorder(old) is False
     assert srv._recorder is new
@@ -303,12 +303,12 @@ async def test_only_the_attached_recorder_is_detached() -> None:
 async def test_a_pcm_client_is_skipped_with_one_log_line() -> None:
     srv, _ = _bare_server()
     rec = _fake_recorder()
-    srv.attach_recorder(rec)
+    srv.set_recorder(rec)
     ws = _ClientWS()
     with structlog.testing.capture_logs() as logs:
         task = asyncio.create_task(srv._handle_connection(ws))  # type: ignore[arg-type]
         await _until(lambda: any(m.get("type") == "input_mode" for m in ws.json))
-        srv.attach_recorder(_fake_recorder())  # a reload: same connection
+        srv.set_recorder(_fake_recorder())  # a reload: same connection
         await srv.send_audio(_sine(100))
         ws.finish()
         await asyncio.wait_for(task, 2)
@@ -323,7 +323,7 @@ async def test_a_pcm_client_is_skipped_with_one_log_line() -> None:
 async def test_a_disconnect_and_an_eviction_close_the_connections_segments() -> None:
     srv, _ = _bare_server()
     rec = _fake_recorder()
-    srv.attach_recorder(rec)
+    srv.set_recorder(rec)
     first, second = _ClientWS(), _ClientWS()
     t1 = asyncio.create_task(srv._handle_connection(first))  # type: ignore[arg-type]
     await _until(lambda: srv._conn is not None and srv._conn.ws is first)
@@ -365,7 +365,7 @@ async def test_a_press_and_a_reply_become_two_files(tmp_path: Path) -> None:
     with structlog.testing.capture_logs() as logs:
         rec = Recorder(tmp_path)
         rec.start()
-        srv.attach_recorder(rec)
+        srv.set_recorder(rec)
         await srv._dispatch(json.dumps({"type": "ptt_start"}))
         for p in mic:
             await srv._dispatch(p)
@@ -383,8 +383,8 @@ async def test_a_press_and_a_reply_become_two_files(tmp_path: Path) -> None:
     assert by_source["model"]["packets"] == len(ws.packets) == 17
     assert by_source["model"]["duration_ms"] == 17 * 60
     # Byte for byte what crossed the wire, both ways.
-    assert _ogg_packets(tmp_path / by_source["mic"]["path"]) == mic
-    assert _ogg_packets(tmp_path / by_source["model"]["path"]) == ws.packets
+    assert data_packets((tmp_path / by_source["mic"]["path"]).read_bytes()) == mic
+    assert data_packets((tmp_path / by_source["model"]["path"]).read_bytes()) == ws.packets
 
 
 # --- The persona switch -----------------------------------------------------------
@@ -429,6 +429,73 @@ async def test_recording_off_writes_nothing_and_starts_no_thread(
     assert len(_recorder_threads()) == before
     await app.shutdown()
     assert not (tmp_path / "personas" / "p" / "data" / "recordings").exists()
+
+
+async def test_recording_follows_the_current_persona_across_swaps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """From a recording persona to one that doesn't: the old recorder is
+    off the server the moment the swap commits, not seconds later when
+    the old persona finishes shutting down (its summary takes seconds,
+    while the new persona already serves the client)."""
+    personas = tmp_path / "personas"
+    for name, extra in (("rec", "recording:\n  enabled: true\n"), ("plain", "")):
+        (personas / name / "data").mkdir(parents=True)
+        (personas / name / "persona.yaml").write_text(_PERSONA_YAML + extra, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    runtime = Runtime(Settings(openai_api_key="test-key"))
+    await runtime._switch_to_persona("rec", auto_connect=False)
+    first = runtime.audio_server._recorder
+    assert isinstance(first, Recorder)
+
+    await runtime._switch_to_persona("plain", auto_connect=False)
+    assert runtime.audio_server._recorder is None
+    assert runtime._teardown_task is not None
+    await runtime._teardown_task
+    assert not first.is_running
+
+    await runtime._switch_to_persona("rec", auto_connect=False)
+    second = runtime.audio_server._recorder
+    assert isinstance(second, Recorder) and second is not first
+    assert runtime.current_app is not None
+    await runtime._shutdown_apps()
+    assert runtime.audio_server._recorder is None
+    assert not second.is_running
+
+
+async def test_a_persona_that_fails_to_start_leaves_the_old_recorder_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from huxley.app import Application
+
+    personas = tmp_path / "personas"
+    for name in ("rec", "broken"):
+        (personas / name / "data").mkdir(parents=True)
+        (personas / name / "persona.yaml").write_text(
+            _PERSONA_YAML + "recording:\n  enabled: true\n", encoding="utf-8"
+        )
+    monkeypatch.chdir(tmp_path)
+    runtime = Runtime(Settings(openai_api_key="test-key"))
+    await runtime._switch_to_persona("rec", auto_connect=False)
+    kept = runtime.audio_server._recorder
+    assert isinstance(kept, Recorder)
+
+    real_start = Application.start
+
+    async def start(self: Application, *, auto_connect: bool = True) -> None:
+        await real_start(self, auto_connect=auto_connect)
+        if self.persona.data_dir.parent.name == "broken":
+            raise RuntimeError("late start failure")
+
+    monkeypatch.setattr(Application, "start", start)
+    with pytest.raises(RuntimeError):
+        await runtime._switch_to_persona("broken", auto_connect=False)
+    assert runtime.audio_server._recorder is kept
+    assert kept.is_running
+    current = runtime.current_app
+    assert current is not None
+    await current.shutdown()
+    assert not kept.is_running
 
 
 async def test_recording_on_attaches_a_recorder_until_shutdown(

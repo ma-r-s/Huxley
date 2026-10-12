@@ -61,7 +61,7 @@ There is **one** audio channel out to the client (`server.send_audio`). Both LLM
 
 See [decision 2026-04-13 — Audiobook audio streams through the WebSocket](./decisions.md#2026-04-13--audiobook-audio-streams-through-the-websocket-not-local-playback) and [`turns.md`](./turns.md).
 
-That edge is also where recording happens, for a persona that opts in (`recording:`). `AudioServer` hands its recorder each Opus packet as it writes it to the socket and each mic packet as it arrives, plus the control frames it sends (`model_speaking`, `stream_started`/`_ended`, `claim_started`/`_ended`, `audio_clear`, `ptt_start`/`_stop`). A writer thread turns that into Ogg Opus files for voices and `recorder.segment` log lines for everything (see [Recordings](./observability.md#recordings)). The coordinator knows nothing about it; the event loop only enqueues.
+That edge is also where recording happens, for a persona that opts in (`recording:`). `AudioServer` hands its recorder each Opus packet as it writes it to the socket and each mic packet as it arrives, plus the control frames it sends (`model_speaking`, `stream_started`/`_ended`, `claim_started`/`_ended`, `audio_clear`, `ptt_start`/`_stop`). A writer thread turns that into Ogg Opus files for voices and `recorder.segment` log lines for everything (see [Recordings](./observability.md#recordings)). The coordinator knows nothing about it; the event loop only enqueues. The recorder is the persona's (its `Application` starts and stops it), but the runtime hands it to the shared server only when that persona becomes current (`AudioServer.set_recorder`), so during a swap neither persona's audio is recorded into the other's folder.
 
 ### Persona is config, not code
 

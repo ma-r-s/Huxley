@@ -448,13 +448,17 @@ class AudioServer:
         cross-referencing PWA-side log entries against server logs."""
         return self._conn.conn_id if self._conn is not None else None
 
-    def attach_recorder(self, recorder: Recorder) -> None:
-        """Record from now on (the persona's `recording:` block is on).
-        A recorder already attached (a swap's previous persona) is told
-        to close what it has open; its owner stops it."""
+    def set_recorder(self, recorder: Recorder | None) -> None:
+        """The recorder of the persona now current, or None when it does
+        not record. Called by the runtime when a persona becomes current
+        (boot, swap, reload). A recorder replaced here (the previous
+        persona's) is told to close what it has open at once; its owner
+        stops it when that persona shuts down."""
         previous, self._recorder = self._recorder, recorder
         if previous is not None and previous is not recorder:
             previous.detached()
+        if recorder is None or recorder is previous:
+            return
         if self._model_speaking:
             recorder.model_speaking(True)
         if self._active_stream_id is not None:
@@ -1725,6 +1729,7 @@ class AudioServer:
         """
         # Before the log's await, so packets the stream's pump writes
         # meanwhile are already tagged with it.
+        self._active_stream_id = stream_id
         self._active_stream_label = label
         if self._recorder is not None:
             self._recorder.stream_started(stream_id, label)
@@ -1734,7 +1739,6 @@ class AudioServer:
             label=label,
             preroll_ms=preroll_ms,
         )
-        self._active_stream_id = stream_id
         await self._send(
             {
                 "type": "stream_started",

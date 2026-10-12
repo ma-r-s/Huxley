@@ -502,6 +502,10 @@ class Runtime:
                 raise
 
             self.current_app = new_app
+            # Recording follows the current persona: from here on its
+            # recorder (or none) gets the server's audio, and the old
+            # persona's closes what it had open.
+            self.audio_server.set_recorder(new_app.recorder)
             await logger.ainfo(
                 "runtime.persona_swap_committed",
                 from_=old_app.persona.name if old_app else None,
@@ -577,6 +581,7 @@ class Runtime:
             await logger.aexception("runtime.reload_restore_failed", persona=name)
             return
         self.current_app = app
+        self.audio_server.set_recorder(app.recorder)
         await logger.awarning(
             "runtime.reload_restored_previous",
             persona=name,

@@ -19,6 +19,7 @@ import structlog
 
 from huxley.server import recorder as recorder_mod
 from huxley.server.recorder import Recorder
+from tests.unit.ogg_reader import data_packets
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -51,27 +52,7 @@ def _pkt(n: int, size: int = 60) -> bytes:
 
 
 def _ogg_packets(path: Path) -> list[bytes]:
-    """Data packets of an Ogg file (headers skipped)."""
-    data = path.read_bytes()
-    packets: list[bytes] = []
-    pos = 0
-    page = 0
-    while pos < len(data):
-        assert data[pos : pos + 4] == b"OggS"
-        nseg = data[pos + 26]
-        lacing = data[pos + 27 : pos + 27 + nseg]
-        body = pos + 27 + nseg
-        current = b""
-        for value in lacing:
-            current += data[body : body + value]
-            body += value
-            if value < 255:
-                if page >= 2:
-                    packets.append(current)
-                current = b""
-        pos = body
-        page += 1
-    return packets
+    return data_packets(path.read_bytes())
 
 
 @pytest.fixture
@@ -307,6 +288,7 @@ def test_a_streams_first_packets_before_its_announcement_join_the_stream(
     assert seg["source"] == "stream"
     assert seg["packets"] == 12
     assert seg["retagged_from"] == "model"
+    assert seg["retagged_ms"] == 120  # what the model segment held
     assert _files(tmp_path) == []  # the model file was dropped, .part included
 
 
@@ -348,6 +330,56 @@ def test_real_model_speech_before_a_stream_keeps_its_file(
     assert _ogg_packets(tmp_path / model["path"]) == words
     assert stream["source"] == "stream"
     assert stream["packets"] == 5
+
+
+def test_a_fast_short_answer_is_never_swallowed_by_a_stream(
+    tmp_path: Path, clock: _Clock, logs: list[Any]
+) -> None:
+    """Model audio arrives faster than real time: a 1.2 s answer can be
+    written in 0.2 s. If its span is still open when a stream starts, it
+    is still speech, not the stream's first packets."""
+    rec = _recorder(tmp_path, clock)
+    rec.model_speaking(True)
+    words = []
+    for i in range(20):
+        clock.advance(0.01)
+        words.append(_pkt(i))
+        rec.speaker_packet("c1", words[-1])
+    rec.stream_started("s1", "Book")
+    _speak(rec, clock, 20, 3)
+    rec.stream_ended("s1", "natural")
+    rec.model_speaking(False)
+    assert rec.stop()
+
+    model, stream = _segments(logs)
+    assert model["source"] == "model"
+    assert "retagged_from" not in model
+    assert _ogg_packets(tmp_path / model["path"]) == words
+    assert stream["packets"] == 3
+
+
+def test_mic_outside_a_press_or_claim_is_timeline_only(
+    tmp_path: Path, clock: _Clock, logs: list[Any]
+) -> None:
+    """The client keeps streaming until it hears the claim ended: those
+    packets are no one's voice and get no file of their own."""
+    rec = _recorder(tmp_path, clock)
+    rec.claim_started("claim-1", "comms", "Ana")
+    _talk(rec, clock, 0, 4)
+    rec.claim_ended("claim-1", "natural")
+    _talk(rec, clock, 4, 2)  # in flight before the mode change landed
+    clock.advance(3.0)
+    rec.ptt(True)
+    rec.ptt(False)
+    assert rec.stop()
+
+    claim_mic, stray = _segments(logs, source="mic")
+    assert claim_mic["claim_id"] == "claim-1"
+    assert claim_mic["path"].endswith("-mic-ana.ogg")
+    assert stray["packets"] == 2
+    assert stray["path"] is None
+    assert stray["end_reason"] == "idle"
+    assert len(_files(tmp_path)) == 1
 
 
 def test_sounds_are_timeline_only_and_close_when_idle(

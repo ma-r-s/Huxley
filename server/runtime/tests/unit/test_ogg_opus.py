@@ -1,7 +1,7 @@
 """The Ogg Opus muxer the recorder writes its files with.
 
-Pages are parsed back by an independent reader here (RFC 3533 layout,
-a bitwise CRC), so the writer is not checked against itself. Where
+Pages are parsed back by an independent reader (`ogg_reader.py`: RFC
+3533 layout, a bitwise CRC), so the writer is not checked against itself. Where
 ffmpeg is installed, one test also has it decode a file end to end.
 """
 
@@ -12,7 +12,6 @@ import math
 import shutil
 import struct
 import subprocess
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import pytest
@@ -24,75 +23,10 @@ from huxley.server.ogg_opus import (
     ogg_crc32,
     opus_packet_samples,
 )
+from tests.unit.ogg_reader import Page, crc_bitwise, parse_pages
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-# --- An independent reader ---------------------------------------------------
-
-
-def _crc_bitwise(data: bytes) -> int:
-    """Ogg's CRC one bit at a time: poly 0x04C11DB7, init 0, no reflection,
-    no final xor. The reference the writer's table-driven CRC must match."""
-    crc = 0
-    for byte in data:
-        crc ^= byte << 24
-        for _ in range(8):
-            crc = ((crc << 1) ^ 0x04C11DB7) if crc & 0x80000000 else crc << 1
-            crc &= 0xFFFFFFFF
-    return crc
-
-
-@dataclass
-class _Page:
-    flags: int
-    granule: int
-    serial: int
-    sequence: int
-    crc: int
-    crc_ok: bool
-    packets: list[bytes]
-    continued_last: bool  # last packet runs on to the next page
-
-
-def _parse(data: bytes) -> list[_Page]:
-    pages: list[_Page] = []
-    pos = 0
-    while pos < len(data):
-        assert data[pos : pos + 4] == b"OggS", f"no capture pattern at {pos}"
-        version, flags, granule, serial, sequence, crc, nseg = struct.unpack_from(
-            "<BBqIIIB", data, pos + 4
-        )
-        assert version == 0
-        lacing = data[pos + 27 : pos + 27 + nseg]
-        body_len = sum(lacing)
-        end = pos + 27 + nseg + body_len
-        raw = bytearray(data[pos:end])
-        raw[22:26] = b"\0\0\0\0"
-        body = data[pos + 27 + nseg : end]
-        packets: list[bytes] = []
-        current = bytearray()
-        offset = 0
-        for value in lacing:
-            current += body[offset : offset + value]
-            offset += value
-            if value < 255:
-                packets.append(bytes(current))
-                current = bytearray()
-        pages.append(
-            _Page(
-                flags=flags,
-                granule=granule,
-                serial=serial,
-                sequence=sequence,
-                crc=crc,
-                crc_ok=_crc_bitwise(bytes(raw)) == crc,
-                packets=packets,
-                continued_last=bool(current),
-            )
-        )
-        pos = end
-    return pages
 
 
 def _packet(samples_config: int, n: int, size: int = 60) -> bytes:
@@ -121,7 +55,7 @@ def test_crc_matches_the_reference_and_the_check_value() -> None:
     # the published check value over "123456789".
     assert ogg_crc32(b"123456789") == 0x89A1897F
     for data in (b"", b"\x00", b"OggS" * 100, bytes(range(256)) * 3):
-        assert ogg_crc32(data) == _crc_bitwise(data)
+        assert ogg_crc32(data) == crc_bitwise(data)
 
 
 # --- TOC durations -----------------------------------------------------------
@@ -162,7 +96,7 @@ def test_the_servers_own_packets_are_60_ms() -> None:
 
 
 def test_header_pages_are_a_valid_opus_head_and_tags() -> None:
-    pages = _parse(_write([_packet(_P60, 0)]))
+    pages = parse_pages(_write([_packet(_P60, 0)]))
     head, tags = pages[0], pages[1]
     assert all(p.crc_ok for p in pages), "CRC must match the bitwise reference"
     assert head.flags == 0x02  # beginning of stream, alone on its page
@@ -197,7 +131,7 @@ def test_granule_grows_by_each_packets_own_duration() -> None:
         _packet(_P60, 3),  # 2880
         _packet(13, 4),  # 960
     ]
-    pages = _parse(_write(packets, packets_per_page=2))[2:]
+    pages = parse_pages(_write(packets, packets_per_page=2))[2:]
     expected = 0
     seen: list[bytes] = []
     for page in pages:
@@ -212,7 +146,7 @@ def test_granule_grows_by_each_packets_own_duration() -> None:
 def test_n_packets_round_trip_and_only_the_last_page_ends_the_stream() -> None:
     packets = [_packet(_P60, i, size=40 + (i * 37) % 400) for i in range(100)]
     data = _write(packets)
-    pages = _parse(data)
+    pages = parse_pages(data)
     assert all(p.crc_ok for p in pages)
     recovered = [pkt for page in pages[2:] for pkt in page.packets]
     assert recovered == packets
@@ -227,7 +161,7 @@ def test_n_packets_round_trip_and_only_the_last_page_ends_the_stream() -> None:
 def test_lacing_edges_round_trip(size: int) -> None:
     # A multiple of 255 needs a 0 lacing value to end on its page.
     packets = [_packet(_P60, 1, size=size), _packet(_P60, 2, size=size)]
-    pages = _parse(_write(packets))
+    pages = parse_pages(_write(packets))
     assert [pkt for page in pages[2:] for pkt in page.packets] == packets
 
 
@@ -235,7 +169,7 @@ def test_a_page_never_overflows_its_lacing_table() -> None:
     # 1275-byte packets need 6 lacing values each: 17 of them would need
     # 102, fine; 60 of 4000 bytes (16 each) would not fit one page.
     packets = [_packet(_P60, i, size=4000) for i in range(60)]
-    pages = _parse(_write(packets, packets_per_page=60))
+    pages = parse_pages(_write(packets, packets_per_page=60))
     assert [pkt for page in pages[2:] for pkt in page.packets] == packets
     assert all(len(p.packets) <= 15 for p in pages[2:])
 
@@ -251,14 +185,14 @@ def test_a_truncated_file_still_has_whole_pages() -> None:
     whole page (players stop there)."""
     data = _write([_packet(_P60, i) for i in range(40)])
     cut = data[: len(data) - 30]
-    pages: list[_Page] = []
+    pages: list[Page] = []
     pos = 0
     while pos + 27 <= len(cut):
         nseg = cut[pos + 26]
         end = pos + 27 + nseg + sum(cut[pos + 27 : pos + 27 + nseg])
         if end > len(cut):
             break  # the torn last page
-        pages.extend(_parse(cut[pos:end]))
+        pages.extend(parse_pages(cut[pos:end]))
         pos = end
     assert len(pages) == 4  # both headers and the first two data pages
     assert all(p.crc_ok for p in pages)

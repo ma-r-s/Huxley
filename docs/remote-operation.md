@@ -167,7 +167,11 @@ Built:
   is a "speaker owned" flag (streams and claim pumps raise it too) and
   arrives about 0.3 ms before `stream_started`, so a stream's or claim's
   first packets looked like model audio; a `model` segment under 0.5 s
-  old when a stream or claim starts is retagged to it.
+  old and under 1 s of audio when a stream or claim starts is retagged
+  to it.
+- **Recording follows the current persona**: the runtime hands the server
+  the new persona's recorder (or none) when a swap commits, so neither
+  persona's audio lands in the other's folder.
 - **Writer thread** with a bounded queue (3000 packets) that drops and
   counts (never blocks the event loop; control frames are never dropped).
   Files written as `.ogg.part`, fsynced and renamed when closed. On the
@@ -178,6 +182,13 @@ Built:
 
 Left:
 
+- **Speech over a parked stream** (found by the critic, needs the
+  coordinator, which another session was editing): an injected turn or
+  a claim parks a live stream without `stream_ended`, so the model's
+  speech then (a reminder over a book) is logged as `stream`, with no
+  file. Fix: announce the park as `stream_ended` and the resume as
+  `stream_started` (the client is told "playing" during the narration
+  today, too). Needed before the production cutover.
 - **Turn ids**: `model` segments carry no response id or turn yet (the
   AudioServer doesn't know them); `turn` bound on `transcript` and
   `cost.response_done` lines; tokens per response logged, not only the
