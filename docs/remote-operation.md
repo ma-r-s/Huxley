@@ -275,6 +275,14 @@ Left:
 
 ### W6. The caregiver's view and alerts (T1.42)
 
+**Status**: v0 built 2026-10-12 ([`server/watch/`](../server/watch/README.md),
+branch `t142-watch`): the visual page Mario approved, `/status.json`, every
+rule with a signal today, alerts (Telegram or the log, once on appearing and
+once on clearing, held at night, kept across restarts), the bench and test
+windows, the dead-man ping. Not yet: the archive (the recorder is in, the
+archive is next), battery (F-0025), rollback and probation (W4), `/health`
+(W1), Access token and SIM expiry. Not installed on the box yet.
+
 - **`huxley-watch`**, its own process on the box: reads the logs, the
   recordings and `/health`; runs the rules every few minutes; serves the
   page on Tailscale; sends alerts; pings the outside dead-man check.

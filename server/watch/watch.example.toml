@@ -1,0 +1,67 @@
+# huxley-watch config. Copy to ~/.config/huxley-watch/watch.toml (or pass
+# --config). Every key is optional; relative paths resolve against this
+# file's directory. Read again every cycle, except `bind`.
+
+[huxley]
+# Where the server runs (`cd server/runtime && uv run huxley`): its logs
+# are in <server_dir>/logs. Default: this checkout's server/runtime.
+# server_dir = "/home/mario/Huxley/server/runtime"
+# Or name the logs directory itself (wins over server_dir). bench.jsonl
+# (the firmware tools' test windows) is read from here too.
+# logs_dir = "/home/mario/huxley-data/logs"
+# The persona: persona.yaml (timezone, spotify.book_hours_per_month) and
+# data/<name>.db. Default: this checkout's server/personas/abuelos.
+# persona_dir = "/home/mario/Huxley/server/personas/abuelos"
+# db = "/home/mario/huxley-data/abuelos.db"   # default: <persona_dir>/data/<name>.db
+# Only this board counts as the walkie (the twin board is a0:f2:62:e2:fb:60).
+# Default: any client whose client.device says shell=firmware.
+# walkie_mac = "44:1b:f6:85:26:80"
+# Is the server process up? The pid in logs/huxley-<port>.lock (read only,
+# same box only), or the server's /health once it has one (T1.43 W1).
+# check_pid = true
+# port = 8765                       # whose lock: logs/huxley-<port>.lock
+# health_url = "http://127.0.0.1:8765/health"
+
+[watch]
+# timezone = "America/Bogota"      # default: the persona's (UTC, with a log line, if none)
+# interval_minutes = 5
+# lookback_days = 40               # how much log history is read
+# state_dir = "~/.local/state/huxley-watch"   # alerts.json, huxley-watch.log, index.html
+# bind = "127.0.0.1:8780"          # the box's Tailscale address (100.x.y.z:8780 or [fd7a:...]:8780) to reach it from the tailnet
+# allow_any_address = false        # needed for 0.0.0.0 or ::, which shows his calls to anyone who reaches the box
+# quiet_hours = "22:00-07:00"      # alerts wait until the end of these, local time
+# secrets = "~/.config/huxley-watch/secrets.toml"   # must be chmod 600
+
+[openai]
+# The balance you read on platform.openai.com, and when (local time).
+# Spend since then comes from the server's cost.response_done lines.
+# balance_usd = 25.0
+# balance_at = "2026-10-12 09:00"
+
+[books]
+# Spotify audiobook hours a month. Default: spotify.book_hours_per_month
+# in persona.yaml; with neither, the gauge shows hours used only and only
+# Spotify's own refusals alert.
+# hours_per_month = 15
+
+[thresholds]
+# The defaults, all tested (server/watch/tests/). Each must be more than 0.
+# offline_minutes = 15          # walkie offline this long in the day...
+# not_seen_days = 2             # ...or this long at all
+# day_start = "07:00"
+# day_end = "22:00"
+# silent_minutes = 10           # nothing from the walkie's connection: offline
+# gap_share_pct = 5.0           # audio gaps as a share of playing time...
+# gap_window_hours = 3.0        # ...over this window (12 at most)...
+# gap_min_played_s = 120        # ...once this much has played
+# restarts_max = 3              # server starts within...
+# restarts_window_minutes = 60
+# down_minutes = 5              # server stopped this long
+# unclean_window_minutes = 60   # a start with no stop before it stays a card this long
+# openai_failures = 3           # failed connects in a row
+# balance_low_usd = 5.0
+# balance_low_days = 7.0
+# book_hours_low = 2.0
+# spotify_down_minutes = 10     # Soloist unreachable this long
+# disk_pct = 80
+# alert_failures = 3            # deliveries failed in a row before the page says so

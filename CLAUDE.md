@@ -34,6 +34,7 @@ Huxley/                              # repo root
 │   │   ├── system/                  #   huxley-skill-system (volume, time)
 │   │   ├── telegram/                #   huxley-skill-telegram (MTProto comms)
 │   │   └── timers/                  #   huxley-skill-timers (one-shot relative reminders)
+│   ├── watch/                       # huxley-watch: the caregiver's page + alerts (T1.42), its own process; reads logs + DB, never writes
 │   └── personas/                    # Persona configs + assets the runtime loads
 │       ├── _shared/                 #   Framework-shared assets (palette of all personas)
 │       │   └── sounds/              #     Earcons rendered by scripts/synth_sounds.py — book_start, book_end, news_start, radio_start, search_start
@@ -93,7 +94,7 @@ Python (uv workspace; lint/typecheck/test work from repo root):
 uv sync                                                                          # install all workspace packages
 uv run ruff check server/                                                        # lint
 uv run ruff format server/                                                       # format
-uv run mypy server/sdk/src server/runtime/src                                    # strict type check
+uv run mypy server/sdk/src server/runtime/src server/watch/src                    # strict type check
 uv run --package huxley-sdk pytest server/sdk/tests                              # SDK tests
 uv run --package huxley pytest server/runtime/tests                              # runtime tests
 uv run --package huxley-skill-audiobooks pytest server/skills/audiobooks/tests   # audiobooks skill
@@ -104,6 +105,8 @@ uv run --package huxley-skill-timers pytest server/skills/timers/tests          
 uv run --package huxley-skill-reminders pytest server/skills/reminders/tests     # reminders skill
 uv run --package huxley-skill-stocks pytest server/skills/stocks/tests           # stocks skill
 uv run --package huxley-skill-spotify pytest server/skills/spotify/tests         # spotify skill
+uv run --package huxley-watch pytest server/watch/tests                          # huxley-watch
+uv run --package huxley-watch huxley-watch [--once] [--config FILE]              # the caregiver's page (127.0.0.1:8780) + alerts; server/watch/README.md
 cd server/runtime && uv run huxley                                               # run the server (loads .env from server/runtime/)
 # Run Basic in parallel for persona A/B testing:
 cd server/runtime && HUXLEY_PERSONA=basic HUXLEY_SERVER_PORT=8766 uv run huxley

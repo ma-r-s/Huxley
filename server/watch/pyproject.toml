@@ -1,0 +1,32 @@
+[project]
+name = "huxley-watch"
+version = "0.1.0"
+description = "The caregiver's view of a Huxley deployment: one calm page and alerts, read from the server's logs (T1.42)."
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "MIT" }
+authors = [{ name = "Mario Ruiz", email = "marioalejandroruizsarmiento@gmail.com" }]
+dependencies = [
+    # persona.yaml (timezone, spotify.book_hours_per_month). Everything
+    # else is the standard library: tomllib, sqlite3, http.server, urllib.
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+huxley-watch = "huxley_watch.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "mypy>=1.13",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/huxley_watch"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

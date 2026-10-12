@@ -459,6 +459,28 @@ grep '"recorder.segment"' logs/huxley.log | jq -r 'select(.path) | "\(.start) \(
 
 **Not in v1**: turn ids on `transcript` and cost lines (to join a file to its transcript, match times); what the walkie actually played (the file is what was sent; its discarded ms on `audio_clear` are not reported yet); call transcription.
 
+## What huxley-watch reads
+
+[`huxley-watch`](../server/watch/README.md) (T1.42) turns this log into the caregiver's page and alerts, so renaming or dropping one of these events breaks a card or a chart silently: change `server/watch/` in the same commit. It reads:
+
+- **Walkie online**: `client_connected`, `client.device` (`shell=firmware`, `mac`, `version`, `rssi`), `client_disconnected`, `client_evicted`. A new process (`huxley_starting`) ends every connection at the last line heard from it; `huxley_stopped` does not (a persona swap or reload logs it while the socket stays up). With no `client.huxley.firmware_log` line from its connection for 10 minutes, the walkie counts as offline. Overlapping connections are merged on the day strip, never summed.
+- **Audio cutting up**: the board's `spk.alive` chunk counter and `spk.underrun silent_ms` (as `dev.py link`), its `info ... rssi=` line.
+- **Server**: `huxley_starting`, `huxley_shutting_down`, `huxley_stopped`, and `huxley_app_ready` / `runtime.persona_swap_committed` (after a stop: a swap or reload, still running); a start with no stop since the previous one is unclean. The pid in `logs/huxley-<port>.lock` says whether the process is there. `skill.setup_failed` and `huxley_app_ready.disabled_skills` after the last start, persona swap or reload.
+- **OpenAI**: `connection_failed` (the traceback's last line: `insufficient_quota` means credit; an `HTTP 429` alone is a rate limit) and `session_connected`; `session.rx.error code=insufficient_quota|billing_hard_limit_reached`; `cost.response_done` (today's spend, spend against the balance Mario enters; a billed answer clears a quota alert); `cost.threshold_crossed tier=bug_canary|kill_switch` and `cost.kill_switch_triggered` today.
+- **What the speaker played**: `server.tx.stream_started` / `server.tx.stream_ended` paired by `stream_id` (a `stream_started` said again for a stream already open, when the client comes back, changes nothing; an `ended` then `started` with the same id is a pause, `coord.content_paused`), the kind from the skill line logged right after the start (`spotify.play_started` with a `spotify:show:` context is a book, other contexts music; `radio.stream_started`; `audiobooks.stream_started`); calls from `server.tx.claim_started` (`title` = the contact) / `server.tx.claim_ended`.
+- **Him and Huxley**: `coord.ptt_start` / `coord.ptt_stop` (a press; only those whose `conn_id` is the walkie's), `server.tx.model_speaking` (`value` true then false; it carries no `conn_id`, so answers, like streams and calls, count only while the walkie was connected).
+- **Books**: `spotify.start_refused cause=book_no_hours`, `spotify.book_hours_out`, `spotify.stream_ended` (`book`, `audio_ms`, `reason`); `spotify:book:seconds:<YYYY-MM>` in the persona DB.
+- **Spotify and Telegram up**: `spotify.ws_state`, `spotify.auth_state`, `spotify.unavailable reason=player_not_paired`; `telegram.credentials_missing`, `telegram.transport.connected`.
+- **Test windows**: `logs/bench.jsonl`, written by `clients/firmware/tools/bench.py` and `dev.py` (`start`, `end`, `what`): "link test ..." windows silence the offline and gap alerts; the rest also leave their activity out of use.
+
+Gaps: what a card would need that the server does not log yet (each a candidate for T1.43's `/health` or a new line):
+
+- **A hung server looks quiet, not down.** Its process is still there and nothing says "alive" when no client is connected. `/health` (T1.43 W1) is the fix; the watcher reads it once `huxley.health_url` is set.
+- **No running commit** at start (`huxley_starting` carries no version), so the page shows only the walkie's firmware version.
+- **Telegram mid-run**: a session revoked or a dropped MTProto connection after setup logs nothing; only a setup failure or a failing call shows it.
+- **Spotify logged out at start**: `spotify.auth_state` is logged only on a change, so a player that is logged out from the first message is seen only when a play is refused (`spotify.unavailable reason=player_not_paired`).
+- **`connection_failed` has no structured reason** (only the traceback), so quota versus network is read from text.
+- **Battery** (F-0025), **rollback and update probation** (T1.43 W4): no signal yet. (The box's disk the watcher reads itself.)
 ## When something looks wrong
 
 The dev workflow:

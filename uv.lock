@@ -20,6 +20,7 @@ members = [
     "huxley-skill-system",
     "huxley-skill-telegram",
     "huxley-skill-timers",
+    "huxley-watch",
 ]
 
 [[package]]
@@ -760,6 +761,29 @@ dev = [
     { name = "mypy", specifier = ">=1.13" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
+]
+
+[[package]]
+name = "huxley-watch"
+version = "0.1.0"
+source = { editable = "server/watch" }
+dependencies = [
+    { name = "pyyaml" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pyyaml", specifier = ">=6.0" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=1.13" },
+    { name = "pytest", specifier = ">=8.0" },
 ]
 
 [[package]]

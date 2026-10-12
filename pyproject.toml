@@ -12,6 +12,7 @@ members = [
     "server/skills/reminders",
     "server/skills/stocks",
     "server/skills/spotify",
+    "server/watch",
 ]
 
 [tool.uv.sources]
@@ -67,6 +68,7 @@ known-first-party = [
     "huxley_skill_reminders",
     "huxley_skill_stocks",
     "huxley_skill_spotify",
+    "huxley_watch",
 ]
 
 [tool.mypy]
