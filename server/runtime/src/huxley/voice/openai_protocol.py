@@ -19,6 +19,7 @@ class ServerEventType(Enum):
 
     SESSION_CREATED = "session.created"
     SESSION_UPDATED = "session.updated"
+    RESPONSE_CREATED = "response.created"
     RESPONSE_OUTPUT_AUDIO_DELTA = "response.output_audio.delta"
     RESPONSE_OUTPUT_AUDIO_DONE = "response.output_audio.done"
     RESPONSE_OUTPUT_AUDIO_TRANSCRIPT_DONE = "response.output_audio_transcript.done"

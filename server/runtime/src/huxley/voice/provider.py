@@ -120,12 +120,22 @@ class VoiceProvider(Protocol):
         Called when the user releases PTT. Combines "commit input buffer"
         and "request response" because they're one logical step —
         providers that expose them separately still surface one method.
+
+        A provider whose transport allows one live response at a time
+        starts the new one when the live one (e.g. one just cancelled)
+        is done, rather than failing the request.
         """
         ...
 
     async def cancel_current_response(self) -> None:
         """Abort the in-flight response (if any). Safe to call when no
-        response is active — the provider should no-op rather than error."""
+        response is active; the provider should no-op rather than error.
+
+        No callback fires for the aborted response afterwards (audio,
+        tool calls, audio done, response done): the caller has already
+        unwound its turn, and a late `on_response_done` would be taken
+        for the next turn's. `suspend()` differs: there lifecycle
+        events still fire."""
         ...
 
     async def request_response(self) -> None:

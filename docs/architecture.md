@@ -153,6 +153,8 @@ stateDiagram-v2
 - **CONNECTING** — opening the session, sending `session.update` with tool schemas.
 - **CONVERSING** — session open, PTT works, tool calls dispatch, audiobook playback may be happening — media is orthogonal to session state.
 
+OpenAI ends a Realtime session at 60 minutes. The provider refreshes it first: after `session_refresh_minutes` (default 50, counted from session start) it disconnects at the first idle moment (no response live, user not talking, reply done playing) with a summary, and the usual auto-reconnect opens the next session (CONVERSING, IDLE, CONNECTING, CONVERSING).
+
 Media playback is **not** a session state. It's tracked by the coordinator's current `ContentStreamObserver`, which outlives turns: a book started in turn N keeps playing until turn N+M interrupts it. The voice provider session stays open during book playback (idle sessions cost zero tokens), and pressing PTT mid-book goes through the turn coordinator's interrupt method rather than a state transition.
 
 See [`turns.md`](./turns.md) and [decision 2026-04-13 — Turn-based coordinator for voice tool calls](./decisions.md#2026-04-13--turn-based-coordinator-for-voice-tool-calls).

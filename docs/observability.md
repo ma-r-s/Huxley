@@ -327,6 +327,19 @@ When a skill's `handle()` raises, the coordinator catches it (see `docs/triage.m
 
 The session does not die. A structured error `tool_output` is sent back to OpenAI with a Spanish apology hint, and the model produces an audible acknowledgement on the next response round. Look for `coord.tool_error` first when a tool call seems to disappear silently.
 
+## Voice provider session: responses, refresh, close
+
+What the OpenAI provider sends and gets back around each response (added 2026-10-12):
+
+- **`session.tx.response_create`**: a response was requested. `generation` is the cancel count stamped in the response's metadata; `deferred_ms` is present when the request was held back.
+- **`session.tx.response_create_deferred`**: a response was requested while `active_response_id` was still live (usually the one an interrupt just cancelled). Sent when that response's `response.done` arrives. OpenAI rejects a second live response (`conversation_already_has_active_response`), which left three presses unanswered on 2026-10-12.
+- **`session.tx.cancel`**: `active_response_id` (what was cancelled, if known) and `dropped_deferred_create`.
+- **`session.rx.response_created`** / **`session.rx.response_done`**: `response_id`, `status` (`completed`, `cancelled`, ...), `stale`. A stale response is one cancelled by an interrupt: its remaining events (audio, tool calls, `response.done`) never reach the coordinator, logged as **`session.rx.stale_dropped`** (audio at debug). Its late `response.done` used to end the next press's turn.
+- **`session.rx.error code=conversation_already_has_active_response`**: should not happen any more; `will_retry=true` means the request is sent again when the live response finishes (once).
+- **`session.tx.tool_output`**: `call_id`, `output` (first 300 characters) and `output_len`.
+- **`session.refresh_due`** / **`session.refresh`**: OpenAI ends a session at 60 minutes. After `HUXLEY_SESSION_REFRESH_MINUTES` (default 50) the provider reconnects at the first idle moment. `refresh_due` says what it is waiting for (`response_active`, `response_pending`, `user_audio`, `reply_playing`, `recent_traffic`); `refresh` is the disconnect, followed by the usual `app.session_end` and auto-reconnect. A `session.rx.error code=session_expired` means no idle moment came in time.
+- **`session_connection_closed`**: the WebSocket closed under us: `code` and `reason` from OpenAI's close frame, `sent_code`, and `age_s` (session age).
+
 ## Session readiness — diagnosing "told ready when not"
 
 Three runtime-level events bracket every WS connection's session-readiness lifecycle. They were added in T1.16 after a class of bugs where the server emitted a normal-looking hello + `state: IDLE` even when `_shim_persona_select` had silently failed — leaving the PWA showing "Hold to talk" while every PTT silently dropped because `current_app is None`.

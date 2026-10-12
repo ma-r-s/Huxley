@@ -216,7 +216,7 @@ The Python namespace (`abuel_os/`) and repo path (`Abuelo/`) are renamed as part
 
 - **Cost of keeping it alive is effectively $0 during silence.** OpenAI bills per Response created (audio in + audio out + the system prompt + tools as input context for that response). A session that opens, sends `session.update`, and closes without ever creating a Response incurs no token charges. So 22 silent reconnects across a 20-hour book = ~$0.00, not the ~$0.05 first estimated.
 - **Context continuity wins over cost.** The model knows what book is playing, what the user asked for five minutes ago, and the flow of the conversation. Proactive disconnect would force the model to re-orient (`get_progress` / `list_in_progress`) on every resume. For a blind elderly user, that's a noticeably dumber assistant with zero meaningful cost savings.
-- **`conversation_max_minutes` in `Settings` still forces a Huxley-side disconnect every N minutes** — but that path already calls `save_summary=True` and auto-reconnects. Raise the knob only if summary-on-reconnect ever proves insufficient.
+- **`conversation_max_minutes` in `Settings` still forces a Huxley-side disconnect every N minutes** — but that path already calls `save_summary=True` and auto-reconnects. Raise the knob only if summary-on-reconnect ever proves insufficient. _(2026-10-12: that disconnect never completed (it cancelled itself) and its timer restarted on every mic frame, so OpenAI's 60-minute expiry did the work, sometimes seconds after a turn. Replaced by `session_refresh_minutes`; see [2026-10-12: session refresh](#2026-10-12-session-refresh-at-an-idle-moment).)_
 - **Revisit if**: a future cost audit shows idle sessions aren't truly $0 (OpenAI could change this), OR a persona ships with a huge prompt whose per-reconnect bill matters even when no Response is created.
 
 ---
@@ -723,3 +723,23 @@ Considered alternatives:
 
 - Evaluate future voice providers against PTT first. Gemini Live qualifies on paper (manual `activityStart`/`activityEnd`); untested.
 - The one GPT-Live idea worth borrowing, handing slow work to a stronger background model and announcing the result later, needs its own plan.
+
+---
+
+## 2026-10-12: The provider drops a cancelled response's late events
+
+**Context**: After an interrupt, the cancelled response's `response.done` can arrive after the next press commits. The coordinator's `response_cancelled` flag is reset by that commit, so the late `response.done` ended the new turn; the press after that skipped the interrupt and its `response.create` hit a still-live response (`conversation_already_has_active_response`). Three presses went unanswered on 2026-10-12.
+
+**Decision**: The OpenAI provider stamps every `response.create` with a cancel generation in `response.metadata`; `cancel_current_response` bumps it. Events from an older generation are dropped in the provider, `response.done` included, and a `response.create` requested while a response is live waits for that response's `response.done`. Alternative rejected: matching `response.created` to creates in send order (FIFO). A create rejected without an `error.event_id` would shift the mapping and drop the current turn's answer, a worse failure than the one fixed. If the server ever stops echoing metadata, the provider degrades to the old behavior instead.
+
+**Consequences**: `VoiceProvider.cancel_current_response` now promises that no callback fires for the cancelled response. `suspend()` still lets lifecycle events through (its contract). The first press after deploying shows whether OpenAI accepts the metadata: a rejection would be a `session.rx.error` on every press.
+
+---
+
+## 2026-10-12: Session refresh at an idle moment
+
+**Context**: OpenAI ends a Realtime session at 60 minutes (`session_expired`), mid-turn if that's when it lands. The 55-minute timer meant to pre-empt it restarted on every mic frame and cancelled its own disconnect, so it never worked.
+
+**Decision**: Time the session from its start. After `session_refresh_minutes` (50) the provider disconnects with a summary at the first idle moment: no response live or pending, no fresh user audio, the last reply done playing (estimated from the audio sent), 3 s without traffic. The app's auto-reconnect opens the next session. A planned refresh goes through the same path as any other disconnect.
+
+**Consequences**: The client sees CONVERSING, IDLE, CONNECTING, CONVERSING once every ~50 minutes, as it did on every expiry (the PWA plays its drop tone). What happens to a playing book on a reconnect is the coordinator's business, unchanged here. A session with no idle moment for its last 10 minutes still expires.

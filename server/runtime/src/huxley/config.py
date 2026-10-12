@@ -54,7 +54,10 @@ class Settings(BaseSettings):
     server_port: int = 8765
 
     # --- Session ---
-    conversation_max_minutes: int = 55
+    # OpenAI ends a Realtime session at 60 minutes. After this many
+    # minutes the provider reconnects at the first idle moment (summary
+    # carried over), so the hard limit doesn't land in the middle of a turn.
+    session_refresh_minutes: float = 50
 
     # --- Logging ---
     log_level: str = "INFO"
