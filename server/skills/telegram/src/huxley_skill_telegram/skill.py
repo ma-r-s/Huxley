@@ -61,11 +61,13 @@ import asyncio
 import json
 import os
 import re
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from huxley_sdk import (
     ClaimBusyError,
     ClaimEndReason,
+    InjectOutcome,
     InjectPriority,
     InputClaim,
     SkillContext,
@@ -317,6 +319,11 @@ _STRINGS: dict[str, dict[str, str]] = {
             "La llamada de {name} ya no está disponible -- la persona "
             "colgó antes de que se contestara."
         ),
+        "missed_call": (
+            "Dile al usuario que {display} lo llamó y que la llamada se colgó "
+            "porque el dispositivo no estaba conectado; pregúntale si quiere "
+            "devolverle la llamada."
+        ),
         "contacts_none": "(ninguno)",
         "phone_invalid": (
             "El numero '{phone}' no tiene formato valido. "
@@ -364,6 +371,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "call_no_longer_available": (
             "The call from {name} is no longer available -- the person "
             "hung up before it could be answered."
+        ),
+        "missed_call": (
+            "Tell the user that {display} called and the call was hung up "
+            "because the device wasn't connected; ask if they want to call back."
         ),
         "contacts_none": "(none)",
         "phone_invalid": (
@@ -417,6 +428,11 @@ _STRINGS: dict[str, dict[str, str]] = {
         "call_no_longer_available": (
             "L'appel de {name} n'est plus disponible -- la personne a "
             "raccroché avant qu'on ne réponde."
+        ),
+        "missed_call": (
+            "Dis à l'utilisateur que {display} a appelé et que l'appel a été "
+            "raccroché parce que l'appareil n'était pas connecté ; demande-lui "
+            "s'il veut rappeler."
         ),
         "contacts_none": "(aucun)",
         "phone_invalid": (
@@ -1063,10 +1079,19 @@ class TelegramSkill:
 
         await self._logger.ainfo("telegram.inbound.call_accepted", user_id=user_id, name=display)
 
-        # Announce the caller and wait for the LLM to finish speaking.
-        # inject_turn_and_wait returns only after response_done fires so
-        # start_input_claim never preempts the announcement mid-sentence.
-        await self._ctx.inject_turn_and_wait(self._t("answering", display=display))
+        # Announce the caller and wait until the user has heard it, so
+        # start_input_claim never cuts the announcement off. The call is
+        # already accepted and the caller hears silence meanwhile, so it
+        # waits for a listener only briefly (T1.44); BLOCK_BEHIND_COMMS so
+        # a stream the turn in progress starts doesn't win over it.
+        outcome = await self._ctx.inject_turn_and_wait(
+            self._t("answering", display=display),
+            priority=InjectPriority.BLOCK_BEHIND_COMMS,
+            expires_after=self._ANNOUNCE_WAIT,
+        )
+        if outcome is not InjectOutcome.DELIVERED:
+            await self._miss_call(user_id, display, outcome)
+            return
 
         # Bridge audio. peer_audio_chunks() flushes frames buffered during the
         # announcement window so playback is real-time, not offset by ~3s.
@@ -1094,6 +1119,34 @@ class TelegramSkill:
                     "telegram.inbound.reject_call_failed", user_id=user_id
                 )
             self._active_contact_name = None
+
+    # How long an accepted call's announcement waits for someone to hear
+    # it (the walkie away, a long answer in progress). The caller hears
+    # silence meanwhile; a server restart reconnects the walkie in ~3 s.
+    _ANNOUNCE_WAIT = timedelta(seconds=30)
+
+    async def _miss_call(self, user_id: int, display: str, outcome: InjectOutcome) -> None:
+        """Nobody heard the announcement in time: hang up rather than bridge
+        the caller to nobody, and tell the user once someone can hear it."""
+        assert self._logger is not None
+        assert self._ctx is not None
+        await self._logger.ainfo(
+            "telegram.inbound.missed_unheard",
+            user_id=user_id,
+            caller_name=display,
+            outcome=outcome.value,
+        )
+        self._active_contact_name = None
+        if self._transport is not None:
+            try:
+                await self._transport.end_call()
+            except TransportError:
+                await self._logger.aexception("telegram.inbound.end_call_failed", user_id=user_id)
+        await self._ctx.inject_turn(
+            self._t("missed_call", display=display),
+            priority=InjectPriority.BLOCK_BEHIND_COMMS,
+            expires_after=None,
+        )
 
     async def _on_ring_cancelled(self, user_id: int) -> None:
         """Called if the caller hangs up before we accepted the call.
@@ -1259,10 +1312,22 @@ class TelegramSkill:
             display=display,
             message_count=len(messages),
         )
-        await self._ctx.inject_turn(
+        # Awaited until heard (T1.44): meanwhile this sender's later messages
+        # gather in the inbox buffer and follow as one more announcement,
+        # so a weekend away is two announcements per sender, not one per
+        # burst. No expiry: a message stays worth saying while unread (the
+        # skill never marks it read). No dedup key: a second burst under
+        # the same key would replace this one unheard.
+        outcome = await self._ctx.inject_turn_and_wait(
             prompt,
-            dedup_key=f"msg_burst:{user_id}",
             priority=InjectPriority.NORMAL,
+            expires_after=None,
+        )
+        await self._logger.ainfo(
+            "telegram.inbound.announced",
+            user_id=user_id,
+            message_count=len(messages),
+            outcome=outcome.value,
         )
 
     # Wait this long after setup() before firing the backfill inject, so
@@ -1338,7 +1403,8 @@ class TelegramSkill:
             per_sender_counts={k: len(v) for k, v in per_sender.items()},
         )
         # No dedup_key: backfill fires once per session, no resend path.
-        await self._ctx.inject_turn(prompt, priority=InjectPriority.NORMAL)
+        # No expiry: unread messages stay worth saying until heard (T1.44).
+        await self._ctx.inject_turn(prompt, priority=InjectPriority.NORMAL, expires_after=None)
 
     # --- Task helper ---
 

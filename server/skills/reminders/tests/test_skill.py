@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from huxley_sdk import InjectOutcome, InjectPriority
 from huxley_sdk.testing import _NoopSkillStorage, make_test_context
 from huxley_skill_reminders.skill import (
     _DEFAULT_LATE_WINDOWS,
@@ -51,7 +52,11 @@ async def _make_skill(
     language: str = "es",
     start_scheduler: bool = True,
 ) -> tuple[RemindersSkill, AsyncMock, SkillStorage]:
-    """Build a RemindersSkill wired to a recording inject_turn mock.
+    """Build a RemindersSkill wired to a recording inject mock.
+
+    The skill narrates through `ctx.inject_turn_and_wait` (T1.44: it acts
+    on what became of the narration); the mock stands in for it and
+    reports DELIVERED unless a test says otherwise.
 
     Default config gives the persona timezone label "America/Bogota" so
     prompt_context tests have a concrete value to assert against.
@@ -64,19 +69,19 @@ async def _make_skill(
     is to run setup so we keep coverage on the boot path.
     """
     skill = RemindersSkill()
-    inject_mock = inject_turn or AsyncMock()
+    inject_mock = inject_turn or AsyncMock(return_value=InjectOutcome.DELIVERED)
     cfg = dict(config) if config else {}
     cfg.setdefault("timezone", "America/Bogota")
     storage_ = storage if storage is not None else _NoopSkillStorage()
     ctx = make_test_context(config=cfg, storage=storage_, language=language)
-    object.__setattr__(ctx, "inject_turn", inject_mock)
+    object.__setattr__(ctx, "inject_turn_and_wait", inject_mock)
     if start_scheduler:
         await skill.setup(ctx)
     else:
         # Minimal wiring so handlers work without spawning the loop.
         # Mirrors what setup() does, less the background_task call.
         skill._logger = ctx.logger
-        skill._inject_turn = ctx.inject_turn
+        skill._inject_turn_and_wait = ctx.inject_turn_and_wait
         skill._background_task = ctx.background_task
         skill._storage = ctx.storage
         skill._language = ctx.language or "en"
@@ -546,7 +551,9 @@ class TestBootReconciliation:
         assert raw is not None
         assert _Entry.from_json(raw).state == _STATE_MISSED
 
-    async def test_fired_non_medication_treated_as_acked(self) -> None:
+    async def test_fired_non_medication_is_said_again_within_its_window(self) -> None:
+        """T1.44: a one-shot kind stays `fired` until it is heard, so a
+        restart may find one that waited for the walkie: said again."""
         storage = _NoopSkillStorage()
         past = datetime.now(UTC) - timedelta(minutes=2)
         entry = _Entry(
@@ -565,7 +572,28 @@ class TestBootReconciliation:
         await skill._reconcile_on_boot()
         raw = await storage.get_setting("reminder:1")
         assert raw is not None
-        assert _Entry.from_json(raw).state == _STATE_ACKED
+        assert _Entry.from_json(raw).state == _STATE_PENDING
+
+    async def test_fired_non_medication_outside_its_window_is_missed(self) -> None:
+        storage = _NoopSkillStorage()
+        past = datetime.now(UTC) - timedelta(hours=3)  # appointment window: 2 h
+        entry = _Entry(
+            id=1,
+            message="appt",
+            kind="appointment",
+            scheduled_for=past,
+            next_fire_at=past,
+            recurrence_rule=None,
+            state=_STATE_FIRED,
+            fired_count=1,
+            last_fired_at=past,
+        )
+        await storage.set_setting("reminder:1", entry.to_json())
+        skill, _, _ = await _make_skill(storage=storage, start_scheduler=False)
+        await skill._reconcile_on_boot()
+        raw = await storage.get_setting("reminder:1")
+        assert raw is not None
+        assert _Entry.from_json(raw).state == _STATE_MISSED
 
     async def test_malformed_entry_skipped(self) -> None:
         storage = _NoopSkillStorage()
@@ -599,13 +627,93 @@ class TestMedicationRetry:
         )
         await storage.set_setting("reminder:1", entry.to_json())
         await skill._fire(entry)
-        inject_mock.assert_awaited_once()
-        # State was advanced.
+        # State was advanced before the narration.
         raw = await storage.get_setting("reminder:1")
         assert raw is not None
         after = _Entry.from_json(raw)
         assert after.state == _STATE_FIRED
         assert after.fired_count == 1
+        await _drain()
+        inject_mock.assert_awaited_once()
+
+    async def test_runtime_retry_counts_from_the_hearing_and_fires(self) -> None:
+        """T1.44 finding: the scheduler only fires `pending` rows and a fire
+        left the row `fired`, so retries never fired in a running process.
+        Now hearing the first nag schedules the next 5 min from then."""
+        skill, inject_mock, storage = await _make_skill(start_scheduler=False)
+        now = datetime.now(UTC)
+        entry = _Entry(
+            id=1,
+            message="pill",
+            kind="medication",
+            scheduled_for=now,
+            next_fire_at=now,
+            recurrence_rule=None,
+            state=_STATE_PENDING,
+        )
+        await storage.set_setting("reminder:1", entry.to_json())
+        await skill._fire(entry)
+        await _drain()
+
+        raw = await storage.get_setting("reminder:1")
+        assert raw is not None
+        after = _Entry.from_json(raw)
+        assert after.state == _STATE_PENDING, "the scheduler can fire the retry"
+        expected = datetime.now(UTC) + _MEDICATION_RETRY_INTERVALS[0]
+        assert abs((after.next_fire_at - expected).total_seconds()) < 5
+        due = await skill._next_due_entry()
+        assert due is not None and due.id == 1
+
+    async def test_no_retry_stacks_on_a_fire_still_waiting(self) -> None:
+        """While the walkie is away the fire waits; the row stays `fired`,
+        which the scheduler never picks."""
+        waiting = asyncio.Event()
+
+        async def never_heard(*_a: object, **_k: object) -> InjectOutcome:
+            await waiting.wait()
+            return InjectOutcome.DELIVERED
+
+        skill, _, storage = await _make_skill(
+            inject_turn=AsyncMock(side_effect=never_heard), start_scheduler=False
+        )
+        now = datetime.now(UTC) - timedelta(minutes=6)
+        entry = _Entry(
+            id=1,
+            message="pill",
+            kind="medication",
+            scheduled_for=now,
+            next_fire_at=now,
+            recurrence_rule=None,
+            state=_STATE_PENDING,
+        )
+        await storage.set_setting("reminder:1", entry.to_json())
+        await skill._fire(entry)
+        await _drain()
+        assert await skill._next_due_entry() is None
+        waiting.set()
+        await _drain()
+        await skill.teardown()
+
+    async def test_a_dose_nobody_could_hear_in_time_is_missed(self) -> None:
+        skill, _, storage = await _make_skill(
+            inject_turn=AsyncMock(return_value=InjectOutcome.EXPIRED), start_scheduler=False
+        )
+        now = datetime.now(UTC)
+        entry = _Entry(
+            id=1,
+            message="pill",
+            kind="medication",
+            scheduled_for=now,
+            next_fire_at=now,
+            recurrence_rule=None,
+            state=_STATE_PENDING,
+        )
+        await storage.set_setting("reminder:1", entry.to_json())
+        await skill._fire(entry)
+        await _drain()
+        raw = await storage.get_setting("reminder:1")
+        assert raw is not None
+        assert _Entry.from_json(raw).state == _STATE_MISSED
 
     async def test_retry_budget_exhaustion_marks_missed(self) -> None:
         skill, inject_mock, storage = await _make_skill(start_scheduler=False)
@@ -642,10 +750,11 @@ class TestMedicationRetry:
             )
             await storage.set_setting("reminder:1", entry.to_json())
             await skill._fire(entry)
+            await _drain()
             raw = await storage.get_setting("reminder:1")
             assert raw is not None
             after = _Entry.from_json(raw)
-            assert after.state == _STATE_ACKED, kind
+            assert after.state == _STATE_ACKED, kind  # heard once, done
 
 
 # ----------------------------------------------------------------- recurrence
@@ -666,13 +775,14 @@ class TestRecurrence:
         )
         await storage.set_setting("reminder:1", entry.to_json())
         await skill._fire(entry)
+        await _drain()
         rows = await storage.list_settings(_STORAGE_PREFIX)
         entries = [
             _Entry.from_json(v)
             for k, v in rows
             if not k.removeprefix(_STORAGE_PREFIX).startswith("_meta:")
         ]
-        # Original acked, new pending exists for next day.
+        # Original acked (heard), new pending exists for next day.
         states = {e.state for e in entries}
         assert _STATE_ACKED in states
         assert _STATE_PENDING in states
@@ -793,7 +903,7 @@ class TestSchedulerFires:
             state=_STATE_PENDING,
         )
         await storage.set_setting("reminder:1", entry.to_json())
-        inject_mock = AsyncMock()
+        inject_mock = AsyncMock(return_value=InjectOutcome.DELIVERED)
         skill, _, _ = await _make_skill(
             storage=storage, inject_turn=inject_mock, start_scheduler=True
         )
@@ -804,7 +914,8 @@ class TestSchedulerFires:
             if inject_mock.await_count > 0:
                 break
         assert inject_mock.await_count >= 1
-        # Generic kind → state should be acked.
+        await _drain()
+        # Generic kind, heard → state should be acked.
         raw = await storage.get_setting("reminder:1")
         assert raw is not None
         assert _Entry.from_json(raw).state == _STATE_ACKED
@@ -1105,6 +1216,7 @@ class TestRrulePatterns:
         )
         await storage.set_setting("reminder:1", entry.to_json())
         await skill._fire(entry)
+        await _drain()
         rows = await storage.list_settings(_STORAGE_PREFIX)
         entries = [
             _Entry.from_json(v)
@@ -1228,13 +1340,14 @@ class TestCommitBeforeInject:
         skill, _, storage = await _make_skill(start_scheduler=False)
         captured_state: dict[str, str] = {}
 
-        async def capturing_inject(prompt: str, **kwargs: object) -> None:
+        async def capturing_inject(prompt: str, **kwargs: object) -> InjectOutcome:
             raw = await storage.get_setting("reminder:1")
             assert raw is not None
             captured_state["state"] = _Entry.from_json(raw).state
             captured_state["fired_count"] = str(_Entry.from_json(raw).fired_count)
+            return InjectOutcome.DELIVERED
 
-        skill._inject_turn = capturing_inject  # type: ignore[assignment]
+        skill._inject_turn_and_wait = capturing_inject
         entry = _Entry(
             id=1,
             message="pill",
@@ -1246,6 +1359,7 @@ class TestCommitBeforeInject:
         )
         await storage.set_setting("reminder:1", entry.to_json())
         await skill._fire(entry)
+        await _drain()
         # When `inject_turn` ran, the row was already at fired/1.
         assert captured_state == {"state": _STATE_FIRED, "fired_count": "1"}
 
@@ -1253,12 +1367,13 @@ class TestCommitBeforeInject:
         skill, _, storage = await _make_skill(start_scheduler=False)
         captured_state: dict[str, str] = {}
 
-        async def capturing_inject(prompt: str, **kwargs: object) -> None:
+        async def capturing_inject(prompt: str, **kwargs: object) -> InjectOutcome:
             raw = await storage.get_setting("reminder:1")
             assert raw is not None
             captured_state["state"] = _Entry.from_json(raw).state
+            return InjectOutcome.DELIVERED
 
-        skill._inject_turn = capturing_inject  # type: ignore[assignment]
+        skill._inject_turn_and_wait = capturing_inject
         entry = _Entry(
             id=1,
             message="appt",
@@ -1270,7 +1385,9 @@ class TestCommitBeforeInject:
         )
         await storage.set_setting("reminder:1", entry.to_json())
         await skill._fire(entry)
-        assert captured_state == {"state": _STATE_ACKED}
+        await _drain()
+        # Fired, not yet acked: a one-shot kind is acked once heard (T1.44).
+        assert captured_state == {"state": _STATE_FIRED}
 
     async def test_inject_failure_does_not_revert_state(self) -> None:
         # If inject_turn raises, state stays advanced — by design.
@@ -1279,10 +1396,10 @@ class TestCommitBeforeInject:
         # `reminders.fire_failed` log line.
         skill, _, storage = await _make_skill(start_scheduler=False)
 
-        async def failing_inject(prompt: str, **kwargs: object) -> None:
+        async def failing_inject(prompt: str, **kwargs: object) -> InjectOutcome:
             raise RuntimeError("Realtime API down")
 
-        skill._inject_turn = failing_inject  # type: ignore[assignment]
+        skill._inject_turn_and_wait = failing_inject
         entry = _Entry(
             id=1,
             message="pill",
@@ -1295,6 +1412,7 @@ class TestCommitBeforeInject:
         await storage.set_setting("reminder:1", entry.to_json())
         # Should NOT raise — the skill swallows inject failures.
         await skill._fire(entry)
+        await _drain()
         raw = await storage.get_setting("reminder:1")
         assert raw is not None
         after = _Entry.from_json(raw)
@@ -1427,8 +1545,6 @@ class TestInjectPriorityIsBlockBehindComms:
     in the focus-plane semantic claim made by the skill doc."""
 
     async def test_fire_uses_block_behind_comms(self) -> None:
-        from huxley_sdk import InjectPriority
-
         skill, inject_mock, storage = await _make_skill(start_scheduler=False)
         entry = _Entry(
             id=1,
@@ -1441,11 +1557,130 @@ class TestInjectPriorityIsBlockBehindComms:
         )
         await storage.set_setting("reminder:1", entry.to_json())
         await skill._fire(entry)
+        await _drain()
         # AsyncMock records call kwargs; the second positional arg or
         # `priority=` kwarg must be BLOCK_BEHIND_COMMS.
         inject_mock.assert_awaited_once()
+        assert inject_mock.await_args is not None
         kwargs = inject_mock.await_args.kwargs
         assert kwargs.get("priority") == InjectPriority.BLOCK_BEHIND_COMMS
+        assert kwargs.get("dedup_key") == "reminder:1"
+
+
+class TestLateWindowExpiry:
+    """T1.44: a fire waits for a client that can hear it, as long as its
+    late window allows: counted from this fire's own due time."""
+
+    @pytest.mark.parametrize(
+        ("kind", "window"),
+        [
+            ("medication", timedelta(minutes=15)),
+            ("appointment", timedelta(hours=2)),
+            ("generic", timedelta(hours=1)),
+        ],
+    )
+    async def test_expiry_is_the_late_window_from_the_due_time(
+        self, kind: str, window: timedelta
+    ) -> None:
+        skill, inject_mock, storage = await _make_skill(start_scheduler=False)
+        due = datetime.now(UTC) - timedelta(minutes=4)  # fired 4 min late (a boot)
+        entry = _Entry(
+            id=1,
+            message="x",
+            kind=kind,  # type: ignore[arg-type]
+            scheduled_for=due,
+            next_fire_at=due,
+            recurrence_rule=None,
+            state=_STATE_PENDING,
+        )
+        await storage.set_setting("reminder:1", entry.to_json())
+        await skill._fire(entry)
+        await _drain()
+        assert inject_mock.await_args is not None
+        expires_after = inject_mock.await_args.kwargs["expires_after"]
+        expected = window - timedelta(minutes=4)
+        assert abs((expires_after - expected).total_seconds()) < 5
+
+    async def test_a_persona_override_applies(self) -> None:
+        skill, inject_mock, storage = await _make_skill(
+            config={"late_window_medication_s": 600}, start_scheduler=False
+        )
+        now = datetime.now(UTC)
+        entry = _Entry(
+            id=1,
+            message="pill",
+            kind="medication",
+            scheduled_for=now,
+            next_fire_at=now,
+            recurrence_rule=None,
+            state=_STATE_PENDING,
+        )
+        await storage.set_setting("reminder:1", entry.to_json())
+        await skill._fire(entry)
+        await _drain()
+        assert inject_mock.await_args is not None
+        expires_after = inject_mock.await_args.kwargs["expires_after"]
+        assert abs(expires_after.total_seconds() - 600) < 5
+
+    async def test_an_unheard_one_shot_reminder_is_missed_and_mentioned(self) -> None:
+        skill, _, storage = await _make_skill(
+            inject_turn=AsyncMock(return_value=InjectOutcome.EXPIRED), start_scheduler=False
+        )
+        now = datetime.now(UTC)
+        entry = _Entry(
+            id=1,
+            message="cita con el médico",
+            kind="appointment",
+            scheduled_for=now,
+            next_fire_at=now,
+            recurrence_rule=None,
+            state=_STATE_PENDING,
+        )
+        await storage.set_setting("reminder:1", entry.to_json())
+        await skill._fire(entry)
+        await _drain()
+        raw = await storage.get_setting("reminder:1")
+        assert raw is not None
+        assert _Entry.from_json(raw).state == _STATE_MISSED
+        assert "cita con el médico" in skill.prompt_context()
+
+    async def test_an_ack_withdraws_a_fire_still_waiting(self) -> None:
+        """ "Ya me la tomé" while the fire waits behind the user's own turn:
+        the waiting narration is withdrawn (its wait is cancelled)."""
+        cancelled = asyncio.Event()
+
+        async def waits(*_a: object, **_k: object) -> InjectOutcome:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            return InjectOutcome.DELIVERED
+
+        skill, _, storage = await _make_skill(
+            inject_turn=AsyncMock(side_effect=waits), start_scheduler=False
+        )
+        now = datetime.now(UTC)
+        entry = _Entry(
+            id=1,
+            message="pill",
+            kind="medication",
+            scheduled_for=now,
+            next_fire_at=now,
+            recurrence_rule=None,
+            state=_STATE_PENDING,
+        )
+        await storage.set_setting("reminder:1", entry.to_json())
+        await skill._fire(entry)
+        await _drain()
+
+        await skill.handle("acknowledge_reminder", {"id": 1})
+        await _drain()
+
+        assert cancelled.is_set()
+        raw = await storage.get_setting("reminder:1")
+        assert raw is not None
+        assert _Entry.from_json(raw).state == _STATE_ACKED
 
 
 # -------------------------------------------- post-RRULE-review regressions
@@ -1736,6 +1971,7 @@ class TestRruleCountOneAccepted:
         )
         await storage.set_setting("reminder:1", entry.to_json())
         await skill._fire(entry)
+        await _drain()
         rows = await storage.list_settings(_STORAGE_PREFIX)
         entries = [
             _Entry.from_json(v)
