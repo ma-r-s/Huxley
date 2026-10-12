@@ -270,14 +270,16 @@ over the three streams the framework already owns (mic, speaker, events).
 
 All in one session with the case open, because it never opens again:
 
-- Battery to IO6 (bridge R78 pads 1-3, or the 200K/100K divider), calibrated
+- Battery to IO6 by the R78 solder bridge (pads 1-3; decided), calibrated
   at two points against a multimeter; median of idle samples, a Li-ion
   table with hysteresis, 6 dB attenuation (`hux_battery.c:43` uses 12 dB).
   Good for warnings, not a precise %.
-- VBUS through a divider to a free ADC1 pin: the only way to know it's charging.
+- Charging detection: an inline 100K/100K divider from header 5V to IO5 in
+  the harness, no board soldering (decided): the only way to know it's charging.
 - Remove R15 (the 0 ohm link from the expander's INT# to GPIO0; the firmware
   never uses INT#): no reset can ever boot download mode again.
-- A pinhole to the board's RST button: staff can restart it with a paperclip.
+- A pinhole to the board's RST button (designed by the case session): staff
+  can restart it with a paperclip.
 - Check the cell has a protection board.
 - Partition table: OTA slots 2 MB to 4 MB each (image 1.3 MB, 10 MB free),
   NVS 24 KB to 64 KB, coredump 64 KB to 256 KB. Final bootloader. Last USB
@@ -285,8 +287,10 @@ All in one session with the case open, because it never opens again:
 - Tests: drain to cutoff with the rocker on, plug in, it must boot and
   reconnect by itself; a full realistic day on battery; current with Wi-Fi
   power save off vs on, then decide.
-- A charge-only magnetic USB-C adapter: easy for a blind hand, and no USB
-  host ever touches the board's reset lines.
+- Charging: a plain USB-C cable into a wall charger (Mario declined the
+  magnetic charge-only adapter). A wall charger has no data lines, so nothing
+  can pull the reset and boot lines (F-0020): **never charge it from a
+  computer**. The staff card says so.
 
 ### W8. Developing from home
 
@@ -314,7 +318,8 @@ All in one session with the case open, because it never opens again:
    restore drill. Exit: no manual touch for 7 days, two remote updates, one
    forced rollback, every alert fired and received.
 7. **Handover** with a staff card: what it is, how to charge it, the
-   paperclip restart, the MAC (for their IT), who to call.
+   paperclip restart, wall charger only (never a computer), the MAC (for
+   their IT), who to call.
 
 ## Open questions for Mario
 
