@@ -1884,7 +1884,7 @@ class TestWaitingForAListener:
         "api_id": 1,
         "api_hash": "x",
         "userbot_phone": "+573000000073",
-        "contacts": {"mario": "+573000000073", "hija": "+573000000078"},
+        "contacts": {"mario": "+573000000073", "hija": "+573000000081"},
         "inbound": {
             "enabled": True,
             "auto_answer": "contacts_only",
@@ -1897,7 +1897,7 @@ class TestWaitingForAListener:
     def _factory(captured: list[StubTransport]) -> Any:
         def factory(**kwargs: Any) -> StubTransport:
             t = StubTransport(**kwargs)
-            t.resolve_map = {"+573000000073": 111, "+573000000078": 222}
+            t.resolve_map = {"+573000000073": 111, "+573000000081": 222}
             captured.append(t)
             return t
 
