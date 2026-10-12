@@ -36,6 +36,18 @@ if TYPE_CHECKING:
     from huxley_watch.wlog import WatchLog
 
 SCHEMA = 1
+# What /day/YYYY-MM-DD.json carries: the page draws markup, it reads no rows.
+SERVED = (
+    "schema",
+    "date",
+    "label",
+    "is_today",
+    "today",
+    "prev",
+    "next",
+    "strip_html",
+    "list_html",
+)
 KEEP_DAYS = 8  # past days kept built (each a few hundred KB at most)
 
 
@@ -141,20 +153,26 @@ class Archive:
         first = min([*covered, today])
         return {"today": today.isoformat(), "first": first.isoformat(), "prev": _iso(prev)}
 
-    def day(self, cfg: Config, which: str, now: datetime | None = None) -> bytes | None:
-        """The day's JSON, or None for a day outside the logs or not a date."""
-        try:
-            day = date.fromisoformat(which)
-        except ValueError:
-            return None
-        if len(which) != 10:
-            return None  # only YYYY-MM-DD
-        now = now or datetime.now(UTC)
+    def view(self, cfg: Config, which: str, now: datetime | None = None) -> dict[str, Any] | None:
+        """The whole day, rows and strip data included, built now (not kept):
+        for tests and tools. None for a day outside the logs or not a date."""
+        day, now = _parse(which), now or datetime.now(UTC)
         today = now.astimezone(cfg.timezone).date()
         with self._lock:
             reader, covered = self._days(cfg)
-            first = min([*covered, today])
-            if not first <= day <= today:
+            if day is None or not min([*covered, today]) <= day <= today:
+                return None
+            return self.build(cfg, reader, day, now, covered)
+
+    def day(self, cfg: Config, which: str, now: datetime | None = None) -> bytes | None:
+        """The JSON the page fetches: the strip's and the list's markup and
+        the picker's fields (SERVED). None for a day outside the logs or not
+        a date."""
+        day, now = _parse(which), now or datetime.now(UTC)
+        today = now.astimezone(cfg.timezone).date()
+        with self._lock:
+            reader, covered = self._days(cfg)
+            if day is None or not min([*covered, today]) <= day <= today:
                 return None
             sig = self._signature(cfg, reader, day)
             kept = self._built.get(day)
@@ -163,7 +181,8 @@ class Archive:
                 return kept[1]
             started = clock.monotonic()
             data = self.build(cfg, reader, day, now, covered)
-            body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+            served = {k: data[k] for k in SERVED}
+            body = json.dumps(served, ensure_ascii=False).encode("utf-8")
             kinds: dict[str, int] = {}
             for r in data["rows"]:
                 kinds[r["kind"]] = kinds.get(r["kind"], 0) + 1
@@ -255,12 +274,21 @@ class Archive:
             "today": today.isoformat(),
             "prev": _iso(prev),
             "next": _iso(nxt),
-            "recordings": len(files),
             "strip": day_strip,
             "strip_html": strip_html(day_strip),
             "rows": listed,
             "list_html": daylist.render(listed),
         }
+
+
+def _parse(which: str) -> date | None:
+    """YYYY-MM-DD, nothing else."""
+    if len(which) != 10:
+        return None
+    try:
+        return date.fromisoformat(which)
+    except ValueError:
+        return None
 
 
 def _iso(d: date | None) -> str | None:

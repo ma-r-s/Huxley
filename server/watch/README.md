@@ -148,15 +148,20 @@ and in them only the day's lines, plus what was still open at midnight
 from the start of its run (the walkie's connection, a stream, a call) and
 the ends of streams, calls and recordings up to 6 h after. Time and event
 name are read from a line's bytes before any JSON is decoded. A run can
-last weeks in one file, so where a day starts in each file, with what was
-open there, is kept: asking for today again reads only today's lines.
+last weeks in one file, so where a day starts in each file is kept, with
+what was open there (a handful of lines, not the run's history): asking
+for today again reads only today's lines. It is keyed by the file's first
+line and dropped past the file's end, so a file rewritten in place (the
+runtime reopens `huxley.log` with "w" after a failed rotation) is read
+again.
 Past days are kept built (8 at most, one entry each) until their files,
 recordings or settings change; today is rebuilt each time.
 
-`/day/YYYY-MM-DD.json` is that day: the strip's data and markup (the same
-renderer as today's), its rows (`t`, `at`, `kind`, `who`, `text`, ...) and
-the list's markup. Gzipped when the browser asks. A day before the logs,
-after today, or not a date: 404.
+`/day/YYYY-MM-DD.json` is that day as the page draws it: the strip's
+markup (the same renderer as today's), the list's markup, and the picker's
+fields (date, label, previous and next day). The rows and the strip's
+numbers behind them are `Archive.view()` (tests, tools). Gzipped when the
+browser asks. A day before the logs, after today, or not a date: 404.
 
 `/audio/<YYYY/MM/DD/file.ogg>` serves a recording read-only, as
 `audio/ogg`, with byte ranges (Safari needs them). It resolves only to an
@@ -169,9 +174,11 @@ Safari the play button turns red.
 
 The page used to reload itself with a meta refresh; its script now reloads
 it when idle (nothing playing, and the list closed on today, or no touch
-for 15 minutes), so a recording or a past day is never cut short, and the
-"Stopped checking" check runs every 30 s, not only at load. Without
-JavaScript the meta refresh still applies.
+for 15 minutes), so a recording or a past day is never cut short. A tap
+while a recording plays leaves the list as it is. Audio paused or resumed
+by the phone itself is followed. The "Stopped checking" check runs every
+30 s, and asks `/status.json` before saying so: an old page is not a
+stopped watcher. Without JavaScript the meta refresh still applies.
 
 ## The rules
 

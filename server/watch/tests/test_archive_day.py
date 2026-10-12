@@ -13,16 +13,21 @@ from zoneinfo import ZoneInfo
 
 from huxley_watch import daylist
 from huxley_watch.config import Config
-from huxley_watch.dayview import Archive, covered_days, neighbours
+from huxley_watch.daylog import DayReader, open_at
+from huxley_watch.dayview import SERVED, Archive, covered_days, neighbours
 from huxley_watch.wlog import WatchLog
 
 from .logs import (
+    alive,
     answer,
     by_time,
     call_placed,
     claim_ended,
     claim_started,
+    connected,
+    device,
     flat,
+    line,
     play_started,
     press,
     ptt_stop,
@@ -134,8 +139,22 @@ def logs(tmp_path: Path) -> None:
 
 
 def day(arch: Archive, cfg: Config, which: str) -> dict[str, Any] | None:
-    body = arch.day(cfg, which, NOW)
-    return json.loads(body) if body is not None else None
+    """The whole day (rows and strip data); what's served is checked below."""
+    return arch.view(cfg, which, NOW)
+
+
+def test_the_served_day_is_the_markup_and_the_pickers_fields(tmp_path: Path) -> None:
+    logs(tmp_path)
+    cfg, arch = cfg_for(tmp_path), Archive(WatchLog(None))
+    body = arch.day(cfg, "2026-10-12", NOW)
+    assert body is not None
+    served = json.loads(body)
+    assert sorted(served) == sorted(SERVED)
+    whole = arch.view(cfg, "2026-10-12", NOW)
+    assert whole is not None
+    assert (
+        served["list_html"] == whole["list_html"] and served["strip_html"] == whole["strip_html"]
+    )
 
 
 def test_a_day_reads_only_the_files_that_reach_it(tmp_path: Path) -> None:
@@ -386,3 +405,58 @@ def test_a_call_over_midnight_keeps_its_recordings(tmp_path: Path) -> None:
         ("call", "", "23:40:00"),
         ("rec", "call", "23:40:00"),
     ]
+
+
+def test_a_file_rewritten_in_place_is_read_again(tmp_path: Path) -> None:
+    """Critic: the runtime opens huxley.log with "w" after a failed
+    rotation (same inode). A kept day start past its new end, or from its
+    old first line, must not be used."""
+    live = tmp_path / "logs" / "huxley.log"
+    filler = [line("huxley_ready", utc(11, 19, 0, s)) for s in range(2000)]
+    write(live, [*filler, transcript(utc(12, 6), "user", "vieja")])
+    reader = DayReader(tmp_path / "logs", WatchLog(None))
+    lo = utc(12, 5)  # Mon 00:00 local
+    hi = lo + timedelta(days=1)
+    assert [e.get("text") for e in reader.read(lo, hi) if e.name == "transcript"] == ["vieja"]
+    with live.open("w") as fh:  # the same inode, a fresh run, a smaller file
+        fh.write(
+            starting(utc(12, 7)) + "\n" + transcript(utc(12, 7, 0, 1), "user", "nueva") + "\n"
+        )
+    assert [e.get("text") for e in reader.read(lo, hi) if e.name == "transcript"] == ["nueva"]
+
+
+def test_the_kept_context_stays_small_over_a_long_run(tmp_path: Path) -> None:
+    """Critic: a run of weeks in one file must not keep every stream it
+    ever played as context. Three days, a song every hour: the day start
+    keeps what is open at midnight, a handful of lines, and the strip
+    still shows the walkie connected and the song playing."""
+    lines = [starting(utc(9, 4, 59)), connected(utc(9, 5), "w1"), device(utc(9, 5, 0, 1), "w1")]
+    t = utc(9, 5, 1)
+    n = 0
+    while t < utc(12, 5):
+        lines += [
+            stream_started(t, f"s{n}", f"Song {n}"),
+            play_started(t + timedelta(seconds=1), "spotify:track:x"),
+            stream_ended(t + timedelta(minutes=50), f"s{n}"),
+        ]
+        t += timedelta(hours=1)
+        n += 1
+    lines += [
+        stream_started(utc(12, 4, 50), "late", "Late"),
+        play_started(utc(12, 4, 50, 1), "spotify:track:y"),
+    ]
+    lines += [alive(utc(12, 4, 45) + timedelta(seconds=5 * k), "w1", 0) for k in range(400)]
+    write(tmp_path / "logs" / "huxley.log", by_time(lines))
+    cfg, arch = cfg_for(tmp_path), Archive(WatchLog(None))
+    mon = arch.view(cfg, "2026-10-12", utc(12, 5, 30))
+    assert mon is not None
+    assert arch._reader is not None
+    kept = [len(s.events) for s in arch._reader._starts.values()]
+    assert kept and max(kept) <= 6, (
+        kept
+    )  # the start, connect, hello, the open song and its kind, the last line
+    assert mon["strip"]["online"][0][0] == 0.0
+    assert [(m["kind"], m["label"], m["s"]) for m in mon["strip"]["media"]] == [
+        ("music", "Late", 0.0)
+    ]
+    assert open_at([]) == []

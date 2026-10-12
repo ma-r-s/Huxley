@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from huxley_watch.activity import KIND_WINDOW
 from huxley_watch.events import KEEP_EVENTS, decode, parse_ts, to_event
 
 if TYPE_CHECKING:
@@ -113,14 +114,66 @@ class FileSpan:
     first: datetime
     last: datetime
     ino: int = 0
+    size: int = 0
 
 
 @dataclass
 class _Start:
-    """Where a day's window begins in a file, and the context lines before it."""
+    """Where a day's window begins in a file, and what was open there."""
 
     offset: int
     events: list[Event] = field(default_factory=list)
+
+
+def open_at(events: list[Event]) -> list[Event]:
+    """Of the context lines before a day's window (in order), only those
+    that still matter there, so a run of weeks keeps a handful: the run's
+    start, each open connection's connect and hello, each open stream's
+    start and the skill line naming it, the open call, and the last line
+    (where an open stream is cut if a new run starts next)."""
+    for n in range(len(events) - 1, -1, -1):
+        if events[n].name == "huxley_starting":
+            events = events[n:]  # a new run ended everything before it
+            break
+    connects: dict[str, Event] = {}
+    hellos: dict[str, Event] = {}
+    streams: dict[str, Event] = {}
+    named: list[Event] = []
+    call: Event | None = None
+    for e in events:
+        conn = e.conn
+        if e.name == "client_connected" and conn:
+            connects[conn] = e
+        elif e.name == "client.device" and conn:
+            hellos[conn] = e
+        elif e.name == "client_disconnected" and conn:
+            connects.pop(conn, None)
+            hellos.pop(conn, None)
+        elif e.name == "client_evicted":
+            old = str(e.get("old_conn_id") or "")
+            connects.pop(old, None)
+            hellos.pop(old, None)
+        elif e.name == "server.tx.stream_started" and e.get("stream_id"):
+            streams.setdefault(str(e.get("stream_id")), e)  # said again while open: the same play
+        elif e.name == "server.tx.stream_ended":
+            streams.pop(str(e.get("stream_id")), None)
+        elif e.name == "server.tx.claim_started":
+            call = call or e
+        elif e.name == "server.tx.claim_ended":
+            call = None
+        elif e.name != "huxley_starting":
+            named.append(e)  # a skill's line naming a stream (the kind)
+    starts = [e.ts for e in streams.values()]
+    kinds = [k for k in named if any(timedelta(0) <= k.ts - t <= KIND_WINDOW for t in starts)]
+    keep = [*connects.values(), *hellos.values(), *streams.values(), *kinds]
+    if call is not None:
+        keep.append(call)
+    if events:
+        keep.append(events[-1])
+        if events[0].name == "huxley_starting":
+            keep.append(events[0])
+    unique = {id(e): e for e in keep}
+    return sorted(unique.values(), key=lambda e: e.ts)
 
 
 CONTEXTS_KEPT = 32  # (file, day) starts remembered
@@ -134,7 +187,7 @@ class DayReader:
         self.logs_dir = logs_dir
         self._log = log
         self._index: dict[Path, tuple[tuple[int, int, int], FileSpan | None]] = {}
-        self._starts: OrderedDict[tuple[Path, int, bytes], _Start] = OrderedDict()
+        self._starts: OrderedDict[tuple[Path, int, datetime, bytes], _Start] = OrderedDict()
         self._lock = threading.Lock()  # the index and starts: the cycle and the page share them
         self.opened: list[Path] = []  # files the last read went into (tests, logs)
 
@@ -163,7 +216,7 @@ class DayReader:
                 sig = (st.st_ino, st.st_size, st.st_mtime_ns)
                 cached = self._index.get(path)
                 if cached is None or cached[0] != sig:
-                    cached = (sig, _span(path, st.st_size, st.st_ino))
+                    cached = (sig, _span(path, st.st_size, st.st_ino))  # size and inode too
                     self._index[path] = cached
                 if cached[1] is not None:
                     out.append(cached[1])
@@ -183,9 +236,15 @@ class DayReader:
         seen: set[tuple[datetime, int]] = set()
         out: list[Event] = []
         for f in wanted:
-            where = (f.path, f.ino, keys[0])
+            # Keyed by the first line too, and never past the file's end: a
+            # file rewritten in place (the runtime opens huxley.log with "w"
+            # after a failed rotation) keeps its inode.
+            where = (f.path, f.ino, f.first, keys[0])
             with self._lock:
                 start = self._starts.get(where)
+                if start is not None and start.offset > f.size:
+                    del self._starts[where]
+                    start = None
             try:
                 found, start = _scan(f.path, keys, start)
             except OSError as exc:
@@ -233,7 +292,8 @@ def _scan(
             if key > after:
                 break  # a run's lines are in time order; 6 h is far past any skew
             if start is None and key >= before:
-                start = _Start(at, list(found))  # the context so far, kept for next time
+                found = open_at(found)  # what is open at the window's start
+                start = _Start(at, list(found))  # kept for next time
             name = line_event(raw)
             if key < before:
                 keep = CONTEXT_EVENTS
@@ -273,7 +333,7 @@ def _span(path: Path, size: int, ino: int = 0) -> FileSpan | None:
         last = _line_ts(raw)
         if last is not None:
             break
-    return FileSpan(path, first, last or first, ino)
+    return FileSpan(path, first, last or first, ino, size)
 
 
 def _line_ts(raw: bytes) -> datetime | None:
