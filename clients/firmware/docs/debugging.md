@@ -527,7 +527,7 @@ cell: every later reading is scaled to match, saved in NVS,
 (`battery.wired gpio=`, or `battery.not_wired` once and a look every
 10 min), reads the median of 32 samples at 6 dB every minute while the
 speaker is quiet (anyway after 5 min with no quiet minute, `loaded=1`),
-and sends `system.battery {mv, pct}` with every reading (once a minute)
+and sends `system.battery {mv, pct}` when the percentage changes; the app adds the last reading to each press and each hello
 (`battery.level mv= pct= pin= raw_mv= loaded=`).
 `tools/bench.py --reset` runs the whole check list and keeps the board's
 log in `/tmp/huxley-debug/bench-*.log`.

@@ -38,13 +38,15 @@ static SemaphoreHandle_t s_lock;
 
 /* The level (F-0025): once the divider is wired (the solder blob on R78:
  * GPIO6; held the other way round it lands on GPIO1), a reading every
- * minute while the speaker is quiet, each one reported. */
+ * minute while the speaker is quiet, sent when the percentage changes. */
 #define LEVEL_TICK_MS      60000
 #define LEVEL_BUSY_RETRY_MS 5000
 #define LEVEL_LOADED_AFTER_MS (5 * 60 * 1000) /* no quiet minute: read anyway */
-/* Every reading goes out: "check again" must never answer with a value
- * minutes old (Mario swapping the cell, 2026-10-12, heard 42 % twice). */
-#define LEVEL_REPORT_MS    LEVEL_TICK_MS
+/* Read every minute (a 64 ms measurement; the divider draws the same
+ * 14 uA either way), sent only when the percentage changes: the app also
+ * sends the last reading with each press and after each hello, so "how
+ * much battery" is answered from a reading at most a minute old without a
+ * message a minute (Mario, 2026-10-12). */
 #define LEVEL_SAMPLES      32
 #define CAL_NVS_NS         "hux_bat"
 #define CAL_NVS_KEY        "cal_ppm"
@@ -236,7 +238,6 @@ static uint32_t uptime_ms(void) {
 
 static void level_task(void *arg) {
     (void)arg;
-    uint32_t last_report = 0;
     uint32_t last_quiet = uptime_ms();
     bool told_not_wired = false;
     for (;;) {
@@ -265,13 +266,12 @@ static void level_task(void *arg) {
             s_raw_cell_mv = raw;
             s_cell_mv = cell;
             s_pct = pct;
-            if (changed || uptime_ms() - last_report >= LEVEL_REPORT_MS) {
+            if (changed) {
                 ESP_LOGI(TAG, "battery.level mv=%d pct=%d pin=%d raw_mv=%d loaded=%d", cell, pct,
                          PINS[s_level_pin], raw, busy);
                 if (s_sink != NULL) {
                     s_sink(cell, pct);
                 }
-                last_report = uptime_ms();
             }
         }
         vTaskDelay(pdMS_TO_TICKS(LEVEL_TICK_MS));
