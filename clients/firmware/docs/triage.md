@@ -390,6 +390,18 @@ goes out, with the press's totals.
   structlog overwrites the client's `level`; server fix); ~30 empty
   `wifi:` lines per boot (the Wi-Fi blob logs header and text apart):
   no longer streamed.
+- Re-run of the full list on 5c88849c: everything passed except
+  `offline`, a real one: Wi-Fi back at board time 45.3 s, the server
+  again only at 63.2 s. The drop was at 33.17 s and the new connection
+  came 30.05 s later: the WebSocket's reconnect attempt started just
+  before the interface went down, and its TCP connect waited out the
+  library's `network_timeout_ms` (30 s) on a SYN into a dead link. In
+  the runs that recovered in under 1 s the attempts started after the
+  interface was down and failed at once (every 3 s). The race can't be
+  forced from outside; `network_timeout_ms` is now 5 s (the connect,
+  ping/pong writes and the rest of a half-read frame), bounding it. The
+  offline step now measures IP-to-READY (pass under 10 s), idle and in
+  the middle of a slowed reply.
 
 ### F-0023: Go back by itself after repeated crashes past the confirm · queued
 

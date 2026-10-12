@@ -485,15 +485,16 @@ static void ws_start(const char *uri) {
         .uri = s_server_uri,
         .buffer_size = WS_BUFFER_SIZE,
         .reconnect_timeout_ms = WS_RECONNECT_MS,
-        /* Used as `timeout_ms` for `esp_transport_poll_write` inside
-         * the library. Default (10s) is too short under bidirectional
-         * audio: a transient TCP-window stall trips the timeout and
-         * (pre-v1.5) closes the socket. With separate TX/RX locks
-         * (v1.5+, enabled via CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK)
-         * 30s gives the library + lwIP comfortable headroom. Per
-         * Espressif maintainer guidance in
-         * espressif/esp-protocols issue #964. */
-        .network_timeout_ms = 30000,
+        /* The library's own waits: the TCP connect, ping/pong/close
+         * writes, and reading the rest of a frame it started (idle waits
+         * for the next frame are a separate 1 s poll). 30 s (per
+         * espressif/esp-protocols #964, from before our sends had their
+         * own timeout) left the walkie deaf for 18 s when Wi-Fi dropped
+         * mid-reply: the task sat in a half-read frame on a dead socket
+         * (bench.py --wifi offline, F-0022). 5 s, the same rule as
+         * WS_SEND_TIMEOUT_MS: no progress for 5 s on a LAN is a dead link;
+         * a 16 KB audio frame takes 0.5 s even at 40% of real time. */
+        .network_timeout_ms = 5000,
 
         /* TCP-level keep-alive — detect dead connections fast so the
          * library can fire `WEBSOCKET_EVENT_DISCONNECTED` and trigger

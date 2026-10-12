@@ -421,14 +421,44 @@ def main() -> int:
         elif step == "offline" and args.wifi:
             # Over Wi-Fi nothing can reach it while it's off: it comes back
             # by itself (`wifi off 8`), and the lines it logged while
-            # offline arrive after it reconnects (F-0022).
-            b.send("wifi off 8")
-            back = b.expect(r"console\.wifi back on", 30, m)
-            ready = b.expect(r"state WAITING_HELLO -> READY", 30, m)
+            # offline arrive after it reconnects (F-0022). Twice: idle,
+            # and in the middle of a reply (a half-read frame on a dead
+            # socket once kept it deaf for 18 s after the IP was back).
+
+            def ts(line: str | None) -> int:
+                t = re.search(r"\((\d+)\)", line or "")
+                return int(t.group(1)) if t else 0
+
+            gaps = []
+            for mid_reply in (False, True):
+                m2 = b.mark()
+                if mid_reply:
+                    # Through the proxy with the downlink at 8 KB/s, so each
+                    # audio frame takes ~2 s to arrive: the drop lands while
+                    # a frame is half read, the case that hung.
+                    if not through_proxy():
+                        gaps.append("no proxy")
+                        continue
+                    m2 = b.mark()
+                    b.send("say 3")  # a long story: frames are arriving
+                    if not b.expect(r"ws\.rx\.stats", 25, m2):
+                        gaps.append("no reply")
+                        continue
+                    proxy.set("down", 8)
+                    time.sleep(3)
+                b.send("wifi off 8")
+                ip = b.expect(r"wifi\.got_ip", 40, m2)
+                if mid_reply:
+                    proxy.set("down", None)
+                ready = b.expect(r"state WAITING_HELLO -> READY", 60, m2)
+                gaps.append(ts(ready) - ts(ip) if ip and ready else -1)
+                if mid_reply:
+                    cancel_reply()
+            ok = all(isinstance(g, int) and 0 <= g <= 10000 for g in gaps)
             result(
                 "offline",
-                bool(back and ready),
-                (ready if back and ready else None) or f"back_on={bool(back)} ready={bool(ready)}",
+                ok,
+                f"server again {gaps[0]} ms (idle) / {gaps[1]} ms (mid-reply) after the IP came back",
             )
         elif step == "offline":
             b.send("wifi off")
@@ -460,6 +490,73 @@ def main() -> int:
                 "evict",
                 bool(evicted and back),
                 f"test client {status}; " + (back or f"evicted={bool(evicted)} back={bool(back)}"),
+            )
+        elif step == "stall":
+            # The uplink stops (stall_kbps 0) for stall_s, starting 1 s into
+            # a ~5 s question (the mic sends ~66 KB/s): a Wi-Fi hiccup. The
+            # connection must survive it and the whole question must get
+            # through (mic.tx.done: every frame sent, none dropped).
+            if not through_proxy():
+                result("stall", False, "the board didn't connect through the proxy")
+                return
+            m = b.mark()
+            b.send("say 3")  # "Cuentame un cuento largo..." (~5 s)
+            time.sleep(1.0)
+            proxy.set("up", args.stall_kbps)
+            time.sleep(args.stall_s)
+            proxy.set("up", None)
+            heard = b.expect(r"\[server\] transcript role=user", 30, m)
+            stats = b.expect(r"mic\.tx\.done", 5, m) or b.expect(r"app\.ptt\.final_stats", 1, m)
+            time.sleep(2)
+            drops = b.grep(r"\[server\] client_(connected|disconnected|evicted)", m)
+            incomplete = b.grep(r"ws\.send\.incomplete", m)
+            cancel_reply()
+            ok = bool(heard and not drops)
+            result(
+                "stall",
+                ok,
+                f"reconnects={len([d for d in drops if 'client_connected' in d])} "
+                f"send_incomplete={len(incomplete)} heard={bool(heard)} "
+                f"{re.split(r'final_stats |mic.tx.done ', stats or '')[-1]}",
+            )
+        elif step == "slowdown":
+            # A stream (the radio) whose downlink drops to slow_kbps for
+            # slow_s. Prints, per second, what the server sent next to what
+            # the board got, so a choppy stream says whose fault it is.
+            if not through_proxy():
+                result("slowdown", False, "the board didn't connect through the proxy")
+                return
+            b.send("say 4")  # "Pon la radio."
+            if not b.expect(r"ws\.rx\.stats", 30, m):
+                result("slowdown", False, "the radio never started")
+                return
+            time.sleep(4)
+            m2 = b.mark()
+            proxy.set("down", args.slow_kbps)
+            time.sleep(args.slow_s)
+            proxy.set("down", None)
+            time.sleep(6)
+            m3 = b.mark()
+            b.send("say 5")  # "Para la radio."
+            b.expect(r"ws\.rx\.model_speaking false", 20, m3)
+            sent = [
+                f"{field('audio_ms', x)}/{field('window_ms', x)}({field('sock_unsent', x)})"
+                for x in b.grep(r"\[server\] server\.tx\.audio_stats", m2)
+            ]
+            got = [
+                f"{field('audio_ms', x)}/{field('window_ms', x)}"
+                for x in b.grep(r"ws\.rx\.stats", m2)
+            ]
+            gaps = b.grep(r"spk\.underrun", m2)
+            drops = b.grep(r"\[server\] client_(connected|disconnected|evicted)", m2)
+            print("          server sent, audio_ms/window_ms (kernel unsent):", *sent[:20])
+            print("          board got,   audio_ms/window_ms:", *got[:20])
+            silent = sum(int(field("silent_ms", g)) for g in gaps)
+            result(
+                "slowdown",
+                not drops and bool(sent) and bool(got),
+                f"reconnects={len(drops)} gaps={len(gaps)} silent_ms={silent} "
+                f"(downlink {args.slow_kbps} KB/s for {args.slow_s:.0f} s)",
             )
         elif step == "health":
             b.send("info")
