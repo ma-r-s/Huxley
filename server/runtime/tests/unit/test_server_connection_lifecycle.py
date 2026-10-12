@@ -156,3 +156,27 @@ async def test_client_presence_follows_the_current_client() -> None:
     new.finish()
     await asyncio.wait_for(new_task, 2)
     assert presence == [True, False, True, False]
+
+
+async def test_device_hello_reaches_the_app() -> None:
+    """A reconnect's `device.hello` says what the walkie played after the
+    drop; the coordinator needs it to settle a cut narration (T1.44)."""
+    hellos: list[dict[str, Any]] = []
+
+    async def on_hello(data: dict[str, Any]) -> None:
+        hellos.append(data)
+
+    server, _ = _server()
+    server._on_device_hello = on_hello
+    ws = _SlowClosingWS("walkie")
+    task = asyncio.create_task(server._handle_connection(ws))  # type: ignore[arg-type]
+    await _until(lambda: any(m.get("type") == "input_mode" for m in ws.sent))
+
+    data = {"schema": 1, "played_after_drop_ms": 4900, "ring_left_ms": 0}
+    ws.push({"type": "client_event", "event": "device.hello", "data": data})
+    ws.push({"type": "client_event", "event": "device.health", "data": {"rssi": -60}})
+    await _until(lambda: hellos == [data])
+
+    ws.finish()
+    await asyncio.wait_for(task, 2)
+    assert hellos == [data], "only device.hello"

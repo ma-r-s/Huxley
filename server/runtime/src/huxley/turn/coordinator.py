@@ -117,6 +117,16 @@ class _InjectedRequest:
     # Its turn dispatched a tool (the "call X now, say nothing" pattern):
     # it did its job even with no audio, so a press doesn't say it again.
     ran_tool: bool = False
+    # What its latest attempt sent: when the last audio went out and where
+    # the client's playhead ended with it (everything sent so far, not only
+    # this turn), and whether the turn ended normally (all of it sent).
+    last_audio_at: float | None = None
+    playhead_end: float | None = None
+    sent_whole: bool = False
+    # Put back after a link drop although the device may have played it all
+    # from its ring while offline (the server sends far faster than real
+    # time): the reconnect's `device.hello` decides before it is repeated.
+    heard_check: bool = False
     attempts: int = 0
 
 
@@ -127,6 +137,13 @@ class _InjectedRequest:
 _NO_WAIT_TASK: contextvars.ContextVar[asyncio.Task[Any] | None] = contextvars.ContextVar(
     "huxley_no_turn_wait_task", default=None
 )
+
+
+def _number(value: object) -> float | None:
+    """A JSON number from a client (not a bool), else None."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
 
 
 def _consume_exception(task: asyncio.Task[None]) -> None:
@@ -368,6 +385,12 @@ class TurnCoordinator:
         self._confirm_task: asyncio.Task[None] | None = None
         self._confirm_client_received = confirm_client_received
         self._failed_epoch: int | None = None
+        # The latest `device.hello` (listener epoch, monotonic receipt, data)
+        # and when each listener was first seen: a turn cut by a link drop
+        # waits up to `_HELLO_WAIT_S` for the reconnect's hello (T1.44).
+        self._device_hello: tuple[int | None, float, dict[str, Any]] | None = None
+        self._listener_first_seen: tuple[int, float] | None = None
+        self._hello_wakeup: asyncio.TimerHandle | None = None
         # Drains scheduled from inside FocusManager callbacks (a claim's
         # end), kept referenced until done.
         self._drain_tasks: set[asyncio.Task[None]] = set()
@@ -695,6 +718,9 @@ class TurnCoordinator:
             # means the user never heard it).
             said.plays_at = max(time.monotonic(), self._client_playhead)
         self._note_client_audio(len(pcm))
+        if said is not None:
+            said.last_audio_at = time.monotonic()
+            said.playhead_end = self._client_playhead
         await self._send_audio(pcm)
         await self._log.adebug("coord.audio_fwd", bytes=len(pcm))
 
@@ -1132,6 +1158,7 @@ class TurnCoordinator:
             # the confirmation.
             if said is not None and self._inflight is said:
                 self._inflight = None
+                said.sent_whole = True
                 self._begin_confirm(said)
             self._bind_turn()
             await self._send_status(self._status["ready"])
@@ -2395,6 +2422,13 @@ class TurnCoordinator:
             )
             if index is None:
                 return
+            candidate = self._injected_queue[index]
+            if candidate.heard_check:
+                verdict = await self._settle_heard_check(candidate)
+                if verdict == "wait":
+                    return
+                if verdict == "heard":
+                    continue
             request = self._injected_queue.pop(index)
             if self._expire_if_due(request, where="dequeue"):
                 continue
@@ -2410,6 +2444,125 @@ class TurnCoordinator:
             )
             await self._fire(request)
             return
+
+    # How long a turn cut by a link drop waits, once a listener is back,
+    # for that connection's `device.hello` (the walkie sends it right after
+    # the server's hello). Without one (an old build, the PWA) it is
+    # repeated as before.
+    _HELLO_WAIT_S: ClassVar[float] = 2.0
+    # Slack on the comparison of what the device played after the drop with
+    # our playhead estimate of what was still unplayed then (the estimate
+    # ignores the device's own buffering and the hello's transit).
+    _HEARD_TOLERANCE_MS: ClassVar[int] = 300
+
+    async def on_device_hello(self, data: dict[str, Any]) -> None:
+        """The current client's `device.hello`. A reconnect's carries what
+        the device played out of its ring after the link dropped
+        (`played_after_drop_ms`, `ring_left_ms`, `drop_uptime_ms`; with
+        `time_to_hello_ms`, the time since that drop): a turn cut by the
+        drop may have been heard whole (T1.44, docs/protocol.md "Device
+        contract")."""
+        self._device_hello = (self._listener(), time.monotonic(), data)
+        if any(r.heard_check for r in self._injected_queue):
+            await self._drain_waiting("device_hello")
+
+    @staticmethod
+    def _mark_heard_check(request: _InjectedRequest) -> None:
+        """A turn the client may have finished playing from its ring after
+        the link dropped: everything it said had been sent (its turn ended
+        normally) and some of it was audio."""
+        request.heard_check = (
+            request.sent_whole
+            and request.last_audio_at is not None
+            and request.playhead_end is not None
+        )
+
+    def _arm_hello_wakeup(self, delay_s: float) -> None:
+        if self._hello_wakeup is not None:
+            return
+        loop = asyncio.get_running_loop()
+
+        def _due() -> None:
+            self._hello_wakeup = None
+            self._drain_soon("hello_timeout")
+
+        self._hello_wakeup = loop.call_later(max(0.0, delay_s), _due)
+
+    async def _settle_heard_check(self, request: _InjectedRequest) -> str:
+        """Did the device play `request` out of its ring after the link
+        dropped? `heard`: resolved DELIVERED, out of the queue. `repeat`:
+        said again (as before). `wait`: the reconnect's hello hasn't come
+        yet (at most `_HELLO_WAIT_S`).
+
+        Heard when the whole turn had been sent before the drop, the ring
+        emptied (`ring_left_ms` 0: nothing thrown away at the reconnect)
+        and the device played at least what our playhead says was still
+        unplayed at the drop (everything sent, not only this turn), less
+        `_HEARD_TOLERANCE_MS`."""
+        listener = self._listener()
+        now = time.monotonic()
+        seen = self._listener_first_seen
+        if listener is not None and (seen is None or seen[0] != listener):
+            seen = self._listener_first_seen = (listener, now)
+        hello = self._device_hello
+        if hello is None or hello[0] != listener:
+            deadline = (seen[1] if seen is not None else now) + self._HELLO_WAIT_S
+            if now < deadline:
+                self._arm_hello_wakeup(deadline - now)
+                return "wait"
+            return await self._heard_verdict(request, heard=False, reason="hello_timeout")
+        _epoch, received_at, data = hello
+        played = _number(data.get("played_after_drop_ms"))
+        left = _number(data.get("ring_left_ms"))
+        since_drop = _number(data.get("time_to_hello_ms"))
+        facts: dict[str, Any] = {
+            "played_after_drop_ms": played,
+            "ring_left_ms": left,
+            "drop_uptime_ms": data.get("drop_uptime_ms"),
+            "time_to_hello_ms": since_drop,
+        }
+        if played is None or left is None or since_drop is None:
+            return await self._heard_verdict(request, heard=False, reason="no_fields", **facts)
+        drop_at = received_at - since_drop / 1000
+        last_audio_at = request.last_audio_at
+        playhead_end = request.playhead_end
+        if last_audio_at is None or playhead_end is None:
+            return await self._heard_verdict(request, heard=False, reason="partial_send", **facts)
+        facts["sent_before_drop_ms"] = round((drop_at - last_audio_at) * 1000)
+        if last_audio_at > drop_at:
+            return await self._heard_verdict(request, heard=False, reason="partial_send", **facts)
+        unplayed_ms = max(0, round((playhead_end - drop_at) * 1000))
+        facts["unplayed_at_drop_ms"] = unplayed_ms
+        if left > 0:
+            return await self._heard_verdict(request, heard=False, reason="ring_left", **facts)
+        if played < unplayed_ms - self._HEARD_TOLERANCE_MS:
+            return await self._heard_verdict(request, heard=False, reason="played_short", **facts)
+        return await self._heard_verdict(request, heard=True, reason="drained", **facts)
+
+    async def _heard_verdict(
+        self, request: _InjectedRequest, *, heard: bool, reason: str, **facts: Any
+    ) -> str:
+        request.heard_check = False
+        await logger.ainfo(
+            "coord.inject_heard_after_drop",
+            heard=heard,
+            reason=reason,
+            dedup_key=request.dedup_key,
+            **facts,
+        )
+        if not heard:
+            return "repeat"
+        if request in self._injected_queue:
+            self._injected_queue.remove(request)
+        self._resolve(request, InjectOutcome.DELIVERED)
+        await logger.ainfo(
+            "coord.inject_turn_delivered",
+            by="ring_after_drop",
+            dedup_key=request.dedup_key,
+            waited_s=round(time.monotonic() - request.queued_at, 1),
+            attempts=request.attempts,
+        )
+        return "heard"
 
     def _drain_soon(self, trigger: str) -> None:
         """`_drain_waiting` on the next loop tick: for callbacks that run
@@ -2531,6 +2684,7 @@ class TurnCoordinator:
             return False
         request.plays_at = None
         request.ran_tool = False
+        request.sent_whole = False
         self._injected_queue.insert(0, request)
         self._arm_expiry(request)
         return True
@@ -2663,6 +2817,8 @@ class TurnCoordinator:
                 and request.epoch == self._listener()
             ):
                 self._failed_epoch = request.epoch
+            if by in ("client_left", "no_pong"):
+                self._mark_heard_check(request)
             requeued = self._requeue_head(request, why=by)
             await logger.ainfo(
                 "coord.inject_turn_undelivered",
@@ -2671,6 +2827,7 @@ class TurnCoordinator:
                 requeued=requeued,
                 epoch=request.epoch,
                 listener=self._listener(),
+                heard_check=request.heard_check,
             )
             await self._drain_waiting("undelivered")
         finally:
@@ -2773,12 +2930,14 @@ class TurnCoordinator:
         if said is not None:
             self._unconfirmed = None
             self._cancel_confirm_task()
+            self._mark_heard_check(said)
             requeued = self._requeue_head(said, why=reason)
             await logger.ainfo(
                 "coord.inject_turn_undelivered",
                 reason=reason,
                 dedup_key=said.dedup_key,
                 requeued=requeued,
+                heard_check=said.heard_check,
             )
         await self._release_content_hold(_HOLD_INJECT_QUEUE)
         # A newer client may already be there (an eviction).
@@ -2800,6 +2959,9 @@ class TurnCoordinator:
             if request is not None:
                 pending.append(request)
         self._inflight = None
+        if self._hello_wakeup is not None:
+            self._hello_wakeup.cancel()
+            self._hello_wakeup = None
         for task in list(self._drain_tasks):
             task.cancel()
         for request in pending:

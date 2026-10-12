@@ -397,6 +397,7 @@ class AudioServer:
         # content when nobody listens instead of streaming it into
         # `_send_raw`'s silent drop. None for tests and tools.
         on_client_presence: Callable[[bool], Awaitable[None]] | None = None,
+        on_device_hello: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         # The runtime's part of `GET /health` (persona, session, skills,
         # process); the server adds `client`, `walkie_last_seen` and
         # `recording`. None (tests, tools): `/health` is not served.
@@ -429,6 +430,10 @@ class AudioServer:
         self._on_persona_select = on_persona_select
         self._get_hello_extras = get_hello_extras
         self._on_client_presence = on_client_presence
+        # The current connection's `device.hello` (the hardware contract), for
+        # the coordinator: a reconnect hello says what the device played out
+        # of its ring after the link dropped (T1.44).
+        self._on_device_hello = on_device_hello
         self._get_health = get_health
         # When a firmware client (`shell: firmware`) was last connected:
         # set when one identifies itself and when it goes away. In memory,
@@ -1060,6 +1065,16 @@ class AudioServer:
                 await logger.ainfo("client_evicted_handler_exited")
             structlog.contextvars.unbind_contextvars("conn_id")
 
+    async def _notify_device_hello(self, data: dict[str, Any]) -> None:
+        """Hand the current connection's `device.hello` to the app. Never
+        raises: a failing handler must not break the receive loop."""
+        if self._on_device_hello is None:
+            return
+        try:
+            await self._on_device_hello(data)
+        except Exception:
+            await logger.aexception("server.device_hello_failed")
+
     async def _notify_presence(self, present: bool) -> None:
         """Tell the app whether a client is listening. Never raises: a
         failing handler must not break the connection's lifecycle."""
@@ -1343,6 +1358,8 @@ class AudioServer:
                 data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
                 self._note_device(event, data)
                 await logger.ainfo(f"client.{event}", **client_event_log_fields(data))
+                if event == "device.hello":
+                    await self._notify_device_hello(data)
                 await self._dispatch_client_event(event, data)
             case other:
                 await logger.awarning("server.rx.unknown", msg_type=other)

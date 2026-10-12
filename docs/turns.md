@@ -438,6 +438,8 @@ Not heard, and back to the head of the queue, said again whole with a note to th
 - the response said nothing and ran no tool (a failed one);
 - a press before the turn's audio had started playing (it was queued behind the previous answer, and the press empties the client's buffer); it follows the user's turn. A press while it plays counts as heard.
 
+**Heard from the ring after a drop (walkie smoke, 2026-10-12).** The server sends 5-6x real time, so a narration cut on the wire has often reached the walkie whole and keeps playing from its ring while offline. A turn put back because the link dropped (`client_left`, `no_pong`) after its turn had ended (all of it sent) waits, once a listener is back, for that connection's `device.hello`, at most 2 s (`_HELLO_WAIT_S`). It counts as DELIVERED, not repeated, when the whole turn had been sent before the drop (its last audio before the drop time, which is the hello's receipt less `time_to_hello_ms`), `ring_left_ms` is 0 and `played_after_drop_ms` is at least our playhead estimate of everything still unplayed at the drop, less 300 ms. Otherwise, or without the fields (an older build, the first hello of a reboot, the PWA, or no hello in 2 s), it is repeated in full. A turn cut while still being sent is repeated at once. If its expiry passes before the device reconnects it is EXPIRED, heard or not: nothing can be checked until the hello.
+
 ### Expiry, dedup, persistence
 
 - `expires_after` (default 10 min, `DEFAULT_INJECT_EXPIRY`; `None` waits until heard) counts from the call and only while the turn waits: a turn being said is never cut for it, and one cut off after its deadline is EXPIRED, not said again. An expiry timer resolves it at its deadline.

@@ -17,6 +17,7 @@ before it).
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
@@ -327,6 +328,13 @@ class TestDedup:
 
 
 class TestCutOff:
+    @pytest.fixture(autouse=True)
+    def _no_device_hello(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """These clients send no `device.hello` (an older build, the PWA):
+        a turn cut after it was all sent is repeated once the short wait
+        for that hello runs out (TestHeardAfterDrop has the hello)."""
+        monkeypatch.setattr(TurnCoordinator, "_HELLO_WAIT_S", 0.01)
+
     async def test_a_client_leaving_mid_turn_cuts_it_and_it_is_said_whole_later(
         self, coordinator: TurnCoordinator, provider: StubVoiceProvider, server: _Server
     ) -> None:
@@ -364,7 +372,7 @@ class TestCutOff:
 
         assert _waiting(coordinator) == ["Aviso largo."]
         await server.connect(coordinator)
-        assert len(_said(provider)) == 2
+        await _until(lambda: len(_said(provider)) == 2)  # after the hello wait
         await _speak(coordinator)
         assert await asyncio.wait_for(task, timeout=2.0) is InjectOutcome.DELIVERED
 
@@ -986,3 +994,153 @@ class TestWithoutAServer:
             assert _said(provider) == ["Aviso."]
         finally:
             await coord.close()
+
+
+class TestHeardAfterDrop:
+    """The walkie smoke of 2026-10-12 (T1.44, R2): the server sends 5-6x
+    real time, so a narration cut on the wire had already reached the
+    walkie whole and played from its ring while offline; the server
+    repeated it after the reconnect and it was heard twice. The
+    reconnect's `device.hello` says what the walkie played after the drop
+    (docs/protocol.md "Device contract"); the turn is repeated only when
+    that doesn't cover it."""
+
+    async def _cut_after_send(
+        self, coordinator: TurnCoordinator, server: _Server
+    ) -> tuple[asyncio.Task[InjectOutcome], float]:
+        """A narration whose 1 s of audio was all sent, then the link drops
+        right away (1 s still to play). Returns the waiting task and the
+        drop time."""
+        await server.connect(coordinator)
+        task = asyncio.create_task(coordinator.inject_turn_and_wait("Es hora de la pastilla."))
+        await _until(lambda: coordinator.current_turn is not None)
+        await _speak(coordinator, nbytes=48_000)
+        dropped_at = time.monotonic()
+        await server.leave(coordinator)
+        assert _waiting(coordinator) == ["Es hora de la pastilla."]
+        return task, dropped_at
+
+    @staticmethod
+    def _hello(dropped_at: float, *, played: int, left: int) -> dict[str, Any]:
+        return {
+            "schema": 1,
+            "time_to_hello_ms": round((time.monotonic() - dropped_at) * 1000),
+            "played_after_drop_ms": played,
+            "ring_left_ms": left,
+            "drop_uptime_ms": 123_456,
+        }
+
+    async def test_drained_after_the_drop_counts_as_heard(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider, server: _Server
+    ) -> None:
+        task, dropped_at = await self._cut_after_send(coordinator, server)
+        await server.connect(coordinator)
+        await asyncio.sleep(0.02)
+        assert len(_said(provider)) == 1, "waits for the reconnect's hello"
+
+        with capture_logs() as logs:
+            await coordinator.on_device_hello(self._hello(dropped_at, played=1_000, left=0))
+
+        assert await asyncio.wait_for(task, timeout=1.0) is InjectOutcome.DELIVERED
+        assert len(_said(provider)) == 1, "not said twice"
+        assert coordinator._injected_queue == []
+        verdict = next(e for e in logs if e["event"] == "coord.inject_heard_after_drop")
+        assert verdict["heard"] is True
+        assert verdict["reason"] == "drained"
+        assert 600 < verdict["unplayed_at_drop_ms"] <= 1_100
+
+    async def test_audio_left_in_the_ring_is_repeated(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider, server: _Server
+    ) -> None:
+        task, dropped_at = await self._cut_after_send(coordinator, server)
+        await server.connect(coordinator)
+
+        with capture_logs() as logs:
+            # Enough played to cover the estimate, yet some left over: what
+            # was left was thrown away at the reconnect, unheard.
+            await coordinator.on_device_hello(self._hello(dropped_at, played=1_000, left=600))
+
+        await _until(lambda: len(_said(provider)) == 2)
+        verdict = next(e for e in logs if e["event"] == "coord.inject_heard_after_drop")
+        assert verdict["reason"] == "ring_left"
+        await _speak(coordinator)
+        assert await asyncio.wait_for(task, timeout=2.0) is InjectOutcome.DELIVERED
+
+    async def test_a_hello_without_the_fields_is_repeated(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider, server: _Server
+    ) -> None:
+        """An older build (or the first hello of a reboot): no fields."""
+        _task, _dropped_at = await self._cut_after_send(coordinator, server)
+        await server.connect(coordinator)
+
+        with capture_logs() as logs:
+            await coordinator.on_device_hello({"schema": 1, "time_to_hello_ms": 5_000})
+
+        await _until(lambda: len(_said(provider)) == 2)
+        verdict = next(e for e in logs if e["event"] == "coord.inject_heard_after_drop")
+        assert verdict["reason"] == "no_fields"
+
+    async def test_no_hello_in_time_is_repeated(
+        self,
+        coordinator: TurnCoordinator,
+        provider: StubVoiceProvider,
+        server: _Server,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The PWA sends no `device.hello`: repeated after the wait."""
+        monkeypatch.setattr(TurnCoordinator, "_HELLO_WAIT_S", 0.05)
+        _task, _dropped_at = await self._cut_after_send(coordinator, server)
+
+        with capture_logs() as logs:
+            await server.connect(coordinator)
+            await asyncio.sleep(0.02)
+            assert len(_said(provider)) == 1
+            await _until(lambda: len(_said(provider)) == 2)
+
+        verdict = next(e for e in logs if e["event"] == "coord.inject_heard_after_drop")
+        assert verdict["reason"] == "hello_timeout"
+
+    async def test_a_drop_before_the_last_audio_was_sent_is_repeated(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider, server: _Server
+    ) -> None:
+        """The walkie's drop came before the server sent the narration's end:
+        what came after never reached it, whatever its ring did."""
+        _task, dropped_at = await self._cut_after_send(coordinator, server)
+        await server.connect(coordinator)
+
+        with capture_logs() as logs:
+            await coordinator.on_device_hello(
+                self._hello(dropped_at - 5.0, played=10_000, left=0)  # dropped 5 s earlier
+            )
+
+        await _until(lambda: len(_said(provider)) == 2)
+        verdict = next(e for e in logs if e["event"] == "coord.inject_heard_after_drop")
+        assert verdict["reason"] == "partial_send"
+
+    async def test_playing_less_than_was_unplayed_is_repeated(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider, server: _Server
+    ) -> None:
+        """The ring emptied, but of less than was sent: the rest was lost in
+        flight."""
+        _task, dropped_at = await self._cut_after_send(coordinator, server)
+        await server.connect(coordinator)
+
+        with capture_logs() as logs:
+            await coordinator.on_device_hello(self._hello(dropped_at, played=300, left=0))
+
+        await _until(lambda: len(_said(provider)) == 2)
+        verdict = next(e for e in logs if e["event"] == "coord.inject_heard_after_drop")
+        assert verdict["reason"] == "played_short"
+
+    async def test_a_turn_cut_while_still_being_sent_is_repeated_at_once(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider, server: _Server
+    ) -> None:
+        """Cut mid-turn: not all of it was sent, so no hello to wait for."""
+        await server.connect(coordinator)
+        await coordinator.inject_turn("Aviso.")
+        await coordinator.on_audio_delta(b"\x00" * 4_800)
+        await server.leave(coordinator)
+        assert not coordinator._injected_queue[0].heard_check
+
+        await server.connect(coordinator)
+        assert len(_said(provider)) == 2

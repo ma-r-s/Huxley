@@ -128,6 +128,7 @@ class Runtime:
             on_delete_skill_secret=self._shim_delete_skill_secret,
             get_hello_extras=self._get_hello_extras,
             on_client_presence=self._shim_client_presence,
+            on_device_hello=self._shim_device_hello,
             get_health=self._get_health,
         )
         self.current_app: Application | None = None
@@ -811,6 +812,10 @@ class Runtime:
     async def _shim_client_presence(self, present: bool) -> None:
         if self.current_app is not None:
             await self.current_app.on_client_presence(present)
+
+    async def _shim_device_hello(self, data: dict[str, Any]) -> None:
+        if self.current_app is not None:
+            await self.current_app.on_device_hello(data)
 
     async def _shim_list_sessions(self) -> None:
         if self.current_app is not None:

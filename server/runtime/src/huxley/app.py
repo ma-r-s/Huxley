@@ -905,6 +905,14 @@ class Application:
             return
         await self.coordinator.on_client_presence(present)
 
+    async def on_device_hello(self, data: dict[str, Any]) -> None:
+        """The current client's `device.hello`: a reconnect's says what it
+        played after the link dropped, which settles a proactive turn the
+        drop cut off (T1.44)."""
+        if self._shutting_down:
+            return
+        await self.coordinator.on_device_hello(data)
+
     async def on_ptt_start(self) -> None:
         if self.state_machine.state != AppState.CONVERSING:
             await logger.ainfo(
