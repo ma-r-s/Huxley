@@ -290,8 +290,8 @@
   "hx1": {
     "titleLine1": "Hold to talk.",
     "titleLine2": "Let go to listen.",
-    "subtitle": "HX-1 is the walkie-talkie Huxley's first persona speaks through. It was made for an elderly blind user: no screen, no wake word, one orange lever.",
-    "ctaHow": "How it works",
+    "subtitle": "A voice assistant for people who can't use a smartphone. No screen, no app, no wake word. One lever.",
+    "ctaHow": "What it does",
     "ctaBuild": "Build one",
     "viewer": {
       "aria": "HX-1, a small walkie-talkie: a white front with ten raised dots that spell “hola” in braille and a small black badge with HX-1 in orange, a black speaker grille below them, a red base, and an orange lever down its right side.",
@@ -300,68 +300,54 @@
     },
     "inside": {
       "eyebrow": "What's inside",
-      "title": "A small board, a big speaker, two cells.",
+      "title": "About $50. Prints at home.",
       "specs": {
         "size": "Size",
         "weight": "Weight",
         "battery": "Battery",
         "speaker": "Speaker",
         "board": "Brain",
-        "light": "Light"
-      },
-      "parts": [
-        {
-          "k": "ESP32-S3 audio board",
-          "v": "Waveshare's round board: Wi-Fi, two microphones, an audio codec, and seven RGB LEDs on its back."
-        },
-        {
-          "k": "40 mm speaker",
-          "v": "Behind it, the whole closed case is its back box, about 130 cm³, so voices come out full."
-        },
-        {
-          "k": "Two 18650 cells",
-          "v": "Protected cells in parallel, charged over USB-C with the power switch on. The switch sits recessed in the left side so it isn't flipped by accident."
-        },
-        {
-          "k": "The talk lever",
-          "v": "A printed lever on a printed pin presses a 12 × 12 switch through a spring, with a short, firm click."
-        },
-        {
-          "k": "The light",
-          "v": "The board's seven LEDs sit behind the clear back, ready for a status light the firmware doesn't drive yet."
-        },
-        {
-          "k": "Four screws",
-          "v": "The front comes off with four screws and opens like a book. Only the two halves of the back are glued."
-        }
-      ]
+        "print": "Print time"
+      }
     },
     "how": {
-      "eyebrow": "How it talks to Huxley",
-      "title": "The walkie is the ears and the voice.",
-      "subtitle": "Everything else happens on a Huxley server: the persona, its skills, and the call to the voice model.",
+      "eyebrow": "What it does",
+      "title": "Everything by voice.",
+      "subtitle": "HX-1 is the microphone and the speaker. A Huxley server at home does the rest: the persona, its skills, and OpenAI's realtime voice model.",
       "steps": [
         {
-          "k": "Hold",
-          "v": "Pressing the lever in opens the microphone. Your voice streams to the server over Wi-Fi while you talk."
+          "k": "Calls",
+          "v": "Contacts call it on Telegram and it picks up by itself. Say a name to call them."
         },
         {
-          "k": "Think",
-          "v": "The server runs the persona, here Abuelo, a slow, warm voice in Spanish, and its skills: audiobooks, radio, news, reminders and messages."
+          "k": "Messages",
+          "v": "New messages are read aloud as they arrive. Replies are spoken."
         },
         {
-          "k": "Answer",
-          "v": "The reply streams back and plays as it arrives. Press the lever again to interrupt it."
+          "k": "Books, music, radio",
+          "v": "Audiobooks and music from a Spotify Premium account, and live radio."
+        },
+        {
+          "k": "Reminders",
+          "v": "Medication reminders repeat after 5, 10 and 30 minutes until acknowledged."
+        },
+        {
+          "k": "News and answers",
+          "v": "Headlines, the weather, and whatever a web search can answer."
+        },
+        {
+          "k": "No dead ends",
+          "v": "It never answers with a bare “I can't”: every no comes with an alternative."
         }
       ],
       "linkPersonas": "About personas",
       "linkFirmware": "The firmware"
     },
     "made": {
-      "eyebrow": "Made to be made",
-      "title": "Printed at home, fitted in software.",
-      "body1": "Every printed part comes off a desktop 3D printer: a white front, a red base, a clear PETG back over the board's LEDs, a black grille and an orange lever. The case is modelled in Python with build123d.",
-      "body2": "Before anything is printed, tests check every part against the others and against the board's own 3D model, check that each one has a way in, and check that no layer starts in mid-air. The heavy parts are held by printed features and screws, never glue.",
+      "eyebrow": "Make one",
+      "title": "Print one. Give it to someone.",
+      "body1": "About six hours on a desktop 3D printer, about $50 of parts, some soldering and four screws. The build guide shows all 21 steps in 3D, with print files for any printer.",
+      "body2": "Case, firmware and server are MIT-licensed. Whoever builds it runs the server and writes the persona, a YAML file; it ships with Abuelo, slow and warm, in Spanish. Whoever uses it only holds the lever. The voice model is billed per answer, so an idle HX-1 costs nothing.",
       "guide": "The build guide",
       "link": "The enclosure source"
     },
@@ -381,20 +367,20 @@
     },
     "story": {
       "aria": "HX-1 up close: its face, its lever, and what is inside.",
-      "dots": {
-        "eyebrow": "The first thing fingers find",
-        "title": "Ten dots. One word.",
-        "body": "They say “hola” in braille, at twice the usual size: from across the room they look like confetti, up close they say hello. Glued on through a printed stencil."
+      "gap": {
+        "eyebrow": "The gap",
+        "title": "Every assistant assumes a phone.",
+        "body": "Echo, Nest and HomePod are set up from a phone app and listen all day for their wake word. Accessible audio players cost about $500 and run from a keypad. HX-1 needs neither."
       },
       "lever": {
-        "eyebrow": "The lever",
+        "eyebrow": "One lever",
         "title": "Hold. Talk. Let go.",
-        "body": "It has a lever, and that is the whole interface. While you hold it, it listens; when you let go, it answers. The rest of the time, nothing listens.",
-        "ask": "What time is it?",
-        "answer": "It's ten past four."
+        "body": "The lever is the whole interface. The microphone is on only while it's held. Press it again to cut an answer short.",
+        "ask": "Any messages?",
+        "answer": "One: “I'll call you at six.”"
       },
       "inside": {
-        "body": "An ESP32-S3 board with Wi-Fi and two microphones, a 40 mm speaker, two 18650 cells and a 12 × 12 switch, in a printed 70 × 104 × 37 mm case that closes with four screws."
+        "body": "An ESP32-S3 audio board, a 40 mm speaker, two 18650 cells and a 12 × 12 switch, in a printed 70 × 104 × 37 mm case. It runs on batteries, so it goes where its owner goes."
       }
     }
   }

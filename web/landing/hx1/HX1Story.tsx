@@ -766,9 +766,9 @@ export function HX1Story() {
           }}
           style={{ ...textBox, ...fade, color: "var(--hux-ink)" }}
         >
-          <div style={eyebrow}>{t("hx1.story.dots.eyebrow")}</div>
-          <h2 style={h2}>{t("hx1.story.dots.title")}</h2>
-          <p style={body}>{t("hx1.story.dots.body")}</p>
+          <div style={eyebrow}>{t("hx1.story.gap.eyebrow")}</div>
+          <h2 style={h2}>{t("hx1.story.gap.title")}</h2>
+          <p style={body}>{t("hx1.story.gap.body")}</p>
         </div>
         <div
           ref={(el) => {

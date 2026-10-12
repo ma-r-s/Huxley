@@ -51,9 +51,8 @@ export function HX1Page() {
     { k: t("hx1.inside.specs.battery"), v: `${S.cells} × 18650` },
     { k: t("hx1.inside.specs.speaker"), v: "40 mm" },
     { k: t("hx1.inside.specs.board"), v: "ESP32-S3" },
-    { k: t("hx1.inside.specs.light"), v: "7 RGB LEDs" },
+    { k: t("hx1.inside.specs.print"), v: "~6 h" },
   ];
-  const parts = t("hx1.inside.parts", { returnObjects: true }) as Item[];
 
   const body: CSSProperties = {
     fontSize: 17,
@@ -101,7 +100,7 @@ export function HX1Page() {
       {/* The story: the device pinned while the page scrolls past it. */}
       <HX1Story />
 
-      {/* What's inside, in detail: the story's last beat names the parts */}
+      {/* The numbers: the story's last beat names the parts */}
       <section
         style={{
           ...paperSection,
@@ -146,17 +145,9 @@ export function HX1Page() {
             </div>
           ))}
         </div>
-        <div style={rowGrid(3)}>
-          {parts.map((p, i) => (
-            <Reveal key={i} delay={(i % 3) * 90}>
-              <div style={itemK}>{p.k}</div>
-              <p style={itemV}>{p.v}</p>
-            </Reveal>
-          ))}
-        </div>
       </section>
 
-      {/* How it talks to Huxley */}
+      {/* What it does */}
       <section
         id="how"
         style={{
@@ -200,7 +191,7 @@ export function HX1Page() {
         </div>
       </section>
 
-      {/* Made to be made */}
+      {/* Make one */}
       <section
         style={{
           ...coralSection,

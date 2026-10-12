@@ -290,8 +290,8 @@
   "hx1": {
     "titleLine1": "Appuyez pour parler.",
     "titleLine2": "Relâchez pour écouter.",
-    "subtitle": "HX-1 est le talkie-walkie par lequel parle la première persona de Huxley. Il a été conçu pour un utilisateur âgé et aveugle : pas d'écran, pas de mot d'activation, un seul levier orange.",
-    "ctaHow": "Comment ça marche",
+    "subtitle": "Un assistant vocal pour ceux qui ne peuvent pas utiliser de smartphone. Pas d'écran, pas d'appli, pas de mot d'activation. Un levier.",
+    "ctaHow": "Ce qu'il fait",
     "ctaBuild": "Le construire",
     "viewer": {
       "aria": "HX-1, un petit talkie-walkie : une face blanche avec dix points en relief qui écrivent « hola » en braille et un petit badge noir marqué HX-1 en orange, une grille de haut-parleur noire en dessous, une base rouge et un levier orange le long du côté droit.",
@@ -300,68 +300,54 @@
     },
     "inside": {
       "eyebrow": "Ce qu'il y a dedans",
-      "title": "Une petite carte, un grand haut-parleur, deux accus.",
+      "title": "Environ 50 dollars. S'imprime à la maison.",
       "specs": {
         "size": "Taille",
         "weight": "Poids",
         "battery": "Batterie",
         "speaker": "Haut-parleur",
         "board": "Cerveau",
-        "light": "Lumière"
-      },
-      "parts": [
-        {
-          "k": "Carte audio ESP32-S3",
-          "v": "La carte ronde de Waveshare : Wi-Fi, deux micros, un codec audio et sept LED RVB au dos."
-        },
-        {
-          "k": "Haut-parleur 40 mm",
-          "v": "Derrière lui, tout le boîtier fermé lui sert de caisse, environ 130 cm³, pour des voix pleines."
-        },
-        {
-          "k": "Deux accus 18650",
-          "v": "Des accus protégés en parallèle, chargés par USB-C interrupteur allumé. L'interrupteur est encastré dans le flanc gauche pour ne pas être basculé par accident."
-        },
-        {
-          "k": "Le levier de parole",
-          "v": "Un levier imprimé, sur un axe imprimé, appuie sur un bouton 12 × 12 à travers un ressort, avec un clic court et franc."
-        },
-        {
-          "k": "La lumière",
-          "v": "Les sept LED de la carte sont derrière le dos transparent, prêtes pour un voyant d'état que le firmware ne pilote pas encore."
-        },
-        {
-          "k": "Quatre vis",
-          "v": "La façade s'enlève avec quatre vis et s'ouvre comme un livre. Seules les deux moitiés du dos sont collées."
-        }
-      ]
+        "print": "Impression"
+      }
     },
     "how": {
-      "eyebrow": "Comment il parle à Huxley",
-      "title": "Le talkie, ce sont les oreilles et la voix.",
-      "subtitle": "Tout le reste se passe sur un serveur Huxley : la persona, ses skills et l'appel au modèle vocal.",
+      "eyebrow": "Ce qu'il fait",
+      "title": "Tout à la voix.",
+      "subtitle": "HX-1 est le micro et le haut-parleur. Un serveur Huxley à la maison fait le reste : la persona, ses skills et le modèle vocal temps réel d'OpenAI.",
       "steps": [
         {
-          "k": "Tenir",
-          "v": "Enfoncer le levier ouvre le micro. Votre voix part vers le serveur en Wi-Fi pendant que vous parlez."
+          "k": "Appels",
+          "v": "Les contacts l'appellent sur Telegram et il décroche tout seul. Il suffit de dire un nom pour les appeler."
         },
         {
-          "k": "Réfléchir",
-          "v": "Le serveur fait tourner la persona, ici Abuelo, une voix lente et chaleureuse en espagnol, et ses skills : livres audio, radio, nouvelles, rappels et messages."
+          "k": "Messages",
+          "v": "Les nouveaux messages sont lus à voix haute dès qu'ils arrivent. Les réponses se dictent."
         },
         {
-          "k": "Répondre",
-          "v": "La réponse revient et se fait entendre au fur et à mesure. Enfoncez à nouveau le levier pour l'interrompre."
+          "k": "Livres, musique, radio",
+          "v": "Livres audio et musique d'un compte Spotify Premium, et la radio en direct."
+        },
+        {
+          "k": "Rappels",
+          "v": "Ceux des médicaments se répètent après 5, 10 et 30 minutes jusqu'à confirmation."
+        },
+        {
+          "k": "Actualités et questions",
+          "v": "Les titres, la météo, et tout ce à quoi une recherche web peut répondre."
+        },
+        {
+          "k": "Pas d'impasse",
+          "v": "Il ne répond jamais par un simple « je ne peux pas » : chaque refus vient avec une alternative."
         }
       ],
       "linkPersonas": "À propos des personas",
       "linkFirmware": "Le firmware"
     },
     "made": {
-      "eyebrow": "Fait pour être fait",
-      "title": "Imprimé à la maison, ajusté en logiciel.",
-      "body1": "Chaque pièce imprimée sort d'une imprimante 3D de bureau : une façade blanche, une base rouge, un dos en PETG transparent au-dessus des LED de la carte, une grille noire et un levier orange. Le boîtier est modélisé en Python avec build123d.",
-      "body2": "Avant toute impression, des tests vérifient chaque pièce contre les autres et contre le modèle 3D de la carte elle-même, qu'elle a un chemin pour entrer et qu'aucune couche ne commence dans le vide. Les pièces lourdes sont tenues par des formes imprimées et des vis, jamais par de la colle.",
+      "eyebrow": "En faire un",
+      "title": "Imprimez-en un. Offrez-le.",
+      "body1": "Environ six heures sur une imprimante 3D de bureau, environ 50 dollars de pièces, un peu de soudure et quatre vis. Le guide de montage montre les 21 étapes en 3D, avec les fichiers pour toute imprimante.",
+      "body2": "Boîtier, firmware et serveur sont sous licence MIT. Celui qui le construit fait tourner le serveur et écrit la persona, un fichier YAML ; il est livré avec Abuelo, posé et chaleureux, en espagnol. Celui qui l'utilise ne fait que tenir le levier. Le modèle vocal est facturé à la réponse : au repos, un HX-1 ne coûte rien.",
       "guide": "Le guide de montage (en anglais)",
       "link": "Les sources du boîtier"
     },
@@ -395,20 +381,20 @@
     },
     "story": {
       "aria": "Le HX-1 de près : sa face, son levier et ce qu'il y a dedans.",
-      "dots": {
-        "eyebrow": "Ce que les doigts trouvent d'abord",
-        "title": "Dix points. Un mot.",
-        "body": "Ils disent « hola » en braille, deux fois plus grands que d'habitude : de loin on dirait des confettis, de près ils disent bonjour. Collés à travers un pochoir imprimé."
+      "gap": {
+        "eyebrow": "Le manque",
+        "title": "Tout assistant suppose un téléphone.",
+        "body": "Echo, Nest et HomePod se configurent depuis une appli sur téléphone et guettent toute la journée leur mot d'activation. Les lecteurs accessibles coûtent environ 500 dollars et se pilotent au clavier. HX-1 n'a besoin de rien de tout cela."
       },
       "lever": {
-        "eyebrow": "Le levier",
+        "eyebrow": "Un levier",
         "title": "Tenez. Parlez. Lâchez.",
-        "body": "Il a un levier, et c'est toute l'interface. Tant que vous le tenez, il écoute ; quand vous le lâchez, il répond. Le reste du temps, rien n'écoute.",
-        "ask": "Quelle heure est-il ?",
-        "answer": "Il est quatre heures dix."
+        "body": "Le levier est toute l'interface. Le micro n'est allumé que tant qu'on le tient. Appuyez à nouveau pour couper une réponse.",
+        "ask": "J'ai des messages ?",
+        "answer": "Un : « Je t'appelle à 18 h. »"
       },
       "inside": {
-        "body": "Une carte ESP32-S3 avec Wi-Fi et deux micros, un haut-parleur de 40 mm, deux piles 18650 et un bouton de 12 × 12, dans un boîtier imprimé de 70 × 104 × 37 mm fermé par quatre vis."
+        "body": "Une carte audio ESP32-S3, un haut-parleur de 40 mm, deux piles 18650 et un bouton de 12 × 12, dans un boîtier imprimé de 70 × 104 × 37 mm. Il fonctionne sur batterie : il suit son propriétaire partout."
       }
     }
   }
