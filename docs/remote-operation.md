@@ -60,13 +60,13 @@ walkie --2.4 GHz--> their router --> wss://<host> (Cloudflare edge) --tunnel--> 
    and modem with a clean shutdown when it runs low, an outside dead-man
    check, and a 4G failover for the home internet if outages outlast the UPS
    (the tunnel dials out, so the carrier's shared NAT is fine).
-2. **A dedicated production box is recommended** (Mario's call: about USD
-   100-150, an N100 mini PC or a Pi 5 with NVMe, on the same UPS), running
-   only Huxley, its cloudflared and Soloist, no Watchtower, no automatic
-   reboots. The shared Pi has 31 auto-updating containers, little free RAM,
-   and Minecraft and Immich ML bursts. Fallback if declined: `CPUWeight`,
-   `IOWeight`, `OOMScoreAdjust=-500`, a data directory of its own, and
-   Huxley, Soloist and its cloudflared excluded from Watchtower.
+2. **Production runs on the shared Orange Pi** (Mario, 2026-10-12; a
+   dedicated box was recommended and declined). So Huxley is made the box's
+   first priority: `CPUWeight`, `IOWeight`, `Nice`, `OOMScoreAdjust=-500` in
+   its unit, a data directory of its own on the eMMC, and Huxley, Soloist and
+   its cloudflared out of Watchtower (pinned versions, updated by hand). If
+   the heartbeat later shows stutter while Immich ML, Jellyfin or Minecraft
+   are busy, those move, not Huxley.
 3. **The walkie reaches it through a Cloudflare Tunnel over `wss://`** (the
    pattern the Pi already runs four times), behind a Cloudflare Access
    service token, plus Huxley's own device token. No port forwarding, no
@@ -110,7 +110,8 @@ walkie --2.4 GHz--> their router --> wss://<host> (Cloudflare edge) --tunnel--> 
 
 ### W1. Production server
 
-- Box per decision 2; UPS with NUT shutdown; an RTC battery if the board takes one.
+- The shared Pi, hardened per decision 2; UPS with NUT shutdown; an RTC
+  battery if the board takes one.
 - systemd unit: `Restart=always`, `After=time-sync.target` with
   `systemd-time-wait-sync` (reminders use the clock), waits on the instance lock.
 - **Start the persona at boot**, pinned, not on the first connection.
@@ -298,8 +299,7 @@ All in one session with the case open, because it never opens again:
 ## Order
 
 0. **Now, no code**: UPS on the Pi, router and modem; the dead-man check;
-   push the code (with the private-data scan); ask the home about its Wi-Fi;
-   decide the production box; split the dev accounts.
+   push the code (with the private-data scan); split the dev accounts.
 1. **Production server, at home** (W1, W3, the dead-man and offline alerts):
    Mario keeps using the walkie at home and real recordings pile up.
 2. **The open case and the cable** (W7), so everything after is built on the
@@ -318,16 +318,17 @@ All in one session with the case open, because it never opens again:
 
 ## Open questions for Mario
 
-- The home's Wi-Fi: password, login page or open; 2.4 GHz in his room? A
-  login page means asking their IT to whitelist the walkie's MAC, or the 4G
-  router (pick one that powers back on by itself after a cut).
-- The production box: dedicated (recommended) or the shared Pi?
-- Dev accounts: dev on Mario's own Spotify login and Telegram off on dev?
-- Where alerts reach him: a Telegram bot (recommended), ntfy or email.
-- The case opens once more before handover for the battery, VBUS, R15 and
-  the pinhole: OK?
-- Offline: should the walkie announce it on its own, or only when he presses?
-- Is the home in the same city? (Timezone is set twice in `persona.yaml`,
+Answered 2026-10-12: production on the shared Pi (decision 2); the home's
+Wi-Fi is a normal password network (compiled into the baseline list; check
+2.4 GHz signal in his room on the day; no 4G box unless that fails); the case
+opens once more (W7, all of it); push after a private-data scan.
+
+Defaults until Mario says otherwise: alerts through a Telegram bot; dev on
+Mario's own Spotify login with Telegram off; offline is said when he presses,
+never unprompted.
+
+Still open:
+- Is he in the same city? (Timezone is set twice in `persona.yaml`,
   weather is Villavicencio.)
 - Handover date; who there can charge it and help.
 - The emergency path (F1, filed April, "blocks deploying to grandpa as a

@@ -5564,7 +5564,7 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 
 ## T1.43: Running the walkie from afar (grandpa's retirement home)
 
-**Status**: `proposal` (2026-10-12; plan reviewed by two critics, waiting on Mario's answers to the open questions) · **Owner**: the "Huxley improvement plan" session (server, ops, observability); firmware items built by the firmware session · **Effort**: L (weeks; phased)
+**Status**: `in_progress` (2026-10-12; Mario answered: shared Orange Pi, password Wi-Fi, the case opens once more, push after a scan) · **Owner**: the "Huxley improvement plan" session (server, ops, observability); firmware items built by the firmware session · **Effort**: L (weeks; phased)
 
 **Ask** (Mario, 2026-10-12): the walkie goes to grandpa at his retirement home, on its Wi-Fi, far from Mario's house. From home: update firmware, record every voice in and out with transcripts, see everything the speaker played (book, music, call, silence), a dashboard on the Orange Pi (hours of Spotify, calls and to whom, each call's recording, battery), keep developing while grandpa uses it, and "what may I be missing". Grandpa agreed to full recording.
 
@@ -5590,3 +5590,5 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 - Phase 6: 7 days of grandpa's exact build on a foreign network with no manual touch, the plug pulled mid-book, home internet cut, cloudflared restarted mid-answer and mid-call, the restore drill under an hour, every alert received.
 
 **Firmware items** (the firmware session files them as F-entries when Mario says go): W4 and W5 of the doc, plus W7's partition table and tests.
+
+**Progress**: logs kept (5721956f).
