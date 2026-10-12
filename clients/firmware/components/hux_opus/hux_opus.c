@@ -56,6 +56,9 @@ static _Atomic uint32_t s_enc_us, s_enc_n, s_dec_us, s_dec_n;
 /* Items the decode task took off s_rx_q (packets and markers): the
  * supervisor's "work done" for the decoder (F-0027). */
 static _Atomic uint32_t s_rx_taken = 0;
+/* ms of packets hux_opus_rx_reset threw away, ever (the hello's
+ * ring_left_ms counts them, T1.44). */
+static _Atomic uint32_t s_rx_dropped_ms = 0;
 
 static void decode_task(void *unused) {
     (void)unused;
@@ -223,12 +226,20 @@ void hux_opus_rx_reset(void) {
     if (s_rx_q == NULL) {
         return;
     }
+    /* Markers count too: rare, and over rather than under is the safe side
+     * (the server repeats a narration it can't prove was heard). */
+    uint32_t waiting = (uint32_t)uxQueueMessagesWaiting(s_rx_q);
     xQueueReset(s_rx_q);
+    atomic_fetch_add(&s_rx_dropped_ms, waiting * HUX_OPUS_FRAME_MS);
     send_ctl(RX_RESET, true);
 }
 
 uint32_t hux_opus_rx_waiting(void) {
     return s_rx_q != NULL ? (uint32_t)uxQueueMessagesWaiting(s_rx_q) : 0;
+}
+
+uint32_t hux_opus_rx_dropped_ms(void) {
+    return atomic_load(&s_rx_dropped_ms);
 }
 
 uint32_t hux_opus_dec_errors(void) {

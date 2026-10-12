@@ -187,6 +187,10 @@ typedef void (*hux_net_audio_sink_fn)(const uint8_t *pcm, size_t len);
  */
 void hux_net_set_audio_sink(hux_net_audio_sink_fn sink);
 
+/** Milliseconds of server audio received since boot (Opus packets, 60 ms
+ * each): the hello's received_ms_last_conn (T1.44). */
+uint32_t hux_net_rx_audio_ms(void);
+
 /**
  * Called for every inbound `audio_clear` ("drop any queued audio": the
  * server is interrupting, seeking, or starting something new). Runs on

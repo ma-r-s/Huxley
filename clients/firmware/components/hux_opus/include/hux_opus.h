@@ -63,6 +63,10 @@ void hux_opus_rx_reset(void);
  * from a clean state. */
 void hux_opus_rx_fresh(void);
 
+/** Milliseconds of received packets hux_opus_rx_reset threw away
+ * undecoded, since boot. */
+uint32_t hux_opus_rx_dropped_ms(void);
+
 /** Any task: one packet of a clip stored on the walkie (hux_prompts),
  * decoded in order after what is queued. Waits up to 5 s for room; false
  * if the decoder isn't running or the packet couldn't be queued. */
