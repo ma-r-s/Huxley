@@ -84,6 +84,8 @@ SERVER_EVENTS = {
     "session.rx.tool_call",
     "coord.content_released",
     "coord.content_resumed",
+    "coord.streams_overruled",
+    "server.tx.stream_started",
 }
 PROXY_PORT = 8775
 
@@ -704,13 +706,18 @@ def main() -> int:
             b.send("say 15")  # "Para la musica."
             stop_call = b.expect(r"\[server\] session\.rx\.tool_call name=music_control", 25, m4)
             time.sleep(12)
-            again = b.grep(r"\[server\] coord\.content_resumed", m4)
+            # Neither the paused stream (content_resumed) nor a new one the
+            # model started (2026-10-12: "pausa la musica" -> resume) may play.
+            again = b.grep(r"\[server\] (coord\.content_resumed|server\.tx\.stream_started)", m4)
+            overruled = b.grep(r"\[server\] coord\.streams_overruled", m4)
             ok = bool(back and got and not again)
             result(
                 "resume",
                 ok,
                 f"music back after the question: {bool(back)} (audio arriving: {bool(got)}); "
-                f"stopped by 'para la musica': {not again} (tool called: {bool(stop_call)})",
+                f"stopped by 'para la musica': {not again} (model: "
+                f"{field('args', stop_call or '') if stop_call else 'no tool'}"
+                f"{', overruled' if overruled else ''})",
             )
         elif step == "hearing":
             # Yesterday's failed requests, spoken by the clips: each must

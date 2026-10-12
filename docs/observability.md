@@ -241,6 +241,7 @@ A press pauses what plays and the turn's end resumes it; no client pauses it too
 - **`coord.content_resume_scheduled`** — the turn ended; the resume waits `delay_ms` for the client to finish playing the answer.
 - **`coord.content_released`** — a hold was dropped. `resumed=true` means `factory()` was called again; `false` with `holds` non-empty means another reason still holds it, or focus is elsewhere (a call, an injected turn).
 - **`coord.content_resumed`** — a pump actually restarted (any path, including FocusManager parking).
+- **`coord.streams_overruled`**: the press said only stop words but the model's tool started media anyway (2026-10-12: "Pausa la música" -> `music_control(resume)`): the turn's new stream is dropped (`dropped`), or stopped once a late transcript arrives (`late=true`, within 3 s). `heard` is the transcript.
 - **`coord.content_stopped`** — the stream was ended instead of resumed. `reason`: `stop_words` (the press said only stop words; `heard` is the transcript), `parked_too_long` (`held_s`), `ptt_without_session` (a press over 5 s into a voice-session outage; `down_s`).
 - **`coord.ptt_rejected_session_back`**: the app rejected a press, but the session was back by the time the coordinator saw it; what plays is left alone (the press still beeps).
 - **`coord.session_connected`**: the voice session is up again; fires the head of the inject queue, then releases a `session` hold. Fields: `connected` (false: it dropped again before this ran, nothing happens), `queued_injects`, `content`, `holds`.

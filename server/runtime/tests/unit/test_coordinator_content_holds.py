@@ -834,3 +834,65 @@ class TestProviderReconnect:
         assert coordinator.current_turn is None
         assert not coordinator._speaking_state.is_speaking
         assert ("send_conversation_message", "The book ended.") not in provider.sent
+
+
+class TestStopWordsOverruleTheModel:
+    """2026-10-12 morning, 08:09 and 08:11 local: "Pausa la música" was
+    transcribed right, the model called music_control(resume), the paused
+    stream was stopped by the stop words and the resume started the music
+    again. What the user said wins over the model's media call."""
+
+    @pytest.fixture(autouse=True)
+    def _words(self, coordinator: TurnCoordinator) -> None:
+        coordinator.set_ui_strings(
+            {"content_stop_words": "para pausa", "content_filler_words": "la musica"}
+        )
+
+    async def _resume_turn(
+        self, coord: TurnCoordinator, mocks: dict[str, Any], heard: str | None
+    ) -> _Media:
+        new = _Media()
+        await coord.on_ptt_start()
+        assert coord.current_turn is not None
+        coord.current_turn.user_audio_bytes = 300 * 48
+        await coord.on_ptt_stop()
+        if heard is not None:
+            coord.on_user_transcript(heard)
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output='{"ok": true, "action": "resume"}', side_effect=AudioStream(factory=new.factory)
+        )
+        await coord.on_tool_call("c1", "music_control", {"action": "resume"})
+        await coord.on_response_done()
+        return new
+
+    async def test_stop_words_drop_the_stream_the_model_started(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        old = await _start(coordinator, mocks)
+
+        new = await self._resume_turn(coordinator, mocks, "Pausa la música")
+
+        await _until(lambda: coordinator._content_obs is None)
+        await _stays(lambda: new.runs == 0 and old.runs == 1)
+
+    async def test_a_late_transcript_stops_the_stream_the_turn_started(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        old = await _start(coordinator, mocks)
+
+        new = await self._resume_turn(coordinator, mocks, None)
+        await _until(lambda: new.chunks > 0)  # it started before the words came
+        coordinator.on_user_transcript("pausa la música")
+
+        await _until(lambda: coordinator._content_obs is None)
+        await _stays(lambda: old.runs == 1)
+
+    async def test_other_words_keep_the_stream(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        await _start(coordinator, mocks)
+
+        new = await self._resume_turn(coordinator, mocks, "Pon otra canción")
+
+        await _until(lambda: new.chunks > 0)
+        await _flowing(new)

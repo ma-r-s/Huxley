@@ -5394,3 +5394,17 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 **Lesson.** Review the combination, not just each branch: four reviewed branches still met in four bugs.
 
 ---
+
+## T1.37: Mario's morning test, 2026-10-12: "pausa la música" resumed; the Wi-Fi starved the walkie
+
+**Status**: `in_progress` (2026-10-12) · **Effort**: S (the overrule); the network is open
+
+**Evidence** (11 presses, 08:05-08:11 local, `server/runtime/logs`): "Pon Weird Fishes de Radiohead" played Weird Fishes / Arpeggi; "Pausa la música", transcribed right, made the model call `music_control(resume)` twice: the stop words stopped the paused stream and the resume started the music again (third try, "PAUSA", worked). "¿Cómo se llama el cantante de la banda Genesis?" first searched audiobooks for "El origen Henesis" (right on the second try); a 380 ms press with an empty transcript got "¡Hola! ¿Qué te gustaría hacer ahora? Puedo ayudarte..."; "Mejor el volumen" got a question instead of an action. Mic: speech peaks -2.9 to -25 dBFS with the button clicks left out (server `coord.ptt_stop`); the board's 0 dBFS peaks and 19-45 clipped samples per press are the lever's clicks, not the voice: no gain change needed.
+
+**Network.** Two stalls: 08:07:34-08:07:53 (server on time, `sock_unsent` 6 KB to 131 KB, sends blocked up to 3.7 s, the board got 100-200 ms of audio per second at rssi -48..-52) and 08:09:41-08:10:47 (sends blocked up to 37.5 s; the server dropped the WebSocket 1006, the board reconnected in 3 s). The enclosure session measured, board idle: 9.3 % ping loss Mac to board (p90 106 ms) against 0 % to the router; the board sits on the main Deco's 2.4 GHz radio, ch 9 at 40 MHz, next to a neighbour on ch 11 at 40 MHz. It is A/B testing HT20 on the board.
+
+**Fix (the overrule).** When the press's transcript is only stop words, the turn's own streams are dropped (or stopped when the transcript arrives within 3 s): `coord.streams_overruled`. Tests: `TestStopWordsOverruleTheModel` (2 of 3 fail without it). bench.py `resume` now fails if any stream starts after "para la música".
+
+**Open.** The Wi-Fi (HT20 A/B in progress elsewhere). Bandwidth: the walkie gets PCM as base64 JSON, ~64 KB/s; Opus would need ~3-4 KB/s and would have ridden out the first stall (protocol + firmware decoder: a plan, not a patch). Model misses (Genesis, the empty press's offer, the volume question) stay with mini (Mario's choice).
+
+---

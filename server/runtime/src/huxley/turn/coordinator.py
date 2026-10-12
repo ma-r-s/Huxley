@@ -300,6 +300,11 @@ class TurnCoordinator:
         # the event the pending resume waits on for it.
         self._press_transcript: str | None = None
         self._press_transcript_event = asyncio.Event()
+        # A user turn whose stream started before its transcript arrived:
+        # (turn_id, deadline). If the transcript then turns out to be only
+        # stop words, that stream is stopped (`_overrule_late`).
+        self._overrule_watch: tuple[str | None, float] | None = None
+        self._overrule_task: asyncio.Task[None] | None = None
         # The coordinator's own view of the voice session: monotonic time
         # it went down (`on_session_disconnected`), None once the app has
         # connected it (`on_session_connected`). Not `provider.is_connected`
@@ -420,6 +425,7 @@ class TurnCoordinator:
         content_held = await self._hold_content(_HOLD_TURN)
         self._press_transcript = None
         self._press_transcript_event.clear()
+        self._overrule_watch = None
         # A press empties the client's buffer (the firmware clears its ring
         # on press; `interrupt` sends audio_clear): nothing queued anymore.
         self._client_playhead = 0.0
@@ -912,6 +918,25 @@ class TurnCoordinator:
         turn_id = self._tid()
         self.current_turn.state = TurnState.APPLYING_FACTORIES
 
+        # What the user said overrules the model's media call when it was
+        # only stop words: 2026-10-12 08:09 and 08:11, "Pausa la música"
+        # (transcribed right) made the model call music_control(resume);
+        # the paused stream was stopped and the resume started it again.
+        # Err toward silence, as for the paused stream itself (T1.30).
+        if streams and self.current_turn.source is TurnSource.USER:
+            heard = self._press_transcript
+            if heard is not None and self._said_stop(heard):
+                await self._log.ainfo(
+                    "coord.streams_overruled",
+                    reason="stop_words",
+                    heard=heard,
+                    dropped=len(streams),
+                )
+                streams = []
+            elif heard is None:
+                loop = asyncio.get_running_loop()
+                self._overrule_watch = (turn_id, loop.time() + self._OVERRULE_WINDOW_S)
+
         if len(streams) > 1:
             await self._log.ainfo(
                 "coord.audio_streams_superseded",
@@ -1398,9 +1423,34 @@ class TurnCoordinator:
 
     def on_user_transcript(self, text: str) -> None:
         """The provider transcribed what the user said in a press. Kept
-        for the pending resume of the content that press held."""
+        for the pending resume of the content that press held, and checked
+        against a stream the press's turn already started."""
         self._press_transcript = text
         self._press_transcript_event.set()
+        watch, self._overrule_watch = self._overrule_watch, None
+        if watch is not None and self._said_stop(text):
+            loop = asyncio.get_running_loop()
+            if loop.time() <= watch[1]:
+                self._overrule_task = loop.create_task(
+                    self._overrule_late(watch[0], text), name="coord.overrule"
+                )
+
+    # How long after a turn starts a stream its late transcript can still
+    # stop it ("pausa" heard after the model already called resume).
+    _OVERRULE_WINDOW_S: ClassVar[float] = 3.0
+
+    async def _overrule_late(self, turn_id: str | None, heard: str) -> None:
+        obs = self._content_obs
+        if obs is None or obs.interface_name != f"turn.content.{turn_id or 'unknown'}":
+            return  # that stream already ended or was replaced
+        await logger.ainfo(
+            "coord.streams_overruled",
+            reason="stop_words",
+            heard=heard,
+            late=True,
+            interface=obs.interface_name,
+        )
+        await self._stop_content_stream()
 
     @staticmethod
     def _words(text: str) -> list[str]:
