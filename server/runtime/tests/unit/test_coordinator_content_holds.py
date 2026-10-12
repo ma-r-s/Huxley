@@ -498,13 +498,19 @@ class TestPressPausesAndResumes:
 
         await _stays(lambda: runs == 1)
 
-    async def test_press_without_a_session_stops_the_content(
-        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    async def test_press_in_an_outage_stops_the_content(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The session drop no longer stops content (failure C), so while
-        the provider is down the press is the user's only way to silence
-        the device."""
+        """The session drop no longer stops content (failure C), so in a
+        real outage the press is the user's only way to silence the
+        device."""
+        monkeypatch.setattr(TurnCoordinator, "_OUTAGE_STOP_AFTER_S", 0.05)
         await _start(coordinator, mocks)
+        await coordinator.on_session_disconnected()
+        await asyncio.sleep(0.1)  # down past the threshold
 
         await coordinator.on_ptt_rejected()
 
@@ -606,3 +612,51 @@ class TestProviderReconnect:
 
         assert coordinator.current_turn is None
         await _until(lambda: media.runs == 2)
+
+    async def test_press_during_the_refresh_pauses_until_the_session_is_back(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        """The planned refresh disconnects mid-book every 50 min; a press in
+        the ~2-3 s before the reconnect stopped the book for good. It
+        pauses it now, and the session coming back resumes it."""
+        media = await _start(coordinator, mocks)
+        provider._connected = False
+        await coordinator.on_session_disconnected()
+
+        await coordinator.on_ptt_rejected()
+
+        assert coordinator.current_media_task is None, "the press pauses it"
+        assert coordinator._content_obs is not None, "not stopped"
+        mocks["send_audio_clear"].assert_awaited()
+        assert not coordinator._speaking_state.is_speaking  # the walkie unholds
+        await _stays(lambda: media.runs == 1, for_s=0.1)
+
+        provider._connected = True
+        await coordinator.on_session_connected()
+
+        await _until(lambda: media.runs == 2)
+        await _flowing(media)
+
+    async def test_a_press_later_in_the_outage_stops_what_was_paused(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(TurnCoordinator, "_OUTAGE_STOP_AFTER_S", 0.05)
+        media = await _start(coordinator, mocks)
+        provider._connected = False
+        await coordinator.on_session_disconnected()
+        await coordinator.on_ptt_rejected()  # paused
+        await asyncio.sleep(0.1)
+
+        await coordinator.on_ptt_rejected()  # the outage is real
+
+        assert coordinator._content_obs is None
+        provider._connected = True
+        await coordinator.on_session_connected()
+        await _stays(lambda: media.runs == 1)

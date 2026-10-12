@@ -73,6 +73,7 @@ from .state import Turn, TurnSource, TurnState
 _HOLD_TURN = "turn"  # a user turn is in progress
 _HOLD_NO_CLIENT = "no_client"  # no client has been connected for a while
 _HOLD_DISPATCH = "dispatch"  # a turn's end is deciding what plays next
+_HOLD_SESSION = "session"  # a press found no voice session (a reconnect)
 
 _SOURCE_TO_OWNER: dict[TurnSource, SpeakingOwner] = {
     TurnSource.USER: SpeakingOwner.USER,
@@ -298,6 +299,12 @@ class TurnCoordinator:
         # the event the pending resume waits on for it.
         self._press_transcript: str | None = None
         self._press_transcript_event = asyncio.Event()
+        # Monotonic time the voice session went down (None while it is
+        # up; down from construction until the first connect). A press
+        # without a session pauses the content when the session dropped
+        # moments ago (a planned refresh), stops it in a real outage
+        # (`on_ptt_rejected`).
+        self._session_down_since: float | None = time.monotonic()
 
         self._current_turn: Turn | None = None
         self.response_cancelled: bool = False
@@ -742,6 +749,7 @@ class TurnCoordinator:
         had_media = self._content_is_running()
         was_speaking = self._speaking_state.is_speaking
         tid = self._tid()
+        self._session_down_since = time.monotonic()
 
         # End any active claim with ERROR: a session disconnect during a
         # call isn't a natural close.
@@ -1538,22 +1546,53 @@ class TurnCoordinator:
                 await task
         await self._stop_content_stream()
 
+    # A press this long into a session outage stops the content rather
+    # than pausing it until the session is back. The planned refresh
+    # reconnects in ~2-3 s (1 s backoff plus the connect), well inside.
+    _OUTAGE_STOP_AFTER_S: ClassVar[float] = 5.0
+
     async def on_ptt_rejected(self) -> None:
-        """A press arrived while there is no voice session (reconnecting,
-        or the provider is down). It can't start a turn, and content no
-        longer stops when the session drops, so the press stops it: the
-        user keeps a way to silence the device during an outage."""
+        """A press arrived while there is no voice session. It can't start
+        a turn, and content no longer stops when the session drops, so the
+        press decides. Down for `_OUTAGE_STOP_AFTER_S` or less (the planned
+        refresh, mid-book, every 50 min): pause it, and the session coming
+        back resumes it (`on_session_connected`); stopping it there cut
+        the book for good over a 2 s reconnect. Down longer (a real
+        outage): stop it, so the user keeps a way to silence the device
+        and nothing starts minutes later out of the blue. The app plays
+        the press's sound."""
         obs = self._content_obs
         if obs is None or not obs.is_live:
             return
-        await logger.ainfo(
-            "coord.content_stopped",
-            reason="ptt_without_session",
-            interface=obs.interface_name,
-        )
-        await self._stop_content_stream()
+        since = self._session_down_since
+        down_s = None if since is None else time.monotonic() - since
+        if down_s is not None and down_s <= self._OUTAGE_STOP_AFTER_S:
+            await self._hold_content(_HOLD_SESSION)
+        else:
+            await logger.ainfo(
+                "coord.content_stopped",
+                reason="ptt_without_session",
+                interface=obs.interface_name,
+                down_s=None if down_s is None else round(down_s, 1),
+            )
+            await self._stop_content_stream()
         await self._send_audio_clear()
         await self._force_release_unless_content()
+
+    async def on_session_connected(self) -> None:
+        """The voice session is up (the first connect or a reconnect).
+        Content a press paused while it was down resumes."""
+        obs = self._content_obs
+        await logger.ainfo(
+            "coord.session_connected",
+            connected=self._provider.is_connected,
+            content=obs.interface_name if obs is not None else None,
+            holds=sorted(obs.holds) if obs is not None else [],
+        )
+        if not self._provider.is_connected:
+            return  # dropped again before we got here: still down
+        self._session_down_since = None
+        await self._release_content_hold(_HOLD_SESSION)
 
     # --- Input claim (T1.4 Stage 2 — mic-capture skills) ---
 

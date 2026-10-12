@@ -237,11 +237,12 @@ If `coord.inject_turn` fires but no subsequent `focus.acquire channel=dialog` ap
 
 A press pauses what plays and the turn's end resumes it; no client pauses it too ([ADR 2026-10-12](./decisions.md#2026-10-12-a-press-pauses-content-the-turns-end-resumes-it-t130)). The story of one pause:
 
-- **`coord.content_held`** — the stream was paused. Fields: `reason` (`turn` = a press, `no_client`), `was_playing`, `holds` (every reason in force).
+- **`coord.content_held`** — the stream was paused. Fields: `reason` (`turn` = a press, `no_client`, `session` = a press while the voice session was down for 5 s or less, i.e. the planned refresh), `was_playing`, `holds` (every reason in force).
 - **`coord.content_resume_scheduled`** — the turn ended; the resume waits `delay_ms` for the client to finish playing the answer.
 - **`coord.content_released`** — a hold was dropped. `resumed=true` means `factory()` was called again; `false` with `holds` non-empty means another reason still holds it, or focus is elsewhere (a call, an injected turn).
 - **`coord.content_resumed`** — a pump actually restarted (any path, including FocusManager parking).
-- **`coord.content_stopped`** — the stream was ended instead of resumed. `reason`: `stop_words` (the press said only stop words; `heard` is the transcript), `parked_too_long` (`held_s`), `ptt_without_session` (a press while the provider was down).
+- **`coord.content_stopped`** — the stream was ended instead of resumed. `reason`: `stop_words` (the press said only stop words; `heard` is the transcript), `parked_too_long` (`held_s`), `ptt_without_session` (a press over 5 s into a voice-session outage; `down_s`).
+- **`coord.session_connected`**: the voice session is up again; releases a `session` hold. Fields: `connected` (false: it dropped again before this ran, nothing released), `content`, `holds`.
 - **`coord.client_presence`** — a client became current (`present=true`) or the last one left. The `no_client` hold follows 5 s later.
 - **`coord.content_held_note`** — the model was told, before the commit, that what played is paused.
 
