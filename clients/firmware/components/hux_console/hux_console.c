@@ -14,6 +14,7 @@
 #include "hal/usb_serial_jtag_ll.h"
 
 #include "hux_audio.h"
+#include "hux_battery.h"
 #include "hux_button.h"
 #include "hux_net.h"
 #include "hux_ota.h"
@@ -158,6 +159,8 @@ void hux_console_run(char *line) {
         }
     } else if (strcmp(cmd, "pa") == 0 && argc > 1) {
         hux_audio_pa(strcmp(argv[1], "on") == 0);
+    } else if (strcmp(cmd, "battery") == 0) {
+        hux_battery_probe();
     } else if (strcmp(cmd, "quiet") == 0) {
         if (argc > 1) {
             hux_audio_quiet((uint32_t)strtoul(argv[1], NULL, 10));
@@ -166,7 +169,7 @@ void hux_console_run(char *line) {
     } else {
         ESP_LOGW(TAG, "console.unknown %s (talk, release, say N, tone [hz] [ms], vol N, pa on|off, "
                       "selftest [hz], wifi off [s]|on, wifistat, wifiscan, wifibw 20|40, info, "
-                      "server <uri> [min], quiet [s], reboot, "
+                      "server <uri> [min], quiet [s], battery, reboot, "
                       "ota <url> [force] | confirm | rollback)",
                  cmd);
     }

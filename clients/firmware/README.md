@@ -220,7 +220,7 @@ evicts the first, so close the PWA tab while testing the board.
   reason, RSSI, volume)
 - Bench console on USB serial: `talk`, `release`, `say <n>`, `selftest`,
   `tone`, `vol`, `pa on|off`, `wifi on|off`, `wifistat`, `wifiscan`,
-  `wifibw 20|40`, `info`, `reboot`, `ota <url>` (`components/hux_console/include/hux_console.h`)
+  `wifibw 20|40`, `info`, `battery`, `reboot`, `ota <url>` (`components/hux_console/include/hux_console.h`)
 - Over Wi-Fi (`tools/dev.py`): updates with rollback, the same console
   commands, health, crash dumps
 

@@ -461,6 +461,28 @@ fallback with today's server (turn, silent, health PASS).
 **Next**: the server side (in progress), then the bench on Opus (turn,
 stall, slowdown, resume, hearing) and `dev.py link` over real use.
 
+### F-0025: Say how much battery is left · in_progress 2026-10-12
+
+**Ask** (Mario): "a way so the device can tell me how much battery is
+left." Nothing reads the battery today.
+**Validate**: the board's schematic (ESP32-S3-AUDIO-Board v1.1) divides
+the cell by 3 (R2 200K over R11 100K, 200 nF) onto BAT_ADC, but its note
+says battery measurement "is disabled by default": BAT_ADC reaches GPIO1
+only through jumpers R53 + R78, or GPIO6 through R78, and stock boards
+ship them open (the camera loses CAM_HREF on GPIO1; we have no camera).
+**Probe** (`hux_battery`, console `battery`): reads GPIO1 and GPIO6
+floating, then pulled down. A wired divider reads cell/3 (~1.3 V) and
+holds ~0.5 V against the pull-down; an open pad reads noise, then ~0.
+One `battery.probe gpio=N ... verdict=wired|not_wired` line per pin.
+**Design** (if wired): the board pushes `client_event system.battery`
+{mv, pct} on connect and every few minutes; the system skill subscribes
+(`ctx.subscribe_client_event`), keeps the last reading, answers a
+`get_battery` tool from it (saying when it is old or missing), and
+speaks a warning when a reading crosses 20 % and 10 %. No new framework
+concept: client_event already carries device telemetry to skills.
+**Next**: flash the probe when the walkie is idle; if not wired, the
+jumper needs a soldering iron inside the case (Mario's call).
+
 Note on IDs: F-0011 to F-0013 were used in code comments and commit
 messages (boot buzz, decode scratch, Wi-Fi power save) but their
 entries never landed here; F-0003 (the speaker path) shipped as v0.3.x

@@ -17,6 +17,7 @@
 
 #include "hux_app.h"
 #include "hux_audio.h"
+#include "hux_battery.h"
 #include "hux_board.h"
 #include "hux_button.h"
 #include "hux_console.h"
@@ -163,6 +164,10 @@ void app_main(void) {
      * idle until `hux_audio_mic_start()`. v0.3 extends this to open
      * ES8311 for playback on the same duplex channel. */
     hux_audio_init();
+
+    /* Cell voltage on ADC1 (Wi-Fi only uses ADC2). The console's
+     * `battery` probes whether the divider is wired at all. */
+    hux_battery_init();
 
     /* Opus (F-0024), before the network: the WebSocket asks the server
      * for it only if the codec is up. Decoded packets go to the same ring,
