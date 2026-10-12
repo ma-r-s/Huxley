@@ -453,6 +453,51 @@ branch is merged into main and pushed (a791d4f0) together with the
 website's /hx-1 page, which shows HX-1 in 3D (`huxcase.site --web`). The
 TPU front test ring fit "really, really good"; the full bumper is next.
 
+**Face art (2026-10-12)**: Mario wanted something meaningful on the face,
+first as braille or morse dots glued on through a printed stencil. Four
+rounds of 2D mockups were rejected before one stuck:
+- small items beside the mic rings: crowded, badly placed;
+- dot fields filling the face: pretty, but meaningless;
+- "hola" sideways down the centre line: something off.
+
+What worked: "hola" in braille at about 2x, so from afar it reads as
+scattered dots. The layout is laid on lines the face already has:
+- the grille's left edge starts the word and a small black HX-1 badge;
+- the mic rings' axis ends it, the "a" a single dot between the rings;
+- the word sits midway between the rings, and the badge on the lower ring's row.
+
+A cold critic ranked six layouts and set the last 0.3 mm (round shapes past
+a straight edge, the "a" on the axis). Dots alternate two colours by letter;
+Mario asked for "more colourful, less Halloween", and orange + sky blue is my
+pick of six pairs. Built in `huxcase/face_art.py`, all glued with CA:
+- ten domed dots, 3.2 x 1.0 mm;
+- the badge, 17 x 6.8 mm, a 1 mm black pill with its letters raised 0.6
+  in orange, so the filament changes once at one height (Mario: no mixing
+  within a layer); one object of two parts (`slice.Plate.parts`);
+- a stencil, a 1 mm plate on the face with a lip over the top and sides.
+
+All of it is on one plate printed by object (`12_face_art`, Mario's ask):
+the badge, the orange dots, the blue dots, then the stencil in blue. That is
+two filament changes, purged into the chute, since by object has no prime
+tower. `tests/test_face_art.py` covers the parts. A cold review before
+printing found:
+- the stencil's 0.4 mm relief was deeper than the dots' foot, so the holes
+  held a dot only by its dome (about 0.65 mm of play): the relief is now 0.2
+  and the foot 0.36, and a test pushes each dot past its clearance;
+- Menlo letters at 4.2 mm would merge on the classic wall generator: they
+  are now 5.0 mm, spaced 0.4, on Arachne.
+
+Bambu Studio orders a by-object plate by its build list, and keeps every
+object 72 mm from the others even when low: `slice.layout` sets both.
+The faceplate loses its engraved name, which printed face down on the
+textured plate had come out invisible. Lessons:
+- when Mario rejects placement, keep the meaning he asked for and fix only
+  the placement;
+- lay decoration on the device's own lines, not the face's centre, when
+  the fixed features are off-centre;
+- a 2-filament plate needs its flush matrix sized 2 x 2 (the presets carry
+  4 x 4 and the CLI refuses).
+
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
 bottom is fine, holders whole, no glue but the tub's halves, plastic pivot, protected cells
 instead of a protection board, the ribbon and loose wires, the board's

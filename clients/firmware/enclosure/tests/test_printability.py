@@ -163,8 +163,10 @@ def test_print_files_are_watertight(tmp_path):
 
     pr.export_stls(tmp_path)
     files = sorted(tmp_path.glob("*.stl"))
-    assert len(files) == len(pr.POSES)
+    extra = sum(len(pr.EXTRA[p.piece]()) for p in pr.POSES if p.piece in pr.EXTRA)
+    assert len(files) == len(pr.POSES) + extra  # a piece's parts and groups too
     for f in files:
         mesh = trimesh.load(f)
         assert mesh.is_watertight, f.name
-        assert abs(mesh.bounds[0][2]) < 1e-3, f.name
+        if not f.stem.endswith("_letters"):  # the badge's letters stand on its body
+            assert abs(mesh.bounds[0][2]) < 1e-3, f.name

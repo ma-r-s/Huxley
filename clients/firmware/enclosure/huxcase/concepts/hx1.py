@@ -51,7 +51,7 @@ from huxcase import fits
 from huxcase import hardware as hw
 from huxcase.concept import Concept, cavity_cc
 from huxcase.hardware import Part
-from huxcase.shapes import bbox_solid, hex_holes, hole_field, label, on_front, rounded_box
+from huxcase.shapes import bbox_solid, hex_holes, hole_field, rounded_box
 
 W = 70.0  # +2 mm over the bare-cell layout: Mario's 18650 holders are 21 mm wide
 T = 2.4
@@ -114,7 +114,6 @@ LAP_TOP_GAP = 0.2  # one layer over the lip
 # wall in front of the lever's slot (_slot_front_relief) and the rocker
 # hole's front edge (ROCKER_HOLE_CLEAR_Y). The base still prints standing.
 TOP_PRINT_UP = (0, -1, 0)  # device direction that is up on the bed
-LABEL_Z = 92.8  # "huxley" and "HX-1" on the face
 
 # The two shells meet at the inside of the face. The faceplate's lip seats in
 # the tub's rim; four M3 x 8 button heads close it into 5 mm heat-set inserts.
@@ -596,8 +595,9 @@ def _faceplate(outer, wall, boss_box, usb_boss, inner):
         ins = _along_y(sx, sz, INSERT_OD / 2, FACE_Y + PAD, FACE_Y + PAD + INSERT_L)
         inserts.append(ins - _along_y(sx, sz, 1.5, -30, 30))
 
-    face -= on_front(label("huxley", 2.4), 6.0, Y_FRONT, LABEL_Z)
-    face -= on_front(label("HX-1", 3.2), -20.0, Y_FRONT, LABEL_Z - 0.2)
+    # No engraved name: printed face down on the textured plate, 0.4 mm
+    # letters came out invisible (2026-10-12). The name is a glued badge now
+    # (huxcase.face_art).
 
     # Lever pin, front seat: a tooth on the faceplate fills a notch in the tub
     # in front of the lever channel and holds the pin's front end.

@@ -16,9 +16,9 @@ import math
 from dataclasses import dataclass
 from functools import cache
 
-from build123d import Pos, Rot
+from build123d import Compound, Pos, Rot
 
-from huxcase import bumper, fits
+from huxcase import bumper, face_art, fits
 from huxcase import hardware as hw
 from huxcase.concepts import hx1
 from huxcase.shapes import bbox_solid
@@ -59,6 +59,12 @@ POSES = (
     # front 8 mm first, as a fit test.
     Pose("bumper", "on its front, the front lip on the bed", (90, 0, 0)),
     Pose("bumper_ring", "on its front, the front lip on the bed", (90, 0, 0)),
+    # The face art (huxcase.face_art), glued on: the badge on its back, its
+    # raised letters on top (the filament changes once, at their height), the
+    # dots dome up, the stencil with its face side up and the lip standing on it.
+    Pose("face_badge", "back down, the letters up", (-90, 0, 0)),
+    Pose("face_dot", "dome up", (-90, 0, 0)),
+    Pose("face_stencil", "front down, the lip up", (90, 0, 0)),
 )
 
 
@@ -82,6 +88,10 @@ def printed_pieces(c=None) -> dict[str, object]:
     out["test_top"] = by_name["tub_frosted"] & bbox_solid(*TEST_CORNER, *TEST_TOP_Z)
     out["bumper"] = bumper.bumper()
     out["bumper_ring"] = bumper.front_ring()
+    body, letters = face_art.badge()
+    out["face_badge"] = body + letters
+    out["face_dot"] = face_art.dots_on_face()[0]
+    out["face_stencil"] = face_art.stencil()
     return out
 
 
@@ -370,6 +380,19 @@ COLOUR = {
     "plunger_long10": "white",
     "bumper": "TPU, from the external spool",
     "bumper_ring": "TPU, from the external spool",
+    "face_badge": "black, its raised letters orange (one object, two filaments)",
+    "face_dot": "the dot colours: h and l in the first, o and a in the second",
+    "face_stencil": "any colour",
+}
+# More STLs from a piece, written next to its own as <stl>_<name>.stl in its
+# pose: the parts of a piece printed in two filaments (the badge), and the
+# dots in two groups, one object each (piece -> {name: shape}).
+EXTRA = {
+    "face_badge": lambda: dict(zip(("body", "letters"), face_art.badge(), strict=True)),
+    "face_dot": lambda: {
+        "h_l": Compound(face_art.dot_group(8)),
+        "o_a": Compound(face_art.dot_group(6)),
+    },
 }
 
 
@@ -392,6 +415,15 @@ def export_stls(out_dir) -> list[str]:
             posed(pieces[pose.piece], pose), str(path), tolerance=0.02, angular_tolerance=0.15
         )
         written.append(f"{path.name}: {COLOUR[pose.piece]}, {pose.how}")
+        if pose.piece in EXTRA:
+            loc = pose_location(pieces[pose.piece], pose)
+            for part, shape in EXTRA[pose.piece]().items():
+                export_stl(
+                    loc * shape,
+                    str(path.with_name(f"{path.stem}_{part}.stl")),
+                    tolerance=0.01,
+                    angular_tolerance=0.1,
+                )
     (out / "PRINT.txt").write_text(
         "HX-1 rev E print set (PLA, the top in clear PETG; 0.4 nozzle, 0.20 mm layers). "
         "The final colours: a white faceplate, a red base, the clear top, the black grille, "
@@ -405,6 +437,10 @@ def export_stls(out_dir) -> list[str]:
         "The TPU bumper (projects/9_bumper_tpu.3mf) prints from the external spool, on "
         "its front, no supports; its front 8 mm (projects/10_bumper_test_ring.3mf) "
         "checks the fit first. "
+        "The face art (huxcase.face_art) is glued on with CA, all on one plate "
+        "printed by object (projects/12_face_art.3mf): the HX-1 badge (black, its "
+        "raised letters orange), ten braille dots in two colours (two spares of "
+        "each) and the stencil that places them. "
         "Projects to open and slice: projects/; the same sliced: sliced/.\n"
         + "\n".join(written)
         + "\n"

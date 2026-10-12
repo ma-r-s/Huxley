@@ -364,6 +364,45 @@ back, off again to open the case.
   spool: 2 h 14 min, about 30 g. Print its front 8 mm first (37 min) to
   check the fit.
 
+## Face art: "hola" in braille, and the badge
+
+Mario's design (2026-10-12), glued on with CA (`huxcase/face_art.py`,
+`tests/test_face_art.py`). The word is "hola" in braille, ten raised dots at
+about twice braille size, so from across a room they read as scattered
+dots and up close they say hello. The model name is a small black badge
+with "HX-1" raised on it in orange; the engraved name it replaces came out invisible,
+printed face down on the textured plate.
+
+Everything sits on lines the face already has:
+- the grille's left edge starts the word and the badge (round shapes 0.3 mm
+  past it, which reads as flush);
+- the mic rings' axis ends the word: the final "a" is one dot on it, so the
+  right side reads ring, dot, ring;
+- the word sits midway between the two rings;
+- the badge sits on the lower ring's row, as tall as a ring, a nameplate
+  over the speaker.
+
+The dots alternate two colours by letter (h and l, then o and a). They are
+domes 3.2 mm across and 1 mm high, so the fingers find them, though braille
+this big reads by eye, not by touch. All of it stays 1.6 mm or more from
+every port, ring and screw head, and clear of the bumper's lip.
+
+To glue (bumper off, charger unplugged):
+1. Slide the stencil on, its lip over the top (the screws' end) and both
+   sides, pushed up against the top.
+2. Hold it there with a rubber band or tape over the top lip: nothing
+   else stops it sliding down.
+3. With a pin, put a little gel CA on a dot's flat foot, drop the dot in its
+   hole (dome up) and press.
+4. Do all ten that way, then the badge in its window.
+5. Lift the stencil straight off after about a minute, with a fan across it.
+
+Glue on the foot rather than dabbed through the hole, so none reaches the
+hole's wall (the only way the stencil could grab a piece). Each hole also has
+a 0.2 mm pocket on the face side for squeeze-out. Use as little CA as holds,
+low-bloom if you have it: its fumes leave a white haze on grey PLA. Try one
+dot on a grey scrap first.
+
 ## Print guide
 
 | Piece | Colour | Pose on the bed | Supports |
@@ -377,6 +416,9 @@ back, off again to open the case.
 | Plunger | grey | standing on its tip (three lengths) | none |
 | Holder bridge | grey | front face down | none |
 | Bumper (and its front 8 mm, the fit test) | TPU, external spool | on its front, the front lip on the bed | none |
+| Badge | black, its raised letters orange (one object, the filament changes at 1.0 mm) | on its back, the letters up | none |
+| Dots (eight in the first colour, six in the second: two spares each; one object per colour) | the two dot colours | dome up | none |
+| Gluing stencil | the second dot colour | front down, the lip up | none |
 
 `huxcase/printability.py` measures what needs support in each pose and finds
 any layer that starts in mid-air (`tests/test_printability.py` holds every
@@ -449,6 +491,7 @@ print. The same sliced are in `out/print/sliced/`.
 | `11_tub_base_red` | one PLA (red) | 34 min; the base alone, standing, for a top already printed |
 | `9_bumper_tpu` | TPU 95A (external spool) | 2 h 14 min; solid, no supports |
 | `10_bumper_test_ring` | TPU 95A (external spool) | 37 min; the bumper's front 8 mm: does the outline fit, does the front lip seat |
+| `12_face_art` | AMS: black, orange, sky blue | 26 min, by object, 0.08 mm layers: the badge (black, then its raised letters in orange), the orange dots, the blue dots, the stencil in blue. Two filament changes, purged into the chute (by object, Bambu Studio has no prime tower). The small pieces sit 80 mm apart across the back and the stencil prints last at the front: Bambu keeps the toolhead's 72 mm round every object. Don't press Arrange |
 
 The tub's plate prints object by object, so the filament changes once,
 between the pieces, never inside one. The clear top goes first, so its
@@ -558,6 +601,7 @@ Close:
 ## Parts list
 
 Printed: faceplate, tub (base and top, glued), grille plug, lever, lever pin (three: two spares),
+the face art (badge, ten dots, the gluing stencil),
 plunger (three lengths), holder bridge (the build page lists each with its
 volume).
 

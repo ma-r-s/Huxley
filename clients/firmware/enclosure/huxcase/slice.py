@@ -162,6 +162,9 @@ class Plate:
     slots: dict = field(default_factory=dict)
     place: dict = field(default_factory=dict)
     clear: int = 0  # the filament slot printed for clarity, 0: none
+    # STLs (of `stls`) assembled into one object, each part in its own
+    # filament slot: a piece printed in two colours at once (the badge).
+    parts: dict = field(default_factory=dict)
 
 
 TOP, BASE = "hx1_10_tub_top", "hx1_03_tub_base"
@@ -250,6 +253,43 @@ TPU_PROCESS = {
 PLATES.append(Plate("9_bumper_tpu", (BUMPER,), NO_BRIM | TPU_PROCESS, (TPU_BLACK,)))
 # Its front 8 mm, to check the outline and the front lip's seat first.
 PLATES.append(Plate("10_bumper_test_ring", (BUMPER_RING,), NO_BRIM | TPU_PROCESS, (TPU_BLACK,)))
+# The face art (huxcase.face_art), glued on: one plate, printed by object
+# (Mario, 2026-10-12), in an order that changes filament twice: the badge
+# (black, then its raised orange letters above it: one change, at one
+# height), the orange dots, the blue dots, then the stencil in that blue.
+# Bambu Studio keeps every object the toolhead's 72 mm from the others, low
+# or not: the three small ones across the back, about 80 mm apart, the
+# stencil (7 mm, the tallest) at the front and last. By object there is
+# no prime tower: each change purges into the chute. 0.08 mm layers: the
+# dots' domes get ten, and the letters start on a layer line (1.0 mm).
+SKY = "#3FA9E5"
+BADGE_BODY, BADGE_LETTERS = "hx1_15_face_badge_body", "hx1_15_face_badge_letters"
+DOTS_HL, DOTS_OA, STENCIL = "hx1_16_face_dot_h_l", "hx1_16_face_dot_o_a", "hx1_17_face_stencil"
+PLATES.append(
+    Plate(
+        "12_face_art",
+        (BADGE_BODY, BADGE_LETTERS, DOTS_HL, DOTS_OA, STENCIL),
+        {
+            "print_sequence": "by object",
+            "enable_prime_tower": "0",
+            "layer_height": "0.08",
+            # the dots' 3.2 mm feet stay 3.2 (the preset's 0.15 shrinks them)
+            "elefant_foot_compensation": "0",
+            # the letters' 0.7 mm strokes print as lines, not collapsed loops
+            "wall_generator": "arachne",
+        },
+        # Mario's AMS (2026-10-12): A2 black, A3 orange, A4 blue.
+        (BLACK, ORANGE, SKY),
+        slots={DOTS_HL: 2, DOTS_OA: 3, STENCIL: 3},
+        place={
+            BADGE_BODY: (30.0, 220.0),
+            DOTS_HL: (128.0, 220.0),
+            DOTS_OA: (226.0, 220.0),
+            STENCIL: (128.0, 60.0),
+        },
+        parts={BADGE_BODY: 1, BADGE_LETTERS: 2},
+    )
+)
 # Plates whose close fits no support may enter: STL, its printed piece.
 KEEP_OUT = {
     "4_tub_base_and_top": (TOP, "tub_top"),
@@ -288,6 +328,25 @@ def _resolve(kind: str, name: str) -> dict:
     out.update(d)
     out.pop("include", None)
     out["inherits"] = ""  # complete: nothing left to inherit
+    return out
+
+
+def _luminance(colour: str) -> float:
+    r, g, b = (int(colour[i : i + 2], 16) / 255 for i in (1, 3, 5))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _flush(colours: tuple[str, ...]) -> list[str]:
+    """Purge volumes (mm3) from each filament to each other, row = from: the
+    base 140, more going light after dark (black to orange about 480), a
+    little going dark. The presets carry a 4 x 4 matrix, and a plate with
+    another filament count fails to slice ("Flush volumes matrix do not match
+    to the correct size")."""
+    out = []
+    for a in colours:
+        for b in colours:
+            d = _luminance(b) - _luminance(a)
+            out.append("0" if a == b else str(round(140 + 800 * max(d, 0) + 60 * max(-d, 0))))
     return out
 
 
@@ -380,7 +439,23 @@ def slice_plate(plate: Plate, print_dir: Path, out_dir: Path, proj_dir: Path) ->
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
         (work / "data").mkdir()
-        files = [str(print_dir / f"{s}.stl") for s in plate.stls]
+        files = [str(print_dir / f"{s}.stl") for s in plate.stls if s not in plate.parts]
+        if plate.parts:
+            # One object from the parts, made with the plate's own filaments
+            # (a 3mf with another filament count crashes the next step).
+            _run(
+                [
+                    *_presets(work, plate.colours),
+                    "--assemble",
+                    "--outputdir",
+                    str(work),
+                    "--export-3mf",
+                    "parts.3mf",
+                    *[str(print_dir / f"{s}.stl") for s in plate.parts],
+                ],
+                work,
+            )
+            files.insert(0, str(work / "parts.3mf"))
         _run(
             [
                 *_presets(work, plate.colours),
@@ -402,6 +477,10 @@ def slice_plate(plate: Plate, print_dir: Path, out_dir: Path, proj_dir: Path) ->
             cfg = json.loads(t)
             cfg.update(plate.settings)
             cfg["filament_colour"] = list(plate.colours)
+            n = len(plate.colours)
+            if n > 1 and len(cfg["flush_volumes_matrix"]) != n * n:
+                cfg["flush_volumes_matrix"] = _flush(plate.colours)
+                cfg["flush_volumes_vector"] = ["140"] * (2 * n)
             if plate.clear:
                 _clarity(cfg, plate.clear)
             cfg["curr_bed_type"] = BED
@@ -409,6 +488,18 @@ def slice_plate(plate: Plate, print_dir: Path, out_dir: Path, proj_dir: Path) ->
             return json.dumps(cfg, indent=4)
 
         def model(t: str) -> str:
+            if plate.parts:
+                first = next(iter(plate.parts))
+                t = t.replace('key="name" value="Assembly"', f'key="name" value="{first}.stl"', 1)
+            for part, slot in plate.parts.items():
+                t, n = re.subn(
+                    rf'(<metadata key="name" value="{part}\.stl"/>.*?key="extruder" value=")\d+"',
+                    rf'\g<1>{slot}"',
+                    t,
+                    count=1,
+                    flags=re.S,
+                )
+                assert n == 1, f"{plate.name}: no part {part}"
             for oid, name, block in _objects(t):
                 ids[name] = oid
                 slot = plate.slots.get(name, 1)
@@ -426,6 +517,23 @@ def slice_plate(plate: Plate, print_dir: Path, out_dir: Path, proj_dir: Path) ->
                     item.group(0),
                     item.group(0).replace(item.group(1), f"1 0 0 0 1 0 0 0 1 {x} {y} {z}"),
                 )
+            # By object, Bambu Studio prints in the build list's order: make it
+            # the plate's (the parts, one object, under their first name).
+            items = re.findall(r"<item [^>]*/>", t)
+            first = next(iter(plate.parts), None)
+            want = []
+            for st in plate.stls:
+                oid = ids.get(first if st in plate.parts else st)
+                if oid and oid not in want:
+                    want.append(oid)
+            rank = {oid: i for i, oid in enumerate(want)}
+            ordered = sorted(
+                items, key=lambda it: rank.get(re.search(r'objectid="(\d+)"', it).group(1), 99)
+            )
+            if len(items) > 1:
+                start, end = t.index(items[0]), t.index(items[-1]) + len(items[-1])
+                sep = t[start + len(items[0]) : t.index(items[1])]
+                t = t[:start] + sep.join(ordered) + t[end:]
             return t
 
         # model_settings first: it names the objects the layout places.
@@ -543,16 +651,24 @@ def check(project: Path, plate: Plate) -> str:
     gcode = gcode_of(project)
     assert "P2S start gcode==" in gcode, f"{project.name}: not the P2S start sequence"
     assert not any(ln.strip() == "M400 U1" for ln in gcode.splitlines()), f"{project.name}: pauses"
-    if len(plate.slots) > 1:
+    if len(plate.slots) > 1 or plate.parts:
         ids = labels(project)
+        first = next(iter(plate.parts), None)  # the parts are one object, by its name
+        order = []
+        for s in plate.stls:
+            oid = ids[first if s in plate.parts else s]
+            if oid not in order:
+                order.append(oid)
         runs = []  # objects in print order, each once if printed whole in turn
         for ln in gcode.splitlines():
             if ln.startswith(OBJECT) and (not runs or runs[-1] != ln.split(":")[1].strip()):
                 runs.append(ln.split(":")[1].strip())
-        assert runs == [ids[s] for s in plate.stls], f"{project.name}: order {runs}"
+        assert runs == order, f"{project.name}: order {runs}"
+        want = [plate.parts.get(s) or plate.slots.get(s, 1) for s in plate.stls]
+        want = [n - 1 for i, n in enumerate(want) if i == 0 or n != want[i - 1]]
         loads = [int(n) for n in re.findall(r"^\s*M620 S(\d+)A", gcode, re.M) if n != "65535"]
         changes = [n for i, n in enumerate(loads) if i == 0 or n != loads[i - 1]]
-        assert changes == [plate.slots[s] - 1 for s in plate.stls], f"{project.name}: {loads}"
+        assert changes == want, f"{project.name}: {loads}"
         assert "; enable_prime_tower = 0" in gcode, f"{project.name}: prime tower on"
     kinds = re.split(r"[;,]", re.search(r"^; filament_type = (.*)$", gcode, re.M).group(1))
     want = [_filament(c)[1] for c in plate.colours]
@@ -566,17 +682,22 @@ def check(project: Path, plate: Plate) -> str:
 
 
 def main() -> int:
+    """All projects afresh, or with plate names as arguments only those
+    (the others left as they are)."""
     print_dir = OUT / "print"
     out_dir, proj_dir = print_dir / "sliced", print_dir / "projects"
+    only = set(sys.argv[1:])
+    unknown = only - {p.name for p in PLATES}
+    assert not unknown, f"no such plates: {sorted(unknown)}"
     for d in (out_dir, proj_dir):
-        if d.exists():
+        if d.exists() and not only:
             shutil.rmtree(d)
-        d.mkdir(parents=True)
+        d.mkdir(parents=True, exist_ok=True)
     for stale in print_dir.glob("*.3mf"):  # the AMS projects from before the split
         stale.unlink()
     pieces = pr.printed_pieces()
     poses = {p.piece: p for p in pr.POSES}
-    for plate in PLATES:
+    for plate in [p for p in PLATES if not only or p.name in only]:
         out = slice_plate(plate, print_dir, out_dir, proj_dir)
         gui_settings(proj_dir / f"{plate.name}.3mf", plate)
         print(f"{plate.name}: {check(out, plate)}")
