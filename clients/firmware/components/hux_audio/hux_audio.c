@@ -108,6 +108,10 @@ static _Atomic int s_volume = SPK_VOLUME_DEFAULT; /* level applied, for reports 
 static _Atomic uint32_t s_spk_writes = 0;
 static _Atomic uint32_t s_mic_turns = 0;
 static _Atomic bool s_spk_debug_hang = false; /* console `hang spk` */
+/* device.health (F-0027): since the last take. 48 bytes = 1 ms of audio. */
+static _Atomic uint32_t s_h_underruns = 0;
+static _Atomic uint32_t s_h_underrun_ms = 0;
+static _Atomic uint32_t s_h_discarded_bytes = 0;
 /* The level survives a reboot (F-0027): at the home a remote restart
  * mustn't leave him at 50 after he asked for more. */
 #define VOLUME_NVS_NS  "hux_audio"
@@ -553,6 +557,8 @@ static void spk_task(void *unused) {
                 if (avail >= SPK_REBUFFER_BYTES || !active || waited >= SPK_REBUFFER_MAX_MS) {
                     rebuffering = false;
                     underruns++;
+                    atomic_fetch_add(&s_h_underruns, 1);
+                    atomic_fetch_add(&s_h_underrun_ms, waited);
                     ESP_LOGW(TAG, "spk.underrun silent_ms=%u count=%u rebuffered ring_ms=%u why=%s",
                              (unsigned)waited, (unsigned)underruns, (unsigned)(avail / 48),
                              avail >= SPK_REBUFFER_BYTES ? "buffered" : !active ? "reply_end" : "max_wait");
@@ -572,6 +578,7 @@ static void spk_task(void *unused) {
              * queues behind it and plays. */
             size_t stale = xStreamBufferBytesAvailable(s_spk_ring);
             discard_left = stale;
+            atomic_fetch_add(&s_h_discarded_bytes, (uint32_t)stale);
             got_bytes = 0;
             unsigned tones = (unsigned)uxQueueMessagesWaiting(s_tone_q) + (tone_left > 0);
             xQueueReset(s_tone_q);
@@ -636,6 +643,8 @@ static void spk_task(void *unused) {
             }
             if (had_audio && silent_run > 0 && silent_run <= SPK_GAP_MAX_CHUNKS) {
                 underruns++;
+                atomic_fetch_add(&s_h_underruns, 1);
+                atomic_fetch_add(&s_h_underrun_ms, silent_run * SPK_CHUNK_MS);
                 ESP_LOGW(TAG, "spk.underrun silent_ms=%u count=%u", (unsigned)(silent_run * SPK_CHUNK_MS),
                          (unsigned)underruns);
             }
@@ -699,6 +708,7 @@ void hux_audio_spk_push(const uint8_t *pcm, size_t len) {
         uint32_t held = uptime_ms() - (hold & ~1u);
         if (held < SPK_HOLD_MAX_MS) {
             s_spk_hold_dropped += len;
+            atomic_fetch_add(&s_h_discarded_bytes, (uint32_t)len);
             return; /* the interrupted reply's tail */
         }
         /* Only this hold: a press since then set a new word and keeps it. */
@@ -721,6 +731,7 @@ void hux_audio_spk_push(const uint8_t *pcm, size_t len) {
     while (off < len) {
         if (atomic_load_explicit(&s_spk_hold, memory_order_acquire) != 0) {
             s_spk_hold_dropped += len - off;
+            atomic_fetch_add(&s_h_discarded_bytes, (uint32_t)(len - off));
             return;
         }
         size_t n = xStreamBufferSend(s_spk_ring, pcm + off, len - off,
@@ -812,6 +823,12 @@ void hux_audio_set_volume(int level) {
 
 void hux_audio_debug_hang_spk(void) {
     atomic_store_explicit(&s_spk_debug_hang, true, memory_order_relaxed);
+}
+
+void hux_audio_take_health(uint32_t *underruns, uint32_t *underrun_ms, uint32_t *discarded_ms) {
+    *underruns = atomic_exchange(&s_h_underruns, 0);
+    *underrun_ms = atomic_exchange(&s_h_underrun_ms, 0);
+    *discarded_ms = atomic_exchange(&s_h_discarded_bytes, 0) / 48;
 }
 
 uint32_t hux_audio_spk_writes(void) {

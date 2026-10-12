@@ -25,6 +25,7 @@
 #include "hux_log.h"
 #include "hux_net.h"
 #include "hux_opus.h"
+#include "hux_health.h"
 #include "hux_super.h"
 #include "hux_ota.h"
 #include "secrets.h"
@@ -213,6 +214,9 @@ void app_main(void) {
     /* The battery level once a minute, to the server through the app
      * (F-0025); without the solder blob it says not_wired once. */
     hux_battery_start(hux_app_report_battery);
+
+    /* The minute line for the caregiver's view (device.health, F-0027). */
+    hux_health_start();
 
     /* Last: the supervisor watches every part started above and feeds the
      * task watchdog only while they all keep working (F-0027). */

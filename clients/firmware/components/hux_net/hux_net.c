@@ -168,6 +168,26 @@ static _Atomic uint32_t s_ladder_ticks = 0;
 static _Atomic uint32_t s_ws_event_ms = 0;
 #define WS_SILENT_MS 90000
 
+/* device.health (F-0027): Wi-Fi disconnect reasons and TLS error codes
+ * with their counts, and WebSocket connects, since the last take. */
+#define HEALTH_SLOTS 8
+static portMUX_TYPE s_health_lock = portMUX_INITIALIZER_UNLOCKED;
+static hux_net_count_t s_h_wifi[HEALTH_SLOTS];
+static hux_net_count_t s_h_tls[HEALTH_SLOTS];
+static uint32_t s_h_connects = 0;
+
+static void health_count(hux_net_count_t *slots, int code) {
+    taskENTER_CRITICAL(&s_health_lock);
+    for (int i = 0; i < HEALTH_SLOTS; i++) {
+        if (slots[i].count == 0 || slots[i].code == code) {
+            slots[i].code = code;
+            slots[i].count++;
+            break; /* full: an eighth distinct code a minute isn't counted */
+        }
+    }
+    taskEXIT_CRITICAL(&s_health_lock);
+}
+
 /* Audio data-plane seam — see firmware/docs/architecture.md §"Data
  * plane vs control plane". Inbound `audio` messages bypass
  * hux_app's queue entirely; at 50 Hz the control-plane queue cannot
@@ -401,6 +421,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
          * 204 wrong password, 8 we left). */
         const wifi_event_sta_disconnected_t *d = (const wifi_event_sta_disconnected_t *)data;
         s_wifi_retries++;
+        health_count(s_h_wifi, d != NULL ? (int)d->reason : -1);
         uint32_t delay_ms = hux_wifi_retry_delay_ms(s_wifi_retries);
         ESP_LOGW(TAG, "wifi.disconnected reason=%d retry=%u next_in_ms=%u",
                  d != NULL ? (int)d->reason : -1, (unsigned)s_wifi_retries, (unsigned)delay_ms);
@@ -747,6 +768,9 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
             atomic_store(&s_audio_opus, false);
             hux_opus_rx_reset();
             atomic_fetch_add(&s_conn_gen, 1);
+            taskENTER_CRITICAL(&s_health_lock);
+            s_h_connects++;
+            taskEXIT_CRITICAL(&s_health_lock);
             ESP_LOGI(TAG, "ws.connected uri=%s", s_server_uri);
             post_app(HUX_APP_EV_NET_WS_CONNECTED);
             break;
@@ -763,6 +787,9 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
             forward_ws_text(ev);
             break;
         case WEBSOCKET_EVENT_ERROR:
+            if (ev != NULL && ev->error_handle.esp_tls_last_esp_err != 0) {
+                health_count(s_h_tls, (int)ev->error_handle.esp_tls_last_esp_err);
+            }
             if (link_loud(atomic_load(&s_ws_attempts) + 1)) {
                 ESP_LOGE(TAG, "ws.error attempt=%u", (unsigned)(atomic_load(&s_ws_attempts) + 1));
             }
@@ -1202,6 +1229,23 @@ static void ladder_task(void *arg) {
         }
         link_unlock();
     }
+}
+
+void hux_net_take_health(hux_net_health_t *out) {
+    taskENTER_CRITICAL(&s_health_lock);
+    memcpy(out->wifi_disconnects, s_h_wifi, sizeof(s_h_wifi));
+    memcpy(out->tls_errors, s_h_tls, sizeof(s_h_tls));
+    out->connects = s_h_connects;
+    memset(s_h_wifi, 0, sizeof(s_h_wifi));
+    memset(s_h_tls, 0, sizeof(s_h_tls));
+    s_h_connects = 0;
+    taskEXIT_CRITICAL(&s_health_lock);
+    wifi_ap_record_t ap = {0};
+    out->have_ap = esp_wifi_sta_get_ap_info(&ap) == ESP_OK;
+    out->rssi = out->have_ap ? ap.rssi : 0;
+    out->channel = out->have_ap ? ap.primary : 0;
+    memcpy(out->bssid, ap.bssid, sizeof(out->bssid));
+    out->ws_rx_age_ms = hux_net_rx_age_ms();
 }
 
 uint32_t hux_net_ladder_ticks(void) {

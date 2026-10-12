@@ -42,6 +42,9 @@ void hux_battery_start(hux_battery_sink_fn sink);
 /** Call the sink now with the last reading, if any (after a hello). */
 void hux_battery_report_now(void);
 
+/** The last reading; false before the first (or never wired). */
+bool hux_battery_last(int *mv, int *pct);
+
 /** A multimeter reading of the cell (`battery cal <mv>`): scales every
  * later reading to match, saved in NVS. */
 void hux_battery_calibrate(int measured_mv);

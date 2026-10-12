@@ -155,6 +155,21 @@ If you see `reset=PANIC`, the previous boot crashed. Check:
    boot banner as `last_panic: <reason> pc=0xXXXXXXXX`.
 2. Coredump — see below.
 
+## The minute line: `device.health` (F-0027)
+
+Every 60 s while connected the board sends `client_event device.health`
+(in the server log as `client.device.health`; fields in
+`docs/protocol.md`): memory floors (`heap_internal_min`, the largest
+internal block, `psram_min`), the link (`rssi`, `channel`, `bssid`,
+`ws_rx_age_ms`), and counts since the previous line that reached the
+server: `wifi_disconnects` and `tls_errors` as `{code: count}`,
+`reconnects`, `underruns`, `underrun_ms`, `discarded_ms`; then
+`ring_used_ms`, `volume`, `quiet_left_s`, `ota_state` and `battery
+{mv, pct}` once wired. A line that can't be sent folds into the next
+(`health.unsent` once, `health.sent after_unsent=` when one gets
+through), so the counts always sum. Read these for trends before
+scrolling the log.
+
 ## The supervisor: hangs end in a restart (F-0027)
 
 Nobody at the home can restart the walkie, so `hux_super` (priority 10)

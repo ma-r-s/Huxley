@@ -88,6 +88,27 @@ void hux_net_server_status(void);
  * (F-0027). */
 uint32_t hux_net_ladder_ticks(void);
 
+/** A code and how often it came (Wi-Fi disconnect reasons, TLS errors). */
+typedef struct {
+    int code;
+    uint32_t count; /* 0: an empty slot */
+} hux_net_count_t;
+
+typedef struct {
+    hux_net_count_t wifi_disconnects[8];
+    hux_net_count_t tls_errors[8];
+    uint32_t connects; /* WebSocket connections opened */
+    bool have_ap;
+    int rssi;
+    int channel;
+    uint8_t bssid[6];
+    uint32_t ws_rx_age_ms;
+} hux_net_health_t;
+
+/** device.health (F-0027): the counts since the last call (then zeroed),
+ * plus the link as it is now. */
+void hux_net_take_health(hux_net_health_t *out);
+
 /** The WebSocket client's task is running (it connects or reconnects on
  * its own). False after a pause, or if it ended unexpectedly. */
 bool hux_net_is_running(void);
