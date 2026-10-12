@@ -5426,3 +5426,15 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 **Open.** libopus on the Orange Pi (`apt install libopus0`), not verified there. On the board: bench (turn, bargein, stall, slowdown, resume) and `dev.py link` against this morning's 34 %.
 
 ---
+
+## T1.39: Spotify audiobooks on the device
+
+**Status**: `blocked` (2026-10-12, on one check in Mario's phone app) · **Effort**: S if Soloist plays them
+
+**Ask** (Mario): Spotify added audiobooks to Premium; can the device play them? On 2026-10-07 Spotify started rolling audiobooks out to 180+ markets, Colombia included (rollout "over the coming months"); Premium there includes 12 hours of listening, with the Audiobooks+ add-on (15 hours) or bought titles beyond it.
+
+**Validate** (silent: Soloist's sink had no reader). The Web API (our app token, `market=CO`) already returns audiobooks: "Cien años de soledad" = `spotify:show:1oVPQwdET6CETd7KFZAghH`, its chapters are `spotify:episode:` items. Soloist accepted that URI, loaded chapter 1 ("Créditos iniciales", 0:18) and logged `stopped` 0.3 s later, no error event. A podcast episode (`spotify:episode:5ieh7vEheH2hPvPmMjQWBW`) played normally on the same Soloist (0:09 reached), so Soloist plays episodes; audiobook chapters are refused. Soloist's docs never mention audiobooks. Soloist's last context restored after each test (Rap God, paused).
+
+**Two explanations, one check tells them apart**: the account doesn't have audiobooks yet (rollout still reaching Colombia), or Spotify keeps audiobooks off Soloist. Mario plays any audiobook in the Spotify app on his phone: if it plays there, Soloist is the blocker (then try sending it to the Huxley device from the app to read the app's message).
+
+**If Soloist plays them**: `play_music` gains `kind: audiobook` (search `type=audiobook`), plays the `spotify:show:` URI; resume where it left off is Spotify's (the account keeps the position). Overlap with the local audiobooks skill ("pon un audiolibro") is a routing question for Mario.
