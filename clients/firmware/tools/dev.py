@@ -94,8 +94,15 @@ def server_events():
         return
 
 
+def is_board_hello(e: dict) -> bool:
+    """The board's hello: `device.hello` (F-0028), or the older `device`
+    with shell=firmware that an image on the other slot still sends."""
+    ev = e.get("event")
+    return ev == "client.device.hello" or (ev == "client.device" and e.get("shell") == "firmware")
+
+
 def board_ip() -> str:
-    """The remote IP of the connection whose client.device says shell=firmware."""
+    """The remote IP of the connection whose board hello came last."""
     remote_by_conn, ip = {}, None
     for e in server_events():
         if e.get("event") == "client_connected":
@@ -103,7 +110,7 @@ def board_ip() -> str:
             # 127.0.0.1: the board through tools/netbench.py's proxy.
             if m and not m.group(1).startswith("127."):
                 remote_by_conn[e.get("conn_id")] = m.group(1)
-        elif e.get("event") == "client.device" and e.get("shell") == "firmware":
+        elif is_board_hello(e):
             ip = remote_by_conn.get(e.get("conn_id"), ip)
     if not ip:
         sys.exit("no firmware connection in the server log: is the board on? (--host IP)")
@@ -147,7 +154,7 @@ def board_lines(offset: int, until: float, stop=None) -> tuple[int, str]:
                 print("  " + text, flush=True)
                 if stop and re.search(stop, text):
                     return f.tell(), text
-            elif e.get("event") == "client.device" and e.get("shell") == "firmware":
+            elif is_board_hello(e):
                 print(
                     f"  [server] board connected: version {e.get('version')} reset {e.get('reset')}",
                     flush=True,

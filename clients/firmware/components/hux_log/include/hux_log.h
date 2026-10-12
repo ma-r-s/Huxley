@@ -81,6 +81,14 @@ const char *hux_log_blackbox(uint32_t *dropped);
 /** The black box reached the server: free it. */
 void hux_log_blackbox_sent(void);
 
+/** Capture what the calling task logs into `buf` ("L tag: text" lines,
+ * NUL-terminated) until hux_log_capture_end(): a console command's output
+ * for dev.cmd (F-0028). One capture at a time. */
+void hux_log_capture_begin(char *buf, size_t size);
+
+/** Stop capturing; the length captured, `*truncated` if lines didn't fit. */
+size_t hux_log_capture_end(bool *truncated);
+
 /** Put one line straight into this boot's black box, from an interrupt
  * (the task watchdog's, just before it panics). */
 void hux_log_blackbox_note_isr(const char *line);

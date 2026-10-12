@@ -22,6 +22,9 @@ typedef struct {
     const char *wifi_password;
     /** Full URI, e.g. "ws://192.168.68.83:8765/". */
     const char *server_uri;
+    /** The device token (F-0028): `Authorization: Bearer` on the upgrade.
+     * NULL or empty: none sent. Never logged. */
+    const char *device_token;
 } hux_net_config_t;
 
 /**
@@ -108,6 +111,16 @@ typedef struct {
 /** device.health (F-0027): the counts since the last call (then zeroed),
  * plus the link as it is now. */
 void hux_net_take_health(hux_net_health_t *out);
+
+typedef struct {
+    char ssid[33];
+    int channel;
+    int rssi;
+    uint8_t bssid[6];
+} hux_net_link_t;
+
+/** The access point now (for device.hello); false when not associated. */
+bool hux_net_link_info(hux_net_link_t *out);
 
 /** The WebSocket client's task is running (it connects or reconnects on
  * its own). False after a pause, or if it ended unexpectedly. */
