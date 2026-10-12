@@ -7,7 +7,7 @@ from huxcase.concepts import hx1
 
 
 def test_every_part_is_in_a_build_step():
-    names = [p.name for p in hx1.build().parts]
+    names = [p.name for p in hx1.build().parts + site.face_art_parts()]
     assigned = site.assign_steps(names)
     missing = sorted(set(names) - set(assigned) - site.HIDDEN)
     assert missing == [], f"add these to a step in site.STEPS: {missing}"

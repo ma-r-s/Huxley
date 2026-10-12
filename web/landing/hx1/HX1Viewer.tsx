@@ -157,6 +157,13 @@ export function HX1Viewer({ height }: { height: number }) {
           clearcoat: 0.35,
           clearcoatRoughness: 0.35,
         }),
+        // the face art's second dot colour (huxcase.face_art)
+        dot_blue: P({
+          color: 0x2f8fe0,
+          roughness: 0.42,
+          clearcoat: 0.35,
+          clearcoatRoughness: 0.35,
+        }),
         pcb: P({
           color: 0x173f86,
           roughness: 0.42,

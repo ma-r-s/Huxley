@@ -498,6 +498,9 @@ textured plate had come out invisible. Lessons:
 - a 2-filament plate needs its flush matrix sized 2 x 2 (the presets carry
   4 x 4 and the CLI refuses).
 
+It is printed and glued (2026-10-12), and the build page and the website's
+/hx-1 model show it (`site.face_art_parts`).
+
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
 bottom is fine, holders whole, no glue but the tub's halves, plastic pivot, protected cells
 instead of a protection board, the ribbon and loose wires, the board's

@@ -21,6 +21,7 @@ from pathlib import Path
 
 from build123d import Compound, export_gltf
 
+from huxcase import face_art
 from huxcase.concepts import hx1
 from huxcase.export import CELL_G, HARDWARE_G, OUT, PLA_G_PER_CC, PRINTED
 
@@ -254,6 +255,18 @@ STEPS = [
         "explode": (0, -142, 0),
         "explode_parts": {"case_screws_floor": (0, -100, -40)},
     },
+    {
+        "id": "face_art",
+        "title": "Dots and badge",
+        "text": "Bumper off. Slide the stencil over the top of the case and hold it "
+        "with a rubber band. A little gel CA on each dot's flat foot, dome up into its "
+        "hole: orange for h and l, blue for o and a. The badge in its window the same "
+        "way. Lift the stencil straight off after a minute. The dots say hola in "
+        "braille.",
+        "parts": ["face_*"],
+        "enter": (0, -30, 0),
+        "explode": (0, -160, 0),
+    },
 ]
 
 LABELS = [
@@ -283,6 +296,8 @@ LABELS = [
     ("lead_*", "Holder leads"),
     ("case_screws_*", "M3 × 8 screw"),
     ("ribbon_*", "Ribbon, 6 wires"),
+    ("face_dot_*", "Braille dot, glued"),
+    ("face_badge*", "HX-1 badge, glued"),
 ]
 
 PRINT_MATERIAL = {
@@ -294,6 +309,7 @@ PRINT_MATERIAL = {
     "case_white": "White PLA",
     "case_red": "Red PLA",
     "case_clear": "Clear PETG",
+    "dot_blue": "Blue PLA",
 }
 # The case's final colours (Mario, 2026-10-12): a white front, a red base, a
 # clear PETG top over the glow, the black grille, the orange lever. The page
@@ -360,10 +376,30 @@ def assign_steps(names: list[str]) -> dict[str, str]:
     return out
 
 
+def face_art_parts() -> list:
+    """The glued face art (huxcase.face_art): the dots, orange for h and l and
+    blue for o and a, and the black badge with its orange letters."""
+    from huxcase.hardware import Part
+
+    out = [
+        Part(f"face_dot_{i}", d, "accent" if letter % 2 == 0 else "dot_blue")
+        for i, (d, (_, _, letter)) in enumerate(
+            zip(face_art.dots_on_face(), face_art.dot_centres(), strict=True)
+        )
+    ]
+    body, letters = face_art.badge()
+    return [
+        *out,
+        Part("face_badge", body, "shell_dark"),
+        Part("face_badge_letters", letters, "accent"),
+    ]
+
+
 def build_site() -> dict:
     import trimesh
 
     c = hx1.build()
+    c.parts += face_art_parts()
     step_of = assign_steps([p.name for p in c.parts])
     shown = [p for p in c.parts if p.name in step_of]
 
@@ -457,7 +493,7 @@ def build_site() -> dict:
 
     printed: dict[str, list] = {}
     for p in c.parts:
-        if p.kind in PRINTED or p.kind in ("shell_inner", "clear"):
+        if p.kind in PRINTED or p.kind in ("shell_inner", "clear", "dot_blue"):
             label = _label(p.name) if p.name in step_of else p.name
             material = PRINT_MATERIAL.get(SITE_KIND.get(p.name, p.kind), "PLA")
             entry = printed.setdefault(label, [material, 0.0])
