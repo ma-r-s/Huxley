@@ -18,6 +18,7 @@
 #include "freertos/queue.h"
 #include "freertos/stream_buffer.h"
 #include "freertos/task.h"
+#include "nvs.h"
 
 #include "hux_board.h"
 
@@ -102,6 +103,37 @@ static const char *TAG = "hux_audio";
 #define SPK_VOLUME_MIN        10
 #define SPK_PA_SETTLE_MS      10  /* Waveshare factsheet recommended PA-on delay */
 static _Atomic int s_volume = SPK_VOLUME_DEFAULT; /* level applied, for reports */
+/* The level survives a reboot (F-0027): at the home a remote restart
+ * mustn't leave him at 50 after he asked for more. */
+#define VOLUME_NVS_NS  "hux_audio"
+#define VOLUME_NVS_KEY "volume"
+
+/* The saved level, or SPK_VOLUME_DEFAULT (none yet, or out of range). */
+static int volume_saved(void) {
+    uint8_t v = 0;
+    nvs_handle_t h;
+    if (nvs_open(VOLUME_NVS_NS, NVS_READONLY, &h) != ESP_OK) {
+        return SPK_VOLUME_DEFAULT;
+    }
+    esp_err_t err = nvs_get_u8(h, VOLUME_NVS_KEY, &v);
+    nvs_close(h);
+    return err == ESP_OK && v >= SPK_VOLUME_MIN && v <= 100 ? v : SPK_VOLUME_DEFAULT;
+}
+
+static void volume_save(int level) {
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(VOLUME_NVS_NS, NVS_READWRITE, &h);
+    if (err == ESP_OK) {
+        err = nvs_set_u8(h, VOLUME_NVS_KEY, (uint8_t)level);
+        if (err == ESP_OK) {
+            err = nvs_commit(h);
+        }
+        nvs_close(h);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "spk.volume_save_failed level=%d err=%s", level, esp_err_to_name(err));
+    }
+}
 
 static i2s_chan_handle_t s_i2s_tx = NULL;
 static i2s_chan_handle_t s_i2s_rx = NULL;
@@ -416,7 +448,9 @@ static esp_err_t es8311_bring_up(void) {
     if (esp_codec_dev_set_vol_curve(s_spk_dev, &curve) != ESP_CODEC_DEV_OK) {
         ESP_LOGW(TAG, "es8311.vol_curve_failed (default curve: 50 is quieter)");
     }
-    esp_codec_dev_set_out_vol(s_spk_dev, SPK_VOLUME_DEFAULT);
+    int boot = volume_saved();
+    esp_codec_dev_set_out_vol(s_spk_dev, boot);
+    atomic_store_explicit(&s_volume, boot, memory_order_relaxed);
     return ESP_OK;
 }
 
@@ -754,7 +788,10 @@ void hux_audio_set_volume(int level) {
         ESP_LOGW(TAG, "spk.volume_failed level=%d err=%s", applied, esp_err_to_name(err));
         return;
     }
-    atomic_store_explicit(&s_volume, applied, memory_order_relaxed);
+    int was = atomic_exchange_explicit(&s_volume, applied, memory_order_relaxed);
+    if (was != applied) {
+        volume_save(applied); /* a few a day: no flash wear to speak of */
+    }
     /* esp_codec_dev doesn't report the codec's own I2C write, so this says
      * what was asked of it. */
     ESP_LOGI(TAG, "spk.volume level=%d requested=%d", applied, level);
@@ -1041,7 +1078,7 @@ void hux_audio_init(void) {
     }
 
     ESP_LOGI(TAG, "audio.init sr=%d mic=ES7210(RMNM:ch1) spk=ES8311 vol=%d",
-             MIC_SAMPLE_RATE_HZ, SPK_VOLUME_DEFAULT);
+             MIC_SAMPLE_RATE_HZ, hux_audio_get_volume());
 }
 
 void hux_audio_selftest(int hz) {

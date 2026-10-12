@@ -103,8 +103,9 @@ void hux_audio_spk_unhold(const char *why);
  * `audio_clear` sink (WS task, in order with the audio). */
 void hux_audio_on_audio_clear(void);
 
-/** Speaker volume 0..100 (`set_volume` from the server): boots at 50
- * (-15 dB), never below 10; out of range is ignored. */
+/** Speaker volume 0..100 (`set_volume` from the server): kept in NVS
+ * and applied at boot (50, -11.5 dB, the first time), never below 10; out
+ * of range is ignored. */
 void hux_audio_set_volume(int level);
 
 /** The volume level applied last (0..100). */
