@@ -50,7 +50,9 @@ TEXT: dict[str, dict[str, str]] = {
         ),
         "whats_playing": (
             "Dice qué está sonando en Spotify ('¿qué canción es esta?', '¿quién "
-            "canta?', '¿qué libro es?', '¿en qué capítulo voy?', '¿cuánto falta?'). "
+            "canta?', '¿qué libro es?', '¿en qué capítulo voy?', '¿cuánto falta?'); "
+            "lo que está sonando ahora, no los libros que ha escuchado (eso es "
+            "`find_books`). "
             "Llámala SIEMPRE que pregunten, aunque creas saberlo: lo que suena cambia. "
             "No digas nada antes de llamarla. Después haz exactamente lo que diga "
             "`then`; lo que sonaba vuelve solo."
@@ -94,7 +96,8 @@ TEXT: dict[str, dict[str, str]] = {
         "find_books": (
             "Busca audiolibros en Spotify para recomendar o elegir: '¿qué libros "
             "tienes?', '¿qué libros hay?', '¿qué me recomiendas para leer?', '¿qué "
-            "libros hay de <autor>?', '¿qué libros he escuchado?', '¿de qué trata?'. "
+            "libros hay de <autor>?', '¿qué libros he escuchado?', '¿qué libros he estado "
+            "escuchando?', '¿de qué trata?'. "
             "Solo devuelve libros que se pueden escuchar aquí. Llama UNA vez por pedido. "
             "Sin `query` da solo los libros ya empezados aquí: úsalo si pregunta qué "
             "ha escuchado; si pide qué hay o qué le recomiendas sin decir autor ni "
@@ -187,7 +190,8 @@ TEXT: dict[str, dict[str, str]] = {
         "find_books": (
             "Look for Spotify audiobooks to recommend or choose from: 'what books do "
             "you have?', 'what books are there?', 'what do you recommend to read?', "
-            "'what books are there by <author>?', 'which books have I listened to?', "
+            "'what books are there by <author>?', 'which books have I listened to?', 'what "
+            "books have I been listening to?', "
             "'what is it about?'. It only returns books that can be listened to here. "
             "Call it ONCE per request. Without `query` it gives only the books already "
             "started here: use that for what they've listened to, or when they ask "
@@ -278,7 +282,8 @@ TEXT: dict[str, dict[str, str]] = {
         "find_books": (
             "Cherche des livres audio Spotify à recommander ou à choisir : 'quels "
             "livres tu as ?', 'quels livres tu me conseilles ?', 'quels livres de "
-            "<auteur> ?', 'quels livres j'ai écoutés ?', 'de quoi ça parle ?'. Ne "
+            "<auteur> ?', 'quels livres j'ai écoutés ?', 'quels livres j'écoute ces jours-ci "
+            "?', 'de quoi ça parle ?'. Ne "
             "donne que des livres qu'on peut écouter ici. Appelle-la UNE fois par "
             "demande. Sans `query`, donne seulement les livres déjà commencés ici ; "
             "aussi s'il demande ce qu'il y a sans auteur ni sujet, puis demande ce "

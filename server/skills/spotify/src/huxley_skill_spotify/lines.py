@@ -9,6 +9,8 @@ and no "tú" or "usted": the persona owns the form of address.
 
 from __future__ import annotations
 
+import re
+
 _NOTICE = {
     "es": "[Aviso del sistema, no lo dijo el usuario: {fact}] Di en voz alta exactamente "
     "«{line}» No llames a ninguna herramienta.",
@@ -238,6 +240,17 @@ def line(lang: str, key: str, **fields: str) -> str:
 def then(lang: str, key: str, **fields: str) -> str:
     """For a tool result: say exactly this line."""
     return _THEN[_lang(lang)].format(line=line(lang, key, **fields))
+
+
+_TRACK = re.compile(r"^(?:track|pista)\s*(\d+)$", re.IGNORECASE)
+_CHAPTER_WORD = {"es": "el capítulo {n}", "en": "chapter {n}", "fr": "le chapitre {n}"}
+
+
+def chapter_name(lang: str, name: str) -> str:
+    """How to say a chapter: some books name them "Track 2" (heard as
+    "Va en Track 2", 2026-10-12); those become "el capítulo 2"."""
+    m = _TRACK.match(name.strip())
+    return _CHAPTER_WORD[_lang(lang)].format(n=m.group(1)) if m else name
 
 
 def duration(lang: str, ms: int) -> str:

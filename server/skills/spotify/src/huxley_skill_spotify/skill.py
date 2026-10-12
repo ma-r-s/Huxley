@@ -789,7 +789,7 @@ class SpotifySkill:
         index = book.index_of(item_uri(state.item)) if book is not None else None
         if book is not None and index is not None:
             lang = self._lang()
-            chapter = book.chapters[index].name
+            chapter = lines.chapter_name(lang, book.chapters[index].name)
             chapter_left, book_left = remaining_ms(book, index, position_now(state) or 0)
             return ToolResult(
                 output=json.dumps(
