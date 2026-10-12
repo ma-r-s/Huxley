@@ -8,6 +8,7 @@ same page with a charset, for a local static server).
 
     cd clients/firmware/enclosure && uv run python -m huxcase.site           # everything
     cd clients/firmware/enclosure && uv run python -m huxcase.site --page    # page edits only
+    cd clients/firmware/enclosure && uv run python -m huxcase.site --web <dir> # the website's copy
 """
 
 from __future__ import annotations
@@ -514,9 +515,46 @@ def write_pages(manifest: dict) -> None:
     )
 
 
+def write_web(out_dir: Path) -> tuple[Path, Path]:
+    """The website's copy (web/: the /hx-1 page): the model as a binary GLB,
+    which a normal host serves, and a trimmed manifest: per node its kind,
+    label and where it sits in the exploded view, plus the light and the
+    specs. Built from out/site (run without --web first)."""
+    doc = json.loads((SITE_OUT / "hx1.gltf.json").read_text())
+    m = json.loads((SITE_OUT / "assembly.json").read_text())
+    uri = doc["buffers"][0]["uri"]
+    blob = base64.b64decode(uri[uri.index(",") + 1 :])
+    doc["buffers"] = [{"byteLength": len(blob)}]
+    js = json.dumps(doc, separators=(",", ":")).encode()
+    js += b" " * (-len(js) % 4)
+    blob += b"\0" * (-len(blob) % 4)
+    glb = struct.pack("<III", 0x46546C67, 2, 28 + len(js) + len(blob))
+    glb += struct.pack("<II", len(js), 0x4E4F534A) + js
+    glb += struct.pack("<II", len(blob), 0x004E4942) + blob
+    steps = {s["id"]: s for s in m["steps"]}
+    nodes = {
+        name: {
+            "kind": n["kind"],
+            "label": n["label"],
+            "explode": n.get("explode", steps[n["step"]]["explode"]),
+            "build_only": steps[n["step"]]["build_only"],
+        }
+        for name, n in m["nodes"].items()
+    }
+    model = {"light_at": m["light_at"], "nodes": nodes, "specs": m["specs"]}
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "hx1.glb").write_bytes(glb)
+    (out_dir / "hx1-model.json").write_text(json.dumps(model, indent=1) + "\n")
+    return out_dir / "hx1.glb", out_dir / "hx1-model.json"
+
+
 def main() -> int:
     import sys
 
+    if "--web" in sys.argv:  # the website's copy, into the given directory
+        glb, model = write_web(Path(sys.argv[sys.argv.index("--web") + 1]))
+        print(f"wrote {glb} ({glb.stat().st_size / 1e6:.1f} MB) and {model}")
+        return 0
     if "--page" in sys.argv:  # page edits only: reuse the exported model and manifest
         write_pages(json.loads((SITE_OUT / "assembly.json").read_text()))
         print(f"wrote {SITE_OUT}/index.html")
