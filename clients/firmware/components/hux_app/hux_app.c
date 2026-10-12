@@ -363,6 +363,7 @@ static void uplink_control(uplink_kind_t kind) {
  * the caregiver's view read it; it replaced `device` (F-0028). */
 static uint32_t s_hellos = 0;       /* this boot */
 static uint32_t s_link_lost_ms = 0; /* the app saw the WebSocket drop */
+static uint32_t s_played_at_drop = 0; /* hux_audio_played_ms() at that drop */
 
 static void send_device_hello(void) {
     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
@@ -427,6 +428,24 @@ static void send_device_hello(void) {
     cJSON_AddStringToObject(net, "source", "compiled"); /* the Wi-Fi list (F-0027) adds nvs */
     cJSON_AddItemToObject(d, "net", net);
     cJSON_AddNumberToObject(d, "time_to_hello_ms", took);
+    if (s_hellos > 1) {
+        /* What it played after the link dropped, out of its ring (the
+         * server sends faster than real time: a narration cut on the wire
+         * may have been heard whole, T1.44), and what was still queued,
+         * thrown away now: the server's state is newer, and it repeats a
+         * narration unless this says it was heard (agreed with the server
+         * session). */
+        uint32_t played = hux_audio_played_ms() - s_played_at_drop;
+        uint32_t left_ms = (uint32_t)(hux_audio_spk_ring_used() / 48);
+        if (left_ms > 0) {
+            hux_audio_spk_clear();
+        }
+        cJSON_AddNumberToObject(d, "played_after_drop_ms", played);
+        cJSON_AddNumberToObject(d, "ring_left_ms", left_ms);
+        cJSON_AddNumberToObject(d, "drop_uptime_ms", s_link_lost_ms);
+        ESP_LOGI(TAG, "app.after_drop played_ms=%u discarded_ms=%u drop_uptime_ms=%u",
+                 (unsigned)played, (unsigned)left_ms, (unsigned)s_link_lost_ms);
+    }
     cJSON_AddNumberToObject(d, "volume", hux_audio_get_volume());
     cJSON_AddItemToObject(root, "data", d);
     char *json = cJSON_PrintUnformatted(root);
@@ -794,6 +813,7 @@ static void dispatch(hux_app_event_t *ev) {
         case HUX_APP_EV_NET_WS_DISCONNECTED:
             if (s_state != ST_WAITING_WS) {
                 s_link_lost_ms = (uint32_t)(esp_timer_get_time() / 1000);
+                s_played_at_drop = hux_audio_played_ms();
             }
             /* Once per outage: every failed retry posts this too, and an
              * outage's lines wait in the 256-line queue (hux_net logs the

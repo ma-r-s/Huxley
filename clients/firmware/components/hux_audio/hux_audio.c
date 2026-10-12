@@ -108,6 +108,9 @@ static _Atomic int s_volume = SPK_VOLUME_DEFAULT; /* level applied, for reports 
 static _Atomic uint32_t s_spk_writes = 0;
 static _Atomic uint32_t s_mic_turns = 0;
 static _Atomic bool s_spk_debug_hang = false; /* console `hang spk` */
+/* Audio chunks (SPK_CHUNK_MS each) that reached the codec: what the walkie
+ * played after a link drop goes in the next hello (T1.44). */
+static _Atomic uint32_t s_played_chunks = 0;
 /* device.health (F-0027): since the last take. 48 bytes = 1 ms of audio. */
 static _Atomic uint32_t s_h_underruns = 0;
 static _Atomic uint32_t s_h_underrun_ms = 0;
@@ -623,6 +626,7 @@ static void spk_task(void *unused) {
             }
             got_samples = SPK_CHUNK_SAMPLES;
             audio_chunks++;
+            atomic_fetch_add_explicit(&s_played_chunks, 1, memory_order_relaxed);
         } else if (got_samples == 0) {
             /* Ring empty — write a full chunk of silence so the DMA
              * stays fed. esp_codec_dev_write blocks on DMA; this
@@ -664,6 +668,7 @@ static void spk_task(void *unused) {
             }
             got_samples = SPK_CHUNK_SAMPLES;
             audio_chunks++;
+            atomic_fetch_add_explicit(&s_played_chunks, 1, memory_order_relaxed);
         }
 
         esp_err_t err = esp_codec_dev_write(
@@ -829,6 +834,10 @@ void hux_audio_take_health(uint32_t *underruns, uint32_t *underrun_ms, uint32_t 
     *underruns = atomic_exchange(&s_h_underruns, 0);
     *underrun_ms = atomic_exchange(&s_h_underrun_ms, 0);
     *discarded_ms = atomic_exchange(&s_h_discarded_bytes, 0) / 48;
+}
+
+uint32_t hux_audio_played_ms(void) {
+    return atomic_load_explicit(&s_played_chunks, memory_order_relaxed) * SPK_CHUNK_MS;
 }
 
 uint32_t hux_audio_spk_writes(void) {

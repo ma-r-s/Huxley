@@ -275,7 +275,12 @@ speaker's, go only to the log). Logs: `app.dev_cmd id=`,
 `POST /admin/dev-cmd` (loopback and Tailscale only). Every connection
 also carries `Authorization: Bearer <HUX_DEVICE_TOKEN>` on the upgrade
 (`ws.token present=1` at boot; the value is never logged), and the hello
-is now `device.hello` (`app.device_hello sent= time_to_hello_ms=`).
+is now `device.hello` (`app.device_hello sent= time_to_hello_ms=`). After a reconnect the hello also says what the walkie played out of its
+ring after the link dropped (`played_after_drop_ms`), what it still had
+queued (`ring_left_ms`, thrown away then: the server's state is newer)
+and when it dropped (`drop_uptime_ms`); the server repeats a cut
+narration only if it wasn't heard (T1.44; `app.after_drop played_ms=
+discarded_ms=`).
 
 ### Updates through the server (F-0028)
 
