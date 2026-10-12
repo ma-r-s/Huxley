@@ -5518,3 +5518,19 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 **Smoke 3 (Mario, 16:54-16:57Z, server on dbf99fb7)**: "¿qué libros tienes?" went to `get_news` (find_books now lists that phrasing); "dame sugerencias de autores importantes" searched the whole sentence and got a leadership book (vague requests now become a concrete topic or author); "Mujeres a través de la historia" played and "¿qué está sonando?" said book, chapter and time left correctly; a resumed book played about a second, cut, then resumed (the back-up seek was sent before "play"; now after, silent until it lands). Deployed f0e3033c at 17:00Z.
 
 **Open**: Mario's smoke on f0e3033c (resume without the blip, a recommendation, a chapter jump, a refused book); the "Amara.org" phantom transcript on near-silent presses (T1.35) showed up again at 16:57:43Z.
+
+## T1.41: A waiting sound while a tool runs (no dead air)
+
+**Status**: `in_progress` (2026-10-12) · **Effort**: S-M (turn coordinator)
+
+**Problem** (Mario, live): "it told me it was gonna look for some books and then it kept silent for like 10 seconds... it feels like it's not doing anything." The log: 22 s from "Un momento, déjame buscar" to the answer (two find_books calls). `docs/turns.md` promises a thinking tone that fills silence, but only the PWA has one, it starts only at `ptt_stop`, and the walkie has none; during a tool the server sends the client nothing at all.
+
+**Decided** (Mario asked "the same sound as connection lost, or a different one?"): different. The walkie's offline cue is a falling pair (440 then 330 Hz) meaning "something's wrong"; waiting must sound like "working, wait": soft, steady, repeating. Using one sound for both would teach the listener that searching means trouble.
+
+## T1.42: The caregiver's view: insight and alerts, never an event log
+
+**Status**: `queued` (2026-10-12, Mario's brief) · **Effort**: L
+
+**Brief** (Mario): alerts and a beautiful, text-light way of knowing what's going on, so he can fix things from his home: audio cutting up on the device ("check what may be going on"), the Orange Pi down, the device out of battery, something unusual, OpenAI credits out or running low, audiobook hours low (buy more), the internet was down, the device not seen in a couple of days; and how the device is being used. **Not wanted**: a complex dashboard, individual events cluttering the board, everything shown with the important part buried; only what tells him something is going on.
+
+**What's measurable today**: link quality and gaps (`spk.alive` underruns, `server.tx.audio_stats`, `dev.py link`), last seen / disconnects, session errors, turns and what was used (books, music, radio, calls), book seconds per month (T1.40 shelf), OpenAI spend (`cost.response_done`). **Needs something**: the Pi being down (an outside watcher: the Pi can't report its own death), credits (OpenAI has no balance API: spend against the balance Mario tops up), battery (F-0025, needs the solder fix), alerts reaching Mario (a channel to choose).
