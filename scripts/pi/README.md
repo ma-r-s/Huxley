@@ -59,3 +59,24 @@ docker logs -f huxley-soloist
 
 Deploy from the Mac: `git push ssh://mario@100.75.152.70/home/mario/huxley.git main`,
 then on the Pi `cd ~/huxley && git pull --ff-only && uv sync && systemctl --user restart huxley`.
+
+## On the internet: walkie.ma-r-s.com (W2)
+
+Created 2026-10-12 with the `cf` CLI (Mario's logged-in Cloudflare account):
+tunnel `huxley-walkie` (9c9efdac-b9d2-40b3-8e36-b832a9191414, remotely
+managed), routing `walkie.ma-r-s.com` -> `http://localhost:8765` with
+`/admin` and `/health` answered 404 at Cloudflare, and a proxied CNAME
+`walkie.ma-r-s.com` -> `<tunnel id>.cfargotunnel.com`. The connector's
+token is in `~/.config/huxley-tunnel/env` on the Pi (mode 600).
+`scripts/pi/tunnel.sh` starts the connector (pinned cloudflared, out of
+Watchtower). **Not started yet:** it waits for the production role
+(device token on the WebSocket upgrade) to be merged and running.
+
+Inspect or change the routing from the Mac:
+
+```bash
+cf zero-trust tunnels cloudflared configurations get 9c9efdac-b9d2-40b3-8e36-b832a9191414
+cf zero-trust tunnels cloudflared get 9c9efdac-b9d2-40b3-8e36-b832a9191414
+cf dns records list -z ma-r-s.com
+```
+
