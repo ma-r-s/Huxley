@@ -570,8 +570,9 @@ export function HX1Story() {
             position: "absolute",
             left: 0,
             right: 0,
-            // under the device: on a phone, right below it; else at the bottom
-            ...(isMobile ? { top: "57svh" } : { bottom: 40 + lead }),
+            // at the bottom of the first screen, under the nav's height: the
+            // model is fitted into what is left above (Stage.band)
+            bottom: (isMobile ? 24 : 40) + lead,
             display: "grid",
             justifyItems: "center",
             textAlign: "center",

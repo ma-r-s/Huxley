@@ -288,7 +288,7 @@
     "linkDocs": "Docs"
   },
   "hx1": {
-    "titleLine1": "Mantén para hablar.",
+    "titleLine1": "Mantén presionado para hablar.",
     "titleLine2": "Suelta para escuchar.",
     "subtitle": "Un asistente de voz para quien no puede usar un smartphone. Sin pantalla, sin app, sin palabra de activación. Una palanca.",
     "ctaHow": "Qué hace",
@@ -306,7 +306,7 @@
         "weight": "Peso",
         "battery": "Batería",
         "speaker": "Altavoz",
-        "board": "Cerebro",
+        "board": "Placa",
         "print": "Impresión"
       }
     },
@@ -321,7 +321,7 @@
         },
         {
           "k": "Mensajes",
-          "v": "Los mensajes nuevos se leen en voz alta al llegar. Las respuestas se dictan."
+          "v": "Los mensajes nuevos se leen en voz alta al llegar. Se responde con la voz."
         },
         {
           "k": "Libros, música, radio",
@@ -329,15 +329,15 @@
         },
         {
           "k": "Recordatorios",
-          "v": "Los de medicación se repiten a los 5, 10 y 30 minutos hasta que se confirman."
+          "v": "Si nadie confirma un recordatorio de medicación, se repite tres veces, con 5, 10 y 30 minutos de separación."
         },
         {
           "k": "Noticias y preguntas",
-          "v": "Titulares, el tiempo y lo que pueda responder una búsqueda en la web."
+          "v": "Titulares, el clima y lo que pueda responder una búsqueda en la web."
         },
         {
-          "k": "Sin callejones sin salida",
-          "v": "Nunca responde con un «no puedo» a secas: cada no trae una alternativa."
+          "k": "Qué necesita",
+          "v": "Wifi, un equipo siempre encendido y una clave de la API de OpenAI. Las llamadas piden una SIM extra para Telegram; los libros y la música, Spotify Premium."
         }
       ],
       "linkPersonas": "Sobre las personas",
@@ -346,8 +346,8 @@
     "made": {
       "eyebrow": "Haz uno",
       "title": "Imprime uno. Regálaselo a alguien.",
-      "body1": "Unas seis horas en una impresora 3D de escritorio, unos 50 dólares en piezas, algo de soldadura y cuatro tornillos. La guía de montaje muestra los 21 pasos en 3D, con los archivos para cualquier impresora.",
-      "body2": "La carcasa, el firmware y el servidor tienen licencia MIT. Quien lo construye pone en marcha el servidor y escribe la persona, un archivo YAML; viene con Abuelo, pausado y cálido, en español. Quien lo usa solo sostiene la palanca. El modelo de voz se cobra por respuesta, así que un HX-1 en reposo no cuesta nada.",
+      "body1": "Unas seis horas en una Bambu P2S, unos 50 dólares en piezas por unidad, algo de soldadura, pegamento y ocho tornillos. La guía de montaje muestra los 21 pasos en 3D, con los archivos para cualquier impresora.",
+      "body2": "La carcasa, el firmware y el servidor tienen licencia MIT. Quien lo construye pone en marcha el servidor y edita la persona, un archivo YAML; viene con Abuelo, pausado y cálido, en español. Quien lo usa solo sostiene la palanca. OpenAI cobra unos 4 dólares por cada mil respuestas, y nada en reposo.",
       "guide": "La guía de montaje (en inglés)",
       "link": "El código de la carcasa"
     },
@@ -382,19 +382,19 @@
     "story": {
       "aria": "HX-1 de cerca: su frente, su palanca y lo que lleva dentro.",
       "gap": {
-        "eyebrow": "El hueco",
-        "title": "Todo asistente da por hecho un teléfono.",
-        "body": "Echo, Nest y HomePod se configuran desde una app del teléfono y escuchan todo el día esperando su palabra de activación. Los reproductores accesibles cuestan unos 500 dólares y se manejan con un teclado. HX-1 no necesita nada de eso."
+        "eyebrow": "El vacío",
+        "title": "Todo altavoz inteligente da por hecho un teléfono.",
+        "body": "Echo, Nest y HomePod se configuran desde una app del teléfono y escuchan todo el día esperando su palabra de activación. El Victor Reader Stream de HumanWare cuesta 499 dólares y se maneja con teclado. HX-1 no necesita nada de eso."
       },
       "lever": {
         "eyebrow": "Una palanca",
         "title": "Mantén. Habla. Suelta.",
-        "body": "La palanca es toda la interfaz. El micrófono solo se enciende mientras la sostienes. Púlsala otra vez para cortar una respuesta.",
+        "body": "Fuera de las llamadas, el micrófono solo se enciende mientras sostienes la palanca. Responde cuando la sueltas, aunque hagas pausas largas.",
         "ask": "¿Tengo mensajes?",
         "answer": "Uno: «Te llamo a las seis.»"
       },
       "inside": {
-        "body": "Una placa de audio ESP32-S3, un altavoz de 40 mm, dos pilas 18650 y un pulsador de 12 × 12, en una caja impresa de 70 × 104 × 37 mm. Funciona con batería, así que va adonde va su dueño."
+        "body": "Una placa de audio ESP32-S3, un altavoz de 40 mm y dos celdas 18650 en una caja impresa. Con batería, funciona hasta donde llegue el wifi de casa."
       }
     }
   }

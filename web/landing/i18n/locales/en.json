@@ -306,7 +306,7 @@
         "weight": "Weight",
         "battery": "Battery",
         "speaker": "Speaker",
-        "board": "Brain",
+        "board": "Board",
         "print": "Print time"
       }
     },
@@ -321,7 +321,7 @@
         },
         {
           "k": "Messages",
-          "v": "New messages are read aloud as they arrive. Replies are spoken."
+          "v": "New messages are read aloud as they arrive. Reply by voice."
         },
         {
           "k": "Books, music, radio",
@@ -329,15 +329,15 @@
         },
         {
           "k": "Reminders",
-          "v": "Medication reminders repeat after 5, 10 and 30 minutes until acknowledged."
+          "v": "If nobody confirms a medication reminder, it repeats three times: 5, 10 and 30 minutes apart."
         },
         {
           "k": "News and answers",
           "v": "Headlines, the weather, and whatever a web search can answer."
         },
         {
-          "k": "No dead ends",
-          "v": "It never answers with a bare “I can't”: every no comes with an alternative."
+          "k": "What it needs",
+          "v": "Wi-Fi, a computer that stays on and an OpenAI API key. Calls need a spare SIM for Telegram; books and music need Spotify Premium."
         }
       ],
       "linkPersonas": "About personas",
@@ -346,8 +346,8 @@
     "made": {
       "eyebrow": "Make one",
       "title": "Print one. Give it to someone.",
-      "body1": "About six hours on a desktop 3D printer, about $50 of parts, some soldering and four screws. The build guide shows all 21 steps in 3D, with print files for any printer.",
-      "body2": "Case, firmware and server are MIT-licensed. Whoever builds it runs the server and writes the persona, a YAML file; it ships with Abuelo, slow and warm, in Spanish. Whoever uses it only holds the lever. The voice model is billed per answer, so an idle HX-1 costs nothing.",
+      "body1": "About six hours on a Bambu P2S, about $50 of parts per unit, some soldering, glue and eight screws. The build guide shows all 21 steps in 3D, with print files for any printer.",
+      "body2": "Case, firmware and server are MIT-licensed. Whoever builds it runs the server and edits the persona, a YAML file; it ships with Abuelo, slow and warm, in Spanish. Whoever uses it only holds the lever. OpenAI charges about $4 per thousand answers, and nothing while idle.",
       "guide": "The build guide",
       "link": "The enclosure source"
     },
@@ -369,18 +369,18 @@
       "aria": "HX-1 up close: its face, its lever, and what is inside.",
       "gap": {
         "eyebrow": "The gap",
-        "title": "Every assistant assumes a phone.",
-        "body": "Echo, Nest and HomePod are set up from a phone app and listen all day for their wake word. Accessible audio players cost about $500 and run from a keypad. HX-1 needs neither."
+        "title": "Every smart speaker assumes a phone.",
+        "body": "Echo, Nest and HomePod are set up from a phone app and listen all day for their wake word. HumanWare's Victor Reader Stream costs $499 and runs from a keypad. HX-1 needs neither."
       },
       "lever": {
         "eyebrow": "One lever",
         "title": "Hold. Talk. Let go.",
-        "body": "The lever is the whole interface. The microphone is on only while it's held. Press it again to cut an answer short.",
+        "body": "Outside calls, the microphone is on only while the lever is held. It answers when you let go, however long you pause.",
         "ask": "Any messages?",
         "answer": "One: “I'll call you at six.”"
       },
       "inside": {
-        "body": "An ESP32-S3 audio board, a 40 mm speaker, two 18650 cells and a 12 × 12 switch, in a printed 70 × 104 × 37 mm case. It runs on batteries, so it goes where its owner goes."
+        "body": "An ESP32-S3 audio board, a 40 mm speaker and two 18650 cells in a printed case. On batteries, it works anywhere its home Wi-Fi reaches."
       }
     }
   }
