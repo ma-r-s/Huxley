@@ -856,3 +856,13 @@ class TestMusicAndBooksApart:
         assert await shelf.played(BOOK.uri)
         assert (await shelf.last_book() or {}).get("uri") == BOOK.uri
         assert await shelf.seconds_this_month() > 0
+
+
+def test_track_chapters_are_said_as_chapters() -> None:
+    """Some books name chapters "Track 2": heard as "Va en Track 2"."""
+    from huxley_skill_spotify import lines
+
+    assert lines.chapter_name("es", "Track 2") == "el capítulo 2"
+    assert lines.chapter_name("en", "track 12") == "chapter 12"
+    assert lines.chapter_name("es", "Capítulo 3") == "Capítulo 3"
+    assert lines.chapter_name("es", "Créditos iniciales") == "Créditos iniciales"

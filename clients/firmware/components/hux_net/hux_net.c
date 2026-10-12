@@ -16,6 +16,7 @@
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
+#include "nvs.h"
 
 #include "hux_app.h"
 #include "hux_log.h"
@@ -86,7 +87,27 @@ static _Atomic bool s_ws_alive = false;
  * by new client", 1001) is told apart from a restart or a ping timeout. */
 static bool s_close_was_eviction = false;
 static char s_server_uri[128] = {0};
-static char s_home_uri[128] = {0}; /* from secrets.h: where `server` reverts to */
+/* Where a switch reverts to: the last address a hello proved (the saved
+ * one, else the compiled one). */
+static char s_home_uri[128] = {0};
+/* secrets.h's address, compiled into every image: the fallback when the
+ * saved one stops answering (remote-operation W5, F-0027). */
+static char s_compiled_uri[128] = {0};
+/* NVS: the address `server keep` switched to, saved only once a hello
+ * succeeded on it, so a typo can never strand the walkie. */
+#define SERVER_NVS_NS  "hux_net"
+#define SERVER_NVS_KEY "srv_uri"
+/* No hello this long on the saved address after a boot: try the compiled
+ * one, then back, until one answers. */
+#define SERVER_FALLBACK_S (10 * 60)
+typedef enum {
+    SRV_HOME,     /* on the proven address: nothing pending */
+    SRV_TEMP,     /* `server <uri> [min]`: tests; reverts by time, never saved */
+    SRV_KEEP,     /* `server keep <uri>`: saved at the first hello, else reverts */
+    SRV_FALLBACK, /* watching the saved address after boot; no hello and it
+                   * alternates with the compiled one ("watch" in the log) */
+} srv_mode_t;
+static _Atomic int s_srv_mode = SRV_HOME;
 /* What the library connects to: the server URI plus `audio=opus` (F-0024,
  * the client's opt-in; the server's hello confirms it). */
 static char s_ws_uri[160] = {0};
@@ -105,6 +126,7 @@ static const char *ws_uri_for(const char *base) {
  * task, whose FINISH would make the app resume it on the old URI. */
 static _Atomic bool s_switching = false;
 static esp_timer_handle_t s_server_revert;
+static void server_revert_due(void *arg);
 
 /* Audio data-plane seam — see firmware/docs/architecture.md §"Data
  * plane vs control plane". Inbound `audio` messages bypass
@@ -644,7 +666,7 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
 }
 
 static void ws_start(const char *uri) {
-    strncpy(s_server_uri, uri, sizeof(s_server_uri) - 1);
+    strlcpy(s_server_uri, uri, sizeof(s_server_uri));
     esp_websocket_client_config_t cfg = {
         .uri = ws_uri_for(s_server_uri),
         .buffer_size = WS_BUFFER_SIZE,
@@ -714,8 +736,32 @@ void hux_net_start(const hux_net_config_t *cfg) {
                  cfg->wifi_password != NULL && cfg->server_uri != NULL);
     hux_ws_reassembler_init(&s_reassembler, s_frag_buf, sizeof(s_frag_buf));
     /* WS client created first; the GOT_IP handler starts it. */
-    strncpy(s_home_uri, cfg->server_uri, sizeof(s_home_uri) - 1);
-    ws_start(cfg->server_uri);
+    strlcpy(s_compiled_uri, cfg->server_uri, sizeof(s_compiled_uri));
+    strlcpy(s_home_uri, cfg->server_uri, sizeof(s_home_uri));
+    char saved[sizeof(s_home_uri)] = {0};
+    size_t len = sizeof(saved);
+    nvs_handle_t h;
+    if (nvs_open(SERVER_NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_str(h, SERVER_NVS_KEY, saved, &len) != ESP_OK) {
+            saved[0] = '\0';
+        }
+        nvs_close(h);
+    }
+    if (saved[0] != '\0' && strcmp(saved, s_compiled_uri) != 0) {
+        strlcpy(s_home_uri, saved, sizeof(s_home_uri));
+    }
+    ESP_LOGI(TAG, "ws.server boot=%s source=%s", s_home_uri,
+             strcmp(s_home_uri, s_compiled_uri) == 0 ? "compiled" : "nvs");
+    ws_start(s_home_uri);
+    if (strcmp(s_home_uri, s_compiled_uri) != 0) {
+        /* The saved address must prove itself again: if it never answers,
+         * the compiled one gets its turn. */
+        atomic_store(&s_srv_mode, SRV_FALLBACK);
+        const esp_timer_create_args_t args = {.callback = server_revert_due, .name = "ws_revert"};
+        if (esp_timer_create(&args, &s_server_revert) == ESP_OK) {
+            esp_timer_start_once(s_server_revert, (uint64_t)SERVER_FALLBACK_S * 1000000);
+        }
+    }
     wifi_init_sta(cfg->wifi_ssid, cfg->wifi_password);
 }
 
@@ -738,10 +784,20 @@ void hux_net_resume(void) {
     ESP_LOGI(TAG, "ws.resumed err=%s", esp_err_to_name(err));
 }
 
+static void server_switch(const char *uri, uint32_t revert_s, srv_mode_t mode);
+
 static void server_revert_task(void *arg) {
     (void)arg;
-    ESP_LOGW(TAG, "ws.server reverting to %s (the switch timed out)", s_home_uri);
-    hux_net_set_server(s_home_uri, 0);
+    if (atomic_load(&s_srv_mode) == SRV_FALLBACK) {
+        /* No hello on either address yet: try the other one. */
+        const char *next = strcmp(s_server_uri, s_compiled_uri) == 0 ? s_home_uri : s_compiled_uri;
+        ESP_LOGW(TAG, "ws.server fallback to=%s (no hello for %u s)", next,
+                 (unsigned)SERVER_FALLBACK_S);
+        server_switch(next, SERVER_FALLBACK_S, SRV_FALLBACK);
+    } else {
+        ESP_LOGW(TAG, "ws.server reverting to %s (the switch timed out)", s_home_uri);
+        server_switch(s_home_uri, 0, SRV_HOME);
+    }
     vTaskDelete(NULL);
 }
 
@@ -752,15 +808,75 @@ static void server_revert_due(void *arg) {
 }
 
 void hux_net_set_server(const char *uri, uint32_t revert_s) {
+    server_switch(uri, revert_s, revert_s > 0 ? SRV_TEMP : SRV_HOME);
+}
+
+void hux_net_server_keep(const char *uri, uint32_t revert_s) {
+    server_switch(uri, revert_s > 0 ? revert_s : 15 * 60, SRV_KEEP);
+}
+
+static void server_save(const char *uri) {
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(SERVER_NVS_NS, NVS_READWRITE, &h);
+    if (err == ESP_OK) {
+        err = uri != NULL ? nvs_set_str(h, SERVER_NVS_KEY, uri) : nvs_erase_key(h, SERVER_NVS_KEY);
+        if (err == ESP_ERR_NVS_NOT_FOUND) {
+            err = ESP_OK; /* erasing what isn't there */
+        }
+        if (err == ESP_OK) {
+            err = nvs_commit(h);
+        }
+        nvs_close(h);
+    }
+    ESP_LOGW(TAG, "ws.server_saved uri=%s err=%s", uri != NULL ? uri : "(compiled)",
+             esp_err_to_name(err));
+}
+
+void hux_net_server_reset(void) {
+    server_save(NULL);
+    strlcpy(s_home_uri, s_compiled_uri, sizeof(s_home_uri));
+    server_switch(s_compiled_uri, 0, SRV_HOME);
+}
+
+void hux_net_hello_ok(void) {
+    int mode = atomic_load(&s_srv_mode);
+    if (mode == SRV_KEEP) {
+        /* Proven: this is home now, across reboots. */
+        server_save(s_server_uri);
+    }
+    if (mode == SRV_KEEP || mode == SRV_FALLBACK) {
+        /* A fallback that landed on the compiled address makes it home
+         * until the next boot, which tries the saved one again. */
+        strlcpy(s_home_uri, s_server_uri, sizeof(s_home_uri));
+    }
+    if (mode == SRV_KEEP || mode == SRV_FALLBACK) {
+        if (s_server_revert != NULL) {
+            esp_timer_stop(s_server_revert);
+        }
+        atomic_store(&s_srv_mode, SRV_HOME);
+        ESP_LOGI(TAG, "ws.server_proven uri=%s mode=%s source=%s", s_server_uri,
+                 mode == SRV_KEEP ? "keep" : "watch",
+                 strcmp(s_server_uri, s_compiled_uri) == 0 ? "compiled" : "nvs");
+    }
+}
+
+void hux_net_server_status(void) {
+    static const char *const MODES[] = {"home", "temp", "keep", "watch"};
+    ESP_LOGI(TAG, "ws.server now=%s home=%s compiled=%s mode=%s", s_server_uri, s_home_uri,
+             s_compiled_uri, MODES[atomic_load(&s_srv_mode) & 3]);
+}
+
+static void server_switch(const char *uri, uint32_t revert_s, srv_mode_t mode) {
     if (s_ws == NULL || uri == NULL || uri[0] == '\0' || atomic_exchange(&s_switching, true)) {
         return;
     }
+    atomic_store(&s_srv_mode, mode);
     bool was_running = atomic_load(&s_ws_alive);
     if (was_running) {
         esp_websocket_client_stop(s_ws);
     }
     ESP_LOGW(TAG, "ws.server uri=%s was=%s revert_in_s=%u", uri, s_server_uri, (unsigned)revert_s);
-    strncpy(s_server_uri, uri, sizeof(s_server_uri) - 1);
+    strlcpy(s_server_uri, uri, sizeof(s_server_uri));
     esp_err_t err = esp_websocket_client_set_uri(s_ws, ws_uri_for(s_server_uri));
     if (was_running) {
         esp_err_t start = esp_websocket_client_start(s_ws);
@@ -773,7 +889,8 @@ void hux_net_set_server(const char *uri, uint32_t revert_s) {
     }
     if (s_server_revert != NULL) {
         esp_timer_stop(s_server_revert);
-        if (revert_s > 0 && strcmp(s_server_uri, s_home_uri) != 0) {
+        /* A fallback runs its timer whichever address it's on. */
+        if (revert_s > 0 && (mode == SRV_FALLBACK || strcmp(s_server_uri, s_home_uri) != 0)) {
             esp_timer_start_once(s_server_revert, (uint64_t)revert_s * 1000000);
         }
     }

@@ -263,6 +263,8 @@ README, debugging guide and CLAUDE.md say not to use `idf.py flash` /
 `monitor` on this board. On battery or a plain charger nothing drives
 those lines: a walkie in use can't get there.
 
+**Found 2026-10-12 by the case session**: the HX-1 tub top's corner block touched the BOOT button's plunger with 0.00 mm clearance (the CAD followed the board's outline, buttons included); a top printed a hair proud could have held BOOT in, which at any reset boots download mode. Fixed in the enclosure (a 0.6 mm pocket for every edge button). The hardware fix for the INT# path is R15's removal (F-0026).
+
 ### F-0021: Updates and debugging over Wi-Fi · done 2026-10-12
 
 **Problem**: every firmware change meant the USB cable, and the walkie
@@ -421,7 +423,7 @@ goes out, with the press's totals.
   (bench clips over Wi-Fi, POST /clips) with the requests that failed in
   real use as clips 7-15.
 
-### F-0023: Go back by itself after repeated crashes past the confirm · queued
+### F-0023: Go back by itself after repeated crashes past the confirm · queued (required by F-0028, ignoring BROWNOUT)
 
 **Problem** (from the F-0021 review): an image that passes its 30 s and
 is confirmed, then crashes on every talk press, crash-loops for good;
@@ -461,7 +463,7 @@ fallback with today's server (turn, silent, health PASS).
 **Next**: the server side (in progress), then the bench on Opus (turn,
 stall, slowdown, resume, hearing) and `dev.py link` over real use.
 
-### F-0025: Say how much battery is left · deferred 2026-10-12 (Mario: not now; needs the case opened)
+### F-0025: Say how much battery is left · scheduled 2026-10-12 (the wiring in F-0026's open-case session; Mario approved the case opening once)
 
 **Ask** (Mario): "a way so the device can tell me how much battery is
 left." Nothing reads the battery today.
@@ -503,6 +505,23 @@ gets built.
 (the BAT / SPK side), ~2 mm apart (Waveshare's STEP: R78 x 19.4-21.0,
 y 31.7-32.5; R53 y 33.6-34.4, board coordinates). Next: map them onto
 Waveshare's bottom photo for Mario, or take option B (no map needed).
+
+### F-0026: The open-case session before handover (remote-operation W7) · queued 2026-10-12
+
+**Why**: the walkie goes to grandpa's retirement home and the case opens once more, never again (Mario, 2026-10-12; plan `docs/remote-operation.md` W7, server side T1.43 owned by the "Huxley improvement plan" session). Everything that needs the open case or the USB cable happens in that one session.
+**Hardware** (a guide for Mario, with photos of where to solder, before the day): battery to IO6 (bridge R78 pads 1-3, or a 200K/100K divider; F-0025's probe confirms `gpio=6 ... wired`); VBUS through a divider to a free ADC1 pin (charging detection: the charger's STAT only drives the LED); remove R15 (the 0 ohm link from the expander's INT# to GPIO0: no reset can ever boot download mode again, F-0020); check the cell has a protection board. (A pinhole to RST was planned; Mario dropped it, 2026-10-12: no holes, no extra prints. Recovery is the firmware's job, F-0027.)
+**Flash** (the last USB flash): partition table with OTA slots 2 to 4 MB each (image 1.3 MB today), NVS 24 to 64 KB, coredump 64 to 256 KB (staged as `partitions-w7.csv` until the day: the device's table only changes over USB); final bootloader; full flash dump and `espefuse summary` saved.
+**Battery firmware** (F-0025 reporting side): two-point calibration against a multimeter, median of idle samples, Li-ion table with hysteresis, 6 dB attenuation; `client_event system.battery` and the skill tool; low battery: a clip once, then deep sleep with a timer wake.
+**Tests**: drain to cutoff with the rocker on, plug in, boots and reconnects alone; a realistic day on battery; current with Wi-Fi power save off vs on.
+**Prep done 2026-10-12**: the handover table is staged (`partitions-w7.csv`, 29704bfc, validated with gen_esp32part.py; on the day also move clips.py / flash.sh to storage 0x820000). Parts located from Waveshare's STEP (assembly placements composed onto local leaf boxes), registered onto their underside product photo (fitted on the BAT and SPK plugs, checked on three chips within 2 px): **R78 and R53 are the two stacked 3-pad boxes near the top centre of the underside** (the BAT/SPK plugs on the right); **R15** (3 pads: pad 1 INT#, pad 2 3V3, pad 3 GPIO0; the fitted 0R joins 1-3, which is F-0020's download-mode trap) is on the underside about 12 mm left of centre, within about 1 mm: confirm on the day with a continuity beep from the BOOT button's GPIO0 side. **Charging detection needs no board soldering**: header P1 pin 1 is USB_5V (silkscreen "5V"), so 100K from 5V to a free ADC1 pin (IO8) and 100K from that pin to GND reads about 2.5 V while charging and 0 V on battery. The cells are protected 18650s (the enclosure decision): check each has its protection board when the case is open. **No RST pinhole** (Mario, 2026-10-12: "I don't want to make any holes or print anything else"; the case session had designed one and took it back out; the 0.6 mm clearance round the edge buttons stays, which fixes BOOT's 0.00 mm contact). Staff can't reach the board: a hung walkie recovers only through the firmware (F-0027's watchdog supervisor, escalation ladder and remote reboot; the black box for why). Staff have no restart at all: the rocker isn't reachable with the case closed either, so the watchdog has to cover every hang. **Parts decided**: battery level by the R78 solder bridge (no parts); charging detection by two 100K through-hole resistors built inline in the harness (header 5V -> 100K -> junction -> 100K -> GND, junction wire to IO8), heat-shrunk in the cable channel like the lever's wires; battery fallback (only if the bridge fails) 200K (2 x 100K) from the cell's + to IO3 and 100K IO3 to GND, so one value (100K) covers everything. **Pins moved off IO5/IO6** (case session, 2026-10-12): the header tails of IO4/5/6/9 sit 0.7 mm from the holder bridge's front bar, so a wire soldered there is crushed when the case closes; IO8 (ADC1_CH7, the unused LCD's MISO) and IO3 (ADC1_CH2, the unused LCD's DC; a strap only if the JTAG-select eFuse is burned, check with `espefuse.py summary` on the day) clear it with the wire dressed straight up along the board. Build each divider compact: the resistors side by side, heat-shrunk to about 13 x 6 mm (a straight 25 mm bundle has one slot, two don't fit). The firmware reads IO8 for charging and IO6 (bridge) or IO3 (fallback) for the cell. The fallback divider's + comes from the ribbon's + splice at the faceplate end (the board's battery lead, cell + after the rocker), so no seventh conductor crosses the hinge; the bundles and routes are in the enclosure README's cable table. **Charging**: no magnetic adapter (Mario, 2026-10-12): staff use a plain USB-C cable into a wall charger (no data lines, so no host can pull the boot lines; never charge it from a computer).
+
+### F-0027: A walkie that survives alone (remote-operation W5) · queued 2026-10-12
+
+Spec: `docs/remote-operation.md` W5. One escalation ladder (restart the WebSocket at 2 min without the server, Wi-Fi at 10, next known network, reboot at 60, after 3 reboots the other slot if valid; a network counts as working when it reached the server); reconnect backoff 2 to 60 s with jitter; a supervisor that feeds the task watchdog only while each part's liveness advances and logs which stalled; Wi-Fi list (compiled baseline: the home's network, a family phone's hotspot, Mario's home; plus NVS entries, `wifi.add` tries and reverts); server URI in NVS, kept once a hello succeeds; black box in RTC memory (last ~4 KB of log lines, reset cause, rollback reason) sent with the next hello; heartbeat `client_event device.health` every 60 s (fields agreed with the server session, including underrun ms and discarded ms per `audio_clear`); volume in NVS; spoken clips for no connection, low battery, OpenAI refusing.
+
+### F-0028: Updates and the remote console through the server (remote-operation W4) · queued 2026-10-12
+
+Spec: `docs/remote-operation.md` W4. The hello identity (fields agreed with the server session, one `docs/protocol.md` change); pull OTA on `server_event firmware.update {version, url}`, only when idle; an image keeps itself only after a local self-test, the hello, an HTTPS GET of the manifest with the OTA client's settings, a server-initiated close and reconnect, and `ota.accept`; the update channel frozen and handled in every state (a protocol mismatch must not park it); rollback bookkeeping in NVS (no_server, crash, selftest, manual); F-0023 required, ignoring BROWNOUT; remote console `server_event dev.cmd` / `client_event dev.cmd_result`; core dump summary in the hello, full dump on request; the port-80 door compiled out of grandpa's build. Built on the twin board (a0:f2:62:e2:fb:60) first.
 
 Note on IDs: F-0011 to F-0013 were used in code comments and commit
 messages (boot buzz, decode scratch, Wi-Fi power save) but their

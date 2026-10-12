@@ -1,0 +1,36 @@
+# systemd system unit for the production Huxley server on the Orange Pi
+# (docs/remote-operation.md W1). Installed by scripts/pi/install.sh.
+#
+# Status:  systemctl status huxley
+# Logs:    tail -f ~/huxley/server/runtime/logs/huxley.log   (JSON, kept by run)
+# Restart: sudo systemctl restart huxley   (the deploy script does this at night)
+#
+# Huxley shares the Pi with ~30 containers, so it gets the box's first
+# claim on CPU, disk and memory (decision 2): a stutter must never come
+# from a photo index or a game server.
+
+[Unit]
+Description=Huxley voice agent (production)
+Wants=network-online.target systemd-time-wait-sync.service
+# The Pi has no RTC: after a power cut the clock is wrong until NTP, and
+# reminders and recordings use the clock.
+After=network-online.target time-sync.target systemd-time-wait-sync.service
+
+[Service]
+Type=simple
+User=mario
+WorkingDirectory=/home/mario/huxley/server/runtime
+Environment=PATH=/home/mario/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/mario/.local/bin/uv run --package huxley huxley
+# SIGINT is the server's clean shutdown (summary saved, skills torn down).
+KillSignal=SIGINT
+TimeoutStopSec=30
+Restart=always
+RestartSec=3
+Nice=-5
+CPUWeight=1000
+IOWeight=1000
+OOMScoreAdjust=-500
+
+[Install]
+WantedBy=multi-user.target

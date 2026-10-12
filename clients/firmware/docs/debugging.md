@@ -202,6 +202,26 @@ crash dump waiting (`dev.py coredump`). `ota rollback` (console or
 `dev.py cmd`) boots the other slot by hand: `ota.rollback to slot=`.
 Wrong token: `dev.denied uri=`.
 
+### Moving the server (F-0027)
+
+The address in `secrets.h` is compiled into every image; a saved one in
+NVS (`hux_net` / `srv_uri`) takes over from it, and is saved only once
+the server there sent its hello, so a typo can't strand the board.
+
+| Console (`dev.py cmd ...`) | What |
+| -------------------------- | ---- |
+| `server`                   | logs `ws.server now= home= compiled= mode=` |
+| `server <uri> [min]`       | temporary (tests, proxies): back after `min` (15) or a reboot, never saved |
+| `server keep <uri> [min]`  | moves: saved at the first hello there (`ws.server_saved`, `ws.server_proven mode=keep`); no hello within `min` (15) and it goes back |
+| `server reset`             | forgets the saved address, back to the compiled one |
+
+At boot, `ws.server boot= source=nvs|compiled`. A saved address is
+watched: its hello logs `ws.server_proven mode=watch source=nvs`; no
+hello for 10 min and it hands over to the compiled one, alternating
+every 10 min until one answers (`ws.server fallback to=`, then
+`mode=watch source=compiled`). A fallback never overwrites the saved
+address, and the next boot tries it first again.
+
 ## Choppy audio or dropped connections: measure both ends
 
 Every second while audio flows, the server logs what it handed over

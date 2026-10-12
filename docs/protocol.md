@@ -91,6 +91,35 @@ and it applies to both directions. **A client that asked for Opus must check it.
 - **Server to client.** Everything that would have been a JSON `audio` message (the model's voice, streams, earcons) comes as Opus packets: encoder `APPLICATION_AUDIO` (it carries music too), VBR, 32 kbit/s, about 240 bytes a packet. No JSON `audio` messages. The server cuts PCM into whole 60 ms frames and sends a sound's last partial frame zero-padded when the sound ends: before `model_speaking: false`, before `stream_ended`, or, outside a stream, after 250 ms with no new audio (an earcon nothing follows; 250 ms is above the 100 ms cadence at which sources send audio in real time). No such timer runs between `stream_started` and `stream_ended`, so a stream whose source stalls never gets silence padded into it. On barge-in the server drops its pending PCM and any packet not yet written and resets its encoder (`OPUS_RESET_STATE`) before it sends `audio_clear`: nothing encoded before the clear follows it. A client should reset its decoder on `audio_clear` too. (A sound cut without a clear, say a stream paused for an announcement, gets the same drop and reset, so its leftovers never play ahead of the next sound.)
 - **Client to server.** Mic audio as Opus packets, 60 ms each, 24 kHz mono. The server decodes each with one decoder per connection and treats the PCM exactly like a JSON `audio` frame (PTT gating, the 133 ms and silent-press checks, a skill's mic claim). It resets that decoder on `ptt_start`, so the client should start each press from a fresh encoder (reset it on `ptt_start`). A packet that fails to decode, or an empty one, is dropped and logged (`server.rx.opus_decode_failed`); the connection stays up. JSON `audio` (base64 PCM) is still accepted from an opus client.
 
+## Device contract (schema 1)
+
+**Status**: agreed 2026-10-12 between the server and firmware owners for [`remote-operation.md`](./remote-operation.md) (T1.43; firmware F-0026..F-0028). Not built yet: each piece lands with its capability in `caps`. Once shipped, a schema-1 field is never removed or renamed; additions are optional fields, and a breaking change means `schema: 2` with the server still accepting 1.
+
+Everything rides the existing `client_event` / `server_event` channels: no new message types. A hardware client that nobody can reach must keep two things working in every state, including a `protocol` mismatch in `hello` (today that parks the walkie): sending `device.hello`, and acting on the update channel below. That is what lets a rolled-back image take the next update.
+
+**Authentication.** `Authorization: Bearer <device token>` on the WebSocket upgrade and on the firmware download, never a query parameter (query strings land in logs). Behind the Cloudflare tunnel, the same two requests also carry `CF-Access-Client-Id` and `CF-Access-Client-Secret`. The device keeps all three in NVS (rotatable over the live link) with compiled fallbacks.
+
+### Device to server (`client_event`)
+
+| `event` | When | `data` |
+| --- | --- | --- |
+| `device.hello` | Right after the server's `hello`, on every connect. Replaces `device`. | `schema` (1), `protocol` (the protocol number the image speaks), `device_id` (MAC `aa:bb:..`), `board`, `version` (git describe), `elf_sha` (9 hex; decodes core dumps), `slot` (`ota_0`/`ota_1`), `slot_state` (`valid`/`pending_verify`), `reset` (`POWERON`, `SW_RESET`, `PANIC`, `TASK_WDT`, `INT_WDT`, `BROWNOUT`, `DEEPSLEEP`, ...), `boot_counter`, `uptime_s`, `audio` (`opus`/`pcm`), `caps` (list: `ota.v1`, `dev_cmd.v1`, `health.v1`, `battery.v1` as each lands; the server offers only what `caps` says), `rollback` (null or `{from_version, reason: no_server\|crash\|selftest\|manual}`), `coredump` (null or `{elf_sha, task, exc_pc}`), `net` (`{ssid, channel, rssi, bssid, source: compiled\|nvs}`), `time_to_hello_ms`, `volume` |
+| `device.blackbox` | Right after `device.hello` when the previous boot left lines in RTC memory. | `lines` (up to ~4 KB of the last log lines before the reset), `dropped` |
+| `device.health` | Every 60 s while connected. Counters are since the previous line, so they sum. | `uptime_s`, `heap_internal_min`, `heap_internal_largest`, `psram_min`, `rssi`, `channel`, `bssid`, `wifi_disconnects` (`{reason: count}`), `tls_errors` (`{code: count}`), `reconnects`, `underruns`, `underrun_ms`, `discarded_ms`, `ws_rx_age_ms`, `ring_used_ms`, `volume`, `quiet_left_s`, `ota_state`, `battery` (`{mv, pct, charging}`, only once wired) |
+| `audio.discarded` | Every time the device drops queued speaker audio. | `ms`, `why` (`server_clear` = an `audio_clear`; `press` = a local barge-in clear), `uptime_ms` |
+| `firmware.status` | During an update the server offered. | `version`, `phase` (`downloading`\|`verifying`\|`rebooting`\|`failed`), `error` |
+| `dev.cmd_result` | Reply to `dev.cmd`. | `id`, `output`, `truncated` |
+
+### Server to device (`server_event`)
+
+| `event` | `data` | Device does |
+| --- | --- | --- |
+| `firmware.update` | `version`, `url`, `force` | Downloads the image from `url` (same host, same headers) when idle, never under 40 % battery unless charging, reports `firmware.status`, restarts. |
+| `ota.accept` | `version` | Marks the running image valid, but only after its own checks passed (self-test, hello, a manifest GET with the update client's settings, one server-initiated reconnect). Without it the image stays pending and goes back on the next restart. |
+| `dev.cmd` | `id`, `line` | Runs one console line, replies `dev.cmd_result`. |
+
+The server logs every `client_event` as `client.<event>` already, so all of the above is in the log from the first device that sends it.
+
 ## Connection lifecycle
 
 ```mermaid

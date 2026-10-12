@@ -118,9 +118,17 @@ void hux_console_run(char *line) {
         ESP_LOGI(TAG, "console.wifi started err=%s", esp_err_to_name(err));
     } else if (strcmp(cmd, "info") == 0) {
         cmd_info();
+    } else if (strcmp(cmd, "server") == 0 && argc == 1) {
+        hux_net_server_status();
+    } else if (strcmp(cmd, "server") == 0 && strcmp(argv[1], "reset") == 0) {
+        hux_net_server_reset();
+    } else if (strcmp(cmd, "server") == 0 && strcmp(argv[1], "keep") == 0 && argc > 2) {
+        /* Moving to another server: saved once a hello succeeds there. */
+        int min = argc > 3 ? atoi(argv[3]) : 15;
+        hux_net_server_keep(argv[2], (uint32_t)(min > 0 ? min : 15) * 60);
     } else if (strcmp(cmd, "server") == 0 && argc > 1) {
         /* Tests route the board through a proxy: back by itself after
-         * N minutes (default 15) or a reboot. */
+         * N minutes (default 15) or a reboot; never saved. */
         int min = argc > 2 ? atoi(argv[2]) : 15;
         hux_net_set_server(argv[1], (uint32_t)(min > 0 ? min : 15) * 60);
     } else if (strcmp(cmd, "ota") == 0 && argc > 1 && strcmp(argv[1], "confirm") == 0) {
@@ -169,7 +177,7 @@ void hux_console_run(char *line) {
     } else {
         ESP_LOGW(TAG, "console.unknown %s (talk, release, say N, tone [hz] [ms], vol N, pa on|off, "
                       "selftest [hz], wifi off [s]|on, wifistat, wifiscan, wifibw 20|40, info, "
-                      "server <uri> [min], quiet [s], battery, reboot, "
+                      "server [<uri> [min] | keep <uri> [min] | reset], quiet [s], battery, reboot, "
                       "ota <url> [force] | confirm | rollback)",
                  cmd);
     }
