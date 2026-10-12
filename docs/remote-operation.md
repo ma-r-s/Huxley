@@ -394,6 +394,10 @@ Wi-Fi is a normal password network (compiled into the baseline list; check
 2.4 GHz signal in his room on the day; no 4G box unless that fails); the case
 opens once more (W7, all of it); push after a private-data scan.
 
+Frozen and dropped (2026-10-12): the UPS (frozen: money), the healthchecks.io
+dead-man check (frozen: the Pi dies with the power, which Mario knows),
+the Telegram bot (dropped: alerts live on the page, which Mario checks).
+
 Defaults until Mario says otherwise: alerts through a Telegram bot; dev on
 Mario's own Spotify login with Telegram off; offline is said when he presses,
 never unprompted.

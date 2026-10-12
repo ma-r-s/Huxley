@@ -5612,7 +5612,7 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 
 **Left** (2026-10-12, the wrap-up list Mario asked for; check off with the commit):
 - In flight: the archive (day list: transcripts, tool calls, play buttons; T1.42); proactive turns wait for the walkie (T1.44); remote updates, server half (/firmware, /admin, the accept flow) + firmware half (F-0028).
-- Needs Mario: (1) Spotify billing day (spotify.com/account/subscription) -> the audiobook gauge (15 h/month add-on, renews on that day); (2) UPS for the Pi, router, modem; (3) a healthchecks.io check, ping URL into huxley-watch secrets; (4) a Telegram bot token + chat id for alerts; (5) ~10 min for the Pi cutover (`sudo ~/huxley/scripts/pi/install.sh`, persona data + Soloist moved together, walkie pointed at the Pi via its NVS server URI).
+- Mario's calls (2026-10-12): billing day is the 14th (audiobook gauge: 15 h/month add-on, renews the 14th); UPS **frozen** (money; power cuts still take the walkie down meanwhile); healthchecks.io **frozen** (the Pi dies with the power, so it would only report what Mario already knows); Telegram bot **dropped** (Mario checks the page instead; alerts stay on the page, the delivery channel is the page itself); the Pi move needs nothing from him (user units with lingering, no sudo). Still his: reserve 192.168.68.75 in the router (DHCP), until the tunnel hostname replaces the IP.
 - Ours, no input: (6) reach over the internet: Cloudflare tunnel + Access token + device token check, production role (W2); (7) remote updates finished both sides + the W7 open-case flash layout (firmware session); (8) the 7-day dress rehearsal on a foreign network (phase 6); later: nightly call transcription, turn ids on transcript lines.
 
 
