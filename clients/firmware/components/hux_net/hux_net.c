@@ -190,6 +190,19 @@ static void wifi_retry_timer_cb(void *arg) {
     esp_wifi_connect();
 }
 
+/* An AP's channel width from its secondary channel: 20 MHz has none. */
+static const char *second_chan_name(wifi_second_chan_t second) {
+    switch (second) {
+        case WIFI_SECOND_CHAN_ABOVE: return "above";
+        case WIFI_SECOND_CHAN_BELOW: return "below";
+        default:                     return "none";
+    }
+}
+
+static int bandwidth_mhz(wifi_bandwidth_t bw) {
+    return bw == WIFI_BW_HT40 ? 40 : 20;
+}
+
 static void wifi_event_handler(void *arg, esp_event_base_t base,
                                int32_t id, void *data) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
@@ -197,9 +210,20 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED) {
         /* Which AP (a mesh has several with one SSID) and how well. */
         const wifi_event_sta_connected_t *c = (const wifi_event_sta_connected_t *)data;
-        ESP_LOGI(TAG, "wifi.associated bssid=%02x:%02x:%02x:%02x:%02x:%02x channel=%d rssi=%d",
+        /* The AP's width (second: none = 20 MHz, above/below = 40) and
+         * ours: on a crowded 2.4 GHz band a 40 MHz link shares its air
+         * with the neighbours on both halves. */
+        wifi_ap_record_t ap = {0};
+        bool have_ap = esp_wifi_sta_get_ap_info(&ap) == ESP_OK;
+        wifi_bandwidth_t bw = WIFI_BW_HT20;
+        esp_wifi_get_bandwidth(WIFI_IF_STA, &bw);
+        ESP_LOGI(TAG,
+                 "wifi.associated bssid=%02x:%02x:%02x:%02x:%02x:%02x channel=%d second=%s "
+                 "phy=%s bw_mhz=%d rssi=%d",
                  c->bssid[0], c->bssid[1], c->bssid[2], c->bssid[3], c->bssid[4], c->bssid[5],
-                 c->channel, hux_net_rssi());
+                 c->channel, have_ap ? second_chan_name(ap.second) : "?",
+                 !have_ap ? "?" : ap.phy_11ax ? "ax" : ap.phy_11n ? "n" : ap.phy_11g ? "g" : "b",
+                 bandwidth_mhz(bw), hux_net_rssi());
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         /* Retry forever (hux_wifi_retry): a few at once, then backing off
          * to every 30 s. The reason code says why (201 no AP found, 15 /
@@ -289,7 +313,56 @@ static void wifi_init_sta(const char *ssid, const char *password) {
      * latency drops from ~50-150 ms to <5 ms. Power cost on
      * mains-powered hardware is irrelevant. */
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
-    ESP_LOGI(TAG, "wifi.init ssid=\"%s\" ps=NONE", ssid);
+    wifi_bandwidth_t bw = WIFI_BW_HT20;
+    esp_wifi_get_bandwidth(WIFI_IF_STA, &bw);
+    ESP_LOGI(TAG, "wifi.init ssid=\"%s\" ps=NONE bw_mhz=%d", ssid, bandwidth_mhz(bw));
+}
+
+#define WIFI_SCAN_MAX_APS 24
+
+void hux_net_wifi_scan(void) {
+    /* Every AP the board hears, from where it sits: which neighbours
+     * share its channel, and how loud they are. Blocking, ~2 s; the link
+     * leaves its channel for a moment per channel scanned. */
+    wifi_scan_config_t sc = {.show_hidden = true};
+    esp_err_t err = esp_wifi_scan_start(&sc, true);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "wifi.scan failed err=%s", esp_err_to_name(err));
+        return;
+    }
+    uint16_t found = 0;
+    esp_wifi_scan_get_ap_num(&found);
+    uint16_t n = found < WIFI_SCAN_MAX_APS ? found : WIFI_SCAN_MAX_APS;
+    wifi_ap_record_t *aps = calloc(n > 0 ? n : 1, sizeof(*aps));
+    if (aps == NULL) {
+        esp_wifi_clear_ap_list();
+        ESP_LOGW(TAG, "wifi.scan failed err=no_mem found=%u", (unsigned)found);
+        return;
+    }
+    esp_wifi_scan_get_ap_records(&n, aps); /* frees the driver's whole list */
+    ESP_LOGI(TAG, "wifi.scan found=%u shown=%u", (unsigned)found, (unsigned)n);
+    for (uint16_t i = 0; i < n; i++) {
+        const wifi_ap_record_t *a = &aps[i];
+        ESP_LOGI(TAG,
+                 "wifi.scan.ap bssid=%02x:%02x:%02x:%02x:%02x:%02x channel=%d second=%s "
+                 "rssi=%d ssid=\"%.32s\"",
+                 a->bssid[0], a->bssid[1], a->bssid[2], a->bssid[3], a->bssid[4], a->bssid[5],
+                 a->primary, second_chan_name(a->second), a->rssi, (const char *)a->ssid);
+    }
+    free(aps);
+}
+
+esp_err_t hux_net_set_bandwidth(int mhz) {
+    /* Takes effect on the next association, so leave the AP: the
+     * disconnect handler rejoins at once (reason 8, retry 1). Not kept
+     * across restarts. */
+    wifi_bandwidth_t bw = mhz == 40 ? WIFI_BW_HT40 : WIFI_BW_HT20;
+    esp_err_t err = esp_wifi_set_bandwidth(WIFI_IF_STA, bw);
+    ESP_LOGI(TAG, "wifi.bandwidth set_mhz=%d err=%s", bandwidth_mhz(bw), esp_err_to_name(err));
+    if (err == ESP_OK) {
+        esp_wifi_disconnect();
+    }
+    return err;
 }
 
 /* ------------------------------------------------------------------ */

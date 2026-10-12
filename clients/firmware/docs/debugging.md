@@ -373,7 +373,11 @@ whole turn: clip n from flash replaces the mic; `tools/clips.py`),
 `selftest` (a tone on the DAC read back electrically on the ES7210's
 echo-reference channel), `tone`, `vol`, `pa off|on` (silent bench),
 `wifi off|on`, `wifistat` (the Wi-Fi driver's buffer and RX/TX
-counters), `info` (heap, PSRAM, every task's smallest free stack, ring,
+counters; they reach the server too, under the `wifi` tag), `wifiscan`
+(every AP the board hears: `wifi.scan.ap` lines with channel, width and
+signal, to see who shares its channel), `wifibw 20|40` (the station's
+channel width, rejoining the AP; back to the default on a restart),
+`info` (heap, PSRAM, every task's smallest free stack, ring,
 volume and the ES8311 register, RSSI, time since the last inbound data).
 `tools/bench.py --reset` runs the whole check list and keeps the board's
 log in `/tmp/huxley-debug/bench-*.log`.

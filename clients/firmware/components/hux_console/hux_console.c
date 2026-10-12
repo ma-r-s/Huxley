@@ -139,6 +139,10 @@ void hux_console_run(char *line) {
     } else if (strcmp(cmd, "wifistat") == 0) {
         /* The Wi-Fi driver's own counters (buffers, RX/TX, hardware). */
         esp_wifi_statis_dump(WIFI_STATIS_BUFFER | WIFI_STATIS_RXTX | WIFI_STATIS_HW);
+    } else if (strcmp(cmd, "wifiscan") == 0) {
+        hux_net_wifi_scan();
+    } else if (strcmp(cmd, "wifibw") == 0 && argc > 1) {
+        hux_net_set_bandwidth(atoi(argv[1]));
     } else if (strcmp(cmd, "selftest") == 0) {
         hux_audio_selftest(argc > 1 ? atoi(argv[1]) : 1000);
     } else if (strcmp(cmd, "say") == 0 && argc > 1) {
@@ -161,7 +165,8 @@ void hux_console_run(char *line) {
         ESP_LOGI(TAG, "console.quiet left_s=%u", (unsigned)hux_audio_quiet_left_s());
     } else {
         ESP_LOGW(TAG, "console.unknown %s (talk, release, say N, tone [hz] [ms], vol N, pa on|off, "
-                      "selftest [hz], wifi off [s]|on, wifistat, info, server <uri> [min], quiet [s], reboot, "
+                      "selftest [hz], wifi off [s]|on, wifistat, wifiscan, wifibw 20|40, info, "
+                      "server <uri> [min], quiet [s], reboot, "
                       "ota <url> [force] | confirm | rollback)",
                  cmd);
     }
