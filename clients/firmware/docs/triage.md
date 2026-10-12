@@ -488,7 +488,11 @@ nothing soldered. Waveshare's Arduino demo for this board reads GPIO8
 (x3); its factory image and xiaozhi's board code read nothing. Probe
 widened to every free ADC1 pin (1f1d57c3): GPIO 1-6, 8, 9 all float
 (2373-3030 mV, spread 192-748) and fall to 0-38 mV pulled down. No pin
-carries the cell on this board. No software path gives a level (the charger's STAT only
+carries the cell on this board. The level Mario saw two days ago came from
+this board's previous firmware (Fleet's statue): it read GPIO8 with a
+x1.5 "divider" fitted so the reading looked like a full cell (x3 gave
+8.3 V), and a guard that hid its "intermittent garbage". That is a
+floating pin's 2.6-3.0 V, which our pull-down test drives to 10 mV. No software path gives a level (the charger's STAT only
 drives the LED; the 3.3 V rail is regulated until the cell is empty).
 **Blocked on Mario**: open the case and either bridge R78's pads 1 and 3
 (BAT_ADC to GPIO6, the board's own 1 % divider), or wire 200K from the
