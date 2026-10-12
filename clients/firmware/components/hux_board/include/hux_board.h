@@ -51,6 +51,15 @@ void hux_board_init(void);
 bool hux_board_tca_read_level(uint8_t pin, bool *high);
 
 /**
+ * Read both TCA9555 input ports (bit n = Pn, P0..P15). Doing this often is
+ * what keeps the expander's INT# line released, and on this board INT#
+ * is wired to GPIO0, the boot strap: left asserted, the next reset boots
+ * into download mode. hux_button calls it every 10 ms. False on an I2C
+ * error.
+ */
+bool hux_board_tca_read_inputs(uint16_t *bits);
+
+/**
  * Drive one TCA9555 output pin. No-op if the pin is configured as
  * an input. Returns `true` on successful I2C write.
  */

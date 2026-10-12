@@ -98,8 +98,30 @@ void hux_board_init(void) {
         return;
     }
 
-    ESP_LOGI(TAG, "board.init i2c=sda%d/scl%d tca=0x%02x",
-             I2C_SDA_GPIO, I2C_SCL_GPIO, TCA9555_I2C_ADDR);
+    uint16_t in = 0;
+    hux_board_tca_read_inputs(&in); /* release INT# (GPIO0) from anything since power-on */
+    ESP_LOGI(TAG, "board.init i2c=sda%d/scl%d tca=0x%02x inputs=0x%04x",
+             I2C_SDA_GPIO, I2C_SCL_GPIO, TCA9555_I2C_ADDR, in);
+}
+
+bool hux_board_tca_read_inputs(uint16_t *bits) {
+    if (s_tca == NULL) {
+        return false;
+    }
+    /* Both input ports in one transaction (the register pointer
+     * auto-increments). Reading a port is what releases the expander's
+     * INT# line, and on this board INT# is wired to GPIO0, the boot strap
+     * (R15, 0 ohm): a port nobody reads keeps GPIO0 low after any change
+     * on it, and the next reset boots into download mode (F-0020). */
+    uint8_t reg = TCA_REG_INPUT_0;
+    uint8_t v[2] = {0};
+    esp_err_t err = i2c_master_transmit_receive(s_tca, &reg, 1, v, 2, 100);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "tca.read inputs err=%s", esp_err_to_name(err));
+        return false;
+    }
+    *bits = (uint16_t)(v[0] | (v[1] << 8));
+    return true;
 }
 
 bool hux_board_tca_read_level(uint8_t pin, bool *high) {

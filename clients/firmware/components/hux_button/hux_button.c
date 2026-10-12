@@ -34,11 +34,29 @@ static hux_debounce_t s_talk;
  * together are still one button with one press and one release. */
 static _Atomic bool s_serial_talk = false;
 
-/* Active-low inputs. A K2 read that fails on the I2C bus counts as not
- * pressed: an unreadable button must never open the mic. */
+/* Active-low inputs. Reads BOTH expander ports every poll: that keeps the
+ * expander's INT# (wired to GPIO0, the boot strap) released, so a reset
+ * can't boot into download mode (F-0020). A read that fails on the I2C
+ * bus counts as not pressed: an unreadable button must never open the
+ * mic. Port 0 changes are logged (what else moves on the expander). */
+static uint16_t s_last_inputs = 0;
+static uint32_t s_port0_changes = 0;
+
 static bool k2_pressed(void) {
-    bool high = true;
-    return hux_board_tca_read_level(HUX_TCA_BTN_K2, &high) && !high;
+    uint16_t in = 0;
+    if (!hux_board_tca_read_inputs(&in)) {
+        return false;
+    }
+    uint8_t p0 = in & 0xFF;
+    uint8_t was = s_last_inputs & 0xFF;
+    if (s_port0_changes > 0 && p0 != was && (s_port0_changes < 20 || s_port0_changes % 100 == 0)) {
+        ESP_LOGI(TAG, "tca.port0 change 0x%02x -> 0x%02x (n=%u)", was, p0, (unsigned)s_port0_changes);
+    }
+    if (p0 != was || s_port0_changes == 0) {
+        s_port0_changes++;
+    }
+    s_last_inputs = in;
+    return !((in >> HUX_TCA_BTN_K2) & 1);
 }
 
 static bool lever_pressed(void) {
