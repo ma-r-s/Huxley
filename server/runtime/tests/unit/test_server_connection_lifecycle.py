@@ -129,3 +129,27 @@ async def test_frames_from_evicted_client_are_not_dispatched() -> None:
 
     new.finish()
     await asyncio.wait_for(new_task, 2)
+
+
+async def test_client_presence_follows_the_current_client() -> None:
+    """The app pauses content while nobody listens (2026-10-12: a stream
+    ran 33 min into the silent drop while the walkie was off Wi-Fi). An
+    eviction by a newer client is not an absence; the last close is."""
+    presence: list[bool] = []
+
+    async def on_presence(present: bool) -> None:
+        presence.append(present)
+
+    server, _ = _server()
+    server._on_client_presence = on_presence
+    old, new = _SlowClosingWS("old-tab"), _SlowClosingWS("home-screen-app")
+
+    old_task, new_task = await _connect_both(server, old, new)
+    await _until(lambda: presence == [True, True])
+    old.finish()
+    await asyncio.wait_for(old_task, 2)
+    assert presence == [True, True], "an evicted client's exit is not an absence"
+
+    new.finish()
+    await asyncio.wait_for(new_task, 2)
+    assert presence == [True, True, False]

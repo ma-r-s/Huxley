@@ -226,6 +226,23 @@ ui_strings:
   sent: "Enviado — esperando respuesta…"
   responding: "Respondiendo…"
   ready: "Listo — mantén el botón para responder"
+  # Not shown to anyone: the note the model gets when a press pauses
+  # what was playing. {label} becomes " (<what was playing>)" or nothing.
+  content_held: >-
+    [Contexto, no lo dijo el usuario: lo que estaba sonando{label} está en
+    pausa solo mientras el usuario habla y vuelve a sonar solo después de tu
+    respuesta. Si el usuario pide parar o pausar, llama a la herramienta que
+    lo hace; si pide poner otra cosa, ponla.]
+  # A press whose words are only these (with at least one stop word) keeps
+  # what was playing stopped even if the model didn't call the stop tool:
+  # "para", "ya basta", "apaga la música por favor". Accents don't matter.
+  content_stop_words: >-
+    para pare pausa pausala pausalo pausar silencio calla callate apaga
+    apagala apagalo apagar basta ya detente deten detener quita quitala
+    quitalo suficiente stop
+  content_filler_words: >-
+    la el lo los las eso esto esa ese musica radio libro cancion audiolibro
+    spotify por favor porfa ahora mismo oye bueno vale y de todo
 
 # Per-language overrides. Swap the client's language via the web UI's
 # language selector and the session re-resolves to these fields. Skills
@@ -467,6 +484,15 @@ i18n:
       sent: "Sent — waiting for response…"
       responding: "Responding…"
       ready: "Ready — hold the button to respond"
+      content_held: >-
+        [Context, not said by the user: what was playing{label} is paused
+        only while the user talks and comes back on its own after your
+        reply. If the user asks to stop or pause it, call the tool that
+        does that; if they ask for something else to play, start it.]
+      content_stop_words: stop pause quiet silence enough off mute
+      content_filler_words: >-
+        the it that this music radio book song please now ok okay turn just
+        all
 
   fr:
     transcription_language: fr
@@ -706,6 +732,18 @@ i18n:
       sent: "Envoyé — en attente de la réponse…"
       responding: "Je réponds…"
       ready: "Prêt — maintiens le bouton pour répondre"
+      content_held: >-
+        [Contexte, pas dit par l'utilisateur : ce qui jouait{label} est en
+        pause seulement pendant que l'utilisateur parle et reprend tout seul
+        après ta réponse. Si l'utilisateur demande d'arrêter ou de mettre en
+        pause, appelle l'outil qui le fait ; s'il demande autre chose à
+        écouter, lance-le.]
+      content_stop_words: >-
+        stop arrete arreter pause silence chut assez coupe couper eteins
+        eteindre
+      content_filler_words: >-
+        la le les ca cela musique radio livre chanson s il te plait vous
+        maintenant ok bon tout de
 
 skills:
   audiobooks:

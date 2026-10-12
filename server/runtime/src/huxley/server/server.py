@@ -280,6 +280,13 @@ class AudioServer:
         # path it short-circuits because target == current already.
         on_persona_select: (Callable[[str | None, str | None], Awaitable[None]] | None) = None,
         get_hello_extras: Callable[[], dict[str, object]] | None = None,
+        # Whether anyone is listening. Fires True once a new client is
+        # current and its handshake is out, False when the current client
+        # goes away with no replacement (an eviction by a newer client
+        # fires only the newer client's True). The coordinator pauses
+        # content when nobody listens instead of streaming it into
+        # `_send_raw`'s silent drop. None for tests and tools.
+        on_client_presence: Callable[[bool], Awaitable[None]] | None = None,
     ) -> None:
         self._host = host
         self._port = port
@@ -307,6 +314,7 @@ class AudioServer:
         # T1.13 — persona swap hooks (see constructor docstring above).
         self._on_persona_select = on_persona_select
         self._get_hello_extras = get_hello_extras
+        self._on_client_presence = on_client_presence
         # `?persona=<name>` from the URL, captured in `_process_request`
         # and consumed before hello in `_handle_connection`. Single field
         # is safe for the same reason `_pending_language` is — handshakes
@@ -571,6 +579,10 @@ class AudioServer:
             # turns that follow.
             if self._on_language_select is not None:
                 await self._on_language_select(selected_language)
+            # Someone is listening again: paused content may resume. After
+            # the handshake so its audio never precedes `hello`.
+            if self._conn is conn:
+                await self._notify_presence(True)
             async for raw in ws:
                 if self._conn is not conn:
                     # Evicted while its close handshake drains (a backgrounded
@@ -607,6 +619,7 @@ class AudioServer:
                     close_reason=conn.close_reason,
                 )
                 self._conn = None
+                await self._notify_presence(False)
             else:
                 # Evicted earlier: the eviction path already archived and
                 # logged this record. Leave `self._conn` alone. Before
@@ -616,6 +629,16 @@ class AudioServer:
                 conn.ws = None
                 await logger.ainfo("client_evicted_handler_exited")
             structlog.contextvars.unbind_contextvars("conn_id")
+
+    async def _notify_presence(self, present: bool) -> None:
+        """Tell the app whether a client is listening. Never raises: a
+        failing handler must not break the connection's lifecycle."""
+        if self._on_client_presence is None:
+            return
+        try:
+            await self._on_client_presence(present)
+        except Exception:
+            await logger.aexception("server.client_presence_failed", present=present)
 
     async def _dispatch(self, raw: str | bytes) -> None:
         # T1.21 — frame-level rx accounting. Counted before any parse

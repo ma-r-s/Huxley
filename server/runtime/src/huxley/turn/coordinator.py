@@ -36,8 +36,11 @@ with a `StubVoiceProvider` and wire into a concrete
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import re
 import time
+import unicodedata
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -64,6 +67,12 @@ from .observers import ClaimObserver, ContentStreamObserver, DialogObserver
 from .press_level import SILENT_PEAK_DBFS
 from .speaking_state import SpeakingOwner, SpeakingState
 from .state import Turn, TurnSource, TurnState
+
+# Reasons the coordinator holds (pauses) a content stream. See
+# `ContentStreamObserver.hold` and docs/decisions.md 2026-10-12.
+_HOLD_TURN = "turn"  # a user turn is in progress
+_HOLD_NO_CLIENT = "no_client"  # no client has been connected for a while
+_HOLD_DISPATCH = "dispatch"  # a turn's end is deciding what plays next
 
 _SOURCE_TO_OWNER: dict[TurnSource, SpeakingOwner] = {
     TurnSource.USER: SpeakingOwner.USER,
@@ -111,6 +120,23 @@ class TurnCoordinator:
         "sent": "Sent — waiting for response...",
         "responding": "Responding...",
         "ready": "Ready — hold button to respond",
+        # Not a status label: the note the model gets when a press pauses
+        # what was playing (see `_tell_model_content_held`). Personas
+        # translate it under `ui_strings` like the labels above.
+        "content_held": (
+            "[Context, not said by the user: what was playing{label} is paused "
+            "only while the user talks and comes back on its own after your "
+            "reply. If the user asks to stop or pause it, call the tool that "
+            "does that; if they ask for something else to play, start it.]"
+        ),
+        # Not labels either: what the user says to stop what plays. When
+        # the words of a press are only these (at least one stop word),
+        # the content stays stopped even if the model never called the
+        # stop tool (`_said_stop`). Space-separated, accents ignored.
+        "content_stop_words": "stop pause quiet silence enough off mute",
+        "content_filler_words": (
+            "the it that this music radio book song please now ok okay turn just all"
+        ),
     }
 
     def __init__(
@@ -253,8 +279,27 @@ class TurnCoordinator:
         # computation sees the terminal values.
         self._turn_audio_first_sent_at: float | None = None
         self._turn_audio_bytes_sent: int = 0
+        # Content holds (2026-10-12, see `docs/decisions.md`). A press
+        # holds the content stream for the turn and the turn's end
+        # releases it (resume), after the client has played the answer:
+        # `_turn_hold_release_task` is that pending release. No client for
+        # `_CLIENT_ABSENT_GRACE_S` holds it too (`_client_absent`), until
+        # a client is back; `_absence_task` is the pending grace.
+        self._turn_hold_release_task: asyncio.Task[None] | None = None
+        self._absence_task: asyncio.Task[None] | None = None
+        self._client_absent = False
+        # Monotonic time at which the client will have played all the
+        # model audio sent so far (0: nothing queued). Every delta pushes
+        # it by its duration; a press resets it (the client flushes its
+        # buffer). The held content resumes once it has passed.
+        self._client_playhead = 0.0
+        # What the user said in the press that holds the content (the
+        # provider's transcript, which can land after the turn ends), and
+        # the event the pending resume waits on for it.
+        self._press_transcript: str | None = None
+        self._press_transcript_event = asyncio.Event()
 
-        self.current_turn: Turn | None = None
+        self._current_turn: Turn | None = None
         self.response_cancelled: bool = False
         # Bound logger — rebound with turn= in on_ptt_start, reset on turn end.
         self._log: structlog.stdlib.BoundLogger = logger
@@ -265,6 +310,24 @@ class TurnCoordinator:
         current `ContentStreamObserver`, or `None` when idle.
         """
         return self._content_obs.task if self._content_obs is not None else None
+
+    @property
+    def current_turn(self) -> Turn | None:
+        """The turn in progress, or None when idle."""
+        return self._current_turn
+
+    @current_turn.setter
+    def current_turn(self, turn: Turn | None) -> None:
+        # Every path that ends a user turn clears it here (natural end,
+        # too-short press, commit failure, interrupt, session drop, and any
+        # path added later): that is what arms the resume of the content
+        # the press held. Structural on purpose, so a new turn-dropping
+        # path can't leave the music paused forever.
+        prev = self._current_turn
+        self._current_turn = turn
+        if turn is None and prev is not None and prev.source is TurnSource.USER:
+            # A press still LISTENING was never committed: no transcript.
+            self._arm_turn_hold_release(expect_transcript=prev.state is not TurnState.LISTENING)
 
     def _content_is_running(self) -> bool:
         """True iff a content stream is currently playing (pump task live)."""
@@ -327,6 +390,17 @@ class TurnCoordinator:
             )
             return
 
+        # Pause what is playing (or parked) for this turn; the turn's end
+        # resumes it unless the turn stops or replaces it (2026-10-12).
+        # Before `interrupt()`: its speaker-flag clear must not race a
+        # live pump.
+        content_held = await self._hold_content(_HOLD_TURN)
+        self._press_transcript = None
+        self._press_transcript_event.clear()
+        # A press empties the client's buffer (the firmware clears its ring
+        # on press; `interrupt` sends audio_clear): nothing queued anymore.
+        self._client_playhead = 0.0
+
         if active_turn or active_media or active_claim:
             await self.interrupt()
 
@@ -342,6 +416,8 @@ class TurnCoordinator:
                 had_turn=active_turn,
                 had_media=active_media,
             )
+            # No turn follows: content the call parked comes back now.
+            await self._release_content_hold(_HOLD_TURN)
             return
 
         self.current_turn = self._turn_factory.create(
@@ -356,6 +432,7 @@ class TurnCoordinator:
             had_media=active_media,
             had_claim=active_claim,
             will_interrupt=active_turn or active_media or active_claim,
+            content_held=content_held,
         )
 
     async def on_ptt_stop(self) -> None:
@@ -406,6 +483,7 @@ class TurnCoordinator:
             "coord.ptt_stop", frames=frames, audio_ms=audio_ms, committed=True, **levels
         )
         await self._send_status(self._status["sent"])
+        await self._tell_model_content_held()
         await self._provider.commit_and_request_response()
 
     async def on_user_audio_frame(self, pcm: bytes) -> None:
@@ -480,6 +558,7 @@ class TurnCoordinator:
             self._turn_audio_first_sent_at = time.monotonic()
             self._turn_audio_bytes_sent = 0
         self._turn_audio_bytes_sent += len(pcm)
+        self._note_client_audio(len(pcm))
         await self._send_audio(pcm)
         await self._log.adebug("coord.audio_fwd", bytes=len(pcm))
 
@@ -639,6 +718,7 @@ class TurnCoordinator:
                 pending_sound = self.current_turn.pending_play_sound
                 if pending_sound is not None and not self.response_cancelled:
                     self.current_turn.pending_play_sound = None
+                    self._note_client_audio(len(pending_sound.pcm))
                     await self._send_audio(pending_sound.pcm)
                     await self._log.ainfo(
                         "coord.play_sound_dispatched", bytes=len(pending_sound.pcm)
@@ -649,26 +729,26 @@ class TurnCoordinator:
     async def on_session_disconnected(self) -> None:
         """OpenAI session dropped — abort any live turn without cancelling OpenAI.
 
-        Ordering note: content stream MUST stop before `force_release`.
-        Between the two awaits, the pump task can run `_factory_send_audio`,
-        observe `is_speaking=False`, and re-acquire FACTORY — leaving
-        SpeakingState stuck on a dead pump after cleanup completes.
+        Content is NOT stopped (2026-10-12): the provider reconnects on its
+        own (planned every N minutes, or after `session_expired`) and the
+        music must not cut out for it. A stream held by the aborted turn
+        resumes, like after any turn that didn't stop it.
+
+        Ordering: the turn's audio is flushed and the speaker flag cleared
+        BEFORE content may come back (DIALOG release, hold release), so
+        neither the flush nor the clear lands on resumed content. A
+        content pump that is playing right now keeps its FACTORY flag.
         """
         had_media = self._content_is_running()
         was_speaking = self._speaking_state.is_speaking
         tid = self._tid()
 
-        # Stop the pump FIRST so no subsequent acquire can race with force_release.
-        # Release DIALOG too so FM's stacks don't carry orphan activities
-        # across the disconnect. End any active claim with ERROR — a
-        # session disconnect during a call isn't a natural close.
-        await self._stop_content_stream()
+        # End any active claim with ERROR: a session disconnect during a
+        # call isn't a natural close.
         claim = self._claim_obs
         if claim is not None:
             claim.set_end_reason(ClaimEndReason.ERROR)
             await self._end_input_claim(claim)
-        await self._release_dialog()
-        await self._speaking_state.force_release()
 
         await logger.ainfo(
             "coord.session_disconnected",
@@ -677,23 +757,35 @@ class TurnCoordinator:
             was_speaking=was_speaking,
         )
 
-        if self.current_turn is None:
-            return
-        self.current_turn.pending_audio_streams.clear()
-        self.current_turn.pending_input_claim = None
-        self.current_turn.state = TurnState.INTERRUPTED
-        self.current_turn = None
-        # Defensive invariant — see matching pattern in `interrupt()`.
-        self._current_injected_dedup_key = None
-        self._signal_injected_turn_done()
-        self._bind_turn()
-        await self._send_audio_clear()
+        if self.current_turn is not None:
+            self.current_turn.pending_audio_streams.clear()
+            self.current_turn.pending_input_claim = None
+            self.current_turn.state = TurnState.INTERRUPTED
+            # The audio_clear below drops the unplayed answer: nothing for
+            # the resume armed by the next line to wait for.
+            self._client_playhead = 0.0
+            self.current_turn = None
+            # Defensive invariant — see matching pattern in `interrupt()`.
+            self._current_injected_dedup_key = None
+            self._signal_injected_turn_done()
+            self._bind_turn()
+            await self._send_audio_clear()
+        await self._force_release_unless_content()
+        # Release DIALOG so FM's stacks don't carry orphan activities
+        # across the disconnect (content an injected turn parked comes
+        # back). A stream the aborted user turn held resumes through the
+        # release armed when `current_turn` was cleared above.
+        await self._release_dialog()
 
     # --- Interrupt: the atomic barrier ---
 
     async def interrupt(self) -> None:
         """Raise the interrupt barrier. Atomic 6-step sequence — see
         `docs/turns.md#3-interrupt`. Order matters.
+
+        Ends the turn, not the content: a content stream is not stopped
+        here (2026-10-12). A press holds it first (`on_ptt_start`), so
+        its pump is already dead when step 4 clears the speaker flag.
         """
         prev_state = self.current_turn.state.value if self.current_turn else None
         has_media = self._content_is_running()
@@ -725,14 +817,13 @@ class TurnCoordinator:
             self.current_turn.pending_audio_streams.clear()
             self.current_turn.pending_play_sound = None
             self.current_turn.pending_input_claim = None
-        # 3. Cancel any live content stream (pump task -> done) BEFORE
-        #    force_release. If the pump is mid-`_factory_send_audio`
-        #    during force_release's await, it can see `is_speaking=False`,
-        #    re-acquire FACTORY, and leave SpeakingState stuck on a dead
-        #    stream after cleanup. Stop the producer first. Also release
-        #    any DIALOG Activity (from an in-flight inject_turn) so FM's
-        #    stacks stay consistent with the coordinator's view.
-        await self._stop_content_stream()
+        # 3. End what this turn owned: a claim, an injected turn's DIALOG
+        #    Activity (so FM's stacks stay consistent with the
+        #    coordinator's view). The content stream is NOT stopped: a
+        #    press held it before calling us (its pump is dead, so step 4
+        #    can't race `_factory_send_audio`), and other callers (reset,
+        #    shutdown) leave it to the FocusManager. Content the claim or
+        #    the DIALOG parked gets FOREGROUND back and stays held.
         # End any active InputClaim with USER_PTT reason (grandpa held
         # PTT during a call / voice memo — skill knows this wasn't a
         # natural close). The observer's cleanup calls `provider.resume()`
@@ -745,7 +836,8 @@ class TurnCoordinator:
         await self._release_dialog()
         # 4. Flush client-side audio queue + clear model-speaking state
         await self._send_audio_clear()
-        await self._speaking_state.force_release()
+        self._client_playhead = 0.0
+        await self._force_release_unless_content()
         # 5. Cancel the in-flight response (only if one could exist)
         if will_cancel:
             await self._provider.cancel_current_response()
@@ -801,33 +893,55 @@ class TurnCoordinator:
                 dropped=len(streams) - 1,
             )
 
-        # Tear down the parent turn fully before spawning the content stream.
-        # Otherwise the stream's natural-completion callback can fire during
-        # one of these awaits and see `current_turn != None`, falsely
-        # concluding a new turn started.
-        await self._emit_turn_summary(
-            reason="ended",
-            spawned_audio_stream=bool(streams),
-        )
-        await self._log.ainfo("coord.turn_ended")
-        # Release any DIALOG Activity this turn held (injected turn finishing
-        # normally). Content Activities are released by `_stop_content_stream`
-        # which the caller path reaches separately.
-        await self._release_dialog()
-        self.current_turn = None
-        # Clear the in-flight dedup key alongside `current_turn` (defensive —
-        # `_release_dialog` also clears it, but coupling the clear to the
-        # turn-clear makes the invariant robust against future code paths
-        # that might end a turn without going through _release_dialog).
-        self._current_injected_dedup_key = None
-        # Signal any inject_turn_and_wait caller. Grab + clear the ref first
-        # so _dispatch_post_turn (which may fire another injected turn) sees
-        # a clean slot and a fresh event if needed.
-        self._signal_injected_turn_done()
-        self._bind_turn()
-        await self._send_status(self._status["ready"])
+        # A content stream that isn't playing (held by the press, parked by
+        # an injected turn's DIALOG) stays stopped until the dispatch below
+        # has decided what plays next. Without this hold the DIALOG release
+        # or the press's armed resume could start it for a tick before a
+        # new stream replaces it (on Spotify, a real play command).
+        held = self._content_obs
+        if held is not None and (not held.is_live or held.is_playing):
+            held = None
+        if held is not None:
+            await held.hold(_HOLD_DISPATCH)
+        try:
+            # Tear down the parent turn fully before spawning the content
+            # stream. Otherwise the stream's natural-completion callback can
+            # fire during one of these awaits and see `current_turn != None`,
+            # falsely concluding a new turn started.
+            await self._emit_turn_summary(
+                reason="ended",
+                spawned_audio_stream=bool(streams),
+            )
+            await self._log.ainfo("coord.turn_ended")
+            # Release any DIALOG Activity this turn held (injected turn
+            # finishing normally). Content Activities are released by
+            # `_stop_content_stream` which the caller path reaches separately.
+            await self._release_dialog()
+            # Clearing a user turn arms the resume of what its press held
+            # (see the `current_turn` setter); it fires once the client has
+            # played the answer.
+            self.current_turn = None
+            # Clear the in-flight dedup key alongside `current_turn` (defensive
+            # — `_release_dialog` also clears it, but coupling the clear to the
+            # turn-clear makes the invariant robust against future code paths
+            # that might end a turn without going through _release_dialog).
+            self._current_injected_dedup_key = None
+            # Signal any inject_turn_and_wait caller. Grab + clear the ref
+            # first so _dispatch_post_turn (which may fire another injected
+            # turn) sees a clean slot and a fresh event if needed.
+            self._signal_injected_turn_done()
+            self._bind_turn()
+            await self._send_status(self._status["ready"])
 
-        await self._dispatch_post_turn(streams, claim, turn_id)
+            if streams and self._content_obs is not None:
+                # The user asked for something new: what played before
+                # doesn't come back, whichever branch wins below (a PREEMPT
+                # reminder may drop the new stream too).
+                await self._stop_content_stream()
+            await self._dispatch_post_turn(streams, claim, turn_id)
+        finally:
+            if held is not None:
+                await held.release_hold(_HOLD_DISPATCH)
 
     async def _dispatch_post_turn(
         self,
@@ -998,12 +1112,13 @@ class TurnCoordinator:
         owns_speaking = [False]
 
         async def _factory_send_audio(chunk: bytes) -> None:
-            # Acquire FACTORY speaker lazily on the first chunk. If another
-            # owner already holds the flag (unlikely but possible if the
-            # stream starts while the model is still finishing its round),
-            # defer to them — the chunk still forwards, we just don't take
-            # the flag.
-            if not owns_speaking[0] and not self._speaking_state.is_speaking:
+            # Acquire FACTORY speaker lazily on the first chunk, and again
+            # on the first chunk after a resume (the press or hold that
+            # paused the pump cleared the flag). If another owner already
+            # holds the flag (unlikely but possible if the stream starts
+            # while the model is still finishing its round), defer to
+            # them: the chunk still forwards, we just don't take the flag.
+            if not self._speaking_state.is_speaking:
                 await self._speaking_state.acquire(SpeakingOwner.FACTORY)
                 owns_speaking[0] = True
             await self._send_audio(chunk)
@@ -1015,7 +1130,7 @@ class TurnCoordinator:
                 interface=interface_name,
                 cancelled=False,
             )
-            await self._send_stream_ended(interface_name, "natural")
+            await self._announce_stream_ended(obs, "natural")
             transferred = await self._maybe_fire_completion_prompt(stream, turn_id)
             if transferred:
                 # Ownership moved FACTORY -> COMPLETION; don't release here.
@@ -1025,16 +1140,38 @@ class TurnCoordinator:
                 await self._speaking_state.release(SpeakingOwner.FACTORY)
                 owns_speaking[0] = False
 
+        async def _on_resume() -> None:
+            # A held or parked stream plays again (`factory()` called anew).
+            await logger.ainfo(
+                "coord.content_resumed",
+                turn=turn_id,
+                interface=interface_name,
+            )
+            await self._announce_stream_started(obs)
+
         obs = ContentStreamObserver(
             interface_name=interface_name,
             stream=stream,
             send_audio=_factory_send_audio,
             on_eof=_on_eof,
+            on_resume=_on_resume,
         )
         # Set the local cache BEFORE acquire — the actor may deliver
         # FOREGROUND before wait_drained returns if the mailbox is busy,
         # and downstream callbacks might query `current_media_task`.
         self._content_obs = obs
+        if self._client_absent:
+            # Nobody is listening (a stream started by an injected or
+            # completion turn while the client is away): start held, so
+            # FOREGROUND doesn't spawn the pump; a client coming back
+            # releases it.
+            await obs.hold(_HOLD_NO_CLIENT)
+            await logger.ainfo(
+                "coord.content_held",
+                reason=_HOLD_NO_CLIENT,
+                interface=interface_name,
+                was_playing=False,
+            )
 
         # `AudioStream.content_type` defaults to NONMIXABLE (right for
         # spoken content — audiobooks, radio, news). A skill shipping
@@ -1073,7 +1210,7 @@ class TurnCoordinator:
         # FOREGROUND to the observer → spawn the pump task. After this,
         # `obs.task is not None` and the stream is actually running.
         await self._focus_manager.wait_drained()
-        await self._send_stream_started(interface_name, stream.label, stream.preroll_ms)
+        await self._announce_stream_started(obs)
 
     async def _stop_content_stream(self) -> None:
         """Cancel any running content-stream observer. Idempotent.
@@ -1089,18 +1226,334 @@ class TurnCoordinator:
         obs = self._content_obs
         if obs is None:
             return
-        task = obs.task
-        was_running = task is not None and not task.done()
-        if was_running:
+        if not obs.finished:
+            # Playing, held or parked: either way it ends here. (A stream
+            # that finished on its own already logged its end.)
             await logger.ainfo(
                 "coord.audio_stream_ended",
                 interface=obs.interface_name,
                 cancelled=True,
+                was_playing=obs.is_playing,
+                holds=sorted(obs.holds),
             )
-            await self._send_stream_ended(obs.interface_name, "interrupted")
+        await self._announce_stream_ended(obs, "interrupted")
         self._content_obs = None
         await self._focus_manager.release(Channel.CONTENT, obs.interface_name)
         await self._focus_manager.wait_drained()
+
+    # --- Content holds: pause and resume (2026-10-12) ---
+    #
+    # A press pauses the content stream for the turn and the turn's end
+    # resumes it, unless the turn stopped it (CancelMedia) or replaced it
+    # (a new AudioStream). No client for a few seconds pauses it until a
+    # client is back. See `ContentStreamObserver.hold` and the
+    # 2026-10-12 ADR in docs/decisions.md.
+
+    async def _hold_content(self, reason: str) -> bool:
+        """Hold the current content stream for `reason`. Returns True iff
+        there is a live stream (playing, or parked to come back later),
+        now held. A playing pump is cancelled before this returns, so a
+        later `force_release` can't race its `_factory_send_audio`."""
+        if reason == _HOLD_TURN:
+            # A new press supersedes the previous turn's pending resume.
+            self._cancel_turn_hold_release()
+        obs = self._content_obs
+        if obs is None or not obs.is_live:
+            return False
+        was_playing = await obs.hold(reason)
+        # The speaker flag is left alone: a press clears it in `interrupt()`
+        # AFTER audio_clear (the firmware drops in-flight audio until
+        # model_speaking=false; clearing first let music play over the
+        # user). The no-client path clears it itself.
+        # Clients see a paused stream as ended ("interrupted", as a press
+        # always sent) and a resumed one as started again, same stream_id.
+        await self._announce_stream_ended(obs, "interrupted")
+        await logger.ainfo(
+            "coord.content_held",
+            reason=reason,
+            interface=obs.interface_name,
+            was_playing=was_playing,
+            holds=sorted(obs.holds),
+        )
+        return True
+
+    async def _release_content_hold(self, reason: str) -> None:
+        """Drop the `reason` hold now. The stream resumes (its factory is
+        called again) when no other hold is left and focus allows it."""
+        if reason == _HOLD_TURN:
+            self._cancel_turn_hold_release()
+        obs = self._content_obs
+        if obs is None or reason not in obs.holds:
+            return
+        if obs.holds == {reason} and obs.held_for_s > self._PARKED_STOP_AFTER_S:
+            # Parked too long (a walkie off overnight, a turn that never
+            # ended): stop it rather than start it out of the blue.
+            await logger.ainfo(
+                "coord.content_stopped",
+                reason="parked_too_long",
+                hold=reason,
+                interface=obs.interface_name,
+                held_s=int(obs.held_for_s),
+            )
+            await self._stop_content_stream()
+            return
+        resumed = await obs.release_hold(reason)
+        await logger.ainfo(
+            "coord.content_released",
+            reason=reason,
+            interface=obs.interface_name,
+            resumed=resumed,
+            holds=sorted(obs.holds),
+            live=obs.is_live,
+        )
+
+    # Longest wait for the client to finish the answer before resuming.
+    # The estimate is ours, not the client's; a stuck estimate must not
+    # keep the music paused.
+    _RESUME_WAIT_CAP_S: ClassVar[float] = 15.0
+
+    # How long the resume waits for the press's transcript once the
+    # answer has played (it usually lands while the answer plays).
+    _TRANSCRIPT_WAIT_S: ClassVar[float] = 1.5
+
+    def _arm_turn_hold_release(self, *, expect_transcript: bool) -> None:
+        """A user turn just ended: resume what its press held once the
+        client has played the answer. Content started at once would queue
+        behind the answer in the client's buffer; the next press flushes
+        that buffer, and an audiobook counts flushed audio as heard.
+        Waiting also spares a pause/play round trip when the user presses
+        again during the answer (the press cancels this release)."""
+        obs = self._content_obs
+        if obs is None or _HOLD_TURN not in obs.holds:
+            return
+        self._cancel_turn_hold_release()
+        self._turn_hold_release_task = asyncio.get_running_loop().create_task(
+            self._release_turn_hold_when_played(expect_transcript=expect_transcript),
+            name="coord.content_resume",
+        )
+
+    async def _release_turn_hold_when_played(self, *, expect_transcript: bool) -> None:
+        delay = min(self._client_playhead_remaining_s(), self._RESUME_WAIT_CAP_S)
+        if delay > 0:
+            obs = self._content_obs
+            await logger.ainfo(
+                "coord.content_resume_scheduled",
+                interface=obs.interface_name if obs is not None else None,
+                delay_ms=int(delay * 1000),
+            )
+            await asyncio.sleep(delay)
+        if expect_transcript and self._press_transcript is None:
+            with contextlib.suppress(TimeoutError):
+                async with asyncio.timeout(self._TRANSCRIPT_WAIT_S):
+                    await self._press_transcript_event.wait()
+        # Detach first: `_release_content_hold` cancels a pending release
+        # task, and that must not be this one.
+        if self._turn_hold_release_task is asyncio.current_task():
+            self._turn_hold_release_task = None
+        turn = self._current_turn
+        if turn is not None and turn.source is TurnSource.USER:
+            return  # a new press holds it for its own turn
+        obs = self._content_obs
+        if obs is None or _HOLD_TURN not in obs.holds:
+            return  # stopped or replaced during the turn: nothing to resume
+        heard = self._press_transcript
+        if heard is not None and self._said_stop(heard):
+            # The user asked to stop and the model didn't (or the stop tool
+            # missed): err toward silence. A blind user can't see why
+            # music came back against what they said.
+            await logger.ainfo(
+                "coord.content_stopped",
+                reason="stop_words",
+                interface=obs.interface_name,
+                heard=heard,
+            )
+            await self._stop_content_stream()
+            return
+        await self._release_content_hold(_HOLD_TURN)
+
+    def on_user_transcript(self, text: str) -> None:
+        """The provider transcribed what the user said in a press. Kept
+        for the pending resume of the content that press held."""
+        self._press_transcript = text
+        self._press_transcript_event.set()
+
+    @staticmethod
+    def _words(text: str) -> list[str]:
+        """Lowercase words with accents dropped ("Apágalo" -> "apagalo")."""
+        decomposed = unicodedata.normalize("NFD", text.lower())
+        plain = "".join(c for c in decomposed if not unicodedata.combining(c))
+        return re.findall(r"[a-z0-9]+", plain)
+
+    def _said_stop(self, text: str) -> bool:
+        """True iff the words are only the persona's stop and filler words,
+        with at least one stop word ("para", "ya basta", "apaga la música
+        por favor"). Anything else ("sube el volumen", "para qué sirve")
+        is left to the model."""
+        words = self._words(text)
+        stop = set(self._words(self._status["content_stop_words"]))
+        filler = set(self._words(self._status["content_filler_words"]))
+        return (
+            bool(words)
+            and all(w in stop or w in filler for w in words)
+            and any(w in stop for w in words)
+        )
+
+    def _note_client_audio(self, nbytes: int) -> None:
+        """Model audio going to the client: push the playhead."""
+        now = time.monotonic()
+        self._client_playhead = (
+            max(self._client_playhead, now) + nbytes / self._CLIENT_AUDIO_BYTES_PER_SECOND
+        )
+
+    def _client_playhead_remaining_s(self) -> float:
+        """Seconds until the client has played the model audio sent so far."""
+        if self._client_playhead <= 0:
+            return 0.0
+        safety_s = self._PLAYBACK_DRAIN_SAFETY_MS / 1000
+        return self._client_playhead + safety_s - time.monotonic()
+
+    def _cancel_turn_hold_release(self) -> None:
+        task = self._turn_hold_release_task
+        self._turn_hold_release_task = None
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+
+    async def _announce_stream_started(self, obs: ContentStreamObserver) -> None:
+        if obs.announced:
+            return
+        obs.announced = True
+        await self._send_stream_started(
+            obs.interface_name, obs.stream.label, obs.stream.preroll_ms
+        )
+
+    async def _announce_stream_ended(self, obs: ContentStreamObserver, reason: str) -> None:
+        if not obs.announced:
+            return
+        obs.announced = False
+        await self._send_stream_ended(obs.interface_name, reason)
+
+    async def _force_release_unless_content(self) -> None:
+        """Clear the speaker flag, unless a content pump is playing and
+        owns it (a turn being torn down must not mark playing music as
+        silent)."""
+        if self._speaking_state.owner is SpeakingOwner.FACTORY and self._content_is_running():
+            return
+        await self._speaking_state.force_release()
+
+    async def _tell_model_content_held(self) -> None:
+        """Tell the model, just ahead of the user's words (called right
+        before the commit, so a dropped press leaves no stale note), that
+        what was playing is paused for this turn and comes back after its
+        reply. Without it the model says "now X is playing" over silence,
+        or answers "it's already paused" to "pausa" without calling the
+        stop tool, and the music comes back. Text is the persona's
+        `content_held` string (English default), `{label}` the stream's
+        label. No-op unless the press holds a live stream."""
+        obs = self._content_obs
+        if (
+            obs is None
+            or not obs.is_live
+            or _HOLD_TURN not in obs.holds
+            or not self._provider.is_connected
+        ):
+            return
+        label = obs.stream.label
+        text = self._status["content_held"].replace("{label}", f" ({label})" if label else "")
+        await self._provider.send_conversation_message(text)
+        await self._log.ainfo("coord.content_held_note", interface=obs.interface_name)
+
+    # --- Client presence (2026-10-12) ---
+
+    # How long without a client before content is paused. Long enough to
+    # ride out an eviction by a reloading client or a quick Wi-Fi blip
+    # without a stop/start (a radio restart, a Spotify round trip); short
+    # next to the ~20 s it takes to notice a dead Wi-Fi link at all.
+    _CLIENT_ABSENT_GRACE_S: ClassVar[float] = 5.0
+    # Held this long (a walkie off overnight, a turn that never ended):
+    # what was playing is stopped rather than resumed out of the blue.
+    # 30 min, like the patience audiobooks and Spotify give a call.
+    _PARKED_STOP_AFTER_S: ClassVar[float] = 30 * 60.0
+
+    async def on_client_presence(self, present: bool) -> None:
+        """A client became current (True) or the last one left (False).
+
+        Nobody listening for `_CLIENT_ABSENT_GRACE_S`: hold the content
+        stream (and any stream started meanwhile). A client back: release
+        it, so the stream resumes where it paused. Before this, frames
+        were dropped at the socket while the stream ran on: 17 minutes
+        of music to nobody on 2026-10-12, and an audiobook skips what
+        nobody heard."""
+        obs = self._content_obs
+        await logger.ainfo(
+            "coord.client_presence",
+            present=present,
+            content=obs.interface_name if obs is not None else None,
+            was_absent=self._client_absent,
+        )
+        if present:
+            task = self._absence_task
+            self._absence_task = None
+            if task is not None and not task.done():
+                task.cancel()
+            if self._client_absent:
+                self._client_absent = False
+                await self._release_content_hold(_HOLD_NO_CLIENT)
+            elif obs is not None and obs.announced:
+                # Back within the grace: the stream never paused, but this
+                # client has not been told it plays.
+                await self._send_stream_started(
+                    obs.interface_name, obs.stream.label, obs.stream.preroll_ms
+                )
+            return
+        if self._client_absent or self._absence_task is not None:
+            return
+        self._absence_task = asyncio.create_task(
+            self._pause_while_absent(), name="coord.client_absent"
+        )
+
+    async def _pause_while_absent(self) -> None:
+        """No client: after the grace, hold the content until a client is
+        back (cancelled then). A client back after `_PARKED_STOP_AFTER_S`
+        gets it stopped instead of resumed (`_release_content_hold`)."""
+        await asyncio.sleep(self._CLIENT_ABSENT_GRACE_S)
+        self._absence_task = None
+        self._client_absent = True
+        if await self._hold_content(_HOLD_NO_CLIENT):
+            # Nobody hears it; clear the flag so the resumed pump announces
+            # model_speaking to whichever client comes back.
+            await self._speaking_state.release(SpeakingOwner.FACTORY)
+
+    async def close(self) -> None:
+        """Stop the content stream and cancel pending timers (a scheduled
+        resume, the no-client wait). First thing in `Application.shutdown`:
+        the AudioServer is shared, so on a persona swap anything this app
+        plays while its provider writes the summary (seconds) would reach
+        the new persona's client."""
+        self._cancel_turn_hold_release()
+        task = self._absence_task
+        self._absence_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        await self._stop_content_stream()
+
+    async def on_ptt_rejected(self) -> None:
+        """A press arrived while there is no voice session (reconnecting,
+        or the provider is down). It can't start a turn, and content no
+        longer stops when the session drops, so the press stops it: the
+        user keeps a way to silence the device during an outage."""
+        obs = self._content_obs
+        if obs is None or not obs.is_live:
+            return
+        await logger.ainfo(
+            "coord.content_stopped",
+            reason="ptt_without_session",
+            interface=obs.interface_name,
+        )
+        await self._stop_content_stream()
+        await self._send_audio_clear()
+        await self._force_release_unless_content()
 
     # --- Input claim (T1.4 Stage 2 — mic-capture skills) ---
 

@@ -761,3 +761,40 @@ Considered alternatives:
 **Decision**: Time the session from its start. After `session_refresh_minutes` (50) the provider disconnects with a summary at the first idle moment: no call holding the mic, no response live or pending, no fresh user audio, the last reply done playing (estimated from the audio sent) 10 s ago, 10 s without traffic. The summary is computed while the session is still up (10 s cap, raw transcript tail as fallback), so a press finds no session only during the reconnect itself. The app's auto-reconnect opens the next session. A planned refresh goes through the same path as any other disconnect.
 
 **Consequences**: The client sees CONVERSING, IDLE, CONNECTING, CONVERSING once every ~50 minutes, as it did on every expiry (the PWA plays its drop tone). What happens to a playing book on a reconnect is the coordinator's business, unchanged here. A session with no idle moment for its last 10 minutes still expires.
+
+---
+
+## 2026-10-12: A press pauses content; the turn's end resumes it (T1.30)
+
+Supersedes rule 5 of [`io-plane.md`](./io-plane.md#cross-cutting-behavior-rules), "Preempted media is cancelled, not paused", for user presses, and the matching "Pause-resume for preempted media" descope item.
+
+**Context**: Server log of 2026-10-12, Mario on the walkie with Spotify, radio and an audiobook:
+
+- **A press stopped the media for good.** `on_ptt_start` → `interrupt()` → `_stop_content_stream()`. 35 presses stopped media; 12 of them were not about media (volume x6, "¿Me escuchas?" x2, a noise press, "¿En cuánto está el volumen?", a Telegram message, "¿En qué capítulo vamos?"). Each left silence, and Mario had to ask again 6 times ("sigue con la radio", "continúa la canción"). Turning the volume down killed the music he was adjusting it for. The model was never told: "Y ahora suena música de The Beatles" 3 s after a press stopped them, "Y ahora suena Oasis", "suena al inicio" for a book that had stopped. The Spotify skill had worked around it for one tool (a queued turn that called `music_control(resume)` after `whats_playing`).
+- **Content played to nobody.** With no client, `AudioServer._send_raw` drops frames silently and nothing stopped the stream: The Beatles ran 33 minutes (06:46 to 07:19) while the walkie was connected for about 16. An audiobook counts what it sent as heard, so a Wi-Fi drop skips what nobody heard.
+- **A provider reconnect stopped content.** `on_session_disconnected` (the planned hourly reconnect, or `session_expired`) called `_stop_content_stream()`. It never coincided with playback that day (45 reconnects, none with media), but every one would have cut the music.
+
+Alternatives: make a user turn acquire DIALOG in the FocusManager (the AVS way, the path injected turns and calls already use to park content, as T1.30 suggested reusing). Rejected after a critic round: streams with patience 0 (radio, any third-party default) would be evicted rather than paused, so the default patience would have to change, which changes inject and call behavior too; a press during a call must latch its end reason before a DIALOG acquire ends the claim; and "nobody is listening" is not a focus question, so the no-client case needs a non-focus pause anyway. What is reused: the resume itself is the same `factory()` re-call FocusManager parking already relies on, and a claim or inject at the end of a turn still parks content through the FocusManager with its patience.
+
+**Decision**: The standard assistant behavior, as a framework mechanism ("content holds"), not per skill:
+
+- The coordinator can **hold** the content stream for a reason: the pump stops (the factory's `finally` saves its position, pauses its player) and the Activity stays where it is in the FocusManager. When every hold is released and focus allows, the coordinator calls `factory()` again: a resume. Reasons: `turn` (a user press), `no_client`, and `dispatch` (internal, while a turn's end decides what plays next).
+- **A press holds what plays.** The turn's end releases it once the client has played the answer (a playhead pushed by every model audio delta, capped at 15 s), unless the turn stopped the stream (`CancelMedia`) or asked for another (`AudioStream`; the old one ends even if a PREEMPT reminder then drops the new one). A claim or a queued inject at turn end parks it first; it comes back when they end. The release is armed when a user turn is cleared (`current_turn = None`), so a turn dropped by any path (too short, commit failure, interrupt, session drop) resumes the content.
+- **The model is told.** Just before the commit, the coordinator sends the persona's `content_held` string (`ui_strings`, English default) with the stream's label: what was playing is paused only while the user talks, comes back after the reply, and a stop/pause request needs the tool. Sent at commit, so a dropped press leaves no stale note.
+- **A stop request stays a stop.** The release waits briefly (1.5 s) for the provider's transcript of the press; if the words are only the persona's stop and filler words (`content_stop_words`, `content_filler_words` in `ui_strings`: "para", "ya basta", "apaga la música por favor"), the stream is stopped even if the model never called the stop tool. Errs toward silence: a blind user can't see why music came back.
+- **A bound on parking.** Content held longer than 30 min (a walkie off overnight, a turn that never ended) is stopped at release instead of resumed out of the blue. Parking by a call or an injected turn keeps its FocusManager patience.
+- **No client for 5 s holds the stream** (a reload or eviction is not an absence: only the last client closing is); a client back resumes it.
+- **A provider reconnect does not touch content.** It aborts the turn (a stream that turn held resumes) and leaves a playing stream and its speaker flag alone. A press while there is no session can't start a turn, so it stops the content: the only way to silence the device during an outage.
+- A stream that finished on its own is never started again (before, a FOREGROUND after an injected turn replayed a finished book from 0).
+- Clients see a held stream as `stream_ended` (`interrupted`, what a press always sent) and a resumed one as `stream_started` again with the same `stream_id`.
+- No SDK surface change. The `AudioStream` contract now says plainly that `factory()` is called again to resume, and that a start earcon belongs to the first call only (radio and audiobooks fixed; Spotify already did it). Audiobooks rewind on a resume: 2 s plus a tenth of the pause, up to the 20 s an explicit resume uses.
+
+**Consequences**:
+
+- Volume changes, questions and noise presses no longer kill the music; the Spotify `whats_playing` workaround is gone.
+- The model should still call the stop tool for "para", "pausa", "silencio" (the note and the tool texts say so). The stop-word backstop covers the short, unambiguous requests; a stop request inside a longer sentence ("ya no quiero oír eso") depends on the model, and nothing in the unit tests can prove an LLM complies. Watch the logs for `coord.content_released resumed=true` right after a stop request, and for `coord.content_stopped reason=stop_words` (the model missed it).
+- A transcription error can turn a question into a stop ("ya" heard for something else): the music stays off and the user asks again. That is the side T1.30 asked to err on.
+- An injected turn still evicts a stream with patience 0: a reminder drained at the end of a press over the radio stops it. Giving radio a patience is a separate call.
+- Content parked by an injected turn resumes at DIALOG release with no wait for the narration to play (unchanged).
+- Up to ~20 s of a book still goes to nobody after a Wi-Fi drop (the server notices a dead link late, then the 5 s grace); the audiobook's resume rewind covers most of it.
+- `inject_turn` narration while no client is connected is still lost.

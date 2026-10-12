@@ -223,7 +223,7 @@ if tool_name == "stop_warmup":
 
 `CancelMedia` cancels whatever's currently playing on the CONTENT channel. Graceful — no audio interrupt, just a clean stop. The model narrates "warmup detenido" after.
 
-For *user-initiated* interrupts (PTT during playback), you don't need anything — the framework handles them automatically. `CancelMedia` is for *model-initiated* stops.
+For *user-initiated* interrupts (PTT during playback), you don't need anything: the framework pauses the stream and resumes it after the turn by calling your factory again. That is why a stop or pause tool must return `CancelMedia` even though the press already silenced the stream: without it, the stream comes back after the answer.
 
 ## When to pick which side effect
 

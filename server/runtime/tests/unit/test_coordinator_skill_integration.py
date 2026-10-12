@@ -490,6 +490,10 @@ class TestAudiobookSurvivesCall:
             "book Activity should still be parked in BACKGROUND after COMMS claim"
             " preempts it, not evicted"
         )
+        saved_raw = await storage.get_setting(f"audiobooks:{_position_key(book['id'])}")
+        assert saved_raw is not None
+        saved = float(saved_raw)
+        assert saved > streaming_positions[0], "the first pump's finally saved its advance"
 
         # End the claim — FG returns to CONTENT; pump respawns.
         handle.cancel()
@@ -507,13 +511,13 @@ class TestAudiobookSurvivesCall:
         # captured at build time. If the critic-flagged regression
         # still existed, streaming_positions[1] would equal
         # streaming_positions[0] exactly (factory closure captured
-        # the original start_position). Since the first pump's
-        # `finally` block saved a post-advance position to storage,
-        # the second pump's read produces a STRICTLY GREATER value.
-        assert streaming_positions[1] > streaming_positions[0], (
+        # the original start_position). It starts from what the first
+        # pump's `finally` saved, minus the short resume rewind (2 s
+        # plus a tenth of a pause that lasted a fraction of a second).
+        assert saved - 2.5 < streaming_positions[1] <= saved - 2.0, (
             f"resume must read current storage (which the prior pump's"
             f" finally-save advanced), not a value captured at build"
-            f" time. got {streaming_positions}"
+            f" time. saved={saved} got {streaming_positions}"
         )
 
         # Clean shutdown so the test doesn't leak the pump task.

@@ -186,7 +186,7 @@ class TestPlay:
         await _cancel(task)
         client.sent.clear()
 
-        # A reminder paused it (MUST_PAUSE); FOREGROUND calls the factory again.
+        # A press (or a reminder) paused it; the resume calls the factory again.
         task, got = await _consume_until(stream, 2)
         await _cancel(task)
 
@@ -488,12 +488,14 @@ class TestControl:
         play = next(c for c in client.sent if c["command"] == "play")
         assert "uri" not in play
 
-    async def test_whats_playing_after_a_press_answers_then_queues_the_resume(
+    async def test_whats_playing_after_a_press_is_only_the_answer(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
         """An AudioStream side effect would end the turn with no follow-up
         round, so the answer would never be spoken (seen live 2026-10-10).
-        The answer is an info result; resuming is a separate queued turn."""
+        The answer is an info result. The music comes back after it the
+        way it does after any turn: the framework resumes the stream the
+        press paused (2026-10-12), so no queued resume turn any more."""
         skill, client, recorded = await _skill(tmp_path, pcm_server)
         task, _ = await _consume_until(await _play(skill), 2)
         await _cancel(task)  # the press that asked "¿qué canción es esta?"
@@ -507,27 +509,7 @@ class TestControl:
         assert "music_control" not in payload["then"]  # one action per reply
         assert result.side_effect is None
         await _settle()
-        # The resume is a separate queued turn, drained after the answer.
-        assert [key for _, key in recorded.injected] == ["spotify:resume_after_answer"]
-        assert "resume" in recorded.injected[0][0]
-
-    async def test_whats_playing_after_pausa_does_not_resume(
-        self, tmp_path: Path, pcm_server: PcmServer
-    ) -> None:
-        skill, client, recorded = await _skill(tmp_path, pcm_server)
-        task, _ = await _consume_until(await _play(skill), 2)
-        await _cancel(task)
-        await skill.handle("music_control", {"action": "pause"})
-        client.state.item = SIN_TI
-
-        result = await skill.handle("whats_playing", {})
-
-        payload = json.loads(result.output)
-        assert payload["title"] == "Sin Ti"
-        assert "«Es Sin Ti, de Los Panchos.»" in payload["then"]
-        assert result.side_effect is None
-        await _settle()
-        assert recorded.injected == []  # no resume after "pausa"
+        assert recorded.injected == []
 
     async def test_whats_playing_with_nothing(self, tmp_path: Path, pcm_server: PcmServer) -> None:
         skill, _, _ = await _skill(tmp_path, pcm_server)
@@ -603,7 +585,7 @@ class TestAgainstRealClient:
                 )
                 answer = json.loads((await skill.handle("whats_playing", {})).output)
                 assert (answer["title"], answer["by"]) == ("Sin Ti", "Los Panchos")
-                assert "then" in answer  # the press just interrupted it
+                assert "then" in answer
             finally:
                 await _cancel(pump)
 

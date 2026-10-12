@@ -10,7 +10,7 @@ Every audio-coordination bug in April 2026 — _book-jumps-in_, _double-ack_, _s
 
 ## The contract, in one paragraph
 
-Every user interaction is a **Turn**. A Turn owns one ordering: all of the model's speech (across as many chained OpenAI responses as the model needs to handle info tools) plays first, then any tool-produced audio streams fire in declaration order. The coordinator forwards both kinds of chunks to the same `server.send_audio` pipe in that order — there is no parallel mixing, no per-source queue, no channel abstraction. Tools never touch playback; they return a `ToolResult` with an optional `side_effect` (today an `AudioStream(factory=...)`) that the coordinator invokes at the right moment. Interrupts atomically flush the client queue, cancel any long-running media task, and cancel the OpenAI response. A client-side **thinking tone** fills any silence longer than 400 ms so a blind user never hears dead air.
+Every user interaction is a **Turn**. A Turn owns one ordering: all of the model's speech (across as many chained OpenAI responses as the model needs to handle info tools) plays first, then any tool-produced audio streams fire in declaration order. The coordinator forwards both kinds of chunks to the same `server.send_audio` pipe in that order — there is no parallel mixing, no per-source queue, no channel abstraction. Tools never touch playback; they return a `ToolResult` with an optional `side_effect` (today an `AudioStream(factory=...)`) that the coordinator invokes at the right moment. Interrupts atomically flush the client queue and cancel the OpenAI response; a press pauses any long-running media task, and the turn's end resumes it (see "Content holds"). A client-side **thinking tone** fills any silence longer than 400 ms so a blind user never hears dead air.
 
 ## Why v3 is smaller than v2
 
@@ -96,7 +96,9 @@ Semantics:
 
 **Long-running media streams live in a `ContentStreamObserver`** attached to a CONTENT-channel `Activity` on the app-owned `FocusManager`. The observer wraps one `asyncio.Task` slot — the pump running `async for chunk in factory(): await send_audio(chunk)`. On `fm.acquire(activity)`, the actor delivers `FOREGROUND/PRIMARY` which spawns the pump. On `fm.release(CONTENT, interface_name)`, the actor delivers `NONE/MUST_STOP` which cancels it. The coordinator's `_start_content_stream` / `_stop_content_stream` call `fm.wait_drained()` right after acquire/release so the synchronous post-conditions callers expect (pump running, pump dead) are genuine, not "eventually."
 
-The pump outlives turns — an audiobook started in one turn keeps playing until the next turn's interrupt. When a new stream is applied, the coordinator calls `_stop_content_stream()` to cancel the previous observer, then starts a fresh one. Single slot, not a channel abstraction. No queue. The coordinator exposes `current_media_task` as a read-only property for callers who want to await the task directly.
+The pump outlives turns: an audiobook started in one turn keeps playing across later turns. When a new stream is applied, the coordinator calls `_stop_content_stream()` to cancel the previous observer, then starts a fresh one. Single slot, not a channel abstraction. No queue. The coordinator exposes `current_media_task` as a read-only property for callers who want to await the task directly.
+
+**Content holds (2026-10-12, [ADR](decisions.md#2026-10-12-a-press-pauses-content-the-turns-end-resumes-it-t130)).** A press does not stop the stream; it *holds* it (`ContentStreamObserver.hold("turn")`: pump cancelled, Activity kept). When the user turn is cleared, by any path, a resume is armed: once the client has played the answer (a playhead pushed by every model audio delta, capped at 15 s) and the press's transcript is in (up to 1.5 s more), the hold is released and the observer calls `factory()` again. Not if the turn stopped the stream (`CancelMedia`), asked for another (`AudioStream`, which ends the held one whichever way the dispatch goes), or said only stop words (the persona's `content_stop_words`); a claim or a drained inject parks it first and it comes back after them. Held over 30 min: stopped instead. A missing client (5 s) holds it too (`"no_client"`), until a client is back. While `_apply_side_effects` decides what plays next, an internal `"dispatch"` hold keeps a non-playing stream from starting for a tick before it is replaced.
 
 **Factory contract** (unchanged from v2):
 
@@ -112,6 +114,8 @@ The pump outlives turns — an audiobook started in one turn keeps playing until
 ### 3. Interrupt — an atomic method on `TurnCoordinator`
 
 Not a separate class. One method with an explicit step order — replaces three layers of hand-rolled partial clearing in the current code.
+
+> **2026-10-12:** step 3 no longer stops the content stream. `interrupt()` ends the turn, not the content: a press holds the stream (pump dead) before calling it, so step 4 still can't race the pump, and reset/shutdown leave content to the FocusManager. The code block below is the original v3 sketch.
 
 ```python
 class TurnCoordinator:
@@ -134,7 +138,7 @@ class TurnCoordinator:
 
 **Rationale for step 1 (drop flag first)**: OpenAI audio deltas arrive asynchronously. Between "we sent `response.cancel`" and "OpenAI actually processed it," more deltas can land. The receive loop checks `response_cancelled` before forwarding each delta — if set, the delta is dropped at the receive point. Without the flag, flush + cancel is not atomic: stale deltas could re-fill a just-flushed client queue. The flag is reset by the next commit, so the provider backs it up: after `cancel_current_response` it drops every remaining event of the cancelled response, including its late `response.done`, which would otherwise be taken for the next turn's (2026-10-12), and holds the next `response.create` until that response is done.
 
-**Rationale for step 3 before step 4** (content stream stop before force_release): if force_release ran first, the await window before `_stop_content_stream` completes gives the pump task time to execute `_factory_send_audio`. That callback sees `is_speaking=False` (force_release just cleared it) and calls `acquire(FACTORY)` — leaving `SpeakingState` stuck on a dead pump after cleanup completes. Stop the producer first, then clear the flag; nothing can re-acquire what doesn't exist. Same reasoning applies to `on_session_disconnected`.
+**Rationale for step 3 before step 4** (content stream stop before force_release): if force_release ran first, the await window before `_stop_content_stream` completes gives the pump task time to execute `_factory_send_audio`. That callback sees `is_speaking=False` (force_release just cleared it) and calls `acquire(FACTORY)` — leaving `SpeakingState` stuck on a dead pump after cleanup completes. Stop the producer first, then clear the flag; nothing can re-acquire what doesn't exist. Since 2026-10-12 the producer is stopped by the press's hold, before `interrupt()`; the flag is cleared after the `audio_clear` (the walkie drops in-flight audio until `model_speaking=false`). `on_session_disconnected` stops nothing and leaves a playing stream's FACTORY flag alone.
 
 This is **not** a new invention — `session/manager.py:82` has the same flag today. The coordinator takes ownership of it; session manager becomes thin transport.
 
@@ -168,6 +172,7 @@ Key transitions:
 - **AWAITING_NEXT_RESPONSE → IN_RESPONSE**: first event of the new response.
 - **APPLYING_FACTORIES → IDLE**: each pending factory has been invoked. Long-running factories (`ContentStreamObserver` pump) run in the background; the turn doesn't wait for them to complete.
 - **Any state → INTERRUPTED**: new `ptt_start` during a live turn calls `coordinator.interrupt()`.
+- **Clearing a USER turn** (any of the above, or a too-short press) arms the resume of content its press held. See "Content holds" above.
 
 ## Concrete decisions
 

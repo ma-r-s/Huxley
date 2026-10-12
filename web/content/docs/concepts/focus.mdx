@@ -79,14 +79,14 @@ audiobook (CONTENT 300)
         ↓
 user holds PTT
         ↓
-DIALOG (100) is requested by the new turn
-        ↓
-audiobook → atomic interrupt (no patience, immediate)
+audiobook → paused at once (position saved)
         ↓
 LLM listens, responds
+        ↓
+answer played → audiobook resumes where it paused
 ```
 
-User PTT is the one case that doesn't grant patience to the lower-priority stream. The user is asking *right now*; we don't make them wait 5 seconds.
+User PTT doesn't go through patience: the user is asking *right now*, so the book pauses immediately, whatever its patience. When the turn ends, the book comes back by itself, unless the user asked to stop it ("pausa", which returns `CancelMedia`) or to play something else. The same pause happens while no client is connected, and a reconnect of the voice provider leaves the book playing.
 
 ## Patience: a grace period before eviction
 

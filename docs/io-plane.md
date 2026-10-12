@@ -308,6 +308,10 @@ tested. Lives in `huxley.turn.arbitration`.
    block and the user can resume with "sigue con el libro." Pause-resume
    is a later addition if and when a skill demands it.
 
+   > **Superseded (2026-10-12).** A press now pauses what plays and the
+   > turn's end resumes it; no client pauses it too; a provider reconnect
+   > leaves it alone. See [ADR 2026-10-12](decisions.md#2026-10-12-a-press-pauses-content-the-turns-end-resumes-it-t130).
+
 ### Stale/expired handling
 
 TTL defaults live on the persona, per urgency tier:
@@ -1079,7 +1083,8 @@ the I/O plane.
 
 1. **Pause-resume for preempted media** (discussed in original proactive
    spec). Cancel-and-resume-via-command preserved. Revisit if a skill
-   needs it (music with deep state, not audiobook).
+   needs it (music with deep state, not audiobook). _Done 2026-10-12 for
+   presses and a missing client: [ADR](decisions.md#2026-10-12-a-press-pauses-content-the-turns-end-resumes-it-t130)._
 
 2. **Client-side ducking.** Server-side software gain. Revisit when
    ESP32 firmware wants smart audio.

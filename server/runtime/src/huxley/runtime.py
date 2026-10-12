@@ -105,6 +105,7 @@ class Runtime:
             on_set_skill_secret=self._shim_set_skill_secret,
             on_delete_skill_secret=self._shim_delete_skill_secret,
             get_hello_extras=self._get_hello_extras,
+            on_client_presence=self._shim_client_presence,
         )
         self.current_app: Application | None = None
         # Background task that tears down the PREVIOUS Application
@@ -657,6 +658,10 @@ class Runtime:
     async def _shim_language_select(self, language: str | None) -> None:
         if self.current_app is not None:
             await self.current_app.on_language_select(language)
+
+    async def _shim_client_presence(self, present: bool) -> None:
+        if self.current_app is not None:
+            await self.current_app.on_client_presence(present)
 
     async def _shim_list_sessions(self) -> None:
         if self.current_app is not None:

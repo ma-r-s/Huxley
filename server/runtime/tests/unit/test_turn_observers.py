@@ -416,3 +416,126 @@ class TestContentStreamObserverSelfCancel:
         async with asyncio.timeout(1.0):
             await _wait_task_done(obs.task)
         assert obs.task is None
+
+
+class TestContentStreamObserverHolds:
+    """Coordinator holds (2026-10-12): a focus-independent pause. The pump
+    runs iff focus allows it, no hold is in force, and the stream has not
+    finished; a release resumes by calling `factory()` again."""
+
+    @staticmethod
+    def _counting() -> tuple[AudioStream, list[int]]:
+        runs: list[int] = []
+
+        def factory() -> AsyncIterator[bytes]:
+            runs.append(1)
+            return _infinite_stream()
+
+        return AudioStream(factory=factory), runs
+
+    async def test_hold_stops_the_pump_and_release_calls_the_factory_again(self) -> None:
+        stream, runs = self._counting()
+        on_resume = AsyncMock()
+        obs = ContentStreamObserver(
+            interface_name="i", stream=stream, send_audio=AsyncMock(), on_resume=on_resume
+        )
+        await obs.on_focus_changed(FocusState.FOREGROUND, MixingBehavior.PRIMARY)
+        await asyncio.sleep(0.02)
+
+        assert await obs.hold("turn") is True
+        assert obs.task is None
+        assert obs.holds == {"turn"}
+        assert obs.is_live
+
+        assert await obs.release_hold("turn") is True
+        await asyncio.sleep(0.02)
+        assert obs.is_playing
+        assert len(runs) == 2
+        on_resume.assert_awaited_once()  # the first spawn is not a resume
+        await obs.on_focus_changed(FocusState.NONE, MixingBehavior.MUST_STOP)
+
+    async def test_foreground_while_held_does_not_spawn(self) -> None:
+        """An injected turn releasing DIALOG gives a held stream its
+        FOREGROUND back: it stays stopped until the hold is released."""
+        stream, runs = self._counting()
+        obs = ContentStreamObserver(interface_name="i", stream=stream, send_audio=AsyncMock())
+        await obs.on_focus_changed(FocusState.FOREGROUND, MixingBehavior.PRIMARY)
+        await asyncio.sleep(0.02)
+        await obs.hold("turn")
+        await obs.on_focus_changed(FocusState.BACKGROUND, MixingBehavior.MUST_PAUSE)
+
+        await obs.on_focus_changed(FocusState.FOREGROUND, MixingBehavior.PRIMARY)
+        await asyncio.sleep(0.02)
+
+        assert obs.task is None
+        assert len(runs) == 1
+        await obs.release_hold("turn")
+        await asyncio.sleep(0.02)
+        assert len(runs) == 2
+        await obs.on_focus_changed(FocusState.NONE, MixingBehavior.MUST_STOP)
+
+    async def test_release_while_backgrounded_waits_for_foreground(self) -> None:
+        stream, runs = self._counting()
+        obs = ContentStreamObserver(interface_name="i", stream=stream, send_audio=AsyncMock())
+        await obs.on_focus_changed(FocusState.FOREGROUND, MixingBehavior.PRIMARY)
+        await asyncio.sleep(0.02)
+        await obs.hold("turn")
+        await obs.on_focus_changed(FocusState.BACKGROUND, MixingBehavior.MUST_PAUSE)
+
+        assert await obs.release_hold("turn") is False
+
+        assert obs.task is None
+        await obs.on_focus_changed(FocusState.FOREGROUND, MixingBehavior.PRIMARY)
+        await asyncio.sleep(0.02)
+        assert len(runs) == 2
+        await obs.on_focus_changed(FocusState.NONE, MixingBehavior.MUST_STOP)
+
+    async def test_every_hold_must_clear(self) -> None:
+        stream, runs = self._counting()
+        obs = ContentStreamObserver(interface_name="i", stream=stream, send_audio=AsyncMock())
+        await obs.on_focus_changed(FocusState.FOREGROUND, MixingBehavior.PRIMARY)
+        await asyncio.sleep(0.02)
+        await obs.hold("turn")
+        await obs.hold("no_client")
+
+        assert await obs.release_hold("turn") is False
+        assert await obs.release_hold("no_client") is True
+        await asyncio.sleep(0.02)
+        assert len(runs) == 2
+        await obs.on_focus_changed(FocusState.NONE, MixingBehavior.MUST_STOP)
+
+    async def test_finished_stream_never_respawns(self) -> None:
+        """Before 2026-10-12 a FOREGROUND after natural EOF called the
+        factory again: a finished book restarted from 0."""
+        runs: list[int] = []
+
+        def factory() -> AsyncIterator[bytes]:
+            runs.append(1)
+            return _finite_stream([b"x"])
+
+        obs = ContentStreamObserver(
+            interface_name="i", stream=AudioStream(factory=factory), send_audio=AsyncMock()
+        )
+        await obs.on_focus_changed(FocusState.FOREGROUND, MixingBehavior.PRIMARY)
+        await asyncio.sleep(0.02)
+        await _wait_task_done(obs.task)
+        assert obs.finished
+        assert not obs.is_live
+
+        await obs.on_focus_changed(FocusState.BACKGROUND, MixingBehavior.MUST_PAUSE)
+        await obs.on_focus_changed(FocusState.FOREGROUND, MixingBehavior.PRIMARY)
+        await asyncio.sleep(0.02)
+        await obs.hold("turn")
+        await obs.release_hold("turn")
+
+        assert len(runs) == 1
+        assert obs.task is None or obs.task.done()
+
+    async def test_evicted_stream_is_not_live(self) -> None:
+        stream, _ = self._counting()
+        obs = ContentStreamObserver(interface_name="i", stream=stream, send_audio=AsyncMock())
+        await obs.on_focus_changed(FocusState.FOREGROUND, MixingBehavior.PRIMARY)
+        await asyncio.sleep(0.02)
+        await obs.on_focus_changed(FocusState.NONE, MixingBehavior.MUST_STOP)
+        assert not obs.is_live
+        assert await obs.release_hold("turn") is False

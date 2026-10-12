@@ -203,6 +203,11 @@ class TestPlayStation:
         assert chunks[0] == chime_bytes
         assert chunks[1:] == [b"after_chime_1", b"after_chime_2"]
 
+        # The framework resumes a paused station by calling the factory
+        # again (2026-10-12): the live feed restarts, without the chime.
+        again = await _drain(result.side_effect.factory)
+        assert again == [b"after_chime_1", b"after_chime_2"]
+
     async def test_no_chime_when_persona_omits_start_sound(self, tmp_path: Path) -> None:
         player = FakeRadioPlayer(default_chunks=[b"radio_only"])
         skill = RadioSkill(player=player)

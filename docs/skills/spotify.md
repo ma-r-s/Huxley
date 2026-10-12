@@ -11,7 +11,7 @@ server's one audio channel, never through a separate speaker.
 | --------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `play_music`    | `query?: string`, `kind?: any \| track \| artist \| album \| playlist` | `{ ok, playing, by, kind, alternatives? }` + `AudioStream`; no query: `{ ok, action: "resume" }` + `AudioStream`; or `{ ok: false, reason, say }` |
 | `music_control` | `action: pause \| resume \| next \| previous`                         | pause: `CancelMedia`; the others: `AudioStream` (resume)                                     |
-| `whats_playing` | (none)                                                                | `{ ok, title, by, then }` (info tool; a queued turn resumes the music), or `nothing_playing` |
+| `whats_playing` | (none)                                                                | `{ ok, title, by, then }` (info tool; the music resumes after the answer), or `nothing_playing` |
 
 **Search returns up to three distinct candidates.** The best plays; the
 other two go back as `alternatives` (`title`, `by`, `kind`). They are
@@ -87,16 +87,17 @@ Spotify app ─┐                        ┌─ WebSocket (control, events) ─
   (client-credentials, renewed hourly). Development mode: the app owner
   must be Premium, at most 5 users, 10 results per search. `market` must
   be set; app tokens can't use `from_token`.
-- **Every press stops the music first** (the coordinator cancels the
-  stream). So `next` and `previous` act and then return a resume stream,
-  and "pause" is just `CancelMedia`. `whats_playing` can't return a
-  stream: a tool with an `AudioStream` gets no follow-up round, so its
-  answer would never be spoken (seen live). It answers as an info tool
-  whose `then` names the exact line to say; when a press just stopped
-  the music it also queues an `inject_turn` asking the model to call
-  `music_control(resume)`, which the coordinator runs after the answer's
-  turn ends. (Asking for both in one reply skipped the answer 1 time in
-  3; split, 5 of 5.)
+- **Every press pauses the music** (the framework holds the stream: the
+  factory's `finally` queues a Soloist pause) and the turn's end resumes
+  it by calling the factory again, which sends a bare `play`
+  ([ADR 2026-10-12](../decisions.md#2026-10-12-a-press-pauses-content-the-turns-end-resumes-it-t130)). So "pause" must return `CancelMedia` (the
+  stream ends, nothing comes back), `next` and `previous` act and then
+  return a resume stream that replaces the held one, and `whats_playing`
+  is a plain info tool: a tool with an `AudioStream` gets no follow-up
+  round, so its answer would never be spoken (seen live). Its `then`
+  names the exact line to say; the music comes back after it. (Before
+  2026-10-12 a press stopped the music and `whats_playing` queued an
+  `inject_turn` to resume it.)
 - **Content type:** `NONMIXABLE` with `patience` (default 30 min): a
   reminder or call pauses the music and it comes back afterwards.
   (Ducking would interleave music and speech; see T1.29.)
@@ -120,9 +121,9 @@ Spotify app ─┐                        ┌─ WebSocket (control, events) ─
 | A call outlasts the 30 min patience           | narrated `patience_expired` (the music stays paused)                                          |
 | Album / playlist runs out                     | stream ends quietly                                                                           |
 
-"What song is this?" brings the music back only if a press stopped it in
-the last two minutes: not after "pausa", and not after it moved to
-another device.
+"What song is this?", like any question, gets the music back after the
+answer. Not after "pausa" (`CancelMedia`), and not after it moved to
+another device (the stream ended on its own and is never restarted).
 
 ## Configuration
 

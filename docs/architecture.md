@@ -161,7 +161,7 @@ stateDiagram-v2
 
 OpenAI ends a Realtime session at 60 minutes. The provider refreshes it first: after `session_refresh_minutes` (default 50, counted from session start) it disconnects at the first idle moment (no call holding the mic, no response live, user not talking, reply done playing) with a summary, and the usual auto-reconnect opens the next session (CONVERSING, IDLE, CONNECTING, CONVERSING).
 
-Media playback is **not** a session state. It's tracked by the coordinator's current `ContentStreamObserver`, which outlives turns: a book started in turn N keeps playing until turn N+M interrupts it. The voice provider session stays open during book playback (idle sessions cost zero tokens), and pressing PTT mid-book goes through the turn coordinator's interrupt method rather than a state transition.
+Media playback is **not** a session state. It's tracked by the coordinator's current `ContentStreamObserver`, which outlives turns: a book started in turn N keeps playing until a later turn stops or replaces it. The voice provider session stays open during book playback (idle sessions cost zero tokens). Pressing PTT mid-book pauses the book for the turn (a content hold) and the turn's end resumes it; a provider reconnect leaves it playing. See [ADR 2026-10-12](./decisions.md#2026-10-12-a-press-pauses-content-the-turns-end-resumes-it-t130).
 
 See [`turns.md`](./turns.md) and [decision 2026-04-13 — Turn-based coordinator for voice tool calls](./decisions.md#2026-04-13--turn-based-coordinator-for-voice-tool-calls).
 
@@ -255,7 +255,7 @@ sequenceDiagram
 1. **A skill never touches the coordinator, state machine, or the voice provider directly.** It returns a `ToolResult` with an optional `side_effect` (today: `AudioStream(factory=...)`; future kinds reuse the same shape). The framework executes side effects at the right moment.
 2. **Speech before factories, always.** The coordinator forwards the model's audio deltas first, then invokes pending factories on `response.done`. Tool audio never jumps in without an ack — structurally impossible, not "fixed with a flag."
 3. **Same audio pipe for everything.** Model speech and tool audio both travel through `server.send_audio`. The client doesn't branch on source.
-4. **Atomic interrupts.** A new `ptt_start` during a live turn runs `coordinator.interrupt()`: drop flag → clear pending factories → audio_clear → cancel media task → cancel LLM response → mark turn interrupted. The running media task's `finally` block persists any terminal state (e.g. audiobook position), so seek/forward/interrupt are all transaction-safe without eager storage writes.
+4. **Atomic interrupts.** A new `ptt_start` first holds the media task (pump cancelled, Activity kept), then runs `coordinator.interrupt()`: drop flag → clear pending factories → audio_clear → cancel LLM response → mark turn interrupted. The media task's `finally` block persists any terminal state (e.g. audiobook position), so seek/forward/pause are all transaction-safe without eager storage writes, and the resume after the turn calls the factory again from that saved state.
 
 ## Turn coordinator internals
 
@@ -288,7 +288,11 @@ reshaping the coordinator:
   (cancels the pump immediately — overlaying two voices is worse
   than a pause). All current Abuelo content is NONMIXABLE (spoken
   word), so the MAY_DUCK code path is scaffolding for future MIXABLE
-  streams (background music, ambient).
+  streams (background music, ambient). Independent of focus, the
+  coordinator can **hold** the observer (`"turn"` during a press,
+  `"no_client"` while nobody is connected): the pump runs only when
+  focus allows it and no hold is in force, and a stream that finished
+  on its own never respawns. See [ADR 2026-10-12](./decisions.md#2026-10-12-a-press-pauses-content-the-turns-end-resumes-it-t130).
 - **`FocusManager`** (app-owned, constructed by `Application`,
   injected into `TurnCoordinator`) is the serialized arbitrator over
   the speaker. Manages Activity stacks per channel (`DIALOG`, `COMMS`,

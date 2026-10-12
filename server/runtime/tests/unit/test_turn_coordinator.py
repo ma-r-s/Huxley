@@ -25,6 +25,7 @@ import pytest
 from huxley.focus.manager import FocusManager
 from huxley.focus.vocabulary import Channel
 from huxley.turn.coordinator import Turn, TurnCoordinator, TurnState
+from huxley.turn.speaking_state import SpeakingOwner
 from huxley.voice.stub import StubVoiceProvider
 from huxley_sdk import AudioStream, PlaySound, ToolResult
 
@@ -650,12 +651,12 @@ class TestInterrupt:
         await coordinator.interrupt()
         assert ("cancel_current_response",) in provider.sent
 
-    async def test_interrupt_cancels_running_media_task(
+    async def test_press_pauses_running_media_task(
         self, coordinator: TurnCoordinator, mocks: dict[str, Any]
     ) -> None:
         import asyncio
 
-        # Factory that never completes (we'll cancel it)
+        # Factory that never completes (the press cancels its pump)
         async def forever_stream() -> AsyncIterator[bytes]:
             while True:
                 yield b"x"
@@ -673,10 +674,39 @@ class TestInterrupt:
         assert task is not None
         assert not task.done()
 
-        await coordinator.interrupt()
+        await coordinator.on_ptt_start()
 
         assert task.done()
         assert coordinator.current_media_task is None
+        # Paused, not stopped: the stream is still the current one.
+        assert coordinator._content_obs is not None
+        assert coordinator._content_obs.holds == {"turn"}
+
+    async def test_interrupt_alone_does_not_stop_content(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        """`interrupt()` ends the turn, not the content (reset, shutdown
+        call it; shutdown's FocusManager stop ends the content)."""
+        import asyncio
+
+        async def forever_stream() -> AsyncIterator[bytes]:
+            while True:
+                yield b"x"
+                await asyncio.sleep(0.01)
+
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output="{}", side_effect=AudioStream(factory=forever_stream)
+        )
+        await _commit_turn(coordinator)
+        await coordinator.on_tool_call("c1", "play", {})
+        await coordinator.on_response_done()
+        task = coordinator.current_media_task
+        assert task is not None
+
+        await coordinator.interrupt()
+
+        assert coordinator.current_media_task is task
+        assert not task.done()
 
     async def test_new_ptt_start_mid_turn_interrupts_and_restarts(
         self, coordinator: TurnCoordinator, provider: StubVoiceProvider
@@ -925,9 +955,9 @@ class TestAudioStreamCompletion:
                 break
             await asyncio.sleep(0.001)
 
-        names = [entry[0] for entry in provider.sent]
-        # PTT cancelled the stream mid-flight → completion should NOT fire
-        assert "send_conversation_message" not in names
+        # PTT paused the stream mid-flight → completion should NOT fire.
+        # (The press does send the "what was playing is paused" note.)
+        assert ("send_conversation_message", "end of book") not in provider.sent
 
 
 class TestModelSpeakingDuringFactoryAudio:
@@ -1318,29 +1348,30 @@ class TestCleanupOrdering:
     ) -> list[str]:
         """Monkey-patch the two ordering-critical awaits to record order."""
         calls: list[str] = []
-        original_stop = coordinator._stop_content_stream
+        original_hold = coordinator._hold_content
         original_force_release = coordinator._speaking_state.force_release
 
-        async def tracking_stop() -> None:
-            calls.append("stop_content_stream")
-            await original_stop()
+        async def tracking_hold(reason: str) -> bool:
+            calls.append("hold_content")
+            return await original_hold(reason)
 
         async def tracking_force_release() -> bool:
             calls.append("force_release")
             return await original_force_release()
 
-        coordinator._stop_content_stream = tracking_stop  # type: ignore[method-assign]
+        coordinator._hold_content = tracking_hold  # type: ignore[method-assign]
         coordinator._speaking_state.force_release = tracking_force_release  # type: ignore[method-assign]
         return calls
 
-    async def test_interrupt_stops_stream_before_force_release(
+    async def test_press_holds_stream_before_force_release(
         self,
         coordinator: TurnCoordinator,
         mocks: dict[str, Any],
     ) -> None:
-        """`interrupt()` step 3 (stop content) must run before step 4
-        (force_release). Reverse order opens a race where the pump's
-        `_factory_send_audio` re-acquires FACTORY after force_release clears it.
+        """A press holds the content (pump dead) before `interrupt()`
+        clears the speaker flag. Reverse order opens a race where the
+        pump's `_factory_send_audio` re-acquires FACTORY after
+        force_release clears it.
         """
         import asyncio
 
@@ -1359,18 +1390,20 @@ class TestCleanupOrdering:
         assert coordinator.current_media_task is not None
 
         calls = self._wrap_call_order(coordinator)
-        await coordinator.interrupt()
+        await coordinator.on_ptt_start()
 
-        assert calls.index("stop_content_stream") < calls.index("force_release"), (
-            f"stop_content_stream must run before force_release; got {calls}"
+        assert calls.index("hold_content") < calls.index("force_release"), (
+            f"hold_content must run before force_release; got {calls}"
         )
 
-    async def test_session_disconnect_stops_stream_before_force_release(
+    async def test_session_disconnect_keeps_stream_playing(
         self,
         coordinator: TurnCoordinator,
         mocks: dict[str, Any],
     ) -> None:
-        """Same ordering invariant for `on_session_disconnected`."""
+        """Failure C (2026-10-12): a provider reconnect (planned, or after
+        session_expired) cut the music. The disconnect must leave a
+        playing stream alone, speaker flag included."""
         import asyncio
 
         async def forever_stream() -> AsyncIterator[bytes]:
@@ -1387,12 +1420,17 @@ class TestCleanupOrdering:
         await coordinator.on_response_done()
         assert coordinator.current_media_task is not None
 
-        calls = self._wrap_call_order(coordinator)
+        task = coordinator.current_media_task
+        assert task is not None
+        await asyncio.sleep(0.02)  # first chunk: the pump owns the speaker
         await coordinator.on_session_disconnected()
 
-        assert calls.index("stop_content_stream") < calls.index("force_release"), (
-            f"stop_content_stream must run before force_release; got {calls}"
-        )
+        assert coordinator.current_media_task is task
+        assert not task.done()
+        assert coordinator._speaking_state.owner is SpeakingOwner.FACTORY
+        sent_before = mocks["send_audio"].await_count
+        await asyncio.sleep(0.03)
+        assert mocks["send_audio"].await_count > sent_before, "music stopped"
 
     async def test_interrupt_leaves_speaking_state_clean_after_factory_stream(
         self,
@@ -1419,7 +1457,7 @@ class TestCleanupOrdering:
         # Let the pump acquire FACTORY via the first chunk
         await asyncio.sleep(0.02)
 
-        await coordinator.interrupt()
+        await coordinator.on_ptt_start()
 
         # Pump is gone and FACTORY (or any owner) is released.
         assert coordinator._speaking_state.owner is None

@@ -179,10 +179,10 @@ async def stream():
         await set_position(book_id, final_pos)
 ```
 
-- **On user interrupt** (PTT pressed mid-book) → coordinator cancels media task → `finally` runs → current position saved ✅
+- **On user press** (PTT pressed mid-book) → coordinator holds the stream: pump cancelled → `finally` runs → current position saved ✅. When the turn ends without "pausa"/"para" or a new book, the framework calls the factory again: it resumes from the saved position, rewound 2 s plus a tenth of the pause (up to 20 s), without the `book_start` earcon ([ADR 2026-10-12](../decisions.md#2026-10-12-a-press-pauses-content-the-turns-end-resumes-it-t130)). A press on the closing chime saves 0.0 (the book is done) and the factory plays nothing more.
 - **On natural EOF** → `completed = True` → position reset to 0.0 so next play starts from the beginning ✅
 - **On rewind / forward** — the new position lives only in the factory closure. If interrupted before the factory runs, storage keeps the old position (interrupt-atomicity for free).
-- **On server shutdown** — `_shutdown` calls `coordinator.interrupt()` → media task cancelled → `finally` runs ✅
+- **On server shutdown** — `Application.shutdown` calls `coordinator.close()` → media task cancelled → `finally` runs ✅
 - **Periodically while playing** — ❌ not implemented; only matters under SIGKILL.
 
 **Resume rewind**: when loading a saved position for resume, the skill subtracts `RESUME_REWIND_SECONDS` (20 s) so playback begins slightly before the interrupt point, avoiding a cold mid-sentence start.
