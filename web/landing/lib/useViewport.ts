@@ -48,14 +48,18 @@ function snapshot(): Viewport {
 export function useViewport(): Viewport {
   const [vp, setVp] = useState<Viewport | null>(null);
   useEffect(() => {
-    setVp(snapshot());
-    const onChange = () => setVp(snapshot());
+    // Only the breakpoints matter: re-render when one is crossed, not on
+    // every resize (a phone's toolbar resizes the window as it scrolls).
+    const update = () =>
+      setVp((prev) => {
+        const next = snapshot();
+        return prev && prev.isMobile === next.isMobile && prev.isTablet === next.isTablet ? prev : next;
+      });
+    update();
     const queries = [MQ_MOBILE, MQ_TABLET].map((q) => window.matchMedia(q));
-    for (const q of queries) q.addEventListener("change", onChange);
-    window.addEventListener("resize", onChange, { passive: true });
+    for (const q of queries) q.addEventListener("change", update);
     return () => {
-      for (const q of queries) q.removeEventListener("change", onChange);
-      window.removeEventListener("resize", onChange);
+      for (const q of queries) q.removeEventListener("change", update);
     };
   }, []);
   return vp ?? SSR_DEFAULT;

@@ -6,6 +6,11 @@
 //   uv run python -m huxcase.site --web <tmp>   -> public/hx1/hx1.glb, landing/hx1/model.json
 // Each node's kind picks its material; `explode` is where it sits in the
 // exploded view (metres, three.js frame: Y up, front toward +Z).
+//
+// It never takes the page's scroll: no wheel zoom, and on touch screens a
+// vertical swipe scrolls the page (touch-action pan-y) while a sideways one
+// turns the model. Animation runs on elapsed time, so it looks the same at
+// 60 and 120 Hz, and nothing is drawn while the viewer is off screen.
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
@@ -36,12 +41,14 @@ type Api = {
   setLight: (on: boolean) => void;
 };
 
+const TIP_W = 220; // widest tooltip kept inside the viewer
+
 export function HX1Viewer({ height }: { height: number }) {
   const { t } = useTranslation();
   const mount = useRef<HTMLDivElement>(null);
   const api = useRef<Api | null>(null);
   const [exploded, setExploded] = useState(false);
-  const [light, setLight] = useState(true);
+  const [light, setLight] = useState(false); // the firmware doesn't drive the LEDs yet
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState<"loading" | "ready" | "failed">(
     "loading",
@@ -70,31 +77,30 @@ export function HX1Viewer({ height }: { height: number }) {
         antialias: true,
         alpha: true,
       });
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
       renderer.shadowMap.enabled = true;
       renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       const canvas = renderer.domElement;
-      canvas.style.cssText =
-        "display:block;width:100%;height:100%;touch-action:none;cursor:grab";
-      canvas.setAttribute("aria-label", t("hx1.viewer.aria"));
-      canvas.setAttribute("role", "img");
+      canvas.style.cssText = "display:block;width:100%;height:100%;cursor:grab";
+      canvas.setAttribute("aria-hidden", "true");
       host.appendChild(canvas);
 
       const scene = new THREE.Scene();
       const pmrem = new THREE.PMREMGenerator(renderer);
-      scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+      const room = new RoomEnvironment();
+      const envTarget = pmrem.fromScene(room, 0.04);
+      scene.environment = envTarget.texture;
       const camera = new THREE.PerspectiveCamera(26, 1, 0.005, 6);
       const controls = new OrbitControls(camera, canvas);
       controls.enableDamping = true;
       controls.dampingFactor = 0.08;
-      controls.minDistance = 0.12;
-      controls.maxDistance = 0.95;
       controls.maxPolarAngle = Math.PI * 0.53;
       controls.enablePan = false;
-      controls.enableZoom = true;
+      controls.enableZoom = false; // the wheel scrolls the page
       controls.autoRotateSpeed = 0.7;
+      canvas.style.touchAction = "pan-y"; // OrbitControls sets none; a vertical swipe scrolls the page
 
       const key = new THREE.DirectionalLight(0xffffff, 2.4);
       key.position.set(0.12, 0.62, 0.3);
@@ -187,14 +193,14 @@ export function HX1Viewer({ height }: { height: number }) {
         to: InstanceType<typeof THREE.Vector3>;
       }[] = [];
       const meshes: InstanceType<typeof THREE.Mesh>[] = [];
-      // Warm light inside, behind the board: what shines through the clear back.
+      // Warm light inside, behind the board: what will shine through the clear back.
       const inner = new THREE.PointLight(0x6cc8ff, 0, 0.22, 2);
       modelGroup.add(inner);
 
       let explodeTo = 0,
         explode = 0,
-        lightTo = 1,
-        lightLevel = 1;
+        lightTo = 0,
+        lightLevel = 0;
       let camTween: {
         t: number;
         p0: InstanceType<typeof THREE.Vector3>;
@@ -227,6 +233,10 @@ export function HX1Viewer({ height }: { height: number }) {
         };
       };
       goTo("assembled", true);
+      const stopSpin = () => {
+        controls.autoRotate = false;
+        idleAt = performance.now();
+      };
       controls.addEventListener("start", () => {
         camTween = null;
         controls.autoRotate = false;
@@ -236,16 +246,6 @@ export function HX1Viewer({ height }: { height: number }) {
       controls.addEventListener("end", () => {
         idleAt = performance.now();
       });
-      api.current = {
-        setExploded: (on) => {
-          explodeTo = on ? 1 : 0;
-          goTo(on ? "exploded" : "assembled");
-          idleAt = performance.now();
-        },
-        setLight: (on) => {
-          lightTo = on ? 1 : 0;
-        },
-      };
 
       new GLTFLoader().load(
         "/hx1/hx1.glb",
@@ -280,32 +280,42 @@ export function HX1Viewer({ height }: { height: number }) {
             o.geometry.computeBoundingBox();
             if (o.geometry.boundingBox) box.union(o.geometry.boundingBox);
           }
+          if (!meshes.length) {
+            setStatus("failed");
+            return;
+          }
           const c = box.getCenter(new THREE.Vector3());
           modelGroup.position.set(-c.x, -box.min.y, -c.z);
           inner.position.set(...(model.light_at as [number, number, number]));
+          api.current = {
+            setExploded: (on) => {
+              explodeTo = on ? 1 : 0;
+              goTo(on ? "exploded" : "assembled");
+              stopSpin();
+            },
+            setLight: (on) => {
+              lightTo = on ? 1 : 0;
+            },
+          };
           setStatus("ready");
         },
         (e) => {
-          if (e.total) setProgress(Math.round((100 * e.loaded) / e.total));
+          if (e.total)
+            setProgress(Math.min(100, Math.round((100 * e.loaded) / e.total)));
         },
         () => {
           if (!disposed) setStatus("failed");
         },
       );
 
-      // Name the part under the mouse.
+      // Name the part under the mouse, or under a tap.
       const ray = new THREE.Raycaster(),
         ndc = new THREE.Vector2();
-      let hoverAt = 0;
-      const onMove = (e: PointerEvent) => {
-        if (e.pointerType !== "mouse" || e.buttons) return;
-        const now = performance.now();
-        if (now - hoverAt < 40) return;
-        hoverAt = now;
+      const nameAt = (clientX: number, clientY: number) => {
         const r = canvas.getBoundingClientRect();
         ndc.set(
-          ((e.clientX - r.left) / r.width) * 2 - 1,
-          -((e.clientY - r.top) / r.height) * 2 + 1,
+          ((clientX - r.left) / r.width) * 2 - 1,
+          -((clientY - r.top) / r.height) * 2 + 1,
         );
         ray.setFromCamera(ndc, camera);
         const hit = ray.intersectObjects(meshes, false)[0];
@@ -313,11 +323,39 @@ export function HX1Viewer({ height }: { height: number }) {
           setTip(null);
           return;
         }
-        const label = hit.object.userData.label as string;
-        setTip({ x: e.clientX - r.left, y: e.clientY - r.top, label });
+        const x = Math.max(0, Math.min(clientX - r.left + 14, r.width - TIP_W));
+        setTip({
+          x,
+          y: clientY - r.top + 12,
+          label: hit.object.userData.label as string,
+        });
+      };
+      let hoverAt = 0;
+      const onMove = (e: PointerEvent) => {
+        if (e.pointerType !== "mouse" || e.buttons) return;
+        const now = performance.now();
+        if (now - hoverAt < 40) return;
+        hoverAt = now;
+        nameAt(e.clientX, e.clientY);
+      };
+      let down: { x: number; y: number } | null = null;
+      const onDown = (e: PointerEvent) => {
+        down = { x: e.clientX, y: e.clientY };
+      };
+      const onUp = (e: PointerEvent) => {
+        if (
+          e.pointerType !== "mouse" &&
+          down &&
+          Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6
+        ) {
+          nameAt(e.clientX, e.clientY);
+        }
+        down = null;
       };
       const onLeave = () => setTip(null);
       canvas.addEventListener("pointermove", onMove);
+      canvas.addEventListener("pointerdown", onDown);
+      canvas.addEventListener("pointerup", onUp);
       canvas.addEventListener("pointerleave", onLeave);
 
       const resize = () => {
@@ -334,19 +372,27 @@ export function HX1Viewer({ height }: { height: number }) {
 
       // Only draw while on screen.
       let visible = true,
-        raf = 0;
+        raf = 0,
+        last = performance.now();
       const io = new IntersectionObserver(([en]) => {
         visible = en.isIntersecting;
-        if (visible && !raf) raf = requestAnimationFrame(frame);
+        if (visible && !raf) {
+          last = performance.now();
+          raf = requestAnimationFrame(frame);
+        }
       });
       io.observe(host);
       const ease = (x: number) =>
         x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+      // Exponential approach per second, so the speed doesn't depend on the frame rate.
+      const approach = (dt: number, rate: number) => 1 - Math.exp(-rate * dt);
       function frame(now: number) {
         raf = 0;
         if (disposed || !visible) return;
+        const dt = Math.min(0.1, (now - last) / 1000);
+        last = now;
         if (camTween) {
-          camTween.t = Math.min(1, camTween.t + 0.022);
+          camTween.t = Math.min(1, camTween.t + dt / 0.75);
           const k = ease(camTween.t);
           camera.position.lerpVectors(camTween.p0, camTween.p1, k);
           controls.target.lerpVectors(camTween.t0, camTween.t1, k);
@@ -354,16 +400,18 @@ export function HX1Viewer({ height }: { height: number }) {
         }
         if (!reduced && !camTween && now - idleAt > 2500)
           controls.autoRotate = true;
-        explode = reduced ? explodeTo : explode + (explodeTo - explode) * 0.08;
+        explode = reduced
+          ? explodeTo
+          : explode + (explodeTo - explode) * approach(dt, 5);
         const f = ease(Math.min(1, Math.max(0, explode)));
         for (const p of parts) p.obj.position.copy(p.to).multiplyScalar(f);
-        lightLevel += (lightTo - lightLevel) * 0.08;
+        lightLevel += (lightTo - lightLevel) * approach(dt, 5);
         const pulse = reduced
           ? 1
           : 0.72 + 0.28 * Math.sin((now / 1000) * ((2 * Math.PI) / 1.9));
         MAT.led.emissiveIntensity = 0.25 + 4.0 * lightLevel * pulse;
         inner.intensity = 0.3 * lightLevel * pulse;
-        controls.update();
+        controls.update(dt);
         renderer.render(scene, camera);
         raf = requestAnimationFrame(frame);
       }
@@ -374,11 +422,19 @@ export function HX1Viewer({ height }: { height: number }) {
         io.disconnect();
         ro.disconnect();
         canvas.removeEventListener("pointermove", onMove);
+        canvas.removeEventListener("pointerdown", onDown);
+        canvas.removeEventListener("pointerup", onUp);
         canvas.removeEventListener("pointerleave", onLeave);
         controls.dispose();
         for (const m of meshes) m.geometry.dispose();
         for (const m of Object.values(MAT)) m.dispose();
+        ground.geometry.dispose();
+        (ground.material as InstanceType<typeof THREE.Material>).dispose();
+        key.dispose();
+        envTarget.dispose();
+        room.dispose();
         pmrem.dispose();
+        renderer.forceContextLoss();
         renderer.dispose();
         canvas.remove();
         api.current = null;
@@ -390,10 +446,9 @@ export function HX1Viewer({ height }: { height: number }) {
       disposed = true;
       cleanup();
     };
-    // Built once; labels and toggles go through state and `api`.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const ready = status === "ready";
   const seg: CSSProperties = {
     display: "inline-flex",
     padding: 3,
@@ -404,7 +459,7 @@ export function HX1Viewer({ height }: { height: number }) {
   const segBtn = (on: boolean): CSSProperties => ({
     appearance: "none",
     border: "none",
-    cursor: "pointer",
+    cursor: ready ? "pointer" : "default",
     padding: "8px 14px",
     borderRadius: 999,
     fontFamily: "var(--hux-sans)",
@@ -412,6 +467,7 @@ export function HX1Viewer({ height }: { height: number }) {
     fontWeight: 500,
     color: on ? "var(--hux-paper)" : "var(--hux-fg)",
     background: on ? "var(--hux-fg)" : "transparent",
+    opacity: ready ? 1 : 0.5,
   });
 
   return (
@@ -424,10 +480,14 @@ export function HX1Viewer({ height }: { height: number }) {
         gap: 12,
       }}
     >
-      <div ref={mount} style={{ position: "relative", minHeight: 0 }}>
-        {status !== "ready" && (
+      <div
+        ref={mount}
+        role="img"
+        aria-label={t("hx1.viewer.aria")}
+        style={{ position: "relative", minHeight: 0, overflow: "hidden" }}
+      >
+        {!ready && (
           <div
-            role="status"
             style={{
               position: "absolute",
               inset: 0,
@@ -442,17 +502,22 @@ export function HX1Viewer({ height }: { height: number }) {
               padding: 24,
             }}
           >
-            {status === "failed"
-              ? t("hx1.viewer.failed")
-              : `${t("hx1.viewer.loading")} ${progress}%`}
+            {status === "failed" ? (
+              <span role="alert">{t("hx1.viewer.failed")}</span>
+            ) : (
+              <span>
+                {t("hx1.viewer.loading")} <span aria-hidden>{progress}%</span>
+              </span>
+            )}
           </div>
         )}
         {tip && (
           <div
             style={{
               position: "absolute",
-              left: tip.x + 14,
-              top: tip.y + 12,
+              left: tip.x,
+              top: tip.y,
+              maxWidth: TIP_W,
               pointerEvents: "none",
               fontFamily: "var(--hux-mono)",
               fontSize: 11,
@@ -461,7 +526,6 @@ export function HX1Viewer({ height }: { height: number }) {
               color: "var(--hux-paper)",
               padding: "5px 8px",
               borderRadius: 4,
-              whiteSpace: "nowrap",
             }}
           >
             {t(`hx1.partNames.${partKey(tip.label)}`, {
@@ -487,6 +551,7 @@ export function HX1Viewer({ height }: { height: number }) {
                 key={v}
                 type="button"
                 aria-pressed={on}
+                disabled={!ready}
                 style={segBtn(on)}
                 onClick={() => {
                   setExploded(v === "exploded");
@@ -501,6 +566,7 @@ export function HX1Viewer({ height }: { height: number }) {
         <button
           type="button"
           aria-pressed={light}
+          disabled={!ready}
           onClick={() => {
             setLight(!light);
             api.current?.setLight(!light);

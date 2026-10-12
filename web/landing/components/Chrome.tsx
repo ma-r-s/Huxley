@@ -83,9 +83,12 @@ export function BalNav() {
             {t("nav.docs")}
           </a>
         )}
-        <a style={chipSolid} href="https://github.com/ma-r-s/Huxley">
-          {t("nav.github")} {!isMobile && "↗"}
-        </a>
+        {/* Phones: the footer links the repo; the nav keeps HX-1 and fits 360 px. */}
+        {!isMobile && (
+          <a style={chipSolid} href="https://github.com/ma-r-s/Huxley">
+            {t("nav.github")} ↗
+          </a>
+        )}
       </div>
     </nav>
   );

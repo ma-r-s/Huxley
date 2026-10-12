@@ -291,7 +291,7 @@
     "pill": "Matériel · HX-1",
     "titleLine1": "Appuyez pour parler.",
     "titleLine2": "Relâchez pour écouter.",
-    "subtitle": "HX-1 est le talkie-walkie sur lequel tourne le premier persona de Huxley. Il a été conçu pour un utilisateur âgé et aveugle : pas d'écran, pas de mot d'éveil, un seul levier orange.",
+    "subtitle": "HX-1 est le talkie-walkie par lequel parle la première persona de Huxley. Il a été conçu pour un utilisateur âgé et aveugle : pas d'écran, pas de mot d'activation, un seul levier orange.",
     "ctaHow": "Comment ça marche",
     "ctaSource": "La CAO",
     "viewer": {
@@ -310,11 +310,11 @@
       "points": [
         {
           "k": "Se trouve au toucher",
-          "v": "Le levier est la seule chose qui dépasse. L'interrupteur est à gauche et la parole à droite, on ne les confond jamais."
+          "v": "Le levier est la seule chose qui dépasse. L'interrupteur est à gauche et le levier de parole à droite, on ne les confond jamais."
         },
         {
-          "k": "N'écoute que tant qu'on tient",
-          "v": "Le micro s'ouvre quand le levier descend et se ferme quand il remonte. Entre les deux, rien n'écoute."
+          "k": "N'écoute que tant qu'on le tient",
+          "v": "En dehors d'un appel, le micro n'est ouvert que tant que le levier est enfoncé. Le reste du temps, rien n'écoute."
         },
         {
           "k": "Rien à regarder",
@@ -325,7 +325,7 @@
     "inside": {
       "eyebrow": "Ce qu'il y a dedans",
       "title": "Une petite carte, un grand haut-parleur, deux accus.",
-      "subtitle": "Passez le modèle en Éclaté pour voir chaque pièce, et pointez-en une pour son nom.",
+      "subtitle": "Passez le modèle en Éclaté pour voir chaque pièce. Pointez-en une, ou touchez-la, pour voir son nom.",
       "specs": {
         "size": "Taille",
         "weight": "Poids",
@@ -340,20 +340,20 @@
           "v": "La carte ronde de Waveshare : Wi-Fi, deux micros, un codec audio et sept LED RVB au dos."
         },
         {
-          "k": "Haut-parleur 40 mm, 5 W",
-          "v": "Derrière lui, tout le boîtier étanche lui sert de caisse, environ 130 cm³, pour des voix pleines."
+          "k": "Haut-parleur 40 mm",
+          "v": "Derrière lui, tout le boîtier fermé lui sert de caisse, environ 130 cm³, pour des voix pleines."
         },
         {
           "k": "Deux accus 18650",
-          "v": "Des accus protégés en parallèle, chargés par USB-C. L'interrupteur est encastré dans le flanc gauche pour ne pas être basculé par accident."
+          "v": "Des accus protégés en parallèle, chargés par USB-C interrupteur allumé. L'interrupteur est encastré dans le flanc gauche pour ne pas être basculé par accident."
         },
         {
           "k": "Le levier de parole",
-          "v": "Un levier imprimé, sur un axe imprimé, appuie sur un bouton 12 × 12 à travers un ressort : environ 2 mm de course jusqu'au clic."
+          "v": "Un levier imprimé, sur un axe imprimé, appuie sur un bouton 12 × 12 à travers un ressort, avec un clic court et franc."
         },
         {
           "k": "La lumière",
-          "v": "Les LED de la carte brillent à travers le dos transparent."
+          "v": "Les sept LED de la carte sont derrière le dos transparent, prêtes pour un voyant d'état que le firmware ne pilote pas encore. Le bouton Lumière montre à quoi il ressemblera."
         },
         {
           "k": "Quatre vis",
@@ -364,19 +364,19 @@
     "how": {
       "eyebrow": "Comment il parle à Huxley",
       "title": "Le talkie, ce sont les oreilles et la voix.",
-      "subtitle": "Tout le reste tourne sur un serveur Huxley : le persona, ses compétences et le modèle vocal.",
+      "subtitle": "Tout le reste se passe sur un serveur Huxley : la persona, ses skills et l'appel au modèle vocal.",
       "steps": [
         {
           "k": "Tenir",
-          "v": "Appuyer sur le levier ouvre le micro. Votre voix part vers le serveur en Wi-Fi pendant que vous parlez."
+          "v": "Enfoncer le levier ouvre le micro. Votre voix part vers le serveur en Wi-Fi pendant que vous parlez."
         },
         {
           "k": "Réfléchir",
-          "v": "Le serveur fait tourner le persona, ici Abuelo, une voix lente et chaleureuse en espagnol, et ses compétences : livres audio, radio, nouvelles, rappels et messages."
+          "v": "Le serveur fait tourner la persona, ici Abuelo, une voix lente et chaleureuse en espagnol, et ses skills : livres audio, radio, nouvelles, rappels et messages."
         },
         {
           "k": "Répondre",
-          "v": "La réponse revient et se joue au fur et à mesure. Appuyez à nouveau sur le levier pour l'interrompre."
+          "v": "La réponse revient et se fait entendre au fur et à mesure. Enfoncez à nouveau le levier pour l'interrompre."
         }
       ],
       "linkPersonas": "À propos des personas",
@@ -385,8 +385,8 @@
     "made": {
       "eyebrow": "Fait pour être fait",
       "title": "Imprimé à la maison, ajusté en logiciel.",
-      "body1": "Chaque pièce s'imprime sur une imprimante 3D de bureau : une façade blanche, une base rouge, un dos en PETG transparent au-dessus de la lumière, une grille noire et un levier orange. Le boîtier est modélisé en Python avec build123d.",
-      "body2": "Avant toute impression, des tests ajustent chaque pièce sur le modèle 3D de la carte elle-même, vérifient que chacune a un chemin pour entrer et qu'aucune couche ne commence dans le vide. Les pièces lourdes sont tenues par des formes imprimées et des vis, jamais par de la colle.",
+      "body1": "Chaque pièce imprimée sort d'une imprimante 3D de bureau : une façade blanche, une base rouge, un dos en PETG transparent au-dessus des LED de la carte, une grille noire et un levier orange. Le boîtier est modélisé en Python avec build123d.",
+      "body2": "Avant toute impression, des tests vérifient chaque pièce contre les autres et contre le modèle 3D de la carte elle-même, qu'elle a un chemin pour entrer et qu'aucune couche ne commence dans le vide. Les pièces lourdes sont tenues par des formes imprimées et des vis, jamais par de la colle.",
       "link": "Les sources du boîtier"
     },
     "partNames": {
@@ -408,7 +408,7 @@
       "power_switch_kcd1_101": "Interrupteur KCD1-101",
       "ribbon_6_wires": "Nappe 6 fils",
       "speaker_lead": "Fil du haut-parleur",
-      "speaker_40_mm_5_w": "Haut-parleur, 40 mm 5 W",
+      "speaker_40_mm_5_w": "Haut-parleur, 40 mm",
       "spring_0_4_4_15": "Ressort 0,4 × 4 × 15",
       "talk_lever": "Levier de parole",
       "talk_switch_wires": "Fils du bouton",

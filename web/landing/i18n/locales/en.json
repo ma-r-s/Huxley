@@ -291,7 +291,7 @@
     "pill": "Hardware · HX-1",
     "titleLine1": "Hold to talk.",
     "titleLine2": "Let go to listen.",
-    "subtitle": "HX-1 is the walkie-talkie Huxley's first persona runs on. It was made for an elderly blind user: no screen, no wake word, one orange lever.",
+    "subtitle": "HX-1 is the walkie-talkie Huxley's first persona speaks through. It was made for an elderly blind user: no screen, no wake word, one orange lever.",
     "ctaHow": "How it works",
     "ctaSource": "The CAD",
     "viewer": {
@@ -314,7 +314,7 @@
         },
         {
           "k": "Listens only while held",
-          "v": "The microphone opens when the lever goes down and closes when it comes back up. Nothing listens in between."
+          "v": "Outside a call, the microphone is open only while the lever is pressed in. The rest of the time, nothing listens."
         },
         {
           "k": "Nothing to look at",
@@ -325,7 +325,7 @@
     "inside": {
       "eyebrow": "What's inside",
       "title": "A small board, a big speaker, two cells.",
-      "subtitle": "Switch the model to Exploded to see every part, and point at one for its name.",
+      "subtitle": "Switch the model to Exploded to see every part. Point at one, or tap it, for its name.",
       "specs": {
         "size": "Size",
         "weight": "Weight",
@@ -340,20 +340,20 @@
           "v": "Waveshare's round board: Wi-Fi, two microphones, an audio codec, and seven RGB LEDs on its back."
         },
         {
-          "k": "40 mm, 5 W speaker",
-          "v": "Behind it, the whole sealed case is its back box, about 130 cm³, so voices come out full."
+          "k": "40 mm speaker",
+          "v": "Behind it, the whole closed case is its back box, about 130 cm³, so voices come out full."
         },
         {
           "k": "Two 18650 cells",
-          "v": "Protected cells in parallel, charged over USB-C. The power switch sits recessed in the left side so it isn't flipped by accident."
+          "v": "Protected cells in parallel, charged over USB-C with the power switch on. The switch sits recessed in the left side so it isn't flipped by accident."
         },
         {
           "k": "The talk lever",
-          "v": "A printed lever on a printed pin presses a 12 × 12 switch through a spring, about 2 mm of travel to the click."
+          "v": "A printed lever on a printed pin presses a 12 × 12 switch through a spring, with a short, firm click."
         },
         {
           "k": "The light",
-          "v": "The board's LEDs shine through the clear back."
+          "v": "The board's seven LEDs sit behind the clear back, ready for a status light the firmware doesn't drive yet. The Light button shows how it will look."
         },
         {
           "k": "Four screws",
@@ -364,11 +364,11 @@
     "how": {
       "eyebrow": "How it talks to Huxley",
       "title": "The walkie is the ears and the voice.",
-      "subtitle": "Everything else runs on a Huxley server: the persona, its skills and the voice model.",
+      "subtitle": "Everything else happens on a Huxley server: the persona, its skills, and the call to the voice model.",
       "steps": [
         {
           "k": "Hold",
-          "v": "Pressing the lever opens the microphone. Your voice streams to the server over Wi-Fi while you talk."
+          "v": "Pressing the lever in opens the microphone. Your voice streams to the server over Wi-Fi while you talk."
         },
         {
           "k": "Think",
@@ -385,10 +385,21 @@
     "made": {
       "eyebrow": "Made to be made",
       "title": "Printed at home, fitted in software.",
-      "body1": "Every part prints on a desktop 3D printer: a white front, a red base, a clear PETG top over the light, a black grille and an orange lever. The case is modelled in Python with build123d.",
-      "body2": "Before anything is printed, tests fit every part against the board's own 3D model, check that each one has a way in, and check that no layer starts in mid-air. The heavy parts are held by printed features and screws, never glue.",
+      "body1": "Every printed part comes off a desktop 3D printer: a white front, a red base, a clear PETG back over the board's LEDs, a black grille and an orange lever. The case is modelled in Python with build123d.",
+      "body2": "Before anything is printed, tests check every part against the others and against the board's own 3D model, check that each one has a way in, and check that no layer starts in mid-air. The heavy parts are held by printed features and screws, never glue.",
       "link": "The enclosure source"
     },
-    "partNames": {}
+    "partNames": {
+      "tub_base": "Base",
+      "tub_top": "Clear back",
+      "faceplate": "Front",
+      "grille_plug": "Speaker grille",
+      "holder_bridge": "Battery holder bridge",
+      "holder_leads": "Battery holder leads",
+      "lever_pin_printed": "Lever pin",
+      "ribbon_6_wires": "Ribbon cable",
+      "speaker_40_mm_5_w": "Speaker, 40 mm",
+      "power_switch_kcd1_101": "Power switch"
+    }
   }
 }

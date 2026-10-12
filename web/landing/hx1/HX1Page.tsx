@@ -51,7 +51,7 @@ export function HX1Page() {
       v: `~${Math.round(S.weight_g / 10) * 10} g`,
     },
     { k: t("hx1.inside.specs.battery"), v: `${S.cells} × 18650` },
-    { k: t("hx1.inside.specs.speaker"), v: "40 mm, 5 W" },
+    { k: t("hx1.inside.specs.speaker"), v: "40 mm" },
     { k: t("hx1.inside.specs.board"), v: "ESP32-S3" },
     { k: t("hx1.inside.specs.light"), v: "7 RGB LEDs" },
   ];
@@ -156,7 +156,7 @@ export function HX1Page() {
             </a>
           </div>
         </div>
-        <div style={{ minWidth: 0 }}>
+        <div style={{ minWidth: 0, height: isMobile ? 440 : 600 }}>
           <HX1Viewer height={isMobile ? 440 : 600} />
         </div>
       </section>
@@ -179,7 +179,7 @@ export function HX1Page() {
         />
         <div style={rowGrid(3)}>
           {why.map((p, i) => (
-            <Reveal key={p.k} delay={i * 90}>
+            <Reveal key={i} delay={i * 90}>
               <div style={itemK}>{p.k}</div>
               <p style={itemV}>{p.v}</p>
             </Reveal>
@@ -208,13 +208,15 @@ export function HX1Page() {
             display: "grid",
             gridTemplateColumns: isMobile
               ? "repeat(2, minmax(0, 1fr))"
-              : "repeat(6, minmax(0, 1fr))",
+              : isTablet
+                ? "repeat(3, minmax(0, 1fr))"
+                : "repeat(6, minmax(0, 1fr))",
             borderTop: "1px solid var(--hux-fg)",
           }}
         >
-          {specs.map((s) => (
+          {specs.map((s, i) => (
             <div
-              key={s.k}
+              key={i}
               style={{
                 padding: "16px 12px 18px 0",
                 borderBottom: "1px solid var(--hux-fg-line)",
@@ -237,7 +239,7 @@ export function HX1Page() {
         </div>
         <div style={rowGrid(3)}>
           {parts.map((p, i) => (
-            <Reveal key={p.k} delay={(i % 3) * 90}>
+            <Reveal key={i} delay={(i % 3) * 90}>
               <div style={itemK}>{p.k}</div>
               <p style={itemV}>{p.v}</p>
             </Reveal>
@@ -271,7 +273,7 @@ export function HX1Page() {
           }}
         >
           {how.map((p, i) => (
-            <Reveal as="li" key={p.k} delay={i * 90}>
+            <Reveal as="li" key={i} delay={i * 90}>
               <div style={itemK}>
                 {String(i + 1).padStart(2, "0")} · {p.k}
               </div>
