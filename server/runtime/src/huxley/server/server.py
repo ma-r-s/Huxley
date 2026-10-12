@@ -40,7 +40,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import fcntl
 import json
+import socket
+import struct
+import sys
 import time
 import uuid
 from collections import deque
@@ -81,6 +85,34 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+# One `server.tx.audio_stats` line per this many ms while audio flows to
+# a client: what the server handed over vs what the network took
+# (F-0022 in clients/firmware/docs/triage.md).
+_TX_STATS_WINDOW_MS = 1000
+# PCM bytes per ms of the 24 kHz 16-bit mono stream.
+_PCM_BYTES_PER_MS = 48
+_SO_NWRITE = 0x1024  # macOS <sys/socket.h>: bytes in the send buffer
+_TIOCOUTQ = 0x5411  # Linux <asm-generic/ioctls.h>: same, via ioctl
+
+
+def _sock_unsent(ws: ServerConnection) -> int | None:
+    """Bytes the kernel holds in this connection's send buffer (not yet
+    sent or not yet acked): grows when the network is slower than the
+    stream. None where the platform can't say."""
+    try:
+        sock = ws.transport.get_extra_info("socket")
+        if sock is None:
+            return None
+        if sys.platform == "darwin":
+            return int(sock.getsockopt(socket.SOL_SOCKET, _SO_NWRITE))
+        if sys.platform.startswith("linux"):
+            buf = fcntl.ioctl(sock.fileno(), _TIOCOUTQ, b"\0\0\0\0")
+            return int(struct.unpack("i", buf)[0])
+    except (OSError, AttributeError, ValueError):
+        return None
+    return None
+
+
 @dataclass
 class _ConnInfo:
     """T1.21 — per-WS-connection diagnostic record.
@@ -117,6 +149,12 @@ class _ConnInfo:
     # in `_send` / `_dispatch`.
     rx_types: dict[str, int] = field(default_factory=dict)
     tx_types: dict[str, int] = field(default_factory=dict)
+    # Outbound audio, current stats window (see `_tx_audio_stats`).
+    tx_audio_window_start_ms: int = 0
+    tx_audio_pcm_bytes: int = 0
+    tx_audio_sends: int = 0
+    tx_audio_wait_ms: float = 0.0
+    tx_audio_max_wait_ms: float = 0.0
 
     def to_diag(self) -> dict[str, Any]:
         """Serialize to the wire-format the `diag_state` frame uses.
@@ -853,10 +891,47 @@ class AudioServer:
             return
         for offset in range(0, len(pcm), self._AUDIO_CHUNK_BYTES):
             chunk = pcm[offset : offset + self._AUDIO_CHUNK_BYTES]
+            t0 = time.monotonic()
             await self._send({"type": "audio", "data": base64.b64encode(chunk).decode()})
+            await self._tx_audio_stats(len(chunk), (time.monotonic() - t0) * 1000)
             # Yield so the recv loop and any other tasks can interleave
             # — keeps the WS bidirectional even mid-burst.
             await asyncio.sleep(0)
+
+    async def _tx_audio_stats(self, pcm_bytes: int, wait_ms: float) -> None:
+        """Count one outbound audio chunk; once a second, log what went
+        out. `send_wait_ms` is time spent in `ws.send` (websockets waits
+        there when its buffer is over the high-water mark: the network
+        isn't keeping up); `sock_unsent` is what the kernel still holds.
+        Audio sent at real time (`audio_ms` ~ `window_ms`) with a board
+        that received less means the network; less sent means the
+        source was late."""
+        conn = self._conn
+        if conn is None or conn.ws is None:
+            return
+        now = _now_ms()
+        if conn.tx_audio_window_start_ms == 0:
+            conn.tx_audio_window_start_ms = now
+        conn.tx_audio_pcm_bytes += pcm_bytes
+        conn.tx_audio_sends += 1
+        conn.tx_audio_wait_ms += wait_ms
+        conn.tx_audio_max_wait_ms = max(conn.tx_audio_max_wait_ms, wait_ms)
+        window = now - conn.tx_audio_window_start_ms
+        if window < _TX_STATS_WINDOW_MS:
+            return
+        await logger.ainfo(
+            "server.tx.audio_stats",
+            window_ms=window,
+            audio_ms=conn.tx_audio_pcm_bytes // _PCM_BYTES_PER_MS,
+            sends=conn.tx_audio_sends,
+            send_wait_ms=round(conn.tx_audio_wait_ms),
+            max_send_wait_ms=round(conn.tx_audio_max_wait_ms),
+            write_buffer=conn.ws.transport.get_write_buffer_size(),
+            sock_unsent=_sock_unsent(conn.ws),
+        )
+        conn.tx_audio_window_start_ms = now
+        conn.tx_audio_pcm_bytes = conn.tx_audio_sends = 0
+        conn.tx_audio_wait_ms = conn.tx_audio_max_wait_ms = 0.0
 
     async def send_state(self, state: str) -> None:
         self._state = state

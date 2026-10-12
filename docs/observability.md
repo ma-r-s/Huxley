@@ -30,7 +30,7 @@ Every log event uses a dotted namespace + direction prefix. This makes events `g
 | `session.rx.*` | Messages received from the voice provider (OpenAI)      | `session.rx.tool_call`, `session.rx.error`                                                                    |
 | `session.tx.*` | Messages sent to the voice provider                     | `session.tx.commit`, `session.tx.cancel`, `session.tx.tool_output`, `session.tx.suspend`, `session.tx.resume` |
 | `server.rx.*`  | Messages received from the audio client                 | `server.rx.ptt_start`, `server.rx.ptt_stop`, `server.rx.wake_word`                                            |
-| `server.tx.*`  | Messages sent to the audio client                       | `server.tx.state`, `server.tx.model_speaking`                                                                 |
+| `server.tx.*`  | Messages sent to the audio client                       | `server.tx.state`, `server.tx.model_speaking`, `server.tx.audio_stats` (once a second while audio flows: audio sent vs what the socket still holds) |
 | `app.*`        | Application orchestration (lifecycle, guard rejections) | `app.session_end`, `app.ptt_rejected`                                                                         |
 | `<skill>.*`    | Per-skill events (skill author owns the namespace)      | `audiobooks.resolve`, `audiobooks.stream_started`, `system.volume_set`                                        |
 | `client.*`     | Telemetry forwarded from the audio client (web/ESP32)   | `client.silence_timer_started`, `client.thinking_tone_on`                                                     |
