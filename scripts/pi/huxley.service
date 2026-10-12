@@ -2,8 +2,15 @@
 # (docs/remote-operation.md W1). Installed by scripts/pi/install.sh.
 #
 # Status:  systemctl status huxley
+#          curl -s localhost:8765/health   (JSON: ok, persona, session, commit)
 # Logs:    tail -f ~/huxley/server/runtime/logs/huxley.log   (JSON, kept by run)
 # Restart: sudo systemctl restart huxley   (the deploy script does this at night)
+#
+# Config comes from the .env in WorkingDirectory (the server reads it
+# itself). Production's sets HUXLEY_PERSONA=abuelos and
+# HUXLEY_PERSONA_AT_BOOT=true, so after a power cut or a restart the
+# persona (reminders, Telegram, the OpenAI session) is up before the
+# walkie reconnects; without them it waits for the first client.
 #
 # Huxley shares the Pi with ~30 containers, so it gets the box's first
 # claim on CPU, disk and memory (decision 2): a stutter must never come

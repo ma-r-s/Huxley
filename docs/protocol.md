@@ -15,6 +15,47 @@ Any client that implements this protocol is a valid Huxley client. The framework
   - `?lang=<code>` — selects the persona's translation for this session (e.g. `es-CO`, `en`). The server resolves the persona for that language; an unsupported code falls back to the persona's default silently.
   - `?persona=<name>` — **T1.13.** Selects which persona this connection is for. `<name>` is the persona's **directory basename** under `./personas/<name>/` (the canonical id, NOT the YAML's `name:` field which is a human label — see `available_personas` in `hello` for both fields). The server swaps the active `Application` to that persona before sending hello, so the hello payload reflects the new persona. The runtime threads the connection's `?lang=<code>` into the swap so the new OpenAI session opens in the requested language from the start, avoiding a "default-language-then-disconnect-and-reconnect" cascade. Omit the param to keep the currently-active persona; on first connection, the server uses `HUXLEY_PERSONA` env or falls back per [persona resolution](#persona-selection-via-query-param-t113). An unknown name is logged and the connection still establishes on the previous persona — the picker UI can detect the mismatch via `hello.current_persona` and surface a retry. Persona-switch is exclusively a reconnect operation; there is no in-band `select_persona` message. Rationale: [decision: hot persona swap via reconnect](./decisions.md#2026-05-01--hot-persona-swap-via-reconnect-not-in-band-t113).
   - `?audio=opus`: audio in both directions as binary Opus packets instead of base64 PCM in JSON. Announced back in `hello.audio_params`. Without it (the PWA), nothing on this page changes. See [Opus audio](#opus-audio-audioopus).
+- **Plain HTTP on the same port**: only `GET /health` ([below](#http-health)). Any other plain HTTP request gets the WebSocket handshake's refusal (`426`), as before.
+
+## HTTP: `/health`
+
+`GET /health` on the voice port is answered as plain HTTP, never upgraded: `200`, `Content-Type: application/json`, `Cache-Control: no-store`. It is read-only and never touches the voice socket: the WebSocket at `/` works as before, and a health request never evicts the connected client (a second WebSocket client would). For the deploy script (after a restart: `ok` and `commit`) and `huxley-watch` ([remote-operation.md](./remote-operation.md) W1, W6), which must not open the voice socket.
+
+**Who may ask**: loopback and Tailscale sources only (`127.0.0.0/8`, `::1`, `100.64.0.0/10`, `fd7a:115c:a1e0::/48`); anyone else gets `404` (`server.health_refused` in the log; other plain HTTP paths answer `426`). Behind the Cloudflare tunnel every request arrives from loopback (cloudflared shares the network namespace), so **the tunnel must not route `/health`** (an ingress rule `path: ^/health$` to `service: http_status:404` ahead of the voice service): Cloudflare Access protects that hostname, and the device token comes later ([remote-operation.md](./remote-operation.md) decision 4). As a second guard, a request carrying a reverse proxy's forwarding header (`Cf-Connecting-Ip`, `Cf-Ray`, `X-Forwarded-For`, `Forwarded`, `X-Real-Ip`, `Tailscale-Funnel-Request`; cloudflared always adds the first three) gets `404` too, even from loopback.
+
+```json
+{
+  "ok": true,
+  "pid": 41873,
+  "started_at": "2026-10-12T23:04:11+00:00",
+  "uptime_s": 5321.4,
+  "commit": "a1b2c3d4",
+  "persona": "abuelos",
+  "session": { "state": "CONVERSING", "provider_connected": true },
+  "skills": { "audiobooks": "ok", "stocks": "disabled", "telegram": "failed" },
+  "client": {
+    "connected": true,
+    "conn_id": "9f2c1a7b",
+    "audio_format": "opus",
+    "shell": "firmware",
+    "since": "2026-10-13T00:12:40+00:00"
+  },
+  "walkie_last_seen": "2026-10-13T00:33:12+00:00",
+  "recording": true
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `ok` | A persona is running and its voice provider session is connected. |
+| `pid`, `started_at`, `uptime_s` | The server process. `started_at` is UTC wall clock; `uptime_s` comes from the monotonic clock (a board without an RTC jumps its wall clock when NTP arrives). |
+| `commit` | `git rev-parse --short HEAD` of the checkout the server's code runs from, read at startup; `null` outside a checkout. |
+| `persona` | The running persona's id (directory basename), or `null`: lazy boot before the first client, a boot that failed, the seconds of a reload. |
+| `session` | `{state, provider_connected}`: the state machine (`IDLE`, `CONNECTING`, `CONVERSING`) and whether the provider session is up; `null` with no persona. |
+| `skills` | Each installed skill: `ok` (running in this persona), `failed` (its `setup()` raised; disabled for this run, see [observability](./observability.md#skill-failures)) or `disabled` (installed, not in the persona). `{}` with no persona. From setup only, no probes: a skill whose own connection drops later still says `ok`. |
+| `client` | The current client, `{connected: true, conn_id, audio_format, shell, since}` (`since` = when it connected), or the last one with `connected: false` (`since` = when it left); `null` if none since start. `shell` is from the client's `device` event (`firmware`, `browser`, `home_screen`, `native_app`; a `device.hello` means `firmware`), `null` until it sends one. |
+| `walkie_last_seen` | When a firmware client was last connected (now, while one is); `null` if none since the server started. In memory. |
+| `recording` | The running persona's recorder is attached ([observability](./observability.md#recordings)). |
 
 ## Message format
 
@@ -199,6 +240,8 @@ Switching personas is therefore a **WebSocket reconnect**: the client closes its
 4. No personas — runtime refuses to start with an explanatory error.
 
 Refusing to start at step 3 was rejected in design: it would force the env var on every multi-persona install, exactly the deployment artifact T1.13 retires.
+
+**Persona at boot** (`HUXLEY_PERSONA_AT_BOOT=true`, production): the server starts the `HUXLEY_PERSONA` persona as soon as it is listening, before any client, through the same swap a first connection would run (eager provider connect included). The first client then finds it running: its hello names it, nothing starts twice, and a client that connects while the boot is still running waits for it. A `?persona=` naming another persona still swaps, as on any later connection. If the boot fails, the server stays up with no persona and the next connection retries as above. Without `HUXLEY_PERSONA` the setting does nothing but log `runtime.persona_boot_skipped`. Off by default, so development keeps the picker-driven lazy boot.
 
 **Failure mode**: if the requested `?persona=<name>` doesn't exist or fails to start, the runtime logs (`runtime.persona_load_failed` / `runtime.persona_start_failed`) and **keeps the previous active persona**. The connection still establishes; hello carries the actual `current_persona`. The PWA detects the mismatch (`current_persona !== requested`) and surfaces a retry — letting the WS handshake crash on a bad persona name would create a reconnect loop on the PWA side that's painful to recover from.
 

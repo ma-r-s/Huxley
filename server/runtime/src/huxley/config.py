@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     # `./personas/` (if exactly one exists). Set to a directory name
     # under `./personas/` to disambiguate when multiple are present.
     persona: str | None = None
+    # Start `persona` when the server starts instead of on the first
+    # client connection (lazy boot, the default). Production sets it so
+    # reminders, Telegram and `/health` work before the walkie reconnects
+    # after a power cut or a deploy. Needs `persona`; without it the
+    # server boots lazily and says so (`runtime.persona_boot_skipped`).
+    persona_at_boot: bool = False
 
     # --- WebSocket server ---
     server_host: str = "localhost"

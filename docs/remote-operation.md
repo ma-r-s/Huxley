@@ -1,7 +1,7 @@
 # Running the walkie from afar
 
 **Status**: plan, 2026-10-12, reviewed by two critics (server and firmware).
-Built so far: log retention (W1) and recording v1 (W3). Triage: [T1.43](./triage.md) (this plan), [T1.42](./triage.md)
+Built so far: log retention, persona at boot and `/health` (W1), recording v1 (W3). Triage: [T1.43](./triage.md) (this plan), [T1.42](./triage.md)
 (the caregiver's view, its front page).
 
 **The ask** (Mario, 2026-10-12): the walkie goes to grandpa at his retirement
@@ -21,7 +21,7 @@ else must work, fail and recover through one outbound connection.
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | Server host        | Mac (`uv run huxley`, port 8765; Soloist in Docker on the Mac). The launchd plist isn't installed.                                                                                                                                                                                                                                                                                      | The Orange Pi runs no Huxley yet.                                                                                                     |
 | Orange Pi          | Orange Pi 5B, 8 cores, 16 GB (8.9 used, 273 MB free, swap in use), 256 GB eMMC + the media HDD. 31 containers on `:latest` under Watchtower (Immich + ML, Jellyfin, Minecraft, qBittorrent, Home Assistant, Uptime Kuma, 4 cloudflared). 75-81 °C, no fan. 3 resets in 2 days: power cuts (heavy rain). No RTC: after a cut the clock is wrong until NTP. libopus and ffmpeg installed. | Every power cut at Mario's house takes grandpa's walkie down.                                                                         |
-| Starting           | The persona starts on the first client connection (`runtime.py:259`).                                                                                                                                                                                                                                                                                                                   | After a cut or a deploy, no reminders and no Telegram until the walkie reconnects.                                                    |
+| Starting           | Persona at boot built (`HUXLEY_PERSONA_AT_BOOT`, off by default, production sets it); otherwise it starts on the first client connection. `GET /health` built (v1).                                                                                                                                                                                                                     | With it set: up after a cut or a deploy, but a reminder due before the walkie reconnects is spoken to nobody (T1.44).                 |
 | Finding the server | `ws://192.168.68.71:8765/` compiled into `secrets.h`.                                                                                                                                                                                                                                                                                                                                   | A LAN IP.                                                                                                                             |
 | Server socket      | Plain `ws://`, no authentication (`server.py:470-508`). Admin messages share it (`install_skill`, `restart_server`, `set_skill_secret`); `?persona=` swaps the persona; `list_sessions` hands out transcripts.                                                                                                                                                                          | Exposed as is, anyone could install a package on the server or read grandpa's conversations.                                          |
 | One client         | A new connection evicts the old; the walkie then waits for a press before reconnecting (`hux_app.c:601-614`).                                                                                                                                                                                                                                                                           | Mario's PWA on grandpa's server silences grandpa.                                                                                     |
@@ -114,9 +114,21 @@ walkie --2.4 GHz--> their router --> wss://<host> (Cloudflare edge) --tunnel--> 
   battery if the board takes one.
 - systemd unit: `Restart=always`, `After=time-sync.target` with
   `systemd-time-wait-sync` (reminders use the clock), waits on the instance lock.
-- **Start the persona at boot**, pinned, not on the first connection.
-- **`/health`** (local and Tailscale only): persona up, OpenAI session,
-  Telegram connected, Soloist up, walkie last seen, running commit.
+- **Start the persona at boot**: done 2026-10-12. `HUXLEY_PERSONA_AT_BOOT=true`
+  with `HUXLEY_PERSONA` in production's `.env` (off by default, so dev
+  keeps the lazy boot); a failed boot leaves the server up and the next
+  connect retries. "Pinned" (ignoring `?persona=`) comes with the
+  production role (W2, decision 4). Before relying on it: T1.44 (a
+  reminder due before the walkie reconnects is spoken to nobody; a
+  provider connect that fails at boot waits for the walkie's
+  `wake_word`, so the deploy script should poll `/health`, not judge one
+  sample).
+- **`/health`** (local and Tailscale only): v1 done 2026-10-12, `GET /health`
+  on the voice port, 404 for other sources ([protocol](./protocol.md#http-health)):
+  persona up, OpenAI session, skills as setup left them (`ok`, `failed`,
+  `disabled`), client, walkie last seen, recording, running commit. Not
+  yet: Telegram connected and Soloist up need per-skill probes. The tunnel
+  must not route `/health` (tunneled requests arrive from loopback).
 - Deploy script: pulls a tag, `uv sync`, restarts at night or when Mario
   forces it (he may listen to books for hours), checks `/health` and the
   running commit, rolls back to the previous tag if it fails. Prompt changes

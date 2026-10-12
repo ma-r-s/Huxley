@@ -33,8 +33,10 @@ import asyncio
 import contextlib
 import os
 import signal
+import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -43,6 +45,7 @@ import structlog
 from huxley.app import Application
 from huxley.installer import InstallEvent, InstallResult, install_skill
 from huxley.instance_lock import InstanceLock, acquire_instance_lock, lock_path_for_port
+from huxley.loader import available_skill_names
 from huxley.logging import setup_logging
 from huxley.marketplace import fetch_marketplace
 from huxley.persona import (
@@ -58,7 +61,7 @@ from huxley.persona_yaml import (
     set_skill_config,
     set_skill_enabled,
 )
-from huxley.server.server import AudioServer
+from huxley.server.server import AudioServer, iso_utc
 from huxley.skills_state import build_skills_state
 from huxley.storage.secrets import JsonFileSecrets
 
@@ -66,6 +69,25 @@ if TYPE_CHECKING:
     from huxley.config import Settings
 
 logger = structlog.get_logger()
+
+
+def git_commit(directory: Path) -> str | None:
+    """`git rev-parse --short HEAD` of the checkout holding `directory`,
+    or None (not a checkout, no git, git failed). `/health`'s `commit`:
+    what the deploy script compares with the tag it just deployed."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=directory,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    sha = result.stdout.strip()
+    return sha if result.returncode == 0 and sha else None
 
 
 class Runtime:
@@ -106,8 +128,24 @@ class Runtime:
             on_delete_skill_secret=self._shim_delete_skill_secret,
             get_hello_extras=self._get_hello_extras,
             on_client_presence=self._shim_client_presence,
+            get_health=self._get_health,
         )
         self.current_app: Application | None = None
+        # Process facts for `/health`. Wall clock for `started_at`, the
+        # monotonic clock for `uptime_s` (the Pi has no RTC: its wall
+        # clock can jump at boot when NTP arrives).
+        self._started_at_ms = int(time.time() * 1000)
+        self._started_monotonic = time.monotonic()
+        # Resolved in `run()`; None before that or outside a checkout.
+        self._commit: str | None = None
+        # Installed skills (entry points), read once in `run()`: installing
+        # one restarts the process, and `/health` must not scan the venv
+        # inside a handshake.
+        self._installed_skills: list[str] | None = None
+        # `HUXLEY_PERSONA_AT_BOOT`: the task starting the persona at boot
+        # (`_boot_persona`). A connect while it runs waits for it instead
+        # of taking the lazy-boot path. None when booting lazily.
+        self._boot_task: asyncio.Task[None] | None = None
         # Background task that tears down the PREVIOUS Application
         # after a swap. Tracked so a rapid back-and-forth swap (A→B→A
         # within ~500ms) can await the in-flight teardown before
@@ -182,6 +220,14 @@ class Runtime:
         If ``HUXLEY_PERSONA`` IS set in the environment, it still wins
         — the env var becomes the default the lazy fallback picks.
 
+        **Persona at boot** (``HUXLEY_PERSONA_AT_BOOT=true``, production):
+        right after the listener starts, ``_boot_persona`` brings up
+        ``HUXLEY_PERSONA`` through the same swap path a first connect
+        takes (auto-connect included), so reminders, Telegram and
+        ``/health`` work with no client. A connect during that boot waits
+        for it. A boot that fails leaves the server up and lazy: the next
+        connect tries again, as it does today.
+
         **One server per port**: before anything else, take the instance
         lock (`huxley.instance_lock`), waiting up to
         `_INSTANCE_LOCK_TIMEOUT_S` for a previous server on the same port
@@ -254,20 +300,41 @@ class Runtime:
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, self._signal_shutdown)
 
+        # Startup facts for `/health` (and this log): the running code's
+        # commit and the installed skills.
+        self._commit = git_commit(Path(__file__).resolve().parent)
+        self._installed_skills = available_skill_names()
+        at_boot = self._config.persona_at_boot and self._config.persona is not None
+        server_url = f"ws://{self._config.server_host}:{self._config.server_port}"
         await logger.ainfo(
             "huxley_ready",
-            persona=None,
-            note="lazy boot — first WS connect picks the persona",
-            server=f"ws://{self._config.server_host}:{self._config.server_port}",
+            persona=self._config.persona if at_boot else None,
+            persona_at_boot=self._config.persona_at_boot,
+            commit=self._commit,
+            note=(
+                "persona starts now, before any client"
+                if at_boot
+                else "lazy boot: the first WS connect picks the persona"
+            ),
+            server=server_url,
         )
         print(
-            f"\033[1;32m[Huxley] Server listening on "
-            f"ws://{self._config.server_host}:{self._config.server_port}"
-            f" — awaiting first client to pick persona\033[0m",
+            f"\033[1;32m[Huxley] Server listening on {server_url}"
+            + (
+                f"; starting persona '{self._config.persona}' now"
+                if at_boot
+                else "; awaiting first client to pick persona"
+            )
+            + "\033[0m",
             flush=True,
         )
 
         server_task = asyncio.create_task(self.audio_server.run())
+        if self._config.persona_at_boot:
+            # Set before the first await below, so any connect sees it.
+            self._boot_task = asyncio.create_task(
+                self._boot_persona(), name="runtime.persona_boot"
+            )
         await self._shutdown_event.wait()
 
         await logger.ainfo("huxley_shutting_down")
@@ -279,6 +346,9 @@ class Runtime:
         # `asyncio.run`'s own teardown and thread joins after `run()`.
         self._arm_shutdown_deadline()
         self._shutting_down = True
+        # Before the listener closes: closing waits for every connection
+        # handler, and one parked on the boot would hold it open.
+        await self._settle_persona_boot()
         server_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await server_task
@@ -366,6 +436,71 @@ class Runtime:
         await logger.ainfo("runtime.restart_initiated")
         self._restart_after_shutdown = True
         self._shutdown_event.set()
+
+    # -- Persona at boot (HUXLEY_PERSONA_AT_BOOT) ---------------------------
+
+    async def _boot_persona(self) -> None:
+        """Start `HUXLEY_PERSONA` with no client connected, through the
+        swap path the first connect would take (auto-connect included).
+
+        Never raises: a failure is logged and the server stays up with no
+        persona, so the next connect retries through the lazy-boot path.
+        Afterwards, with nobody connected, the app is told so (the same
+        call a client leaving makes): content that starts before the
+        first client starts held instead of playing to nobody."""
+        name = self._config.persona
+        if name is None or self._shutting_down:
+            await logger.awarning(
+                "runtime.persona_boot_skipped",
+                reason="no_persona_configured" if name is None else "shutting_down",
+                note=(
+                    "HUXLEY_PERSONA_AT_BOOT needs HUXLEY_PERSONA; the first client picks"
+                    if name is None
+                    else "shutdown began before the boot ran"
+                ),
+            )
+            return
+        started = time.monotonic()
+        await logger.ainfo("runtime.persona_boot_started", persona=name)
+        try:
+            await self._switch_to_persona(name, auto_connect=True)
+        except Exception as exc:
+            await logger.aexception(
+                "runtime.persona_boot_failed",
+                persona=name,
+                error=f"{type(exc).__name__}: {exc}",
+                elapsed_ms=round((time.monotonic() - started) * 1000),
+                note="server stays up with no persona; the next client connect retries",
+            )
+            return
+        app = self.current_app
+        await logger.ainfo(
+            "runtime.persona_boot_ready",
+            persona=name,
+            provider_connected=app.provider.is_connected if app is not None else False,
+            client_connected=self.audio_server.has_client,
+            elapsed_ms=round((time.monotonic() - started) * 1000),
+        )
+        if app is not None and not self.audio_server.has_client:
+            await app.on_client_presence(False)
+
+    async def _settle_persona_boot(self) -> None:
+        """Shutdown during a boot: let it finish (bounded) so the app it
+        started is shut down cleanly by `_shutdown_apps`, then give up."""
+        task = self._boot_task
+        if task is None or task.done():
+            return
+        done, _ = await asyncio.wait({task}, timeout=self._TEARDOWN_TIMEOUT_S)
+        if done:
+            return
+        await logger.awarning(
+            "runtime.persona_boot_abandoned",
+            timeout_s=self._TEARDOWN_TIMEOUT_S,
+            note="shutdown came during the persona boot, which did not finish in time",
+        )
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
     # ── Persona swap algorithm ──────────────────────────────────────────
 
@@ -489,6 +624,14 @@ class Runtime:
 
             try:
                 await new_app.start(auto_connect=auto_connect)
+            except asyncio.CancelledError:
+                # Cancelled mid-start (a shutdown giving up on a stuck
+                # persona boot): close what it opened (DB, skill sessions,
+                # provider socket) instead of leaking it, then stop.
+                with contextlib.suppress(Exception):
+                    await new_app.shutdown()
+                await logger.awarning("runtime.persona_start_cancelled", persona=name)
+                raise
             except Exception:
                 # Cleanup partial init; OLD app (if any) untouched, unless
                 # this was a reload, which already stopped it.
@@ -1042,6 +1185,14 @@ class Runtime:
         Eager-connects (`auto_connect=True`) so the user's first PTT
         after the swap reaches a CONVERSING session instead of being
         rejected by the IDLE-state guard. Critic round 2 §4."""
+        # HUXLEY_PERSONA_AT_BOOT: the boot may still be starting the
+        # persona. Wait for it rather than starting a second one (or, on
+        # a different `?persona=`, swapping mid-start). It never raises;
+        # if it failed, `current_app` is None and the lazy path retries.
+        boot = self._boot_task
+        if boot is not None and not boot.done():
+            await logger.ainfo("runtime.connect_waits_for_persona_boot", requested=name)
+            await asyncio.wait({boot})
         # A swap or same-persona reload in flight can have
         # `current_app` at None for a few seconds (the reload stops the
         # old app before starting the new one). Wait for it, so this
@@ -1051,6 +1202,14 @@ class Runtime:
         if self._swap_lock.locked():
             async with self._swap_lock:
                 pass
+
+        # Shutting down (a connect parked on the boot, or one arriving
+        # while shutdown waits for it): start nothing new.
+        if self._shutting_down:
+            await logger.ainfo(
+                "runtime.persona_select_skipped", reason="shutting_down", requested=name
+            )
+            return
 
         # Lazy-boot path: no current_app yet. Pick a name (env var
         # default if no query param was supplied) and bring it up.
@@ -1197,3 +1356,45 @@ class Runtime:
             "session_ready": session_ready,
             "session_error": self._last_session_error,
         }
+
+    # -- GET /health (docs/protocol.md "HTTP: /health") ---------------------
+
+    def _get_health(self) -> dict[str, object]:
+        """The runtime's part of `/health`; `AudioServer` adds `client`,
+        `walkie_last_seen` and `recording` and serves it.
+
+        Synchronous and read-only: built from what the runtime already
+        holds, no probes. `ok` is true when a persona is running and its
+        voice provider session is connected."""
+        app = self.current_app
+        provider_connected = app is not None and app.provider.is_connected
+        return {
+            "ok": provider_connected,
+            "pid": os.getpid(),
+            "started_at": iso_utc(self._started_at_ms),
+            "uptime_s": round(time.monotonic() - self._started_monotonic, 1),
+            "commit": self._commit,
+            "persona": app.persona.data_dir.parent.name if app is not None else None,
+            "session": (
+                {
+                    "state": app.state_machine.state.name,
+                    "provider_connected": provider_connected,
+                }
+                if app is not None
+                else None
+            ),
+            "skills": self._skills_health(app),
+        }
+
+    def _skills_health(self, app: Application | None) -> dict[str, str]:
+        """Each installed skill: `ok` (running in the current persona),
+        `failed` (its setup raised; the registry disabled it) or
+        `disabled` (installed, not in the persona). Empty with no persona."""
+        if app is None:
+            return {}
+        if self._installed_skills is None:  # run() fills it; tests may not
+            self._installed_skills = available_skill_names()
+        skills = dict.fromkeys(self._installed_skills, "disabled")
+        skills.update(dict.fromkeys(app.skill_registry.skill_names, "ok"))
+        skills.update(dict.fromkeys(app.skill_registry.disabled_skill_names, "failed"))
+        return dict(sorted(skills.items()))

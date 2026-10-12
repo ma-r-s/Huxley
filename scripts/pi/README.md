@@ -10,7 +10,22 @@ The production server for grandpa's walkie runs on the shared Orange Pi
 - Config: `~/huxley/server/runtime/.env` (mode 600) and the persona's
   `data/` (DB, secrets, Telegram session), copied from the Mac at the
   cutover. Never run the Mac and the Pi on the same Telegram session or
-  Spotify account at once (decision 5).
+  Spotify account at once (decision 5). Production's `.env` also sets
+  `HUXLEY_PERSONA=abuelos` and `HUXLEY_PERSONA_AT_BOOT=true`: the persona
+  starts with the server, not when the walkie first connects, so reminders
+  and Telegram work right after a power cut or a deploy. The unit reads no
+  other environment file; the server loads this one from its working
+  directory.
+- Health: `curl -s localhost:8765/health` on the Pi (JSON; `ok` is true
+  when the persona runs and its OpenAI session is up; `commit` is the
+  running checkout). From the Mac over Tailscale only if
+  `HUXLEY_SERVER_HOST` binds the Pi's Tailscale address: `0.0.0.0` would
+  also open the unauthenticated voice socket, admin messages included, to
+  the house LAN until the device token (W2). Other sources and proxied
+  requests get 404; the Cloudflare tunnel must not route `/health`.
+  Fields in [`docs/protocol.md`](../../docs/protocol.md#http-health).
+- Before relying on reminders right after a restart: T1.44 in
+  [`docs/triage.md`](../../docs/triage.md).
 - Service: `huxley.service` (system unit, `User=mario`), installed by
   `sudo ~/huxley/scripts/pi/install.sh`: restarts on crash, waits for
   real time after boot, and outranks the Pi's containers for CPU, disk

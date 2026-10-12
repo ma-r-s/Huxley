@@ -5602,4 +5602,21 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 
 **Firmware items** (the firmware session files them as F-entries when Mario says go): W4 and W5 of the doc, plus W7's partition table and tests.
 
-**Progress**: logs kept (5721956f); device contract schema 1 in protocol.md (106b408a); the Pi has the code, a venv (runtime 775/775 there) and a verified-but-uninstalled unit (62b42aa8); main pushed to origin after a private-data scan (Mario OK'd the retirement-home wording); recorder (W3) merged (6376cdbf; abuelos records since c9689f84; end to end checked: mic and model Ogg files decode at the logged durations); a reminder or call parking a stream now announces it (5c4a775d); bench and planned test runs marked in logs/bench.jsonl (36 backfilled); firmware F-0026..F-0028 filed by the firmware session. huxley-watch v0 merged (0c521266): Mario rejected the sentence page and approved the visual one (status, tiles, day strip, 7-day bars, audiobook gauge, gap bars, calls), two critic rounds, 156 tests; running on the Mac at 127.0.0.1:8780 until the Pi cutover.
+**Progress**: logs kept (5721956f); device contract schema 1 in protocol.md (106b408a); the Pi has the code, a venv (runtime 775/775 there) and a verified-but-uninstalled unit (62b42aa8); main pushed to origin after a private-data scan (Mario OK'd the retirement-home wording); recorder (W3) merged (6376cdbf; abuelos records since c9689f84; end to end checked: mic and model Ogg files decode at the logged durations); a reminder or call parking a stream now announces it (5c4a775d); bench and planned test runs marked in logs/bench.jsonl (36 backfilled); firmware F-0026..F-0028 filed by the firmware session. huxley-watch v0 merged (0c521266): Mario rejected the sentence page and approved the visual one (status, tiles, day strip, 7-day bars, audiobook gauge, gap bars, calls), two critic rounds, 156 tests; running on the Mac at 127.0.0.1:8780 until the Pi cutover. Persona at boot (`HUXLEY_PERSONA_AT_BOOT`, off by default) and `GET /health` v1 (loopback and Tailscale, 404 otherwise; no per-skill probes yet) on branch `t143-boot-health`; follow-ups before relying on it in T1.44.
+
+---
+
+## T1.44: Before the first client: proactive turns and the provider connect
+
+**Status**: `queued` (2026-10-12, found by the critic of persona at boot, T1.43 W1) · **Effort**: M
+
+**Problem.** With `HUXLEY_PERSONA_AT_BOOT=true` the persona runs before the walkie reconnects, which surfaces two gaps that lazy boot hid:
+
+- **Proactive turns don't wait for a client.** Only content streams start held while nobody is connected (`TurnCoordinator._client_absent`); `inject_turn` goes ahead. A reminder still inside its late window (reminders skill `_DEFAULT_LATE_WINDOWS`: medication 15 min, generic 1 h, appointment 2 h) fires at setup and is spoken to nobody. Generic and appointment reminders never re-fire; medication ones lean on the 5/10/30 min retries. Lazy boot delivered them with the walkie connected. The same already happens whenever the walkie drops while the persona runs.
+- **A provider connect that fails outside a session end is never retried.** `_enter_connecting` drops to IDLE and only `_on_session_end` schedules `_auto_reconnect`, so a failed connect at boot waits for a client's `wake_word` (the walkie sends one per connection), and `/health` says `ok: false` meanwhile. On a connected walkie the same failure leaves presses beeping until it reconnects.
+
+**Why it matters.** Production should set the flag (T1.43 W1). A reminder spoken to nobody is a missed pill or appointment for a blind user, and the deploy script will judge a restart by `/health`.
+
+**Solution sketch.** (1) A framework mechanism, not a reminders tweak: proactive turns wait while no client is present and are delivered when one is back, with the skill keeping the say on staleness (a deadline the coordinator honours, or a "nobody heard it" signal so the skill re-fires). Needs design and a critic. (2) Run the existing reconnect loop when a connect fails at boot or on `wake_word` (its no-signal beep goes nowhere without a client), or retry from `Runtime._boot_persona`.
+
+**Validation.** Code citations above; the critic's scratch probe of 2026-10-12 (reminder fired at setup with no client connected).

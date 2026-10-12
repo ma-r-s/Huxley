@@ -48,6 +48,7 @@ import asyncio
 import base64
 import contextlib
 import fcntl
+import ipaddress
 import json
 import socket
 import struct
@@ -56,6 +57,8 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlparse
 
@@ -82,7 +85,7 @@ websockets.http11.MAX_LINE_LENGTH = 64 * 1024
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from websockets.http11 import Request
+    from websockets.http11 import Request, Response
 
     from huxley.server.recorder import Recorder
 
@@ -117,6 +120,60 @@ def _now_ms() -> int:
     PWA's `Date.now()` so server + client logs can be aligned on a single
     timeline without timezone math."""
     return int(time.time() * 1000)
+
+
+def iso_utc(ms: int) -> str:
+    """Epoch ms as an ISO 8601 UTC timestamp to the second (`/health`)."""
+    return datetime.fromtimestamp(ms / 1000, tz=UTC).isoformat(timespec="seconds")
+
+
+# `GET /health` (docs/protocol.md "HTTP: /health") answers only requests
+# from loopback or Tailscale (100.64.0.0/10 and Tailscale's IPv6 range);
+# any other source gets 404. Behind the Cloudflare tunnel EVERY request
+# arrives from loopback (cloudflared shares the network namespace), so the
+# tunnel must never route /health: Cloudflare Access guards that hostname,
+# and the device token comes later (docs/remote-operation.md decision 4).
+# As a second guard, a request carrying a reverse proxy's forwarding header
+# (cloudflared always adds Cf-Connecting-Ip, Cf-Ray and X-Forwarded-For;
+# Tailscale Serve and Funnel add X-Forwarded-For) is refused too, whatever
+# the tunnel's ingress rules say. 100.64.0.0/10 is also carrier-grade NAT
+# space, but those addresses never reach this socket directly.
+HEALTH_PATH = "/health"
+_HEALTH_NETWORKS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("fd7a:115c:a1e0::/48"),
+)
+_PROXY_HEADERS = (
+    "Cf-Connecting-Ip",
+    "Cf-Ray",
+    "X-Forwarded-For",
+    "Forwarded",
+    "X-Real-Ip",
+    "Tailscale-Funnel-Request",
+)
+
+
+def _url_path(target: str) -> str | None:
+    """The path part of a request target (no query), None if unparsable."""
+    try:
+        return urlparse(target).path
+    except ValueError:
+        return None
+
+
+def health_source_allowed(remote: object) -> bool:
+    """True when `remote` (a socket peername tuple) may read `/health`."""
+    if not isinstance(remote, tuple) or not remote or not isinstance(remote[0], str):
+        return False
+    try:
+        addr = ipaddress.ip_address(remote[0])
+    except ValueError:
+        return False
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped  # a dual-stack socket's view of an IPv4 peer
+    return any(addr in net for net in _HEALTH_NETWORKS)
 
 
 # One `server.tx.audio_stats` line per this many ms while audio flows to
@@ -216,6 +273,10 @@ class _ConnInfo:
     hello_sent: bool = False
     # `recorder.skipped_pcm_client` said for this connection already.
     recording_skip_logged: bool = False
+    # Which kind of client this is, from its device event (`device`'s
+    # `shell`: `firmware`, `browser`, `home_screen`, `native_app`; a
+    # `device.hello` means `firmware`). None until it says. `/health`.
+    shell: str | None = None
 
     def to_diag(self) -> dict[str, Any]:
         """Serialize to the wire-format the `diag_state` frame uses.
@@ -333,6 +394,10 @@ class AudioServer:
         # content when nobody listens instead of streaming it into
         # `_send_raw`'s silent drop. None for tests and tools.
         on_client_presence: Callable[[bool], Awaitable[None]] | None = None,
+        # The runtime's part of `GET /health` (persona, session, skills,
+        # process); the server adds `client`, `walkie_last_seen` and
+        # `recording`. None (tests, tools): `/health` is not served.
+        get_health: Callable[[], dict[str, object]] | None = None,
     ) -> None:
         self._host = host
         self._port = port
@@ -361,6 +426,11 @@ class AudioServer:
         self._on_persona_select = on_persona_select
         self._get_hello_extras = get_hello_extras
         self._on_client_presence = on_client_presence
+        self._get_health = get_health
+        # When a firmware client (`shell: firmware`) was last connected:
+        # set when one identifies itself and when it goes away. In memory,
+        # since this process started. `/health`'s `walkie_last_seen`.
+        self._firmware_last_seen_ms: int | None = None
         # `?persona=<name>` from the URL, captured in `_process_request`
         # and consumed before hello in `_handle_connection`. Single field
         # is safe for the same reason `_pending_language` is — handshakes
@@ -538,7 +608,7 @@ class AudioServer:
         self,
         connection: ServerConnection,
         request: Request,
-    ) -> None:
+    ) -> Response | None:
         """Intercept the WebSocket upgrade to capture URL query params.
 
         Clients pass `?lang=<code>` to select the persona's translation
@@ -547,7 +617,15 @@ class AudioServer:
         cache it on the server and consume it in `_handle_connection`,
         which runs immediately after the handshake completes. Returning
         `None` lets the handshake proceed normally.
+
+        `GET /health` is answered here as plain HTTP, never upgraded and
+        never touching the pending query params above, so it cannot
+        disturb the voice socket (see `_health_response`). Every other
+        path keeps the WebSocket handshake as before.
         """
+        get_health = self._get_health
+        if get_health is not None and _url_path(request.path) == HEALTH_PATH:
+            return self._health_response(connection, request, get_health)
         del connection
         try:
             parsed = urlparse(request.path)
@@ -574,6 +652,97 @@ class AudioServer:
             self._pending_audio = None
         return None
 
+    def _health_response(
+        self,
+        connection: ServerConnection,
+        request: Request,
+        get_health: Callable[[], dict[str, object]],
+    ) -> Response:
+        """`GET /health`: 200 with a JSON body for loopback and Tailscale,
+        404 for anyone else or anything relayed by a reverse proxy.
+        Read-only and synchronous: it never awaits, so the voice socket's
+        handlers can't interleave with it."""
+        remote = connection.remote_address
+        proxied = next((h for h in _PROXY_HEADERS if h in request.headers), None)
+        if proxied is not None or not health_source_allowed(remote):
+            logger.warning(
+                "server.health_refused",
+                remote=str(remote),
+                reason="proxied" if proxied is not None else "source",
+                header=proxied,
+                note="only loopback and Tailscale may read /health, never via a proxy; 404",
+            )
+            return connection.respond(HTTPStatus.NOT_FOUND, "Not Found\n")
+        status = HTTPStatus.OK
+        try:
+            payload: dict[str, object] = {**get_health(), **self._health_fields()}
+            body = json.dumps(payload)
+        except Exception as exc:
+            logger.exception("server.health_failed", remote=str(remote))
+            status = HTTPStatus.INTERNAL_SERVER_ERROR
+            body = json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+        else:
+            logger.debug("server.health", remote=str(remote), ok=payload.get("ok"))
+        response = connection.respond(status, body + "\n")
+        del response.headers["Content-Type"]
+        response.headers["Content-Type"] = "application/json"
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    def _health_fields(self) -> dict[str, object]:
+        """The server's part of `/health`: the current client (or the last
+        one, `connected: false`), when a firmware client was last
+        connected, and whether the persona's recorder is attached."""
+        conn = self._conn
+        shown = (
+            conn if conn is not None else (self._recent_conns[-1] if self._recent_conns else None)
+        )
+        client: dict[str, object] | None = None
+        if shown is not None:
+            connected = shown is conn
+            since_ms = shown.connected_at_ms
+            if not connected and shown.closed_at_ms is not None:
+                since_ms = shown.closed_at_ms
+            client = {
+                "connected": connected,
+                "conn_id": shown.conn_id,
+                "audio_format": shown.audio_format,
+                "shell": shown.shell,
+                "since": iso_utc(since_ms),
+            }
+        firmware_ms = self._firmware_last_seen_ms
+        if conn is not None and conn.shell == "firmware":
+            firmware_ms = _now_ms()  # connected right now
+        return {
+            "client": client,
+            "walkie_last_seen": iso_utc(firmware_ms) if firmware_ms is not None else None,
+            "recording": self._recorder is not None,
+        }
+
+    def _note_device(self, event: str, data: dict[str, Any]) -> None:
+        """Remember what kind of client the current connection is, from the
+        device event every client sends after `hello`: `device` with its
+        `shell`, or the hardware contract's `device.hello` (firmware only;
+        docs/protocol.md "Device contract")."""
+        conn = self._conn
+        if conn is None:
+            return
+        if event == "device.hello":
+            shell = "firmware"
+        elif event == "device" and isinstance(data.get("shell"), str):
+            shell = str(data["shell"])
+        else:
+            return
+        conn.shell = shell
+        if shell == "firmware":
+            self._firmware_last_seen_ms = _now_ms()
+
+    def _note_client_gone(self, conn: _ConnInfo) -> None:
+        """A connection closed or was evicted: a firmware client was last
+        seen when it left."""
+        if conn.shell == "firmware" and conn.closed_at_ms is not None:
+            self._firmware_last_seen_ms = conn.closed_at_ms
+
     async def _handle_connection(self, ws: ServerConnection) -> None:
         # T1.21 — per-connection diagnostic id. Short hex prefix is
         # plenty unique within a session and easy to type when grepping
@@ -596,6 +765,7 @@ class AudioServer:
             old_conn.close_reason = "evicted_by_new_client"
             old_conn.close_code = 1001
             old_conn.closed_at_ms = _now_ms()
+            self._note_client_gone(old_conn)
             self._recent_conns.append(old_conn)
             self._conn = None
             self._ptt_active = False
@@ -763,6 +933,7 @@ class AudioServer:
                 if self._recorder is not None:
                     self._recorder.connection_closed(conn_id, "disconnect")
                 conn.closed_at_ms = _now_ms()
+                self._note_client_gone(conn)
                 conn.ws = None  # release ref for GC
                 # If we got here without a ConnectionClosed exception
                 # (e.g. handler raised something else), close_code stays
@@ -1071,6 +1242,7 @@ class AudioServer:
                 event = str(msg.get("event", "unknown"))
                 raw_data = msg.get("data")
                 data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
+                self._note_device(event, data)
                 await logger.ainfo(f"client.{event}", **client_event_log_fields(data))
                 await self._dispatch_client_event(event, data)
             case other:

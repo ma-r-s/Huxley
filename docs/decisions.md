@@ -16,6 +16,18 @@ Append-only log of non-obvious calls. Format: date · context · decision · con
 
 ---
 
+## 2026-10-12: Persona at boot is opt-in; `/health` rides the voice port (T1.43 W1)
+
+**Decision**: `HUXLEY_PERSONA_AT_BOOT=true` starts `HUXLEY_PERSONA` as soon as the listener is up, through the same swap a first connection runs; off by default. `GET /health` is answered in the WebSocket server's `process_request` on the same port, as JSON, for loopback and Tailscale sources only (404 otherwise).
+
+**Why**: production restarts after power cuts and deploys, and with lazy boot nothing (reminders, Telegram, the provider session) runs until the walkie reconnects, and nothing tells the deploy script the restart worked. The deploy script and `huxley-watch` must not open the voice socket: a second client evicts the walkie.
+
+**Alternatives**: persona at boot by default (dev would need `HUXLEY_PERSONA` again, the ceremony the 2026-05-01 lazy boot removed). Booting before the listener starts (simpler, no wait in the connect path, but `/health` and the walkie's reconnects would hit a closed port for the whole boot). A separate health port (a second listener and one more port to firewall, for no gain). A token instead of the address check (comes with the device token; until then the tunnel simply must not route `/health`, since tunneled requests arrive from loopback).
+
+**Consequences**: a connect during the boot waits for it; a boot that fails leaves the server lazy and the next connect retries. `/health` reports skills only as setup left them (no probes), so "Telegram connected" and "Soloist up" need a later version. `walkie_last_seen` is in memory: a restart forgets it.
+
+---
+
 ## 2026-10-12: The waiting sound comes from the server (T1.41)
 
 **Decision**: the coordinator sends a soft waiting cue (one struck note every 1.5 s) while a user waits on a reply or a tool and the client has gone quiet; the PWA drops its own client-side tone. Reverses the 2026-04 decision that the thinking tone is client-side.

@@ -372,8 +372,21 @@ A disabled skill stays disabled until the persona reloads or the server restarts
 | `runtime.reload_restored_previous`   | The reloaded app failed to start; the persona is running again as it was before the edit.                                                                                                        | `persona`                                  |
 | `runtime.reload_restore_failed`      | That restore failed too; no app is loaded until the next connect. The next hello says `session_ready=false`.                                                                                     | `persona`                                  |
 | `runtime.teardown_timeout_abandoned` | A previous app's teardown outlived its bound (10 s for a swap, 20 s for a reload); the swap or reload went ahead anyway.                                                                         | `what` (`previous_swap`, `reload_old_app`) |
+| `huxley_ready` | The listener is about to start. Says whether the persona starts now or on the first connect, and which code is running. | `persona`, `persona_at_boot`, `commit`, `server` |
+| `runtime.persona_boot_started` | `HUXLEY_PERSONA_AT_BOOT`: the configured persona is starting with no client. | `persona` |
+| `runtime.persona_boot_ready` | It is running. `provider_connected=false` means the voice provider connect failed (`connection_failed` just before); the next client's `wake_word` retries it. | `persona`, `provider_connected`, `client_connected`, `elapsed_ms` |
+| `runtime.persona_boot_failed` | (error, traceback) It did not start. The server stays up with no persona (`/health` says `persona: null`); the next client connect retries through the lazy path. | `persona`, `error`, `elapsed_ms` |
+| `runtime.persona_boot_skipped` | (warning) `HUXLEY_PERSONA_AT_BOOT` is set but `HUXLEY_PERSONA` is not (`reason=no_persona_configured`; boot is lazy), or shutdown began before the boot ran (`shutting_down`). | `reason` |
+| `runtime.connect_waits_for_persona_boot` | A client connected while the boot was running; its hello waits for the boot instead of starting a second app. | `requested` |
+| `runtime.persona_boot_abandoned` | (warning) Shutdown came during the boot and the boot did not finish within 10 s; it was cancelled. | `timeout_s` |
+| `runtime.persona_start_cancelled` | (warning) A persona start was cancelled midway (the line above); what it had opened was shut down. | `persona` |
+| `runtime.persona_select_skipped` | A client connected during shutdown (or was waiting on the boot when it began); no persona is started for it. | `reason`, `requested` |
 
 A server that gives up waiting for the old one (30 s) prints `[huxley] not starting: ...` to stderr and exits 1; under launchd that line is in `huxley.stderr.log` and KeepAlive starts it again later. It does not rotate the log first, so the stuck process's log is kept.
+
+### `/health`
+
+`GET /health` ([protocol](./protocol.md#http-health)) logs only what goes wrong: **`server.health_refused`** (warning) when a source other than loopback or Tailscale asked, or the request came through a reverse proxy (answered 404; `remote`, `reason` = `source` or `proxied`, `header`), **`server.health_failed`** (error, traceback) when building the answer raised (answered 500). A served request is **`server.health`** at debug (`remote`, `ok`): the watcher polls every few minutes.
 
 ## Voice provider session: responses, refresh, close
 
