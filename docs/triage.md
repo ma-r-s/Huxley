@@ -5544,7 +5544,7 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 
 ## T1.42: The caregiver's view: insight and alerts, never an event log
 
-**Status**: `queued` (2026-10-12, Mario's brief) · **Owner**: the "Huxley improvement plan" session (handed over 2026-10-12 at Mario's request: diagnostics, monitoring and alerting architecture live there; features and firmware stay in the firmware session) · **Effort**: L
+**Status**: `queued` (2026-10-12, Mario's brief; design v1 in [`remote-operation.md`](./remote-operation.md) W6, part of T1.43) · **Owner**: the "Huxley improvement plan" session (handed over 2026-10-12 at Mario's request: diagnostics, monitoring and alerting architecture live there; features and firmware stay in the firmware session) · **Effort**: L
 
 **Brief** (Mario): alerts and a beautiful, text-light way of knowing what's going on, so he can fix things from his home: audio cutting up on the device ("check what may be going on"), the Orange Pi down, the device out of battery, something unusual, OpenAI credits out or running low, audiobook hours low (buy more), the internet was down, the device not seen in a couple of days; and how the device is being used. **Not wanted**: a complex dashboard, individual events cluttering the board, everything shown with the important part buried; only what tells him something is going on.
 
@@ -5554,3 +5554,39 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 - One page, read in seconds. Top line: "All good" or "2 things need you". Then only the things that need him, each a plain sentence, why it matters, and one action ("About 2 h of audiobook time left this month. Buy more hours."; "The walkie hasn't connected since Saturday 21:10. Check it's charged and switched on."; "Audio was cutting up yesterday evening, about 1 minute in 10. Check the Wi-Fi near him."; "OpenAI credits: about USD 4 left, about 5 days at this pace. Top up."; "The Orange Pi stopped checking in 20 min ago."). Everything healthy folds into one quiet line ("Walkie online, Wi-Fi good, server up 12 days, latest version"). One small "how he uses it" block: this week's days used, conversations a day, hours of books, music and radio, calls. No event lists, no charts unless one says something a sentence can't.
 - Alerts: the same "needs you" items, pushed once when they appear and once when they clear, never repeated, quiet at night.
 - Where it comes from: a small watch module in the server turns its own state and logs into those sentences every few minutes (rules with thresholds, each rule tested); the Pi checks in with an outside watcher (a dead-man's switch such as healthchecks.io) that alerts if it goes silent; credits are spend (from the server's own cost lines) against the balance Mario enters after each top-up.
+
+**Design v1** (2026-10-12, after T1.43's two critics; full text in [`remote-operation.md`](./remote-operation.md) W6):
+- Proposal v0's page stays as is, plus one plain archive one click away (day, then conversation, then audio and transcript, calls included): Mario's other brief asked to "see each call and hear its recording" and to know "exactly when it's being used". The archive is where that lives, never the front page.
+- `huxley-watch` is its own process on the production box, not a module inside the voice server: it must keep alerting when the server is down or crash-looping, and it can never glitch audio. It reads the logs (kept by date, T1.43 W1), the recordings (T1.43 W3) and the server's `/health`; it builds a disposable cache, so no new database and no writes in the server. It pings the outside dead-man check.
+- Tailscale only (Mario's Mac and iPhones are on the tailnet); it never opens the voice WebSocket (one client at a time would evict the walkie).
+- Rules: offline > 15 min in the day or not seen for days; audio cutting up; battery < 20 % (only once F-0025's wiring exists: shown as unavailable until then); crash, rollback, update probation failure; server restart loop; OpenAI connect or quota failures; spend against the entered balance; audiobook hours low (`book:seconds:YYYY-MM` against `book_hours_per_month`, `spotify.start_refused cause=book_no_hours`, `spotify.book_hours_out`); Telegram or Soloist logged out; disk > 80 %; Access token or 4G SIM near expiry. Each sent once on appearing and once on clearing, quiet at night. T1.41's waiting cue never counts as an underrun.
+- Open (Mario): the alert channel (Telegram bot recommended; ntfy or email) and whether Tailscale-only is fine.
+
+## T1.43: Running the walkie from afar (grandpa's retirement home)
+
+**Status**: `proposal` (2026-10-12; plan reviewed by two critics, waiting on Mario's answers to the open questions) · **Owner**: the "Huxley improvement plan" session (server, ops, observability); firmware items built by the firmware session · **Effort**: L (weeks; phased)
+
+**Ask** (Mario, 2026-10-12): the walkie goes to grandpa at his retirement home, on its Wi-Fi, far from Mario's house. From home: update firmware, record every voice in and out with transcripts, see everything the speaker played (book, music, call, silence), a dashboard on the Orange Pi (hours of Spotify, calls and to whom, each call's recording, battery), keep developing while grandpa uses it, and "what may I be missing". Grandpa agreed to full recording.
+
+**Validation (Gate 1)**, measured today, every item a break at the retirement home (full table in [`remote-operation.md`](./remote-operation.md#where-things-stand-measured-2026-10-12)):
+- The server runs on the Mac (pid 94414, port 8765, the walkie at 192.168.68.69 connected to it); the Orange Pi runs no Huxley. The Pi reset 3 times in 2 days (journal boots -3..-1 end with no shutdown): power cuts (Mario: heavy rain). 75-81 °C, no fan, 31 containers under Watchtower, 273 MB free.
+- The walkie dials `ws://192.168.68.71:8765/` from `secrets.h`; the socket has no auth and carries `install_skill`, `restart_server`, `set_skill_secret`, `?persona=`, `list_sessions`; a second client evicts the walkie, which then waits for a press.
+- Updates and the remote console need the board's port-80 door and the Mac's LAN IP; an image is kept only after `dev.py` confirms it.
+- One Wi-Fi network compiled in; open networks refused; reconnect every 2 s forever; the task watchdog only logs; the rocker is unreachable; F-0020's download-mode fix is software polling.
+- Battery not wired (F-0025); no charging detection; never drained and recharged.
+- No audio recorded; logs pruned to 10 runs at each start; DB snapshots only at app start, same disk; persona starts on the first connection; `main` 31 commits ahead of `origin`.
+
+**Design (Gate 2)**: [`remote-operation.md`](./remote-operation.md): ten decisions, workstreams W1-W8, the order. In short: production stays at Mario's house on a UPS (dedicated box recommended); a Cloudflare Tunnel over `wss://` with an Access token and a device token, production granting by token, admin off; dev and prod never share an account; updates pulled through the server link, kept only after proving the next update works; voices recorded as the Opus that crossed the wire, everything else a timeline in the logs, no new database; T1.42 as the front page in its own process; everything needing the cable or the open case done in one session before handover; a 7-day dress rehearsal on a foreign network.
+
+**Critic notes (Gate 2)**: two fresh critics, server and firmware, 2026-10-12. Blockers taken: address-based admin lockdown would give the tunnel admin (cloudflared shares the network namespace) -> grant by token; dev and prod sharing Telegram, Spotify, OpenAI and the persona DB; power and clock first; the confirm proving the next update's path; a rollback image that can't come back (protocol mismatch parks it, NVS wiped across format changes); resets that can still boot download mode (remove R15, RST pinhole, charge-only adapter); battery behaviour at cutoff. Cut on the critics' advice: an analytics database, the recovery partition, secure boot and flash encryption, captive-portal automation, the server-sent hash. Full list in the doc's "Critic notes".
+
+**Definition of Done** (locked per phase when Mario answers; the whole plan's exit is phase 6):
+- Phase 0: UPS with clean shutdown on the box, router and modem; dead-man check alerting Mario's phone; code pushed after the private-data scan; production box and dev accounts decided.
+- Phase 1: production on the box, persona at boot, `/health`, logs by date, recorder writing Ogg/Opus per press, answer and call leg with `recorder.segment` lines, offline alerts.
+- Phase 2: the case-open list done once (battery, VBUS, R15, pinhole, partition table, flash dump, efuse summary), drain-and-recharge test passed.
+- Phase 3: the twin board on `wss://` through the tunnel with both tokens; production refuses everything but the device role.
+- Phase 4: two updates and one forced rollback on the twin board through the server link only; the ladder, watchdog supervisor and black box tested on the bench.
+- Phase 5: T1.42's page, archive and every rule, each rule with a test.
+- Phase 6: 7 days of grandpa's exact build on a foreign network with no manual touch, the plug pulled mid-book, home internet cut, cloudflared restarted mid-answer and mid-call, the restore drill under an hour, every alert received.
+
+**Firmware items** (the firmware session files them as F-entries when Mario says go): W4 and W5 of the doc, plus W7's partition table and tests.

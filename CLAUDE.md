@@ -65,6 +65,7 @@ Huxley/                              # repo root
 │   ├── decisions.md                 # ADR log
 │   ├── roadmap.md                   # framework + persona roadmaps
 │   ├── skill-marketplace.md         # T1.14 spec: v1/v2 split, secrets layout, schema versioning
+│   ├── remote-operation.md          # T1.43 plan: grandpa's walkie run from afar (prod server, reach, OTA, recording, alerts)
 │   ├── personas/{README,abuelos,basic,chief,librarian,buddy}.md
 │   ├── skills/{README,authoring,installing,index,audiobooks,news,radio,search,spotify,telegram,timers,reminders}.md
 │   ├── sounds.md                    # sound UX architecture (PlaySound, AudioStream, synthesis pipeline)

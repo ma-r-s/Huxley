@@ -16,6 +16,7 @@ Single source of truth for what Huxley is, what it does, and how it's built. Cod
 10. [**decisions.md**](./decisions.md) — architectural decision log (ADRs)
 11. [**verifying.md**](./verifying.md) — end-to-end smoke-test for a fresh checkout / reviewer
 12. [**review-notes.md**](./review-notes.md) — honest self-assessment for a third-party reviewer: known rough edges, non-issues, how to handle feedback
+13. [**remote-operation.md**](./remote-operation.md): running a device nobody can touch: production server, reach across the internet, remote firmware updates, recording, alerts (the plan for grandpa's walkie)
 
 ## Worked examples
 
