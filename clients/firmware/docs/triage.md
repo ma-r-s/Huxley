@@ -463,7 +463,7 @@ fallback with today's server (turn, silent, health PASS).
 **Next**: the server side (in progress), then the bench on Opus (turn,
 stall, slowdown, resume, hearing) and `dev.py link` over real use.
 
-### F-0025: Say how much battery is left · in_progress 2026-10-12 (the wiring in F-0026's open-case session; Mario approved the case opening once)
+### F-0025: Say how much battery is left · done 2026-10-12 (1b0fe784, probe fix below) (the wiring in F-0026's open-case session; Mario approved the case opening once)
 
 **Ask** (Mario): "a way so the device can tell me how much battery is
 left." Nothing reads the battery today.
@@ -503,6 +503,7 @@ cell's + to header IO6 and 100K from IO6 to GND. Either lands on GPIO6;
 gets built.
 **What the board has** (Mario looked, 2026-10-12): both are 3-pad groups with a 0R fitted. Upper group: 0R across middle and right; lower: 0R across middle and left (board held BAT/SPK plugs on the right). The schematic's "0R NC" puts each factory 0R across pins 2-1 (R53: CAM_HREF-GPIO1; R78: BAT_ADC to the link toward R53's pin 3, a dead end); that is the only fitting consistent with the probe (GPIO1 and GPIO6 both unconnected), so on R78 pin 2 is the left pad and the empty right pad is pin 3 (GPIO6). **The fix**: keep both 0R parts, add one solder blob on the lower group joining the middle pad to the empty right pad (BAT_ADC to GPIO6). Held the other way round, the same instruction lands on R53 instead and puts BAT_ADC on GPIO1 (through R78's 0R and the link): also readable, the probe covers both pins. Picture sent to Mario (`battery_bridge_exact.png`).
 **Built ahead of the blob** (2026-10-12): firmware `hux_battery_start` (finds GPIO6 or GPIO1, median of 32 at 6 dB once a minute while quiet, `hux_battery_level.c` host-tested: a Li-ion curve, a fall followed at once, a rise only past 5 points), `system.battery {mv, pct}` after each hello, on a change and every 5 min, `battery cal <mv>`; the system skill keeps the last reading for `get_battery` (says how old past 15 min, "not reported yet" before any) and speaks once at 20 % and once at 10 % (re-armed above 30 %), the warning as its own task (the handler runs in the receive loop). Waiting on Mario's blob to see `battery.wired gpio=6`, then a multimeter reading for `battery cal`.
+**Done on the walkie** (2026-10-12 20:20Z): Mario's blob landed on the upper group (R53: GPIO1 to the link, through R78's 0R to BAT_ADC), so the cell reads on GPIO1, as predicted for that case; GPIO6 and every other pin still read empty (no stray bridge). First boot: `battery.wired gpio=1`, 3.66 V uncalibrated = 18 %, and the system skill spoke the 20 % warning. A multimeter read the cell at 3.79 V: `battery cal 3790` set `cal_ppm=1026265` (the ADC read 2.6 % low), and the level became 3.81 V = 53 %. **Lesson**: around 3.6-3.8 V the curve is steep (130 mV is 30 points), so an uncalibrated board can warn falsely; every board gets one multimeter reading. Found doing it: the console probe read the level pin with the 12 dB scale after the level task had set it to 6 dB (1.9x too high, `verdict=not_wired`); fixed, the probe uses that pin's own scale.
 **Where it stopped (before)**: R78 and R53 are 0603 pads on the board's bottom
 (the BAT / SPK side), ~2 mm apart (Waveshare's STEP: R78 x 19.4-21.0,
 y 31.7-32.5; R53 y 33.6-34.4, board coordinates). Next: map them onto

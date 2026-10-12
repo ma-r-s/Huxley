@@ -31,6 +31,8 @@ static const int PINS[] = {1, 2, 3, 4, 5, 6, 8, 9};
 
 static adc_oneshot_unit_handle_t s_adc;
 static adc_cali_handle_t s_cali[NPINS]; /* per channel: the S3 calibrates each one */
+static int s_level_pin = -1;      /* index into PINS once a wired pin is found */
+static adc_cali_handle_t s_level_cali; /* that pin's 6 dB calibration */
 /* The probe (console task) and the level task share the ADC. */
 static SemaphoreHandle_t s_lock;
 
@@ -46,8 +48,6 @@ static SemaphoreHandle_t s_lock;
 #define CAL_NVS_NS         "hux_bat"
 #define CAL_NVS_KEY        "cal_ppm"
 static const int CANDIDATES[] = {6, 1};
-static int s_level_pin = -1;      /* index into PINS once a wired pin is found */
-static adc_cali_handle_t s_level_cali;
 static uint32_t s_cal_ppm = 1000000;
 static volatile int s_raw_cell_mv = -1; /* before the multimeter calibration */
 static volatile int s_cell_mv = -1;
@@ -111,8 +111,12 @@ static bool sample(int i, int *mean, int *lo, int *hi) {
         if (adc_oneshot_read(s_adc, ch, &raw) != ESP_OK) {
             return false;
         }
-        if (s_cali[i] == NULL || adc_cali_raw_to_voltage(s_cali[i], raw, &mv) != ESP_OK) {
-            mv = raw * 3100 / 4095; /* uncalibrated: 12 dB spans ~3.1 V */
+        /* The level pin runs at 6 dB once found: read it on its own scale,
+         * or the probe reports it ~1.9x too high. */
+        bool level = i == s_level_pin;
+        adc_cali_handle_t cal = level ? s_level_cali : s_cali[i];
+        if (cal == NULL || adc_cali_raw_to_voltage(cal, raw, &mv) != ESP_OK) {
+            mv = raw * (level ? 1750 : 3100) / 4095; /* uncalibrated: the range of 6 / 12 dB */
         }
         sum += mv;
         *lo = mv < *lo ? mv : *lo;
