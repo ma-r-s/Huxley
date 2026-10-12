@@ -1,5 +1,6 @@
 """The watcher's settings: one TOML file, every key optional, plus a
-secrets file (mode 600) for the Telegram bot and the dead-man ping URL.
+secrets file (mode 600) for the Telegram bot, the dead-man ping URL and
+the OpenAI admin key.
 
 Lookup: `--config PATH`, else `$HUXLEY_WATCH_CONFIG`, else
 `~/.config/huxley-watch/watch.toml` if it exists, else all defaults.
@@ -7,7 +8,7 @@ Relative paths in the file resolve against the file's directory. With no
 file, paths default to this checkout (`server/runtime/logs`,
 `server/personas/abuelos`), which is how the Mac and the Pi run it.
 
-The file is read again every cycle, so a new OpenAI balance or threshold
+The file is read again every cycle, so a new OpenAI limit or threshold
 applies without a restart (the bind address needs one).
 """
 
@@ -94,6 +95,13 @@ class Config:
     quiet_end: time = time(7, 0)
     balance_usd: float | None = None
     balance_at: datetime | None = None
+    # The month's OpenAI budget when the Admin API can't say: the hard
+    # spend limit set on platform.openai.com, USD a calendar month (UTC).
+    monthly_limit_usd: float | None = None
+    openai_project_id: str | None = None  # read this project's limit and spend too
+    # An sk-admin-... key: billed spend and the limits (openai_admin.py).
+    # Never logged, never served; repr=False keeps it out of any dump.
+    openai_admin_key: str | None = field(default=None, repr=False)
     book_hours_per_month: float | None = None
     # The audiobook allowance renews on this day of the month (Spotify's
     # billing day); None: calendar months, as the skill's own counter.
@@ -116,6 +124,11 @@ class Config:
     @property
     def state_file(self) -> Path:
         return self.state_dir / "alerts.json"
+
+    @property
+    def admin_file(self) -> Path:
+        """The Admin API's last answer (openai_admin.py); never the key."""
+        return self.state_dir / "openai_admin.json"
 
 
 class ConfigError(Exception):
@@ -313,6 +326,10 @@ def _load(path: Path | None) -> Config:
     balance_usd = _float(openai, "balance_usd")
     if balance_usd is not None and balance_at is None:
         raise ConfigError("openai.balance_usd needs openai.balance_at (when you read it)")
+    monthly_limit = _float(openai, "monthly_limit_usd")
+    if monthly_limit is not None and monthly_limit <= 0:
+        raise ConfigError("openai.monthly_limit_usd must be more than 0")
+    project_id = _secret(openai, "project_id")
 
     hours = _float(books, "hours_per_month")
     if hours is None:
@@ -392,6 +409,9 @@ def _load(path: Path | None) -> Config:
         quiet_end=quiet_end,
         balance_usd=balance_usd,
         balance_at=balance_at,
+        monthly_limit_usd=monthly_limit,
+        openai_project_id=project_id,
+        openai_admin_key=_secret(secrets, "openai_admin_key"),
         book_hours_per_month=hours,
         book_renews_day=renews_day,
         book_since=book_since,

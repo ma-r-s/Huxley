@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from huxley_watch.activity import KINDS, Segment
 from huxley_watch.facts import gaps_since, half_hours, wifi_bars
-from huxley_watch.rules import balance_estimate, rule_books, spent_today
+from huxley_watch.rules import balance_estimate, day_month, rule_books, spent_today
 from huxley_watch.text import short, short_when
 
 if TYPE_CHECKING:
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from huxley_watch.bench import Window
     from huxley_watch.rules import Inputs, Item
 
-SCHEMA = 2
+SCHEMA = 3  # 3: "credit", the month's OpenAI budget (T1.42)
 WEEK_DAYS = 7
 GAP_SLOTS = 24  # half hours on the gaps chart: the last 12 h
 GAP_MIN_PLAYED_S = 30.0  # under this a half hour has nothing to say (dev.py link)
@@ -94,6 +94,7 @@ def build(
         "today": _today(i, segments, midnight),
         "week": _week(i, segments, presses, midnight),
         "books": _books(i),
+        "credit": credit(i, items),
         "gaps": _gaps(i),
         "calls": _calls(segments, midnight - timedelta(days=WEEK_DAYS - 1)),
         "alerts": alerts_channel,
@@ -132,7 +133,6 @@ def _tiles(i: Inputs) -> dict[str, Any]:
     g = gaps_since(i.events, now - timedelta(hours=i.th.gap_window_hours), tz, w.conns, i.bench)
     enough = g.played_s >= i.th.gap_min_played_s
     pct = round(g.share * 100, 1) if enough else None
-    est = balance_estimate(i)
     return {
         "walkie": {
             "online": w.online if w.ever_seen else None,
@@ -162,12 +162,137 @@ def _tiles(i: Inputs) -> dict[str, Any]:
             "low_pct": i.th.battery_low_pct,
             "crit_pct": i.th.battery_crit_pct,
         },
-        "openai": {
+        "openai": _openai_tile(i),
+    }
+
+
+def _openai_tile(i: Inputs) -> dict[str, Any]:
+    """This month's budget left when a limit is known; else the balance
+    you entered (the secondary mode); else today's spend."""
+    b = i.budget
+    if b is not None and b.limit_usd is not None and b.left_usd is not None:
+        return {
             "today_usd": round(spent_today(i), 2),
-            "balance_left_usd": round(est[0], 2) if est else None,
-            "days_left": round(est[1], 1) if est and est[1] is not None else None,
-            "partial": bool(est and est[2]),
-        },
+            "budget_left_usd": round(max(0.0, b.left_usd), 2),
+            "limit_usd": b.limit_usd,
+            "balance_left_usd": None,
+            "days_left": None,
+            "partial": b.partial,
+        }
+    est = balance_estimate(i)
+    return {
+        "today_usd": round(spent_today(i), 2),
+        "budget_left_usd": None,
+        "limit_usd": None,
+        "balance_left_usd": round(est[0], 2) if est else None,
+        "days_left": round(est[1], 1) if est and est[1] is not None else None,
+        "partial": bool(est and est[2]),
+    }
+
+
+def _money(value: float | None, digits: int = 2) -> float | None:
+    return round(value, digits) if value is not None else None
+
+
+def credit(i: Inputs, items: Sequence[Item]) -> dict[str, Any]:
+    """The OpenAI card: this month's budget (UTC month, OpenAI's), each
+    day's spend and its source, the budget left after each day, and the
+    projection at the pace to the reset. x is days since the 1st 00:00
+    UTC; every number the card draws is here."""
+    b = i.budget
+    ids = {it.id for it in items}
+    chip = (
+        "Top up"
+        if "openai.quota" in ids
+        else "Raise limit or wait"
+        if ids & {"openai.limit", "openai.budget"}
+        else None
+    )
+    if b is None:
+        return {"mode": "spend", "chip": chip, "days": [], "line": [], "projection": []}
+    limit = b.limit_usd
+    n = (b.end - b.start).days
+    now_x = round((b.now - b.start).total_seconds() / 86400, 3)
+    days: list[dict[str, Any]] = []
+    line: list[list[float]] = [[0.0, limit]] if limit is not None else []
+    used = 0.0
+    for k, d in enumerate(b.days):
+        used += d.usd
+        entry: dict[str, Any] = {
+            "date": d.date.isoformat(),
+            "label": f"{d.date.day} {d.date.strftime('%b')}",
+            "x": k,
+            "usd": round(d.usd, 4),
+            "source": d.source,
+        }
+        if limit is not None:
+            entry["left_usd"] = round(limit - used, 2)
+            line.append([min(float(k + 1), now_x), round(limit - used, 4)])
+        days.append(entry)
+    projection: list[list[float]] = []
+    ahead: list[dict[str, Any]] = []
+    runs_out_x: float | None = None
+    left = b.left_usd
+    if limit is not None and left is not None and left > 0 and b.pace_usd:
+        if b.runs_out is not None:
+            runs_out_x = round((b.runs_out - b.start).total_seconds() / 86400, 3)
+            projection = [[now_x, round(left, 4)], [runs_out_x, 0.0]]
+        else:
+            projection = [[now_x, round(left, 4)], [float(n), round(b.end_left_usd or 0.0, 4)]]
+        for k in range(len(b.days), n):
+            when_ = b.start + timedelta(days=k)
+            ahead.append(
+                {
+                    "date": when_.date().isoformat(),
+                    "label": f"{when_.day} {when_.strftime('%b')}",
+                    "x": k,
+                    "left_usd": round(max(0.0, left - b.pace_usd * (k + 1 - now_x)), 2),
+                }
+            )
+    if limit is not None:
+        mode = "budget"
+    elif i.balance_usd is not None:
+        mode = "balance"  # the entered balance: the tile and its rule only
+    else:
+        mode = "spend"
+    return {
+        "mode": mode,
+        "month": b.start.strftime("%B"),
+        "month_start": b.start.date().isoformat(),
+        "days_in_month": n,
+        "resets": day_month(b.end),
+        "resets_at": b.end.isoformat(),
+        "limit_usd": limit,
+        "limit_source": b.limit_source,
+        "project_id": b.project_id,
+        "spent_usd": round(b.spent_usd, 2),
+        "left_usd": _money(left),
+        "partial": b.partial,
+        "today_usd": round(b.today_usd, 2),
+        "pace_usd": _money(b.pace_usd),
+        "pace_days": b.pace_days,
+        "runs_out": day_month(b.runs_out) if b.runs_out is not None else None,
+        "runs_out_x": runs_out_x,
+        "end_left_usd": _money(b.end_left_usd),
+        "now_x": now_x,
+        "source": b.source,
+        **_admin_state(i),
+        "chip": chip,
+        "line": line,
+        "projection": projection,
+        "days": days,
+        "ahead": ahead,
+    }
+
+
+def _admin_state(i: Inputs) -> dict[str, Any]:
+    """Whether the Admin API is read, and why it failed (by type only)."""
+    a = i.admin
+    return {
+        "admin": a is not None,
+        "billed_at": a.fetched_at.isoformat() if a is not None and a.fetched_at else None,
+        "billed_error": a.costs_error if a is not None else None,
+        "limit_error": a.limit_error if a is not None else None,
     }
 
 

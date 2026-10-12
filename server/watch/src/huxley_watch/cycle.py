@@ -28,6 +28,7 @@ from huxley_watch.dayview import Archive
 from huxley_watch.db import DbRead, read_db
 from huxley_watch.events import LogReader
 from huxley_watch.facts import server_alive, server_health_ok
+from huxley_watch.openai_admin import AdminReader
 from huxley_watch.page import render, render_fallback
 from huxley_watch.rules import evaluate, make_inputs
 from huxley_watch.views import build, fallback_status, mark_stale
@@ -35,7 +36,7 @@ from huxley_watch.views import build, fallback_status, mark_stale
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from huxley_watch.rules import Item
+    from huxley_watch.rules import Inputs, Item
     from huxley_watch.wlog import WatchLog
 
 
@@ -72,6 +73,7 @@ class Watcher:
         sender: Sender | None = None,
         pinger: Callable[[str], str | None] = ping,
         alive: Callable[[Config], bool | None] | None = None,
+        admin_opener: Callable[..., Any] | None = None,
     ) -> None:
         self.config_path = config_path
         self.cfg = cfg
@@ -79,6 +81,8 @@ class Watcher:
         self._sender_override = sender
         self._ping = pinger
         self._alive = alive or _alive
+        self._admin_opener = admin_opener or urllib.request.urlopen
+        self.admin_reader = AdminReader(cfg.admin_file, log, self._admin_opener)
         self.reader = LogReader(cfg.logs_dir, timedelta(days=cfg.lookback_days), log)
         self.bench_reader = BenchReader(cfg.logs_dir / "bench.jsonl", log)
         self.state: AlertState = load_state(cfg.state_file, log)
@@ -114,6 +118,12 @@ class Watcher:
                 "watch.book_budget_off",
                 "no books.hours_per_month and no spotify.book_hours_per_month",
             ),
+            (
+                self.cfg.openai_admin_key is None,
+                "watch.openai_admin_off",
+                "no openai_admin_key in secrets: spend is the server's estimate, "
+                "the limit openai.monthly_limit_usd",
+            ),
         )
         for off, event, reason in offs:
             if off and (event, "") not in self._notes_logged:
@@ -131,6 +141,8 @@ class Watcher:
         if cfg.logs_dir != self.cfg.logs_dir or cfg.lookback_days != self.cfg.lookback_days:
             self.reader = LogReader(cfg.logs_dir, timedelta(days=cfg.lookback_days), self.log)
             self.bench_reader = BenchReader(cfg.logs_dir / "bench.jsonl", self.log)
+        if cfg.admin_file != self.cfg.admin_file:
+            self.admin_reader = AdminReader(cfg.admin_file, self.log, self._admin_opener)
         self.cfg = cfg
         self._log_notes()
 
@@ -173,6 +185,13 @@ class Watcher:
         alive = self._fenced("server_alive", lambda: self._alive(cfg), None)
         health_ok = self._fenced("server_health", lambda: _health_ok(cfg), None) if alive else None
         disk_path = cfg.logs_dir if cfg.logs_dir.is_dir() else cfg.state_dir.parent
+        # Hourly at most, cached; a failure inside is logged there and the
+        # estimate takes over. Fenced too: nothing in it may cost a cycle.
+        admin = self._fenced(
+            "openai_admin",
+            lambda: self.admin_reader.read(cfg.openai_admin_key, cfg.openai_project_id, now),
+            None,
+        )
 
         inputs = make_inputs(
             result.events,
@@ -191,6 +210,9 @@ class Watcher:
             book_since=cfg.book_since,
             balance_usd=cfg.balance_usd,
             balance_at=cfg.balance_at,
+            admin=admin,
+            monthly_limit_usd=cfg.monthly_limit_usd,
+            openai_project_id=cfg.openai_project_id,
             disk_pct=self._fenced("disk", lambda: disk_pct(disk_path), None),
             alert_failures=self.state.failures,
             heard=result.heard,
@@ -255,6 +277,7 @@ class Watcher:
             alert_failures=state.failures,
             ping_ok=ping_ok,
             db_ok=db.problem is None,
+            **_budget_fields(inputs),
             duration_ms=round((time.monotonic() - started) * 1000),
         )
         return status
@@ -299,6 +322,22 @@ class Watcher:
             (self.cfg.state_dir / "status.json").write_bytes(body)
         except OSError as exc:
             self.log.warning("watch.page_write_failed", error=type(exc).__name__)
+
+
+def _budget_fields(inputs: Inputs) -> dict[str, Any]:
+    """The month's OpenAI budget on the cycle line: enough to see from the
+    log alone why the card said what it said."""
+    b = inputs.budget
+    if b is None:
+        return {}
+    return {
+        "budget_left_usd": round(b.left_usd, 2) if b.left_usd is not None else None,
+        "budget_limit_usd": b.limit_usd,
+        "budget_limit_source": b.limit_source,
+        "month_spent_usd": round(b.spent_usd, 2),
+        "spend_source": b.source,
+        "pace_usd": round(b.pace_usd, 3) if b.pace_usd is not None else None,
+    }
 
 
 def _health_ok(cfg: Config) -> bool | None:

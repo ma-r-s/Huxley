@@ -362,7 +362,7 @@ def test_http_serves_the_page_and_json(tmp_path: Path) -> None:
             assert resp.headers["Content-Type"].startswith("text/html")
             assert "The walkie" in resp.read().decode()
         with urllib.request.urlopen(base + "/status.json") as resp:
-            assert json.loads(resp.read())["schema"] == 2
+            assert json.loads(resp.read())["schema"] == 3
         with pytest.raises(urllib.error.HTTPError) as err:
             urllib.request.urlopen(base + "/logs/huxley.log")
         assert err.value.code == 404
