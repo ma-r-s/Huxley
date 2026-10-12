@@ -16,6 +16,7 @@
 #include "hux_audio.h"
 #include "hux_button.h"
 #include "hux_net.h"
+#include "hux_ota.h"
 
 static const char *TAG = "hux_console";
 
@@ -61,7 +62,7 @@ static void cmd_info(void) {
     ESP_LOGI(TAG, "info stack_free_min%s", line);
 }
 
-static void handle_line(char *line) {
+void hux_console_run(char *line) {
     char *argv[4] = {0};
     int argc = 0;
     for (char *tok = strtok(line, " \t"); tok != NULL && argc < 4; tok = strtok(NULL, " \t")) {
@@ -92,6 +93,9 @@ static void handle_line(char *line) {
         ESP_LOGI(TAG, "console.wifi started err=%s", esp_err_to_name(err));
     } else if (strcmp(cmd, "info") == 0) {
         cmd_info();
+    } else if (strcmp(cmd, "ota") == 0 && argc > 1) {
+        /* ESP-IDF's on-demand update: download, check, boot (hux_ota). */
+        hux_ota_start(argv[1], argc > 2 && strcmp(argv[2], "force") == 0);
     } else if (strcmp(cmd, "reboot") == 0) {
         /* A software restart: boots the app again, whatever the USB lines
          * are doing. Tools use it instead of pulsing RTS, which on this
@@ -119,7 +123,7 @@ static void handle_line(char *line) {
         hux_audio_pa(strcmp(argv[1], "on") == 0);
     } else {
         ESP_LOGW(TAG, "console.unknown %s (talk, release, say N, tone [hz] [ms], vol N, pa on|off, "
-                      "selftest [hz], wifi off|on, wifistat, info, reboot)",
+                      "selftest [hz], wifi off|on, wifistat, info, reboot, ota <url> [force])",
                  cmd);
     }
 }
@@ -147,7 +151,7 @@ static void console_task(void *unused) {
             char c = (char)buf[i];
             if (c == '\r' || c == '\n') {
                 line[len] = '\0';
-                handle_line(line);
+                hux_console_run(line);
                 len = 0;
             } else if (len < sizeof(line) - 1) {
                 line[len++] = c;

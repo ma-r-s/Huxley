@@ -102,3 +102,9 @@ CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK=y
 # -- Compiler ------------------------------------------------------------
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 CONFIG_COMPILER_WARN_WRITE_STRINGS=y
+
+# -- Updates over Wi-Fi (hux_ota) ----------------------------------------
+# ESP-IDF app rollback: a new image must confirm itself or the bootloader
+# boots the previous one. Plain http:// for images served on the LAN.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y

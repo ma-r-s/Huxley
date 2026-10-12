@@ -15,6 +15,8 @@
  *   wifistat            the Wi-Fi driver's buffer / RX / TX counters
  *   info                heap, PSRAM, task stack headroom, ring, volume
  *                       (and the codec's register), RSSI
+ *   ota <url> [force]   download the image at url, check it, boot it
+ *                       (hux_ota; `force` takes the same version again)
  *   reboot              restart in software: the safe way for a tool to
  *                       get a fresh boot (an RTS pulse can leave the chip
  *                       in download mode until a power cut)
@@ -32,6 +34,11 @@ extern "C" {
 
 /** Start the console task. Call once, after the components it drives. */
 void hux_console_start(void);
+
+/** Run one command line (the commands above; `line` is modified). The
+ * serial console calls it, and so does hux_dev's POST /cmd over Wi-Fi.
+ * Its results are log lines (serial, and the server's log). */
+void hux_console_run(char *line);
 
 #ifdef __cplusplus
 }

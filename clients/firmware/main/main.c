@@ -20,8 +20,10 @@
 #include "hux_board.h"
 #include "hux_button.h"
 #include "hux_console.h"
+#include "hux_dev.h"
 #include "hux_log.h"
 #include "hux_net.h"
+#include "hux_ota.h"
 #include "secrets.h"
 
 static const char *TAG = "huxley";
@@ -158,6 +160,16 @@ void app_main(void) {
     /* Bench commands on the USB serial console (talk, tone, vol, wifi,
      * info): drives the board from the Mac. */
     hux_console_start();
+
+    /* Updates over Wi-Fi: confirm a freshly updated image once it has run
+     * a while (ESP-IDF app rollback), and the developer door (HTTP) that
+     * tools/dev.py uses to update and look at the board. */
+    hux_ota_boot_check();
+#ifdef HUX_DEV_TOKEN
+    hux_dev_start(HUX_DEV_TOKEN);
+#else
+    hux_dev_start(NULL);
+#endif
 
     /* Plug the log drain into the net layer. From here on, log lines
      * at or above the remote threshold go to serial AND to the server
