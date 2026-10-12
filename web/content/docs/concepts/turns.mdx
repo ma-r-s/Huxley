@@ -53,7 +53,7 @@ The user is holding the PTT button. Audio frames flow from the browser through t
 </Accordion>
 
 <Accordion title="COMMITTING — audio captured, waiting for response">
-The user released the button. The framework checks how much audio arrived: under 133 ms is treated as an accidental tap and the turn aborts with "muy corto" (or whatever the persona's `too_short` UI string says). Otherwise the audio buffer is committed to OpenAI and the turn moves to IN_RESPONSE.
+The user released the button. The framework checks how much audio arrived: under 133 ms is treated as an accidental tap and the turn aborts with "muy corto" (or whatever the persona's `too_short` UI string says). So does a press where nobody spoke: after the first 100 ms (the button click), nothing peaks above -40 dBFS. Committed silence gets transcribed as a hallucination the model would answer. Otherwise the audio buffer is committed to OpenAI and the turn moves to IN_RESPONSE.
 </Accordion>
 
 <Accordion title="IN_RESPONSE — model is replying">

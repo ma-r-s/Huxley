@@ -46,6 +46,7 @@ class Turn:
     state: TurnState
     user_audio_frames: int             # chunks received (logged)
     user_audio_bytes: int              # PCM16 bytes received; the 133 ms too-short check measures this
+    user_audio_level: PressLevel       # peak / RMS after the first 100 ms; a press peaking under -40 dBFS is silent, not committed
     response_ids: list[str]
     pending_factories: list[Factory]   # accumulated across all responses in this turn
     needs_follow_up: bool              # per-response flag: set when a None-factory tool was called in the current response
@@ -143,8 +144,8 @@ This is **not** a new invention — `session/manager.py:82` has the same flag to
 stateDiagram-v2
     [*] --> IDLE
     IDLE --> LISTENING: ptt_start
-    LISTENING --> IDLE: ptt_stop (frames < 3)
-    LISTENING --> COMMITTING: ptt_stop (frames ≥ 3)
+    LISTENING --> IDLE: ptt_stop (under 133 ms, or silent)
+    LISTENING --> COMMITTING: ptt_stop (133 ms or more, not silent)
     COMMITTING --> IN_RESPONSE: first response event
     IN_RESPONSE --> IN_RESPONSE: audio delta OR function_call dispatched
     IN_RESPONSE --> AWAITING_NEXT_RESPONSE: response.done AND needs_follow_up

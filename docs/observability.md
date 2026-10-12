@@ -191,6 +191,10 @@ Read top to bottom: user pressed PTT (frame 28), coordinator committed, model st
 
 Every event is grep-able. To filter to one turn: `grep "turn=abc12345"`. To see only coordinator decisions: `grep "^coord\."`. To see only focus arbitration: `grep "^focus\."`. To see what the agent sent the user: `grep "^server.tx\."`.
 
+## Press levels — why a press didn't commit
+
+`coord.ptt_stop` carries `peak_dbfs` and `rms_dbfs` for every press (measured after its first 100 ms, which hold the button click), and `reason` (`too_short` or `silent`) when it wasn't committed. A silent press (peak under -40 dBFS) also logs **`coord.press_silent`** with `audio_ms`, `measured_ms`, the levels and `threshold_dbfs`. Reference levels on 2026-10-12: the walkie with nobody talking peaks at -56 dBFS, speech at -7 to 0 dBFS. A real question dropped as silent would show here with a peak just under the threshold.
+
 ## Focus events — what they tell you
 
 The `focus.*` namespace surfaces every move on the FocusManager's Activity stacks. These are mailbox-driven, so they appear slightly after the coordinator's `coord.*` event that triggered them (~5–50ms typical actor-loop processing).

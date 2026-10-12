@@ -136,7 +136,8 @@ class TestTurnLifecycle:
         under 2.5 s from the native app."""
         await coordinator.on_ptt_start()
         for _ in range(2):
-            await coordinator.on_user_audio_frame(b"\x00" * 4800)  # 100 ms
+            # 100 ms at -6 dBFS: a voice, not silence (silent presses don't commit)
+            await coordinator.on_user_audio_frame(b"\x00\x40" * 2400)
         await coordinator.on_ptt_stop()
 
         assert ("commit_and_request_response",) in provider.sent

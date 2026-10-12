@@ -61,6 +61,7 @@ from huxley_sdk import (
 from .factory import TurnFactory
 from .mic_router import MicRouter
 from .observers import ClaimObserver, ContentStreamObserver, DialogObserver
+from .press_level import SILENT_PEAK_DBFS
 from .speaking_state import SpeakingOwner, SpeakingState
 from .state import Turn, TurnSource, TurnState
 
@@ -358,7 +359,7 @@ class TurnCoordinator:
         )
 
     async def on_ptt_stop(self) -> None:
-        """User released PTT. Commit audio if enough frames were sent."""
+        """User released PTT. Commit the audio unless the press was too short or silent."""
         if self.current_turn is None:
             return
         frames = self.current_turn.user_audio_frames
@@ -366,9 +367,28 @@ class TurnCoordinator:
         # worklet sends 5.3 ms frames, the iOS app 20-100 ms, the ESP32 its
         # own size), so a chunk count means a different duration on each.
         audio_ms = self.current_turn.user_audio_bytes * 1000 // self._CLIENT_AUDIO_BYTES_PER_SECOND
-        if audio_ms < self._MIN_COMMIT_AUDIO_MS:
+        level = self.current_turn.user_audio_level
+        levels = {"peak_dbfs": level.peak_dbfs, "rms_dbfs": level.rms_dbfs}
+        # Silence is transcribed as a Whisper hallucination ("Subtitulos ...
+        # Amara.org") that the model then answers, so a silent press is
+        # dropped like a tap. Threshold and reference levels: `press_level`.
+        silent = audio_ms >= self._MIN_COMMIT_AUDIO_MS and level.is_silent
+        if audio_ms < self._MIN_COMMIT_AUDIO_MS or silent:
+            if silent:
+                await self._log.ainfo(
+                    "coord.press_silent",
+                    audio_ms=audio_ms,
+                    measured_ms=level.measured_ms,
+                    threshold_dbfs=SILENT_PEAK_DBFS,
+                    **levels,
+                )
             await self._log.ainfo(
-                "coord.ptt_stop", frames=frames, audio_ms=audio_ms, committed=False
+                "coord.ptt_stop",
+                frames=frames,
+                audio_ms=audio_ms,
+                committed=False,
+                reason="silent" if silent else "too_short",
+                **levels,
             )
             await self._send_status(self._status["too_short"])
             # audio_clear tells the client to cancel its silence timer — without
@@ -382,7 +402,9 @@ class TurnCoordinator:
             return
         self.current_turn.state = TurnState.COMMITTING
         self.response_cancelled = False
-        await self._log.ainfo("coord.ptt_stop", frames=frames, audio_ms=audio_ms, committed=True)
+        await self._log.ainfo(
+            "coord.ptt_stop", frames=frames, audio_ms=audio_ms, committed=True, **levels
+        )
         await self._send_status(self._status["sent"])
         await self._provider.commit_and_request_response()
 
@@ -413,6 +435,7 @@ class TurnCoordinator:
             await self._mic_router.dispatch(pcm)
             self.current_turn.user_audio_frames += 1
             self.current_turn.user_audio_bytes += len(pcm)
+            self.current_turn.user_audio_level.feed(pcm)
             await self._log.adebug("coord.mic_fwd", bytes=len(pcm))
         elif self.current_turn is not None:
             await self._log.adebug(
