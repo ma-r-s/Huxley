@@ -38,12 +38,13 @@ static SemaphoreHandle_t s_lock;
 
 /* The level (F-0025): once the divider is wired (the solder blob on R78:
  * GPIO6; held the other way round it lands on GPIO1), a reading every
- * minute while the speaker is quiet, reported on a change of percentage
- * and every 5 min. */
+ * minute while the speaker is quiet, each one reported. */
 #define LEVEL_TICK_MS      60000
 #define LEVEL_BUSY_RETRY_MS 5000
 #define LEVEL_LOADED_AFTER_MS (5 * 60 * 1000) /* no quiet minute: read anyway */
-#define LEVEL_REPORT_MS    (5 * 60 * 1000)
+/* Every reading goes out: "check again" must never answer with a value
+ * minutes old (Mario swapping the cell, 2026-10-12, heard 42 % twice). */
+#define LEVEL_REPORT_MS    LEVEL_TICK_MS
 #define LEVEL_SAMPLES      32
 #define CAL_NVS_NS         "hux_bat"
 #define CAL_NVS_KEY        "cal_ppm"
