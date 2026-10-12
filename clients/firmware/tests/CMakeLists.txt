@@ -52,6 +52,15 @@ target_include_directories(hux_type_probe PUBLIC ${HUX_NET_DIR}/include)
 add_library(hux_wifi_retry STATIC ${HUX_NET_DIR}/hux_wifi_retry.c)
 target_include_directories(hux_wifi_retry PUBLIC ${HUX_NET_DIR}/include)
 
+# -- hux_link (library under test): WS backoff + escalation ladder, in hux_net.
+add_library(hux_link STATIC ${HUX_NET_DIR}/hux_link.c)
+target_include_directories(hux_link PUBLIC ${HUX_NET_DIR}/include)
+
+# -- hux_blackbox (library under test): the RTC ring of last warnings, in hux_log.
+set(HUX_LOG_DIR ${CMAKE_SOURCE_DIR}/../components/hux_log)
+add_library(hux_blackbox STATIC ${HUX_LOG_DIR}/hux_blackbox.c)
+target_include_directories(hux_blackbox PUBLIC ${HUX_LOG_DIR}/include)
+
 # -- hux_debounce (library under test) ------------------------------
 # Pure C, the talk button's debounce; lives inside hux_button.
 set(HUX_BUTTON_DIR ${CMAKE_SOURCE_DIR}/../components/hux_button)
@@ -84,9 +93,19 @@ target_include_directories(test_hux_wifi_retry PRIVATE ${CMAKE_SOURCE_DIR}/helpe
 target_link_libraries(test_hux_wifi_retry PRIVATE hux_wifi_retry)
 add_test(NAME hux_wifi_retry COMMAND test_hux_wifi_retry)
 
+add_executable(test_hux_link test_hux_link.c)
+target_include_directories(test_hux_link PRIVATE ${CMAKE_SOURCE_DIR}/helpers)
+target_link_libraries(test_hux_link PRIVATE hux_link)
+add_test(NAME hux_link COMMAND test_hux_link)
+
+add_executable(test_hux_blackbox test_hux_blackbox.c)
+target_include_directories(test_hux_blackbox PRIVATE ${CMAKE_SOURCE_DIR}/helpers)
+target_link_libraries(test_hux_blackbox PRIVATE hux_blackbox)
+add_test(NAME hux_blackbox COMMAND test_hux_blackbox)
+
 # Convenience target: `cmake --build build --target check` runs every test.
 add_custom_target(check
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
     DEPENDS test_hux_proto test_hux_ws_frag test_hux_debounce test_hux_type_probe
-            test_hux_wifi_retry
+            test_hux_wifi_retry test_hux_link test_hux_blackbox
 )

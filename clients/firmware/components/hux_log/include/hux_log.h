@@ -70,6 +70,17 @@ void hux_log_set_sink(hux_log_sink_fn sink);
  */
 void hux_log_set_remote_level(char level_char);
 
+/**
+ * The previous boot's last warnings and errors (`device.blackbox`, about
+ * 4 KB, oldest first, one per line), or NULL: none (a power-on, or
+ * nothing logged). `*dropped` gets the lines it had to overwrite. Kept
+ * until hux_log_blackbox_sent(). App task only.
+ */
+const char *hux_log_blackbox(uint32_t *dropped);
+
+/** The black box reached the server: free it. */
+void hux_log_blackbox_sent(void);
+
 #ifdef __cplusplus
 }
 #endif

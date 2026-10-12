@@ -117,6 +117,14 @@ from a session, and `client_level` for the board's warnings and errors.
   the server's `timestamp` is when it got the line, `ts` is the
   board's uptime in ms when it happened. Past 256 lines the newest
   are dropped and counted (`log.dropped`). ISR lines stay on serial.
+- **A reset still loses the queue**, so warnings and errors also go to
+  a 4 KB black box in RTC memory (`hux_blackbox.c`, host-tested), which
+  a panic, a watchdog reset or a restart leaves alone (a power cut
+  doesn't). After the next hello the board sends the previous boot's as
+  `client_event device.blackbox {lines, dropped}` (in the server log as
+  `client.device.blackbox`; `dropped` = lines the 4 KB ring overwrote)
+  and logs `app.blackbox bytes= dropped= sent=`. Each line is
+  `<uptime_ms> <W|E> <tag>: <text>`. Kept until a send succeeds.
 - The current dev build sets the threshold to `INFO` (in `main.c`:
   `hux_log_set_remote_level('I')`) — the server sees every firmware
   log line. In prod we'll bump back up to `WARN` to bound bandwidth.
@@ -212,15 +220,51 @@ the server there sent its hello, so a typo can't strand the board.
 | -------------------------- | ---- |
 | `server`                   | logs `ws.server now= home= compiled= mode=` |
 | `server <uri> [min]`       | temporary (tests, proxies): back after `min` (15) or a reboot, never saved |
-| `server keep <uri> [min]`  | moves: saved at the first hello there (`ws.server_saved`, `ws.server_proven mode=keep`); no hello within `min` (15) and it goes back |
+| `server keep <uri> [min]`  | moves: saved at the first hello there (`ws.server_saved`, `ws.server_proven mode=keep`); no hello within `min` (15) and it goes back (`ws.server_revert to= why=timeout home_proven=`) |
+
+An address must be `ws://` or `wss://`, a host, an explicit port and a
+path (`ws://192.168.68.71:8765/`), or it's refused (`ws.server_refused
+why=invalid`): the library keeps the old port or path when a new address
+leaves one out, and a saved address it can't parse would fail every
+boot. One it refuses anyway leaves the old one in place
+(`why=set_uri`). A saved address that is invalid or fails at boot is
+erased and the compiled one used (`ws.server_saved_invalid`,
+`ws.server_saved_unusable`). Only a hello from a connection opened
+after the switch proves an address (`ws.hello_stale` otherwise).
 | `server reset`             | forgets the saved address, back to the compiled one |
 
 At boot, `ws.server boot= source=nvs|compiled`. A saved address is
 watched: its hello logs `ws.server_proven mode=watch source=nvs`; no
-hello for 10 min and it hands over to the compiled one, alternating
-every 10 min until one answers (`ws.server fallback to=`, then
-`mode=watch source=compiled`). A fallback never overwrites the saved
-address, and the next boot tries it first again.
+hello for 5 min and it hands over to the compiled one, alternating
+every 5 min until one answers (`ws.server fallback to= no_hello_s=`,
+then `mode=watch source=compiled`). A fallback never overwrites the
+saved address, and the next boot tries it first again. A revert that a
+hello or another switch overtook logs `ws.server_revert skipped
+why=stale`.
+
+### Without the server: backoff and the ladder (F-0027)
+
+Nobody at the home can restart the walkie, so it climbs by itself.
+A disconnect logs `ws.backoff why=disconnected|closed|finished
+attempt= next_in_ms=` (it replaced `ws.disconnected`): 2 s doubling,
+jittered 75 to 125 %, 45 to 60 s at the cap (`hux_link.c`,
+host-tested); a hello resets it, and a new IP gets a fast try
+(`ws.retry_fast why=new_ip`). Trust `ws.backoff`, not the library's own
+`Reconnect after N ms` (it prints the delay from before the change). Only the first three attempts of an
+outage and every tenth log (`ws.error` too): the lines wait in the
+256-line queue until the server is back. The first disconnect of an
+outage logs `ladder.lost why=disconnected|closed|finished`; then,
+still without a hello: `ladder.step step=ws` at 2 min (client stopped
+and started), `step=wifi` at 10 (`esp_wifi_stop`/`start`: a new
+association and DHCP lease), `step=reboot` at 60 (no lock: a hung
+holder can't stop it; an image still pending its OTA confirm goes back
+to the other slot). Each once per outage; a step that can't get the
+link lock in 10 s logs `ladder.lock_busy` and retries. Every client
+start logs `ws.start why=first_ip|resume|switch|ladder err= uri=`. The hello that ends it logs `ladder.found lost_s= steps=`
+(the last step taken). An eviction (`net.ws.evicted`, another client
+took the server) pauses the clock until the next press. Lines from
+the outage reach the server log only after it reconnects; the
+reboot's never do (the black box, F-0027, will carry them).
 
 ## Choppy audio or dropped connections: measure both ends
 
@@ -357,8 +401,8 @@ has no 5 GHz radio on this board), MAC not blocked.
 
 ```
 E (N) esp-tls: [sock=54] delayed connect error: Connection reset by peer
-E (N) hux_net: ws.error
-W (N) hux_net: ws.disconnected
+E (N) hux_net: ws.error attempt=1
+W (N) hux_net: ws.backoff why=disconnected attempt=1 next_in_ms=2214
 ```
 
 Check: server is running (`pgrep -af huxley`), bound on `0.0.0.0`

@@ -8,6 +8,8 @@
 #include "esp_attr.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_random.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
@@ -19,6 +21,7 @@
 #include "nvs.h"
 
 #include "hux_app.h"
+#include "hux_link.h"
 #include "hux_log.h"
 #include "hux_type_probe.h"
 #include "hux_wifi_retry.h"
@@ -81,7 +84,7 @@ static esp_timer_handle_t s_wifi_retry_timer = NULL;
  * by its own FINISH (dispatched by the task just before it exits, so it is
  * clear before stop() returns). A FINISH reaching the app late can't
  * restart a client that is already running again. */
-static bool s_ws_first_start = false;
+static _Atomic bool s_ws_first_start = false;
 static _Atomic bool s_ws_alive = false;
 /* The last CLOSE frame the server sent (WS task): an eviction ("Replaced
  * by new client", 1001) is told apart from a restart or a ping timeout. */
@@ -98,8 +101,9 @@ static char s_compiled_uri[128] = {0};
 #define SERVER_NVS_NS  "hux_net"
 #define SERVER_NVS_KEY "srv_uri"
 /* No hello this long on the saved address after a boot: try the compiled
- * one, then back, until one answers. */
-#define SERVER_FALLBACK_S (10 * 60)
+ * one, then back, until one answers. 5 min, off the ladder's 10 min Wi-Fi
+ * step (both at once wastes the first one's attempt). */
+#define SERVER_FALLBACK_S (5 * 60)
 typedef enum {
     SRV_HOME,     /* on the proven address: nothing pending */
     SRV_TEMP,     /* `server <uri> [min]`: tests; reverts by time, never saved */
@@ -122,11 +126,40 @@ static const char *ws_uri_for(const char *base) {
     snprintf(s_ws_uri, sizeof(s_ws_uri), "%s%saudio=opus", base, strchr(base, '?') ? "&" : "?");
     return s_ws_uri;
 }
-/* A `server <uri>` switch in progress: the stop it does ends the client's
- * task, whose FINISH would make the app resume it on the old URI. */
-static _Atomic bool s_switching = false;
+/* The link lock: one stop/start of the client at a time (a server move,
+ * its revert, the ladder, a pause or resume, a hello proving an address).
+ * The stop a switch does ends the client's task, whose FINISH would make
+ * the app resume it on the old URI; resume waits for the lock instead. */
+static _Atomic bool s_link_busy = false;
+/* The first IP's start, asked for while the lock was held: the holder runs
+ * it on its way out (the event task never waits on the lock). */
+static _Atomic bool s_start_pending = false;
 static esp_timer_handle_t s_server_revert;
 static void server_revert_due(void *arg);
+/* Generations, under the lock: a switch or a proving hello bumps
+ * s_srv_gen, so a revert timer armed before it (s_revert_gen) is stale. A
+ * hello proves an address only if its connection opened after the last
+ * switch (s_conn_gen, bumped by the WS task at each CONNECTED). */
+static uint32_t s_srv_gen = 0;
+static uint32_t s_revert_gen = 0;
+static _Atomic uint32_t s_conn_gen = 0;
+static uint32_t s_switch_conn_gen = 0;
+/* A hello arrived on s_home_uri this boot. A revert to an unproven home
+ * watches it instead of trusting it. */
+static bool s_home_proven = false;
+
+/* The ladder (remote-operation W5, F-0027): nobody at the home can
+ * restart the walkie, so without the server it restarts the WebSocket
+ * (2 min), Wi-Fi (10), then itself (60). The server counts as reached
+ * at a hello, lost at any disconnect; a deliberate pause (another client
+ * took the server) stops the clock. */
+static _Atomic bool s_server_up = false;
+static _Atomic bool s_paused = false;
+static _Atomic uint32_t s_lost_ms = 0;
+static _Atomic int s_ladder_done = HUX_LADDER_NONE;
+static _Atomic uint32_t s_ws_attempts = 0;
+#define LADDER_TICK_MS 5000
+static void ladder_task(void *arg);
 
 /* Audio data-plane seam — see firmware/docs/architecture.md §"Data
  * plane vs control plane". Inbound `audio` messages bypass
@@ -193,6 +226,86 @@ static _Atomic uint32_t s_rx_last_ms = 0;
 
 static uint32_t now_ms(void) {
     return (uint32_t)(esp_timer_get_time() / 1000);
+}
+
+/* Waits instead of skipping, so a revert can't be lost to a ladder step
+ * that happened to run at the same moment. Never from the WS task (a stop
+ * waits for it) or the event task (the ladder holds it around
+ * esp_wifi_stop). */
+static void link_lock(void) {
+    while (atomic_exchange(&s_link_busy, true)) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+
+static bool link_lock_timed(uint32_t ms) {
+    for (uint32_t waited = 0; atomic_exchange(&s_link_busy, true); waited += 50) {
+        if (waited >= ms) {
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    return true;
+}
+
+/* Lock held. A running client is not paused, whoever started it. */
+static void client_start(const char *why) {
+    esp_err_t err = esp_websocket_client_start(s_ws);
+    if (err == ESP_OK) {
+        atomic_store(&s_ws_alive, true);
+        atomic_store(&s_ws_first_start, true);
+        atomic_store(&s_paused, false);
+    }
+    ESP_LOGI(TAG, "ws.start why=%s err=%s uri=%s", why, esp_err_to_name(err), s_server_uri);
+}
+
+/* Lock held. FINISH clears s_ws_alive on the task's way out; clear it
+ * here too, so nothing reads a stale true after stop() returns. */
+static void client_stop(void) {
+    esp_websocket_client_stop(s_ws);
+    atomic_store(&s_ws_alive, false);
+}
+
+static void link_unlock(void) {
+    for (;;) {
+        if (atomic_exchange(&s_start_pending, false) && !atomic_load(&s_ws_alive) &&
+            !atomic_load(&s_paused)) {
+            client_start("first_ip");
+        }
+        atomic_store(&s_link_busy, false);
+        /* A start asked for while we released: take the lock back for it. */
+        if (!atomic_load(&s_start_pending) || atomic_exchange(&s_link_busy, true)) {
+            return;
+        }
+    }
+}
+
+/* An outage logs its first attempts and every tenth, not each one: the
+ * lines wait in a 256-line queue until the server is back, and an hour of
+ * them would push out the ladder's own. */
+static bool link_loud(uint32_t attempt) {
+    return attempt <= 3 || attempt % 10 == 0;
+}
+
+/* Any disconnect: start the ladder's clock (once per outage) and back
+ * the next attempt off (2 s doubling to 60 s, jittered): a long outage
+ * must not cost a TLS handshake every 2 s. From the WS task: the
+ * library reads the delay live, without a lock. */
+static void link_lost(const char *why) {
+    if (atomic_exchange(&s_server_up, false)) {
+        atomic_store(&s_lost_ms, now_ms());
+        atomic_store(&s_ladder_done, HUX_LADDER_NONE);
+        ESP_LOGW(TAG, "ladder.lost why=%s", why);
+    }
+    uint32_t attempt = atomic_fetch_add(&s_ws_attempts, 1) + 1;
+    uint32_t ms = hux_link_backoff_ms(attempt, esp_random());
+    if (s_ws != NULL) {
+        esp_websocket_client_set_reconnect_timeout(s_ws, (int)ms);
+    }
+    if (link_loud(attempt)) {
+        ESP_LOGW(TAG, "ws.backoff why=%s attempt=%u next_in_ms=%u", why, (unsigned)attempt,
+                 (unsigned)ms);
+    }
 }
 
 static void rx_stats_tick(uint32_t now) {
@@ -299,16 +412,21 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
         esp_timer_stop(s_wifi_retry_timer); /* a pending retry is moot now */
         xEventGroupSetBits(s_wifi_events, WIFI_CONNECTED_BIT);
         post_app(HUX_APP_EV_NET_WIFI_UP);
-        if (!s_ws_first_start && s_ws != NULL) {
-            /* From here on esp_websocket_client reconnects on its own. */
-            esp_err_t err = esp_websocket_client_start(s_ws);
-            s_ws_first_start = err == ESP_OK;
-            atomic_store(&s_ws_alive, err == ESP_OK);
-            if (err != ESP_OK) {
-                ESP_LOGE(TAG, "ws.start_failed err=%s (retried on the next IP)",
-                         esp_err_to_name(err));
+        if (atomic_load(&s_ws_first_start) && !atomic_load(&s_server_up)) {
+            /* A new network deserves a fast try, not the outage's minute. */
+            atomic_store(&s_ws_attempts, 0);
+            esp_websocket_client_set_reconnect_timeout(s_ws, HUX_LINK_BACKOFF_MIN_MS);
+            ESP_LOGI(TAG, "ws.retry_fast why=new_ip");
+        }
+        if (!atomic_load(&s_ws_first_start) && s_ws != NULL) {
+            /* From here on esp_websocket_client reconnects on its own. Never
+             * wait for the lock here: ask, and whoever holds it (or we, if
+             * nobody does) runs the start on the way out. */
+            atomic_store(&s_start_pending, true);
+            if (!atomic_exchange(&s_link_busy, true)) {
+                link_unlock();
             } else {
-                ESP_LOGI(TAG, "ws.start uri=%s", s_server_uri);
+                ESP_LOGI(TAG, "ws.start_deferred why=link_busy");
             }
         }
     }
@@ -620,11 +738,12 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
              * close without DISCONNECTED: CLOSED, FINISH). */
             atomic_store(&s_audio_opus, false);
             hux_opus_rx_reset();
+            atomic_fetch_add(&s_conn_gen, 1);
             ESP_LOGI(TAG, "ws.connected uri=%s", s_server_uri);
             post_app(HUX_APP_EV_NET_WS_CONNECTED);
             break;
         case WEBSOCKET_EVENT_DISCONNECTED:
-            ESP_LOGW(TAG, "ws.disconnected");
+            link_lost("disconnected"); /* logs ws.backoff why=disconnected */
             atomic_store(&s_audio_opus, false); /* the next hello decides again */
             hux_opus_rx_reset();
             /* Any half-received message is now unrecoverable; the
@@ -636,7 +755,9 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
             forward_ws_text(ev);
             break;
         case WEBSOCKET_EVENT_ERROR:
-            ESP_LOGE(TAG, "ws.error");
+            if (link_loud(atomic_load(&s_ws_attempts) + 1)) {
+                ESP_LOGE(TAG, "ws.error attempt=%u", (unsigned)(atomic_load(&s_ws_attempts) + 1));
+            }
             break;
         case WEBSOCKET_EVENT_CLOSED:
             /* The server closed it with a CLOSE frame (eviction, shutdown, a
@@ -644,6 +765,7 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
              * (enable_close_reconnect) but emits no DISCONNECTED: post it,
              * or the app stays READY on a dead socket. */
             ESP_LOGW(TAG, "ws.closed by_server eviction=%d", s_close_was_eviction);
+            link_lost("closed");
             hux_ws_reassembler_reset(&s_reassembler);
             post_app(HUX_APP_EV_NET_WS_DISCONNECTED);
             if (s_close_was_eviction) {
@@ -656,7 +778,8 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
              * hux_net_pause() should get here; anything else is reported so
              * the app restarts it. Before enable_close_reconnect, every
              * server close ended here, silently (F-0015). */
-            ESP_LOGW(TAG, "ws.finished: the client task exited");
+            ESP_LOGW(TAG, "ws.finished why=client_task_exited");
+            link_lost("finished");
             atomic_store(&s_ws_alive, false);
             post_app(HUX_APP_EV_NET_WS_FINISHED);
             break;
@@ -665,7 +788,7 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
     }
 }
 
-static void ws_start(const char *uri) {
+static bool ws_start(const char *uri) {
     strlcpy(s_server_uri, uri, sizeof(s_server_uri));
     esp_websocket_client_config_t cfg = {
         .uri = ws_uri_for(s_server_uri),
@@ -721,15 +844,40 @@ static void ws_start(const char *uri) {
         .task_stack = 6144,
     };
     s_ws = esp_websocket_client_init(&cfg);
-    configASSERT(s_ws != NULL);
+    if (s_ws == NULL) {
+        ESP_LOGE(TAG, "ws.init_failed uri=%s", s_server_uri);
+        return false;
+    }
     ESP_ERROR_CHECK(esp_websocket_register_events(
         s_ws, WEBSOCKET_EVENT_ANY, ws_event_handler, NULL));
     ESP_LOGI(TAG, "ws.init uri=%s (starts on the first IP)", s_server_uri);
+    return true;
 }
 
 /* ------------------------------------------------------------------ */
 /*  Public API                                                         */
 /* ------------------------------------------------------------------ */
+
+/* NVS's saved address, or "" (none, unreadable, or not one we may use:
+ * it is erased then, so it can't fail every boot). */
+static void server_load_saved(char *out, size_t cap) {
+    out[0] = '\0';
+    nvs_handle_t h;
+    if (nvs_open(SERVER_NVS_NS, NVS_READONLY, &h) != ESP_OK) {
+        return;
+    }
+    size_t len = cap;
+    esp_err_t err = nvs_get_str(h, SERVER_NVS_KEY, out, &len);
+    nvs_close(h);
+    if (err != ESP_OK) {
+        if (err != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(TAG, "ws.server_nvs_read err=%s", esp_err_to_name(err));
+        }
+        out[0] = '\0';
+    }
+}
+
+static void server_save(const char *uri);
 
 void hux_net_start(const hux_net_config_t *cfg) {
     configASSERT(cfg != NULL && cfg->wifi_ssid != NULL &&
@@ -738,81 +886,76 @@ void hux_net_start(const hux_net_config_t *cfg) {
     /* WS client created first; the GOT_IP handler starts it. */
     strlcpy(s_compiled_uri, cfg->server_uri, sizeof(s_compiled_uri));
     strlcpy(s_home_uri, cfg->server_uri, sizeof(s_home_uri));
-    char saved[sizeof(s_home_uri)] = {0};
-    size_t len = sizeof(saved);
-    nvs_handle_t h;
-    if (nvs_open(SERVER_NVS_NS, NVS_READONLY, &h) == ESP_OK) {
-        if (nvs_get_str(h, SERVER_NVS_KEY, saved, &len) != ESP_OK) {
-            saved[0] = '\0';
-        }
-        nvs_close(h);
+    char saved[sizeof(s_home_uri)];
+    server_load_saved(saved, sizeof(saved));
+    if (saved[0] != '\0' && !hux_link_uri_ok(saved, sizeof(s_home_uri))) {
+        ESP_LOGE(TAG, "ws.server_saved_invalid uri=%s: erased", saved);
+        server_save(NULL);
+        saved[0] = '\0';
     }
     if (saved[0] != '\0' && strcmp(saved, s_compiled_uri) != 0) {
         strlcpy(s_home_uri, saved, sizeof(s_home_uri));
     }
-    ESP_LOGI(TAG, "ws.server boot=%s source=%s", s_home_uri,
-             strcmp(s_home_uri, s_compiled_uri) == 0 ? "compiled" : "nvs");
-    ws_start(s_home_uri);
-    if (strcmp(s_home_uri, s_compiled_uri) != 0) {
+    bool from_nvs = strcmp(s_home_uri, s_compiled_uri) != 0;
+    ESP_LOGI(TAG, "ws.server boot=%s source=%s", s_home_uri, from_nvs ? "nvs" : "compiled");
+    if (!ws_start(s_home_uri)) {
+        /* Never let saved data stop the boot: back to the compiled one. */
+        configASSERT(from_nvs);
+        ESP_LOGE(TAG, "ws.server_saved_unusable uri=%s: erased, booting on %s", s_home_uri,
+                 s_compiled_uri);
+        server_save(NULL);
+        strlcpy(s_home_uri, s_compiled_uri, sizeof(s_home_uri));
+        from_nvs = false;
+        configASSERT(ws_start(s_home_uri));
+    }
+    const esp_timer_create_args_t args = {.callback = server_revert_due, .name = "ws_revert"};
+    ESP_ERROR_CHECK(esp_timer_create(&args, &s_server_revert));
+    if (from_nvs) {
         /* The saved address must prove itself again: if it never answers,
          * the compiled one gets its turn. */
         atomic_store(&s_srv_mode, SRV_FALLBACK);
-        const esp_timer_create_args_t args = {.callback = server_revert_due, .name = "ws_revert"};
-        if (esp_timer_create(&args, &s_server_revert) == ESP_OK) {
-            esp_timer_start_once(s_server_revert, (uint64_t)SERVER_FALLBACK_S * 1000000);
-        }
+        s_revert_gen = s_srv_gen;
+        esp_timer_start_once(s_server_revert, (uint64_t)SERVER_FALLBACK_S * 1000000);
+    }
+    atomic_store(&s_lost_ms, now_ms()); /* no server yet: the ladder's clock runs */
+    if (xTaskCreate(ladder_task, "hux_ladder", 4096, NULL, 3, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "ladder.task_create_failed: no escalation this boot");
     }
     wifi_init_sta(cfg->wifi_ssid, cfg->wifi_password);
 }
 
 void hux_net_pause(void) {
-    if (s_ws == NULL || !atomic_load(&s_ws_alive)) {
+    if (s_ws == NULL) {
         return;
     }
-    /* From the app task (never the WS task: stop waits for it to exit,
-     * and its FINISH clears s_ws_alive on the way out). */
-    esp_err_t err = esp_websocket_client_stop(s_ws);
-    ESP_LOGI(TAG, "ws.paused err=%s", esp_err_to_name(err));
+    /* From the app task. Deliberate: the ladder waits until the next press
+     * resumes. */
+    link_lock();
+    if (atomic_load(&s_ws_alive)) {
+        atomic_store(&s_paused, true);
+        client_stop();
+        ESP_LOGI(TAG, "ws.paused");
+    }
+    link_unlock();
 }
 
 void hux_net_resume(void) {
-    if (s_ws == NULL || atomic_load(&s_ws_alive) || atomic_load(&s_switching)) {
-        return; /* already running: nothing to do (never stop a live task here) */
+    if (s_ws == NULL) {
+        return;
     }
-    esp_err_t err = esp_websocket_client_start(s_ws);
-    atomic_store(&s_ws_alive, err == ESP_OK);
-    ESP_LOGI(TAG, "ws.resumed err=%s", esp_err_to_name(err));
-}
-
-static void server_switch(const char *uri, uint32_t revert_s, srv_mode_t mode);
-
-static void server_revert_task(void *arg) {
-    (void)arg;
-    if (atomic_load(&s_srv_mode) == SRV_FALLBACK) {
-        /* No hello on either address yet: try the other one. */
-        const char *next = strcmp(s_server_uri, s_compiled_uri) == 0 ? s_home_uri : s_compiled_uri;
-        ESP_LOGW(TAG, "ws.server fallback to=%s (no hello for %u s)", next,
-                 (unsigned)SERVER_FALLBACK_S);
-        server_switch(next, SERVER_FALLBACK_S, SRV_FALLBACK);
+    link_lock();
+    if (!atomic_load(&s_ws_first_start)) {
+        ESP_LOGI(TAG, "ws.resume skipped why=no_ip_yet"); /* the first IP starts it */
+    } else if (atomic_load(&s_ws_alive)) {
+        ESP_LOGI(TAG, "ws.resume skipped why=running");
     } else {
-        ESP_LOGW(TAG, "ws.server reverting to %s (the switch timed out)", s_home_uri);
-        server_switch(s_home_uri, 0, SRV_HOME);
+        if (atomic_load(&s_paused) && !atomic_load(&s_server_up)) {
+            atomic_store(&s_lost_ms, now_ms()); /* the clock starts again */
+            atomic_store(&s_ladder_done, HUX_LADDER_NONE);
+        }
+        client_start("resume");
     }
-    vTaskDelete(NULL);
-}
-
-static void server_revert_due(void *arg) {
-    (void)arg;
-    /* Not on the esp_timer task: the stop below waits for the WS task. */
-    xTaskCreate(server_revert_task, "ws_revert", 4096, NULL, 3, NULL);
-}
-
-void hux_net_set_server(const char *uri, uint32_t revert_s) {
-    server_switch(uri, revert_s, revert_s > 0 ? SRV_TEMP : SRV_HOME);
-}
-
-void hux_net_server_keep(const char *uri, uint32_t revert_s) {
-    server_switch(uri, revert_s > 0 ? revert_s : 15 * 60, SRV_KEEP);
+    link_unlock();
 }
 
 static void server_save(const char *uri) {
@@ -832,69 +975,218 @@ static void server_save(const char *uri) {
              esp_err_to_name(err));
 }
 
+/* Lock held. Points the client at `uri` (restarting it if it ran) and arms
+ * the revert. False, with nothing changed, if the library refuses it. */
+static bool server_switch_locked(const char *uri, uint32_t revert_s, srv_mode_t mode) {
+    bool was_running = atomic_load(&s_ws_alive);
+    if (was_running) {
+        client_stop();
+    }
+    char old[sizeof(s_server_uri)];
+    strlcpy(old, s_server_uri, sizeof(old));
+    strlcpy(s_server_uri, uri, sizeof(s_server_uri));
+    esp_err_t err = esp_websocket_client_set_uri(s_ws, ws_uri_for(s_server_uri));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "ws.server_refused uri=%s why=set_uri err=%s", uri, esp_err_to_name(err));
+        strlcpy(s_server_uri, old, sizeof(s_server_uri));
+        esp_websocket_client_set_uri(s_ws, ws_uri_for(s_server_uri));
+        if (was_running) {
+            client_start("switch_undone");
+        }
+        return false;
+    }
+    atomic_store(&s_srv_mode, mode);
+    s_srv_gen++;
+    s_switch_conn_gen = atomic_load(&s_conn_gen); /* a hello must come after this */
+    ESP_LOGW(TAG, "ws.server uri=%s was=%s mode=%d revert_in_s=%u", uri, old, (int)mode,
+             (unsigned)revert_s);
+    if (was_running) {
+        client_start("switch");
+    }
+    esp_timer_stop(s_server_revert); /* not running is fine */
+    /* A watch runs its timer whichever address it's on. */
+    if (revert_s > 0 && (mode == SRV_FALLBACK || strcmp(s_server_uri, s_home_uri) != 0)) {
+        s_revert_gen = s_srv_gen;
+        esp_timer_start_once(s_server_revert, (uint64_t)revert_s * 1000000);
+    }
+    return true;
+}
+
+static void server_switch(const char *uri, uint32_t revert_s, srv_mode_t mode) {
+    if (s_ws == NULL) {
+        return;
+    }
+    if (!hux_link_uri_ok(uri, sizeof(s_server_uri))) {
+        ESP_LOGE(TAG, "ws.server_refused uri=%s why=invalid (ws[s]://host:port/path)",
+                 uri != NULL ? uri : "(null)");
+        return;
+    }
+    link_lock();
+    server_switch_locked(uri, revert_s, mode);
+    link_unlock();
+}
+
+static void server_revert_task(void *arg) {
+    (void)arg;
+    link_lock();
+    int mode = atomic_load(&s_srv_mode);
+    if (s_revert_gen != s_srv_gen || mode == SRV_HOME) {
+        /* A hello or another switch got here first. */
+        ESP_LOGI(TAG, "ws.server_revert skipped why=stale mode=%d", mode);
+    } else if (mode == SRV_FALLBACK) {
+        /* No hello on either address yet: try the other one. */
+        const char *next = strcmp(s_server_uri, s_compiled_uri) == 0 ? s_home_uri : s_compiled_uri;
+        char to[sizeof(s_server_uri)];
+        strlcpy(to, next, sizeof(to));
+        ESP_LOGW(TAG, "ws.server fallback to=%s no_hello_s=%u", to, (unsigned)SERVER_FALLBACK_S);
+        server_switch_locked(to, SERVER_FALLBACK_S, SRV_FALLBACK);
+    } else {
+        /* A temporary or kept switch timed out: home, watched if no hello
+         * proved it this boot. */
+        char to[sizeof(s_server_uri)];
+        strlcpy(to, s_home_uri, sizeof(to));
+        ESP_LOGW(TAG, "ws.server_revert to=%s why=timeout home_proven=%d", to, s_home_proven);
+        server_switch_locked(to, s_home_proven ? 0 : SERVER_FALLBACK_S,
+                             s_home_proven ? SRV_HOME : SRV_FALLBACK);
+    }
+    link_unlock();
+    vTaskDelete(NULL);
+}
+
+static void server_revert_due(void *arg) {
+    (void)arg;
+    /* Not on the esp_timer task: the stop a switch does waits for the WS
+     * task. If the task can't be made, try again in 10 s. */
+    if (xTaskCreate(server_revert_task, "ws_revert", 4096, NULL, 3, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "ws.server_revert task_create_failed: retry in 10 s");
+        esp_timer_start_once(s_server_revert, 10 * 1000000);
+    }
+}
+
+void hux_net_set_server(const char *uri, uint32_t revert_s) {
+    server_switch(uri, revert_s, revert_s > 0 ? SRV_TEMP : SRV_HOME);
+}
+
+void hux_net_server_keep(const char *uri, uint32_t revert_s) {
+    server_switch(uri, revert_s > 0 ? revert_s : 15 * 60, SRV_KEEP);
+}
+
 void hux_net_server_reset(void) {
+    if (s_ws == NULL) {
+        return;
+    }
+    link_lock();
     server_save(NULL);
     strlcpy(s_home_uri, s_compiled_uri, sizeof(s_home_uri));
-    server_switch(s_compiled_uri, 0, SRV_HOME);
+    s_home_proven = false;
+    char to[sizeof(s_server_uri)];
+    strlcpy(to, s_compiled_uri, sizeof(to));
+    server_switch_locked(to, 0, SRV_HOME);
+    link_unlock();
 }
 
 void hux_net_hello_ok(void) {
+    if (s_ws == NULL) {
+        return;
+    }
+    link_lock();
+    if (!esp_websocket_client_is_connected(s_ws) ||
+        atomic_load(&s_conn_gen) == s_switch_conn_gen) {
+        /* Queued from a connection a switch has since closed: it proves
+         * nothing about the address we're on now. */
+        ESP_LOGW(TAG, "ws.hello_stale uri=%s", s_server_uri);
+        link_unlock();
+        return;
+    }
+    atomic_store(&s_ws_attempts, 0);
+    if (!atomic_exchange(&s_server_up, true)) {
+        ESP_LOGI(TAG, "ladder.found lost_s=%u steps=%s",
+                 (unsigned)((now_ms() - atomic_load(&s_lost_ms)) / 1000),
+                 hux_ladder_name((hux_ladder_step_t)atomic_load(&s_ladder_done)));
+    }
     int mode = atomic_load(&s_srv_mode);
     if (mode == SRV_KEEP) {
-        /* Proven: this is home now, across reboots. */
-        server_save(s_server_uri);
+        server_save(s_server_uri); /* proven: home now, across reboots */
     }
     if (mode == SRV_KEEP || mode == SRV_FALLBACK) {
-        /* A fallback that landed on the compiled address makes it home
-         * until the next boot, which tries the saved one again. */
+        /* A watch that landed on the compiled address makes it home until
+         * the next boot, which tries the saved one again. */
         strlcpy(s_home_uri, s_server_uri, sizeof(s_home_uri));
-    }
-    if (mode == SRV_KEEP || mode == SRV_FALLBACK) {
-        if (s_server_revert != NULL) {
-            esp_timer_stop(s_server_revert);
-        }
+        esp_timer_stop(s_server_revert);
+        s_srv_gen++; /* a revert already on its way is stale */
         atomic_store(&s_srv_mode, SRV_HOME);
         ESP_LOGI(TAG, "ws.server_proven uri=%s mode=%s source=%s", s_server_uri,
                  mode == SRV_KEEP ? "keep" : "watch",
                  strcmp(s_server_uri, s_compiled_uri) == 0 ? "compiled" : "nvs");
     }
+    if (strcmp(s_server_uri, s_home_uri) == 0) {
+        s_home_proven = true;
+    }
+    link_unlock();
 }
 
 void hux_net_server_status(void) {
     static const char *const MODES[] = {"home", "temp", "keep", "watch"};
-    ESP_LOGI(TAG, "ws.server now=%s home=%s compiled=%s mode=%s", s_server_uri, s_home_uri,
-             s_compiled_uri, MODES[atomic_load(&s_srv_mode) & 3]);
+    link_lock();
+    ESP_LOGI(TAG, "ws.server now=%s home=%s compiled=%s mode=%s home_proven=%d", s_server_uri,
+             s_home_uri, s_compiled_uri, MODES[atomic_load(&s_srv_mode) & 3], s_home_proven);
+    link_unlock();
 }
 
-static void server_switch(const char *uri, uint32_t revert_s, srv_mode_t mode) {
-    if (s_ws == NULL || uri == NULL || uri[0] == '\0' || atomic_exchange(&s_switching, true)) {
-        return;
-    }
-    atomic_store(&s_srv_mode, mode);
-    bool was_running = atomic_load(&s_ws_alive);
-    if (was_running) {
-        esp_websocket_client_stop(s_ws);
-    }
-    ESP_LOGW(TAG, "ws.server uri=%s was=%s revert_in_s=%u", uri, s_server_uri, (unsigned)revert_s);
-    strlcpy(s_server_uri, uri, sizeof(s_server_uri));
-    esp_err_t err = esp_websocket_client_set_uri(s_ws, ws_uri_for(s_server_uri));
-    if (was_running) {
-        esp_err_t start = esp_websocket_client_start(s_ws);
-        atomic_store(&s_ws_alive, start == ESP_OK);
-        ESP_LOGI(TAG, "ws.server set=%s start=%s", esp_err_to_name(err), esp_err_to_name(start));
-    }
-    if (s_server_revert == NULL) {
-        const esp_timer_create_args_t args = {.callback = server_revert_due, .name = "ws_revert"};
-        esp_timer_create(&args, &s_server_revert);
-    }
-    if (s_server_revert != NULL) {
-        esp_timer_stop(s_server_revert);
-        /* A fallback runs its timer whichever address it's on. */
-        if (revert_s > 0 && (mode == SRV_FALLBACK || strcmp(s_server_uri, s_home_uri) != 0)) {
-            esp_timer_start_once(s_server_revert, (uint64_t)revert_s * 1000000);
+static void ladder_task(void *arg) {
+    (void)arg;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(LADDER_TICK_MS));
+        if (atomic_load(&s_server_up) || atomic_load(&s_paused) || s_ws == NULL) {
+            continue;
         }
+        uint32_t lost_s = (now_ms() - atomic_load(&s_lost_ms)) / 1000;
+        hux_ladder_step_t step =
+            hux_ladder_due(lost_s, (hux_ladder_step_t)atomic_load(&s_ladder_done));
+        if (step == HUX_LADDER_NONE) {
+            continue;
+        }
+        if (step == HUX_LADDER_REBOOT) {
+            /* An hour without the server: whatever is stuck, a restart
+             * clears it. No lock: a hung holder must not stop the last
+             * resort. (An image still pending its OTA confirm goes back to
+             * the other slot.) */
+            ESP_LOGE(TAG, "ladder.step step=reboot lost_s=%u uri=%s", (unsigned)lost_s,
+                     s_server_uri);
+            vTaskDelay(pdMS_TO_TICKS(500)); /* the line reaches serial and the black box */
+            esp_restart();
+        }
+        if (!link_lock_timed(10000)) {
+            ESP_LOGW(TAG, "ladder.lock_busy step=%s lost_s=%u", hux_ladder_name(step),
+                     (unsigned)lost_s);
+            continue; /* the next tick tries again; the reboot needs no lock */
+        }
+        atomic_store(&s_ladder_done, step);
+        ESP_LOGW(TAG, "ladder.step step=%s lost_s=%u uri=%s", hux_ladder_name(step),
+                 (unsigned)lost_s, s_server_uri);
+        if (step == HUX_LADDER_WS) {
+            if (!atomic_load(&s_ws_first_start)) {
+                ESP_LOGI(TAG, "ladder.ws_skipped why=no_ip_yet"); /* Wi-Fi's step is next */
+            } else {
+                if (atomic_load(&s_ws_alive)) {
+                    client_stop();
+                }
+                client_start("ladder");
+            }
+        } else {
+            /* A full stop and start: a fresh association and DHCP lease
+             * (a stuck AP, a login page that handed out an IP). STA_START
+             * reconnects; the WebSocket follows the new IP. A pending
+             * retry would call connect in the middle of it. */
+            esp_timer_stop(s_wifi_retry_timer);
+            s_wifi_retries = 0;
+            esp_err_t stop = esp_wifi_stop();
+            esp_err_t start = esp_wifi_start();
+            ESP_LOGI(TAG, "ladder.wifi_restarted stop=%s start=%s", esp_err_to_name(stop),
+                     esp_err_to_name(start));
+        }
+        link_unlock();
     }
-    atomic_store(&s_switching, false);
 }
 
 bool hux_net_is_running(void) {

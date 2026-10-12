@@ -3,14 +3,19 @@
 #include <stdarg.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+
+#include "hux_blackbox.h"
 
 /* In PSRAM: ~58 KB holds the boot and 15-25 s offline (F-0022). */
 #define LOG_QUEUE_DEPTH      256
@@ -188,7 +193,60 @@ static bool take_continuation(hux_log_entry_t *out) {
     return ours;
 }
 
+/* The black box (F-0027): this boot's warnings and errors in RTC memory,
+ * which a panic, a watchdog reset or a restart leaves alone; the previous
+ * boot's, taken at init, wait for the app to send them. */
+RTC_NOINIT_ATTR static hux_blackbox_t s_box;
+static portMUX_TYPE s_box_lock = portMUX_INITIALIZER_UNLOCKED;
+static char *s_prev_box = NULL;
+static uint32_t s_prev_dropped = 0;
+
+static void box_note(const hux_log_entry_t *e) {
+    if (e->level != 'E' && e->level != 'W') {
+        return;
+    }
+    char line[sizeof(e->tag) + sizeof(e->line) + 16];
+    int n = snprintf(line, sizeof(line), "%u %c %s: %s", (unsigned)e->ts_ms, e->level, e->tag,
+                     e->line);
+    if (n <= 0) {
+        return;
+    }
+    if ((size_t)n >= sizeof(line)) {
+        n = (int)sizeof(line) - 1;
+    }
+    taskENTER_CRITICAL(&s_box_lock);
+    hux_blackbox_put(&s_box, line, (size_t)n);
+    taskEXIT_CRITICAL(&s_box_lock);
+}
+
+static void box_take_previous(void) {
+    if (esp_reset_reason() != ESP_RST_POWERON && hux_blackbox_valid(&s_box) && s_box.used > 0) {
+        s_prev_box = heap_caps_malloc(HUX_BLACKBOX_BYTES + 1, MALLOC_CAP_SPIRAM);
+        if (s_prev_box != NULL) {
+            uint32_t kept = 0;
+            if (hux_blackbox_read(&s_box, s_prev_box, HUX_BLACKBOX_BYTES + 1, &kept) == 0) {
+                free(s_prev_box);
+                s_prev_box = NULL;
+            } else {
+                s_prev_dropped = s_box.lines - kept;
+            }
+        }
+    }
+    hux_blackbox_reset(&s_box);
+}
+
+const char *hux_log_blackbox(uint32_t *dropped) {
+    *dropped = s_prev_dropped;
+    return s_prev_box;
+}
+
+void hux_log_blackbox_sent(void) {
+    free(s_prev_box);
+    s_prev_box = NULL;
+}
+
 static void enqueue(const hux_log_entry_t *entry, char threshold) {
+    box_note(entry); /* whatever the remote threshold */
     if (level_rank(entry->level) > level_rank(threshold)) {
         return; /* Below threshold — serial only. */
     }
@@ -336,6 +394,7 @@ void hux_log_init(void) {
     }
     s_queue = xQueueCreateWithCaps(LOG_QUEUE_DEPTH, sizeof(hux_log_entry_t), MALLOC_CAP_SPIRAM);
     configASSERT(s_queue != NULL);
+    box_take_previous(); /* before the hook: this boot's lines start a fresh box */
 
     BaseType_t ok = xTaskCreate(drain_task, "hux_log_drain", DRAIN_TASK_STACK,
                                 NULL, DRAIN_TASK_PRIO, &s_drain_task);

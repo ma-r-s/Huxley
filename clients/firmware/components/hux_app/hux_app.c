@@ -12,9 +12,11 @@
 #include "freertos/idf_additions.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "cJSON.h"
 #include "mbedtls/base64.h"
 
 #include "hux_audio.h"
+#include "hux_log.h"
 #include "hux_net.h"
 #include "hux_opus.h"
 #include "hux_proto.h"
@@ -359,6 +361,33 @@ static void send_device_info(void) {
     }
 }
 
+/* The previous boot's last warnings and errors (RTC memory), once, after
+ * the hello: the lines that explain a reset otherwise die with it
+ * (F-0027). Kept until a send succeeds. */
+static void send_blackbox(void) {
+    uint32_t dropped = 0;
+    const char *lines = hux_log_blackbox(&dropped);
+    if (lines == NULL) {
+        return;
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON *data = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "type", "client_event");
+    cJSON_AddStringToObject(root, "event", "device.blackbox");
+    cJSON_AddStringToObject(data, "lines", lines);
+    cJSON_AddNumberToObject(data, "dropped", dropped);
+    cJSON_AddItemToObject(root, "data", data);
+    char *json = cJSON_PrintUnformatted(root);
+    bool ok = json != NULL && hux_net_send_text(json, strlen(json));
+    ESP_LOGI(TAG, "app.blackbox bytes=%u dropped=%u sent=%d", (unsigned)strlen(lines),
+             (unsigned)dropped, ok);
+    if (ok) {
+        hux_log_blackbox_sent();
+    }
+    cJSON_free(json);
+    cJSON_Delete(root);
+}
+
 /* The device can't reach the server (no Wi-Fi, no WebSocket, no hello
  * yet), so nobody else can tell the user: a short low falling pair of
  * tones, made here. The user can't see a light; silence would read as
@@ -488,6 +517,7 @@ static void handle_ws_message(hux_app_ws_message_t *msg) {
             ESP_LOGI(TAG, "app.audio format=%s", parsed.as.hello.audio_opus ? "opus" : "pcm");
             transition(ST_READY);
             send_device_info();
+            send_blackbox();
             /* Kick the server into CONVERSING so PTT presses work
              * immediately. `wake_word` is named legacy-style in the
              * protocol (docs/protocol.md) — it's really a "start
@@ -580,7 +610,12 @@ static void dispatch(hux_app_event_t *ev) {
             break;
 
         case HUX_APP_EV_NET_WS_DISCONNECTED:
-            ESP_LOGW(TAG, "net.ws.disconnected");
+            /* Once per outage: every failed retry posts this too, and an
+             * outage's lines wait in the 256-line queue (hux_net logs the
+             * attempts, thinned). */
+            if (s_state != ST_WAITING_WS) {
+                ESP_LOGW(TAG, "net.ws.disconnected state=%s", state_name(s_state));
+            }
             /* Nothing can be sent: stop the mic. The server re-sends its
              * state and input_mode on the next connect; a held button
              * has to be pressed again. */

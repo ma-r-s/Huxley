@@ -1,0 +1,91 @@
+#include "hux_link.h"
+
+#include <string.h>
+
+uint32_t hux_link_backoff_ms(uint32_t attempt, uint32_t r) {
+    uint32_t doublings = attempt > 1 ? attempt - 1 : 0;
+    uint32_t base = HUX_LINK_BACKOFF_MAX_MS;
+    if (doublings < 5) { /* 2 s << 5 is past the cap; no overflow */
+        base = (uint32_t)HUX_LINK_BACKOFF_MIN_MS << doublings;
+    }
+    if (base > HUX_LINK_BACKOFF_MAX_MS) {
+        base = HUX_LINK_BACKOFF_MAX_MS;
+    }
+    if (base == HUX_LINK_BACKOFF_MAX_MS) {
+        return base / 100 * (75 + r % 26); /* 45 to 60 s, not mostly 60 */
+    }
+    uint32_t ms = base / 100 * (75 + r % 51);
+    return ms > HUX_LINK_BACKOFF_MAX_MS ? HUX_LINK_BACKOFF_MAX_MS : ms;
+}
+
+bool hux_link_uri_ok(const char *uri, size_t max) {
+    if (uri == NULL) {
+        return false;
+    }
+    size_t len = strlen(uri);
+    if (len == 0 || len >= max) {
+        return false;
+    }
+    const char *s = uri;
+    if (strncmp(s, "ws://", 5) == 0) {
+        s += 5;
+    } else if (strncmp(s, "wss://", 6) == 0) {
+        s += 6;
+    } else {
+        return false;
+    }
+    const char *host = s;
+    while (*s != '\0' && *s != ':' && *s != '/') {
+        if (*s == '@' || *s == ' ' || *s == '?' || *s == '#') {
+            return false;
+        }
+        s++;
+    }
+    if (s == host || *s != ':') {
+        return false; /* no host, or no explicit port */
+    }
+    s++;
+    uint32_t port = 0;
+    const char *digits = s;
+    while (*s >= '0' && *s <= '9') {
+        port = port * 10 + (uint32_t)(*s - '0');
+        if (port > 65535) {
+            return false;
+        }
+        s++;
+    }
+    if (s == digits || port == 0 || *s != '/') {
+        return false;
+    }
+    for (; *s != '\0'; s++) {
+        if (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') {
+            return false;
+        }
+    }
+    return true;
+}
+
+hux_ladder_step_t hux_ladder_due(uint32_t lost_s, hux_ladder_step_t done) {
+    hux_ladder_step_t due = HUX_LADDER_NONE;
+    if (lost_s >= HUX_LADDER_REBOOT_S) {
+        due = HUX_LADDER_REBOOT;
+    } else if (lost_s >= HUX_LADDER_WIFI_S) {
+        due = HUX_LADDER_WIFI;
+    } else if (lost_s >= HUX_LADDER_WS_S) {
+        due = HUX_LADDER_WS;
+    }
+    return due > done ? due : HUX_LADDER_NONE;
+}
+
+const char *hux_ladder_name(hux_ladder_step_t step) {
+    switch (step) {
+        case HUX_LADDER_WS:
+            return "ws";
+        case HUX_LADDER_WIFI:
+            return "wifi";
+        case HUX_LADDER_REBOOT:
+            return "reboot";
+        default:
+            return "none";
+    }
+}
