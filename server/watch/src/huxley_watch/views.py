@@ -13,13 +13,14 @@ from typing import TYPE_CHECKING, Any
 
 from huxley_watch.activity import KINDS, Segment
 from huxley_watch.facts import gaps_since, half_hours, wifi_bars
-from huxley_watch.rules import balance_estimate, spent_today
+from huxley_watch.rules import balance_estimate, rule_books, spent_today
 from huxley_watch.text import short, short_when
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from zoneinfo import ZoneInfo
 
+    from huxley_watch.bench import Window
     from huxley_watch.rules import Inputs, Item
 
 SCHEMA = 2
@@ -60,6 +61,7 @@ def build(
     *,
     alerts_channel: str,
     interval_s: float,
+    archive: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     tz, now = i.tz, i.now
     local_now = now.astimezone(tz)
@@ -91,16 +93,38 @@ def build(
         "tiles": _tiles(i),
         "today": _today(i, segments, midnight),
         "week": _week(i, segments, presses, midnight),
-        "books": {
-            "month": now.astimezone(UTC).strftime("%B"),  # the skill counts UTC months
-            "used_s": i.book_seconds,
-            "allowance_h": i.book_hours_per_month,
-        },
+        "books": _books(i),
         "gaps": _gaps(i),
         "calls": _calls(segments, midnight - timedelta(days=WEEK_DAYS - 1)),
         "alerts": alerts_channel,
         "logs_from": short_when(i.logs_from, now, tz) if i.logs_from else None,
+        "archive": archive,  # the day picker: today, the first day, the previous one
     }
+
+
+def _out(i: Inputs) -> bool:
+    item = rule_books(i)
+    return item is not None and item.big == "0 h"
+
+
+def _books(i: Inputs) -> dict[str, Any]:
+    used, allowance = i.book_seconds, i.book_hours_per_month
+    left = allowance * 3600 - used if allowance is not None and used is not None else None
+    out: dict[str, Any] = {
+        "month": i.now.astimezone(UTC).strftime("%B"),  # the skill counts UTC months
+        "used_s": used,
+        "allowance_h": allowance,
+        "left_s": max(0.0, left) if left is not None else None,
+        "renews": None,
+        "partial": i.book_partial,
+        "out": _out(i),
+        "low_h": i.th.book_hours_low,
+    }
+    if i.book_cycle is not None:
+        end = i.book_cycle[1].astimezone(i.tz)
+        out["renews"] = f"{end.day} {end.strftime('%b')}"
+        out["month"] = f"until {out['renews']}"
+    return out
 
 
 def _tiles(i: Inputs) -> dict[str, Any]:
@@ -148,8 +172,23 @@ def _tiles(i: Inputs) -> dict[str, Any]:
 
 
 def _today(i: Inputs, segments: Sequence[Segment], midnight: datetime) -> dict[str, Any]:
+    return strip(midnight, i.now, segments, i.walkie.spans, i.bench.windows, today=True)
+
+
+def strip(
+    midnight: datetime,
+    now: datetime,
+    segments: Sequence[Segment],
+    online: Sequence[tuple[datetime, datetime]],
+    windows: Sequence[Window],
+    *,
+    today: bool,
+) -> dict[str, Any]:
+    """One day's strip: the walkie connected, him and Huxley, what played,
+    the test windows; minutes since `midnight`. Today's has a "now"; the
+    archive draws past days with the same function (dayview.py)."""
     end = midnight + timedelta(days=1)
-    hi = min(end, i.now)
+    hi = min(end, now)
 
     def spans(pairs: Sequence[tuple[datetime, datetime]]) -> list[list[float]]:
         out = []
@@ -173,11 +212,11 @@ def _today(i: Inputs, segments: Sequence[Segment], midnight: datetime) -> dict[s
                     "label": seg.label,
                 }
             )
-    windows = []
-    for w in i.bench.windows:
+    bands = []
+    for w in windows:
         c = _clip(w.start, w.end, midnight, end)
         if c:
-            windows.append(
+            bands.append(
                 {
                     "kind": w.kind,
                     "s": _minutes(c[0], midnight),
@@ -188,12 +227,12 @@ def _today(i: Inputs, segments: Sequence[Segment], midnight: datetime) -> dict[s
     return {
         "date": midnight.date().isoformat(),
         "label": midnight.strftime("%a %d"),
-        "now_min": _minutes(i.now, midnight),
-        "online": spans(i.walkie.spans),
+        "now_min": _minutes(now, midnight) if today else None,
+        "online": spans(online),
         "talk": spans([(s.start, s.end) for s in segments if s.kind == "talk"]),
         "answer": spans([(s.start, s.end) for s in segments if s.kind == "answer"]),
         "media": media,
-        "windows": windows,
+        "windows": bands,
     }
 
 

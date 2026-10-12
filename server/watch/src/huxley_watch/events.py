@@ -69,6 +69,7 @@ KEEP_EVENTS = frozenset(
         "spotify.unavailable",
         "spotify.start_refused",
         "spotify.book_hours_out",
+        "spotify.refusal_explained",
         "spotify.stream_ended",
         "spotify.play_started",  # its context says book (spotify:show:) or music
         # what the speaker played: streams and calls by id, and their kind
@@ -78,9 +79,11 @@ KEEP_EVENTS = frozenset(
         "server.tx.claim_ended",
         "radio.stream_started",
         "audiobooks.stream_started",
-        # him talking, Huxley answering
+        # him talking, Huxley answering (model_speaking is raised by
+        # streams and calls too: an answer starts at coord.audio_start)
         "coord.ptt_start",
         "coord.ptt_stop",
+        "coord.audio_start",
         "server.tx.model_speaking",
         # Telegram
         "telegram.credentials_missing",
@@ -136,16 +139,16 @@ def decode(raw: str) -> dict[str, Any] | None:
     return obj if isinstance(obj, dict) else None
 
 
-def parse_line(raw: str) -> Event | None:
+def parse_line(raw: str, keep: frozenset[str] = KEEP_EVENTS) -> Event | None:
     """One log line -> Event, or None if it is malformed or not one the
     watcher keeps. Never raises."""
     obj = decode(raw)
-    return to_event(obj, raw) if obj is not None else None
+    return to_event(obj, raw, keep) if obj is not None else None
 
 
-def to_event(obj: dict[str, Any], raw: str) -> Event | None:
+def to_event(obj: dict[str, Any], raw: str, keep: frozenset[str] = KEEP_EVENTS) -> Event | None:
     name = obj.get("event")
-    if not isinstance(name, str) or name not in KEEP_EVENTS:
+    if not isinstance(name, str) or name not in keep:
         return None
     if name == FIRMWARE_LOG and not str(obj.get("line") or "").startswith(FIRMWARE_PREFIXES):
         return None
@@ -172,9 +175,9 @@ def to_event(obj: dict[str, Any], raw: str) -> Event | None:
     return Event(ts=ts, name=name, f=fields, key=hash(raw.strip()))
 
 
-def make_events(lines: Iterable[str]) -> list[Event]:
+def make_events(lines: Iterable[str], keep: frozenset[str] = KEEP_EVENTS) -> list[Event]:
     """Test and tooling helper: parse lines, keep the relevant ones, in order."""
-    out = [e for e in (parse_line(line) for line in lines) if e is not None]
+    out = [e for e in (parse_line(line, keep) for line in lines) if e is not None]
     out.sort(key=lambda e: e.ts)
     return out
 

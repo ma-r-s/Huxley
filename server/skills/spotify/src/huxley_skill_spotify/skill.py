@@ -117,8 +117,10 @@ END_MARGIN_MS = 15_000
 PROBE_LOAD_S = 4.0
 # After a seek, how long to stay silent at most waiting for it to land.
 SEEK_SETTLE_S = 2.0
+# "ok" only if still playing at the end: Spotify says "playing" the moment
+# a play lands, before it decides (Siddhartha passed a 0.35 s check, then
+# was refused, and the refusal was read as the hours, 2026-10-12).
 PROBE_OK_S = 1.6
-PROBE_CONFIRM_S = 0.35
 MAX_PROBES = 4
 # A book played fine this recently: the hours aren't out, so a refusal
 # means the book isn't available, with no control check.
@@ -1093,18 +1095,58 @@ class SpotifySkill:
             self._book = await self._book_info(context)
         return self._book
 
-    async def _refusal_cause(self, uri: str) -> str:
-        """A refusal of a book known to play here means the hours ran out;
-        of any other, that it isn't available (paid apart or not offered:
-        the same to the listener, Mario 2026-10-12)."""
+    async def _refusal_cause(self, uri: str) -> str | None:
+        """Why Spotify refused a book, when it's known without playing
+        another: the month's budget spent is the hours; a book that played
+        lately means the hours are there, so it's this book (paid apart or
+        not offered: the same to the listener, Mario 2026-10-12). None: a
+        book known to play here was refused, and only trying another one
+        tells the book from the hours (`_explain_refusal`)."""
         shelf = self._require_shelf()
-        if await shelf.playable(uri):
-            return "book_no_hours"
         budget = self._hours_per_month
         if budget is not None and await shelf.seconds_this_month() >= budget * 3600 - 600:
             return "book_no_hours"
+        if not self._hours_recently_ok() and await shelf.playable(uri):
+            return None
         await shelf.mark_unavailable(uri)
         return "book_unavailable"
+
+    async def _explain_refusal(self, uri: str) -> None:
+        """A book known to play here was refused: after its stream has
+        ended (a check needs the player, and with no stream reading it,
+        nothing reaches a speaker), try a book known to play. It plays:
+        the hours are there and this book isn't available. Refused too: the
+        hours ran out. No other book to try: a book that really played here
+        means the hours, a check's "ok" alone means this book."""
+        for _ in range(60):  # the stream's finally, up to 3 s
+            if self._streams == 0:
+                break
+            await asyncio.sleep(0.05)
+        shelf = self._require_shelf()
+        client = self._require_client()
+        control = await shelf.any_playable(besides=uri)
+        result = None
+        if control is not None and self._streams == 0 and self._unavailable() is None:
+            result = await self._probe(control)
+            if self._streams == 0:
+                client.send("pause")
+        if result == "ok":
+            self._hours_ok_at = time.monotonic()
+            cause = "book_unavailable"
+        elif result == "no":
+            cause = "book_no_hours"
+        else:
+            cause = "book_no_hours" if await shelf.played(uri) else "book_unavailable"
+        if cause == "book_unavailable":
+            await shelf.mark_unavailable(uri)
+        await self._log().ainfo(
+            "spotify.refusal_explained",
+            uri=uri,
+            control=control,
+            control_result=result,
+            cause=cause,
+        )
+        self._narrate(cause)
 
     async def _playable_only(self, candidates: list[Match], want: int) -> tuple[list[Match], bool]:
         """The first `want` candidates Spotify will play here: known ones
@@ -1127,10 +1169,10 @@ class SpotifySkill:
             for match in candidates:
                 if len(kept) == want:
                     break
+                if await shelf.unavailable(match.uri):
+                    continue  # first: a book refused lately, even one that played once
                 if await shelf.playable(match.uri):
                     kept.append(match)
-                    continue
-                if await shelf.unavailable(match.uri):
                     continue
                 if not can_check or tried >= MAX_PROBES:
                     continue
@@ -1177,7 +1219,6 @@ class SpotifySkill:
         loaded."""
         client = self._require_client()
         errors = client.state.error_count
-        was = item_uri(client.state.item)
         client.send("play", uri=uri)
         loaded = await client.wait_until(
             lambda s: s.context_uri == uri or s.error_count > errors or not s.connected,
@@ -1186,25 +1227,16 @@ class SpotifySkill:
         if not loaded or client.state.context_uri != uri:
             result = "unknown"
         else:
-            # Refused: "playing", the first chapter, "buffering", then idle.
-            # Accepted: the same, then "playing" with the position moving.
-            # Decide on that instead of always waiting the full window.
-            def decided(s: PlayerState) -> bool:
-                if s.status == "idle" or s.context_uri != uri:
-                    return True
-                new_item = item_uri(s.item) not in (None, was)
-                return new_item and s.status == "playing" and s.speed > 0
-
-            await client.wait_until(decided, PROBE_OK_S)
-            if client.state.status == "playing":
-                # A refusal can trail the first "playing" by a moment.
-                await client.wait_until(
-                    lambda s: s.status == "idle" or s.context_uri != uri, PROBE_CONFIRM_S
-                )
-            state = client.state
-            result = (
-                "no" if state.status == "idle" else "ok" if state.context_uri == uri else "unknown"
+            # Refused: "playing", the first chapter, "buffering", then idle
+            # within about a second. Accepted: still playing the book at the
+            # end of the window. A refusal decides early; an "ok" never does
+            # (the first "playing" comes before Spotify's verdict).
+            await client.wait_until(
+                lambda s: s.status == "idle" or s.context_uri != uri, PROBE_OK_S
             )
+            state = client.state
+            playing = state.status == "playing" and state.context_uri == uri
+            result = "no" if state.status == "idle" else "ok" if playing else "unknown"
         await self._log().ainfo("spotify.book_probe", uri=uri, result=result)
         return result
 
@@ -1503,9 +1535,13 @@ class SpotifySkill:
                             resumed=start is None,
                             moving=moving,
                             chunks=chunks,
-                            cause=cause or None,
+                            cause=cause if cause is not None else "checking",
                         )
-                        self._narrate(cause or "start_failed")
+                        if cause is None:
+                            # After this stream ends: try a book known to play.
+                            self._spawn(self._explain_refusal(refused))
+                        else:
+                            self._narrate(cause or "start_failed")
                         return
                     if book is not None:
                         reason = await self._book_stopped(book, state, chapter, left=False)

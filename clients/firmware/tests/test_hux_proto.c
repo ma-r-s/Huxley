@@ -16,6 +16,66 @@ static bool parse(const char *json, hux_msg_t *out) {
     return hux_proto_parse(json, strlen(json), out);
 }
 
+/* ---- server_event (F-0028: the device contract) ---------------------- */
+
+static void test_server_event_dev_cmd(void) {
+    hux_msg_t m;
+    HX_ASSERT_TRUE(parse("{\"type\":\"server_event\",\"event\":\"dev.cmd\","
+                         "\"data\":{\"id\":\"a1\",\"line\":\"battery\"}}",
+                         &m),
+                   "parses");
+    HX_ASSERT_EQ(m.kind, HUX_MSG_SERVER_EVENT, "kind");
+    HX_ASSERT_EQ(m.as.server_event.event, HUX_SERVER_EV_DEV_CMD, "dev.cmd");
+    HX_ASSERT_TRUE(strcmp(m.as.server_event.id, "a1") == 0, "id");
+    HX_ASSERT_TRUE(strcmp(m.as.server_event.line, "battery") == 0, "line");
+    HX_ASSERT_TRUE(!m.as.server_event.line_truncated, "not truncated");
+    HX_ASSERT_TRUE(parse("{\"type\":\"server_event\",\"event\":\"dev.cmd\","
+                         "\"data\":{\"id\":42,\"line\":\"info\"}}",
+                         &m),
+                   "numeric id parses");
+    HX_ASSERT_TRUE(strcmp(m.as.server_event.id, "42") == 0, "a number id as digits");
+}
+
+static void test_server_event_firmware_update_and_accept(void) {
+    hux_msg_t m;
+    HX_ASSERT_TRUE(parse("{\"type\":\"server_event\",\"event\":\"firmware.update\",\"data\":"
+                         "{\"version\":\"3de141d8\",\"url\":\"/firmware/3de141d8.bin\","
+                         "\"force\":true}}",
+                         &m),
+                   "parses");
+    HX_ASSERT_EQ(m.as.server_event.event, HUX_SERVER_EV_FIRMWARE_UPDATE, "firmware.update");
+    HX_ASSERT_TRUE(strcmp(m.as.server_event.version, "3de141d8") == 0, "version");
+    HX_ASSERT_TRUE(strcmp(m.as.server_event.url, "/firmware/3de141d8.bin") == 0, "url");
+    HX_ASSERT_TRUE(m.as.server_event.force, "force");
+    HX_ASSERT_TRUE(parse("{\"type\":\"server_event\",\"event\":\"ota.accept\","
+                         "\"data\":{\"version\":\"3de141d8\"}}",
+                         &m),
+                   "accept parses");
+    HX_ASSERT_EQ(m.as.server_event.event, HUX_SERVER_EV_OTA_ACCEPT, "ota.accept");
+    HX_ASSERT_TRUE(!m.as.server_event.force, "force defaults to false");
+}
+
+static void test_server_event_unknown_and_odd_payloads(void) {
+    hux_msg_t m;
+    HX_ASSERT_TRUE(parse("{\"type\":\"server_event\",\"event\":\"something.new\"}", &m),
+                   "an unknown event parses");
+    HX_ASSERT_EQ(m.as.server_event.event, HUX_SERVER_EV_UNKNOWN, "UNKNOWN");
+    HX_ASSERT_TRUE(strcmp(m.as.server_event.name, "something.new") == 0, "its name kept");
+    HX_ASSERT_TRUE(parse("{\"type\":\"server_event\",\"event\":\"dev.cmd\",\"data\":7}", &m),
+                   "a non-object data parses");
+    HX_ASSERT_TRUE(m.as.server_event.line[0] == '\0', "no line");
+    char big[400];
+    int n = snprintf(big, sizeof(big), "{\"type\":\"server_event\",\"event\":\"dev.cmd\","
+                                       "\"data\":{\"id\":\"x\",\"line\":\"");
+    for (int i = 0; i < 200; i++) {
+        big[n++] = 'a';
+    }
+    snprintf(big + n, sizeof(big) - (size_t)n, "\"}}");
+    HX_ASSERT_TRUE(parse(big, &m), "a long line parses");
+    HX_ASSERT_TRUE(m.as.server_event.line_truncated, "and says it was cut");
+    HX_ASSERT_EQ((int)strlen(m.as.server_event.line), 127, "kept within the buffer");
+}
+
 /* ---- basic shape --------------------------------------------------- */
 
 static void test_parse_hello_v2(void) {
@@ -260,5 +320,8 @@ int main(void) {
     HX_RUN(test_parse_hello_with_extra_fields);
     HX_RUN(test_parse_nested_whitespace);
     HX_RUN(test_null_out_rejected);
+    HX_RUN(test_server_event_dev_cmd);
+    HX_RUN(test_server_event_firmware_update_and_accept);
+    HX_RUN(test_server_event_unknown_and_odd_payloads);
     HX_SUMMARY();
 }

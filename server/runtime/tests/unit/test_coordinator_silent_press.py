@@ -19,7 +19,12 @@ import structlog
 
 from huxley.focus.manager import FocusManager
 from huxley.turn.coordinator import TurnCoordinator
-from huxley.turn.press_level import SILENT_PEAK_DBFS, PressLevel
+from huxley.turn.press_level import (
+    QUIET_RMS_DBFS,
+    QUIET_WINDOW_DBFS,
+    SILENT_PEAK_DBFS,
+    PressLevel,
+)
 from huxley.voice.stub import StubVoiceProvider
 from huxley_sdk import ToolResult
 
@@ -122,6 +127,44 @@ class TestPressLevel:
 
     def test_threshold_is_conservative(self) -> None:
         assert SILENT_PEAK_DBFS == -40.0
+
+    def test_a_long_quiet_press_with_one_loud_instant_is_silent(self) -> None:
+        """21:05, 2026-10-12: 19.6 s of room noise with a -22.8 dBFS peak
+        passed the peak gate and was answered as "Amara.org"."""
+        level = PressLevel()
+        body = _room_noise(9_000, peak=60) + _tone(10, 2_400) + _room_noise(9_000, peak=60)
+        for frame in _frames(_room_noise(100) + body + _room_noise(60)):
+            level.feed(frame)
+        assert level.peak_dbfs > SILENT_PEAK_DBFS  # the old gate let it through
+        assert level.rms_dbfs < QUIET_RMS_DBFS
+        assert level.window_dbfs < QUIET_WINDOW_DBFS
+        assert level.silent_why == "quiet"
+
+    def test_a_long_press_with_one_short_word_still_goes_through(self) -> None:
+        """Holding the lever while thinking, then one quiet word: the whole
+        press averages below the quiet line, its word doesn't."""
+        level = PressLevel()
+        body = _room_noise(15_000) + _tone(400, 600) + _room_noise(15_000)
+        for frame in _frames(_room_noise(100) + body + _room_noise(60)):
+            level.feed(frame)
+        assert level.rms_dbfs < QUIET_RMS_DBFS
+        assert level.window_dbfs > QUIET_WINDOW_DBFS
+        assert not level.is_silent
+
+    def test_the_quietest_recorded_speech_goes_through(self) -> None:
+        """'Siguiente canción', 1.2 s: averaged -43.5, loudest 250 ms -38.9
+        (speech is peaky: a 300 ms syllable in a soft press)."""
+        level = PressLevel()
+        speech = _room_noise(450) + _tone(300, 1_100) + _room_noise(450)
+        for frame in _frames(_room_noise(100) + speech + _room_noise(60)):
+            level.feed(frame)
+        assert not level.is_silent
+
+    def test_window_on_a_press_shorter_than_a_window_is_its_rms(self) -> None:
+        level = PressLevel()
+        level.feed(_room_noise(100) + _tone(200, 1_000) + _room_noise(60))
+        assert level.window_max < 0
+        assert level.window_dbfs == level.rms_dbfs
 
 
 # ----------------------------------------------------------- coordinator

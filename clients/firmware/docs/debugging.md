@@ -263,6 +263,20 @@ crash dump waiting (`dev.py coredump`). `ota rollback` (console or
 `dev.py cmd`) boots the other slot by hand: `ota.rollback to slot=`.
 Wrong token: `dev.denied uri=`.
 
+### The console through the server (F-0028)
+
+At the home the port-80 door won't be reachable, so the server can send
+`server_event dev.cmd {id, line}`: the app task runs the line like the
+serial console (`hux_console_run`) and answers `client_event
+dev.cmd_result {id, output, truncated}`, `output` being what the command
+logged on that task (lines from other tasks, like a `hang` or the
+speaker's, go only to the log). Logs: `app.dev_cmd id=`,
+`app.dev_cmd_result id= bytes= truncated= sent=`. The server's side is
+`POST /admin/dev-cmd` (loopback and Tailscale only). Every connection
+also carries `Authorization: Bearer <HUX_DEVICE_TOKEN>` on the upgrade
+(`ws.token present=1` at boot; the value is never logged), and the hello
+is now `device.hello` (`app.device_hello sent= time_to_hello_ms=`).
+
 ### Moving the server (F-0027)
 
 The address in `secrets.h` is compiled into every image; a saved one in
@@ -511,10 +525,12 @@ reading, F-0025), `battery cal <mv>` (a multimeter's reading of the
 cell: every later reading is scaled to match, saved in NVS,
 `battery.calibrated cal_ppm=`). The level task finds the wired pin once
 (`battery.wired gpio=`, or `battery.not_wired` once and a look every
-10 min), reads the median of 32 samples at 6 dB every minute while the
-speaker is quiet (anyway after 5 min with no quiet minute, `loaded=1`),
-and sends `system.battery {mv, pct}` on a change and every 5 min
-(`battery.level mv= pct= pin= raw_mv= loaded=`).
+10 min), then reads the median of 32 samples at 6 dB at boot, every
+20 min while the speaker is quiet (anyway after 5 min with no quiet
+moment), and at each press, and sends `system.battery {mv, pct}` when
+the percentage changes or a press asked (`battery.level mv= pct= pin=
+raw_mv= loaded= why=changed|press`); the app also sends the last one
+after each hello.
 `tools/bench.py --reset` runs the whole check list and keeps the board's
 log in `/tmp/huxley-debug/bench-*.log`.
 

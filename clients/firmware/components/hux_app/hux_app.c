@@ -14,6 +14,9 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "cJSON.h"
+#include "esp_app_desc.h"
+#include "esp_core_dump.h"
+#include "esp_timer.h"
 #include "mbedtls/base64.h"
 
 #include "hux_audio.h"
@@ -21,6 +24,7 @@
 #include "hux_log.h"
 #include "hux_net.h"
 #include "hux_opus.h"
+#include "hux_ota.h"
 #include "hux_proto.h"
 
 static const char *TAG = "hux_app";
@@ -353,19 +357,79 @@ static void uplink_control(uplink_kind_t kind) {
     }
 }
 
-static void send_device_info(void) {
-    char json[320];
-    int n = snprintf(json, sizeof(json),
-                     "{\"type\":\"client_event\",\"event\":\"device\",\"data\":{"
-                     "\"shell\":\"firmware\",\"board\":\"esp32s3-audio-board\","
-                     "\"version\":\"%s\",\"mac\":\"%s\",\"reset\":\"%s\","
-                     "\"boot_counter\":%u,\"rssi\":%d,\"volume\":%d}}",
-                     s_device.version ? s_device.version : "?", s_device.mac,
-                     s_device.reset ? s_device.reset : "?", (unsigned)s_device.boot_counter,
-                     hux_net_rssi(), hux_audio_get_volume());
-    if (n > 0 && (size_t)n < sizeof(json)) {
-        send_control(json);
+/* device.hello (docs/protocol.md "Device contract", schema 1): who this
+ * walkie is and how it came up, after every server hello. The server and
+ * the caregiver's view read it; it replaced `device` (F-0028). */
+static uint32_t s_hellos = 0;       /* this boot */
+static uint32_t s_link_lost_ms = 0; /* the app saw the WebSocket drop */
+
+static void send_device_hello(void) {
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    /* The first of a boot: since boot. Later: since the link dropped. */
+    uint32_t took = s_hellos++ == 0 ? now : now - s_link_lost_ms;
+    cJSON *root = cJSON_CreateObject();
+    cJSON *d = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "type", "client_event");
+    cJSON_AddStringToObject(root, "event", "device.hello");
+    cJSON_AddNumberToObject(d, "schema", 1);
+    cJSON_AddNumberToObject(d, "protocol", HUX_PROTOCOL_VERSION);
+    cJSON_AddStringToObject(d, "device_id", s_device.mac);
+    cJSON_AddStringToObject(d, "board", "esp32s3-audio-board");
+    cJSON_AddStringToObject(d, "version", s_device.version ? s_device.version : "?");
+    char elf[10] = {0};
+    esp_app_get_elf_sha256(elf, sizeof(elf));
+    cJSON_AddStringToObject(d, "elf_sha", elf);
+    cJSON_AddStringToObject(d, "slot", hux_ota_running_slot());
+    cJSON_AddStringToObject(d, "slot_state", hux_ota_running_state());
+    cJSON_AddStringToObject(d, "reset", s_device.reset ? s_device.reset : "?");
+    cJSON_AddNumberToObject(d, "boot_counter", s_device.boot_counter);
+    cJSON_AddNumberToObject(d, "uptime_s", now / 1000);
+    cJSON_AddStringToObject(d, "audio", hux_net_audio_opus() ? "opus" : "pcm");
+    cJSON *caps = cJSON_AddArrayToObject(d, "caps");
+    cJSON_AddItemToArray(caps, cJSON_CreateString("health.v1"));
+    cJSON_AddItemToArray(caps, cJSON_CreateString("dev_cmd.v1"));
+    int mv = 0, pct = 0;
+    if (hux_battery_last(&mv, &pct)) {
+        cJSON_AddItemToArray(caps, cJSON_CreateString("battery.v1"));
     }
+    cJSON_AddNullToObject(d, "rollback"); /* F-0028's rollback bookkeeping fills it */
+    esp_core_dump_summary_t *dump = calloc(1, sizeof(*dump));
+    if (dump != NULL && esp_core_dump_image_check() == ESP_OK &&
+        esp_core_dump_get_summary(dump) == ESP_OK) {
+        cJSON *c = cJSON_CreateObject();
+        char sha[10] = {0};
+        memcpy(sha, dump->app_elf_sha256, 9);
+        char pc[12];
+        snprintf(pc, sizeof(pc), "0x%08x", (unsigned)dump->exc_pc);
+        cJSON_AddStringToObject(c, "elf_sha", sha);
+        cJSON_AddStringToObject(c, "task", dump->exc_task);
+        cJSON_AddStringToObject(c, "exc_pc", pc);
+        cJSON_AddItemToObject(d, "coredump", c);
+    } else {
+        cJSON_AddNullToObject(d, "coredump");
+    }
+    free(dump);
+    hux_net_link_t link;
+    cJSON *net = cJSON_CreateObject();
+    if (hux_net_link_info(&link)) {
+        char bssid[18];
+        snprintf(bssid, sizeof(bssid), "%02x:%02x:%02x:%02x:%02x:%02x", link.bssid[0],
+                 link.bssid[1], link.bssid[2], link.bssid[3], link.bssid[4], link.bssid[5]);
+        cJSON_AddStringToObject(net, "ssid", link.ssid);
+        cJSON_AddNumberToObject(net, "channel", link.channel);
+        cJSON_AddNumberToObject(net, "rssi", link.rssi);
+        cJSON_AddStringToObject(net, "bssid", bssid);
+    }
+    cJSON_AddStringToObject(net, "source", "compiled"); /* the Wi-Fi list (F-0027) adds nvs */
+    cJSON_AddItemToObject(d, "net", net);
+    cJSON_AddNumberToObject(d, "time_to_hello_ms", took);
+    cJSON_AddNumberToObject(d, "volume", hux_audio_get_volume());
+    cJSON_AddItemToObject(root, "data", d);
+    char *json = cJSON_PrintUnformatted(root);
+    bool ok = json != NULL && hux_net_send_text(json, strlen(json));
+    ESP_LOGI(TAG, "app.device_hello sent=%d time_to_hello_ms=%u", ok, (unsigned)took);
+    cJSON_free(json);
+    cJSON_Delete(root);
 }
 
 /* The previous boot's last warnings and errors (RTC memory), once, after
@@ -494,8 +558,48 @@ static void leave_ptt(void) {
     uplink_control(UPLINK_PTT_STOP);
 }
 
+/* dev.cmd's runner: hux_console_run, set by main (the console depends on
+ * this component already). */
+static hux_app_dev_cmd_fn s_dev_cmd_runner = NULL;
+
+void hux_app_set_dev_cmd_runner(hux_app_dev_cmd_fn runner) {
+    s_dev_cmd_runner = runner;
+}
+
+/* server_event dev.cmd {id, line}: run one console line here and answer
+ * client_event dev.cmd_result {id, output, truncated} with what it logged
+ * on this task (F-0028: the console through the server, no LAN door). */
+static void run_dev_cmd(hux_msg_server_event_t *se) {
+    static char out[1536];
+    if (s_dev_cmd_runner == NULL || se->line[0] == '\0') {
+        ESP_LOGW(TAG, "app.dev_cmd refused id=%s why=%s", se->id,
+                 s_dev_cmd_runner == NULL ? "no_runner" : "empty_line");
+        return;
+    }
+    ESP_LOGI(TAG, "app.dev_cmd id=%s line_truncated=%d", se->id, se->line_truncated);
+    hux_log_capture_begin(out, sizeof(out));
+    s_dev_cmd_runner(se->line); /* may modify the line; the reply doesn't need it */
+    bool truncated = false;
+    size_t len = hux_log_capture_end(&truncated);
+    cJSON *root = cJSON_CreateObject();
+    cJSON *data = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "type", "client_event");
+    cJSON_AddStringToObject(root, "event", "dev.cmd_result");
+    cJSON_AddStringToObject(data, "id", se->id);
+    cJSON_AddStringToObject(data, "output", out);
+    cJSON_AddBoolToObject(data, "truncated", truncated || se->line_truncated);
+    cJSON_AddItemToObject(root, "data", data);
+    char *json = cJSON_PrintUnformatted(root);
+    bool ok = json != NULL && hux_net_send_text(json, strlen(json));
+    ESP_LOGI(TAG, "app.dev_cmd_result id=%s bytes=%u truncated=%d sent=%d", se->id,
+             (unsigned)len, truncated, ok);
+    cJSON_free(json);
+    cJSON_Delete(root);
+}
+
 static void handle_ws_message(hux_app_ws_message_t *msg) {
-    hux_msg_t parsed;
+    /* Static: the app task's stack is tight, and only this task parses. */
+    static hux_msg_t parsed;
     if (!hux_proto_parse(msg->data, msg->len, &parsed)) {
         ESP_LOGW(TAG, "ws.rx.malformed len=%u", (unsigned)msg->len);
         return;
@@ -523,7 +627,7 @@ static void handle_ws_message(hux_app_ws_message_t *msg) {
             hux_net_hello_ok(); /* a pending server move is proven (F-0027) */
             ESP_LOGI(TAG, "app.audio format=%s", parsed.as.hello.audio_opus ? "opus" : "pcm");
             transition(ST_READY);
-            send_device_info();
+            send_device_hello();
             send_blackbox();
             hux_battery_report_now(); /* the server's skill gets a level at once */
             /* Kick the server into CONVERSING so PTT presses work
@@ -583,6 +687,19 @@ static void handle_ws_message(hux_app_ws_message_t *msg) {
             }
             break;
 
+        case HUX_MSG_SERVER_EVENT:
+            switch (parsed.as.server_event.event) {
+                case HUX_SERVER_EV_DEV_CMD:
+                    run_dev_cmd(&parsed.as.server_event);
+                    break;
+                default:
+                    /* firmware.update and ota.accept land with F-0028's update. */
+                    ESP_LOGI(TAG, "ws.rx.server_event name=%s (not handled yet)",
+                             parsed.as.server_event.name);
+                    break;
+            }
+            break;
+
         case HUX_MSG_AUDIO_CLEAR:
             /* Normally handled on the WS task, in order with the audio
              * (hux_net). One only gets here if that probe missed it: clear
@@ -618,6 +735,9 @@ static void dispatch(hux_app_event_t *ev) {
             break;
 
         case HUX_APP_EV_NET_WS_DISCONNECTED:
+            if (s_state != ST_WAITING_WS) {
+                s_link_lost_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            }
             /* Once per outage: every failed retry posts this too, and an
              * outage's lines wait in the 256-line queue (hux_net logs the
              * attempts, thinned). */
@@ -682,6 +802,9 @@ static void dispatch(hux_app_event_t *ev) {
         case HUX_APP_EV_BUTTON_K2_PRESSED:
             ESP_LOGI(TAG, "app.ptt.pressed");
             enter_ptt();
+            /* A fresh reading rides with the press, so "how much battery"
+             * is answered from now (64 ms, on the battery task). */
+            hux_battery_read_now();
             break;
 
         case HUX_APP_EV_BUTTON_K2_RELEASED:

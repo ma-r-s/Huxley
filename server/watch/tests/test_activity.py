@@ -13,6 +13,8 @@ from huxley_watch.wlog import WatchLog
 from .logs import (
     NOW,
     ago,
+    answer,
+    audio_start,
     audiobook_started,
     bench,
     bench_line,
@@ -87,8 +89,7 @@ def test_talk_answer_and_calls() -> None:
     lines = [
         press(ago(minutes=30)),
         ptt_stop(ago(minutes=30) + timedelta(seconds=4)),
-        speaking(ago(minutes=30) + timedelta(seconds=5), True),
-        speaking(ago(minutes=30) + timedelta(seconds=9), False),
+        *answer(ago(minutes=30) + timedelta(seconds=5), ago(minutes=30) + timedelta(seconds=9)),
         claim_started(ago(minutes=20), "mario"),
         claim_ended(ago(minutes=17)),
     ]
@@ -106,6 +107,7 @@ def test_something_playing_when_the_server_restarts_ends_at_its_last_line() -> N
         stream_started(ago(minutes=50), "s1", "Joropo"),
         play_started(ago(minutes=50), "spotify:track:x"),
         speaking(ago(minutes=40), True),
+        audio_start(ago(minutes=40)),
         cost(ago(minutes=35), 0.01, 0.5),  # the old process's last line
         starting(ago(minutes=10)),
     ]
@@ -203,3 +205,23 @@ def test_no_bench_file_excludes_nothing(tmp_path: Path) -> None:
     b = BenchReader(tmp_path / "nope.jsonl", WatchLog(None)).read()
     assert b.windows == ()
     assert flat() == []
+
+
+def test_a_stream_owning_the_speaker_is_not_huxley_speaking() -> None:
+    """Real log, 2026-10-12: model_speaking stays true for a whole song
+    (the stream's pump owns the speaker), which drew 164 min of "Huxley"
+    over music, radio and books. Only coord.audio_start opens an answer."""
+    t = ago(minutes=30)
+    lines = [
+        press(t),
+        ptt_stop(t + timedelta(seconds=2)),
+        *answer(t + timedelta(seconds=3), t + timedelta(seconds=3.2)),
+        stream_started(t + timedelta(seconds=4), "turn.content.24d007c6", "Adele"),
+        speaking(t + timedelta(seconds=4), True, conn="w1"),
+        play_started(t + timedelta(seconds=7), "spotify:artist:x"),
+        stream_ended(t + timedelta(minutes=5), "turn.content.24d007c6"),
+        speaking(t + timedelta(minutes=5, seconds=1), False, conn="w1"),
+    ]
+    segs = segments(events(lines), NOW)
+    kinds = {s.kind: round(s.seconds, 1) for s in segs}
+    assert kinds == {"talk": 2.0, "answer": 0.2, "music": 296.0}

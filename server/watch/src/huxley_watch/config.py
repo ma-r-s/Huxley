@@ -18,7 +18,7 @@ import os
 import stat
 import tomllib
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, time
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -82,6 +82,9 @@ class Config:
     db_path: Path
     state_dir: Path
     timezone: ZoneInfo
+    # The recorder's Ogg files (T1.43 W3): <persona data dir>/recordings.
+    # The archive serves files from here only.
+    recordings_dir: Path | None = None
     walkie_mac: str | None = None
     interval_s: float = 300.0
     lookback_days: float = 40.0
@@ -92,6 +95,10 @@ class Config:
     balance_usd: float | None = None
     balance_at: datetime | None = None
     book_hours_per_month: float | None = None
+    # The audiobook allowance renews on this day of the month (Spotify's
+    # billing day); None: calendar months, as the skill's own counter.
+    book_renews_day: int | None = None
+    book_since: date | None = None  # when the allowance began (first cycle only)
     telegram_token: str | None = None
     telegram_chat_id: str | None = None
     ping_url: str | None = None
@@ -277,6 +284,11 @@ def _load(path: Path | None) -> Config:
         if "db" in huxley
         else persona_dir / "data" / f"{persona_dir.name}.db"
     )
+    recordings_dir = (
+        _path(huxley["recordings_dir"], base)
+        if "recordings_dir" in huxley
+        else db_path.parent / "recordings"
+    )
     persona = read_persona(persona_dir)
     tz = _timezone(watch.get("timezone"), str(persona.get("timezone") or ""), notes)
 
@@ -311,6 +323,25 @@ def _load(path: Path | None) -> Config:
                 hours = float(spotify["book_hours_per_month"])
             except (TypeError, ValueError):
                 hours = None
+
+    renews_day: int | None = None
+    if books.get("renews_day") is not None:
+        try:
+            renews_day = int(books["renews_day"])
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"books.renews_day: not a day: {books['renews_day']!r}") from exc
+        if not 1 <= renews_day <= 31:
+            raise ConfigError(f"books.renews_day: 1-31, got {renews_day}")
+    book_since: date | None = None
+    if books.get("since") is not None:
+        value = books["since"]
+        if isinstance(value, date):
+            book_since = value
+        else:
+            try:
+                book_since = date.fromisoformat(str(value))
+            except ValueError as exc:
+                raise ConfigError(f"books.since: not a date: {value!r}") from exc
 
     known = {f for f in Thresholds.__dataclass_fields__}
     th_kwargs: dict[str, Any] = {}
@@ -351,6 +382,7 @@ def _load(path: Path | None) -> Config:
         db_path=db_path,
         state_dir=_path(watch.get("state_dir", DEFAULT_STATE), base),
         timezone=tz,
+        recordings_dir=recordings_dir,
         walkie_mac=str(mac).lower() if mac else None,
         interval_s=60.0 * (interval or 5.0),
         lookback_days=lookback or 40.0,
@@ -361,6 +393,8 @@ def _load(path: Path | None) -> Config:
         balance_usd=balance_usd,
         balance_at=balance_at,
         book_hours_per_month=hours,
+        book_renews_day=renews_day,
+        book_since=book_since,
         telegram_token=_secret(secrets, "telegram_bot_token"),
         telegram_chat_id=_secret(secrets, "telegram_chat_id"),
         ping_url=ping,

@@ -573,7 +573,7 @@ class TurnCoordinator:
         # own size), so a chunk count means a different duration on each.
         audio_ms = self.current_turn.user_audio_bytes * 1000 // self._CLIENT_AUDIO_BYTES_PER_SECOND
         level = self.current_turn.user_audio_level
-        levels = {"peak_dbfs": level.peak_dbfs, "rms_dbfs": level.rms_dbfs}
+        levels = level.as_log()
         # Silence is transcribed as a Whisper hallucination ("Subtitulos ...
         # Amara.org") that the model then answers, so a silent press is
         # dropped like a tap. Threshold and reference levels: `press_level`.
@@ -585,6 +585,7 @@ class TurnCoordinator:
                     audio_ms=audio_ms,
                     measured_ms=level.measured_ms,
                     threshold_dbfs=SILENT_PEAK_DBFS,
+                    why=level.silent_why,
                     **levels,
                 )
             await self._log.ainfo(

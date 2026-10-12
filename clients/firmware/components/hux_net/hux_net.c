@@ -498,8 +498,11 @@ static void wifi_init_sta(const char *ssid, const char *password) {
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    /* Mains-powered audio device — battery life is irrelevant.
-     * Default `WIFI_PS_MIN_MODEM` parks the radio between AP beacons
+    /* Power save off: the radio stays awake (the walkie's biggest steady
+     * draw; it runs on its cells now, so F-0029 measures a day of drain
+     * and re-tests power save: the send timeout is 5 s today, not the
+     * 200 ms that tripped below). History: the default `WIFI_PS_MIN_MODEM`
+     * parks the radio between AP beacons
      * (typically 100 ms intervals) and the first packet after an
      * idle period waits for the next wake, blowing through the
      * 200 ms WS write timeout when two beacons stack unfavourably.
@@ -507,8 +510,7 @@ static void wifi_init_sta(const char *ssid, const char *password) {
      * conversational silence, the next outbound mic frame trips
      * `transport_poll_write(0)` and the WS lock starves.
      * `WIFI_PS_NONE` keeps the radio always-awake — first-packet
-     * latency drops from ~50-150 ms to <5 ms. Power cost on
-     * mains-powered hardware is irrelevant. */
+     * latency drops from ~50-150 ms to <5 ms. */
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     wifi_bandwidth_t bw = WIFI_BW_HT20;
     esp_wifi_get_bandwidth(WIFI_IF_STA, &bw);
@@ -823,6 +825,9 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
     }
 }
 
+/* "Authorization: Bearer <token>\r\n" for the upgrade (F-0028). */
+static char s_auth_header[96] = {0};
+
 static bool ws_start(const char *uri) {
     strlcpy(s_server_uri, uri, sizeof(s_server_uri));
     esp_websocket_client_config_t cfg = {
@@ -859,13 +864,13 @@ static bool ws_start(const char *uri) {
         .keep_alive_count = 3,
 
         /* WS-level application PING. Cuts through application-layer
-         * stalls (e.g. server hung but TCP healthy). 10s default is
-         * fine; making it explicit so a future tweak doesn't have
-         * to read the library source to know it. With
+         * stalls (e.g. server hung but TCP healthy). Every 20 s, not 10
+         * (Mario, 2026-10-12: fewer wakeups; the server pings every 20 s
+         * too, and a WS silent 90 s still counts as stuck). With
          * `disable_pingpong_discon=false` (default), missing PONG
          * for `pingpong_timeout_sec` (default 120s) auto-closes the
          * socket — combines with auto-reconnect to clear zombies. */
-        .ping_interval_sec = 10,
+        .ping_interval_sec = 20,
 
         /* Reconnect after the server closes the socket too, not only after
          * a network error. Off by default: the client's task then exits on
@@ -877,6 +882,7 @@ static bool ws_start(const char *uri) {
          * base64, the speaker ring) and logs from it. The library default
          * (4 KB) had 1.2 KB left before the first reply arrived. */
         .task_stack = 6144,
+        .headers = s_auth_header[0] != '\0' ? s_auth_header : NULL,
     };
     s_ws = esp_websocket_client_init(&cfg);
     if (s_ws == NULL) {
@@ -918,6 +924,15 @@ void hux_net_start(const hux_net_config_t *cfg) {
     configASSERT(cfg != NULL && cfg->wifi_ssid != NULL &&
                  cfg->wifi_password != NULL && cfg->server_uri != NULL);
     hux_ws_reassembler_init(&s_reassembler, s_frag_buf, sizeof(s_frag_buf));
+    if (cfg->device_token != NULL && cfg->device_token[0] != '\0') {
+        int n = snprintf(s_auth_header, sizeof(s_auth_header), "Authorization: Bearer %s\r\n",
+                         cfg->device_token);
+        if (n <= 0 || n >= (int)sizeof(s_auth_header)) {
+            s_auth_header[0] = '\0';
+            ESP_LOGE(TAG, "ws.token_too_long: none sent");
+        }
+    }
+    ESP_LOGI(TAG, "ws.token present=%d", s_auth_header[0] != '\0'); /* never the value */
     /* WS client created first; the GOT_IP handler starts it. */
     strlcpy(s_compiled_uri, cfg->server_uri, sizeof(s_compiled_uri));
     strlcpy(s_home_uri, cfg->server_uri, sizeof(s_home_uri));
@@ -1246,6 +1261,18 @@ void hux_net_take_health(hux_net_health_t *out) {
     out->channel = out->have_ap ? ap.primary : 0;
     memcpy(out->bssid, ap.bssid, sizeof(out->bssid));
     out->ws_rx_age_ms = hux_net_rx_age_ms();
+}
+
+bool hux_net_link_info(hux_net_link_t *out) {
+    wifi_ap_record_t ap = {0};
+    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
+        return false;
+    }
+    strlcpy(out->ssid, (const char *)ap.ssid, sizeof(out->ssid));
+    out->channel = ap.primary;
+    out->rssi = ap.rssi;
+    memcpy(out->bssid, ap.bssid, sizeof(out->bssid));
+    return true;
 }
 
 uint32_t hux_net_ladder_ticks(void) {
