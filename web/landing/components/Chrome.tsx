@@ -61,10 +61,12 @@ export function BalNav() {
         background: "var(--hux-coral)",
       }}
     >
-      <Wordmark
-        size={isMobile ? 26 : 32}
-        subtle={isMobile ? undefined : t("nav.wordmarkSubtle")}
-      />
+      <a href="/" aria-label="huxley" style={{ color: "inherit", textDecoration: "none" }}>
+        <Wordmark
+          size={isMobile ? 26 : 32}
+          subtle={isMobile ? undefined : t("nav.wordmarkSubtle")}
+        />
+      </a>
       <div
         style={{
           display: "flex",
@@ -73,6 +75,9 @@ export function BalNav() {
         }}
       >
         <LangToggle />
+        <a style={chipGhost} href="/hx-1">
+          {t("nav.hx1")}
+        </a>
         {!isMobile && (
           <a style={chipGhost} href="/docs">
             {t("nav.docs")}
@@ -229,6 +234,7 @@ export function SectionHead({ eyebrow, title, subtitle }: SectionHeadProps) {
             lineHeight: 1.02,
             letterSpacing: "-0.015em",
             margin: 0,
+            textWrap: "balance",
           }}
         >
           {title}

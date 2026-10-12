@@ -2,7 +2,8 @@
   "nav": {
     "wordmarkSubtle": "v0.9 · pre-1.0",
     "docs": "Docs",
-    "github": "GitHub"
+    "github": "GitHub",
+    "hx1": "HX-1"
   },
   "hero": {
     "pill": "Asistentes de voz personales · Python auto-alojado · MIT",
@@ -285,5 +286,134 @@
     "linkIssues": "Issues",
     "linkDiscussions": "Discusiones",
     "linkDocs": "Docs"
+  },
+  "hx1": {
+    "pill": "Hardware · HX-1",
+    "titleLine1": "Mantén para hablar.",
+    "titleLine2": "Suelta para escuchar.",
+    "subtitle": "HX-1 es el walkie-talkie en el que corre la primera persona de Huxley. Se hizo para un usuario mayor y ciego: sin pantalla, sin palabra de activación, una sola palanca naranja.",
+    "ctaHow": "Cómo funciona",
+    "ctaSource": "El CAD",
+    "viewer": {
+      "aria": "Modelo 3D de HX-1. Arrastra para girarlo.",
+      "view": "Vista",
+      "assembled": "Armado",
+      "exploded": "Despiece",
+      "light": "Luz",
+      "loading": "Cargando el modelo",
+      "failed": "El modelo 3D no cargó. Recarga la página para intentarlo de nuevo."
+    },
+    "why": {
+      "eyebrow": "Por qué una palanca",
+      "title": "Hecho para las manos, no para los ojos.",
+      "subtitle": "Un teléfono necesita la vista. Un altavoz inteligente escucha todo el tiempo y se despierta con la palabra equivocada. Sostener una palanca para hablar es un gesto que todos conocen.",
+      "points": [
+        {
+          "k": "Se encuentra al tacto",
+          "v": "La palanca es lo único que sobresale. El encendido está a la izquierda y el botón de hablar a la derecha, así que nunca se confunden."
+        },
+        {
+          "k": "Escucha solo mientras la sostienes",
+          "v": "El micrófono se abre al bajar la palanca y se cierra al soltarla. Entre medio, nada escucha."
+        },
+        {
+          "k": "Nada que mirar",
+          "v": "Sin pantalla y sin menús. La música, los audiolibros, las noticias, los recordatorios y el volumen se piden en voz alta."
+        }
+      ]
+    },
+    "inside": {
+      "eyebrow": "Qué lleva dentro",
+      "title": "Una placa pequeña, un altavoz grande, dos pilas.",
+      "subtitle": "Cambia el modelo a Despiece para ver cada pieza, y señala una para ver su nombre.",
+      "specs": {
+        "size": "Tamaño",
+        "weight": "Peso",
+        "battery": "Batería",
+        "speaker": "Altavoz",
+        "board": "Cerebro",
+        "light": "Luz"
+      },
+      "parts": [
+        {
+          "k": "Placa de audio ESP32-S3",
+          "v": "La placa redonda de Waveshare: Wi-Fi, dos micrófonos, un códec de audio y siete LED RGB en su parte trasera."
+        },
+        {
+          "k": "Altavoz de 40 mm y 5 W",
+          "v": "Detrás de él, toda la carcasa sellada hace de caja, unos 130 cm³, así que las voces suenan llenas."
+        },
+        {
+          "k": "Dos pilas 18650",
+          "v": "Pilas protegidas en paralelo, que se cargan por USB-C. El interruptor de encendido va hundido en el lado izquierdo para que no se apague por accidente."
+        },
+        {
+          "k": "La palanca de hablar",
+          "v": "Una palanca impresa, sobre un eje impreso, presiona un pulsador de 12 × 12 a través de un resorte: unos 2 mm de recorrido hasta el clic."
+        },
+        {
+          "k": "La luz",
+          "v": "Los LED de la placa brillan a través de la parte trasera transparente."
+        },
+        {
+          "k": "Cuatro tornillos",
+          "v": "El frente se quita con cuatro tornillos y se abre como un libro. Solo las dos mitades de la parte trasera van pegadas."
+        }
+      ]
+    },
+    "how": {
+      "eyebrow": "Cómo habla con Huxley",
+      "title": "El walkie es los oídos y la voz.",
+      "subtitle": "Todo lo demás corre en un servidor Huxley: la persona, sus habilidades y el modelo de voz.",
+      "steps": [
+        {
+          "k": "Sostén",
+          "v": "Al bajar la palanca se abre el micrófono. Tu voz viaja al servidor por Wi-Fi mientras hablas."
+        },
+        {
+          "k": "Piensa",
+          "v": "El servidor corre la persona, aquí Abuelo, una voz lenta y cálida en español, y sus habilidades: audiolibros, radio, noticias, recordatorios y mensajes."
+        },
+        {
+          "k": "Responde",
+          "v": "La respuesta vuelve y suena a medida que llega. Baja la palanca otra vez para interrumpirla."
+        }
+      ],
+      "linkPersonas": "Sobre las personas",
+      "linkFirmware": "El firmware"
+    },
+    "made": {
+      "eyebrow": "Hecho para hacerse",
+      "title": "Impreso en casa, ajustado en software.",
+      "body1": "Cada pieza se imprime en una impresora 3D de escritorio: un frente blanco, una base roja, una tapa trasera de PETG transparente sobre la luz, una rejilla negra y una palanca naranja. La carcasa está modelada en Python con build123d.",
+      "body2": "Antes de imprimir nada, unas pruebas encajan cada pieza contra el propio modelo 3D de la placa, comprueban que cada una tenga por dónde entrar y que ninguna capa empiece en el aire. Las piezas pesadas las sujetan formas impresas y tornillos, nunca pegamento.",
+      "link": "El código de la carcasa"
+    },
+    "partNames": {
+      "12_12_tact_switch": "Pulsador de 12 × 12",
+      "18650_cell": "Pila 18650",
+      "18650_holder": "Portapilas 18650",
+      "battery_lead": "Cable de la batería",
+      "esp32_s3_audio_board": "Placa de audio ESP32-S3",
+      "faceplate": "Frente",
+      "grille_plug": "Rejilla",
+      "holder_bridge": "Puente de los portapilas",
+      "holder_leads": "Cables de los portapilas",
+      "lever_pin_printed": "Eje de la palanca, impreso",
+      "m2_8_screw_and_washer": "Tornillo M2 × 8 y arandela",
+      "m3_5_heat_set_insert": "Inserto roscado M3 × 5",
+      "m3_6_screw": "Tornillo M3 × 6",
+      "m3_8_screw": "Tornillo M3 × 8",
+      "plunger": "Émbolo",
+      "power_switch_kcd1_101": "Interruptor de encendido KCD1-101",
+      "ribbon_6_wires": "Cinta de 6 cables",
+      "speaker_lead": "Cable del altavoz",
+      "speaker_40_mm_5_w": "Altavoz, 40 mm 5 W",
+      "spring_0_4_4_15": "Resorte 0,4 × 4 × 15",
+      "talk_lever": "Palanca de hablar",
+      "talk_switch_wires": "Cables del pulsador",
+      "tub_base": "Base",
+      "tub_top": "Tapa trasera"
+    }
   }
 }

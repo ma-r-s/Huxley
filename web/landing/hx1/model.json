@@ -1,0 +1,421 @@
+{
+ "light_at": [
+  -0.0012,
+  0.07242,
+  0.0054
+ ],
+ "nodes": {
+  "n000": {
+   "kind": "black",
+   "label": "ESP32-S3 audio board",
+   "explode": [
+    0.0,
+    0.0,
+    0.086
+   ],
+   "build_only": false
+  },
+  "n001": {
+   "kind": "led",
+   "label": "ESP32-S3 audio board",
+   "explode": [
+    0.0,
+    0.0,
+    0.086
+   ],
+   "build_only": false
+  },
+  "n002": {
+   "kind": "metal",
+   "label": "ESP32-S3 audio board",
+   "explode": [
+    0.0,
+    0.0,
+    0.086
+   ],
+   "build_only": false
+  },
+  "n003": {
+   "kind": "pcb",
+   "label": "ESP32-S3 audio board",
+   "explode": [
+    0.0,
+    0.0,
+    0.086
+   ],
+   "build_only": false
+  },
+  "n004": {
+   "kind": "screw",
+   "label": "M2 \u00d7 8 screw and washer",
+   "explode": [
+    0.0,
+    0.0,
+    0.08
+   ],
+   "build_only": false
+  },
+  "n005": {
+   "kind": "white",
+   "label": "ESP32-S3 audio board",
+   "explode": [
+    0.0,
+    0.0,
+    0.086
+   ],
+   "build_only": false
+  },
+  "n006": {
+   "kind": "screw",
+   "label": "M3 \u00d7 6 screw",
+   "explode": [
+    0.0,
+    0.0,
+    0.064
+   ],
+   "build_only": false
+  },
+  "n007": {
+   "kind": "shell_inner",
+   "label": "Holder bridge",
+   "explode": [
+    0.0,
+    0.0,
+    0.064
+   ],
+   "build_only": false
+  },
+  "n008": {
+   "kind": "cell",
+   "label": "18650 cell",
+   "explode": [
+    0.0,
+    0.0,
+    0.046
+   ],
+   "build_only": false
+  },
+  "n009": {
+   "kind": "cell",
+   "label": "18650 cell",
+   "explode": [
+    0.0,
+    0.0,
+    0.046
+   ],
+   "build_only": false
+  },
+  "n010": {
+   "kind": "wire_red",
+   "label": "Ribbon, 6 wires",
+   "explode": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "build_only": false
+  },
+  "n011": {
+   "kind": "metal",
+   "label": "M3 \u00d7 5 heat-set insert",
+   "explode": [
+    0.0,
+    -0.016,
+    0.1
+   ],
+   "build_only": false
+  },
+  "n012": {
+   "kind": "case_white",
+   "label": "Faceplate",
+   "explode": [
+    0.0,
+    0.0,
+    0.108
+   ],
+   "build_only": false
+  },
+  "n013": {
+   "kind": "shell_dark",
+   "label": "Grille plug",
+   "explode": [
+    0.0,
+    0.0,
+    0.126
+   ],
+   "build_only": false
+  },
+  "n014": {
+   "kind": "black",
+   "label": "18650 holder",
+   "explode": [
+    0.0,
+    0.0,
+    0.046
+   ],
+   "build_only": false
+  },
+  "n015": {
+   "kind": "black",
+   "label": "18650 holder",
+   "explode": [
+    0.0,
+    0.0,
+    0.046
+   ],
+   "build_only": false
+  },
+  "n016": {
+   "kind": "metal",
+   "label": "18650 holder",
+   "explode": [
+    0.0,
+    0.0,
+    0.046
+   ],
+   "build_only": false
+  },
+  "n017": {
+   "kind": "metal",
+   "label": "18650 holder",
+   "explode": [
+    0.0,
+    0.0,
+    0.046
+   ],
+   "build_only": false
+  },
+  "n018": {
+   "kind": "metal",
+   "label": "M3 \u00d7 5 heat-set insert",
+   "explode": [
+    0.0,
+    0.0,
+    0.024
+   ],
+   "build_only": false
+  },
+  "n019": {
+   "kind": "wire_black",
+   "label": "Battery lead",
+   "explode": [
+    0.0,
+    0.0,
+    0.056
+   ],
+   "build_only": false
+  },
+  "n020": {
+   "kind": "wire_black",
+   "label": "Holder leads",
+   "explode": [
+    0.0,
+    0.0,
+    0.056
+   ],
+   "build_only": false
+  },
+  "n021": {
+   "kind": "wire_red",
+   "label": "Holder leads",
+   "explode": [
+    0.0,
+    0.0,
+    0.056
+   ],
+   "build_only": false
+  },
+  "n022": {
+   "kind": "accent",
+   "label": "Talk lever",
+   "explode": [
+    0.045,
+    0.0,
+    0.0
+   ],
+   "build_only": false
+  },
+  "n023": {
+   "kind": "shell_inner",
+   "label": "Lever pin, printed",
+   "explode": [
+    0.045,
+    0.0,
+    0.0
+   ],
+   "build_only": false
+  },
+  "n024": {
+   "kind": "metal",
+   "label": "Spring 0.4 \u00d7 4 \u00d7 15",
+   "explode": [
+    0.03,
+    0.018,
+    0.0
+   ],
+   "build_only": false
+  },
+  "n025": {
+   "kind": "shell_inner",
+   "label": "Plunger",
+   "explode": [
+    0.03,
+    0.018,
+    0.0
+   ],
+   "build_only": false
+  },
+  "n026": {
+   "kind": "wire_red",
+   "label": "Ribbon, 6 wires",
+   "explode": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "build_only": true
+  },
+  "n027": {
+   "kind": "black",
+   "label": "Power switch KCD1-101",
+   "explode": [
+    -0.04,
+    0.0,
+    0.0
+   ],
+   "build_only": false
+  },
+  "n028": {
+   "kind": "metal",
+   "label": "Power switch KCD1-101",
+   "explode": [
+    -0.04,
+    0.0,
+    0.0
+   ],
+   "build_only": false
+  },
+  "n029": {
+   "kind": "screw",
+   "label": "M3 \u00d7 8 screw",
+   "explode": [
+    0.0,
+    -0.04,
+    0.1
+   ],
+   "build_only": false
+  },
+  "n030": {
+   "kind": "cone",
+   "label": "Speaker, 40 mm 5 W",
+   "explode": [
+    0.0,
+    0.0,
+    0.072
+   ],
+   "build_only": false
+  },
+  "n031": {
+   "kind": "metal",
+   "label": "Speaker, 40 mm 5 W",
+   "explode": [
+    0.0,
+    0.0,
+    0.072
+   ],
+   "build_only": false
+  },
+  "n032": {
+   "kind": "speaker",
+   "label": "Speaker, 40 mm 5 W",
+   "explode": [
+    0.0,
+    0.0,
+    0.072
+   ],
+   "build_only": false
+  },
+  "n033": {
+   "kind": "wire_black",
+   "label": "Speaker lead",
+   "explode": [
+    0.0,
+    0.0,
+    0.072
+   ],
+   "build_only": false
+  },
+  "n034": {
+   "kind": "black",
+   "label": "12 \u00d7 12 tact switch",
+   "explode": [
+    0.0,
+    0.018,
+    0.03
+   ],
+   "build_only": false
+  },
+  "n035": {
+   "kind": "metal",
+   "label": "12 \u00d7 12 tact switch",
+   "explode": [
+    0.0,
+    0.018,
+    0.03
+   ],
+   "build_only": false
+  },
+  "n036": {
+   "kind": "case_red",
+   "label": "Tub base",
+   "explode": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "build_only": false
+  },
+  "n037": {
+   "kind": "case_clear",
+   "label": "Tub top",
+   "explode": [
+    0.0,
+    0.012,
+    0.0
+   ],
+   "build_only": false
+  },
+  "n038": {
+   "kind": "wire_red",
+   "label": "Battery lead",
+   "explode": [
+    0.0,
+    0.0,
+    0.056
+   ],
+   "build_only": false
+  },
+  "n039": {
+   "kind": "wire_white",
+   "label": "Talk switch wires",
+   "explode": [
+    0.0,
+    0.0,
+    0.056
+   ],
+   "build_only": false
+  }
+ },
+ "specs": {
+  "size_mm": [
+   70.0,
+   37.2,
+   104.0
+  ],
+  "size_with_lever_mm": 101.0,
+  "weight_g": 247,
+  "back_volume_cc": 130.4,
+  "cells": 2,
+  "printed_cc": 75.3
+ }
+}

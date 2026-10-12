@@ -18,5 +18,5 @@ export const baseOptions: BaseLayoutProps = {
     ),
     url: "/",
   },
-  links: [],
+  links: [{ text: "HX-1", url: "/hx-1" }],
 };

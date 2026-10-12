@@ -2,7 +2,8 @@
   "nav": {
     "wordmarkSubtle": "v0.9 · pré-1.0",
     "docs": "Docs",
-    "github": "GitHub"
+    "github": "GitHub",
+    "hx1": "HX-1"
   },
   "hero": {
     "pill": "Assistants vocaux personnels · Python auto-hébergé · MIT",
@@ -285,5 +286,134 @@
     "linkIssues": "Issues",
     "linkDiscussions": "Discussions",
     "linkDocs": "Docs"
+  },
+  "hx1": {
+    "pill": "Matériel · HX-1",
+    "titleLine1": "Appuyez pour parler.",
+    "titleLine2": "Relâchez pour écouter.",
+    "subtitle": "HX-1 est le talkie-walkie sur lequel tourne le premier persona de Huxley. Il a été conçu pour un utilisateur âgé et aveugle : pas d'écran, pas de mot d'éveil, un seul levier orange.",
+    "ctaHow": "Comment ça marche",
+    "ctaSource": "La CAO",
+    "viewer": {
+      "aria": "Modèle 3D du HX-1. Faites glisser pour le tourner.",
+      "view": "Vue",
+      "assembled": "Assemblé",
+      "exploded": "Éclaté",
+      "light": "Lumière",
+      "loading": "Chargement du modèle",
+      "failed": "Le modèle 3D ne s'est pas chargé. Rechargez la page pour réessayer."
+    },
+    "why": {
+      "eyebrow": "Pourquoi un levier",
+      "title": "Fait pour les mains, pas pour les yeux.",
+      "subtitle": "Un téléphone demande la vue. Une enceinte connectée écoute en permanence et se réveille au mauvais mot. Tenir un levier pour parler est un geste que tout le monde connaît.",
+      "points": [
+        {
+          "k": "Se trouve au toucher",
+          "v": "Le levier est la seule chose qui dépasse. L'interrupteur est à gauche et la parole à droite, on ne les confond jamais."
+        },
+        {
+          "k": "N'écoute que tant qu'on tient",
+          "v": "Le micro s'ouvre quand le levier descend et se ferme quand il remonte. Entre les deux, rien n'écoute."
+        },
+        {
+          "k": "Rien à regarder",
+          "v": "Ni écran ni menus. La musique, les livres audio, les nouvelles, les rappels et le volume se demandent à voix haute."
+        }
+      ]
+    },
+    "inside": {
+      "eyebrow": "Ce qu'il y a dedans",
+      "title": "Une petite carte, un grand haut-parleur, deux accus.",
+      "subtitle": "Passez le modèle en Éclaté pour voir chaque pièce, et pointez-en une pour son nom.",
+      "specs": {
+        "size": "Taille",
+        "weight": "Poids",
+        "battery": "Batterie",
+        "speaker": "Haut-parleur",
+        "board": "Cerveau",
+        "light": "Lumière"
+      },
+      "parts": [
+        {
+          "k": "Carte audio ESP32-S3",
+          "v": "La carte ronde de Waveshare : Wi-Fi, deux micros, un codec audio et sept LED RVB au dos."
+        },
+        {
+          "k": "Haut-parleur 40 mm, 5 W",
+          "v": "Derrière lui, tout le boîtier étanche lui sert de caisse, environ 130 cm³, pour des voix pleines."
+        },
+        {
+          "k": "Deux accus 18650",
+          "v": "Des accus protégés en parallèle, chargés par USB-C. L'interrupteur est encastré dans le flanc gauche pour ne pas être basculé par accident."
+        },
+        {
+          "k": "Le levier de parole",
+          "v": "Un levier imprimé, sur un axe imprimé, appuie sur un bouton 12 × 12 à travers un ressort : environ 2 mm de course jusqu'au clic."
+        },
+        {
+          "k": "La lumière",
+          "v": "Les LED de la carte brillent à travers le dos transparent."
+        },
+        {
+          "k": "Quatre vis",
+          "v": "La façade s'enlève avec quatre vis et s'ouvre comme un livre. Seules les deux moitiés du dos sont collées."
+        }
+      ]
+    },
+    "how": {
+      "eyebrow": "Comment il parle à Huxley",
+      "title": "Le talkie, ce sont les oreilles et la voix.",
+      "subtitle": "Tout le reste tourne sur un serveur Huxley : le persona, ses compétences et le modèle vocal.",
+      "steps": [
+        {
+          "k": "Tenir",
+          "v": "Appuyer sur le levier ouvre le micro. Votre voix part vers le serveur en Wi-Fi pendant que vous parlez."
+        },
+        {
+          "k": "Réfléchir",
+          "v": "Le serveur fait tourner le persona, ici Abuelo, une voix lente et chaleureuse en espagnol, et ses compétences : livres audio, radio, nouvelles, rappels et messages."
+        },
+        {
+          "k": "Répondre",
+          "v": "La réponse revient et se joue au fur et à mesure. Appuyez à nouveau sur le levier pour l'interrompre."
+        }
+      ],
+      "linkPersonas": "À propos des personas",
+      "linkFirmware": "Le firmware"
+    },
+    "made": {
+      "eyebrow": "Fait pour être fait",
+      "title": "Imprimé à la maison, ajusté en logiciel.",
+      "body1": "Chaque pièce s'imprime sur une imprimante 3D de bureau : une façade blanche, une base rouge, un dos en PETG transparent au-dessus de la lumière, une grille noire et un levier orange. Le boîtier est modélisé en Python avec build123d.",
+      "body2": "Avant toute impression, des tests ajustent chaque pièce sur le modèle 3D de la carte elle-même, vérifient que chacune a un chemin pour entrer et qu'aucune couche ne commence dans le vide. Les pièces lourdes sont tenues par des formes imprimées et des vis, jamais par de la colle.",
+      "link": "Les sources du boîtier"
+    },
+    "partNames": {
+      "12_12_tact_switch": "Bouton 12 × 12",
+      "18650_cell": "Accu 18650",
+      "18650_holder": "Support d'accu 18650",
+      "battery_lead": "Fil de batterie",
+      "esp32_s3_audio_board": "Carte audio ESP32-S3",
+      "faceplate": "Façade",
+      "grille_plug": "Grille",
+      "holder_bridge": "Pont des supports",
+      "holder_leads": "Fils des supports",
+      "lever_pin_printed": "Axe du levier, imprimé",
+      "m2_8_screw_and_washer": "Vis M2 × 8 et rondelle",
+      "m3_5_heat_set_insert": "Insert fileté M3 × 5",
+      "m3_6_screw": "Vis M3 × 6",
+      "m3_8_screw": "Vis M3 × 8",
+      "plunger": "Poussoir",
+      "power_switch_kcd1_101": "Interrupteur KCD1-101",
+      "ribbon_6_wires": "Nappe 6 fils",
+      "speaker_lead": "Fil du haut-parleur",
+      "speaker_40_mm_5_w": "Haut-parleur, 40 mm 5 W",
+      "spring_0_4_4_15": "Ressort 0,4 × 4 × 15",
+      "talk_lever": "Levier de parole",
+      "talk_switch_wires": "Fils du bouton",
+      "tub_base": "Base",
+      "tub_top": "Dos"
+    }
   }
 }

@@ -2,7 +2,8 @@
   "nav": {
     "wordmarkSubtle": "v0.9 · pre-1.0",
     "docs": "Docs",
-    "github": "GitHub"
+    "github": "GitHub",
+    "hx1": "HX-1"
   },
   "hero": {
     "pill": "Personal voice assistants · Self-hosted Python · MIT",
@@ -285,5 +286,109 @@
     "linkIssues": "Issues",
     "linkDiscussions": "Discussions",
     "linkDocs": "Docs"
+  },
+  "hx1": {
+    "pill": "Hardware · HX-1",
+    "titleLine1": "Hold to talk.",
+    "titleLine2": "Let go to listen.",
+    "subtitle": "HX-1 is the walkie-talkie Huxley's first persona runs on. It was made for an elderly blind user: no screen, no wake word, one orange lever.",
+    "ctaHow": "How it works",
+    "ctaSource": "The CAD",
+    "viewer": {
+      "aria": "3D model of HX-1. Drag to turn it.",
+      "view": "View",
+      "assembled": "Assembled",
+      "exploded": "Exploded",
+      "light": "Light",
+      "loading": "Loading the model",
+      "failed": "The 3D model didn't load. Reload the page to try again."
+    },
+    "why": {
+      "eyebrow": "Why a lever",
+      "title": "Made for hands, not eyes.",
+      "subtitle": "A phone needs sight. A smart speaker listens all the time and wakes to the wrong word. Holding a lever to talk is a gesture everyone already knows.",
+      "points": [
+        {
+          "k": "Found by touch",
+          "v": "The lever is the only thing that sticks out. Power is on the left side and talk on the right, so the two never get mixed up."
+        },
+        {
+          "k": "Listens only while held",
+          "v": "The microphone opens when the lever goes down and closes when it comes back up. Nothing listens in between."
+        },
+        {
+          "k": "Nothing to look at",
+          "v": "No screen and no menus. Music, audiobooks, the news, reminders and the volume are all asked for out loud."
+        }
+      ]
+    },
+    "inside": {
+      "eyebrow": "What's inside",
+      "title": "A small board, a big speaker, two cells.",
+      "subtitle": "Switch the model to Exploded to see every part, and point at one for its name.",
+      "specs": {
+        "size": "Size",
+        "weight": "Weight",
+        "battery": "Battery",
+        "speaker": "Speaker",
+        "board": "Brain",
+        "light": "Light"
+      },
+      "parts": [
+        {
+          "k": "ESP32-S3 audio board",
+          "v": "Waveshare's round board: Wi-Fi, two microphones, an audio codec, and seven RGB LEDs on its back."
+        },
+        {
+          "k": "40 mm, 5 W speaker",
+          "v": "Behind it, the whole sealed case is its back box, about 130 cm³, so voices come out full."
+        },
+        {
+          "k": "Two 18650 cells",
+          "v": "Protected cells in parallel, charged over USB-C. The power switch sits recessed in the left side so it isn't flipped by accident."
+        },
+        {
+          "k": "The talk lever",
+          "v": "A printed lever on a printed pin presses a 12 × 12 switch through a spring, about 2 mm of travel to the click."
+        },
+        {
+          "k": "The light",
+          "v": "The board's LEDs shine through the clear back."
+        },
+        {
+          "k": "Four screws",
+          "v": "The front comes off with four screws and opens like a book. Only the two halves of the back are glued."
+        }
+      ]
+    },
+    "how": {
+      "eyebrow": "How it talks to Huxley",
+      "title": "The walkie is the ears and the voice.",
+      "subtitle": "Everything else runs on a Huxley server: the persona, its skills and the voice model.",
+      "steps": [
+        {
+          "k": "Hold",
+          "v": "Pressing the lever opens the microphone. Your voice streams to the server over Wi-Fi while you talk."
+        },
+        {
+          "k": "Think",
+          "v": "The server runs the persona, here Abuelo, a slow, warm voice in Spanish, and its skills: audiobooks, radio, news, reminders and messages."
+        },
+        {
+          "k": "Answer",
+          "v": "The reply streams back and plays as it arrives. Press the lever again to interrupt it."
+        }
+      ],
+      "linkPersonas": "About personas",
+      "linkFirmware": "The firmware"
+    },
+    "made": {
+      "eyebrow": "Made to be made",
+      "title": "Printed at home, fitted in software.",
+      "body1": "Every part prints on a desktop 3D printer: a white front, a red base, a clear PETG top over the light, a black grille and an orange lever. The case is modelled in Python with build123d.",
+      "body2": "Before anything is printed, tests fit every part against the board's own 3D model, check that each one has a way in, and check that no layer starts in mid-air. The heavy parts are held by printed features and screws, never glue.",
+      "link": "The enclosure source"
+    },
+    "partNames": {}
   }
 }
