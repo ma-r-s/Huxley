@@ -289,11 +289,14 @@ the server there sent its hello, so a typo can't strand the board.
 | `server <uri> [min]`       | temporary (tests, proxies): back after `min` (15) or a reboot, never saved |
 | `server keep <uri> [min]`  | moves: saved at the first hello there (`ws.server_saved`, `ws.server_proven mode=keep`); no hello within `min` (15) and it goes back (`ws.server_revert to= why=timeout home_proven=`) |
 
-An address must be `ws://` or `wss://`, a host, an explicit port and a
-path (`ws://192.168.68.71:8765/`), or it's refused (`ws.server_refused
-why=invalid`): the library keeps the old port or path when a new address
-leaves one out, and a saved address it can't parse would fail every
-boot. One it refuses anyway leaves the old one in place
+An address is `ws://` or `wss://`, a host, a port and a path; a missing
+port becomes the scheme's (443 for `wss://`, 80 for `ws://`) and a
+missing path `/` before anything else (`hux_link_uri_complete`), since
+the library keeps the old port or path when a new address leaves one
+out. Anything else is refused (`ws.server_refused why=invalid`): a saved
+address it can't parse would fail every boot. `wss://` checks the
+server's certificate against the Mozilla CA bundle (the Cloudflare
+tunnel, T1.43). One it refuses anyway leaves the old one in place
 (`why=set_uri`). A saved address that is invalid or fails at boot is
 erased and the compiled one used (`ws.server_saved_invalid`,
 `ws.server_saved_unusable`). Only a hello from a connection opened
