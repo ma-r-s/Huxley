@@ -169,6 +169,11 @@ static void ladder_task(void *arg);
  * keep coming) stamps s_ws_event_ms: 90 s without one while the server is
  * up means the WS task is stuck, which counts as lost (F-0027). */
 static _Atomic uint32_t s_ladder_ticks = 0;
+static TaskHandle_t s_ladder_task = NULL;
+/* A new IP while the server is lost: restart the client now. The library
+ * sleeps half its retry delay between checks (up to 30 s after a long
+ * outage), so lowering the delay alone came 25 s late (2026-10-12). */
+static _Atomic bool s_kick = false;
 static _Atomic uint32_t s_ws_event_ms = 0;
 #define WS_SILENT_MS 90000
 
@@ -449,6 +454,10 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
             atomic_store(&s_ws_attempts, 0);
             esp_websocket_client_set_reconnect_timeout(s_ws, HUX_LINK_BACKOFF_MIN_MS);
             ESP_LOGI(TAG, "ws.retry_fast why=new_ip");
+            atomic_store(&s_kick, true);
+            if (s_ladder_task != NULL) {
+                xTaskNotifyGive(s_ladder_task); /* the ladder restarts it, not this task */
+            }
         }
         if (!atomic_load(&s_ws_first_start) && s_ws != NULL) {
             /* From here on esp_websocket_client reconnects on its own. Never
@@ -978,7 +987,7 @@ void hux_net_start(const hux_net_config_t *cfg) {
         esp_timer_start_once(s_server_revert, (uint64_t)SERVER_FALLBACK_S * 1000000);
     }
     atomic_store(&s_lost_ms, now_ms()); /* no server yet: the ladder's clock runs */
-    if (xTaskCreate(ladder_task, "hux_ladder", 4096, NULL, 3, NULL) != pdPASS) {
+    if (xTaskCreate(ladder_task, "hux_ladder", 4096, NULL, 3, &s_ladder_task) != pdPASS) {
         ESP_LOGE(TAG, "ladder.task_create_failed: no escalation this boot");
     }
     wifi_init_sta(cfg->wifi_ssid, cfg->wifi_password);
@@ -1197,8 +1206,17 @@ void hux_net_server_status(void) {
 static void ladder_task(void *arg) {
     (void)arg;
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(LADDER_TICK_MS));
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(LADDER_TICK_MS)); /* or a new IP */
         atomic_fetch_add(&s_ladder_ticks, 1);
+        if (atomic_exchange(&s_kick, false) && !atomic_load(&s_server_up) &&
+            atomic_load(&s_ws_first_start) && !atomic_load(&s_paused) &&
+            link_lock_timed(10000)) {
+            if (atomic_load(&s_ws_alive)) {
+                client_stop();
+            }
+            client_start("new_ip");
+            link_unlock();
+        }
         if (atomic_load(&s_server_up) &&
             now_ms() - atomic_load_explicit(&s_ws_event_ms, memory_order_relaxed) > WS_SILENT_MS) {
             ESP_LOGE(TAG, "ws.silent ms=%u: the WS task is stuck or the link dead",

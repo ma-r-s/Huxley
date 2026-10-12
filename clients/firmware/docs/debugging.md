@@ -344,8 +344,10 @@ Nobody at the home can restart the walkie, so it climbs by itself.
 A disconnect logs `ws.backoff why=disconnected|closed|finished
 attempt= next_in_ms=` (it replaced `ws.disconnected`): 2 s doubling,
 jittered 75 to 125 %, 45 to 60 s at the cap (`hux_link.c`,
-host-tested); a hello resets it, and a new IP gets a fast try
-(`ws.retry_fast why=new_ip`). Trust `ws.backoff`, not the library's own
+host-tested); a hello resets it, and a new IP while the server is lost restarts the client at once
+(`ws.retry_fast why=new_ip`, then `ws.start why=new_ip`: the library
+sleeps half its retry delay between checks, so a lower delay alone
+reconnected 25 s after the IP). Trust `ws.backoff`, not the library's own
 `Reconnect after N ms` (it prints the delay from before the change). Only the first three attempts of an
 outage and every tenth log (`ws.error` too): the lines wait in the
 256-line queue until the server is back. The first disconnect of an
