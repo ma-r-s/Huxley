@@ -296,36 +296,12 @@
     "ctaSource": "La CAO",
     "viewer": {
       "aria": "Modèle 3D du HX-1. Faites glisser pour le tourner.",
-      "view": "Vue",
-      "assembled": "Assemblé",
-      "exploded": "Éclaté",
-      "light": "Lumière",
       "loading": "Chargement du modèle",
       "failed": "Le modèle 3D ne s'est pas chargé. Rechargez la page pour réessayer."
-    },
-    "why": {
-      "eyebrow": "Pourquoi un levier",
-      "title": "Fait pour les mains, pas pour les yeux.",
-      "subtitle": "Un téléphone demande la vue. Une enceinte connectée écoute en permanence et se réveille au mauvais mot. Tenir un levier pour parler est un geste que tout le monde connaît.",
-      "points": [
-        {
-          "k": "Se trouve au toucher",
-          "v": "Le levier est la seule chose qui dépasse. L'interrupteur est à gauche et le levier de parole à droite, on ne les confond jamais."
-        },
-        {
-          "k": "N'écoute que tant qu'on le tient",
-          "v": "En dehors d'un appel, le micro n'est ouvert que tant que le levier est enfoncé. Le reste du temps, rien n'écoute."
-        },
-        {
-          "k": "Rien à regarder",
-          "v": "Ni écran ni menus. La musique, les livres audio, les nouvelles, les rappels et le volume se demandent à voix haute."
-        }
-      ]
     },
     "inside": {
       "eyebrow": "Ce qu'il y a dedans",
       "title": "Une petite carte, un grand haut-parleur, deux accus.",
-      "subtitle": "Passez le modèle en Éclaté pour voir chaque pièce. Pointez-en une, ou touchez-la, pour voir son nom.",
       "specs": {
         "size": "Taille",
         "weight": "Poids",
@@ -353,7 +329,7 @@
         },
         {
           "k": "La lumière",
-          "v": "Les sept LED de la carte sont derrière le dos transparent, prêtes pour un voyant d'état que le firmware ne pilote pas encore. Le bouton Lumière montre à quoi il ressemblera."
+          "v": "Les sept LED de la carte sont derrière le dos transparent, prêtes pour un voyant d'état que le firmware ne pilote pas encore."
         },
         {
           "k": "Quatre vis",
@@ -413,7 +389,27 @@
       "talk_lever": "Levier de parole",
       "talk_switch_wires": "Fils du bouton",
       "tub_base": "Base",
-      "tub_top": "Dos"
+      "tub_top": "Dos",
+      "braille_dot_glued": "Point braille, collé",
+      "hx_1_badge_glued": "Badge HX-1, collé"
+    },
+    "story": {
+      "aria": "HX-1 en 3D, qui reste à l'écran pendant que vous faites défiler la page.",
+      "dots": {
+        "eyebrow": "Ce que les doigts trouvent d'abord",
+        "title": "Dix points. Un mot.",
+        "body": "Ils disent « hola » en braille, deux fois plus grands que d'habitude : de loin on dirait des confettis, de près ils disent bonjour. Collés à travers un pochoir imprimé."
+      },
+      "lever": {
+        "eyebrow": "Le levier",
+        "title": "Tenez. Parlez. Lâchez.",
+        "body": "Il a un levier, et c'est toute l'interface. Tant que vous le tenez, il écoute ; quand vous le lâchez, il répond. Le reste du temps, rien n'écoute.",
+        "ask": "Quelle heure est-il ?",
+        "answer": "Il est quatre heures dix."
+      },
+      "inside": {
+        "body": "Une carte ESP32-S3 avec Wi-Fi et deux micros, un haut-parleur de 40 mm, deux piles 18650 et un bouton de 12 × 12, dans un boîtier imprimé de 70 × 104 × 37 mm fermé par quatre vis."
+      }
     }
   }
 }

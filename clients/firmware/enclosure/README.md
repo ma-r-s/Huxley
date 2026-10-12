@@ -411,9 +411,12 @@ a 0.2 mm pocket on the face side for squeeze-out. Use as little CA as holds,
 low-bloom if you have it: its fumes leave a white haze on grey PLA. Try one
 dot on a grey scrap first.
 
-The build page and the website's /hx-1 page show it glued on, as the last
-build step (`site.face_art_parts`; the blue dots are kind `dot_blue`, with a
-material of their own in both viewers).
+The build page shows it glued on as the last build step
+(`site.face_art_parts`; the blue dots are kind `dot_blue`, with a material of
+their own). The website's /hx-1 page opens on it: a scroll story that lights
+the letters in reading order, presses the talk lever, then takes the device
+apart. `site.py --web` writes what that page needs (each dot's letter, the
+lever's pivot and travel, the spring) next to the model.
 
 ## Print guide
 

@@ -443,6 +443,9 @@ def build_site() -> dict:
         label = _label(part)
         if part.startswith(("holder_", "cell_")):
             label += "|" + part[-1]  # one node per side
+        if part.startswith("face_dot_"):  # one node per letter: the page lights them in turn
+            letter = face_art.dot_centres()[int(part.rsplit("_", 1)[1])][2]
+            label += "|" + face_art.WORD[letter]
         m = scene.geometry[geom].copy()
         m.apply_transform(tf)
         groups.setdefault((step_of[part], kind, label), []).append(m)
@@ -456,6 +459,8 @@ def build_site() -> dict:
         name = f"n{i:03d}"
         out.add_geometry(merged, node_name=name, geom_name=name)
         nodes[name] = {"step": step, "kind": kind, "label": label.split("|")[0]}
+        if label.startswith("Braille dot"):
+            nodes[name]["letter"] = label.split("|")[1]
         step_def = next(st for st in STEPS if st["id"] == step)
         for pattern, vec in step_def.get("explode_parts", {}).items():
             if any(fnmatch.fnmatchcase(p, pattern) for p in group_parts[(step, kind, label)]):
@@ -554,8 +559,10 @@ def write_pages(manifest: dict) -> None:
 def write_web(out_dir: Path) -> tuple[Path, Path]:
     """The website's copy (web/: the /hx-1 page): the model as a binary GLB,
     which a normal host serves, and a trimmed manifest: per node its kind,
-    label and where it sits in the exploded view, plus the light and the
-    specs. Built from out/site (run without --web first)."""
+    label, braille letter and where it sits in the exploded view, plus the
+    light, the specs, and what the page's scroll story moves (the talk lever's
+    pivot and travel, its spring, where "hola." points). Built from out/site
+    (run without --web first)."""
     doc = json.loads((SITE_OUT / "hx1.gltf.json").read_text())
     m = json.loads((SITE_OUT / "assembly.json").read_text())
     uri = doc["buffers"][0]["uri"]
@@ -574,10 +581,38 @@ def write_web(out_dir: Path) -> tuple[Path, Path]:
             "label": n["label"],
             "explode": n.get("explode", steps[n["step"]]["explode"]),
             "build_only": steps[n["step"]]["build_only"],
+            **({"letter": n["letter"]} if "letter" in n else {}),
         }
         for name, n in m["nodes"].items()
     }
-    model = {"light_at": m["light_at"], "nodes": nodes, "specs": m["specs"]}
+    # For the page's scroll story: where the talk lever turns and how far it
+    # goes to the click, and the face art's centre (the "hola." bubble).
+    dots = face_art.dot_centres()
+    spring_bb = next(p.shape for p in hx1.build().parts if p.name == "spring").bounding_box()
+    model = {
+        "light_at": m["light_at"],
+        "nodes": nodes,
+        "specs": m["specs"],
+        "lever": {
+            "pivot": _to_three((hx1.PIVOT_X, hx1.SWITCH_Y, hx1.PIVOT_Z)),
+            "press_deg": round(hx1.PRESS_DEG, 2),
+            # The spring between the plunger's flange and the lever: it
+            # shortens as the lever's top end comes in (arm = its height over
+            # the pin), its inner end fixed on the flange.
+            "spring": {
+                "inner": _to_three((spring_bb.min.X, hx1.SWITCH_Y, hx1.TS_Z)),
+                "length": round((spring_bb.max.X - spring_bb.min.X) / 1000, 5),
+                "arm": round((hx1.TS_Z - hx1.PIVOT_Z) / 1000, 5),
+            },
+        },
+        "hola_at": _to_three(
+            (
+                sum(x for x, _, _ in dots) / len(dots),
+                hx1.Y_FRONT - face_art.DOT_H,
+                sum(z for _, z, _ in dots) / len(dots),
+            )
+        ),
+    }
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "hx1.glb").write_bytes(glb)
     (out_dir / "hx1-model.json").write_text(json.dumps(model, indent=1) + "\n")

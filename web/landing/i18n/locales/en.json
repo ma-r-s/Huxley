@@ -296,36 +296,12 @@
     "ctaSource": "The CAD",
     "viewer": {
       "aria": "3D model of HX-1. Drag to turn it.",
-      "view": "View",
-      "assembled": "Assembled",
-      "exploded": "Exploded",
-      "light": "Light",
       "loading": "Loading the model",
       "failed": "The 3D model didn't load. Reload the page to try again."
-    },
-    "why": {
-      "eyebrow": "Why a lever",
-      "title": "Made for hands, not eyes.",
-      "subtitle": "A phone needs sight. A smart speaker listens all the time and wakes to the wrong word. Holding a lever to talk is a gesture everyone already knows.",
-      "points": [
-        {
-          "k": "Found by touch",
-          "v": "The lever is the only thing that sticks out. Power is on the left side and talk on the right, so the two never get mixed up."
-        },
-        {
-          "k": "Listens only while held",
-          "v": "Outside a call, the microphone is open only while the lever is pressed in. The rest of the time, nothing listens."
-        },
-        {
-          "k": "Nothing to look at",
-          "v": "No screen and no menus. Music, audiobooks, the news, reminders and the volume are all asked for out loud."
-        }
-      ]
     },
     "inside": {
       "eyebrow": "What's inside",
       "title": "A small board, a big speaker, two cells.",
-      "subtitle": "Switch the model to Exploded to see every part. Point at one, or tap it, for its name.",
       "specs": {
         "size": "Size",
         "weight": "Weight",
@@ -353,7 +329,7 @@
         },
         {
           "k": "The light",
-          "v": "The board's seven LEDs sit behind the clear back, ready for a status light the firmware doesn't drive yet. The Light button shows how it will look."
+          "v": "The board's seven LEDs sit behind the clear back, ready for a status light the firmware doesn't drive yet."
         },
         {
           "k": "Four screws",
@@ -399,7 +375,27 @@
       "lever_pin_printed": "Lever pin",
       "ribbon_6_wires": "Ribbon cable",
       "speaker_40_mm_5_w": "Speaker, 40 mm",
-      "power_switch_kcd1_101": "Power switch"
+      "power_switch_kcd1_101": "Power switch",
+      "braille_dot_glued": "Braille dot, glued",
+      "hx_1_badge_glued": "HX-1 badge, glued"
+    },
+    "story": {
+      "aria": "HX-1 in 3D, staying on screen while you scroll down the page.",
+      "dots": {
+        "eyebrow": "The first thing fingers find",
+        "title": "Ten dots. One word.",
+        "body": "They say “hola” in braille, at twice the usual size: from across the room they look like confetti, up close they say hello. Glued on through a printed stencil."
+      },
+      "lever": {
+        "eyebrow": "The lever",
+        "title": "Hold. Talk. Let go.",
+        "body": "It has a lever, and that is the whole interface. While you hold it, it listens; when you let go, it answers. The rest of the time, nothing listens.",
+        "ask": "What time is it?",
+        "answer": "It's ten past four."
+      },
+      "inside": {
+        "body": "An ESP32-S3 board with Wi-Fi and two microphones, a 40 mm speaker, two 18650 cells and a 12 × 12 switch, in a printed 70 × 104 × 37 mm case that closes with four screws."
+      }
     }
   }
 }

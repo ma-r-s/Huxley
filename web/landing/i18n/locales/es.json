@@ -296,36 +296,12 @@
     "ctaSource": "El CAD",
     "viewer": {
       "aria": "Modelo 3D de HX-1. Arrastra para girarlo.",
-      "view": "Vista",
-      "assembled": "Montado",
-      "exploded": "Despiezado",
-      "light": "Luz",
       "loading": "Cargando el modelo",
       "failed": "El modelo 3D no cargó. Recarga la página para intentarlo de nuevo."
-    },
-    "why": {
-      "eyebrow": "Por qué una palanca",
-      "title": "Hecho para las manos, no para los ojos.",
-      "subtitle": "Un teléfono necesita la vista. Un altavoz inteligente escucha todo el tiempo y se despierta con la palabra equivocada. Sostener una palanca para hablar es un gesto que todos conocen.",
-      "points": [
-        {
-          "k": "Se encuentra al tacto",
-          "v": "La palanca es lo único que sobresale. El encendido está a la izquierda y la palanca de hablar a la derecha, así que nunca se confunden."
-        },
-        {
-          "k": "Escucha solo mientras la sostienes",
-          "v": "Fuera de una llamada, el micrófono solo está abierto mientras la palanca está apretada. El resto del tiempo no escucha nada."
-        },
-        {
-          "k": "Nada que mirar",
-          "v": "Sin pantalla y sin menús. La música, los audiolibros, las noticias, los recordatorios y el volumen se piden en voz alta."
-        }
-      ]
     },
     "inside": {
       "eyebrow": "Qué lleva dentro",
       "title": "Una placa pequeña, un altavoz grande, dos pilas.",
-      "subtitle": "Cambia el modelo a Despiezado para ver cada pieza. Señala una, o tócala, para ver su nombre.",
       "specs": {
         "size": "Tamaño",
         "weight": "Peso",
@@ -353,7 +329,7 @@
         },
         {
           "k": "La luz",
-          "v": "Los siete LED de la placa quedan detrás de la parte trasera transparente, listos para una luz de estado que el firmware aún no maneja. El botón Luz muestra cómo se verá."
+          "v": "Los siete LED de la placa quedan detrás de la parte trasera transparente, listos para una luz de estado que el firmware aún no maneja."
         },
         {
           "k": "Cuatro tornillos",
@@ -413,7 +389,27 @@
       "talk_lever": "Palanca de hablar",
       "talk_switch_wires": "Cables del pulsador",
       "tub_base": "Base",
-      "tub_top": "Parte trasera transparente"
+      "tub_top": "Parte trasera transparente",
+      "braille_dot_glued": "Punto braille, pegado",
+      "hx_1_badge_glued": "Placa HX-1, pegada"
+    },
+    "story": {
+      "aria": "HX-1 en 3D, que se queda en pantalla mientras bajas por la página.",
+      "dots": {
+        "eyebrow": "Lo primero que encuentran los dedos",
+        "title": "Diez puntos. Una palabra.",
+        "body": "Dicen «hola» en braille, al doble del tamaño normal: de lejos parecen confeti, de cerca saludan. Van pegados con una plantilla impresa."
+      },
+      "lever": {
+        "eyebrow": "La palanca",
+        "title": "Mantén. Habla. Suelta.",
+        "body": "Tiene una palanca, y esa es toda la interfaz. Mientras la aprietas, escucha; cuando la sueltas, contesta. El resto del tiempo no escucha nada.",
+        "ask": "¿Qué hora es?",
+        "answer": "Son las cuatro y diez."
+      },
+      "inside": {
+        "body": "Una placa ESP32-S3 con Wi-Fi y dos micrófonos, un altavoz de 40 mm, dos pilas 18650 y un pulsador de 12 × 12, en una caja impresa de 70 × 104 × 37 mm que cierra con cuatro tornillos."
+      }
     }
   }
 }

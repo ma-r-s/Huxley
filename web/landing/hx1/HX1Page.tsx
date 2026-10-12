@@ -22,10 +22,9 @@ import { Footer } from "../sections/Install";
 import model from "./model.json";
 
 // three.js only in the browser, and only on this page.
-const HX1Viewer = dynamic(
-  () => import("./HX1Viewer").then((m) => m.HX1Viewer),
-  { ssr: false },
-);
+const HX1Story = dynamic(() => import("./HX1Story").then((m) => m.HX1Story), {
+  ssr: false,
+});
 
 const ENCLOSURE_SRC =
   "https://github.com/ma-r-s/Huxley/tree/main/clients/firmware/enclosure";
@@ -39,7 +38,6 @@ export function HX1Page() {
   const { isMobile, isTablet } = useViewport();
   const pad = isMobile ? "56px 24px" : "96px 64px";
   const S = model.specs;
-  const why = t("hx1.why.points", { returnObjects: true }) as Item[];
   const how = t("hx1.how.steps", { returnObjects: true }) as Item[];
   const specs: Item[] = [
     {
@@ -100,94 +98,10 @@ export function HX1Page() {
       <BalancedBackdrop />
       <BalNav />
 
-      {/* Hero: the device, on paper so its white front and red base read true. */}
-      <section
-        style={{
-          ...paperSection,
-          position: "relative",
-          zIndex: 2,
-          display: "grid",
-          gridTemplateColumns:
-            isMobile || isTablet ? "1fr" : "minmax(0, 1fr) minmax(0, 1.1fr)",
-          alignItems: "center",
-          gap: isMobile ? 24 : 48,
-          padding: isMobile ? "40px 24px 48px" : "72px 64px 80px",
-        }}
-      >
-        <div style={{ minWidth: 0 }}>
-          <div className="eyebrow" style={{ opacity: 0.7, marginBottom: 24 }}>
-            {t("hx1.pill")}
-          </div>
-          <h1
-            style={{
-              fontFamily: "var(--hux-serif)",
-              fontWeight: 400,
-              fontSize: "clamp(52px, 6.4vw, 96px)",
-              lineHeight: 0.98,
-              letterSpacing: "-0.015em",
-              margin: "0 0 24px",
-              textWrap: "balance",
-            }}
-          >
-            {t("hx1.titleLine1")}
-            <br />
-            <em>{t("hx1.titleLine2")}</em>
-          </h1>
-          <p
-            style={{
-              fontFamily: "var(--hux-serif)",
-              fontStyle: "italic",
-              fontSize: 22,
-              lineHeight: 1.4,
-              maxWidth: 520,
-              margin: "0 0 32px",
-              opacity: 0.88,
-              textWrap: "pretty",
-            }}
-          >
-            {t("hx1.subtitle")}
-          </p>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-            <a style={{ ...chipSolid, color: "var(--hux-paper)" }} href="#how">
-              {t("hx1.ctaHow")}
-            </a>
-            <a style={chipGhost} href={ENCLOSURE_SRC}>
-              {t("hx1.ctaSource")} ↗
-            </a>
-          </div>
-        </div>
-        <div style={{ minWidth: 0, height: isMobile ? 440 : 600 }}>
-          <HX1Viewer height={isMobile ? 440 : 600} />
-        </div>
-      </section>
+      {/* The story: the device pinned while the page scrolls past it. */}
+      <HX1Story />
 
-      {/* Why a lever */}
-      <section
-        style={{
-          ...coralSection,
-          position: "relative",
-          zIndex: 2,
-          padding: pad,
-          display: "grid",
-          gap: 48,
-        }}
-      >
-        <SectionHead
-          eyebrow={t("hx1.why.eyebrow")}
-          title={t("hx1.why.title")}
-          subtitle={t("hx1.why.subtitle")}
-        />
-        <div style={rowGrid(3)}>
-          {why.map((p, i) => (
-            <Reveal key={i} delay={i * 90}>
-              <div style={itemK}>{p.k}</div>
-              <p style={itemV}>{p.v}</p>
-            </Reveal>
-          ))}
-        </div>
-      </section>
-
-      {/* What's inside */}
+      {/* What's inside, in detail: the story's last beat names the parts */}
       <section
         style={{
           ...paperSection,
@@ -198,11 +112,6 @@ export function HX1Page() {
           gap: 48,
         }}
       >
-        <SectionHead
-          eyebrow={t("hx1.inside.eyebrow")}
-          title={t("hx1.inside.title")}
-          subtitle={t("hx1.inside.subtitle")}
-        />
         <div
           style={{
             display: "grid",

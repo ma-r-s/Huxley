@@ -516,6 +516,23 @@ zones clean. Mario's aim is an even glow, not glass, so a little clarity
 went for success. Lesson: read the base preset before overriding it; the
 override can be the risky value, and the preset can carry one too.
 
+**The /hx-1 scroll story (2026-10-12)**: Mario pointed at play.date and asked
+for something as good. The top of /hx-1 is now one pinned 3D HX-1 that the
+page scrolls past in four beats: the hero turning slowly (a drag turns it)
+with a "hola." bubble on the dots; the face close up, the braille letters
+lighting in reading order; the right side, the lever pressing in and the
+exchange it makes appearing beside it; the device apart, its main parts
+named (`web/landing/hx1/stage.ts`, `HX1Story.tsx`; the old viewer is gone).
+`site.py --web` adds what that needs: each dot's letter, the lever's pivot
+and travel, the spring. Phones and reduced motion cut between still poses.
+Mario saw the spring run through the orange lever when it pressed: the
+spring now shortens with the lever. Lessons:
+- words that sit beside a moving model must stay put and only fade, in
+  windows computed from where the colour edges sweep, or they cross the
+  model or an edge at some window size;
+- anything named on the model (part labels) waits for the model's own eased
+  state, not the scroll position, or a jump names a closed case.
+
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
 bottom is fine, holders whole, no glue but the tub's halves, plastic pivot, protected cells
 instead of a protection board, the ribbon and loose wires, the board's
