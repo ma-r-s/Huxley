@@ -421,7 +421,7 @@ goes out, with the press's totals.
   (bench clips over Wi-Fi, POST /clips) with the requests that failed in
   real use as clips 7-15.
 
-### F-0023: Go back by itself after repeated crashes past the confirm · queued
+### F-0023: Go back by itself after repeated crashes past the confirm · queued (required by F-0028, ignoring BROWNOUT)
 
 **Problem** (from the F-0021 review): an image that passes its 30 s and
 is confirmed, then crashes on every talk press, crash-loops for good;
@@ -461,7 +461,7 @@ fallback with today's server (turn, silent, health PASS).
 **Next**: the server side (in progress), then the bench on Opus (turn,
 stall, slowdown, resume, hearing) and `dev.py link` over real use.
 
-### F-0025: Say how much battery is left · deferred 2026-10-12 (Mario: not now; needs the case opened)
+### F-0025: Say how much battery is left · scheduled 2026-10-12 (the wiring in F-0026's open-case session; Mario approved the case opening once)
 
 **Ask** (Mario): "a way so the device can tell me how much battery is
 left." Nothing reads the battery today.
@@ -503,6 +503,22 @@ gets built.
 (the BAT / SPK side), ~2 mm apart (Waveshare's STEP: R78 x 19.4-21.0,
 y 31.7-32.5; R53 y 33.6-34.4, board coordinates). Next: map them onto
 Waveshare's bottom photo for Mario, or take option B (no map needed).
+
+### F-0026: The open-case session before handover (remote-operation W7) · queued 2026-10-12
+
+**Why**: the walkie goes to grandpa's retirement home and the case opens once more, never again (Mario, 2026-10-12; plan `docs/remote-operation.md` W7, server side T1.43 owned by the "Huxley improvement plan" session). Everything that needs the open case or the USB cable happens in that one session.
+**Hardware** (a guide for Mario, with photos of where to solder, before the day): battery to IO6 (bridge R78 pads 1-3, or a 200K/100K divider; F-0025's probe confirms `gpio=6 ... wired`); VBUS through a divider to a free ADC1 pin (charging detection: the charger's STAT only drives the LED); remove R15 (the 0 ohm link from the expander's INT# to GPIO0: no reset can ever boot download mode again, F-0020); a pinhole to RST in the case (coordinate with the case session); check the cell has a protection board; a charge-only magnetic USB-C adapter afterwards.
+**Flash** (the last USB flash): partition table with OTA slots 2 to 4 MB each (image 1.3 MB today), NVS 24 to 64 KB, coredump 64 to 256 KB (staged as `partitions-w7.csv` until the day: the device's table only changes over USB); final bootloader; full flash dump and `espefuse summary` saved.
+**Battery firmware** (F-0025 reporting side): two-point calibration against a multimeter, median of idle samples, Li-ion table with hysteresis, 6 dB attenuation; `client_event system.battery` and the skill tool; low battery: a clip once, then deep sleep with a timer wake.
+**Tests**: drain to cutoff with the rocker on, plug in, boots and reconnects alone; a realistic day on battery; current with Wi-Fi power save off vs on.
+
+### F-0027: A walkie that survives alone (remote-operation W5) · queued 2026-10-12
+
+Spec: `docs/remote-operation.md` W5. One escalation ladder (restart the WebSocket at 2 min without the server, Wi-Fi at 10, next known network, reboot at 60, after 3 reboots the other slot if valid; a network counts as working when it reached the server); reconnect backoff 2 to 60 s with jitter; a supervisor that feeds the task watchdog only while each part's liveness advances and logs which stalled; Wi-Fi list (compiled baseline: the home's network, a family phone's hotspot, Mario's home; plus NVS entries, `wifi.add` tries and reverts); server URI in NVS, kept once a hello succeeds; black box in RTC memory (last ~4 KB of log lines, reset cause, rollback reason) sent with the next hello; heartbeat `client_event device.health` every 60 s (fields agreed with the server session, including underrun ms and discarded ms per `audio_clear`); volume in NVS; spoken clips for no connection, low battery, OpenAI refusing.
+
+### F-0028: Updates and the remote console through the server (remote-operation W4) · queued 2026-10-12
+
+Spec: `docs/remote-operation.md` W4. The hello identity (fields agreed with the server session, one `docs/protocol.md` change); pull OTA on `server_event firmware.update {version, url}`, only when idle; an image keeps itself only after a local self-test, the hello, an HTTPS GET of the manifest with the OTA client's settings, a server-initiated close and reconnect, and `ota.accept`; the update channel frozen and handled in every state (a protocol mismatch must not park it); rollback bookkeeping in NVS (no_server, crash, selftest, manual); F-0023 required, ignoring BROWNOUT; remote console `server_event dev.cmd` / `client_event dev.cmd_result`; core dump summary in the hello, full dump on request; the port-80 door compiled out of grandpa's build. Built on the twin board (a0:f2:62:e2:fb:60) first.
 
 Note on IDs: F-0011 to F-0013 were used in code comments and commit
 messages (boot buzz, decode scratch, Wi-Fi power save) but their
