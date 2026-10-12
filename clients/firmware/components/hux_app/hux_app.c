@@ -484,6 +484,7 @@ static void handle_ws_message(hux_app_ws_message_t *msg) {
             /* F-0024: Opus both ways if the server agreed to our ?audio=opus;
              * an older server keeps base64 PCM. */
             hux_net_set_audio_opus(parsed.as.hello.audio_opus);
+            hux_net_hello_ok(); /* a pending server move is proven (F-0027) */
             ESP_LOGI(TAG, "app.audio format=%s", parsed.as.hello.audio_opus ? "opus" : "pcm");
             transition(ST_READY);
             send_device_info();

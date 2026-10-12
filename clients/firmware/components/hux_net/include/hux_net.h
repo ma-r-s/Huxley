@@ -68,6 +68,22 @@ bool hux_net_send_binary(const uint8_t *data, size_t len);
  * now. Not from the WebSocket task. */
 void hux_net_set_server(const char *uri, uint32_t revert_s);
 
+/** Switch to `uri` and keep it, across reboots, once a hello succeeds on
+ * it (saved in NVS); no hello within `revert_s` (0: 15 min) and it goes
+ * back to the last proven address. For moving the walkie to another
+ * server remotely (remote-operation W5, F-0027). Not from the WS task. */
+void hux_net_server_keep(const char *uri, uint32_t revert_s);
+
+/** Forget the saved address and go back to the compiled one. */
+void hux_net_server_reset(void);
+
+/** The app's hello arrived: a pending `server_keep` is saved; a fallback
+ * stops alternating. */
+void hux_net_hello_ok(void);
+
+/** Log the current, proven and compiled addresses and the mode. */
+void hux_net_server_status(void);
+
 /** The WebSocket client's task is running (it connects or reconnects on
  * its own). False after a pause, or if it ended unexpectedly. */
 bool hux_net_is_running(void);
