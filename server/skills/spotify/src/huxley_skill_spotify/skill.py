@@ -213,6 +213,55 @@ _SAY: dict[str, dict[str, str]] = {
     },
 }
 
+# Failures that contradict the tool's own `ok: true, playing: ...`: the
+# play_music result already told the model it was playing. Asked to "tell
+# the user Spotify wouldn't play the book", the model said "the audiobook
+# is playing now" instead (live, 2026-10-12). So these state the fact and
+# give the exact line, the format whats_playing proved reliable.
+_NOTICE = {
+    "es": "[Aviso del sistema, no lo dijo el usuario: {fact}] Di en voz alta exactamente "
+    "{line} No llames a ninguna herramienta.",
+    "en": "[System notice, not said by the user: {fact}] Say out loud exactly {line} "
+    "Do not call any tool.",
+    "fr": "[Avis du système, pas dit par l'utilisateur : {fact}] Dis à voix haute "
+    "exactement {line} N'appelle aucun outil.",
+}
+_CONTRADICTED: dict[str, dict[str, tuple[str, str]]] = {
+    "es": {
+        "start_failed": (
+            "la música NO está sonando, Spotify no la pudo poner.",
+            "«No pude poner la música en Spotify. ¿Pongo la radio?»",
+        ),
+        "audiobook_refused": (
+            "el libro NO está sonando, Spotify no lo dejó reproducir.",
+            "«No pude poner ese libro: no viene incluido en Spotify, o ya se acabaron "
+            "las horas de libros de este mes. ¿Busco otro?»",
+        ),
+    },
+    "en": {
+        "start_failed": (
+            "the music is NOT playing, Spotify couldn't start it.",
+            '"I couldn\'t start the music on Spotify. Shall I put the radio on?"',
+        ),
+        "audiobook_refused": (
+            "the book is NOT playing, Spotify wouldn't play it.",
+            "\"I couldn't play that book: it isn't included on Spotify, or this "
+            "month's book hours have run out. Shall I find another?\"",
+        ),
+    },
+    "fr": {
+        "start_failed": (
+            "la musique NE joue PAS, Spotify n'a pas pu la lancer.",
+            "« Je n'ai pas pu lancer la musique sur Spotify. Je mets la radio ? »",
+        ),
+        "audiobook_refused": (
+            "le livre NE joue PAS, Spotify a refusé de le lire.",
+            "« Je n'ai pas pu lancer ce livre : il n'est pas inclus sur Spotify, ou les "
+            "heures de livres du mois sont épuisées. J'en cherche un autre ? »",
+        ),
+    },
+}
+
 _ACTIONS = ("pause", "resume", "next", "previous")
 
 # whats_playing's instruction: one thing only, say this exact line. Asking
@@ -820,7 +869,14 @@ class SpotifySkill:
         )
 
     def _narrate(self, reason: str) -> None:
-        self._inject(self._say(reason), f"spotify:{reason}")
+        lang = self._lang()
+        contradicted = _CONTRADICTED[lang].get(reason)
+        if contradicted is not None:
+            fact, line = contradicted
+            prompt = _NOTICE[lang].format(fact=fact, line=line)
+        else:
+            prompt = self._say(reason)
+        self._inject(prompt, f"spotify:{reason}")
 
     def _inject(self, prompt: str, dedup_key: str) -> None:
         """Schedule an inject_turn; never awaited from a tool or a stream."""

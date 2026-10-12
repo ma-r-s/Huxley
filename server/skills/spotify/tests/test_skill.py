@@ -368,9 +368,13 @@ class TestAudiobooks:
     async def test_book_refused_right_after_start_is_spoken(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
-        """An account with no audiobook hours: Soloist reports playing,
-        then idle 0.3 s later, no error (live, 2026-10-12). Without this
-        the stream ended as if the book had finished: silence."""
+        """A book Spotify won't play (purchase-only, or no hours left):
+        Soloist reports playing, then idle 0.3-1.2 s later, no error (live,
+        2026-10-12). Without this the stream ended as if the book had
+        finished: silence. And told only to "tell the user Spotify
+        wouldn't play it", the model said the book was playing, trusting
+        the tool's `ok: true`; so the notice states the fact and gives the
+        exact line."""
         pcm_server.hold_open.set()
         skill, client, recorded = await _skill(tmp_path, pcm_server, match=BOOK)
         chunks: list[bytes] = []
@@ -380,7 +384,10 @@ class TestAudiobooks:
         await _settle()
 
         assert [key for _, key in recorded.injected] == ["spotify:audiobook_refused"]
-        assert "horas de audiolibros" in recorded.injected[0][0]
+        prompt = recorded.injected[0][0]
+        assert "NO está sonando" in prompt
+        assert "Di en voz alta exactamente «" in prompt
+        assert "no viene incluido" in prompt and "horas de libros" in prompt
         assert "pause" not in client.commands()
 
     async def test_music_refused_right_after_start_says_it_could_not_start(
@@ -392,6 +399,7 @@ class TestAudiobooks:
             client.state.status = "idle"
         await _settle()
         assert [key for _, key in recorded.injected] == ["spotify:start_failed"]
+        assert "NO está sonando" in recorded.injected[0][0]
 
     async def test_book_kind_reaches_the_search_and_plays_the_show(
         self, tmp_path: Path, pcm_server: PcmServer

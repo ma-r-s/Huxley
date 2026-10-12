@@ -5451,4 +5451,6 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 
 **Docs**: docs/skills/spotify.md (Audiobooks, failures), docs/personas/abuelos.md (skills, rules, v1 criteria), docs/skills/audiobooks.md (Abuelo no longer uses it).
 
+**Smoke 1 (Mario, 15:58Z)**: "pon el audiolibro del extranjero": Spotify refused it (idle 1.2 s after start; `spotify.start_refused` fired, so the silence check worked) because "El extranjero" is purchase-only (the app shows "Comprar", "Cien años de soledad" shows "Incluido con Premium"; the Web API doesn't expose which). Then the model, told to say Spotify wouldn't play it, said "el audiolibro quedó en reproducción": it trusted the tool's `ok: true`. Fix: refusals state the fact and give the exact line (the whats_playing format), naming both causes (not included, or no hours).
+
 **DoD left**: Mario asks for a book on the walkie: it plays, "pausa" / "sigue" / "siguiente capítulo" work, "¿qué está sonando?" names the book.

@@ -48,7 +48,14 @@ so a device signed in as another member needs hours bought for that
 account. With none left, Soloist reports `playing` and then `idle` 0.3 s
 later, with no error; any fresh start that goes idle within 3 s
 (`REFUSED_S`) is a refusal, spoken as `audiobook_refused` for a book and
-`start_failed` for music, never taken for the end of the album.
+`start_failed` for music, never taken for the end of the album. Not
+every book is included with Premium: some are purchase-only ("El
+extranjero" shows "Comprar" in the app and was refused the same way),
+and the Web API doesn't say which, so the spoken line names both causes.
+These two narrations contradict the tool's own `ok: true`, so they state
+the fact ("the book is NOT playing") and give the exact line to say:
+told only to "tell the user Spotify wouldn't play it", the model said
+the book was playing (live, 2026-10-12).
 
 **No query** (the user asked for music without saying which): continue
 what Soloist has loaded (it keeps its last context across restarts).
