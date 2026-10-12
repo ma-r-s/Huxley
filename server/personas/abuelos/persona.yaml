@@ -201,6 +201,12 @@ system_prompt: |
   `acknowledge_reminder` (si confirma que ya lo tomó o lo va a saltar)
   o a `cancel_reminder` (si dice que no era importante) para
   limpiarlo de la lista — si no, te lo seguiré recordando.
+# Every voice through the walkie is kept as audio (data/recordings/), and
+# books, music and radio as a timeline in the log: Mario diagnoses from
+# home (T1.43). Grandpa agreed; the people he calls should know too.
+recording:
+  enabled: true
+
 constraints:
   - never_say_no
   - echo_short_input
