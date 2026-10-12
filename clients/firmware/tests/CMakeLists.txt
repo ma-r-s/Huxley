@@ -48,6 +48,10 @@ target_include_directories(hux_ws_frag PUBLIC ${HUX_NET_DIR}/include)
 add_library(hux_type_probe STATIC ${HUX_NET_DIR}/hux_type_probe.c)
 target_include_directories(hux_type_probe PUBLIC ${HUX_NET_DIR}/include)
 
+# -- hux_wifi_retry (library under test): Wi-Fi reconnect backoff, in hux_net.
+add_library(hux_wifi_retry STATIC ${HUX_NET_DIR}/hux_wifi_retry.c)
+target_include_directories(hux_wifi_retry PUBLIC ${HUX_NET_DIR}/include)
+
 # -- hux_debounce (library under test) ------------------------------
 # Pure C, the talk button's debounce; lives inside hux_button.
 set(HUX_BUTTON_DIR ${CMAKE_SOURCE_DIR}/../components/hux_button)
@@ -75,8 +79,14 @@ target_include_directories(test_hux_debounce PRIVATE ${CMAKE_SOURCE_DIR}/helpers
 target_link_libraries(test_hux_debounce PRIVATE hux_debounce)
 add_test(NAME hux_debounce COMMAND test_hux_debounce)
 
+add_executable(test_hux_wifi_retry test_hux_wifi_retry.c)
+target_include_directories(test_hux_wifi_retry PRIVATE ${CMAKE_SOURCE_DIR}/helpers)
+target_link_libraries(test_hux_wifi_retry PRIVATE hux_wifi_retry)
+add_test(NAME hux_wifi_retry COMMAND test_hux_wifi_retry)
+
 # Convenience target: `cmake --build build --target check` runs every test.
 add_custom_target(check
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
     DEPENDS test_hux_proto test_hux_ws_frag test_hux_debounce test_hux_type_probe
+            test_hux_wifi_retry
 )

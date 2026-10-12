@@ -31,11 +31,12 @@ components/
   hux_net/     Wi-Fi STA + WebSocket client; the audio data plane
                (audio, audio_clear) and fragment reassembly (hux_ws_frag)
   hux_audio/   I2S1 duplex: ES7210 mic (24 kHz) and ES8311 speaker with a
-               512 KB PSRAM playback ring
+               4 MB PSRAM playback ring (a whole reply); bench self-test
   hux_board/   I2C bus + TCA9555 expander (buttons, speaker PA)
   hux_button/  Talk input: GPIO7 (the case's lever) or K2, debounced
                (hux_debounce, host-testable)
   hux_log/     Log hook: serial + streamed to the server as client_event
+  hux_console/ Bench commands on the USB serial console (talk, say, info…)
 ```
 
 Invariants (see [`../CLAUDE.md`](../CLAUDE.md) for the full project
@@ -79,8 +80,11 @@ cp main/secrets.example.h main/secrets.h
 cd clients/firmware
 idf.py set-target esp32s3      # first time only
 idf.py build
-idf.py -p /dev/cu.usbmodem2101 flash monitor
+idf.py -p /dev/cu.usbmodem1101 flash monitor
 ```
+
+The port name follows the USB socket (`usbmodem1101`, `usbmodem2101`,
+…): `ls /dev/cu.usbmodem*`.
 
 `dependencies.lock` (gitignored) pins the managed components; copy the
 one from a checkout that has run on the board (esp_codec_dev 1.4.0,
@@ -106,11 +110,19 @@ uv run --package huxley pytest server/runtime/tests/unit/test_firmware_contract.
 # 3. End-to-end smoke — boots the board, waits for READY on serial
 clients/firmware/tools/smoke.sh              # uses currently-flashed firmware
 clients/firmware/tools/smoke.sh --flash      # reflash + smoke
+
+# 4. Bench check list: real board + real server, no hand, no sound:
+#    boot, electrical self-test, a turn, volume, barge-in, offline cue +
+#    Wi-Fi recovery, eviction, heap and stack headroom (~3 min)
+python3 tools/clips.py && esptool.py --chip esp32s3 -p PORT write_flash 0x420000 build/clips.bin  # once
+python tools/bench.py --reset
 ```
 
 Run (1) and (2) before every commit that changes firmware C or
 server protocol. Run (3) before every commit that changes
-`hux_net`, `hux_app`, `main.c`, or `sdkconfig.defaults`.
+`hux_net`, `hux_app`, `main.c`, or `sdkconfig.defaults`, and (4) before
+any change to the audio path, the network settings or the WebSocket
+client. Each prints PASS/FAIL; no step needs an ear.
 
 ## Server-side note
 
@@ -121,16 +133,25 @@ evicts the first, so close the PWA tab while testing the board.
 
 ## What works today
 
-- Wi-Fi STA (power save off), WebSocket connect, keep-alive, reconnect
+- Wi-Fi STA (power save off, strongest AP, retries forever), WebSocket
+  connect, keep-alive, reconnect after any drop or server close; after
+  an eviction by another client it waits for the next talk press
 - `hello` with protocol check (2); `session_ready=false` is logged
 - Talk: GPIO7 (the case's lever, header pin 2 to GND) or K2 →
   `ptt_start`, 20 ms mic frames as `audio`, `ptt_stop`; a press clears
-  the speaker (barge-in)
-- Speaker: inbound `audio` (reassembled when fragmented) into a 512 KB
-  PSRAM ring, played through ES8311; `audio_clear` empties it in order
+  the speaker and drops the interrupted reply still on its way
+  (barge-in); a press while offline plays a low two-tone cue
+- Speaker: inbound `audio` (reassembled when fragmented) into a 4 MB
+  PSRAM ring that holds a whole reply (it pushes back on the server only
+  past 87 s), played through ES8311; `audio_clear` empties it in order
 - `set_volume` (the system skill), `input_mode` (mic continuous during
   a skill's claim, e.g. a Telegram call), `state` tracked and logged
-- Logs to serial and to the server (`client_event: huxley.firmware_log`)
+- Logs to serial and to the server (`client_event: huxley.firmware_log`);
+  says who it is on every connect (`client_event: device`: version, reset
+  reason, RSSI, volume)
+- Bench console on USB serial: `talk`, `release`, `say <n>`, `selftest`,
+  `tone`, `vol`, `pa on|off`, `wifi on|off`, `wifistat`, `info`
+  (`components/hux_console/include/hux_console.h`)
 
 ## What's next
 
@@ -145,8 +166,9 @@ evicts the first, so close the PWA tab while testing the board.
    check the IP is the server's today (`ipconfig getifaddr en0`); DHCP
    moves it (a reservation in the router stops that). If `ws.connected`
    never shows, this is the first suspect.
-2. `idf.py -p /dev/cu.usbmodem2101 flash monitor` (or `tools/smoke.sh
-   --flash`, which waits for READY).
+2. `idf.py -p /dev/cu.usbmodem1101 flash monitor` (or `tools/smoke.sh
+   --flash`, which waits for READY; check the port with `ls
+   /dev/cu.usbmodem*`).
 3. Serial should show, in order: `boot version=…`, `button_task started
    … talk=k2+gpio7`, `wifi.got_ip`, `ws.connected`, `ws.rx.hello
    protocol=2`, `state WAITING_HELLO -> READY`, then `ws.rx.state … ->
@@ -157,3 +179,5 @@ evicts the first, so close the PWA tab while testing the board.
 5. Say "pon el volumen al 90", then "al 40": `spk.volume level=…`, and
    you hear the difference (it boots at 50, today's loudness). A `talk.gpio7 low at
    boot` warning means GPIO7 is held or shorted.
+6. Or, with nobody at the board: `python tools/bench.py --reset` (see
+   Tests).

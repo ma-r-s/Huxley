@@ -46,6 +46,7 @@ whichever is wrong in the same commit.
 | `hux_audio`             | I2S + ES7210 + ES8311 + PSRAM speaker ring, volume                       | Decides when audio is allowed (that's hux_app)                |
 | `hux_board`             | I2C bus + TCA9555 (buttons, speaker PA)                                  | Knows what a pin means beyond its name                        |
 | `hux_button`            | Talk input (GPIO7 or K2), polled and debounced                           | Decides what a press means (that's hux_app)                   |
+| `hux_console`           | Bench commands on the USB serial console (talk, say, selftest, info…)    | Anything the product needs: it is a test seam                 |
 
 **The dependency graph flows downward only.** `hux_app` requires
 `hux_proto`; `hux_net` requires `hux_app` + `hux_proto` + `hux_log`
@@ -63,12 +64,16 @@ FreeRTOS tasks, in priority order (higher = more important):
 | -------------------------- | -------------------- | ---- | ----- | ---------------------------------------------------------- |
 | `hux_app`                  | `hux_app_start`      | 5    | 6 KB  | Dequeues events, runs the state machine                    |
 | _esp_wifi_                 | IDF internal         | 23   | —     | Wi-Fi driver                                               |
-| _websocket_client_         | esp_websocket_client | 5    | —     | WS RX + reconnect loop; invokes our event handler          |
-| `hux_log_drain`            | `hux_log_init`       | 2    | 4 KB  | Pops log ring, calls registered sink; emits drop heartbeat |
+| _websocket_task_           | esp_websocket_client | 5    | 6 KB  | WS RX + reconnect loop; runs our handler (the data plane)  |
+| `hux_log_drain`            | `hux_log_init`       | 2    | 6 KB  | Pops log ring, calls registered sink; emits drop heartbeat |
 | `hux_mic`                  | `hux_audio_init`     | 8    | 6 KB  | I2S RX, extract Mic1, hand frames to hux_app's queue       |
 | `hux_audio_tx`             | `hux_app_start`      | 6    | 8 KB  | base64-encode queued mic frames, send `audio`              |
 | `hux_spk`                  | `hux_audio_init`     | 8    | 6 KB  | Pop the PCM ring (or silence), I2S TX; services clears     |
-| `hux_button`               | `hux_button_start`   | 4    | 3 KB  | Poll GPIO7 + K2 every 10 ms, debounce, post press/release  |
+| `hux_button`               | `hux_button_start`   | 4    | 4 KB  | Poll GPIO7 + K2 every 10 ms, debounce, post press/release  |
+| `hux_console`              | `hux_console_start`  | 3    | 5 KB  | Poll the USB RX FIFO every 20 ms, run bench commands       |
+
+The console's `info` prints each task's smallest free stack so far
+(and the heap and PSRAM minimums); `tools/bench.py` fails below 512 B.
 
 **Audio tasks are prio 8 — higher than `app`.** If the state machine
 starves audio we get glitches; if audio starves the state machine we
@@ -90,7 +95,15 @@ Two classes of inbound message, two paths:
   `hux_net_audio_clear_fn`), so a clear is applied in order with the
   audio around it: through `hux_app`'s queue it could land after the
   next reply's first chunks and wipe them. The speaker ring is reset by
-  its own reader (`spk_task`); `hux_audio_spk_clear` asks and waits.
+  its own reader (`spk_task`); `hux_audio_spk_clear` asks and waits
+  (one 20 ms pass), the read-out of the stale bytes follows.
+  The ring (4 MB, 87 s) holds a whole model reply, which the server
+  sends 5-6x faster than real time. When it is full, the sink waits for
+  room: the WS task stops reading, TCP pushes back on the server
+  (F-0015). A talk press while the server is speaking (`model_speaking`)
+  holds the speaker: inbound audio is dropped until the server's
+  `audio_clear`, so the interrupted reply's tail, already on its way,
+  never plays over the user (F-0017).
 - **Control plane**: everything else (`state`, `status`, `input_mode`,
   `stream_started`, `claim_started`, …). Low-rate, latency-tolerant,
   needs the state machine. These flow through `hux_app`'s event
@@ -173,13 +186,15 @@ Flash (16 MB):
   0x020000  ota_0 app slot                      (2 MB)
   0x220000  ota_1 app slot                      (2 MB)
   0x420000  storage (SPIFFS)                    (1.75 MB)
-  0x5e0000  coredump                            (64 KB)      — planned
+  0x420000  (clips for the bench `say`, tools/clips.py, in storage)
+  0x5e0000  coredump                            (64 KB)
   0x5f0000  (free)                              (~10 MB free for future)
 
 PSRAM (8 MB):
-  Audio ring buffers (mic + speaker + earcons)  (~200 KB planned)
-  Wi-Fi / LWIP buffers                          (~100 KB via SPIRAM_TRY_ALLOCATE_WIFI_LWIP)
-  Future: TFLM wake-word models (~1–2 MB)
+  Speaker ring                                  (4 MB: a whole reply, 87 s)
+  WS reassembly + audio decode scratch          (384 KB + 288 KB, EXT_RAM_BSS)
+  Wi-Fi / LWIP buffers                          (via SPIRAM_TRY_ALLOCATE_WIFI_LWIP)
+  Free at boot after all that                   (~3.4 MB, `info psram=`)
 
 Internal SRAM (512 KB):
   FreeRTOS kernel + task stacks

@@ -1,5 +1,6 @@
 #include "hux_button.h"
 
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -16,7 +17,7 @@ static const char *TAG = "hux_button";
 
 #define POLL_INTERVAL_MS  10
 #define DEBOUNCE_SAMPLES  2   /* ~20 ms effective — below perceptible, above contact bounce */
-#define TASK_STACK_BYTES  3072
+#define TASK_STACK_BYTES  4096  /* 3072 left 532 B free at idle (I2C + logging) */
 #define TASK_PRIO         4   /* Below app_task (5); above idle. */
 
 /* The HX-1 case's talk lever closes a switch from header pin 2 (GPIO7)
@@ -26,6 +27,12 @@ static const char *TAG = "hux_button";
 #define TALK_GPIO         GPIO_NUM_7
 
 static hux_debounce_t s_talk;
+
+/* A third talk input with no hardware: the serial console's `talk` /
+ * `release` (hux_console), so a bench test can hold talk from the Mac.
+ * It goes through the same debounce as the lever and K2, so the three
+ * together are still one button with one press and one release. */
+static _Atomic bool s_serial_talk = false;
 
 /* Active-low inputs. A K2 read that fails on the I2C bus counts as not
  * pressed: an unreadable button must never open the mic. */
@@ -41,7 +48,8 @@ static bool lever_pressed(void) {
 static void talk_poll(void) {
     bool k2 = k2_pressed();
     bool lever = lever_pressed();
-    hux_edge_t edge = hux_debounce_step(&s_talk, k2 || lever, DEBOUNCE_SAMPLES);
+    bool serial = atomic_load_explicit(&s_serial_talk, memory_order_relaxed);
+    hux_edge_t edge = hux_debounce_step(&s_talk, k2 || lever || serial, DEBOUNCE_SAMPLES);
     if (edge == HUX_EDGE_NONE) {
         return;
     }
@@ -51,7 +59,11 @@ static void talk_poll(void) {
     };
     /* On a press, which input it was; on a release, what is still held
      * at that sample (nothing). */
-    const char *src = lever && k2 ? "lever+k2" : lever ? "lever" : k2 ? "k2" : "-";
+    const char *src = lever && k2 ? "lever+k2"
+                      : lever     ? "lever"
+                      : k2        ? "k2"
+                      : serial    ? "serial"
+                                  : "-";
     if (!hux_app_post_event(&ev, false)) {
         /* Queue full — control plane is backed up. Logging here is
          * visible via the log streamer; app_task will catch up. */
@@ -69,6 +81,10 @@ static void button_task(void *unused) {
         talk_poll();
         vTaskDelay(pdMS_TO_TICKS(POLL_INTERVAL_MS));
     }
+}
+
+void hux_button_set_serial_talk(bool held) {
+    atomic_store_explicit(&s_serial_talk, held, memory_order_relaxed);
 }
 
 void hux_button_start(void) {

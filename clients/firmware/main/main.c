@@ -4,6 +4,7 @@
  * a component.
  */
 #include <inttypes.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_app_desc.h"
@@ -18,6 +19,7 @@
 #include "hux_audio.h"
 #include "hux_board.h"
 #include "hux_button.h"
+#include "hux_console.h"
 #include "hux_log.h"
 #include "hux_net.h"
 #include "secrets.h"
@@ -49,6 +51,11 @@ static const char *reset_reason_str(esp_reset_reason_t r) {
         case ESP_RST_DEEPSLEEP: return "DEEPSLEEP";
         case ESP_RST_BROWNOUT:  return "BROWNOUT";
         case ESP_RST_SDIO:      return "SDIO";
+        case ESP_RST_USB:       return "USB";      /* also esptool / the monitor resetting it */
+        case ESP_RST_JTAG:      return "JTAG";
+        case ESP_RST_EFUSE:     return "EFUSE";
+        case ESP_RST_PWR_GLITCH: return "PWR_GLITCH";
+        case ESP_RST_CPU_LOCKUP: return "CPU_LOCKUP";
         default:                return "UNKNOWN";
     }
 }
@@ -83,8 +90,19 @@ static void log_boot_banner(void) {
 
     /* If we rebooted from a crash, surface it once. The full backtrace
      * is in the coredump partition — see firmware/docs/debugging.md. */
+    /* Same identity for the server, sent on every connect (hux_app). */
+    hux_app_device_info_t info = {
+        .version = desc->version,
+        .reset = reset_reason_str(reason),
+        .boot_counter = s_boot_counter,
+    };
+    snprintf(info.mac, sizeof(info.mac), "%02x:%02x:%02x:%02x:%02x:%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    hux_app_set_device_info(&info);
+
     if (reason == ESP_RST_PANIC || reason == ESP_RST_INT_WDT ||
-        reason == ESP_RST_TASK_WDT) {
+        reason == ESP_RST_TASK_WDT || reason == ESP_RST_WDT ||
+        reason == ESP_RST_BROWNOUT || reason == ESP_RST_CPU_LOCKUP) {
         ESP_LOGE(TAG, "previous_boot_crashed reset=%s — decode with "
                       "`esp_coredump info_corefile`",
                  reset_reason_str(reason));
@@ -134,6 +152,10 @@ void app_main(void) {
      * press/release events drive the mic pipeline in `hux_app`. */
     hux_button_start();
 
+    /* Bench commands on the USB serial console (talk, tone, vol, wifi,
+     * info): drives the board from the Mac. */
+    hux_console_start();
+
     /* Plug the log drain into the net layer. From here on, log lines
      * at or above the remote threshold go to serial AND to the server
      * as client_event:huxley.firmware_log payloads (best-effort —
@@ -146,7 +168,7 @@ void app_main(void) {
      * task pulls from the ring and feeds I2S TX via ES8311. */
     hux_net_set_audio_sink(hux_audio_spk_push);
     /* `audio_clear` on the same task, in order with the audio. */
-    hux_net_set_audio_clear_sink(hux_audio_spk_clear);
+    hux_net_set_audio_clear_sink(hux_audio_on_audio_clear);
 
     /* Threshold = INFO for dev: the server log becomes a full record
      * of what the board did. WARN/ERROR is the prod default once this

@@ -268,6 +268,90 @@ replies carry it).
 
 ---
 
+## 2026-10-11: Receive side sized to the Wi-Fi RX buffers (supersedes part of 2026-04-24 LWIP)
+
+**Decision**: `TCP_WND` 32 KB (was 64 KB), `TCP_OOSEQ_MAX_PBUFS` 8 (was
+0, no cap), Wi-Fi dynamic RX buffers 40 (was 32), `TCP_RECVMBOX_SIZE` 32
+(was 6). The send buffer stays 64 KB.
+
+**Why**: measured on the board (triage F-0015). Every segment lwIP holds
+pins a Wi-Fi RX buffer; with no cap on out-of-order segments one lost
+frame let 32 of them take every buffer (JTAG: `ooseq` = 32), so the
+socket went deaf. The 6-entry receive mailbox, not the window, set how
+much lwIP could queue for the app, and its 250 ms retry timer throttled
+replies to 0.65x real time. Espressif's own rules (Kconfig help, Wi-Fi
+guide): window <= dynamic RX buffers, mailbox = window / MSS + 2.
+
+**Alternative rejected**: more RX buffers alone, keeping 64 KB. Without
+the OOSEQ cap the wedge only moves; with it, 32 KB is still ~10x the
+audio rate at a 50 ms round trip.
+
+---
+
+## 2026-10-11: The speaker ring holds a whole reply; full means wait
+
+**Decision**: 4 MB PSRAM ring (87 s). When it is full, the audio sink
+waits for room (TCP then pushes back on the server) instead of
+dropping. A clear marks the ring stale and reads it out over the next
+20 ms passes.
+
+**Why**: the server forwards a reply as fast as the model makes it
+(5-6x real time once the socket was fixed). Dropping lost 60 s of an
+80 s story. Pushing back alone lets macOS grow the server's socket
+buffer to 4 MB, its keepalive ping waits behind the backlog, and the
+server drops the connection after 20 s. Holding the reply makes both
+rare: nothing waits on the server below 87 s. Radio and audiobooks
+arrive at real time (ffmpeg `-re`), so only model replies burst.
+
+**Alternative rejected**: pacing on the server (bounded `SO_SNDBUF`):
+the right long-term bound, but it changes the turn coordinator for every
+client; filed as main triage T1.32 for Mario.
+
+---
+
+## 2026-10-11: An evicted walkie waits for its talk button
+
+**Decision**: when the server closes the socket with 1001 "Replaced by
+new client" (another client connected), the firmware stops its
+WebSocket client and reconnects on the next talk press (with the
+offline cue on that press). Any other close reconnects at once.
+
+**Why**: the server serves one client and evicts the older one. The PWA
+already defers an evicted hidden tab until it is shown; a walkie that
+reconnected at once would evict that client, which reconnects in 2 s:
+the two trade places forever. A press is the walkie's "shown".
+
+**Open**: a slow periodic retry, so reminders reach the walkie again
+after someone else's session ends, would evict that session every few
+minutes. A product call (which client wins), not taken here.
+
+---
+
+## 2026-10-11: Volume: no PA headroom compensation; 50 stays put
+
+**Decision**: ES8311 `hw_gain` with equal PA and DAC voltages (0 dB);
+curve 0 / 50 / 100 = -50 / -11.5 / 0 dB.
+
+**Why**: the default (5 V PA, 3.3 V DAC) adds 3.6 dB to every level, so
+100 was +3.5 dB of digital gain and clipped a full-scale reply. -11.5 dB
+at 50 is the loudness of every hardware test so far (the old boot level),
+so nothing sounds different at boot. Read back from the codec register.
+
+---
+
+## 2026-10-11: Bench seams in the product firmware
+
+**Decision**: a serial console (`hux_console`), an electrical loopback
+self-test and clip injection ship in the firmware, always on.
+
+**Why**: the board can be tested end to end with no hand on it and no
+sound in the room (`tools/bench.py`, nine checks, ~3 min). Without them
+every audio or network change waits for someone to hold a button and
+listen. They answer only to bytes on the USB port, so a walkie on its
+battery never sees them. Revisit in the pre-release sweep (F-0008).
+
+---
+
 ## 2026-04-24 — `K2` = PTT, `K1`/`K3` reserved
 
 **Decision**: The middle button (`K2`) is the push-to-talk trigger.

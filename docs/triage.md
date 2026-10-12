@@ -5301,3 +5301,17 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 **Lesson.** Test what the user hears, not what the model said: a transcript is complete even when the audio was cut. The voice test now counts `audio_clear` after speech.
 
 ---
+
+## T1.32: A client that reads slowly gets dropped: the server's send buffer has no bound
+
+**Status**: `proposal` (2026-10-11, needs Mario: it changes how the coordinator waits on a client) · **Effort**: S-M
+
+**Problem.** The Realtime model makes a long answer 3-6x faster than real time and the server forwards it as it comes. A client that plays as it receives (the ESP32 walkie when its buffer is full) reads at real time, so the rest piles up on the server. `ws.send()` does await `drain()`, but macOS auto-tunes the socket's send buffer up to `net.inet.tcp.autosndbufmax` = 4 MB (~65 s of audio), so the coordinator never feels it. Everything sent after that (the `websockets` keepalive ping, `audio_clear`, state) queues behind the backlog: the ping waited 30 s, `websockets` failed the connection after 20 s (`client_disconnected close_code=1006`), and a barge-in `audio_clear` arrived 2.1 s late.
+
+**Validation.** Bench, 2026-10-11 (firmware F-0015, F-0016): `server.tx.model_speaking false` at 00:36:56.576, received by the board at 00:37:26.352 (29.8 s), connection failed at 00:37:26.375. `netstat` showed the socket's send queue pinned while the board read at real time.
+
+**Firmware side, done.** The walkie's ring now holds a whole reply (4 MB, 87 s), so in practice it reads at network speed and nothing piles up (last message lag 2.8 s on a 150 s story, no disconnect), and it reconnects after any close. The gap left: a reply longer than ~87 s, or any future client that plays as it reads.
+
+**Proposal.** Bound what the server queues per client: set `SO_SNDBUF` on each accepted socket (e.g. 256 KB, which turns off auto-tuning) so `drain()` reaches the coordinator, or pace forwarded model audio to a few seconds ahead of real time. Either way the coordinator's `on_audio_delta` would then block on a slow client, which needs a look at what else waits on it (the provider's receive loop). Not done because it changes the turn coordinator's timing for every client.
+
+---

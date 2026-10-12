@@ -200,6 +200,19 @@ static void test_input_mode(void) {
     HX_ASSERT_TRUE(!m.as.input_mode.known, "a future mode is not known (caller keeps its mode)");
 }
 
+static void test_model_speaking(void) {
+    /* Barge-in holds the speaker only while the server says it's speaking. */
+    hux_msg_t m;
+    HX_ASSERT_TRUE(parse("{\"type\":\"model_speaking\",\"value\":true}", &m), "parses");
+    HX_ASSERT_TRUE(m.as.model_speaking.known && m.as.model_speaking.value, "true");
+    HX_ASSERT_TRUE(parse("{\"type\":\"model_speaking\",\"value\":false}", &m), "parses");
+    HX_ASSERT_TRUE(m.as.model_speaking.known && !m.as.model_speaking.value, "false");
+    HX_ASSERT_TRUE(parse("{\"type\":\"model_speaking\",\"value\":\"yes\"}", &m), "parses");
+    HX_ASSERT_TRUE(!m.as.model_speaking.known, "a non-boolean is not known (caller keeps its state)");
+    HX_ASSERT_TRUE(parse("{\"type\":\"model_speaking\"}", &m), "parses");
+    HX_ASSERT_TRUE(!m.as.model_speaking.known, "missing value is not known");
+}
+
 static void test_audio_clear_is_not_audio(void) {
     hux_msg_t m;
     HX_ASSERT_TRUE(parse("{\"type\":\"audio_clear\"}", &m), "parses");
@@ -215,6 +228,7 @@ int main(void) {
     HX_RUN(test_state_values);
     HX_RUN(test_set_volume_level);
     HX_RUN(test_input_mode);
+    HX_RUN(test_model_speaking);
     HX_RUN(test_audio_clear_is_not_audio);
     HX_RUN(test_parse_hello_with_odd_field_order);
     HX_RUN(test_parse_hello_missing_protocol);

@@ -297,6 +297,13 @@ async def test_server_frames_match_what_the_firmware_parses() -> None:
         _, mode = await _recv_until(ws, "input_mode")
         assert mode["mode"] == "assistant_ptt"
 
+        # Barge-in: the firmware holds the speaker on a press only while this
+        # is a JSON boolean true, and lets go when it turns false.
+        for speaking in (True, False):
+            await srv.send_model_speaking(speaking)
+            _, ms = await _recv_until(ws, "model_speaking")
+            assert ms["value"] is speaking
+
         await srv.send_audio_clear()
         raw, _ = await _recv_until(ws, "audio_clear")
         assert _type_within_probe(raw), raw

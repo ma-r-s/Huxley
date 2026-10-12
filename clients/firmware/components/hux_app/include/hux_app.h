@@ -15,6 +15,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 typedef enum {
     HUX_APP_EV_NET_WIFI_UP = 1,
@@ -22,6 +23,10 @@ typedef enum {
     HUX_APP_EV_NET_WS_CONNECTED,
     HUX_APP_EV_NET_WS_DISCONNECTED,
     HUX_APP_EV_NET_WS_MESSAGE,
+    /* The server replaced us with another client (close 1001). */
+    HUX_APP_EV_NET_WS_EVICTED,
+    /* The WebSocket client's task ended (it no longer reconnects). */
+    HUX_APP_EV_NET_WS_FINISHED,
     /* Button events. K1/K3 will land as their own kinds when a
      * consumer appears — see hux_button.c. */
     HUX_APP_EV_BUTTON_K2_PRESSED,
@@ -58,3 +63,15 @@ void hux_app_start(void);
  * or access it after a successful post.
  */
 bool hux_app_post_event(const hux_app_event_t *event, bool from_isr);
+
+/** Identity reported to the server on every connect (`client_event:
+ * device`). Strings must outlive the firmware (static or app desc). */
+typedef struct {
+    const char *version;
+    const char *reset;
+    char mac[18];
+    uint32_t boot_counter;
+} hux_app_device_info_t;
+
+/** Set once at boot, before Wi-Fi starts. */
+void hux_app_set_device_info(const hux_app_device_info_t *info);

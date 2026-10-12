@@ -11,7 +11,7 @@
 #include "freertos/task.h"
 
 #define LOG_QUEUE_DEPTH      32
-#define DRAIN_TASK_STACK     4096
+#define DRAIN_TASK_STACK     6144  /* cJSON + the WS send: 4 KB left 688 B free in a soak */
 #define DRAIN_TASK_PRIO      2
 /* vprintf hook runs on the caller's stack — Wi-Fi, LWIP, and ISR
  * paths have tight stacks (~2–4 KB). 256 B covers typical IDF log

@@ -22,7 +22,7 @@ excerpts via relative paths (store evidence under
 
 ## Active
 
-### F-0014 — Talk on GPIO7; act on `set_volume`, `input_mode`, `audio_clear` · built, awaiting bench test 2026-10-11
+### F-0014: Talk on GPIO7; act on `set_volume`, `input_mode`, `audio_clear` · bench-tested 2026-10-11 (K2 and a call left for a hand)
 
 **Problem**: the HX-1 case's talk lever closes a switch on header pin 2
 (GPIO7) to GND, but the firmware only read the board's K2. And against
@@ -61,13 +61,141 @@ the protocol's mic mode says. It is the first time the device has an
 open mic without the lever held. Calls need it to be two-way; if the
 walkie-talkie rule should hold even in calls, it is one line in
 `hux_app.c` (`mic_update`).
-**DoD left**: Mario flashes it (README "First flash after a long gap"),
-then: talk on K2 and on GPIO7, an answer plays, "pon el volumen al 90"
-then "al 40", an audiobook seek, and a Telegram call if one is set up.
-Also check `HUX_SERVER_URI` in `main/secrets.h`: DHCP had moved the Mac
-from .77 to .71 since April (fixed locally the night of 2026-10-11).
+**Bench test, 2026-10-11** (the original Huxley board, speaker amp
+off, no sound in the room; see F-0015 to F-0019 for what it found):
+GPIO7 pressed electrically through JTAG (pull-up flipped to pull-down in
+IO_MUX: `button.talk press src=lever`, Mic1 streamed 22 frames, release
+ended the turn); answers play (reply audio reaches the codec, 0 write
+errors, verified electrically by the loopback self-test); "pon el volumen
+al 80" by injected speech -> `set_volume 80` -> ES8311 register 0xB5;
+`audio_clear` by barge-in. **Left for a hand**: K2 (behind the I2C
+expander, JTAG can't press it; its reads never failed in hours of
+polling) and a real Telegram call (`input_mode`).
 **Known gaps** (not in scope): no echo cancellation during calls; the
 speaker leaks into the mic.
+
+### F-0015: Long replies stalled, dropped and played choppy · fixed 2026-10-11, measured on the board
+
+**Problem**: a long answer ("cuéntame un cuento largo") died 15 s in:
+the socket heard nothing until TCP keepalive killed it, and the rest of
+the reply was lost. With that fixed, the reply arrived at 0.65x real time
+and the speaker ran dry hundreds of times (choppy); with that fixed, it
+arrived 5-6x faster than real time and the 512 KB ring dropped 60 s of
+an 80 s story.
+**Evidence** (all on the board, `say 3`, amp off):
+1. JTAG snapshot mid-stall: the WebSocket's TCP control block had
+   `ooseq` = 32 segments (46 KB), the in-order queue empty (`rcv_wnd`
+   65535). lwIP kept out-of-order segments without a cap
+   (`TCP_OOSEQ_MAX_PBUFS=0`, IDF's default with PSRAM) against a 64 KB
+   window and 32 Wi-Fi RX buffers: after one lost frame the out-of-order
+   queue held every RX buffer and the retransmission had nowhere to land.
+   IDF's Kconfig describes exactly this.
+2. `ws.rx.stats` (new): 0.65x real time, gaps of ~250 ms (lwIP's TCP
+   timer). Wi-Fi driver counters clean (`wifistat`: no RX buffer
+   failures), ping to the board 0 % loss at 140 KB/s, the server's socket
+   pinned at 128 KB queued. Cause: `LWIP_TCP_RECVMBOX_SIZE=6`; lwIP's rule
+   is window / MSS + 2 (25). The mailbox filled while the WS task handled
+   a chunk, lwIP refused the next segments and retried on its 250 ms timer.
+3. With 1 and 2 fixed: 363 KB/s, an 80 s story in 14 s, and 364
+   `spk.ring.overflow` (59.5 s dropped): the ring dropped when full.
+4. Backpressure alone (wait for room) kept the audio but let macOS grow
+   the server's socket buffer (`net.inet.tcp.autosndbufmax` 4 MB): the
+   server's keepalive ping queued behind 30 s of audio, the server failed
+   the connection after 20 s, and F-0016 left the device dead.
+**Fix**: `TCP_WND` 32 KB, `TCP_OOSEQ_MAX_PBUFS` 8, Wi-Fi dynamic RX
+buffers 40, `TCP_RECVMBOX_SIZE` 32 (sdkconfig.defaults, with the story);
+the speaker ring is 4 MB in PSRAM (87 s, a whole reply; 3.4 MB PSRAM
+stays free) and `hux_audio_spk_push` waits for room instead of dropping
+(re-checking the barge-in hold every 20 ms; gives up after 2 s if
+playback is stuck). A clear marks the ring stale and reads it out over the
+next passes (a full 4 MB ring empties in ~0.6 s; the caller isn't held).
+**Verified**: 46 s and ~150 s stories: 0 underruns, 0 drops, received =
+played to 0.4 %, server send queue <= 132 KB, server -> board lag of the
+last message 2.8 s (was 29.8 s), no disconnect. `spk.underrun` (new) and
+`ws.rx.stats` (new) watch it from now on. **Residual**: a reply longer
+than 87 s falls back to backpressure and the server-side buffer growth
+(main `docs/triage.md` T1.32).
+
+### F-0016: Any close from the server left the device dead until power-cycled · fixed 2026-10-11
+
+**Problem**: esp_websocket_client's task exits on a CLOSE frame unless
+`enable_close_reconnect` is set (it defaults off) and emits `CLOSED` /
+`FINISH`, which `hux_net` didn't handle. The app stayed READY on a dead
+client: no reconnect, presses sent nothing, no offline cue. Every server
+close does this: an eviction by another client, a server shutdown, the
+keepalive timeout of F-0015.
+**Evidence**: after the story, JTAG showed no `websocket_task` and no
+active TCP control block while the app logged READY; the server had
+logged `client_disconnected close_code=1006` at the same second.
+**Fix**: `enable_close_reconnect`; `CLOSED` posts a disconnect to the app;
+`FINISH` (the task ended) makes the app restart the client. An eviction
+(close 1001 "Replaced by new client", parsed from the CLOSE frame) pauses
+the client until the next talk press, as an evicted PWA tab waits until
+it is shown: reconnecting at once would evict that client, and the two
+would trade places forever.
+**Verified**: a test client took the server: `ws.rx.close code=1001
+eviction=1`, paused; a talk press played the offline cue and the board
+was READY 62 ms later.
+
+### F-0017: Barge-in played the old reply over the user for 1.5-2.5 s · fixed 2026-10-11
+
+**Problem**: a press clears the ring, but the reply audio the server had
+already sent kept arriving and played until the server's `audio_clear`
+(it follows that audio in the stream): measured 1.55 s, then 2.5 s.
+**Fix**: on a press while the server says it is speaking
+(`model_speaking`, now parsed), the speaker holds: inbound audio is
+dropped until `audio_clear` (or `model_speaking: false`, or 3 s). The hold
+goes on before the clear so a write waiting for room can't land in the
+emptied ring. Host test for the `model_speaking` parse; contract test
+for its shape.
+**Verified**: press 25 s into a story with the 4 MB ring full: 4.2 MB
+marked stale, 167 KB in flight dropped, `audio_clear` 612 ms after the
+press, the new answer played.
+
+### F-0018: Smaller defects found on the bench · fixed 2026-10-11
+
+- **Volume clipped at the top**: esp_codec_dev's default "PA headroom"
+  (a 5 V PA, a 3.3 V DAC) added 3.6 dB to every level: 100 was +3.5 dB
+  of digital gain, so a full-scale reply clipped in the DAC. Same rail =
+  0 dB; the curve's middle moved to -11.5 dB so 50 keeps the loudness of
+  every test so far. Read back from the ES8311 register (and by loopback):
+  10 / 50 / 80 / 100 = -42.5 / -11.5 / -5.0 / 0 dB.
+- **Wi-Fi gave up after 5 retries** (`wifi.retries_exhausted`, then never
+  again): a router reboot left the walkie offline until power-cycled. Now
+  5 quick tries, then 1, 2, 4 ... 30 s, forever (`hux_wifi_retry`, host
+  test); the disconnect reason is logged.
+- **Joined the first AP heard, not the strongest**: on the mesh the board
+  sat at -26, -60 and -87 dBm on three boots a metre from a node. Full
+  scan, strongest first (~3 s more at boot); `wifi.associated` logs the
+  BSSID, channel and RSSI.
+- **The WebSocket started before Wi-Fi had an IP**: a false "Host is
+  unreachable" error every boot and 2 s lost. It starts on the first IP
+  (READY at 2.2 s, was 4.1 s, before the full scan).
+- **I2S underflow replayed the last buffer** (a stutter or buzz if
+  spk_task is ever late): `auto_clear` sends zeros instead.
+- **Stack headroom**: `hux_button` had 532 B left of 3 KB (now 4 KB),
+  the WS task 1.2 KB of 4 KB before its first reply (now 6 KB), the log
+  drain 688 B of 4 KB after a 12-turn soak (now 6 KB). `info` reports
+  every task's minimum; `bench.py` fails below 512 B.
+- `reset=UNKNOWN` for USB/JTAG resets; `ring_used` read 1 when empty.
+- The original board's coredump partition held stale data (a false
+  "Incorrect size of core dump image" error every boot): erased.
+
+### F-0019: Bench tools: test the board with no hand and no sound · done 2026-10-11
+
+The serial console (`hux_console`): `talk` / `release` (a third talk
+input, debounced with the lever and K2), `say <n>` (a whole turn: a clip
+from flash replaces Mic1 while talk is held; `tools/clips.py` renders
+Spanish questions with macOS `say -o`, nothing is played), `selftest`
+(electrical loopback: a tone on the DAC read back on the ES7210's echo
+reference channel; pass = 80+ dB rise, mics alive), `tone`, `vol`,
+`pa off|on` (silent bench), `wifi off|on`, `wifistat`, `info` (heap,
+PSRAM, every task's stack minimum, ring, volume and the ES8311 register,
+RSSI, time since the last inbound data). Also new on the wire: `client_event
+device` on every connect (firmware version, reset reason, boot counter,
+RSSI, volume: the server log now says which firmware is talking) and
+`mic peak_dbfs` in each press's stats. `tools/bench.py` runs the whole
+bench check list and prints PASS/FAIL.
 
 Note on IDs: F-0011 to F-0013 were used in code comments and commit
 messages (boot buzz, decode scratch, Wi-Fi power save) but their

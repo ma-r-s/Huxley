@@ -8,6 +8,7 @@
 #include "esp_attr.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "esp_websocket_client.h"
@@ -19,13 +20,21 @@
 #include "hux_app.h"
 #include "hux_log.h"
 #include "hux_type_probe.h"
+#include "hux_wifi_retry.h"
 #include "hux_ws_frag.h"
 
 static const char *TAG = "hux_net";
 
+/* sdkconfig (gitignored) keeps whatever it had when it was first made:
+ * edits to sdkconfig.defaults never reach an existing one. These values
+ * are what keeps a long reply from stalling (F-0015); an old sdkconfig
+ * builds the bug back in, silently. Fail the build instead. */
+#if CONFIG_LWIP_TCP_RECVMBOX_SIZE < 25 || CONFIG_LWIP_TCP_OOSEQ_MAX_PBUFS == 0 || \
+    CONFIG_LWIP_TCP_WND_DEFAULT > CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM * 1024
+#error "sdkconfig is older than sdkconfig.defaults: delete it and run `idf.py reconfigure` (F-0015)"
+#endif
+
 #define WIFI_CONNECTED_BIT BIT0
-#define WIFI_FAIL_BIT      BIT1
-#define WIFI_RETRY_MAX     5
 /* Network ring buffer sized for the largest single WS text frame we
  * reasonably expect in v0 (hello / state / status / audio deltas are
  * all under 4 KB). Revisit when inbound audio chunks grow. */
@@ -46,7 +55,16 @@ static const char *TAG = "hux_net";
 
 static EventGroupHandle_t s_wifi_events = NULL;
 static esp_websocket_client_handle_t s_ws = NULL;
-static int s_wifi_retries = 0;
+static uint32_t s_wifi_retries = 0;   /* attempts since the last IP */
+static esp_timer_handle_t s_wifi_retry_timer = NULL;
+/* The WS client starts on the first IP, not at boot: started earlier its
+ * first connect fails ("Host is unreachable", logged as an error on every
+ * boot) and the next try waits out the 2 s reconnect timer. Only the
+ * system event task touches this. */
+static bool s_ws_started = false;
+/* The last CLOSE frame the server sent (WS task): an eviction ("Replaced
+ * by new client", 1001) is told apart from a restart or a ping timeout. */
+static bool s_close_was_eviction = false;
 static char s_server_uri[128] = {0};
 
 /* Audio data-plane seam — see firmware/docs/architecture.md §"Data
@@ -97,6 +115,42 @@ EXT_RAM_BSS_ATTR static uint8_t s_audio_scratch[AUDIO_SCRATCH_BYTES];
 EXT_RAM_BSS_ATTR static char s_frag_buf[WS_FRAG_BUFFER_BYTES];
 static hux_ws_reassembler_t s_reassembler;
 
+/* Inbound stats, WS task only. One `ws.rx.stats` line per second while
+ * audio flows: a reply that never plays shows here first (did audio
+ * arrive? how fast? how long did the socket go quiet?). */
+static uint32_t s_rx_events = 0;
+static uint32_t s_rx_bytes = 0;
+static uint32_t s_rx_msgs = 0;
+static uint32_t s_rx_audio_msgs = 0;
+static uint32_t s_rx_audio_bytes = 0;
+static uint32_t s_rx_max_gap_ms = 0;
+static uint32_t s_rx_busy_us = 0;      /* time spent in our handler */
+static uint32_t s_rx_max_busy_us = 0;
+static uint32_t s_rx_window_start_ms = 0;
+static _Atomic uint32_t s_rx_last_ms = 0;
+#define RX_STATS_WINDOW_MS 1000
+
+static uint32_t now_ms(void) {
+    return (uint32_t)(esp_timer_get_time() / 1000);
+}
+
+static void rx_stats_tick(uint32_t now) {
+    if (now - s_rx_window_start_ms < RX_STATS_WINDOW_MS) {
+        return;
+    }
+    if (s_rx_audio_msgs > 0) {
+        ESP_LOGI(TAG, "ws.rx.stats window_ms=%u events=%u bytes=%u msgs=%u audio_msgs=%u "
+                      "audio_ms=%u max_gap_ms=%u busy_ms=%u max_busy_ms=%u",
+                 (unsigned)(now - s_rx_window_start_ms), (unsigned)s_rx_events,
+                 (unsigned)s_rx_bytes, (unsigned)s_rx_msgs, (unsigned)s_rx_audio_msgs,
+                 (unsigned)(s_rx_audio_bytes / 48), (unsigned)s_rx_max_gap_ms,
+                 (unsigned)(s_rx_busy_us / 1000), (unsigned)(s_rx_max_busy_us / 1000));
+    }
+    s_rx_events = s_rx_bytes = s_rx_msgs = s_rx_audio_msgs = s_rx_audio_bytes = 0;
+    s_rx_max_gap_ms = s_rx_busy_us = s_rx_max_busy_us = 0;
+    s_rx_window_start_ms = now;
+}
+
 static void post_app(hux_app_event_kind_t kind) {
     hux_app_event_t ev = {.kind = kind};
     hux_app_post_event(&ev, false);
@@ -106,33 +160,67 @@ static void post_app(hux_app_event_kind_t kind) {
 /*  Wi-Fi                                                             */
 /* ------------------------------------------------------------------ */
 
+static void wifi_retry_timer_cb(void *arg) {
+    (void)arg;
+    esp_wifi_connect();
+}
+
 static void wifi_event_handler(void *arg, esp_event_base_t base,
                                int32_t id, void *data) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED) {
+        /* Which AP (a mesh has several with one SSID) and how well. */
+        const wifi_event_sta_connected_t *c = (const wifi_event_sta_connected_t *)data;
+        ESP_LOGI(TAG, "wifi.associated bssid=%02x:%02x:%02x:%02x:%02x:%02x channel=%d rssi=%d",
+                 c->bssid[0], c->bssid[1], c->bssid[2], c->bssid[3], c->bssid[4], c->bssid[5],
+                 c->channel, hux_net_rssi());
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        if (s_wifi_retries < WIFI_RETRY_MAX) {
-            s_wifi_retries++;
-            ESP_LOGW(TAG, "wifi.disconnected retry=%d/%d",
-                     s_wifi_retries, WIFI_RETRY_MAX);
+        /* Retry forever (hux_wifi_retry): a few at once, then backing off
+         * to every 30 s. The reason code says why (201 no AP found, 15 /
+         * 204 wrong password, 8 we left). */
+        const wifi_event_sta_disconnected_t *d = (const wifi_event_sta_disconnected_t *)data;
+        s_wifi_retries++;
+        uint32_t delay_ms = hux_wifi_retry_delay_ms(s_wifi_retries);
+        ESP_LOGW(TAG, "wifi.disconnected reason=%d retry=%u next_in_ms=%u",
+                 d != NULL ? (int)d->reason : -1, (unsigned)s_wifi_retries, (unsigned)delay_ms);
+        if (delay_ms == 0) {
             esp_wifi_connect();
         } else {
-            ESP_LOGE(TAG, "wifi.retries_exhausted");
-            xEventGroupSetBits(s_wifi_events, WIFI_FAIL_BIT);
+            esp_timer_stop(s_wifi_retry_timer); /* not running is fine */
+            esp_timer_start_once(s_wifi_retry_timer, (uint64_t)delay_ms * 1000);
         }
         post_app(HUX_APP_EV_NET_WIFI_DOWN);
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)data;
-        ESP_LOGI(TAG, "wifi.got_ip ip=" IPSTR, IP2STR(&event->ip_info.ip));
+        ESP_LOGI(TAG, "wifi.got_ip ip=" IPSTR " rssi=%d", IP2STR(&event->ip_info.ip),
+                 hux_net_rssi());
         s_wifi_retries = 0;
+        esp_timer_stop(s_wifi_retry_timer); /* a pending retry is moot now */
         xEventGroupSetBits(s_wifi_events, WIFI_CONNECTED_BIT);
         post_app(HUX_APP_EV_NET_WIFI_UP);
+        if (!s_ws_started && s_ws != NULL) {
+            /* From here on esp_websocket_client reconnects on its own. */
+            esp_err_t err = esp_websocket_client_start(s_ws);
+            s_ws_started = err == ESP_OK;
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "ws.start_failed err=%s (retried on the next IP)",
+                         esp_err_to_name(err));
+            } else {
+                ESP_LOGI(TAG, "ws.start uri=%s", s_server_uri);
+            }
+        }
     }
 }
 
 static void wifi_init_sta(const char *ssid, const char *password) {
     s_wifi_events = xEventGroupCreate();
     configASSERT(s_wifi_events != NULL);
+    const esp_timer_create_args_t retry_args = {
+        .callback = wifi_retry_timer_cb,
+        .name = "wifi_retry",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&retry_args, &s_wifi_retry_timer));
 
     ESP_ERROR_CHECK(esp_netif_init());
     esp_netif_create_default_wifi_sta();
@@ -152,6 +240,12 @@ static void wifi_init_sta(const char *ssid, const char *password) {
             sizeof(wifi_config.sta.password) - 1);
     wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
     wifi_config.sta.pmf_cfg.capable = true;
+    /* Join the strongest AP with this SSID. The default fast scan joins the
+     * first one it hears: on a mesh (several APs, one SSID) the bench board
+     * landed at -26, -60 and -87 dBm on three boots a metre from the same
+     * node. A full scan costs about a second at boot. */
+    wifi_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    wifi_config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
@@ -207,6 +301,8 @@ static void dispatch_audio(const char *json, size_t len) {
         ESP_LOGW(TAG, "ws.rx.audio.b64_decode_failed rc=-0x%04x", -rc);
         return;
     }
+    s_rx_audio_msgs++;
+    s_rx_audio_bytes += pcm_len;
     sink(s_audio_scratch, pcm_len);
 }
 
@@ -214,6 +310,7 @@ static void dispatch_audio(const char *json, size_t len) {
  * goes to the zero-copy data-plane sink; everything else gets copied
  * onto the heap and posted to hux_app's control queue. */
 static void dispatch_complete_message(const char *msg, size_t msg_len) {
+    s_rx_msgs++;
     if (hux_has_type(msg, msg_len, "\"audio\"")) {
         dispatch_audio(msg, msg_len);
         return;
@@ -250,16 +347,43 @@ static void dispatch_complete_message(const char *msg, size_t msg_len) {
  * fragments through the reassembler, and dispatches on the first
  * `HUX_FRAG_READY`. Binary frames are flagged loud — protocol is
  * JSON-only. */
+/* A CLOSE frame from the server: code (2 bytes, big-endian) + reason. */
+static void note_close_frame(const esp_websocket_event_data_t *data) {
+    int code = -1;
+    char reason[48] = {0};
+    if (data->data_len >= 2 && data->data_ptr != NULL) {
+        code = ((uint8_t)data->data_ptr[0] << 8) | (uint8_t)data->data_ptr[1];
+        int n = data->data_len - 2 < (int)sizeof(reason) - 1 ? data->data_len - 2
+                                                             : (int)sizeof(reason) - 1;
+        memcpy(reason, data->data_ptr + 2, (size_t)n);
+    }
+    s_close_was_eviction = code == 1001 && strstr(reason, "Replaced") != NULL;
+    ESP_LOGW(TAG, "ws.rx.close code=%d reason=\"%s\" eviction=%d", code, reason,
+             s_close_was_eviction);
+}
+
 static void forward_ws_text(const esp_websocket_event_data_t *data) {
     if (data->op_code != 0x01 /* TEXT */) {
         if (data->op_code == 0x02) {
             ESP_LOGW(TAG, "ws.rx.binary len=%d (unexpected)", data->data_len);
+        } else if (data->op_code == 0x08) {
+            note_close_frame(data);
         }
         /* Control frames (PING/PONG/CLOSE) and stray binary are handled
          * by esp_websocket_client internally; the reassembler doesn't
          * see them (we skip the call entirely). */
         return;
     }
+
+    int64_t t0 = esp_timer_get_time();
+    uint32_t now = (uint32_t)(t0 / 1000);
+    uint32_t last = atomic_load_explicit(&s_rx_last_ms, memory_order_relaxed);
+    if (last != 0 && now - last > s_rx_max_gap_ms) {
+        s_rx_max_gap_ms = now - last;
+    }
+    atomic_store_explicit(&s_rx_last_ms, now, memory_order_relaxed);
+    s_rx_events++;
+    s_rx_bytes += (uint32_t)data->data_len;
 
     const char *msg = NULL;
     size_t msg_len = 0;
@@ -284,6 +408,12 @@ static void forward_ws_text(const esp_websocket_event_data_t *data) {
                      data->payload_offset, data->data_len, data->payload_len);
             break;
     }
+    uint32_t busy = (uint32_t)(esp_timer_get_time() - t0);
+    s_rx_busy_us += busy;
+    if (busy > s_rx_max_busy_us) {
+        s_rx_max_busy_us = busy;
+    }
+    rx_stats_tick(now);
 }
 
 static void ws_event_handler(void *arg, esp_event_base_t base,
@@ -306,6 +436,27 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
             break;
         case WEBSOCKET_EVENT_ERROR:
             ESP_LOGE(TAG, "ws.error");
+            break;
+        case WEBSOCKET_EVENT_CLOSED:
+            /* The server closed it with a CLOSE frame (eviction, shutdown, a
+             * missed keepalive ping). The library reconnects by itself
+             * (enable_close_reconnect) but emits no DISCONNECTED: post it,
+             * or the app stays READY on a dead socket. */
+            ESP_LOGW(TAG, "ws.closed by_server eviction=%d", s_close_was_eviction);
+            hux_ws_reassembler_reset(&s_reassembler);
+            post_app(HUX_APP_EV_NET_WS_DISCONNECTED);
+            if (s_close_was_eviction) {
+                post_app(HUX_APP_EV_NET_WS_EVICTED);
+            }
+            s_close_was_eviction = false;
+            break;
+        case WEBSOCKET_EVENT_FINISH:
+            /* The client's task ended: nothing reads or reconnects now. Only
+             * hux_net_pause() should get here; anything else is reported so
+             * the app restarts it. Before enable_close_reconnect, every
+             * server close ended here, silently (F-0015). */
+            ESP_LOGW(TAG, "ws.finished: the client task exited");
+            post_app(HUX_APP_EV_NET_WS_FINISHED);
             break;
         default:
             break;
@@ -354,13 +505,23 @@ static void ws_start(const char *uri) {
          * for `pingpong_timeout_sec` (default 120s) auto-closes the
          * socket — combines with auto-reconnect to clear zombies. */
         .ping_interval_sec = 10,
+
+        /* Reconnect after the server closes the socket too, not only after
+         * a network error. Off by default: the client's task then exits on
+         * any CLOSE frame and the device sits "connected" to nothing until
+         * it is power-cycled (seen on the bench, F-0015). */
+        .enable_close_reconnect = true,
+
+        /* This task runs the whole inbound data plane (reassembly, cJSON,
+         * base64, the speaker ring) and logs from it. The library default
+         * (4 KB) had 1.2 KB left before the first reply arrived. */
+        .task_stack = 6144,
     };
     s_ws = esp_websocket_client_init(&cfg);
     configASSERT(s_ws != NULL);
     ESP_ERROR_CHECK(esp_websocket_register_events(
         s_ws, WEBSOCKET_EVENT_ANY, ws_event_handler, NULL));
-    ESP_ERROR_CHECK(esp_websocket_client_start(s_ws));
-    ESP_LOGI(TAG, "ws.init uri=%s", s_server_uri);
+    ESP_LOGI(TAG, "ws.init uri=%s (starts on the first IP)", s_server_uri);
 }
 
 /* ------------------------------------------------------------------ */
@@ -371,11 +532,42 @@ void hux_net_start(const hux_net_config_t *cfg) {
     configASSERT(cfg != NULL && cfg->wifi_ssid != NULL &&
                  cfg->wifi_password != NULL && cfg->server_uri != NULL);
     hux_ws_reassembler_init(&s_reassembler, s_frag_buf, sizeof(s_frag_buf));
-    wifi_init_sta(cfg->wifi_ssid, cfg->wifi_password);
-    /* WS client auto-connects once Wi-Fi has an IP (esp_websocket_client
-     * retries internally until DNS + TCP succeed). Starting it here keeps
-     * the lifecycle simple — no separate "wifi is up, start WS" hook. */
+    /* WS client created first; the GOT_IP handler starts it. */
     ws_start(cfg->server_uri);
+    wifi_init_sta(cfg->wifi_ssid, cfg->wifi_password);
+}
+
+void hux_net_pause(void) {
+    if (s_ws == NULL || !s_ws_started) {
+        return;
+    }
+    /* From the app task (never the WS task: stop waits for it to exit). */
+    esp_err_t err = esp_websocket_client_stop(s_ws);
+    s_ws_started = false;
+    ESP_LOGI(TAG, "ws.paused err=%s", esp_err_to_name(err));
+}
+
+void hux_net_resume(void) {
+    if (s_ws == NULL) {
+        return;
+    }
+    if (s_ws_started) {
+        /* The task ended on its own (FINISH): stop() just cleans up. */
+        esp_websocket_client_stop(s_ws);
+    }
+    esp_err_t err = esp_websocket_client_start(s_ws);
+    s_ws_started = err == ESP_OK;
+    ESP_LOGI(TAG, "ws.resumed err=%s", esp_err_to_name(err));
+}
+
+uint32_t hux_net_rx_age_ms(void) {
+    uint32_t last = atomic_load_explicit(&s_rx_last_ms, memory_order_relaxed);
+    return last == 0 ? UINT32_MAX : now_ms() - last;
+}
+
+int hux_net_rssi(void) {
+    wifi_ap_record_t ap;
+    return esp_wifi_sta_get_ap_info(&ap) == ESP_OK ? ap.rssi : 0;
 }
 
 bool hux_net_send_text(const char *data, size_t len) {

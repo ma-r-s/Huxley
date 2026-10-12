@@ -97,6 +97,12 @@ bool hux_proto_parse(const char *json, size_t len, hux_msg_t *out) {
             }
             break;
         }
+        case HUX_MSG_MODEL_SPEAKING: {
+            const cJSON *value = cJSON_GetObjectItemCaseSensitive(root, "value");
+            out->as.model_speaking.known = cJSON_IsBool(value);
+            out->as.model_speaking.value = cJSON_IsTrue(value);
+            break;
+        }
         case HUX_MSG_INPUT_MODE: {
             const cJSON *mode = cJSON_GetObjectItemCaseSensitive(root, "mode");
             const char *m = cJSON_IsString(mode) ? mode->valuestring : NULL;

@@ -62,7 +62,25 @@ CONFIG_ESP_WIFI_ENABLE_WPA3_SAE=y
 # inbound audio chunks during model speech. Tuned for sustained
 # bidirectional WS audio load.
 CONFIG_LWIP_TCP_SND_BUF_DEFAULT=65535
-CONFIG_LWIP_TCP_WND_DEFAULT=65535
+# Receive side: sized to the Wi-Fi RX buffers (F-0015). Each segment
+# lwIP holds pins one Wi-Fi dynamic RX buffer until it's read. With a
+# 64 KB window and no cap on the out-of-order queue, one Wi-Fi frame
+# lost in a reply burst let 32 later segments wait in the OOSEQ queue
+# (seen over JTAG: ooseq=32 segments, 46 KB) and take every RX buffer,
+# so the retransmission had nowhere to land: the socket heard nothing
+# until keepalive killed it, and the reply stopped mid-sentence.
+# Espressif's rule: window (KB) <= dynamic RX buffers; cap OOSEQ.
+# 32 KB is still ~10x the audio rate at a 50 ms RTT.
+CONFIG_LWIP_TCP_WND_DEFAULT=32768
+CONFIG_LWIP_TCP_OOSEQ_MAX_PBUFS=8
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=40
+# The socket's receive mailbox: lwIP's rule is window / MSS + 2 (25 here).
+# At the default 6 it held ~8.6 KB, whatever the window said: while the
+# WS task was busy with a chunk the mailbox filled, lwIP refused the next
+# segments and only retried on its 250 ms TCP timer. Replies arrived at
+# 0.65x real time with a ~2 s backlog on the server (late barge-in clears)
+# and the speaker ran dry hundreds of times in a long reply (F-0015).
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=32
 CONFIG_LWIP_WND_SCALE=y
 CONFIG_LWIP_TCP_RCV_SCALE=4
 # `LWIP_TCPIP_CORE_LOCKING` lets the lwIP TCP/IP thread share its

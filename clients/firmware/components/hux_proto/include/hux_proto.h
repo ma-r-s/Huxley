@@ -70,6 +70,15 @@ typedef struct {
     bool continuous;
 } hux_msg_input_mode_t;
 
+typedef struct {
+    /** `value` was a boolean. */
+    bool known;
+    /** The server is speaking: model audio or a skill's stream is
+     * playing out (a press now interrupts it, and the server sends
+     * `audio_clear`). */
+    bool value;
+} hux_msg_model_speaking_t;
+
 /**
  * Parsed server→client message. The `kind` tag discriminates which
  * member of `as` is populated. For kinds not yet handled the tag is set
@@ -83,6 +92,7 @@ typedef struct {
         hux_msg_state_t state;
         hux_msg_set_volume_t set_volume;
         hux_msg_input_mode_t input_mode;
+        hux_msg_model_speaking_t model_speaking;
     } as;
 } hux_msg_t;
 

@@ -70,27 +70,82 @@ bool hux_audio_mic_is_running(void);
 /* -- Speaker (playback) path ---------------------------------------- */
 
 /**
- * Push a PCM16 mono chunk at 24 kHz into the speaker ring buffer.
- * Safe to call from any task; designed to be the target of
- * `hux_net_set_audio_sink`. Non-blocking — on ring overflow (consumer
- * falling behind producer) the tail is dropped and a WARN is logged.
- *
- * `pcm` points to a caller-owned buffer; the push copies into the
- * ring, so `pcm` can be freed / reused immediately after return.
+ * Push a PCM16 mono chunk at 24 kHz into the speaker ring buffer: the
+ * `hux_net_set_audio_sink` target, one writer (the WS task). When the
+ * ring (87 s) is full it waits for room, which backs the server off
+ * through TCP; it returns at once (dropping the chunk) while a barge-in
+ * hold is on, and gives up after 2 s if playback is stuck. `pcm` is
+ * copied; the caller can reuse it on return.
  */
 void hux_audio_spk_push(const uint8_t *pcm, size_t len);
 
 /**
  * Drop everything currently in the speaker ring: on `audio_clear` (from
  * the WS client task) and on a talk press (barge-in, from the app task).
- * The playback task does the reset itself; this waits for it, up to
- * ~100 ms (normally one 20 ms chunk). Don't call it from that task.
+ * The playback task marks it stale and answers within a 20 ms chunk (this
+ * waits for that, up to 100 ms), then reads it out over the next passes;
+ * audio pushed after the call plays after it. Don't call it from that task.
  */
 void hux_audio_spk_clear(void);
+
+/**
+ * Barge-in: drop inbound audio (the interrupted reply's tail, already on
+ * its way) until the server's `audio_clear`, `hux_audio_spk_unhold`, or
+ * 3 s. Call on a talk press while the server is speaking.
+ */
+void hux_audio_spk_hold(void);
+
+/** End the hold early (`why` is logged): the server stopped speaking on
+ * its own, so no `audio_clear` will come. No-op if not holding. */
+void hux_audio_spk_unhold(const char *why);
+
+/** The server's `audio_clear`: ends a hold, then clears the ring. The
+ * `audio_clear` sink (WS task, in order with the audio). */
+void hux_audio_on_audio_clear(void);
 
 /** Speaker volume 0..100 (`set_volume` from the server): boots at 50
  * (-15 dB), never below 10; out of range is ignored. */
 void hux_audio_set_volume(int level);
+
+/** The volume level applied last (0..100). */
+int hux_audio_get_volume(void);
+
+/**
+ * Queue a local tone: a sine of `hz` (0 = a silent gap) for `ms`, faded
+ * in and out. Segments play in order once the reply audio in the ring
+ * has played; a speaker clear drops them. For sounds the device makes on
+ * its own (it can't reach the server) and the bench `tone`. Returns
+ * false if rejected (out of range, queue of 8 full).
+ */
+bool hux_audio_tone(int hz, int ms);
+
+/** Bytes of reply audio waiting in the speaker ring. */
+size_t hux_audio_spk_ring_used(void);
+
+/* -- Bench tests with no sound (serial console) ---------------------- */
+
+/**
+ * Electrical loopback: play a tone of `hz` and read it back on the ES7210
+ * reference channel, which is wired to the speaker codec's output. Logs
+ * `audio.selftest` per channel and a pass/FAIL line. Refused while the
+ * mic is in use; runs on the mic task, about a second.
+ */
+void hux_audio_selftest(int hz);
+
+/**
+ * Arm clip `clip` from the `storage` partition (written by
+ * tools/clips.py): the next mic session streams it instead of Mic1, then
+ * silence. Returns the clip's length in ms, or -1 (no clips, bad index,
+ * mic busy).
+ */
+int hux_audio_inject(int clip);
+
+/** Speaker amplifier on/off (TCA9555 P8). Off: everything still plays
+ * through the codec, nothing is heard. On at boot. */
+void hux_audio_pa(bool on);
+
+/** ES8311 DAC volume register (0xBF = 0 dB, 0.5 dB steps), or -1. */
+int hux_audio_dac_volume_reg(void);
 
 #ifdef __cplusplus
 }

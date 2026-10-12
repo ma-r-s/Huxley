@@ -1,5 +1,6 @@
 #include "hux_app.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,6 +42,12 @@ static app_state_t s_state = ST_BOOT;
 static bool s_ptt_held = false;          /* a press we acted on (sent ptt_start) */
 static bool s_mic_continuous = false;    /* input_mode == skill_continuous */
 static hux_server_state_t s_server_state = HUX_SERVER_STATE_UNKNOWN;
+static bool s_model_speaking = false;      /* server's model_speaking */
+/* Another client took the server: the WS client is paused until the user
+ * presses talk (as an evicted PWA tab waits until it is shown again;
+ * reconnecting at once would evict that client, and the two would trade
+ * places forever). */
+static bool s_evicted = false;
 
 static const char *server_state_name(hux_server_state_t s) {
     switch (s) {
@@ -131,10 +138,24 @@ static uint32_t s_mic_enqueue_dropped = 0;
 static uint32_t s_tx_sent = 0;
 static uint32_t s_tx_failed = 0;
 static uint32_t s_tx_last_stats_tick = 0;
+/* Loudest mic sample this press (absolute). Near 0 = the mic heard
+ * nothing; near 32767 = clipping. Written by mic_sink, read at release. */
+static uint32_t s_mic_peak = 0;
+
+/* Who this device is, sent as `client_event: device` on every connect
+ * (the PWA sends the same event) so the server log says which firmware is
+ * talking. Set once by app_main before Wi-Fi starts. */
+static hux_app_device_info_t s_device;
 
 static void mic_sink(const int16_t *pcm, size_t samples) {
     if (s_audio_q == NULL || samples != AUDIO_FRAME_SAMPLES) {
         return;
+    }
+    for (size_t i = 0; i < samples; i++) {
+        uint32_t a = (uint32_t)(pcm[i] < 0 ? -(int32_t)pcm[i] : pcm[i]);
+        if (a > s_mic_peak) {
+            s_mic_peak = a;
+        }
     }
     audio_frame_t frame;
     memcpy(frame.pcm, pcm, samples * sizeof(int16_t));
@@ -223,9 +244,41 @@ static void send_control(const char *literal) {
     (void)hux_net_send_text(literal, strlen(literal));
 }
 
+static void send_device_info(void) {
+    char json[320];
+    int n = snprintf(json, sizeof(json),
+                     "{\"type\":\"client_event\",\"event\":\"device\",\"data\":{"
+                     "\"shell\":\"firmware\",\"board\":\"esp32s3-audio-board\","
+                     "\"version\":\"%s\",\"mac\":\"%s\",\"reset\":\"%s\","
+                     "\"boot_counter\":%u,\"rssi\":%d,\"volume\":%d}}",
+                     s_device.version ? s_device.version : "?", s_device.mac,
+                     s_device.reset ? s_device.reset : "?", (unsigned)s_device.boot_counter,
+                     hux_net_rssi(), hux_audio_get_volume());
+    if (n > 0 && (size_t)n < sizeof(json)) {
+        send_control(json);
+    }
+}
+
+/* The device can't reach the server (no Wi-Fi, no WebSocket, no hello
+ * yet), so nobody else can tell the user: a short low falling pair of
+ * tones, made here. The user can't see a light; silence would read as
+ * "it heard me" or "it's broken". */
+static void play_offline_cue(void) {
+    hux_audio_tone(440, 120);
+    hux_audio_tone(0, 60);
+    hux_audio_tone(330, 220);
+}
+
 static void enter_ptt(void) {
     if (s_state != ST_READY) {
-        ESP_LOGW(TAG, "app.ptt.ignored_press state=%s", state_name(s_state));
+        ESP_LOGW(TAG, "app.ptt.ignored_press state=%s evicted=%d cue=offline",
+                 state_name(s_state), s_evicted);
+        play_offline_cue();
+        if (s_evicted) {
+            /* The user wants the walkie back: take the server again. */
+            s_evicted = false;
+            hux_net_resume();
+        }
         return;
     }
     if (s_server_state != HUX_SERVER_STATE_CONVERSING) {
@@ -241,6 +294,7 @@ static void enter_ptt(void) {
     s_tx_sent = 0;
     s_tx_failed = 0;
     s_tx_last_stats_tick = 0;
+    s_mic_peak = 0;
 
     /* Barge-in: drain any buffered model speech immediately so the
      * user hears their own input, not the previous reply finishing
@@ -250,9 +304,15 @@ static void enter_ptt(void) {
      * this clear, pressing K2 mid-reply leaves Huxley audibly talking
      * over the user's question — exactly what we don't want.
      *
-     * Order: clear ring FIRST so the next spk_task iteration sees an
-     * empty buffer and falls through to silence; THEN announce PTT to
-     * the server; THEN arm the mic. */
+     * Order: hold + clear the ring FIRST so the next spk_task iteration
+     * sees an empty buffer and falls through to silence; THEN announce
+     * PTT to the server; THEN arm the mic. */
+    /* The reply's audio still on its way is dropped until the server's
+     * audio_clear (hux_audio). The hold goes on before the clear: a write
+     * waiting for room in a full ring must not land in the emptied one. */
+    if (s_model_speaking) {
+        hux_audio_spk_hold();
+    }
     hux_audio_spk_clear();
 
     /* Order is: announce -> arm mic. The server tolerates a frame or
@@ -276,9 +336,12 @@ static void leave_ptt(void) {
      * skill still owning the mic keeps it on. */
     s_ptt_held = false;
     mic_update("ptt_stop");
-    ESP_LOGI(TAG, "app.ptt.final_stats enq=%u enq_drop=%u tx_ok=%u tx_fail=%u",
+    /* The audio sender may still be draining the queue: tx_ok here can
+     * trail enq by the frames still in flight. */
+    int peak_dbfs = s_mic_peak == 0 ? -96 : (int)lroundf(20.0f * log10f((float)s_mic_peak / 32768.0f));
+    ESP_LOGI(TAG, "app.ptt.final_stats enq=%u enq_drop=%u tx_ok=%u tx_fail=%u peak=%u peak_dbfs=%d",
              (unsigned)s_mic_enqueued, (unsigned)s_mic_enqueue_dropped,
-             (unsigned)s_tx_sent, (unsigned)s_tx_failed);
+             (unsigned)s_tx_sent, (unsigned)s_tx_failed, (unsigned)s_mic_peak, peak_dbfs);
     send_control("{\"type\":\"ptt_stop\"}");
 }
 
@@ -306,6 +369,7 @@ static void handle_ws_message(hux_app_ws_message_t *msg) {
                 ESP_LOGW(TAG, "ws.rx.hello session_ready=false: the server cannot answer yet");
             }
             transition(ST_READY);
+            send_device_info();
             /* Kick the server into CONVERSING so PTT presses work
              * immediately. `wake_word` is named legacy-style in the
              * protocol (docs/protocol.md) — it's really a "start
@@ -319,6 +383,17 @@ static void handle_ws_message(hux_app_ws_message_t *msg) {
                 ESP_LOGI(TAG, "ws.rx.state %s -> %s", server_state_name(s_server_state),
                          server_state_name(parsed.as.state.value));
                 s_server_state = parsed.as.state.value;
+            }
+            break;
+
+        case HUX_MSG_MODEL_SPEAKING:
+            if (parsed.as.model_speaking.known && parsed.as.model_speaking.value != s_model_speaking) {
+                s_model_speaking = parsed.as.model_speaking.value;
+                ESP_LOGI(TAG, "ws.rx.model_speaking %s", s_model_speaking ? "true" : "false");
+                if (!s_model_speaking) {
+                    /* It ended before our press reached it: no audio_clear. */
+                    hux_audio_spk_unhold("model_speaking_false");
+                }
             }
             break;
 
@@ -350,7 +425,7 @@ static void handle_ws_message(hux_app_ws_message_t *msg) {
              * (hux_net). One only gets here if that probe missed it: clear
              * anyway, late rather than never. */
             ESP_LOGW(TAG, "ws.rx.audio_clear on the control plane (probe missed it)");
-            hux_audio_spk_clear();
+            hux_audio_on_audio_clear();
             break;
 
         default:
@@ -387,12 +462,28 @@ static void dispatch(hux_app_event_t *ev) {
             s_ptt_held = false;
             s_mic_continuous = false;
             s_server_state = HUX_SERVER_STATE_UNKNOWN;
+            s_model_speaking = false;
+            hux_audio_spk_unhold("ws_disconnected");
             mic_update("ws_disconnected");
             /* Preserve WIFI state — if wifi is still up, we go to
              * WAITING_WS; if wifi dropped, a wifi_down event got here
              * first and we're already in WAITING_WIFI. */
             if (s_state != ST_WAITING_WIFI) {
                 transition(ST_WAITING_WS);
+            }
+            break;
+
+        case HUX_APP_EV_NET_WS_EVICTED:
+            ESP_LOGW(TAG, "net.ws.evicted: another client has the server; reconnecting on the "
+                          "next talk press");
+            s_evicted = true;
+            hux_net_pause();
+            break;
+
+        case HUX_APP_EV_NET_WS_FINISHED:
+            if (!s_evicted) {
+                ESP_LOGW(TAG, "net.ws.finished unexpectedly: restarting the client");
+                hux_net_resume();
             }
             break;
 
@@ -454,6 +545,12 @@ void hux_app_start(void) {
      * atomically, and the mic task only dereferences it after
      * `hux_audio_mic_start()` is called. */
     hux_audio_set_mic_sink(mic_sink);
+}
+
+void hux_app_set_device_info(const hux_app_device_info_t *info) {
+    if (info != NULL) {
+        s_device = *info;
+    }
 }
 
 bool hux_app_post_event(const hux_app_event_t *event, bool from_isr) {

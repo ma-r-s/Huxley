@@ -56,14 +56,14 @@ level. Connect:
 # With idf.py (needs a real terminal):
 . ~/esp/esp-idf/export.sh
 cd firmware
-idf.py -p /dev/cu.usbmodem2101 monitor
+idf.py -p /dev/cu.usbmodem1101 monitor
 ```
 
 Or without:
 
 ```sh
-stty -f /dev/cu.usbmodem2101 115200 cs8 -cstopb -parenb raw -echo
-cat /dev/cu.usbmodem2101
+stty -f /dev/cu.usbmodem1101 115200 cs8 -cstopb -parenb raw -echo
+cat /dev/cu.usbmodem1101
 ```
 
 `idf.py monitor` is strictly better — it decodes panic backtraces to
@@ -143,7 +143,7 @@ board reboots (or while it's halted), pull the dump:
 . ~/esp/esp-idf/export.sh
 cd firmware
 python -m esp_coredump info_corefile \
-  --port /dev/cu.usbmodem2101 \
+  --port /dev/cu.usbmodem1101 \
   build/huxley-firmware.elf
 ```
 
@@ -275,6 +275,61 @@ task <name> has been detected` — bump that task's stack in its
 - Watchdog: a task held the CPU too long. Look for `Task watchdog got
 triggered. The following tasks did not reset the watchdog…` with
   the offender named.
+
+## The bench, with no hand and no sound
+
+The serial console (`components/hux_console/include/hux_console.h`)
+takes commands typed on the USB port: `talk` / `release`, `say <n>` (a
+whole turn: clip n from flash replaces the mic; `tools/clips.py`),
+`selftest` (a tone on the DAC read back electrically on the ES7210's
+echo-reference channel), `tone`, `vol`, `pa off|on` (silent bench),
+`wifi off|on`, `wifistat` (the Wi-Fi driver's buffer and RX/TX
+counters), `info` (heap, PSRAM, every task's smallest free stack, ring,
+volume and the ES8311 register, RSSI, time since the last inbound data).
+`tools/bench.py --reset` runs the whole check list and keeps the board's
+log in `/tmp/huxley-debug/bench-*.log`.
+
+Opening the serial port can reset the board (macOS toggles DTR/RTS):
+expect a boot when a monitor or `bench.py` attaches.
+
+Lines that watch the audio path while a reply plays:
+
+- `ws.rx.stats` (once a second while audio arrives): bytes, messages,
+  audio received (`audio_ms`; above 1000 per second = faster than real
+  time), the longest gap between socket reads, time spent in our handler.
+  Gaps of ~250 ms mean lwIP is retrying on its TCP timer (F-0015).
+- `spk.underrun silent_ms=N`: the ring ran dry mid-reply, an audible
+  dropout. `spk.alive` counts them and shows how long the network side
+  waited for room (`push_wait_max_ms`).
+- `spk.hold on` / `spk.hold off by=audio_clear held_ms=N`: a barge-in
+  and how long the interrupted reply's tail took to clear (~0.2-0.6 s).
+- `ws.rx.close code=N reason=...` / `ws.closed` / `ws.finished`: the
+  server closed the socket; an eviction pauses the client until the next
+  talk press (`net.ws.evicted`).
+
+## JTAG (the board's built-in USB-JTAG)
+
+```sh
+. ~/esp/esp-idf/export.sh
+openocd -c "set ESP_FLASH_SIZE 0" -f board/esp32s3-builtin.cfg &
+xtensa-esp32s3-elf-gdb -batch -x tools/jtag_snapshot.gdb build/huxley-firmware.elf
+python3 tools/jtag_lever.py 0.5      # press the case's lever (GPIO7) electrically
+```
+
+- `ESP_FLASH_SIZE 0` matters: without it OpenOCD resets the chip on the
+  first GDB attach (to lift memory protection for flash breakpoints),
+  destroying the state you attached to look at. Reads and RAM writes
+  work without flash support.
+- `jtag_snapshot.gdb` prints the WebSocket's TCP control block (window,
+  out-of-order segments queued, retransmits) and every task's
+  backtrace, then resumes. It found F-0015 (32 out-of-order segments
+  holding every Wi-Fi RX buffer) and F-0016 (no `websocket_task` left).
+- Never `call` a function from GDB on this target: an inferior call on
+  the halted chip double-faulted it on resume.
+- With a debugger attached a panic halts instead of rebooting:
+  `targets` in OpenOCD's telnet (port 4444) shows `halted`, and GDB's
+  `bt` shows where.
+- The console and JTAG share the USB cable; both work at once.
 
 ## Adding a new log line — the checklist
 

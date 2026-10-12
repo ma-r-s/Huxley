@@ -1,5 +1,6 @@
 #include "hux_audio.h"
 
+#include <math.h>
 #include <stdatomic.h>
 #include <string.h>
 
@@ -10,7 +11,9 @@
 #include "esp_codec_dev_defaults.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_partition.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/stream_buffer.h"
 #include "freertos/task.h"
 
@@ -66,32 +69,37 @@ static const char *TAG = "hux_audio";
  * the task writes silence so the DMA never underflows (no click /
  * pop from the PA when the stream pauses).
  *
- * Ring size: see SPK_RING_BYTES (512 KB, about 10.6 s of 24 kHz PCM16
+ * Ring size: see SPK_RING_BYTES (4 MB, about 87 s of 24 kHz PCM16
  * mono) for why it holds a whole reply. */
 #define SPK_SAMPLE_RATE_HZ    24000
 #define SPK_CHUNK_MS          20
 #define SPK_CHUNK_SAMPLES     (SPK_SAMPLE_RATE_HZ * SPK_CHUNK_MS / 1000) /* 480 */
 #define SPK_CHUNK_BYTES       (SPK_CHUNK_SAMPLES * sizeof(int16_t))      /* 960 */
-/* OpenAI Realtime generates the FULL response in 1-3 sec of compute
- * then streams the buffered audio to the server, which forwards it
- * to the firmware as fast as the WS will accept. A 10-second reply
- * arrives in ~3 sec wall time. spk_task plays at strict real-time
- * (48 KB/s); difference fills the ring. 512 KB = 10.6 seconds of
- * audio holds the longest realistic single-utterance reply.
- * PSRAM-backed via xStreamBufferCreateWithCaps. */
-#define SPK_RING_BYTES        (512 * 1024)
+/* The server forwards a reply as fast as the model makes it: 5-6x real
+ * time measured on the bench once the socket was fixed (F-0015), so an
+ * 80 s story arrives in ~14 s. The ring holds a whole reply (4 MB = 87 s;
+ * the longest seen was 80 s) so it never has to push back on the server:
+ * when it does (spk_push waits for room), macOS lets the server's socket
+ * buffer grow to 4 MB, the server's keepalive ping queues behind it, and
+ * after 20 s the server drops the connection. Radio and audiobooks come
+ * at real time (ffmpeg -re), so only model replies burst. PSRAM: about
+ * 3.4 MB stays free. */
+#define SPK_RING_BYTES        (4 * 1024 * 1024)
+#define SPK_DISCARD_PER_CHUNK (128 * 1024) /* clear read-out per 20 ms pass */
 #define SPK_TASK_STACK        6144
 #define SPK_TASK_PRIO         8
 /* Volume 0..100. The server's system skill sends absolute levels and
- * assumes 50 to start with; esp_codec_dev's default curve (0 = -50 dB,
- * 100 = 0 dB, linear) put the old boot level 70 at -15 dB, the loudness
- * every hardware test so far used. This curve keeps -15 dB at 50, so the
+ * assumes 50 to start with. Level 50 is the loudness every hardware test
+ * so far used (the old boot level 70: ES8311 DAC at -11.5 dB), so the
  * device boots where the server thinks it is and "sube" / "baja" go the
- * right way from there. Below SPK_VOLUME_MIN is raised to it: a blind
- * user can't be left with a device too quiet to hear. */
+ * right way from there; 100 is 0 dB, the most the DAC gives without
+ * clipping (measured by the loopback self-test: the curve below is the
+ * DAC register, 1:1). Below SPK_VOLUME_MIN is raised to it: a blind user
+ * can't be left with a device too quiet to hear. */
 #define SPK_VOLUME_DEFAULT    50
 #define SPK_VOLUME_MIN        10
 #define SPK_PA_SETTLE_MS      10  /* Waveshare factsheet recommended PA-on delay */
+static _Atomic int s_volume = SPK_VOLUME_DEFAULT; /* level applied, for reports */
 
 static i2s_chan_handle_t s_i2s_tx = NULL;
 static i2s_chan_handle_t s_i2s_rx = NULL;
@@ -121,9 +129,68 @@ static StreamBufferHandle_t s_spk_ring = NULL;
  * ring "full" of 0x55 fill, which plays as a loud DC hum; reading out is
  * what the reader always does, so it is safe next to a writer. A caller
  * bumps `s_spk_clear_req` and waits until spk_task reports it done. */
+/* Barge-in hold. A press interrupts a reply, but the reply's audio the
+ * server had already sent is still on its way (measured: 1.5 s of it,
+ * queued in the server's socket ahead of the `audio_clear`), and it
+ * would play over the user. From the press until the server's
+ * `audio_clear` (it marks where the old audio ends) inbound audio is
+ * dropped. Set by the app task, checked by the WS task in spk_push. */
+static _Atomic bool s_spk_hold = false;
+static _Atomic uint32_t s_spk_hold_since_ms = 0;
+static uint32_t s_spk_hold_dropped = 0; /* WS task only */
+#define SPK_HOLD_MAX_MS 3000  /* the clear comes in ~1.5 s; never mute longer */
+#define SPK_PUSH_POLL_MS 20    /* ring full: re-check the hold this often */
+#define SPK_PUSH_MAX_MS  2000  /* the ring drains 48 KB/s; 2 s full means stuck */
+static uint32_t s_spk_push_max_wait_ms = 0; /* WS task only; reported by the heartbeat */
+
 static _Atomic uint32_t s_spk_clear_req = 0;
 static _Atomic uint32_t s_spk_clear_done = 0;
+#define SPK_GAP_MAX_CHUNKS 50  /* 1 s: a silence shorter than this mid-reply is a dropout */
 #define SPK_CLEAR_WAIT_MS 100  /* spk_task services a request within one chunk (~20 ms) */
+
+/* Local tones: the "can't reach the server" cue (hux_app) and the bench
+ * `tone` (hux_console). spk_task synthesises them itself in place of
+ * silence, so nothing but the WS task ever writes the ring (it has one
+ * writer); reply audio in the ring plays first. A clear drops them too. */
+typedef struct {
+    uint16_t hz;      /* 0 = a silent gap */
+    uint16_t ms;
+} tone_seg_t;
+#define TONE_QUEUE_DEPTH 8
+#define TONE_AMPLITUDE   8000  /* about -12 dBFS: clear, not harsh */
+#define TONE_FADE_SAMPLES (SPK_SAMPLE_RATE_HZ / 200)  /* 5 ms in and out: no clicks */
+static QueueHandle_t s_tone_q = NULL;
+
+/* Bench tests with no air in between (serial console; hux_console.h).
+ *
+ * Self-test: ES7210 channel 0 is the echo-cancellation reference (RMNM),
+ * wired to the speaker codec's output, so a tone played on the DAC comes
+ * back on it electrically: DAC, I2S both ways and the ADC, no sound
+ * needed. Runs on the mic task (the codec's only reader); refused while
+ * the mic is in use.
+ *
+ * Inject: the next talk press streams a recorded clip from the `storage`
+ * partition instead of Mic1 (the codec is still read, for pacing), so a
+ * full turn can run against the server with nobody speaking. Clips are
+ * written by tools/clips.py. */
+static _Atomic uint32_t s_selftest_hz = 0;
+#define CLIP_MAGIC 0x4C435848u /* "HXCL" little-endian */
+typedef struct {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t count;
+} clip_header_t;
+typedef struct {
+    uint32_t offset; /* from the partition start */
+    uint32_t bytes;  /* PCM16 mono 24 kHz */
+} clip_entry_t;
+static const esp_partition_t *s_clips = NULL;
+static const uint8_t *s_clips_map = NULL; /* mapped once: reads never stall the cache */
+static esp_partition_mmap_handle_t s_clips_map_handle;
+static _Atomic bool s_inject_armed = false;
+static uint32_t s_inject_off = 0;   /* mic task only once armed */
+static uint32_t s_inject_left = 0;
+static int s_inject_clip = -1;
 
 static _Atomic(hux_audio_mic_frame_fn) s_mic_sink = NULL;
 static _Atomic bool s_mic_running = false;
@@ -135,6 +202,10 @@ static int16_t s_mono_buf[FRAME_SAMPLES];
 
 static esp_err_t i2s_bring_up(void) {
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_PORT, I2S_ROLE_MASTER);
+    /* If spk_task is ever late, the DMA sends zeros. The default replays
+     * the last buffer it sent, a 10 ms piece of the reply heard again as
+     * a stutter or a buzz. */
+    chan_cfg.auto_clear_after_cb = true;
     ESP_RETURN_ON_ERROR(i2s_new_channel(&chan_cfg, &s_i2s_tx, &s_i2s_rx),
                         TAG, "i2s.new_channel");
 
@@ -273,6 +344,11 @@ static esp_err_t es8311_bring_up(void) {
         .gpio_if = s_spk_gpio_if,
         .pa_pin = -1,
         .use_mclk = false,
+        /* No "PA headroom" compensation: left at its defaults (a 5 V PA,
+         * a 3.3 V DAC) esp_codec_dev adds 3.6 dB to every level, so 100
+         * was +3.5 dB of digital gain and a full-scale reply clipped in
+         * the DAC. Same rail = 0 dB: the volume curve is the register. */
+        .hw_gain = {.pa_voltage = 3.3f, .codec_dac_voltage = 3.3f, .pa_gain = 0.0f},
     };
     s_spk_codec_if = es8311_codec_new(&es8311_cfg);
     if (s_spk_codec_if == NULL) {
@@ -303,7 +379,7 @@ static esp_err_t es8311_bring_up(void) {
         .bits_per_sample = 32,
     };
     ESP_RETURN_ON_ERROR(esp_codec_dev_open(s_spk_dev, &fs), TAG, "es8311.open");
-    esp_codec_dev_vol_map_t points[] = {{0, -50.0f}, {50, -15.0f}, {100, 0.0f}};
+    esp_codec_dev_vol_map_t points[] = {{0, -50.0f}, {50, -11.5f}, {100, 0.0f}};
     esp_codec_dev_vol_curve_t curve = {.vol_map = points, .count = 3};
     if (esp_codec_dev_set_vol_curve(s_spk_dev, &curve) != ESP_CODEC_DEV_OK) {
         ESP_LOGW(TAG, "es8311.vol_curve_failed (default curve: 50 is quieter)");
@@ -344,36 +420,116 @@ static void spk_task(void *unused) {
      * (50 iters at 20 ms/chunk) is plenty for diagnosis without
      * flooding the console. */
     uint32_t iters = 0;
+    size_t discard_left = 0; /* stale bytes a clear left in the ring */
+    /* The tone segment playing now: its total and remaining samples. */
+    tone_seg_t tone = {0};
+    uint32_t tone_total = 0;
+    uint32_t tone_left = 0;
+    float tone_phase = 0.0f;
     uint32_t silence_chunks = 0;
     uint32_t audio_chunks = 0;
+    /* Underruns: the ring ran dry mid-reply (audio, a short silence,
+     * audio again): an audible dropout, usually the network falling
+     * behind. A silence longer than SPK_GAP_MAX_CHUNKS is the reply's end. */
+    uint32_t silent_run = 0;
+    uint32_t underruns = 0;
+    bool had_audio = false;
     uint32_t write_errs = 0;
 
     for (;;) {
-        size_t got_bytes = xStreamBufferReceive(
-            s_spk_ring, mono16, sizeof(mono16), pdMS_TO_TICKS(SPK_CHUNK_MS));
+        /* Wait for reply audio up to a chunk, unless a tone is due: then
+         * the DMA write below paces the loop, as it does for audio. */
+        bool tone_due = tone_left > 0 || uxQueueMessagesWaiting(s_tone_q) > 0;
+        size_t got_bytes = 0;
+        if (discard_left > 0) {
+            /* Stale audio from a clear: read out (into stereo32, rewritten
+             * below) up to SPK_DISCARD_PER_CHUNK per pass, silence meanwhile,
+             * so a full 4 MB ring empties in ~0.6 s without starving the DMA. */
+            size_t step = 0;
+            size_t n = 1;
+            while (discard_left > 0 && step < SPK_DISCARD_PER_CHUNK && n > 0) {
+                size_t want = discard_left < sizeof(stereo32) ? discard_left : sizeof(stereo32);
+                n = xStreamBufferReceive(s_spk_ring, stereo32, want, 0);
+                discard_left -= n;
+                step += n;
+            }
+            if (n == 0) {
+                discard_left = 0; /* nothing left to read: the ring is empty */
+            }
+            if (discard_left == 0) {
+                ESP_LOGI(TAG, "spk.discard done");
+            }
+        } else {
+            got_bytes = xStreamBufferReceive(s_spk_ring, mono16, sizeof(mono16),
+                                             tone_due ? 0 : pdMS_TO_TICKS(SPK_CHUNK_MS));
+        }
         uint32_t req = atomic_load_explicit(&s_spk_clear_req, memory_order_acquire);
         if (req != atomic_load_explicit(&s_spk_clear_done, memory_order_relaxed)) {
-            /* A clear was asked for: drop this chunk and read the rest of
-             * the ring out (into stereo32, rewritten below anyway). */
-            size_t dropped = got_bytes;
-            size_t n;
-            while ((n = xStreamBufferReceive(s_spk_ring, stereo32, sizeof(stereo32), 0)) > 0) {
-                dropped += n;
-            }
+            /* A clear was asked for: this chunk and everything in the ring
+             * now is stale. Count it and answer at once; the read-out happens
+             * over the next passes (above). What is written after this point
+             * queues behind it and plays. */
+            size_t stale = xStreamBufferBytesAvailable(s_spk_ring);
+            discard_left = stale;
             got_bytes = 0;
+            unsigned tones = (unsigned)uxQueueMessagesWaiting(s_tone_q) + (tone_left > 0);
+            xQueueReset(s_tone_q);
+            tone_left = 0;
+            had_audio = false; /* what plays next is a new reply, not a resumed one */
             atomic_store_explicit(&s_spk_clear_done, req, memory_order_release);
-            ESP_LOGI(TAG, "spk.cleared dropped_bytes=%u", (unsigned)dropped);
+            ESP_LOGI(TAG, "spk.cleared dropped_bytes=%u tones=%u", (unsigned)stale, tones);
         }
         size_t got_samples = got_bytes / sizeof(int16_t);
 
-        if (got_samples == 0) {
+        if (got_samples == 0 && tone_left == 0 && xQueueReceive(s_tone_q, &tone, 0) == pdTRUE) {
+            tone_total = (uint32_t)SPK_SAMPLE_RATE_HZ / 1000 * tone.ms;
+            tone_left = tone_total;
+            tone_phase = 0.0f;
+        }
+        if (got_samples == 0 && tone_left > 0) {
+            /* One chunk of the current segment (a sine, or a gap), faded in
+             * and out; segments shorter than a chunk end mid-chunk. */
+            float step = 2.0f * (float)M_PI * (float)tone.hz / SPK_SAMPLE_RATE_HZ;
+            for (size_t i = 0; i < SPK_CHUNK_SAMPLES; i++) {
+                int32_t v = 0;
+                if (tone_left > 0) {
+                    uint32_t pos = tone_total - tone_left;
+                    float gain = 1.0f;
+                    if (pos < TONE_FADE_SAMPLES) {
+                        gain = (float)pos / TONE_FADE_SAMPLES;
+                    } else if (tone_left < TONE_FADE_SAMPLES) {
+                        gain = (float)tone_left / TONE_FADE_SAMPLES;
+                    }
+                    if (tone.hz != 0) {
+                        v = (int32_t)(TONE_AMPLITUDE * gain * sinf(tone_phase)) * 65536;
+                    }
+                    tone_phase += step;
+                    if (tone_phase > 2.0f * (float)M_PI) {
+                        tone_phase -= 2.0f * (float)M_PI;
+                    }
+                    tone_left--;
+                }
+                stereo32[2 * i + 0] = v;
+                stereo32[2 * i + 1] = v;
+            }
+            got_samples = SPK_CHUNK_SAMPLES;
+            audio_chunks++;
+        } else if (got_samples == 0) {
             /* Ring empty — write a full chunk of silence so the DMA
              * stays fed. esp_codec_dev_write blocks on DMA; this
              * paces the loop at ~20 ms. */
             memset(stereo32, 0, sizeof(stereo32));
             got_samples = SPK_CHUNK_SAMPLES;
             silence_chunks++;
+            silent_run++;
         } else {
+            if (had_audio && silent_run > 0 && silent_run <= SPK_GAP_MAX_CHUNKS) {
+                underruns++;
+                ESP_LOGW(TAG, "spk.underrun silent_ms=%u count=%u", (unsigned)(silent_run * SPK_CHUNK_MS),
+                         (unsigned)underruns);
+            }
+            had_audio = true;
+            silent_run = 0;
             /* Mono PCM16 -> stereo PCM32. Pad the tail with silence
              * if we got a short read so the codec writes whole
              * frames. */
@@ -406,28 +562,66 @@ static void spk_task(void *unused) {
          * from the next line ("we missed N seconds, here's the new
          * audio_chunks delta"). */
         if ((++iters % 250) == 0) {
-            size_t ring_used = SPK_RING_BYTES - xStreamBufferSpacesAvailable(s_spk_ring);
-            ESP_LOGI(TAG, "spk.alive iters=%u audio=%u silence=%u errs=%u ring_used=%u",
+            size_t ring_used = xStreamBufferBytesAvailable(s_spk_ring);
+            ESP_LOGI(TAG, "spk.alive iters=%u audio=%u silence=%u underruns=%u errs=%u ring_used=%u "
+                          "push_wait_max_ms=%u",
                      (unsigned)iters, (unsigned)audio_chunks,
-                     (unsigned)silence_chunks, (unsigned)write_errs,
-                     (unsigned)ring_used);
+                     (unsigned)silence_chunks, (unsigned)underruns, (unsigned)write_errs,
+                     (unsigned)ring_used, (unsigned)s_spk_push_max_wait_ms);
+            s_spk_push_max_wait_ms = 0; /* a racy reset is fine: a stat */
         }
     }
+}
+
+static uint32_t uptime_ms(void) {
+    return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
 }
 
 void hux_audio_spk_push(const uint8_t *pcm, size_t len) {
     if (s_spk_ring == NULL || pcm == NULL || len == 0) {
         return;
     }
-    /* Non-blocking. If the ring is full the consumer is falling
-     * behind; we drop the overflow (newest) rather than stall the
-     * WS RX task. Logged at WARN so we see it if it becomes a
-     * pattern. */
-    size_t sent = xStreamBufferSend(s_spk_ring, pcm, len, 0);
-    if (sent < len) {
-        ESP_LOGW(TAG, "spk.ring.overflow dropped=%u of=%u ring_used=%u",
-                 (unsigned)(len - sent), (unsigned)len,
-                 (unsigned)(SPK_RING_BYTES - xStreamBufferSpacesAvailable(s_spk_ring)));
+    if (atomic_load_explicit(&s_spk_hold, memory_order_acquire)) {
+        uint32_t held = uptime_ms() - atomic_load_explicit(&s_spk_hold_since_ms,
+                                                           memory_order_relaxed);
+        if (held < SPK_HOLD_MAX_MS) {
+            s_spk_hold_dropped += len;
+            return; /* the interrupted reply's tail */
+        }
+        atomic_store_explicit(&s_spk_hold, false, memory_order_release);
+        ESP_LOGW(TAG, "spk.hold expired after_ms=%u dropped_bytes=%u: no audio_clear came",
+                 (unsigned)held, (unsigned)s_spk_hold_dropped);
+        s_spk_hold_dropped = 0;
+    }
+    /* Backpressure: a full ring makes the WS task wait for room instead
+     * of dropping audio. While it waits it doesn't read the socket, TCP's
+     * window closes and the server's send blocks, so the rest of a long
+     * reply (or a stream) waits on the server, paced to playback. The
+     * server sends far faster than real time (5-6x measured): dropping
+     * the overflow lost 60 s of an 80 s story. The wait re-checks the
+     * barge-in hold every SPK_PUSH_POLL_MS, so a press ends it at once;
+     * a wedged speaker task can't stall the socket past SPK_PUSH_MAX_MS. */
+    size_t off = 0;
+    uint32_t waited_ms = 0;
+    while (off < len) {
+        if (atomic_load_explicit(&s_spk_hold, memory_order_acquire)) {
+            s_spk_hold_dropped += len - off;
+            return;
+        }
+        size_t n = xStreamBufferSend(s_spk_ring, pcm + off, len - off,
+                                     pdMS_TO_TICKS(SPK_PUSH_POLL_MS));
+        off += n;
+        if (n == 0) {
+            waited_ms += SPK_PUSH_POLL_MS;
+            if (waited_ms >= SPK_PUSH_MAX_MS) {
+                ESP_LOGW(TAG, "spk.ring.stuck dropped=%u of=%u waited_ms=%u: is spk_task running?",
+                         (unsigned)(len - off), (unsigned)len, (unsigned)waited_ms);
+                return;
+            }
+        }
+    }
+    if (waited_ms > s_spk_push_max_wait_ms) {
+        s_spk_push_max_wait_ms = waited_ms;
     }
 }
 
@@ -449,6 +643,30 @@ void hux_audio_spk_clear(void) {
     }
 }
 
+void hux_audio_spk_hold(void) {
+    atomic_store_explicit(&s_spk_hold_since_ms, uptime_ms(), memory_order_relaxed);
+    atomic_store_explicit(&s_spk_hold, true, memory_order_release);
+    ESP_LOGI(TAG, "spk.hold on: dropping the interrupted reply until audio_clear");
+}
+
+void hux_audio_spk_unhold(const char *why) {
+    if (atomic_exchange_explicit(&s_spk_hold, false, memory_order_acq_rel)) {
+        ESP_LOGI(TAG, "spk.hold off by=%s held_ms=%u", why,
+                 (unsigned)(uptime_ms() -
+                            atomic_load_explicit(&s_spk_hold_since_ms, memory_order_relaxed)));
+    }
+}
+
+void hux_audio_on_audio_clear(void) {
+    /* On the WS task: the hold's dropped count is ours to read here. */
+    if (atomic_load_explicit(&s_spk_hold, memory_order_acquire)) {
+        ESP_LOGI(TAG, "spk.hold dropped_bytes=%u", (unsigned)s_spk_hold_dropped);
+        s_spk_hold_dropped = 0;
+        hux_audio_spk_unhold("audio_clear");
+    }
+    hux_audio_spk_clear();
+}
+
 void hux_audio_set_volume(int level) {
     if (s_spk_dev == NULL || level < 0 || level > 100) {
         return;
@@ -459,9 +677,114 @@ void hux_audio_set_volume(int level) {
         ESP_LOGW(TAG, "spk.volume_failed level=%d err=%s", applied, esp_err_to_name(err));
         return;
     }
+    atomic_store_explicit(&s_volume, applied, memory_order_relaxed);
     /* esp_codec_dev doesn't report the codec's own I2C write, so this says
      * what was asked of it. */
     ESP_LOGI(TAG, "spk.volume level=%d requested=%d", applied, level);
+}
+
+int hux_audio_get_volume(void) {
+    return atomic_load_explicit(&s_volume, memory_order_relaxed);
+}
+
+bool hux_audio_tone(int hz, int ms) {
+    if (s_tone_q == NULL || (hz != 0 && (hz < 20 || hz > 12000)) || ms <= 0 || ms > 10000) {
+        ESP_LOGW(TAG, "spk.tone rejected hz=%d ms=%d", hz, ms);
+        return false;
+    }
+    tone_seg_t seg = {.hz = (uint16_t)hz, .ms = (uint16_t)ms};
+    if (xQueueSend(s_tone_q, &seg, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "spk.tone queue_full hz=%d ms=%d", hz, ms);
+        return false;
+    }
+    return true;
+}
+
+size_t hux_audio_spk_ring_used(void) {
+    return s_spk_ring == NULL ? 0 : xStreamBufferBytesAvailable(s_spk_ring);
+}
+
+/* Goertzel power of `hz` in channel `ch` of one raw RMNM frame. */
+static float goertzel(const int16_t *in, int ch, float hz) {
+    float coeff = 2.0f * cosf(2.0f * (float)M_PI * hz / MIC_SAMPLE_RATE_HZ);
+    float s1 = 0.0f, s2 = 0.0f;
+    for (size_t i = 0; i < FRAME_SAMPLES; i++) {
+        float s0 = (float)in[MIC_CHANNELS_TDM * i + ch] / 32768.0f + coeff * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+    }
+    return s1 * s1 + s2 * s2 - coeff * s1 * s2;
+}
+
+/* Measure `frames` frames: per channel, the RMS and the level at `hz`
+ * (dBFS of a sine's amplitude). */
+static bool measure(int frames, float hz, float rms_db[4], float tone_db[4]) {
+    double sq[4] = {0}, pw[4] = {0};
+    for (int f = 0; f < frames; f++) {
+        if (esp_codec_dev_read(s_mic_dev, s_raw_buf, sizeof(s_raw_buf)) != ESP_OK) {
+            return false;
+        }
+        const int16_t *in = (const int16_t *)s_raw_buf;
+        for (int ch = 0; ch < MIC_CHANNELS_TDM; ch++) {
+            for (size_t i = 0; i < FRAME_SAMPLES; i++) {
+                double v = in[MIC_CHANNELS_TDM * i + ch] / 32768.0;
+                sq[ch] += v * v;
+            }
+            pw[ch] += goertzel(in, ch, hz);
+        }
+    }
+    for (int ch = 0; ch < MIC_CHANNELS_TDM; ch++) {
+        double rms = sqrt(sq[ch] / (frames * FRAME_SAMPLES));
+        double amp = 2.0 * sqrt(pw[ch] / frames) / FRAME_SAMPLES;
+        rms_db[ch] = (float)(20.0 * log10(rms + 1e-9));
+        tone_db[ch] = (float)(20.0 * log10(amp + 1e-9));
+    }
+    return true;
+}
+
+static void run_selftest(float hz) {
+    float rms0[4], tone0[4], rms1[4], tone1[4];
+    /* Quiet first, then the tone; skip its first 200 ms (start-up and DMA
+     * latency) and measure 300 ms of it. */
+    bool ok = measure(10, hz, rms0, tone0);
+    hux_audio_tone((int)hz, 700);
+    if (ok) {
+        float skip_r[4], skip_t[4];
+        ok = measure(10, hz, skip_r, skip_t) && measure(15, hz, rms1, tone1);
+    }
+    if (!ok) {
+        ESP_LOGW(TAG, "audio.selftest read_failed");
+        return;
+    }
+    static const char *const NAMES[] = {"ref", "mic1", "noise", "mic2"};
+    for (int ch = 0; ch < MIC_CHANNELS_TDM; ch++) {
+        ESP_LOGI(TAG, "audio.selftest ch=%d(%s) quiet_rms=%.1f quiet_tone=%.1f tone_rms=%.1f "
+                      "tone=%.1f dBFS rise=%.1f dB",
+                 ch, NAMES[ch], rms0[ch], tone0[ch], rms1[ch], tone1[ch], tone1[ch] - tone0[ch]);
+    }
+    /* Pass: the tone stands well clear on the reference channel, and the
+     * mic channels are alive (not a stuck-at-zero ADC). */
+    float rise = tone1[0] - tone0[0];
+    bool mic_alive = rms0[1] > -90.0f && rms0[3] > -90.0f;
+    ESP_LOGI(TAG, "audio.selftest result=%s hz=%.0f ref_rise=%.1f dB ref_level=%.1f dBFS "
+                  "volume=%d mic_alive=%d",
+             rise > 20.0f && mic_alive ? "pass" : "FAIL", hz, rise, tone1[0],
+             atomic_load_explicit(&s_volume, memory_order_relaxed), mic_alive);
+}
+
+static void inject_frame(void) {
+    if (s_inject_left == 0) {
+        memset(s_mono_buf, 0, sizeof(s_mono_buf));
+        return;
+    }
+    uint32_t n = s_inject_left < sizeof(s_mono_buf) ? s_inject_left : sizeof(s_mono_buf);
+    memcpy(s_mono_buf, s_clips_map + s_inject_off, n);
+    memset((uint8_t *)s_mono_buf + n, 0, sizeof(s_mono_buf) - n);
+    s_inject_off += n;
+    s_inject_left -= n;
+    if (s_inject_left == 0) {
+        ESP_LOGI(TAG, "mic.inject done clip=%d", s_inject_clip);
+    }
 }
 
 static void mic_task(void *unused) {
@@ -469,8 +792,18 @@ static void mic_task(void *unused) {
     ESP_LOGI(TAG, "mic_task started sr=%d frame_ms=%d samples=%d",
              MIC_SAMPLE_RATE_HZ, FRAME_MS, FRAME_SAMPLES);
 
+    bool injecting = false;
     for (;;) {
+        uint32_t st_hz = atomic_exchange_explicit(&s_selftest_hz, 0, memory_order_acq_rel);
+        if (st_hz != 0) {
+            if (atomic_load_explicit(&s_mic_running, memory_order_acquire)) {
+                ESP_LOGW(TAG, "audio.selftest refused: the mic is in use");
+            } else {
+                run_selftest((float)st_hz);
+            }
+        }
         if (!atomic_load_explicit(&s_mic_running, memory_order_acquire)) {
+            injecting = false;
             /* Idle — park for a frame period, not forever, so
              * start()/stop() transitions are responsive. */
             vTaskDelay(pdMS_TO_TICKS(FRAME_MS));
@@ -484,10 +817,20 @@ static void mic_task(void *unused) {
             continue;
         }
 
-        /* RMNM: 4 × int16 per time instant. We want Mic1 at index 1. */
-        const int16_t *in = (const int16_t *)s_raw_buf;
-        for (size_t i = 0; i < FRAME_SAMPLES; i++) {
-            s_mono_buf[i] = in[MIC_CHANNELS_TDM * i + 1];
+        /* A clip armed before this press replaces the mic for the press. */
+        if (!injecting && atomic_exchange_explicit(&s_inject_armed, false, memory_order_acq_rel)) {
+            injecting = true;
+            ESP_LOGI(TAG, "mic.inject start clip=%d bytes=%u", s_inject_clip,
+                     (unsigned)s_inject_left);
+        }
+        if (injecting) {
+            inject_frame();
+        } else {
+            /* RMNM: 4 x int16 per time instant. We want Mic1 at index 1. */
+            const int16_t *in = (const int16_t *)s_raw_buf;
+            for (size_t i = 0; i < FRAME_SAMPLES; i++) {
+                s_mono_buf[i] = in[MIC_CHANNELS_TDM * i + 1];
+            }
         }
 
         hux_audio_mic_frame_fn sink =
@@ -529,6 +872,8 @@ void hux_audio_init(void) {
         s_spk_ring = xStreamBufferCreateWithCaps(SPK_RING_BYTES, 1,
                                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         configASSERT(s_spk_ring != NULL);
+        s_tone_q = xQueueCreate(TONE_QUEUE_DEPTH, sizeof(tone_seg_t));
+        configASSERT(s_tone_q != NULL);
 
         /* PA on. Per the Waveshare factsheet: assert before the
          * first I2S frame is written, allow 10 ms settle, then the
@@ -549,6 +894,69 @@ void hux_audio_init(void) {
 
     ESP_LOGI(TAG, "audio.init sr=%d mic=ES7210(RMNM:ch1) spk=ES8311 vol=%d",
              MIC_SAMPLE_RATE_HZ, SPK_VOLUME_DEFAULT);
+}
+
+void hux_audio_selftest(int hz) {
+    if (hz < 100 || hz > 8000) {
+        ESP_LOGW(TAG, "audio.selftest rejected hz=%d", hz);
+        return;
+    }
+    atomic_store_explicit(&s_selftest_hz, (uint32_t)hz, memory_order_release);
+}
+
+int hux_audio_inject(int clip) {
+    if (s_clips == NULL) {
+        s_clips = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY,
+                                           "storage");
+    }
+    if (s_clips != NULL && s_clips_map == NULL &&
+        esp_partition_mmap(s_clips, 0, s_clips->size, ESP_PARTITION_MMAP_DATA,
+                           (const void **)&s_clips_map, &s_clips_map_handle) != ESP_OK) {
+        s_clips_map = NULL;
+    }
+    clip_header_t h;
+    clip_entry_t e;
+    if (s_clips_map == NULL) {
+        ESP_LOGW(TAG, "mic.inject no storage partition");
+        return -1;
+    }
+    memcpy(&h, s_clips_map, sizeof(h));
+    if (h.magic != CLIP_MAGIC) {
+        ESP_LOGW(TAG, "mic.inject no clips in the storage partition (tools/clips.py)");
+        return -1;
+    }
+    if (clip >= 0 && clip < h.count) {
+        memcpy(&e, s_clips_map + sizeof(h) + (size_t)clip * sizeof(e), sizeof(e));
+    }
+    if (clip < 0 || clip >= h.count || e.offset + e.bytes > s_clips->size) {
+        ESP_LOGW(TAG, "mic.inject bad clip=%d count=%u", clip, (unsigned)h.count);
+        return -1;
+    }
+    if (hux_audio_mic_is_running()) {
+        ESP_LOGW(TAG, "mic.inject refused: the mic is in use");
+        return -1;
+    }
+    s_inject_clip = clip;
+    s_inject_off = e.offset;
+    s_inject_left = e.bytes;
+    atomic_store_explicit(&s_inject_armed, true, memory_order_release);
+    int ms = (int)(e.bytes / (sizeof(int16_t) * MIC_SAMPLE_RATE_HZ / 1000));
+    ESP_LOGI(TAG, "mic.inject armed clip=%d ms=%d", clip, ms);
+    return ms;
+}
+
+void hux_audio_pa(bool on) {
+    bool ok = hux_board_tca_write(HUX_TCA_AUDIO_PA_EN, on);
+    ESP_LOGI(TAG, "spk.pa %s ok=%d", on ? "on" : "off", ok);
+}
+
+int hux_audio_dac_volume_reg(void) {
+    int v = 0;
+    if (s_spk_ctrl_if == NULL ||
+        s_spk_ctrl_if->read_reg(s_spk_ctrl_if, 0x32 /* ES8311 DAC volume */, 1, &v, 1) != 0) {
+        return -1;
+    }
+    return v & 0xFF;
 }
 
 void hux_audio_set_mic_sink(hux_audio_mic_frame_fn sink) {

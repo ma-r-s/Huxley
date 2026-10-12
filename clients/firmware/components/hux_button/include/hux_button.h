@@ -17,6 +17,8 @@
  */
 #pragma once
 
+#include <stdbool.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -27,6 +29,13 @@ extern "C" {
  * TCA9555 and GPIO7 directly, every 10 ms.
  */
 void hux_button_start(void);
+
+/**
+ * Hold (`true`) or let go of talk from software: the serial console's
+ * `talk` / `release`, for bench tests without a hand on the lever. ORed
+ * with the lever and K2 before the debounce, so it is the same button.
+ */
+void hux_button_set_serial_talk(bool held);
 
 #ifdef __cplusplus
 }

@@ -11,6 +11,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "hux_log.h"
 
@@ -27,6 +28,21 @@ typedef struct {
  * Call exactly once at boot, after `hux_app_start`.
  */
 void hux_net_start(const hux_net_config_t *cfg);
+
+/** Signal strength of the current AP in dBm, 0 when not associated. */
+int hux_net_rssi(void);
+
+/**
+ * Stop the WebSocket client (no reconnects) / start it again. For an
+ * eviction: another client took the server, and the walkie waits for its
+ * talk button before taking it back. Call from the app task, never from
+ * the WebSocket task. `resume` also restarts a client whose task ended.
+ */
+void hux_net_pause(void);
+void hux_net_resume(void);
+
+/** Milliseconds since the last inbound WebSocket data, UINT32_MAX if none. */
+uint32_t hux_net_rx_age_ms(void);
 
 /**
  * Send a text frame over the WebSocket. Returns true on success, false
