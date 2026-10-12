@@ -99,7 +99,10 @@ _SESSION_NAME = "huxley_userbot"
 # the user has to manually reload past. This retry closes the loop
 # — the previous teardown completes within hundreds of ms, so a
 # single retry-with-backoff clears it on the next attempt for the
-# vast majority of cases.
+# vast majority of cases. Each retry builds a fresh client pair
+# (see `TelegramTransport.connect`); with pyrogram's 1 s SQLite
+# busy timeout per attempt the whole budget is about 6.5 s (measured
+# 2026-10-12 against the real libraries with the session held locked).
 _DB_LOCK_BACKOFFS_S: tuple[float, ...] = (0.2, 0.5, 1.0)
 _DB_LOCK_NEEDLE = "database is locked"
 
@@ -231,16 +234,30 @@ class TelegramTransport:
     async def connect(self) -> None:
         """Start pyrogram + PyTgCalls. Idempotent.
 
-        T1.17 — wraps `call_py.start()` with a small retry loop on
+        T1.17: wraps the start in a small retry loop on
         `OperationalError: database is locked`. The previous
         Application's pyrogram client may still be tearing down its
         session SQLite when the new one starts; a few hundred ms of
         backoff is enough for the lock to clear in practice. Other
         OperationalError variants raise immediately so genuinely
         broken sessions still fail loudly.
+
+        Each attempt builds a fresh client pair (`_build_clients`).
+        PyTgCalls marks itself running before pyrogram opens the
+        session, so a PyTgCalls whose start failed can never start
+        again: reusing it turned every retry into
+        `PyTgCallsAlreadyRunning` (2026-10-12 restart incident).
         """
         if self._call_py is not None:
             return
+        app, call_py = await self._start_with_db_lock_retry(self._build_clients)
+        self._app = app
+        self._call_py = call_py
+        await logger.ainfo("telegram.transport.connected")
+
+    def _build_clients(self) -> tuple[object, object]:
+        """Construct one unstarted (pyrogram Client, PyTgCalls) pair with
+        every update handler wired. Called once per connect attempt."""
         from pyrogram import Client  # type: ignore[attr-defined]
         from pytgcalls import PyTgCalls
 
@@ -253,24 +270,26 @@ class TelegramTransport:
         )
         call_py = PyTgCalls(app)
         self._wire_handlers(call_py, app)
-        await self._start_with_db_lock_retry(call_py)
-        self._app = app
-        self._call_py = call_py
-        await logger.ainfo("telegram.transport.connected")
+        return app, call_py
 
-    async def _start_with_db_lock_retry(self, call_py: object) -> None:
-        """Call `call_py.start()` with retry-on-database-locked.
+    async def _start_with_db_lock_retry(
+        self, build: Callable[[], tuple[object, object]]
+    ) -> tuple[object, object]:
+        """Build a client pair with `build()` and start it, retrying with
+        a NEW pair on database-locked. Returns the pair that started.
 
         Retries only when the underlying `sqlite3.OperationalError`
         carries the "database is locked" message. Any other
         OperationalError (or any non-OperationalError exception) is
         re-raised immediately so the caller's normal failure path
-        runs unchanged.
+        runs unchanged. Every pair whose start raised is discarded
+        (`_discard_failed_clients`) before the next attempt or the
+        re-raise, so a failed attempt never keeps the session file open.
 
         Backoff schedule lives at module level (`_DB_LOCK_BACKOFFS_S`).
         Final exhaustion re-raises the last captured exception so the
-        runtime's session-readiness path (T1.16) shows a real error
-        instead of swallowing it.
+        runtime's skill-failure path shows a real error instead of
+        swallowing it.
         """
         from sqlite3 import OperationalError
 
@@ -287,14 +306,16 @@ class TelegramTransport:
                     last_error=str(last_exc),
                 )
                 await asyncio.sleep(backoff_s)
+            app, call_py = build()
             try:
                 await call_py.start()  # type: ignore[attr-defined]
-            except OperationalError as exc:
-                if _DB_LOCK_NEEDLE not in str(exc):
+            except Exception as exc:
+                await self._discard_failed_clients(app, call_py, attempt=attempt)
+                if not isinstance(exc, OperationalError) or _DB_LOCK_NEEDLE not in str(exc):
                     raise
                 last_exc = exc
                 continue
-            return
+            return app, call_py
         await logger.aerror(
             "telegram.session_db_lock.exhausted",
             attempts=len(_DB_LOCK_BACKOFFS_S) + 1,
@@ -304,6 +325,36 @@ class TelegramTransport:
         # loop after at least one OperationalError was caught).
         assert last_exc is not None
         raise last_exc
+
+    async def _discard_failed_clients(self, app: object, call_py: object, *, attempt: int) -> None:
+        """Release what a failed start left open, then drop the pair.
+
+        pyrogram's `Client.start()` disconnects itself when it fails
+        after connecting, but a failure inside `load_session` (the
+        database-locked case) leaves the session SQLite connection open
+        with `is_connected` False. Close whichever of the two is open so
+        the next attempt, or the old process still shutting down, is not
+        fighting this one's handle. PyTgCalls' own pool is shut down too.
+        Never raises: a cleanup error must not mask the start error.
+        """
+        try:
+            if getattr(app, "is_connected", False):
+                await app.disconnect()  # type: ignore[attr-defined]
+            else:
+                storage = getattr(app, "storage", None)
+                if getattr(storage, "conn", None) is not None:
+                    await storage.close()  # type: ignore[union-attr]
+            executor = getattr(call_py, "executor", None)
+            if executor is not None:
+                executor.shutdown(wait=False)
+        except Exception as exc:
+            await logger.awarning(
+                "telegram.transport.discard_failed",
+                attempt=attempt,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return
+        await logger.ainfo("telegram.transport.discarded_failed_client", attempt=attempt)
 
     def _wire_handlers(self, call_py: object, app: object) -> None:
         """Attach all update handlers: peer audio + ring/discard + messages.

@@ -157,17 +157,105 @@ class TestTransportConstruction:
         assert t._sent_count == 0  # type: ignore[attr-defined]
 
 
-class TestT117DbLockRetry:
-    """T1.17 — `_start_with_db_lock_retry` recovers from transient
-    `OperationalError: database is locked` raised by pyrogram's
-    Storage.update() when a previous Application's session SQLite
-    is still tearing down on top of a rapid-reconnect.
+class _FakeStorage:
+    """Stand-in for pyrogram's SQLiteStorage: `conn` is set once the
+    session file was opened, `close()` closes it."""
 
-    The wider `connect()` integration is exercised by the live
-    smoke (Mario's voice flow); these tests pin the retry helper
-    in isolation against a fake `call_py` whose `.start()` is
-    scriptable. Backoffs are skipped via `monkeypatch.setattr` on
-    `asyncio.sleep` so the test doesn't actually wait.
+    def __init__(self, *, opened: bool) -> None:
+        self.conn: object | None = object() if opened else None
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _FakeExecutor:
+    def __init__(self) -> None:
+        self.shut_down = False
+
+    def shutdown(self, *, wait: bool) -> None:
+        self.shut_down = True
+
+
+class _FakeApp:
+    """Stand-in for a pyrogram Client. A database-locked start fails
+    inside `load_session`, after the session file was opened but before
+    `is_connected` flips, which is what `opened=True, connected=False`
+    models."""
+
+    def __init__(self, *, opened: bool = True, connected: bool = False) -> None:
+        self.storage = _FakeStorage(opened=opened)
+        self.is_connected = connected
+        self.disconnected = False
+
+    async def disconnect(self) -> None:
+        self.disconnected = True
+        self.is_connected = False
+
+
+class _FakeCallPy:
+    """Stand-in for PyTgCalls with the property behind the 2026-10-12
+    incident: `start()` marks the instance running BEFORE the
+    underlying client starts, so a second `start()` on the same
+    instance raises even though the first one failed."""
+
+    def __init__(self, error: BaseException | None) -> None:
+        self._error = error
+        self._is_running = False
+        self.executor = _FakeExecutor()
+        self.start_calls = 0
+
+    async def start(self) -> None:
+        self.start_calls += 1
+        if self._is_running:
+            msg = "PyTgCalls client is already running"
+            raise RuntimeError(msg)
+        self._is_running = True
+        if self._error is not None:
+            raise self._error
+
+
+class _Builder:
+    """Scripted `_build_clients` replacement: attempt N gets a fresh
+    pair whose start raises `errors[N]` (None = succeeds)."""
+
+    def __init__(
+        self,
+        errors: list[BaseException | None],
+        *,
+        connected: bool = False,
+    ) -> None:
+        self._errors = list(errors)
+        self._connected = connected
+        self.pairs: list[tuple[_FakeApp, _FakeCallPy]] = []
+
+    def __call__(self) -> tuple[object, object]:
+        error = self._errors[len(self.pairs)]
+        pair = (_FakeApp(connected=self._connected), _FakeCallPy(error))
+        self.pairs.append(pair)
+        return pair
+
+
+def _locked() -> BaseException:
+    from sqlite3 import OperationalError
+
+    return OperationalError("database is locked")
+
+
+class TestT117DbLockRetry:
+    """T1.17: `_start_with_db_lock_retry` recovers from transient
+    `OperationalError: database is locked` raised by pyrogram's
+    session storage when another client (a previous Application, or a
+    previous server process still shutting down) holds the session
+    SQLite.
+
+    Every attempt must use a FRESH client pair: the real PyTgCalls
+    refuses a second `start()` after a failed one, so the old
+    reuse-the-same-object retry raised `PyTgCallsAlreadyRunning` on
+    every retry and took the persona down (2026-10-12 incident). The
+    fakes above reproduce that property, so these tests fail against
+    the old implementation. Backoffs are skipped via `monkeypatch` on
+    `asyncio.sleep` so the tests don't actually wait.
     """
 
     @pytest.fixture
@@ -196,32 +284,28 @@ class TestT117DbLockRetry:
     async def test_start_succeeds_first_try_no_retry(
         self, transport: TelegramTransport, no_sleep: list[float]
     ) -> None:
-        starts: list[None] = []
-
-        class _FakeCallPy:
-            async def start(self) -> None:
-                starts.append(None)
-
-        await transport._start_with_db_lock_retry(_FakeCallPy())  # type: ignore[arg-type]
-        assert len(starts) == 1
+        build = _Builder([None])
+        app, call_py = await transport._start_with_db_lock_retry(build)
+        assert (app, call_py) == build.pairs[0]
         assert no_sleep == []  # no backoff fired
+        assert not build.pairs[0][0].storage.closed
 
     @pytest.mark.asyncio
-    async def test_start_recovers_after_one_lock_then_succeeds(
+    async def test_retry_uses_a_fresh_client_pair(
         self, transport: TelegramTransport, no_sleep: list[float]
     ) -> None:
-        from sqlite3 import OperationalError
-
-        attempts = {"count": 0}
-
-        class _FakeCallPy:
-            async def start(self) -> None:
-                attempts["count"] += 1
-                if attempts["count"] == 1:
-                    raise OperationalError("database is locked")
-
-        await transport._start_with_db_lock_retry(_FakeCallPy())  # type: ignore[arg-type]
-        assert attempts["count"] == 2
+        """The incident: lock on attempt 1, success on attempt 2 must
+        come from a NEW pair (the old pair would raise
+        already-running), and the failed pair's session handle is
+        closed."""
+        build = _Builder([_locked(), None])
+        app, call_py = await transport._start_with_db_lock_retry(build)
+        assert len(build.pairs) == 2
+        assert (app, call_py) == build.pairs[1]
+        failed_app, failed_call_py = build.pairs[0]
+        assert failed_call_py.start_calls == 1  # never restarted
+        assert failed_app.storage.closed
+        assert failed_call_py.executor.shut_down
         assert no_sleep == [0.2]  # only the first backoff fired
 
     @pytest.mark.asyncio
@@ -229,37 +313,30 @@ class TestT117DbLockRetry:
         self, transport: TelegramTransport, no_sleep: list[float]
     ) -> None:
         """Three lock errors then success on the fourth (final)
-        attempt — verifies the full backoff schedule before
-        exhaustion would have fired."""
-        from sqlite3 import OperationalError
-
-        attempts = {"count": 0}
-
-        class _FakeCallPy:
-            async def start(self) -> None:
-                attempts["count"] += 1
-                if attempts["count"] <= 3:
-                    raise OperationalError("database is locked")
-
-        await transport._start_with_db_lock_retry(_FakeCallPy())  # type: ignore[arg-type]
-        assert attempts["count"] == 4
+        attempt: verifies the full backoff schedule before exhaustion
+        would have fired, with one pair per attempt."""
+        build = _Builder([_locked(), _locked(), _locked(), None])
+        app, _ = await transport._start_with_db_lock_retry(build)
+        assert len(build.pairs) == 4
+        assert app is build.pairs[3][0]
+        assert all(pair[1].start_calls == 1 for pair in build.pairs)
+        assert all(pair[0].storage.closed for pair in build.pairs[:3])
         assert no_sleep == [0.2, 0.5, 1.0]
 
     @pytest.mark.asyncio
     async def test_start_exhausts_and_reraises_last_lock_error(
         self, transport: TelegramTransport, no_sleep: list[float]
     ) -> None:
-        """Permanent lock — every attempt raises. Helper exhausts
-        its retries and re-raises the most recent exception so the
-        caller's normal failure path runs."""
+        """Permanent lock: every attempt raises. Helper exhausts its
+        retries, discards every pair, and re-raises the most recent
+        exception so the caller's normal failure path runs."""
         from sqlite3 import OperationalError
 
-        class _FakeCallPy:
-            async def start(self) -> None:
-                raise OperationalError("database is locked")
-
+        build = _Builder([_locked() for _ in range(4)])
         with pytest.raises(OperationalError, match="database is locked"):
-            await transport._start_with_db_lock_retry(_FakeCallPy())  # type: ignore[arg-type]
+            await transport._start_with_db_lock_retry(build)
+        assert len(build.pairs) == 4
+        assert all(pair[0].storage.closed for pair in build.pairs)
         assert no_sleep == [0.2, 0.5, 1.0]  # all three backoffs fired
 
     @pytest.mark.asyncio
@@ -267,37 +344,84 @@ class TestT117DbLockRetry:
         self, transport: TelegramTransport, no_sleep: list[float]
     ) -> None:
         """An OperationalError for a different reason (e.g. missing
-        table, malformed schema) is NOT a transient lock — re-raise
-        immediately without burning the retry budget."""
+        table, malformed schema) is NOT a transient lock: re-raise
+        immediately without burning the retry budget, after closing
+        the failed pair."""
         from sqlite3 import OperationalError
 
-        attempts = {"count": 0}
-
-        class _FakeCallPy:
-            async def start(self) -> None:
-                attempts["count"] += 1
-                raise OperationalError("no such table: version")
-
+        build = _Builder([OperationalError("no such table: version")])
         with pytest.raises(OperationalError, match="no such table"):
-            await transport._start_with_db_lock_retry(_FakeCallPy())  # type: ignore[arg-type]
-        assert attempts["count"] == 1  # zero retries
+            await transport._start_with_db_lock_retry(build)
+        assert len(build.pairs) == 1  # zero retries
+        assert build.pairs[0][0].storage.closed
         assert no_sleep == []
 
     @pytest.mark.asyncio
     async def test_unrelated_exception_raises_immediately(
         self, transport: TelegramTransport, no_sleep: list[float]
     ) -> None:
-        """Anything that isn't an OperationalError bypasses the
-        retry path entirely."""
-        attempts = {"count": 0}
-
-        class _FakeCallPy:
-            async def start(self) -> None:
-                attempts["count"] += 1
-                msg = "auth failed"
-                raise RuntimeError(msg)
-
+        """Anything that isn't an OperationalError bypasses the retry
+        path entirely; a client that got as far as connecting is
+        disconnected rather than having its storage closed under it."""
+        build = _Builder([RuntimeError("auth failed")], connected=True)
         with pytest.raises(RuntimeError, match="auth failed"):
-            await transport._start_with_db_lock_retry(_FakeCallPy())  # type: ignore[arg-type]
-        assert attempts["count"] == 1
+            await transport._start_with_db_lock_retry(build)
+        assert len(build.pairs) == 1
+        failed_app = build.pairs[0][0]
+        assert failed_app.disconnected
+        assert not failed_app.storage.closed
         assert no_sleep == []
+
+    @pytest.mark.asyncio
+    async def test_cleanup_error_does_not_mask_start_error(
+        self, transport: TelegramTransport, no_sleep: list[float]
+    ) -> None:
+        """A raising cleanup is logged and swallowed; the retry still
+        goes ahead with a fresh pair."""
+        build = _Builder([_locked(), None])
+
+        def _build_with_broken_close() -> tuple[object, object]:
+            app, call_py = build()
+            if len(build.pairs) == 1:
+
+                async def _boom() -> None:
+                    msg = "close failed"
+                    raise OSError(msg)
+
+                app.storage.close = _boom  # type: ignore[attr-defined]
+            return app, call_py
+
+        app, _ = await transport._start_with_db_lock_retry(_build_with_broken_close)
+        assert app is build.pairs[1][0]
+
+    @pytest.mark.asyncio
+    async def test_connect_keeps_the_pair_that_started(
+        self,
+        transport: TelegramTransport,
+        no_sleep: list[float],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """End to end through `connect()`: after a locked first attempt
+        the transport holds the second pair."""
+        build = _Builder([_locked(), None])
+        monkeypatch.setattr(transport, "_build_clients", build)
+        await transport.connect()
+        assert transport._app is build.pairs[1][0]  # type: ignore[attr-defined]
+        assert transport._call_py is build.pairs[1][1]  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_failed_connect_leaves_transport_unconnected(
+        self,
+        transport: TelegramTransport,
+        no_sleep: list[float],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A connect that exhausts its retries leaves no half-started
+        client behind, so a later `connect()` starts from scratch."""
+        from sqlite3 import OperationalError
+
+        monkeypatch.setattr(transport, "_build_clients", _Builder([_locked() for _ in range(4)]))
+        with pytest.raises(OperationalError):
+            await transport.connect()
+        assert transport._app is None  # type: ignore[attr-defined]
+        assert transport._call_py is None  # type: ignore[attr-defined]
