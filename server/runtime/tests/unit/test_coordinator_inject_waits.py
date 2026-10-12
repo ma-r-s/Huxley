@@ -1088,12 +1088,12 @@ class TestHeardAfterDrop:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """The PWA sends no `device.hello`: repeated after the wait."""
-        monkeypatch.setattr(TurnCoordinator, "_HELLO_WAIT_S", 0.05)
+        monkeypatch.setattr(TurnCoordinator, "_HELLO_WAIT_S", 0.3)
         _task, _dropped_at = await self._cut_after_send(coordinator, server)
 
         with capture_logs() as logs:
             await server.connect(coordinator)
-            await asyncio.sleep(0.02)
+            await asyncio.sleep(0.05)
             assert len(_said(provider)) == 1
             await _until(lambda: len(_said(provider)) == 2)
 
@@ -1144,3 +1144,143 @@ class TestHeardAfterDrop:
 
         await server.connect(coordinator)
         assert len(_said(provider)) == 2
+
+    async def test_a_drop_noticed_after_playback_ended_proves_nothing(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider, server: _Server
+    ) -> None:
+        """Critic: the link died mid-send and the walkie noticed seconds later,
+        once our playhead said the turn had played. Playing nothing after
+        that looks exactly like having played it all: repeated."""
+        await server.connect(coordinator)
+        await coordinator.inject_turn("Aviso.")
+        await _speak(coordinator, nbytes=4_800)  # 100 ms: played by the drop
+        await asyncio.sleep(0.15)
+        dropped_at = time.monotonic()
+        await server.leave(coordinator)
+        await server.connect(coordinator)
+
+        with capture_logs() as logs:
+            await coordinator.on_device_hello(self._hello(dropped_at, played=0, left=0))
+
+        await _until(lambda: len(_said(provider)) == 2)
+        verdict = next(e for e in logs if e["event"] == "coord.inject_heard_after_drop")
+        assert verdict["reason"] == "drop_noticed_late"
+
+    async def test_the_no_pong_path_the_smoke_took_is_settled_by_the_hello(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider, server: _Server
+    ) -> None:
+        """The walkie smoke: the server never saw the drop, the ping went
+        unanswered (no_pong), the walkie came back later with a new
+        connection and said it had played the rest."""
+        await server.connect(coordinator)
+        server.pong = False
+        task = asyncio.create_task(coordinator.inject_turn_and_wait("Es hora de la pastilla."))
+        await _until(lambda: coordinator.current_turn is not None)
+        await _speak(coordinator, nbytes=48_000)  # 1 s to play
+        dropped_at = time.monotonic()  # the walkie lost Wi-Fi right then
+        await _until(lambda: _waiting(coordinator) == ["Es hora de la pastilla."], 3.0)
+        assert coordinator._injected_queue[0].heard_check
+
+        server.pong = True
+        await server.leave(coordinator)  # the abort
+        await server.connect(coordinator)  # back, a new connection
+        await coordinator.on_device_hello(self._hello(dropped_at, played=1_000, left=0))
+
+        assert await asyncio.wait_for(task, timeout=1.0) is InjectOutcome.DELIVERED
+        assert len(_said(provider)) == 1
+
+    @pytest.mark.parametrize(("left", "said"), [(0, 1), (600, 2)])
+    async def test_a_hello_racing_another_drain_settles_once(
+        self,
+        coordinator: TurnCoordinator,
+        provider: StubVoiceProvider,
+        server: _Server,
+        left: int,
+        said: int,
+    ) -> None:
+        """Critic: the verdict awaited a log line while the drain held a queue
+        index; a concurrent drain raised IndexError or said it twice."""
+        _task, dropped_at = await self._cut_after_send(coordinator, server)
+        await server.connect(coordinator)
+        hello = self._hello(dropped_at, played=1_000, left=left)
+
+        await asyncio.gather(
+            coordinator.on_device_hello(hello),
+            coordinator._drain_waiting("inject"),
+            coordinator._drain_waiting("session_connected"),
+        )
+
+        await asyncio.sleep(0.02)
+        assert len(_said(provider)) == said
+
+    async def test_the_book_stays_parked_while_the_hello_is_awaited(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+        server: _Server,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Critic: the no-client hold lifted while the check waited, so the
+        book (on Spotify, a real play) came back before the repeat."""
+        monkeypatch.setattr(TurnCoordinator, "_CLIENT_ABSENT_GRACE_S", 0.01)
+        runs = 0
+
+        async def _book() -> AsyncIterator[bytes]:
+            while True:
+                yield b"\x00" * 480
+                await asyncio.sleep(0.005)
+
+        def factory() -> AsyncIterator[bytes]:
+            nonlocal runs
+            runs += 1
+            return _book()
+
+        await server.connect(coordinator)
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output="{}",
+            side_effect=AudioStream(factory=factory, patience=timedelta(minutes=30)),
+        )
+        await _press(coordinator)
+        await coordinator.on_tool_call("c1", "play", {})
+        await coordinator.on_response_done()
+        await _until(lambda: runs == 1)
+        await coordinator.inject_turn("Aviso.")  # parks the book
+        await _speak(coordinator, nbytes=48_000)
+        dropped_at = time.monotonic()
+        await server.leave(coordinator)
+        await _until(lambda: coordinator._client_absent)
+        await _until(lambda: coordinator.current_media_task is None)  # held
+        before = runs
+
+        await server.connect(coordinator)  # the check waits for the hello
+        await asyncio.sleep(0.05)
+        assert runs == before, "the book waits for the check"
+
+        await coordinator.on_device_hello(self._hello(dropped_at, played=500, left=500))
+        await _until(lambda: len(_said(provider)) == 2)
+        await asyncio.sleep(0.05)
+        assert runs == before, "and for the repeat"
+        await _speak(coordinator)
+        await _until(lambda: runs == before + 1)
+
+    async def test_a_tool_only_repeat_does_not_inherit_the_first_attempts_audio(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider, server: _Server
+    ) -> None:
+        """Critic: the snapshot of attempt 1 survived into attempt 2; a repeat
+        with no audio could be counted heard for audio it never sent."""
+        await server.connect(coordinator)
+        await coordinator.inject_turn("Llama a resume.")
+        await _speak(coordinator, nbytes=48_000)
+        await server.leave(coordinator)
+        await server.connect(coordinator)
+        await coordinator.on_device_hello({"schema": 1})  # no fields: repeat
+        await _until(lambda: len(_said(provider)) == 2)
+
+        await coordinator.on_tool_call("c1", "music_control", {"action": "resume"})
+        await coordinator.on_response_done()
+        await coordinator.on_response_done()  # attempt 2: a tool, no audio
+        await server.leave(coordinator)
+
+        assert _waiting(coordinator) == ["Llama a resume."]
+        assert not coordinator._injected_queue[0].heard_check

@@ -391,6 +391,7 @@ class TurnCoordinator:
         self._device_hello: tuple[int | None, float, dict[str, Any]] | None = None
         self._listener_first_seen: tuple[int, float] | None = None
         self._hello_wakeup: asyncio.TimerHandle | None = None
+        self._settled_heard_check = False
         # Drains scheduled from inside FocusManager callbacks (a claim's
         # end), kept referenced until done.
         self._drain_tasks: set[asyncio.Task[None]] = set()
@@ -2403,7 +2404,22 @@ class TurnCoordinator:
         long line of routine ones until it expires. With a
         live claim, only PREEMPT. No await between taking a request out of
         the queue and firing it: a request out of the queue and not yet
-        fired would be invisible to `close()` and to dedup."""
+        fired would be invisible to `close()` and to dedup.
+
+        A turn cut by a link drop first waits for the reconnect's
+        `device.hello` (`_settle_heard_check`); meanwhile what it parked
+        stays parked, so nothing plays for a moment before a repeat."""
+        try:
+            await self._drain_loop(trigger)
+        finally:
+            # A check settled this round: what waited on it may move now
+            # (the repeat has taken DIALOG; or nothing is said again).
+            settled_a_check = self._settled_heard_check
+            self._settled_heard_check = False
+            if settled_a_check:
+                await self._release_content_hold(_HOLD_INJECT_QUEUE)
+
+    async def _drain_loop(self, trigger: str) -> None:
         while self._injected_queue and self._can_fire():
             claim = self._claim_obs
             claim_live = claim is not None and not claim.is_ended
@@ -2424,11 +2440,13 @@ class TurnCoordinator:
                 return
             candidate = self._injected_queue[index]
             if candidate.heard_check:
-                verdict = await self._settle_heard_check(candidate)
-                if verdict == "wait":
+                # Synchronous: nothing else runs between the index and
+                # this verdict, which may remove the request (heard).
+                if self._settle_heard_check(candidate) == "wait":
+                    await self._hold_content(_HOLD_INJECT_QUEUE)
                     return
-                if verdict == "heard":
-                    continue
+                self._settled_heard_check = True
+                continue  # look again: the queue may have changed
             request = self._injected_queue.pop(index)
             if self._expire_if_due(request, where="dequeue"):
                 continue
@@ -2488,17 +2506,22 @@ class TurnCoordinator:
 
         self._hello_wakeup = loop.call_later(max(0.0, delay_s), _due)
 
-    async def _settle_heard_check(self, request: _InjectedRequest) -> str:
+    def _settle_heard_check(self, request: _InjectedRequest) -> str:
         """Did the device play `request` out of its ring after the link
         dropped? `heard`: resolved DELIVERED, out of the queue. `repeat`:
         said again (as before). `wait`: the reconnect's hello hasn't come
-        yet (at most `_HELLO_WAIT_S`).
+        yet (at most `_HELLO_WAIT_S` from the first attempt to say it after
+        the reconnect). Synchronous, logs included: the drain loop holds a
+        queue index across it.
 
-        Heard when the whole turn had been sent before the drop, the ring
-        emptied (`ring_left_ms` 0: nothing thrown away at the reconnect)
-        and the device played at least what our playhead says was still
-        unplayed at the drop (everything sent, not only this turn), less
-        `_HEARD_TOLERANCE_MS`."""
+        Heard when the whole turn had been sent before the drop, the device
+        noticed the drop while some of it was still unplayed by our
+        playhead (more than `_HEARD_TOLERANCE_MS`; noticed later, playing
+        nothing after it proves nothing: a lost tail looks the same), the
+        ring emptied (`ring_left_ms` 0: nothing thrown away at the
+        reconnect) and the device played at least what our playhead says
+        was still unplayed at the drop (everything sent, not only this
+        turn), less `_HEARD_TOLERANCE_MS`."""
         listener = self._listener()
         now = time.monotonic()
         seen = self._listener_first_seen
@@ -2510,7 +2533,7 @@ class TurnCoordinator:
             if now < deadline:
                 self._arm_hello_wakeup(deadline - now)
                 return "wait"
-            return await self._heard_verdict(request, heard=False, reason="hello_timeout")
+            return self._heard_verdict(request, heard=False, reason="hello_timeout")
         _epoch, received_at, data = hello
         played = _number(data.get("played_after_drop_ms"))
         left = _number(data.get("ring_left_ms"))
@@ -2522,28 +2545,34 @@ class TurnCoordinator:
             "time_to_hello_ms": since_drop,
         }
         if played is None or left is None or since_drop is None:
-            return await self._heard_verdict(request, heard=False, reason="no_fields", **facts)
+            return self._heard_verdict(request, heard=False, reason="no_fields", **facts)
         drop_at = received_at - since_drop / 1000
         last_audio_at = request.last_audio_at
         playhead_end = request.playhead_end
         if last_audio_at is None or playhead_end is None:
-            return await self._heard_verdict(request, heard=False, reason="partial_send", **facts)
+            return self._heard_verdict(request, heard=False, reason="partial_send", **facts)
         facts["sent_before_drop_ms"] = round((drop_at - last_audio_at) * 1000)
         if last_audio_at > drop_at:
-            return await self._heard_verdict(request, heard=False, reason="partial_send", **facts)
+            return self._heard_verdict(request, heard=False, reason="partial_send", **facts)
         unplayed_ms = max(0, round((playhead_end - drop_at) * 1000))
         facts["unplayed_at_drop_ms"] = unplayed_ms
+        if unplayed_ms <= self._HEARD_TOLERANCE_MS or played <= 0:
+            return self._heard_verdict(request, heard=False, reason="drop_noticed_late", **facts)
         if left > 0:
-            return await self._heard_verdict(request, heard=False, reason="ring_left", **facts)
+            return self._heard_verdict(request, heard=False, reason="ring_left", **facts)
         if played < unplayed_ms - self._HEARD_TOLERANCE_MS:
-            return await self._heard_verdict(request, heard=False, reason="played_short", **facts)
-        return await self._heard_verdict(request, heard=True, reason="drained", **facts)
+            return self._heard_verdict(request, heard=False, reason="played_short", **facts)
+        return self._heard_verdict(request, heard=True, reason="drained", **facts)
 
-    async def _heard_verdict(
+    def _heard_verdict(
         self, request: _InjectedRequest, *, heard: bool, reason: str, **facts: Any
     ) -> str:
+        """Record the check's outcome (sync logs: see the caller)."""
         request.heard_check = False
-        await logger.ainfo(
+        if not any(r.heard_check for r in self._injected_queue) and self._hello_wakeup:
+            self._hello_wakeup.cancel()
+            self._hello_wakeup = None
+        logger.info(
             "coord.inject_heard_after_drop",
             heard=heard,
             reason=reason,
@@ -2555,7 +2584,7 @@ class TurnCoordinator:
         if request in self._injected_queue:
             self._injected_queue.remove(request)
         self._resolve(request, InjectOutcome.DELIVERED)
-        await logger.ainfo(
+        logger.info(
             "coord.inject_turn_delivered",
             by="ring_after_drop",
             dedup_key=request.dedup_key,
@@ -2722,6 +2751,10 @@ class TurnCoordinator:
             return
         self._disarm_expiry(request)
         request.epoch = self._listener()
+        # This attempt's sending facts start empty: a tool-only repeat must
+        # not inherit the previous attempt's audio (`_mark_heard_check`).
+        request.last_audio_at = None
+        request.playhead_end = None
         request.attempts += 1
         prompt = request.prompt
         if request.attempts > 1:

@@ -1357,9 +1357,12 @@ class AudioServer:
                 raw_data = msg.get("data")
                 data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
                 self._note_device(event, data)
-                await logger.ainfo(f"client.{event}", **client_event_log_fields(data))
                 if event == "device.hello":
+                    # First, so the coordinator stamps its arrival before the
+                    # log line's hop to a thread (the drop time is derived
+                    # from it).
                     await self._notify_device_hello(data)
+                await logger.ainfo(f"client.{event}", **client_event_log_fields(data))
                 await self._dispatch_client_event(event, data)
             case other:
                 await logger.awarning("server.rx.unknown", msg_type=other)
