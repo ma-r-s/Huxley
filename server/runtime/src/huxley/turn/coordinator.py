@@ -299,12 +299,21 @@ class TurnCoordinator:
         # the event the pending resume waits on for it.
         self._press_transcript: str | None = None
         self._press_transcript_event = asyncio.Event()
-        # Monotonic time the voice session went down (None while it is
-        # up; down from construction until the first connect). A press
+        # The coordinator's own view of the voice session: monotonic time
+        # it went down (`on_session_disconnected`), None once the app has
+        # connected it (`on_session_connected`). Not `provider.is_connected`
+        # alone: that stays true on a socket the server closed (expiry, a
+        # network drop) and turns true before the session is configured.
+        # Down from construction unless the provider is already up. A press
         # without a session pauses the content when the session dropped
         # moments ago (a planned refresh), stops it in a real outage
-        # (`on_ptt_rejected`).
-        self._session_down_since: float | None = time.monotonic()
+        # (`on_ptt_rejected`); injects wait for it.
+        self._session_down_since: float | None = (
+            None if provider.is_connected else time.monotonic()
+        )
+        self._session_up_event = asyncio.Event()
+        if self._session_down_since is None:
+            self._session_up_event.set()
 
         self._current_turn: Turn | None = None
         self.response_cancelled: bool = False
@@ -335,6 +344,12 @@ class TurnCoordinator:
         if turn is None and prev is not None and prev.source is TurnSource.USER:
             # A press still LISTENING was never committed: no transcript.
             self._arm_turn_hold_release(expect_transcript=prev.state is not TurnState.LISTENING)
+
+    @property
+    def _session_up(self) -> bool:
+        """A voice session is connected and configured: what the
+        coordinator sends reaches the model."""
+        return self._session_down_since is None and self._provider.is_connected
 
     def _content_is_running(self) -> bool:
         """True iff a content stream is currently playing (pump task live)."""
@@ -750,6 +765,7 @@ class TurnCoordinator:
         was_speaking = self._speaking_state.is_speaking
         tid = self._tid()
         self._session_down_since = time.monotonic()
+        self._session_up_event.clear()
 
         # End any active claim with ERROR: a session disconnect during a
         # call isn't a natural close.
@@ -1558,22 +1574,29 @@ class TurnCoordinator:
         refresh, mid-book, every 50 min): pause it, and the session coming
         back resumes it (`on_session_connected`); stopping it there cut
         the book for good over a 2 s reconnect. Down longer (a real
-        outage): stop it, so the user keeps a way to silence the device
-        and nothing starts minutes later out of the blue. The app plays
-        the press's sound."""
+        outage): stop it, so the user keeps a way to silence the device.
+        The app plays the press's sound."""
         obs = self._content_obs
         if obs is None or not obs.is_live:
             return
         since = self._session_down_since
-        down_s = None if since is None else time.monotonic() - since
-        if down_s is not None and down_s <= self._OUTAGE_STOP_AFTER_S:
+        if since is None:
+            # The session came back while the app was rejecting the press:
+            # nothing to wait for, so leave what plays alone.
+            await logger.ainfo(
+                "coord.ptt_rejected_session_back",
+                interface=obs.interface_name,
+            )
+            return
+        down_s = time.monotonic() - since
+        if down_s <= self._OUTAGE_STOP_AFTER_S:
             await self._hold_content(_HOLD_SESSION)
         else:
             await logger.ainfo(
                 "coord.content_stopped",
                 reason="ptt_without_session",
                 interface=obs.interface_name,
-                down_s=None if down_s is None else round(down_s, 1),
+                down_s=round(down_s, 1),
             )
             await self._stop_content_stream()
         await self._send_audio_clear()
@@ -1597,19 +1620,25 @@ class TurnCoordinator:
         if not self._provider.is_connected:
             return  # dropped again before we got here: still down
         self._session_down_since = None
-        claim = self._claim_obs
-        claim_live = claim is not None and not claim.is_ended
-        if self.current_turn is None and not claim_live and self._injected_queue:
-            request = self._injected_queue.pop(0)
-            await logger.ainfo(
-                "coord.inject_turn_dequeued",
-                trigger="session_connected",
-                remaining=len(self._injected_queue),
-                dedup_key=request.dedup_key,
-                priority=request.priority.value,
-            )
-            await self._fire_injected_turn(request.prompt, request.dedup_key)
-        await self._release_content_hold(_HOLD_SESSION)
+        self._session_up_event.set()
+        try:
+            claim = self._claim_obs
+            claim_live = claim is not None and not claim.is_ended
+            if self.current_turn is None and not claim_live and self._injected_queue:
+                request = self._injected_queue.pop(0)
+                await logger.ainfo(
+                    "coord.inject_turn_dequeued",
+                    trigger="session_connected",
+                    remaining=len(self._injected_queue),
+                    dedup_key=request.dedup_key,
+                    priority=request.priority.value,
+                )
+                await self._fire_injected_turn(request.prompt, request.dedup_key)
+        finally:
+            # Whatever happened above, the session hold must not outlive
+            # the outage: it would keep the music paused through later
+            # presses (theirs release, this one stays).
+            await self._release_content_hold(_HOLD_SESSION)
 
     # --- Input claim (T1.4 Stage 2 — mic-capture skills) ---
 
@@ -1876,7 +1905,7 @@ class TurnCoordinator:
         if self.current_turn is not None:
             await self._enqueue_injected(prompt, dedup_key, priority, reason="turn_in_progress")
             return
-        if not self._provider.is_connected:
+        if not self._session_up:
             await self._enqueue_injected(prompt, dedup_key, priority, reason="no_session")
             return
         # A **live** COMMS claim (live call, voice memo, etc.) counts as
@@ -1940,13 +1969,30 @@ class TurnCoordinator:
         the announcement — the exact behavior the 2026-04-24 smoke
         test caught on inbound Telegram calls.
 
-        If a turn is already in progress, or there is no voice session,
+        With no voice session (a reconnect), waits up to
+        `_INJECT_SESSION_WAIT_S` for it first, so a caller that sequences
+        work after the announcement (Telegram: announce the caller, then
+        bridge the call) still gets the announcement first. (Fired
+        without a session, the wait never ended: nothing reached the
+        model.)
+
+        If a turn is already in progress, or the session stays down,
         falls back to a plain enqueue (same as `inject_turn`) and
-        returns immediately: the caller should not depend on the wait
-        semantics in that case. (Without a session the wait never
-        ended: nothing reached the model.)
+        returns: the caller should not depend on the wait semantics in
+        that case.
         """
-        if self.current_turn is not None or not self._provider.is_connected:
+        if self.current_turn is None and not self._session_up:
+            started = time.monotonic()
+            with contextlib.suppress(TimeoutError):
+                async with asyncio.timeout(self._INJECT_SESSION_WAIT_S):
+                    await self._session_up_event.wait()
+            await self._log.ainfo(
+                "coord.inject_and_wait_session_wait",
+                waited_ms=int((time.monotonic() - started) * 1000),
+                session_up=self._session_up,
+                dedup_key=dedup_key,
+            )
+        if self.current_turn is not None or not self._session_up:
             reason = "turn_in_progress" if self.current_turn is not None else "no_session"
             await self._enqueue_injected(prompt, dedup_key, InjectPriority.NORMAL, reason=reason)
             return
@@ -1957,6 +2003,11 @@ class TurnCoordinator:
         if done is not None:
             await done.wait()
         await self._wait_for_client_playback_drain()
+
+    # How long `inject_turn_and_wait` waits for a voice session that is
+    # reconnecting. The backoff is 1 s, then 3 s after a failed attempt,
+    # plus the connects: two attempts fit.
+    _INJECT_SESSION_WAIT_S: ClassVar[float] = 10.0
 
     # Audio rate for the one audio channel shared with the client:
     # 24kHz sample rate * 2 bytes/sample (PCM16 mono).
@@ -2183,7 +2234,7 @@ class TurnCoordinator:
                 reason="turn_in_progress",
             )
             return False
-        if not self._provider.is_connected:
+        if not self._session_up:
             # The stream ended during a reconnect: the prompt would go
             # nowhere and the synthetic turn would never end, keeping
             # model_speaking on and every inject queued behind it.

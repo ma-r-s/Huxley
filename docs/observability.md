@@ -242,6 +242,7 @@ A press pauses what plays and the turn's end resumes it; no client pauses it too
 - **`coord.content_released`** — a hold was dropped. `resumed=true` means `factory()` was called again; `false` with `holds` non-empty means another reason still holds it, or focus is elsewhere (a call, an injected turn).
 - **`coord.content_resumed`** — a pump actually restarted (any path, including FocusManager parking).
 - **`coord.content_stopped`** — the stream was ended instead of resumed. `reason`: `stop_words` (the press said only stop words; `heard` is the transcript), `parked_too_long` (`held_s`), `ptt_without_session` (a press over 5 s into a voice-session outage; `down_s`).
+- **`coord.ptt_rejected_session_back`**: the app rejected a press, but the session was back by the time the coordinator saw it; what plays is left alone (the press still beeps).
 - **`coord.session_connected`**: the voice session is up again; fires the head of the inject queue, then releases a `session` hold. Fields: `connected` (false: it dropped again before this ran, nothing happens), `queued_injects`, `content`, `holds`.
 - **`coord.client_presence`** — a client became current (`present=true`) or the last one left. The `no_client` hold follows 5 s later.
 - **`coord.content_held_note`** — the model was told, before the commit, that what played is paused.
@@ -257,6 +258,7 @@ When `inject_turn` is called while a user or synthetic turn is in progress, or w
 - **`coord.inject_turn_deduped`** — an enqueue replaced one or more same-key entries already in the queue. Fields: `dedup_key`, `removed`.
 - **`coord.inject_turn_dropped`** — an enqueue was silently dropped because a same-key inject is currently firing. Fields: `reason=dedup_in_flight`, `dedup_key`.
 - **`coord.inject_turn_preempted_content`** — a `PREEMPT`-priority inject drained at turn-end and displaced a pending content stream (the stream request is discarded). Fields: `remaining` (queue depth after pop), `dedup_key`, `dropped_streams` (count). Only fires for priority=PREEMPT; NORMAL always waits for a quiet moment instead.
+- **`coord.inject_and_wait_session_wait`**: `inject_turn_and_wait` found no voice session and waited for one (up to 10 s). Fields: `waited_ms`, `session_up` (false: it queued instead), `dedup_key`.
 - **`coord.inject_turn`** — the moment a request actually fires (whether immediate from `inject_turn` itself or drained from the queue). Fields: `interface`, `prompt_len`, `dedup_key`.
 
 If a skill's `inject_turn` "didn't speak," look for these in order: `inject_turn_dropped` (dedup'd against in-flight), `inject_turn_queued` followed by `inject_turn_dequeued` after a delay (queued, drained later), or no events at all (caller never invoked it). If a PREEMPT reminder displaced a book, look for `inject_turn_preempted_content`.

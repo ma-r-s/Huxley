@@ -430,7 +430,7 @@ await self._ctx.start_input_claim(InputClaim(...))
 
 `inject_turn_and_wait` fires the same injected turn as `inject_turn`, but **blocks until `response_done` fires** (the LLM has finished generating and all PCM has been sent to the client). This eliminates the hardcoded `sleep()` that would otherwise be needed between "announce the event" and "start audio bridging."
 
-**Fallback**: if the coordinator is busy (a turn is already in progress), it falls back to a plain enqueue — same as `inject_turn`. The blocking guarantee only holds when the coordinator is idle. Design accordingly: call it from a background task where you control the timing.
+**Fallback**: if the coordinator is busy (a turn is already in progress), it falls back to a plain enqueue — same as `inject_turn`. With no voice session it first waits up to 10 s for the reconnect (then announces and blocks as usual); still down after that, it enqueues too. The blocking guarantee only holds when the coordinator is idle. Design accordingly: call it from a background task where you control the timing.
 
 **When to use it**: any skill that must announce an event and then immediately claim the mic or start an audio source. Without the wait, your bridged audio queues behind the announcement PCM still in the client's playback buffer, causing a perceptible delay. The `telegram` inbound-call flow uses this for exactly that reason.
 

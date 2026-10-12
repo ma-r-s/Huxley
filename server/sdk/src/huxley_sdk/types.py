@@ -851,7 +851,8 @@ class SkillContext:
       e.g., `start_input_claim` right after an inbound-call announcement
       so the claim doesn't preempt the LLM mid-sentence. Falls back to
       a plain enqueue (no wait) if a turn is already in progress or
-      the voice session is down.
+      the voice session stays down for 10 s (it waits that long for a
+      reconnect).
     - `background_task(name, coro_factory, *, restart_on_crash=True,
       max_restarts_per_hour=10, on_permanent_failure=None) ->
       BackgroundTaskHandle`: spawn a long-running supervised task.
