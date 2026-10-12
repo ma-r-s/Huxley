@@ -5,6 +5,11 @@ starts at login and auto-restarts if it crashes.
 
 ## Install
 
+Prerequisites beyond `uv sync`: `brew install ffmpeg opus` (ffmpeg for the
+radio/audiobook skills, libopus for the walkie's Opus audio; without libopus
+the server still runs and the walkie gets PCM, see `server.audio.opus_unavailable`
+in the log).
+
 ```bash
 ./scripts/launchd/install.sh
 ```

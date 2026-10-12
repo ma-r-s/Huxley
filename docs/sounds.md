@@ -21,7 +21,7 @@ Secondary transitions (error, thinking) are important but not part of v1. See [S
 
 ## Transport: server-side PCM injection
 
-All sound effects are raw PCM16 24 kHz mono bytes injected server-side into the existing audio stream. They travel through the same WebSocket `audio` message channel the model's voice uses. No new protocol messages. No client changes.
+All sound effects are raw PCM16 24 kHz mono bytes injected server-side into the existing audio stream. They travel through the same WebSocket `audio` message channel the model's voice uses (for a client on [Opus](./protocol.md#opus-audio-audioopus), the same binary Opus packets). No new protocol messages. No client changes.
 
 ```
 Book audio (PCM chunks from ffmpeg)

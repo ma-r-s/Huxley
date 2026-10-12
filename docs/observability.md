@@ -30,7 +30,7 @@ Every log event uses a dotted namespace + direction prefix. This makes events `g
 | `session.rx.*` | Messages received from the voice provider (OpenAI)      | `session.rx.tool_call`, `session.rx.error`                                                                                                          |
 | `session.tx.*` | Messages sent to the voice provider                     | `session.tx.commit`, `session.tx.cancel`, `session.tx.tool_output`, `session.tx.suspend`, `session.tx.resume`                                       |
 | `server.rx.*`  | Messages received from the audio client                 | `server.rx.ptt_start`, `server.rx.ptt_stop`, `server.rx.wake_word`                                                                                  |
-| `server.tx.*`  | Messages sent to the audio client                       | `server.tx.state`, `server.tx.model_speaking`, `server.tx.audio_stats` (once a second while audio flows: audio sent vs what the socket still holds) |
+| `server.tx.*`  | Messages sent to the audio client                       | `server.tx.state`, `server.tx.model_speaking`, `server.tx.audio_stats` (once a second while audio flows: audio sent vs what the socket still holds; see [Opus audio](#opus-audio-the-walkies-wire-format)) |
 | `app.*`        | Application orchestration (lifecycle, guard rejections) | `app.session_end`, `app.ptt_rejected`                                                                                                               |
 | `<skill>.*`    | Per-skill events (skill author owns the namespace)      | `audiobooks.resolve`, `audiobooks.stream_started`, `system.volume_set`                                                                              |
 | `client.*`     | Telemetry forwarded from the audio client (web/ESP32)   | `client.silence_timer_started`, `client.thinking_tone_on`                                                                                           |
@@ -402,6 +402,20 @@ grep -E "runtime\.session_(ready|failed|degraded)" /private/tmp/huxley_server.lo
 ```
 
 If you see `session_failed` followed by no `session_ready`, the server is in a degraded-boot state — the PWA's orb hint will show the `session_error` string, but the operator-facing log carries the full traceback (always logged via `runtime.lazy_boot.first_swap_failed` or similar in the same connect block).
+
+## Opus audio: the walkie's wire format
+
+A client that connects with `?audio=opus` gets binary Opus packets instead of base64 PCM ([protocol](./protocol.md#opus-audio-audioopus)). The events that say what each connection got and where its audio went:
+
+- **`client_connected`** carries `audio_format=pcm|opus`: what this connection speaks, decided once at connect. `diag_state` shows the same per connection.
+- **`server.audio.opus_unavailable`** (warning): libopus could not be loaded (`reason`), so an opus client got PCM (`fallback=pcm`, and its hello has no `audio_params`). Logged at boot (`audio_server_listening` also says `opus_available`) and on each such connect. Fix: `brew install opus` / `apt install libopus0`, restart.
+- **`server.audio.format_unsupported`** (warning): `?audio=` held something other than `opus` or `pcm`; the client got PCM.
+- **`server.tx.audio_stats`**: `audio_ms` is always PCM duration handed to `send_audio`, whatever the encoding; `bytes_sent` is what went on the wire for it and `sends` the WebSocket messages; `audio_format` says which. PCM runs about 64 KB a second of audio, Opus about 4 KB (one ~240-byte packet per 60 ms).
+- **`server.tx.opus_flush`** (info): a sound's last partial frame went out, `tail_ms` of audio plus `pad_ms` of silence. `reason=model_speaking` (reply over) or `stream_ended` is the normal end of a sound; `reason=idle` means no PCM came for 250 ms outside a stream (an earcon's end). No idle timer runs while a stream is announced.
+- **`server.tx.opus_clear`** (debug): an `audio_clear` dropped `dropped_packets` not yet written (the link was backed up) and `dropped_pcm_ms` of pending PCM, and reset the encoder.
+- **`server.tx.opus_cancelled`** (debug): the task sending a sound was cancelled (barge-in, a pause) while writing it; its `dropped_packets` and `dropped_pcm_ms` were dropped and the encoder reset, as a cancelled PCM send's remaining chunks never go out.
+- **`server.tx.opus_encode_failed`** / **`server.rx.opus_decode_failed`** (warning): libopus refused a frame. The encoder drops its pending audio and restarts; a mic packet that fails to decode is dropped (`packet_bytes`, `error`, running `errors` count) and the connection stays up. Repeated decode failures mean the client's encoder does not match `audio_params`.
+- **`server.tx.opus_before_hello_dropped`** (debug): audio for a connection whose hello was not out yet (a reconnect while something played) was dropped, so the client never sees binary before the hello that announces it.
 
 ## When something looks wrong
 

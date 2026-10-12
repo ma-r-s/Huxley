@@ -58,7 +58,7 @@ When all three are separate repos, the **only** API between them is the document
 Today the protocol covers:
 
 - **Primary WebSocket** at `ws://<host>:<port>/` — the user's conversation channel. The dev `clients/pwa/` client speaks it today; `huxley-web` and `huxley-firmware` will speak the same contract.
-  - Client → server: PTT events, audio frames (PCM16 mono @ 24 kHz), wake word, reset, `client_event` (pure telemetry).
+  - Client → server: PTT events, audio frames (PCM16 mono @ 24 kHz; binary Opus packets for a client that asks with `?audio=opus`), wake word, reset, `client_event` (pure telemetry).
   - Server → client: `hello` + protocol version, state machine transitions, status strings, transcript lines, audio chunks, `audio_clear`, `model_speaking` indicator, volume hints, `dev_event`.
 
 Planned additions:

@@ -33,6 +33,13 @@ Protocol — server → client
     {"type": "claim_ended",    "claim_id": str, "end_reason": str}
     {"type": "dev_event",      "kind": "...", "payload": {...}}
     {"type": "server_event",   "event": "<name>", "data": {...}}  # generic skill→client
+
+Opus audio (opt-in, `?audio=opus`; the design is xiaozhi-esp32's)
+    hello gains "audio_params": {"format": "opus", "sample_rate": 24000,
+    "channels": 1, "frame_duration": 60}. After it, audio in both
+    directions is binary messages, one raw 60 ms Opus packet each; the
+    server sends no JSON `audio` to that client (it still accepts it).
+    Everything else stays JSON text. See `opus_codec.py`.
 """
 
 from __future__ import annotations
@@ -56,6 +63,15 @@ import structlog
 import websockets
 import websockets.http11
 from websockets.asyncio.server import ServerConnection, serve
+
+from huxley.server.opus_codec import (
+    AUDIO_PARAMS,
+    FRAME_MS,
+    OpusDecoderStream,
+    OpusEncoderStream,
+    OpusUnavailableError,
+    opus_unavailable_reason,
+)
 
 # Localhost cookie jars from dev tools (React DevTools, HMR clients, etc.) can
 # push the WebSocket upgrade's Cookie header past websockets v16's default 8 KB
@@ -168,9 +184,31 @@ class _ConnInfo:
     # Outbound audio, current stats window (see `_tx_audio_stats`).
     tx_audio_window_start_ms: int = 0
     tx_audio_pcm_bytes: int = 0
+    tx_audio_wire_bytes: int = 0
     tx_audio_sends: int = 0
     tx_audio_wait_ms: float = 0.0
     tx_audio_max_wait_ms: float = 0.0
+    # Audio encoding chosen at connect: "pcm" (base64 PCM inside JSON
+    # `audio`, the default) or "opus" (`?audio=opus`: binary Opus
+    # packets both ways, docs/protocol.md "Opus audio").
+    audio_format: str = "pcm"
+    opus_tx: OpusEncoderStream | None = None
+    opus_rx: OpusDecoderStream | None = None
+    # Encoded packets not yet written, in encoder order. Every sender
+    # drains this one queue (see `_drain_opus`), so concurrent
+    # `send_audio` calls cannot reorder packets, and `audio_clear`
+    # empties it so nothing encoded before the clear follows it.
+    opus_out: deque[bytes] = field(default_factory=deque)
+    # Sends the partial frame when no PCM came for a while (the end of
+    # an earcon nothing follows). Restarted by every `send_audio`.
+    opus_flush_timer: asyncio.TimerHandle | None = None
+    opus_flush_task: asyncio.Task[None] | None = None
+    opus_last_push_s: float = 0.0  # time.monotonic() of the last send_audio
+    opus_rx_errors: int = 0
+    # Set once `hello` is out. An opus client gets no binary before its
+    # hello (it learns the format there), so audio for it until then is
+    # dropped: a reconnect mid-song loses a few ms, never confuses it.
+    hello_sent: bool = False
 
     def to_diag(self) -> dict[str, Any]:
         """Serialize to the wire-format the `diag_state` frame uses.
@@ -182,6 +220,7 @@ class _ConnInfo:
             "connected_at_ms": self.connected_at_ms,
             "requested_persona": self.requested_persona,
             "requested_language": self.requested_language,
+            "audio_format": self.audio_format,
             "frames_tx": self.frames_tx,
             "frames_rx": self.frames_rx,
             "bytes_tx": self.bytes_tx,
@@ -354,6 +393,9 @@ class AudioServer:
         # a second concurrent upgrade would race but is architecturally
         # excluded (we evict old clients, not parallel them).
         self._pending_language: str | None = None
+        # `?audio=<format>` from the URL, same capture/consume pattern as
+        # `_pending_language`. "opus" asks for binary Opus audio.
+        self._pending_audio: str | None = None
         # `client_event` subscription registry: event_key → list of
         # (skill_name, handler) pairs. Skills register via
         # `register_client_event_subscriber`; the connection-handling
@@ -414,10 +456,15 @@ class AudioServer:
             self._port,
             process_request=self._process_request,
         ):
+            opus_error = opus_unavailable_reason()
             await logger.ainfo(
                 "audio_server_listening",
                 url=f"ws://{self._host}:{self._port}",
+                opus_available=opus_error is None,
             )
+            if opus_error is not None:
+                # Opus clients will get PCM; this says why, once, at boot.
+                await logger.awarning("server.audio.opus_unavailable", reason=opus_error)
             await asyncio.Future()  # run until cancelled
 
     def _process_request(
@@ -447,11 +494,17 @@ class AudioServer:
             persona_values = qs.get("persona")
             persona = persona_values[0].strip() if persona_values else None
             self._pending_persona = persona or None
+            # `?audio=opus` asks for binary Opus audio both ways instead
+            # of base64 PCM in JSON (docs/protocol.md "Opus audio").
+            audio_values = qs.get("audio")
+            audio = audio_values[0].strip().lower() if audio_values else None
+            self._pending_audio = audio or None
         except Exception:
             # Never block a handshake over a malformed query string;
             # fall back to persona default.
             self._pending_language = None
             self._pending_persona = None
+            self._pending_audio = None
         return None
 
     async def _handle_connection(self, ws: ServerConnection) -> None:
@@ -488,8 +541,10 @@ class AudioServer:
         # otherwise the hello would carry the old persona's name.
         selected_language = self._pending_language
         selected_persona = self._pending_persona
+        requested_audio = self._pending_audio
         self._pending_language = None
         self._pending_persona = None
+        self._pending_audio = None
 
         # Build the conn record + bind contextvars BEFORE the first
         # log line so every event in this handler carries `conn_id`
@@ -507,6 +562,17 @@ class AudioServer:
             requested_language=selected_language,
             ws=ws,
         )
+        # The audio format is fixed before the connection becomes current,
+        # so every audio frame it ever gets (even one racing the hello) is
+        # in the format the hello announces.
+        opus_error: str | None = None
+        if requested_audio == "opus":
+            try:
+                conn.opus_tx = OpusEncoderStream()
+                conn.opus_rx = OpusDecoderStream()
+                conn.audio_format = "opus"
+            except OpusUnavailableError as exc:
+                opus_error = str(exc)
         self._conn = conn
         structlog.contextvars.bind_contextvars(conn_id=conn_id)
         await logger.ainfo(
@@ -514,7 +580,16 @@ class AudioServer:
             remote=str(ws.remote_address),
             language=selected_language,
             persona=selected_persona,
+            audio_format=conn.audio_format,
         )
+        if opus_error is not None:
+            await logger.awarning(
+                "server.audio.opus_unavailable", reason=opus_error, fallback="pcm"
+            )
+        elif requested_audio not in (None, "opus", "pcm"):
+            await logger.awarning(
+                "server.audio.format_unsupported", requested=requested_audio, fallback="pcm"
+            )
         # T1.13 — fire the persona-select callback BEFORE hello. The
         # runtime's swap algorithm runs here; on success, current_app
         # is the new persona by the time hello goes out. On failure,
@@ -559,7 +634,12 @@ class AudioServer:
                     hello_payload.update(self._get_hello_extras())
                 except Exception:
                     await logger.aexception("hello_extras_failed")
+            # Only for a client that asked for opus and got it; a PCM
+            # client's hello stays exactly as it was.
+            if conn.audio_format == "opus":
+                hello_payload["audio_params"] = dict(AUDIO_PARAMS)
             await self._send_raw(hello_payload, _via_handshake=True)
+            conn.hello_sent = True
             await self._send_raw({"type": "state", "value": self._state}, _via_handshake=True)
             await self._send_raw(
                 {
@@ -599,6 +679,7 @@ class AudioServer:
                 conn.close_code = exc.code
                 conn.close_reason = exc.reason or None
         finally:
+            self._close_opus(conn)
             # T1.21 — finalize the conn record, archive into recent
             # history for the diag endpoint, then unbind contextvars.
             if self._conn is conn:
@@ -649,6 +730,11 @@ class AudioServer:
             self._conn.frames_rx += 1
             self._conn.bytes_rx += raw_len
             self._conn.last_rx_at_ms = _now_ms()
+            # An opus client's binary message is one Opus packet of mic
+            # audio. Any other client's binary keeps today's handling.
+            if self._conn.opus_rx is not None and not isinstance(raw, str):
+                await self._on_opus_packet(self._conn, self._conn.opus_rx, bytes(raw))
+                return
         try:
             msg: dict[str, Any] = json.loads(raw)
         except (json.JSONDecodeError, ValueError):
@@ -666,6 +752,10 @@ class AudioServer:
                 pcm = base64.b64decode(msg.get("data", ""))
                 await self._on_audio_frame(pcm)
             case "ptt_start":
+                # A press starts a new Opus stream from the client: no
+                # decoder state carries over from the last one.
+                if self._conn is not None and self._conn.opus_rx is not None:
+                    self._conn.opus_rx.reset()
                 await logger.ainfo("server.rx.ptt_start")
                 await self._on_ptt_start()
             case "ptt_stop":
@@ -901,6 +991,26 @@ class AudioServer:
             case other:
                 await logger.awarning("server.rx.unknown", msg_type=other)
 
+    async def _on_opus_packet(
+        self, conn: _ConnInfo, decoder: OpusDecoderStream, packet: bytes
+    ) -> None:
+        """Decode one inbound Opus packet and hand the PCM16 on exactly
+        where a JSON `audio` message's PCM goes. A packet libopus rejects
+        is logged and dropped; the connection stays up."""
+        conn.rx_types["opus"] = conn.rx_types.get("opus", 0) + 1
+        try:
+            pcm = decoder.decode(packet)
+        except Exception as exc:
+            conn.opus_rx_errors += 1
+            await logger.awarning(
+                "server.rx.opus_decode_failed",
+                packet_bytes=len(packet),
+                error=f"{type(exc).__name__}: {exc}",
+                errors=conn.opus_rx_errors,
+            )
+            return
+        await self._on_audio_frame(pcm)
+
     # --- Server → client ---
 
     # Maximum PCM bytes per outbound `audio` message. Larger inputs
@@ -925,26 +1035,193 @@ class AudioServer:
     # back-to-back inside the websockets library.
     _AUDIO_CHUNK_BYTES = 12 * 1024
 
+    # Opus only: how long no new PCM means "this sound is over", so its
+    # partial frame goes out zero-padded (an earcon nothing follows).
+    # Above the 100 ms cadence of the real-time streams (audiobooks,
+    # radio, Spotify all send 100 ms chunks): at ~100 ms the timer would
+    # race every chunk. Replies and streams don't use it at all:
+    # `model_speaking: false` and `stream_ended` flush at once, and no
+    # timer runs while a stream is announced, so a source that stalls
+    # never gets silence padded into it.
+    _OPUS_IDLE_FLUSH_S = 0.25
+
     async def send_audio(self, pcm: bytes) -> None:
         if not pcm:
             return
+        conn = self._conn
+        if conn is not None and conn.opus_tx is not None:
+            if conn.hello_sent:
+                await self._send_audio_opus(conn, conn.opus_tx, pcm)
+            else:
+                await logger.adebug("server.tx.opus_before_hello_dropped", pcm_bytes=len(pcm))
+            return
         for offset in range(0, len(pcm), self._AUDIO_CHUNK_BYTES):
+            # `_send` goes to whichever client is current. If an opus
+            # client took over mid-send (the walkie reconnecting), the
+            # rest of this PCM must not reach it as JSON audio.
+            current = self._conn
+            if current is not None and current.opus_tx is not None:
+                return
             chunk = pcm[offset : offset + self._AUDIO_CHUNK_BYTES]
             t0 = time.monotonic()
-            await self._send({"type": "audio", "data": base64.b64encode(chunk).decode()})
-            await self._tx_audio_stats(len(chunk), (time.monotonic() - t0) * 1000)
+            wire = await self._send({"type": "audio", "data": base64.b64encode(chunk).decode()})
+            await self._tx_audio_stats(len(chunk), (time.monotonic() - t0) * 1000, wire_bytes=wire)
             # Yield so the recv loop and any other tasks can interleave
             # — keeps the WS bidirectional even mid-burst.
             await asyncio.sleep(0)
 
-    async def _tx_audio_stats(self, pcm_bytes: int, wait_ms: float) -> None:
-        """Count one outbound audio chunk; once a second, log what went
-        out. `send_wait_ms` is time spent in `ws.send` (websockets waits
-        there when its buffer is over the high-water mark: the network
-        isn't keeping up); `sock_unsent` is what the kernel still holds.
-        Audio sent at real time (`audio_ms` ~ `window_ms`) with a board
-        that received less means the network; less sent means the
-        source was late."""
+    async def _send_audio_opus(
+        self, conn: _ConnInfo, encoder: OpusEncoderStream, pcm: bytes
+    ) -> None:
+        """Encode whole 60 ms frames now, keep the remainder for the next
+        call (or a flush), and write the packets."""
+        conn.opus_last_push_s = time.monotonic()
+        self._cancel_opus_idle_flush(conn)
+        try:
+            conn.opus_out.extend(encoder.push(pcm))
+        except Exception as exc:
+            await self._opus_encode_failed(conn, exc, pcm_bytes=len(pcm))
+            return
+        await self._drain_opus(conn, pcm_bytes=len(pcm))
+        # Armed after the writes: a sender stuck in flow control is not
+        # idle. Not while a stream is announced (see _OPUS_IDLE_FLUSH_S).
+        if (
+            encoder.pending_bytes
+            and self._conn is conn
+            and conn.opus_tx is encoder
+            and self._active_stream_id is None
+        ):
+            self._arm_opus_idle_flush(conn)
+
+    async def _drain_opus(self, conn: _ConnInfo, *, pcm_bytes: int) -> None:
+        """Write queued packets, one binary message each, in queue order.
+
+        Every sender drains the one shared queue: whoever runs pops the
+        next packet, and `ws.send` writes the frame before it waits on
+        flow control, so the wire order is the encoder order however
+        many tasks send audio at once. Same pacing as the PCM path: each
+        send waits out websockets' backpressure, then yields.
+
+        Cancelled mid-way (a barge-in or a pause cancels the task sending
+        a sound), the sound was cut: what it still had queued is dropped
+        and the encoder reset, as a cancelled PCM send's other chunks
+        never go out. Otherwise a pause with no `audio_clear` would play
+        the leftover ahead of the next sound."""
+        sends = wire = 0
+        wait_ms = 0.0
+        try:
+            while conn.opus_out and self._conn is conn and conn.ws is not None:
+                packet = conn.opus_out.popleft()
+                t0 = time.monotonic()
+                await conn.ws.send(packet)
+                wait_ms += (time.monotonic() - t0) * 1000
+                sends += 1
+                wire += len(packet)
+                conn.frames_tx += 1
+                conn.bytes_tx += len(packet)
+                conn.last_tx_at_ms = _now_ms()
+                conn.tx_types["opus"] = conn.tx_types.get("opus", 0) + 1
+                await asyncio.sleep(0)
+        except websockets.ConnectionClosed:
+            conn.opus_out.clear()
+        except asyncio.CancelledError:
+            dropped_packets = len(conn.opus_out)
+            conn.opus_out.clear()
+            dropped_pcm = 0
+            if conn.opus_tx is not None:
+                with contextlib.suppress(Exception):
+                    dropped_pcm = conn.opus_tx.reset()
+            self._cancel_opus_idle_flush(conn)
+            # Sync call: no await between a cancellation and its re-raise.
+            logger.debug(
+                "server.tx.opus_cancelled",
+                dropped_packets=dropped_packets,
+                dropped_pcm_ms=dropped_pcm // _PCM_BYTES_PER_MS,
+            )
+            raise
+        if self._conn is conn:
+            await self._tx_audio_stats(pcm_bytes, wait_ms, sends=sends, wire_bytes=wire)
+
+    async def _flush_opus(self, conn: _ConnInfo | None, reason: str) -> None:
+        """Send the partial frame zero-padded to 60 ms, so the end of a
+        sound is not held back for PCM that is not coming. `reason`:
+        `model_speaking` (reply over), `stream_ended`, `idle` (no PCM for
+        `_OPUS_IDLE_FLUSH_S`)."""
+        if conn is None or conn.opus_tx is None:
+            return
+        if reason == "idle" and time.monotonic() - conn.opus_last_push_s < self._OPUS_IDLE_FLUSH_S:
+            return  # PCM came in after the timer fired: not idle after all
+        self._cancel_opus_idle_flush(conn)
+        tail_ms = conn.opus_tx.pending_bytes // _PCM_BYTES_PER_MS
+        try:
+            packet = conn.opus_tx.flush()
+        except Exception as exc:
+            await self._opus_encode_failed(conn, exc, pcm_bytes=0)
+            return
+        if packet is None:
+            return
+        conn.opus_out.append(packet)
+        await self._drain_opus(conn, pcm_bytes=0)
+        # One line per sound end: `pad_ms` of silence closed this sound.
+        await logger.ainfo(
+            "server.tx.opus_flush", reason=reason, tail_ms=tail_ms, pad_ms=FRAME_MS - tail_ms
+        )
+
+    def _arm_opus_idle_flush(self, conn: _ConnInfo) -> None:
+        self._cancel_opus_idle_flush(conn)
+        conn.opus_flush_timer = asyncio.get_running_loop().call_later(
+            self._OPUS_IDLE_FLUSH_S, self._opus_idle_flush_due, conn
+        )
+
+    def _cancel_opus_idle_flush(self, conn: _ConnInfo) -> None:
+        if conn.opus_flush_timer is not None:
+            conn.opus_flush_timer.cancel()
+            conn.opus_flush_timer = None
+
+    def _opus_idle_flush_due(self, conn: _ConnInfo) -> None:
+        conn.opus_flush_timer = None
+        if self._conn is conn:
+            # Referenced from `conn` so the task isn't collected mid-run.
+            conn.opus_flush_task = asyncio.get_running_loop().create_task(
+                self._flush_opus(conn, "idle")
+            )
+
+    async def _opus_encode_failed(
+        self, conn: _ConnInfo, exc: Exception, *, pcm_bytes: int
+    ) -> None:
+        """libopus refused a frame. Drop what is pending and start the
+        encoder fresh; the audio that follows still plays."""
+        dropped = 0
+        if conn.opus_tx is not None:
+            with contextlib.suppress(Exception):
+                dropped = conn.opus_tx.reset()
+        await logger.awarning(
+            "server.tx.opus_encode_failed",
+            error=f"{type(exc).__name__}: {exc}",
+            pcm_bytes=pcm_bytes,
+            dropped_pcm_bytes=dropped,
+        )
+
+    def _close_opus(self, conn: _ConnInfo) -> None:
+        """Connection over: stop its flush timer and release the codecs."""
+        self._cancel_opus_idle_flush(conn)
+        conn.opus_out.clear()
+        conn.opus_tx = None
+        conn.opus_rx = None
+
+    async def _tx_audio_stats(
+        self, pcm_bytes: int, wait_ms: float, *, sends: int = 1, wire_bytes: int = 0
+    ) -> None:
+        """Count outbound audio; once a second, log what went out.
+        `audio_ms` is PCM duration handed to `send_audio`, whatever the
+        encoding; `bytes_sent` is what went on the wire for it (JSON +
+        base64 for PCM, Opus packets for opus: ~64 KB/s vs ~4 KB/s).
+        `sends` counts WebSocket messages. `send_wait_ms` is time spent
+        in `ws.send` (websockets waits there when its buffer is over the
+        high-water mark: the network isn't keeping up); `sock_unsent` is
+        what the kernel still holds. Audio sent at real time (`audio_ms`
+        ~ `window_ms`) with a board that received less means the
+        network; less sent means the source was late."""
         conn = self._conn
         if conn is None or conn.ws is None:
             return
@@ -952,7 +1229,8 @@ class AudioServer:
         if conn.tx_audio_window_start_ms == 0:
             conn.tx_audio_window_start_ms = now
         conn.tx_audio_pcm_bytes += pcm_bytes
-        conn.tx_audio_sends += 1
+        conn.tx_audio_wire_bytes += wire_bytes
+        conn.tx_audio_sends += sends
         conn.tx_audio_wait_ms += wait_ms
         conn.tx_audio_max_wait_ms = max(conn.tx_audio_max_wait_ms, wait_ms)
         window = now - conn.tx_audio_window_start_ms
@@ -962,6 +1240,8 @@ class AudioServer:
             "server.tx.audio_stats",
             window_ms=window,
             audio_ms=conn.tx_audio_pcm_bytes // _PCM_BYTES_PER_MS,
+            audio_format=conn.audio_format,
+            bytes_sent=conn.tx_audio_wire_bytes,
             sends=conn.tx_audio_sends,
             send_wait_ms=round(conn.tx_audio_wait_ms),
             max_send_wait_ms=round(conn.tx_audio_max_wait_ms),
@@ -969,7 +1249,7 @@ class AudioServer:
             sock_unsent=_sock_unsent(conn.ws),
         )
         conn.tx_audio_window_start_ms = now
-        conn.tx_audio_pcm_bytes = conn.tx_audio_sends = 0
+        conn.tx_audio_pcm_bytes = conn.tx_audio_wire_bytes = conn.tx_audio_sends = 0
         conn.tx_audio_wait_ms = conn.tx_audio_max_wait_ms = 0.0
 
     async def send_state(self, state: str) -> None:
@@ -985,6 +1265,10 @@ class AudioServer:
         await self._send({"type": "transcript", "role": role, "text": text})
 
     async def send_model_speaking(self, value: bool) -> None:
+        if not value:
+            # Opus: the reply's last partial frame goes out before the
+            # client hears that the reply is over.
+            await self._flush_opus(self._conn, "model_speaking")
         await logger.ainfo("server.tx.model_speaking", value=value)
         await self._send({"type": "model_speaking", "value": value})
 
@@ -1261,8 +1545,27 @@ class AudioServer:
 
         Fires on seek so the audiobook player can start at the new position
         without the client first playing the tail of the old queue.
+
+        Opus: the partial frame and any packets not yet written are
+        dropped and the encoder reset (OPUS_RESET_STATE) before the clear
+        goes out, with no await in between, so nothing encoded from the
+        cut-off audio follows the clear and the next sound starts from a
+        fresh encoder.
         """
+        conn = self._conn
+        dropped_packets = dropped_pcm = 0
+        if conn is not None and conn.opus_tx is not None:
+            self._cancel_opus_idle_flush(conn)
+            dropped_packets = len(conn.opus_out)
+            conn.opus_out.clear()
+            dropped_pcm = conn.opus_tx.reset()
         await self._send({"type": "audio_clear"})
+        if conn is not None and conn.opus_tx is not None:
+            await logger.adebug(
+                "server.tx.opus_clear",
+                dropped_packets=dropped_packets,
+                dropped_pcm_ms=dropped_pcm // _PCM_BYTES_PER_MS,
+            )
 
     async def send_stream_started(
         self, stream_id: str, label: str | None, preroll_ms: int = 0
@@ -1298,6 +1601,8 @@ class AudioServer:
         `end_reason`: "natural" (played to completion) or "interrupted"
         (user PTT, new tool call, or session reset).
         """
+        # Opus: the stream's last partial frame goes out before the end.
+        await self._flush_opus(self._conn, "stream_ended")
         await logger.ainfo("server.tx.stream_ended", stream_id=stream_id, end_reason=end_reason)
         if self._active_stream_id == stream_id:
             self._active_stream_id = None
@@ -1349,23 +1654,25 @@ class AudioServer:
             }
         )
 
-    async def _send(self, msg: dict[str, Any]) -> None:
+    async def _send(self, msg: dict[str, Any]) -> int:
         """Public send used by every `send_*` callsite. Goes through
         `_send_raw` so frame counters / type histograms / last-tx
         timestamps update for every TX, including the ones from skills
         (`server_event`, `set_volume`, etc.). Pre-T1.21 this was the
         only send path; now `_send_raw` handles the actual write so
         the handshake's pre-dispatch sends stay accounted for too.
+        Returns the bytes written (0 if dropped).
         """
-        await self._send_raw(msg)
+        return await self._send_raw(msg)
 
     async def _send_raw(
         self,
         msg: dict[str, Any],
         *,
         _via_handshake: bool = False,
-    ) -> None:
-        """T1.21 — single chokepoint for every outbound frame.
+    ) -> int:
+        """T1.21 — single chokepoint for every outbound JSON frame (opus
+        audio packets go through `_drain_opus`, same accounting).
 
         - Updates `_conn` frame counters + `tx_types` histogram +
           `last_tx_at_ms` so the diag panel + `client_disconnected`
@@ -1381,11 +1688,13 @@ class AudioServer:
         `_handle_connection` BEFORE the dispatch loop starts; counted
         the same way but documented because they're written before
         any inbound message has hit `_dispatch`.
+
+        Returns the bytes written, 0 when the frame was dropped.
         """
         del _via_handshake  # documentation only; counted normally
         conn = self._conn
         if conn is None or conn.ws is None:
-            return
+            return 0
         encoded = json.dumps(msg)
         with contextlib.suppress(websockets.ConnectionClosed):
             await conn.ws.send(encoded)
@@ -1395,3 +1704,5 @@ class AudioServer:
             msg_type = msg.get("type")
             if isinstance(msg_type, str):
                 conn.tx_types[msg_type] = conn.tx_types.get(msg_type, 0) + 1
+            return len(encoded)
+        return 0

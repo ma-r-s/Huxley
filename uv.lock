@@ -402,6 +402,7 @@ dependencies = [
     { name = "aiosqlite" },
     { name = "huxley-sdk" },
     { name = "openai" },
+    { name = "opuslib-next" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
@@ -428,6 +429,7 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "huxley-sdk", editable = "server/sdk" },
     { name = "openai", specifier = ">=1.60" },
+    { name = "opuslib-next", specifier = ">=1.3.1" },
     { name = "pydantic-settings", specifier = ">=2.7" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pyyaml", specifier = ">=6.0" },
@@ -1167,6 +1169,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ed/59/bdcc6b759b8c42dd73afaf5bf8f902c04b37987a5514dbc1c64dba390fef/openai-2.32.0.tar.gz", hash = "sha256:c54b27a9e4cb8d51f0dd94972ffd1a04437efeb259a9e60d8922b8bd26fe55e0", size = 693286, upload-time = "2026-04-15T22:28:19.434Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1e/c1/d6e64ccd0536bf616556f0cad2b6d94a8125f508d25cfd814b1d2db4e2f1/openai-2.32.0-py3-none-any.whl", hash = "sha256:4dcc9badeb4bf54ad0d187453742f290226d30150890b7890711bda4f32f192f", size = 1162570, upload-time = "2026-04-15T22:28:17.714Z" },
+]
+
+[[package]]
+name = "opuslib-next"
+version = "1.3.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/84/8f/5c91b792689a70f3333e3569832c9a1263c3a736b69f81f43c7131494a8a/opuslib_next-1.3.1.tar.gz", hash = "sha256:fa22ed3934d9cf885e0e88fa52b0b0ea9d51895970e288c3831067f7713e1462", size = 28098, upload-time = "2026-08-10T03:13:33.369Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/58/af/037773144edf48fa4920592be2b91ec7cea5f5587fe1926a529e7de24270/opuslib_next-1.3.1-py3-none-any.whl", hash = "sha256:26a3eb057269bcafdcd363fbd2bae61a35ebe033cc91d264d54d408fe9fca0f6", size = 19499, upload-time = "2026-08-10T03:13:32.512Z" },
 ]
 
 [[package]]

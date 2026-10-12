@@ -122,6 +122,7 @@ skills:
 - [uv](https://docs.astral.sh/uv/)
 - [bun](https://bun.sh) (dev client only)
 - [ffmpeg](https://ffmpeg.org/download.html) on PATH (radio and Telegram skills)
+- libopus, for clients that ask for Opus audio (the ESP32 walkie): `brew install opus` on macOS, `apt install libopus0` on Debian/Ubuntu (Orange Pi). Without it the server still runs and serves those clients PCM.
 - OpenAI API key with Realtime API access
 
 Linux and macOS supported. Windows untested.
