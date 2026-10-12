@@ -461,7 +461,7 @@ fallback with today's server (turn, silent, health PASS).
 **Next**: the server side (in progress), then the bench on Opus (turn,
 stall, slowdown, resume, hearing) and `dev.py link` over real use.
 
-### F-0025: Say how much battery is left · in_progress 2026-10-12
+### F-0025: Say how much battery is left · blocked 2026-10-12 (needs the case opened)
 
 **Ask** (Mario): "a way so the device can tell me how much battery is
 left." Nothing reads the battery today.
@@ -480,8 +480,16 @@ One `battery.probe gpio=N ... verdict=wired|not_wired` line per pin.
 `get_battery` tool from it (saying when it is old or missing), and
 speaks a warning when a reading crosses 20 % and 10 %. No new framework
 concept: client_event already carries device telemetry to skills.
-**Next**: flash the probe when the walkie is idle; if not wired, the
-jumper needs a soldering iron inside the case (Mario's call).
+**Probe result** (c9a022d2 on the walkie, 2026-10-12): GPIO1 floats at
+2632 mV (spread 725) and drops to 0 pulled down; GPIO6 2594 mV (spread
+351), pulled 3 mV. Both `not_wired`: a wired divider would read ~1.3 V
+and hold ~0.5 V. No software path gives a level (the charger's STAT only
+drives the LED; the 3.3 V rail is regulated until the cell is empty).
+**Blocked on Mario**: open the case and either bridge R78's pads 1 and 3
+(BAT_ADC to GPIO6, the board's own 1 % divider), or wire 200K from the
+cell's + to header IO6 and 100K from IO6 to GND. Either lands on GPIO6;
+`battery` then says `gpio=6 ... verdict=wired`, and the design above
+gets built.
 
 Note on IDs: F-0011 to F-0013 were used in code comments and commit
 messages (boot buzz, decode scratch, Wi-Fi power save) but their
