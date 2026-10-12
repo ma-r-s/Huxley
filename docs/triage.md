@@ -5456,3 +5456,45 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 **Smoke 2 (15:59Z)**: "pon silencios de soledad" (misheard "cien años de soledad") was searched as "Silencio", kind `any`, and played an unrelated song: the model cut the heard words instead of passing them as heard. Then "pon el audiolibro de cien años de soledad" played the book from chapter 1, where the earlier test had left it (Spotify's resume works end to end on the walkie).
 
 **DoD left**: Mario asks for a book on the walkie: it plays, "pausa" / "sigue" / "siguiente capítulo" work, "¿qué está sonando?" names the book.
+
+## T1.40: Books for grandpa: everything he'd ask of a Spotify audiobook, and every failure, spoken plainly
+
+**Status**: `in_progress` (2026-10-12) · **Effort**: M
+
+**Ask** (Mario, after T1.39 worked): think as grandpa, the least technical user possible. A book that isn't available must be said clearly; "¿qué libros me recomiendas?" must get books he can actually play; next / previous chapter, start over, and so on; and Mario, testing, wants to erase a book's progress.
+
+**Facts that bound the design** (2026-10-12):
+- Soloist's WebSocket (reference): `play` takes only `uri` (track, album, playlist, episode; no offset), `skip_next`, `skip_prev` ("previous track or restart current"), `seek {position_ms}`, repeat/shuffle; `playback_state.position {position_ms, timestamp_ms, speed}` and `position_sync` give the position; `options.playback_speed` is reported but there is no command to set it. So: chapters and seeking yes, speed no.
+- Spotify keeps each account's place in each book (T1.39: a replay resumed at 0:09). Playing chapter 1 from 0:00 moves that place back to the start: that is "desde el principio", and Mario's reset.
+- The Web API with our app token lists a book's chapters (number, name, `spotify:episode:` URI, duration) but can't tell included from purchase-only: "Cien años de soledad" (included) and "El extranjero" (purchase-only, "Comprar" in the app) both answer `is_playable: true` and every chapter `restrictions.reason: payment_required`. Whether a household-account user token (OAuth, one approval) shows the difference is untested.
+- Search returns reading guides next to the books ("El extranjero (Guía de lectura): Resumen y análisis").
+
+**Grandpa's requests** (tools are new and book-only, so the small model never mixes them with music):
+
+| He says | Tool | What happens |
+|---|---|---|
+| "pon Cien años de soledad", "pon el libro de <autor>" | `play_book(title)` | search books (guides and summaries dropped, his language first), play; continues where he left it |
+| "sigue con el libro", "pon mi libro", "pon el libro" | `play_book()` | the last book he listened to, where he left it; none yet: asks which book |
+| "desde el principio", "empiézalo de nuevo" | `play_book(title?, from_beginning: true)` | chapter 1 at 0:00 (also Mario's reset) |
+| "siguiente capítulo", "el capítulo anterior", "repite el capítulo", "ve al capítulo 5" | `book_control(next_chapter / previous_chapter / restart_chapter / go_to_chapter)` | moves and keeps playing; at the ends: "ya es el último / el primer capítulo" |
+| "regresa un poco", "repite eso", "adelanta cinco minutos" | `book_control(back / forward, seconds)` | default 30 s, kept inside the chapter |
+| "pausa", "sigue" | `book_control(pause / resume)` | as music |
+| "¿qué libro es?", "¿en qué capítulo voy?", "¿cuánto le falta?" | `book_status()` | book, author, chapter X of N, minutes left in the chapter, about how long in the book; the book comes back after |
+| "¿qué libros me recomiendas?", "¿qué libros hay de <autor>?", "¿qué libros he empezado?" | `find_books(query?)` | up to 5 (title, author, hours); books Spotify refused here are left out; started ones marked; no query: the started books, then asks what author or kind (no default taste) |
+| "más despacio" | (persona) | speed can't change: said so, offers to keep listening |
+
+**Every failure, as an exact line** (the T1.39 lesson: a stated fact plus the exact words, or the model contradicts it):
+- not found: "No encontré ese libro en Spotify. ¿Busco otro?"
+- refused, never played here: "Ese libro no se puede poner: Spotify lo vende aparte, o ya se acabaron las horas de libros de este mes. ¿Busco otro?"
+- refused, but it played here before (so it is included): "Se acabaron las horas de libros de este mes en Spotify."
+- the book ended: "Se terminó <libro>." and asks if he wants another
+- another device took it: "El libro pasó a sonar en otro aparato."
+- the sound cut: "Se cortó el libro. ¿Lo vuelvo a poner?"
+- Spotify offline / not connected: as music, offering the radio
+- chapter control with no book: "No hay ningún libro puesto."
+
+**State the skill keeps** (`ctx.storage`): the current book (uri, title, author), the books started (for "sigue" and the list), and the books Spotify refused here (never recommended again). Positions stay Spotify's.
+
+**To verify on Soloist before relying on it** (silent tests, walkie idle): does `play <chapter uri>` keep playing into the next chapter; `skip_prev` at 0:00 vs mid-chapter; `seek`; position events.
+
+**Later, needs Mario** (one OAuth approval by the household account): check whether a user token marks included books; if it does, recommendations list only playable books and a refusal can say exactly which cause.
