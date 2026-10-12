@@ -5583,7 +5583,7 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 **Definition of Done** (locked per phase when Mario answers; the whole plan's exit is phase 6):
 - Phase 0: UPS with clean shutdown on the box, router and modem; dead-man check alerting Mario's phone; code pushed after the private-data scan; production box and dev accounts decided.
 - Phase 1: production on the box, persona at boot, `/health`, logs by date, recorder writing Ogg/Opus per press, answer and call leg with `recorder.segment` lines, offline alerts.
-- Phase 2: the case-open list done once (battery, VBUS, R15, pinhole, partition table, flash dump, efuse summary), drain-and-recharge test passed.
+- Phase 2: the case-open list done once (battery, VBUS, R15, partition table, flash dump, efuse summary; the pinhole was dropped), drain-and-recharge test passed.
 - Phase 3: the twin board on `wss://` through the tunnel with both tokens; production refuses everything but the device role.
 - Phase 4: two updates and one forced rollback on the twin board through the server link only; the ladder, watchdog supervisor and black box tested on the bench.
 - Phase 5: T1.42's page, archive and every rule, each rule with a test.

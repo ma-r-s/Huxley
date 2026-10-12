@@ -282,8 +282,13 @@ All in one session with the case open, because it never opens again:
   same way.
 - Remove R15 (the 0 ohm link from the expander's INT# to GPIO0; the firmware
   never uses INT#): no reset can ever boot download mode again.
-- A pinhole to the board's RST button (designed by the case session): staff
-  can restart it with a paperclip.
+- No reset pinhole: Mario dropped it (2026-10-12, "I don't want to make
+  any holes or print anything else"). Staff can't reach the board's buttons,
+  so a hung walkie has to recover by itself: the supervisor watchdog, the
+  escalation ladder and a remote reboot (W5), with the black box saying why.
+  Staff have no restart at all: the rocker isn't reachable with the case
+  closed either. Short of opening the case, a walkie hung beyond the
+  firmware's reach waits for its battery to run flat.
 - Check the cell has a protection board.
 - Partition table: OTA slots 2 MB to 4 MB each (image 1.3 MB, 10 MB free),
   NVS 24 KB to 64 KB, coredump 64 KB to 256 KB. Final bootloader. Last USB
@@ -323,8 +328,8 @@ All in one session with the case open, because it never opens again:
    restart cloudflared mid-answer and mid-call, force a rollback, run the
    restore drill. Exit: no manual touch for 7 days, two remote updates, one
    forced rollback, every alert fired and received.
-7. **Handover** with a staff card: what it is, how to charge it, the
-   paperclip restart, wall charger only (never a computer), the MAC (for
+7. **Handover** with a staff card: what it is, how to charge it, wall
+   charger only (never a computer), the MAC (for
    their IT), who to call.
 
 ## Open questions for Mario
@@ -360,7 +365,7 @@ and out of Watchtower; deploy at night; storage estimate corrected (media is
 
 Firmware critic (2026-10-12): taken: the confirm proves the next update's
 path (B1); the rollback image must be able to come back (B2); R15 removal,
-RST pinhole, charge-only adapter (B3); battery behaviour tested, low-battery
+RST pinhole, charge-only adapter (B3; both later dropped by Mario); battery behaviour tested, low-battery
 deep sleep, VBUS divider (B4); rollback bookkeeping, one escalation ladder,
 backoff, supervisor watchdog, black box, bigger coredump and NVS, token
 rotation. Cut on its advice: the recovery partition, secure boot and flash
