@@ -107,6 +107,48 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
+# A peer that vanishes while audio is in flight (the walkie switched off
+# mid-reply) leaves unacknowledged data in the socket: the kernel keeps
+# retransmitting for ~15 min (tcp_retries2), and the websockets keepalive
+# can't help, because its ping waits behind the same full buffer before
+# its timeout even starts. Bounding how long sent data may stay unACKed
+# makes the kernel abort instead, so presence drops within this many ms
+# and a proactive turn waits for the walkie rather than being said into
+# a dead socket (T1.44). 2026-10-12: a zombie walkie connection held the
+# server's speaker for 15 min.
+UNACKED_DATA_TIMEOUT_MS = 30_000
+# Darwin's per-socket equivalent (seconds), <netinet/tcp.h>.
+_TCP_RXT_CONNDROPTIME = 0x80
+
+
+def _raw_socket(ws: Any) -> Any:
+    """The connection's OS socket, or None (a test double, a transport
+    that doesn't expose one)."""
+    transport = getattr(ws, "transport", None)
+    get = getattr(transport, "get_extra_info", None)
+    return get("socket") if callable(get) else None
+
+
+def bound_unacked_data(sock: Any, timeout_ms: int = UNACKED_DATA_TIMEOUT_MS) -> str | None:
+    """Ask the kernel to abort the connection when sent data stays
+    unacknowledged for `timeout_ms`. Returns the option used
+    ("tcp_user_timeout" on Linux, "tcp_rxt_conndroptime" on macOS) or
+    None when the platform has neither or the call fails."""
+    if sock is None:
+        return None
+    try:
+        user_timeout = getattr(socket, "TCP_USER_TIMEOUT", None)
+        if user_timeout is not None:
+            sock.setsockopt(socket.IPPROTO_TCP, user_timeout, timeout_ms)
+            return "tcp_user_timeout"
+        if sys.platform == "darwin":
+            sock.setsockopt(socket.IPPROTO_TCP, _TCP_RXT_CONNDROPTIME, max(1, timeout_ms // 1000))
+            return "tcp_rxt_conndroptime"
+    except OSError:
+        return None
+    return None
+
+
 PROTOCOL_VERSION = 2
 
 # Keys the log pipeline owns: structlog's own (`event`, `level`,
@@ -1320,6 +1362,7 @@ class AudioServer:
             persona=selected_persona,
             audio_format=conn.audio_format,
             role=conn.role,
+            unacked_bound=bound_unacked_data(_raw_socket(ws)),
         )
         if access.role in (ROLE_DEVICE, ROLE_LOCAL):
             await logger.ainfo(

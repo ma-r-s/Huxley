@@ -574,3 +574,5 @@ The dev workflow:
 5. **The LLM** proposes a fix.
 
 This works because every event in the log is structured, every decision is logged with its inputs, and the namespacing tells you instantly which component made which call. If a future bug isn't diagnosable from the log, the fix isn't just the bug — it's also adding the log line that would have caught it.
+
+- **`client_connected` `unacked_bound`**: how the server bounded unacknowledged data on this connection (`tcp_user_timeout` on Linux, `tcp_rxt_conndroptime` on macOS, null if neither): a peer that vanishes mid-send (the walkie switched off mid-reply) is dropped within 30 s (`UNACKED_DATA_TIMEOUT_MS`) instead of the kernel's ~15 min, so presence drops and proactive turns wait (T1.44).
