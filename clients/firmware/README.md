@@ -37,6 +37,8 @@ components/
                (hux_debounce, host-testable)
   hux_log/     Log hook: serial + streamed to the server as client_event
   hux_console/ Bench commands on the USB serial console (talk, say, info…)
+  hux_ota/     Updates over Wi-Fi (esp_https_ota) + rollback self-test
+  hux_dev/     Developer door over Wi-Fi: /info, /cmd, /coredump (token)
 ```
 
 Invariants (see [`../CLAUDE.md`](../CLAUDE.md) for the full project
@@ -48,8 +50,9 @@ standards):
    alone so the wire layer is unit-testable on a host.
 3. **Pre-allocated audio path**: ring buffers sized at init in PSRAM;
    no `malloc` per frame.
-4. **Dual-OTA partitions** reserved from day 1 — adding OTA is additive,
-   not a flash-layout migration.
+4. **Dual-OTA partitions** reserved from day 1, used since F-0021:
+   updates go over Wi-Fi into the other slot, and a new image that
+   crashes in its first 30 s boots the old one again.
 
 ## Wiring the talk button
 
@@ -96,6 +99,29 @@ cp main/secrets.example.h main/secrets.h
 ```
 
 ## Build, flash, monitor
+
+Once the board has this firmware and is on the Wi-Fi, it never needs the
+USB cable again (F-0021). The server must be running (that's how the
+tool finds the board and reads its log):
+
+```sh
+idf.py build
+python3 tools/dev.py flash     # over Wi-Fi: ~10 s, then it reboots into it
+python3 tools/dev.py info      # version, uptime, heap, RSSI, slot
+python3 tools/dev.py cmd selftest   # any console command
+python3 tools/dev.py coredump  # fetch and decode the last crash
+```
+
+`flash` refuses a build with the version already running. The version
+is `git describe` as of the last cmake configure, so a commit gets a new
+one but an uncommitted test build keeps the old one: `--force` sends it
+anyway. A new image confirms itself after 30 s; if it crashes before
+that, the bootloader boots the previous one, and `coredump` shows why.
+The token for all of this is `HUX_DEV_TOKEN` in `main/secrets.h`. USB is
+for the first flash, the bootloader, the partition table and the bench
+clips.
+
+Over USB:
 
 ```sh
 . ~/esp/esp-idf/export.sh
@@ -186,8 +212,10 @@ evicts the first, so close the PWA tab while testing the board.
   says who it is on every connect (`client_event: device`: version, reset
   reason, RSSI, volume)
 - Bench console on USB serial: `talk`, `release`, `say <n>`, `selftest`,
-  `tone`, `vol`, `pa on|off`, `wifi on|off`, `wifistat`, `info`
-  (`components/hux_console/include/hux_console.h`)
+  `tone`, `vol`, `pa on|off`, `wifi on|off`, `wifistat`, `info`,
+  `reboot`, `ota <url>` (`components/hux_console/include/hux_console.h`)
+- Over Wi-Fi (`tools/dev.py`): updates with rollback, the same console
+  commands, health, crash dumps
 
 ## What's next
 

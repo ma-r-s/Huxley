@@ -134,7 +134,8 @@ Firmware (ESP-IDF must be sourced first):
 . ~/esp/esp-idf/export.sh
 cd clients/firmware
 idf.py build                                              # compile for ESP32-S3
-clients/firmware/tools/flash.sh                           # flash + boot (never `idf.py flash`: it can strand the S3 in download mode)
+python3 clients/firmware/tools/dev.py flash               # update over Wi-Fi, no cable (also: info, cmd <line>, log, coredump)
+clients/firmware/tools/flash.sh                           # USB flash + boot, first flash only (never `idf.py flash`: it can strand the S3 in download mode)
 clients/firmware/tools/serial-capture.sh                  # console log without resetting the board (never idf.py monitor)
 clients/firmware/tools/flash.sh --unstick                 # board silent, "waiting for download": boot it from the Mac
 

@@ -342,6 +342,33 @@ so nothing sounds different at boot. Read back from the codec register.
 
 ---
 
+## 2026-10-12: Updates over Wi-Fi: ESP-IDF OTA, rollback after 30 s up, a token
+
+**Decision**: the board updates itself on request (`ota <url>` from the
+developer door or the console) with ESP-IDF's `esp_https_ota` into the
+other app slot, with ESP-IDF app rollback on. A new image marks itself
+valid after 30 s without a crash. The developer door (`hux_dev`) is
+plain HTTP on port 80 behind a shared token from `secrets.h`.
+
+**Why**: the walkie is sealed in its case, so USB costs Mario a
+teardown. These are the standard pieces (Espressif's
+`advanced_https_ota`, the Tasmota/ESPHome web-updater shape), not a
+custom protocol. Pull, not push: the developer's tool serves the file
+and the board fetches it, so the board needs no server-side update
+logic. Valid after 30 s up, not "after the server answered": a server
+outage must not roll back a good image (Fleet's push OTA had that
+problem). The 30 s cover boot, Wi-Fi, the WebSocket and the first
+seconds of audio, where today's crashes happen; a bug that crashes
+later is caught by the core dump instead. HTTP because the home LAN is
+the trust boundary and certificates on a dev door add work with no
+attacker in the model; the token keeps other devices on the LAN from
+driving it.
+
+**Revisit**: a build for someone else's network (HTTPS + signed images,
+`CONFIG_SECURE_SIGNED_APPS`), or a crash that only shows after 30 s.
+
+---
+
 ## 2026-10-11: Bench seams in the product firmware
 
 **Decision**: a serial console (`hux_console`), an electrical loopback

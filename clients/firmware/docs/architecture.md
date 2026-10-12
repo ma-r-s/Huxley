@@ -47,6 +47,8 @@ whichever is wrong in the same commit.
 | `hux_board`             | I2C bus + TCA9555 (buttons, speaker PA)                                  | Knows what a pin means beyond its name                        |
 | `hux_button`            | Talk input (GPIO7 or K2), polled and debounced                           | Decides what a press means (that's hux_app)                   |
 | `hux_console`           | Bench commands on the USB serial console (talk, say, selftest, info…)    | Anything the product needs: it is a test seam                 |
+| `hux_ota`               | Updates over Wi-Fi into the other slot; confirms a new image after 30 s  | Decides when to update (a developer asks)                     |
+| `hux_dev`               | Developer door over Wi-Fi: `/info`, `/cmd` (console lines), `/coredump`  | Answers without the token                                     |
 
 **The dependency graph flows downward only.** `hux_app` requires
 `hux_proto`; `hux_net` requires `hux_app` + `hux_proto` + `hux_log`
@@ -71,6 +73,8 @@ FreeRTOS tasks, in priority order (higher = more important):
 | `hux_spk`                  | `hux_audio_init`     | 8    | 6 KB  | Pop the PCM ring (or silence), I2S TX; services clears     |
 | `hux_button`               | `hux_button_start`   | 4    | 4 KB  | Poll GPIO7 + K2 every 10 ms, debounce, post press/release  |
 | `hux_console`              | `hux_console_start`  | 3    | 5 KB  | Poll the USB RX FIFO every 20 ms, run bench commands       |
+| _httpd_ (`hux_dev`)        | `hux_dev_start`      | 3    | 8 KB  | Developer door; runs `/cmd` console lines on this task     |
+| `hux_ota`                  | `hux_ota_start`      | 3    | 8 KB  | Only during an update: download, write, verify, reboot     |
 
 The console's `info` prints each task's smallest free stack so far
 (and the heap and PSRAM minimums); `tools/bench.py` fails below 512 B.
@@ -183,7 +187,7 @@ Flash (16 MB):
   0x009000  nvs                                 (24 KB)
   0x00f000  otadata                             (8 KB)
   0x011000  phy_init                            (4 KB)
-  0x020000  ota_0 app slot                      (2 MB)
+  0x020000  ota_0 app slot                      (2 MB; updates alternate)
   0x220000  ota_1 app slot                      (2 MB)
   0x420000  storage (SPIFFS)                    (1.75 MB)
   0x420000  (clips for the bench `say`, tools/clips.py, in storage)

@@ -263,6 +263,42 @@ README, debugging guide and CLAUDE.md say not to use `idf.py flash` /
 `monitor` on this board. On battery or a plain charger nothing drives
 those lines: a walkie in use can't get there.
 
+### F-0021: Updates and debugging over Wi-Fi · done 2026-10-12
+
+**Problem**: every firmware change meant the USB cable, and the walkie
+lives in a closed case (4 screws, ~20 cables). Mario: "so I don't ever
+have to connect this device again to this computer unless absolutely
+necessary", and "look what people have built ... and implement that".
+**What others do** (looked up, not invented): ESP-IDF's own
+`esp_https_ota` with app rollback (the `advanced_https_ota` example,
+the base of ESPHome's and Tasmota's updaters); Tasmota/ESPHome's
+pattern of a small authenticated HTTP endpoint on the device; ESP-IDF's
+core dump to flash, fetched later. The Fleet project's push-style OTA
+marked images valid only after a network check, which rolls back a
+good image when the server is down; this one doesn't.
+**Built**: `hux_ota` (on-demand `esp_https_ota` into the other slot;
+refuses another project's image and the running version unless forced;
+a new image confirms itself after 30 s up, else the bootloader boots
+the old one), `hux_dev` (port 80, token in `X-Huxley-Token`: `GET
+/info`, `POST /cmd` = any console command, `GET /coredump`), console
+`reboot` and `ota <url> [force]`, `tools/dev.py` (finds the board in the
+server log, serves `build/`, follows the board's lines, keeps each
+flashed ELF as `build/elf/<version>-<sha9>.elf` and decodes a dump with
+the one whose hash it carries).
+**Evidence** (on the board in its closed case, no cable used for any of
+it): `dev.py flash` 02cc5438 in 11 s, confirmed 30 s later in ota_1; a
+test image that aborts in `app_main` was installed, crashed, and the
+bootloader went back to 02cc5438 by itself; `dev.py coredump` fetched
+the 64 KB dump over Wi-Fi and decoded `abort()` at `app_main
+main.c:118` with the test image's ELF (picked by hash, not the running
+one); flashing the running version prints `not updated: ... ota.refused`
+and exits 1.
+**Gaps**: after that rollback the old image reported `reset=SW_RESET`,
+not `PANIC`: only the missing `ota.confirmed` and the waiting dump tell
+a rollback apart (worth a `rollback` field in `client_event device`).
+HTTP, not HTTPS: fine on the home LAN, the token is the lock. The
+bootloader and partition table still need USB.
+
 Note on IDs: F-0011 to F-0013 were used in code comments and commit
 messages (boot buzz, decode scratch, Wi-Fi power save) but their
 entries never landed here; F-0003 (the speaker path) shipped as v0.3.x

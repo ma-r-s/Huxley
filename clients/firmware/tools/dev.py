@@ -20,10 +20,12 @@ bootloader goes back to the previous one (ESP-IDF app rollback).
 """
 
 import argparse
+import contextlib
+import hashlib
 import http.server
 import json
-import os
 import re
+import shutil
 import socket
 import socketserver
 import subprocess
@@ -31,27 +33,30 @@ import sys
 import threading
 import time
 import urllib.request
+from pathlib import Path
 
-FW = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-REPO = os.path.dirname(os.path.dirname(FW))
-SERVER_LOG = os.path.join(REPO, "server", "runtime", "logs", "huxley.log")
-IMAGE = os.path.join(FW, "build", "huxley-firmware.bin")
-ELF = os.path.join(FW, "build", "huxley-firmware.elf")
+FW = Path(__file__).resolve().parent.parent
+REPO = FW.parent.parent
+SERVER_LOG = REPO / "server" / "runtime" / "logs" / "huxley.log"
+IMAGE = FW / "build" / "huxley-firmware.bin"
+ELF = FW / "build" / "huxley-firmware.elf"
+# Every image `flash` sends leaves its ELF here as <version>-<sha9>.elf: a
+# crash dump decodes only against the ELF of the build that crashed, and
+# after a rollback that is not the one running.
+ELF_ARCHIVE = FW / "build" / "elf"
 
 
 def token() -> str:
-    m = re.search(
-        r'#define\s+HUX_DEV_TOKEN\s+"([^"]+)"', open(os.path.join(FW, "main", "secrets.h")).read()
-    )
+    m = re.search(r'#define\s+HUX_DEV_TOKEN\s+"([^"]+)"', (FW / "main" / "secrets.h").read_text())
     if not m:
         sys.exit("no HUX_DEV_TOKEN in main/secrets.h (see secrets.example.h)")
     return m.group(1)
 
 
-def server_events(since: float = 0.0):
+def server_events():
     """The server log as dicts, newest last (it's JSON lines)."""
     try:
-        with open(SERVER_LOG) as f:
+        with SERVER_LOG.open() as f:
             for line in f:
                 try:
                     yield json.loads(line)
@@ -86,15 +91,15 @@ def request(host: str, path: str, body: bytes | None = None, timeout: float = 10
 
 def log_tail_from() -> int:
     try:
-        return os.path.getsize(SERVER_LOG)
+        return SERVER_LOG.stat().st_size
     except OSError:
         return 0
 
 
-def board_lines(offset: int, until: float, stop=None) -> int:
+def board_lines(offset: int, until: float, stop=None) -> tuple[int, str]:
     """Print the board's log lines (from the server log) until `until` or
-    until a line matches `stop`; returns the new offset."""
-    with open(SERVER_LOG) as f:
+    until a line matches `stop`; returns the new offset and that line."""
+    with SERVER_LOG.open() as f:
         f.seek(offset)
         while time.time() < until:
             line = f.readline()
@@ -109,22 +114,28 @@ def board_lines(offset: int, until: float, stop=None) -> int:
                 text = f"{e.get('level', '?')[:1].upper()} {e.get('tag')}: {e.get('line')}"
                 print("  " + text, flush=True)
                 if stop and re.search(stop, text):
-                    return f.tell()
+                    return f.tell(), text
             elif e.get("event") == "client.device" and e.get("shell") == "firmware":
                 print(
                     f"  [server] board connected: version {e.get('version')} reset {e.get('reset')}",
                     flush=True,
                 )
                 if stop and re.search(stop, f"device {e.get('version')}"):
-                    return f.tell()
-        return f.tell()
+                    return f.tell(), f"device {e.get('version')}"
+        return f.tell(), ""
 
 
-def image_version(path: str) -> str:
+def image_version(path: Path) -> str:
     """esp_app_desc_t.version, at 0x30 in an ESP32 app image."""
-    with open(path, "rb") as f:
+    with path.open("rb") as f:
         f.seek(0x30)
         return f.read(32).split(b"\0")[0].decode()
+
+
+def elf_sha9(path: Path) -> str:
+    """What a core dump records of its app: the ELF's SHA-256, 9 hex chars
+    (CONFIG_APP_RETRIEVE_LEN_ELF_SHA)."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:9]
 
 
 def local_ip_towards(host: str) -> str:
@@ -136,31 +147,42 @@ def local_ip_towards(host: str) -> str:
 
 
 def cmd_flash(host: str, force: bool) -> int:
-    if not os.path.exists(IMAGE):
+    if not IMAGE.exists():
         sys.exit(f"no {IMAGE}: run idf.py build")
     version = image_version(IMAGE)
-    serve_dir = os.path.dirname(IMAGE)
+    if ELF.exists():
+        ELF_ARCHIVE.mkdir(exist_ok=True)
+        shutil.copyfile(ELF, ELF_ARCHIVE / f"{version}-{elf_sha9(ELF)}.elf")
 
     class Quiet(http.server.SimpleHTTPRequestHandler):
         def __init__(self, *a, **kw):
-            super().__init__(*a, directory=serve_dir, **kw)
+            super().__init__(*a, directory=str(IMAGE.parent), **kw)
 
         def log_message(self, *a):
             pass
 
-    httpd = socketserver.ThreadingTCPServer(("0.0.0.0", 0), Quiet)
+    class Server(socketserver.ThreadingTCPServer):
+        def handle_error(self, request, client_address):
+            # The board hangs up mid-download when it refuses an image: not news.
+            if not isinstance(sys.exc_info()[1], ConnectionError):
+                super().handle_error(request, client_address)
+
+    httpd = Server(("0.0.0.0", 0), Quiet)
     port = httpd.server_address[1]
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    url = f"http://{local_ip_towards(host)}:{port}/{os.path.basename(IMAGE)}"
-    print(f"flashing {version} ({os.path.getsize(IMAGE) // 1024} KB) to {host} from {url}")
+    url = f"http://{local_ip_towards(host)}:{port}/{IMAGE.name}"
+    print(f"flashing {version} ({IMAGE.stat().st_size // 1024} KB) to {host} from {url}")
     offset, t0 = log_tail_from(), time.time()
     request(host, "/cmd", f"ota {url}{' force' if force else ''}".encode())
-    offset = board_lines(
+    offset, why = board_lines(
         offset,
         t0 + 120,
         stop=rf"ota\.failed|ota\.refused|ota\.not_started|device {re.escape(version)}",
     )
     httpd.shutdown()
+    if re.search(r"ota\.(failed|refused|not_started)", why):
+        print(f"not updated: {why}")
+        return 1
     info = json.loads(request(host, "/info"))
     if info.get("version") == version:
         print(
@@ -172,6 +194,36 @@ def cmd_flash(host: str, force: bool) -> int:
     return 1
 
 
+def cmd_coredump(host: str, out: Path, elf: Path | None) -> int:
+    out.parent.mkdir(parents=True, exist_ok=True)
+    data = request(host, "/coredump", timeout=30)
+    out.write_bytes(data)
+    print(f"{len(data)} bytes -> {out}")
+    if data[:4] == b"\xff\xff\xff\xff":
+        print("empty: no crash recorded")
+        return 0
+    if elf is None:
+        # The ELF whose hash the dump carries: the build that crashed.
+        candidates = [e for e in [ELF, *sorted(ELF_ARCHIVE.glob("*.elf"))] if e.exists()]
+        elf = next((e for e in candidates if elf_sha9(e).encode() in data), None)
+        if elf is None:
+            sys.exit("no ELF here matches this dump (built elsewhere?): --elf PATH")
+    print(f"decoding with {elf}")
+    return subprocess.call(
+        [
+            sys.executable,
+            "-m",
+            "esp_coredump",
+            "info_corefile",
+            "-c",
+            str(out),
+            "-t",
+            "raw",
+            str(elf),
+        ]
+    )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -180,6 +232,7 @@ def main() -> int:
     ap.add_argument("args", nargs="*")
     ap.add_argument("--host", help="the board's IP (default: from the server log)")
     ap.add_argument("--force", action="store_true", help="flash even if it runs this version")
+    ap.add_argument("--elf", type=Path, help="coredump: decode with this ELF")
     a = ap.parse_args()
     host = a.host or board_ip()
 
@@ -193,22 +246,11 @@ def main() -> int:
     elif a.what == "flash":
         return cmd_flash(host, a.force)
     elif a.what == "log":
-        try:
+        with contextlib.suppress(KeyboardInterrupt):
             board_lines(log_tail_from(), float("inf"))
-        except KeyboardInterrupt:
-            pass
     elif a.what == "coredump":
-        out = a.args[0] if a.args else "/tmp/huxley-debug/coredump.bin"
-        os.makedirs(os.path.dirname(out), exist_ok=True)
-        data = request(host, "/coredump", timeout=30)
-        open(out, "wb").write(data)
-        print(f"{len(data)} bytes -> {out}")
-        if data[:4] == b"\xff\xff\xff\xff":
-            print("empty: no crash recorded")
-            return 0
-        return subprocess.call(
-            [sys.executable, "-m", "esp_coredump", "info_corefile", "-c", out, "-t", "raw", ELF]
-        )
+        out = Path(a.args[0] if a.args else "/tmp/huxley-debug/coredump.bin")
+        return cmd_coredump(host, out, a.elf)
     return 0
 
 

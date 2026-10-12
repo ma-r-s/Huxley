@@ -149,24 +149,52 @@ If you see `reset=PANIC`, the previous boot crashed. Check:
 ## Coredump — reading a crash
 
 When the board panics with coredumps enabled, it writes a binary
-image to the `coredump` flash partition before resetting. After the
-board reboots (or while it's halted), pull the dump:
+image to the `coredump` flash partition before resetting. Over Wi-Fi,
+case closed:
 
 ```sh
 . ~/esp/esp-idf/export.sh
-cd firmware
-python -m esp_coredump info_corefile \
-  --port /dev/cu.usbmodem1101 \
+python3 tools/dev.py coredump
+```
+
+It fetches the partition (`GET /coredump`) and decodes it with the ELF
+of the build that crashed: the dump carries that ELF's SHA-256 (9 hex
+chars), and `dev.py flash` keeps every ELF it sends in `build/elf/` as
+`<version>-<sha9>.elf`. That matters after a rollback, when the image
+that crashed is not the one running. Over USB, for a board off the
+Wi-Fi:
+
+```sh
+python -m esp_coredump info_corefile --port /dev/cu.usbmodem1101 \
   build/huxley-firmware.elf
 ```
 
 The output shows the faulting task, the backtrace with source-line
-numbers (because we have the matching ELF in `build/`), and the
-register state at the moment of panic.
+numbers, and the register state at the moment of panic. A build flashed
+from another checkout has no ELF here: `--elf PATH`.
 
-If you don't have the ELF (a field device), you need the ELF that
-was flashed — save `build/huxley-firmware.elf` alongside every
-release binary.
+## Over Wi-Fi: the developer door
+
+`hux_dev` (F-0021) is an HTTP server on port 80, Tasmota-style, behind
+the `X-Huxley-Token` header (`HUX_DEV_TOKEN` in `main/secrets.h`; without
+one it doesn't start, `dev.off`). `tools/dev.py` wraps it:
+
+| Endpoint         | `dev.py`             | What                                                        |
+| ---------------- | -------------------- | ----------------------------------------------------------- |
+| `GET /info`      | `info`               | version, uptime, reset reason, heap, PSRAM, ring, volume, RSSI, slot and its state |
+| `POST /cmd`      | `cmd <line>`, `flash` | one console command (same as on USB); replies `ok`, results go to the log |
+| `GET /coredump`  | `coredump`           | the core dump partition, raw                                |
+
+The board's log already streams to the server (`client.huxley.firmware_log`),
+so `dev.py cmd` and `dev.py log` print the board's own lines from
+`server/runtime/logs/huxley.log`; that is also how it finds the board's
+IP. Update events: `ota.start`, `ota.image`, `ota.progress kb=`,
+`ota.refused`, `ota.failed`, `ota.done`; after the reboot `ota.boot` and
+`ota.pending` happen before Wi-Fi is up (serial only), and
+`ota.confirmed slot=` reaches the server 30 s in. A rollback shows as
+the old version reconnecting (`client.device`) without that
+`ota.confirmed`, and a crash dump waiting (`dev.py coredump`); `dev.py
+info` then says which slot runs. Wrong token: `dev.denied uri=`.
 
 ## Diagnosing WS / TCP flaps
 
