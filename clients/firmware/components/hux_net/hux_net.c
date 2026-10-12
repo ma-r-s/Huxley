@@ -204,6 +204,8 @@ static void health_count(hux_net_count_t *slots, int code) {
  * reads cross CPU cores (set from app_main, called on the WS client
  * task) so it's atomic. */
 static _Atomic(hux_net_audio_sink_fn) s_audio_sink = NULL;
+/* Server audio received, ever, in ms (the hello's received_ms_last_conn). */
+static _Atomic uint32_t s_rx_audio_total_ms = 0;
 /* `audio_clear` runs on the same task as `audio`, in arrival order: a
  * clear posted through hux_app's queue could land after the next reply's
  * first chunks and wipe them. */
@@ -709,6 +711,7 @@ static void forward_ws_text(const esp_websocket_event_data_t *data) {
                 s_rx_msgs++;
                 s_rx_audio_msgs++;
                 s_rx_audio_bytes += HUX_OPUS_FRAME_SAMPLES * 2; /* as PCM: audio_ms stays true */
+                atomic_fetch_add(&s_rx_audio_total_ms, HUX_OPUS_FRAME_MS);
                 int64_t t0 = esp_timer_get_time();
                 hux_opus_rx_packet((const uint8_t *)data->data_ptr, (size_t)data->data_len);
                 uint32_t busy = (uint32_t)(esp_timer_get_time() - t0); /* a full queue waits */
@@ -1390,6 +1393,10 @@ bool hux_net_send_text(const char *data, size_t len) {
         return false;
     }
     return true;
+}
+
+uint32_t hux_net_rx_audio_ms(void) {
+    return atomic_load(&s_rx_audio_total_ms);
 }
 
 void hux_net_set_audio_sink(hux_net_audio_sink_fn sink) {

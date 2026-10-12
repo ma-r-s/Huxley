@@ -626,7 +626,8 @@ static void spk_task(void *unused) {
             }
             got_samples = SPK_CHUNK_SAMPLES;
             audio_chunks++;
-            atomic_fetch_add_explicit(&s_played_chunks, 1, memory_order_relaxed);
+            /* Not s_played_chunks: a tone is the walkie's own sound, and
+             * the hello's played_after_drop_ms counts server audio (T1.44). */
         } else if (got_samples == 0) {
             /* Ring empty — write a full chunk of silence so the DMA
              * stays fed. esp_codec_dev_write blocks on DMA; this

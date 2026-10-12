@@ -284,7 +284,10 @@ discarded_ms=`). A press during the outage fixes both figures at that
 press: it ends the playback, and the spoken "no connection" it gets
 isn't the server's audio. A connection replaced with no drop seen (a
 `server` switch, the ladder restarting the client) counts from the moment
-the new one connects.
+the new one connects. `ring_left_ms` also counts the packets the decoder
+still had queued when the connection ended; tones never count as played;
+`received_ms_last_conn` is all the audio the dropped connection delivered
+(`app.after_drop ... queue_ms= received_ms= frozen=`).
 
 ### Updates through the server (F-0028)
 

@@ -117,7 +117,9 @@ int hux_audio_get_volume(void);
 uint32_t hux_audio_spk_writes(void);
 uint32_t hux_audio_mic_turns(void);
 
-/** Milliseconds of server audio played since boot (silence not counted). */
+/** Milliseconds played out of the speaker ring since boot: the server's
+ * audio (and a stored prompt, hux_prompts); local tones and silence don't
+ * count. */
 uint32_t hux_audio_played_ms(void);
 
 /** Supervisor test (console `hang spk`): the speaker task blocks for good. */

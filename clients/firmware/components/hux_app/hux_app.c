@@ -372,12 +372,18 @@ static uint32_t s_after_drop_played = 0;
 static uint32_t s_after_drop_left = 0;
 /* The drop above belongs to the connection the next hello replaces. */
 static bool s_drop_noted = false;
+/* At the last hello: the decoder's drops and the audio received, ever;
+ * and the audio received when the link dropped. */
+static uint32_t s_rx_dropped_at_hello = 0;
+static uint32_t s_rx_audio_at_hello = 0;
+static uint32_t s_rx_audio_at_drop = 0;
 
 /* The link to the server ended: what the next hello's after-drop figures
  * count from. */
 static void note_link_lost(void) {
     s_link_lost_ms = (uint32_t)(esp_timer_get_time() / 1000);
     s_played_at_drop = hux_audio_played_ms();
+    s_rx_audio_at_drop = hux_net_rx_audio_ms();
     s_after_drop_frozen = false;
     s_drop_noted = true;
 }
@@ -462,12 +468,25 @@ static void send_device_hello(void) {
         } else if (left_ms > 0) {
             hux_audio_spk_clear();
         }
+        /* Every discard of server audio counts: also the packets the decoder
+         * still had queued when a connection ended (T1.44's contract). */
+        uint32_t queue_ms = hux_opus_rx_dropped_ms() - s_rx_dropped_at_hello;
+        left_ms += queue_ms;
+        /* All the server audio the dropped connection delivered: the server
+         * compares it with what it sent, for a tail lost on the wire. */
+        uint32_t received = s_rx_audio_at_drop - s_rx_audio_at_hello;
         cJSON_AddNumberToObject(d, "played_after_drop_ms", played);
         cJSON_AddNumberToObject(d, "ring_left_ms", left_ms);
         cJSON_AddNumberToObject(d, "drop_uptime_ms", s_link_lost_ms);
-        ESP_LOGI(TAG, "app.after_drop played_ms=%u discarded_ms=%u drop_uptime_ms=%u",
-                 (unsigned)played, (unsigned)left_ms, (unsigned)s_link_lost_ms);
+        cJSON_AddNumberToObject(d, "received_ms_last_conn", received);
+        ESP_LOGI(TAG,
+                 "app.after_drop played_ms=%u discarded_ms=%u (queue_ms=%u) received_ms=%u "
+                 "drop_uptime_ms=%u frozen=%d",
+                 (unsigned)played, (unsigned)left_ms, (unsigned)queue_ms, (unsigned)received,
+                 (unsigned)s_link_lost_ms, s_after_drop_frozen);
     }
+    s_rx_dropped_at_hello = hux_opus_rx_dropped_ms();
+    s_rx_audio_at_hello = hux_net_rx_audio_ms();
     cJSON_AddNumberToObject(d, "volume", hux_audio_get_volume());
     cJSON_AddItemToObject(root, "data", d);
     char *json = cJSON_PrintUnformatted(root);
