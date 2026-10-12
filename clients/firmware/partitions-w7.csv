@@ -1,0 +1,20 @@
+# Huxley firmware partition table for handover (F-0026, remote-operation W7).
+# Staged: the device's table only changes over USB, in the one open-case
+# session before the walkie leaves. Until that day the build uses
+# partitions.csv; on the day, point CONFIG_PARTITION_TABLE_CUSTOM_FILENAME
+# here, and move clips.py / flash.sh to the new storage offset (0x820000).
+# 16 MB flash. The firmware finds every partition by name.
+# Name,     Type, SubType,  Offset,   Size,       Flags
+# NVS 24 -> 64 KB: the Wi-Fi list, the server URI, rollback bookkeeping, volume.
+nvs,        data, nvs,      0x9000,   0x10000,
+otadata,    data, ota,      0x19000,  0x2000,
+phy_init,   data, phy,      0x1b000,  0x1000,
+# OTA slots 2 -> 4 MB each: the image is 1.3 MB today and grows; never
+# outgrow a slot after handover (no cable to fix it).
+ota_0,      app,  ota_0,    0x20000,  0x400000,
+ota_1,      app,  ota_1,    0x420000, 0x400000,
+# Clips (bench injected speech; later the spoken status clips): 1.75 -> 2 MB.
+storage,    data, spiffs,   0x820000, 0x200000,
+# Coredump 64 -> 256 KB: a whole dump with every task's stack.
+coredump,   data, coredump, 0xa20000, 0x40000,
+# 0xa60000-0x1000000 (5.6 MB) left free on purpose.
