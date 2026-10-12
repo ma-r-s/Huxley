@@ -402,6 +402,24 @@ goes out, with the press's totals.
   ping/pong writes and the rest of a half-read frame), bounding it. The
   offline step now measures IP-to-READY (pass under 10 s), idle and in
   the middle of a slowed reply.
+- Review (fresh critic, 2026-10-12 night), acted on, 979fbc7b: a
+  stalled mic send holds the library's tx lock up to 5 s and the
+  WebSocket task's PONG waited only 2 s for it, then aborted: a server
+  ping during a stall still dropped the question (the first `stall` PASS
+  was luck against a 20 s ping cycle). bench.py's proxy now injects a
+  ping at a frame boundary mid-stall: d5b0bc8c FAIL, 4 reconnects;
+  979fbc7b (tx lock timeout 6 s, build-checked > send timeout) PASS, 0
+  reconnects, 984/984 frames. Also: the last 20 ms of every question
+  was lost (mic stop didn't wait for the frame in flight; now 288/288
+  frames where it was 287), `server <uri>` reverts by itself after 15
+  min and can't race the app's resume, `quiet` capped at 12 h,
+  rebuffering waits for 60 ms dry, bench restores in a finally and
+  leaves a quiet period alone, `stall` checks the whole question went
+  out, dev.py confirms an image left pending by an interrupted flash.
+- New bench tools tonight: `silent` (an empty press must not be
+  committed; fails on the server until its gate lands), `dev.py clips`
+  (bench clips over Wi-Fi, POST /clips) with the requests that failed in
+  real use as clips 7-15.
 
 ### F-0023: Go back by itself after repeated crashes past the confirm · queued
 
