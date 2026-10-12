@@ -3892,6 +3892,8 @@ The "too limiting — prevents diagrams, contribution maps, custom counters" obj
 
 **Was**: deferred at Stage 1d.2 (2026-04-21 — `.wait_outcome()` shelved) · re-raised at Stage 5 critic (2026-04-23 finding #5) · **Revisit when**: first medication / safety-critical reminder skill ships for a user who routinely has multi-hour calls
 
+**Done by T1.44** (2026-10-12, branch `t144-inject-waits`): `expires_after` on `inject_turn` / `inject_turn_and_wait`, and `inject_turn_and_wait` returns EXPIRED instead of an `on_dropped` callback; reminders mark a fire nobody heard in its late window as missed.
+
 **Reason for deferral.** An `inject_turn` fired with `InjectPriority.BLOCK_BEHIND_COMMS` (Stage 5) queues behind active COMMS claims. If the claim is a 2-hour phone call with grandpa's doctor, a medication reminder that should have fired at 8:00 AM fires at 10:00 AM — grandpa took his morning pill two hours late, or (worse) already took it without the system knowing and now the reminder tells him to take it again. For medication and similar safety-adjacent reminders, late-fire is worse than no-fire; a TTL with drop-callback lets the skill log "missed dose" and escalate via a different path (call a family member, etc.) instead of firing stale.
 
 **Why it matters (but doesn't block Stage 5).** Huxley today has `huxley-skill-timers` (short cooking timers, not medication) and planned `huxley-skill-reminders` (T1.8, queued). Only T1.8's urgent medication path would hit the TTL case in practice, and T1.8 hasn't started. If it ships with the audiobook-only-strands motivation from PQ-1 and without long-call exposure, there's no urgency. If the skill expands to medication for a user in heavy-call households, TTL becomes safety-critical.
@@ -5608,7 +5610,7 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 
 ## T1.44: Before the first client: proactive turns and the provider connect
 
-**Status**: `in_progress` (2026-10-12, branch `t144-inject-waits`; found by the critic of persona at boot, T1.43 W1) · **Effort**: M
+**Status**: `in_progress` (2026-10-12): implemented on branch `t144-inject-waits`, two critic rounds, awaiting Mario's walkie smoke and the merge (see Ship); found by the critic of persona at boot, T1.43 W1 · **Effort**: M
 
 **Problem.** With `HUXLEY_PERSONA_AT_BOOT=true` the persona runs before the walkie reconnects, which surfaces two gaps that lazy boot hid:
 
@@ -5717,3 +5719,41 @@ One fresh critic, 2026-10-12, read the design, the code and the brief. Findings 
 - SDK backward compatible (old calls type-check; nothing bumped on PyPI). `/health` additive fields only. No protocol message changes.
 - ruff, ruff format --check, mypy --strict, the touched packages' tests and the full runtime suite green.
 - Docs in the same commit set: turns.md, concepts.md, skills/README.md, observability.md, skills/reminders.md, skills/telegram.md, skills/timers.md, decisions.md (ADR), triage (this entry, D7).
+### Critic notes (second, on the finished diff)
+
+A second fresh critic, 2026-10-12, reproduced each finding with a probe. All fixed in `fix(runtime): second critic round` unless noted:
+
+- **A tap left a waiting turn with nothing to start it.** A press put a not-yet-playing turn back, then was too short (or its commit failed): no drain followed. Now a dropped press drains.
+- **Content played between two waiting turns** (the next fires only after the previous is confirmed, and the dispatch hold was gone by then): a Spotify play then a pause, book time skipped. Now an `inject_queue` hold keeps it parked until the next fires or the confirmation settles.
+- **A response that said nothing counted as delivered** (a failed response; a one-shot reminder acked unheard). Now no audio and no tool means not heard, fired again.
+- **A press while the injected turn took focus** still sent the prompt and `response.create` (the orphan response played as the press's answer). `_fire_injected_turn` re-checks after its awaits and sends nothing for a replaced turn.
+- A popped request was invisible during an awaited log line (close, dedup). The dequeue line is now synchronous and `_fire` resolves DROPPED when closed.
+- A failed send left the injected turn holding DIALOG and dropped the request; a skill cancelling mid-fire could leave a half-made turn. The turn is ended and the request put back; the direct fire is shielded from the caller's cancellation.
+- **Urgency over arrival** (taken; the critic left it to Mario): a 30-second call announcement queued behind non-expiring message announcements expired while grandpa listened to them. Drains now take the most urgent tier first (PREEMPT, BLOCK_BEHIND_COMMS, NORMAL), arrival order within a tier. Standard practice for alerts; reversible in one function.
+- `None` re-fired on every reconnect with no cap: at most 5 attempts per turn, then DROPPED.
+- `_confirm_delivery` had no exception guard: guarded; the backstop timeout logs.
+- Nits taken: a generic repeat note (it said "the connection dropped" after a press too), the site's cheat sheet, the timers doc (a restored timer's remaining time), a cancel during `_submit` withdraws, ASCII in comments, a stale "5/10/30" comment. Not taken: the protocol return-type change breaking typed third-party fakes (old calls still type-check; documented).
+- Found by me while it ran (`fix(runtime): a tool-only inject ...`): a tool-only inject ("call resume now, say nothing") was put back by a press while awaiting its confirmation and ran its tool again; a drain that raised on a client's return left the no-client content hold.
+- Checked by the critic, nothing serious: the WaitCue gates and disarm points, the server's epoch and bounded ping, Part 2's single loop, reminders' retry indices and ack/cancel/snooze, telegram teardown, `/health`.
+
+### Tests (Gate 3)
+
+- `server/runtime/tests/unit/test_coordinator_inject_waits.py` (new, 41): the regression (no client: not spoken; a client connects: spoken), written against the API the old coordinator had too and checked failing on main's sources; expiry while waiting and the 10-minute default; order one at a time and urgency first; dedup replace-in-place and drop-while-heard; cut-offs (client leaving mid-turn and before playback ends, evicted after the turn and before the ping, an unanswered and a never-returning ping, a session drop, a press into vs before the audio, a tool-only turn and a press, a cut-off past its expiry); races (a press while focus is taken, a tap after a press put a turn back, a silent response, the attempts cap, a failed send, a cancel mid-fire); the WaitCue never arming through the new paths; a live call when the client returns; content parked until the narration ends and between two turns, and the no-client hold released when the narration fails; withdraw, close, `/health` summary; QUEUED from a tool handler and from setup while a spawned task can wait.
+- `test_server_client_ping.py` (new, 9): listener epoch only after the hello, pong, a newer connection proving nothing, close before the pong, a closed socket, a missing pong and a ping stuck on a full buffer both aborting, a real websockets client.
+- Part 2 in `test_app_session_gap.py`: a failed boot connect retried by the loop; no second loop (both fail on main).
+- Changed on purpose: the 10 s session wait (now up to its expiry), the drain-sleep tests (now the playhead confirmation), FIFO chaining and same-key re-fire (wait for the previous to be heard), eviction presence (`[True, False, True, False]`), `/health` fields.
+- Skills: reminders (late-window expiry per kind and with a persona override; the retry firing at runtime, counted from the hearing; no retry stacking on a waiting fire; EXPIRED to missed and mentioned; boot re-fire in and out of the window; an ack withdrawing a waiting fire), telegram (an unheard call hangs up and queues a missed-call turn; later messages follow as one announcement), timers (expiry by duration, capped).
+- Mutation checks: fifteen deliberate breaks, each turning a named test red.
+- Counts: runtime 949, SDK 81, reminders 99, telegram 127, timers 35, the other skills unchanged and green; ruff, ruff format, mypy --strict clean; `test_focus_manager.py` did not flake in a dozen full runs.
+
+### Docs touched (Gate 4)
+
+`turns.md` (the waiting rule), `concepts.md`, `architecture.md`, `observability.md` (inject events, `server.client_ping`, `app.reconnect_*`, the `inject_queue` hold, `/health`), `protocol.md` (`/health` gains two fields; no WebSocket message changes), `extensibility.md`, `skills/README.md`, `skills/reminders.md`, `skills/telegram.md`, `skills/timers.md`, `personas/README.md` (`inject_repeat_note`), `decisions.md` (ADR "Proactive turns wait for a listener"), the site's `build-skill/proactive.mdx`, `cookbook/notifications.mdx` and `reference/skill-cheat-sheet.mdx`, abuelos' translated note, D7 closed. README, CLAUDE.md: none affected (checked: no command or setup change).
+
+### Ship (Gate 5)
+
+Branch `t144-inject-waits` (worktree), on base f0897867: 7d23267e (design), 36fd744b (framework), d05ff5a3 (skills), 833661eb (self-found fixes), then the second critic round. Not merged, not pushed. Before relying on it: Mario's smoke on the walkie (a reminder while it is off Wi-Fi, then back; a reminder through a server restart with persona at boot; pull the plug mid-narration). Merging into main: `docs/protocol.md` and `docs/triage.md` also changed on main since the base (small, separate sections).
+
+**Follow-ups** (file when this merges): audiobooks' "paused for the long call" note, Spotify's notices and the system skill's battery warning take the 10-minute default and could pick their own; marking Telegram messages read once heard (read ticks the family would see: Mario's call); counting only the firmware client as grandpa's listener when the PWA evicts it (Mario's call); an earcon before proactive speech (`vision.md`); `TCP_USER_TIMEOUT` and a tighter keepalive (content still plays into a dead socket for 20-40 s); the reminders boot reconcile's retry interval index (off by one, predates T1.44); the last medication fire marked missed before it is said (predates T1.44).
+
+**Lessons**: both critics earned their keep. The first turned "a pong timeout is delivered" and a cached presence flag around before any code; the second found four bugs in code that passed 940 tests, three of them in the gaps between awaits. The repo's medication retries had never fired at runtime: nothing tested the scheduler past the first fire.

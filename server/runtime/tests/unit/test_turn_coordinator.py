@@ -1713,7 +1713,9 @@ class TestInjectTurnAndWaitPlaybackDrain:
             if coordinator.current_turn is not None:
                 break
             await _asyncio.sleep(0.001)
-        await coordinator.on_response_done()
+        await coordinator.on_tool_call("c1", "play", {})
+        await coordinator.on_response_done()  # the tool's round
+        await coordinator.on_response_done()  # the follow-up says nothing
         ended = _time.monotonic()
 
         await _asyncio.wait_for(task, timeout=1.0)

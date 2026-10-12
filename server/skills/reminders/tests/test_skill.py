@@ -915,7 +915,7 @@ class TestSchedulerFires:
                 break
         assert inject_mock.await_count >= 1
         await _drain()
-        # Generic kind, heard → state should be acked.
+        # Generic kind, heard: state should be acked.
         raw = await storage.get_setting("reminder:1")
         assert raw is not None
         assert _Entry.from_json(raw).state == _STATE_ACKED
@@ -1645,7 +1645,7 @@ class TestLateWindowExpiry:
         assert "cita con el médico" in skill.prompt_context()
 
     async def test_an_ack_withdraws_a_fire_still_waiting(self) -> None:
-        """ "Ya me la tomé" while the fire waits behind the user's own turn:
+        """The user acks while the fire waits behind their own turn:
         the waiting narration is withdrawn (its wait is cancelled)."""
         cancelled = asyncio.Event()
 

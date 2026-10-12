@@ -118,8 +118,9 @@ class InjectOutcome(Enum):
       could be said again after a cut-off). It was never said in full.
     - `DROPPED`: never said, and won't be: a newer turn with the same
       `dedup_key` replaced it while it waited, a turn with that key was
-      already being said, the caller cancelled the wait, or the persona
-      shut down.
+      already being said, the caller cancelled the wait, it went unheard 5
+      times (a link that keeps dropping, a provider that keeps failing),
+      or the persona shut down.
     - `QUEUED`: only when awaited inside a tool handler of the turn in
       progress, or a skill's `setup()` / `reconfigure()`. Waiting there
       would deadlock (the turn can't end until the handler returns), so

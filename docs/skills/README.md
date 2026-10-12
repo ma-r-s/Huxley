@@ -344,7 +344,7 @@ await self._ctx.inject_turn("Es hora de la pastilla de las nueve.")
 - **Idle (no turn in progress, a client connected)**: fires immediately. Any playing content stream (audiobook, radio) is preempted via FocusManager: the LLM narrates the prompt in persona voice, then the framework releases focus and a stream that allows it comes back.
 - **Busy (a user or synthetic turn is in progress)**: the request is **queued**. It drains automatically when a turn ends without spawning a content stream. This protects against dropped reminders when the user happens to PTT at the moment a timer fires.
 - **No voice session (a reconnect, about every 50 minutes, or an outage)**: queued as well, and fired when the session is back.
-- **Nobody listening (the walkie off Wi-Fi or rebooting, a server just started)**: queued, and said when a client connects (T1.44). Waiting turns are said in order, one at a time: the next starts once the client has played the previous one.
+- **Nobody listening (the walkie off Wi-Fi or rebooting, a server just started)**: queued, and said when a client connects (T1.44). Waiting turns are said one at a time (the next starts once the client has played the previous one), the most urgent tier first (`PREEMPT`, `BLOCK_BEHIND_COMMS`, `NORMAL`) and in order within a tier.
 - **Cut off**: a turn the client didn't hear whole (it left or reconnected mid-sentence, or before playing it all; the voice session dropped) goes back to the head of the queue and is said again in full; the model is told it wasn't heard. A press while it plays counts as heard; a press before it started playing (it was queued behind an answer) puts it back, after the user's turn.
 
 **Expiry** (optional `expires_after`):
@@ -444,7 +444,7 @@ if outcome is InjectOutcome.DELIVERED:
 
 - `DELIVERED`: the client played it to the end (the server confirms it with a WebSocket ping), or the user pressed to talk while it played. Bridged audio started now doesn't cut the announcement off.
 - `EXPIRED`: `expires_after` ran out while it waited for a listener; it was never said in full.
-- `DROPPED`: a same-key turn replaced it, a same-key turn was already being said, you cancelled the wait, or the persona shut down.
+- `DROPPED`: a same-key turn replaced it, a same-key turn was already being said, you cancelled the wait, it went unheard 5 times (a flapping link, a failing provider), or the persona shut down.
 - `QUEUED`: only when awaited where waiting would deadlock (below): the turn is queued as with `inject_turn` and its fate isn't reported.
 
 It waits through a turn in progress, a voice reconnect and an absent client alike, as long as `expires_after` allows, so call it from a task of your own (`ctx.background_task`, a transport callback task), not inline where something waits on you. **Cancelling** the call withdraws a turn still waiting (`DROPPED`); one already being said finishes. The reminders skill cancels a waiting fire when the user acks or snoozes it.

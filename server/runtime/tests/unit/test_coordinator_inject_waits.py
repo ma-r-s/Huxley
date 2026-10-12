@@ -381,6 +381,9 @@ class TestCutOff:
         await _speak(coordinator, nbytes=4_800)  # 100 ms still to play
         server.epoch = 2  # replaced, no presence call yet
 
+        # The confirmation finds a different listener: not delivered, put
+        # back, and (the new listener being ready) fired again at once;
+        # the handshake's presence call below then finds nothing to do.
         await _until(lambda: _waiting(coordinator) == ["Aviso."] or len(_said(provider)) == 2)
         assert not task.done()
         server._next = 2
@@ -547,27 +550,207 @@ class TestCutOff:
 
 
 class TestRaces:
-    async def test_a_press_during_a_drain_is_not_overwritten(
-        self, coordinator: TurnCoordinator, provider: StubVoiceProvider, server: _Server
+    async def test_a_press_while_focus_is_taken_sends_no_prompt(
+        self,
+        coordinator: TurnCoordinator,
+        provider: StubVoiceProvider,
+        server: _Server,
+        focus_manager: FocusManager,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Critic: an await between the drain's check and the turn let a
-        press in, and the injected turn then replaced the user's."""
+        """Second critic: a press while the injected turn takes DIALOG focus
+        replaced the turn, yet the prompt and response.create still went
+        out; the orphan response then played as the press's answer."""
         await coordinator.inject_turn("Aviso.")
         server.epoch = 1
-        original = coordinator._log.ainfo
+        acquire = focus_manager.acquire
+        pressed = False
 
-        async def press_while_logging(event: str, **kw: Any) -> None:
-            if event == "coord.inject_turn_dequeued":
+        async def press_during_acquire(activity: Any) -> None:
+            nonlocal pressed
+            if not pressed:
+                pressed = True
                 await coordinator.on_ptt_start()
-            await original(event, **kw)
+            await acquire(activity)
 
-        coordinator._log.ainfo = press_while_logging  # type: ignore[method-assign]
+        monkeypatch.setattr(focus_manager, "acquire", press_during_acquire)
         await coordinator.on_client_presence(True)
 
+        assert pressed
         assert coordinator.current_turn is not None
         assert coordinator.current_turn.source is TurnSource.USER
-        assert _said(provider) == []
+        assert _said(provider) == [], "no prompt for a turn the press replaced"
+        assert ("request_response",) not in provider.sent
+        assert _waiting(coordinator) == ["Aviso."], "said after the user's turn"
+
+    async def test_a_quick_tap_after_a_press_put_a_turn_back_drains_it(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider, server: _Server
+    ) -> None:
+        """Second critic: a press put a not-yet-playing turn back, then was
+        too short to commit; nothing drained it while the user sat there."""
+        await server.connect(coordinator)
+        await coordinator.inject_turn("Aviso.")
+        assert coordinator.current_turn is not None  # live, no audio yet
+
+        await coordinator.on_ptt_start()
         assert _waiting(coordinator) == ["Aviso."]
+        await coordinator.on_ptt_stop()  # a tap: too short, dropped
+
+        assert len(_said(provider)) == 2, "said again right away"
+        assert coordinator.current_turn is not None
+        assert coordinator.current_turn.source is TurnSource.INJECTED
+
+    async def test_a_silent_response_is_not_delivered_and_is_retried(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider, server: _Server
+    ) -> None:
+        """Second critic: a response with no audio and no tool (a failed
+        one) counted as heard; a one-shot reminder was acked unheard."""
+        await server.connect(coordinator)
+        task = asyncio.create_task(coordinator.inject_turn_and_wait("Cita a las tres."))
+        await _until(lambda: coordinator.current_turn is not None)
+        await coordinator.on_response_done()  # nothing said
+
+        await _until(lambda: len(_said(provider)) == 2)
+        assert not task.done()
+        await _speak(coordinator)
+        assert await asyncio.wait_for(task, timeout=1.0) is InjectOutcome.DELIVERED
+
+    async def test_attempts_are_capped(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider, server: _Server
+    ) -> None:
+        """Every attempt is a paid response: a provider that keeps failing,
+        or a link that keeps flapping, gets five."""
+        await server.connect(coordinator)
+        task = asyncio.create_task(coordinator.inject_turn_and_wait("Aviso."))
+        for attempt in range(1, TurnCoordinator._MAX_ATTEMPTS + 1):
+            await _until(lambda n=attempt: len(_said(provider)) == n)
+            await coordinator.on_response_done()  # silent again
+
+        assert await asyncio.wait_for(task, timeout=1.0) is InjectOutcome.DROPPED
+        assert len(_said(provider)) == TurnCoordinator._MAX_ATTEMPTS
+        assert coordinator._injected_queue == []
+
+    async def test_a_failed_send_ends_the_turn_and_puts_it_back(
+        self,
+        coordinator: TurnCoordinator,
+        provider: StubVoiceProvider,
+        server: _Server,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Second critic: the session closed between the check and the
+        send; the injected turn stayed in progress holding DIALOG, and the
+        request was dropped."""
+        await server.connect(coordinator)
+        monkeypatch.setattr(
+            provider,
+            "send_conversation_message",
+            AsyncMock(side_effect=ConnectionError),
+        )
+
+        with pytest.raises(ConnectionError):
+            await coordinator.inject_turn("Aviso.")
+
+        assert coordinator.current_turn is None
+        assert coordinator._dialog_interface_name is None
+        assert _waiting(coordinator) == ["Aviso."]
+
+    async def test_a_skill_cancelling_mid_fire_leaves_no_half_made_turn(
+        self,
+        coordinator: TurnCoordinator,
+        provider: StubVoiceProvider,
+        server: _Server,
+        focus_manager: FocusManager,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An ack cancels the reminder's delivery task while its turn is
+        being created: the turn goes on, whole."""
+        await server.connect(coordinator)
+        acquire = focus_manager.acquire
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow_acquire(activity: Any) -> None:
+            entered.set()
+            await release.wait()
+            await acquire(activity)
+
+        monkeypatch.setattr(focus_manager, "acquire", slow_acquire)
+        task = asyncio.create_task(coordinator.inject_turn_and_wait("Aviso."))
+        await entered.wait()
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        await _until(lambda: _said(provider) == ["Aviso."])
+        assert coordinator.current_turn is not None
+        assert coordinator.current_turn.source is TurnSource.INJECTED
+        await _speak(coordinator)
+        await _until(lambda: coordinator.current_turn is None)
+
+
+class TestTiers:
+    async def test_a_more_urgent_turn_goes_first_when_the_client_returns(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider, server: _Server
+    ) -> None:
+        """Second critic: a 30-second call announcement queued behind
+        message announcements expired while the user listened to them.
+        The most urgent tier goes first; first come first served within."""
+        await coordinator.inject_turn("mensaje 1", expires_after=None)
+        await coordinator.inject_turn("mensaje 2", expires_after=None)
+        await coordinator.inject_turn(
+            "llamada de Ana",
+            priority=InjectPriority.BLOCK_BEHIND_COMMS,
+            expires_after=timedelta(seconds=30),
+        )
+
+        await server.connect(coordinator)
+        assert _said(provider) == ["llamada de Ana"]
+        await _speak(coordinator)
+        await _until(lambda: _said(provider) == ["llamada de Ana", "mensaje 1"])
+
+
+class TestContentBetweenTurns:
+    async def test_the_book_stays_parked_between_two_waiting_turns(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+        server: _Server,
+    ) -> None:
+        """Second critic: the next turn fires only once the previous one has
+        played, and the book (or a real Spotify play) came back in
+        between. It now stays parked until the last narration ends."""
+        runs = 0
+
+        async def _book() -> AsyncIterator[bytes]:
+            while True:
+                yield b"\x00" * 480
+                await asyncio.sleep(0.005)
+
+        def factory() -> AsyncIterator[bytes]:
+            nonlocal runs
+            runs += 1
+            return _book()
+
+        await server.connect(coordinator)
+        mocks["dispatch_tool"].return_value = ToolResult(
+            output="{}",
+            side_effect=AudioStream(factory=factory, patience=timedelta(minutes=30)),
+        )
+        await _press(coordinator)
+        await coordinator.on_tool_call("c1", "play", {})
+        await coordinator.on_response_done()
+        await _until(lambda: runs == 1)
+
+        await coordinator.inject_turn("uno")  # parks the book
+        await coordinator.inject_turn("dos")  # waits behind "uno"
+        await _speak(coordinator, nbytes=4_800)  # "uno" ends; 100 ms to play
+
+        await _until(lambda: _said(provider) == ["uno", "dos"])
+        assert runs == 1, "the book did not play between the two"
+        await _speak(coordinator)
+        await _until(lambda: runs == 2)
 
 
 class TestWaitCue:

@@ -424,7 +424,7 @@ Content keeps its 5 s grace before it pauses (`_client_absent`); a turn has no s
 
 ### When it is said
 
-The head of the queue fires when what blocked it clears: a client arrives (`on_client_presence(True)`, before the no-client content hold is released, so the narration's DIALOG parks the content first), the session connects, the previous turn is confirmed heard, a claim ends (scheduled on the next tick: a claim's end runs inside the FocusManager), a cut-off finishes, or a turn ends (where the priority branches above still apply). In order, one at a time; a turn put back goes to the head.
+The next waiting turn fires when what blocked it clears: a client arrives (`on_client_presence(True)`, before the no-client content hold is released, so the narration's DIALOG parks the content first), the session connects, the previous turn is confirmed heard, a claim ends (scheduled on the next tick: a claim's end runs inside the FocusManager), a cut-off finishes, a press is dropped (too short or silent), or a turn ends (where the priority branches above still apply). One at a time, the most urgent tier first (PREEMPT, BLOCK_BEHIND_COMMS, NORMAL; with a live claim only PREEMPT), first come first served within a tier, so a 30-second call announcement isn't kept behind a weekend of message announcements; a turn put back goes to the head. Between two waiting turns, what the first parked stays parked (`inject_queue` hold) until the next fires. Every condition is re-checked with no await right before the turn is created, and again after DIALOG focus is taken: a press or a disconnect in between ends it before any prompt is sent.
 
 ### Heard, or not
 
@@ -434,14 +434,16 @@ Not heard, and back to the head of the queue, said again whole with a note to th
 
 - the client left or was replaced (an eviction counts: a reconnecting walkie evicts its dead socket) while the turn was being said (the response is cancelled) or before its confirmation;
 - the ping failed or timed out; nothing fires into that connection again;
-- the voice session dropped mid-turn;
+- the voice session dropped mid-turn, or the prompt's send failed (the turn is ended, not left holding DIALOG);
+- the response said nothing and ran no tool (a failed one);
 - a press before the turn's audio had started playing (it was queued behind the previous answer, and the press empties the client's buffer); it follows the user's turn. A press while it plays counts as heard.
 
 ### Expiry, dedup, persistence
 
 - `expires_after` (default 10 min, `DEFAULT_INJECT_EXPIRY`; `None` waits until heard) counts from the call and only while the turn waits: a turn being said is never cut for it, and one cut off after its deadline is EXPIRED, not said again. An expiry timer resolves it at its deadline.
 - A queued turn with the same `dedup_key` is replaced in its place; a same key being said or awaiting its confirmation drops the newcomer.
-- Cancelling `inject_turn_and_wait` withdraws a turn still waiting.
+- Cancelling `inject_turn_and_wait` withdraws a turn still waiting; a turn already being created goes on whole (the fire is shielded from the caller).
+- At most 5 attempts per turn (`_MAX_ATTEMPTS`): each is a paid response, and a link that keeps flapping or a provider that keeps failing gets no more. Then DROPPED.
 - Memory only: a restart loses waiting turns, and skills that persist re-fire from their own storage at setup (reminders do; timers don't, by design). `close()` drops what waits (DROPPED) and counts a turn the client finished playing as heard.
 
 ### What doesn't change

@@ -1541,7 +1541,7 @@ class RemindersSkill:
         # the user explicitly said "give me X more" so don't keep
         # escalating during the snooze window. If the snooze itself
         # elapses without ack, the next fire counts as fire #1 again
-        # — full 5/10/30 budget restored. Both `fired_count` and
+        # -- full budget restored (3 fires). Both `fired_count` and
         # `last_fired_at` reset; otherwise the next `_fire` would
         # increment to 2 and use the 10-minute interval (review F3,
         # 2026-04-29).
@@ -1581,7 +1581,7 @@ class RemindersSkill:
         entry.state = _STATE_ACKED
         entry.acked_at = _utcnow()
         await self._save_entry(entry)
-        # "Ya me la tomé" said while its fire still waits (behind the
+        # The user says they took it while its fire still waits (behind the
         # user's own turn): don't say it after all (T1.44).
         self._cancel_delivery(rid)
         # Acks may close out a row that's mid-retry; wake the scheduler
