@@ -91,7 +91,7 @@ A morning of real use on the phone produced 88 replies; the failures behind thes
 - **Controls follow what is playing.** "Pausa", "sigue", "ponlo", "siguiente" go to the controls of the last thing put on (book, radio or music). "Sigue con la canción" is resume, not next.
 - **Music.** A song and its artist search the song. No example artists or genres anywhere in the prompt or tool descriptions: they became the model's guess when it misheard. A station from the radio list is the radio even when pronounced a bit differently; a band or song with "radio" in its name is music.
 - **"Pon música" with nothing named continues the last music played** (Spotify keeps its last context); only if nothing was ever played does the agent ask which artist or song. This is a deliberate choice: picking a default genre or artist would assume the user's taste. "Pon un libro" without a title gets "¿cuál?"; naming a book continues it where it was, since Spotify keeps the place in each book.
-- **Books are Spotify audiobooks (2026-10-12, T1.39).** Mario turned the local audiobooks skill off for Abuelo; `play_music` with `kind: "audiobook"` plays the book and `music_control` pauses it or moves between chapters. Spotify gives audiobook hours only to a family plan's holder, so the household account the device plays as has hours bought for it; when they run out, the walkie says so (`audiobook_refused`). Reading speed and seeking by seconds aren't available on Spotify books. The local skill's config stays in `persona.yaml`, commented out.
+- **Books are Spotify audiobooks (2026-10-12, T1.39, T1.40).** Mario turned the local audiobooks skill off for Abuelo. `play_book` plays a book (by title or author; without one, the last book; "desde el principio" asks book or chapter when deep in it, and "vuelve a donde iba" undoes it), `music_control` pauses, resumes and moves between chapters, `book_control` goes back or forward a bit and to a chapter by name, `whats_playing` says the book, the chapter and what's left, `find_books` reads three books, numbered. Every failure is an exact line: a book that must be bought, the month's hours used up (the household account the device plays as has its own bought hours), the end of the book, a cut. After 60 minutes with no press a book pauses at the next chapter. Reading speed can't change. Details in [`docs/skills/spotify.md`](../skills/spotify.md#audiobooks-t139-t140). The local skill's config stays in `persona.yaml`, commented out.
 
 ## Success criteria for Abuelo v1
 
@@ -99,7 +99,7 @@ The persona is considered v1-complete when **all** of these work end-to-end via 
 
 - Ask for a book by title or author (_"pon Cien años de soledad"_); since 2026-10-12 books are Spotify audiobooks
 - Pause / resume mid-sentence
-- Navigate forward / backward by chapter (seconds and minutes were the local skill's; Spotify books don't seek)
+- Navigate forward / backward by seconds or by chapter, go to a chapter by its number, start over (and undo it)
 - Stop playback
 - Resume later by naming the book again: Spotify keeps the place across sessions
 - Every negative response offers an alternative
