@@ -47,11 +47,16 @@ static const char *TAG = "hux_net";
  * governs how many TCP bytes can be queued for transmission. */
 #define WS_BUFFER_SIZE     32768
 #define WS_RECONNECT_MS    2000
-/* Bounded send timeout — if TCP stalls, the 50 Hz audio sender task
- * must fail fast, not wedge. Longer than any reasonable flush on a
- * healthy LAN (~1 ms); short enough that a stall becomes a warning
- * we can act on before the watchdog does. */
-#define WS_SEND_TIMEOUT_MS 200
+/* How long a send may wait for room in the socket. esp_websocket_client
+ * tears the connection down when a send can't start within its timeout
+ * (esp_websocket_client.c, `wlen == 0` -> abort_connection), so this is
+ * "how long without progress before the link counts as dead", not "how
+ * slow is too slow". At 200 ms (until F-0022) any Wi-Fi slowdown during a
+ * question killed the connection and the question with it. A slow link
+ * still frees room every so often; 5 s with none is a dead one. Callers
+ * (mic sender, log drain, app control messages) are their own tasks, never
+ * the WebSocket task, so the receive side keeps playing meanwhile. */
+#define WS_SEND_TIMEOUT_MS 5000
 
 static EventGroupHandle_t s_wifi_events = NULL;
 static esp_websocket_client_handle_t s_ws = NULL;

@@ -215,6 +215,12 @@ Server `audio_ms` near `window_ms` while the board's falls short, with
 own `audio_ms` short: the source (a skill's stream, the model) was late.
 `spk.underrun silent_ms=` is each gap the speaker played as silence.
 
+The uplink side of a press: `mic.tx.stats` every 500 ms (`q_waiting` is
+the backlog in the 10 s queue), `app.ptt.final_stats` at the release,
+and `mic.tx.done` when `ptt_stop` actually goes out behind the last
+frame, with the press's totals (`enq` = frames captured, `tx_ok` =
+sent, `enq_drop` = lost to a full queue).
+
 To reproduce instead of waiting for bad Wi-Fi: `python3 tools/bench.py
 --wifi --steps stall,slowdown` routes the board through Toxiproxy (the
 console's `server <uri>`, until reboot) and throttles the uplink in the

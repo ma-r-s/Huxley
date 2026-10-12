@@ -356,9 +356,17 @@ the next 200 ms wait kills the connection and the question with it.
   for this): `stall` (uplink at 1 KB/s for 5 s mid-question; pass = no
   reconnect, the question is heard) and `slowdown` (downlink capped
   mid-stream; prints server-sent next to board-received per second).
-**Next**: run `stall` on today's firmware and watch it fail, fix the
-send path (a stall must not kill the connection), run it again; run
-`slowdown` to put numbers on the music gaps before changing playback.
+**Fix** (built; verified below once the board is free): sends wait up
+to 5 s for room in the socket (`WS_SEND_TIMEOUT_MS`, was 200 ms): the
+library only aborts a link with no progress for 5 s, a slow one keeps
+going. The mic queue is 10 s in PSRAM (was 1 s). `ptt_start`, the frames
+and `ptt_stop` go through that one queue in order: `ptt_stop` used to
+leave from the app task and overtake frames still queued, so a backlog
+cut the end off the question. `mic.tx.done` logs when `ptt_stop` really
+goes out, with the press's totals.
+**Next**: run `stall` on the build before the fix and watch it fail,
+then on the fix; run `slowdown` to put numbers on the music gaps before
+changing playback.
 
 ### F-0023: Go back by itself after repeated crashes past the confirm · queued
 

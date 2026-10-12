@@ -6,7 +6,9 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
@@ -112,20 +114,29 @@ static char    s_envelope[1700];
  * hiccups, and a brief hiccup of lost audio is better than the WS
  * going down for seconds.
  *
- * Depth bumped from 10 (200 ms) to 50 (1 sec) in v0.3.2 after a WS
- * stall ate 95 of 130 frames in a 2-second window — losing most of
- * a user utterance. 50 frames × 960 B/frame = 48 KB of internal RAM,
- * negligible. Beyond ~1 sec we'd be sending stale audio to OpenAI
- * after the network recovers, which is its own problem; if the WS
- * is dead longer than that the keep-alive fires and the queue gets
- * reset on reconnect.
+ * Depth: 10 (200 ms), then 50 (1 s, v0.3.2, after a stall ate 95 of
+ * 130 frames), now 500 (10 s, in PSRAM, F-0022). It's push to talk:
+ * a question that reaches the server a few seconds late but whole beats
+ * one with its middle missing, so a slow uplink fills this queue instead
+ * of dropping audio (and, until F-0022, the connection).
+ *
+ * One lane, in order: `ptt_start`, the frames, `ptt_stop` all go through
+ * this queue. When ptt_stop went straight from the app task it overtook
+ * frames still queued, and under a backlog the server committed the
+ * question without its end.
  */
 #define AUDIO_FRAME_SAMPLES 480                 /* 20 ms at 24 kHz — matches hux_audio */
-#define AUDIO_QUEUE_DEPTH   50                  /* 1 sec buffer at 50 Hz */
+#define AUDIO_QUEUE_DEPTH   500                 /* 10 s at 50 Hz, PSRAM (~480 KB) */
+/* How long the app task waits to put ptt_start/ptt_stop in a full queue
+ * (a dead link drains it within WS_SEND_TIMEOUT_MS per frame). */
+#define UPLINK_CONTROL_WAIT_MS 6000
 #define AUDIO_SENDER_STACK  8192
 #define AUDIO_SENDER_PRIO   6                   /* mic task (8) > this > app (5) */
 
+typedef enum { UPLINK_AUDIO = 0, UPLINK_PTT_START, UPLINK_PTT_STOP } uplink_kind_t;
+
 typedef struct {
+    uint8_t kind; /* uplink_kind_t */
     int16_t pcm[AUDIO_FRAME_SAMPLES];
 } audio_frame_t;
 
@@ -158,6 +169,7 @@ static void mic_sink(const int16_t *pcm, size_t samples) {
         }
     }
     audio_frame_t frame;
+    frame.kind = UPLINK_AUDIO;
     memcpy(frame.pcm, pcm, samples * sizeof(int16_t));
     if (xQueueSend(s_audio_q, &frame, 0) != pdTRUE) {
         s_mic_enqueue_dropped++;
@@ -174,6 +186,21 @@ static void audio_sender_task(void *unused) {
     audio_frame_t frame;
     for (;;) {
         if (xQueueReceive(s_audio_q, &frame, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        if (frame.kind != UPLINK_AUDIO) {
+            /* In order with the frames: everything said before the release
+             * is on the wire before ptt_stop. */
+            bool stop = frame.kind == UPLINK_PTT_STOP;
+            const char *msg = stop ? "{\"type\":\"ptt_stop\"}" : "{\"type\":\"ptt_start\"}";
+            bool ok = hux_net_send_text(msg, strlen(msg));
+            if (stop) {
+                ESP_LOGI(TAG, "mic.tx.done ptt_stop_sent=%d enq=%u enq_drop=%u tx_ok=%u tx_fail=%u",
+                         ok, (unsigned)s_mic_enqueued, (unsigned)s_mic_enqueue_dropped,
+                         (unsigned)s_tx_sent, (unsigned)s_tx_failed);
+            } else if (!ok) {
+                ESP_LOGW(TAG, "mic.tx.ptt_start_failed");
+            }
             continue;
         }
 
@@ -238,10 +265,21 @@ static void mic_update(const char *why) {
 }
 
 /* Non-heap control-message sender. Used for tiny JSON messages
- * (ptt_start / ptt_stop / wake_word / reset) where the payload is a
- * static literal. */
+ * (wake_word / reset) where the payload is a static literal. ptt_start
+ * and ptt_stop go through uplink_control instead. */
 static void send_control(const char *literal) {
     (void)hux_net_send_text(literal, strlen(literal));
+}
+
+/* ptt_start / ptt_stop, queued behind the press's audio (see the uplink
+ * comment above). */
+static void uplink_control(uplink_kind_t kind) {
+    static audio_frame_t marker; /* app task only; the pcm is ignored */
+    marker.kind = (uint8_t)kind;
+    if (xQueueSend(s_audio_q, &marker, pdMS_TO_TICKS(UPLINK_CONTROL_WAIT_MS)) != pdTRUE) {
+        ESP_LOGE(TAG, "mic.tx.queue_full %s not sent",
+                 kind == UPLINK_PTT_STOP ? "ptt_stop" : "ptt_start");
+    }
 }
 
 static void send_device_info(void) {
@@ -324,7 +362,7 @@ static void enter_ptt(void) {
      * two arriving before `ptt_start` but shouldn't have to. During a
      * skill's claim (a call) the mic is already on; the press tells the
      * server to end the claim. */
-    send_control("{\"type\":\"ptt_start\"}");
+    uplink_control(UPLINK_PTT_START);
     s_ptt_held = true;
     mic_update("ptt_start");
 }
@@ -342,12 +380,13 @@ static void leave_ptt(void) {
     s_ptt_held = false;
     mic_update("ptt_stop");
     /* The audio sender may still be draining the queue: tx_ok here can
-     * trail enq by the frames still in flight. */
+     * trail enq by the frames still in flight (mic.tx.done has the
+     * totals, when ptt_stop goes out behind them). */
     int peak_dbfs = s_mic_peak == 0 ? -96 : (int)lroundf(20.0f * log10f((float)s_mic_peak / 32768.0f));
     ESP_LOGI(TAG, "app.ptt.final_stats enq=%u enq_drop=%u tx_ok=%u tx_fail=%u peak=%u peak_dbfs=%d",
              (unsigned)s_mic_enqueued, (unsigned)s_mic_enqueue_dropped,
              (unsigned)s_tx_sent, (unsigned)s_tx_failed, (unsigned)s_mic_peak, peak_dbfs);
-    send_control("{\"type\":\"ptt_stop\"}");
+    uplink_control(UPLINK_PTT_STOP);
 }
 
 static void handle_ws_message(hux_app_ws_message_t *msg) {
@@ -547,7 +586,7 @@ void hux_app_start(void) {
     /* Audio PCM ring — mic task fills, audio_sender drains. Must
      * exist before the mic sink is registered so there's never a
      * window where sink runs with NULL queue. */
-    s_audio_q = xQueueCreate(AUDIO_QUEUE_DEPTH, sizeof(audio_frame_t));
+    s_audio_q = xQueueCreateWithCaps(AUDIO_QUEUE_DEPTH, sizeof(audio_frame_t), MALLOC_CAP_SPIRAM);
     configASSERT(s_audio_q != NULL);
     ok = xTaskCreate(audio_sender_task, "hux_audio_tx", AUDIO_SENDER_STACK,
                      NULL, AUDIO_SENDER_PRIO, NULL);

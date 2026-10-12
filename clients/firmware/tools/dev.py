@@ -164,28 +164,29 @@ def wait_info(host: str, until: float) -> dict | None:
     return None
 
 
-def cmd_flash(host: str, force: bool) -> int:
+def cmd_flash(host: str, force: bool, image: Path = IMAGE) -> int:
     """Send the image, check the board runs exactly it (the ELF hash, not a
     version string: uncommitted builds share one), wait out the self-test
     and confirm it. Anything short of that and the board goes back to the
     previous image on its next restart."""
-    if not IMAGE.exists():
-        sys.exit(f"no {IMAGE}: run idf.py build")
-    version = image_version(IMAGE)
-    sha = elf_sha9(ELF) if ELF.exists() else None
+    if not image.exists():
+        sys.exit(f"no {image}: run idf.py build")
+    elf = image.with_suffix(".elf")
+    version = image_version(image)
+    sha = elf_sha9(elf) if elf.exists() else None
     if sha:
         ELF_ARCHIVE.mkdir(exist_ok=True)
-        shutil.copyfile(ELF, ELF_ARCHIVE / f"{version}-{sha}.elf")
+        shutil.copyfile(elf, ELF_ARCHIVE / f"{version}-{sha}.elf")
     before = info(host)
 
     class OnlyTheImage(http.server.SimpleHTTPRequestHandler):
         # Just the image: build/ also holds the ELF and other files with
         # the Wi-Fi password and the token in them.
         def __init__(self, *a, **kw):
-            super().__init__(*a, directory=str(IMAGE.parent), **kw)
+            super().__init__(*a, directory=str(image.parent), **kw)
 
         def do_GET(self):
-            if self.path != f"/{IMAGE.name}":
+            if self.path != f"/{image.name}":
                 self.send_error(404)
                 return
             super().do_GET()
@@ -202,8 +203,8 @@ def cmd_flash(host: str, force: bool) -> int:
     httpd = Server(("0.0.0.0", 0), OnlyTheImage)
     port = httpd.server_address[1]
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    url = f"http://{local_ip_towards(host)}:{port}/{IMAGE.name}"
-    print(f"flashing {version} ({IMAGE.stat().st_size // 1024} KB) to {host} from {url}")
+    url = f"http://{local_ip_towards(host)}:{port}/{image.name}"
+    print(f"flashing {version} ({image.stat().st_size // 1024} KB) to {host} from {url}")
     offset, t0 = log_tail_from(), time.time()
     request(host, "/cmd", f"ota {url}{' force' if force else ''}".encode())
     offset, why = board_lines(
@@ -287,6 +288,9 @@ def main() -> int:
     ap.add_argument("--host", help="the board's IP (default: from the server log)")
     ap.add_argument("--force", action="store_true", help="flash even if it runs this version")
     ap.add_argument("--elf", type=Path, help="coredump: decode with this ELF")
+    ap.add_argument(
+        "--image", type=Path, default=IMAGE, help="flash: this .bin (its .elf next to it)"
+    )
     a = ap.parse_args()
     host = a.host or board_ip()
 
@@ -298,7 +302,7 @@ def main() -> int:
         request(host, "/cmd", line.encode(), timeout=30)
         board_lines(offset, time.time() + (12 if line.startswith("say") else 4))
     elif a.what == "flash":
-        return cmd_flash(host, a.force)
+        return cmd_flash(host, a.force, a.image)
     elif a.what == "log":
         with contextlib.suppress(KeyboardInterrupt):
             board_lines(log_tail_from(), float("inf"))

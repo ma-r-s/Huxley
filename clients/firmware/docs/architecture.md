@@ -69,7 +69,7 @@ FreeRTOS tasks, in priority order (higher = more important):
 | _websocket_task_           | esp_websocket_client | 5    | 6 KB  | WS RX + reconnect loop; runs our handler (the data plane)  |
 | `hux_log_drain`            | `hux_log_init`       | 2    | 6 KB  | Pops the log queue (256 lines, PSRAM), sends each; offline it holds the line and retries; drop heartbeat |
 | `hux_mic`                  | `hux_audio_init`     | 8    | 6 KB  | I2S RX, extract Mic1, hand frames to hux_app's queue       |
-| `hux_audio_tx`             | `hux_app_start`      | 6    | 8 KB  | base64-encode queued mic frames, send `audio`              |
+| `hux_audio_tx`             | `hux_app_start`      | 6    | 8 KB  | The uplink lane, in order: `ptt_start`, mic frames as `audio`, `ptt_stop` (10 s queue) |
 | `hux_spk`                  | `hux_audio_init`     | 8    | 6 KB  | Pop the PCM ring (or silence), I2S TX; services clears     |
 | `hux_button`               | `hux_button_start`   | 4    | 4 KB  | Poll GPIO7 + K2 every 10 ms, debounce, post press/release  |
 | `hux_console`              | `hux_console_start`  | 3    | 5 KB  | Poll the USB RX FIFO every 20 ms, run bench commands       |
@@ -197,6 +197,8 @@ Flash (16 MB):
 PSRAM (8 MB):
   Speaker ring                                  (4 MB: a whole reply, 87 s)
   WS reassembly + audio decode scratch          (384 KB + 288 KB, EXT_RAM_BSS)
+  Mic uplink queue                              (480 KB: 10 s, a slow uplink delays a question, never cuts it)
+  Log queue                                     (58 KB: 256 lines kept while offline)
   Wi-Fi / LWIP buffers                          (via SPIRAM_TRY_ALLOCATE_WIFI_LWIP)
   Free at boot after all that                   (~3.4 MB, `info psram=`)
 
