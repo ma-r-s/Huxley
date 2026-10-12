@@ -43,12 +43,35 @@ from pathlib import Path
 FW = Path(__file__).resolve().parent.parent
 REPO = FW.parent.parent
 SERVER_LOG = REPO / "server" / "runtime" / "logs" / "huxley.log"
+# Test runs on the board, so the caregiver view (huxley-watch) leaves them
+# out of grandpa's usage: one JSON line at the start ("end": null) and one
+# at the end, same "start". Never pruned.
+BENCH_RUNS = SERVER_LOG.parent / "bench.jsonl"
+# Console commands that press or play: marked as a test for this long
+# (the answer to a press comes after it).
+PRESS_CMDS = ("talk", "release", "say", "tone")
+PRESS_MARK_S = 120
 IMAGE = FW / "build" / "huxley-firmware.bin"
 ELF = FW / "build" / "huxley-firmware.elf"
 # Every image `flash` sends leaves its ELF here as <version>-<sha9>.elf: a
 # crash dump decodes only against the ELF of the build that crashed, and
 # after a rollback that is not the one running.
 ELF_ARCHIVE = FW / "build" / "elf"
+
+
+def utc_iso(t: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+
+
+def mark_bench(what: str, start: float, end: float | None) -> None:
+    """Append a test-run record for huxley-watch (BENCH_RUNS). Best effort:
+    a test never fails because the mark couldn't be written."""
+    rec = {"start": utc_iso(start), "end": utc_iso(end) if end is not None else None, "what": what}
+    try:
+        with BENCH_RUNS.open("a") as f:
+            f.write(json.dumps(rec) + "\n")
+    except OSError as e:
+        print(f"(bench mark not written: {e})", file=sys.stderr)
 
 
 def token() -> str:
@@ -401,6 +424,9 @@ def main() -> int:
         print(json.dumps(json.loads(request(host, "/info")), indent=2))
     elif a.what == "cmd":
         line = " ".join(a.args)
+        if line.split(" ", 1)[0] in PRESS_CMDS:
+            now = time.time()
+            mark_bench(f"dev.py cmd {line}", now, now + PRESS_MARK_S)
         offset = log_tail_from()
         request(host, "/cmd", line.encode(), timeout=30)
         board_lines(offset, time.time() + (12 if line.startswith("say") else 4))
