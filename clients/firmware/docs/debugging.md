@@ -70,9 +70,13 @@ or read the coredump (below).
 
 Symptom: silent, no Wi-Fi, no server connection; the console prints
 `rst:0x15 (USB_UART_CHIP_RESET),boot:0x0 (DOWNLOAD(USB/UART0))` and
-`waiting for download`. Cause: a host reset the chip over USB with the
-boot pin overridden low, and every later RTS or JTAG reset keeps the
-latched download mode (esptool docs: the USB-Serial/JTAG's RTS is a
+`waiting for download`. Root cause on this board: GPIO0 (the boot strap)
+is wired to the TCA9555 expander's INT# (R15, 0 ohm); INT# stays low
+after an input change until the firmware reads that port, so a reset
+while it's low boots into download mode. The firmware now reads both
+ports every 10 ms (`hux_button`), which keeps GPIO0 high. Also: a host
+can reset the chip over USB with the boot pin overridden low, and every
+later RTS or JTAG reset keeps the latched download mode (esptool docs: the USB-Serial/JTAG's RTS is a
 core reset that "does not re-sample the boot strapping pins"). Fix,
 from the Mac: `tools/flash.sh --unstick` (esptool's watchdog reset, a
 full system reset that re-reads them). A power cut fixes it too. The

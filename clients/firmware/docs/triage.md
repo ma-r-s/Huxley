@@ -237,7 +237,18 @@ do that, and `idf.py flash` ends with an RTS reset. GPIO0 read high
 throughout (esptool `read_mem` of GPIO_IN): the case doesn't press BOOT.
 The S3 can't refuse a host's reset in software (C6 and later can;
 `RTC_CNTL_USB_RESET_DISABLE` doesn't, per a forum report).
-**Fix**: `tools/flash.sh` flashes and ends with esptool's watchdog reset
+**Root cause** (found after the first fix, from the schematic): the
+TCA9555 expander's INT# output is wired to GPIO0 through R15 (0 ohm).
+INT# goes low on any input change and stays low until the changed port
+is read; the firmware only ever read port 1 (K2), so after any change on
+port 0 (EX1-EX3 on the header, RTC and card-detect lines) GPIO0 stayed
+low and every reset short of a power cut booted into download mode. A
+power cut resets the expander too, which is why only that helped; on
+the bench nothing on port 0 moved. Fix (88baa3aa): both ports are read
+every 10 ms and at boot; port-0 changes are logged (`tca.port0 change`).
+Verified: GPIO0 sampled high over JTAG before the flash; `flash.sh`'s
+watchdog reset booted the app by itself, case closed.
+**Also**: `tools/flash.sh` flashes and ends with esptool's watchdog reset
 (a full reset that re-reads the pins) and `--unstick` boots a stuck
 board from the Mac; `tools/serial_log.py` (and `serial-capture.sh`,
 `bench.py`, `smoke.sh` on top of it) hold DTR and RTS still; the console

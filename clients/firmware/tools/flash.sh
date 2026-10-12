@@ -37,7 +37,7 @@ case "${1:-}" in
         fi
         cd "$FW_DIR/build"
         "${ESPTOOL[@]}" -b 921600 --before default_reset --after watchdog_reset \
-            write_flash @flash_args "${extra[@]}"
+            write_flash @flash_args ${extra[@]+"${extra[@]}"}
         ;;
     *)
         sed -n '2,/^set/p' "$0" | sed 's/^# \{0,1\}//' | sed '$d'
