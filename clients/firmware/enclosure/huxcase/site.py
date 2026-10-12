@@ -39,8 +39,8 @@ STEPS = [
     {
         "id": "tub",
         "title": "Tub base",
-        "text": "The grey base, standing up. Its walls end in a lip, the inner half of "
-        "the wall standing 1.6 mm proud: the frosted top fits down over it.",
+        "text": "The red base, standing up. Its walls end in a lip, the inner half of "
+        "the wall standing 1.6 mm proud: the clear top fits down over it.",
         "parts": ["tub_grey"],
         "enter": (0, -130, 0),
         "explode": (0, 0, 0),
@@ -51,8 +51,8 @@ STEPS = [
         "text": "Dry first: the top slides down over the base's lip and sits flush. "
         "Scuff the lip and the inside of the skirt with fine sandpaper. Then "
         "a thin line of CA round the lip, very little (its fumes leave a "
-        "white haze on the frosted part; low-bloom CA if you have it), then the "
-        "frosted top straight down over it, open fronts flush, held 30 s. Then lay "
+        "white haze on the clear part; low-bloom CA if you have it), then the "
+        "clear top straight down over it, open fronts flush, held 30 s. Then lay "
         "the tub on its back: everything goes in from the open front.",
         "parts": ["tub_frosted"],
         "enter": (0, 0, 40),
@@ -256,7 +256,8 @@ STEPS = [
 ]
 
 LABELS = [
-    ("tub_*", "Tub"),
+    ("tub_grey", "Tub base"),
+    ("tub_frosted", "Tub top"),
     ("inserts", "M3 × 5 heat-set insert"),
     ("bridge_insert", "M3 × 5 heat-set insert"),
     ("face_inserts", "M3 × 5 heat-set insert"),
@@ -289,9 +290,14 @@ PRINT_MATERIAL = {
     "shell_inner": "Grey PLA",
     "accent": "Orange PLA",
     "translucent": "Frosted PLA",
+    "case_white": "White PLA",
+    "case_red": "Red PLA",
+    "case_clear": "Clear PETG",
 }
-# One print, two filaments.
-PRINT_MATERIAL_BY_LABEL = {"Tub": "Grey, then frosted PLA"}
+# The case's final colours (Mario, 2026-10-12): a white front, a red base, a
+# clear PETG top over the glow, the black grille, the orange lever. The page
+# shows them by these kinds; the print set and the studio renders keep theirs.
+SITE_KIND = {"faceplate": "case_white", "tub_grey": "case_red", "tub_frosted": "case_clear"}
 
 BOUGHT = [
     ("ESP32-S3 audio board (Waveshare)", 1),
@@ -394,6 +400,7 @@ def build_site() -> dict:
         if tag is None:
             continue
         part, kind = tags[tag].name, tags[tag].kind
+        kind = SITE_KIND.get(part, kind)
         if part.startswith("board_led_"):
             kind = "led"
         label = _label(part)
@@ -451,7 +458,7 @@ def build_site() -> dict:
     for p in c.parts:
         if p.kind in PRINTED or p.kind in ("shell_inner", "clear"):
             label = _label(p.name) if p.name in step_of else p.name
-            material = PRINT_MATERIAL_BY_LABEL.get(label, PRINT_MATERIAL.get(p.kind, "PLA"))
+            material = PRINT_MATERIAL.get(SITE_KIND.get(p.name, p.kind), "PLA")
             entry = printed.setdefault(label, [material, 0.0])
             entry[1] += p.shape.volume / 1000
     printed_cc = sum(v for _, v in printed.values())

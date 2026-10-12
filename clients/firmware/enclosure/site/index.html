@@ -199,14 +199,14 @@ footer p { margin: 0; max-width: 70ch; }
 
   <section class="sheet" aria-labelledby="seq-h">
     <h2 id="seq-h">Build sequence</h2>
-    <p class="sub">The tub lies on its back and everything goes in from its open front. The faceplate side is built face down beside it, then swings over onto it like a book and closes with four screws. Nothing is glued. Pick a step to see it on the model.</p>
+    <p class="sub">The tub lies on its back and everything goes in from its open front. The faceplate side is built face down beside it, then swings over onto it like a book and closes with four screws. Only the tub's two halves are glued. Pick a step to see it on the model.</p>
     <ol class="steps" id="steps"></ol>
   </section>
 
   <section class="sheet" aria-labelledby="parts-h">
     <h2 id="parts-h">Parts</h2>
     <div class="parts">
-      <div class="tablewrap"><table id="printed"><caption>Printed, PLA on a 0.4 mm nozzle</caption>
+      <div class="tablewrap"><table id="printed"><caption>Printed on a 0.4 mm nozzle</caption>
         <thead><tr><th>Part</th><th>Material</th><th class="num">cm³</th></tr></thead><tbody></tbody></table></div>
       <div class="tablewrap"><table id="bought"><caption>Bought</caption>
         <thead><tr><th>Part</th><th class="num">Qty</th></tr></thead><tbody></tbody></table></div>
@@ -214,7 +214,7 @@ footer p { margin: 0; max-width: 70ch; }
   </section>
 
   <footer>
-    <p>Rev E. Every part is fit-checked against Waveshare's own 3D model of the board, the speaker and your measured parts, and every heavy part is held by printed features, screws or crush ribs, never glue; the wires lie loose with slack. The clearances come from the fit coupon printed on your Bambu P2S.</p>
+    <p>Rev E. Every part is fit-checked against Waveshare's own 3D model of the board, the speaker and your measured parts, and every heavy part is held by printed features, screws or crush ribs, never glue (only the tub's two halves are glued to each other); the wires lie loose with slack. The clearances come from the fit coupon printed on your Bambu P2S.</p>
     <p class="mono">Source: clients/firmware/enclosure · build123d · three.js</p>
   </footer>
 </main>
@@ -252,15 +252,16 @@ $("specs").innerHTML = [
   ["Battery", `${S.cells} × 18650`, "In parallel, charged over USB-C"],
   ["Speaker", "40 mm, 5 W", `${Math.round(S.back_volume_cc)} cm³ sealed back box`],
   ["Talk", "12 × 12 tact", "Pressed through a 0.4 × 4 × 15 spring"],
-  ["Light", "7 RGB LEDs", "Glowing through frosted PLA"],
+  ["Light", "7 RGB LEDs", "Glowing through the clear PETG back"],
   ["Power", "KCD1-101", "Rocker, recessed in the left side"],
-  ["Printed", `${S.printed_cc} cm³`, "Grey, black, orange and frosted PLA"],
+  ["Printed", `${S.printed_cc} cm³`, "White, red, black and orange PLA, clear PETG"],
 ].map(([k, v, s]) => `<div class="spec"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${s}</span></div>`).join("");
 
 $("steps").innerHTML = M.steps.map((s, i) =>
   `<li><button type="button" data-step="${i}"><span class="n">${pad(i + 1)}</span><span class="t">${s.title}</span><span class="d">${s.text}</span></button></li>`).join("");
 
-const SWATCH = { "Grey PLA": "#bdbeb9", "Black PLA": "#1b1b1b", "Orange PLA": "#ff5a14", "Frosted PLA": "#eef3f6" };
+const SWATCH = { "Grey PLA": "#bdbeb9", "Black PLA": "#1b1b1b", "Orange PLA": "#ff5a14", "Frosted PLA": "#eef3f6",
+  "White PLA": "#efeee9", "Red PLA": "#c12e1f", "Clear PETG": "#e8f1f4" };
 $("printed").tBodies[0].innerHTML = M.printed.map((p) =>
   `<tr><td>${p.part}</td><td><span class="swatch" style="background:${SWATCH[p.material] || "#bbb"}"></span>${p.material}</td><td class="num">${fmt(p.cc)}</td></tr>`).join("");
 $("bought").tBodies[0].innerHTML = M.bought.map((b) => `<tr><td>${b.part}</td><td class="num">${b.count}</td></tr>`).join("");
@@ -343,6 +344,12 @@ const MAT = {
   // Opaque on purpose: transmissive parts only show opaque ones through them.
   glow: P({ color: 0xeef7ff, roughness: 0.45, emissive: 0x6cc8ff, emissiveIntensity: 0 }),
   clear: P({ color: 0xffffff, roughness: 0.2, transmission: 0.9, thickness: 0.001 }),
+  // The case's final colours: a white front, a red base, the top in clear PETG
+  // (printed for clarity, so even rather than glassy).
+  case_white: P({ color: 0xefeee9, roughness: 0.55 }),
+  case_red: P({ color: 0xb8291c, roughness: 0.5 }),
+  case_clear: P({ color: 0xf6fafb, roughness: 0.32, transmission: 0.94, thickness: 0.0024, ior: 1.57,
+    attenuationColor: new THREE.Color(0xe4f0f4), attenuationDistance: 0.02, side: THREE.DoubleSide }),
   pcb: P({ color: 0x173f86, roughness: 0.42, metalness: 0.05, clearcoat: 0.4 }),
   led: P({ color: 0xf4fbff, roughness: 0.3, emissive: 0x6cc8ff, emissiveIntensity: 0.2 }),
   metal: P({ color: 0xd2d2d6, metalness: 1, roughness: 0.28 }),
@@ -359,7 +366,7 @@ const MAT = {
 // X-ray: the case turns to clear plastic; everything inside stays as it is.
 const CLEAR = P({ color: 0xffffff, roughness: 0.04, transmission: 1, thickness: 0.0012, ior: 1.5,
   clearcoat: 1, clearcoatRoughness: 0.04, side: THREE.DoubleSide, envMapIntensity: 1.3 });
-const CASE_KINDS = new Set(["shell", "shell_dark", "translucent"]);
+const CASE_KINDS = new Set(["shell", "shell_dark", "translucent", "case_white", "case_red", "case_clear"]);
 
 /* ---------- model ---------- */
 const pivot = new THREE.Group(), model = new THREE.Group();
@@ -426,7 +433,7 @@ async function loadModel() {
     if (!o.geometry.attributes.normal) o.geometry.computeVertexNormals();
     o.material = MAT[info.kind] || MAT.shell;
     o.castShadow = true;
-    o.receiveShadow = info.kind !== "translucent";
+    o.receiveShadow = info.kind !== "translucent" && info.kind !== "case_clear";
     o.userData = { ...info, solid: o.material };
     groups[stepIndex[info.step]].add(o);
     meshes.push(o);
@@ -438,7 +445,7 @@ async function loadModel() {
   HALF_D = size.z / 2; HALF_H = size.y / 2; FOOT = [size.x, size.z];
 }
 
-// Warm light inside, behind the board: what shines through the frosted back.
+// Warm light inside, behind the board: what shines through the clear back.
 const inner = new THREE.PointLight(0x6cc8ff, 0, 0.22, 2);
 /* ---------- state ---------- */
 let mode = "assembled";
