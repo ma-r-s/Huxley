@@ -34,7 +34,6 @@ import math
 from build123d import (
     Axis,
     Box,
-    Cone,
     Cylinder,
     Location,
     Plane,
@@ -435,21 +434,10 @@ def _teardrop_y(x: float, z: float, r: float, y0: float, y1: float):
 # The board's edge buttons are side-actuated (hw.KEYS): pressed along the
 # board's radius. The tub stands KEY_CLEAR off each plunger: its corner block
 # was shaped round the board with none, touching BOOT, and BOOT held in at a
-# reset boots download mode (F-0020). RESET gets a pinhole through that
-# block for a paperclip, so staff can restart a hung walkie without opening
-# it (docs/remote-operation.md W7, 2026-10-12).
+# reset boots download mode (F-0020). (A reset pinhole was designed here and
+# dropped the same day: Mario wants no holes in the case, 2026-10-12.)
 KEY_CLEAR = 0.6
 KEY_NUB = (0.9, 1.6, 1.0)  # plunger: along the radius, across it, off the PCB (hw.board_parts)
-RESET_BORE = 1.5  # a paperclip (0.8 to 1.2 mm); printed lying flat it comes out about 1.3
-RESET_MOUTH = 3.0  # a 45 deg cone at the wall, to find it
-
-
-def key_line(name: str):
-    """A board edge button's plunger tip and its outward press direction."""
-    a = math.radians(hw.KEYS[name])
-    tip = (BOARD_LOC * Pos(hw.KEY_TIP_R * math.cos(a), hw.KEY_TIP_R * math.sin(a), 0.6)).position
-    out = BOARD_LOC * Pos((hw.KEY_TIP_R + 1) * math.cos(a), (hw.KEY_TIP_R + 1) * math.sin(a), 0.6)
-    return tip, (out.position - tip).normalized()
 
 
 def _key_pockets():
@@ -458,26 +446,6 @@ def _key_pockets():
     w, h = KEY_NUB[1] + 2 * KEY_CLEAR, KEY_NUB[2] + 2 * KEY_CLEAR
     box = Pos((r0 + r1) / 2, 0, 0.6) * Box(r1 - r0, w, h)
     return _union([BOARD_LOC * (Rot(0, 0, deg) * box) for deg in hw.KEYS.values()])
-
-
-def reset_mouth_s() -> float:
-    """How far out from RESET's tip its press line leaves the case's side."""
-    tip, u = key_line("RESET")
-    return (-W / 2 - tip.X) / u.X
-
-
-def _reset_pinhole():
-    tip, u = key_line("RESET")
-    s_out = reset_mouth_s()
-    length = s_out + 2.0
-    bore = Plane(origin=tip + u * (length / 2), z_dir=u).location * Cylinder(
-        RESET_BORE / 2, length
-    )
-    sink = (RESET_MOUTH - RESET_BORE) / 2
-    mouth = Plane(origin=tip + u * (s_out - sink / 2 + 0.25), z_dir=u).location * Cone(
-        RESET_BORE / 2, RESET_MOUTH / 2 + 0.25, sink + 0.5
-    )
-    return bore + mouth
 
 
 def _bore_x_front(y: float, z: float, r: float, x0: float, x1: float):
@@ -1213,7 +1181,6 @@ def build() -> Concept:
     tub -= rocker_cut
     tub -= usb_cut
     tub -= _key_pockets()
-    tub -= _reset_pinhole()
     # On its back (TOP_PRINT_UP) the 1 mm strip of wall between the USB-C
     # opening and the faceplate's seam would be a roof over the opening with
     # nothing under it: gone, the opening reaches the seam (the faceplate's

@@ -248,25 +248,13 @@ lead between the BAT pad and the + joint. The charger sits behind it too, so
 **the rocker must be ON to charge**. Power on the left, talk on the right: easy
 to tell apart by touch. A test asserts it stays below the surface.
 
-## Reset pinhole: a paperclip, on the left side
-
-So the staff at the retirement home can restart a hung walkie without
-opening it (`docs/remote-operation.md` W7, 2026-10-12). The board's edge
-buttons are side switches, pressed along the board's radius, so the hole
-comes in through the case's left side, a little in front of the power
-rocker, in the board's plane. It's a 1.5 mm bore through the tub top's
-corner block (prints about 1.3, for a 0.8 to 1.2 mm paperclip), with
-7.3 mm of guide and a 45 deg mouth to find it. It ends in a pocket 0.6 mm
-from RESET's plunger; push about 8 mm in until it clicks. BOOT, the next
-button round, is 6.7 mm off the line and can't be reached (BOOT held at a
-reset boots download mode, F-0020). The bumper has a 3.2 mm hole over it.
-`tests/test_reset_pinhole.py`: a 1 mm clip from outside touches nothing
-but RESET.
+## The board's edge buttons: room round them
 
 The tub stands 0.6 mm off every edge button's plunger (`hx1.KEY_CLEAR`).
 Until 2026-10-12 its corner block was shaped round the board with no
 clearance, touching BOOT's plunger: a top printed a hair proud could have
-held BOOT in.
+held BOOT in. (A reset pinhole for a paperclip was designed the same day
+and dropped: Mario wants no holes in the case.)
 
 ## Battery protection: in the cells
 
@@ -316,9 +304,24 @@ printed parts, measure, and add about 20 mm. Loose is fine.
 | Holder - leads (2) | bottom of each holder | - joint | trim to fit | the joint's pocket |
 | Battery - | the - joint | the junction | 75 mm | two clips on the back wall |
 | Talk pair | tact switch legs | the junction | 70 mm each | loose, across the bridge |
+| Charge sense (fitted) | header tails 18 (5V) and 16 (GND), on the board's back | a compact bundle: 100K + 100K in series, the junction to tail 9 (GPIO8) | about 50 mm each | loose in the channel between the cells, beside the ribbon; rides with the faceplate |
+| Battery sense (only if R78's bridge fails) | the + splice at the ribbon's faceplate end, and GND | a compact bundle: 2 x 100K, then 100K to GND, the tap to tail 10 (GPIO3) | about 50 mm each | the same channel, its own spot; plan it, expect it empty |
 
 The board's battery socket is 1.25 mm pitch; the board's own battery plug
 and lead came with it (Mario, 2026-10-11), so plug it in and splice its lead.
+
+**The two dividers** (W7 in `docs/remote-operation.md`; F-0026 in the
+firmware triage). Build each bundle compact: the resistors side by side
+under one heat-shrink, about 13 x 6 mm, not end to end (25 mm long, it fits
+in only one place). Closed, they lie loose in the channel with the ribbon;
+they hang from the board's wires, so they ride with the faceplate when it
+opens. Wires leave the header's tails on the board's back and run left,
+behind the board, into the channel above the holder bridge's front bar.
+**The bar sits just under tails 9 and 10 (GPIO8, GPIO3)**: solder those
+wires so they leave straight up along the board, never toward the bar.
+Tails 3 to 8 (GPIO4, 5, 6, 9 and EXIO0, 1) are right behind the bar, with
+0.7 mm to spare: no wire fits there. Tail 2 (GPIO7, the talk wire), 16
+(GND) and 18 (5V) have room.
 
 ## Bumper: TPU, for falls and a strap
 
@@ -341,7 +344,6 @@ back, off again to open the case.
   (it springs back on 0.9 N). It stands 1.5 mm proud of the thin side: a
   table pushes it 1.3 mm at most at the switch, short of the 2.1 mm click.
   In a side drop it swings in on its spring and the band takes the hit.
-- **The reset pinhole** has a 3.2 mm hole over it (see below).
 - **The rocker** stays recessed in a straight window (hard to flip by
   accident: off means no charging). **USB-C** has a funnel along the
   plug's long side, so a plug aimed by feel slides in.

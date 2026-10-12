@@ -431,18 +431,17 @@ before it was built. Its findings:
   the chest, an arm or a hug can press the lever; the server's silent-press
   gate (T1.35) drops presses with no speech.
 
-**Reset pinhole and button clearance (2026-10-12)**: the firmware session's
-W7 (docs/remote-operation.md: the case opens once more before it goes to the
-retirement home) asked for a paperclip pinhole to RESET. The board's edge
-buttons are side-actuated (hw.KEYS; Waveshare's photo: clockwise from USB-C,
-RESET, BOOT, K3, K2, K1), so the bore runs in the board's plane through the
-left wall and the tub top's corner block: 1.5 mm, 7.3 mm of guide, BOOT 6.7
-mm off the line. Only the tub top and the bumper change. Found on the way:
-the corner block touched BOOT's plunger (0.00 mm; the block was cut round
-the board's outline, buttons included). Every edge button now has 0.6 mm
-(`hx1.KEY_CLEAR`). The clear top's project carries both. Lesson: clearance
-to a part that changes how the device boots is a tested number, not
-whatever the envelope left.
+**Button clearance (2026-10-12)**: the firmware session's W7
+(docs/remote-operation.md) asked for a paperclip pinhole to RESET. It was
+designed (the edge buttons are side switches, so the bore ran in the
+board's plane through the left wall) and committed (23c41f5f), then
+dropped the same day: Mario wants no holes in the case and nothing else to
+print. Kept from it: the tub top's corner block touched BOOT's plunger
+(0.00 mm; cut round the board's outline, buttons included), and BOOT held
+at a reset boots download mode (F-0020). Every edge button now has 0.6 mm
+(`hx1.KEY_CLEAR`), inside the clear top he prints anyway. Lesson:
+clearance to a part that changes how the device boots is a tested number,
+not whatever the envelope left.
 
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
 bottom is fine, holders whole, no glue but the tub's halves, plastic pivot, protected cells
