@@ -300,6 +300,47 @@ printed parts, measure, and add about 20 mm. Loose is fine.
 The board's battery socket is 1.25 mm pitch; the board's own battery plug
 and lead came with it (Mario, 2026-10-11), so plug it in and splice its lead.
 
+## Bumper: TPU, for falls and a strap
+
+Mario's mother's idea (2026-10-12): a TPU case that protects it from falls,
+with a loop so his grandfather can hang it from his neck or his wrist
+(`huxcase/bumper.py`, `tests/test_bumper.py`). One piece, pulled on from the
+back, off again to open the case.
+
+- **Thin sides, thick corners** (Mario's call): 1.5 mm on the flat sides,
+  4.2 mm on each corner. Drops land on the corners. The bumper's outer
+  corners are tighter (R3) than the case's own (R8), so the TPU fills the
+  round: 73 x 107 mm against the bare 70 x 104.
+- **Lips over both faces.** The front one is the seat: it hugs the rounded
+  edge, 5 mm wide along the sides, 2.5 mm at the top (clear of the face
+  screws) and the bottom (clear of the grille). The back one is the way in:
+  2 mm, its underside a 45 deg cone resting on the case's rounded edge. Each
+  lip presses its face by 0.1 mm; round the band the fit is nominal.
+- **The lever** sits in a U open to the back, 1.5 mm clear in front, so the
+  case goes in front first and nothing of the bumper can drag on the lever
+  (it springs back on 0.9 N). It stands 1.5 mm proud of the thin side: a
+  table pushes it 1.3 mm at most at the switch, short of the 2.1 mm click.
+  In a side drop it swings in on its spring and the band takes the hit.
+- **The rocker** stays recessed in a straight window (hard to flip by
+  accident: off means no charging). **USB-C** has a funnel along the
+  plug's long side, so a plug aimed by feel slides in.
+- **The loop**, centred on top near the centre of mass so it hangs
+  straight: a 5 mm hole on a 25 mm base. Use a cord loop, girth-hitched,
+  not a metal ring (the Wi-Fi antenna is just under the top). For the neck,
+  a breakaway lanyard (it opens if it catches); for the wrist, a strap
+  with no slider.
+- Prints on its front, the front lip on the bed: every wall vertical, no
+  supports; the windows over USB-C and the rocker are short bridges.
+  Solid (four walls, 100 % infill): in sections this thin there is no
+  room for infill, and a softer corner would only bottom out sooner (a
+  1.2 m drop is about 3.3 J at 277 g; an edge-first hit squashes about
+  half of a 4.2 mm corner). TPU before the PLA touches the floor: 5 mm at
+  the vertices, 4.2 at the corners, 2.8 along the face edges, 1.5 on the
+  flats (a flat face-down drop squashes about 0.5 of it). Mario's Overture
+  TPU 95A on Bambu's TPU 95A preset (230 C, 3.6 mm3/s), from the external
+  spool: 2 h 14 min, about 30 g. Print its front 8 mm first (37 min) to
+  check the fit.
+
 ## Print guide
 
 | Piece | Colour | Pose on the bed | Supports |
@@ -312,6 +353,7 @@ and lead came with it (Mario, 2026-10-11), so plug it in and splice its lead.
 | Lever pin | grey | lying flat (three: two spares) | none |
 | Plunger | grey | standing on its tip (three lengths) | none |
 | Holder bridge | grey | front face down | none |
+| Bumper (and its front 8 mm, the fit test) | TPU, external spool | on its front, the front lip on the bed | none |
 
 `huxcase/printability.py` measures what needs support in each pose and finds
 any layer that starts in mid-air (`tests/test_printability.py` holds every
@@ -381,6 +423,8 @@ print. The same sliced are in `out/print/sliced/`.
 | `5_test_corner` | AMS: slot 1 white PLA, slot 4 frosted PETG | 31 min; both halves' corner at the seam: print it first |
 | `7_tub_top_pla` | one PLA (red set) | 1 h (on its back); the top alone, standard settings, for a base already printed |
 | `8_tub_top_clear` | one PETG (frosted set) | 3 h 52 min (on its back); the top alone, clear, for a base already printed: dry the spool first |
+| `9_bumper_tpu` | TPU 95A (external spool) | 2 h 14 min; solid, no supports |
+| `10_bumper_test_ring` | TPU 95A (external spool) | 37 min; the bumper's front 8 mm: does the outline fit, does the front lip seat |
 
 The tub's plate prints object by object, so the filament changes once,
 between the pieces, never inside one. The frosted top goes first, so its

@@ -18,7 +18,7 @@ from functools import cache
 
 from build123d import Pos, Rot
 
-from huxcase import fits
+from huxcase import bumper, fits
 from huxcase import hardware as hw
 from huxcase.concepts import hx1
 from huxcase.shapes import bbox_solid
@@ -54,6 +54,11 @@ POSES = (
     # together dry and hold the frosted one to a light before the long print.
     Pose("test_base", "standing on its floor cut", (0, 0, 0)),
     Pose("test_top", "on its back, the open front up", (-90, 0, 0)),
+    # The TPU bumper (huxcase.bumper) on its front, the front lip on the bed:
+    # every wall vertical, two short bridges (over USB-C and the rocker). Its
+    # front 8 mm first, as a fit test.
+    Pose("bumper", "on its front, the front lip on the bed", (90, 0, 0)),
+    Pose("bumper_ring", "on its front, the front lip on the bed", (90, 0, 0)),
 )
 
 
@@ -75,6 +80,8 @@ def printed_pieces(c=None) -> dict[str, object]:
     out["tub_top"] = by_name["tub_frosted"]
     out["test_base"] = by_name["tub_grey"] & bbox_solid(*TEST_CORNER, *TEST_BASE_Z)
     out["test_top"] = by_name["tub_frosted"] & bbox_solid(*TEST_CORNER, *TEST_TOP_Z)
+    out["bumper"] = bumper.bumper()
+    out["bumper_ring"] = bumper.front_ring()
     return out
 
 
@@ -152,7 +159,8 @@ def islands(shape, pitch: float = 0.2) -> list[dict]:
     mesh = trimesh.Trimesh(
         vertices=np.array([(v.X, v.Y, v.Z) for v in verts]), faces=np.array(tris), process=True
     )
-    vox = mesh.voxelized(pitch).fill()
+    # trimesh halves edges 10 times by default: not enough for the bumper's 116 mm ones
+    vox = mesh.voxelized(pitch, max_iter=14).fill()
     mat, origin = vox.matrix, vox.translation
     out = []
     for k in range(1, mat.shape[2]):
@@ -360,6 +368,8 @@ COLOUR = {
     "bridge": "grey",
     "plunger_long05": "grey",
     "plunger_long10": "grey",
+    "bumper": "TPU, from the external spool",
+    "bumper_ring": "TPU, from the external spool",
 }
 
 
@@ -391,6 +401,9 @@ def export_stls(out_dir) -> list[str]:
         "clarity settings (dry the filament first). Print the test corner first "
         "(projects/5_test_corner.3mf): the two halves' corner at the seam, to push "
         "together dry and to hold to a light. "
+        "The TPU bumper (projects/9_bumper_tpu.3mf) prints from the external spool, on "
+        "its front, no supports; its front 8 mm (projects/10_bumper_test_ring.3mf) "
+        "checks the fit first. "
         "Projects to open and slice: projects/; the same sliced: sliced/.\n"
         + "\n".join(written)
         + "\n"

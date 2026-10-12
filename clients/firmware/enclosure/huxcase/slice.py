@@ -45,6 +45,10 @@ MACHINE, PROCESS = "Bambu Lab P2S 0.4 nozzle", "0.20mm Standard @BBL P2S"
 # Mario's frosted spool is transparent PETG (2026-10-11); the rest are PLA.
 # Bambu's own preset for translucent PETG on the P2S is the starting point.
 PLA, PETG = "Bambu PLA Basic @BBL P2S", "Bambu PETG Translucent @BBL P2S 0.4 nozzle"
+# The bumper's TPU runs from the external spool (the AMS can't feed it).
+# Mario's is Overture TPU 95A (2026-10-12): standard flow, so Bambu's 95A
+# preset (3.6 mm3/s, 230 C), not the HF one (12 mm3/s would starve it).
+TPU = "Bambu TPU 95A @BBL P2S"
 TREE_SUPPORTS = {
     "enable_support": "1",
     "support_type": "tree(auto)",
@@ -133,6 +137,13 @@ CLARITY_FILAMENT = {  # on the PETG preset
 GREY, BLACK, ORANGE, FROSTED = "#8E9089", "#161616", "#FF6A13", "#E4ECEE"
 WHITE, RED = "#F4F4F2", "#C12E1F"  # the tub base: Mario's white PLA in slot 1 (2026-10-11)
 AMS = (WHITE, BLACK, ORANGE, FROSTED)  # Mario's AMS slots 1 to 4 for the tub
+TPU_BLACK = "#101010"  # the external spool
+FILAMENT = {FROSTED: (PETG, "PETG"), TPU_BLACK: (TPU, "TPU")}  # by colour; the rest PLA
+
+
+def _filament(colour: str) -> tuple[str, str]:
+    """(preset, filament type) for a plate's colour."""
+    return FILAMENT.get(colour, (PLA, "PLA"))
 
 
 @dataclass(frozen=True)
@@ -218,6 +229,18 @@ PLATES.append(
     # Mario has (2026-10-11, after the clear PETG top strung).
     Plate("7_tub_top_pla", (TOP,), TREE_SUPPORTS | NO_BRIM, (RED,))
 )
+# The TPU bumper (huxcase.bumper): on its front, no supports (every wall
+# vertical; the windows over USB-C and the rocker are short bridges). Solid:
+# four walls make the 1.5 mm sides all perimeter and the corners fill.
+BUMPER, BUMPER_RING = "hx1_13_bumper", "hx1_14_bumper_ring"
+TPU_PROCESS = {
+    "wall_loops": "4",
+    "sparse_infill_density": "100%",
+    "sparse_infill_pattern": "zig-zag",  # the preset's grid isn't allowed at 100 %
+}
+PLATES.append(Plate("9_bumper_tpu", (BUMPER,), NO_BRIM | TPU_PROCESS, (TPU_BLACK,)))
+# Its front 8 mm, to check the outline and the front lip's seat first.
+PLATES.append(Plate("10_bumper_test_ring", (BUMPER_RING,), NO_BRIM | TPU_PROCESS, (TPU_BLACK,)))
 # Plates whose close fits no support may enter: STL, its printed piece.
 KEEP_OUT = {
     "4_tub_base_and_top": (TOP, "tub_top"),
@@ -261,9 +284,10 @@ def _resolve(kind: str, name: str) -> dict:
 
 def _presets(work: Path, colours: tuple[str, ...] = ("",)) -> list[str]:
     """Command-line arguments loading the complete P2S presets from `work`,
-    one filament per colour: PETG for the frosted one, PLA for the rest."""
+    one filament per colour (_filament)."""
     paths = {}
-    wanted = [("machine", MACHINE), ("process", PROCESS), ("filament", PLA), ("filament", PETG)]
+    wanted = [("machine", MACHINE), ("process", PROCESS)]
+    wanted += [("filament", f) for f in (PLA, PETG, TPU)]
     for kind, name in wanted:
         paths[name] = work / f"{kind}_{len(paths)}.json"
         paths[name].write_text(json.dumps(_resolve(kind, name), indent=1))
@@ -271,7 +295,7 @@ def _presets(work: Path, colours: tuple[str, ...] = ("",)) -> list[str]:
         "--load-settings",
         f"{paths[MACHINE]};{paths[PROCESS]}",
         "--load-filaments",
-        ";".join(str(paths[PETG if c == FROSTED else PLA]) for c in colours),
+        ";".join(str(paths[_filament(c)[0]]) for c in colours),
     ]
 
 
@@ -501,8 +525,9 @@ def support_in_keep_outs(
 def check(project: Path, plate: Plate) -> str:
     """What every sliced plate must be: the P2S's own start sequence, no
     pause, one plate; its objects one after another in the plate's order,
-    each in its own filament, no prime tower; PETG on the frosted slot and
-    the clarity settings on it alone. Returns its print time."""
+    each in its own filament, no prime tower; every filament the type its
+    colour asks for (PETG frosted, TPU for the bumper, else PLA), and the
+    clarity settings on the frosted one alone. Returns its print time."""
     with zipfile.ZipFile(project) as z:
         plates = [n for n in z.namelist() if n.endswith(".gcode")]
     assert plates == ["Metadata/plate_1.gcode"], f"{project.name}: plates {plates}"
@@ -520,10 +545,10 @@ def check(project: Path, plate: Plate) -> str:
         changes = [n for i, n in enumerate(loads) if i == 0 or n != loads[i - 1]]
         assert changes == [plate.slots[s] - 1 for s in plate.stls], f"{project.name}: {loads}"
         assert "; enable_prime_tower = 0" in gcode, f"{project.name}: prime tower on"
+    kinds = re.split(r"[;,]", re.search(r"^; filament_type = (.*)$", gcode, re.M).group(1))
+    want = [_filament(c)[1] for c in plate.colours]
+    assert kinds == want, f"{project.name}: filament types {kinds}"
     if plate.clear:
-        kinds = re.split(r"[;,]", re.search(r"^; filament_type = (.*)$", gcode, re.M).group(1))
-        want = ["PETG" if c == FROSTED else "PLA" for c in plate.colours]
-        assert kinds == want, f"{project.name}: filament types {kinds}"
         for key in ("nozzle_temperature", "filament_max_volumetric_speed", "fan_max_speed"):
             got = re.search(rf"^; {key} = (.*)$", gcode, re.M).group(1).split(",")
             mine = [i + 1 for i, v in enumerate(got) if v == CLARITY_FILAMENT[key]]

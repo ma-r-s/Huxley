@@ -26,7 +26,9 @@ def test_every_piece_has_a_pose_and_is_one_solid(pieces):
         assert len(shape.solids()) == 1, name
 
 
-@pytest.mark.parametrize("piece", ["ptt_pin", "plunger", "plunger_long05", "plunger_long10"])
+@pytest.mark.parametrize(
+    "piece", ["ptt_pin", "plunger", "plunger_long05", "plunger_long10", "bumper_ring"]
+)
 def test_small_parts_need_no_support(report, piece):
     assert report[piece] == []
 
@@ -58,6 +60,7 @@ def test_nothing_starts_in_mid_air(pieces, pose):
         ("ptt_bar", 60),  # the pin bore's roof and the dimple's floor: tiny bridges
         ("bridge", 130),  # the back bar bridges 17 mm between its webs
         ("grille_plug", 200),  # its flange: 1.5 mm out
+        ("bumper", 30),  # on its front: the 11 mm bridge over the rocker's window
         ("faceplate", 450),  # the face's edge round-over and the counterbore steps
         ("tub_base", 450),  # the joint shelves, the pedestal ribs: tree supports
         (
