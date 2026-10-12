@@ -47,7 +47,7 @@ compounding.
 
 **Verified when**: forcing a panic on the board produces a coredump
 we can decode on the host, AND server log shows matching
-`client.huxley.firmware_log level=E` entries timestamp-aligned with
+`client.huxley.firmware_log client_level=E` entries timestamp-aligned with
 serial.
 
 ---
@@ -85,7 +85,7 @@ voice client (output still via the web dev client's speaker for now).
 
 **Verified when**: holding `K2`, speaking "hola" into the board's
 mic, and seeing the transcript appear in the web dev client and in
-the server log. Pressing for < 133 ms produces the
+the server log. Pressing for < 133 ms, or without speaking, produces the
 "too short" nudge (server-side gate from `docs/protocol.md`).
 
 ---

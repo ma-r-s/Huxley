@@ -46,6 +46,7 @@ class Turn:
     state: TurnState
     user_audio_frames: int             # chunks received (logged)
     user_audio_bytes: int              # PCM16 bytes received; the 133 ms too-short check measures this
+    user_audio_level: PressLevel       # peak / RMS without the first 100 ms and last 60 ms (clicks); peaking under -40 dBFS = silent, not committed
     response_ids: list[str]
     pending_factories: list[Factory]   # accumulated across all responses in this turn
     needs_follow_up: bool              # per-response flag: set when a None-factory tool was called in the current response
@@ -131,7 +132,7 @@ class TurnCoordinator:
             self.current_turn.state = TurnState.INTERRUPTED # 6. mark turn
 ```
 
-**Rationale for step 1 (drop flag first)**: OpenAI audio deltas arrive asynchronously. Between "we sent `response.cancel`" and "OpenAI actually processed it," more deltas can land. The receive loop checks `response_cancelled` before forwarding each delta — if set, the delta is dropped at the receive point. Without the flag, flush + cancel is not atomic: stale deltas could re-fill a just-flushed client queue.
+**Rationale for step 1 (drop flag first)**: OpenAI audio deltas arrive asynchronously. Between "we sent `response.cancel`" and "OpenAI actually processed it," more deltas can land. The receive loop checks `response_cancelled` before forwarding each delta — if set, the delta is dropped at the receive point. Without the flag, flush + cancel is not atomic: stale deltas could re-fill a just-flushed client queue. The flag is reset by the next commit, so the provider backs it up: after `cancel_current_response` it drops every remaining event of the cancelled response, including its late `response.done`, which would otherwise be taken for the next turn's (2026-10-12), and holds the next `response.create` until that response is done.
 
 **Rationale for step 3 before step 4** (content stream stop before force_release): if force_release ran first, the await window before `_stop_content_stream` completes gives the pump task time to execute `_factory_send_audio`. That callback sees `is_speaking=False` (force_release just cleared it) and calls `acquire(FACTORY)` — leaving `SpeakingState` stuck on a dead pump after cleanup completes. Stop the producer first, then clear the flag; nothing can re-acquire what doesn't exist. Same reasoning applies to `on_session_disconnected`.
 
@@ -143,8 +144,8 @@ This is **not** a new invention — `session/manager.py:82` has the same flag to
 stateDiagram-v2
     [*] --> IDLE
     IDLE --> LISTENING: ptt_start
-    LISTENING --> IDLE: ptt_stop (frames < 3)
-    LISTENING --> COMMITTING: ptt_stop (frames ≥ 3)
+    LISTENING --> IDLE: ptt_stop (under 133 ms, or silent)
+    LISTENING --> COMMITTING: ptt_stop (133 ms or more, not silent)
     COMMITTING --> IN_RESPONSE: first response event
     IN_RESPONSE --> IN_RESPONSE: audio delta OR function_call dispatched
     IN_RESPONSE --> AWAITING_NEXT_RESPONSE: response.done AND needs_follow_up

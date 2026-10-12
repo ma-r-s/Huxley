@@ -37,7 +37,7 @@ Every log event uses a dotted namespace + direction prefix. This makes events `g
 
 A skill named `audiobooks` emits events like `audiobooks.factory_built`, `audiobooks.stream_ended`. The framework reserves `coord.`, `focus.`, `background.`, `session.`, `server.`, `app.`, `client.`; everything else is skill territory.
 
-The `client.*` events come in via the `client_event` WebSocket message type — clients emit `{"type": "client_event", "event": "<name>", "data": {...}}` and the server logs them as `client.<name>` with the data fields spread. Pure observability — the framework takes no action. This closes the "client-side blackbox" gap; thinking-tone state, silence-timer fires, and PTT UI transitions are now visible in the same log file as the server-side flow.
+The `client.*` events come in via the `client_event` WebSocket message type — clients emit `{"type": "client_event", "event": "<name>", "data": {...}}` and the server logs them as `client.<name>` with the data fields spread. A data field named like one of the log line's own keys (`event`, `level`, `timestamp`, `logger`, `exc_info`, `stack_info`, `conn_id`) is logged as `client_<key>`: the firmware's `huxley.firmware_log` carries the board's level (`W`, `E`, `I`) as `client_level`, while `level` stays the server's (`info`). Pure observability — the framework takes no action. This closes the "client-side blackbox" gap; thinking-tone state, silence-timer fires, and PTT UI transitions are now visible in the same log file as the server-side flow.
 
 PWA client events worth knowing when debugging a phone (added 2026-10-10):
 
@@ -190,6 +190,10 @@ server.tx.model_speaking   value=true
 Read top to bottom: user pressed PTT (frame 28), coordinator committed, model started speaking ("ahí le pongo el libro"), called the play_audiobook tool, the audiobooks skill built a stream and announced it, model finished speaking, response done, the parent turn ended, the content stream's Activity was acquired on the FocusManager (CONTENT channel went FOREGROUND), pump spawned, first chunk acquired the FACTORY speaker.
 
 Every event is grep-able. To filter to one turn: `grep "turn=abc12345"`. To see only coordinator decisions: `grep "^coord\."`. To see only focus arbitration: `grep "^focus\."`. To see what the agent sent the user: `grep "^server.tx\."`.
+
+## Press levels — why a press didn't commit
+
+`coord.ptt_stop` carries `peak_dbfs` and `rms_dbfs` for every press (measured without its first 100 ms and last 60 ms, which hold the button's press and release clicks), and `reason` (`too_short` or `silent`) when it wasn't committed. A silent press (peak under -40 dBFS) also logs **`coord.press_silent`** with `audio_ms`, `measured_ms`, the levels and `threshold_dbfs`. Reference levels on 2026-10-12: the walkie with nobody talking peaks at -56 dBFS, speech at -7 to 0 dBFS. A real question dropped as silent would show here with a peak just under the threshold.
 
 ## Focus events — what they tell you
 
@@ -348,6 +352,22 @@ A disabled skill stays disabled until the persona reloads or the server restarts
 | `runtime.teardown_timeout_abandoned` | A previous app's teardown outlived its bound (10 s for a swap, 20 s for a reload); the swap or reload went ahead anyway.                                                                          | `what` (`previous_swap`, `reload_old_app`) |
 
 A server that gives up waiting for the old one (30 s) prints `[huxley] not starting: ...` to stderr and exits 1; under launchd that line is in `huxley.stderr.log` and KeepAlive starts it again later. It does not rotate the log first, so the stuck process's log is kept.
+
+## Voice provider session: responses, refresh, close
+
+What the OpenAI provider sends and gets back around each response (added 2026-10-12):
+
+- **`session.tx.response_create`**: a response was requested. `generation` is the cancel count stamped in the response's metadata; `deferred_ms` is present when the request was held back.
+- **`session.tx.response_create_deferred`**: a response was requested while `active_response_id` was still live (usually the one an interrupt just cancelled). Sent when that response's `response.done` arrives. OpenAI rejects a second live response (`conversation_already_has_active_response`), which left three presses unanswered on 2026-10-12.
+- **`session.tx.response_create_forced`** (warning): a held-back request waited 5 s and its `response.done` never came; sent anyway. Means the provider's response bookkeeping missed an event.
+- **`session.rx.stale_done_forwarded`**: a call (`suspend()`) dropped a held-back request, so the cancelled response's `response.done` was passed to the coordinator to close the waiting turn.
+- **`session.rx.metadata_rejected`** (error): OpenAI refused `response.metadata`; the provider stops sending it and stale detection falls back to the response live at each cancel.
+- **`session.tx.cancel`**: `active_response_id` (what was cancelled, if known) and `dropped_deferred_create`.
+- **`session.rx.response_created`** / **`session.rx.response_done`**: `response_id`, `status` (`completed`, `cancelled`, ...), `stale`. A stale response is one cancelled by an interrupt: its remaining events (audio, tool calls, `response.done`) never reach the coordinator, logged as **`session.rx.stale_dropped`** (audio at debug). Its late `response.done` used to end the next press's turn.
+- **`session.rx.error code=conversation_already_has_active_response`**: should not happen any more; `will_retry=true` means the request is sent again when the live response finishes (once).
+- **`session.tx.tool_output`**: `call_id`, `output` (first 300 characters) and `output_len`.
+- **`session.refresh_due`** / **`session.refresh`**: OpenAI ends a session at 60 minutes. After `HUXLEY_SESSION_REFRESH_MINUTES` (default 50) the provider reconnects at the first idle moment. `refresh_due` says what it is waiting for (`input_claimed` (a call holds the mic; a disconnect would hang it up), `response_active`, `response_pending`, `user_audio`, `reply_playing`, `recent_traffic`); It waits for 10 s without traffic and 10 s after the last reply finished playing, then computes the summary with the session still up (`session.summary_timeout` if that took over 10 s; the raw transcript tail is used). `refresh` is the disconnect, followed by the usual `app.session_end` and auto-reconnect. A `session.rx.error code=session_expired` means no idle moment came in time.
+- **`session_connection_closed`**: the WebSocket closed under us: `code` and `reason` from OpenAI's close frame, `sent_code`, and `age_s` (session age).
 
 ## Session readiness — diagnosing "told ready when not"
 

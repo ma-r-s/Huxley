@@ -102,6 +102,16 @@ If set, also write logs to this path (in addition to stdout).
 HUXLEY_LOG_FILE=/var/log/huxley/server.jsonl
 ```
 
+### `HUXLEY_SESSION_REFRESH_MINUTES`
+
+OpenAI ends a Realtime session after 60 minutes. After this many minutes the server reconnects on its own, at the first moment nobody is talking and no answer is playing, carrying a summary of the conversation into the new session.
+
+- Default: `50`
+
+```bash
+HUXLEY_SESSION_REFRESH_MINUTES=45
+```
+
 ## Skill-specific
 
 Skills can read their own environment variables. By convention they're prefixed with `HUXLEY_<SKILL>_`. As of now (pre-secret-interpolation Stage 4), skills typically read:

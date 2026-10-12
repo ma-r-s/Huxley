@@ -103,9 +103,11 @@ streamed to the server as:
 
 The server logs them as `client.huxley.firmware_log` with all `data`
 fields as structured kwargs (per the generic `client_event` handler
-in [`../../docs/protocol.md`](../../docs/protocol.md)). Search the
-server's structlog output for `event=client.huxley.firmware_log` to
-pull every firmware event from a session.
+in [`../../docs/protocol.md`](../../docs/protocol.md)), except that the
+board's `level` arrives as `client_level` (the log line's own `level`
+is the server's, always `info`). Search the server's structlog output
+for `event=client.huxley.firmware_log` to pull every firmware event
+from a session, and `client_level` for the board's warnings and errors.
 
 **Limitations**:
 

@@ -172,7 +172,9 @@ class WifiBoard(Board):
     def format(e: dict) -> str | None:
         ev = e.get("event")
         if ev == "client.huxley.firmware_log":
-            return f"{e.get('level', '?')} ({e.get('ts', 0)}) {e.get('tag')}: {e.get('line')}"
+            # The board's level is `client_level`; older logs carry it as `level`.
+            level = e.get("client_level") or e.get("level", "?")
+            return f"{level} ({e.get('ts', 0)}) {e.get('tag')}: {e.get('line')}"
         if ev in SERVER_EVENTS:
             skip = ("event", "timestamp", "level", "logger")
             return f"[server] {ev} " + " ".join(f"{k}={v}" for k, v in e.items() if k not in skip)

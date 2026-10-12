@@ -16,6 +16,8 @@ from enum import Enum
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
+from .press_level import PressLevel
+
 if TYPE_CHECKING:
     from huxley_sdk import AudioStream, InputClaim, PlaySound
 
@@ -60,6 +62,8 @@ class Turn:
     user_audio_frames: int = 0
     # PCM16 bytes forwarded this turn; the too-short check measures this.
     user_audio_bytes: int = 0
+    # Peak / RMS of those frames; the silent-press check reads this.
+    user_audio_level: PressLevel = field(default_factory=PressLevel)
     pending_audio_streams: list[AudioStream] = field(default_factory=list)
     needs_follow_up: bool = False
     # Latched PlaySound from an info-tool call. Sent to the audio channel

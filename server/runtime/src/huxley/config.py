@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path  # noqa: TC003 — pydantic-settings needs the runtime symbol
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -54,7 +55,11 @@ class Settings(BaseSettings):
     server_port: int = 8765
 
     # --- Session ---
-    conversation_max_minutes: int = 55
+    # OpenAI ends a Realtime session at 60 minutes. After this many
+    # minutes the provider reconnects at the first idle moment (summary
+    # carried over), so the hard limit doesn't land in the middle of a turn.
+    # Must leave time before the hard limit to find an idle moment.
+    session_refresh_minutes: float = Field(default=50, gt=0, lt=60)
 
     # --- Logging ---
     log_level: str = "INFO"

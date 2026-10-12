@@ -19,6 +19,7 @@ class ServerEventType(Enum):
 
     SESSION_CREATED = "session.created"
     SESSION_UPDATED = "session.updated"
+    RESPONSE_CREATED = "response.created"
     RESPONSE_OUTPUT_AUDIO_DELTA = "response.output_audio.delta"
     RESPONSE_OUTPUT_AUDIO_DONE = "response.output_audio.done"
     RESPONSE_OUTPUT_AUDIO_TRANSCRIPT_DONE = "response.output_audio_transcript.done"
@@ -75,6 +76,7 @@ class ErrorEvent:
     message: str
     type: str = ""
     code: str = ""
+    param: str = ""  # the request field at fault, when the server names one
 
 
 def parse_server_event(
@@ -105,6 +107,7 @@ def parse_server_event(
             message=error.get("message", "Unknown error"),
             type=error.get("type", ""),
             code=error.get("code", ""),
+            param=error.get("param") or "",
         )
 
     return None
