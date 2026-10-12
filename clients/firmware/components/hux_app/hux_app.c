@@ -802,6 +802,9 @@ static void dispatch(hux_app_event_t *ev) {
         case HUX_APP_EV_BUTTON_K2_PRESSED:
             ESP_LOGI(TAG, "app.ptt.pressed");
             enter_ptt();
+            /* The last reading (at most a minute old) rides with the press,
+             * so "how much battery" is answered from now. */
+            hux_battery_report_now();
             break;
 
         case HUX_APP_EV_BUTTON_K2_RELEASED:
