@@ -16,6 +16,18 @@ Append-only log of non-obvious calls. Format: date · context · decision · con
 
 ---
 
+## 2026-10-12: The waiting sound comes from the server (T1.41)
+
+**Decision**: the coordinator sends a soft waiting cue (one struck note every 1.5 s) while a user waits on a reply or a tool and the client has gone quiet; the PWA drops its own client-side tone. Reverses the 2026-04 decision that the thinking tone is client-side.
+
+**Why**: the long silences are tool waits after the model's preamble ("un momento"), and only the server knows a tool is running; the walkie had no tone at all, and the PWA's started only at `ptt_stop`. Live: 22 s of silence during two book searches. Server-side, the walkie needs no firmware change and both clients behave the same.
+
+**Alternatives**: a `waiting` protocol message each client voices itself (the critic's more robust option: no shared audio queue, a press clears it locally); kept in reserve if the smoke test hears blips during presses. Arming only for tools (simpler, but leaves the slow-reply gap).
+
+**Consequences**: cue audio is plain audio with `model_speaking: false`; it is excluded from the playhead and from `server.tx.audio_stats`; the recorder and the caregiver alerts must label it as the cue. Details in `turns.md` "The waiting cue".
+
+---
+
 ## 2026-04-12 — Python server does not own audio hardware
 
 **Context**: Initial design had Python capturing mic via PyAudio and playing to the speaker directly. This coupled the server to host audio hardware and made the browser dev UI a second-class citizen that had to work around it.

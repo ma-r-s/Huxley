@@ -1045,13 +1045,16 @@ class AudioServer:
     # never gets silence padded into it.
     _OPUS_IDLE_FLUSH_S = 0.25
 
-    async def send_audio(self, pcm: bytes) -> None:
+    async def send_audio(self, pcm: bytes, *, stats: bool = True) -> None:
+        """`stats=False` for the coordinator's waiting cue (T1.41): its
+        blips are not a source falling behind, so they stay out of
+        `server.tx.audio_stats` (the caregiver alerts read it)."""
         if not pcm:
             return
         conn = self._conn
         if conn is not None and conn.opus_tx is not None:
             if conn.hello_sent:
-                await self._send_audio_opus(conn, conn.opus_tx, pcm)
+                await self._send_audio_opus(conn, conn.opus_tx, pcm, stats=stats)
             else:
                 await logger.adebug("server.tx.opus_before_hello_dropped", pcm_bytes=len(pcm))
             return
@@ -1065,13 +1068,16 @@ class AudioServer:
             chunk = pcm[offset : offset + self._AUDIO_CHUNK_BYTES]
             t0 = time.monotonic()
             wire = await self._send({"type": "audio", "data": base64.b64encode(chunk).decode()})
-            await self._tx_audio_stats(len(chunk), (time.monotonic() - t0) * 1000, wire_bytes=wire)
+            if stats:
+                await self._tx_audio_stats(
+                    len(chunk), (time.monotonic() - t0) * 1000, wire_bytes=wire
+                )
             # Yield so the recv loop and any other tasks can interleave
             # — keeps the WS bidirectional even mid-burst.
             await asyncio.sleep(0)
 
     async def _send_audio_opus(
-        self, conn: _ConnInfo, encoder: OpusEncoderStream, pcm: bytes
+        self, conn: _ConnInfo, encoder: OpusEncoderStream, pcm: bytes, *, stats: bool = True
     ) -> None:
         """Encode whole 60 ms frames now, keep the remainder for the next
         call (or a flush), and write the packets."""
@@ -1082,7 +1088,7 @@ class AudioServer:
         except Exception as exc:
             await self._opus_encode_failed(conn, exc, pcm_bytes=len(pcm))
             return
-        await self._drain_opus(conn, pcm_bytes=len(pcm))
+        await self._drain_opus(conn, pcm_bytes=len(pcm), stats=stats)
         # Armed after the writes: a sender stuck in flow control is not
         # idle. Not while a stream is announced (see _OPUS_IDLE_FLUSH_S).
         if (
@@ -1093,7 +1099,7 @@ class AudioServer:
         ):
             self._arm_opus_idle_flush(conn)
 
-    async def _drain_opus(self, conn: _ConnInfo, *, pcm_bytes: int) -> None:
+    async def _drain_opus(self, conn: _ConnInfo, *, pcm_bytes: int, stats: bool = True) -> None:
         """Write queued packets, one binary message each, in queue order.
 
         Every sender drains the one shared queue: whoever runs pops the
@@ -1139,7 +1145,7 @@ class AudioServer:
                 dropped_pcm_ms=dropped_pcm // _PCM_BYTES_PER_MS,
             )
             raise
-        if self._conn is conn:
+        if self._conn is conn and stats:
             await self._tx_audio_stats(pcm_bytes, wait_ms, sends=sends, wire_bytes=wire)
 
     async def _flush_opus(self, conn: _ConnInfo | None, reason: str) -> None:

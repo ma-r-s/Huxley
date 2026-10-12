@@ -416,7 +416,7 @@ These are client changes only. They do not affect the server or the WebSocket pr
 - [x] `sounds_enabled` toggle disables palette + silence atomically (#11)
 - [x] Persona-overridable `on_complete_prompt` via `skills.audiobooks.on_complete_prompt` (#5)
 
-### Stage D — Client-side thinking tone ✅
+### Stage D — Client-side thinking tone ✅ (superseded 2026-10-12 by the server's waiting cue, T1.41: see `turns.md` "The waiting cue")
 
 - [x] `clients/pwa/src/lib/audio/playback.ts`: thinking tone frequency 440Hz → 120Hz (below the 200Hz–4kHz vocal band so it can't mask incoming speech)
 - [x] `clients/pwa/src/lib/ws.svelte.ts`: `SILENCE_TIMEOUT_MS` 400ms → 1500ms (was over-triggering on every normal model first-token gap, teaching the user to ignore it)

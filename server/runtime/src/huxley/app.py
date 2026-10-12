@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 from typing import TYPE_CHECKING
 
 import structlog
@@ -192,6 +193,7 @@ class Application:
             send_claim_ended=self.server.send_claim_ended,
             send_stream_started=self.server.send_stream_started,
             send_stream_ended=self.server.send_stream_ended,
+            send_cue_audio=functools.partial(self.server.send_audio, stats=False),
             provider=self.provider,
             dispatch_tool=self.skill_registry.dispatch,
             status_messages=self._resolved_persona.ui_strings or None,

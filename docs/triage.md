@@ -5521,7 +5521,7 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 
 ## T1.41: A waiting sound while a tool runs (no dead air)
 
-**Status**: `in_progress` (2026-10-12) · **Effort**: S-M (turn coordinator)
+**Status**: `in_progress` (2026-10-12; built, waiting on Mario's smoke on the walkie) · **Effort**: S-M (turn coordinator)
 
 **Problem** (Mario, live): "it told me it was gonna look for some books and then it kept silent for like 10 seconds... it feels like it's not doing anything." The log: 22 s from "Un momento, déjame buscar" to the answer (two find_books calls). `docs/turns.md` promises a thinking tone that fills silence, but only the PWA has one, it starts only at `ptt_stop`, and the walkie has none; during a tool the server sends the client nothing at all.
 
@@ -5533,6 +5533,14 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 - The sound: one steady soft note (about 520 Hz, 90 ms, raised-cosine envelope, about -24 dBFS), generated in code: a small speaker can't play the PWA's 120 Hz, and a steady repeat reads as "working", unlike the offline cue's falling pair. Sent as plain audio (`model_speaking` stays false).
 - Logs: `coord.wait_cue_start` (reason, waited_ms), `coord.wait_cue_stop` (reason, blips).
 - The PWA's own post-release tone overlaps it at 1.5 s: the critic decides whether it goes.
+
+**Critic** (fresh agent, on design v1; all taken): B1 stopping by cancelling the task could clear the walkie's shared Opus queue and drop the answer's first packets: stop is a flag, a blip being written finishes. B2 a 90 ms blip splits across 60 ms Opus frames (a click and a false `spk.underrun`): 120 ms. M1 a blip could reach the open mic: disarm is the first statement of `on_ptt_start` and of `interrupt`, and every `current_turn` change. M2 no limit: stops after 30 s (`reason=cap`). M3 1.5 s after release would blip before one ordinary answer in nine (measured p90 2.02 s): 2.5 s for replies, 1.5 s after the playhead for tools. M4 the PWA's own tone collided: removed, visual "thinking" kept until model_speaking / audio_clear / press. Minors: user turns only; a second tool keeps the running cue; cue audio out of the playhead and out of `server.tx.audio_stats`; louder struck note (about -16 dBFS, D5, every 1.5 s); the firmware no longer counts the gap before a reply as an underrun. Found on the way, fixed: a tool result that lands after a press started a new turn was attached to it (`coord.tool_result_stale`).
+
+**Tests**: `test_wait_cue.py` (6: whole Opus frames and level, quiet first, no blip before the threshold, a send in flight finishes and nothing follows, the cap, re-arming), `test_coordinator_wait_cue.py` (5: a long tool wait blips and the answer stops it, a quick answer doesn't, a press stops it, injected turns never arm, a stale tool result is dropped; that last one fails without its fix). Runtime 768. PWA `bun run check` green. Firmware build + host tests green.
+
+**Docs**: `turns.md` "The waiting cue" (replaces the client thinking-tone section), ADR 2026-10-12 "The waiting sound comes from the server", `sounds.md` Stage D superseded, `roadmap.md`, `observability.md` (the three new events).
+
+**DoD left**: Mario's walkie smoke: a book search (blips during the wait), a plain question (no blip), a press during the blips (no leak), and his ear on the level. Firmware with the underrun reset flashed when the walkie is idle.
 
 ## T1.42: The caregiver's view: insight and alerts, never an event log
 

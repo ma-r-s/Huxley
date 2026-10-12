@@ -67,6 +67,7 @@ from .observers import ClaimObserver, ContentStreamObserver, DialogObserver
 from .press_level import SILENT_PEAK_DBFS
 from .speaking_state import SpeakingOwner, SpeakingState
 from .state import Turn, TurnSource, TurnState
+from .wait_cue import WAIT_REPLY_S, WAIT_TOOL_S, WaitCue
 
 # Reasons the coordinator holds (pauses) a content stream. See
 # `ContentStreamObserver.hold` and docs/decisions.md 2026-10-12.
@@ -159,6 +160,7 @@ class TurnCoordinator:
         send_claim_ended: Callable[[str, str], Awaitable[None]] | None = None,
         send_stream_started: Callable[[str, str | None, int], Awaitable[None]] | None = None,
         send_stream_ended: Callable[[str, str], Awaitable[None]] | None = None,
+        send_cue_audio: Callable[[bytes], Awaitable[None]] | None = None,
     ) -> None:
         # Client-facing outputs (to the WebSocket audio server).
         self._send_audio = send_audio
@@ -166,6 +168,13 @@ class TurnCoordinator:
         self._send_status = send_status
         self._send_model_speaking = send_model_speaking
         self._send_dev_event = send_dev_event
+        # The waiting sound (T1.41): a soft blip while the user waits on a
+        # reply or a tool and the client is quiet. Its audio skips the
+        # playhead (it isn't the reply) and, through `send_cue_audio`, the
+        # server's audio stats.
+        self._wait_cue = WaitCue(
+            send_cue_audio or send_audio, lambda: max(0.0, self._client_playhead_remaining_s())
+        )
 
         async def _noop_volume(_level: int) -> None:
             pass
@@ -347,6 +356,8 @@ class TurnCoordinator:
         # path can't leave the music paused forever.
         prev = self._current_turn
         self._current_turn = turn
+        if turn is not prev:
+            self._wait_cue.disarm("turn_end" if turn is None else "new_turn")
         if turn is None and prev is not None and prev.source is TurnSource.USER:
             # A press still LISTENING was never committed: no transcript.
             self._arm_turn_hold_release(expect_transcript=prev.state is not TurnState.LISTENING)
@@ -402,6 +413,10 @@ class TurnCoordinator:
         keyboard-repeat-defeating logic). Dropped silently so grandpa
         doesn't hang up on himself the moment the call connects.
         """
+        # First, before any await: a blip after the client's audio_clear
+        # would play into the open mic (the walkie only holds inbound audio
+        # on a press while model_speaking is true).
+        self._wait_cue.disarm("press")
         active_turn = self.current_turn is not None and self.current_turn.state != TurnState.IDLE
         active_media = self._content_is_running()
         active_claim = self._claim_obs is not None
@@ -508,6 +523,8 @@ class TurnCoordinator:
             return
         self.current_turn.state = TurnState.COMMITTING
         self.response_cancelled = False
+        if self.current_turn.source is TurnSource.USER:
+            self._wait_cue.arm("reply", WAIT_REPLY_S, self._log)
         await self._log.ainfo(
             "coord.ptt_stop", frames=frames, audio_ms=audio_ms, committed=True, **levels
         )
@@ -567,6 +584,7 @@ class TurnCoordinator:
         if self.response_cancelled:
             await self._log.adebug("coord.audio_dropped")
             return
+        self._wait_cue.disarm("speech")
         self._enter_in_response_if_idle_between_rounds()
         if not self._speaking_state.is_speaking:
             owner = (
@@ -609,11 +627,22 @@ class TurnCoordinator:
         if self.response_cancelled or self.current_turn is None:
             return
         self._enter_in_response_if_idle_between_rounds()
+        turn = self.current_turn
+        if turn.source is TurnSource.USER and not self._wait_cue.armed:
+            self._wait_cue.arm("tool", WAIT_TOOL_S, self._log)
 
         try:
             result = await self._dispatch_tool(name, args)
         except Exception as exc:
             await self._handle_tool_error(call_id, name, args, exc)
+            return
+        if self.current_turn is not turn or self.response_cancelled:
+            # A press during a slow tool started a new turn: this result
+            # belongs to the old one (critic, 2026-10-12). Attaching it would
+            # play the old request's stream on the new turn.
+            await self._log.ainfo(
+                "coord.tool_result_stale", name=name, cancelled=self.response_cancelled
+            )
             return
         await self._provider.send_tool_output(call_id, result.output)
 
@@ -746,6 +775,7 @@ class TurnCoordinator:
                 # response_cancelled while we were waiting.
                 pending_sound = self.current_turn.pending_play_sound
                 if pending_sound is not None and not self.response_cancelled:
+                    self._wait_cue.disarm("sound")
                     self.current_turn.pending_play_sound = None
                     self._note_client_audio(len(pending_sound.pcm))
                     await self._send_audio(pending_sound.pcm)
@@ -768,6 +798,7 @@ class TurnCoordinator:
         neither the flush nor the clear lands on resumed content. A
         content pump that is playing right now keeps its FACTORY flag.
         """
+        self._wait_cue.disarm("session_down")
         had_media = self._content_is_running()
         was_speaking = self._speaking_state.is_speaking
         tid = self._tid()
@@ -818,6 +849,7 @@ class TurnCoordinator:
         here (2026-10-12). A press holds it first (`on_ptt_start`), so
         its pump is already dead when step 4 clears the speaker flag.
         """
+        self._wait_cue.disarm("interrupt")
         prev_state = self.current_turn.state.value if self.current_turn else None
         has_media = self._content_is_running()
         has_response = self.current_turn is not None and self.current_turn.state in (
@@ -910,6 +942,7 @@ class TurnCoordinator:
         expiry branch; Stage 2 adds `InputClaim` cleanup), so keeping the
         decision in its own method keeps this one focused on cleanup.
         """
+        self._wait_cue.disarm("turn_end")
         if self.current_turn is None:
             return
 

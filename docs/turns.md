@@ -10,7 +10,7 @@ Every audio-coordination bug in April 2026 — _book-jumps-in_, _double-ack_, _s
 
 ## The contract, in one paragraph
 
-Every user interaction is a **Turn**. A Turn owns one ordering: all of the model's speech (across as many chained OpenAI responses as the model needs to handle info tools) plays first, then any tool-produced audio streams fire in declaration order. The coordinator forwards both kinds of chunks to the same `server.send_audio` pipe in that order — there is no parallel mixing, no per-source queue, no channel abstraction. Tools never touch playback; they return a `ToolResult` with an optional `side_effect` (today an `AudioStream(factory=...)`) that the coordinator invokes at the right moment. Interrupts atomically flush the client queue and cancel the OpenAI response; a press pauses any long-running media task, and the turn's end resumes it (see "Content holds"). A client-side **thinking tone** fills any silence longer than 400 ms so a blind user never hears dead air.
+Every user interaction is a **Turn**. A Turn owns one ordering: all of the model's speech (across as many chained OpenAI responses as the model needs to handle info tools) plays first, then any tool-produced audio streams fire in declaration order. The coordinator forwards both kinds of chunks to the same `server.send_audio` pipe in that order — there is no parallel mixing, no per-source queue, no channel abstraction. Tools never touch playback; they return a `ToolResult` with an optional `side_effect` (today an `AudioStream(factory=...)`) that the coordinator invokes at the right moment. Interrupts atomically flush the client queue and cancel the OpenAI response; a press pauses any long-running media task, and the turn's end resumes it (see "Content holds"). A **waiting cue** from the server fills a real wait (a reply slower than 2.5 s, a tool that runs on after the model's "un momento") so a blind user never hears dead air (T1.41; see "The waiting cue" below).
 
 ## Why v3 is smaller than v2
 
@@ -34,7 +34,7 @@ v2 proposed named audio channels (`speech`, `media`, cut to just those two after
 - Mid-chain interrupt rule (interrupted turns drop all accumulated factories)
 - Closure-captured new position for rewind/forward (no premature storage writes)
 - `PLAYING` state removal from the session state machine
-- Client-side thinking tone anchored on existing protocol signals
+- Client-side thinking tone anchored on existing protocol signals (superseded 2026-10-12: the waiting cue is the server's, T1.41)
 
 ## The primitives — three, not four
 
@@ -379,48 +379,30 @@ Down from v2's 8. Steps for "implement channel queue" and "client per-channel st
 
 **Total wall-clock**: 2 focused days for steps 1-5 (v2 was 2-3 because steps 2 and 6 existed), plus a half day for step 6 and smoke testing.
 
-## The thinking tone — client-side gap filler
+## The waiting cue (T1.41)
 
-Unchanged from v2. For a blind user, silence longer than ~400 ms is indistinguishable from _"the device is broken."_
+For a blind user, a silence while the server works is indistinguishable from _"the device is broken."_ ("It told me it was gonna look for some books and then it kept silent for like 10 seconds", Mario, 2026-10-12.)
 
 ### Where it lives
 
-**Entirely client-side.** Implemented in `clients/pwa/src/lib/audio/playback.ts` as a new method `playThinkingTone()`. No server-side tone production, no new WebSocket message.
+**On the server**, in the coordinator (`turn/wait_cue.py`). Until 2026-10-12 this was a client-side tone, anchored on `ptt_stop`; it never covered the wait while a tool runs after the model's preamble, which is the long one, because only the server knows a tool is running. The walkie then needed no firmware change: it plays any audio while `model_speaking` is false. See the ADR "The waiting sound comes from the server" (2026-10-12).
 
 ### When it starts
 
-The client starts a 400 ms silence timer on either:
+Armed for user turns only (never for injected or completion turns: a reminder isn't something the user is waiting for):
 
-- **Send `ptt_stop`** — the initial gap while the coordinator commits, OpenAI processes, and the first audio delta arrives
-- **Receive `model_speaking: false`** — an inter-round gap: the current round's audio item finished, another round may be coming
-
-If 400 ms passes without either an `audio` message or a `model_speaking: true` message arriving, the tone starts.
+- **A committed `ptt_stop`**: the first blip comes 2.5 s after release with no model audio. Release to first audio measured p50 1.06 s, p90 2.02 s on 233 turns; at the old 1.5 s, one ordinary answer in nine would have got a blip just before the speech.
+- **A tool call**: once the client has played what it was sent (`_client_playhead_remaining_s`, a lower bound) plus 1.5 s. A cue already running keeps going.
 
 ### When it stops
 
-With a ~20 ms linear fade to avoid clicks:
+Before any real sound and on anything that ends the wait: model audio, a `PlaySound`, the turn's side effects (a stream, a claim), a press (the first statement of `on_ptt_start`, before any await, so no blip reaches the open mic), an interrupt, any change of `current_turn`, a session drop. And by itself after 30 s (`reason=cap`): a model that never answers isn't a wait. A blip already being written finishes: stopping never cancels a send, because the walkie's Opus queue is shared and a cancelled drain clears it.
 
-- Receive `audio` — content is arriving
-- Receive `model_speaking: true` — audio imminent
-- Any interrupt (user `ptt_start`, state transitions to IDLE, WebSocket disconnects)
+### The sound
 
-### Duration bound
+One soft struck note (D5 with two quiet partials, 4 ms attack, fast decay, about -16 dBFS), 120 ms (two whole 60 ms Opus frames), every 1.5 s. Not the walkie's offline cue (a falling 440 / 330 Hz pair meaning "can't reach the server"): waiting must sound like "working". Its audio skips the playhead estimate and `server.tx.audio_stats` (`send_audio(stats=False)`). Logs: `coord.wait_cue_start` (reason, playhead_remaining_ms, waited_ms), `coord.wait_cue_stop` (reason, blips, cue_ms).
 
-**No hard timeout.** The tone plays as long as silence persists. Server crashes bounded by the existing 2 s WebSocket reconnect logic.
-
-### Sound design
-
-| Tone             | Purpose                   | Frequency    | Envelope                                    |
-| ---------------- | ------------------------- | ------------ | ------------------------------------------- |
-| Ready (existing) | "Mic is live, speak now"  | 880 Hz       | Single burst, 90 ms, sharp attack + decay   |
-| Thinking (new)   | "Processing, please wait" | 440 Hz       | Pulsing: 150 ms on, 250 ms off, soft attack |
-| Error (deferred) | "Something broke"         | 440 → 220 Hz | Descending two-tone, 400 ms total           |
-
-Grandpa learns three sounds at most. Audibly distinct.
-
-### Interrupt behavior
-
-The thinking tone is NOT carried across turns. On any interrupt, client stops the tone as part of the cleanup. A previous turn's tone never plays over a new turn's listening phase.
+Not covered: the moment between a turn's end and a stream's first audio (a Spotify start). The PWA no longer plays its own tone; it keeps the visual "thinking" state until `model_speaking: true`, `audio_clear` or a press.
 
 ## Open questions
 

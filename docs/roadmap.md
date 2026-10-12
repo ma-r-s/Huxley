@@ -16,7 +16,7 @@ Two roadmaps live here: **Huxley** (the framework) and **Abuelo** (the first per
 | ffmpeg-based audiobook streamer                      | ✅ built (`AudiobookPlayer.stream()` async generator)           |
 | SQLite storage                                       | ✅ built                                                        |
 | Diagnostic logging (namespaced events, turn context) | ✅ built — see [`observability.md`](./observability.md)         |
-| Browser dev client (SvelteKit, one-button PTT)       | ✅ end-to-end audio path; thinking-tone gap filler              |
+| Browser dev client (SvelteKit, one-button PTT)       | ✅ end-to-end audio path; visual thinking state (the waiting sound is the server's, T1.41) |
 
 ### Next: framework-product alignment
 
@@ -28,7 +28,7 @@ Make Huxley what it claims to be in [`vision.md`](./vision.md): a framework anyo
 - ✅ **Constraint registry**: `never_say_no`, `confirm_destructive`, `child_safe`, `no_religious_content` defined in `huxley.constraints`; persona composes them into the system prompt at connect time. Unknown names fail at load.
 - ✅ **Rename / namespace cleanup**: repo path and Python namespace both on `huxley`; _Abuelo_ is the persona.
 - ✅ **Sound UX layer (server-side)** — `AudioStream` carries `on_complete_prompt` + `completion_silence_ms`; coordinator creates a synthetic IN_RESPONSE turn for the LLM-narrated end-of-content announcement, fires `request_response` BEFORE the silence buffer so model latency overlaps with silence playback. Skill loads sound palette via `wave.open()`. Persona owns `sounds_path` / `sounds_enabled` / `silence_ms` / `on_complete_prompt`. Full design + critic-list state in [`sounds.md`](./sounds.md).
-- ✅ **Sound UX layer (client-side)** — thinking tone at 120Hz (out of vocal band, can't mask speech); silence threshold raised to 1500ms (was 400ms — over-triggered constantly); descending 660→330Hz error chime fires on session drop so a blind user can distinguish "device crashed" from "still working." Stage D in [`sounds.md`](./sounds.md).
+- ✅ **Sound UX layer** — (2026-10-12: the waiting sound moved to the server, T1.41) thinking tone at 120Hz (out of vocal band, can't mask speech); silence threshold raised to 1500ms (was 400ms — over-triggered constantly); descending 660→330Hz error chime fires on session drop so a blind user can distinguish "device crashed" from "still working." Stage D in [`sounds.md`](./sounds.md).
 - ✅ **`PlaySound` SideEffect primitive + shared `huxley_sdk.audio` helper** — info tools can emit a one-shot chime that lands on the WebSocket ahead of the model's response audio (FIFO). Audiobooks + news both use it; news skill (`get_news`) is the canonical example.
 - ✅ **Second first-party skill (`huxley-skill-news`)** — proves the persona-agnostic abstraction. Same skill, totally different audio for Abuelo (slow + chime) vs Basic (terse + no chime). See [`skills/news.md`](./skills/news.md) and [`server/personas/basic.md`](./personas/basic.md).
 - ✅ **Web UI persona dropdown** — `clients/pwa/.env.local`'s `VITE_HUXLEY_PERSONAS` lists `name:url` pairs; the header dropdown switches the active WebSocket connection cleanly.
