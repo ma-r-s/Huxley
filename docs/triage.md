@@ -5429,12 +5429,14 @@ Mario's retry: he heard "Es..." and then the music. The transcript was complete,
 
 ## T1.39: Spotify audiobooks on the device
 
-**Status**: `blocked` (2026-10-12, on one check in Mario's phone app) · **Effort**: S if Soloist plays them
+**Status**: `blocked` (2026-10-12, on Mario: which account pays for the device's audiobook hours) · **Effort**: S
 
 **Ask** (Mario): Spotify added audiobooks to Premium; can the device play them? On 2026-10-07 Spotify started rolling audiobooks out to 180+ markets, Colombia included (rollout "over the coming months"); Premium there includes 12 hours of listening, with the Audiobooks+ add-on (15 hours) or bought titles beyond it.
 
 **Validate** (silent: Soloist's sink had no reader). The Web API (our app token, `market=CO`) already returns audiobooks: "Cien años de soledad" = `spotify:show:1oVPQwdET6CETd7KFZAghH`, its chapters are `spotify:episode:` items. Soloist accepted that URI, loaded chapter 1 ("Créditos iniciales", 0:18) and logged `stopped` 0.3 s later, no error event. A podcast episode (`spotify:episode:5ieh7vEheH2hPvPmMjQWBW`) played normally on the same Soloist (0:09 reached), so Soloist plays episodes; audiobook chapters are refused. Soloist's docs never mention audiobooks. Soloist's last context restored after each test (Rap God, paused).
 
-**Two explanations, one check tells them apart**: the account doesn't have audiobooks yet (rollout still reaching Colombia), or Spotify keeps audiobooks off Soloist. Mario plays any audiobook in the Spotify app on his phone: if it plays there, Soloist is the blocker (then try sending it to the Huxley device from the app to read the app's message).
+**Cause found** (Spotify's docs + Mario's account, read in his browser). Soloist is not excluded: its README and launch post list "music, podcasts, and audiobooks: the whole catalog". Mario's account is the Premium Familiar plan holder and has the hours (12 h, 0 used, page "Tiempo de escucha de audiolibros"). But Soloist is logged in as a different account (the household member on the same plan; Soloist log "logged in as 31dm..."), and Spotify's support page "Audiolibros en los planes Premium" says only the plan holder gets audiobook time; members get none unless the holder buys it for them (Audiolibros+ para miembros, or top-ups). A member with 0 hours is refused, which matches the 0.3 s stop.
+
+**Mario's call**: buy hours for the household account (add-on or top-up), or pair Soloist with his own account (free 12 h, but the device then shares his account: his history, and one stream at a time with his phone).
 
 **If Soloist plays them**: `play_music` gains `kind: audiobook` (search `type=audiobook`), plays the `spotify:show:` URI; resume where it left off is Spotify's (the account keeps the position). Overlap with the local audiobooks skill ("pon un audiolibro") is a routing question for Mario.
