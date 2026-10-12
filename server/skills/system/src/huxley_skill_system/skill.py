@@ -1,6 +1,7 @@
 """System skill — basic device control and information.
 
-Provides tools for volume control and time queries. Volume control sends a
+Provides tools for volume control, time queries and the device's battery
+level. Volume control sends a
 `set_volume` WebSocket command to the connected audio client — the client owns
 its own speaker. This is deployment-agnostic: the server never touches audio
 hardware directly.
@@ -13,12 +14,21 @@ couple of arrays is cheaper than a new dependency.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from datetime import datetime
 from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
 
-from huxley_sdk import SetVolume, SkillContext, SkillLogger, ToolDefinition, ToolResult
+from huxley_sdk import (
+    InjectPriority,
+    SetVolume,
+    SkillContext,
+    SkillLogger,
+    ToolDefinition,
+    ToolResult,
+)
 
 # --- Per-language tool descriptions -----------------------------------------
 
@@ -27,17 +37,57 @@ _TOOL_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "set_volume": "Ajusta el volumen del dispositivo (0-100).",
         "set_volume_level": "Nivel de volumen (0-100)",
         "get_current_time": "Devuelve la hora y fecha actual.",
+        "get_battery": (
+            "Cuánta batería le queda al dispositivo, en porcentaje. Úsala cuando "
+            "pregunten por la batería o la carga."
+        ),
     },
     "en": {
         "set_volume": "Adjust the device volume (0-100).",
         "set_volume_level": "Volume level (0-100)",
         "get_current_time": "Return the current time and date.",
+        "get_battery": (
+            "How much battery the device has left, as a percentage. Use it when "
+            "asked about the battery or the charge."
+        ),
     },
     "fr": {
         "set_volume": "Ajuste le volume de l'appareil (0-100).",
         "set_volume_level": "Niveau de volume (0-100)",
         "get_current_time": "Renvoie l'heure et la date actuelles.",
+        "get_battery": (
+            "Combien de batterie il reste à l'appareil, en pourcentage. À utiliser "
+            "quand on demande la batterie ou la charge."
+        ),
     },
+}
+
+
+# --- Battery (F-0025) --------------------------------------------------------
+
+# The device reports `client_event system.battery {mv, pct}` on a change of
+# percentage and every 5 min. Crossing these speaks once each, on the way
+# down; charging back above BATTERY_REARM_PCT arms them again.
+BATTERY_WARN_PCTS = (20, 10)
+BATTERY_REARM_PCT = 30
+# Older than this, the tool says how old (the device reports every 5 min).
+BATTERY_STALE_S = 15 * 60
+
+# inject_turn prompts are instructions to the model: say what to tell the
+# user, or it treats them as a silent note.
+_BATTERY_WARNING: dict[str, str] = {
+    "es": (
+        "La batería del dispositivo bajó al {pct} por ciento. Díselo al usuario "
+        "con calma, en una frase, y sugiérele que lo pongan a cargar."
+    ),
+    "en": (
+        "The device's battery is down to {pct} percent. Tell the user calmly, "
+        "in one sentence, and suggest they put it on to charge."
+    ),
+    "fr": (
+        "La batterie de l'appareil est descendue à {pct} pour cent. Dis-le "
+        "calmement à l'utilisateur, en une phrase, et suggère de le mettre en charge."
+    ),
 }
 
 
@@ -170,6 +220,12 @@ class SystemSkill:
         # Seeded at setup / reconfigure from `ctx.language`. Drives both
         # tool descriptions and the date-string locale.
         self._language: str = "en"
+        self._ctx: SkillContext | None = None
+        # The device's last reading: (pct, mv, time.monotonic()).
+        self._battery: tuple[int, int, float] | None = None
+        # The lowest warning spoken since the cell was last charged.
+        self._battery_warned: int | None = None
+        self._tasks: set[asyncio.Task[None]] = set()
 
     @property
     def name(self) -> str:
@@ -203,6 +259,11 @@ class SystemSkill:
                 description=d["get_current_time"],
                 parameters={"type": "object", "properties": {}},
             ),
+            ToolDefinition(
+                name="get_battery",
+                description=d["get_battery"],
+                parameters={"type": "object", "properties": {}},
+            ),
         ]
 
     async def handle(self, tool_name: str, args: dict[str, Any]) -> ToolResult:
@@ -232,12 +293,69 @@ class SystemSkill:
                         ensure_ascii=False,
                     )
                 )
+            case "get_battery":
+                return await self._get_battery()
             case _:
                 await self._logger.awarning("system.unknown_tool", tool=tool_name)
                 return ToolResult(output=json.dumps({"error": f"Unknown tool: {tool_name}"}))
 
+    async def _get_battery(self) -> ToolResult:
+        assert self._logger is not None
+        if self._battery is None:
+            await self._logger.ainfo("system.battery_query", known=False)
+            return ToolResult(
+                output=json.dumps(
+                    {"known": False, "why": "the device hasn't reported its battery yet"}
+                )
+            )
+        pct, mv, at = self._battery
+        age_s = int(time.monotonic() - at)
+        await self._logger.ainfo("system.battery_query", known=True, pct=pct, age_s=age_s)
+        out: dict[str, Any] = {"known": True, "percent": pct}
+        if age_s > BATTERY_STALE_S:
+            out["minutes_since_reading"] = age_s // 60
+        return ToolResult(output=json.dumps(out))
+
+    async def _on_battery(self, data: dict[str, Any]) -> None:
+        """`client_event system.battery {mv, pct}` from the device."""
+        assert self._logger is not None
+        pct, mv = data.get("pct"), data.get("mv")
+        if not isinstance(pct, int) or not isinstance(mv, int) or not 0 <= pct <= 100:
+            await self._logger.awarning("system.battery_bad", data=data)
+            return
+        self._battery = (pct, mv, time.monotonic())
+        if self._battery_warned is not None and pct >= BATTERY_REARM_PCT:
+            self._battery_warned = None  # charged: the warnings apply again
+        crossed = [t for t in BATTERY_WARN_PCTS if pct <= t]
+        warn = min(crossed) if crossed else None
+        speak = warn is not None and (self._battery_warned is None or warn < self._battery_warned)
+        await self._logger.ainfo(
+            "system.battery",
+            pct=pct,
+            mv=mv,
+            warn=warn if speak else None,
+            warned=self._battery_warned,
+        )
+        if speak and self._ctx is not None:
+            self._battery_warned = warn
+            prompt = _BATTERY_WARNING.get(_bucket(self._language), _BATTERY_WARNING["en"])
+            # Its own task: this handler runs inside the server's receive
+            # loop, which must not wait on a turn.
+            task = asyncio.create_task(
+                self._ctx.inject_turn(
+                    prompt.format(pct=pct),
+                    dedup_key="system.battery_low",
+                    priority=InjectPriority.NORMAL,
+                ),
+                name="system.battery_warning",
+            )
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+
     async def setup(self, ctx: SkillContext) -> None:
         self._logger = ctx.logger
+        self._ctx = ctx
+        ctx.subscribe_client_event("system.battery", self._on_battery)
         tz_value = ctx.config.get("timezone")
         if isinstance(tz_value, str) and tz_value:
             self._timezone = tz_value
@@ -248,4 +366,5 @@ class SystemSkill:
         await ctx.logger.ainfo("system.reconfigure", language=self._language)
 
     async def teardown(self) -> None:
-        pass
+        for task in list(self._tasks):
+            task.cancel()

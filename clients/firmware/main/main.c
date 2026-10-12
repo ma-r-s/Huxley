@@ -210,6 +210,10 @@ void app_main(void) {
     /* `audio_clear` on the same task, in order with the audio. */
     hux_net_set_audio_clear_sink(hux_audio_on_audio_clear);
 
+    /* The battery level once a minute, to the server through the app
+     * (F-0025); without the solder blob it says not_wired once. */
+    hux_battery_start(hux_app_report_battery);
+
     /* Last: the supervisor watches every part started above and feeds the
      * task watchdog only while they all keep working (F-0027). */
     hux_super_start();

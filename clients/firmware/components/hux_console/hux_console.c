@@ -179,6 +179,8 @@ void hux_console_run(char *line) {
         }
     } else if (strcmp(cmd, "pa") == 0 && argc > 1) {
         hux_audio_pa(strcmp(argv[1], "on") == 0);
+    } else if (strcmp(cmd, "battery") == 0 && argc > 2 && strcmp(argv[1], "cal") == 0) {
+        hux_battery_calibrate(atoi(argv[2])); /* a multimeter's reading of the cell, mV */
     } else if (strcmp(cmd, "battery") == 0) {
         hux_battery_probe();
     } else if (strcmp(cmd, "quiet") == 0) {
@@ -189,7 +191,7 @@ void hux_console_run(char *line) {
     } else {
         ESP_LOGW(TAG, "console.unknown %s (talk, release, say N, tone [hz] [ms], vol N, pa on|off, "
                       "selftest [hz], wifi off [s]|on, wifistat, wifiscan, wifibw 20|40, info, "
-                      "server [<uri> [min] | keep <uri> [min] | reset], quiet [s], battery, super, "
+                      "server [<uri> [min] | keep <uri> [min] | reset], quiet [s], battery [cal <mv>], super, "
                       "hang app|spk, coredump erase, reboot, "
                       "ota <url> [force] | confirm | rollback)",
                  cmd);

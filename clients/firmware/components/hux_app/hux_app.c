@@ -17,6 +17,7 @@
 #include "mbedtls/base64.h"
 
 #include "hux_audio.h"
+#include "hux_battery.h"
 #include "hux_log.h"
 #include "hux_net.h"
 #include "hux_opus.h"
@@ -524,6 +525,7 @@ static void handle_ws_message(hux_app_ws_message_t *msg) {
             transition(ST_READY);
             send_device_info();
             send_blackbox();
+            hux_battery_report_now(); /* the server's skill gets a level at once */
             /* Kick the server into CONVERSING so PTT presses work
              * immediately. `wake_word` is named legacy-style in the
              * protocol (docs/protocol.md) — it's really a "start
@@ -736,6 +738,19 @@ void hux_app_start(void) {
 void hux_app_set_device_info(const hux_app_device_info_t *info) {
     if (info != NULL) {
         s_device = *info;
+    }
+}
+
+void hux_app_report_battery(int cell_mv, int pct) {
+    /* From the battery task: not connected, it goes with the next reading
+     * (every 5 min) or the next hello. */
+    char json[128];
+    int n = snprintf(json, sizeof(json),
+                     "{\"type\":\"client_event\",\"event\":\"system.battery\",\"data\":{"
+                     "\"mv\":%d,\"pct\":%d}}",
+                     cell_mv, pct);
+    if (n > 0 && (size_t)n < sizeof(json)) {
+        (void)hux_net_send_text(json, (size_t)n);
     }
 }
 

@@ -96,3 +96,88 @@ class TestSetupGuard:
         s = SystemSkill()
         with pytest.raises(RuntimeError, match="setup"):
             await s.handle("get_current_time", {})
+
+
+class TestBattery:
+    """The device's level (F-0025): kept from `client_event system.battery`,
+    answered by `get_battery`, and spoken once at 20 % and once at 10 %."""
+
+    async def _skill(self) -> tuple[SystemSkill, list[str], list[tuple[str, object]]]:
+        import dataclasses
+
+        injected: list[str] = []
+        subs: list[tuple[str, object]] = []
+
+        async def inject(prompt: str, /, **_: object) -> None:
+            injected.append(prompt)
+
+        def subscribe(key: str, handler: object, /) -> None:
+            subs.append((key, handler))
+
+        ctx = dataclasses.replace(
+            make_test_context(config={}, language="es"),
+            inject_turn=inject,
+            subscribe_client_event=subscribe,
+        )
+        s = SystemSkill()
+        await s.setup(ctx)
+        return s, injected, subs
+
+    async def _report(self, s: SystemSkill, pct: int, mv: int = 3800) -> None:
+        import asyncio
+
+        await s._on_battery({"pct": pct, "mv": mv})
+        await asyncio.sleep(0)  # the warning runs as its own task
+
+    async def test_subscribes_to_the_device_event(self) -> None:
+        _, _, subs = await self._skill()
+        assert [k for k, _ in subs] == ["system.battery"]
+
+    async def test_no_reading_yet(self) -> None:
+        s, _, _ = await self._skill()
+        data = json.loads((await s.handle("get_battery", {})).output)
+        assert data["known"] is False
+
+    async def test_reports_the_last_reading(self) -> None:
+        s, _, _ = await self._skill()
+        await self._report(s, 63)
+        data = json.loads((await s.handle("get_battery", {})).output)
+        assert data == {"known": True, "percent": 63}
+
+    async def test_warns_once_at_20_then_once_at_10(self) -> None:
+        s, injected, _ = await self._skill()
+        for pct in (25, 21, 20, 19, 18, 12, 10, 9, 5):
+            await self._report(s, pct)
+        assert len(injected) == 2
+        assert "20 por ciento" in injected[0] and "Díselo al usuario" in injected[0]
+        assert "10 por ciento" in injected[1]
+
+    async def test_a_jump_past_both_warns_once_at_the_lower(self) -> None:
+        s, injected, _ = await self._skill()
+        await self._report(s, 40)
+        await self._report(s, 8)
+        assert len(injected) == 1 and "8 por ciento" in injected[0]
+
+    async def test_charging_rearms_the_warnings(self) -> None:
+        s, injected, _ = await self._skill()
+        await self._report(s, 19)
+        await self._report(s, 35)  # charged
+        await self._report(s, 20)
+        assert len(injected) == 2
+
+    async def test_a_bad_reading_is_ignored(self) -> None:
+        s, injected, _ = await self._skill()
+        await s._on_battery({"pct": "lots"})
+        await s._on_battery({"pct": 150, "mv": 3800})
+        data = json.loads((await s.handle("get_battery", {})).output)
+        assert data["known"] is False and injected == []
+
+    async def test_stale_reading_says_how_old(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import huxley_skill_system.skill as mod
+
+        s, _, _ = await self._skill()
+        await self._report(s, 50)
+        real = mod.time.monotonic
+        monkeypatch.setattr(mod.time, "monotonic", lambda: real() + 20 * 60)
+        data = json.loads((await s.handle("get_battery", {})).output)
+        assert data["percent"] == 50 and data["minutes_since_reading"] == 20

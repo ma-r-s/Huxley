@@ -491,7 +491,15 @@ channel width, rejoining the AP; back to the default on a restart),
 `info` (heap, PSRAM, every task's smallest free stack, ring,
 volume and the ES8311 register, RSSI, time since the last inbound data).
 `battery` (is the cell's divider wired to GPIO1 or GPIO6? one
-`battery.probe` line per pin, F-0025).
+`battery.probe` line per pin, then `battery.level` with the current
+reading, F-0025), `battery cal <mv>` (a multimeter's reading of the
+cell: every later reading is scaled to match, saved in NVS,
+`battery.calibrated cal_ppm=`). The level task finds the wired pin once
+(`battery.wired gpio=`, or `battery.not_wired` once and a look every
+10 min), reads the median of 32 samples at 6 dB every minute while the
+speaker is quiet (anyway after 5 min with no quiet minute, `loaded=1`),
+and sends `system.battery {mv, pct}` on a change and every 5 min
+(`battery.level mv= pct= pin= raw_mv= loaded=`).
 `tools/bench.py --reset` runs the whole check list and keeps the board's
 log in `/tmp/huxley-debug/bench-*.log`.
 

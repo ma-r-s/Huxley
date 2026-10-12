@@ -81,4 +81,8 @@ void hux_app_set_device_info(const hux_app_device_info_t *info);
 /** The supervisor's view (F-0027): app loop wakes (one a second at least),
  * and the uplink's items taken / waiting. */
 uint32_t hux_app_beats(void);
+
+/** Send a battery reading to the server (`client_event system.battery
+ * {mv, pct}`, F-0025): hux_battery's sink. Any task. */
+void hux_app_report_battery(int cell_mv, int pct);
 void hux_app_uplink_progress(uint32_t *done, uint32_t *pending);
