@@ -106,8 +106,10 @@ managed), routing `walkie.ma-r-s.com` -> `http://localhost:8765` with
 `walkie.ma-r-s.com` -> `<tunnel id>.cfargotunnel.com`. The connector's
 token is in `~/.config/huxley-tunnel/env` on the Pi (mode 600).
 `scripts/pi/tunnel.sh` starts the connector (pinned cloudflared, out of
-Watchtower). **Not started yet:** it waits for the production role
-(device token on the WebSocket upgrade) to be merged and running.
+Watchtower). **Live since 2026-10-12 22:07Z** (production role deployed at 22:06, ad6f87d).
+Proven from outside: /health and /admin 404 at the edge; /firmware/* 401
+without or with a wrong token, 404 (nothing offered) with the walkie's token,
+so Authorization reaches the origin; a WSS upgrade without a token gets 401.
 
 Inspect or change the routing from the Mac:
 
