@@ -95,8 +95,8 @@ export function BalNav() {
 }
 
 // Segmented language picker — drives i18next + persists to localStorage
-// (the i18next LanguageDetector handles the persistence; we just call
-// changeLanguage and React re-renders via the t() hook).
+// (I18nProvider saves the choice; we just call changeLanguage and React
+// re-renders via the t() hook).
 function LangToggle() {
   const { i18n } = useTranslation();
   const current = (i18n.resolvedLanguage as LangCode) || "en";
