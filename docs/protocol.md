@@ -15,7 +15,7 @@ Any client that implements this protocol is a valid Huxley client. The framework
   - `?lang=<code>` — selects the persona's translation for this session (e.g. `es-CO`, `en`). The server resolves the persona for that language; an unsupported code falls back to the persona's default silently.
   - `?persona=<name>` — **T1.13.** Selects which persona this connection is for. `<name>` is the persona's **directory basename** under `./personas/<name>/` (the canonical id, NOT the YAML's `name:` field which is a human label — see `available_personas` in `hello` for both fields). The server swaps the active `Application` to that persona before sending hello, so the hello payload reflects the new persona. The runtime threads the connection's `?lang=<code>` into the swap so the new OpenAI session opens in the requested language from the start, avoiding a "default-language-then-disconnect-and-reconnect" cascade. Omit the param to keep the currently-active persona; on first connection, the server uses `HUXLEY_PERSONA` env or falls back per [persona resolution](#persona-selection-via-query-param-t113). An unknown name is logged and the connection still establishes on the previous persona — the picker UI can detect the mismatch via `hello.current_persona` and surface a retry. Persona-switch is exclusively a reconnect operation; there is no in-band `select_persona` message. Rationale: [decision: hot persona swap via reconnect](./decisions.md#2026-05-01--hot-persona-swap-via-reconnect-not-in-band-t113).
   - `?audio=opus`: audio in both directions as binary Opus packets instead of base64 PCM in JSON. Announced back in `hello.audio_params`. Without it (the PWA), nothing on this page changes. See [Opus audio](#opus-audio-audioopus).
-- **Plain HTTP on the same port**: only `GET /health` ([below](#http-health)). Any other plain HTTP request gets the WebSocket handshake's refusal (`426`), as before.
+- **Plain HTTP on the same port**: `GET /health` ([below](#http-health)), and the firmware and admin routes ([`/firmware` and `/admin`](#http-firmware-and-admin)) when the server runs with a firmware directory (the runtime always does). Any other plain HTTP request gets the WebSocket handshake's refusal (`426`), as before.
 
 ## HTTP: `/health`
 
@@ -56,6 +56,46 @@ Any client that implements this protocol is a valid Huxley client. The framework
 | `client` | The current client, `{connected: true, conn_id, audio_format, shell, since}` (`since` = when it connected), or the last one with `connected: false` (`since` = when it left); `null` if none since start. `shell` is from the client's `device` event (`firmware`, `browser`, `home_screen`, `native_app`; a `device.hello` means `firmware`), `null` until it sends one. |
 | `walkie_last_seen` | When a firmware client was last connected (now, while one is); `null` if none since the server started. In memory. |
 | `recording` | The running persona's recorder is attached ([observability](./observability.md#recordings)). |
+
+## HTTP: `/firmware` and `/admin`
+
+**Status**: server half built 2026-10-12 (T1.43 W4, `huxley.server.firmware`); the firmware half is the firmware session's.
+
+Plain HTTP on the voice port, answered in `process_request` like `/health`: never upgraded, `Cache-Control: no-store`, errors as `{"error": "..."}`, and the voice socket never notices (no eviction, a pending `?lang=` untouched). **GET only**: websockets refuses any other method, and any request body, with `400` before the server sees the request, so the admin routes take query parameters. Every answer must be written within the opening handshake's time limit, 60 s from the TCP accept (`open_timeout`, raised from websockets' 10 s for this): a 2 MB image needs about 35 KB/s end to end. An image's answer has no other deadline (websockets' 10 s close deadline is lifted for it). At shutdown, pending dev-cmd waits answer 503 and image downloads still draining are cut, so a restart never waits on them. Only origin-form targets (`/path`) reach these routes and `/health`: `//host/admin/...` and `http://host/admin/...` get the handshake's refusal, so a tunnel's path rule can't be sidestepped.
+
+**Files** live in `<server cwd>/firmware/` (gitignored; on the Pi `~/huxley/server/runtime/firmware/`): `<version>.bin` (the app image), `<version>.elf` (its ELF, for core dumps), and `offer.json` = `{"version", "force", "previous"}`, written by the admin route: the one version this server offers (one server, one walkie) and the one it offered before. A version is letters, digits and `._+-` (git describe fits), at most 64 characters, so no route can name a file outside the directory.
+
+### Device routes: `/firmware/*`
+
+From any source: the walkie comes through the Cloudflare tunnel, where every request is loopback, so the **device token** decides, never the address. `Authorization: Bearer <HUXLEY_DEVICE_TOKEN>`, compared in constant time (over digests, so not even its length leaks). Missing, wrong or not ASCII: `401` (`WWW-Authenticate: Bearer`). With `HUXLEY_DEVICE_TOKEN` unset every request gets `503`: never open. Each refusal logs one `firmware.auth_refused` warning; no token, presented or configured, is ever logged.
+
+| Route | Answer |
+| --- | --- |
+| `GET /firmware/manifest.json` | `200` `{"version", "url": "/firmware/<version>.bin", "size", "elf_sha"}` for the offered version; `404` when nothing is offered (or its image is missing). `elf_sha` is read from the image itself (the ELF hash esptool writes at offset 0xB0, first 9 hex digits), so it is exactly what `device.hello` reports once that image runs. |
+| `GET /firmware/<version>.bin` | `200` `application/octet-stream` with `Content-Length`: the whole image in one answer (no `Range`: `process_request` can't stream, so the answer is buffered and drained), for the offered version and the one before it only. `404` for any other version or name. |
+
+### Admin routes: `/admin/*`
+
+Loopback and Tailscale only, never through a proxy: the `/health` guard, `404` otherwise (`firmware.admin_refused`); the tunnel must not route `/admin` either. And only requests a person sends on purpose: the header `X-Huxley-Admin: 1` (a web page can make a browser GET a URL, but can't add a header without a CORS preflight, which this server never answers) and a local `Host` (an IP, `localhost`, a one-label name or a `*.ts.net` name; a DNS-rebinding page arrives with its own domain): `403` otherwise.
+
+| Route | Does | Answer |
+| --- | --- | --- |
+| `GET /admin/firmware` | Reads only. | `200` `{offer, manifest, files: [{name, bytes}], token_configured, walkie, pending}`. `walkie`: the last `device.hello` (`connected`, `conn_id`, `device_id`, `hello_at`, `version`, `elf_sha`, `slot`, `slot_state`, `rollback`, `caps`), `null` if none since start. `pending`: the accept flow of a pending image (`version`, `selftest`, `selftest_error`, `manifest_seen`, `reconnect_forced`, `accept_sent`, `waiting_for`), else `null`. |
+| `GET /admin/firmware-offer?version=<v>[&force=1]` | Checks that `<v>.bin` is an app image that says it is `<v>` (a misnamed image would be offered forever: the walkie would keep reporting another version) and that `<v>.elf` is its ELF (same hash). Writes `offer.json`, then sends `firmware.update` to the connected walkie, or at its next `device.hello` when none is. | `200` `{offer, image: {size, elf_sha}, sent, reason}`; `reason` is `sent`, `no_device_connected` (it goes at the next hello), or why not (`same_version`, `no_ota_cap`, `no_device_token`, `pending_verify`, `failed_too_often`, `rolled_back`, `image_unavailable`). `400` bad parameters, `404` no `<v>.bin`, `422` not offerable (the message says why). |
+| `GET /admin/dev-cmd?line=<console line>[&timeout_s=10]` | Sends `server_event dev.cmd {id, line}` to the connected walkie and waits for its `dev.cmd_result` with that `id`. `line` URL-encoded, up to 256 printable characters; `timeout_s` up to 30. Only to a walkie whose WebSocket upgrade carried the device token (anyone can send `device.hello`; console lines can carry passwords). | `200` `{id, output, truncated}`; `409` no walkie connected, its socket opened without the device token, or its hello has no `dev_cmd.v1` in `caps`; `504` no reply in time; `503` the server is stopping; `400` bad parameters. |
+
+**When `firmware.update` goes out** (on an admin offer, and on every `device.hello`): something is offered, the device token is set (else the download would get 503), `caps` has `ota.v1`, the image isn't `pending_verify` (ESP-IDF refuses a new update before the accept), it runs another version (with `force`, another image: uncommitted builds share a version string, so `force` compares `elf_sha` and still never resends what runs), it has not reported `failed` for this version 3 times (`failed_too_often`), and it is not a version this device rolled back from (`rollback.from_version`). A `crash`, `selftest` or `manual` rollback is never re-offered automatically and a `no_server` one gets one retry per server run; offering a version again from the admin route clears its failures and sends it past the rollback rule until the walkie reports `downloading` it. The retry and the override are used up by `downloading`, not by the send, because the walkie installs only when idle and may reconnect first.
+
+### The accept flow
+
+A freshly updated image boots `pending_verify` and keeps itself only after the server's `ota.accept`. The server's side, kept in memory per device:
+
+1. The image's `device.hello` says `slot_state: pending_verify` (a new version, a new `boot_counter` or a lower `uptime_s` starts a new record). Then it sends `firmware.status {version, phase: "selftest", error}` (`error` null: passed).
+2. It GETs `/firmware/manifest.json` with its OTA client's exact settings.
+3. Once the self-test passed and the manifest served this image's version and `elf_sha` (in either order), the server closes the walkie's WebSocket with `1012`, about 2 s later so the manifest's answer is out first, and never during a press, an answer or a call (it waits for them to end; a playing stream is fine, it resumes after the reconnect). 1012 reconnects normally (only 1001 with the eviction reason pauses the walkie).
+4. At the next hello (a new connection, the same boot, still pending) the server sends `server_event ota.accept {version}`. Anything short of that and it sends nothing and logs why (`firmware.accept_withheld`).
+
+A server restart midway loses the record. The image stays pending, so the walkie should repeat steps 1 and 2 on every connection while pending: a restart then costs one more round, not a reboot.
 
 ## Message format
 
@@ -134,7 +174,7 @@ and it applies to both directions. **A client that asked for Opus must check it.
 
 ## Device contract (schema 1)
 
-**Status**: agreed 2026-10-12 between the server and firmware owners for [`remote-operation.md`](./remote-operation.md) (T1.43; firmware F-0026..F-0028). Not built yet: each piece lands with its capability in `caps`. Once shipped, a schema-1 field is never removed or renamed; additions are optional fields, and a breaking change means `schema: 2` with the server still accepting 1.
+**Status**: agreed 2026-10-12 between the server and firmware owners for [`remote-operation.md`](./remote-operation.md) (T1.43; firmware F-0026..F-0028). Each piece lands with its capability in `caps`. Server side of the update channel and the console built 2026-10-12 ([`/firmware` and `/admin`](#http-firmware-and-admin)). Once shipped, a schema-1 field is never removed or renamed; additions are optional fields, and a breaking change means `schema: 2` with the server still accepting 1.
 
 Everything rides the existing `client_event` / `server_event` channels: no new message types. A hardware client that nobody can reach must keep two things working in every state, including a `protocol` mismatch in `hello` (today that parks the walkie): sending `device.hello`, and acting on the update channel below. That is what lets a rolled-back image take the next update.
 
@@ -149,16 +189,16 @@ Everything rides the existing `client_event` / `server_event` channels: no new m
 | `device.health` | Every 60 s while connected. Counters are since the previous line, so they sum. | `uptime_s`, `heap_internal_min`, `heap_internal_largest`, `psram_min`, `rssi`, `channel`, `bssid`, `wifi_disconnects` (`{reason: count}`), `tls_errors` (`{code: count}`), `reconnects`, `underruns`, `underrun_ms`, `discarded_ms`, `ws_rx_age_ms`, `ring_used_ms`, `volume`, `quiet_left_s`, `ota_state`, `battery` (`{mv, pct, charging}`, only once wired) |
 | `system.battery` | After each hello, on every change of percentage and every 5 min, once the cell is wired (F-0025). The system skill keeps the last one for `get_battery` and speaks once at 20 % and once at 10 %. | `mv` (the cell, calibrated), `pct` (0-100, from a Li-ion curve; follows a fall at once, a rise only past 5 points) |
 | `audio.discarded` | Every time the device drops queued speaker audio. | `ms`, `why` (`server_clear` = an `audio_clear`; `press` = a local barge-in clear), `uptime_ms` |
-| `firmware.status` | During an update the server offered. | `version`, `phase` (`downloading`\|`verifying`\|`rebooting`\|`failed`), `error` |
+| `firmware.status` | During an update the server offered (`downloading`, `verifying`, `rebooting`, `failed`), and on the boot of a pending image: `selftest` when its silent self-test ends (supervisor progress for 20 s, expander and codec I2C, heap floors), `accepted` once it marked itself valid on `ota.accept`, `failed` if it refused the accept. The server logs every phase (`firmware.status`) and uses `selftest` in [the accept flow](#the-accept-flow). | `version`, `phase` (`downloading`\|`verifying`\|`rebooting`\|`failed`\|`selftest`\|`accepted`), `error` (null; for `selftest` the first failed check's name, e.g. `codec_es8311`; for `failed` the reason) |
 | `dev.cmd_result` | Reply to `dev.cmd`. | `id`, `output`, `truncated` |
 
 ### Server to device (`server_event`)
 
 | `event` | `data` | Device does |
 | --- | --- | --- |
-| `firmware.update` | `version`, `url`, `force` | Downloads the image from `url` (same host, same headers) when idle, never under 40 % battery unless charging, reports `firmware.status`, restarts. |
-| `ota.accept` | `version` | Marks the running image valid, but only after its own checks passed (self-test, hello, a manifest GET with the update client's settings, one server-initiated reconnect). Without it the image stays pending and goes back on the next restart. |
-| `dev.cmd` | `id`, `line` | Runs one console line, replies `dev.cmd_result`. |
+| `firmware.update` | `version`, `url` (relative: `/firmware/<version>.bin`), `force` | Downloads the image from `url` (same host, same headers) when idle, never under 40 % battery unless charging, reports `firmware.status`, restarts. |
+| `ota.accept` | `version` | Marks the running image valid, but only after its own checks passed (self-test, hello, a manifest GET with the update client's settings, one server-initiated reconnect; the manifest must have returned this version and `elf_sha`). Without it the image stays pending and goes back on the next restart. The server sends it per [the accept flow](#the-accept-flow). |
+| `dev.cmd` | `id`, `line` | Runs one console line, replies `dev.cmd_result`. Sent by `GET /admin/dev-cmd`. |
 
 The server logs every `client_event` as `client.<event>` already, so all of the above is in the log from the first device that sends it.
 

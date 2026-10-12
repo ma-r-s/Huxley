@@ -67,6 +67,13 @@ import websockets
 import websockets.http11
 from websockets.asyncio.server import ServerConnection, serve
 
+from huxley.server.firmware import (
+    ADMIN_PREFIX,
+    MIN_TOKEN_CHARS,
+    FirmwareService,
+    HttpAnswer,
+    is_firmware_path,
+)
 from huxley.server.opus_codec import (
     AUDIO_PARAMS,
     FRAME_MS,
@@ -84,7 +91,9 @@ websockets.http11.MAX_LINE_LENGTH = 64 * 1024
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from pathlib import Path
 
+    from pydantic import SecretStr
     from websockets.http11 import Request, Response
 
     from huxley.server.recorder import Recorder
@@ -155,8 +164,20 @@ _PROXY_HEADERS = (
 )
 
 
+# websockets' opening-handshake time limit (`open_timeout`, 10 s by
+# default). It also bounds every plain HTTP answer given in
+# process_request: a firmware image must be written out, and an admin
+# dev-cmd must get its reply, inside it (huxley.server.firmware). 60 s
+# leaves a 4 MB image about 70 KB/s.
+_HANDSHAKE_TIMEOUT_S = 60.0
+
+
 def _url_path(target: str) -> str | None:
-    """The path part of a request target (no query), None if unparsable."""
+    """The path part of a request target (no query), None if unparsable or
+    not an origin-form target: `//host/health` and `http://host/health`
+    would parse to `/health` and slip past a tunnel's path rule."""
+    if not target.startswith("/") or target.startswith("//"):
+        return None
     try:
         return urlparse(target).path
     except ValueError:
@@ -174,6 +195,41 @@ def health_source_allowed(remote: object) -> bool:
     if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
         addr = addr.ipv4_mapped  # a dual-stack socket's view of an IPv4 peer
     return any(addr in net for net in _HEALTH_NETWORKS)
+
+
+def _local_refusal(
+    connection: ServerConnection, request: Request
+) -> tuple[str, str | None] | None:
+    """Why a local-only route (`/health`, `/admin/*`) is refused: a reverse
+    proxy's header (`("proxied", header)`) or a source outside loopback and
+    Tailscale (`("source", None)`). None when allowed."""
+    proxied = next((h for h in _PROXY_HEADERS if h in request.headers), None)
+    if proxied is not None:
+        return "proxied", proxied
+    if not health_source_allowed(connection.remote_address):
+        return "source", None
+    return None
+
+
+def _http_response(connection: ServerConnection, answer: HttpAnswer) -> Response:
+    """A plain HTTP answer as the handshake's response: never upgraded,
+    never cached. An image's answer gets no close deadline (websockets
+    sets it before the drain, so the default 10 s would cut a slow
+    download's tail); the handshake limit still bounds it."""
+    response = connection.respond(answer.status, "")
+    response.body = answer.body
+    for name, value in (
+        ("Content-Length", str(len(answer.body))),
+        ("Content-Type", answer.content_type),
+        ("Cache-Control", "no-store"),
+        *answer.headers,
+    ):
+        if name in response.headers:
+            del response.headers[name]
+        response.headers[name] = value
+    if answer.long_send:
+        connection.close_timeout = None
+    return response
 
 
 # One `server.tx.audio_stats` line per this many ms while audio flows to
@@ -277,6 +333,9 @@ class _ConnInfo:
     # `shell`: `firmware`, `browser`, `home_screen`, `native_app`; a
     # `device.hello` means `firmware`). None until it says. `/health`.
     shell: str | None = None
+    # The upgrade carried `Authorization: Bearer <HUXLEY_DEVICE_TOKEN>`.
+    # Only such a connection gets console lines (`/admin/dev-cmd`).
+    device_token_ok: bool = False
 
     def to_diag(self) -> dict[str, Any]:
         """Serialize to the wire-format the `diag_state` frame uses.
@@ -398,6 +457,12 @@ class AudioServer:
         # process); the server adds `client`, `walkie_last_seen` and
         # `recording`. None (tests, tools): `/health` is not served.
         get_health: Callable[[], dict[str, object]] | None = None,
+        # Firmware images and the admin routes (`huxley.server.firmware`),
+        # served from this directory, the device routes gated by this
+        # token. None (tests, tools): `/firmware/*` and `/admin/*` are not
+        # served.
+        firmware_dir: Path | None = None,
+        device_token: SecretStr | None = None,
     ) -> None:
         self._host = host
         self._port = port
@@ -506,6 +571,14 @@ class AudioServer:
         self._no_client_drop_sends = 0
         self._no_client_drop_bytes = 0
         self._no_client_drop_logged_s = float("-inf")
+        self._firmware: FirmwareService | None = (
+            FirmwareService(firmware_dir, device_token, link=self)
+            if firmware_dir is not None
+            else None
+        )
+        # Connections still writing a firmware image (aborted at shutdown,
+        # so the listener's close doesn't wait out a slow download).
+        self._long_sends: set[ServerConnection] = set()
 
     @property
     def has_client(self) -> bool:
@@ -592,19 +665,35 @@ class AudioServer:
             self._host,
             self._port,
             process_request=self._process_request,
+            open_timeout=_HANDSHAKE_TIMEOUT_S,
         ):
             opus_error = opus_unavailable_reason()
+            firmware = self._firmware
             await logger.ainfo(
                 "audio_server_listening",
                 url=f"ws://{self._host}:{self._port}",
                 opus_available=opus_error is None,
+                firmware_dir=str(firmware.directory) if firmware is not None else None,
+                device_token_set=firmware.token_configured if firmware is not None else None,
             )
             if opus_error is not None:
                 # Opus clients will get PCM; this says why, once, at boot.
                 await logger.awarning("server.audio.opus_unavailable", reason=opus_error)
-            await asyncio.Future()  # run until cancelled
+            if firmware is not None and firmware.token_short:
+                await logger.awarning(
+                    "firmware.device_token_short",
+                    min_chars=MIN_TOKEN_CHARS,
+                    note="HUXLEY_DEVICE_TOKEN is guessable through the tunnel: use 32+ random chars",
+                )
+            try:
+                await asyncio.Future()  # run until cancelled
+            finally:
+                # Before serve() closes: it waits for every connection still
+                # in its handshake, and an admin dev-cmd or an image download
+                # is one (up to the 60 s handshake limit).
+                self._stop_http_waits()
 
-    def _process_request(
+    async def _process_request(
         self,
         connection: ServerConnection,
         request: Request,
@@ -620,12 +709,16 @@ class AudioServer:
 
         `GET /health` is answered here as plain HTTP, never upgraded and
         never touching the pending query params above, so it cannot
-        disturb the voice socket (see `_health_response`). Every other
-        path keeps the WebSocket handshake as before.
+        disturb the voice socket (see `_health_response`). `/firmware/*`
+        and `/admin/*` are answered the same way (`_firmware_response`).
+        Every other path keeps the WebSocket handshake as before.
         """
         get_health = self._get_health
-        if get_health is not None and _url_path(request.path) == HEALTH_PATH:
+        path = _url_path(request.path)
+        if get_health is not None and path == HEALTH_PATH:
             return self._health_response(connection, request, get_health)
+        if self._firmware is not None and path is not None and is_firmware_path(path):
+            return await self._firmware_response(connection, request, path, self._firmware)
         del connection
         try:
             parsed = urlparse(request.path)
@@ -663,13 +756,13 @@ class AudioServer:
         Read-only and synchronous: it never awaits, so the voice socket's
         handlers can't interleave with it."""
         remote = connection.remote_address
-        proxied = next((h for h in _PROXY_HEADERS if h in request.headers), None)
-        if proxied is not None or not health_source_allowed(remote):
+        refusal = _local_refusal(connection, request)
+        if refusal is not None:
             logger.warning(
                 "server.health_refused",
                 remote=str(remote),
-                reason="proxied" if proxied is not None else "source",
-                header=proxied,
+                reason=refusal[0],
+                header=refusal[1],
                 note="only loopback and Tailscale may read /health, never via a proxy; 404",
             )
             return connection.respond(HTTPStatus.NOT_FOUND, "Not Found\n")
@@ -688,6 +781,102 @@ class AudioServer:
         response.headers["Content-Type"] = "application/json"
         response.headers["Cache-Control"] = "no-store"
         return response
+
+    async def _firmware_response(
+        self,
+        connection: ServerConnection,
+        request: Request,
+        path: str,
+        firmware: FirmwareService,
+    ) -> Response:
+        """`/firmware/*` (the device token decides, from any source: the
+        walkie comes through the tunnel) and `/admin/*` (loopback and
+        Tailscale only, never via a proxy, like `/health`). Never touches
+        the pending query params, so the voice socket can't notice it."""
+        remote = str(connection.remote_address)
+        try:
+            if path.startswith(ADMIN_PREFIX):
+                refusal = _local_refusal(connection, request)
+                if refusal is not None:
+                    logger.warning(
+                        "firmware.admin_refused",
+                        remote=remote,
+                        reason=refusal[0],
+                        header=refusal[1],
+                        path=path[:200],
+                        note="only loopback and Tailscale may use /admin, never via a proxy; 404",
+                    )
+                    return connection.respond(HTTPStatus.NOT_FOUND, "Not Found\n")
+                query = urlparse(request.path).query
+                answer = await firmware.admin_http(path, query, request.headers)
+            else:
+                answer = await firmware.device_http(path, request.headers, remote)
+        except Exception:
+            logger.exception("firmware.http_failed", path=path[:200], remote=remote)
+            answer = HttpAnswer(HTTPStatus.INTERNAL_SERVER_ERROR, b'{"error": "internal error"}\n')
+        if answer.long_send:
+            self._long_sends = {c for c in self._long_sends if not c.transport.is_closing()}
+            self._long_sends.add(connection)
+        return _http_response(connection, answer)
+
+    def _stop_http_waits(self) -> None:
+        """Shutdown: end pending dev-cmd waits and abort image downloads
+        still draining, so closing the listener is quick."""
+        if self._firmware is not None:
+            self._firmware.close()
+        aborted = 0
+        for connection in self._long_sends:
+            if not connection.transport.is_closing():
+                connection.transport.abort()
+                aborted += 1
+        self._long_sends.clear()
+        if aborted:
+            logger.info("firmware.image_send_aborted", reason="shutdown", count=aborted)
+
+    def _device_token_on_upgrade(self, ws: ServerConnection) -> bool:
+        """Whether this connection's own upgrade request carried the device
+        token. Read from the connection's request, never from a field shared
+        between handshakes (two upgrades can interleave)."""
+        if self._firmware is None:
+            return False
+        request = getattr(ws, "request", None)  # None on test doubles
+        return request is not None and self._firmware.token_matches(request.headers)
+
+    def device_token_presented(self, conn_id: str) -> bool:
+        """Whether connection `conn_id` (the current one) opened with the
+        device token."""
+        conn = self._conn
+        return conn is not None and conn.conn_id == conn_id and conn.device_token_ok
+
+    def device_busy(self) -> bool:
+        """A press, the model speaking, or a skill holding the mic (a call)."""
+        return self._ptt_active or self._model_speaking or self.has_active_claim
+
+    # --- DeviceLink (huxley.server.firmware): the connected firmware client ---
+
+    def device_conn_id(self) -> str | None:
+        """The current connection's id when it is a firmware client."""
+        conn = self._conn
+        return conn.conn_id if conn is not None and conn.shell == "firmware" else None
+
+    async def send_device_event(self, conn_id: str, event: str, data: dict[str, Any]) -> bool:
+        """A `server_event` to connection `conn_id`, if it is still the
+        current one. True when it was written."""
+        conn = self._conn
+        if conn is None or conn.conn_id != conn_id:
+            return False
+        written = await self._send_raw({"type": "server_event", "event": event, "data": data})
+        return written > 0
+
+    async def close_device(self, conn_id: str, code: int, reason: str) -> bool:
+        """Close connection `conn_id` with `code`, if it is still the
+        current one (its `client_disconnected` line carries the code)."""
+        conn = self._conn
+        if conn is None or conn.conn_id != conn_id or conn.ws is None:
+            return False
+        conn.close_code, conn.close_reason = code, reason
+        await conn.ws.close(code, reason)
+        return True
 
     def _health_fields(self) -> dict[str, object]:
         """The server's part of `/health`: the current client (or the last
@@ -801,6 +990,7 @@ class AudioServer:
             requested_persona=selected_persona,
             requested_language=selected_language,
             ws=ws,
+            device_token_ok=self._device_token_on_upgrade(ws),
         )
         # The audio format is fixed before the connection becomes current,
         # so every audio frame it ever gets (even one racing the hello) is
@@ -823,6 +1013,7 @@ class AudioServer:
             language=selected_language,
             persona=selected_persona,
             audio_format=conn.audio_format,
+            device_token=conn.device_token_ok,
         )
         self._log_recording_skipped(conn)
         if self._no_client_drop_sends:
@@ -1244,6 +1435,7 @@ class AudioServer:
                 data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
                 self._note_device(event, data)
                 await logger.ainfo(f"client.{event}", **client_event_log_fields(data))
+                await self._firmware_client_event(event, data)
                 await self._dispatch_client_event(event, data)
             case other:
                 await logger.awarning("server.rx.unknown", msg_type=other)
@@ -1724,6 +1916,18 @@ class AudioServer:
         is gated. Idempotent.
         """
         self._dispatching_enabled = False
+
+    async def _firmware_client_event(self, event: str, data: dict[str, Any]) -> None:
+        """The device contract's update and console events, to the firmware
+        service (framework plumbing, never a skill). Never raises into the
+        receive loop."""
+        conn = self._conn
+        if self._firmware is None or conn is None:
+            return
+        try:
+            await self._firmware.on_client_event(conn.conn_id, event, data)
+        except Exception:
+            await logger.aexception("firmware.event_failed", event_name=event)
 
     async def _dispatch_client_event(self, event: str, data: dict[str, Any]) -> None:
         """Invoke every registered handler for `event` concurrently.

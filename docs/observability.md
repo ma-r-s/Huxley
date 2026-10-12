@@ -33,10 +33,11 @@ Every log event uses a dotted namespace + direction prefix. This makes events `g
 | `server.tx.*`  | Messages sent to the audio client                       | `server.tx.state`, `server.tx.model_speaking`, `server.tx.audio_stats` (once a second while audio flows: audio sent vs what the socket still holds; see [Opus audio](#opus-audio-the-walkies-wire-format)) |
 | `app.*`        | Application orchestration (lifecycle, guard rejections) | `app.session_end`, `app.ptt_rejected`                                                                                                               |
 | `recorder.*`   | The recorder (persona opt-in; see [Recordings](#recordings)) | `recorder.segment`, `recorder.write_failed`                                                                                                    |
+| `firmware.*`   | Firmware updates, the remote console, the admin routes (see [Firmware updates](#firmware-updates-and-the-remote-console)) | `firmware.update_sent`, `firmware.accept_sent`, `firmware.auth_refused` |
 | `<skill>.*`    | Per-skill events (skill author owns the namespace)      | `audiobooks.resolve`, `audiobooks.stream_started`, `system.volume_set`                                                                              |
 | `client.*`     | Telemetry forwarded from the audio client (web/ESP32)   | `client.silence_timer_started`, `client.thinking_tone_on`                                                                                           |
 
-A skill named `audiobooks` emits events like `audiobooks.factory_built`, `audiobooks.stream_ended`. The framework reserves `coord.`, `focus.`, `background.`, `session.`, `server.`, `app.`, `recorder.`, `client.`; everything else is skill territory.
+A skill named `audiobooks` emits events like `audiobooks.factory_built`, `audiobooks.stream_ended`. The framework reserves `coord.`, `focus.`, `background.`, `session.`, `server.`, `app.`, `recorder.`, `firmware.`, `client.`; everything else is skill territory.
 
 The `client.*` events come in via the `client_event` WebSocket message type — clients emit `{"type": "client_event", "event": "<name>", "data": {...}}` and the server logs them as `client.<name>` with the data fields spread. A data field named like one of the log line's own keys (`event`, `level`, `timestamp`, `logger`, `exc_info`, `stack_info`, `conn_id`) is logged as `client_<key>`: the firmware's `huxley.firmware_log` carries the board's level (`W`, `E`, `I`) as `client_level`, while `level` stays the server's (`info`). Pure observability — the framework takes no action. This closes the "client-side blackbox" gap; thinking-tone state, silence-timer fires, and PTT UI transitions are now visible in the same log file as the server-side flow.
 
@@ -471,6 +472,48 @@ grep '"recorder.segment"' logs/huxley.log | jq -r 'select(.path) | "\(.start) \(
 **A known gap**: when something parks a live stream (an injected turn, a claim) and the model then speaks, the coordinator has sent no `stream_ended` (the client too is told the stream still plays), so that speech is logged as `source=stream` with no file. A reminder spoken over a book is the common case. The frames cannot tell it from the stream resuming; the fix is in the coordinator: announce the park as `stream_ended` and the resume as `stream_started` ([remote-operation W3](./remote-operation.md#w3-recording)).
 
 **Not in v1**: turn ids on `transcript` and cost lines (to join a file to its transcript, match times); what the walkie actually played (the file is what was sent; its discarded ms on `audio_clear` are not reported yet); call transcription.
+
+## Firmware updates and the remote console
+
+The server half of W4 ([protocol](./protocol.md#http-firmware-and-admin), `huxley.server.firmware`). Every line is `firmware.*`; the walkie's own events also arrive as `client.device.hello`, `client.firmware.status` and `client.dev.cmd_result`, as every `client_event` does. No line ever carries a token (presented or configured), and a console line is logged by its first word only (arguments can be passwords).
+
+| Event | When | Key fields |
+| --- | --- | --- |
+| `firmware.auth_refused` (warn) | A `/firmware/*` request without the device token (`missing`, `wrong`), or with `HUXLEY_DEVICE_TOKEN` unset (`unconfigured`, answered 503). | `reason`, `path`, `remote`, `forwarded_for` (`Cf-Connecting-Ip` / `X-Forwarded-For`: who it was behind the tunnel) |
+| `firmware.manifest_served` | The manifest went out. `pending_boot=true`: it counts for the accept flow. | `version`, `bytes` (the image's size), `elf_sha`, `remote`, `forwarded_for`, `conn_id` (the walkie's socket, if connected), `pending_boot` |
+| `firmware.manifest_none` / `firmware.manifest_unavailable` (error) | Nothing offered (404) / the offer names an image that is missing or isn't that version (404). | `remote` / `version`, `reason` |
+| `firmware.image_served` | An image went out (whole, in one answer). | `version`, `bytes`, `remote`, `forwarded_for`, `conn_id` |
+| `firmware.image_refused` (warn) / `firmware.image_unreadable` (error) | A version that isn't the offered one or the one before (`not_offered`), or isn't a version name (`bad_version`) / the file vanished. | `version`, `reason` / `error` |
+| `firmware.admin_refused` (warn) | An `/admin/*` request from outside loopback and Tailscale (`source`) or through a proxy (`proxied`, with the `header`): 404. Or without `X-Huxley-Admin` (`no_admin_header`) or with a foreign `Host` (`host`): 403. | `reason`, `remote`, `header`, `host`, `path` |
+| `firmware.offered` | An admin offer was written to `offer.json`. | `version`, `force`, `previous`, `bytes`, `elf_sha` |
+| `firmware.offer_refused` (warn) | An admin offer was refused (bad parameters, no `.bin`, a misnamed image, no or another `.elf`). | `reason`, `version` |
+| `firmware.offer_unreadable` (error) | `offer.json` is not valid; nothing is offered until it is rewritten. | `path`, `error` |
+| `firmware.update_sent` | `firmware.update` went to the walkie. | `version`, `force`, `running`, `trigger` (`offer`, `hello`), `conn_id` |
+| `firmware.update_skipped` | It did not, and why: `same_version`, `no_ota_cap`, `no_device_token` (`HUXLEY_DEVICE_TOKEN` unset: the download would get 503), `pending_verify`, `failed_too_often`, `rolled_back`, `image_unavailable` (error); `no_offer` at debug. | `reason`, `version`, `running`, `trigger` |
+| `firmware.update_deferred` | An offer with no walkie connected (`no_device_connected`; it goes at the next hello), or the walkie left mid-send (`device_gone`). | `version`, `reason` |
+| `firmware.update_failed` (warn) | The walkie reported `failed` for a version; at 3 it is no longer offered automatically (`update_skipped reason=failed_too_often`) until an admin offer. | `version`, `failures`, `max_failures` |
+| `firmware.update_withheld` (warn) | The walkie rolled back from the offered version: not offered again automatically. Offer it from the admin route to retry. | `version`, `rollback_reason` |
+| `firmware.rollback_retry` / `firmware.rollback_overridden` | A `no_server` rollback's one automatic retry / an admin offer sent a version the walkie rolled back from. | `version`, `rollback_reason` |
+| `firmware.status` | Every `firmware.status` from the walkie, any phase (`downloading`, `verifying`, `rebooting`, `failed`, `selftest`, `accepted`). Warning for `failed` and for a failed self-test. | `version`, `phase`, `error`, `conn_id`, `pending_boot` |
+| `firmware.status_ignored` (warn) | A `selftest` status for another version than the pending image's. | `version`, `pending` |
+| `firmware.pending_boot` | A hello from a `pending_verify` image starts a new record (first hello of that boot). | `version`, `elf_sha`, `boot_counter`, `device_id` |
+| `firmware.reconnect_forced` | Self-test passed and manifest served: the walkie's socket will be closed with 1012 after `delay_s`. | `version`, `conn_id`, `trigger` (`selftest`, `manifest`, `hello`), `delay_s`, `code` |
+| `firmware.reconnect_waiting` | The forced close waits for a press, an answer or a call to end (said once per close). | `reason` (`busy`), `conn_id` |
+| `firmware.reconnect_deferred` / `firmware.reconnect_skipped` | The walkie wasn't connected when the conditions were met / it left before the close; its next hello closes again. | `version`, `reason`, `trigger` / `conn_id` |
+| `firmware.accept_sent` | `ota.accept` went out (`repeat=true`: again, for a later hello of the same boot). | `version`, `conn_id`, `repeat` |
+| `firmware.accept_withheld` | A pending image's hello got no accept, and why: `selftest_pending`, `selftest_failed` (with `selftest_error`), `no_manifest_get`, `manifest_version_mismatch` (the manifest offered another version), `elf_sha_mismatch`, `awaiting_reconnect` (the forced close is on its way), `device_gone`. | `reason`, `version`, `selftest_error`, `served`, `conn_id` |
+| `firmware.pending_ended` | The walkie reports a non-pending image again (accepted, or back on the old one). | `version`, `running`, `slot_state`, `accept_sent` |
+| `firmware.dev_cmd_sent` / `firmware.dev_cmd_done` | A console line went to the walkie / its reply came. | `id`, `cmd` (first word), `chars`, `timeout_s`, `conn_id` / `id`, `elapsed_ms`, `output_chars`, `truncated` |
+| `firmware.dev_cmd_timeout` (warn) / `firmware.dev_cmd_refused` | No reply in time (504) / refused: `bad_params`, `no_device`, `not_authenticated` (warn: the walkie's socket opened without the device token), `no_dev_cmd_cap`, `device_gone`, `shutting_down` (503). | `id`, `timeout_s` / `reason` |
+| `firmware.dev_cmd_result_unmatched` (warn) | A `dev.cmd_result` for no waiting request (it came after the timeout). | `id` |
+| `firmware.device_token_short` (warn) | At startup: `HUXLEY_DEVICE_TOKEN` is shorter than 32 characters. | `min_chars` |
+| `firmware.device_forgotten` | A fifth device said hello; the oldest one's state was dropped (at most 4 are kept, so made-up hellos can't grow memory). | `device_id` |
+| `firmware.image_send_aborted` | Shutdown cut image downloads still draining. | `reason`, `count` |
+| `firmware.http_failed` / `firmware.event_failed` (error, traceback) | A route or an event handler raised (answered 500 / the receive loop goes on). | `path` / `event_name` |
+
+`audio_server_listening` says where images are read from (`firmware_dir`) and whether the device token is set (`device_token_set`); `client_connected` says whether the connection's upgrade carried it (`device_token`).
+
+**An update, end to end**: `grep -E '"firmware\.|"client\.(device\.hello|firmware\.status)' logs/huxley.log`. A healthy one reads `firmware.offered`, `firmware.update_sent`, `firmware.status` (`downloading`, `verifying`, `rebooting`), the new image's `firmware.pending_boot` and `accept_withheld reason=selftest_pending`, `firmware.status phase=selftest`, `firmware.manifest_served`, `firmware.reconnect_forced`, `client_disconnected close_code=1012`, `firmware.accept_sent`, `firmware.status phase=accepted`, then a hello with `slot_state=valid` (`firmware.pending_ended`).
 
 ## What huxley-watch reads
 

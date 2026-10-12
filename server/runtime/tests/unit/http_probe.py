@@ -33,13 +33,20 @@ def free_port() -> int:
 
 
 async def http_get(
-    port: int, path: str, *, headers: dict[str, str] | None = None, timeout_s: float = 2.0
+    port: int,
+    path: str,
+    *,
+    headers: dict[str, str] | None = None,
+    timeout_s: float = 2.0,
+    host: str | None = None,
 ) -> HttpReply:
-    """One GET to 127.0.0.1:`port`, read until the server closes."""
+    """One GET to 127.0.0.1:`port`, read until the server closes. `host`
+    replaces the `Host` header (default `127.0.0.1:<port>`)."""
     extra = "".join(f"{k}: {v}\r\n" for k, v in (headers or {}).items())
+    host = host if host is not None else f"127.0.0.1:{port}"
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
     try:
-        writer.write(f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{extra}\r\n".encode())
+        writer.write(f"GET {path} HTTP/1.1\r\nHost: {host}\r\n{extra}\r\n".encode())
         await writer.drain()
         raw = await asyncio.wait_for(reader.read(), timeout=timeout_s)
     finally:

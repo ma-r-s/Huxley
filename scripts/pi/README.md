@@ -24,6 +24,34 @@ The production server for grandpa's walkie runs on the shared Orange Pi
   the house LAN until the device token (W2). Other sources and proxied
   requests get 404; the Cloudflare tunnel must not route `/health`.
   Fields in [`docs/protocol.md`](../../docs/protocol.md#http-health).
+- Firmware updates (T1.43 W4; routes in
+  [`docs/protocol.md`](../../docs/protocol.md#http-firmware-and-admin)): the
+  walkie pulls images from `~/huxley/server/runtime/firmware/` with the
+  device token, `HUXLEY_DEVICE_TOKEN` in the `.env` (unset, the image
+  routes answer 503). To offer a build, from the Mac (the image and its
+  ELF, named after the version the image carries; the offer refuses a
+  misnamed image or a mismatched ELF):
+
+  ```bash
+  cd clients/firmware/build
+  VER=$(python3 -c "f=open('huxley-firmware.bin','rb'); f.seek(0x30); print(f.read(32).split(b'\0')[0].decode())")
+  ssh mario@100.75.152.70 mkdir -p huxley/server/runtime/firmware
+  scp huxley-firmware.bin mario@100.75.152.70:huxley/server/runtime/firmware/$VER.bin
+  scp huxley-firmware.elf mario@100.75.152.70:huxley/server/runtime/firmware/$VER.elf
+  ssh mario@100.75.152.70 "curl -s -H 'X-Huxley-Admin: 1' 'http://127.0.0.1:8765/admin/firmware-offer?version=$VER'"
+  ```
+
+  It answers `sent: true` when the walkie got `firmware.update` now, or
+  `reason: no_device_connected` (it gets it at its next hello). Add
+  `&force=1` to send an uncommitted build carrying the running version.
+  Follow it with `curl -s -H 'X-Huxley-Admin: 1'
+  http://127.0.0.1:8765/admin/firmware` on the Pi (offer, files, the
+  walkie's last hello, the accept flow) and the `firmware.*` log lines.
+  A console line: `curl -s -H 'X-Huxley-Admin: 1' --get --data-urlencode
+  'line=info' http://127.0.0.1:8765/admin/dev-cmd`. The admin routes
+  answer only loopback and Tailscale, never through a proxy, and need the
+  `X-Huxley-Admin` header. The Cloudflare tunnel routes `/firmware/*` and
+  the voice socket, never `/admin` or `/health`.
 - Before relying on reminders right after a restart: T1.44 in
   [`docs/triage.md`](../../docs/triage.md).
 - Service: `huxley.service` (system unit, `User=mario`), installed by

@@ -29,6 +29,14 @@ class TestSettings:
         monkeypatch.setenv("HUXLEY_PERSONA_AT_BOOT", "true")
         assert Settings(openai_api_key="test").persona_at_boot is True
 
+    def test_device_token_from_env_never_printed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HUXLEY_DEVICE_TOKEN", "s3cret-device-token")
+        s = Settings(openai_api_key="test")
+        assert s.device_token is not None
+        assert s.device_token.get_secret_value() == "s3cret-device-token"
+        assert "s3cret" not in repr(s)
+        assert "s3cret" not in str(s.model_dump())
+
     def test_ignores_unknown_env_vars(self) -> None:
         """Legacy env vars from pre-stage-4 .env files must not crash startup."""
         s = Settings(

@@ -1,7 +1,7 @@
 # Running the walkie from afar
 
 **Status**: plan, 2026-10-12, reviewed by two critics (server and firmware).
-Built so far: log retention, persona at boot and `/health` (W1), recording v1 (W3). Triage: [T1.43](./triage.md) (this plan), [T1.42](./triage.md)
+Built so far: log retention, persona at boot and `/health` (W1), recording v1 (W3), the server half of firmware updates and the remote console (W4). Triage: [T1.43](./triage.md) (this plan), [T1.42](./triage.md)
 (the caregiver's view, its front page).
 
 **The ask** (Mario, 2026-10-12): the walkie goes to grandpa at his retirement
@@ -214,6 +214,8 @@ Left:
 - Size: 40-60 minutes of voice a day is about 3-4 GB a year.
 
 ### W4. Firmware updates and the remote console (firmware session builds it)
+
+**Server half built 2026-10-12** (`huxley.server.firmware`, branch `t143-ota-server`; [protocol](./protocol.md#http-firmware-and-admin), [observability](./observability.md#firmware-updates-and-the-remote-console)): images served on the voice port (`GET /firmware/manifest.json`, `GET /firmware/<version>.bin`) behind the device token (`HUXLEY_DEVICE_TOKEN`; unset means 503, never open), the offered version and the one before only; admin routes on loopback and Tailscale (`/admin/firmware`, `/admin/firmware-offer`, `/admin/dev-cmd`; GET with query parameters, because websockets refuses any other method before the server sees it); the accept flow (self-test, manifest GET, a 1012 close, `ota.accept` at the next hello); and the server's side of the rollback bookkeeping below (a crash rollback is never re-offered automatically, a no_server one is retried once). How to offer an update: [scripts/pi/README.md](../scripts/pi/README.md). Not yet: the 24 h probation alerts (huxley-watch), `dev.py` talking to the box, offering at night (Mario offers by hand; the walkie installs when idle).
 
 - **Pull**: the walkie's hello carries version, slot, reset reason, rollback
   reason, coredump summary. The server offers a version per device (twin
