@@ -142,7 +142,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "search_match_msg": "Encontré estos libros.",
         "not_found": "No encuentro '{query}'. ¿Quiere que le diga qué libros tengo?",
         "probe_failed": "No pude abrir ese libro. Déjeme intentarlo otra vez.",
-        "no_resume": "No tiene ningún libro a medias. ¿Busco algo?",
+        "no_resume": "No hay ningún libro a medias. Estos son algunos de la biblioteca.",
         "no_active_book": "No hay ningún libro activo. ¿Quiere que busque uno?",
         "missing_book": "No encuentro ese libro en la biblioteca.",
         "no_in_progress": "No tiene ningún libro empezado. ¿Quiere que le busque uno?",
@@ -172,7 +172,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "search_match_msg": "I found these books.",
         "not_found": "I can't find '{query}'. Want me to list what I have?",
         "probe_failed": "I couldn't open that book. Let me try again.",
-        "no_resume": "You don't have any book in progress. Want me to find one?",
+        "no_resume": "No book is in progress. These are a few from the library.",
         "no_active_book": "There's no active book. Would you like me to find one?",
         "missing_book": "I can't find that book in the library.",
         "no_in_progress": "You haven't started any book. Want me to find one?",
@@ -202,7 +202,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "search_match_msg": "J'ai trouvé ces livres.",
         "not_found": "Je ne trouve pas « {query} ». Veux-tu que je te dise ce que j'ai ?",
         "probe_failed": "Je n'ai pas pu ouvrir ce livre. Laisse-moi réessayer.",
-        "no_resume": "Tu n'as aucun livre en cours. Veux-tu que j'en cherche un ?",
+        "no_resume": "Aucun livre en cours. En voici quelques-uns de la bibliothèque.",
         "no_active_book": "Aucun livre actif. Veux-tu que je t'en trouve un ?",
         "missing_book": "Je ne trouve pas ce livre dans la bibliothèque.",
         "no_in_progress": "Tu n'as commencé aucun livre. Veux-tu que j'en cherche un ?",
@@ -231,7 +231,8 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "Busca audiolibros en la biblioteca local del usuario. "
             "Devuelve una lista de libros que coinciden con la búsqueda. "
             "Para saber qué libros hay ('¿qué libros tienes?', '¿cuáles "
-            "hay?'), pasa `query` vacío: devuelve toda la biblioteca."
+            "hay?'), pasa `query` vacío: devuelve la biblioteca (hasta 20 "
+            "libros; `total` dice cuántos hay)."
         ),
         "search_query_param": (
             "Texto de búsqueda (título, autor, o parte del nombre). Vacío "
@@ -308,7 +309,8 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "Search the user's local audiobook library. "
             "Returns a list of books matching the query. To say which "
             "books there are ('what books do you have?', 'which ones?'), "
-            "pass an empty `query`: it returns the whole library."
+            "pass an empty `query`: it returns the library (up to 20 "
+            "books; `total` says how many there are)."
         ),
         "search_query_param": (
             "Search text (title, author, or part of the name). Empty to list every book."
@@ -374,7 +376,8 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "l'utilisateur. Renvoie une liste de livres correspondant à "
             "la recherche. Pour dire quels livres il y a ('quels livres "
             "as-tu ?', 'lesquels ?'), passe une `query` vide : elle "
-            "renvoie toute la bibliothèque."
+            "renvoie la bibliothèque (jusqu'à 20 livres ; `total` dit "
+            "combien il y en a)."
         ),
         "search_query_param": (
             "Texte de recherche (titre, auteur, ou partie du nom). Vide "
@@ -1275,10 +1278,22 @@ class AudiobooksSkill:
         """Resume the most-recently-played book from its saved position."""
         last_id = await self._storage_req.get_setting(LAST_BOOK_KEY)
         if not last_id:
+            catalog = self._catalog_req
+            if len(catalog) == 0:
+                return ToolResult(
+                    output=json.dumps(
+                        {"resumed": False, "results": [], "message": self._t("library_empty")},
+                        ensure_ascii=False,
+                    )
+                )
+            # "Pon un libro" with nothing in progress: name a few so the
+            # user can pick, instead of a bare "search for something?".
             return ToolResult(
                 output=json.dumps(
                     {
                         "resumed": False,
+                        "results": [_hit_summary(h) for h in list(catalog)[:5]],
+                        "total": len(catalog),
                         "message": self._t("no_resume"),
                     },
                     ensure_ascii=False,

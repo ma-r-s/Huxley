@@ -23,9 +23,11 @@ best section first: a song beats an album beats a playlist beats an
 artist, and an artist wins only when the query is its exact name.
 
 **No query** (the user asked for music without saying which): continue
-what Soloist has loaded (it keeps its last context across restarts),
-the same as `music_control(resume)`. If nothing was ever loaded, it
-answers `nothing_to_resume` and the model asks which artist or song.
+what Soloist has loaded (it keeps its last context across restarts).
+Paused: the same stream as `music_control(resume)`. Idle (it ran out; a
+single song ends that way): start that context again by its URI, since
+a bare `play` may have nothing to resume. If nothing was ever loaded,
+it answers `nothing_to_resume` and the model asks which artist or song.
 This is a deliberate persona-neutral choice: the skill never picks a
 default genre or artist, because that would assume the user's taste.
 
@@ -158,7 +160,7 @@ In short:
 `spotify.auth_state` (logged in, active), `spotify.playback` (status,
 context), `spotify.track`, `spotify.play_requested` (query, the kind asked and
 the kind matched, match, uri, `alternatives`), `spotify.play_last`
-(context resumed for a request with no query),
+(context and `restart` for a request with no query),
 `spotify.play_started` (`latency_ms`, context), `spotify.start_failed`,
 `spotify.stream_ended` (`reason`: cancelled, finished, takeover,
 paused_elsewhere, capture_closed, start_failed, player_offline),

@@ -321,8 +321,13 @@ class TestResumeLast:
         result = await audiobooks_skill.handle("resume_last", {})
         data = json.loads(result.output)
         assert data["resumed"] is False
-        assert "No tiene ningún libro a medias" in data["message"]
+        assert "No hay ningún libro a medias" in data["message"]
         assert not isinstance(result.side_effect, AudioStream)
+        # "Pon un libro" with nothing in progress: a few titles to pick
+        # from, not a bare "search for something?".
+        assert 0 < len(data["results"]) <= 5
+        assert {"id", "title", "author"} <= set(data["results"][0])
+        assert data["total"] == len(audiobooks_skill._catalog)
 
     async def test_resume_last_picks_up_previously_played_book(
         self,

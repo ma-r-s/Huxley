@@ -398,6 +398,7 @@ class TestNothingNamed:
         search = skill._search
         assert isinstance(search, FakeSearch)
         client.state.context_uri = "spotify:artist:last"
+        client.state.status = "paused"
 
         result = await skill.handle("play_music", args)
 
@@ -409,6 +410,27 @@ class TestNothingNamed:
         play = next(c for c in client.sent if c["command"] == "play")
         assert "uri" not in play  # resume what Soloist has, not a new search
         assert search.queries == []
+
+    async def test_a_finished_song_starts_again_by_its_uri(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        """A single song ends idle; a bare play may have nothing to resume
+        and would time out into "Spotify couldn't start"."""
+        skill, client, _ = await _skill(tmp_path, pcm_server)
+        client.state.context_uri = "spotify:track:done"
+        client.state.status = "idle"
+        client.state.item = SIN_TI
+
+        result = await skill.handle("play_music", {})
+
+        assert json.loads(result.output) == {"ok": True, "action": "restart"}
+        stream = result.side_effect
+        assert isinstance(stream, AudioStream)
+        assert stream.label == "Sin Ti"
+        task, _ = await _consume_until(stream, 1)
+        await _cancel(task)
+        play = next(c for c in client.sent if c["command"] == "play")
+        assert play["uri"] == "spotify:track:done"
 
     async def test_asks_when_nothing_ever_played(
         self, tmp_path: Path, pcm_server: PcmServer

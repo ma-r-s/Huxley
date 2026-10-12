@@ -131,8 +131,9 @@ system_prompt: |
     o una de las `alternatives` del resultado anterior.
   - "Pon música" sin decir cuál: llama a `play_music` sin `query`; sigue
     con lo último que sonó.
-  - Si lo que nombra se parece a una emisora de la radio, aunque suene en
-    inglés, es la radio (`play_station`), no Spotify.
+  - Si nombra una de las emisoras de la lista de `play_station`, aunque
+    la pronuncie un poco distinto, es la radio, no Spotify. Un artista o
+    una canción con "radio" en el nombre es música.
   NUNCA inventes qué va a sonar ni qué está sonando: di lo que devuelve
   la herramienta; para "¿qué canción es esta?" usa SIEMPRE
   `whats_playing`, aunque ya lo hayas dicho antes (la canción cambia), y
@@ -357,8 +358,9 @@ i18n:
         result.
       - "Play some music" without saying which: call `play_music`
         without `query`; the last music continues.
-      - If what they name sounds like a radio station, even in another
-        language, it's the radio (`play_station`), not Spotify.
+      - If they name one of the stations listed in `play_station`, even
+        pronounced a bit differently, it's the radio, not Spotify. An
+        artist or a song with "radio" in its name is music.
       NEVER invent what will play or what is playing: say what the tool
       returns; for "what song is this?" ALWAYS use `whats_playing`, even
       if you said it before (the song changes), and do what its `then`
@@ -607,8 +609,10 @@ i18n:
         résultat précédent.
       - "Mets de la musique" sans dire laquelle : appelle `play_music`
         sans `query` ; la dernière musique reprend.
-      - Si ce qu'il nomme ressemble à une station de radio, même dans
-        une autre langue, c'est la radio (`play_station`), pas Spotify.
+      - S'il nomme une des stations de la liste de `play_station`, même
+        prononcée un peu autrement, c'est la radio, pas Spotify. Un
+        artiste ou une chanson avec "radio" dans le nom, c'est de la
+        musique.
       N'invente JAMAIS ce qui va passer ni ce qui passe : dis ce que
       renvoie l'outil ; pour "c'est quelle chanson ?" utilise TOUJOURS
       `whats_playing`, même si tu l'as déjà dit (la chanson change), et

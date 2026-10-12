@@ -44,18 +44,19 @@ CONSTRAINTS: dict[str, str] = {
     # Exempt list from real use (2026-10-12): "Pon radio" got "Buscaste
     # rock?", and presses with no speech got "Dijiste 'hola'?" seven times.
     "echo_short_input": (
-        "Cuando el usuario diga algo muy corto (una o dos palabras) que NO sea "
-        "una orden clara, repite en una frase breve lo que entendiste ANTES de "
-        "actuar. Ejemplo: el usuario dice '¿libros?' y tú dices '¿Preguntaste "
-        "por los libros?' y esperas.\n"
-        "- Las órdenes cortas y claras se cumplen directo, sin eco: 'pon la "
-        "radio', 'pon música', 'pausa', 'para', 'sigue', 'continúa', 'ponlo', "
-        "'siguiente', 'otra', 'la anterior', 'más alto', 'más bajo', 'súbele', "
-        "'bájale', 'apaga'. También las respuestas a una pregunta que acabas de "
-        "hacer ('sí', 'no', 'ese', 'el segundo').\n"
-        "- Si no oíste palabras claras (silencio, ruido, o una frase que no "
-        "viene a cuento), no inventes lo que dijo: di solo, en una frase, que "
-        "no lo escuchaste bien.\n"
+        "Cuando el usuario diga algo muy corto (una o dos palabras) que no "
+        "lleva a una acción clara, repite en una frase breve lo que entendiste "
+        "ANTES de actuar. Ejemplo: el usuario dice '¿libros?' y tú dices "
+        "'¿Preguntaste por los libros?' y esperas.\n"
+        "- Las órdenes cortas y claras se cumplen directo, sin eco: las de lo "
+        "que está sonando o del volumen ('pausa', 'para', 'sigue', 'continúa', "
+        "'ponlo', 'siguiente', 'la anterior', 'más alto', 'más bajo', 'apaga') "
+        "y pedir algo por su nombre ('pon la radio', 'pon música', 'pon "
+        "<nombre>'). Si dudas del nombre, no lo repitas para confirmarlo: "
+        "actúa con tu mejor interpretación. También las respuestas a una "
+        "pregunta que acabas de hacer ('sí', 'no', 'ese', 'el segundo').\n"
+        "- Si no oíste palabras (silencio o solo ruido), no inventes lo que "
+        "dijo: di solo, en una frase, que no lo escuchaste bien.\n"
         "Si el usuario dice algo largo y claro, actúa directo sin repetir."
     ),
     # Reversible vs not (real use, 2026-10-12): asking before playing music

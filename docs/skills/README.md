@@ -152,7 +152,7 @@ If your skill could surface adult or profane content (search results, news headl
 
 ### `echo_short_input`
 
-Prompt-level only, no skill action required. The model echoes very short inputs back to the user before acting, except clear short commands (_"pausa"_, _"siguiente"_, _"pon la radio"_) and answers to a question it just asked, which run directly. Your tool descriptions should list the short phrases that map to each action (_"sigue"_ is `resume`, not `next`) so a single word resolves unambiguously.
+Prompt-level only, no skill action required. The model echoes very short inputs back to the user before acting, except clear short commands (_"pausa"_, _"siguiente"_), asking for something by name (_"pon la radio"_, _"pon <nombre>"_) and answers to a question it just asked, which run directly. Your tool descriptions should list the short phrases that map to each action (_"sigue"_ is `resume`, not `next`) so a single word resolves unambiguously.
 
 ### `confirm_if_unclear`
 

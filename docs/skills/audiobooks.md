@@ -136,7 +136,7 @@ The skill lives in [`server/skills/audiobooks/src/huxley_skill_audiobooks/skill.
 | _"quiero ese primero"_ / _"el primero"_            | `play_audiobook(book_id=<result[0].id>)`                 |
 | _"ponle el segundo"_ (right after a list)          | `play_audiobook(book_id=<result[1].title>)`, no question |
 | _"sigue con el libro"_ / _"el de anoche"_          | `resume_last()`                                          |
-| _"pon un libro"_ (no title)                        | `resume_last()`; nothing in progress: name a few titles  |
+| _"pon un libro"_ (no title)                        | `resume_last()`; nothing in progress: it returns 5 titles to name |
 | _"pausa"_ / _"detente"_ / _"espera"_ (a book on)   | `audiobook_control(action="pause")`                      |
 | _"sigue"_ / _"reanuda"_                            | `audiobook_control(action="resume")`                     |
 | _"retrocede un poquito"_                           | `audiobook_control(action="rewind")`                     |
@@ -144,7 +144,7 @@ The skill lives in [`server/skills/audiobooks/src/huxley_skill_audiobooks/skill.
 | _"vuelve al principio"_                            | `play_audiobook(book_id=<current>, from_beginning=true)` |
 | _"¿cuánto llevo?"_ / _"¿cuánto me queda?"_         | `get_progress()`                                         |
 | _"¿qué libros tengo empezados?"_                   | `list_in_progress()`                                     |
-| _"¿qué libros tienes?"_ / _"¿cuáles tienes?"_ / _"¿qué me recomiendas?"_ | `search_audiobooks(query="")` (its description says so) |
+| _"¿qué libros tienes?"_ / _"¿cuáles tienes?"_ / _"¿qué me recomiendas?"_ | `search_audiobooks(query="")`: up to 20 books plus `total` (its description says so) |
 
 ### Resume UX rule
 

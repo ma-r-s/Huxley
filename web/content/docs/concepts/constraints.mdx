@@ -41,7 +41,7 @@ This is a prompting tactic. The model receives the rule, internalizes it, and be
 | `confirm_destructive`   | Before deleting, sending, or calling, ask "are you sure?"            | Any persona that touches the real world |
 | `child_safe`            | Filter profanity, adult content, age-inappropriate topics.           | Personas for kids                    |
 | `no_religious_content`  | Avoid religious commentary, prayers, scripture references.           | Secular workplaces, public-facing assistants |
-| `echo_short_input`      | When the user said one or two words that aren't a clear command, repeat back what you heard. Clear short commands ("pause", "next", "play the radio") and answers to your own question run directly; silence is never echoed as invented words. | Hard-of-hearing users, noisy environments |
+| `echo_short_input`      | When the user said one or two words that aren't a clear command, repeat back what you heard. Clear short commands ("pause", "next"), asking for something by name ("play the radio", "play <name>") and answers to your own question run directly; silence is never echoed as invented words. | Hard-of-hearing users, noisy environments |
 | `confirm_if_unclear`    | Unsure about something easy to undo (playing, pausing, searching, volume)? Act on your best guess and let the user correct you. Unsure about something that can't be undone or reaches other people (sending, calling, deleting, scheduling)? Ask one short question first. After "no", never repeat the same guess. | Cooking, home automation, anything where guessing wrong is costly |
 
 The list is short on purpose. Each one earns its keep — solves a real problem someone hit, in a way that prompt-engineering alone would have repeated across every skill.

@@ -349,8 +349,9 @@ class SpotifySkill:
             )
             control = (
                 "Controla la música de Spotify. action: 'pause' (pausa, para, silencio), "
-                "'resume' (sigue, sigue con la canción, continúa, ponlo, dale, vuelve a "
-                "poner la música), 'next' solo si pide OTRA canción (siguiente, otra, "
+                "'resume' (sigue, sigue con la canción, continúa, vuelve a poner la "
+                "música; 'ponlo' si lo último que sonaba era música), 'next' solo si "
+                "pide OTRA canción (siguiente, otra, "
                 "cambia la canción, pasa), 'previous' (la anterior). 'Sigue' es seguir "
                 "con la misma: 'resume', no 'next'."
             )
@@ -423,7 +424,8 @@ class SpotifySkill:
             )
             control = (
                 "Control the Spotify music. action: 'pause' (pause, stop, quiet), "
-                "'resume' (continue, keep going, play it, play again), 'next' only for "
+                "'resume' (continue, keep going, play again; 'play it' if music was the "
+                "last thing playing), 'next' only for "
                 "ANOTHER song (next, another one, skip), 'previous' (the previous one). "
                 "'Keep going' means the same song: 'resume', not 'next'."
             )
@@ -524,13 +526,27 @@ class SpotifySkill:
         loaded last (it keeps it across restarts). Persona-neutral: no
         default genre or artist is ever guessed. With nothing loaded,
         ask instead of failing after the 10 s start timeout."""
-        context = self._require_client().state.context_uri
+        state = self._require_client().state
+        context = state.context_uri
         if not context:
             return await self._fail("nothing_to_resume")
-        await self._log().ainfo("spotify.play_last", context=context)
+        # Paused: a bare play resumes it. Idle: it ran out (a single song
+        # ends that way), so start that context again by its URI rather
+        # than send a bare play Soloist may have nothing to resume for.
+        finished = state.status == "idle"
+        await self._log().ainfo("spotify.play_last", context=context, restart=finished)
+        if not finished:
+            return ToolResult(
+                output=json.dumps({"ok": True, "action": "resume"}),
+                side_effect=self._stream(),
+            )
+        parts = context.split(":")
+        kind = parts[1] if len(parts) == 3 and parts[1] in KINDS else "any"
+        title, by = describe_item(state.item)
+        again = Match(uri=context, kind=kind, title=title or "Spotify", artist=by)
         return ToolResult(
-            output=json.dumps({"ok": True, "action": "resume"}),
-            side_effect=self._stream(),
+            output=json.dumps({"ok": True, "action": "restart"}),
+            side_effect=self._stream(start=again),
         )
 
     async def _music_control(self, action: str) -> ToolResult:

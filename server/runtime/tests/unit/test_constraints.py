@@ -21,6 +21,13 @@ class TestEchoShortInput:
         # "Pon radio" was echoed back as "Buscaste rock?" (2026-10-12).
         assert f"'{command}'" in CONSTRAINTS["echo_short_input"]
 
+    def test_asking_for_something_by_name_is_a_clear_command(self) -> None:
+        # "Pon Adele" is two words; echoing it would bring back the round
+        # trip that confirm_if_unclear's best-guess rule removes.
+        snippet = CONSTRAINTS["echo_short_input"]
+        assert "'pon <nombre>'" in snippet
+        assert "mejor interpretación" in snippet
+
     def test_answers_to_a_question_are_exempt(self) -> None:
         snippet = CONSTRAINTS["echo_short_input"]
         assert "'sí'" in snippet
