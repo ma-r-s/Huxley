@@ -156,13 +156,13 @@ Refusing to start at step 3 was rejected in design: it would force the env var o
 
 ## Error behavior
 
-| Failure                       | Client observes                                                                                         |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Protocol version mismatch     | Client closes with code `1002`, reason `"Protocol version mismatch"`, shows status banner               |
-| Second client connects        | **Existing client** closed with code `1001`, reason `"Replaced by new client"`. New client is accepted. |
-| OpenAI connection fails       | `state: CONNECTING` → `state: IDLE` + `status: "Error al conectar — intenta de nuevo"`                  |
-| OpenAI disconnect mid-session | `state: CONVERSING` → `state: IDLE` silently; next `ptt_start` outside CONVERSING returns a status      |
-| Malformed client message      | Silently ignored (no error response)                                                                    |
+| Failure                       | Client observes                                                                                                                                                                                                                                                                                              |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Protocol version mismatch     | Client closes with code `1002`, reason `"Protocol version mismatch"`, shows status banner                                                                                                                                                                                                                    |
+| Second client connects        | **Existing client** closed with code `1001`, reason `"Replaced by new client"`. New client is accepted.                                                                                                                                                                                                      |
+| OpenAI connection fails       | `state: CONNECTING` → `state: IDLE` + `status: "Error al conectar — intenta de nuevo"`                                                                                                                                                                                                                       |
+| OpenAI disconnect mid-session | `state: CONVERSING` → `state: IDLE` silently; next `ptt_start` outside CONVERSING returns a status and a double beep (`audio`). A playing stream gets `stream_ended`; it comes back (`stream_started`) when the session does, unless the session had been down over 5 s at the press (then it stays stopped) |
+| Malformed client message      | Silently ignored (no error response)                                                                                                                                                                                                                                                                         |
 
 ## Dev observability channel
 

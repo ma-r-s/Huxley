@@ -19,6 +19,7 @@ framework called `factory()` (2 = resumed), `chunks` how much it pumped.
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
 
@@ -159,6 +160,12 @@ async def _start(coord: TurnCoordinator, mocks: dict[str, Any], **stream_kwargs:
     await _turn(coord, mocks, stream)
     await _until(lambda: media.chunks > 0)
     return media
+
+
+def _down_for(coord: TurnCoordinator, seconds: float) -> None:
+    """Pretend the voice session dropped `seconds` ago."""
+    assert coord._session_down_since is not None
+    coord._session_down_since -= seconds
 
 
 async def _flowing(media: _Media) -> None:
@@ -498,13 +505,15 @@ class TestPressPausesAndResumes:
 
         await _stays(lambda: runs == 1)
 
-    async def test_press_without_a_session_stops_the_content(
+    async def test_press_in_an_outage_stops_the_content(
         self, coordinator: TurnCoordinator, mocks: dict[str, Any]
     ) -> None:
-        """The session drop no longer stops content (failure C), so while
-        the provider is down the press is the user's only way to silence
-        the device."""
+        """The session drop no longer stops content (failure C), so in a
+        real outage the press is the user's only way to silence the
+        device."""
         await _start(coordinator, mocks)
+        await coordinator.on_session_disconnected()
+        _down_for(coordinator, 6.0)
 
         await coordinator.on_ptt_rejected()
 
@@ -606,3 +615,222 @@ class TestProviderReconnect:
 
         assert coordinator.current_turn is None
         await _until(lambda: media.runs == 2)
+
+    async def test_press_during_the_refresh_pauses_until_the_session_is_back(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        """The planned refresh disconnects mid-book every 50 min; a press in
+        the ~2-3 s before the reconnect stopped the book for good. It
+        pauses it now, and the session coming back resumes it."""
+        media = await _start(coordinator, mocks)
+        provider._connected = False
+        await coordinator.on_session_disconnected()
+
+        await coordinator.on_ptt_rejected()
+
+        assert coordinator.current_media_task is None, "the press pauses it"
+        assert coordinator._content_obs is not None, "not stopped"
+        mocks["send_audio_clear"].assert_awaited()
+        assert not coordinator._speaking_state.is_speaking  # the walkie unholds
+        await _stays(lambda: media.runs == 1, for_s=0.1)
+
+        provider._connected = True
+        await coordinator.on_session_connected()
+
+        await _until(lambda: media.runs == 2)
+        await _flowing(media)
+
+    async def test_a_press_later_in_the_outage_stops_what_was_paused(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        media = await _start(coordinator, mocks)
+        provider._connected = False
+        await coordinator.on_session_disconnected()
+        await coordinator.on_ptt_rejected()
+        assert coordinator._content_obs is not None
+        assert "session" in coordinator._content_obs.holds, "the first press pauses"
+        _down_for(coordinator, 6.0)
+
+        await coordinator.on_ptt_rejected()  # the outage is real
+
+        assert coordinator._content_obs is None
+        provider._connected = True
+        await coordinator.on_session_connected()
+        await _stays(lambda: media.runs == 1)
+
+    async def test_reminder_during_the_refresh_waits_for_the_session(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        """A timer firing in the reconnect gap was sent into no session: its
+        turn never ended, kept the music parked until the next press, and
+        queued every later inject behind it. It waits for the session now."""
+        media = await _start(coordinator, mocks, patience=timedelta(minutes=30))
+        provider._connected = False
+        await coordinator.on_session_disconnected()
+        provider.sent.clear()
+
+        await coordinator.inject_turn("Timer: the pasta")
+
+        assert coordinator.current_turn is None
+        assert provider.sent == []
+        await _flowing(media)  # the music plays on meanwhile
+
+        provider._connected = True
+        await coordinator.on_session_connected()
+
+        assert ("send_conversation_message", "Timer: the pasta") in provider.sent
+        assert coordinator.current_turn is not None
+        await _until(lambda: coordinator.current_media_task is None)  # parked
+        await _answer(coordinator)  # the narration ends
+        await _until(lambda: media.runs == 2)
+
+    async def test_reminder_and_press_in_the_gap_narrate_before_the_music(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        """The session back fires the reminder first: the music the press
+        paused must not start for a tick before the narration."""
+        media = await _start(coordinator, mocks, patience=timedelta(minutes=30))
+        provider._connected = False
+        await coordinator.on_session_disconnected()
+        await coordinator.on_ptt_rejected()
+        await coordinator.inject_turn("Timer: the pasta")
+
+        provider._connected = True
+        await coordinator.on_session_connected()
+
+        assert ("send_conversation_message", "Timer: the pasta") in provider.sent
+        await _stays(lambda: media.runs == 1, for_s=0.1)
+        await _answer(coordinator)
+        await _until(lambda: media.runs == 2)
+
+    async def test_inject_and_wait_in_the_gap_announces_once_the_session_is_back(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider
+    ) -> None:
+        """Telegram announces a caller, then bridges the call. Fired into no
+        session, the wait never ended and the call was never bridged."""
+        provider._connected = False
+        await coordinator.on_session_disconnected()
+        task = asyncio.create_task(coordinator.inject_turn_and_wait("Ana is calling"))
+        await asyncio.sleep(0.05)
+        assert coordinator.current_turn is None, "nothing fires into no session"
+
+        provider._connected = True
+        await coordinator.on_session_connected()
+
+        await _until(lambda: ("send_conversation_message", "Ana is calling") in provider.sent)
+        assert not task.done(), "returns after the announcement, not before"
+        await _answer(coordinator)
+        await asyncio.wait_for(task, timeout=1.0)
+
+    async def test_inject_and_wait_queues_if_the_session_stays_down(
+        self,
+        coordinator: TurnCoordinator,
+        provider: StubVoiceProvider,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(TurnCoordinator, "_INJECT_SESSION_WAIT_S", 0.05)
+        provider._connected = False
+        await coordinator.on_session_disconnected()
+
+        await asyncio.wait_for(coordinator.inject_turn_and_wait("Ana is calling"), timeout=1.0)
+
+        assert coordinator.current_turn is None
+        assert [r.prompt for r in coordinator._injected_queue] == ["Ana is calling"]
+
+    async def test_reminder_after_a_server_close_waits_too(
+        self, coordinator: TurnCoordinator, provider: StubVoiceProvider
+    ) -> None:
+        """OpenAI closed the session (expiry, a network drop): the provider
+        still holds the dead socket and says it is connected. The
+        coordinator goes by the drop it was told about."""
+        await coordinator.on_session_disconnected()  # provider still "connected"
+
+        await coordinator.inject_turn("Timer: the pasta")
+
+        assert coordinator.current_turn is None
+        assert len(coordinator._injected_queue) == 1
+        await coordinator.on_session_connected()
+        assert ("send_conversation_message", "Timer: the pasta") in provider.sent
+
+    async def test_press_rejected_as_the_session_comes_back_leaves_the_music(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        """The app rejected the press, then awaited a log line and a status
+        while the connect completed. Nothing to wait for anymore: the
+        music must not stop for good."""
+        media = await _start(coordinator, mocks)
+        await coordinator.on_session_disconnected()
+        await coordinator.on_session_connected()
+
+        await coordinator.on_ptt_rejected()
+
+        assert coordinator.current_media_task is not None
+        await _flowing(media)
+
+    async def test_session_hold_released_even_if_the_queued_inject_fails(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A hold left behind would keep the music paused through every
+        later press (theirs release, this one would not)."""
+        await _start(coordinator, mocks, patience=timedelta(minutes=30))
+        provider._connected = False
+        await coordinator.on_session_disconnected()
+        await coordinator.on_ptt_rejected()
+        await coordinator.inject_turn("Timer: the pasta")
+        provider._connected = True
+        monkeypatch.setattr(
+            provider, "send_conversation_message", AsyncMock(side_effect=ConnectionError)
+        )
+
+        with pytest.raises(ConnectionError):
+            await coordinator.on_session_connected()
+
+        obs = coordinator._content_obs
+        assert obs is not None
+        assert "session" not in obs.holds
+
+    async def test_stream_ending_in_the_gap_leaves_no_turn_behind(
+        self,
+        coordinator: TurnCoordinator,
+        mocks: dict[str, Any],
+        provider: StubVoiceProvider,
+    ) -> None:
+        """A book's end prompt sent into no session left a completion turn
+        that never ended: model_speaking stuck on, injects queued behind
+        it until the next press."""
+        end = asyncio.Event()
+
+        async def gen() -> AsyncIterator[bytes]:
+            yield b"\x00\x00" * 240
+            await end.wait()
+
+        stream = AudioStream(factory=gen, on_complete_prompt="The book ended.")
+        await _turn(coordinator, mocks, stream)
+        await _until(lambda: coordinator._speaking_state.is_speaking)
+        provider._connected = False
+        await coordinator.on_session_disconnected()
+
+        end.set()  # the book ends during the reconnect
+
+        await _until(
+            lambda: coordinator._content_obs is not None and coordinator._content_obs.finished
+        )
+        assert coordinator.current_turn is None
+        assert not coordinator._speaking_state.is_speaking
+        assert ("send_conversation_message", "The book ended.") not in provider.sent

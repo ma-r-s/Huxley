@@ -73,6 +73,7 @@ from .state import Turn, TurnSource, TurnState
 _HOLD_TURN = "turn"  # a user turn is in progress
 _HOLD_NO_CLIENT = "no_client"  # no client has been connected for a while
 _HOLD_DISPATCH = "dispatch"  # a turn's end is deciding what plays next
+_HOLD_SESSION = "session"  # a press found no voice session (a reconnect)
 
 _SOURCE_TO_OWNER: dict[TurnSource, SpeakingOwner] = {
     TurnSource.USER: SpeakingOwner.USER,
@@ -299,6 +300,21 @@ class TurnCoordinator:
         # the event the pending resume waits on for it.
         self._press_transcript: str | None = None
         self._press_transcript_event = asyncio.Event()
+        # The coordinator's own view of the voice session: monotonic time
+        # it went down (`on_session_disconnected`), None once the app has
+        # connected it (`on_session_connected`). Not `provider.is_connected`
+        # alone: that stays true on a socket the server closed (expiry, a
+        # network drop) and turns true before the session is configured.
+        # Down from construction unless the provider is already up. A press
+        # without a session pauses the content when the session dropped
+        # moments ago (a planned refresh), stops it in a real outage
+        # (`on_ptt_rejected`); injects wait for it.
+        self._session_down_since: float | None = (
+            None if provider.is_connected else time.monotonic()
+        )
+        self._session_up_event = asyncio.Event()
+        if self._session_down_since is None:
+            self._session_up_event.set()
 
         self._current_turn: Turn | None = None
         self.response_cancelled: bool = False
@@ -329,6 +345,12 @@ class TurnCoordinator:
         if turn is None and prev is not None and prev.source is TurnSource.USER:
             # A press still LISTENING was never committed: no transcript.
             self._arm_turn_hold_release(expect_transcript=prev.state is not TurnState.LISTENING)
+
+    @property
+    def _session_up(self) -> bool:
+        """A voice session is connected and configured: what the
+        coordinator sends reaches the model."""
+        return self._session_down_since is None and self._provider.is_connected
 
     def _content_is_running(self) -> bool:
         """True iff a content stream is currently playing (pump task live)."""
@@ -743,6 +765,8 @@ class TurnCoordinator:
         had_media = self._content_is_running()
         was_speaking = self._speaking_state.is_speaking
         tid = self._tid()
+        self._session_down_since = time.monotonic()
+        self._session_up_event.clear()
 
         # End any active claim with ERROR: a session disconnect during a
         # call isn't a natural close.
@@ -1539,22 +1563,83 @@ class TurnCoordinator:
                 await task
         await self._stop_content_stream()
 
+    # A press this long into a session outage stops the content rather
+    # than pausing it until the session is back. The planned refresh
+    # reconnects in ~2-3 s (1 s backoff plus the connect), well inside.
+    _OUTAGE_STOP_AFTER_S: ClassVar[float] = 5.0
+
     async def on_ptt_rejected(self) -> None:
-        """A press arrived while there is no voice session (reconnecting,
-        or the provider is down). It can't start a turn, and content no
-        longer stops when the session drops, so the press stops it: the
-        user keeps a way to silence the device during an outage."""
+        """A press arrived while there is no voice session. It can't start
+        a turn, and content no longer stops when the session drops, so the
+        press decides. Down for `_OUTAGE_STOP_AFTER_S` or less (the planned
+        refresh, mid-book, every 50 min): pause it, and the session coming
+        back resumes it (`on_session_connected`); stopping it there cut
+        the book for good over a 2 s reconnect. Down longer (a real
+        outage): stop it, so the user keeps a way to silence the device.
+        The app plays the press's sound."""
         obs = self._content_obs
         if obs is None or not obs.is_live:
             return
-        await logger.ainfo(
-            "coord.content_stopped",
-            reason="ptt_without_session",
-            interface=obs.interface_name,
-        )
-        await self._stop_content_stream()
+        since = self._session_down_since
+        if since is None:
+            # The session came back while the app was rejecting the press:
+            # nothing to wait for, so leave what plays alone.
+            await logger.ainfo(
+                "coord.ptt_rejected_session_back",
+                interface=obs.interface_name,
+            )
+            return
+        down_s = time.monotonic() - since
+        if down_s <= self._OUTAGE_STOP_AFTER_S:
+            await self._hold_content(_HOLD_SESSION)
+        else:
+            await logger.ainfo(
+                "coord.content_stopped",
+                reason="ptt_without_session",
+                interface=obs.interface_name,
+                down_s=round(down_s, 1),
+            )
+            await self._stop_content_stream()
         await self._send_audio_clear()
         await self._force_release_unless_content()
+
+    async def on_session_connected(self) -> None:
+        """The voice session is up (the first connect or a reconnect).
+        Injects that arrived while it was down fire (the head of the
+        queue; the rest drain at its end, as at any turn end), then
+        content a press paused while it was down resumes. In that order:
+        a reminder's DIALOG parks the content first, so it doesn't start
+        for a tick before the narration."""
+        obs = self._content_obs
+        await logger.ainfo(
+            "coord.session_connected",
+            connected=self._provider.is_connected,
+            queued_injects=len(self._injected_queue),
+            content=obs.interface_name if obs is not None else None,
+            holds=sorted(obs.holds) if obs is not None else [],
+        )
+        if not self._provider.is_connected:
+            return  # dropped again before we got here: still down
+        self._session_down_since = None
+        self._session_up_event.set()
+        try:
+            claim = self._claim_obs
+            claim_live = claim is not None and not claim.is_ended
+            if self.current_turn is None and not claim_live and self._injected_queue:
+                request = self._injected_queue.pop(0)
+                await logger.ainfo(
+                    "coord.inject_turn_dequeued",
+                    trigger="session_connected",
+                    remaining=len(self._injected_queue),
+                    dedup_key=request.dedup_key,
+                    priority=request.priority.value,
+                )
+                await self._fire_injected_turn(request.prompt, request.dedup_key)
+        finally:
+            # Whatever happened above, the session hold must not outlive
+            # the outage: it would keep the music paused through later
+            # presses (theirs release, this one stays).
+            await self._release_content_hold(_HOLD_SESSION)
 
     # --- Input claim (T1.4 Stage 2 — mic-capture skills) ---
 
@@ -1798,6 +1883,10 @@ class TurnCoordinator:
               freshly-spawned content stream. Right for medication
               reminders and safety-critical events where "wait until
               the user PTTs again" could mean hours.
+        - If there is no voice session (the planned refresh reconnects
+          every 50 min; an outage), **queue** it too: the provider
+          drops what it can't send, so a turn fired now would never
+          end. `on_session_connected` drains the queue.
 
         Priority never barges into a live user turn — the queue always
         waits for turn-end, regardless of tier. Interrupting a user
@@ -1815,7 +1904,10 @@ class TurnCoordinator:
         handle with `wait_outcome()`, finer arbitration tiers.
         """
         if self.current_turn is not None:
-            await self._enqueue_injected(prompt, dedup_key, priority)
+            await self._enqueue_injected(prompt, dedup_key, priority, reason="turn_in_progress")
+            return
+        if not self._session_up:
+            await self._enqueue_injected(prompt, dedup_key, priority, reason="no_session")
             return
         # A **live** COMMS claim (live call, voice memo, etc.) counts as
         # "busy" for NORMAL and BLOCK_BEHIND_COMMS — respect the live
@@ -1840,7 +1932,7 @@ class TurnCoordinator:
             and not claim_obs.is_ended
             and priority is not InjectPriority.PREEMPT
         ):
-            await self._enqueue_injected(prompt, dedup_key, priority)
+            await self._enqueue_injected(prompt, dedup_key, priority, reason="claim_live")
             return
         await self._fire_injected_turn(prompt, dedup_key)
 
@@ -1878,12 +1970,32 @@ class TurnCoordinator:
         the announcement — the exact behavior the 2026-04-24 smoke
         test caught on inbound Telegram calls.
 
-        If a turn is already in progress, falls back to a plain
-        enqueue (same as `inject_turn`) and returns immediately — the
-        caller should not depend on the wait semantics in that case.
+        With no voice session (a reconnect), waits up to
+        `_INJECT_SESSION_WAIT_S` for it first, so a caller that sequences
+        work after the announcement (Telegram: announce the caller, then
+        bridge the call) still gets the announcement first. (Fired
+        without a session, the wait never ended: nothing reached the
+        model.)
+
+        If a turn is already in progress, or the session stays down,
+        falls back to a plain enqueue (same as `inject_turn`) and
+        returns: the caller should not depend on the wait semantics in
+        that case.
         """
-        if self.current_turn is not None:
-            await self._enqueue_injected(prompt, dedup_key, InjectPriority.NORMAL)
+        if self.current_turn is None and not self._session_up:
+            started = time.monotonic()
+            with contextlib.suppress(TimeoutError):
+                async with asyncio.timeout(self._INJECT_SESSION_WAIT_S):
+                    await self._session_up_event.wait()
+            await self._log.ainfo(
+                "coord.inject_and_wait_session_wait",
+                waited_ms=int((time.monotonic() - started) * 1000),
+                session_up=self._session_up,
+                dedup_key=dedup_key,
+            )
+        if self.current_turn is not None or not self._session_up:
+            reason = "turn_in_progress" if self.current_turn is not None else "no_session"
+            await self._enqueue_injected(prompt, dedup_key, InjectPriority.NORMAL, reason=reason)
             return
         await self._fire_injected_turn(prompt, dedup_key)
         # _fire_injected_turn sets _injected_turn_done before returning;
@@ -1892,6 +2004,11 @@ class TurnCoordinator:
         if done is not None:
             await done.wait()
         await self._wait_for_client_playback_drain()
+
+    # How long `inject_turn_and_wait` waits for a voice session that is
+    # reconnecting. The backoff is 1 s, then 3 s after a failed attempt,
+    # plus the connects: two attempts fit.
+    _INJECT_SESSION_WAIT_S: ClassVar[float] = 10.0
 
     # Audio rate for the one audio channel shared with the client:
     # 24kHz sample rate * 2 bytes/sample (PCM16 mono).
@@ -1946,8 +2063,12 @@ class TurnCoordinator:
         prompt: str,
         dedup_key: str | None,
         priority: InjectPriority,
+        *,
+        reason: str,
     ) -> None:
-        """Append or dedup-replace a pending inject_turn request."""
+        """Append or dedup-replace a pending inject_turn request. `reason`
+        (logged) is why it can't fire now: `turn_in_progress`,
+        `claim_live`, `no_session`."""
         if dedup_key is not None:
             if self._current_injected_dedup_key == dedup_key:
                 await self._log.ainfo(
@@ -1970,6 +2091,7 @@ class TurnCoordinator:
         )
         await self._log.ainfo(
             "coord.inject_turn_queued",
+            reason=reason,
             queue_depth=len(self._injected_queue),
             dedup_key=dedup_key,
             priority=priority.value,
@@ -1978,7 +2100,9 @@ class TurnCoordinator:
 
     async def _fire_injected_turn(self, prompt: str, dedup_key: str | None) -> None:
         """Actually create the INJECTED turn, acquire DIALOG, send prompt.
-        Caller guarantees `self.current_turn is None`."""
+        Caller guarantees `self.current_turn is None` and a connected
+        provider (without one the prompt goes nowhere and the turn never
+        ends, holding DIALOG and every later inject)."""
         # Synthesize the Turn. Skills pass a plain string; the framework
         # wraps it in a TurnSource.INJECTED turn that the rest of the
         # coordinator treats like any other in-response turn — audio
@@ -2109,6 +2233,16 @@ class TurnCoordinator:
                 "coord.completion_prompt_skipped",
                 turn=parent_turn_id,
                 reason="turn_in_progress",
+            )
+            return False
+        if not self._session_up:
+            # The stream ended during a reconnect: the prompt would go
+            # nowhere and the synthetic turn would never end, keeping
+            # model_speaking on and every inject queued behind it.
+            await logger.ainfo(
+                "coord.completion_prompt_skipped",
+                turn=parent_turn_id,
+                reason="no_session",
             )
             return False
 

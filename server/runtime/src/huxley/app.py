@@ -558,6 +558,9 @@ class Application:
             await self.server.send_status(
                 _STATUS_FAILED.get(self._resolved_persona.language_code, _STATUS_FAILED["en"])
             )
+            return
+        # Content a press paused while the session was down comes back.
+        await self.coordinator.on_session_connected()
 
     async def _apply_language(self, language: str | None) -> None:
         """Resolve the persona for `language`, push ui_strings to the
@@ -828,8 +831,14 @@ class Application:
             await self.server.send_status(
                 _STATUS_WAIT.get(self._resolved_persona.language_code, _STATUS_WAIT["en"])
             )
-            # No session to talk to; the press still stops what plays.
+            # No session to talk to: the press pauses (or, in a long
+            # outage, stops) what plays.
             await self.coordinator.on_ptt_rejected()
+            # The walkie shows no status text, so the press needs a sound
+            # (the user is blind): the double beep the reconnect loop plays,
+            # "no session, retrying". After the coordinator's audio_clear,
+            # which would drop it.
+            await self.server.send_audio(no_signal_tone_pcm())
             return
         await self.coordinator.on_ptt_start()
 

@@ -349,6 +349,7 @@ await self._ctx.inject_turn("Es hora de la pastilla de las nueve.")
 
 - **Idle (no turn in progress)**: fires immediately. Any playing content stream (audiobook, radio) is preempted via FocusManager — the LLM narrates the prompt in persona voice, then the framework releases focus. The content stays stopped (a future stage will add "resume or drop" based on the stream's patience).
 - **Busy (a user or synthetic turn is in progress)**: the request is **queued**. It drains automatically when a turn ends without spawning a content stream. This protects against dropped reminders when the user happens to PTT at the moment a timer fires.
+- **No voice session (a reconnect, about every 50 minutes, or an outage)**: queued as well, and fired when the session is back.
 
 **Dedup** (optional `dedup_key`):
 
@@ -429,7 +430,7 @@ await self._ctx.start_input_claim(InputClaim(...))
 
 `inject_turn_and_wait` fires the same injected turn as `inject_turn`, but **blocks until `response_done` fires** (the LLM has finished generating and all PCM has been sent to the client). This eliminates the hardcoded `sleep()` that would otherwise be needed between "announce the event" and "start audio bridging."
 
-**Fallback**: if the coordinator is busy (a turn is already in progress), it falls back to a plain enqueue — same as `inject_turn`. The blocking guarantee only holds when the coordinator is idle. Design accordingly: call it from a background task where you control the timing.
+**Fallback**: if the coordinator is busy (a turn is already in progress), it falls back to a plain enqueue — same as `inject_turn`. With no voice session it first waits up to 10 s for the reconnect (then announces and blocks as usual); still down after that, it enqueues too. The blocking guarantee only holds when the coordinator is idle. Design accordingly: call it from a background task where you control the timing.
 
 **When to use it**: any skill that must announce an event and then immediately claim the mic or start an audio source. Without the wait, your bridged audio queues behind the announcement PCM still in the client's playback buffer, causing a perceptible delay. The `telegram` inbound-call flow uses this for exactly that reason.
 

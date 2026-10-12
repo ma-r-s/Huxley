@@ -222,7 +222,7 @@ class AudioStream(SideEffect):
 
 `completion_silence_ms`: the coordinator sends this much PCM16 silence to the client AFTER firing `request_response`. It overlaps with the LLM's first-token latency so the user hears _book → chime → silence → model voice_ with minimal dead air. 500–1000ms covers typical OpenAI Realtime latency. Set to 0 to disable.
 
-When the stream ends naturally (not cancelled), the coordinator sends `on_complete_prompt` as a user-role conversation item and triggers a model response. The coordinator must (a) skip the prompt if a PTT-induced cancel raced the trailing silence, and (b) create a synthetic IN_RESPONSE turn so the incoming model reply (deltas, tool calls, response_done) is handled by the existing turn-aware paths instead of being silently dropped:
+When the stream ends naturally (not cancelled), the coordinator sends `on_complete_prompt` as a user-role conversation item and triggers a model response. The coordinator must (a) skip the prompt if a PTT-induced cancel raced the trailing silence or there is no voice session (a reconnect: the turn would never end), and (b) create a synthetic IN_RESPONSE turn so the incoming model reply (deltas, tool calls, response_done) is handled by the existing turn-aware paths instead of being silently dropped:
 
 ```python
 # server/runtime/src/huxley/turn/coordinator.py
