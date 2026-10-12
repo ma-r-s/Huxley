@@ -39,6 +39,7 @@ import socket
 import sys
 import threading
 import time
+from collections.abc import Callable
 
 STEPS = [
     "boot",
@@ -783,5 +784,21 @@ def main() -> int:
     return fails
 
 
+def marked(run: Callable[[], int]) -> int:
+    """Run the bench inside a test window for huxley-watch (dev.py's
+    BENCH_RUNS): its presses and plays aren't grandpa's usage."""
+    import dev  # tools/dev.py, next to this file
+
+    what = "bench.py " + " ".join(sys.argv[1:])
+    start = time.time()
+    dev.mark_bench(what, start, None)
+    try:
+        return run()
+    finally:
+        dev.mark_bench(what, start, time.time())
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    if {"-h", "--help"} & set(sys.argv[1:]):
+        sys.exit(main())
+    sys.exit(marked(main))
