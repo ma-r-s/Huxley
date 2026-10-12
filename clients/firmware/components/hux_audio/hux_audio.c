@@ -161,9 +161,17 @@ static _Atomic uint32_t s_spk_clear_done = 0;
 #define SPK_REBUFFER_AFTER_CHUNKS 3
 
 static _Atomic bool s_stream_active = false;
+/* Set when a reply or stream starts: the silence before it is a wait, not
+ * a dropout. The server's waiting cue (T1.41) blips during that wait, and
+ * a reply starting within 1 s of a blip was counted as an underrun, which
+ * the caregiver alerts read as "audio cutting up". */
+static _Atomic bool s_stream_started = false;
 
 void hux_audio_set_stream_active(bool active) {
-    atomic_store_explicit(&s_stream_active, active, memory_order_release);
+    bool was = atomic_exchange_explicit(&s_stream_active, active, memory_order_acq_rel);
+    if (active && !was) {
+        atomic_store_explicit(&s_stream_started, true, memory_order_release);
+    }
 }
 #define SPK_CLEAR_WAIT_MS 100  /* spk_task services a request within one chunk (~20 ms) */
 
@@ -578,6 +586,9 @@ static void spk_task(void *unused) {
             }
             silent_run++;
         } else {
+            if (atomic_exchange_explicit(&s_stream_started, false, memory_order_acq_rel)) {
+                had_audio = false; /* a new reply: the silence before it was a wait */
+            }
             if (had_audio && silent_run > 0 && silent_run <= SPK_GAP_MAX_CHUNKS) {
                 underruns++;
                 ESP_LOGW(TAG, "spk.underrun silent_ms=%u count=%u", (unsigned)(silent_run * SPK_CHUNK_MS),
