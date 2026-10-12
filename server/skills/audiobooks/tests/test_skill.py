@@ -565,6 +565,28 @@ class TestToolsExposed:
         names = [t.name for t in audiobooks_skill.tools]
         assert "resume_last" in names
 
+    def test_search_says_an_empty_query_lists_everything(
+        self, audiobooks_skill: AudiobooksSkill
+    ) -> None:
+        # "Cuales tienes?" searched "audiolibros disponibles" and got 5 of
+        # 19 books (2026-10-12); the model didn't know "" lists them all.
+        search = next(t for t in audiobooks_skill.tools if t.name == "search_audiobooks")
+        assert "`query` vacío" in search.description
+        assert "Vacío" in search.parameters["properties"]["query"]["description"]
+
+    def test_play_resolves_a_pick_from_the_list_just_read(
+        self, audiobooks_skill: AudiobooksSkill
+    ) -> None:
+        # "Ponle el segundo" after a list got "which one?" (2026-10-12).
+        play = next(t for t in audiobooks_skill.tools if t.name == "play_audiobook")
+        assert "'el segundo'" in play.description
+        assert "no preguntes cuál" in play.description
+
+    def test_control_is_for_books_only(self, audiobooks_skill: AudiobooksSkill) -> None:
+        # "Ponlo" with music playing paused the book instead (2026-10-12).
+        control = next(t for t in audiobooks_skill.tools if t.name == "audiobook_control")
+        assert "Solo para libros" in control.description
+
 
 class TestSoundPalette:
     """Sound loading + warning behavior."""
