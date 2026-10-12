@@ -92,6 +92,24 @@ class TestLoadPersona:
             load_persona(tmp_path)
 
 
+class TestRecordingBlock:
+    """`recording:` is opt-in: off unless a persona says `enabled: true`."""
+
+    def test_off_by_default(self, tmp_path: Path) -> None:
+        _write_persona(tmp_path, VALID_YAML)
+        assert load_persona(tmp_path).recording.enabled is False
+
+    def test_enabled(self, tmp_path: Path) -> None:
+        _write_persona(tmp_path, VALID_YAML + "recording:\n  enabled: true\n")
+        assert load_persona(tmp_path).recording.enabled is True
+
+    def test_unknown_key_raises(self, tmp_path: Path) -> None:
+        # A typo must not leave a persona believed recorded but not.
+        _write_persona(tmp_path, VALID_YAML + "recording:\n  enable: true\n")
+        with pytest.raises(PersonaError, match="Invalid persona spec"):
+            load_persona(tmp_path)
+
+
 class TestResolvePersonaPath:
     """T1.6/T2.3 follow-up: framework no longer hardcodes 'abuelos'."""
 

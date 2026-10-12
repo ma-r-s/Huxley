@@ -84,6 +84,8 @@ if TYPE_CHECKING:
 
     from websockets.http11 import Request
 
+    from huxley.server.recorder import Recorder
+
 logger = structlog.get_logger()
 
 PROTOCOL_VERSION = 2
@@ -123,6 +125,9 @@ def _now_ms() -> int:
 _TX_STATS_WINDOW_MS = 1000
 # PCM bytes per ms of the 24 kHz 16-bit mono stream.
 _PCM_BYTES_PER_MS = 48
+# At most one `server.tx.audio_dropped_no_client` line per this many
+# seconds while audio is sent with nobody connected.
+_NO_CLIENT_DROP_LOG_S = 5.0
 _SO_NWRITE = 0x1024  # macOS <sys/socket.h>: bytes in the send buffer
 _TIOCOUTQ = 0x5411  # Linux <asm-generic/ioctls.h>: same, via ioctl
 
@@ -209,6 +214,8 @@ class _ConnInfo:
     # hello (it learns the format there), so audio for it until then is
     # dropped: a reconnect mid-song loses a few ms, never confuses it.
     hello_sent: bool = False
+    # `recorder.skipped_pcm_client` said for this connection already.
+    recording_skip_logged: bool = False
 
     def to_diag(self) -> dict[str, Any]:
         """Serialize to the wire-format the `diag_state` frame uses.
@@ -414,6 +421,21 @@ class AudioServer:
         # route through a half-stopped framework. Default-on so steady
         # state is unaffected.
         self._dispatching_enabled: bool = True
+        # Recording (persona opt-in, `huxley.server.recorder`). None when
+        # the running persona doesn't record: every tap is one `is None`
+        # check. The context below mirrors the control frames sent to the
+        # client, so a recorder attached mid-activity (a reload during a
+        # stream, a swap mid-claim) starts from what is playing now.
+        self._recorder: Recorder | None = None
+        self._model_speaking = False
+        self._active_stream_label: str | None = None
+        self._claim_info: tuple[str, str, str | None] | None = None
+        self._ptt_active = False
+        # Audio sent while no client is connected (`send_audio` drops it):
+        # counted, logged at most every `_NO_CLIENT_DROP_LOG_S`.
+        self._no_client_drop_sends = 0
+        self._no_client_drop_bytes = 0
+        self._no_client_drop_logged_s = float("-inf")
 
     @property
     def has_client(self) -> bool:
@@ -425,6 +447,47 @@ class AudioServer:
         between disconnect and the next connect. Useful to operators
         cross-referencing PWA-side log entries against server logs."""
         return self._conn.conn_id if self._conn is not None else None
+
+    def attach_recorder(self, recorder: Recorder) -> None:
+        """Record from now on (the persona's `recording:` block is on).
+        A recorder already attached (a swap's previous persona) is told
+        to close what it has open; its owner stops it."""
+        previous, self._recorder = self._recorder, recorder
+        if previous is not None and previous is not recorder:
+            previous.detached()
+        if self._model_speaking:
+            recorder.model_speaking(True)
+        if self._active_stream_id is not None:
+            recorder.stream_started(self._active_stream_id, self._active_stream_label)
+        if self._claim_info is not None:
+            recorder.claim_started(*self._claim_info)
+        conn = self._conn
+        if conn is not None:
+            recorder.connection_opened(conn.conn_id, conn.audio_format)
+            if self._ptt_active:
+                recorder.ptt(True)
+            self._log_recording_skipped(conn)
+
+    def detach_recorder(self, recorder: Recorder) -> bool:
+        """Stop recording into `recorder`, if it is the one attached. A
+        dying persona never detaches the recorder of the one that
+        replaced it. True when it was attached."""
+        if self._recorder is not recorder:
+            return False
+        self._recorder = None
+        return True
+
+    def _log_recording_skipped(self, conn: _ConnInfo) -> None:
+        """Once per connection: a PCM client is never recorded (v1)."""
+        if self._recorder is None or conn.audio_format == "opus" or conn.recording_skip_logged:
+            return
+        conn.recording_skip_logged = True
+        logger.info(
+            "recorder.skipped_pcm_client",
+            conn_id=conn.conn_id,
+            audio_format=conn.audio_format,
+            note="only Opus clients are recorded",
+        )
 
     @property
     def has_active_claim(self) -> bool:
@@ -531,6 +594,9 @@ class AudioServer:
             old_conn.closed_at_ms = _now_ms()
             self._recent_conns.append(old_conn)
             self._conn = None
+            self._ptt_active = False
+            if self._recorder is not None:
+                self._recorder.connection_closed(old_conn.conn_id, "evicted")
             with contextlib.suppress(Exception):
                 await old_conn.ws.close(1001, "Replaced by new client") if old_conn.ws else None
 
@@ -574,6 +640,8 @@ class AudioServer:
             except OpusUnavailableError as exc:
                 opus_error = str(exc)
         self._conn = conn
+        if self._recorder is not None:
+            self._recorder.connection_opened(conn_id, conn.audio_format)
         structlog.contextvars.bind_contextvars(conn_id=conn_id)
         await logger.ainfo(
             "client_connected",
@@ -582,6 +650,10 @@ class AudioServer:
             persona=selected_persona,
             audio_format=conn.audio_format,
         )
+        self._log_recording_skipped(conn)
+        if self._no_client_drop_sends:
+            # What was sent into the void while nobody was connected.
+            await self._log_no_client_drops(time.monotonic())
         if opus_error is not None:
             await logger.awarning(
                 "server.audio.opus_unavailable", reason=opus_error, fallback="pcm"
@@ -683,6 +755,9 @@ class AudioServer:
             # T1.21 — finalize the conn record, archive into recent
             # history for the diag endpoint, then unbind contextvars.
             if self._conn is conn:
+                self._ptt_active = False
+                if self._recorder is not None:
+                    self._recorder.connection_closed(conn_id, "disconnect")
                 conn.closed_at_ms = _now_ms()
                 conn.ws = None  # release ref for GC
                 # If we got here without a ConnectionClosed exception
@@ -756,9 +831,15 @@ class AudioServer:
                 # decoder state carries over from the last one.
                 if self._conn is not None and self._conn.opus_rx is not None:
                     self._conn.opus_rx.reset()
+                self._ptt_active = True
+                if self._recorder is not None:
+                    self._recorder.ptt(True)
                 await logger.ainfo("server.rx.ptt_start")
                 await self._on_ptt_start()
             case "ptt_stop":
+                self._ptt_active = False
+                if self._recorder is not None:
+                    self._recorder.ptt(False)
                 await logger.ainfo("server.rx.ptt_stop")
                 await self._on_ptt_stop()
             case "wake_word":
@@ -996,8 +1077,14 @@ class AudioServer:
     ) -> None:
         """Decode one inbound Opus packet and hand the PCM16 on exactly
         where a JSON `audio` message's PCM goes. A packet libopus rejects
-        is logged and dropped; the connection stays up."""
+        is logged and dropped; the connection stays up.
+
+        Recorded as it arrived, before decoding or any gating, so a
+        packet that fails to decode and a press that never commits are
+        in the recording too."""
         conn.rx_types["opus"] = conn.rx_types.get("opus", 0) + 1
+        if self._recorder is not None:
+            self._recorder.mic_packet(conn.conn_id, packet)
         try:
             pcm = decoder.decode(packet)
         except Exception as exc:
@@ -1052,7 +1139,10 @@ class AudioServer:
         if not pcm:
             return
         conn = self._conn
-        if conn is not None and conn.opus_tx is not None:
+        if conn is None or conn.ws is None:
+            await self._audio_dropped_no_client(len(pcm))
+            return
+        if conn.opus_tx is not None:
             if conn.hello_sent:
                 await self._send_audio_opus(conn, conn.opus_tx, pcm, stats=stats)
             else:
@@ -1075,6 +1165,30 @@ class AudioServer:
             # Yield so the recv loop and any other tasks can interleave
             # — keeps the WS bidirectional even mid-burst.
             await asyncio.sleep(0)
+
+    async def _audio_dropped_no_client(self, pcm_bytes: int) -> None:
+        """Audio for nobody: no client is connected, so it goes nowhere.
+        Counted and logged (rate-limited), never silent: a source still
+        playing with nobody listening shows up in the log."""
+        self._no_client_drop_sends += 1
+        self._no_client_drop_bytes += pcm_bytes
+        now = time.monotonic()
+        if now - self._no_client_drop_logged_s >= _NO_CLIENT_DROP_LOG_S:
+            await self._log_no_client_drops(now)
+        else:
+            # The send path yields once per chunk; keep a producer that
+            # does not pace itself from holding the loop.
+            await asyncio.sleep(0)
+
+    async def _log_no_client_drops(self, now: float) -> None:
+        count, pcm_bytes = self._no_client_drop_sends, self._no_client_drop_bytes
+        self._no_client_drop_sends = self._no_client_drop_bytes = 0
+        self._no_client_drop_logged_s = now
+        await logger.ainfo(
+            "server.tx.audio_dropped_no_client",
+            count=count,
+            audio_ms=pcm_bytes // _PCM_BYTES_PER_MS,
+        )
 
     async def _send_audio_opus(
         self, conn: _ConnInfo, encoder: OpusEncoderStream, pcm: bytes, *, stats: bool = True
@@ -1118,6 +1232,12 @@ class AudioServer:
         try:
             while conn.opus_out and self._conn is conn and conn.ws is not None:
                 packet = conn.opus_out.popleft()
+                # Recorded here, in wire order: `ws.send` writes the frame
+                # before its first await (it waits on flow control after
+                # the write), so nothing the server does can come between
+                # this line and the write. Only a socket already closing
+                # raises before writing: one packet at a disconnect.
+                self._record_speaker(conn, packet)
                 t0 = time.monotonic()
                 await conn.ws.send(packet)
                 wait_ms += (time.monotonic() - t0) * 1000
@@ -1147,6 +1267,11 @@ class AudioServer:
             raise
         if self._conn is conn and stats:
             await self._tx_audio_stats(pcm_bytes, wait_ms, sends=sends, wire_bytes=wire)
+
+    def _record_speaker(self, conn: _ConnInfo, packet: bytes) -> None:
+        """Hand a packet just written to the client to the recorder."""
+        if self._recorder is not None:
+            self._recorder.speaker_packet(conn.conn_id, packet)
 
     async def _flush_opus(self, conn: _ConnInfo | None, reason: str) -> None:
         """Send the partial frame zero-padded to 60 ms, so the end of a
@@ -1275,6 +1400,10 @@ class AudioServer:
             # Opus: the reply's last partial frame goes out before the
             # client hears that the reply is over.
             await self._flush_opus(self._conn, "model_speaking")
+        # After the flush: the padded tail belongs to what just ended.
+        self._model_speaking = value
+        if self._recorder is not None:
+            self._recorder.model_speaking(value)
         await logger.ainfo("server.tx.model_speaking", value=value)
         await self._send({"type": "model_speaking", "value": value})
 
@@ -1520,6 +1649,9 @@ class AudioServer:
         The behavioral signal remains `input_mode=skill_continuous`;
         `title` is presentation-only.
         """
+        self._claim_info = (claim_id, skill, title)
+        if self._recorder is not None:
+            self._recorder.claim_started(claim_id, skill, title)
         await logger.ainfo(
             "server.tx.claim_started",
             claim_id=claim_id,
@@ -1541,6 +1673,10 @@ class AudioServer:
         behavioral signal is `input_mode=assistant_ptt` fired
         immediately after.
         """
+        if self._claim_info is not None and self._claim_info[0] == claim_id:
+            self._claim_info = None
+        if self._recorder is not None:
+            self._recorder.claim_ended(claim_id, end_reason)
         await logger.ainfo("server.tx.claim_ended", claim_id=claim_id, end_reason=end_reason)
         await self._send(
             {"type": "claim_ended", "claim_id": claim_id, "end_reason": end_reason},
@@ -1560,6 +1696,8 @@ class AudioServer:
         """
         conn = self._conn
         dropped_packets = dropped_pcm = 0
+        if self._recorder is not None:
+            self._recorder.audio_clear()
         if conn is not None and conn.opus_tx is not None:
             self._cancel_opus_idle_flush(conn)
             dropped_packets = len(conn.opus_out)
@@ -1585,6 +1723,11 @@ class AudioServer:
         earcon/intro the stream factory yields before actual content;
         the client hides the waveform visualizer for that many ms.
         """
+        # Before the log's await, so packets the stream's pump writes
+        # meanwhile are already tagged with it.
+        self._active_stream_label = label
+        if self._recorder is not None:
+            self._recorder.stream_started(stream_id, label)
         await logger.ainfo(
             "server.tx.stream_started",
             stream_id=stream_id,
@@ -1609,9 +1752,14 @@ class AudioServer:
         """
         # Opus: the stream's last partial frame goes out before the end.
         await self._flush_opus(self._conn, "stream_ended")
+        # Right after the flush: its padded tail is the stream's last
+        # packet; whatever plays from here on is not the stream.
+        if self._recorder is not None:
+            self._recorder.stream_ended(stream_id, end_reason)
         await logger.ainfo("server.tx.stream_ended", stream_id=stream_id, end_reason=end_reason)
         if self._active_stream_id == stream_id:
             self._active_stream_id = None
+            self._active_stream_label = None
         await self._send(
             {"type": "stream_ended", "stream_id": stream_id, "end_reason": end_reason},
         )

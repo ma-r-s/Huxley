@@ -36,6 +36,7 @@ Run Huxley with `HUXLEY_PERSONA=my_assistant` (the directory name under `./perso
 | `constraints`            | no       | List of named behavioral constraints (see below). Snippets are composed and appended to `system_prompt` at connect time.                                  |
 | `i18n`                   | no       | Map of `<lang>` → `{transcription_language?, system_prompt?, ui_strings?}` for additional languages. See [Multilingual personas](#multilingual-personas). |
 | `skills`                 | yes      | Map of skill name → config dict. Skills named here are discovered via `huxley.skills` entry points; missing names fail fast at startup.                   |
+| `recording`              | no       | `{enabled: true}` records this persona's conversations (off by default). See [Recording](#recording).                                                      |
 
 ## Multilingual personas
 
@@ -112,6 +113,19 @@ skills:
 The skill name (`audiobooks`, `system`, `weather`) matches the entry-point key registered by `huxley-skill-<name>`'s `pyproject.toml`. The config dict is whatever the skill's docs say it accepts. Relative paths in config values resolve against `server/personas/<name>/data/`.
 
 If a listed skill isn't installed, Huxley fails fast at startup with a clear error pointing you at `pip install huxley-skill-<name>`.
+
+## Recording
+
+```yaml
+recording:
+  enabled: true
+```
+
+Off unless a persona says so. On, the server keeps every voice that crossed the wire with an Opus client (the walkie) as Ogg Opus files: each press of the button (whether or not it became a turn), each spoken answer, and both sides of anything a skill holds the mic and speaker for (a claim). Books, music, radio, earcons and the waiting cue are not recorded as audio; the log says what played, when and how it ended. PCM clients (the PWA) are never recorded.
+
+Files go to `data/recordings/YYYY/MM/DD/` (UTC) inside the persona's directory, one per segment, named `HHMMSS-<connection>-<n>-<source>[-<label>].ogg`; each also gets a `recorder.segment` log line ([Recordings](../observability.md#recordings)). Nothing is pruned: 40 to 60 minutes of voice a day is about 3 to 4 GB a year. Recording people is a decision for whoever runs the persona: everyone recorded, including the other side of a conversation, should know.
+
+`enabled` is the only key; anything else fails the load (a typo must not leave a persona believed recorded but not).
 
 ## Where personas live
 

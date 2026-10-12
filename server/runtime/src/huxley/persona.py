@@ -55,6 +55,20 @@ class LanguageOverride(BaseModel):
     ui_strings: dict[str, str] = Field(default_factory=dict)
 
 
+class RecordingConfig(BaseModel):
+    """The persona's `recording:` block. Off unless `enabled: true`.
+
+    On, the server keeps every voice that crossed the wire (each press,
+    each spoken answer, both sides of a skill's claim) as Ogg Opus files
+    under `<data_dir>/recordings/`, and the rest of what the speaker
+    played as `recorder.segment` log lines. See `huxley.server.recorder`.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    enabled: bool = False
+
+
 class PersonaSpec(BaseModel):
     """Parsed `persona.yaml`.
 
@@ -90,6 +104,9 @@ class PersonaSpec(BaseModel):
     # "fr"). The default language (`self.language_code`) is NOT a valid
     # key here — its fields live at the top level.
     i18n: dict[str, LanguageOverride] = Field(default_factory=dict)
+
+    # Opt-in audio recording (docs/personas/README.md "Recording").
+    recording: RecordingConfig = Field(default_factory=RecordingConfig)
 
     # Populated by `load_persona` from the persona file's parent directory.
     # Not user-settable in YAML (the loader injects it); tests constructing

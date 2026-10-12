@@ -31,6 +31,7 @@ from huxley.cost import CostTracker
 from huxley.focus.manager import FocusManager
 from huxley.loader import discover_skills
 from huxley.reconnect import no_signal_tone_pcm, run_reconnect_loop
+from huxley.server.recorder import Recorder
 from huxley.state.machine import StateMachine
 from huxley.storage.backup import ensure_daily_snapshot
 from huxley.storage.db import Storage
@@ -218,6 +219,9 @@ class Application:
         # `start()` runs `setup_all` (None otherwise), so a skill disabled
         # by a failed setup can have its tasks cancelled.
         self._setup_task_handles: dict[str, list[BackgroundTaskHandle]] | None = None
+        # The persona's recorder while it runs (`recording: {enabled:
+        # true}`), attached to the shared AudioServer. None when off.
+        self._recorder: Recorder | None = None
 
     @property
     def active_language(self) -> str | None:
@@ -426,6 +430,8 @@ class Application:
         self.state_machine.on_enter(AppState.CONNECTING, self._enter_connecting)
         self.state_machine.on_transition(self._on_state_transition)
 
+        await self._start_recorder()
+
         await logger.ainfo(
             "huxley_app_ready",
             persona=self.persona.name,
@@ -479,6 +485,15 @@ class Application:
 
     async def shutdown(self) -> None:
         """Tear down all subsystems in reverse order."""
+        try:
+            await self._shutdown_subsystems()
+        finally:
+            # Last, and even when a step above raised: the recorder's open
+            # files are closed and renamed, its thread stopped.
+            await self._stop_recorder()
+        await logger.ainfo("huxley_stopped")
+
+    async def _shutdown_subsystems(self) -> None:
         await logger.ainfo("huxley_shutting_down")
         self._shutting_down = True
         # Stop content and the coordinator's timers first: the AudioServer
@@ -532,7 +547,35 @@ class Application:
         await self.task_supervisor.stop()
         await self.storage.close()
 
-        await logger.ainfo("huxley_stopped")
+    async def _start_recorder(self) -> None:
+        """Record this persona's conversations if its `recording:` block
+        says so. A recorder that can't start is logged and skipped: the
+        persona runs, unrecorded, rather than not at all."""
+        if not self.persona.recording.enabled:
+            return
+        recorder = Recorder(self.persona.data_dir)
+        try:
+            recorder.start()
+        except Exception as exc:
+            await logger.aexception(
+                "recorder.write_failed",
+                op="start",
+                error=f"{type(exc).__name__}: {exc}",
+                note="running without recording",
+            )
+            return
+        self._recorder = recorder
+        self.server.attach_recorder(recorder)
+
+    async def _stop_recorder(self) -> None:
+        """Last step of shutdown: close open segments, flush, stop the
+        writer thread. Detaches only if this app's recorder is still the
+        attached one (a swap's new persona may have attached its own)."""
+        recorder, self._recorder = self._recorder, None
+        if recorder is None:
+            return
+        self.server.detach_recorder(recorder)
+        await recorder.aclose()
 
     # --- State machine callbacks ---
 

@@ -32,10 +32,11 @@ Every log event uses a dotted namespace + direction prefix. This makes events `g
 | `server.rx.*`  | Messages received from the audio client                 | `server.rx.ptt_start`, `server.rx.ptt_stop`, `server.rx.wake_word`                                                                                  |
 | `server.tx.*`  | Messages sent to the audio client                       | `server.tx.state`, `server.tx.model_speaking`, `server.tx.audio_stats` (once a second while audio flows: audio sent vs what the socket still holds; see [Opus audio](#opus-audio-the-walkies-wire-format)) |
 | `app.*`        | Application orchestration (lifecycle, guard rejections) | `app.session_end`, `app.ptt_rejected`                                                                                                               |
+| `recorder.*`   | The recorder (persona opt-in; see [Recordings](#recordings)) | `recorder.segment`, `recorder.write_failed`                                                                                                    |
 | `<skill>.*`    | Per-skill events (skill author owns the namespace)      | `audiobooks.resolve`, `audiobooks.stream_started`, `system.volume_set`                                                                              |
 | `client.*`     | Telemetry forwarded from the audio client (web/ESP32)   | `client.silence_timer_started`, `client.thinking_tone_on`                                                                                           |
 
-A skill named `audiobooks` emits events like `audiobooks.factory_built`, `audiobooks.stream_ended`. The framework reserves `coord.`, `focus.`, `background.`, `session.`, `server.`, `app.`, `client.`; everything else is skill territory.
+A skill named `audiobooks` emits events like `audiobooks.factory_built`, `audiobooks.stream_ended`. The framework reserves `coord.`, `focus.`, `background.`, `session.`, `server.`, `app.`, `recorder.`, `client.`; everything else is skill territory.
 
 The `client.*` events come in via the `client_event` WebSocket message type — clients emit `{"type": "client_event", "event": "<name>", "data": {...}}` and the server logs them as `client.<name>` with the data fields spread. A data field named like one of the log line's own keys (`event`, `level`, `timestamp`, `logger`, `exc_info`, `stack_info`, `conn_id`) is logged as `client_<key>`: the firmware's `huxley.firmware_log` carries the board's level (`W`, `E`, `I`) as `client_level`, while `level` stays the server's (`info`). Pure observability — the framework takes no action. This closes the "client-side blackbox" gap; thinking-tone state, silence-timer fires, and PTT UI transitions are now visible in the same log file as the server-side flow.
 
@@ -418,6 +419,40 @@ A client that connects with `?audio=opus` gets binary Opus packets instead of ba
 - **`server.tx.opus_cancelled`** (debug): the task sending a sound was cancelled (barge-in, a pause) while writing it; its `dropped_packets` and `dropped_pcm_ms` were dropped and the encoder reset, as a cancelled PCM send's remaining chunks never go out.
 - **`server.tx.opus_encode_failed`** / **`server.rx.opus_decode_failed`** (warning): libopus refused a frame. The encoder drops its pending audio and restarts; a mic packet that fails to decode is dropped (`packet_bytes`, `error`, running `errors` count) and the connection stays up. Repeated decode failures mean the client's encoder does not match `audio_params`.
 - **`server.tx.opus_before_hello_dropped`** (debug): audio for a connection whose hello was not out yet (a reconnect while something played) was dropped, so the client never sees binary before the hello that announces it.
+
+## Recordings
+
+A persona with `recording: {enabled: true}` ([persona fields](./personas/README.md#recording)) keeps every voice that crossed the wire with an Opus client as an Ogg Opus file, and everything else its speaker played as log lines (T1.43, [remote-operation W3](./remote-operation.md#w3-recording)). Nothing else is stored: no database, no transcripts beyond the ones already logged.
+
+What is recorded, from the two points where Opus crosses the wire (`huxley.server.recorder`, tapped in `AudioServer`):
+
+- **Speaker**: each packet as it was written to the socket. Audio queued and then dropped (by `audio_clear`, or a cancelled sender) never reached the client and is not in the file.
+- **Mic**: each packet the client sent, as it arrived, before decoding or any gating. A press too short or too quiet to commit, and a packet that fails to decode, are kept.
+- PCM clients (the PWA) are not recorded (`recorder.skipped_pcm_client`, once per connection).
+
+The speaker's **source** comes from the control frames the client got, in this order: `claim` (between `claim_started` and `claim_ended`: the claim's speaker audio, e.g. the other side of a conversation a skill holds), `stream` (between `stream_started` and `stream_ended`), `model` (while `model_speaking` is true), else `sound` (earcons, the waiting cue, tones). Files are written only for voices: `mic` (one per press, one per claim), `model` (one per `model_speaking` span) and `claim` (one per claim). `stream` and `sound` segments are timeline lines only.
+
+| Event                            | When                                                                                                                                                                       | Key fields                                                                                    |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `recorder.started` / `.stopped`  | The persona's recorder came up (app start) / finished (shutdown, swap, reload: open segments closed, files renamed, thread stopped).                                       | `path`, `max_queued_packets` / `segments`, `files`, `dropped`, `unattributed_drops`           |
+| `recorder.segment`               | A segment ended. One line per file, and one per stream or sound stretch.                                                                                                   | see below                                                                                     |
+| `recorder.write_failed` (warn)   | A disk operation failed (`op`: `open`, `write`, `close`, `rename`, `discard`, `start`, `stop`, `handle`). Audio is never affected; the segment goes on as a timeline line. | `op`, `error`, `path`, `source`, `conn_id`                                                    |
+| `recorder.skipped_pcm_client`    | A PCM client connected while recording is on.                                                                                                                              | `conn_id`, `audio_format`                                                                     |
+| `server.tx.audio_dropped_no_client` | Audio was sent with no client connected (it goes nowhere). First one at once, then at most every 5 s, plus what is pending when a client connects. Logged recording or not. | `count` (`send_audio` calls), `audio_ms`                                                  |
+
+`recorder.segment` fields: `source` (`mic`, `model`, `stream`, `claim`, `sound`), `label` (the stream's label, or the claim's title, falling back to its skill; mic segments during a claim carry the claim's), `start` / `end` (ISO UTC, wall clock of the first and last packet), `duration_ms` (sum of the packets' own durations, read from each TOC byte), `packets`, `bytes`, `path` (relative to the persona's data dir; `null` for timeline-only segments), `end_reason`, `cut_by_clear`, `dropped` (packets the writer queue had no room for), `conn_id`; plus `stream_id` / `claim_id` when set, `invalid` (packets that are not valid Opus: counted, not written), `retagged_from` and `error` when they apply.
+
+`end_reason`: `model_done` (`model_speaking` false), the frame's own reason for streams and claims (`natural`, `interrupted`, `user_ptt`, `preempted`, ...), `ptt_start` / `ptt_stop` (mic), `audio_clear` (with `cut_by_clear=true`), `next_source` (something else took the speaker), `idle` (a sound, or mic packets outside a press or claim, with nothing for 2 s), `disconnect`, `evicted`, `recorder_replaced` (a swap), `shutdown`.
+
+**Finding a segment's file**: `<persona dir>/data/<path>`, e.g. `server/personas/abuelos/data/recordings/2026/10/12/153000-ab12cd34-003-model.ogg`. Names are `HHMMSS-<conn_id>-<seq>-<source>[-<label>].ogg` in UTC, so a directory listing is a timeline and `conn_id` matches every other log line of that connection. A `.ogg.part` is a file still being written, or one a crash cut short (playable up to its last second). To list a day's voices:
+
+```
+grep '"recorder.segment"' logs/huxley.log | jq -r 'select(.path) | "\(.start) \(.source) \(.label // "") \(.duration_ms)ms \(.path)"'
+```
+
+**One correction the source inference makes**: a stream's or claim's first packets can be written a few ms before its `stream_started` / `claim_started` (the pump runs while the coordinator announces it; `model_speaking` is already true for them, as it is for anything that owns the speaker). A `model` segment younger than 0.5 s when a stream or claim starts is taken as that stream's or claim's start: `retagged_from=model`, its file dropped for a stream, kept and named for a claim.
+
+**Not in v1**: turn ids on `transcript` and cost lines (to join a file to its transcript, match times); what the walkie actually played (the file is what was sent; its discarded ms on `audio_clear` are not reported yet); call transcription.
 
 ## When something looks wrong
 

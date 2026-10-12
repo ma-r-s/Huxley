@@ -1,7 +1,7 @@
 # Running the walkie from afar
 
 **Status**: plan, 2026-10-12, reviewed by two critics (server and firmware).
-Not built. Triage: [T1.43](./triage.md) (this plan), [T1.42](./triage.md)
+Built so far: log retention (W1) and recording v1 (W3). Triage: [T1.43](./triage.md) (this plan), [T1.42](./triage.md)
 (the caregiver's view, its front page).
 
 **The ask** (Mario, 2026-10-12): the walkie goes to grandpa at his retirement
@@ -31,7 +31,7 @@ else must work, fail and recover through one outbound connection.
 | Wi-Fi              | One network compiled in; open networks refused; no list; no roaming. WebSocket retries every 2 s forever.                                                                                                                                                                                                                                                                               | A changed password or a login page and it's dead. During a long outage at Mario's house it would hammer a 4G SIM with TLS handshakes. |
 | Hangs              | Task watchdog only logs. F-0023 (go back after repeated crashes) queued. The power rocker isn't reachable with the case closed. A reset while the expander's line is low can still boot download mode (F-0020's fix is software polling).                                                                                                                                               | A hang, or an unlucky reset at low battery, and only a power cut fixes it. Nobody there can do one.                                   |
 | Battery            | Not wired (F-0025). No charging detection (the charger's STAT drives only the LED). Never drained to cutoff and recharged. Wi-Fi power save off ("mains-powered").                                                                                                                                                                                                                      | No level, no warning, unknown behaviour at 0 %.                                                                                       |
-| Recording          | No audio stored. Transcripts (user via whisper-1, assistant text) logged and kept per session; `transcript` and cost lines carry no turn id.                                                                                                                                                                                                                                            | Nothing to listen to.                                                                                                                 |
+| Recording          | Recorder built (W3 v1), off in every persona. Transcripts (user via whisper-1, assistant text) logged and kept per session; `transcript` and cost lines carry no turn id.                                                                                                                                                                                                               | Nothing to listen to.                                                                                                                 |
 | Logs               | Per-run files, last 10 kept, pruned at each start (`logging.py:33-75`). ~15 MB a day.                                                                                                                                                                                                                                                                                                   | A few days of restarts erase what happened.                                                                                           |
 | Backups            | A DB snapshot only when the app starts, same disk, 7 kept.                                                                                                                                                                                                                                                                                                                              | A Pi that dies takes grandpa's data with it.                                                                                          |
 | Cost               | Kill switch at USD 20/day, then auto-reconnect resumes; the day rolls over at 19:00 in Colombia.                                                                                                                                                                                                                                                                                        | "Credits out" means a beeping device.                                                                                                 |
@@ -144,25 +144,44 @@ walkie --2.4 GHz--> their router --> wss://<host> (Cloudflare edge) --tunnel--> 
 A framework mechanism, opt-in per persona (`recording: {enabled: true}`),
 over the three streams the framework already owns (mic, speaker, events).
 
-- **Tap what was written, not what was handed over**: queued audio is
-  dropped on cancel and on `audio_clear` (`server.py:1127`, `:1560`), and
-  with no client it is dropped silently (`_send_raw` returns 0; add
-  `server.tx.audio_dropped_no_client`). Record what `_drain_opus` wrote; mic
-  from `_on_audio_frame` (`server.py:753`, `:1012`), including presses that
-  never committed (T1.35).
-- **Store the Opus packets as they are** (the walkie is Opus both ways at 32
-  kbit/s; nothing to re-encode). PCM clients are dev only: skipped.
-- **Sources** (framework words): `model` (response id, turn), `sound`
-  (earcons, the T1.41 waiting cue, tones), `stream:<label>`,
-  `claim:<skill>`. A call needs no extra tap: the peer leg comes through the
-  claim's speaker pump into `send_audio`, the mic leg through
-  `_on_audio_frame`, both tagged by the active claim.
-- **Writer thread** with a bounded queue that drops and counts (never blocks
-  the event loop), on the eMMC/SSD, never the HDD. Files written as `.part`
-  and renamed when closed; Ogg stays playable if a power cut truncates it.
-- **One `recorder.segment` log line per file** (source, turn, start, end,
-  path, bytes); `turn` bound on `transcript` and `cost.response_done` lines;
-  tokens per response logged, not only the daily total.
+**v1 built 2026-10-12** (`huxley.server.recorder`, `ogg_opus.py`; events
+and file layout in [observability](./observability.md#recordings)). Off in
+every persona: grandpa's gets it at the production cutover.
+
+Built:
+
+- **Tap what was written, not what was handed over**: speaker packets are
+  recorded in `_drain_opus` as each is written, so audio dropped by
+  `audio_clear` or a cancel is not in the file. Audio sent with no client
+  is logged now (`server.tx.audio_dropped_no_client`, rate-limited, with a
+  count). Mic packets are recorded raw in `_on_opus_packet`, before
+  decoding (not `_on_audio_frame`, which only sees PCM), so presses that
+  never committed (T1.35) and packets that fail to decode are kept.
+- **Opus packets stored as they are**, in Ogg (own muxer, granule from each
+  packet's TOC). PCM clients skipped, said once per connection.
+- **Sources** (framework words), from the control frames the client got:
+  `claim` (label: its title or skill), `stream` (label), `model`, `sound`.
+  Files for voices only: mic per press and per claim, `model` per
+  `model_speaking` span, `claim` per claim (the peer leg); `stream` and
+  `sound` are log lines. Found in the 2026-10-12 log: `model_speaking`
+  is a "speaker owned" flag (streams and claim pumps raise it too) and
+  arrives about 0.3 ms before `stream_started`, so a stream's or claim's
+  first packets looked like model audio; a `model` segment under 0.5 s
+  old when a stream or claim starts is retagged to it.
+- **Writer thread** with a bounded queue (3000 packets) that drops and
+  counts (never blocks the event loop; control frames are never dropped).
+  Files written as `.ogg.part`, fsynced and renamed when closed. On the
+  persona's data dir: on the Pi that must be the eMMC/SSD, never the HDD.
+- **One `recorder.segment` log line per segment** (source, label, start,
+  end, duration, packets, bytes, path, end reason, `cut_by_clear`,
+  dropped, `conn_id`).
+
+Left:
+
+- **Turn ids**: `model` segments carry no response id or turn yet (the
+  AudioServer doesn't know them); `turn` bound on `transcript` and
+  `cost.response_done` lines; tokens per response logged, not only the
+  daily total. Until then a file is joined to its transcript by time.
 - **Heard, not sent**: the coordinator's playhead estimate
   (`coordinator.py:1476-1488`) gives speaker time; the walkie reports how
   many ms it discarded on each `audio_clear` and its underrun ms in the
