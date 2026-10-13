@@ -762,18 +762,27 @@ def rule_spotify(i: Inputs) -> Item | None:
         )
     down_since: datetime | None = None
     logged_out: Event | None = None
+    reached = False  # this server process has reached the player at least once
     for e in app:
         if e.name == "spotify.ws_state":
             if e.get("connected"):
                 down_since = None
+                reached = True
             elif down_since is None:
                 down_since = e.ts
         elif e.name == "spotify.auth_state":
             logged_out = None if e.get("logged_in") else e
         elif e.name == "spotify.unavailable" and e.get("reason") == "player_not_paired":
             logged_out = e
-    if down_since is not None and i.now - down_since >= timedelta(
-        minutes=i.th.spotify_down_minutes
+    # Open, and the server restarted without reaching the player since:
+    # still down. Each reboot of a flickering power supply closed it
+    # ("Spotify is working again") while Soloist was dead, and reopened it
+    # minutes later (2026-10-13).
+    held = not reached and "spotify.down" in i.was_open and (failed is None)
+    if held and down_since is None:
+        down_since = app[0].ts if app else i.now
+    if down_since is not None and (
+        held or i.now - down_since >= timedelta(minutes=i.th.spotify_down_minutes)
     ):
         return Item(
             "spotify.down",

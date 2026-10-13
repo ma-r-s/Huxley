@@ -67,7 +67,7 @@ archive's list, from the data `/day/YYYY-MM-DD.json` serves).
   action chip ("42 h", "Walkie offline", "Check charger").
 - **Tiles**: walkie (online since, or away and last seen), Wi-Fi (rssi and
   bars), audio gaps over the last 3 h (meter against the threshold),
-  server (up, or "not ready" when its `/health` says so; uptime, the walkie's firmware), battery (percent and volts from `client.system.battery`; "not wired" or "not reported" until a reading),
+  server (up, or "not ready" when its `/health` says so; uptime, the walkie's firmware; "N restarts today, M unclean" when any start today had no stop before it: power cuts or crashes), battery (percent and volts from `client.system.battery`; "not wired" or "not reported" until a reading),
   OpenAI (this month's budget left, see "OpenAI budget"; without a limit,
   today's spend, or the balance you entered).
 - **Today, hour by hour**: three lanes from midnight: the walkie connected
@@ -213,7 +213,7 @@ card.
 | `openai.balance`       | only with no monthly limit known: the balance you entered minus the spend since is under USD 5 or 7 days at the last week's pace | 20 % past both                                        |
 | `openai.spend_today`   | the server's `bug_canary` or `kill_switch` cost threshold today                                                | local midnight                                        |
 | `books.hours`          | under 2 h of audiobook time left this month, or `spotify.book_hours_out` / `start_refused cause=book_no_hours` | 20 % past it; 30 s of a book playing; the month turns |
-| `spotify.down`         | Spotify's setup failed, Soloist unreachable 10 min, or the player logged out                                   | connected and logged in                               |
+| `spotify.down`         | Spotify's setup failed, Soloist unreachable 10 min, or the player logged out                                   | connected and logged in; a server restart doesn't clear it until the new server reaches the player |
 | `telegram.down`        | Telegram's setup failed or its credentials are missing                                                         | `telegram.transport.connected`                        |
 | `disk.full`            | the disk holding the logs is 80 % full                                                                         | under 75 %                                            |
 | `watch.logs`           | the logs can't be found or have nothing in the lookback                                                        | they can                                              |

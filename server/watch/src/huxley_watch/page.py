@@ -89,7 +89,7 @@ main{max-width:1040px;margin:0 auto;padding:20px 16px 48px}
 .tile .lab{font-size:12px;color:var(--mute);display:flex;align-items:center;gap:6px}
 .tile .lab i{width:8px;height:8px;border-radius:50%;display:inline-block}
 .tile .val{font-size:26px;font-weight:620;margin-top:6px;letter-spacing:-.01em;white-space:nowrap}
-.tile .sub{font-size:12px;color:var(--ink2);margin-top:2px;min-height:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tile .sub{font-size:12px;color:var(--ink2);margin-top:2px;min-height:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tile .sub.warnt{color:var(--ink);font-weight:600}
 .meter{height:8px;border-radius:4px;background:var(--grid);margin-top:10px;overflow:hidden}
 .meter i{display:block;height:100%;border-radius:4px}
 .meter.hatch{background:repeating-linear-gradient(45deg,var(--grid) 0 4px,transparent 4px 8px)}
@@ -377,14 +377,26 @@ def _tiles(t: dict[str, Any]) -> str:
         )
     sv = t["server"]
     sub = ", ".join(x for x in (sv["up"], f"fw {sv['firmware']}" if sv["firmware"] else "") if x)
+    # Starts today with no stop before them: power cuts or crashes.
+    restarts = (
+        f'<div class="sub warnt">{sv["starts_today"]} restarts today, {sv["unclean_today"]} unclean</div>'
+        if sv.get("unclean_today")
+        else ""
+    )
     if sv["running"] is None:
-        server = _tile("Server", "?", sub, "mute")
+        server = _tile("Server", "?", sub, "mute", restarts)
     elif sv["running"] and sv.get("ready") is False:
         # Up, but its own /health says the persona or the voice session isn't.
-        server = _tile("Server", "Up", ", ".join(x for x in ("not ready", sub) if x), "warn")
+        server = _tile(
+            "Server", "Up", ", ".join(x for x in ("not ready", sub) if x), "warn", restarts
+        )
     else:
         server = _tile(
-            "Server", "Up" if sv["running"] else "Down", sub, "good" if sv["running"] else "crit"
+            "Server",
+            "Up" if sv["running"] else "Down",
+            sub,
+            "good" if sv["running"] else "crit",
+            restarts,
         )
     bt = t["battery"]
     if bt["pct"] is not None:

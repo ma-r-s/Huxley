@@ -131,6 +131,7 @@ def _books(i: Inputs) -> dict[str, Any]:
 
 def _tiles(i: Inputs) -> dict[str, Any]:
     w, s, now, tz = i.walkie, i.server, i.now, i.tz
+    midnight = datetime.combine(now.astimezone(tz).date(), datetime.min.time(), tz)
     g = gaps_since(i.events, now - timedelta(hours=i.th.gap_window_hours), tz, w.conns, i.bench)
     enough = g.played_s >= i.th.gap_min_played_s
     pct = round(g.share * 100, 1) if enough else None
@@ -153,6 +154,10 @@ def _tiles(i: Inputs) -> dict[str, Any]:
             "ready": i.health_ok,
             "up": short(now - s.started_at) if s.running and s.started_at else None,
             "firmware": w.version,
+            # Since local midnight: a flickering power supply shows here
+            # (each cut is a start with no stop before it).
+            "starts_today": sum(1 for t in s.starts if t >= midnight),
+            "unclean_today": sum(1 for t in s.unclean if t >= midnight),
         },
         "battery": {
             "wired": i.battery.wired,

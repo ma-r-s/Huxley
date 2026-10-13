@@ -609,6 +609,23 @@ def test_soloist_unreachable_ten_minutes_opens_and_reconnect_clears() -> None:
     assert rule_spotify(inputs(flat(BOOT, down, ws(ago(minutes=1), True)))) is None
 
 
+def test_soloist_down_stays_open_across_a_restart() -> None:
+    """2026-10-13, power flickering: each reboot started a new server, the
+    rule only looked at that server's lines, and "Soloist down" closed
+    ("working again") while Soloist was dead, to reopen ten minutes later."""
+    before = [ws(ago(minutes=m), False) for m in (40, 35, 30)]
+    was = frozenset({"spotify.down"})
+    restarted = flat(BOOT, before, starting(ago(minutes=3)), ws(ago(minutes=2), False))
+    held = rule_spotify(inputs(restarted, was_open=was))
+    assert held is not None and held.label == "Soloist down"
+    quiet = flat(BOOT, before, starting(ago(minutes=1)))  # nothing from the new server yet
+    assert rule_spotify(inputs(quiet, was_open=was)) is not None
+    back = flat(BOOT, before, starting(ago(minutes=3)), ws(ago(minutes=1), True))
+    assert rule_spotify(inputs(back, was_open=was)) is None
+    # Not open before the restart: a two-minute outage still opens nothing.
+    assert rule_spotify(inputs(restarted)) is None
+
+
 def test_spotify_logged_out_and_back() -> None:
     lines = flat(BOOT, ws(ago(hours=1), True), auth(ago(minutes=30), False))
     item = rule_spotify(inputs(lines))

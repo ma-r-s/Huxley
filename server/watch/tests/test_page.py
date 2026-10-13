@@ -128,7 +128,14 @@ def test_tiles() -> None:
     assert t["wifi"] == {"rssi": -48, "bars": 4}
     assert t["audio"]["gap_pct"] == 9.1
     assert t["audio"]["over"] is True
-    assert t["server"] == {"running": True, "ready": None, "up": "3 d", "firmware": "5d89504f"}
+    assert t["server"] == {
+        "running": True,
+        "ready": None,
+        "up": "3 d",
+        "firmware": "5d89504f",
+        "starts_today": 0,
+        "unclean_today": 0,
+    }
     assert t["battery"]["pct"] is None
     assert t["battery"]["wired"] is None  # nothing either way: "not reported"
     assert t["openai"]["balance_left_usd"] is None
@@ -369,6 +376,25 @@ def test_battery_chart_empty_states() -> None:
     lines = flat(DAY, fw(ago(minutes=30), "w1", "battery.not_wired probe=gpio6"))
     chart = render(status_for(lines)).split('id="battery"')[1].split("</section>")[0]
     assert ">not wired<" in chart
+
+
+def test_the_server_tile_counts_todays_unclean_restarts() -> None:
+    """Flickering power: each cut is a start with no stop before it."""
+    lines = flat(
+        DAY,
+        starting(ago(hours=3)),
+        starting(ago(hours=2)),
+        starting(ago(minutes=30)),
+    )
+    status = status_for(lines)
+    sv = status["tiles"]["server"]
+    assert sv["unclean_today"] >= 3 and sv["starts_today"] >= sv["unclean_today"]
+    page = render(status)
+    assert f">{sv['starts_today']} restarts today, {sv['unclean_today']} unclean<" in page
+
+
+def test_no_restart_line_on_a_clean_day() -> None:
+    assert "restarts today" not in render(status_for(DAY))
 
 
 def test_server_up_but_not_ready() -> None:
