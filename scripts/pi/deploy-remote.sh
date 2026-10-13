@@ -1,6 +1,8 @@
 #!/bin/sh
 # Runs ON the Pi (called by scripts/pi/deploy.sh). Checks the walkie is
-# idle BEFORE touching the working tree, then fast-forwards, syncs, marks
+# idle BEFORE touching the working tree, then fast-forwards to exactly
+# <commit> (a later push to the Pi doesn't change what a waiting deploy
+# installs), syncs, marks
 # the restart in bench.jsonl, restarts the user unit and waits for /health
 # to report the new commit. Result line in /tmp/huxley-deploy.result.
 #   deploy-remote.sh <commit> [--force | --when-idle]
@@ -26,7 +28,7 @@ if [ "$mode" = "--when-idle" ]; then
 elif [ "$mode" != "--force" ]; then
   if why=$(busy); then echo "busy: $why (use --force or --when-idle)" | tee "$result"; exit 3; fi
 fi
-cd "$HOME/huxley" && git pull -q --ff-only && "$HOME/.local/bin/uv" sync -q
+cd "$HOME/huxley" && git fetch -q && git merge -q --ff-only "$want" && "$HOME/.local/bin/uv" sync -q
 start=$(date -u +%Y-%m-%dT%H:%M:%SZ); end=$(date -u -d '+3 min' +%Y-%m-%dT%H:%M:%SZ)
 echo "{\"start\": \"$start\", \"end\": \"$end\", \"what\": \"link test: deploy $want\"}" >> "$logs/bench.jsonl"
 systemctl --user restart huxley.service
