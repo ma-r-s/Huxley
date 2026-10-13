@@ -21,7 +21,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from huxley_watch.activity import presses, segments
-from huxley_watch.alerts import AlertState, Sender, deliver, load_state, plan, save_state
+from huxley_watch.alerts import (
+    AlertState,
+    Sender,
+    deliver,
+    load_state,
+    plan,
+    read_state,
+    save_state,
+)
 from huxley_watch.bench import Bench, BenchReader
 from huxley_watch.config import Config, ConfigError, in_range, load_config
 from huxley_watch.dayview import Archive
@@ -158,6 +166,23 @@ class Watcher:
             page_url=self.cfg.page_url,
         )
 
+    def _sync_state(self) -> None:
+        """Adopt the state file if another process wrote it (a `--once`
+        check run beside the service): otherwise this process would announce
+        again what that one already said, from its stale memory. A file
+        that is missing or can't be read is ignored: the memory stays, so a
+        broken file never makes every cycle re-announce the open items."""
+        got = read_state(self.cfg.state_file)
+        if not isinstance(got, AlertState) or got == self.state:
+            return
+        self.log.info(
+            "watch.state_reloaded",
+            open_before=sorted(self.state.open),
+            open_now=sorted(got.open),
+            pending=len(got.pending),
+        )
+        self.state = got
+
     def _fenced(self, step: str, fn: Callable[[], Any], default: Any) -> Any:
         try:
             return fn()
@@ -171,6 +196,7 @@ class Watcher:
         self._reload()
         cfg = self.cfg
 
+        self._sync_state()
         result = self.reader.read(now)
         logs_problem = None
         if not cfg.logs_dir.is_dir():

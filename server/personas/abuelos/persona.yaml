@@ -207,6 +207,12 @@ system_prompt: |
 recording:
   enabled: true
 
+# Said when OpenAI can't answer him (no credit, a spend limit, a long
+# outage): at the release of a press with no session after a minute down
+# or a refusal, or for a question OpenAI refused. Until the file exists,
+# the double beep (T1.43).
+unavailable_sound: sounds/unavailable.wav
+
 constraints:
   - never_say_no
   - echo_short_input

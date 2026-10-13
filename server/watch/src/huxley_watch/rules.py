@@ -476,12 +476,18 @@ def rule_openai_down(i: Inputs) -> Item | None:
 
 
 def _refused(e: Event, codes: frozenset[str]) -> bool:
-    """OpenAI refused for one of these codes: an error in the session, or
-    the traceback of a failed connect. An HTTP 429 alone is a rate limit:
-    it counts as a failed connect (openai.down), not here."""
-    if e.name == "session.rx.error":
+    """OpenAI refused for one of these codes: an error in the session, a
+    refused answer (`session.response_refused`, from an error or a failed
+    `response.done`), or a failed connect (its `refused` field, read from
+    the response body since T1.43; older servers only had the traceback,
+    which says "HTTP 429" without the code). An HTTP 429 alone is a rate
+    limit: it counts as a failed connect (openai.down), not here."""
+    if e.name in ("session.rx.error", "session.response_refused"):
         return str(e.get("code") or "") in codes
     if e.name == "connection_failed":
+        refused = str(e.get("refused") or "")
+        if refused:
+            return refused in codes
         text = str(e.get("exception") or "")
         return any(code in text for code in codes)
     return False

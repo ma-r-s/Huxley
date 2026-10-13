@@ -22,6 +22,7 @@
 #include "nvs.h"
 
 #include "hux_board.h"
+#include "hux_echo.h"
 
 static const char *TAG = "hux_audio";
 
@@ -124,6 +125,54 @@ static _Atomic uint32_t s_h_discarded_bytes = 0;
 #define VOLUME_NVS_NS  "hux_audio"
 #define VOLUME_NVS_KEY "volume"
 
+/* The amp's state, for the call stats (F-0031). */
+static _Atomic bool s_pa_on = false;
+
+static bool pa_write(bool on) {
+    bool ok = hux_board_tca_write(HUX_TCA_AUDIO_PA_EN, on);
+    if (ok) {
+        atomic_store(&s_pa_on, on);
+    }
+    return ok;
+}
+
+/* The call's echo mode and jitter buffer (F-0031), kept in NVS beside the
+ * volume: `echo off|shadow|on` (shadow by default: the first real calls
+ * measure), `calljb <ms>` (240 by default). */
+#define ECHO_NVS_KEY   "echo"
+#define CALLJB_NVS_KEY "calljb"
+static _Atomic int s_echo_mode = HUX_ECHO_MODE_SHADOW;
+static _Atomic int s_call_jb_ms = 240;
+
+static void call_settings_load(void) {
+    nvs_handle_t h;
+    if (nvs_open(VOLUME_NVS_NS, NVS_READONLY, &h) != ESP_OK) {
+        return;
+    }
+    uint8_t m = 0;
+    uint16_t jb = 0;
+    if (nvs_get_u8(h, ECHO_NVS_KEY, &m) == ESP_OK && m <= HUX_ECHO_MODE_ON) {
+        atomic_store(&s_echo_mode, (int)m);
+    }
+    if (nvs_get_u16(h, CALLJB_NVS_KEY, &jb) == ESP_OK && jb >= 100 && jb <= 1000) {
+        atomic_store(&s_call_jb_ms, (int)jb);
+    }
+    nvs_close(h);
+}
+
+static void call_setting_save(const char *key, int value, bool wide) {
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(VOLUME_NVS_NS, NVS_READWRITE, &h);
+    if (err == ESP_OK) {
+        err = wide ? nvs_set_u16(h, key, (uint16_t)value) : nvs_set_u8(h, key, (uint8_t)value);
+        if (err == ESP_OK) {
+            err = nvs_commit(h);
+        }
+        nvs_close(h);
+    }
+    ESP_LOGW(TAG, "audio.call_setting %s=%d saved=%s", key, value, esp_err_to_name(err));
+}
+
 /* The saved level, or SPK_VOLUME_DEFAULT (none yet, or out of range). */
 static int volume_saved(void) {
     uint8_t v = 0;
@@ -203,6 +252,17 @@ static _Atomic uint32_t s_spk_clear_done = 0;
  * the downlink at 40% of real time for 8 s gave 25 dropouts before. */
 #define SPK_REBUFFER_MS     1000
 #define SPK_REBUFFER_BYTES  (SPK_REBUFFER_MS * 48)  /* 24 kHz mono PCM16 */
+/* In a call (F-0031) the buffer is a call's, not a stream's: 240 ms by
+ * default (`calljb`), as VoIP does; 1 s of cushion was 1 s added to every
+ * exchange and to the echo the far end heard. Above the target + 160 ms
+ * (a stall's backlog arriving at once) it trims back down, in a quiet
+ * chunk if one comes within 2 s. */
+#define SPK_CALL_TRIM_OVER_MS 160
+#define SPK_CALL_TRIM_WAIT_MS 2000
+#define SPK_CALL_QUIET        3.2e-5f /* -45 dBFS: a pause in the far end's speech */
+static _Atomic bool s_call = false;
+/* Ring depth over the stats window, and trims (the mic task's line takes them). */
+static _Atomic uint32_t s_call_ring_min = UINT32_MAX, s_call_ring_max = 0, s_call_trims = 0;
 #define SPK_REBUFFER_MAX_MS 4000
 /* Dry this many chunks in a row first: a 20 ms timing blip at the edge of
  * an empty ring shouldn't cost a 1 s pause (F-0022 review). */
@@ -279,6 +339,12 @@ static _Atomic bool s_mic_parked = true;
  * single-writer (mic task). */
 static uint8_t s_raw_buf[FRAME_RAW_BYTES];
 static int16_t s_mono_buf[FRAME_SAMPLES];
+/* The call's echo suppressor (F-0031): the reference channel of the frame,
+ * and its state (mic task only). */
+static int16_t s_ref_buf[FRAME_SAMPLES];
+static hux_echo_t s_echo;
+static uint32_t s_echo_log_ms = 0;
+static bool s_echo_on = false; /* the mic task's view of s_call */
 
 static esp_err_t i2s_bring_up(void) {
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_PORT, I2S_ROLE_MASTER);
@@ -481,6 +547,55 @@ static esp_err_t es8311_bring_up(void) {
  * by `(sample << 16)` for both L and R — the codec reads the high
  * 16 bits as the audio data; the low 16 are zeros. 4x size growth.
  * Note this happens AFTER the ring drain, so the ring holds mono. */
+/* A call's ring past its cap (F-0031): drop it back to the target, in a
+ * quiet chunk if one comes within SPK_CALL_TRIM_WAIT_MS. Speaker task only;
+ * `scratch` is the task's own buffer, rewritten afterwards. */
+static void call_trim(const int16_t *chunk, size_t chunk_bytes, void *scratch, size_t scratch_bytes,
+                      uint32_t *since_ms) {
+    size_t avail = xStreamBufferBytesAvailable(s_spk_ring);
+    uint32_t ms = (uint32_t)(avail / 48);
+    if (ms < atomic_load(&s_call_ring_min)) {
+        atomic_store(&s_call_ring_min, ms);
+    }
+    if (ms > atomic_load(&s_call_ring_max)) {
+        atomic_store(&s_call_ring_max, ms);
+    }
+    uint32_t jb = (uint32_t)atomic_load(&s_call_jb_ms);
+    if (ms <= jb + SPK_CALL_TRIM_OVER_MS) {
+        *since_ms = 0;
+        return;
+    }
+    uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    if (*since_ms == 0) {
+        *since_ms = now;
+    }
+    float power = 0.0f;
+    size_t n = chunk_bytes / 2;
+    for (size_t i = 0; i < n; i++) {
+        float v = (float)chunk[i] / 32768.0f;
+        power += v * v;
+    }
+    bool quiet = n > 0 && power / (float)n < SPK_CALL_QUIET;
+    if (!quiet && now - *since_ms < SPK_CALL_TRIM_WAIT_MS) {
+        return;
+    }
+    size_t drop = (avail - (size_t)jb * 48) & ~(size_t)1;
+    size_t left = drop;
+    while (left > 0) {
+        size_t got = xStreamBufferReceive(s_spk_ring, scratch,
+                                          left < scratch_bytes ? left : scratch_bytes, 0);
+        if (got == 0) {
+            break;
+        }
+        left -= got;
+    }
+    atomic_fetch_add(&s_call_trims, 1);
+    ESP_LOGW(TAG, "spk.call_trim dropped_ms=%u ring_ms=%u jb_ms=%u quiet=%d waited_ms=%u",
+             (unsigned)((drop - left) / 48), (unsigned)ms, (unsigned)jb, quiet,
+             (unsigned)(now - *since_ms));
+    *since_ms = 0;
+}
+
 static void spk_task(void *unused) {
     (void)unused;
     ESP_LOGI(TAG, "spk_task started chunk_ms=%d chunk_bytes=%d ring_bytes=%d",
@@ -518,6 +633,7 @@ static void spk_task(void *unused) {
     bool had_audio = false;
     bool rebuffering = false;
     uint32_t rebuffer_start_ms = 0;
+    uint32_t trim_since_ms = 0; /* a call's ring over its cap since (0: not) */
     uint32_t write_errs = 0;
 
     for (;;) {
@@ -561,20 +677,26 @@ static void spk_task(void *unused) {
                 size_t avail = xStreamBufferBytesAvailable(s_spk_ring);
                 bool active = atomic_load_explicit(&s_stream_active, memory_order_acquire);
                 uint32_t waited = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS) - rebuffer_start_ms;
-                if (avail >= SPK_REBUFFER_BYTES || !active || waited >= SPK_REBUFFER_MAX_MS) {
+                size_t want = atomic_load_explicit(&s_call, memory_order_relaxed)
+                                  ? (size_t)atomic_load(&s_call_jb_ms) * 48
+                                  : SPK_REBUFFER_BYTES;
+                if (avail >= want || !active || waited >= SPK_REBUFFER_MAX_MS) {
                     rebuffering = false;
                     underruns++;
                     atomic_fetch_add(&s_h_underruns, 1);
                     atomic_fetch_add(&s_h_underrun_ms, waited);
                     ESP_LOGW(TAG, "spk.underrun silent_ms=%u count=%u rebuffered ring_ms=%u why=%s",
                              (unsigned)waited, (unsigned)underruns, (unsigned)(avail / 48),
-                             avail >= SPK_REBUFFER_BYTES ? "buffered" : !active ? "reply_end" : "max_wait");
+                             avail >= want ? "buffered" : !active ? "reply_end" : "max_wait");
                     silent_run = 0; /* counted here, not again when audio resumes */
                 }
             }
             if (!rebuffering) {
                 got_bytes = xStreamBufferReceive(s_spk_ring, mono16, sizeof(mono16),
                                                  tone_due ? 0 : pdMS_TO_TICKS(SPK_CHUNK_MS));
+                if (got_bytes > 0 && atomic_load_explicit(&s_call, memory_order_relaxed)) {
+                    call_trim(mono16, got_bytes, stereo32, sizeof(stereo32), &trim_since_ms);
+                }
             }
         }
         uint32_t req = atomic_load_explicit(&s_spk_clear_req, memory_order_acquire);
@@ -953,6 +1075,31 @@ static void run_selftest(float hz) {
              atomic_load_explicit(&s_volume, memory_order_relaxed), mic_alive);
 }
 
+/* Every 5 s during a call (F-0031): what the speaker did to the mic, so
+ * one real call picks the next step (a gate, or echo cancellation). */
+static void echo_stats(void) {
+    uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    if (now - s_echo_log_ms < 5000) {
+        return;
+    }
+    s_echo_log_ms = now;
+    static const char *const MODES[] = {"off", "shadow", "on"};
+    uint32_t rmin = atomic_exchange(&s_call_ring_min, UINT32_MAX);
+    uint32_t rmax = atomic_exchange(&s_call_ring_max, 0);
+    ESP_LOGI(TAG,
+             "audio.echo mode=%s frames=%u active=%u ratio_db_p10=%d p50=%d p90=%d "
+             "ref_floor_db=%.0f mic_peak=%d ref_peak=%d mic_clips=%u ref_clips=%u vol=%d pa=%d "
+             "ring_ms_min=%d max=%u trims=%u jb_ms=%d",
+             MODES[atomic_load(&s_echo_mode)], (unsigned)s_echo.frames, (unsigned)s_echo.active,
+             hux_echo_percentile(&s_echo, 10), hux_echo_percentile(&s_echo, 50),
+             hux_echo_percentile(&s_echo, 90), 10.0f * log10f(s_echo.ref_floor + 1e-12f),
+             s_echo.mic_peak, s_echo.ref_peak, (unsigned)s_echo.mic_clips,
+             (unsigned)s_echo.ref_clips, atomic_load(&s_volume), atomic_load(&s_pa_on),
+             rmin == UINT32_MAX ? -1 : (int)rmin, (unsigned)rmax,
+             (unsigned)atomic_exchange(&s_call_trims, 0), atomic_load(&s_call_jb_ms));
+    hux_echo_take_stats(&s_echo);
+}
+
 static void inject_frame(void) {
     if (s_inject_left == 0) {
         memset(s_mono_buf, 0, sizeof(s_mono_buf));
@@ -1016,6 +1163,22 @@ static void mic_task(void *unused) {
             for (size_t i = 0; i < FRAME_SAMPLES; i++) {
                 s_mono_buf[i] = in[MIC_CHANNELS_TDM * i + 1];
             }
+            int mode = atomic_load_explicit(&s_echo_mode, memory_order_relaxed);
+            bool call = atomic_load_explicit(&s_call, memory_order_relaxed) &&
+                        mode != HUX_ECHO_MODE_OFF;
+            if (call && !s_echo_on) {
+                hux_echo_reset(&s_echo, mode == HUX_ECHO_MODE_ON); /* each call afresh */
+                s_echo_log_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+            }
+            s_echo_on = call;
+            s_echo.apply = mode == HUX_ECHO_MODE_ON; /* switchable mid-call */
+            if (call) {
+                for (size_t i = 0; i < FRAME_SAMPLES; i++) {
+                    s_ref_buf[i] = in[MIC_CHANNELS_TDM * i + 0]; /* the speaker's own output */
+                }
+                hux_echo_process(&s_echo, s_mono_buf, s_ref_buf, FRAME_SAMPLES);
+                echo_stats();
+            }
         }
 
         hux_audio_mic_frame_fn sink =
@@ -1037,7 +1200,7 @@ static esp_timer_handle_t s_quiet_timer;
 static void quiet_over(void *arg) {
     (void)arg;
     s_quiet_magic = 0;
-    bool ok = hux_board_tca_write(HUX_TCA_AUDIO_PA_EN, true);
+    bool ok = pa_write(true);
     ESP_LOGW(TAG, "spk.quiet over: pa on ok=%d", ok);
 }
 
@@ -1088,7 +1251,7 @@ void hux_audio_quiet(uint32_t seconds) {
     }
     s_quiet_until_us = esp_rtc_get_time_us() + (uint64_t)seconds * 1000000;
     s_quiet_magic = QUIET_MAGIC;
-    bool ok = hux_board_tca_write(HUX_TCA_AUDIO_PA_EN, false);
+    bool ok = pa_write(false);
     quiet_arm((uint64_t)seconds * 1000000);
     ESP_LOGW(TAG, "spk.quiet pa off for %u s (then on by itself) ok=%d", (unsigned)seconds, ok);
 }
@@ -1097,6 +1260,7 @@ void hux_audio_init(void) {
     if (s_mic_dev != NULL) {
         return; /* Idempotent. */
     }
+    call_settings_load();
 
     if (i2s_bring_up() != ESP_OK) {
         ESP_LOGE(TAG, "i2s.bring_up_failed");
@@ -1133,7 +1297,7 @@ void hux_audio_init(void) {
          * spk_task starts writing silence immediately after, which
          * satisfies the "first I2S frame" part. */
         if (!quiet_resume()) {
-            hux_board_tca_write(HUX_TCA_AUDIO_PA_EN, true);
+            pa_write(true);
         }
         vTaskDelay(pdMS_TO_TICKS(SPK_PA_SETTLE_MS));
 
@@ -1217,7 +1381,7 @@ void hux_audio_pa(bool on) {
         }
         s_quiet_magic = 0; /* an explicit `pa on` ends the quiet */
     }
-    bool ok = hux_board_tca_write(HUX_TCA_AUDIO_PA_EN, on);
+    bool ok = pa_write(on);
     ESP_LOGI(TAG, "spk.pa %s ok=%d", on ? "on" : "off", ok);
 }
 
@@ -1289,6 +1453,33 @@ int hux_audio_dac_volume_reg(void) {
 
 void hux_audio_set_mic_sink(hux_audio_mic_frame_fn sink) {
     atomic_store_explicit(&s_mic_sink, sink, memory_order_release);
+}
+
+void hux_audio_set_call(bool on) {
+    if (atomic_exchange(&s_call, on) == on) {
+        return;
+    }
+    /* The mic task resets the suppressor when it sees the call begin. */
+    static const char *const MODES[] = {"off", "shadow", "on"};
+    ESP_LOGI(TAG, "audio.call %s rebuffer_ms=%d echo=%s", on ? "on" : "off",
+             on ? atomic_load(&s_call_jb_ms) : SPK_REBUFFER_MS, MODES[atomic_load(&s_echo_mode)]);
+}
+
+void hux_audio_set_echo_mode(int mode) {
+    if (mode < HUX_ECHO_MODE_OFF || mode > HUX_ECHO_MODE_ON) {
+        return;
+    }
+    atomic_store(&s_echo_mode, mode);
+    call_setting_save(ECHO_NVS_KEY, mode, false);
+}
+
+void hux_audio_set_call_jb(int ms) {
+    if (ms < 100 || ms > 1000) {
+        ESP_LOGW(TAG, "audio.calljb refused ms=%d (100-1000)", ms);
+        return;
+    }
+    atomic_store(&s_call_jb_ms, ms);
+    call_setting_save(CALLJB_NVS_KEY, ms, true);
 }
 
 void hux_audio_mic_start(void) {

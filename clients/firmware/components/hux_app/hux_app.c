@@ -812,6 +812,7 @@ static void handle_ws_message(hux_app_ws_message_t *msg) {
                 ESP_LOGI(TAG, "ws.rx.input_mode %s",
                          parsed.as.input_mode.continuous ? "skill_continuous" : "assistant_ptt");
                 s_mic_continuous = parsed.as.input_mode.continuous;
+                hux_audio_set_call(s_mic_continuous); /* F-0031, before the mic opens */
                 mic_update("input_mode");
             }
             break;
@@ -889,6 +890,7 @@ static void dispatch(hux_app_event_t *ev) {
              * has to be pressed again. */
             s_ptt_held = false;
             s_mic_continuous = false;
+            hux_audio_set_call(false);
             s_server_state = HUX_SERVER_STATE_UNKNOWN;
             s_model_speaking = false;
             hux_audio_set_stream_active(false);

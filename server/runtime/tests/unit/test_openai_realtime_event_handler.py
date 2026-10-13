@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
 
 import pytest
+import structlog
 
 from huxley.cost import CostThresholds, CostTracker
 from huxley.voice.openai_realtime import OpenAIRealtimeProvider
@@ -48,6 +49,7 @@ def _callbacks() -> tuple[VoiceProviderCallbacks, dict[str, AsyncMock]]:
         "on_commit_failed": AsyncMock(),
         "on_session_end": AsyncMock(),
         "on_transcript": AsyncMock(),
+        "on_response_refused": AsyncMock(),
     }
     cb = VoiceProviderCallbacks(
         on_audio_delta=mocks["on_audio_delta"],
@@ -57,6 +59,7 @@ def _callbacks() -> tuple[VoiceProviderCallbacks, dict[str, AsyncMock]]:
         on_commit_failed=mocks["on_commit_failed"],
         on_session_end=mocks["on_session_end"],
         on_transcript=mocks["on_transcript"],
+        on_response_refused=mocks["on_response_refused"],
     )
     return cb, mocks
 
@@ -334,6 +337,151 @@ class TestHandleResponseDone:
         )
 
         mocks["on_response_done"].assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Refusals (T1.43): no credit or a spend limit. Before, an `error` with
+# these codes was only logged and the turn hung in silence.
+
+
+class TestHandleRefusal:
+    @pytest.mark.parametrize(
+        "error",
+        [
+            {"code": "insufficient_quota", "type": "insufficient_quota"},
+            {"code": "organization_spend_limit_exceeded"},
+            {"code": None, "type": "billing_hard_limit_reached"},
+        ],
+        ids=["credit", "limit", "type_only"],
+    )
+    async def test_refusal_error_fires_on_response_refused(
+        self,
+        settings: Settings,
+        persona: PersonaSpec,
+        storage: Storage,
+        error: dict[str, Any],
+    ) -> None:
+        cb, mocks = _callbacks()
+        prov = _provider(settings, persona, storage, cb)
+
+        await prov._handle_server_event(
+            {"type": "error", "error": {**error, "message": "You exceeded your quota."}}
+        )
+
+        expected = error["code"] or error["type"]
+        mocks["on_response_refused"].assert_awaited_once_with(expected)
+        for name, m in mocks.items():
+            if name != "on_response_refused":
+                m.assert_not_awaited()
+
+    async def test_refusal_logs_the_error_and_the_refusal(
+        self, settings: Settings, persona: PersonaSpec, storage: Storage
+    ) -> None:
+        cb, _ = _callbacks()
+        prov = _provider(settings, persona, storage, cb)
+
+        with structlog.testing.capture_logs() as logs:
+            await prov._handle_server_event(
+                {"type": "error", "error": {"code": "credit_balance_exhausted", "message": "m"}}
+            )
+
+        names = [(e["event"], e.get("code"), e.get("via")) for e in logs]
+        assert ("session.rx.error", "credit_balance_exhausted", None) in names
+        assert ("session.response_refused", "credit_balance_exhausted", "error") in names
+
+    async def test_failed_response_done_with_a_refusal_code_is_a_refusal(
+        self, settings: Settings, persona: PersonaSpec, storage: Storage
+    ) -> None:
+        """Realtime can report a refused answer as a failed `response.done`.
+        It is not forwarded as a done: one arriving after a new press would
+        end that press's turn."""
+        cb, mocks = _callbacks()
+        prov = _provider(settings, persona, storage, cb)
+        prov._create_deferred_at = 1.0  # a create held back for this turn
+
+        await prov._handle_server_event(
+            {
+                "type": "response.done",
+                "response": {
+                    "id": "resp_9",
+                    "status": "failed",
+                    "status_details": {
+                        "type": "failed",
+                        "error": {"type": "insufficient_quota", "code": "insufficient_quota"},
+                    },
+                },
+            }
+        )
+
+        mocks["on_response_refused"].assert_awaited_once_with("insufficient_quota")
+        mocks["on_response_done"].assert_not_awaited()
+        assert prov._create_deferred_at is None
+
+    async def test_other_failed_response_done_is_forwarded(
+        self, settings: Settings, persona: PersonaSpec, storage: Storage
+    ) -> None:
+        cb, mocks = _callbacks()
+        prov = _provider(settings, persona, storage, cb)
+
+        with structlog.testing.capture_logs() as logs:
+            await prov._handle_server_event(
+                {
+                    "type": "response.done",
+                    "response": {
+                        "id": "resp_9",
+                        "status": "failed",
+                        "status_details": {"error": {"type": "server_error", "code": None}},
+                    },
+                }
+            )
+
+        mocks["on_response_done"].assert_awaited_once()
+        mocks["on_response_refused"].assert_not_awaited()
+        (done,) = [e for e in logs if e["event"] == "session.rx.response_done"]
+        assert done["error_type"] == "server_error"
+
+    async def test_stale_refused_response_done_is_not_a_refusal(
+        self, settings: Settings, persona: PersonaSpec, storage: Storage
+    ) -> None:
+        """A cancelled turn's response: the turn is gone, and the current
+        one must not be ended for it."""
+        cb, mocks = _callbacks()
+        prov = _provider(settings, persona, storage, cb)
+        prov._stale_response_ids.add("resp_old")
+
+        await prov._handle_server_event(
+            {
+                "type": "response.done",
+                "response": {
+                    "id": "resp_old",
+                    "status": "failed",
+                    "status_details": {"error": {"code": "insufficient_quota"}},
+                },
+            }
+        )
+
+        mocks["on_response_refused"].assert_not_awaited()
+
+    async def test_refusal_without_a_callback_only_logs(
+        self, settings: Settings, persona: PersonaSpec, storage: Storage
+    ) -> None:
+        cb, _ = _callbacks()
+        bare = VoiceProviderCallbacks(
+            on_audio_delta=cb.on_audio_delta,
+            on_tool_call=cb.on_tool_call,
+            on_response_done=cb.on_response_done,
+            on_audio_done=cb.on_audio_done,
+            on_commit_failed=cb.on_commit_failed,
+            on_session_end=cb.on_session_end,
+        )
+        prov = _provider(settings, persona, storage, bare)
+
+        with structlog.testing.capture_logs() as logs:
+            await prov._handle_server_event(
+                {"type": "error", "error": {"code": "insufficient_quota", "message": "m"}}
+            )
+
+        assert [e["event"] for e in logs] == ["session.rx.error", "session.response_refused"]
 
 
 # ---------------------------------------------------------------------------

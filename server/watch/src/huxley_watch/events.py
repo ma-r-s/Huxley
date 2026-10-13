@@ -62,6 +62,7 @@ KEEP_EVENTS = frozenset(
         "app.reconnect_failed",
         "app.reconnect_succeeded",
         "session.rx.error",
+        "session.response_refused",  # a refused answer, from an error or a failed response.done
         "cost.response_done",
         "cost.threshold_crossed",
         "cost.kill_switch_triggered",

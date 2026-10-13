@@ -365,6 +365,29 @@ def test_openai_quota_from_an_error_and_from_a_429() -> None:
     assert "openai.down" not in found
 
 
+def test_openai_refusals_from_the_new_server_signals() -> None:
+    """T1.43: the server now names the refusal: `session.response_refused`
+    (an answer refused in-session, by error or failed response.done) and
+    `connection_failed refused=<code>` (the code from the 429's body)."""
+    refused = line(
+        "session.response_refused",
+        ago(minutes=5),
+        level="error",
+        code="insufficient_quota",
+        via="response.done",
+    )
+    assert rule_openai_quota(inputs(flat(BOOT, refused))) is not None
+    connect = line(
+        "connection_failed",
+        ago(minutes=5),
+        level="error",
+        refused="billing_hard_limit_reached",
+        exception="websockets.exceptions.InvalidStatus: server rejected WebSocket connection: HTTP 429",
+    )
+    found = ids(flat(BOOT, connect))
+    assert "openai.limit" in found and "openai.quota" not in found
+
+
 def test_spend_today_on_bug_canary_and_kill_switch() -> None:
     canary = line(
         "cost.threshold_crossed",

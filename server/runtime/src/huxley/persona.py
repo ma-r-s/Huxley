@@ -108,10 +108,28 @@ class PersonaSpec(BaseModel):
     # Opt-in audio recording (docs/personas/README.md "Recording").
     recording: RecordingConfig = Field(default_factory=RecordingConfig)
 
+    # A WAV (PCM16 mono 24 kHz, the wire format), path relative to the
+    # persona directory (`load_persona` makes it absolute), played when
+    # the voice provider is unavailable: after a press in a long outage or
+    # after a refusal, or for a user turn the provider refused. None,
+    # missing or the wrong format: the double beep. One clip whatever the
+    # session language. See `huxley.app`.
+    unavailable_sound: str | None = None
+
     # Populated by `load_persona` from the persona file's parent directory.
     # Not user-settable in YAML (the loader injects it); tests constructing
     # `PersonaSpec` directly must pass it explicitly.
     data_dir: Path
+
+    @property
+    def unavailable_sound_path(self) -> Path | None:
+        """`unavailable_sound` as a path, or None when unset. `load_persona`
+        stores it absolute; a relative one (a spec built in code) is taken
+        against the parent of `data_dir`."""
+        if not self.unavailable_sound:
+            return None
+        path = Path(self.unavailable_sound)
+        return path if path.is_absolute() else self.data_dir.parent / path
 
     @property
     def supported_languages(self) -> list[str]:
@@ -343,6 +361,12 @@ def load_persona(path: Path | None = None) -> PersonaSpec:
             f"supports version {SUPPORTED_VERSION}."
         )
         raise PersonaError(msg)
+
+    # Persona-relative paths resolve against the persona directory itself,
+    # not `data_dir.parent`: `data/` may be a symlink to another disk.
+    sound = parsed.get("unavailable_sound")
+    if isinstance(sound, str) and sound:
+        parsed = {**parsed, "unavailable_sound": str(root / sound)}
 
     try:
         spec = PersonaSpec.model_validate({**parsed, "data_dir": data_dir})

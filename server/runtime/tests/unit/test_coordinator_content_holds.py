@@ -362,6 +362,20 @@ class TestPressPausesAndResumes:
 
         await _until(lambda: media.runs == 2)
 
+    async def test_refused_turn_resumes_after_its_sound(
+        self, coordinator: TurnCoordinator, mocks: dict[str, Any]
+    ) -> None:
+        """T1.43: OpenAI refused the answer (no credit). Like any turn that
+        didn't stop it, what the press held comes back, once the
+        "unavailable" sound (here the double beep, 330 ms) has played."""
+        media = await _start(coordinator, mocks)
+
+        await _press(coordinator)
+        await coordinator.on_response_refused("insufficient_quota")
+
+        await _stays(lambda: media.runs == 1, for_s=0.2)
+        await _until(lambda: media.runs == 2, timeout_s=2.0)
+
     async def test_resume_waits_for_the_answer_to_play(
         self, coordinator: TurnCoordinator, mocks: dict[str, Any]
     ) -> None:

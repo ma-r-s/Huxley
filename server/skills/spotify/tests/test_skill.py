@@ -481,6 +481,7 @@ class TestControl:
         self, tmp_path: Path, pcm_server: PcmServer, action: str, command: str
     ) -> None:
         skill, client, _ = await _skill(tmp_path, pcm_server)
+        client.state.position_ms = 0  # at the start: previous needs no rewind
         stream = (await skill.handle("music_control", {"action": action})).side_effect
         assert isinstance(stream, AudioStream)
         task, _ = await _consume_until(stream, 1)
@@ -488,6 +489,23 @@ class TestControl:
         assert client.commands()[0] == command
         play = next(c for c in client.sent if c["command"] == "play")
         assert "uri" not in play
+
+    @pytest.mark.parametrize(
+        ("position_ms", "rewound"), [(5_000, True), (1_000, False), (None, True)]
+    )
+    async def test_previous_goes_back_even_mid_song(
+        self, tmp_path: Path, pcm_server: PcmServer, position_ms: int | None, rewound: bool
+    ) -> None:
+        """2026-10-13: "canción anterior" 5 s into a song restarted it twice;
+        Soloist's skip_prev only goes back in a song's first seconds."""
+        client = TrackSoloist(position_ms)
+        skill, _, _ = await _skill(tmp_path, pcm_server, client=client)
+        stream = (await skill.handle("music_control", {"action": "previous"})).side_effect
+        assert isinstance(stream, AudioStream)
+        task, _ = await _consume_until(stream, 1)
+        await _cancel(task)
+        assert client.track == 0  # back to the song before
+        assert ("seek" in client.commands()) is rewound
 
     async def test_whats_playing_after_a_press_is_only_the_answer(
         self, tmp_path: Path, pcm_server: PcmServer
@@ -517,6 +535,30 @@ class TestControl:
         result = await skill.handle("whats_playing", {})
         assert json.loads(result.output)["reason"] == "nothing_playing"
         assert result.side_effect is None
+
+
+class TrackSoloist(FakeSoloist):
+    """A queue of songs with Soloist's skip_prev rule: in a song's first
+    3 s it goes back one, later it restarts the song. A seek lands (and
+    wakes waiters) a moment later, as Soloist's own update does."""
+
+    def __init__(self, position_ms: int | None) -> None:
+        super().__init__()
+        self.track = 1
+        self.state.status = "paused"
+        self.state.position_ms = position_ms
+
+    def send(self, command: str, *, generation: int | None = None, **fields: Any) -> None:
+        super().send(command, generation=generation, **fields)
+        if command == "seek":
+            to = int(fields["position_ms"])
+            asyncio.get_running_loop().call_soon(
+                lambda: asyncio.ensure_future(self._update(position_ms=to))
+            )
+        elif command == "skip_prev":
+            if (self.state.position_ms or 0) < 3_000:
+                self.track = max(0, self.track - 1)
+            self.state.position_ms = 0
 
 
 class FakeSoloistServer:
