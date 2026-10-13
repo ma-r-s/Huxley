@@ -96,8 +96,16 @@ tail -f ~/huxley/server/runtime/logs/huxley.log
 docker logs -f huxley-soloist
 ```
 
-Deploy from the Mac: `git push ssh://mario@100.75.152.70/home/mario/huxley.git main`,
-then on the Pi `cd ~/huxley && git pull --ff-only && uv sync && systemctl --user restart huxley`.
+Deploy the server from the Mac: `scripts/pi/deploy.sh --when-idle` (or no
+flag: now if the walkie is idle; `--force`: now regardless). It pushes main
+to the Pi, which installs exactly that commit once the walkie is idle and
+checks `/health`; a newer deploy replaces a waiting one; the result is in
+`/tmp/huxley-deploy.result` on the Pi. See the script headers.
+
+The page runs from its own checkout, `~/huxley-watch`: after the push,
+`cd ~/huxley-watch && git pull --ff-only && uv sync --package huxley-watch &&
+systemctl --user restart huxley-watch` (its unit file says why it doesn't
+start through `uv run`).
 
 ## On the internet: walkie.ma-r-s.com (W2)
 

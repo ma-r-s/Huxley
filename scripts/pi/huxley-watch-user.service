@@ -2,6 +2,16 @@
 # Install: cp scripts/pi/huxley-watch-user.service ~/.config/systemd/user/huxley-watch.service
 #          systemctl --user daemon-reload && systemctl --user enable --now huxley-watch
 # Config:  ~/.config/huxley-watch/watch.toml (bind it to the Pi's Tailscale address).
+# Runs from its own checkout, ~/huxley-watch (a clone of ~/huxley.git), so a
+# page change ships without touching the server's tree. Update:
+#   cd ~/huxley-watch && git pull --ff-only && uv sync --package huxley-watch
+#   systemctl --user restart huxley-watch
+# ExecStart is the venv's entry point, not `uv run`: in this user manager
+# systemd can't signal the whole control group ("Failed to kill control
+# group ... Invalid argument"), so SIGTERM reaches only the main process,
+# and a uv main process didn't pass it on in a restart: every restart sat
+# 90 s and ended in SIGKILL (reproduced 2026-10-12). With Python as the
+# main process the stop takes under a second.
 
 [Unit]
 Description=huxley-watch, the caregiver's page
@@ -9,9 +19,9 @@ After=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/huxley
+WorkingDirectory=%h/huxley-watch
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=%h/.local/bin/uv run --package huxley-watch huxley-watch --config %h/.config/huxley-watch/watch.toml
+ExecStart=%h/huxley-watch/.venv/bin/huxley-watch --config %h/.config/huxley-watch/watch.toml
 Restart=always
 RestartSec=5
 
