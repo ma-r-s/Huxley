@@ -62,6 +62,12 @@ ICONS: dict[str, tuple[bool, str]] = {
         '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1'
         'M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/>',
     ),
+    "chart": (False, '<path d="M4 20h16M7 16v-5M12 16V6M17 16v-8"/>'),
+    "walkie": (
+        False,
+        '<rect x="6.5" y="7" width="11" height="15" rx="2.5"/><path d="M9 7V2"/>'
+        '<path d="M9.5 11h5M9.5 14h5"/><circle cx="12" cy="18.2" r="1"/>',
+    ),
     "prev": (False, '<path d="M15 5l-7 7 7 7"/>'),
     "next": (False, '<path d="M9 5l7 7-7 7"/>'),
     "close": (False, '<path d="M6 6l12 12M18 6L6 18"/>'),

@@ -5782,3 +5782,27 @@ Branch `t144-inject-waits` (worktree), on base f0897867: 7d23267e (design), 36fd
 **Smoke R2 (2026-10-12, merged 66e7f5f6, live on the Pi)**: a narration cut by a Wi-Fi drop had reached the walkie whole and played from its ring while offline; the server marked it `no_pong` and repeated it after the reconnect, so it was heard twice. Fixed on `t144-heard-after-drop`: the reconnect's `device.hello` now reports `played_after_drop_ms`, `ring_left_ms`, `drop_uptime_ms` (firmware 0e9a3347), and a turn cut after it was all sent waits up to 2 s for that hello and counts as heard when the ring drained and played at least what was unplayed at the drop (turns.md).
 
 **Lessons**: both critics earned their keep. The first turned "a pong timeout is delivered" and a cached presence flag around before any code; the second found four bugs in code that passed 940 tests, three of them in the gaps between awaits. The repo's medication retries had never fired at runtime: nothing tested the scheduler past the first fire.
+
+## T1.46: A phone app of how grandpa uses the walkie
+
+**Status**: `in_progress` (2026-10-13, branch `t146-phone-app`) · **Owner**: this session · **Effort**: M
+
+**Problem** (Mario): he wants to understand how his grandfather uses the walkie, from his iPhone: when he last used it, how much against his usual, who he talks to, what he enjoys, where he struggles. The caregiver's page (`/`, T1.42) is a reliability dashboard: dense, about the device and the server, and it can't tell "quiet" from "unwell", or a bad answer from a good one.
+
+**Validation**: the 2026-10-12 logs hold everything the design needs except one thing. Each press's words are recoverable: transcripts carry no turn, but each committed press is one input item transcribed in order; pairing them oldest-first matched 304 of 304 committed presses (1.2 s after the release at the median, 5.5 s at p99, 19.3 s at most). The struggles have their signals: 32 empty transcripts and 10 Whisper hallucinations ("Subtitulos por la comunidad de Amara.org", "Gracias por ver el video"), 9 silent presses, `coord.tool_error` and the skills' own "couldn't" lines (`spotify.unavailable reason=`, `spotify.start_refused`...), corrections ("No! Quiero escuchar al grupo Menudo!") and repeats (four `get_battery` in two minutes). The missing piece: a book's chapter index (only its name was logged at a start), so "ch. 5 of 19" needed the Spotify skill to log it.
+
+**Design** (approved by Mario after a design critic; binding rules from that critic):
+- Three tabs (Today, Trends, Talks), bottom tab bar, one scrolling screen each, at `/app/`: one self-contained HTML file (inline CSS and JS, no build, no CDN: it runs on the tailnet), hash routes, fetch on open, every 60 s while visible and on a pull at the top; dark mode, safe areas, 44 px targets, the page's look. A home-screen PWA: manifest, icons from a Pillow script, Apple meta tags; a service worker only in a secure context (iOS runs none over http on the tailnet), shell and last `/app.json` only.
+- Data: `/app.json` (`schema: 1`, `app.AppStatus` TypedDicts), built in the same cycle from the page's Inputs and segments: no second log parser. `talks.py` turns the kept events into requests and verdicts.
+- Honesty: "his usual" only after 14 days with the walkie mostly online (half the daytime, bench left out), until then "Learning his routine, day N of 14"; offline days hatched, never low use; device state on every quiet stretch and day; compared only with his own range; struggles by five named rules (tool error, not heard, no answer in 20 s, corrected within 60 s, asked again within 90 s; skips and volume excluded); his timezone, labelled when the phone's differs.
+- Privacy: a day's words fetched live from `/day/YYYY-MM-DD.json` (`no-store`), never cached; the worker never touches `/day/` or `/audio/`; recordings stay on `/`.
+
+**Definition of Done**:
+- `/app.json` with every field above, from the cycle, documented in the README; `watch.app_json_built` (debug) each cycle; a failed build costs only the app (`watch.step_failed step=app`).
+- `/app/`, its manifest, worker and icons served with the right types and caches; package data shipped by hatch.
+- Each struggle rule and its exclusions unit-tested; the learning state before 14 days and a range after; offline days hatched; people; favourites; first use; conversation counts; routes and types; the page self-contained.
+- ruff, ruff format, mypy --strict on `server/watch/src`, all watch tests green.
+- Looked at: screenshots at 393x852, light and dark, real logs and a 20-day fixture; no horizontal scroll at 375 px.
+- A fresh critic on the finished code; its findings fixed or answered here.
+
+**Built** (2026-10-13): `3bb433ee` the Spotify skill logs `chapter_index` and `chapters` at a start, a move and an end (`book` on `spotify.book_nav`); the app itself on this branch (see Ship).

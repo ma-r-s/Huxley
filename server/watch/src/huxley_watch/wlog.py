@@ -50,6 +50,10 @@ class WatchLog:
             except OSError:
                 print(line, file=sys.stderr)
 
+    def debug(self, event: str, **fields: Any) -> None:
+        """Every cycle's routine numbers: a grep reads them, a skim skips them."""
+        self._write("debug", event, fields)
+
     def info(self, event: str, **fields: Any) -> None:
         self._write("info", event, fields)
 
