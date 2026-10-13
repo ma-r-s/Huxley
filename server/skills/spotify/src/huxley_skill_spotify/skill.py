@@ -118,6 +118,9 @@ END_MARGIN_MS = 15_000
 PROBE_LOAD_S = 4.0
 # After a seek, how long to stay silent at most waiting for it to land.
 SEEK_SETTLE_S = 2.0
+# Soloist's skip_prev, like Spotify's own button, restarts the song once
+# it's past its first ~3 s and only goes back before that.
+PREVIOUS_GOES_BACK_MS = 2_000
 # "ok" only if still playing at the end: Spotify says "playing" the moment
 # a play lands, before it decides (Siddhartha passed a 0.35 s check, then
 # was refused, and the refusal was read as the hours, 2026-10-12).
@@ -764,6 +767,8 @@ class SpotifySkill:
             book = await self._loaded_book()
             if book is not None:
                 return await self._move_chapter(book, 1 if action == "next" else -1)
+        if action == "previous":
+            await self._rewind_before_previous()
         if action == "resume" and self._require_client().state.status == "idle":
             # Nothing to resume (a cut, a refusal, the end): a bare play
             # would do nothing for 10 s. Start it again by its URI.
@@ -784,6 +789,26 @@ class SpotifySkill:
         return ToolResult(
             output=json.dumps({"ok": True, "action": action}),
             side_effect=self._stream(before=before),
+        )
+
+    async def _rewind_before_previous(self) -> None:
+        """ "Canción anterior" 5 s into an autoplayed song restarted it,
+        twice, instead of going back (2026-10-13): past its first seconds
+        skip_prev only restarts. So seek to the start first and wait for
+        it to land; at 0, skip_prev goes back. The seek can't ride in the
+        stream's commands: those send seeks after play."""
+        client = self._require_client()
+        position = position_now(client.state)
+        if position is not None and position < PREVIOUS_GOES_BACK_MS:
+            await self._log().ainfo("spotify.previous", position_ms=position, rewound=False)
+            return
+        client.send("seek", position_ms=0)
+        landed = await client.wait_until(
+            lambda s: s.position_ms is not None and s.position_ms < PREVIOUS_GOES_BACK_MS,
+            SEEK_SETTLE_S,
+        )
+        await self._log().ainfo(
+            "spotify.previous", position_ms=position, rewound=True, landed=landed
         )
 
     async def _whats_playing(self) -> ToolResult:

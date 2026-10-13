@@ -200,7 +200,10 @@ Spotify app ─┐                        ┌─ WebSocket (control, events) ─
   it by calling the factory again, which sends a bare `play`
   ([ADR 2026-10-12](../decisions.md#2026-10-12-a-press-pauses-content-the-turns-end-resumes-it-t130)). So "pause" must return `CancelMedia` (the
   stream ends, nothing comes back), `next` and `previous` act and then
-  return a resume stream that replaces the held one, and `whats_playing`
+  return a resume stream that replaces the held one (a song's `previous`
+  first seeks to 0 and waits for it, because past a song's first seconds
+  Soloist's `skip_prev` only restarts it, as Spotify's own button does:
+  `spotify.previous` with `position_ms`, `rewound`, `landed`), and `whats_playing`
   is a plain info tool: a tool with an `AudioStream` gets no follow-up
   round, so its answer would never be spoken (seen live). Its `then`
   names the exact line to say; the music comes back after it. (Before
@@ -290,7 +293,7 @@ the kind matched, match, uri, `alternatives`), `spotify.play_last`
 paused_elsewhere, capture_closed, start_failed, player_offline),
 `spotify.capture_closed` (`chunks`), `spotify.soloist_error`,
 `spotify.search_failed`, `spotify.capture_failed`, `spotify.unavailable`,
-`spotify.control`.
+`spotify.control`, `spotify.previous`.
 
 The Soloist build's expiry is logged by the container at start ("client
 expires in N days"); an expired build exits with code 10, which the skill
