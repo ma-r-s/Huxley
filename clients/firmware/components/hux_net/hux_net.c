@@ -422,6 +422,8 @@ static _Atomic uint32_t s_noip_ms = 0;
 static uint32_t s_rotate_ms = 0;
 /* The last hello (an add's "server reached" must come after its IP). */
 static _Atomic uint32_t s_hello_ms = 0;
+/* F-0032: the last time the server was steadily up (2 min on one connection), or boot. */
+static _Atomic uint32_t s_stable_ms = 0;
 /* Saved entries an update has since compiled in: kept in NVS untouched (a
  * rollback to an older image still finds them), not joined twice. */
 static wifi_saved_t s_shadow[HUX_WIFI_SAVED_MAX];
@@ -1547,6 +1549,7 @@ void hux_net_start(const hux_net_config_t *cfg) {
         esp_timer_start_once(s_server_revert, (uint64_t)SERVER_FALLBACK_S * 1000000);
     }
     atomic_store(&s_lost_ms, now_ms()); /* no server yet: the ladder's clock runs */
+    atomic_store(&s_stable_ms, now_ms()); /* F-0032's clock, from boot */
     if (xTaskCreate(ladder_task, "hux_ladder", 4096, NULL, 3, &s_ladder_task) != pdPASS) {
         ESP_LOGE(TAG, "ladder.task_create_failed: no escalation this boot");
     }
@@ -1955,6 +1958,31 @@ bool hux_net_send_text(const char *data, size_t len) {
         return false;
     }
     return true;
+}
+
+bool hux_net_have_ip(void) {
+    return atomic_load(&s_have_ip);
+}
+
+/* F-0032: the server counts as reachable only after 2 min on one connection
+ * (a server that connects and crashes over and over still counts as lost),
+ * counted from the last time it was. Paused on purpose (an eviction) or
+ * switched for a test: not lost. */
+#define STABLE_UP_MS (2u * 60u * 1000u)
+
+uint32_t hux_net_server_lost_ms(void) {
+    uint32_t now = now_ms();
+    if (atomic_load(&s_paused) || atomic_load(&s_srv_mode) == SRV_TEMP) {
+        atomic_store(&s_stable_ms, now);
+        return 0;
+    }
+    uint32_t hello = atomic_load(&s_hello_ms);
+    if (atomic_load(&s_server_up) && hello != 0 && now - hello >= STABLE_UP_MS) {
+        atomic_store(&s_stable_ms, now);
+        return 0;
+    }
+    uint32_t ms = now - atomic_load(&s_stable_ms);
+    return ms > 0 ? ms : 1;
 }
 
 uint32_t hux_net_rx_audio_ms(void) {

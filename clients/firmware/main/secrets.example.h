@@ -35,3 +35,10 @@
  * server/runtime/.env; mint one with
  * python3 -c "import secrets; print(secrets.token_urlsafe(32))" */
 #define HUX_DEVICE_TOKEN  "change-me"
+
+/* The walkie's own phone alert when it can't reach the server (F-0032):
+ * the ntfy.sh topic Mario's phone subscribes to (the same as huxley-watch's
+ * `ntfy_topic`). A secret: anyone with it can post to that phone. Leave it
+ * out to build without alerts. HUX_ALERT_CLICK: what a tap on it opens. */
+/* #define HUX_NTFY_TOPIC  "the-topic" */
+#define HUX_ALERT_CLICK "http://100.75.152.70:8780/"

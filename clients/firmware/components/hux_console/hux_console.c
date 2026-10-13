@@ -13,6 +13,7 @@
 #include "freertos/task.h"
 #include "hal/usb_serial_jtag_ll.h"
 
+#include "hux_alert.h"
 #include "hux_audio.h"
 #include "hux_battery.h"
 #include "hux_button.h"
@@ -145,6 +146,8 @@ static void run_line(char *line, bool usb) {
         } else {
             hux_audio_set_echo_mode(mode);
         }
+    } else if (strcmp(cmd, "alert") == 0 && argc > 1 && strcmp(argv[1], "test") == 0) {
+        hux_alert_test(); /* one push to Mario's phone, end to end (F-0032) */
     } else if (strcmp(cmd, "calljb") == 0 && argc > 1) {
         hux_audio_set_call_jb(atoi(argv[1])); /* a call's jitter buffer, ms */
     } else if (strcmp(cmd, "super") == 0) {
@@ -268,7 +271,7 @@ static void run_line(char *line, bool usb) {
     } else {
         ESP_LOGW(TAG, "console.unknown %s (talk, release, say N, tone [hz] [ms], vol N, pa on|off, "
                       "selftest [hz], wifi off [s]|on|list|addhex <ssid> <pw>|forget <ssid>, wifistat, wifiscan, wifibw 20|40, info, "
-                      "server [<uri> [min] | keep <uri> [min] | reset], quiet [s], battery [cal <mv> | cutoff on|off | park <mv> <min>], echo off|shadow|on, calljb <ms>, super, "
+                      "server [<uri> [min] | keep <uri> [min] | reset], quiet [s], battery [cal <mv> | cutoff on|off | park <mv> <min>], echo off|shadow|on, calljb <ms>, alert test, super, "
                       "hang app|spk, coredump erase, reboot, "
                       "ota <url> [force] | confirm | rollback)",
                  cmd);

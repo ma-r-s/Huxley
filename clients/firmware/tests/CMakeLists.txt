@@ -88,6 +88,11 @@ add_library(hux_echo STATIC ${HUX_AUDIO_DIR}/hux_echo.c)
 target_include_directories(hux_echo PUBLIC ${HUX_AUDIO_DIR}/include)
 target_link_libraries(hux_echo PUBLIC m)
 
+# -- hux_alert_logic (library under test): the walkie's own phone alerts.
+set(HUX_ALERT_DIR ${CMAKE_SOURCE_DIR}/../components/hux_alert)
+add_library(hux_alert_logic STATIC ${HUX_ALERT_DIR}/hux_alert_logic.c)
+target_include_directories(hux_alert_logic PUBLIC ${HUX_ALERT_DIR}/include)
+
 # -- hux_debounce (library under test) ------------------------------
 # Pure C, the talk button's debounce; lives inside hux_button.
 set(HUX_BUTTON_DIR ${CMAKE_SOURCE_DIR}/../components/hux_button)
@@ -161,11 +166,16 @@ target_include_directories(test_hux_echo PRIVATE ${CMAKE_SOURCE_DIR}/helpers)
 target_link_libraries(test_hux_echo PRIVATE hux_echo m)
 add_test(NAME hux_echo COMMAND test_hux_echo)
 
+add_executable(test_hux_alert_logic test_hux_alert_logic.c)
+target_include_directories(test_hux_alert_logic PRIVATE ${CMAKE_SOURCE_DIR}/helpers)
+target_link_libraries(test_hux_alert_logic PRIVATE hux_alert_logic)
+add_test(NAME hux_alert_logic COMMAND test_hux_alert_logic)
+
 # Convenience target: `cmake --build build --target check` runs every test.
 add_custom_target(check
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
     DEPENDS test_hux_proto test_hux_ws_frag test_hux_debounce test_hux_type_probe
             test_hux_wifi_retry test_hux_link test_hux_blackbox test_hux_super_check
             test_hux_battery_level test_hux_prompt_parse test_hux_battery_cutoff
-            test_hux_wifi_list test_hux_echo
+            test_hux_wifi_list test_hux_echo test_hux_alert_logic
 )

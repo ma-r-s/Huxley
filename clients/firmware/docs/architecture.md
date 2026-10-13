@@ -51,6 +51,7 @@ whichever is wrong in the same commit.
 | `hux_ota`               | Updates over Wi-Fi into the other slot; keeps it on `ota confirm` (30 s+) | Decides when to update (a developer asks)                     |
 | `hux_dev`               | Developer door over Wi-Fi: `/info`, `/cmd` (console lines), `/coredump`  | Answers without the token                                     |
 | `hux_opus`              | Opus (esp_audio_codec): mic encoder, speaker decoder task + ordered queue | Decides the format (the server's hello does)                  |
+| `hux_alert`             | The walkie's own phone alert over ntfy.sh when the server is unreachable (SNTP, RTC state) | Watches anything but its own link (huxley-watch does)            |
 | `hux_park`              | The low-battery cutoff's park: at boot, light sleep until a charger lifts the cell; the cutoff's say-arm-restart | Decides when the cell is spent (hux_battery_cutoff does)        |
 | `hux_prompts`           | Sentences stored in the firmware (Opus), said through the decoder when no server can speak | Decides when to say them (that's hux_app)                     |
 

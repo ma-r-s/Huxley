@@ -209,6 +209,12 @@ void hux_net_set_audio_sink(hux_net_audio_sink_fn sink);
  * each): the hello's received_ms_last_conn (T1.44). */
 uint32_t hux_net_rx_audio_ms(void);
 
+/** The walkie has an IP now (F-0032: it can reach the internet at all). */
+bool hux_net_have_ip(void);
+/** How long the server has been unreachable, ms; 0 while it's up or the
+ * walkie is paused on purpose (an eviction). */
+uint32_t hux_net_server_lost_ms(void);
+
 /**
  * Called for every inbound `audio_clear` ("drop any queued audio": the
  * server is interrupting, seeking, or starting something new). Runs on
