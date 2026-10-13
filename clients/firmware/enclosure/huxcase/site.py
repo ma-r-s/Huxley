@@ -95,8 +95,9 @@ STEPS = [
         "id": "plunger",
         "title": "Plunger and spring",
         "text": "From outside the right side: the normal printed plunger (5.0 mm, the "
-        "shortest of the three) into its tube, then the 0.4 × 4 × 15 spring on top "
-        "of it. The longer two are for a click that comes late.",
+        "second longest of the four) into its tube, then the 0.5 × 5 × 15 spring on "
+        "top of it, whole. The 4.75 and 4.5 are for a switch that stays on after "
+        "release, the 5.25 for a click that comes late.",
         "parts": ["plunger", "spring"],
         "enter": (60, 0, 0),
         "explode": (30, 0, 18),
@@ -285,7 +286,7 @@ LABELS = [
     ("board_*", "ESP32-S3 audio board"),
     ("tact_*", "12 × 12 tact switch"),
     ("plunger", "Plunger"),
-    ("spring", "Spring 0.4 × 4 × 15"),
+    ("spring", "Spring 0.5 × 5 × 15"),
     ("ptt_bar", "Talk lever"),
     ("ptt_pin", "Lever pin, printed"),
     ("rocker_*", "Power switch KCD1-101"),
@@ -325,7 +326,7 @@ BOUGHT = [
     ("18650 cell, protected", 2),
     ("Single-18650 holder with leads", 2),
     ("12 × 12 tact switch", 1),
-    ("Spring 0.4 × 4 × 15 (SciWil kit)", 1),
+    ("Spring 0.5 × 5 × 15 (SciWil kit)", 1),
     ("KCD1-101 rocker switch", 1),
     ("M3 × 8 button head, case", 4),
     ("M3 × 6 button head, holder bridge", 1),

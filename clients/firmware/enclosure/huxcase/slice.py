@@ -191,20 +191,30 @@ TOP, BASE = "hx1_10_tub_top", "hx1_03_tub_base"
 TEST_BASE, TEST_TOP = "hx1_11_test_base", "hx1_12_test_top"
 PLATES = [
     Plate(
-        "1_white_faceplate_bridge_pin_plunger",
+        "1_white_faceplate_bridge_pin",
         (
             "hx1_01_faceplate",
             "hx1_07_bridge",
             *["hx1_05_ptt_pin"] * 3,  # two spares: it is thin and lies on a narrow base
-            "hx1_06_plunger",
-            "hx1_08_plunger_long05",
-            "hx1_09_plunger_long10",
         ),
         {},
         (WHITE,),
     ),
     Plate("2_black_grille", ("hx1_02_grille_plug",), {}, (BLACK,)),
-    Plate("3_orange_lever", ("hx1_04_ptt_bar",), {}, (ORANGE,)),
+    # The lever and its plungers, all that the talk switch's fix changed
+    # (2026-10-13): one small plate, nothing else to reprint.
+    Plate(
+        "3_orange_lever_plungers",
+        (
+            "hx1_04_ptt_bar",
+            "hx1_06_plunger",
+            "hx1_08_plunger_short",
+            "hx1_09_plunger_long",
+            "hx1_18_plunger_shortest",
+        ),
+        {},
+        (ORANGE,),
+    ),
     # The tub, both halves, by object: the frosted top first (its first
     # layers come out clean, no grey left in the nozzle), then the base.
     # 94 mm apart in y (the top lies on its back, 68 mm deep): the toolhead
