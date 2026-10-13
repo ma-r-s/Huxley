@@ -16,8 +16,9 @@ want="$(git -C "$here" rev-parse --short=7 main)"
 git -C "$here" push -q "ssh://$pi/home/mario/huxley.git" main:main
 # The remote script comes from the commit being deployed, not the working tree.
 # A waiting deploy is stopped first, and the file replaced rather than
-# rewritten: sh reads a running script as it goes.
-ssh -o BatchMode=yes "$pi" "pkill -f '[/]tmp/huxley-deploy-remote.sh' && echo 'replaced a waiting deploy'; rm -f /tmp/huxley-deploy-remote.sh && git -C ~/huxley.git show main:scripts/pi/deploy-remote.sh > /tmp/huxley-deploy-remote.sh && chmod +x /tmp/huxley-deploy-remote.sh && rm -f /tmp/huxley-deploy.result"
+# rewritten: sh reads a running script as it goes. The pattern is anchored
+# to the waiter's own command line; this ssh command names the path too.
+ssh -o BatchMode=yes "$pi" "pkill -f '^/bin/sh /tmp/huxley-deploy-remote' && echo 'replaced a waiting deploy'; rm -f /tmp/huxley-deploy-remote.sh && git -C ~/huxley.git show main:scripts/pi/deploy-remote.sh > /tmp/huxley-deploy-remote.sh && chmod +x /tmp/huxley-deploy-remote.sh && rm -f /tmp/huxley-deploy.result"
 if [ "$mode" = "--when-idle" ]; then
   ssh -o BatchMode=yes "$pi" "nohup /tmp/huxley-deploy-remote.sh $want --when-idle > /tmp/huxley-deploy.log 2>&1 &"
   echo "waiting on the Pi for the walkie to be idle; result in /tmp/huxley-deploy.result there"
