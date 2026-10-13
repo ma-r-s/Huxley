@@ -18,6 +18,14 @@ Usage (needs HUXLEY_OPENAI_API_KEY, read from server/runtime/.env):
     uv run --package huxley python clients/firmware/tools/render_prompts.py
     uv run --package huxley python clients/firmware/tools/render_prompts.py offline
 
+    uv run --package huxley python clients/firmware/tools/render_prompts.py --level-only
+        (re-level the committed files to the loudness target, same takes)
+
+Every prompt is levelled to -20 LUFS integrated with its true peak at most
+-1.5 dBFS (T1.47: one loudness for everything the walkie plays; speech
+and streams at -20, cues 3 dB under), by ffmpeg's two-pass loudnorm, and
+measured again after the Opus round trip.
+
 Then build and flash; commit the .hxp files (the build needs no API key).
 To change what the walkie says, edit PROMPTS and the enum in
 components/hux_prompts/include/hux_prompts.h together.
@@ -26,10 +34,12 @@ components/hux_prompts/include/hux_prompts.h together.
 from __future__ import annotations
 
 import io
+import json
 import os
 import pathlib
 import re
 import struct
+import subprocess
 import sys
 import unicodedata
 import wave
@@ -51,6 +61,8 @@ PROMPTS = {
     "offline": "No tengo conexión. Lo sigo intentando.",
     "battery_empty": "Batería agotada. Ponme a cargar.",
 }
+LOUDNESS_LUFS = -20.0  # T1.47: speech and streams
+TRUE_PEAK_DB = -1.5
 MAGIC = b"HXP1"
 EDGE_MS = 80  # silence kept before and after the words
 SILENT = 300  # |sample| under this counts as silence when trimming
@@ -76,6 +88,61 @@ def trim(pcm: bytes) -> bytes:
     start = max(0, loud[0] - edge)
     end = min(len(samples), loud[-1] + edge)
     return pcm[start * 2 : end * 2]
+
+
+def ffmpeg(args: list[str], pcm: bytes) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-nostats",
+            "-f",
+            "s16le",
+            "-ar",
+            str(SAMPLE_RATE),
+            "-ac",
+            "1",
+            "-i",
+            "-",
+            *args,
+        ],
+        input=pcm,
+        capture_output=True,
+        check=True,
+    )
+
+
+def level(pcm: bytes) -> bytes:
+    """Two-pass loudnorm to LOUDNESS_LUFS, true peak TRUE_PEAK_DB, linear
+    gain when the peak allows it."""
+    target = f"I={LOUDNESS_LUFS}:TP={TRUE_PEAK_DB}:LRA=11"
+    first = ffmpeg(["-af", f"loudnorm={target}:print_format=json", "-f", "null", "-"], pcm)
+    err = first.stderr.decode()
+    stats = json.loads(err[err.rindex("{") : err.rindex("}") + 1])
+    measured = (
+        f"measured_I={stats['input_i']}:measured_TP={stats['input_tp']}:"
+        f"measured_LRA={stats['input_lra']}:measured_thresh={stats['input_thresh']}:"
+        f"offset={stats['target_offset']}:linear=true"
+    )
+    out = ffmpeg(
+        ["-af", f"loudnorm={target}:{measured}", "-ar", str(SAMPLE_RATE), "-f", "s16le", "-"], pcm
+    )
+    return out.stdout
+
+
+def loudness(pcm: bytes) -> tuple[float, float]:
+    """Integrated LUFS and true peak dBFS (ffmpeg's ebur128)."""
+    run = ffmpeg(["-af", "ebur128=peak=true", "-f", "null", "-"], pcm)
+    text = run.stderr.decode()
+    summary = text[text.rindex("Summary:") :]
+    lufs = float(re.search(r"I:\s+(-?[\d.]+) LUFS", summary).group(1))
+    peak = float(re.search(r"Peak:\s+(-?[\d.inf]+) dBFS", summary).group(1))
+    return lufs, peak
+
+
+def decoded(blob: bytes) -> bytes:
+    dec = OpusDecoderStream()
+    return b"".join(dec.decode(p) for p in unpack(blob))
 
 
 def encode(pcm: bytes) -> list[bytes]:
@@ -114,8 +181,7 @@ def words(text: str) -> list[str]:
 def check(client: OpenAI, name: str, blob: bytes, text: str) -> None:
     """Decode the packets back and transcribe them: the walkie must say
     the text, word for word."""
-    dec = OpusDecoderStream()
-    pcm = b"".join(dec.decode(p) for p in unpack(blob))
+    pcm = decoded(blob)
     wav = io.BytesIO()
     with wave.open(wav, "wb") as w:
         w.setnchannels(1)
@@ -132,8 +198,27 @@ def check(client: OpenAI, name: str, blob: bytes, text: str) -> None:
     print(f"  check: heard {heard!r}")
 
 
+def finish(client: OpenAI, name: str, text: str, pcm: bytes) -> None:
+    """Level, encode, check the words and the loudness the walkie will play,
+    write the file."""
+    pcm = level(pcm)
+    packets = encode(pcm)
+    blob = pack(packets)
+    lufs, peak = loudness(decoded(blob))
+    print(
+        f"{name}: {text!r} {len(pcm) // 48} ms, {len(packets)} packets, {len(blob)} bytes, "
+        f"{lufs:.1f} LUFS, true peak {peak:.1f} dBFS (after Opus)"
+    )
+    if abs(lufs - LOUDNESS_LUFS) > 1.0 or peak > TRUE_PEAK_DB + 0.5:
+        sys.exit(f"{name}: {lufs:.1f} LUFS / {peak:.1f} dBTP misses the target")
+    check(client, name, blob, text)
+    (OUT / f"{name}.hxp").write_bytes(blob)
+
+
 def main() -> None:
-    names = sys.argv[1:] or list(PROMPTS)
+    args = sys.argv[1:]
+    level_only = "--level-only" in args
+    names = [a for a in args if a != "--level-only"] or list(PROMPTS)
     unknown = [n for n in names if n not in PROMPTS]
     if unknown:
         sys.exit(f"unknown prompt(s) {unknown}; known: {list(PROMPTS)}")
@@ -141,24 +226,20 @@ def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     for name in names:
         text = PROMPTS[name]
-        pcm = client.audio.speech.create(
-            model=MODEL,
-            voice=VOICE,
-            input=text,
-            instructions=INSTRUCTIONS,
-            response_format="pcm",  # 24 kHz PCM16 mono, the wire format
-        ).content
-        pcm = trim(pcm)
-        peak = max(abs(s) for s in memoryview(pcm).cast("h"))
-        packets = encode(pcm)
-        blob = pack(packets)
-        ms = len(packets) * 60
-        print(
-            f"{name}: {text!r} {len(pcm) // 48} ms of speech, {len(packets)} packets "
-            f"({ms} ms), {len(blob)} bytes, peak {peak} of 32767"
-        )
-        check(client, name, blob, text)
-        (OUT / f"{name}.hxp").write_bytes(blob)
+        if level_only:
+            pcm = decoded((OUT / f"{name}.hxp").read_bytes())  # the same take
+            before, _ = loudness(pcm)
+            print(f"{name}: was {before:.1f} LUFS")
+        else:
+            pcm = client.audio.speech.create(
+                model=MODEL,
+                voice=VOICE,
+                input=text,
+                instructions=INSTRUCTIONS,
+                response_format="pcm",  # 24 kHz PCM16 mono, the wire format
+            ).content
+            pcm = trim(pcm)
+        finish(client, name, text, pcm)
 
 
 if __name__ == "__main__":
