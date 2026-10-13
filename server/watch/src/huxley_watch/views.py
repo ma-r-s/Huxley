@@ -482,15 +482,23 @@ def fallback_status(
 
 
 BATTERY_WINDOW = timedelta(hours=24)
-BATTERY_GAP = timedelta(minutes=15)  # longer between readings: the walkie was off
+BATTERY_GAP = timedelta(minutes=15)  # offline this long between readings: the line breaks
 
 
 def battery_history(i: Inputs) -> dict[str, Any]:
     """The walkie's battery over the last 24 h, from its own readings
-    (client_event system.battery, about once a minute while connected).
-    Points carry minutes since the window's start; a gap of more than 15
-    minutes between readings breaks the line (the walkie was off or away)."""
+    (client_event system.battery: every 20 minutes, at each press and at
+    each connect). Points carry minutes since the window's start. The line
+    breaks where the walkie was offline for over 15 minutes between two
+    readings, from its connection spans: a quiet stretch between readings
+    is normal, only a disconnection means the walkie was off or away."""
     start = i.now - BATTERY_WINDOW
+    spans = i.walkie.spans
+    offline = [
+        (spans[k][1], spans[k + 1][0])
+        for k in range(len(spans) - 1)
+        if spans[k + 1][0] - spans[k][1] > BATTERY_GAP
+    ]
     raw: list[tuple[datetime, int, int | None]] = []
     for e in i.events:
         if e.name != "client.system.battery" or e.ts < start:
@@ -513,7 +521,8 @@ def battery_history(i: Inputs) -> dict[str, Any]:
                 "pct": pct,
                 "mv": mv,
                 "at": ts.astimezone(i.tz).strftime("%H:%M"),
-                "gap_before": prev is not None and ts - prev > BATTERY_GAP,
+                "gap_before": prev is not None
+                and any(prev <= off_start and off_end <= ts for off_start, off_end in offline),
             }
         )
         prev = ts

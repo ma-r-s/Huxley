@@ -292,36 +292,42 @@ def test_battery_not_wired_says_so() -> None:
 
 
 def _battery_day() -> list[str]:
-    """Readings every minute for two hours, then the walkie off for 40
-    minutes, then back for half an hour; plus one reading from yesterday."""
+    """The walkie as it reports: a reading every 20 minutes while connected.
+    Online from 190 to 70 minutes ago, off for 40 minutes, back for the last
+    half hour; plus one reading from yesterday."""
     out = [line("client.system.battery", ago(hours=30), mv=4100, pct=95, conn_id="w0")]
-    for m in range(190, 70, -1):  # 190 to 71 minutes ago
+    out += walkie_session(ago(minutes=190), ago(minutes=70), "w1")
+    out.append(disconnected(ago(minutes=70), "w1"))
+    for k, m in enumerate(range(190, 69, -20)):  # 7 readings, 80 % down to 74 %
         out.append(
-            line(
-                "client.system.battery",
-                ago(minutes=m),
-                mv=3900,
-                pct=80 - (190 - m) // 10,
-                conn_id="w1",
-            )
+            line("client.system.battery", ago(minutes=m), mv=3900, pct=80 - k, conn_id="w1")
         )
-    for m in range(30, 0, -1):  # after a 40 minute gap
+    out += walkie_session(ago(minutes=30), NOW, "w2")
+    for m in (30, 10):
         out.append(line("client.system.battery", ago(minutes=m), mv=3700, pct=18, conn_id="w2"))
     return out
 
 
-def test_battery_history_keeps_the_last_day_in_five_minute_points() -> None:
+def test_battery_history_keeps_the_last_day_and_breaks_only_when_offline() -> None:
     h = status_for(flat(DAY, *_battery_day()))["battery_history"]
     pts = h["points"]
     assert h["window_min"] == 24 * 60
-    assert all(p["pct"] != 95 for p in pts)  # yesterday's reading is outside the window
-    assert len(pts) <= 31  # 150 readings, one point per 5 minutes
-    assert [p["gap_before"] for p in pts].count(True) == 1  # the walkie off for 40 minutes
-    assert pts[-1]["pct"] == 18 and pts[-1]["mv"] == 3700
-    assert pts[-1]["m"] == 24 * 60 - 1
+    assert [p["pct"] for p in pts] == [80, 79, 78, 77, 76, 75, 74, 18, 18]  # not yesterday's 95
+    # 20 minutes between readings is normal; only the 40 minutes offline breaks the line
+    assert [p["gap_before"] for p in pts].count(True) == 1 and pts[7]["gap_before"]
+    assert pts[-1]["mv"] == 3700 and pts[-1]["m"] == 24 * 60 - 10
     assert (h["low_pct"], h["crit_pct"]) == (20, 10)
     assert all(m["label"][-3:] == ":00" for m in h["marks"])
     assert 3 <= len(h["marks"]) <= 4  # every 6 hours
+
+
+def test_battery_history_one_point_per_five_minutes() -> None:
+    lines = walkie_session(ago(minutes=60), NOW, "w1")
+    lines += [
+        line("client.system.battery", ago(minutes=m), mv=3800, pct=50, conn_id="w1")
+        for m in range(60, 0, -1)
+    ]
+    assert len(status_for(flat(DAY, *lines))["battery_history"]["points"]) <= 13
 
 
 def test_battery_chart_breaks_where_the_walkie_was_off() -> None:
@@ -333,6 +339,7 @@ def test_battery_chart_breaks_where_the_walkie_was_off() -> None:
     assert '<i class="bdot warn"' in chart  # 18 % sits under the low line
     assert ">18 %<" in chart
     assert "18 % (3.70 V)" in chart  # a half-hour tip
+    assert '<span class="blab left"' in chart  # at the right edge the label sits left of the dot
     assert chart.count("data-tip=") <= 48
 
 

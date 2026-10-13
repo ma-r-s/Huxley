@@ -203,11 +203,11 @@ details.bgroup[open]>summary{opacity:.7}
 .chip.crit{background:color-mix(in srgb,var(--crit) 16%,transparent)}
 .plot.cbat{height:150px}.plot.cspend{height:72px;margin-top:24px}
 .cline{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
-.plot.bat{height:120px}.bline .ln{fill:none;stroke:var(--good);stroke-width:2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
-.bline .area{fill:var(--good);fill-opacity:.1;stroke:none}.bline .low{stroke:var(--warn);stroke-width:1.5;stroke-dasharray:4 4;vector-effect:non-scaling-stroke}
+.plot.bat{height:120px}.cline.bline .ln{fill:none;stroke:var(--good);stroke-width:2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
+.cline.bline .area{fill:var(--good);fill-opacity:.1;stroke:none}.bline .low{stroke:var(--warn);stroke-width:1.5;stroke-dasharray:4 4;vector-effect:non-scaling-stroke}
 .bdot{position:absolute;width:10px;height:10px;margin:0 0 -5px -5px;border-radius:50%;background:var(--good);box-shadow:0 0 0 2px var(--card);pointer-events:none}
 .bdot.warn{background:var(--warn)}.bdot.crit{background:var(--crit)}
-.blab{position:absolute;transform:translate(8px,50%);font-size:12px;font-weight:600;color:var(--ink);white-space:nowrap;pointer-events:none}
+.blab{position:absolute;transform:translate(8px,50%)}.blab.left{transform:translate(calc(-100% - 8px),50%)}.blab{font-size:12px;font-weight:600;color:var(--ink);white-space:nowrap;pointer-events:none}
 .cline .area{fill:var(--credit);fill-opacity:.1;stroke:none}
 .cline .ln,.cline .proj{fill:none;stroke:var(--credit);stroke-width:2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
 .cline .proj{stroke-dasharray:5 4}
@@ -697,7 +697,7 @@ def _battery_chart(h: dict[str, Any]) -> str:
     left = last["m"] / total * 100
     marks = (
         f'<i class="bdot {cls}" style="left:{left:.2f}%;bottom:{last["pct"]:.0f}%"></i>'
-        f'<span class="blab" style="left:{left:.2f}%;bottom:{last["pct"]:.0f}%">{last["pct"]} %</span>'
+        f'<span class="blab{" left" if left > 85 else ""}" style="left:{left:.2f}%;bottom:{last["pct"]:.0f}%">{last["pct"]} %</span>'
     )
     ticks = "".join(
         f'<div class="ytick" style="bottom:{v}%"><span>{v} %</span></div>' for v in (0, 50, 100)
