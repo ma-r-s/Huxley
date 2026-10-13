@@ -380,3 +380,43 @@ def test_http_serves_the_page_and_json(tmp_path: Path) -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+class Recording(Sender):
+    def __init__(self) -> None:
+        super().__init__("t", "c")
+        self.sent: list[str] = []
+
+    def send(self, text: str, kinds: Sequence[str] = ()) -> str | None:
+        self.sent.append(text)
+        return None
+
+
+def test_a_check_run_beside_the_service_never_makes_it_repeat(tmp_path: Path) -> None:
+    """2026-10-13: a `--once` run saw an item clear, sent "Cleared" and saved
+    the state; the service, still holding the item in memory, would have
+    sent "Cleared" again at its next cycle."""
+    cfg_path = setup(tmp_path, OFFLINE_LOG)
+    service = watcher(cfg_path, Recording())
+    service.cycle(NOW)
+    assert ids(service.status or {}) == ["walkie.offline"]
+    back = flat(OFFLINE_LOG, walkie_session(ago(minutes=5), NOW, "w2"))
+    (tmp_path / "runtime" / "logs" / "huxley.log").write_text("".join(x + "\n" for x in back))
+    check = Recording()
+    watcher(cfg_path, check).cycle(NOW)  # the one-off check: it says "Cleared"
+    assert any(t.startswith("Cleared") for t in check.sent)
+    sender = service.sender
+    assert isinstance(sender, Recording)
+    sender.sent.clear()
+    service.cycle(NOW)
+    assert sender.sent == []
+
+
+def test_an_unreadable_state_file_keeps_the_memory(tmp_path: Path) -> None:
+    sender = Recording()
+    service = watcher(setup(tmp_path, OFFLINE_LOG), sender)
+    service.cycle(NOW)
+    assert len(sender.sent) == 1
+    (tmp_path / "state" / "alerts.json").write_text("{not json")
+    service.cycle(NOW)
+    assert len(sender.sent) == 1  # no second "Needs you" from a forgotten item

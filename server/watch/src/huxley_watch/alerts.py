@@ -71,16 +71,15 @@ class AlertState:
         }
 
 
-def load_state(path: Path, log: WatchLog) -> AlertState:
-    """The saved state, or an empty one (first run, or a damaged file,
-    which is logged: the open items will be announced again)."""
+def read_state(path: Path) -> AlertState | str | None:
+    """The saved state; None when there is no file; the error's type when
+    it can't be read or parsed."""
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return AlertState()
+        return None
     except (OSError, ValueError) as exc:
-        log.warning("watch.state_unreadable", path=str(path), error=type(exc).__name__)
-        return AlertState()
+        return type(exc).__name__
     try:
         return AlertState(
             open={k: OpenItem(**v) for k, v in dict(raw.get("open", {})).items()},
@@ -88,8 +87,17 @@ def load_state(path: Path, log: WatchLog) -> AlertState:
             failures=int(raw.get("failures", 0)),
         )
     except (TypeError, AttributeError, ValueError) as exc:
-        log.warning("watch.state_unreadable", path=str(path), error=type(exc).__name__)
+        return type(exc).__name__
+
+
+def load_state(path: Path, log: WatchLog) -> AlertState:
+    """The saved state, or an empty one (first run, or a damaged file,
+    which is logged: the open items will be announced again)."""
+    got = read_state(path)
+    if isinstance(got, str):
+        log.warning("watch.state_unreadable", path=str(path), error=got)
         return AlertState()
+    return got if got is not None else AlertState()
 
 
 def save_state(path: Path, state: AlertState) -> None:

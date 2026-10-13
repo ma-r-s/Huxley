@@ -264,7 +264,10 @@ chunk is sent. A failed send stays queued for the next cycle, the reason
 is logged (never the token or the topic), and after 3 in a row the page
 shows "Alerts failing". The open items, the queue and the failure count
 are kept in `<state_dir>/alerts.json`, so a restart doesn't send anything
-twice.
+twice. The service re-reads it every cycle (`watch.state_reloaded` when
+someone else changed it), so a `--once` check run beside it doesn't make
+it repeat what that check already sent; a file it can't read is ignored
+and its memory kept.
 
 If `healthchecks_url` is set, every cycle pings it: healthchecks.io tells
 you when the pings stop, which is how you learn the box itself died.
@@ -280,7 +283,7 @@ spent, the spend's source, the pace, duration), `watch.item_opened`, `watch.item
 `watch.alert_dropped`, `watch.ping_failed`, `watch.step_failed`,
 `watch.db_unavailable`, `watch.logs_missing`, `watch.bench_line_skipped`,
 `watch.bench_window_capped`,
-`watch.config_invalid`, `watch.secrets_insecure`, `watch.timezone_fallback`,
+`watch.config_invalid`, `watch.secrets_insecure`, `watch.timezone_fallback`, `watch.state_reloaded`,
 `watch.telegram_off`, `watch.ping_off`, `watch.book_budget_off`,
 `watch.openai_admin_off`, `watch.openai_admin_read` (days billed, the
 limits read, `limit_error`, duration), `watch.openai_costs_failed` (the
