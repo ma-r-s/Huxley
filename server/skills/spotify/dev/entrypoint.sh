@@ -9,6 +9,14 @@ set -eu
 : "${SOLOIST_API_KEY:?set SOLOIST_API_KEY}"
 DEVICE_NAME="${DEVICE_NAME:-Huxley}"
 mkdir -p "$XDG_RUNTIME_DIR" /data/bin /cache
+# A restart keeps the container's files: after a power cut the killed
+# daemon's pid file is still here, its number now belongs to another
+# process, and PulseAudio refuses to start ("Daemon startup failed", a
+# restart loop: 2026-10-13). The runtime dir is this container's alone.
+if [ -e "$XDG_RUNTIME_DIR/pulse" ]; then
+  echo "entrypoint: removing stale PulseAudio runtime state ($XDG_RUNTIME_DIR/pulse)" >&2
+  rm -rf "$XDG_RUNTIME_DIR/pulse"
+fi
 
 # --log-target=stderr: the container has no syslog; this lands in docker logs.
 pulseaudio --daemonize=yes --exit-idle-time=-1 --disallow-exit -n --log-target=stderr \
