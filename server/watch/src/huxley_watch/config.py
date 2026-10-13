@@ -1,6 +1,6 @@
 """The watcher's settings: one TOML file, every key optional, plus a
-secrets file (mode 600) for the Telegram bot, the dead-man ping URL and
-the OpenAI admin key.
+secrets file (mode 600) for the alert channel (an ntfy topic, or a
+Telegram bot), the dead-man ping URL and the OpenAI admin key.
 
 Lookup: `--config PATH`, else `$HUXLEY_WATCH_CONFIG`, else
 `~/.config/huxley-watch/watch.toml` if it exists, else all defaults.
@@ -110,6 +110,10 @@ class Config:
     book_since: date | None = None  # when the allowance began (first cycle only)
     telegram_token: str | None = None
     telegram_chat_id: str | None = None
+    # ntfy (phone push): the topic is a secret (anyone who knows it can
+    # read the alerts and post to them), the server a plain setting.
+    ntfy_topic: str | None = field(default=None, repr=False)
+    ntfy_server: str = "https://ntfy.sh"
     ping_url: str | None = None
     health_url: str | None = None  # the server's /health, once it has one (T1.43 W1)
     check_pid: bool = True  # read the server's instance lock (same box only)
@@ -117,6 +121,15 @@ class Config:
     thresholds: Thresholds = field(default_factory=Thresholds)
     source: Path | None = None  # the config file read, if any
     notes: tuple[tuple[str, str], ...] = ()  # (event, detail) to log once
+
+    @property
+    def ntfy_url(self) -> str | None:
+        return f"{self.ntfy_server}/{self.ntfy_topic}" if self.ntfy_topic else None
+
+    @property
+    def page_url(self) -> str:
+        host = f"[{self.bind_host}]" if ":" in self.bind_host else self.bind_host
+        return f"http://{host}:{self.bind_port}/"
 
     @property
     def log_file(self) -> Path:
@@ -418,6 +431,8 @@ def _load(path: Path | None) -> Config:
         book_since=book_since,
         telegram_token=_secret(secrets, "telegram_bot_token"),
         telegram_chat_id=_secret(secrets, "telegram_chat_id"),
+        ntfy_topic=_secret(secrets, "ntfy_topic"),
+        ntfy_server=str(watch.get("ntfy_server", "https://ntfy.sh")).rstrip("/"),
         ping_url=ping,
         health_url=_secret(huxley, "health_url"),
         check_pid=huxley.get("check_pid", True) is not False,

@@ -38,9 +38,9 @@ uv run --package huxley-watch pytest server/watch/tests
 
 With no config it watches this checkout (`server/runtime/logs`,
 `server/personas/abuelos`). Settings: [`watch.example.toml`](./watch.example.toml);
-the Telegram bot, the dead-man ping URL and the OpenAI admin key go in a
+the alert channel (an ntfy topic or a Telegram bot), the dead-man ping URL and the OpenAI admin key go in a
 separate [`secrets.toml`](./secrets.example.toml) that must be `chmod 600`.
-Any missing optional piece (Telegram, the ping, the OpenAI admin key or
+Any missing optional piece (the alert channel, the ping, the OpenAI admin key or
 limit, the audiobook allowance, the database) turns just that piece off,
 with one log line saying so.
 
@@ -246,15 +246,22 @@ is skipped and logged once.
 
 ## Alerts
 
-Telegram's Bot API when `telegram_bot_token` and `telegram_chat_id` are
-set, otherwise only the watcher's log (`watch.alert_sent channel=log`).
+A push to the phone through [ntfy](https://ntfy.sh) when `ntfy_topic` is
+set (free app, no account: subscribe to the topic in the app; the topic is
+the secret, so make it long and random). Else Telegram's Bot API when
+`telegram_bot_token` and `telegram_chat_id` are set, otherwise only the
+watcher's log (`watch.alert_sent channel=log`). An ntfy push is titled
+"Walkie: needs you" (high priority) when something opened, "Walkie:
+fixed" otherwise, and tapping it opens this page (over Tailscale). The
+texts name skills and states, never people.
 Once when an item appears ("Needs you: ..."), once when it clears
 ("Cleared: ..."), never repeated. Between 22:00 and 07:00 (`quiet_hours`)
 they wait and go out together in the morning; something that appeared and
 cleared before its alert went out becomes one "Came and went" line.
-Messages go in chunks Telegram accepts (4096 characters); each leaves the
-queue only once its chunk is sent. A failed send stays queued for the
-next cycle, Telegram's reason is logged, and after 3 in a row the page
+Messages go in chunks the channel accepts (Telegram 4096 characters, ntfy
+3500 to stay under its 4096 bytes); each leaves the queue only once its
+chunk is sent. A failed send stays queued for the next cycle, the reason
+is logged (never the token or the topic), and after 3 in a row the page
 shows "Alerts failing". The open items, the queue and the failure count
 are kept in `<state_dir>/alerts.json`, so a restart doesn't send anything
 twice.

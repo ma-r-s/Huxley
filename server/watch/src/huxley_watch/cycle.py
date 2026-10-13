@@ -108,9 +108,10 @@ class Watcher:
                 self._notes_logged.add((event, detail))
         offs = (
             (
-                self.cfg.telegram_token is None or self.cfg.telegram_chat_id is None,
+                self.cfg.ntfy_topic is None
+                and (self.cfg.telegram_token is None or self.cfg.telegram_chat_id is None),
                 "watch.telegram_off",
-                "no bot token and chat id in secrets",
+                "no ntfy topic, bot token or chat id in secrets: alerts are only logged",
             ),
             (self.cfg.ping_url is None, "watch.ping_off", "no healthchecks_url"),
             (
@@ -150,7 +151,12 @@ class Watcher:
     def sender(self) -> Sender:
         if self._sender_override is not None:
             return self._sender_override
-        return Sender(self.cfg.telegram_token, self.cfg.telegram_chat_id)
+        return Sender(
+            self.cfg.telegram_token,
+            self.cfg.telegram_chat_id,
+            ntfy_url=self.cfg.ntfy_url,
+            page_url=self.cfg.page_url,
+        )
 
     def _fenced(self, step: str, fn: Callable[[], Any], default: Any) -> Any:
         try:

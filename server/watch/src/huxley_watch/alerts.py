@@ -8,8 +8,9 @@ next cycle, which is not a repeat: it never arrived). Something that
 appeared and cleared before its alert went out (at night, say) becomes
 one "came and went" line instead of two.
 
-Delivery is Telegram's Bot API (`sendMessage`) when a token and chat id
-are configured; otherwise the alert is only logged (`channel=log`).
+Delivery is a push to the phone through ntfy (a POST to the topic) when a
+topic is configured, else Telegram's Bot API (`sendMessage`) when a token
+and chat id are, otherwise the alert is only logged (`channel=log`).
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ if TYPE_CHECKING:
 
 STATE_VERSION = 1
 TELEGRAM_MAX = 4096  # characters in one sendMessage
+NTFY_MAX = 3500  # ntfy takes 4096 bytes; Spanish accents take two
 
 
 @dataclass
@@ -160,23 +162,40 @@ def plan(
 
 
 class Sender:
-    """Telegram if configured, else the log. `send` returns None on
-    success or the error to log."""
+    """ntfy if a topic is configured, else Telegram, else the log. `send`
+    returns None on success or the error to log."""
 
-    def __init__(self, token: str | None, chat_id: str | None, timeout_s: float = 10.0) -> None:
+    def __init__(
+        self,
+        token: str | None,
+        chat_id: str | None,
+        timeout_s: float = 10.0,
+        ntfy_url: str | None = None,
+        page_url: str | None = None,
+    ) -> None:
         self.token = token
         self.chat_id = chat_id
         self.timeout_s = timeout_s
+        self.ntfy_url = ntfy_url
+        self.page_url = page_url
 
     @property
     def channel(self) -> str:
+        if self.ntfy_url:
+            return "ntfy"
         return "telegram" if self.token and self.chat_id else "log"
 
-    def send(self, text: str) -> str | None:
+    @property
+    def limit(self) -> int:
+        return NTFY_MAX if self.channel == "ntfy" else TELEGRAM_MAX
+
+    def send(self, text: str, kinds: Sequence[str] = ()) -> str | None:
         """None on success, else what went wrong: never the URL or the
-        exception's text, which can carry the token."""
+        exception's text, which can carry the token or the topic."""
         if self.channel == "log":
             return None
+        if self.channel == "ntfy":
+            return self._ntfy(text, kinds)
         data = urllib.parse.urlencode(
             {"chat_id": self.chat_id, "text": text, "disable_web_page_preview": "true"}
         ).encode()
@@ -192,6 +211,30 @@ class Sender:
             return None
         described = body.get("description") if isinstance(body, dict) else None
         return f"telegram said: {str(described or 'not ok')[:200]}"
+
+    def _ntfy(self, text: str, kinds: Sequence[str]) -> str | None:
+        """One push: "Needs you" at high priority when anything opened,
+        else a plain "Fixed". Tapping it opens the page (over Tailscale)."""
+        assert self.ntfy_url is not None
+        needs_you = "opened" in kinds
+        headers = {
+            "Title": "Walkie: needs you" if needs_you else "Walkie: fixed",
+            "Priority": "high" if needs_you else "default",
+            "Tags": "warning" if needs_you else "white_check_mark",
+        }
+        if self.page_url:
+            headers["Click"] = self.page_url
+        request = urllib.request.Request(
+            self.ntfy_url, data=text.encode("utf-8"), headers=headers, method="POST"
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_s) as resp:
+                resp.read()
+        except urllib.error.HTTPError as exc:
+            return f"HTTP {exc.code}"
+        except Exception as exc:
+            return type(exc).__name__
+        return None
 
 
 def _telegram_description(exc: urllib.error.HTTPError) -> str:
@@ -228,10 +271,10 @@ def deliver(state: AlertState, sender: Sender, quiet: bool, log: WatchLog) -> Al
     if quiet or not state.pending:
         return state
     pending = list(state.pending)
-    for chunk in chunks(pending):
-        text = "\n\n".join(m.text for m in chunk)[:TELEGRAM_MAX]
+    for chunk in chunks(pending, sender.limit):
+        text = "\n\n".join(m.text for m in chunk)[: sender.limit]
         try:
-            error = sender.send(text)
+            error = sender.send(text, [m.kind for m in chunk])
         except Exception as exc:  # a broken sender must not stop the cycle
             error = type(exc).__name__
         if error is not None:

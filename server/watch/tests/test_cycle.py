@@ -33,7 +33,7 @@ from .test_alerts import FakeSender
 from .test_db import make_db
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
     from pathlib import Path
 
 
@@ -166,7 +166,7 @@ def test_a_crashing_sender_or_ping_never_skips_saving_or_the_page(tmp_path: Path
         def __init__(self) -> None:
             super().__init__("t", "c")
 
-        def send(self, text: str) -> str | None:
+        def send(self, text: str, kinds: Sequence[str] = ()) -> str | None:
             raise RuntimeError("boom with SECRET inside")
 
     def bad_ping(url: str) -> str | None:
@@ -272,6 +272,17 @@ def test_secrets_readable_by_others_are_refused_and_values_stripped(tmp_path: Pa
     cfg = load_config(cfg_path)
     assert cfg.telegram_token == "123:abc"
     assert cfg.telegram_chat_id == "42"
+
+
+def test_an_ntfy_topic_in_the_secrets_makes_ntfy_the_channel(tmp_path: Path) -> None:
+    cfg_path = setup(tmp_path, OFFLINE_LOG)
+    secrets = tmp_path / "secrets.toml"
+    secrets.write_text('ntfy_topic = " huxley-abc123 "' + chr(10))
+    secrets.chmod(0o600)
+    cfg = load_config(cfg_path)
+    assert cfg.ntfy_url == "https://ntfy.sh/huxley-abc123"
+    assert "huxley-abc123" not in repr(cfg)
+    assert cfg.page_url.startswith("http://") and cfg.page_url.endswith(":8780/")
 
 
 def test_balance_and_thresholds_from_the_config(tmp_path: Path) -> None:

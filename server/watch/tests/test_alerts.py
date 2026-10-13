@@ -7,6 +7,7 @@ import email.message
 import http.client
 import io
 import urllib.error
+import urllib.request
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -28,6 +29,7 @@ from huxley_watch.wlog import WatchLog
 from .logs import NOW, TZ
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
 
 
@@ -48,10 +50,12 @@ class FakeSender(Sender):
     def __init__(self, fail: bool = False, fail_after: int | None = None) -> None:
         super().__init__("token", "chat")
         self.sent: list[str] = []
+        self.kinds: list[list[str]] = []
         self.fail = fail
         self.fail_after = fail_after
 
-    def send(self, text: str) -> str | None:
+    def send(self, text: str, kinds: Sequence[str] = ()) -> str | None:
+        self.kinds.append(list(kinds))
         if self.fail or (self.fail_after is not None and len(self.sent) >= self.fail_after):
             return "URLError"
         self.sent.append(text)
@@ -263,3 +267,65 @@ def test_any_send_failure_is_its_type_only(
     error = Sender("SECRET", "42").send("hi")
     assert error == type(exc).__name__
     assert "SECRET" not in (error or "")
+
+
+# --- ntfy (phone push) --------------------------------------------------
+
+
+class _Captured:
+    def __init__(self) -> None:
+        self.requests: list[urllib.request.Request] = []
+
+    def __call__(self, request: urllib.request.Request, timeout: float = 0) -> Any:
+        self.requests.append(request)
+        return io.BytesIO(b'{"id": "x"}')
+
+
+NTFY = "https://ntfy.sh/huxley-SECRETTOPIC"
+
+
+def test_ntfy_wins_over_telegram_and_posts_the_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = _Captured()
+    monkeypatch.setattr("urllib.request.urlopen", captured)
+    sender = Sender("tok", "42", ntfy_url=NTFY, page_url="http://100.75.152.70:8780/")
+    assert sender.channel == "ntfy"
+    assert sender.send("Needs you: the walkie is offline.", ["opened"]) is None
+    req = captured.requests[0]
+    assert (req.full_url, req.get_method()) == (NTFY, "POST")
+    assert req.data == b"Needs you: the walkie is offline."
+    headers = {k.lower(): v for k, v in req.header_items()}
+    assert (headers["title"], headers["priority"]) == ("Walkie: needs you", "high")
+    assert headers["click"] == "http://100.75.152.70:8780/"
+
+
+def test_ntfy_a_clearing_is_a_plain_fixed(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = _Captured()
+    monkeypatch.setattr("urllib.request.urlopen", captured)
+    assert Sender(None, None, ntfy_url=NTFY).send("Cleared: back online.", ["cleared"]) is None
+    headers = {k.lower(): v for k, v in captured.requests[0].header_items()}
+    assert (headers["title"], headers["priority"]) == ("Walkie: fixed", "default")
+    assert "click" not in headers
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        urllib.error.HTTPError(NTFY, 429, "Too Many Requests", email.message.Message(), None),
+        urllib.error.URLError(f"no route to {NTFY}"),
+        http.client.IncompleteRead(b"SECRETTOPIC"),
+    ],
+)
+def test_ntfy_failures_never_carry_the_topic(
+    monkeypatch: pytest.MonkeyPatch, exc: BaseException
+) -> None:
+    monkeypatch.setattr("urllib.request.urlopen", _raise(exc))
+    error = Sender(None, None, ntfy_url=NTFY).send("hi", ["opened"])
+    assert error in ("HTTP 429", "URLError", "IncompleteRead")
+    assert "SECRETTOPIC" not in (error or "")
+
+
+def test_deliver_tells_the_sender_what_kinds_it_carries() -> None:
+    sender = FakeSender()
+    state = step(AlertState(), [OFFLINE], sender)
+    step(state, [], sender, minutes=10)
+    assert sender.kinds == [["opened"], ["cleared"]]
