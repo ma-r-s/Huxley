@@ -346,7 +346,7 @@ def rule_walkie_offline(i: Inputs) -> Item | None:
     w = i.walkie
     if w.online or not i.events:
         return None
-    if i.battery.cutoff:
+    if battery_cut_off(i):
         return None  # it switched itself off with an empty battery: rule_battery says so
     was = "walkie.offline" in i.was_open  # open: it stays open until the walkie is back
     if i.bench.suppressed(i.now) and not was:
@@ -822,54 +822,74 @@ def rule_disk(i: Inputs) -> Item | None:
 BATTERY_STALE = timedelta(hours=2)  # older says nothing about now
 
 
-def rule_battery(i: Inputs) -> Item | None:
+def battery_cut_off(i: Inputs) -> bool:
+    """Offline because the firmware's cutoff (F-0030) switched it off: the
+    last reading carried `cutoff: true` and no connection began after it.
+    A walkie that came back without a reading (lost, older firmware) and
+    went away again is plain offline, not "empty" from an old cutoff."""
+    b, w = i.battery, i.walkie
+    if not b.cutoff or b.at is None or w.online:
+        return False
+    return not w.spans or w.spans[-1][0] <= b.at
+
+
+def rule_battery(i: Inputs) -> Item | list[Item] | None:
     """Low battery, from the walkie's own readings (every 20 minutes, at
     each press and at each connect). Hysteresis: opens under low, clears
     only back at clear (a charge, not a wobble). A reading too old to judge
     keeps an open item open (no false "charged").
 
-    Empty: the firmware's cutoff (F-0030) sends a last reading with
-    `cutoff: true`, says so out loud and parks offline until a charger
-    lifts it. Gone with that flag is "battery empty", not "offline"; it
-    closes when the walkie is back."""
+    Empty: the cutoff sends a last reading with `cutoff: true`, says so out
+    loud and parks offline until a charger lifts it. Then "battery empty"
+    opens (not "offline") and closes when the walkie is back, and "battery
+    low" is held open under it: it may only clear at a real charge, never
+    at the cutoff itself or at the reconnect, where the walkie comes back
+    at about 10 % sitting on its charger."""
     b, key = i.battery, "battery.low"
     was = key in i.was_open
     if b.pct is None or b.at is None:
         return None
-    if b.cutoff and not i.walkie.online:
-        if i.bench.suppressed(i.now) and "battery.empty" not in i.was_open:
-            return None  # a bench run of the cutoff itself
+
+    def low(crit: bool) -> Item:
         return Item(
-            "battery.empty",
-            "Battery empty",
-            short(i.now - b.at),
+            key,
+            "Battery low",
+            f"{b.pct} %",
             "Charge it",
-            "The walkie switched itself off: its battery is empty.",
-            "He can't use it, and reminders and calls can't reach him until it's charged.",
+            f"The walkie's battery is at {b.pct} %.",
+            "When it runs out he can't use it, and reminders and calls can't reach him.",
             "Ask someone there to plug it into its wall charger (never a computer).",
-            "The walkie is charged and back online.",
+            "The walkie's battery is charged again.",
             since=b.at,
-            severity="crit",
+            severity="crit" if crit else "warn",
         )
+
+    if battery_cut_off(i):
+        items = [low(crit=True)]
+        if not i.bench.suppressed(i.now) or "battery.empty" in i.was_open:
+            items.insert(
+                0,
+                Item(
+                    "battery.empty",
+                    "Battery empty",
+                    short(i.now - b.at),
+                    "Charge it",
+                    "The walkie switched itself off: its battery is empty.",
+                    "He can't use it, and reminders and calls can't reach him until it's charged.",
+                    "Ask someone there to plug it into its wall charger (never a computer).",
+                    "The walkie is back online, charging.",
+                    since=b.at,
+                    severity="crit",
+                ),
+            )
+        return items
     stale = i.now - b.at > BATTERY_STALE
     if stale and not was:
         return None
     limit = i.th.battery_clear_pct if was else i.th.battery_low_pct
     if b.pct >= limit:
         return None
-    crit = b.pct < i.th.battery_crit_pct
-    return Item(
-        key,
-        "Battery low",
-        f"{b.pct} %",
-        "Charge it",
-        f"The walkie's battery is at {b.pct} %.",
-        "When it runs out he can't use it, and reminders and calls can't reach him.",
-        "Ask someone there to plug it into its wall charger (never a computer).",
-        "The walkie's battery is charged again.",
-        since=b.at,
-        severity="crit" if crit else "warn",
-    )
+    return low(crit=b.pct < i.th.battery_crit_pct)
 
 
 def rule_alerts_failing(i: Inputs) -> Item | None:

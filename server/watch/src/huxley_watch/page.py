@@ -705,7 +705,7 @@ def _battery_chart(h: dict[str, Any]) -> str:
     cols = []
     for k in range(48):
         lo, hi = k * total / 48, (k + 1) * total / 48
-        inside = [p for p in pts if lo <= p["m"] < hi]
+        inside = [p for p in pts if lo <= p["m"] < hi or (k == 47 and p["m"] == hi)]
         if inside:
             p = inside[-1]
             volts = f" ({p['mv'] / 1000:.2f} V)" if p.get("mv") else ""

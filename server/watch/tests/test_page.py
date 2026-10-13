@@ -321,6 +321,26 @@ def test_battery_history_keeps_the_last_day_and_breaks_only_when_offline() -> No
     assert 3 <= len(h["marks"]) <= 4  # every 6 hours
 
 
+def test_battery_line_breaks_across_a_restart_closed_span() -> None:
+    """The critic's case: a server restart ends a connection at the walkie's
+    last line, and a reading can land after it. The offline stretch then
+    doesn't contain the reading pair, but it overlaps it by an hour."""
+    lines = walkie_session(ago(minutes=130), ago(minutes=125), "w1")
+    lines.append(line("client.system.battery", ago(minutes=124), mv=3800, pct=50, conn_id="w1"))
+    lines.append(starting(ago(minutes=123)))
+    lines += walkie_session(ago(minutes=62), NOW, "w2")
+    lines.append(line("client.system.battery", ago(minutes=60), mv=3790, pct=48, conn_id="w2"))
+    pts = status_for(flat(DAY, *lines))["battery_history"]["points"]
+    assert [p["gap_before"] for p in pts] == [False, True]
+
+
+def test_battery_reading_at_the_right_edge_keeps_its_tip() -> None:
+    lines = walkie_session(ago(minutes=10), NOW, "w1")
+    lines.append(line("client.system.battery", NOW, mv=3700, pct=30, conn_id="w1"))
+    chart = render(status_for(flat(DAY, *lines))).split('id="battery"')[1].split("</section>")[0]
+    assert "30 % (3.70 V)" in chart
+
+
 def test_battery_history_one_point_per_five_minutes() -> None:
     lines = walkie_session(ago(minutes=60), NOW, "w1")
     lines += [

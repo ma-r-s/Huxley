@@ -482,6 +482,7 @@ def fallback_status(
 
 
 BATTERY_WINDOW = timedelta(hours=24)
+BATTERY_WINDOW_MIN = int(BATTERY_WINDOW.total_seconds() // 60)
 BATTERY_GAP = timedelta(minutes=15)  # offline this long between readings: the line breaks
 
 
@@ -491,7 +492,10 @@ def battery_history(i: Inputs) -> dict[str, Any]:
     each connect). Points carry minutes since the window's start. The line
     breaks where the walkie was offline for over 15 minutes between two
     readings, from its connection spans: a quiet stretch between readings
-    is normal, only a disconnection means the walkie was off or away."""
+    is normal, only a disconnection means the walkie was off or away. The
+    test is the overlap with an offline stretch, not containment: a span
+    closed by a server restart ends at the walkie's last line, which can
+    come before a reading."""
     start = i.now - BATTERY_WINDOW
     spans = i.walkie.spans
     offline = [
@@ -517,12 +521,12 @@ def battery_history(i: Inputs) -> dict[str, Any]:
         ts, pct, mv = buckets[key]
         points.append(
             {
-                "m": round((ts - start).total_seconds() / 60, 1),
+                "m": min(round((ts - start).total_seconds() / 60, 1), BATTERY_WINDOW_MIN),
                 "pct": pct,
                 "mv": mv,
                 "at": ts.astimezone(i.tz).strftime("%H:%M"),
                 "gap_before": prev is not None
-                and any(prev <= off_start and off_end <= ts for off_start, off_end in offline),
+                and any(min(ts, b) - max(prev, a) > BATTERY_GAP for a, b in offline),
             }
         )
         prev = ts
@@ -538,7 +542,7 @@ def battery_history(i: Inputs) -> dict[str, Any]:
             )
         t += timedelta(hours=1)
     return {
-        "window_min": int(BATTERY_WINDOW.total_seconds() // 60),
+        "window_min": BATTERY_WINDOW_MIN,
         "points": points,
         "marks": marks,
         "low_pct": i.th.battery_low_pct,
