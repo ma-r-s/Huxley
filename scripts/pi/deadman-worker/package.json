@@ -1,0 +1,12 @@
+{
+  "name": "huxley-walkie-deadman",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "selftest": "bun selftest.js"
+  },
+  "devDependencies": {
+    "wrangler": "4.118.0"
+  }
+}

@@ -46,7 +46,7 @@ walkie --2.4 GHz--> their router --> wss://<host> (Cloudflare edge) --tunnel--> 
                                                                               |- recordings (Ogg/Opus) + logs by date
                                                                               |- huxley-watch: alerts + the caregiver page (Tailscale)
                                                                               '- Soloist, cloudflared, firmware images
-                                                         healthchecks.io <-- pinged every few minutes (alerts if silent)
+                                                         Cloudflare Worker --> asks wss://<host> every 5 min (ntfy push if silent)
                                                          Mac: dev server, its own accounts, the twin board
 ```
 
@@ -401,7 +401,11 @@ Wi-Fi is a normal password network (compiled into the baseline list; check
 opens once more (W7, all of it); push after a private-data scan.
 
 Frozen and dropped (2026-10-12): the UPS (frozen: money), the healthchecks.io
-dead-man check (frozen: the Pi dies with the power, which Mario knows),
+dead-man check (frozen: the Pi dies with the power, which Mario knows;
+replaced 2026-10-13 by an outside check that needs nothing from the Pi, the
+`huxley-walkie-deadman` Worker in [`scripts/pi/README.md`](../scripts/pi/README.md#outside-check-huxley-walkie-deadman-cloudflare-worker);
+its pushes don't get through yet: ntfy.sh refuses anonymous pushes from
+Cloudflare's shared addresses),
 the Telegram bot (dropped: alerts live on the page, which Mario checks).
 
 Defaults until Mario says otherwise: alerts through a Telegram bot; dev on
