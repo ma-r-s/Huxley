@@ -719,6 +719,33 @@ def test_battery_old_reading_opens_nothing_but_keeps_an_open_item() -> None:
     assert _battery_item(old, frozenset({"battery.low"})) is not None  # no false "charged"
 
 
+def test_battery_cutoff_says_empty_not_offline() -> None:
+    """F-0030: the walkie sends a last reading with cutoff and parks offline.
+    One card that says why, not "Walkie offline"."""
+    lines = walkie_session(ago(hours=2), ago(minutes=40), "w1")
+    lines += [disconnected(ago(minutes=40), "w1")]
+    lines.append(
+        line("client.system.battery", ago(minutes=40), mv=3380, pct=6, cutoff=True, conn_id="w1")
+    )
+    i = inputs(lines)
+    empty = rule_battery(i)
+    assert empty is not None and empty.id == "battery.empty" and empty.severity == "crit"
+    assert empty.big == "40 min"
+    assert rule_walkie_offline(i) is None
+
+
+def test_battery_cutoff_closes_when_the_walkie_is_back() -> None:
+    lines = walkie_session(ago(hours=2), ago(minutes=40), "w1")
+    lines += [disconnected(ago(minutes=40), "w1")]
+    lines.append(
+        line("client.system.battery", ago(minutes=40), mv=3380, pct=6, cutoff=True, conn_id="w1")
+    )
+    lines += walkie_session(ago(minutes=5), NOW, "w2")
+    lines.append(_battery(35, ago(minutes=5)))  # the reading at its hello
+    item = rule_battery(inputs(lines, was_open=frozenset({"battery.empty"})))
+    assert item is None
+
+
 def test_battery_takes_the_last_reading() -> None:
     lines = [_battery(15, ago(minutes=20)), _battery(40, ago(minutes=2))]
     assert _battery_item(lines) is None

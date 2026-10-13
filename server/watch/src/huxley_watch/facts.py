@@ -359,6 +359,9 @@ class BatteryState:
     mv: int | None = None
     at: datetime | None = None  # when the last reading arrived
     wired: bool | None = None  # False: the board said battery.not_wired and never reported
+    cutoff: bool = (
+        False  # the last reading said the cell is spent: the walkie switched off (F-0030)
+    )
 
 
 def battery_state(events: Sequence[Event]) -> BatteryState:
@@ -370,7 +373,13 @@ def battery_state(events: Sequence[Event]) -> BatteryState:
         elif e.name == FIRMWARE_LOG and str(e.get("line") or "").startswith("battery.not_wired"):
             not_wired = True
     if reading is not None:
-        return BatteryState(_int(reading.get("pct")), _int(reading.get("mv")), reading.ts, True)
+        return BatteryState(
+            _int(reading.get("pct")),
+            _int(reading.get("mv")),
+            reading.ts,
+            True,
+            reading.get("cutoff") is True,
+        )
     return BatteryState(wired=False if not_wired else None)
 
 

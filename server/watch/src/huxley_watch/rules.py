@@ -346,6 +346,8 @@ def rule_walkie_offline(i: Inputs) -> Item | None:
     w = i.walkie
     if w.online or not i.events:
         return None
+    if i.battery.cutoff:
+        return None  # it switched itself off with an empty battery: rule_battery says so
     was = "walkie.offline" in i.was_open  # open: it stays open until the walkie is back
     if i.bench.suppressed(i.now) and not was:
         return None  # a planned outage or a bench run: no new alert inside it
@@ -821,14 +823,34 @@ BATTERY_STALE = timedelta(hours=2)  # older says nothing about now
 
 
 def rule_battery(i: Inputs) -> Item | None:
-    """Low battery, from the walkie's own readings (it sends one on every
-    change of percent and every 5 min). Hysteresis: opens under low, clears
+    """Low battery, from the walkie's own readings (every 20 minutes, at
+    each press and at each connect). Hysteresis: opens under low, clears
     only back at clear (a charge, not a wobble). A reading too old to judge
-    keeps an open item open (no false "charged")."""
+    keeps an open item open (no false "charged").
+
+    Empty: the firmware's cutoff (F-0030) sends a last reading with
+    `cutoff: true`, says so out loud and parks offline until a charger
+    lifts it. Gone with that flag is "battery empty", not "offline"; it
+    closes when the walkie is back."""
     b, key = i.battery, "battery.low"
     was = key in i.was_open
     if b.pct is None or b.at is None:
         return None
+    if b.cutoff and not i.walkie.online:
+        if i.bench.suppressed(i.now) and "battery.empty" not in i.was_open:
+            return None  # a bench run of the cutoff itself
+        return Item(
+            "battery.empty",
+            "Battery empty",
+            short(i.now - b.at),
+            "Charge it",
+            "The walkie switched itself off: its battery is empty.",
+            "He can't use it, and reminders and calls can't reach him until it's charged.",
+            "Ask someone there to plug it into its wall charger (never a computer).",
+            "The walkie is charged and back online.",
+            since=b.at,
+            severity="crit",
+        )
     stale = i.now - b.at > BATTERY_STALE
     if stale and not was:
         return None

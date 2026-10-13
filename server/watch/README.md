@@ -83,6 +83,11 @@ archive's list, from the data `/day/YYYY-MM-DD.json` serves).
   ("allowance not set" without one).
 - **OpenAI budget** (full width, under the gauge): the month's budget left
   as a battery, then daily spend. See "OpenAI budget".
+- **Battery, last 24 h** (full width): the walkie's own readings, one
+  point per 5 minutes, the line broken where the walkie was offline over
+  15 minutes between two readings (a quiet stretch between readings is
+  normal: it reads every 20 minutes). The 20 % line dashed, the latest
+  reading labelled, a tip per half hour with % and volts.
 - **Audio gaps per half hour**: the last 12 hours, every half hour a slot
   (nothing played: an empty slot), the 5 % threshold dashed, bars over it
   in amber. Same arithmetic as `clients/firmware/tools/dev.py link`.
@@ -193,8 +198,9 @@ card.
 
 | Item                   | Opens when                                                                                                     | Clears when                                           |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `walkie.offline`       | the walkie (client.device shell=firmware) away 15 min of daytime (07:00-22:00), or 2 days at all               | it connects                                           |
+| `walkie.offline`       | the walkie (client.device shell=firmware) away 15 min of daytime (07:00-22:00), or 2 days at all; not after a battery cutoff | it connects                                     |
 | `battery.low`          | the walkie's last `system.battery` reading is under 20 % (critical under 10 %)                                 | back at 30 % (an old reading keeps it open)           |
+| `battery.empty`        | the walkie's last reading carried `cutoff: true` (F-0030) and it's offline; critical, replaces `walkie.offline` | it connects                                           |
 | `audio.gaps`           | gaps 5 % or more of the speaker's playing time over 3 h (at least 2 min played)                                | under 60 % of that threshold                          |
 | `server.down`          | the server's process is gone, or its last line is a stop with no app ready after it, for 5 min                 | it runs                                               |
 | `server.restarts`      | 3 starts within an hour                                                                                        | fewer in the last hour                                |
@@ -215,7 +221,7 @@ card.
 
 Every threshold is in `[thresholds]`. With the server down, "walkie
 offline" is not said (nothing can connect; the server is the problem).
-Battery alerts come from the walkie's own readings (`client.system.battery`, F-0025: after each hello, on every change of percent, every 5 min). With no reading there is no alert.
+Battery alerts come from the walkie's own readings (`client.system.battery`, F-0025: at each hello, at each press, every 20 min; every 2 min under 10 %). With no reading there is no alert.
 
 ## Test windows
 
