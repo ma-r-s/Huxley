@@ -22,7 +22,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
-import traceback
 import wave
 from typing import TYPE_CHECKING
 
@@ -83,10 +82,11 @@ _STATUS_WAIT: dict[str, str] = {
     "fr": "Connexion \u2014 un instant",
 }
 
-# A press with no voice session plays the persona's "unavailable" clip once
-# the session has been down this long (T1.43); before that, the double
-# beep. The planned refresh reconnects in 2-3 s and a network blip within
-# the reconnect loop's first steps (1, 3, 10, 30 s): neither should talk.
+# A press with no voice session is answered, at its release, with the
+# persona's "unavailable" clip once the session has been down this long
+# (T1.43); before that, only the press's double beep. The planned refresh
+# reconnects in 2-3 s and a network blip within the reconnect loop's first
+# steps (1, 3, 10, 30 s): neither should talk.
 _UNAVAILABLE_AFTER_S = 60.0
 
 # The wire format, which a persona's sound file must already be in:
@@ -120,6 +120,20 @@ def _read_wire_wav(path: Path) -> bytes:
     if not pcm:
         raise ValueError("empty")
     return pcm
+
+
+def _exception_messages(exc: BaseException) -> str:
+    """The messages of `exc` and of what caused it (`__cause__`, else
+    `__context__`), one per line: where a provider names a refusal. Not
+    the formatted traceback, whose source lines could hold anything."""
+    lines: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        lines.append(f"{type(current).__name__}: {current}")
+        current = current.__cause__ or current.__context__
+    return "\n".join(lines)
 
 
 def _load_unavailable_sound(persona: PersonaSpec) -> bytes | None:
@@ -202,14 +216,20 @@ class Application:
 
         # What the user hears when the voice provider can't serve (T1.43):
         # the persona's clip, or None for the double beep. A press with no
-        # session plays it in a long outage or after a refusal
-        # (`on_ptt_start`); the coordinator plays it for a refused turn.
+        # session gets it at its release in a long outage or after a
+        # refusal (`on_ptt_stop`); the coordinator plays it for a refused
+        # user turn.
         self._unavailable_sound = _load_unavailable_sound(persona)
         # The provider's code when it last refused the account (no credit,
         # a spend limit), from a failed connect or a refused turn: a press
-        # with no session then plays the clip at once, not after the
-        # outage has lasted `_UNAVAILABLE_AFTER_S`. Cleared by a connect.
+        # with no session then gets the clip at once, not after the outage
+        # has lasted `_UNAVAILABLE_AFTER_S`. Cleared only by a completed
+        # response (`_on_response_done`): a connect proves nothing when the
+        # provider refuses answer by answer, as huxley-watch also reads it.
         self._refusal_code: str | None = None
+        # Why the press being held (rejected: no session) is answered with
+        # the clip at its release; None: it got only the beep.
+        self._clip_on_release: str | None = None
 
         # Provider callbacks — lambdas so `self.coordinator` resolves at call
         # time (constructed below). The provider fires these as it receives
@@ -217,7 +237,7 @@ class Application:
         provider_callbacks = VoiceProviderCallbacks(
             on_audio_delta=lambda pcm: self.coordinator.on_audio_delta(pcm),
             on_tool_call=lambda cid, name, args: self.coordinator.on_tool_call(cid, name, args),
-            on_response_done=lambda: self.coordinator.on_response_done(),
+            on_response_done=self._on_response_done,
             on_audio_done=lambda: self.coordinator.on_audio_done(),
             on_commit_failed=lambda: self.coordinator.on_commit_failed(),
             on_session_end=self._on_session_end,
@@ -689,9 +709,6 @@ class Application:
         )
         try:
             await self.provider.connect(language=self._resolved_persona.language_code)
-            # A session is up: an earlier refusal no longer says the account
-            # is refused (a refused turn in this session marks it again).
-            self._refusal_code = None
             await self.state_machine.trigger("connected")
             await self.server.send_status(
                 _STATUS_CONNECTED.get(
@@ -701,9 +718,9 @@ class Application:
         except Exception as exc:
             # The provider refused the account (no credit, a spend limit),
             # not a network blip: the next press plays the persona's
-            # "unavailable" clip at once (T1.43). Read from the same text
-            # huxley-watch reads, the traceback.
-            refused = find_refusal_code("".join(traceback.format_exception(exc)))
+            # "unavailable" clip at once (T1.43). The messages huxley-watch
+            # reads in the traceback, without its source lines.
+            refused = find_refusal_code(_exception_messages(exc))
             if refused is not None:
                 self._refusal_code = refused
             await logger.aexception("connection_failed", refused=refused)
@@ -807,6 +824,15 @@ class Application:
         if not will_reconnect:
             return
         await self._schedule_reconnect("session_end")
+
+    async def _on_response_done(self) -> None:
+        """A response finished (refused ones never get here): the provider
+        answers again, so a press with no session goes back to beeping
+        through a short gap."""
+        if self._refusal_code is not None:
+            await logger.ainfo("app.refusal_cleared", code=self._refusal_code)
+            self._refusal_code = None
+        await self.coordinator.on_response_done()
 
     async def _on_response_refused(self, code: str) -> None:
         """The provider refused a turn for the account (no credit, a spend
@@ -1028,38 +1054,53 @@ class Application:
             # The walkie shows no status text, so the press needs a sound
             # (the user is blind). After the coordinator's audio_clear,
             # which would drop it.
-            await self._play_no_session_sound()
+            await self._beep_rejected_press()
             return
+        self._clip_on_release = None
         await self.coordinator.on_ptt_start()
 
-    async def _play_no_session_sound(self) -> None:
-        """The sound of a press that found no voice session. The persona's
-        "unavailable" clip when the outage is real: the provider refused
-        the account, or the session has been down `_UNAVAILABLE_AFTER_S`.
-        Otherwise (a short reconnect, or no clip) the double beep the
-        reconnect loop plays, "no session, retrying"."""
+    async def _beep_rejected_press(self) -> None:
+        """A press found no voice session: the double beep the reconnect
+        loop plays ("no session, retrying"), short, while the button is
+        held. When the outage is real (the provider refused the account,
+        or the session has been down `_UNAVAILABLE_AFTER_S`) and the
+        persona has a clip, the release then plays it: the walkie answers
+        after release, and a clip played during the press would be talked
+        over."""
         down_s = self.coordinator.session_down_s
         down = round(down_s, 1) if down_s is not None else 0.0
         if self._refusal_code is not None:
-            reason: str | None = f"refused:{self._refusal_code}"
+            unavailable: str | None = f"refused:{self._refusal_code}"
         elif down_s is not None and down_s >= _UNAVAILABLE_AFTER_S:
-            reason = "down_long"
+            unavailable = "down_long"
         else:
-            reason = None
-        clip = self._unavailable_sound
-        if reason is not None and clip is not None:
-            await logger.ainfo("app.unavailable_played", reason=reason, down_s=down)
-            await self.server.send_audio(clip)
-            return
+            unavailable = None
+        has_clip = self._unavailable_sound is not None
+        self._clip_on_release = unavailable if has_clip else None
+        if unavailable is None:
+            reason = "short_gap"
+        else:
+            reason = "clip_on_release" if has_clip else "no_clip"
         await logger.ainfo(
-            "app.ptt_rejected_beep",
-            down_s=down,
-            reason="short_gap" if reason is None else "no_clip",
-            unavailable=reason,
+            "app.ptt_rejected_beep", down_s=down, reason=reason, unavailable=unavailable
         )
         await self.server.send_audio(no_signal_tone_pcm())
 
     async def on_ptt_stop(self) -> None:
+        reason, self._clip_on_release = self._clip_on_release, None
         if self.state_machine.state != AppState.CONVERSING:
+            if reason is not None and self._unavailable_sound is not None:
+                # The release of a press that found no session in a real
+                # outage: say why nothing answers (T1.43).
+                down_s = self.coordinator.session_down_s
+                await logger.ainfo(
+                    "app.unavailable_played",
+                    reason=reason,
+                    down_s=round(down_s, 1) if down_s is not None else 0.0,
+                )
+                await self.server.send_audio(self._unavailable_sound)
             return
+        if reason is not None:
+            # The session came back while the button was held.
+            await logger.ainfo("app.unavailable_skipped", reason=reason, why="session_back")
         await self.coordinator.on_ptt_stop()

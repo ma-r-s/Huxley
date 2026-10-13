@@ -6,10 +6,12 @@ and a turn OpenAI refused (no credit, a spend limit) hung in silence. Now:
 
 - The clip (`unavailable_sound` in persona.yaml) is read once at app
   start; missing or in the wrong format, the double beep stays.
-- Path A, a press with no session: the clip once the outage has lasted
-  60 s or the provider refused the account; the beep for a short gap.
-- Path B, a refused turn: the coordinator ends it and plays the clip (or
-  the beep), and the next press works.
+- Path A, a press with no session: the short beep while held; at the
+  release, the clip once the outage has lasted 60 s or the provider
+  refused the account (nothing more for a short gap).
+- Path B, a refused turn: the coordinator ends it; a user turn gets the
+  clip (or the beep) and the next press works, a proactive turn gets no
+  sound and waits at the head of the queue.
 """
 
 from __future__ import annotations
@@ -182,6 +184,9 @@ async def test_no_key_no_clip_and_no_log(
 
 
 # --- path A: a press with no session ------------------------------------------
+# The press itself always gets the short double beep (the button is held,
+# the user is talking). In a real outage the release then plays the clip:
+# the walkie answers after release.
 
 
 @pytest.fixture
@@ -196,57 +201,78 @@ def _down_for(application: Application, seconds: float) -> None:
     application.coordinator._session_down_since = time.monotonic() - seconds
 
 
-async def _press(application: Application, monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
-    """Press with no session; returns the server's `send_audio` mock."""
+class _Heard:
+    """What a press-and-release with no session sent, and logged."""
+
+    def __init__(self, sent: list[bytes], logs: list[dict[str, Any]]) -> None:
+        self.sent = sent
+        self.logs = logs
+
+    def event(self, name: str) -> dict[str, Any]:
+        (found,) = _events(self.logs, name)
+        return found
+
+
+async def _press_and_release(application: Application, monkeypatch: pytest.MonkeyPatch) -> _Heard:
     assert application.state_machine.state is AppState.IDLE
     send_audio = AsyncMock()
     monkeypatch.setattr(application.server, "send_audio", send_audio)
     with structlog.testing.capture_logs() as logs:
         await application.on_ptt_start()
-    send_audio.logs = logs  # type: ignore[attr-defined]
-    return send_audio
+        await application.on_ptt_stop()
+    return _Heard([c.args[0] for c in send_audio.await_args_list], logs)
 
 
-async def test_a_short_gap_still_beeps(
+_BEEP = no_signal_tone_pcm()
+
+
+async def test_a_short_gap_only_beeps(
     clip_app: tuple[Application, bytes], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The planned refresh reconnects in 2-3 s: a press then must not talk."""
     application, _ = clip_app
     _down_for(application, 3.0)
 
-    send_audio = await _press(application, monkeypatch)
+    heard = await _press_and_release(application, monkeypatch)
 
-    send_audio.assert_awaited_once_with(no_signal_tone_pcm())
-    (beep,) = _events(send_audio.logs, "app.ptt_rejected_beep")  # type: ignore[attr-defined]
+    assert heard.sent == [_BEEP]
+    beep = heard.event("app.ptt_rejected_beep")
     assert beep["reason"] == "short_gap"
     assert 2.5 < beep["down_s"] < 10
+    assert _events(heard.logs, "app.unavailable_played") == []
 
 
-async def test_a_long_outage_plays_the_clip(
+async def test_a_long_outage_beeps_then_plays_the_clip_on_release(
     clip_app: tuple[Application, bytes], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     application, pcm = clip_app
     _down_for(application, 61.0)
+    send_audio = AsyncMock()
+    monkeypatch.setattr(application.server, "send_audio", send_audio)
 
-    send_audio = await _press(application, monkeypatch)
+    await application.on_ptt_start()
+    # Held: only the beep so far; a clip now would be talked over.
+    assert [c.args[0] for c in send_audio.await_args_list] == [_BEEP]
+    with structlog.testing.capture_logs() as logs:
+        await application.on_ptt_stop()
 
-    send_audio.assert_awaited_once_with(pcm)
-    (played,) = _events(send_audio.logs, "app.unavailable_played")  # type: ignore[attr-defined]
+    assert [c.args[0] for c in send_audio.await_args_list] == [_BEEP, pcm]
+    (played,) = _events(logs, "app.unavailable_played")
     assert played["reason"] == "down_long"
     assert played["down_s"] >= 61
 
 
-async def test_a_long_outage_without_a_clip_beeps(
+async def test_a_long_outage_without_a_clip_only_beeps(
     make_app: Callable[[str | None], Coroutine[Any, Any, Application]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     application = await make_app(None)
     _down_for(application, 120.0)
 
-    send_audio = await _press(application, monkeypatch)
+    heard = await _press_and_release(application, monkeypatch)
 
-    send_audio.assert_awaited_once_with(no_signal_tone_pcm())
-    (beep,) = _events(send_audio.logs, "app.ptt_rejected_beep")  # type: ignore[attr-defined]
+    assert heard.sent == [_BEEP]
+    beep = heard.event("app.ptt_rejected_beep")
     assert beep["reason"] == "no_clip"
     assert beep["unavailable"] == "down_long"
 
@@ -266,11 +292,11 @@ async def test_a_billing_refusal_on_connect_plays_the_clip_at_once(
     (failed,) = _events(logs, "connection_failed")
     assert failed["refused"] == "insufficient_quota"
 
-    send_audio = await _press(application, monkeypatch)
+    heard = await _press_and_release(application, monkeypatch)
 
-    send_audio.assert_awaited_once_with(pcm)
-    (played,) = _events(send_audio.logs, "app.unavailable_played")  # type: ignore[attr-defined]
-    assert played["reason"] == "refused:insufficient_quota"
+    assert heard.sent == [_BEEP, pcm]
+    assert heard.event("app.ptt_rejected_beep")["reason"] == "clip_on_release"
+    assert heard.event("app.unavailable_played")["reason"] == "refused:insufficient_quota"
 
 
 async def test_a_refusal_in_the_exception_chain_counts(
@@ -293,9 +319,9 @@ async def test_a_refusal_in_the_exception_chain_counts(
     monkeypatch.setattr(application, "_schedule_reconnect", AsyncMock())
     await application.state_machine.trigger("wake_word")
 
-    send_audio = await _press(application, monkeypatch)
+    heard = await _press_and_release(application, monkeypatch)
 
-    send_audio.assert_awaited_once_with(pcm)
+    assert heard.sent == [_BEEP, pcm]
 
 
 async def test_a_network_failure_is_not_a_refusal(
@@ -309,15 +335,39 @@ async def test_a_network_failure_is_not_a_refusal(
     _down_for(application, 0.5)
     await application.state_machine.trigger("wake_word")
 
-    send_audio = await _press(application, monkeypatch)
+    heard = await _press_and_release(application, monkeypatch)
 
-    send_audio.assert_awaited_once_with(no_signal_tone_pcm())
+    assert heard.sent == [_BEEP]
 
 
-async def test_a_connect_clears_the_refusal(
+async def test_a_session_back_during_the_hold_skips_the_clip(
     clip_app: tuple[Application, bytes], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Topped up and reconnected: a later short gap beeps again."""
+    application, _ = clip_app
+    _down_for(application, 61.0)
+    send_audio = AsyncMock()
+    monkeypatch.setattr(application.server, "send_audio", send_audio)
+    monkeypatch.setattr(application.provider, "connect", AsyncMock())
+    monkeypatch.setattr(application.coordinator, "on_session_connected", AsyncMock())
+    coord_stop = AsyncMock()
+    monkeypatch.setattr(application.coordinator, "on_ptt_stop", coord_stop)
+
+    await application.on_ptt_start()
+    await application.state_machine.trigger("wake_word")  # back while held
+    with structlog.testing.capture_logs() as logs:
+        await application.on_ptt_stop()
+
+    assert [c.args[0] for c in send_audio.await_args_list] == [_BEEP]
+    (skipped,) = _events(logs, "app.unavailable_skipped")
+    assert skipped["why"] == "session_back"
+    coord_stop.assert_awaited_once()
+
+
+async def test_a_connect_does_not_clear_the_refusal_a_reply_does(
+    clip_app: tuple[Application, bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OpenAI can accept the session and refuse every answer: only a
+    completed reply proves it serves again."""
     application, _ = clip_app
     application._refusal_code = "insufficient_quota"
     monkeypatch.setattr(application.provider, "connect", AsyncMock())
@@ -326,14 +376,24 @@ async def test_a_connect_clears_the_refusal(
     await application.state_machine.trigger("wake_word")
 
     assert application.state_machine.state is AppState.CONVERSING
+    assert application._refusal_code == "insufficient_quota"
+
+    coord_done = AsyncMock()
+    monkeypatch.setattr(application.coordinator, "on_response_done", coord_done)
+    with structlog.testing.capture_logs() as logs:
+        await application.provider._cb.on_response_done()
+
     assert application._refusal_code is None
+    coord_done.assert_awaited_once()
+    (cleared,) = _events(logs, "app.refusal_cleared")
+    assert cleared["code"] == "insufficient_quota"
 
 
 async def test_a_refused_turn_marks_the_refusal_for_the_next_press(
     clip_app: tuple[Application, bytes], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Path B feeds path A: once a turn was refused, a press after the
-    session drops plays the clip at once, not after a minute of beeps."""
+    session drops gets the clip at once, not after a minute of beeps."""
     application, pcm = clip_app
     on_refused = AsyncMock()
     monkeypatch.setattr(application.coordinator, "on_response_refused", on_refused)
@@ -344,9 +404,9 @@ async def test_a_refused_turn_marks_the_refusal_for_the_next_press(
 
     on_refused.assert_awaited_once_with("organization_spend_limit_exceeded")
     _down_for(application, 1.0)
-    send_audio = await _press(application, monkeypatch)
-    send_audio.assert_awaited_once_with(pcm)
-    (played,) = _events(send_audio.logs, "app.unavailable_played")  # type: ignore[attr-defined]
+    heard = await _press_and_release(application, monkeypatch)
+    assert heard.sent == [_BEEP, pcm]
+    played = heard.event("app.unavailable_played")
     assert played["reason"] == "refused:organization_spend_limit_exceeded"
 
 
@@ -365,6 +425,24 @@ async def test_a_dying_app_ignores_a_refusal(
 
     on_refused.assert_not_awaited()
     assert application._refusal_code is None
+
+
+async def test_the_clip_resolves_against_the_persona_dir_not_a_symlinked_data_dir(
+    tmp_path: Path,
+    make_app: Callable[[str | None], Coroutine[Any, Any, Application]],
+) -> None:
+    """`data/` may be a symlink to another disk; the clip lives beside
+    persona.yaml."""
+    persona_dir = tmp_path / "personas" / "p"
+    elsewhere = tmp_path / "disk" / "data"
+    elsewhere.mkdir(parents=True)
+    (persona_dir / "data").rmdir()
+    (persona_dir / "data").symlink_to(elsewhere)
+    pcm = _write_wav(persona_dir / "sounds" / "unavailable.wav")
+
+    application = await make_app("sounds/unavailable.wav")
+
+    assert application._unavailable_sound == pcm
 
 
 # --- path B: a refused turn ----------------------------------------------------
@@ -497,16 +575,16 @@ async def test_a_refusal_with_no_turn_does_nothing(
     mocks["send_audio_clear"].assert_not_awaited()
 
 
-async def test_a_refused_reminder_goes_back_to_the_queue_without_refiring(
+async def test_a_refused_reminder_is_silent_and_waits_at_the_head_of_the_queue(
     mocks: dict[str, Any], focus_manager: FocusManager, provider: StubVoiceProvider
 ) -> None:
-    """Fired again right away it would be refused again: another clip, an
-    attempt burned. It waits at the head of the queue instead, DIALOG
-    released so what it parked comes back."""
+    """Nobody pressed: a reminder (or a timer at 3 a.m.) refused must not
+    wake the user to say "unavailable". It goes back to the head of the
+    queue, its attempt given back, DIALOG released so what it parked comes
+    back; no drain fires it straight into the same refusal."""
     coordinator = _coordinator(mocks, focus_manager, _CLIP)
     await coordinator.inject_turn("Recuerda la pastilla", dedup_key="pill")
-    turn = coordinator.current_turn
-    assert turn is not None
+    assert coordinator.current_turn is not None
     assert coordinator._dialog_interface_name is not None
     assert focus_manager._stacks[Channel.DIALOG]
     provider.sent.clear()
@@ -515,12 +593,32 @@ async def test_a_refused_reminder_goes_back_to_the_queue_without_refiring(
     await focus_manager.wait_drained()
 
     assert coordinator.current_turn is None
-    mocks["send_audio"].assert_awaited_once_with(_CLIP)
-    assert [r.dedup_key for r in coordinator._injected_queue] == ["pill"]
+    mocks["send_audio"].assert_not_awaited()
+    mocks["send_audio_clear"].assert_not_awaited()  # an earlier answer's tail plays on
+    (request,) = coordinator._injected_queue
+    assert request.dedup_key == "pill"
+    assert request.attempts == 0
     assert coordinator._inflight is None
     assert coordinator._dialog_interface_name is None
     assert focus_manager._stacks[Channel.DIALOG] == []
     assert ("request_response",) not in provider.sent
+
+
+async def test_a_refused_reminder_retried_later_has_no_repeat_note(
+    mocks: dict[str, Any], focus_manager: FocusManager, provider: StubVoiceProvider
+) -> None:
+    """The next drain (here another skill's inject) retries it. Nothing was
+    said the first time, so it isn't introduced as "say it again"."""
+    coordinator = _coordinator(mocks, focus_manager, _CLIP)
+    await coordinator.inject_turn("Recuerda la pastilla", dedup_key="pill")
+    await coordinator.on_response_refused("insufficient_quota")
+    provider.sent.clear()
+
+    await coordinator.inject_turn("Tu temporizador", dedup_key="timer")
+
+    messages = [m[1] for m in provider.sent if m[0] == "send_conversation_message"]
+    assert messages == ["Recuerda la pastilla"]
+    assert [r.dedup_key for r in coordinator._injected_queue] == ["timer"]
 
 
 async def test_a_press_during_the_cancel_takes_over_and_no_sound_plays(

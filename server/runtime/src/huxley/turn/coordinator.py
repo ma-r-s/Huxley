@@ -708,16 +708,23 @@ class TurnCoordinator:
     async def on_response_refused(self, code: str) -> None:
         """The provider refused to answer this turn for the account (no
         credit, a spend limit; `code` is the provider's), and every turn
-        after it will be refused too until someone acts. Without this the
-        turn hung in silence after the user spoke (T1.43).
+        after it will be refused too until someone acts. Without this a
+        user turn hung in silence after the user spoke (T1.43).
 
-        End the turn like a cut-off (no drain: a queued proactive turn
-        fired now would be refused the same way), then play the persona's
-        "unavailable" clip, or the double beep without one. Any response
-        of the turn still live is cancelled, so a late `response.done`
-        can't end the next press's turn. An injected turn goes back to
-        the head of the queue (its attempts are capped), to be said once
-        the provider answers again.
+        End the turn like a cut-off. Any response of it still live is
+        cancelled, so a late `response.done` can't end the next press's
+        turn. No drain: a queued proactive turn fired now would be refused
+        the same way.
+
+        A user turn then gets the persona's "unavailable" clip, or the
+        double beep without one: the user is waiting on an answer. A
+        proactive or completion turn gets no sound (nobody asked; a timer
+        refused at 3 a.m. must not wake the user to say so) and no
+        `audio_clear` (the tail of an earlier answer may still be
+        playing). A proactive turn goes back to the head of the queue with
+        its attempt given back (nothing was said, so no "say it again"
+        note and no step toward the attempt cap); the next drain retries
+        it, and it is said once the provider answers again.
 
         No turn, or one still LISTENING (it asked for nothing yet: the
         refusal is a late one for the turn it replaced): nothing to end;
@@ -729,8 +736,11 @@ class TurnCoordinator:
         turn = self.current_turn
         if turn is None or turn.state is TurnState.LISTENING:
             return
-        # First, before any await: no waiting blip after the clip.
+        # First, before any await: no waiting blip after the clip, and no
+        # late audio of the refused response.
         self._wait_cue.disarm("refused")
+        self.response_cancelled = True
+        user = turn.source is TurnSource.USER
         sound = self._unavailable_sound
         log = self._log
         # Sync: nothing may run between the check above and this line.
@@ -739,7 +749,7 @@ class TurnCoordinator:
             code=code,
             state=turn.state.value,
             source=turn.source.value,
-            sound="clip" if sound is not None else "beep",
+            sound="none" if not user else "clip" if sound is not None else "beep",
         )
         turn.pending_audio_streams.clear()
         turn.pending_play_sound = None
@@ -757,19 +767,22 @@ class TurnCoordinator:
         # on is its own turn. The playhead is pushed by the sound first, so
         # the resume of what the press held (armed by the clear) waits for
         # it to play out, like any answer.
-        pcm = sound if sound is not None else no_signal_tone_pcm()
+        pcm: bytes | None = None
+        if user:
+            pcm = sound if sound is not None else no_signal_tone_pcm()
+            self._client_playhead = 0.0
+            self._note_client_audio(len(pcm))
         cut = self._inflight if turn.source is TurnSource.INJECTED else None
         if cut is not None:
             self._inflight = None
         dialog = self._dialog_interface_name
         self._dialog_interface_name = None
-        self._client_playhead = 0.0
-        self._note_client_audio(len(pcm))
         turn.state = TurnState.INTERRUPTED
         self.current_turn = None
         self._current_injected_dedup_key = None
         self._bind_turn()
         if cut is not None:
+            cut.attempts = max(0, cut.attempts - 1)
             requeued = self._requeue_head(cut, why="refused")
             log.info(
                 "coord.inject_turn_cut_off",
@@ -777,12 +790,18 @@ class TurnCoordinator:
                 dedup_key=cut.dedup_key,
                 requeued=requeued,
             )
-        # The audio_clear also ends the client's own "thinking" state; the
-        # speaker flag must be down before the sound, or the walkie drops it.
-        await self._send_audio_clear()
-        await self._force_release_unless_content()
-        if self.current_turn is None:
-            await self._send_audio(pcm)
+        if pcm is not None:
+            # The audio_clear also ends the client's own "thinking" state;
+            # the speaker flag must be down before the sound, or the walkie
+            # drops it.
+            await self._send_audio_clear()
+            await self._force_release_unless_content()
+            if self.current_turn is None:
+                await self._send_audio(pcm)
+            else:
+                log.info("coord.response_refused_sound_skipped", code=code, reason="press")
+        else:
+            await self._force_release_unless_content()
         await self._emit_turn_summary(
             reason="refused", spawned_audio_stream=False, turn=turn, log=log
         )

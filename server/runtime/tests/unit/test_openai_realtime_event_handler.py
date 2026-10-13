@@ -476,9 +476,12 @@ class TestHandleRefusal:
         )
         prov = _provider(settings, persona, storage, bare)
 
-        await prov._handle_server_event(
-            {"type": "error", "error": {"code": "insufficient_quota", "message": "m"}}
-        )
+        with structlog.testing.capture_logs() as logs:
+            await prov._handle_server_event(
+                {"type": "error", "error": {"code": "insufficient_quota", "message": "m"}}
+            )
+
+        assert [e["event"] for e in logs] == ["session.rx.error", "session.response_refused"]
 
 
 # ---------------------------------------------------------------------------
