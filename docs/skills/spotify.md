@@ -288,9 +288,12 @@ In short:
 context), `spotify.track`, `spotify.play_requested` (query, the kind asked and
 the kind matched, match, uri, `alternatives`), `spotify.play_last`
 (context and `restart` for a request with no query),
-`spotify.play_started` (`latency_ms`, context), `spotify.start_failed`,
+`spotify.play_started` (`latency_ms`, context; for a book `book`,
+`chapter`, `chapter_index` from 0 and `chapters`), `spotify.start_failed`,
 `spotify.stream_ended` (`reason`: cancelled, finished, takeover,
-paused_elsewhere, capture_closed, start_failed, player_offline),
+paused_elsewhere, capture_closed, start_failed, player_offline; for a book
+`audio_ms` and the chapter it ended on, as at the start),
+`spotify.book_nav` (the book and the chapter reached, as at the start),
 `spotify.capture_closed` (`chunks`), `spotify.soloist_error`,
 `spotify.search_failed`, `spotify.capture_failed`, `spotify.unavailable`,
 `spotify.control`, `spotify.previous`.
