@@ -272,7 +272,10 @@ dev.cmd_result {id, output, truncated}`, `output` being what the command
 logged on that task (lines from other tasks, like a `hang` or the
 speaker's, go only to the log). Logs: `app.dev_cmd id=`,
 `app.dev_cmd_result id= bytes= truncated= sent=`. The server's side is
-`POST /admin/dev-cmd` (loopback and Tailscale only). Every connection
+`GET /admin/dev-cmd?line=` (loopback and Tailscale only, and in production
+the admin token: `ssh mario@100.75.152.70 "~/huxley/scripts/pi/admin.sh
+dev-cmd 'line=info'"`; also `admin.sh firmware-offer version=<v>`,
+`firmware-offer withdraw=1`, `firmware`; scripts/pi/README.md). Every connection
 also carries `Authorization: Bearer <HUX_DEVICE_TOKEN>` on the upgrade
 (`ws.token present=1` at boot; the value is never logged), and the hello
 is now `device.hello` (`app.device_hello sent= time_to_hello_ms=`). After a reconnect the hello also says what the walkie played out of its
@@ -643,7 +646,7 @@ lever_wakes= presses= min_mv=`). It never parks an update not yet kept
 (its restarts would roll it back; `battery.park_skipped
 why=update_pending`). These lines are warnings, so the black box brings
 them with the next hello. The remote switch: `battery cutoff off|on`
-(NVS, also through `/admin/dev-cmd`; `battery.cutoff_inactive` at boot
+(NVS, also through `admin.sh dev-cmd`; `battery.cutoff_inactive` at boot
 while it is off or the calibration is more than 5 % out). Bench: `battery
 park <mv> <minutes>` parks as if the cell read `<mv>` and boots by itself
 after that many wakes (refused during an update). While parked the USB
