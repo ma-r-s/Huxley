@@ -68,9 +68,11 @@ HEARING = [
     (8, "Pon Weird Fishes de Radiohead", "play_music", r"(?i)weird fishes", None),
     (9, "Pon Blu Radio", "play_station", r"(?i)blu", None),
     (5, "Para la radio", "stop_radio", None, None),
-    (13, "Que audiolibros tienes?", "search_audiobooks", r"query': ''|^\{\}$|args=\{\}", None),
-    (14, "Pon el segundo", "play_audiobook", None, None),
-    (10, "Pausa", "audiobook_control", r"pause", None),
+    # Books live in the Spotify skill since T1.40: find_books, play_book, and
+    # a playing book pauses through music_control.
+    (13, "Que audiolibros tienes?", "find_books", r"query': ''|^\{\}$|args=\{\}", None),
+    (14, "Pon el segundo", "play_book", None, None),
+    (10, "Pausa", "music_control", r"pause", None),
     # 2026-10-13 (3cdcdefc): a title said the Spanish way, a correction, a
     # previous song mid-song (its own server line: rewound, then skipped).
     (16, "Reproduce el boya de Daft Punk", "play_music", r"(?i)boya|voyager", None),
