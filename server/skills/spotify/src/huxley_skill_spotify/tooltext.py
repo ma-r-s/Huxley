@@ -34,6 +34,8 @@ TEXT: dict[str, dict[str, str]] = {
             "de la canción aunque suene rara o mal dicha (un título en inglés dicho "
             "en español: 'boya' por 'Voyager'): ponla tal como sonó junto al artista, "
             "nunca la quites para buscar solo al artista; Spotify la encuentra así. "
+            "Escríbela como sonó en español, letra por letra, sin cambiarla por otra "
+            "palabra ni 'corregirla'. "
             "Vacío si no dijo qué música."
         ),
         "play_kind": (
@@ -141,6 +143,8 @@ TEXT: dict[str, dict[str, str]] = {
             "Any word besides the artist is the song's name even if it sounds odd or "
             "garbled (an English title said with another accent): keep it as it "
             "sounded, next to the artist; never drop it to search the artist alone. "
+            "Spell it the way it sounded, letter by letter, never swapping it for "
+            "another word or 'correcting' it. "
             "Spotify finds it that way. Empty if they didn't say which music."
         ),
         "play_kind": (
@@ -243,6 +247,8 @@ TEXT: dict[str, dict[str, str]] = {
             "chanson même s'il sonne bizarre ou mal dit (un titre anglais prononcé "
             "à la française) : garde-le tel qu'il a sonné, à côté de l'artiste ; ne "
             "l'enlève jamais pour chercher l'artiste seul. Spotify le trouve ainsi. "
+            "Écris-le comme il a sonné, lettre par lettre, sans le remplacer par un "
+            "autre mot ni le 'corriger'. "
             "Vide s'il n'a pas dit quelle musique."
         ),
         "play_kind": (
