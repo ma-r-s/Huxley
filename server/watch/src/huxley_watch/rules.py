@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from huxley_watch.bench import Bench
 from huxley_watch.credit import budget
@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
     from zoneinfo import ZoneInfo
 
+    from huxley_watch.bookshelf import Shelf
     from huxley_watch.config import Thresholds
     from huxley_watch.credit import Admin, Budget
     from huxley_watch.events import Event
@@ -88,6 +89,9 @@ class Inputs:
     logs_problem: str | None = None  # the logs can't be read at all
     book_seconds: float | None = None  # this month's, from the persona DB
     book_hours_per_month: float | None = None
+    # His books (T1.45): the skill's per-book summaries and the shelf.
+    book_summaries: tuple[dict[str, Any], ...] = ()
+    shelf: Shelf | None = None
     balance_usd: float | None = None
     balance_at: datetime | None = None
     disk_pct: float | None = None
@@ -129,6 +133,8 @@ def make_inputs(
     admin: Admin | None = None,
     monthly_limit_usd: float | None = None,
     openai_project_id: str | None = None,
+    book_summaries: tuple[dict[str, Any], ...] = (),
+    shelf: Shelf | None = None,
 ) -> Inputs:
     """Inputs with the walkie and server facts computed from the events."""
     cycle: tuple[datetime, datetime] | None = None
@@ -164,6 +170,8 @@ def make_inputs(
         logs_problem=logs_problem,
         book_seconds=book_seconds,
         book_hours_per_month=book_hours_per_month,
+        book_summaries=book_summaries,
+        shelf=shelf,
         balance_usd=balance_usd,
         balance_at=balance_at,
         disk_pct=disk_pct,

@@ -6,12 +6,16 @@ from __future__ import annotations
 import json
 import re
 from datetime import timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from huxley_watch.activity import presses, segments
+from huxley_watch.bookshelf import Shelf
 from huxley_watch.page import render
 from huxley_watch.rules import evaluate
 from huxley_watch.views import build, mark_stale
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from .logs import (
     NOW,
@@ -427,3 +431,120 @@ def test_no_previous_day_without_older_logs() -> None:
 
 def test_the_huxley_lane_is_the_answer_not_the_song() -> None:
     assert status_for(DAY)["today"]["answer"] == [[731.0, 732.0]]  # 12:11 to 12:12
+
+
+# --- his books (T1.45) ---------------------------------------------------------
+
+
+def _summary(uri: str, title: str, days_ago: float, **kw: Any) -> dict[str, Any]:
+    return {
+        "uri": uri,
+        "title": title,
+        "author": kw.pop("author", "Autor"),
+        "chapters": kw.pop("chapters", 20),
+        "chapter": kw.pop("chapter", 4),
+        "position_ms": 1000,
+        "last_at": (NOW - timedelta(days=days_ago)).timestamp(),
+        "finished": kw.pop("finished", False),
+        "opinion": kw.pop("opinion", None),
+        "source": "shelf",
+    }
+
+
+def _shelf() -> Shelf:
+    books = (
+        {
+            "title": "Cien años de soledad",
+            "author": "Gabriel García Márquez",
+            "uri": "spotify:show:a",
+            "category": "novela",
+        },
+        {
+            "title": "María",
+            "author": "Jorge Isaacs",
+            "uri": "spotify:show:b",
+            "category": "novela",
+        },
+        {
+            "title": "Asesinato en el Orient Express",
+            "author": "Agatha Christie",
+            "uri": "spotify:show:c",
+            "category": "misterio",
+        },
+    )
+    return Shelf(("novela", "misterio"), books)
+
+
+def test_bookshelf_sorts_reading_finished_dropped_and_what_is_left() -> None:
+    summaries = (
+        _summary("spotify:show:a", "Cien años de soledad", 1, chapter=4, chapters=20),
+        _summary("spotify:show:x", "Un libro viejo", 40),  # not heard for 40 days: dropped
+        _summary(
+            "spotify:show:c", "Asesinato en el Orient Express", 10, finished=True, opinion="liked"
+        ),
+    )
+    b = status_for(DAY, book_summaries=summaries, shelf=_shelf())["bookshelf"]
+    assert [r["title"] for r in b["reading"]] == ["Cien años de soledad"]
+    assert (b["reading"][0]["chapter"], b["reading"][0]["pct"]) == (5, 20)
+    assert [r["title"] for r in b["finished"]] == ["Asesinato en el Orient Express"]
+    assert b["finished"][0]["liked"] is True
+    assert [r["title"] for r in b["dropped"]] == ["Un libro viejo"]
+    assert (b["shelf"]["total"], b["shelf"]["left"]) == (3, 1)  # only María is still on offer
+    page = render(status_for(DAY, book_summaries=summaries, shelf=_shelf()))
+    card = page.split('id="bookshelf"')[1].split("</section>")[0]
+    assert ">ch 5 of 20<" in card and ">24 h ago<" in card
+    assert "Asesinato en el Orient Express &#9829;" in card
+    assert "On the shelf &middot; 1 of 3 left" in card
+    assert ">María <span" in card
+
+
+def test_the_latest_book_is_never_dropped_however_old() -> None:
+    summaries = (_summary("spotify:show:a", "Cien años de soledad", 60),)
+    b = status_for(DAY, book_summaries=summaries)["bookshelf"]
+    assert [r["title"] for r in b["reading"]] == ["Cien años de soledad"] and b["dropped"] == []
+
+
+def test_bookshelf_empty_states() -> None:
+    card = render(status_for(DAY)).split('id="bookshelf"')[1].split("</section>")[0]
+    assert ">nothing started yet<" in card and ">no shelf yet<" in card
+
+
+def test_summaries_and_shelf_are_read_tolerantly(tmp_path: Path) -> None:
+    import sqlite3
+
+    from huxley_watch.bookshelf import read_shelf
+    from huxley_watch.db import read_db
+
+    db = tmp_path / "abuelos.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
+    good = json.dumps(_summary("spotify:show:a", "Cien años de soledad", 1))
+    conn.executemany(
+        "INSERT INTO settings VALUES (?, ?)",
+        [
+            ("spotify:book:summary:a", good),
+            ("spotify:book:summary:b", json.dumps(good)),  # encoded twice: still read
+            ("spotify:book:summary:c", "{not json"),
+            ("spotify:book:summary:d", json.dumps({"title": "no uri"})),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    got = read_db(db, NOW)
+    assert [s["title"] for s in got.book_summaries] == ["Cien años de soledad"] * 2
+    shelf_file = tmp_path / "shelf.json"
+    shelf_file.write_text(
+        json.dumps(
+            {
+                "categories": ["novela"],
+                "books": [
+                    {"title": "María", "uri": "spotify:show:b", "category": "novela"},
+                    {"title": "X", "uri": "spotify:show:y", "category": "otra"},
+                    {"uri": "no title"},
+                ],
+            }
+        )
+    )
+    shelf = read_shelf(shelf_file)
+    assert shelf is not None and shelf.categories == ("novela", "otra") and len(shelf.books) == 2
+    assert read_shelf(tmp_path / "missing.json") is None

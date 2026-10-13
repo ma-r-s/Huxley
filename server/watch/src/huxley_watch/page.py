@@ -201,6 +201,15 @@ details.bgroup[open]>summary{opacity:.7}
 .cf .cq{font-size:13px;font-weight:400;color:var(--mute);margin-left:6px;letter-spacing:0}
 .chip{margin-left:auto;align-self:center;font-size:12px;background:color-mix(in srgb,var(--warn) 22%,transparent);padding:5px 9px;border-radius:999px;white-space:nowrap}
 .chip.crit{background:color-mix(in srgb,var(--crit) 16%,transparent)}
+.bkg{margin-top:14px}.bkg>h3{font-size:12px;font-weight:600;color:var(--ink2);margin:0 0 6px;text-transform:none}
+.bkr{display:grid;grid-template-columns:minmax(0,1fr) 110px 70px;gap:10px;align-items:center;padding:5px 0;border-top:1px solid var(--grid)}
+.bkr .bt{font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bkr .ba{font-size:12px;color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bkbar{height:8px;border-radius:4px;background:color-mix(in srgb,var(--book) 16%,transparent);overflow:hidden}.bkbar>i{display:block;height:100%;background:var(--book)}
+.bkn{font-size:12px;color:var(--ink2);text-align:right;white-space:nowrap}
+.bkc{display:flex;flex-wrap:wrap;gap:6px}.bkc span{font-size:12px;padding:4px 9px;border-radius:999px;background:var(--grid);white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.bkc span.mute{color:var(--ink2);background:transparent;border:1px solid var(--grid)}
+@media (max-width:560px){.bkr{grid-template-columns:minmax(0,1fr) 56px 64px;gap:8px}.bkr .bt,.bkr .ba{white-space:normal}}
+.bks summary{cursor:pointer;font-size:12px;color:var(--ink2);margin-top:8px}.bks ul{margin:6px 0 0;padding-left:18px;font-size:13px}.bks li{margin:1px 0}
 .plot.cbat{height:150px}.plot.cspend{height:72px;margin-top:24px}
 .cline{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
 .plot.bat{height:120px}.cline.bline .ln{fill:none;stroke:var(--good);stroke-width:2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
@@ -926,6 +935,65 @@ def _nodata(days: list[dict[str, Any]], n: int, label: bool) -> str:
     return "".join(out)
 
 
+def _bookshelf(b: dict[str, Any]) -> str:
+    """His books: reading (chapter bar), finished, dropped, and what the
+    shelf has left by category, the titles folded away under each."""
+    parts: list[str] = []
+    if b["reading"]:
+        rows = []
+        for r in b["reading"]:
+            pct = r.get("pct")
+            bar = (
+                f'<div class="bkbar"><i style="width:{max(2, pct)}%"></i></div>'
+                if pct is not None
+                else '<div class="bkbar"></div>'
+            )
+            where = f"ch {r['chapter']} of {r['chapters']}" if r.get("chapters") else ""
+            when = f"{r['ago']} ago" if r.get("ago") else ""
+            rows.append(
+                f'<div class="bkr"><div><div class="bt">{_t(r["title"])}</div>'
+                f'<div class="ba">{_t(r["author"])}</div></div>{bar}'
+                f'<div class="bkn">{_t(where)}<br>{_t(when)}</div></div>'
+            )
+        parts.append(f'<div class="bkg"><h3>Reading now</h3>{"".join(rows)}</div>')
+    for key, label, cls in (("finished", "Finished", ""), ("dropped", "Dropped", "mute")):
+        if b[key]:
+            chips = "".join(
+                f'<span class="{cls}" title="{_a(r["author"])}">'
+                f"{_t(r['title'])}{' &#9829;' if r.get('liked') else ''}</span>"
+                for r in b[key]
+            )
+            parts.append(f'<div class="bkg"><h3>{label}</h3><div class="bkc">{chips}</div></div>')
+    if not (b["reading"] or b["finished"] or b["dropped"]):
+        parts.append(
+            '<div class="bkg"><h3>Reading now</h3><div class="ba">nothing started yet</div></div>'
+        )
+    shelf = b.get("shelf")
+    if shelf is None:
+        parts.append(
+            '<div class="bkg"><h3>On the shelf</h3><div class="ba">no shelf yet</div></div>'
+        )
+    else:
+        chips = "".join(
+            f"<span>{_t(c['name'])} &middot; {len(c['left'])}</span>" for c in shelf["categories"]
+        )
+        lists = "".join(
+            f'<details class="bks"><summary>{_t(c["name"])}</summary><ul>'
+            + "".join(
+                f'<li>{_t(x["title"])} <span class="ba">{_t(x["author"])}</span></li>'
+                for x in c["left"]
+            )
+            + "</ul></details>"
+            for c in shelf["categories"]
+            if c["left"]
+        )
+        parts.append(
+            f'<div class="bkg"><h3>On the shelf &middot; {shelf["left"]} of {shelf["total"]} left</h3>'
+            f'<div class="bkc">{chips}</div>{lists}</div>'
+        )
+    return f"<h2>Books</h2>{''.join(parts)}"
+
+
 def _credit(c: dict[str, Any]) -> str:
     """The OpenAI card: the month's budget as a battery, the spend under it."""
     n = c.get("days_in_month") or 0
@@ -1064,6 +1132,7 @@ def render(status: dict[str, Any]) -> str:
 <section class="card"><h2>Audiobook hours, {_t(month)}</h2>{_gauge(status["books"])}</section>
 </div>
 <section class="card section" id="credit">{_credit(status["credit"])}</section>
+<section class="card section" id="bookshelf">{_bookshelf(status["bookshelf"])}</section>
 <section class="card section" id="battery"><h2>Battery, last 24 h</h2>{_battery_chart(status["battery_history"])}</section>
 <div class="grid two section">
 <section class="card"><h2>Audio gaps per half hour</h2>{_gaps(status["gaps"])}</section>

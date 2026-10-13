@@ -92,6 +92,14 @@ archive's list, from the data `/day/YYYY-MM-DD.json` serves).
   (nothing played: an empty slot), the 5 % threshold dashed, bars over it
   in amber. Same arithmetic as `clients/firmware/tools/dev.py link`.
 - **Calls**: the week's total and one row per person.
+- **Books** (full width, T1.45): his books from the Spotify skill's
+  per-book summaries (`spotify:book:summary:<id>` in the persona DB):
+  reading now (a bar for the chapter he's on, "ch 5 of 20", how long
+  since), finished (a heart if he said he liked it), dropped (started,
+  not finished, not the latest, not heard for 21 days), and what the
+  curated shelf (`<persona>/books/shelf.json`) still has to offer, a
+  chip per category with the titles folded under each. "no shelf yet"
+  without the file; titles are data, so they may run past five words.
 
 Charts are HTML and CSS, so labels stay readable at phone width; light and
 dark follow the system. An inline script shows tooltips on hover or tap,

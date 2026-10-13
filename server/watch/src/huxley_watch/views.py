@@ -94,6 +94,7 @@ def build(
         "today": _today(i, segments, midnight),
         "week": _week(i, segments, presses, midnight),
         "books": _books(i),
+        "bookshelf": bookshelf(i),
         "credit": credit(i, items),
         "gaps": _gaps(i),
         "battery_history": battery_history(i),
@@ -554,3 +555,69 @@ def battery_history(i: Inputs) -> dict[str, Any]:
         "crit_pct": i.th.battery_crit_pct,
         "wired": i.battery.wired,
     }
+
+
+DROPPED_AFTER = timedelta(days=21)  # the Spotify skill's own "abandoned" (T1.45)
+
+
+def bookshelf(i: Inputs) -> dict[str, Any]:
+    """His books: reading now (with the chapter), finished, dropped
+    (started, not finished, not the latest, not heard for 21 days), and
+    what the shelf still has to offer, by category. From the skill's
+    summaries and the shelf file; titles only, never a sentence."""
+    summaries = sorted(i.book_summaries, key=lambda s: _float(s.get("last_at")), reverse=True)
+    latest = summaries[0]["uri"] if summaries else None
+    reading: list[dict[str, Any]] = []
+    finished: list[dict[str, Any]] = []
+    dropped: list[dict[str, Any]] = []
+    for s in summaries:
+        at = _float(s.get("last_at"))
+        last = datetime.fromtimestamp(at, UTC) if at else None
+        row: dict[str, Any] = {
+            "title": s["title"],
+            "author": s.get("author") or "",
+            "liked": s.get("opinion") == "liked",
+            "disliked": s.get("opinion") == "disliked",
+            "ago": short(i.now - last) if last else None,
+        }
+        if s.get("finished"):
+            finished.append(row)
+        elif s["uri"] != latest and last is not None and i.now - last > DROPPED_AFTER:
+            dropped.append(row)
+        else:
+            chapters, chapter = _int(s.get("chapters")), _int(s.get("chapter"))
+            row["chapters"] = chapters
+            row["chapter"] = chapter + 1 if chapter is not None else None
+            row["pct"] = (
+                round(100 * chapter / chapters) if chapters and chapter is not None else None
+            )
+            reading.append(row)
+    shelf: dict[str, Any] | None = None
+    if i.shelf is not None:
+        started = {s["uri"] for s in summaries}
+        cats: list[dict[str, Any]] = []
+        left_total = 0
+        for name in i.shelf.categories:
+            books = [b for b in i.shelf.books if b.get("category") == name]
+            left = [b for b in books if b["uri"] not in started]
+            left_total += len(left)
+            cats.append(
+                {
+                    "name": name,
+                    "total": len(books),
+                    "left": [{"title": b["title"], "author": b.get("author") or ""} for b in left],
+                }
+            )
+        shelf = {
+            "total": len(i.shelf.books),
+            "left": left_total,
+            "categories": cats,
+        }
+    return {"reading": reading, "finished": finished, "dropped": dropped, "shelf": shelf}
+
+
+def _float(value: object) -> float:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
