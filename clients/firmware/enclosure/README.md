@@ -534,6 +534,7 @@ print. The same sliced are in `out/print/sliced/`.
 | `8_tub_top_clear` | one PETG (clear) | 3 h 52 min (on its back); the top alone, clear, for a base already printed: dry the spool first |
 | `11_tub_base_red` | one PLA (red) | 34 min; the base alone, standing, for a top already printed |
 | `9_bumper_tpu` | TPU 95A (external spool) | 2 h 14 min; solid, no supports |
+| `13_case_by_object` | AMS: A1 white, A2 black, A3 orange, A4 red PLA | 1 h 51 min; a second case in one go, by object: the faceplate with the bridge and pins, the lever with its plungers, the grille, then the base (the only one taller than the gantry's 32.5 mm, so last); support on the base only (its own setting) |
 | `10_bumper_test_ring` | TPU 95A (external spool) | 37 min; the bumper's front 8 mm: does the outline fit, does the front lip seat |
 | `12_face_art` | AMS: black, orange, sky blue | 26 min, by object, 0.08 mm layers: the badge (black, then its raised letters in orange), the orange dots, the blue dots, the stencil in blue. Two filament changes, purged into the chute (by object, Bambu Studio has no prime tower). The small pieces sit 80 mm apart across the back and the stencil prints last at the front: Bambu keeps the toolhead's 72 mm round every object. Don't press Arrange |
 
