@@ -37,6 +37,7 @@ Run Huxley with `HUXLEY_PERSONA=my_assistant` (the directory name under `./perso
 | `i18n`                   | no       | Map of `<lang>` → `{transcription_language?, system_prompt?, ui_strings?}` for additional languages. See [Multilingual personas](#multilingual-personas). |
 | `skills`                 | yes      | Map of skill name → config dict. Skills named here are discovered via `huxley.skills` entry points; missing names fail fast at startup.                   |
 | `recording`              | no       | `{enabled: true}` records this persona's conversations (off by default). See [Recording](#recording).                                                      |
+| `unavailable_sound`      | no       | Path (relative to the persona directory) of a WAV said when the voice provider can't answer: out of credit, over a spend limit, or down for a minute. Without it, a double beep. See [Unavailable sound](#unavailable-sound). |
 
 ## Multilingual personas
 
@@ -126,6 +127,19 @@ Off unless a persona says so. On, the server keeps every voice that crossed the 
 Files go to `data/recordings/YYYY/MM/DD/` (UTC) inside the persona's directory, one per segment, named `HHMMSS-<connection>-<n>-<source>[-<label>].ogg`; each also gets a `recorder.segment` log line ([Recordings](../observability.md#recordings)). Nothing is pruned: 40 to 60 minutes of voice a day is about 3 to 4 GB a year. Recording people is a decision for whoever runs the persona: everyone recorded, including the other side of a conversation, should know.
 
 `enabled` is the only key; anything else fails the load (a typo must not leave a persona believed recorded but not).
+
+## Unavailable sound
+
+```yaml
+unavailable_sound: sounds/unavailable.wav
+```
+
+What the user hears when the voice provider won't serve. Without it the device has only a double beep ("no session, retrying") for a press with no session, and silence after a turn the provider refused; for a blind user both sound like a broken device. The clip plays:
+
+- **On a press with no session**, once the outage is real: the session has been down for 60 s, or the provider refused the account (its connect failed with a no-credit or spend-limit code, or a turn was refused before the session dropped). A shorter gap (the planned session refresh, a network blip) keeps the double beep.
+- **For a turn the provider refused** (no credit, a spend limit), in place of the silence: the turn ends and the clip plays. A proactive turn (a reminder) refused this way goes back to the queue, to be said once the provider answers again.
+
+The file must already be in the wire format, PCM16 mono 24 kHz WAV: nothing resamples it. It is read once when the persona starts; a missing or wrong-format file is logged (`app.unavailable_sound_invalid`) and the double beep plays instead, so the key can ship before the file. One clip, whatever the session language. Say it in the persona's voice and words, and say what the user can do (wait, or tell someone).
 
 ## Where personas live
 

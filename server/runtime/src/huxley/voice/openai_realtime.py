@@ -32,6 +32,7 @@ from huxley.voice.openai_protocol import (
     FunctionCallEvent,
     ServerEventType,
     TranscriptEvent,
+    find_refusal_code,
     parse_server_event,
 )
 
@@ -214,8 +215,18 @@ class OpenAIRealtimeProvider:
                 },
             )
         except websockets.InvalidStatus as exc:
-            if exc.response.status_code == 401:
+            status = exc.response.status_code
+            if status == 401:
                 msg = "Invalid OpenAI API key — check HUXLEY_OPENAI_API_KEY"
+                raise RuntimeError(msg) from exc
+            # The exception's text is only "HTTP 429"; the reason is in the
+            # body. Name a refusal (no credit, a spend limit) in the error,
+            # so the app plays the persona's "unavailable" sound at the next
+            # press and `connection_failed` says why (T1.43).
+            body = bytes(exc.response.body).decode("utf-8", "replace")
+            refused = find_refusal_code(body)
+            if refused is not None:
+                msg = f"OpenAI refused the session: {refused} (HTTP {status})"
                 raise RuntimeError(msg) from exc
             raise
 
@@ -695,6 +706,17 @@ class OpenAIRealtimeProvider:
                 if retry:
                     self._create_retried = True
                     self._defer_create()
+            elif (refused := find_refusal_code(parsed.code, parsed.type)) is not None:
+                # No credit or a spend limit: this answer won't come, and
+                # neither will the next. The coordinator ends the turn with
+                # the persona's "unavailable" sound instead of silence.
+                await logger.aerror(
+                    "session.rx.error",
+                    code=parsed.code,
+                    message=parsed.message,
+                    error_type=parsed.type,
+                )
+                await self._response_refused(refused, via="error")
             elif self._send_metadata and "metadata" in f"{parsed.param} {parsed.message}":
                 # Not verifiable without the live API: if OpenAI ever
                 # refuses `response.metadata`, every create would fail.
@@ -754,12 +776,28 @@ class OpenAIRealtimeProvider:
             self._active_response_id = None
         if isinstance(response_id, str):
             self._stale_response_ids.discard(response_id)
+        error = _failed_response_error(response)
+        fields: dict[str, Any] = {}
+        if error is not None:
+            fields["error_code"], fields["error_type"] = error
         await logger.ainfo(
             "session.rx.response_done",
             response_id=response_id,
             status=response.get("status"),
             stale=stale,
+            **fields,
         )
+        refused = None if stale or error is None else find_refusal_code(*error)
+        if refused is not None:
+            # A refused response (no credit, a spend limit) may come as a
+            # failed `response.done` instead of an `error`. Not forwarded
+            # as a done: the coordinator ends the turn on the refusal, and a
+            # done arriving after a new press would end that press's turn.
+            # A create held back for this turn would be refused too.
+            self._create_deferred_at = None
+            self._forward_next_done = False
+            await self._response_refused(refused, via="response_done")
+            return
         # Send a held-back create before telling the coordinator, so a
         # follow-up the coordinator asks for queues behind it.
         if self._create_deferred_at is not None and self._active_response_id is None:
@@ -771,6 +809,13 @@ class OpenAIRealtimeProvider:
         if not stale or self._forward_next_done:
             self._forward_next_done = False
             await self._cb.on_response_done()
+
+    async def _response_refused(self, code: str, *, via: str) -> None:
+        """OpenAI refused to answer for the account (no credit, a spend
+        limit): tell the app, which ends the live turn audibly."""
+        await logger.aerror("session.response_refused", code=code, via=via)
+        if self._cb.on_response_refused is not None:
+            await self._cb.on_response_refused(code)
 
     def _from_old_generation(self, response: dict[str, Any]) -> bool:
         """True if `response` was requested before the latest cancel.
@@ -899,3 +944,15 @@ class OpenAIRealtimeProvider:
             return
         self._pending_summary = summary
         await self.disconnect(save_summary=False)
+
+
+def _failed_response_error(response: dict[str, Any]) -> tuple[str, str] | None:
+    """(code, type) of the error of a `response.done` whose status is
+    `failed` (`status_details.error`), or None. Missing parts are ""."""
+    if response.get("status") != "failed":
+        return None
+    details = response.get("status_details")
+    error = details.get("error") if isinstance(details, dict) else None
+    if not isinstance(error, dict):
+        return None
+    return str(error.get("code") or ""), str(error.get("type") or "")

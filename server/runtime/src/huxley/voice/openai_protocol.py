@@ -13,6 +13,37 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+# OpenAI's codes for refusing the account rather than one request (T1.43).
+# Credit: the prepaid balance is gone. Limit: a monthly spend cap was
+# reached (the organization's, a project's, or OpenAI's own approved
+# limit; `billing_hard_limit_reached` is the old name). Every answer fails
+# until someone tops up or the month turns, so the provider reports these
+# as a refusal instead of a passing error. Same lists as huxley-watch
+# (server/watch/src/huxley_watch/rules.py): keep them in step.
+CREDIT_CODES = frozenset({"insufficient_quota", "credit_balance_exhausted"})
+LIMIT_CODES = frozenset(
+    {
+        "organization_spend_limit_exceeded",
+        "project_spend_limit_exceeded",
+        "organization_usage_limit_exceeded",
+        "billing_hard_limit_reached",
+    }
+)
+REFUSAL_CODES = CREDIT_CODES | LIMIT_CODES
+
+
+def find_refusal_code(*texts: str | None) -> str | None:
+    """The first refusal code found in any of `texts` (an error's code or
+    type, a handshake body, a traceback), or None. Substring match: the
+    codes are distinctive, and a body or traceback carries them inline."""
+    for text in texts:
+        if not text:
+            continue
+        for code in sorted(REFUSAL_CODES):
+            if code in text:
+                return code
+    return None
+
 
 class ServerEventType(Enum):
     """Server-sent event types we handle."""

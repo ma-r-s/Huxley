@@ -64,6 +64,14 @@ class VoiceProviderCallbacks:
     # provider doesn't produce transcripts.
     on_transcript: Callable[[str, str], Awaitable[None]] | None = None
 
+    # Optional: the provider refused to answer for a reason that holds for
+    # every request until someone acts (the account is out of credit or
+    # over a spend limit), not a passing error. The argument is the
+    # provider's code, for the log. The coordinator ends the live turn
+    # and plays the persona's "unavailable" sound instead of leaving the
+    # user in silence. `None`: the provider never reports refusals.
+    on_response_refused: Callable[[str], Awaitable[None]] | None = None
+
 
 @runtime_checkable
 class VoiceProvider(Protocol):

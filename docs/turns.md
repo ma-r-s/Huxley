@@ -174,6 +174,7 @@ Key transitions:
 - **AWAITING_NEXT_RESPONSE → IN_RESPONSE**: first event of the new response.
 - **APPLYING_FACTORIES → IDLE**: each pending factory has been invoked. Long-running factories (`ContentStreamObserver` pump) run in the background; the turn doesn't wait for them to complete.
 - **Any state → INTERRUPTED**: new `ptt_start` during a live turn calls `coordinator.interrupt()`.
+- **COMMITTING / IN_RESPONSE / AWAITING_NEXT_RESPONSE → INTERRUPTED, refused** (T1.43): the provider refused to answer for the account (no credit, a spend limit; `on_response_refused`, from an `error` or a failed `response.done`). The turn ends like a cut-off: `audio_clear`, the live response cancelled (a late `response.done` can't end the next press's turn), the speaker flag cleared, then the persona's `unavailable_sound` clip or the double beep. No queue drain (a proactive turn fired now would be refused the same way); a refused proactive turn goes back to the head of the queue. A LISTENING turn is left alone: it asked for nothing, so the refusal is a late one for the turn it replaced. A press during the handling wins: no sound plays into the open mic, and the press's turn is never ended by it.
 - **Clearing a USER turn** (any of the above, or a too-short press) arms the resume of content its press held. See "Content holds" above.
 
 ## Concrete decisions
@@ -398,7 +399,7 @@ Armed for user turns only (never for injected or completion turns: a reminder is
 
 ### When it stops
 
-Before any real sound and on anything that ends the wait: model audio, a `PlaySound`, the turn's side effects (a stream, a claim), a press (the first statement of `on_ptt_start`, before any await, so no blip reaches the open mic), an interrupt, any change of `current_turn`, a session drop. And by itself after 30 s (`reason=cap`): a model that never answers isn't a wait. A blip already being written finishes: stopping never cancels a send, because the walkie's Opus queue is shared and a cancelled drain clears it.
+Before any real sound and on anything that ends the wait: model audio, a `PlaySound`, the turn's side effects (a stream, a claim), a refused turn (before its "unavailable" sound), a press (the first statement of `on_ptt_start`, before any await, so no blip reaches the open mic), an interrupt, any change of `current_turn`, a session drop. And by itself after 30 s (`reason=cap`): a model that never answers isn't a wait. A blip already being written finishes: stopping never cancels a send, because the walkie's Opus queue is shared and a cancelled drain clears it.
 
 ### The sound
 

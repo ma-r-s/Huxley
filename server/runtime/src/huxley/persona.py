@@ -108,10 +108,25 @@ class PersonaSpec(BaseModel):
     # Opt-in audio recording (docs/personas/README.md "Recording").
     recording: RecordingConfig = Field(default_factory=RecordingConfig)
 
+    # A WAV (PCM16 mono 24 kHz, the wire format), path relative to the
+    # persona directory, played when the voice provider is unavailable: a
+    # press in a long outage or after a refusal, or a turn the provider
+    # refused. None, missing or the wrong format: the double beep. One
+    # clip whatever the session language. See `huxley.app`.
+    unavailable_sound: str | None = None
+
     # Populated by `load_persona` from the persona file's parent directory.
     # Not user-settable in YAML (the loader injects it); tests constructing
     # `PersonaSpec` directly must pass it explicitly.
     data_dir: Path
+
+    @property
+    def unavailable_sound_path(self) -> Path | None:
+        """`unavailable_sound` resolved against the persona directory
+        (the parent of `data_dir`), or None when unset."""
+        if not self.unavailable_sound:
+            return None
+        return self.data_dir.parent / self.unavailable_sound
 
     @property
     def supported_languages(self) -> list[str]:

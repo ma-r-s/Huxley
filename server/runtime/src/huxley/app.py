@@ -22,6 +22,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
+import traceback
+import wave
 from typing import TYPE_CHECKING
 
 import structlog
@@ -38,12 +40,14 @@ from huxley.storage.db import Storage
 from huxley.storage.secrets import JsonFileSecrets
 from huxley.storage.skill import NamespacedSkillStorage
 from huxley.turn import TurnCoordinator, turn_waits_forbidden
+from huxley.voice.openai_protocol import find_refusal_code
 from huxley.voice.openai_realtime import OpenAIRealtimeProvider
 from huxley.voice.provider import VoiceProviderCallbacks
 from huxley_sdk import AppState, InvalidTransitionError, SkillContext, SkillRegistry
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Coroutine
+    from pathlib import Path
     from typing import Any
 
     from huxley.config import Settings
@@ -78,6 +82,68 @@ _STATUS_WAIT: dict[str, str] = {
     "en": "Connecting \u2014 one moment",
     "fr": "Connexion \u2014 un instant",
 }
+
+# A press with no voice session plays the persona's "unavailable" clip once
+# the session has been down this long (T1.43); before that, the double
+# beep. The planned refresh reconnects in 2-3 s and a network blip within
+# the reconnect loop's first steps (1, 3, 10, 30 s): neither should talk.
+_UNAVAILABLE_AFTER_S = 60.0
+
+# The wire format, which a persona's sound file must already be in:
+# nothing resamples it.
+_WIRE_CHANNELS = 1
+_WIRE_SAMPLE_WIDTH = 2  # PCM16
+_WIRE_RATE_HZ = 24_000
+
+
+def _read_wire_wav(path: Path) -> bytes:
+    """The PCM of a WAV already in the wire format. Raises `ValueError`
+    whose message is the reason it can't be used."""
+    if not path.is_file():
+        raise ValueError("missing")
+    try:
+        with wave.open(str(path), "rb") as wf:
+            fmt = (wf.getnchannels(), wf.getsampwidth(), wf.getframerate())
+            if fmt != (_WIRE_CHANNELS, _WIRE_SAMPLE_WIDTH, _WIRE_RATE_HZ):
+                msg = (
+                    f"format: {fmt[0]} channel(s), {fmt[1] * 8}-bit, {fmt[2]} Hz; "
+                    f"want mono 16-bit {_WIRE_RATE_HZ} Hz"
+                )
+                raise ValueError(msg)
+            pcm = wf.readframes(wf.getnframes())
+    except (wave.Error, EOFError) as exc:
+        msg = f"not a PCM WAV: {exc}"
+        raise ValueError(msg) from exc
+    except OSError as exc:
+        msg = f"unreadable: {exc}"
+        raise ValueError(msg) from exc
+    if not pcm:
+        raise ValueError("empty")
+    return pcm
+
+
+def _load_unavailable_sound(persona: PersonaSpec) -> bytes | None:
+    """The persona's `unavailable_sound` clip, read once at app start, or
+    None (unset, or unusable: logged, and the double beep plays)."""
+    path = persona.unavailable_sound_path
+    if path is None:
+        return None
+    try:
+        pcm = _read_wire_wav(path)
+    except ValueError as exc:
+        logger.warning(
+            "app.unavailable_sound_invalid",
+            path=str(path),
+            reason=str(exc),
+            note="the double beep plays instead",
+        )
+        return None
+    logger.info(
+        "app.unavailable_sound_loaded",
+        path=str(path),
+        ms=len(pcm) * 1000 // (_WIRE_RATE_HZ * _WIRE_SAMPLE_WIDTH),
+    )
+    return pcm
 
 
 class Application:
@@ -134,6 +200,17 @@ class Application:
         for _name, skill_cls in discover_skills(enabled).items():
             self.skill_registry.register(skill_cls())
 
+        # What the user hears when the voice provider can't serve (T1.43):
+        # the persona's clip, or None for the double beep. A press with no
+        # session plays it in a long outage or after a refusal
+        # (`on_ptt_start`); the coordinator plays it for a refused turn.
+        self._unavailable_sound = _load_unavailable_sound(persona)
+        # The provider's code when it last refused the account (no credit,
+        # a spend limit), from a failed connect or a refused turn: a press
+        # with no session then plays the clip at once, not after the
+        # outage has lasted `_UNAVAILABLE_AFTER_S`. Cleared by a connect.
+        self._refusal_code: str | None = None
+
         # Provider callbacks — lambdas so `self.coordinator` resolves at call
         # time (constructed below). The provider fires these as it receives
         # events from the LLM; the coordinator processes them.
@@ -145,6 +222,7 @@ class Application:
             on_commit_failed=lambda: self.coordinator.on_commit_failed(),
             on_session_end=self._on_session_end,
             on_transcript=self._on_transcript,
+            on_response_refused=self._on_response_refused,
         )
 
         # Cost tracker observes per-response usage and warns at daily-total
@@ -204,6 +282,7 @@ class Application:
             # a ping to the client the turn was said to.
             listener_epoch=lambda: self.server.listener_epoch,
             confirm_client_received=self.server.client_received_all,
+            unavailable_sound=self._unavailable_sound,
         )
 
         # `_shutting_down` gates auto-reconnect inside `_on_session_end`
@@ -610,14 +689,24 @@ class Application:
         )
         try:
             await self.provider.connect(language=self._resolved_persona.language_code)
+            # A session is up: an earlier refusal no longer says the account
+            # is refused (a refused turn in this session marks it again).
+            self._refusal_code = None
             await self.state_machine.trigger("connected")
             await self.server.send_status(
                 _STATUS_CONNECTED.get(
                     self._resolved_persona.language_code, _STATUS_CONNECTED["en"]
                 )
             )
-        except Exception:
-            await logger.aexception("connection_failed")
+        except Exception as exc:
+            # The provider refused the account (no credit, a spend limit),
+            # not a network blip: the next press plays the persona's
+            # "unavailable" clip at once (T1.43). Read from the same text
+            # huxley-watch reads, the traceback.
+            refused = find_refusal_code("".join(traceback.format_exception(exc)))
+            if refused is not None:
+                self._refusal_code = refused
+            await logger.aexception("connection_failed", refused=refused)
             await self.state_machine.trigger("failed")
             await self.server.send_status(
                 _STATUS_FAILED.get(self._resolved_persona.language_code, _STATUS_FAILED["en"])
@@ -718,6 +807,17 @@ class Application:
         if not will_reconnect:
             return
         await self._schedule_reconnect("session_end")
+
+    async def _on_response_refused(self, code: str) -> None:
+        """The provider refused a turn for the account (no credit, a spend
+        limit). Marked first, so a press after the session drops plays the
+        clip at once; then the coordinator ends the live turn with it."""
+        if self._shutting_down:
+            # A dying app (persona swap) must not speak to the shared
+            # AudioServer, now the new persona's.
+            return
+        self._refusal_code = code
+        await self.coordinator.on_response_refused(code)
 
     async def _schedule_reconnect(self, trigger: str) -> None:
         """Start the reconnect loop unless one already runs (an attempt
@@ -926,12 +1026,38 @@ class Application:
             # outage, stops) what plays.
             await self.coordinator.on_ptt_rejected()
             # The walkie shows no status text, so the press needs a sound
-            # (the user is blind): the double beep the reconnect loop plays,
-            # "no session, retrying". After the coordinator's audio_clear,
+            # (the user is blind). After the coordinator's audio_clear,
             # which would drop it.
-            await self.server.send_audio(no_signal_tone_pcm())
+            await self._play_no_session_sound()
             return
         await self.coordinator.on_ptt_start()
+
+    async def _play_no_session_sound(self) -> None:
+        """The sound of a press that found no voice session. The persona's
+        "unavailable" clip when the outage is real: the provider refused
+        the account, or the session has been down `_UNAVAILABLE_AFTER_S`.
+        Otherwise (a short reconnect, or no clip) the double beep the
+        reconnect loop plays, "no session, retrying"."""
+        down_s = self.coordinator.session_down_s
+        down = round(down_s, 1) if down_s is not None else 0.0
+        if self._refusal_code is not None:
+            reason: str | None = f"refused:{self._refusal_code}"
+        elif down_s is not None and down_s >= _UNAVAILABLE_AFTER_S:
+            reason = "down_long"
+        else:
+            reason = None
+        clip = self._unavailable_sound
+        if reason is not None and clip is not None:
+            await logger.ainfo("app.unavailable_played", reason=reason, down_s=down)
+            await self.server.send_audio(clip)
+            return
+        await logger.ainfo(
+            "app.ptt_rejected_beep",
+            down_s=down,
+            reason="short_gap" if reason is None else "no_clip",
+            unavailable=reason,
+        )
+        await self.server.send_audio(no_signal_tone_pcm())
 
     async def on_ptt_stop(self) -> None:
         if self.state_machine.state != AppState.CONVERSING:

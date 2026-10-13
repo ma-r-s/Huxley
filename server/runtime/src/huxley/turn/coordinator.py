@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 import structlog
 
 from huxley.focus.vocabulary import Activity, Channel
+from huxley.reconnect import no_signal_tone_pcm
 from huxley_sdk import (
     DEFAULT_INJECT_EXPIRY,
     AudioStream,
@@ -250,6 +251,7 @@ class TurnCoordinator:
         listener_epoch: Callable[[], int | None] | None = None,
         confirm_client_received: Callable[[int, float], Awaitable[bool]] | None = None,
         client_present: bool = True,
+        unavailable_sound: bytes | None = None,
     ) -> None:
         # Client-facing outputs (to the WebSocket audio server).
         self._send_audio = send_audio
@@ -432,6 +434,10 @@ class TurnCoordinator:
         self._session_down_since: float | None = (
             None if provider.is_connected else time.monotonic()
         )
+        # The persona's "unavailable" clip (PCM16 mono 24 kHz), played when
+        # the provider refuses a turn (`on_response_refused`); None: the
+        # reconnect loop's double beep instead (T1.43).
+        self._unavailable_sound = unavailable_sound
 
         self._current_turn: Turn | None = None
         self.response_cancelled: bool = False
@@ -470,6 +476,15 @@ class TurnCoordinator:
         """A voice session is connected and configured: what the
         coordinator sends reaches the model."""
         return self._session_down_since is None and self._provider.is_connected
+
+    @property
+    def session_down_s(self) -> float | None:
+        """Seconds the voice session has been down: since it dropped, or
+        since construction if it never came up (failed connects don't
+        reset it). None while it is up. The app reads it to tell a short
+        reconnect from a real outage when a press finds no session."""
+        since = self._session_down_since
+        return None if since is None else time.monotonic() - since
 
     def _content_is_running(self) -> bool:
         """True iff a content stream is currently playing (pump task live)."""
@@ -689,6 +704,96 @@ class TurnCoordinator:
         self.current_turn = None
         self._bind_turn()
         await self._drain_waiting("press_dropped")
+
+    async def on_response_refused(self, code: str) -> None:
+        """The provider refused to answer this turn for the account (no
+        credit, a spend limit; `code` is the provider's), and every turn
+        after it will be refused too until someone acts. Without this the
+        turn hung in silence after the user spoke (T1.43).
+
+        End the turn like a cut-off (no drain: a queued proactive turn
+        fired now would be refused the same way), then play the persona's
+        "unavailable" clip, or the double beep without one. Any response
+        of the turn still live is cancelled, so a late `response.done`
+        can't end the next press's turn. An injected turn goes back to
+        the head of the queue (its attempts are capped), to be said once
+        the provider answers again.
+
+        No turn, or one still LISTENING (it asked for nothing yet: the
+        refusal is a late one for the turn it replaced): nothing to end;
+        the provider's `session.response_refused` is the record.
+
+        A press can land at any await here. Before the turn is detached it
+        interrupts the turn itself (then this stops: the user is talking);
+        after, it starts its own turn, which nothing below may touch."""
+        turn = self.current_turn
+        if turn is None or turn.state is TurnState.LISTENING:
+            return
+        # First, before any await: no waiting blip after the clip.
+        self._wait_cue.disarm("refused")
+        sound = self._unavailable_sound
+        log = self._log
+        # Sync: nothing may run between the check above and this line.
+        log.info(
+            "coord.response_refused",
+            code=code,
+            state=turn.state.value,
+            source=turn.source.value,
+            sound="clip" if sound is not None else "beep",
+        )
+        turn.pending_audio_streams.clear()
+        turn.pending_play_sound = None
+        turn.pending_input_claim = None
+        # Cancelled while the turn is still current: it clears the input
+        # buffer, which after the detach could be a new press's.
+        if self._provider.is_connected:
+            await self._provider.cancel_current_response()
+        if self.current_turn is not turn:
+            # A press took over during the cancel; its interrupt ended this
+            # turn (and put a proactive one back). No sound into the mic.
+            log.info("coord.response_refused_superseded", code=code)
+            return
+        # Detach, with no await until done: what a press starts from here
+        # on is its own turn. The playhead is pushed by the sound first, so
+        # the resume of what the press held (armed by the clear) waits for
+        # it to play out, like any answer.
+        pcm = sound if sound is not None else no_signal_tone_pcm()
+        cut = self._inflight if turn.source is TurnSource.INJECTED else None
+        if cut is not None:
+            self._inflight = None
+        dialog = self._dialog_interface_name
+        self._dialog_interface_name = None
+        self._client_playhead = 0.0
+        self._note_client_audio(len(pcm))
+        turn.state = TurnState.INTERRUPTED
+        self.current_turn = None
+        self._current_injected_dedup_key = None
+        self._bind_turn()
+        if cut is not None:
+            requeued = self._requeue_head(cut, why="refused")
+            log.info(
+                "coord.inject_turn_cut_off",
+                reason="refused",
+                dedup_key=cut.dedup_key,
+                requeued=requeued,
+            )
+        # The audio_clear also ends the client's own "thinking" state; the
+        # speaker flag must be down before the sound, or the walkie drops it.
+        await self._send_audio_clear()
+        await self._force_release_unless_content()
+        if self.current_turn is None:
+            await self._send_audio(pcm)
+        await self._emit_turn_summary(
+            reason="refused", spawned_audio_stream=False, turn=turn, log=log
+        )
+        # After the sound: content an injected turn parked comes back
+        # behind it in the client's queue, not over it. Only this turn's
+        # DIALOG: an inject fired meanwhile holds its own.
+        if dialog is not None:
+            await self._focus_manager.release(Channel.DIALOG, dialog)
+            await self._focus_manager.wait_drained()
+        if self.current_turn is None:
+            await self._send_status(self._status["ready"])
 
     # --- Provider events (fired by the VoiceProvider's receive loop) ---
 
@@ -1317,22 +1422,30 @@ class TurnCoordinator:
                 return i
         return None
 
-    async def _emit_turn_summary(self, *, reason: str, spawned_audio_stream: bool) -> None:
-        """One-line summary at end-of-turn. Useful for grep + per-turn timing."""
-        if self.current_turn is None:
+    async def _emit_turn_summary(
+        self,
+        *,
+        reason: str,
+        spawned_audio_stream: bool,
+        turn: Turn | None = None,
+        log: structlog.stdlib.BoundLogger | None = None,
+    ) -> None:
+        """One-line summary at end-of-turn. Useful for grep + per-turn timing.
+        `turn` and `log` (its bound logger) default to the current turn's;
+        passed for a turn already detached."""
+        turn = turn if turn is not None else self.current_turn
+        if turn is None:
             return
-        elapsed_ms = int((time.monotonic() - self.current_turn.started_at) * 1000)
-        await self._log.ainfo(
+        elapsed_ms = int((time.monotonic() - turn.started_at) * 1000)
+        await (log if log is not None else self._log).ainfo(
             "coord.turn_summary",
             reason=reason,
             elapsed_ms=elapsed_ms,
-            tool_calls=self.current_turn.tool_calls,
-            response_done_count=self.current_turn.response_done_count,
+            tool_calls=turn.tool_calls,
+            response_done_count=turn.response_done_count,
             spawned_audio_stream=spawned_audio_stream,
-            user_audio_frames=self.current_turn.user_audio_frames,
-            user_audio_ms=self.current_turn.user_audio_bytes
-            * 1000
-            // self._CLIENT_AUDIO_BYTES_PER_SECOND,
+            user_audio_frames=turn.user_audio_frames,
+            user_audio_ms=turn.user_audio_bytes * 1000 // self._CLIENT_AUDIO_BYTES_PER_SECOND,
         )
 
     async def _start_content_stream(self, stream: AudioStream, turn_id: str | None) -> None:

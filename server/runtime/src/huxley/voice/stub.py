@@ -137,6 +137,10 @@ class StubVoiceProvider:
     async def emit_session_end(self, summary: str | None = None) -> None:
         await self._callbacks.on_session_end(summary)
 
+    async def emit_response_refused(self, code: str) -> None:
+        if self._callbacks.on_response_refused:
+            await self._callbacks.on_response_refused(code)
+
     async def emit_transcript(self, role: str, text: str) -> None:
         if self._callbacks.on_transcript:
             await self._callbacks.on_transcript(role, text)
@@ -167,4 +171,5 @@ def _noop_callbacks() -> VoiceProviderCallbacks:
         on_commit_failed=_noop_void,
         on_session_end=_noop_session_end,
         on_transcript=None,
+        on_response_refused=None,
     )

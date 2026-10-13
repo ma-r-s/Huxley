@@ -333,6 +333,52 @@ class TestConnectGAInterface:
             assert beta_key not in session
 
 
+class TestConnectRefused:
+    """T1.43: a refused handshake's exception says only "HTTP 429"; the
+    reason is in the body. A refusal (no credit, a spend limit) is named in
+    the error, so the app and `connection_failed` can tell it from a blip."""
+
+    @staticmethod
+    def _rejecting(status: int, body: bytes) -> Any:
+        from websockets.datastructures import Headers
+        from websockets.exceptions import InvalidStatus
+        from websockets.http11 import Response
+
+        async def fake_connect(_url: str, **_kwargs: Any) -> Any:
+            raise InvalidStatus(Response(status, "Too Many Requests", Headers(), body))
+
+        return fake_connect
+
+    async def test_a_refusal_body_names_the_code(
+        self, provider_deps: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        body = json.dumps(
+            {"error": {"message": "You exceeded your current quota", "code": "insufficient_quota"}}
+        ).encode()
+        monkeypatch.setattr(
+            "huxley.voice.openai_realtime.websockets.connect", self._rejecting(429, body)
+        )
+        provider = OpenAIRealtimeProvider(**provider_deps)
+
+        with pytest.raises(RuntimeError, match=r"insufficient_quota \(HTTP 429\)"):
+            await provider.connect()
+        assert not provider.is_connected
+
+    async def test_a_rate_limit_stays_as_it_was(
+        self, provider_deps: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import websockets
+
+        body = b'{"error": {"code": "rate_limit_exceeded"}}'
+        monkeypatch.setattr(
+            "huxley.voice.openai_realtime.websockets.connect", self._rejecting(429, body)
+        )
+        provider = OpenAIRealtimeProvider(**provider_deps)
+
+        with pytest.raises(websockets.InvalidStatus):
+            await provider.connect()
+
+
 class TestSuspendResume:
     """Provider-side half of T1.4 Stage 2 `InputClaim`.
 
