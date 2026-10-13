@@ -134,6 +134,7 @@ class Runtime:
             # (gitignored; scripts/pi/README.md says how to offer one).
             firmware_dir=Path.cwd() / "firmware",
             device_token=config.device_token,
+            admin_token=config.admin_token,
         )
         self.current_app: Application | None = None
         # Process facts for `/health`. Wall clock for `started_at`, the

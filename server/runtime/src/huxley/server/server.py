@@ -608,6 +608,9 @@ class AudioServer:
         # served.
         firmware_dir: Path | None = None,
         device_token: SecretStr | None = None,
+        # The admin routes' secret (`HUXLEY_ADMIN_TOKEN`); None: any
+        # `X-Huxley-Admin` value will do.
+        admin_token: SecretStr | None = None,
     ) -> None:
         self._host = host
         self._port = port
@@ -721,7 +724,7 @@ class AudioServer:
         self._no_client_drop_bytes = 0
         self._no_client_drop_logged_s = float("-inf")
         self._firmware: FirmwareService | None = (
-            FirmwareService(firmware_dir, device_token, link=self)
+            FirmwareService(firmware_dir, device_token, link=self, admin_token=admin_token)
             if firmware_dir is not None
             else None
         )
@@ -898,6 +901,7 @@ class AudioServer:
                 opus_available=opus_error is None,
                 firmware_dir=str(firmware.directory) if firmware is not None else None,
                 device_token_set=firmware.token_configured if firmware is not None else None,
+                admin_token_set=firmware.admin_token_configured if firmware is not None else None,
             )
             if opus_error is not None:
                 # Opus clients will get PCM; this says why, once, at boot.

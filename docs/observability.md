@@ -511,7 +511,7 @@ The server half of W4 ([protocol](./protocol.md#http-firmware-and-admin), `huxle
 | `firmware.manifest_none` / `firmware.manifest_unavailable` (error) | Nothing offered (404) / the offer names an image that is missing or isn't that version (404). | `remote` / `version`, `reason` |
 | `firmware.image_served` | An image went out (whole, in one answer). | `version`, `bytes`, `remote`, `forwarded_for`, `conn_id` |
 | `firmware.image_refused` (warn) / `firmware.image_unreadable` (error) | A version that isn't the offered one or the one before (`not_offered`), or isn't a version name (`bad_version`) / the file vanished. | `version`, `reason` / `error` |
-| `firmware.admin_refused` (warn) | An `/admin/*` request from outside loopback and Tailscale (`source`) or through a proxy (`proxied`, with the `header`): 404. Or without `X-Huxley-Admin` (`no_admin_header`) or with a foreign `Host` (`host`): 403. | `reason`, `remote`, `header`, `host`, `path` |
+| `firmware.admin_refused` (warn) | An `/admin/*` request from outside loopback and Tailscale (`source`) or through a proxy (`proxied`, with the `header`): 404. Or without `X-Huxley-Admin` (`no_admin_header`), with one that isn't `HUXLEY_ADMIN_TOKEN` when that is set (`bad_admin_token`; the value is never logged) or with a foreign `Host` (`host`): 403. | `reason`, `remote`, `header`, `host`, `path` |
 | `firmware.offered` | An admin offer was written to `offer.json`. | `version`, `force`, `previous`, `bytes`, `elf_sha` |
 | `firmware.offer_refused` (warn) | An admin offer was refused (bad parameters, no `.bin`, a misnamed image, no or another `.elf`). | `reason`, `version` |
 | `firmware.offer_unreadable` (error) | `offer.json` is not valid; nothing is offered until it is rewritten. | `path`, `error` |
@@ -537,7 +537,7 @@ The server half of W4 ([protocol](./protocol.md#http-firmware-and-admin), `huxle
 | `firmware.image_send_aborted` | Shutdown cut image downloads still draining. | `reason`, `count` |
 | `firmware.http_failed` / `firmware.event_failed` (error, traceback) | A route or an event handler raised (answered 500 / the receive loop goes on). | `path` / `event_name` |
 
-`audio_server_listening` says where images are read from (`firmware_dir`) and whether the device token is set (`device_token_set`); `client_connected` carries the connection's `role`.
+`audio_server_listening` says where images are read from (`firmware_dir`) and whether the device token is set (`device_token_set`) and the admin token (`admin_token_set`); `client_connected` carries the connection's `role`.
 
 **An update, end to end**: `grep -E '"firmware\.|"client\.(device\.hello|firmware\.status)' logs/huxley.log`. A healthy one reads `firmware.offered`, `firmware.update_sent`, `firmware.status` (`downloading`, `verifying`, `rebooting`), the new image's `firmware.pending_boot` and `accept_withheld reason=selftest_pending`, `firmware.status phase=selftest`, `firmware.manifest_served`, `firmware.reconnect_forced`, `client_disconnected close_code=1012`, `firmware.accept_sent`, `firmware.status phase=accepted`, then a hello with `slot_state=valid` (`firmware.pending_ended`).
 

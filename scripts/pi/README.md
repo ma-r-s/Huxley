@@ -47,21 +47,24 @@ The production server for grandpa's walkie runs on the shared Orange Pi
   ssh mario@100.75.152.70 mkdir -p huxley/server/runtime/firmware
   scp huxley-firmware.bin mario@100.75.152.70:huxley/server/runtime/firmware/$VER.bin
   scp huxley-firmware.elf mario@100.75.152.70:huxley/server/runtime/firmware/$VER.elf
-  ssh mario@100.75.152.70 "curl -s -H 'X-Huxley-Admin: 1' 'http://127.0.0.1:8765/admin/firmware-offer?version=$VER'"
+  ssh mario@100.75.152.70 "~/huxley/scripts/pi/admin.sh firmware-offer version=$VER"
   # After a test, offer nothing again (an old offer is re-sent to any walkie on another version):
-  ssh mario@100.75.152.70 "curl -s -H 'X-Huxley-Admin: 1' 'http://127.0.0.1:8765/admin/firmware-offer?withdraw=1'"
+  ssh mario@100.75.152.70 "~/huxley/scripts/pi/admin.sh firmware-offer withdraw=1"
   ```
 
   It answers `sent: true` when the walkie got `firmware.update` now, or
   `reason: no_device_connected` (it gets it at its next hello). Add
-  `&force=1` to send an uncommitted build carrying the running version.
-  Follow it with `curl -s -H 'X-Huxley-Admin: 1'
-  http://127.0.0.1:8765/admin/firmware` on the Pi (offer, files, the
-  walkie's last hello, the accept flow) and the `firmware.*` log lines.
-  A console line: `curl -s -H 'X-Huxley-Admin: 1' --get --data-urlencode
-  'line=info' http://127.0.0.1:8765/admin/dev-cmd`. The admin routes
-  answer only loopback and Tailscale, never through a proxy, and need the
-  `X-Huxley-Admin` header. The Cloudflare tunnel routes `/firmware/*` and
+  `force=1` to send an uncommitted build carrying the running version.
+  Follow it with `~/huxley/scripts/pi/admin.sh firmware` on the Pi (offer,
+  files, the walkie's last hello, the accept flow) and the `firmware.*`
+  log lines. A console line: `~/huxley/scripts/pi/admin.sh dev-cmd
+  'line=info'`. The admin routes answer only loopback and Tailscale, never
+  through a proxy, and need `X-Huxley-Admin: <HUXLEY_ADMIN_TOKEN>` (in the
+  server's `.env`, mode 600): `admin.sh` reads it there and hands it to
+  curl on stdin, so it never lands in a command line or a log. Without the
+  token anything else on this shared box (Home Assistant and two other
+  containers share the host's network) or on the tailnet could drive the
+  walkie's console. The Cloudflare tunnel routes `/firmware/*` and
   the voice socket, never `/admin` or `/health`.
 - Before relying on reminders right after a restart: T1.44 in
   [`docs/triage.md`](../../docs/triage.md).

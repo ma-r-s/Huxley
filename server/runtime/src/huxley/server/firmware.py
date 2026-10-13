@@ -12,7 +12,8 @@ it. Three pieces, all framework plumbing (no skill sees any of it):
   `/admin/dev-cmd`), loopback and Tailscale only. The server checks the
   source (server.py); this module checks the request itself
   (`X-Huxley-Admin`, a local `Host`) so a web page in Mario's browser can't
-  fire one. GET with query parameters, not POST: websockets answers 400 to
+  fire one. With `HUXLEY_ADMIN_TOKEN` set (production) the header must
+  carry that secret, so another process on the shared box can't either. GET with query parameters, not POST: websockets answers 400 to
   any other method or any request body before `process_request` runs.
 - **The accept flow**: a freshly updated image boots `pending_verify` and
   is kept only after the server's `ota.accept`, which the server sends
@@ -47,6 +48,7 @@ from huxley.server.auth import (
     bearer_token_state,
     configured_token,
     forwarded_for,
+    header_secret_ok,
 )
 from huxley.server.auth import local_host_allowed as admin_host_allowed
 
@@ -479,10 +481,18 @@ def _parse_bool(raw: str | None, default: bool) -> bool | None:
 class FirmwareService:
     """The firmware routes and the device's update/console events."""
 
-    def __init__(self, directory: Path, device_token: SecretStr | None, link: DeviceLink) -> None:
+    def __init__(
+        self,
+        directory: Path,
+        device_token: SecretStr | None,
+        link: DeviceLink,
+        admin_token: SecretStr | None = None,
+    ) -> None:
         self._store = FirmwareStore(directory)
         # An empty token is no token: never open.
         self._token = configured_token(device_token)
+        # Unset: any `X-Huxley-Admin` value will do (dev).
+        self._admin_token = configured_token(admin_token)
         self._link = link
         self._devices: dict[str, _Device] = {}
         self._last_device_id: str | None = None
@@ -495,6 +505,10 @@ class FirmwareService:
     @property
     def token_configured(self) -> bool:
         return self._token is not None
+
+    @property
+    def admin_token_configured(self) -> bool:
+        return self._admin_token is not None
 
     @property
     def directory(self) -> Path:
@@ -646,10 +660,22 @@ class FirmwareService:
         """`GET /admin/...`. Refuses requests a browser could send on its
         own: without `X-Huxley-Admin` (a cross-site page can't add a
         header without a CORS preflight, which this server never grants)
-        or with a `Host` that is not local (DNS rebinding)."""
+        or with a `Host` that is not local (DNS rebinding). With an admin
+        token configured the header must carry it: anything else on the
+        box or the tailnet can reach these routes, and dev-cmd drives the
+        walkie's console."""
         if not headers.get_all(ADMIN_HEADER):
             logger.warning("firmware.admin_refused", reason="no_admin_header", path=path[:200])
-            return _error(HTTPStatus.FORBIDDEN, f"send the header {ADMIN_HEADER}: 1")
+            want = "the admin token (scripts/pi/admin.sh)" if self._admin_token else "1"
+            return _error(HTTPStatus.FORBIDDEN, f"send the header {ADMIN_HEADER}: {want}")
+        if self._admin_token is not None and not header_secret_ok(
+            headers, ADMIN_HEADER, self._admin_token
+        ):
+            logger.warning("firmware.admin_refused", reason="bad_admin_token", path=path[:200])
+            return _error(
+                HTTPStatus.FORBIDDEN,
+                f"{ADMIN_HEADER} isn't the admin token: use scripts/pi/admin.sh",
+            )
         hosts = headers.get_all("Host")
         if len(hosts) != 1 or not admin_host_allowed(hosts[0]):
             logger.warning(

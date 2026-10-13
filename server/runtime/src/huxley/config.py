@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     # /admin"). Unset (or empty), those routes refuse everyone with 503.
     # SecretStr: never printed in a repr or a log.
     device_token: SecretStr | None = None
+    # The admin routes' secret (`/admin/*`, docs/protocol.md "Admin
+    # routes"): set, `X-Huxley-Admin` must carry it; unset, any value does
+    # (dev). The routes are loopback and Tailscale only either way; this
+    # keeps another process on a shared box, or a tailnet device, from
+    # driving the walkie's console. On the Pi, scripts/pi/admin.sh sends it.
+    admin_token: SecretStr | None = None
 
     # --- Session ---
     # OpenAI ends a Realtime session at 60 minutes. After this many

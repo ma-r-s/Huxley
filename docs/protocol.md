@@ -104,7 +104,7 @@ From any source: the walkie comes through the Cloudflare tunnel, where every req
 
 ### Admin routes: `/admin/*`
 
-Loopback and Tailscale only, never through a proxy: the `/health` guard, `404` otherwise (`firmware.admin_refused`); the tunnel must not route `/admin` either. And only requests a person sends on purpose: the header `X-Huxley-Admin: 1` (a web page can make a browser GET a URL, but can't add a header without a CORS preflight, which this server never answers) and a local `Host` (an IP, `localhost`, a one-label name or a `*.ts.net` name; a DNS-rebinding page arrives with its own domain): `403` otherwise.
+Loopback and Tailscale only, never through a proxy: the `/health` guard, `404` otherwise (`firmware.admin_refused`); the tunnel must not route `/admin` either. And only requests a person sends on purpose: the header `X-Huxley-Admin` (a web page can make a browser GET a URL, but can't add a header without a CORS preflight, which this server never answers), carrying `HUXLEY_ADMIN_TOKEN` when that is set (production: anything else on the shared box or the tailnet can reach these routes and add a header; constant-time compare; `scripts/pi/admin.sh` sends it) and any value otherwise (`1` by convention, dev), and a local `Host` (an IP, `localhost`, a one-label name or a `*.ts.net` name; a DNS-rebinding page arrives with its own domain): `403` otherwise.
 
 | Route | Does | Answer |
 | --- | --- | --- |

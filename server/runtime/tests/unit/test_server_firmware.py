@@ -51,7 +51,7 @@ ADMIN = {"X-Huxley-Admin": "1"}
 
 @contextlib.asynccontextmanager
 async def _serving(
-    fwdir: Path | None, token: str | None = TOKEN
+    fwdir: Path | None, token: str | None = TOKEN, admin_token: str | None = None
 ) -> AsyncIterator[tuple[int, AudioServer]]:
     port = free_port()
     server = AudioServer(
@@ -65,6 +65,7 @@ async def _serving(
         get_health=lambda: {"ok": True},
         firmware_dir=fwdir,
         device_token=SecretStr(token) if token is not None else None,
+        admin_token=SecretStr(admin_token) if admin_token is not None else None,
     )
     task = asyncio.create_task(server.run())
     try:
@@ -381,6 +382,30 @@ class TestAdminGuard:
         async with _serving(fwdir) as (port, _server):
             reply = await _admin(port, "/admin/firmware", host=f"evil.example.com:{port}")
         assert reply.status == 403
+
+    async def test_an_admin_token_must_be_presented(self, fwdir: Path) -> None:
+        """Production (HUXLEY_ADMIN_TOKEN set): anything else on the shared
+        box or the tailnet reaches these routes and can add the header, so
+        "1" is not enough; the token is, and it is never logged."""
+        secret = "admin-test-secret-0123456789abcdef"
+        async with _serving(fwdir, admin_token=secret) as (port, _server):
+            with structlog.testing.capture_logs() as logs:
+                plain = await _admin(port, "/admin/dev-cmd?line=reboot")
+                wrong = await http_get(
+                    port, "/admin/firmware", headers={"X-Huxley-Admin": secret + "x"}
+                )
+                none = await http_get(port, "/admin/firmware")
+                right = await http_get(port, "/admin/firmware", headers={"X-Huxley-Admin": secret})
+        assert (plain.status, wrong.status, none.status, right.status) == (403, 403, 403, 200)
+        reasons = [e["reason"] for e in logs if e["event"] == "firmware.admin_refused"]
+        assert reasons == ["bad_admin_token", "bad_admin_token", "no_admin_header"]
+        assert secret not in repr(logs)
+        assert secret not in plain.body.decode() + none.body.decode()
+
+    async def test_without_an_admin_token_any_header_value_will_do(self, fwdir: Path) -> None:
+        async with _serving(fwdir) as (port, _server):
+            reply = await http_get(port, "/admin/firmware", headers={"X-Huxley-Admin": "yes"})
+        assert reply.status == 200
 
     async def test_unknown_admin_path_is_404(self, fwdir: Path) -> None:
         async with _serving(fwdir) as (port, _server):

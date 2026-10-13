@@ -86,6 +86,22 @@ def configured_token(token: SecretStr | None) -> SecretStr | None:
     return token if token is not None and token.get_secret_value() else None
 
 
+def header_secret_ok(headers: HeaderLookup, name: str, secret: SecretStr) -> bool:
+    """Whether `headers` carry exactly one `name` header whose value is
+    `secret`. Constant time over digests, like the bearer check. Never
+    raises and never logs; the caller logs the refusal, never a value."""
+    values = headers.get_all(name)
+    if len(values) != 1:
+        return False
+    presented = values[0].strip()
+    if not presented or not presented.isascii():
+        return False
+    expected = secret.get_secret_value().encode("utf-8", "surrogateescape")
+    return hmac.compare_digest(
+        hashlib.sha256(presented.encode()).digest(), hashlib.sha256(expected).digest()
+    )
+
+
 def bearer_token_state(headers: HeaderLookup, token: SecretStr | None) -> TokenState:
     """Whether `headers` carry exactly one `Authorization: Bearer <token>`.
     `missing`: no such header (or no token configured); `bad_token`: a
