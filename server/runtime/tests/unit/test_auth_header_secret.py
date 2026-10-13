@@ -27,3 +27,14 @@ def test_two_headers_fail_even_if_one_is_right() -> None:
     headers[NAME] = "1"
     headers[NAME] = "s3cret-admin-token-0123456789"
     assert not header_secret_ok(headers, NAME, SECRET)
+
+
+def test_admin_token_problems() -> None:
+    from huxley.server.auth import admin_token_problem
+
+    assert admin_token_problem(None) == "missing"
+    assert admin_token_problem(SecretStr("short")) == "short"
+    assert admin_token_problem(SecretStr("ñ" * 40)) == "not_ascii"
+    assert admin_token_problem(SecretStr(" " + "a" * 40)) == "spaces"
+    assert admin_token_problem(SecretStr("a" * 20 + " " + "b" * 20)) == "spaces"
+    assert admin_token_problem(SecretStr("a" * 48)) is None

@@ -40,6 +40,8 @@ if TYPE_CHECKING:
 
 TOKEN = "roles-test-token-0123456789abcdefghij"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
+ADMIN_SECRET = "admin-roles-test-secret-0123456789ab"
+ADMIN = {"X-Huxley-Admin": ADMIN_SECRET}
 TUNNEL = {"Cf-Connecting-Ip": "203.0.113.9", "Cf-Ray": "8c1f-BOG"}
 
 
@@ -59,7 +61,7 @@ class Callbacks:
 
 @contextlib.asynccontextmanager
 async def _serving(
-    token: str | None = TOKEN, fwdir: Path | None = None
+    token: str | None = TOKEN, fwdir: Path | None = None, admin_token: str | None = ADMIN_SECRET
 ) -> AsyncIterator[tuple[int, AudioServer, Callbacks]]:
     cb = Callbacks()
     port = free_port()
@@ -79,6 +81,7 @@ async def _serving(
         get_health=lambda: {"ok": True},
         firmware_dir=fwdir,
         device_token=SecretStr(token) if token is not None else None,
+        admin_token=SecretStr(admin_token) if admin_token is not None else None,
     )
     task = asyncio.create_task(server.run())
     try:
@@ -295,10 +298,41 @@ class TestEviction:
             assert server.conn_id == hello["conn_id"]
             await device.close()
 
-    async def test_unless_it_asks_with_evict(self) -> None:
+    async def test_evict_without_the_admin_token_is_refused(self) -> None:
+        """Without it anything on the shared box or the tailnet could knock
+        the walkie off, again and again (it stays off until its next press)."""
+        async with _serving() as (port, server, _cb):
+            device, hello = await _open(port, headers=AUTH)
+            with structlog.testing.capture_logs() as logs:
+                plain = await _refused_status(port, path="/?evict=1")
+                wrong = await _refused_status(
+                    port, path="/?evict=1", headers={"X-Huxley-Admin": "1"}
+                )
+            assert (plain, wrong) == (409, 409)
+            assert server.conn_id == hello["conn_id"]
+            await device.close()
+        refused = [e for e in logs if e["event"] == "server.auth.evict_refused"]
+        assert refused[0]["asked"] is True and refused[0]["admin_token_set"] is True
+        assert ADMIN_SECRET not in repr(logs)
+
+    async def test_production_without_an_admin_token_warns_at_startup(self) -> None:
+        with structlog.testing.capture_logs() as logs:
+            async with _serving(admin_token=None):
+                pass
+        warned = [e for e in logs if e["event"] == "server.auth.admin_token_unusable"]
+        assert warned and warned[0]["problem"] == "missing"
+
+    async def test_nobody_evicts_when_no_admin_token_is_configured(self) -> None:
+        async with _serving(admin_token=None) as (port, _server, _cb):
+            device, _hello = await _open(port, headers=AUTH)
+            status = await _refused_status(port, path="/?evict=1", headers=ADMIN)
+            assert status == 409
+            await device.close()
+
+    async def test_unless_it_asks_with_evict_and_the_admin_token(self) -> None:
         async with _serving() as (port, server, _cb):
             device, _hello = await _open(port, headers=AUTH)
-            local, hello = await _open(port, path="/?evict=1")
+            local, hello = await _open(port, path="/?evict=1", headers=ADMIN)
             await until(lambda: server.conn_id == hello["conn_id"])
             with contextlib.suppress(ConnectionClosed):
                 await asyncio.wait_for(device.recv(), timeout=2)

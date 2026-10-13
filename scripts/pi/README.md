@@ -30,7 +30,9 @@ The production server for grandpa's walkie runs on the shared Orange Pi
   only what the firmware sends, and the PWA works from the Pi itself or
   over Tailscale only (served from a local address: a page on another
   site gets 403). A PWA never knocks the walkie off: its connect gets
-  409 while the walkie is connected, unless its URL adds `&evict=1`.
+  409 while the walkie is connected. Only a tool can replace it, with
+  `?evict=1` and `X-Huxley-Admin: <HUXLEY_ADMIN_TOKEN>` (browsers can't
+  send that header on a WebSocket).
   Details: [`docs/protocol.md`](../../docs/protocol.md#authentication-and-roles).
   Fields in [`docs/protocol.md`](../../docs/protocol.md#http-health).
 - Firmware updates (T1.43 W4; routes in

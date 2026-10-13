@@ -70,12 +70,15 @@ from websockets.asyncio.server import ServerConnection, serve
 from huxley.server.auth import (
     MIN_TOKEN_CHARS,
     HeaderLookup,
+    admin_token_problem,
     bearer_token_state,
     configured_token,
     forwarded_for,
+    header_secret_ok,
     local_origin,
 )
 from huxley.server.firmware import (
+    ADMIN_HEADER,
     ADMIN_PREFIX,
     FirmwareService,
     HttpAnswer,
@@ -731,6 +734,9 @@ class AudioServer:
         # Production mode: a device token is configured. Without one every
         # connection keeps today's full behaviour (dev).
         self._device_token = configured_token(device_token)
+        # Production: `?evict=1` must come with it (X-Huxley-Admin), like
+        # the admin routes; without one configured nobody may evict.
+        self._admin_token = configured_token(admin_token)
         # Connections still writing a firmware image (aborted at shutdown,
         # so the listener's close doesn't wait out a slow download).
         self._long_sends: set[ServerConnection] = set()
@@ -913,6 +919,18 @@ class AudioServer:
                     min_chars=MIN_TOKEN_CHARS,
                     note="HUXLEY_DEVICE_TOKEN is guessable through the tunnel: use 32+ random chars",
                 )
+            if token is not None:
+                problem = admin_token_problem(self._admin_token)
+                if problem is not None:
+                    await logger.awarning(
+                        "server.auth.admin_token_unusable",
+                        problem=problem,
+                        min_chars=MIN_TOKEN_CHARS,
+                        note="/admin answers 503 and nobody can evict the walkie until "
+                        "HUXLEY_ADMIN_TOKEN is 32+ random ASCII chars"
+                        if problem == "missing"
+                        else "HUXLEY_ADMIN_TOKEN: use 32+ random ASCII chars, no spaces",
+                    )
             try:
                 await asyncio.Future()  # run until cancelled
             finally:
@@ -1071,17 +1089,26 @@ class AudioServer:
             return _Access(ROLE_LOCAL, source, token)
         return _Access(None, source, token)
 
-    def _evicts_device(self, access: _Access, target: str) -> bool:
+    def _evicts_device(self, access: _Access, target: str, headers: HeaderLookup) -> bool:
         """Production: a connection that isn't the device would replace a
-        connected device without a local `?evict=1`."""
+        connected device without a local `?evict=1` carrying the admin
+        token (`X-Huxley-Admin`). Without the token anything on the box or
+        the tailnet could knock the walkie off, again and again: it stays
+        off until its next press."""
         current = self._conn
         return (
             self._device_token is not None
             and current is not None
             and current.role == ROLE_DEVICE
             and access.role != ROLE_DEVICE
-            and not (access.source == "local" and _wants_evict(target))
+            and not self._evict_allowed(access, target, headers)
         )
+
+    def _evict_allowed(self, access: _Access, target: str, headers: HeaderLookup) -> bool:
+        if access.source != "local" or not _wants_evict(target):
+            return False
+        token = self._admin_token
+        return token is not None and header_secret_ok(headers, ADMIN_HEADER, token)
 
     def _upgrade_refusal(self, connection: ServerConnection, request: Request) -> Response | None:
         """Production: refuse an upgrade with no role (401) or one that would
@@ -1107,16 +1134,20 @@ class AudioServer:
             response = connection.respond(HTTPStatus.UNAUTHORIZED, "device token required\n")
             response.headers["WWW-Authenticate"] = "Bearer"
             return response
-        if self._evicts_device(access, request.path):
+        if self._evicts_device(access, request.path, request.headers):
             logger.warning(
                 "server.auth.evict_refused",
                 role=access.role,
                 remote=remote,
                 device_conn_id=self._conn.conn_id if self._conn is not None else None,
-                note="the walkie is connected; a local client may replace it with ?evict=1",
+                asked=_wants_evict(request.path),
+                admin_token_set=self._admin_token is not None,
+                note="the walkie is connected; to replace it: ?evict=1 and the admin token",
             )
             return connection.respond(
-                HTTPStatus.CONFLICT, "the walkie is connected; add ?evict=1 to replace it\n"
+                HTTPStatus.CONFLICT,
+                "the walkie is connected; to replace it add ?evict=1 and send "
+                f"{ADMIN_HEADER} with the admin token\n",
             )
         return None
 
@@ -1132,8 +1163,10 @@ class AudioServer:
         decided on the HTTP request, but the device may have connected while
         this handshake finished. False (logged, socket closed 1008) when the
         connection has no role or would evict the device."""
-        target = getattr(getattr(ws, "request", None), "path", "/")
-        if access.role is not None and not self._evicts_device(access, target):
+        request = getattr(ws, "request", None)
+        target = getattr(request, "path", "/")
+        headers: HeaderLookup = request.headers if request is not None else _NO_HEADERS
+        if access.role is not None and not self._evicts_device(access, target, headers):
             return True
         reason = "no_role" if access.role is None else "evicts_device"
         await logger.awarning(

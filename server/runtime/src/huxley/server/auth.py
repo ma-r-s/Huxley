@@ -86,6 +86,22 @@ def configured_token(token: SecretStr | None) -> SecretStr | None:
     return token if token is not None and token.get_secret_value() else None
 
 
+def admin_token_problem(token: SecretStr | None) -> str | None:
+    """What's wrong with a production admin token, None if nothing:
+    `missing`, `short` (under MIN_TOKEN_CHARS: guessable by anything that
+    can reach /admin), `not_ascii` or `spaces` (no header can match it)."""
+    if token is None:
+        return "missing"
+    value = token.get_secret_value()
+    if not value.isascii():
+        return "not_ascii"
+    if value != value.strip() or " " in value:
+        return "spaces"
+    if len(value) < MIN_TOKEN_CHARS:
+        return "short"
+    return None
+
+
 def header_secret_ok(headers: HeaderLookup, name: str, secret: SecretStr) -> bool:
     """Whether `headers` carry exactly one `name` header whose value is
     `secret`. Constant time over digests, like the bearer check. Never

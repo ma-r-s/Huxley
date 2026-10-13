@@ -80,7 +80,8 @@ class Headers:
 
 
 AUTH = Headers({"Authorization": f"Bearer {TOKEN}"})
-ADMIN = Headers({"X-Huxley-Admin": "1", "Host": "127.0.0.1:8765"})
+ADMIN_SECRET = "admin-unit-test-secret-0123456789abc"
+ADMIN = Headers({"X-Huxley-Admin": ADMIN_SECRET, "Host": "127.0.0.1:8765"})
 
 
 def hello(**fields: Any) -> dict[str, Any]:
@@ -111,7 +112,12 @@ def fwdir(tmp_path: Path) -> Path:
 
 
 def service(fwdir: Path, link: FakeLink, token: str | None = TOKEN) -> FirmwareService:
-    return FirmwareService(fwdir, SecretStr(token) if token is not None else None, link)
+    return FirmwareService(
+        fwdir,
+        SecretStr(token) if token is not None else None,
+        link,
+        admin_token=SecretStr(ADMIN_SECRET),
+    )
 
 
 class TestVersionNames:

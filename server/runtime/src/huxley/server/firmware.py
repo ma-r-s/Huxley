@@ -664,10 +664,19 @@ class FirmwareService:
         token configured the header must carry it: anything else on the
         box or the tailnet can reach these routes, and dev-cmd drives the
         walkie's console."""
+        if self._token is not None and self._admin_token is None:
+            # Production without an admin token: closed, never "any value".
+            logger.warning(
+                "firmware.admin_refused", reason="no_admin_token_configured", path=path[:200]
+            )
+            return _error(
+                HTTPStatus.SERVICE_UNAVAILABLE, "set HUXLEY_ADMIN_TOKEN in the server's .env"
+            )
         if not headers.get_all(ADMIN_HEADER):
             logger.warning("firmware.admin_refused", reason="no_admin_header", path=path[:200])
-            want = "the admin token (scripts/pi/admin.sh)" if self._admin_token else "1"
-            return _error(HTTPStatus.FORBIDDEN, f"send the header {ADMIN_HEADER}: {want}")
+            return _error(
+                HTTPStatus.FORBIDDEN, f"send the header {ADMIN_HEADER} (scripts/pi/admin.sh)"
+            )
         if self._admin_token is not None and not header_secret_ok(
             headers, ADMIN_HEADER, self._admin_token
         ):
