@@ -134,6 +134,19 @@ static void run_line(char *line, bool usb) {
         } else {
             (void)hux_prompt_play((hux_prompt_t)id);
         }
+    } else if (strcmp(cmd, "echo") == 0 && argc > 1) {
+        /* A call's echo (F-0031): off, shadow (measure only), on (gate). */
+        int mode = strcmp(argv[1], "off") == 0     ? HUX_ECHO_MODE_OFF
+                   : strcmp(argv[1], "shadow") == 0 ? HUX_ECHO_MODE_SHADOW
+                   : strcmp(argv[1], "on") == 0     ? HUX_ECHO_MODE_ON
+                                                    : -1;
+        if (mode < 0) {
+            ESP_LOGW(TAG, "console.echo unknown=%s (off, shadow, on)", argv[1]);
+        } else {
+            hux_audio_set_echo_mode(mode);
+        }
+    } else if (strcmp(cmd, "calljb") == 0 && argc > 1) {
+        hux_audio_set_call_jb(atoi(argv[1])); /* a call's jitter buffer, ms */
     } else if (strcmp(cmd, "super") == 0) {
         hux_super_status();
     } else if (strcmp(cmd, "hang") == 0 && argc > 1) {
@@ -255,7 +268,7 @@ static void run_line(char *line, bool usb) {
     } else {
         ESP_LOGW(TAG, "console.unknown %s (talk, release, say N, tone [hz] [ms], vol N, pa on|off, "
                       "selftest [hz], wifi off [s]|on|list|addhex <ssid> <pw>|forget <ssid>, wifistat, wifiscan, wifibw 20|40, info, "
-                      "server [<uri> [min] | keep <uri> [min] | reset], quiet [s], battery [cal <mv> | cutoff on|off | park <mv> <min>], super, "
+                      "server [<uri> [min] | keep <uri> [min] | reset], quiet [s], battery [cal <mv> | cutoff on|off | park <mv> <min>], echo off|shadow|on, calljb <ms>, super, "
                       "hang app|spk, coredump erase, reboot, "
                       "ota <url> [force] | confirm | rollback)",
                  cmd);

@@ -64,6 +64,18 @@ void hux_audio_mic_start(void);
  */
 void hux_audio_mic_stop(void);
 
+/** A call (F-0031: the mic streams while the speaker plays the far end):
+ * the speaker's rebuffer target drops to 240 ms and the mic's echo
+ * suppressor runs. `audio.call on|off`, `audio.echo` once a second. */
+void hux_audio_set_call(bool on);
+
+/** The call's echo mode (`echo off|shadow|on`, NVS; shadow by default:
+ * measure, change nothing) and jitter buffer (`calljb <ms>`, 100-1000,
+ * NVS; 240 by default). */
+enum { HUX_ECHO_MODE_OFF = 0, HUX_ECHO_MODE_SHADOW = 1, HUX_ECHO_MODE_ON = 2 };
+void hux_audio_set_echo_mode(int mode);
+void hux_audio_set_call_jb(int ms);
+
 /** `true` if the mic is actively producing frames. */
 bool hux_audio_mic_is_running(void);
 
