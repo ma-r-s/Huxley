@@ -44,6 +44,10 @@ CLIPS = [
     "¿Qué audiolibros tienes?",  # 13: the whole list, was 5 of 19
     "Pon el segundo.",  # 14: from that list
     "Para la música.",  # 15
+    # 2026-10-13, Spotify asks that went wrong live (3cdcdefc):
+    "Reproduce el boya de Daft Punk.",  # 16: "Voyager" said the Spanish way
+    "No, pon Voyager de Daft Punk.",  # 17: a correction is a new search, not resume
+    "Canción anterior.",  # 18: mid-song: back a song, not the same one again
 ]
 TAIL_SILENCE_MS = 200
 

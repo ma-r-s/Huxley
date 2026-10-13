@@ -71,6 +71,13 @@ HEARING = [
     (13, "Que audiolibros tienes?", "search_audiobooks", r"query': ''|^\{\}$|args=\{\}", None),
     (14, "Pon el segundo", "play_audiobook", None, None),
     (10, "Pausa", "audiobook_control", r"pause", None),
+    # 2026-10-13 (3cdcdefc): a title said the Spanish way, a correction, a
+    # previous song mid-song (its own server line: rewound, then skipped).
+    (16, "Reproduce el boya de Daft Punk", "play_music", r"(?i)boya|voyager", None),
+    (17, "No, pon Voyager de Daft Punk", "play_music", r"(?i)voyager|daft", None),
+    (18, "Cancion anterior", "music_control", r"previous", None,
+     r"\[server\] spotify\.previous .*rewound=True"),
+    (15, "Para la musica", "music_control", r"pause|stop", None),
 ]
 # Server events the Wi-Fi board sees as `[server] <event> k=v ...` lines.
 SERVER_EVENTS = {
@@ -87,6 +94,7 @@ SERVER_EVENTS = {
     "coord.content_resumed",
     "coord.streams_overruled",
     "server.tx.stream_started",
+    "spotify.previous",
 }
 PROXY_PORT = 8775
 
@@ -726,7 +734,7 @@ def main() -> int:
             # call the right tool with the right arguments (the server log's
             # session.rx.tool_call). Needs Spotify up; the amp stays as is.
             rows, fails_here = [], 0
-            for clip, said, tool, want, avoid in HEARING:
+            for clip, said, tool, want, avoid, *extra in HEARING:
                 m2 = b.mark()
                 b.send(f"say {clip}")
                 call = b.expect(r"\[server\] session\.rx\.tool_call ", 25, m2)
@@ -738,6 +746,10 @@ def main() -> int:
                     and (want is None or re.search(want, args_txt))
                     and (avoid is None or not re.search(avoid, args_txt))
                 )
+                if ok and extra:  # a server line the call must also cause
+                    seen = b.expect(extra[0], 15, m2)
+                    ok = seen is not None
+                    args_txt += f" | {'saw' if seen else 'MISSING'} {extra[0][:40]}"
                 fails_here += not ok
                 rows.append(
                     f"{'ok ' if ok else 'BAD'} {said!r}: {name or 'no tool call'} {args_txt[:60]}"
