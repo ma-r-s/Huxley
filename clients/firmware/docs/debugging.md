@@ -709,7 +709,10 @@ echo-reference channel), `tone`, `prompt <name>` (a sentence or sound stored on
 the walkie, `offline`, `battery_empty`, `startup`, `searching`,
 `connected` or `lost`; `prompt.play name= ms= queued=`), `status poweron`
 (the connection sounds as after a power on, F-0033), `led bright <pct>` /
-`led demo rainbow|glow|voice` / `led walk` (the lights, F-0034),
+`led demo rainbow|glow|voice` / `led walk` (the lights, F-0034), `opus yield on|off` / `opus flood <s>` (the decoder's
+guard, which gives a core up after 100 ms of work without waiting,
+`opus.yield run_ms= waiting= count=`; and a silent flood to test it, amp
+off first, F-0035),
 `vol`, `pa off|on` (silent bench),
 `wifi off|on`, `wifistat` (the Wi-Fi driver's buffer and RX/TX
 counters; they reach the server too, under the `wifi` tag), `wifiscan`
