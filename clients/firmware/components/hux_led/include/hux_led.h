@@ -5,14 +5,15 @@
  * every call here only sets a flag and wakes it, so nothing on the audio or
  * press path ever waits for a light.
  *
- * Mario's pick (frames: hux_led_anim.h): at boot "Orbit" in warm white,
- * started when the startup sound reaches the speaker, so it follows the
- * sound's boot rule (F-0033: a real power on or after the battery park);
- * while the lever is held "Voice" in white (the light climbs with the mic
- * level), or "Glow" for a press the walkie can't act on (offline). Peak
- * brightness `led bright <pct>` (saved; 25 % of full by default), a third
- * of it at night (22:00-07:00 Bogota, once the clock is known). Logs
- * `led.anim kind=boot|press mode=orbit|voice|glow`.
+ * Mario's pick (frames: hux_led_anim.h): at boot "Rainbow", every LED its
+ * own colour turning round the ring, started when the startup sound
+ * reaches the speaker, so it follows the sound's boot rule (F-0033: a real
+ * power on or after the battery park); while the lever is held "Voice",
+ * all seven in white, their intensity following the mic level, or "Glow"
+ * (steady) for a press the walkie can't act on (offline). Peak brightness
+ * `led bright <pct>` (saved; 25 % of full by default), a third of it at
+ * night (22:00-07:00 Bogota, once the clock is known). Logs
+ * `led.anim kind=boot|press mode=rainbow|voice|glow`.
  */
 #pragma once
 
@@ -29,7 +30,7 @@ extern "C" {
 void hux_led_start(void);
 
 /** The startup sound was just queued; `played_ms_before` is
- * hux_audio_played_ms() from before it was: Orbit starts when that
+ * hux_audio_played_ms() from before it was: the light starts when that
  * counter moves (the sound left the ring) plus the I2S queue ahead of it. */
 void hux_led_boot(uint32_t played_ms_before);
 
@@ -40,7 +41,7 @@ void hux_led_press(bool held, bool voice);
 /** From the mic sink, each 20 ms frame: its mean square (PCM16). */
 void hux_led_mic(uint32_t mean_square);
 
-/** Console: `orbit`, `glow` or `voice` (3 s, a made-up sentence for the
+/** Console: `rainbow`, `glow` or `voice` (3 s, a made-up sentence for the
  * level), to look at them without the startup sound or a real press; or
  * `walk`: each position alone for 0.6 s, bottom first, to check the order. */
 void hux_led_demo(const char *what);

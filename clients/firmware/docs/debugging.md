@@ -496,14 +496,13 @@ default; in `led.started hidden_gain=`) so the ring reads even through the
 case. The frames are Mario's
 mockup ported number for number (`hux_led_anim`, host-tested against it).
 Peak `led bright <pct>` (saved, 25 % by default), a third of it 22:00-07:00.
-Logs: `led.started gpio= dma= pct=`, `led.anim kind=boot mode=orbit
+Logs: `led.started gpio= dma= pct= hidden_gain=`, `led.anim kind=boot mode=rainbow
 wait_ms= heard= night= pct=` (heard=0: the sound never moved, started on
 the timeout), `led.anim kind=press mode=voice|glow night= pct= demo=`,
 `led.anim.end kind=press mode= ms= v_max_pct=` (the press's loudest level:
 tune the mic mapping from it), `led.refresh_failed tries=` (a frame retried
-~0.5 s). Console `led demo orbit|glow|voice` (voice: 3 s of the mockup's
-made-up sentence, which fills the low pair and barely the top) shows them
-without a press. The frame logic (`hux_led_engine_step`) is pure and
+~0.5 s). Console `led demo rainbow|glow|voice` (voice: 3 s of the mockup's
+made-up sentence) shows them without a press. The frame logic (`hux_led_engine_step`) is pure and
 host-tested; the task only reads its inputs and writes pixels.
 
 ### Calls: latency and the walkie's own echo (F-0031)
@@ -707,7 +706,7 @@ echo-reference channel), `tone`, `prompt <name>` (a sentence or sound stored on
 the walkie, `offline`, `battery_empty`, `startup`, `searching`,
 `connected` or `lost`; `prompt.play name= ms= queued=`), `status poweron`
 (the connection sounds as after a power on, F-0033), `led bright <pct>` /
-`led demo orbit|glow|voice` / `led walk` (the lights, F-0034),
+`led demo rainbow|glow|voice` / `led walk` (the lights, F-0034),
 `vol`, `pa off|on` (silent bench),
 `wifi off|on`, `wifistat` (the Wi-Fi driver's buffer and RX/TX
 counters; they reach the server too, under the `wifi` tag), `wifiscan`

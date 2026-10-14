@@ -2,59 +2,58 @@
 
 #include <math.h>
 
-/* Height step of each LED: bottom, low, mid, top (the mockup's LEVEL). */
-static const int LEVEL[HUX_LED_COUNT] = {0, 1, 2, 3, 3, 2, 1};
-
 static float clamp01(float v) {
     return v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v;
 }
 
-/* A sharp rise over `attack` from `t0`, then an exponential decay. */
-static float pulse(float t, float t0, float attack, float decay) {
-    if (t < t0) {
-        return 0.0f;
+/* The mockup's hsv(): hue in degrees, s and v 0..1. */
+static void hsv(float h, float s, float v, float rgb[3]) {
+    h = fmodf(fmodf(h, 360.0f) + 360.0f, 360.0f) / 60.0f;
+    float c = v * s;
+    float x = c * (1.0f - fabsf(fmodf(h, 2.0f) - 1.0f));
+    float m = v - c;
+    float r, g, b;
+    if (h < 1.0f) {
+        r = c, g = x, b = 0.0f;
+    } else if (h < 2.0f) {
+        r = x, g = c, b = 0.0f;
+    } else if (h < 3.0f) {
+        r = 0.0f, g = c, b = x;
+    } else if (h < 4.0f) {
+        r = 0.0f, g = x, b = c;
+    } else if (h < 5.0f) {
+        r = x, g = 0.0f, b = c;
+    } else {
+        r = c, g = 0.0f, b = x;
     }
-    float d = t - t0;
-    return d < attack ? d / attack : expf(-(d - attack) / decay);
+    rgb[0] = r + m;
+    rgb[1] = g + m;
+    rgb[2] = b + m;
 }
 
-/* A soft swell from `t0` that is gone by `end`. */
-static float after(float t, float t0, float rise, float end) {
-    if (t < t0) {
-        return 0.0f;
+/* Fade in over `up`, hold, fade out over `down` (squared). */
+static float envelope(float t, float up, float hold, float down) {
+    if (t < up) {
+        return t / up;
     }
-    if (t < t0 + rise) {
-        return (t - t0) / rise;
+    if (t < up + hold) {
+        return 1.0f;
     }
-    float v = clamp01(1.0f - (t - t0 - rise) / (end - t0 - rise));
+    float v = clamp01(1.0f - (t - up - hold) / down);
     return v * v;
 }
 
-bool hux_led_orbit(uint32_t t_ms, float b[HUX_LED_COUNT]) {
-    if (t_ms > HUX_LED_ORBIT_MS) {
+bool hux_led_rainbow(uint32_t t_ms, float rgb[HUX_LED_COUNT][3]) {
+    if (t_ms > HUX_LED_BOOT_MS) {
         for (int i = 0; i < HUX_LED_COUNT; i++) {
-            b[i] = 0.0f;
+            rgb[i][0] = rgb[i][1] = rgb[i][2] = 0.0f;
         }
         return false;
     }
-    const float hold = (float)HUX_LED_ORBIT_HOLD_MS;
     float t = (float)t_ms;
-    float u = 1.0f - clamp01((t - hold) / 460.0f);
-    float head = 180.0f * (1.0f - u * u * u); /* bottom to top, easing out */
-    float flash = pulse(t, 470.0f + hold, 30.0f, 420.0f);
-    float rest = 0.3f * after(t, 480.0f + hold, 120.0f, 1350.0f + hold);
+    float v = envelope(t, 200.0f, 700.0f, 700.0f);
     for (int i = 0; i < HUX_LED_COUNT; i++) {
-        float ang = (float)i * 360.0f / HUX_LED_COUNT;
-        float a = ang <= 180.0f ? ang : 360.0f - ang; /* each arm climbs its own side */
-        float d = head - a;
-        float arm = 0.0f;
-        if (t <= 520.0f + hold) {
-            float w = d >= 0.0f ? d / 70.0f : d / 22.0f;
-            arm = expf(-(w * w));
-        }
-        /* The end lights the upper half only: the top is the last thing lit. */
-        float fl = LEVEL[i] == 3 ? flash : LEVEL[i] == 2 ? 0.5f * flash : 0.0f;
-        b[i] = clamp01(0.85f * arm + fl + rest * (float)LEVEL[i] / 3.0f);
+        hsv((float)i * 360.0f / HUX_LED_COUNT + t * 0.24f, 0.8f, v, rgb[i]);
     }
     return true;
 }
@@ -102,12 +101,12 @@ bool hux_led_hidden(int p) {
     return p == 1 || p == 2 || p == 5 || p == 6;
 }
 
-void hux_led_pixels(const float b[HUX_LED_COUNT], const uint8_t colour[3], float scale,
-                    float hidden_gain, uint8_t out[HUX_LED_COUNT][3]) {
+void hux_led_pixels(const float rgb[HUX_LED_COUNT][3], float scale, float hidden_gain,
+                    uint8_t out[HUX_LED_COUNT][3]) {
     for (int i = 0; i < HUX_LED_COUNT; i++) {
         float gain = hux_led_hidden(i) ? hidden_gain : 1.0f;
         for (int c = 0; c < 3; c++) {
-            float v = (float)colour[c] * clamp01(b[i]) * gain * scale + 0.5f;
+            float v = 255.0f * clamp01(rgb[i][c]) * gain * scale + 0.5f;
             out[i][c] = (uint8_t)(v > 255.0f ? 255.0f : v);
         }
     }
@@ -131,7 +130,7 @@ bool hux_led_engine_active(const hux_led_engine_t *e) {
 }
 
 unsigned hux_led_engine_step(hux_led_engine_t *e, const hux_led_in_t *in,
-                             float b_boot[HUX_LED_COUNT], float b_press[HUX_LED_COUNT]) {
+                             float boot_rgb[HUX_LED_COUNT][3], float b_press[HUX_LED_COUNT]) {
     unsigned ev = 0;
     uint32_t now = in->now;
     float dt = (float)(now - e->prev);
@@ -140,7 +139,7 @@ unsigned hux_led_engine_step(hux_led_engine_t *e, const hux_led_in_t *in,
         dt = 64.0f; /* as the mockup: a late frame doesn't jump */
     }
     for (int i = 0; i < HUX_LED_COUNT; i++) {
-        b_boot[i] = 0.0f;
+        boot_rgb[i][0] = boot_rgb[i][1] = boot_rgb[i][2] = 0.0f;
         b_press[i] = 0.0f;
     }
 
@@ -167,19 +166,19 @@ unsigned hux_led_engine_step(hux_led_engine_t *e, const hux_led_in_t *in,
         e->walk_on = true;
         e->walk_start = now;
         e->boot_waiting = false;
-        e->boot_on = false; /* the walk replaces Orbit */
+        e->boot_on = false; /* the walk replaces the startup light */
         ev |= HUX_LED_EV_WALK;
     }
     if (e->boot_on) {
         int32_t t = (int32_t)(now - e->boot_start);
-        if (t >= 0 && !hux_led_orbit((uint32_t)t, b_boot)) {
+        if (t >= 0 && !hux_led_rainbow((uint32_t)t, boot_rgb)) {
             e->boot_on = false;
         }
     }
     if (e->walk_on) {
         uint32_t p = (now - e->walk_start) / HUX_LED_WALK_STEP_MS;
         if (p < HUX_LED_COUNT) {
-            b_boot[p] = 1.0f;
+            boot_rgb[p][0] = boot_rgb[p][1] = boot_rgb[p][2] = 1.0f; /* white */
         } else {
             e->walk_on = false;
         }

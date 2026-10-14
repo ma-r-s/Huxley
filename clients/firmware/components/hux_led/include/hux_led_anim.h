@@ -18,20 +18,15 @@ extern "C" {
 #endif
 
 #define HUX_LED_COUNT    7
-#define HUX_LED_ORBIT_HOLD_MS 150u
-#define HUX_LED_ORBIT_MS      (1400u + HUX_LED_ORBIT_HOLD_MS) /* the boot animation's length */
+#define HUX_LED_BOOT_MS 1600u /* the startup light's length */
 
-/** Startup "Orbit": the bottom LED alone for 150 ms, then two arms climb
- * to the top pair (460 ms, easing out), a flash and a soft rest on the
- * upper LEDs, gone by 1.5 s. `t_ms` from when the startup sound reaches
- * the speaker. False (all 0) once it is over.
- *
- * Mario's mockup, adjusted on the walkie (2026-10-14): through the case
- * the side LEDs hide behind the battery holders, the mockup's bottom blip
- * lasted under 0.1 s and its end glow lit the bottom again after the top,
- * so it read "up, then down". The hold and the top-weighted end make it
- * read as meant: down, then up. */
-bool hux_led_orbit(uint32_t t_ms, float b[HUX_LED_COUNT]);
+/** Startup "Rainbow" (Mario's pick, 2026-10-14, from his mockups): every
+ * LED its own colour, spread round the ring (hue p x 360/7), turning just
+ * over once (0.24 deg/ms) while the whole ring fades in (200 ms), holds
+ * (700 ms) and fades out (700 ms, squared); saturation 0.8. `t_ms` from
+ * when the startup sound reaches the speaker; rgb 0..1. False (all 0)
+ * once it is over. */
+bool hux_led_rainbow(uint32_t t_ms, float rgb[HUX_LED_COUNT][3]);
 
 /** A press's light: `level` eases toward 1 while the lever is held (110 ms)
  * and toward 0 after (240 ms); `voice` follows the mic level (70 ms). */
@@ -72,7 +67,7 @@ typedef struct {
 } hux_led_in_t;
 
 enum {
-    HUX_LED_EV_BOOT = 1,      /* Orbit is starting: take the peak, log */
+    HUX_LED_EV_BOOT = 1,      /* the startup light is starting: take the peak, log */
     HUX_LED_EV_PRESS = 2,     /* a press light starts */
     HUX_LED_EV_PRESS_END = 4, /* it went out */
     HUX_LED_EV_DEMO_OVER = 8, /* clear demo_until (it would come round on a wrap) */
@@ -95,11 +90,11 @@ typedef struct {
 /** After the task slept: the first frame moves a frame's worth, not 0. */
 void hux_led_engine_wake(hux_led_engine_t *e, uint32_t now);
 
-/** One frame: the warm light's (Orbit, or the walk, which replaces it) and
- * the press's brightness (0 when off), by position, and the events to act
- * on (HUX_LED_EV_*). */
+/** One frame: the startup light's colours (Rainbow, or the walk in white,
+ * which replaces it) and the press's brightness (0 when off), by position,
+ * and the events to act on (HUX_LED_EV_*). */
 unsigned hux_led_engine_step(hux_led_engine_t *e, const hux_led_in_t *in,
-                             float b_boot[HUX_LED_COUNT], float b_press[HUX_LED_COUNT]);
+                             float boot_rgb[HUX_LED_COUNT][3], float b_press[HUX_LED_COUNT]);
 
 /** Something shows or waits to: keep rendering frames; else sleep. */
 bool hux_led_engine_active(const hux_led_engine_t *e);
@@ -123,11 +118,11 @@ void hux_led_chain(const uint8_t pos[HUX_LED_COUNT][3], uint8_t chain[HUX_LED_CO
  * directly (0, 3, 4). */
 bool hux_led_hidden(int p);
 
-/** Brightness to pixels: each channel `colour` x b x `scale` (the peak:
- * 0.25 is a quarter of full), x `hidden_gain` on the hidden positions,
- * rounded and clipped to 0..255. */
-void hux_led_pixels(const float b[HUX_LED_COUNT], const uint8_t colour[3], float scale,
-                    float hidden_gain, uint8_t out[HUX_LED_COUNT][3]);
+/** Colours (0..1 per channel) to pixels: each channel x 255 x `scale` (the
+ * peak: 0.25 is a quarter of full), x `hidden_gain` on the hidden
+ * positions, rounded and clipped to 0..255. */
+void hux_led_pixels(const float rgb[HUX_LED_COUNT][3], float scale, float hidden_gain,
+                    uint8_t out[HUX_LED_COUNT][3]);
 
 #ifdef __cplusplus
 }

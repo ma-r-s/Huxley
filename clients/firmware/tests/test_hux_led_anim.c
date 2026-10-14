@@ -1,8 +1,7 @@
 /**
  * Host unit tests for `hux_led_anim` (F-0034): the light is Mario's mockup,
- * number for number, except Orbit's adjustment on the walkie (a 150 ms
- * hold at the bottom, the end on the upper half; see hux_led_anim.h). The
- * reference values below are those formulas evaluated in double precision
+ * number for number (Rainbow at boot, his pick). The reference values
+ * below are the mockup's own JS formulas evaluated in double precision
  * (the generator is described in the F-0034 triage entry).
  */
 #include <math.h>
@@ -11,22 +10,16 @@
 
 #include "hux_led_anim.h"
 
-static const struct { uint32_t t; float b[7]; } ORBIT_REF[] = {
-    {0, {0.850000f, 0.003599f, 0.000000f, 0.000000f, 0.000000f, 0.000000f, 0.003599f}},
-    {100, {0.850000f, 0.003599f, 0.000000f, 0.000000f, 0.000000f, 0.000000f, 0.003599f}},
-    {150, {0.850000f, 0.003599f, 0.000000f, 0.000000f, 0.000000f, 0.000000f, 0.003599f}},
-    {190, {0.582911f, 0.733750f, 0.000517f, 0.000000f, 0.000000f, 0.000517f, 0.733750f}},
-    {250, {0.141552f, 0.590052f, 0.715348f, 0.000435f, 0.000435f, 0.715348f, 0.590052f}},
-    {380, {0.005380f, 0.085549f, 0.462146f, 0.848210f, 0.848210f, 0.462146f, 0.085549f}},
-    {550, {0.001176f, 0.029742f, 0.255516f, 0.745796f, 0.745796f, 0.255516f, 0.029742f}},
-    {621, {0.001142f, 0.029126f, 0.268998f, 0.776034f, 0.776034f, 0.268998f, 0.029126f}},
-    {650, {0.001142f, 0.045793f, 0.785665f, 1.000000f, 1.000000f, 0.785665f, 0.045793f}},
-    {670, {0.001142f, 0.062460f, 0.795746f, 1.000000f, 1.000000f, 0.795746f, 0.062460f}},
-    {671, {0.000000f, 0.034167f, 0.543948f, 1.000000f, 1.000000f, 0.543948f, 0.034167f}},
-    {850, {0.000000f, 0.075111f, 0.460795f, 0.846478f, 0.846478f, 0.460795f, 0.075111f}},
-    {1150, {0.000000f, 0.021778f, 0.195594f, 0.369410f, 0.369410f, 0.195594f, 0.021778f}},
-    {1499, {0.000000f, 0.000000f, 0.066233f, 0.132467f, 0.132467f, 0.066233f, 0.000000f}},
-    {1550, {0.000000f, 0.000000f, 0.058660f, 0.117319f, 0.117319f, 0.058660f, 0.000000f}},
+static const struct { uint32_t t; float rgb[7][3]; } RAINBOW_REF[] = {
+    {0, {{0.000000f, 0.000000f, 0.000000f}, {0.000000f, 0.000000f, 0.000000f}, {0.000000f, 0.000000f, 0.000000f}, {0.000000f, 0.000000f, 0.000000f}, {0.000000f, 0.000000f, 0.000000f}, {0.000000f, 0.000000f, 0.000000f}, {0.000000f, 0.000000f, 0.000000f}}},
+    {100, {{0.500000f, 0.260000f, 0.100000f}, {0.397143f, 0.500000f, 0.100000f}, {0.100000f, 0.500000f, 0.145714f}, {0.100000f, 0.500000f, 0.488571f}, {0.100000f, 0.168571f, 0.500000f}, {0.374286f, 0.100000f, 0.500000f}, {0.500000f, 0.100000f, 0.282857f}}},
+    {200, {{1.000000f, 0.840000f, 0.200000f}, {0.474286f, 1.000000f, 0.200000f}, {0.200000f, 1.000000f, 0.611429f}, {0.200000f, 0.702857f, 1.000000f}, {0.382857f, 0.200000f, 1.000000f}, {1.000000f, 0.200000f, 0.931429f}, {1.000000f, 0.200000f, 0.245714f}}},
+    {500, {{0.200000f, 1.000000f, 0.200000f}, {0.200000f, 1.000000f, 0.885714f}, {0.200000f, 0.428571f, 1.000000f}, {0.657143f, 0.200000f, 1.000000f}, {1.000000f, 0.200000f, 0.657143f}, {1.000000f, 0.428571f, 0.200000f}, {0.885714f, 1.000000f, 0.200000f}}},
+    {899, {{0.200000f, 0.523200f, 1.000000f}, {0.562514f, 0.200000f, 1.000000f}, {1.000000f, 0.200000f, 0.751771f}, {1.000000f, 0.333943f, 0.200000f}, {0.980343f, 1.000000f, 0.200000f}, {0.294629f, 1.000000f, 0.200000f}, {0.200000f, 1.000000f, 0.791086f}}},
+    {900, {{0.200000f, 0.520000f, 1.000000f}, {0.565714f, 0.200000f, 1.000000f}, {1.000000f, 0.200000f, 0.748571f}, {1.000000f, 0.337143f, 0.200000f}, {0.977143f, 1.000000f, 0.200000f}, {0.291429f, 1.000000f, 0.200000f}, {0.200000f, 1.000000f, 0.794286f}}},
+    {1200, {{0.274286f, 0.065306f, 0.326531f}, {0.326531f, 0.065306f, 0.154869f}, {0.326531f, 0.199650f, 0.065306f}, {0.229504f, 0.326531f, 0.065306f}, {0.065306f, 0.326531f, 0.125015f}, {0.065306f, 0.304140f, 0.326531f}, {0.065306f, 0.080233f, 0.326531f}}},
+    {1599, {{0.000002f, 0.000001f, 0.000000f}, {0.000002f, 0.000002f, 0.000000f}, {0.000000f, 0.000002f, 0.000001f}, {0.000000f, 0.000002f, 0.000002f}, {0.000000f, 0.000001f, 0.000002f}, {0.000002f, 0.000000f, 0.000002f}, {0.000002f, 0.000000f, 0.000001f}}},
+    {1600, {{0.000000f, 0.000000f, 0.000000f}, {0.000000f, 0.000000f, 0.000000f}, {0.000000f, 0.000000f, 0.000000f}, {0.000000f, 0.000000f, 0.000000f}, {0.000000f, 0.000000f, 0.000000f}, {0.000000f, 0.000000f, 0.000000f}, {0.000000f, 0.000000f, 0.000000f}}},
 };
 static const float VOICE_REF[7] = {0.174426f, 0.174426f, 0.174426f, 0.174426f, 0.174426f, 0.174426f, 0.174426f};
 static const float GLOW_REF[7] = {0.321927f, 0.321927f, 0.321927f, 0.321927f, 0.321927f, 0.321927f, 0.321927f};
@@ -37,32 +30,36 @@ static bool near(float a, float b) {
     return fabsf(a - b) < 2e-4f;
 }
 
-static void test_orbit_is_the_mockup(void) {
-    for (size_t k = 0; k < sizeof(ORBIT_REF) / sizeof(ORBIT_REF[0]); k++) {
-        float b[HUX_LED_COUNT];
-        HX_ASSERT_TRUE(hux_led_orbit(ORBIT_REF[k].t, b), "running");
+static void test_rainbow_is_the_mockup(void) {
+    for (size_t k = 0; k < sizeof(RAINBOW_REF) / sizeof(RAINBOW_REF[0]); k++) {
+        float rgb[HUX_LED_COUNT][3];
+        HX_ASSERT_TRUE(hux_led_rainbow(RAINBOW_REF[k].t, rgb), "running");
         for (int i = 0; i < HUX_LED_COUNT; i++) {
-            if (!near(b[i], ORBIT_REF[k].b[i])) {
-                printf("    t=%u led=%d got %.6f want %.6f\n", (unsigned)ORBIT_REF[k].t, i, b[i],
-                       ORBIT_REF[k].b[i]);
+            for (int c = 0; c < 3; c++) {
+                if (!near(rgb[i][c], RAINBOW_REF[k].rgb[i][c])) {
+                    printf("    t=%u led=%d ch=%d got %.6f want %.6f\n", (unsigned)RAINBOW_REF[k].t, i, c,
+                           rgb[i][c], RAINBOW_REF[k].rgb[i][c]);
+                }
+                HX_ASSERT_TRUE(near(rgb[i][c], RAINBOW_REF[k].rgb[i][c]), "rainbow matches the mockup");
             }
-            HX_ASSERT_TRUE(near(b[i], ORBIT_REF[k].b[i]), "orbit matches the mockup");
         }
     }
 }
 
-static void test_orbit_is_symmetric_and_ends(void) {
-    for (uint32_t t = 0; t <= HUX_LED_ORBIT_MS; t += 7) {
-        float b[HUX_LED_COUNT];
-        hux_led_orbit(t, b);
-        bool mirrored = fabsf(b[1] - b[6]) < 1e-5f && fabsf(b[2] - b[5]) < 1e-5f &&
-                        fabsf(b[3] - b[4]) < 1e-5f; /* 360 - 308.57 isn't bit-exact 51.43 */
-        HX_ASSERT_TRUE(mirrored, "mirror pairs equal");
-    }
-    float b[HUX_LED_COUNT];
-    HX_ASSERT_TRUE(!hux_led_orbit(HUX_LED_ORBIT_MS + 1, b), "over after 1.4 s");
+static void test_rainbow_all_at_once_and_ends(void) {
+    float rgb[HUX_LED_COUNT][3];
+    hux_led_rainbow(500, rgb);
     for (int i = 0; i < HUX_LED_COUNT; i++) {
-        HX_ASSERT_TRUE(b[i] == 0.0f, "dark");
+        float hi = fmaxf(rgb[i][0], fmaxf(rgb[i][1], rgb[i][2]));
+        HX_ASSERT_TRUE(hi > 0.99f, "all seven lit at once, full in the hold");
+        int j = (i + 1) % HUX_LED_COUNT;
+        HX_ASSERT_TRUE(!(near(rgb[i][0], rgb[j][0]) && near(rgb[i][1], rgb[j][1]) &&
+                         near(rgb[i][2], rgb[j][2])),
+                       "each its own colour");
+    }
+    HX_ASSERT_TRUE(!hux_led_rainbow(HUX_LED_BOOT_MS + 1, rgb), "over after 1.6 s");
+    for (int i = 0; i < HUX_LED_COUNT; i++) {
+        HX_ASSERT_TRUE(rgb[i][0] == 0.0f && rgb[i][1] == 0.0f && rgb[i][2] == 0.0f, "dark");
     }
 }
 
@@ -139,48 +136,39 @@ static void test_mic_mapping(void) {
 }
 
 static void test_pixels(void) {
-    float b[HUX_LED_COUNT] = {1.0f, 0.5f, 0.0f, 1.0f, 1.0f, 0.0f, 0.5f};
-    const uint8_t warm[3] = {255, 206, 158};
+    const float w[3] = {255.0f / 255.0f, 206.0f / 255.0f, 158.0f / 255.0f};
+    const float lv[HUX_LED_COUNT] = {1.0f, 0.5f, 0.0f, 1.0f, 1.0f, 0.0f, 0.5f};
+    float rgb[HUX_LED_COUNT][3];
+    for (int i = 0; i < HUX_LED_COUNT; i++) {
+        for (int c = 0; c < 3; c++) {
+            rgb[i][c] = w[c] * lv[i];
+        }
+    }
     uint8_t out[HUX_LED_COUNT][3];
-    hux_led_pixels(b, warm, 0.25f, 1.0f, out);
-    HX_ASSERT_EQ(out[0][0], 64, "b 1 at a quarter: 255 -> 64");
+    hux_led_pixels(rgb, 0.25f, 1.0f, out);
+    HX_ASSERT_EQ(out[0][0], 64, "1.0 at a quarter: 255 -> 64");
     HX_ASSERT_EQ(out[0][2], 40, "158 -> 40");
     HX_ASSERT_EQ(out[1][0], 32, "half of that");
     HX_ASSERT_EQ(out[2][1], 0, "dark is 0");
-    hux_led_pixels(b, warm, 0.25f / 3.0f, 1.0f, out);
+    hux_led_pixels(rgb, 0.25f / 3.0f, 1.0f, out);
     HX_ASSERT_EQ(out[0][0], 21, "night: a third");
-    hux_led_pixels(b, warm, 0.25f, 3.0f, out);
+    hux_led_pixels(rgb, 0.25f, 3.0f, out);
     HX_ASSERT_EQ(out[0][0], 64, "seen directly: no gain");
-    HX_ASSERT_EQ(out[1][0], 96, "behind a holder, b 0.5: x3");
-    hux_led_pixels(b, warm, 0.5f, 3.0f, out);
-    HX_ASSERT_EQ(out[1][0], 191, "x3 at half");
-    float full[7] = {1, 1, 1, 1, 1, 1, 1};
-    hux_led_pixels(full, warm, 0.5f, 3.0f, out);
+    HX_ASSERT_EQ(out[1][0], 96, "behind a holder, 0.5: x3");
+    float full[HUX_LED_COUNT][3];
+    for (int i = 0; i < HUX_LED_COUNT; i++) {
+        full[i][0] = full[i][1] = full[i][2] = 1.0f;
+    }
+    hux_led_pixels(full, 0.5f, 3.0f, out);
     HX_ASSERT_EQ(out[2][0], 255, "clipped at 255");
     HX_ASSERT_TRUE(hux_led_hidden(1) && hux_led_hidden(2) && hux_led_hidden(5) && hux_led_hidden(6) &&
                        !hux_led_hidden(0) && !hux_led_hidden(3) && !hux_led_hidden(4),
                    "hidden: 1, 2, 5, 6");
 }
 
-/* On the walkie the mockup read "up, then down": the bottom blip was under
- * 0.1 s and the end lit the bottom again after the top. Now: the bottom
- * holds first, and the bottom is dark once the top lights. */
-static void test_orbit_reads_down_then_up(void) {
-    float b[HUX_LED_COUNT];
-    for (uint32_t t = 0; t <= 150; t += 10) {
-        hux_led_orbit(t, b);
-        HX_ASSERT_TRUE(b[0] > 0.8f && b[3] < 0.001f, "the bottom alone for 150 ms");
-    }
-    for (uint32_t t = 400; t <= HUX_LED_ORBIT_MS; t += 10) {
-        hux_led_orbit(t, b);
-        HX_ASSERT_TRUE(b[0] < 0.01f, "once the top is lit, the bottom stays dark");
-        HX_ASSERT_TRUE(b[3] >= b[2] && b[2] >= b[1], "the top is the brightest to the end");
-    }
-}
-
 /* -- The frame engine (what the LED task decides each frame) ---------- */
 
-static unsigned step(hux_led_engine_t *e, hux_led_in_t *in, uint32_t now, float bb[7], float bp[7]) {
+static unsigned step(hux_led_engine_t *e, hux_led_in_t *in, uint32_t now, float bb[7][3], float bp[7]) {
     in->now = now;
     unsigned ev = hux_led_engine_step(e, in, bb, bp);
     in->boot_req = false; /* requests are taken once, as the task's exchange does */
@@ -191,34 +179,36 @@ static unsigned step(hux_led_engine_t *e, hux_led_in_t *in, uint32_t now, float 
 static void test_engine_boot_waits_for_the_sound(void) {
     hux_led_engine_t e = {0};
     hux_led_in_t in = {.played_ms = 500, .boot_req = true, .boot_p0 = 500, .boot_wait = true};
-    float bb[7], bp[7];
+    float bb[7][3], bp[7];
     hux_led_engine_wake(&e, 1000);
     HX_ASSERT_EQ(step(&e, &in, 1000, bb, bp), 0u, "the sound hasn't left the ring");
     HX_ASSERT_TRUE(hux_led_engine_active(&e), "waiting keeps the task awake");
     in.played_ms = 520; /* its first chunk went to the codec */
     HX_ASSERT_EQ(step(&e, &in, 1048, bb, bp), (unsigned)HUX_LED_EV_BOOT, "Orbit starts");
     HX_ASSERT_TRUE(e.boot_heard && e.boot_wait_ms == 48, "heard after 48 ms");
-    HX_ASSERT_TRUE(bb[0] == 0.0f, "dark for the I2S queue's 60 ms");
+    HX_ASSERT_TRUE(bb[0][0] == 0.0f, "dark for the I2S queue's 60 ms");
     step(&e, &in, 1048 + 59, bb, bp);
-    HX_ASSERT_TRUE(bb[0] == 0.0f, "still dark at 59 ms");
-    step(&e, &in, 1048 + 60, bb, bp);
-    HX_ASSERT_TRUE(near(bb[0], ORBIT_REF[0].b[0]), "Orbit's t=0 when the sound is heard");
+    HX_ASSERT_TRUE(bb[0][0] == 0.0f, "still dark at 59 ms");
+    step(&e, &in, 1048 + 60 + 100, bb, bp);
+    HX_ASSERT_TRUE(near(bb[3][1], RAINBOW_REF[1].rgb[3][1]), "Rainbow's t=100, timed from the sound");
     uint32_t t = 1108;
     while (hux_led_engine_active(&e) && t < 5000) {
         step(&e, &in, t += 16, bb, bp);
     }
-    HX_ASSERT_TRUE(!hux_led_engine_active(&e) && t <= 1108 + HUX_LED_ORBIT_MS + 16, "over at the end: sleep");
+    HX_ASSERT_TRUE(!hux_led_engine_active(&e) && t <= 1108 + HUX_LED_BOOT_MS + 16, "over at the end: sleep");
 }
 
 static void test_engine_boot_timeout_and_demo(void) {
     hux_led_engine_t e = {0};
     hux_led_in_t in = {.played_ms = 7, .boot_req = true, .boot_p0 = 7, .boot_wait = true};
-    float bb[7], bp[7];
+    float bb[7][3], bp[7];
     hux_led_engine_wake(&e, 0);
     step(&e, &in, 0, bb, bp);
     HX_ASSERT_EQ(step(&e, &in, 999, bb, bp), 0u, "waits up to 1 s");
     HX_ASSERT_EQ(step(&e, &in, 1000, bb, bp), (unsigned)HUX_LED_EV_BOOT, "then starts anyway");
-    HX_ASSERT_TRUE(!e.boot_heard && near(bb[0], ORBIT_REF[0].b[0]), "at once, no lag");
+    HX_ASSERT_TRUE(!e.boot_heard && bb[0][0] == 0.0f, "at once, no lag (t=0 is dark)");
+    step(&e, &in, 1100, bb, bp);
+    HX_ASSERT_TRUE(near(bb[3][1], RAINBOW_REF[1].rgb[3][1]), "t=100 a frame later");
     hux_led_engine_t d = {0};
     hux_led_in_t dm = {.boot_req = true, .boot_wait = false};
     HX_ASSERT_EQ(step(&d, &dm, 50, bb, bp), (unsigned)HUX_LED_EV_BOOT, "a demo starts at once");
@@ -227,7 +217,7 @@ static void test_engine_boot_timeout_and_demo(void) {
 static void test_engine_press_from_dark(void) {
     hux_led_engine_t e = {0};
     hux_led_in_t in = {.held = true, .voice = false};
-    float bb[7], bp[7];
+    float bb[7][3], bp[7];
     hux_led_engine_wake(&e, 5000);
     HX_ASSERT_EQ(step(&e, &in, 5000, bb, bp), (unsigned)HUX_LED_EV_PRESS, "starts");
     HX_ASSERT_TRUE(bp[0] > 0.05f, "lit on the first frame (a frame's worth of rise)");
@@ -249,7 +239,7 @@ static void test_engine_mic_staleness(void) {
     hux_led_engine_t e = {0};
     uint32_t loud = 0x10000000u; /* about -6 dBFS: level 1 */
     hux_led_in_t in = {.held = true, .voice = true, .mic_ms = loud};
-    float bb[7], bp[7];
+    float bb[7][3], bp[7];
     hux_led_engine_wake(&e, 1000);
     for (uint32_t t = 1000; t < 1600; t += 16) {
         in.mic_at = t + 1; /* the mic task stored a frame a tick after this frame's clock */
@@ -267,7 +257,7 @@ static void test_engine_mic_staleness(void) {
 static void test_engine_demo_ends_and_is_cleared(void) {
     hux_led_engine_t e = {0};
     hux_led_in_t in = {.voice = true, .demo_until = 3000};
-    float bb[7], bp[7];
+    float bb[7][3], bp[7];
     hux_led_engine_wake(&e, 0);
     HX_ASSERT_TRUE(step(&e, &in, 0, bb, bp) & HUX_LED_EV_PRESS, "a demo is a press");
     HX_ASSERT_TRUE(e.demo, "marked");
@@ -302,31 +292,30 @@ static void test_chain_order(void) {
 static void test_engine_walk(void) {
     hux_led_engine_t e = {0};
     hux_led_in_t in = {.walk_req = true};
-    float bb[7], bp[7];
+    float bb[7][3], bp[7];
     hux_led_engine_wake(&e, 0);
     HX_ASSERT_TRUE(step(&e, &in, 0, bb, bp) & HUX_LED_EV_WALK, "starts");
     for (int p = 0; p < 7; p++) {
         step(&e, &in, (uint32_t)p * 600u + 300u, bb, bp);
         int lit = 0;
         for (int i = 0; i < 7; i++) {
-            lit += bb[i] > 0.0f;
+            lit += bb[i][0] > 0.0f;
         }
-        HX_ASSERT_TRUE(lit == 1 && bb[p] == 1.0f, "one position at a time, bottom first");
+        HX_ASSERT_TRUE(lit == 1 && bb[p][0] == 1.0f && bb[p][2] == 1.0f, "one position at a time, white, bottom first");
     }
     step(&e, &in, 4200, bb, bp);
     HX_ASSERT_TRUE(!hux_led_engine_active(&e), "over after 4.2 s: sleep");
 }
 
 int main(void) {
-    HX_RUN(test_orbit_is_the_mockup);
-    HX_RUN(test_orbit_is_symmetric_and_ends);
+    HX_RUN(test_rainbow_is_the_mockup);
+    HX_RUN(test_rainbow_all_at_once_and_ends);
     HX_RUN(test_voice_is_the_mockup);
     HX_RUN(test_voice_climbs_with_the_level);
     HX_RUN(test_a_press_from_dark_stays_on);
     HX_RUN(test_glow_is_the_mockup);
     HX_RUN(test_mic_mapping);
     HX_RUN(test_pixels);
-    HX_RUN(test_orbit_reads_down_then_up);
     HX_RUN(test_engine_boot_waits_for_the_sound);
     HX_RUN(test_engine_boot_timeout_and_demo);
     HX_RUN(test_engine_press_from_dark);

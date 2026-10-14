@@ -33,8 +33,7 @@ static const char *TAG = "hux_led";
 #define NVS_KEY_GAIN    "gain10"
 #define GAIN10_DEFAULT  30   /* x3.0 behind the holders */
 
-static const uint8_t WARM[3] = {255, 206, 158};  /* Orbit */
-static const uint8_t WHITE[3] = {236, 240, 255}; /* Voice, Glow */
+static const float WHITE[3] = {236.0f / 255.0f, 240.0f / 255.0f, 1.0f}; /* Voice, Glow */
 
 static led_strip_handle_t s_strip;
 static TaskHandle_t s_task;
@@ -105,12 +104,12 @@ static void led_task(void *arg) {
             .demo_until = atomic_load(&s_demo_until),
             .walk_req = atomic_exchange(&s_walk_req, false),
         };
-        float b_boot[HUX_LED_COUNT], b_press[HUX_LED_COUNT];
-        unsigned ev = hux_led_engine_step(&e, &in, b_boot, b_press);
+        float boot_rgb[HUX_LED_COUNT][3], b_press[HUX_LED_COUNT];
+        unsigned ev = hux_led_engine_step(&e, &in, boot_rgb, b_press);
         if (ev & HUX_LED_EV_BOOT) {
             bool night;
             boot_peak = peak_now(&night);
-            ESP_LOGI(TAG, "led.anim kind=boot mode=orbit wait_ms=%u heard=%d night=%d pct=%d",
+            ESP_LOGI(TAG, "led.anim kind=boot mode=rainbow wait_ms=%u heard=%d night=%d pct=%d",
                      (unsigned)e.boot_wait_ms, e.boot_heard, night, atomic_load(&s_bright));
         }
         if (ev & HUX_LED_EV_WALK) {
@@ -139,8 +138,14 @@ static void led_task(void *arg) {
          * the two, channel by channel, as the mockup combines them. */
         uint8_t px[HUX_LED_COUNT][3], pp[HUX_LED_COUNT][3];
         float gain = (float)atomic_load(&s_gain10) / 10.0f;
-        hux_led_pixels(b_boot, WARM, boot_peak, gain, px);
-        hux_led_pixels(b_press, WHITE, press_peak, gain, pp);
+        float press_rgb[HUX_LED_COUNT][3];
+        for (int i = 0; i < HUX_LED_COUNT; i++) {
+            for (int c = 0; c < 3; c++) {
+                press_rgb[i][c] = WHITE[c] * b_press[i];
+            }
+        }
+        hux_led_pixels(boot_rgb, boot_peak, gain, px);
+        hux_led_pixels(press_rgb, press_peak, gain, pp);
         for (int i = 0; i < HUX_LED_COUNT; i++) {
             for (int c = 0; c < 3; c++) {
                 if (pp[i][c] > px[i][c]) {
@@ -237,7 +242,7 @@ void hux_led_mic(uint32_t mean_square) {
 }
 
 void hux_led_demo(const char *what) {
-    if (strcmp(what, "orbit") == 0) {
+    if (strcmp(what, "rainbow") == 0 || strcmp(what, "boot") == 0) {
         boot_request(0, false);
         return;
     }
@@ -248,7 +253,7 @@ void hux_led_demo(const char *what) {
     }
     bool voice = strcmp(what, "voice") == 0;
     if (!voice && strcmp(what, "glow") != 0) {
-        ESP_LOGW(TAG, "led.demo unknown=%s (orbit, glow, voice, walk)", what);
+        ESP_LOGW(TAG, "led.demo unknown=%s (rainbow, glow, voice, walk)", what);
         return;
     }
     atomic_store(&s_voice, voice);
