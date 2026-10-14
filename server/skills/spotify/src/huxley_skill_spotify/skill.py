@@ -402,6 +402,20 @@ def _weak_match(spoken: str, book: Match) -> bool:
     return bool(_unheard_words(rest, book.title))
 
 
+def _title_unheard(spoken: str, book: Match) -> bool:
+    """What he said besides the author's name shares no main word with
+    the book's title: search's best guess, not the book he asked for. "Mi
+    alma se la dejo al diablo" (not on Spotify CO) was asked back as "¿Es
+    La melancolía de los feos, de Mario Mendoza?" (2026-10-14)."""
+    author = set(fold(book.artist or "").replace(",", " ").split())
+    rest = [w for w in fold(spoken).split() if w not in author and w not in _FILLER]
+    if not rest:
+        return False
+    main = re.split(r"[:(/|.\-]", book.title, maxsplit=1)[0]
+    words = [w for w in fold(main).split() if len(w) >= 4 and w not in _FILLER]
+    return bool(words) and _unheard_words(rest, book.title) == words
+
+
 def _unheard_words(heard: list[str], title: str) -> list[str]:
     """The main title's words (before a subtitle, 4 letters or more) that
     nothing heard comes close to, before the last one that was heard: a
@@ -424,6 +438,28 @@ def _unheard_words(heard: list[str], title: str) -> list[str]:
         return words
     last = max(i for i, m in enumerate(matched) if m)
     return [w for w, m in zip(words[:last], matched[:last], strict=True) if not m]
+
+
+# "Otros" said inside a query: the model passed "Julio Verne títulos
+# adicionales" without `more`, and the same three were read again
+# (2026-10-14).
+_MORE_WORDS = frozenset(
+    {"otro", "otros", "otra", "otras", "mas", "adicional", "adicionales", "demas"}
+    | {"other", "others", "more", "additional", "else", "autre", "autres", "plus"}
+)
+# Words around a subject that don't change it ("títulos de Julio Verne").
+_SUBJECT_FILLER = _FILLER | frozenset(
+    {"libros", "titulo", "titulos", "obras", "algo", "dime", "busca", "buscame", "busqueme"}
+    | {"oir", "pongame", "books", "title", "titles", "livres", "titre", "titres", "quelque"}
+)
+
+
+def _subject_words(query: str) -> list[str]:
+    return [w for w in fold(query).split() if w not in _MORE_WORDS and w not in _SUBJECT_FILLER]
+
+
+def _asks_more(query: str) -> bool:
+    return any(w in _MORE_WORDS for w in fold(query).split())
 
 
 # The shelf's offers are read "Uno, ... Dos, ... Tres" (lines.py), so the
@@ -1121,6 +1157,43 @@ class SpotifySkill:
                     await log.ainfo("spotify.book_not_found", query=title)
                     return self._then("book_not_found")
                 target = ordered[0]
+                if _title_unheard(title, target) and (
+                    author.strip() or _same_author(title, target.artist)
+                ):
+                    # His author, another of their books: say so, offer it.
+                    self._last_list = [target]
+                    await log.ainfo(
+                        "spotify.book_not_found",
+                        query=query,
+                        reason="other_by_author",
+                        offered=target.title,
+                    )
+                    return self._then(
+                        "book_other_by",
+                        author=(target.artist or author).split(",")[0].strip(),
+                        other=_short_title(target.title),
+                    )
+                if _title_unheard(title, target):
+                    # Search's best guess shares nothing with what he
+                    # said: a closer book further down, or not found.
+                    closer = next(
+                        (
+                            m
+                            for m in ordered[1:]
+                            if not _weak_match(title, m)
+                            and not is_guide(m.title, edition=m.edition)
+                        ),
+                        None,
+                    )
+                    if closer is None:
+                        await log.ainfo(
+                            "spotify.book_not_found",
+                            query=query,
+                            reason="no_title_match",
+                            top=target.title,
+                        )
+                        return self._then("book_not_found_title", title=title)
+                    target = closer
                 if _weak_match(title, target):
                     # A wrong book costs listening hours: ask first. "Sí"
                     # comes back as this title, found in the list.
@@ -1218,8 +1291,19 @@ class SpotifySkill:
         if listened or shelf is None:
             return await self._find_books_open("" if listened else query or like)
         last = self._browse
+        if (
+            not more
+            and last is not None
+            and not like.strip()
+            and _asks_more(query)
+            and self._same_subject(shelf, query, last["query"])
+        ):
+            await self._log().ainfo(
+                "spotify.shelf_more_inferred", query=query, last_query=last["query"]
+            )
+            more = True
         if more and last is not None:
-            changed = (query.strip() and fold(query) != fold(last["query"])) or (
+            changed = (query.strip() and not self._same_subject(shelf, query, last["query"])) or (
                 like.strip() and fold(like) != fold(last["like"])
             )
             if changed:
@@ -1244,6 +1328,33 @@ class SpotifySkill:
         if query.strip():
             return await self._browse_query(shelf, query, more=more)
         return await self._browse_rotation(shelf)
+
+    def _same_subject(self, shelf: Shelf, query: str, last: str) -> bool:
+        """`query` names what the last offer was about, or nothing at all
+        ("otros"): "Julio Verne títulos adicionales" is "Julio Verne
+        títulos"."""
+        if not _subject_words(query):
+            return True
+        return self._subject(shelf, query) == self._subject(shelf, last)
+
+    @staticmethod
+    def _subject(shelf: Shelf, query: str) -> tuple[str, str]:
+        """What a query browses, resolved as `_browse_query` does."""
+        said = " ".join(_subject_words(query))
+        book = shelves.match_title(shelf, said)
+        if book is not None:
+            return ("title", book.uri)
+        if shelves.only_theme(shelf, said):
+            category = shelves.match_category(shelf, said)
+            if category is not None:
+                return ("category", category)
+            tag = shelves.match_tag(shelf, said)
+            if tag is not None:
+                return ("tag", tag)
+        author = shelves.match_author(shelf, said)
+        if author is not None:
+            return ("author", author)
+        return ("query", said)
 
     # --- The shelf (T1.45) ---
 
@@ -1499,6 +1610,9 @@ class SpotifySkill:
         if not offered:
             await log.ainfo("spotify.shelf_nothing", reason="none_playable", query=query or like)
             return self._then("none_available")
+        # Books of the subject not offered yet that may still play: past
+        # the three, or not checked this time.
+        left = [m for m in candidates if m not in offered and not await memory.unavailable(m.uri)]
         return await self._said_offer(
             mode=mode,
             query=query,
@@ -1509,6 +1623,7 @@ class SpotifySkill:
             excluded=excluded,
             offset=len(already),
             already=already,
+            left=len(left),
         )
 
     async def _said_offer(
@@ -1523,6 +1638,7 @@ class SpotifySkill:
         excluded: int,
         offset: int,
         already: list[str],
+        left: int = 0,
     ) -> ToolResult:
         lang = self._lang()
         more = bool(already)
@@ -1537,7 +1653,11 @@ class SpotifySkill:
         else:
             head = "head_more" if more else "head"
         line = lines.offer(
-            lang, head, topic, [(m.title, m.artist or "?", m.about) for m in offered]
+            lang,
+            head,
+            topic,
+            [(m.title, m.artist or "?", m.about) for m in offered],
+            more_left=left > 0,
         )
         await self._require_memory().mark_offered([m.uri for m in offered])
         self._last_list = offered
@@ -1557,6 +1677,7 @@ class SpotifySkill:
             excluded=excluded,
             offered=[m.title for m in offered],
             offset=offset,
+            left=left,
         )
         return ToolResult(
             output=json.dumps(

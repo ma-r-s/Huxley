@@ -88,6 +88,7 @@ A morning of real use on the phone produced 88 replies; the failures behind thes
 - **No closing offers.** Once the request is done, the reply ends; no "si quieres, puedo..." (19 of the 88 replies had one). The news keeps its own "offer to tell more" rule, and failures still offer an alternative (`never_say_no`).
 - **Each request is new.** No anchoring on the last topic (a book request was heard as a volume question); "ponlo", "súbele" and "el otro" do refer back.
 - **Picks from a list.** "El primero", "el segundo", "el último" right after a list mean that item, in the order it was read; no "¿cuál?".
+- **An author's books are what he can hear.** "¿Qué libros (o títulos) tiene <autor>?" goes to `find_books`, not a web search: the web listed eight Castro Caycedo titles, and the one he picked isn't on Spotify (2026-10-14).
 - **A bare title is a book first.** "Quiero oír <título>" without "libro" or "canción" goes to `play_book` when it is a book's title, else `play_music`.
 - **Controls follow what is playing.** "Pausa", "sigue", "ponlo", "siguiente" go to the controls of the last thing put on (book, radio or music). "Sigue con la canción" is resume, not next.
 - **Music.** A song and its artist search the song. No example artists or genres anywhere in the prompt or tool descriptions: they became the model's guess when it misheard. A station from the radio list is the radio even when pronounced a bit differently; a band or song with "radio" in its name is music.

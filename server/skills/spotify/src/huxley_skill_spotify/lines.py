@@ -131,6 +131,8 @@ _SAY: dict[str, dict[str, str]] = {
     "es": {
         "book_not_found": "No encontré ese libro en Spotify. ¿Busco otro?",
         "book_not_found_by": "No encontré {title}, de {author}, en Spotify. ¿Busco otro?",
+        "book_not_found_title": "No encontré {title} en Spotify. ¿Busco otro?",
+        "book_other_by": "No encontré ese libro en Spotify. De {author} está {other}. ¿Lo pongo?",
         "first_chapter": "Ya es el primer capítulo.",
         "last_chapter": "Ya es el último capítulo.",
         "no_book": "No hay ningún libro puesto. ¿Qué libro busco?",
@@ -159,6 +161,8 @@ _SAY: dict[str, dict[str, str]] = {
     "en": {
         "book_not_found": "I didn't find that book on Spotify. Shall I look for another?",
         "book_not_found_by": "I didn't find {title}, by {author}, on Spotify. Shall I look for another?",
+        "book_not_found_title": "I didn't find {title} on Spotify. Shall I look for another?",
+        "book_other_by": "I didn't find that book on Spotify. By {author} there's {other}. Shall I put it on?",
         "first_chapter": "This is already the first chapter.",
         "last_chapter": "This is already the last chapter.",
         "no_book": "No book is on. Which book shall I look for?",
@@ -187,6 +191,8 @@ _SAY: dict[str, dict[str, str]] = {
     "fr": {
         "book_not_found": "Je n'ai pas trouvé ce livre sur Spotify. J'en cherche un autre ?",
         "book_not_found_by": "Je n'ai pas trouvé {title}, de {author}, sur Spotify. J'en cherche un autre ?",
+        "book_not_found_title": "Je n'ai pas trouvé {title} sur Spotify. J'en cherche un autre ?",
+        "book_other_by": "Je n'ai pas trouvé ce livre sur Spotify. De {author}, il y a {other}. Je le mets ?",
         "first_chapter": "C'est déjà le premier chapitre.",
         "last_chapter": "C'est déjà le dernier chapitre.",
         "no_book": "Aucun livre n'est lancé. Quel livre je cherche ?",
@@ -331,6 +337,12 @@ _SHELF: dict[str, dict[str, str]] = {
         "head_more": "Tengo {n} más de {topic}.",
         "head_more_like": "Tengo {n} más parecidos a {topic}.",
         "head_found": "De {topic} encontré {n}.",
+        # More of the subject left to offer: never a count that reads as
+        # the total ("De Julio Verne tengo tres", then a fourth; 2026-10-14).
+        "head_some": "De {topic} tengo varios; te digo {n}.",
+        "head_more_some": "Te digo {n} más de {topic}.",
+        "head_like_some": "Parecidos a {topic} tengo varios; te digo {n}.",
+        "head_more_like_some": "Te digo {n} más parecidos a {topic}.",
         "item": "{ordinal}, {title}, de {author}: {pitch}",
         "item_bare": "{ordinal}, {title}, de {author}.",
         "one": "{title}, de {author}: {pitch}",
@@ -350,6 +362,10 @@ _SHELF: dict[str, dict[str, str]] = {
         "head_more": "I have {n} more for {topic}.",
         "head_more_like": "I have {n} more like {topic}.",
         "head_found": "By {topic} I found {n}.",
+        "head_some": "For {topic} I have several; here are {n}.",
+        "head_more_some": "Here are {n} more for {topic}.",
+        "head_like_some": "Like {topic}, I have several; here are {n}.",
+        "head_more_like_some": "Here are {n} more like {topic}.",
         "item": "{ordinal}, {title}, by {author}: {pitch}",
         "item_bare": "{ordinal}, {title}, by {author}.",
         "one": "{title}, by {author}: {pitch}",
@@ -369,6 +385,10 @@ _SHELF: dict[str, dict[str, str]] = {
         "head_more": "J'en ai {n} de plus en {topic}.",
         "head_more_like": "J'en ai {n} de plus dans le style de {topic}.",
         "head_found": "De {topic}, j'en ai trouvé {n}.",
+        "head_some": "En {topic}, j'en ai plusieurs ; en voici {n}.",
+        "head_more_some": "En voici {n} de plus en {topic}.",
+        "head_like_some": "Dans le style de {topic}, j'en ai plusieurs ; en voici {n}.",
+        "head_more_like_some": "En voici {n} de plus dans le style de {topic}.",
         "item": "{ordinal}, {title}, de {author} : {pitch}",
         "item_bare": "{ordinal}, {title}, de {author}.",
         "one": "{title}, de {author} : {pitch}",
@@ -408,14 +428,19 @@ def offer(
     head: str,
     topic: str,
     books: list[tuple[str, str, str]],
+    *,
+    more_left: bool = False,
 ) -> str:
     """The spoken offer: "De misterio tengo tres. Uno, X, de Y: <pitch>.
     ... ¿Cuál pongo, o busco otros?" `books` are (title, author, pitch),
     at most three; `head` is one of the "head*" keys, or "" for a single
-    book named on its own."""
+    book named on its own. `more_left`: the subject has more books than
+    these, so the head gives no count of them all."""
     lang = _lang(lang)
     words = _SHELF[lang]
     parts: list[str] = []
+    if head and more_left and f"{head}_some" in words:
+        head = f"{head}_some"
     if head:
         parts.append(words[head].format(topic=topic, n=_COUNT[lang][len(books) - 1]))
     for i, (title, author, pitch) in enumerate(books):

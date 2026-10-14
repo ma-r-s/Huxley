@@ -89,7 +89,7 @@ the persona's language first); a title far from what was heard, with no
 author named, or one whose main words before the last heard one were never
 said ("Hechos de los Apóstoles" for "Los doce apóstoles" heard as "Los dos
 apos"; a title named by its opening words, "Cien años", is fine), is
-confirmed first (`ask_which`), since a wrong book costs listening hours. An `author` (said, or just looked up) searches "title author" and keeps only that author's books; none is "No encontré <título>, de <autor>, en Spotify" (`book_not_found_by`), never another author's book ("El divino" of Gardeazábal, not on Spotify CO, was offered as a self-help "El Amor Divino Revelado", 2026-10-14). The question names the title without its subtitle. No title: the last book. "El segundo" after
+confirmed first (`ask_which`), since a wrong book costs listening hours. A top result sharing no main title word with what was said is never asked about ("Mi alma se la dejo al diablo", not on Spotify CO, was asked back as "¿Es La melancolía de los feos?", 2026-10-14): a close result further down is taken, else "No encontré <título> en Spotify" (`book_not_found_title`); with the author named it is "No encontré ese libro en Spotify. De <autor> está <otro>. ¿Lo pongo?" (`book_other_by`), and "sí" plays that one. An `author` (said, or just looked up) searches "title author" and keeps only that author's books; none is "No encontré <título>, de <autor>, en Spotify" (`book_not_found_by`), never another author's book ("El divino" of Gardeazábal, not on Spotify CO, was offered as a self-help "El Amor Divino Revelado", 2026-10-14). The question names the title without its subtitle. No title: the last book. "El segundo" after
 `find_books` is the second book read. `from_beginning` with no chapter
 list (Spotify's `/audiobooks` blocked) says it can't go back to the start
 right now (`cant_restart`) and the book goes on, rather than resuming and
@@ -256,7 +256,10 @@ search:
   words;
 - `more`: the next three of the last offer ("otros"; after a
   recommendation, the next three of the rotation); after a single book,
-  books like it; with a new subject, a fresh offer for it;
+  books like it; with a new subject, a fresh offer for it. A query with
+  "otros", "más" or "adicionales" naming the last offer's subject is
+  `more` too ("Julio Verne títulos adicionales" re-read the same three,
+  2026-10-14); subjects are compared as the shelf resolves them;
 - `listened`: the books started here.
 
 Asking for books ends whatever was playing (`CancelMedia`): it stays
@@ -268,7 +271,9 @@ to `find_books` with no arguments, which recommends the next three.
 
 The skill writes the offer itself in `then` ("Te recomiendo tres. Uno,
 ...", or for a topic "De misterio tengo tres.
-Uno, X, de Y: <pitch>. ... ¿Cuál pongo, o busco otros?") and returns
+Uno, X, de Y: <pitch>. ... ¿Cuál pongo, o busco otros?"; when the subject
+has more books left, never a count that reads as the total: "De Julio
+Verne tengo varios; te digo tres.") and returns
 `books[{n, title, by, about}]` so "el segundo" or "el dos" plays the
 second; a book he named and already started is offered in his own
 edition, so "ponlo" continues it. Nothing

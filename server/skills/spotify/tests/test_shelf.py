@@ -283,6 +283,21 @@ class TestSpokenLists:
     def test_lists(self, items: list[str], lang: str, said: str) -> None:
         assert shelves.spoken_list(items, lang) == said
 
+    @pytest.mark.parametrize(
+        ("head", "said"),
+        [
+            ("head", "De Julio Verne tengo varios; te digo uno."),
+            ("head_more", "Te digo uno más de Julio Verne."),
+            ("head_pick", "Te recomiendo uno."),
+        ],
+    )
+    def test_more_left_gives_no_total(self, head: str, said: str) -> None:
+        # "De Julio Verne tengo tres", then a fourth (2026-10-14).
+        line = lines.offer(
+            "es", head, "Julio Verne", [("Miguel Strogoff", "Julio Verne", "")], more_left=True
+        )
+        assert line.startswith(said)
+
     def test_an_offer_reads_three_numbered_with_pitches(self) -> None:
         said = lines.offer(
             "es",
