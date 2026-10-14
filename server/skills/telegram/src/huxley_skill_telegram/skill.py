@@ -61,8 +61,10 @@ import asyncio
 import json
 import os
 import re
-from datetime import timedelta
+import time
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from huxley_sdk import (
     ClaimBusyError,
@@ -174,6 +176,8 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "Elimina un contacto de la lista de Telegram. Contactos actuales: {contacts}."
         ),
         "remove_name_param": "Nombre (en minúsculas) del contacto a eliminar.",
+        "read_messages": "Lee los mensajes de Telegram que le llegaron de sus contactos en los últimos siete días, leídos o no: '¿qué mensajes tengo?', 'léeme los mensajes', '¿me escribió Elsa?'. Con `name`, solo los de esa persona.",
+        "read_name_param": "De quién: vacío para todos sus contactos, o el nombre de uno.",
         "phone_number": (
             "Lee en voz alta un número de teléfono: el del propio usuario o el de un contacto. "
             "Úsala siempre que pregunte por un número: «¿cuál es mi número?», «el número de "
@@ -225,6 +229,8 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
         ),
         "remove_contact": "Remove a contact from the Telegram list. Current contacts: {contacts}.",
         "remove_name_param": "Name (lowercase) of the contact to remove.",
+        "read_messages": 'Reads the Telegram messages their contacts sent in the last seven days, read or not: "what messages do I have?", "read me my messages", "did Elsa write?". With `name`, only that person\'s.',
+        "read_name_param": "Whose: empty for all contacts, or one contact's name.",
         "phone_number": (
             "Reads out a phone number: the user's own or a contact's. Use it whenever they ask "
             'for a number: "what is my number?", "{self_name}\'s number", "Mario\'s number". '
@@ -279,6 +285,8 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "Supprime un contact de la liste Telegram. Contacts actuels : {contacts}."
         ),
         "remove_name_param": "Nom (en minuscules) du contact à supprimer.",
+        "read_messages": "Lit les messages Telegram reçus de ses contacts ces sept derniers jours, lus ou non : « quels messages j'ai ? », « lis-moi mes messages », « Elsa m'a écrit ? ». Avec `name`, seulement ceux de cette personne.",
+        "read_name_param": "De qui : vide pour tous ses contacts, ou le nom d'un contact.",
         "phone_number": (
             "Lit à voix haute un numéro de téléphone : celui de l'utilisateur ou d'un contact. "
             "À utiliser dès qu'il demande un numéro : « quel est mon numéro ? », « le numéro de "
@@ -369,6 +377,32 @@ _NAME_FILLER = frozenset(
 )
 
 
+_DAYS = {
+    "es": ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"),
+    "en": ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"),
+    "fr": ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"),
+}
+_WHEN = {
+    "es": ("hoy a las {t}", "ayer a las {t}", "el {d} a las {t}"),
+    "en": ("today at {t}", "yesterday at {t}", "on {d} at {t}"),
+    "fr": ("aujourd'hui à {t}", "hier à {t}", "{d} à {t}"),
+}
+
+
+def _message_when(ts: float, now: float, tz: ZoneInfo, lang: str) -> str:
+    """When a message came, in his time: "hoy a las 10:15", "ayer a las
+    08:05", "el lunes a las 19:40"."""
+    when = datetime.fromtimestamp(ts, tz)
+    days = (datetime.fromtimestamp(now, tz).date() - when.date()).days
+    today, yesterday, other = _WHEN.get(lang, _WHEN["en"])
+    clock = f"{when:%H:%M}"
+    if days <= 0:
+        return today.format(t=clock)
+    if days == 1:
+        return yesterday.format(t=clock)
+    return other.format(d=_DAYS.get(lang, _DAYS["en"])[when.weekday()], t=clock)
+
+
 def _spoken_name(name: str) -> str:
     """A contact key as a name is written: "juan miguel" -> "Juan Miguel"."""
     return " ".join(w[:1].upper() + w[1:] for w in name.split())
@@ -412,6 +446,9 @@ def _contact_key(name: str, contacts: dict[str, str]) -> str | None:
 
 _STRINGS: dict[str, dict[str, str]] = {
     "es": {
+        "read_none": "[Aviso del sistema: pidió sus mensajes y no hay.] Di en voz alta exactamente «No tienes mensajes de {who} en los últimos siete días.» No llames a ninguna herramienta.",
+        "read_then": "[Aviso del sistema: estos son sus mensajes, del más reciente al más antiguo.] Léeselos al usuario tal cual, en ese orden: de quién es cada uno, cuándo llegó y lo que dice, sin resumir ni agregar nada. No llames a ninguna herramienta.",
+        "read_everyone": "tus contactos",
         "my_number_is": "[Aviso del sistema: el usuario pidió su propio número.] Di en voz alta exactamente «Tu número es {digits}. ¿Te lo repito?» No llames a ninguna herramienta.",
         "my_number_unknown": "No tengo guardado tu número de teléfono.",
         "contact_number_is": "[Aviso del sistema: el usuario pidió el número de {name}.] Di en voz alta exactamente «El número de {name} es {digits}. ¿Te lo repito?» No llames a ninguna herramienta.",
@@ -479,6 +516,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         ),
     },
     "en": {
+        "read_none": '[System notice: they asked for their messages and there are none.] Say out loud exactly "You have no messages from {who} in the last seven days." Don\'t call any tool.',
+        "read_then": "[System notice: these are their messages, newest first.] Read them to the user as they are, in that order: who sent each one, when it arrived and what it says, without summarizing or adding anything. Don't call any tool.",
+        "read_everyone": "your contacts",
         "my_number_is": '[System notice: the user asked for their own number.] Say out loud exactly "Your number is {digits}. Shall I repeat it?" Don\'t call any tool.',
         "my_number_unknown": "I don't have your phone number saved.",
         "contact_number_is": "[System notice: the user asked for {name}'s number.] Say out loud exactly \"{name}'s number is {digits}. Shall I repeat it?\" Don't call any tool.",
@@ -540,6 +580,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         ),
     },
     "fr": {
+        "read_none": "[Avis du système : il a demandé ses messages et il n'y en a pas.] Dis à voix haute exactement « Tu n'as pas de messages de {who} ces sept derniers jours. » N'appelle aucun outil.",
+        "read_then": "[Avis du système : voici ses messages, du plus récent au plus ancien.] Lis-les-lui tels quels, dans cet ordre : de qui est chacun, quand il est arrivé et ce qu'il dit, sans résumer ni rien ajouter. N'appelle aucun outil.",
+        "read_everyone": "tes contacts",
         "my_number_is": "[Avis du système : l'utilisateur a demandé son propre numéro.] Dis à voix haute exactement « Ton numéro est {digits}. Je te le répète ? » N'appelle aucun outil.",
         "my_number_unknown": "Je n'ai pas ton numéro de téléphone enregistré.",
         "contact_number_is": "[Avis du système : l'utilisateur a demandé le numéro de {name}.] Dis à voix haute exactement « Le numéro de {name} est {digits}. Je te le répète ? » N'appelle aucun outil.",
@@ -650,6 +693,7 @@ class TelegramSkill:
         # country code explicitly).
         self._default_country_code: str | None = None
         self._own_phone: str | None = None  # the account's number (userbot_phone)
+        self._tz: ZoneInfo = ZoneInfo("UTC")  # persona timezone (skill config), for "cuándo"
         self._transport: TelegramTransport | None = None
         self._transport_factory = transport_factory or TelegramTransport
 
@@ -784,6 +828,17 @@ class TelegramSkill:
                 parameters={"type": "object", "properties": {}, "required": []},
             ),
             ToolDefinition(
+                name="read_messages",
+                description=td["read_messages"],
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": td["read_name_param"]},
+                    },
+                    "required": [],
+                },
+            ),
+            ToolDefinition(
                 name="phone_number",
                 description=td["phone_number"].format(
                     self_name=own_name or self._t("self_unknown_name"), contacts=contacts_list
@@ -831,6 +886,13 @@ class TelegramSkill:
             or cfg.get("userbot_phone")
         )
         raw_contacts = cfg.get("contacts") or {}
+        tz_name = cfg.get("timezone")
+        try:
+            self._tz = (
+                ZoneInfo(tz_name) if isinstance(tz_name, str) and tz_name else ZoneInfo("UTC")
+            )
+        except ZoneInfoNotFoundError:
+            self._tz = ZoneInfo("UTC")
         self._own_phone = (
             userbot_phone if isinstance(userbot_phone, str) and userbot_phone else None
         )
@@ -1042,6 +1104,9 @@ class TelegramSkill:
                 return await self._remove_contact(name_raw.lower().strip())
             case "list_contacts":
                 return self._list_contacts()
+            case "read_messages":
+                name_arg = args.get("name")
+                return await self._read_messages(name_arg if isinstance(name_arg, str) else "")
             case "phone_number":
                 name_arg = args.get("name")
                 return await self._phone_number(name_arg if isinstance(name_arg, str) else "")
@@ -1645,6 +1710,64 @@ class TelegramSkill:
         """
         self._language = ctx.language or self._language
         await ctx.logger.ainfo("telegram.reconfigure", language=self._language)
+
+    async def _read_messages(self, asked: str) -> ToolResult:
+        """His latest Telegram messages from contacts, read or not, newest
+        first, for "¿qué mensajes tengo?" (Mario, 2026-10-14: he asked and
+        the walkie could only announce new ones as they came)."""
+        assert self._logger is not None
+        if self._transport is None:
+            return _error_result(self._t("not_configured_send"))
+        who = self._t("read_everyone")
+        if asked.strip():
+            key = _contact_key(asked.lower().strip(), self._contacts)
+            if key is None:
+                known = ", ".join(sorted(self._contacts)) or self._t("contacts_none")
+                return _error_result(
+                    self._t("contact_missing_send", name=asked.strip(), known=known)
+                )
+            ids = {uid for uid, n in self._user_id_to_name.items() if n == key}
+            who = _spoken_name(key)
+        else:
+            ids = set(self._user_id_to_name)
+        try:
+            await self._transport.connect()
+            found = (
+                await self._transport.recent_messages(
+                    ids, since_seconds=7 * 86_400, per_chat=3, max_messages=6
+                )
+                if ids
+                else []
+            )
+        except TransportError:
+            await self._logger.aexception("telegram.read_messages_failed", asked=asked[:60])
+            return _error_result(self._t("not_configured_send"))
+        await self._logger.ainfo(
+            "telegram.read_messages", asked=asked[:60], contacts=len(ids), messages=len(found)
+        )
+        if not found:
+            return ToolResult(
+                output=json.dumps(
+                    {"ok": True, "messages": [], "then": self._t("read_none", who=who)},
+                    ensure_ascii=False,
+                )
+            )
+        lang = _telegram_lang_bucket(self._language)
+        now = time.time()
+        messages = [
+            {
+                "from": _spoken_name(self._user_id_to_name.get(m.user_id) or m.sender_display),
+                "when": _message_when(m.timestamp, now, self._tz, lang),
+                "text": m.text,
+            }
+            for m in found
+        ]
+        return ToolResult(
+            output=json.dumps(
+                {"ok": True, "messages": messages, "then": self._t("read_then")},
+                ensure_ascii=False,
+            )
+        )
 
     async def _phone_number(self, asked: str) -> ToolResult:
         """A number read digit by digit: his own (no name, "mi número", his

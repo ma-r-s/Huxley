@@ -77,6 +77,17 @@ class StubTransport:
     async def resolve_cached(self, identifier: str) -> int | None:
         return self.resolve_map.get(identifier)
 
+    async def recent_messages(
+        self,
+        whitelist_user_ids: set[int],
+        *,
+        since_seconds: int,
+        per_chat: int,
+        max_messages: int,
+    ) -> list[Any]:
+        self.recent_asked = set(whitelist_user_ids)
+        return [m for m in getattr(self, "recent", []) if m.user_id in whitelist_user_ids]
+
     async def resolve_contact(self, identifier: str, name: str | None = None) -> int:
         if identifier in self.raise_on_resolve_for:
             from huxley_skill_telegram.transport import TransportError
@@ -689,6 +700,7 @@ class TestInbound:
             "call_contact",
             "list_contacts",
             "phone_number",
+            "read_messages",
             "remove_contact",
             "send_message",
         ]
@@ -1025,6 +1037,7 @@ class TestTools:
             "remove_contact",
             "list_contacts",
             "phone_number",
+            "read_messages",
         }
         # Tools that mention the contact list should show the empty sentinel.
         for name in ("call_contact", "send_message", "add_contact", "remove_contact"):
@@ -1073,6 +1086,7 @@ class TestTools:
                 "call_contact",
                 "list_contacts",
                 "phone_number",
+                "read_messages",
                 "remove_contact",
                 "send_message",
             ]
@@ -2192,3 +2206,80 @@ class TestNamesHeSays:
         result = await skill.handle("call_contact", {"name": "Juan Miguel"})
         assert json.loads(result.output)["ok"] is True
         assert captured[0].placed_calls == [4242]
+
+
+class TestReadMessages:
+    """ "¿Qué mensajes tengo?" (Mario, 2026-10-14): the walkie only announced
+    new messages as they came; now it reads the latest on request."""
+
+    def _config(self) -> dict[str, Any]:
+        return {
+            "api_id": 1,
+            "api_hash": "x",
+            "timezone": "America/Bogota",
+            "contacts": {"mario": "+573000000073", "elsa sarmiento": "+573000000078"},
+            "inbound": {"enabled": True},
+        }
+
+    async def _skill(self, tmp_path: Path, recent: list[Any]) -> tuple[TelegramSkill, Any]:
+        import time as _time
+
+        from huxley_skill_telegram.transport import InboundMessage
+
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            t.resolve_map = {"+573000000073": 111, "+573000000078": 222}
+            t.recent = [  # type: ignore[attr-defined]
+                InboundMessage(
+                    user_id=uid, sender_display="x", text=text, timestamp=int(_time.time()) - age
+                )
+                for uid, text, age in recent
+            ]
+            captured.append(t)
+            return t
+
+        skill = TelegramSkill(transport_factory=factory)
+        ctx, _ = _build_ctx(self._config(), tmp_path)
+        await skill.setup(ctx)
+        return skill, captured[0]
+
+    @pytest.mark.asyncio
+    async def test_reads_the_latest_newest_first(self, tmp_path: Path) -> None:
+        skill, _ = await self._skill(tmp_path, [(111, "Hola abuelo", 60), (222, "Ya voy", 120)])
+        out = json.loads((await skill.handle("read_messages", {})).output)
+        assert [(m["from"], m["text"]) for m in out["messages"]] == [
+            ("Mario", "Hola abuelo"),
+            ("Elsa Sarmiento", "Ya voy"),
+        ]
+        assert out["messages"][0]["when"].startswith(("hoy a las", "ayer a las"))
+        assert "Léeselos al usuario tal cual" in out["then"]
+
+    @pytest.mark.asyncio
+    async def test_one_contact_by_first_name(self, tmp_path: Path) -> None:
+        skill, transport = await self._skill(tmp_path, [(111, "Hola", 60), (222, "Ya voy", 60)])
+        out = json.loads((await skill.handle("read_messages", {"name": "Elsa"})).output)
+        assert transport.recent_asked == {222}
+        assert [m["from"] for m in out["messages"]] == ["Elsa Sarmiento"]
+
+    @pytest.mark.asyncio
+    async def test_none_says_so(self, tmp_path: Path) -> None:
+        skill, _ = await self._skill(tmp_path, [])
+        out = json.loads((await skill.handle("read_messages", {})).output)
+        assert out["messages"] == []
+        assert "«No tienes mensajes de tus contactos en los últimos siete días.»" in out["then"]
+
+
+def test_message_when_words() -> None:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from huxley_skill_telegram.skill import _message_when
+
+    tz = ZoneInfo("America/Bogota")
+    now = datetime(2026, 10, 14, 12, 0, tzinfo=tz).timestamp()
+    at = lambda d, h, m: datetime(2026, 10, d, h, m, tzinfo=tz).timestamp()  # noqa: E731
+    assert _message_when(at(14, 10, 15), now, tz, "es") == "hoy a las 10:15"
+    assert _message_when(at(13, 8, 5), now, tz, "es") == "ayer a las 08:05"
+    assert _message_when(at(12, 19, 40), now, tz, "es") == "el lunes a las 19:40"

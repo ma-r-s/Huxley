@@ -1094,6 +1094,66 @@ class TelegramTransport:
         )
         return out
 
+    async def recent_messages(
+        self,
+        whitelist_user_ids: set[int],
+        *,
+        since_seconds: int,
+        per_chat: int,
+        max_messages: int,
+        max_dialogs: int = 40,
+    ) -> list[InboundMessage]:
+        """The latest incoming text messages from whitelisted senders, read
+        or not, newest first: "¿qué mensajes tengo?" (2026-10-14; the
+        backfill above only brings unread ones, once, at connect). Walks
+        the most recent `max_dialogs` dialogs; soft-fails per chat."""
+        if self._app is None:
+            msg = "recent_messages() before connect()"
+            raise TransportError(msg)
+        cutoff_ts = int(time.time()) - since_seconds
+        out: list[InboundMessage] = []
+        seen = 0
+        async for dialog in self._app.get_dialogs():  # type: ignore[attr-defined]
+            seen += 1
+            if seen > max_dialogs:
+                break
+            chat = getattr(dialog, "chat", None)
+            chat_id = int(getattr(chat, "id", 0)) if chat is not None else 0
+            if chat_id not in whitelist_user_ids:
+                continue
+            try:
+                async for message in self._app.get_chat_history(  # type: ignore[attr-defined]
+                    chat_id, limit=per_chat
+                ):
+                    if getattr(message, "outgoing", False):
+                        continue
+                    text = getattr(message, "text", None) or getattr(message, "caption", None)
+                    date = getattr(message, "date", None)
+                    from_user = getattr(message, "from_user", None)
+                    if not text or date is None or from_user is None:
+                        continue
+                    ts = int(date.timestamp())
+                    if ts < cutoff_ts:
+                        continue
+                    out.append(
+                        InboundMessage(
+                            user_id=int(from_user.id),
+                            sender_display=_pyro_user_display(from_user),
+                            text=str(text),
+                            timestamp=ts,
+                        )
+                    )
+            except Exception:
+                await logger.aexception(
+                    "telegram.transport.recent_messages_chat_failed", chat_id=chat_id
+                )
+        out.sort(key=lambda m: m.timestamp, reverse=True)
+        out = out[:max_messages]
+        await logger.ainfo(
+            "telegram.transport.recent_messages", messages=len(out), dialogs_seen=seen
+        )
+        return out
+
     async def disconnect(self) -> None:
         """Stop pyrogram + PyTgCalls. Hangs up any active call first."""
         if self._active_user_id is not None:

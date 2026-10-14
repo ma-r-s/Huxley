@@ -1057,6 +1057,7 @@ skills:
     inbound:
       enabled: true
       auto_answer: contacts_only
+    timezone: America/Bogota  # when his messages came (read_messages)
 
   # Reminders skill — persistent scheduled reminders (medication /
   # appointment / generic) with kind-aware retry escalation, recurrence,

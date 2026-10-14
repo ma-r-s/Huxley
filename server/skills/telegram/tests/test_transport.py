@@ -587,3 +587,49 @@ class TestConnectionStateLog:
             42, SimpleNamespace(state="TIMEOUT", kind="NORMAL")
         )
         assert handled == [(42, "TIMEOUT")]
+
+
+class TestRecentMessages:
+    @pytest.mark.asyncio
+    async def test_newest_first_contacts_only_incoming_in_window(self, tmp_path: Path) -> None:
+        import time as _time
+        from datetime import datetime
+        from types import SimpleNamespace
+
+        now = _time.time()
+
+        def msg(uid: int, text: str, age: float, outgoing: bool = False) -> SimpleNamespace:
+            return SimpleNamespace(
+                outgoing=outgoing,
+                text=text,
+                caption=None,
+                date=datetime.fromtimestamp(now - age),
+                from_user=SimpleNamespace(
+                    id=uid, first_name="X", last_name=None, username=None, phone_number=None
+                ),
+            )
+
+        chats = {
+            111: [
+                msg(111, "nuevo", 60),
+                msg(111, "mio", 30, outgoing=True),
+                msg(111, "viejo", 9 * 86400),
+            ],
+            222: [msg(222, "otro", 300)],
+            999: [msg(999, "spam", 10)],
+        }
+
+        async def get_dialogs() -> Any:
+            for cid in (999, 111, 222):
+                yield SimpleNamespace(chat=SimpleNamespace(id=cid))
+
+        async def get_chat_history(chat_id: int, limit: int) -> Any:
+            for m in chats[chat_id][:limit]:
+                yield m
+
+        t = TelegramTransport(api_id=12345678, api_hash="abcdef0123456789", session_dir=tmp_path)
+        t._app = SimpleNamespace(get_dialogs=get_dialogs, get_chat_history=get_chat_history)  # type: ignore[attr-defined]
+        out = await t.recent_messages(
+            {111, 222}, since_seconds=7 * 86400, per_chat=3, max_messages=6
+        )
+        assert [m.text for m in out] == ["nuevo", "otro"]
