@@ -504,7 +504,7 @@ dev = [
 
 [[package]]
 name = "huxley-skill-news"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "server/skills/news" }
 dependencies = [
     { name = "httpx" },
@@ -587,11 +587,13 @@ dev = [
 
 [[package]]
 name = "huxley-skill-search"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "server/skills/search" }
 dependencies = [
     { name = "ddgs" },
+    { name = "httpx" },
     { name = "huxley-sdk" },
+    { name = "lxml" },
 ]
 
 [package.dev-dependencies]
@@ -604,7 +606,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "ddgs", specifier = ">=9.0" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "huxley-sdk", editable = "server/sdk" },
+    { name = "lxml", specifier = ">=5.0" },
 ]
 
 [package.metadata.requires-dev]

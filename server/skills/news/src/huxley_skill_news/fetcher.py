@@ -16,10 +16,13 @@ the lead, not us.
 
 from __future__ import annotations
 
+import html
 import json
+import re
+import unicodedata
 import urllib.parse
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import TYPE_CHECKING, Any
@@ -71,11 +74,12 @@ def _wmo_key(code: int | None) -> str:
 
 @dataclass(frozen=True, slots=True)
 class WeatherFetcher:
-    """Open-Meteo wrapper. Returns current + today's forecast.
+    """Open-Meteo wrapper. Returns current + today's and tomorrow's forecast.
 
     Open-Meteo is free, no API key, and returns JSON. We ask for: current
-    temperature/wind/code + daily max/min/code for today. Units are metric;
-    the skill converts to imperial if the persona configured `units: imperial`.
+    temperature/wind/code + daily max/min/code/rain chance for today and
+    tomorrow. Units are metric unless the persona configured
+    `units: imperial`, which Open-Meteo converts.
     """
 
     http: HttpClient
@@ -88,8 +92,13 @@ class WeatherFetcher:
             "latitude": self.latitude,
             "longitude": self.longitude,
             "current": "temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m",
-            "daily": "temperature_2m_max,temperature_2m_min,weather_code",
-            "forecast_days": 1,
+            "daily": (
+                "temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max"
+            ),
+            # Today and tomorrow: "will it rain tomorrow?" is the second most
+            # common weather question, and without tomorrow the model
+            # either guesses or searches the web (T1.48).
+            "forecast_days": 2,
             "timezone": "auto",
         }
         if self.units == "imperial":
@@ -107,27 +116,33 @@ class WeatherFetcher:
                 "wind_speed": current.get("wind_speed_10m"),
                 "condition_key": _wmo_key(current.get("weather_code")),
             },
-            "today": {
-                "high": _first(daily.get("temperature_2m_max")),
-                "low": _first(daily.get("temperature_2m_min")),
-                "condition_key": _wmo_key(_first(daily.get("weather_code"))),
-            },
+            "today": _day(daily, 0),
+            "tomorrow": _day(daily, 1),
             "units": "fahrenheit" if self.units == "imperial" else "celsius",
         }
 
 
-def _first(seq: list[Any] | None) -> Any:
-    return seq[0] if seq else None
+def _day(daily: dict[str, Any], index: int) -> dict[str, Any]:
+    code = _nth(daily.get("weather_code"), index)
+    return {
+        "high": _nth(daily.get("temperature_2m_max"), index),
+        "low": _nth(daily.get("temperature_2m_min"), index),
+        "condition_key": _wmo_key(code),
+        "rain_chance_pct": _nth(daily.get("precipitation_probability_max"), index),
+    }
+
+
+def _nth(seq: list[Any] | None, index: int) -> Any:
+    return seq[index] if seq and len(seq) > index else None
 
 
 # Google News RSS topic IDs (used as the SECTION param in the URL). See
-# https://news.google.com/ for the canonical list. Categories the skill
-# exposes map onto these (with "local" treated as country-scoped — Google
-# News doesn't do hyperlocal; see docs/skills/news.md for the limitation).
-_GOOGLE_NEWS_TOPICS: dict[str, str | None] = {
+# https://news.google.com/ for the canonical list. `local` is not here:
+# Google News has no city feed, so local news is a search for the
+# persona's `local_query` (see `NewsFetcher.fetch`).
+_GOOGLE_NEWS_TOPICS: dict[str, str] = {
     "world": "WORLD",
     "national": "NATION",
-    "local": "NATION",  # closest available; honest limitation
     "sports": "SPORTS",
     "tech": "TECHNOLOGY",
     "business": "BUSINESS",
@@ -137,42 +152,100 @@ _GOOGLE_NEWS_TOPICS: dict[str, str | None] = {
     # `weather` is fetched by WeatherFetcher, not Google News.
 }
 
+# Searches (a `query`, or local news) look back further than the top
+# stories: Google ranks search results by relevance, not date, and a
+# story from two days ago is still news to someone who asks about it.
+SEARCH_MAX_AGE_HOURS = 72
+_RELATED_MAX = 2
+_RELATED_MAX_CHARS = 150
+# Two headlines are the same story when this share of the shorter one's
+# content words appears in the other (measured on the Villavicencio feed:
+# one road accident came back as five headlines from five outlets).
+_DUPLICATE_OVERLAP = 0.6
+
+_STOPWORDS = frozenset(
+    """
+    el la los las un una unos unas de del al a en y o u que se su sus es son
+    fue por para con sin sobre como este esta estos estas ese esa lo le les
+    mas tras ante entre hasta desde hoy ayer the of and or to in on for with
+    is are was at by from
+    """.split()  # noqa: SIM905 - a word list reads better as text
+)
+_WORD_RE = re.compile(r"[a-z0-9]+")
+_RELATED_RE = re.compile(
+    r"<a\b[^>]*>(?P<title>.*?)</a>(?:\s|&nbsp;|\xa0)*<font\b[^>]*>(?P<source>.*?)</font>",
+    re.IGNORECASE | re.DOTALL,
+)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _fold(text: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", text.lower())
+    return "".join(c for c in decomposed if not unicodedata.combining(c))
+
+
+def content_words(text: str) -> set[str]:
+    """Folded content words of a headline, crude plural strip, no stopwords."""
+    out: set[str] = set()
+    for word in _WORD_RE.findall(_fold(text)):
+        if len(word) < 3 or word in _STOPWORDS:
+            continue
+        if len(word) > 4 and word.endswith("s"):
+            word = word[:-1]
+        out.add(word)
+    return out
+
+
+def same_story(a: set[str], b: set[str]) -> bool:
+    if not a or not b:
+        return False
+    return len(a & b) / min(len(a), len(b)) >= _DUPLICATE_OVERLAP
+
 
 @dataclass(frozen=True, slots=True)
 class NewsItem:
     title: str
-    summary: str
     source: str
     published_at: datetime
     category: str
+    # Other outlets' headlines for the same story (Google clusters them in
+    # the item's description). They often say what the main headline
+    # leaves out ("what the sometimiento bill is"), so the model can tell
+    # the story instead of reading a bare title.
+    related: tuple[str, ...] = field(default_factory=tuple)
 
     def age_hours(self, now: datetime) -> float:
         return (now - self.published_at).total_seconds() / 3600
 
     def to_dict(self, now: datetime) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "title": self.title,
-            "summary": self.summary,
             "source": self.source,
-            "published_at": self.published_at.isoformat(),
             "age_hours": round(self.age_hours(now), 1),
-            "category": self.category,
         }
+        if self.related:
+            out["related"] = list(self.related)
+        return out
 
 
 @dataclass(frozen=True, slots=True)
 class NewsFetcher:
     """Google News RSS wrapper. Returns curated headlines.
 
-    With no `category` and no `query`: pulls the country's "Top stories"
-    feed — Google's algorithm picks what matters, we don't.
-    With `category`: pulls the topic-specific feed (sports/tech/etc.).
-    With `query`: pulls Google News search RSS for that text.
+    With no `category` and no `query`: the country's "Top stories" feed;
+    Google's algorithm picks what matters, we don't.
+    With `category="local"`: a search for `local_query` (the persona's
+    city and region), since Google News has no city feed.
+    With another `category`: the topic feed (sports, tech, ...).
+    With `query`: Google News search for that text.
+    Searches carry `when:3d` so Google returns recent stories, and look
+    back `SEARCH_MAX_AGE_HOURS`; feeds look back `max_age_hours`.
     """
 
     http: HttpClient
     country_code: str  # ISO 3166-1 alpha-2 ("ES", "CO", "US", ...)
     language_code: str  # ISO 639-1 ("es", "en", ...)
+    local_query: str = ""
 
     @property
     def _ceid(self) -> str:
@@ -185,18 +258,28 @@ class NewsFetcher:
             "ceid": self._ceid,
         }
 
-    def _build_url(self, *, query: str | None, category: str | None) -> str:
+    def _search_text(self, *, query: str | None, category: str | None) -> str | None:
         if query:
-            params = {"q": query, **self._base_params()}
+            return query
+        if category == "local" and self.local_query:
+            return self.local_query
+        return None
+
+    def _build_url(self, *, query: str | None, category: str | None) -> str:
+        search = self._search_text(query=query, category=category)
+        if search:
+            days = SEARCH_MAX_AGE_HOURS // 24
+            params = {"q": f"{search} when:{days}d", **self._base_params()}
             return "https://news.google.com/rss/search?" + urllib.parse.urlencode(params)
-        if category and category in _GOOGLE_NEWS_TOPICS:
-            topic = _GOOGLE_NEWS_TOPICS[category]
-            if topic:
-                params = self._base_params()
-                return (
-                    f"https://news.google.com/rss/headlines/section/topic/{topic}?"
-                    + urllib.parse.urlencode(params)
-                )
+        topic = _GOOGLE_NEWS_TOPICS.get(category or "")
+        if category == "local":
+            topic = "NATION"  # no local_query configured: closest feed
+        if topic:
+            params = self._base_params()
+            return (
+                f"https://news.google.com/rss/headlines/section/topic/{topic}?"
+                + urllib.parse.urlencode(params)
+            )
         # Default: country's top stories
         return "https://news.google.com/rss?" + urllib.parse.urlencode(self._base_params())
 
@@ -211,9 +294,24 @@ class NewsFetcher:
         url = self._build_url(query=query, category=category)
         body = await self.http.get_text(url)
         items = _parse_rss(body, category=category or ("search" if query else "top"))
+        searched = self._search_text(query=query, category=category) is not None
+        window = max(max_age_hours, SEARCH_MAX_AGE_HOURS) if searched else max_age_hours
         now = datetime.now(UTC)
-        fresh = [item for item in items if item.age_hours(now) <= max_age_hours]
-        return fresh[:max_items]
+        fresh = [item for item in items if item.age_hours(now) <= window]
+        return dedupe(fresh)[:max_items]
+
+
+def dedupe(items: list[NewsItem]) -> list[NewsItem]:
+    """Drop items that repeat a story already kept (feed order wins)."""
+    kept: list[NewsItem] = []
+    kept_words: list[set[str]] = []
+    for item in items:
+        words = content_words(item.title)
+        if any(same_story(words, other) for other in kept_words):
+            continue
+        kept.append(item)
+        kept_words.append(words)
+    return kept
 
 
 def _parse_rss(body: str, *, category: str) -> list[NewsItem]:
@@ -224,20 +322,10 @@ def _parse_rss(body: str, *, category: str) -> list[NewsItem]:
         return []
     items: list[NewsItem] = []
     for item_el in root.iter("item"):
-        title = (item_el.findtext("title") or "").strip()
-        if not title:
+        raw_title = (item_el.findtext("title") or "").strip()
+        if not raw_title:
             continue
-        # Google News titles have format "Title - Source"; split off the source
-        source = ""
-        if " - " in title:
-            title, _, source = title.rpartition(" - ")
-            source = source.strip()
-        # Description is HTML-ish; we just store the title for now since
-        # description contains stripped HTML the LLM doesn't need.
-        summary = (item_el.findtext("description") or "").strip()
-        # Strip HTML tags crudely from the description (Google News
-        # descriptions are minimal HTML — link list to the source).
-        summary = _strip_tags(summary)
+        title, source = split_title(raw_title)
         pub_date_str = item_el.findtext("pubDate")
         try:
             pub_date = parsedate_to_datetime(pub_date_str) if pub_date_str else None
@@ -249,24 +337,55 @@ def _parse_rss(body: str, *, category: str) -> list[NewsItem]:
             pub_date = pub_date.replace(tzinfo=UTC)
         items.append(
             NewsItem(
-                title=title.strip(),
-                summary=summary,
+                title=title,
                 source=source,
                 published_at=pub_date,
                 category=category,
+                related=_related(item_el.findtext("description") or "", title),
             )
         )
     return items
 
 
-def _strip_tags(html: str) -> str:
-    """Remove HTML tags + decode common entities. Google News descriptions
-    are very simple HTML (just <a href>...</a> wrapping linked headlines)."""
-    import re
+def split_title(raw_title: str) -> tuple[str, str]:
+    """Google News titles are "Title - Source"; some repeat " | Source"."""
+    title, source = raw_title, ""
+    if " - " in raw_title:
+        title, _, source = raw_title.rpartition(" - ")
+    title, source = title.strip(), source.strip()
+    if source and " | " in title:
+        head, _, tail = title.rpartition(" | ")
+        if _fold(tail.strip()) == _fold(source):
+            title = head.strip()
+    return title, source
 
-    if not html:
-        return ""
-    text = re.sub(r"<[^>]+>", " ", html)
-    text = text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
-    text = text.replace("&#39;", "'").replace("&quot;", '"').replace("&nbsp;", " ")
-    return " ".join(text.split())
+
+def _related(description_html: str, title: str) -> tuple[str, ...]:
+    """Up to two other outlets' headlines for the story, "Headline (Source)".
+
+    The description of a clustered item is an <ol> of <a>headline</a>
+    <font>source</font> pairs, the first being the item itself. Entries
+    that just repeat the main headline are skipped.
+    """
+    if not description_html:
+        return ()
+    own = content_words(title)
+    out: list[str] = []
+    seen: list[set[str]] = [own]
+    for match in _RELATED_RE.finditer(description_html):
+        headline = _clean_html(match.group("title"))
+        source = _clean_html(match.group("source"))
+        words = content_words(headline)
+        if not headline or any(same_story(words, other) for other in seen):
+            continue
+        seen.append(words)
+        if len(headline) > _RELATED_MAX_CHARS:
+            headline = headline[:_RELATED_MAX_CHARS].rsplit(" ", 1)[0] + "..."
+        out.append(f"{headline} ({source})" if source else headline)
+        if len(out) >= _RELATED_MAX:
+            break
+    return tuple(out)
+
+
+def _clean_html(fragment: str) -> str:
+    return " ".join(html.unescape(_TAG_RE.sub(" ", fragment)).split())

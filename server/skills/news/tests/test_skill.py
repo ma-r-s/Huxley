@@ -173,7 +173,7 @@ class TestGetNews:
         data = json.loads(result.output)
 
         assert data["filter"]["category"] == "sports"
-        assert data["items"][0]["category"] == "sports"
+        assert data["items"][0]["title"] == "Match recap"
         assert any("topic/SPORTS" in u for u in http.requested_urls)
 
     async def test_query_uses_search_feed(self, tmp_path: Path) -> None:
@@ -191,6 +191,8 @@ class TestGetNews:
 
         assert data["filter"]["query"] == "Petro"
         assert any("rss/search?q=Petro" in u for u in http.requested_urls)
+        # Searches ask Google for recent stories only.
+        assert any("when%3A3d" in u for u in http.requested_urls)
 
     async def test_fetch_failure_returns_structured_error(self, tmp_path: Path) -> None:
         http = FakeHttpClient(
@@ -352,3 +354,194 @@ class TestUnknownTool:
         result = await skill.handle("nonsense_tool", {})
         data = json.loads(result.output)
         assert "unknown_tool" in data["error"]
+
+
+# --- T1.48: item shape, related headlines, dedupe, freshness, local, tomorrow ---
+
+
+def _feed(items: list[tuple[str, float, str]]) -> str:
+    """RSS with (title, age_hours, description_html) per item."""
+    from xml.sax.saxutils import escape
+
+    now = datetime.now(UTC)
+    body = "".join(
+        f"<item><title>{escape(title)}</title>"
+        f"<description>{escape(desc)}</description>"
+        f"<pubDate>{format_datetime(now - timedelta(hours=age), usegmt=True)}</pubDate></item>"
+        for title, age, desc in items
+    )
+    return f'<?xml version="1.0" encoding="UTF-8"?><rss><channel>{body}</channel></rss>'
+
+
+def _cluster(*pairs: tuple[str, str]) -> str:
+    """Google's clustered description: <ol> of <a>headline</a> <font>source</font>."""
+    lis = "".join(
+        f'<li><a href="https://news.google.com/x">{h}</a>&nbsp;&nbsp;'
+        f'<font color="#6f6f6f">{src}</font></li>'
+        for h, src in pairs
+    )
+    return f"<ol>{lis}</ol>"
+
+
+async def _news(tmp_path: Path, feed: str, args: dict[str, object], **extra: object) -> dict:
+    http = FakeHttpClient(
+        responses={"open-meteo.com": _open_meteo_response(), "news.google.com": feed}
+    )
+    skill = NewsSkill(http=http)
+    await skill.setup(_make_ctx(tmp_path, extra=dict(extra)))
+    data = json.loads((await skill.handle("get_news", args)).output)
+    data["_urls"] = http.requested_urls
+    return data
+
+
+class TestItemShape:
+    async def test_compact_item_with_related_headlines(self, tmp_path: Path) -> None:
+        title = "Gobierno radicó proyecto de sometimiento a la justicia - Caracol Radio"
+        desc = _cluster(
+            ("Gobierno radicó proyecto de sometimiento a la justicia", "Caracol Radio"),
+            ("Los puntos clave de la ley: rebaja de penas de hasta el 50 %", "Semana"),
+            ("Qué es la ley de sometimiento y a quién beneficia", "El Tiempo"),
+            ("Tercer titular que ya no cabe", "Infobae"),
+        )
+        data = await _news(tmp_path, _feed([(title, 2.0, desc)]), {})
+        item = data["items"][0]
+        assert item["title"] == "Gobierno radicó proyecto de sometimiento a la justicia"
+        assert item["source"] == "Caracol Radio"
+        assert item["age_hours"] == 2.0
+        # The item's own headline is skipped; two others kept, with source.
+        assert item["related"] == [
+            "Los puntos clave de la ley: rebaja de penas de hasta el 50 % (Semana)",
+            "Qué es la ley de sometimiento y a quién beneficia (El Tiempo)",
+        ]
+        # Dropped noise: the old concatenated summary and the ISO stamp.
+        assert set(item) == {"title", "source", "age_hours", "related"}
+
+    async def test_single_link_description_adds_nothing(self, tmp_path: Path) -> None:
+        title = "Fleteo en Villavicencio terminó con un muerto - HSB Noticias"
+        desc = (
+            '<a href="https://news.google.com/x">Fleteo en Villavicencio terminó con un muerto</a>'
+            '&nbsp;&nbsp;<font color="#6f6f6f">HSB Noticias</font>'
+        )
+        data = await _news(tmp_path, _feed([(title, 1.0, desc)]), {})
+        assert "related" not in data["items"][0]
+
+    async def test_repeated_source_is_stripped_from_title(self, tmp_path: Path) -> None:
+        title = "Urabá cuenta los daños del terremoto | El Colombiano - El Colombiano"
+        data = await _news(tmp_path, _feed([(title, 1.0, "")]), {})
+        assert data["items"][0]["title"] == "Urabá cuenta los daños del terremoto"
+
+
+class TestDedupeAndFreshness:
+    async def test_same_story_from_several_outlets_is_kept_once(self, tmp_path: Path) -> None:
+        feed = _feed(
+            [
+                (
+                    "Accidente en vía Villavicencio-Puerto López deja un muerto y 12 heridos - El Espectador",
+                    3.0,
+                    "",
+                ),
+                (
+                    "Accidente en la vía Villavicencio - Puerto López deja un muerto y 12 heridos: hay niños - Infobae",
+                    4.0,
+                    "",
+                ),
+                ("Lluvias causaron inundaciones en Villavicencio - La FM", 5.0, ""),
+            ]
+        )
+        data = await _news(tmp_path, feed, {"query": "Villavicencio"})
+        assert [i["source"] for i in data["items"]] == ["El Espectador", "La FM"]
+
+    async def test_top_stories_keep_the_24h_window(self, tmp_path: Path) -> None:
+        feed = _feed([("Noticia de hoy - A", 2.0, ""), ("Noticia de hace dos días - B", 40.0, "")])
+        http = FakeHttpClient(
+            responses={"open-meteo.com": _open_meteo_response(), "news.google.com": feed}
+        )
+        skill = NewsSkill(http=http)
+        await skill.setup(_make_ctx(tmp_path, extra={"max_age_hours": 24}))
+        data = json.loads((await skill.handle("get_news", {})).output)
+        assert [i["source"] for i in data["items"]] == ["A"]
+
+    async def test_searches_look_back_three_days(self, tmp_path: Path) -> None:
+        feed = _feed(
+            [
+                ("Petro habla de la marcha - A", 2.0, ""),
+                ("Petro responde a la Fiscalía por el caso - B", 40.0, ""),
+                ("Petro viaja a Europa en gira oficial - C", 100.0, ""),
+            ]
+        )
+        http = FakeHttpClient(
+            responses={"open-meteo.com": _open_meteo_response(), "news.google.com": feed}
+        )
+        skill = NewsSkill(http=http)
+        await skill.setup(_make_ctx(tmp_path, extra={"max_age_hours": 24}))
+        data = json.loads((await skill.handle("get_news", {"query": "Petro"})).output)
+        assert [i["source"] for i in data["items"]] == ["A", "B"]
+
+
+class TestLocal:
+    async def test_local_searches_the_local_query(self, tmp_path: Path) -> None:
+        feed = _feed([("Cierran la vía al Llano por derrumbe - Periódico del Meta", 3.0, "")])
+        data = await _news(
+            tmp_path, feed, {"category": "local"}, local_query='Villavicencio OR "del Meta"'
+        )
+        url = next(u for u in data["_urls"] if "news.google.com" in u)
+        assert "rss/search?q=Villavicencio+OR+%22del+Meta%22+when%3A3d" in url
+        assert data["items"][0]["source"] == "Periódico del Meta"
+
+    async def test_local_defaults_to_the_location_name(self, tmp_path: Path) -> None:
+        data = await _news(tmp_path, _feed([]), {"category": "local"})
+        url = next(u for u in data["_urls"] if "news.google.com" in u)
+        assert "rss/search?q=Testville+when%3A3d" in url
+
+    async def test_local_tool_description_names_the_place(self, tmp_path: Path) -> None:
+        skill = NewsSkill(http=FakeHttpClient())
+        await skill.setup(_make_ctx(tmp_path))
+        desc = next(t for t in skill.tools if t.name == "get_news").description
+        assert "local = noticias de Testville" in desc
+        assert "related" in desc
+
+
+class TestWeatherTomorrow:
+    async def test_tomorrow_and_rain_chance(self, tmp_path: Path) -> None:
+        body = json.dumps(
+            {
+                "current": {"temperature_2m": 26.0, "weather_code": 2},
+                "daily": {
+                    "temperature_2m_max": [29.0, 30.5],
+                    "temperature_2m_min": [22.0, 23.0],
+                    "weather_code": [95, 61],
+                    "precipitation_probability_max": [100, 63],
+                },
+            }
+        )
+        http = FakeHttpClient(responses={"open-meteo.com": body})
+        skill = NewsSkill(http=http)
+        await skill.setup(_make_ctx(tmp_path))
+        data = json.loads((await skill.handle("get_weather", {})).output)
+        weather = data["weather"]
+        assert weather["today"] == {
+            "high": 29.0,
+            "low": 22.0,
+            "condition_key": "thunderstorm",
+            "rain_chance_pct": 100,
+        }
+        assert weather["tomorrow"]["condition_key"] == "light_rain"
+        assert weather["tomorrow"]["rain_chance_pct"] == 63
+        url = http.requested_urls[0]
+        assert "forecast_days=2" in url
+        assert "precipitation_probability_max" in url
+
+    async def test_missing_tomorrow_is_null_not_an_error(self, tmp_path: Path) -> None:
+        http = FakeHttpClient(responses={"open-meteo.com": _open_meteo_response()})
+        skill = NewsSkill(http=http)
+        await skill.setup(_make_ctx(tmp_path))
+        data = json.loads((await skill.handle("get_weather", {})).output)
+        assert data["weather"]["tomorrow"]["high"] is None
+        assert data["weather"]["today"]["rain_chance_pct"] is None
+
+    async def test_weather_description_mentions_tomorrow(self, tmp_path: Path) -> None:
+        skill = NewsSkill(http=FakeHttpClient())
+        await skill.setup(_make_ctx(tmp_path))
+        desc = next(t for t in skill.tools if t.name == "get_weather").description
+        assert "mañana" in desc
+        assert "rain_chance_pct" in desc

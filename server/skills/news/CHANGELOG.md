@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.0 (2026-10-13)
+
+T1.48: headlines a voice model can tell.
+
+### Added
+
+- `related`: up to two other outlets' headlines for the same story (from Google's cluster), so a bare headline can be explained.
+- `category: local` searches Google News for `local_query` (new config, default the `location`) instead of the national feed.
+- Weather: `tomorrow` and `rain_chance_pct` for today and tomorrow.
+- `news.fetched` logs `with_related`, `oldest_age_h`, `latency_ms`.
+
+### Changed
+
+- Searches (`query`, local) add `when:3d` and keep items up to 72 h old; feeds keep `max_age_hours`.
+- Near-identical headlines from several outlets are kept once; " | Source" repeated in a title is trimmed.
+- Items are `{title, source, age_hours, related?}`: the old `summary` (every clustered headline run together) and `published_at`/`category` are gone. A top-stories payload went from about 6.9 KB to 3.8 KB.
+
 ## 0.1.0 — 2026-05-01
 
 Initial release. Bundled with Huxley as a workspace member.
@@ -16,4 +33,4 @@ Initial release. Bundled with Huxley as a workspace member.
 ### Notes
 
 - No API keys required (Open-Meteo + Google News RSS are both public).
-- The HTTP client is `httpx`; tests use `pytest-httpx` for offline mocks.
+- The HTTP client is `httpx`; tests use a dict-backed `FakeHttpClient` for offline runs.
