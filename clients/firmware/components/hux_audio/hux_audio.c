@@ -1097,7 +1097,7 @@ static void echo_stats(void) {
     ESP_LOGI(TAG,
              "audio.echo mode=%s depth_db=%d frames=%u active=%u ratio_db_p10=%d p50=%d p90=%d "
              "ref_floor_db=%.0f mic_peak=%d ref_peak=%d mic_clips=%u ref_clips=%u vol=%d pa=%d "
-             "ring_ms_min=%d max=%u trims=%u jb_ms=%d",
+             "ring_ms_min=%d max=%u trims=%u jb_ms=%d release_ms_last=%u max=%u",
              MODES[atomic_load(&s_echo_mode)], atomic_load(&s_echo_depth_db),
              (unsigned)s_echo.frames, (unsigned)s_echo.active,
              hux_echo_percentile(&s_echo, 10), hux_echo_percentile(&s_echo, 50),
@@ -1105,7 +1105,7 @@ static void echo_stats(void) {
              s_echo.mic_peak, s_echo.ref_peak, (unsigned)s_echo.mic_clips,
              (unsigned)s_echo.ref_clips, atomic_load(&s_volume), atomic_load(&s_pa_on),
              rmin == UINT32_MAX ? -1 : (int)rmin, (unsigned)rmax,
-             (unsigned)atomic_exchange(&s_call_trims, 0), atomic_load(&s_call_jb_ms));
+             (unsigned)atomic_exchange(&s_call_trims, 0), atomic_load(&s_call_jb_ms), (unsigned)(s_echo.release_last * 20), (unsigned)(s_echo.release_max * 20));
     hux_echo_take_stats(&s_echo);
 }
 
