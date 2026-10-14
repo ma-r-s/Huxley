@@ -1158,6 +1158,19 @@ Next: rollback bookkeeping (the hello's `rollback` field), F-0023, the heap duri
 - Press while searching gives the offline prompt: unchanged code path (`enter_ptt`), checked on the board by the bench (`talk` during the server drop).
 - Pending: the board run (amp off through the update, then `status poweron`, a 6 s Wi-Fi blip, a 1 min server drop with a press in it, a 45 s Wi-Fi drop 2 min later, `battery park 3500 1`), then Mario hears them.
 
+### F-0034: LED animations through the clear back, at boot and while the lever is held · queued 2026-10-14 (waiting on Mario's pick)
+
+**Ask** (Mario, through the server session, 2026-10-14): light visible through the HX-1's clear back, for onlookers (grandpa can't see it), at boot and while the lever is held. Mario is choosing between mockups; the server session sends the pick. Nothing to build until then.
+**Hardware** (the server session's notes, pin checked here): the board's 7 WS2812B on GPIO38 (`bsp_board.h` `LED_STRIP_GPIO_PIN 38`, `LED_STRIP_LED_COUNT 7`), underside, ring r = 22 mm, LED i at board angle i x 360/7 from board +x. In HX-1 board +x is device down (`hx1.py` BOARD_LOC): LED 0 points straight down; mirror pairs (1,6), (2,5), (3,4); height steps bottom {0}, low {1,6}, mid {2,5}, top {3,4}. Through the back only LED 0 (the channel between the holders) and 3,4 (above the holders) show directly; 1,2,5,6 sit behind the battery holders and show as spill. All seven are above the grey/clear seam (36 mm).
+**Candidates**: boot "Rise", one step per startup chime note (LED 0 at 0 ms, 1+6 at 60, 2+5 at 120, 3+4 at 135, then a soft whole-ring glow fading by ~1.2 s), started with the startup sound so the light climbs with the pitch. Lever "Glow" (soft steady glow in ~110 ms, out ~240 ms after release) or "Voice" (while held, how high the light climbs follows the mic level, ~70 ms smoothing: bottom first, top only when loud).
+**Constraints**: low brightness; never delays audio or the press path; at night (22:00-07:00 Bogota, when the time is known: `hux_alert_quiet`) a third of the brightness; off whenever idle. Log `led.anim kind=boot|press mode=`.
+**Scoping notes** (firmware, 2026-10-14):
+- GPIO38 is unused by our firmware and nothing drives the strip today; it needs `espressif/led_strip` (RMT backend; the S3's RMT is otherwise unused). A low-priority LED task fed by atomic flags keeps it off the app and audio paths; 7 LEDs refresh in well under 1 ms.
+- "Rise" timed to the sound must start when the startup sound reaches the speaker, not when it is queued: the decoder and I2S add a fixed delay (measure it with the loopback, `selftest`). The startup sound plays only on a real power on or after the battery park (F-0033); open question for the pick: the boot light follows the same rule, or every boot.
+- "Voice" can read a smoothed level the mic sink already computes per frame (`mic_sink` peak/RMS in hux_app); the mic only runs while the press is acted on, so offline (press ignored) it would fall back to "Glow".
+- Battery: WS2812Bs draw about 0.5-1 mA each when dark if their rail is always on. That's already the case today whatever we animate, but worth a reading with F-0029's idle drain work; low brightness for ~1 s at boot and during presses adds little.
+**DoD** (draft): the pick implemented; host test for the animation timing (pure frame function: time -> 7 RGB values, the night scale); a silent bench run whose log shows `led.anim` at boot and press with no change in press-to-`ptt_start` or audio timing; then Mario sees it.
+
 Note on IDs: F-0011 to F-0013 were used in code comments and commit
 messages (boot buzz, decode scratch, Wi-Fi power save) but their
 entries never landed here; F-0003 (the speaker path) shipped as v0.3.x
