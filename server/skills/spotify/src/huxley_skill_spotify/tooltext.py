@@ -19,6 +19,8 @@ TEXT: dict[str, dict[str, str]] = {
     "es": {
         "play_music": (
             "Pone música de Spotify: una canción, un artista, un álbum o una lista. "
+            "'Para', 'para la música', 'pausa' o 'detén' es detener, nunca poner: eso es "
+            "`music_control` con 'pause', aunque no suene nada. "
             "Para un libro con título usa `play_book`; para pedir un tipo de libro, "
             "`find_books`. "
             "ANTES de llamar di algo breve como 'a ver, la busco'. Los nombres pueden "
@@ -146,6 +148,8 @@ TEXT: dict[str, dict[str, str]] = {
     "en": {
         "play_music": (
             "Play music from Spotify: a song, an artist, an album or a playlist. "
+            "'Stop', 'stop the music', 'pause' are stopping, never playing: that's "
+            "`music_control` with 'pause', even when nothing is playing. "
             "For a book by title use `play_book`; to ask for a kind of book, "
             "`find_books`. "
             "BEFORE calling, briefly say something like 'let me find it'. Names may "
@@ -266,7 +270,9 @@ TEXT: dict[str, dict[str, str]] = {
     "fr": {
         "play_music": (
             "Joue de la musique Spotify : une chanson, un artiste, un album ou une "
-            "playlist. Pour un livre par son titre, utilise `play_book` ; pour un genre "
+            "playlist. 'Arrête', 'arrête la musique', 'pause' c'est arrêter, jamais "
+            "mettre : c'est `music_control` avec 'pause', même si rien ne joue. "
+            "Pour un livre par son titre, utilise `play_book` ; pour un genre "
             "de livre, `find_books`. AVANT l'appel, dis "
             "brièvement 'je cherche'. Les noms peuvent "
             "être en anglais ou en toute autre langue : passe-les tels que tu les as "

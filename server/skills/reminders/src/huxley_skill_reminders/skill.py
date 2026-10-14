@@ -1738,23 +1738,44 @@ class RemindersSkill:
         tomorrow = now_local + timedelta(days=1)
         today_words, tomorrow_words = _day_words(now_local, bucket), _day_words(tomorrow, bucket)
         clock, offset = f"{now_local:%H:%M}", _utc_offset(now_local)
+        # Before dawn, "mañana a las 8" is this morning, after sleeping (as
+        # people mean it, and as big assistants read it): said once, plainly.
+        small_hours = now_local.hour < 4
         if bucket == "es":
             lines.append(
                 f"Hora actual del usuario ({self._timezone_label}): {today_words} de "
                 f"{now_local.year}, {clock} ({offset}). Mañana es {tomorrow_words}. "
                 f"Usa ese offset en `when_iso`."
+                + (
+                    f" Es de madrugada: si dice 'mañana' para una hora de la mañana, habla "
+                    f"de hoy, {today_words}, después de dormir."
+                    if small_hours
+                    else ""
+                )
             )
         elif bucket == "fr":
             lines.append(
                 f"Heure actuelle de l'utilisateur ({self._timezone_label}) : {today_words} "
                 f"{now_local.year}, {clock} ({offset}). Demain, c'est {tomorrow_words}. "
                 f"Utilise ce décalage dans `when_iso`."
+                + (
+                    f" C'est le milieu de la nuit : s'il dit 'demain' pour une heure du "
+                    f"matin, il parle d'aujourd'hui, {today_words}, après avoir dormi."
+                    if small_hours
+                    else ""
+                )
             )
         else:
             lines.append(
                 f"Current time for the user ({self._timezone_label}): {today_words} "
                 f"{now_local.year}, {clock} ({offset}). Tomorrow is {tomorrow_words}. "
                 f"Use that offset in `when_iso`."
+                + (
+                    f" It's the small hours: 'tomorrow' at a morning hour means today, "
+                    f"{today_words}, after sleeping."
+                    if small_hours
+                    else ""
+                )
             )
         if self._missed_cache:
             if bucket == "es":

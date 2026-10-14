@@ -390,6 +390,21 @@ class TestPromptContext:
         assert "lunes 12 de octubre de 2026, 20:58 (UTC-05:00)" in ctx
         assert "Mañana es martes 13 de octubre." in ctx
 
+    async def test_before_dawn_mañana_is_this_morning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Hearing bench, 01:24 Bogota: "mañana a las 8" meant this morning
+        (the model picked it; the prompt now says so), and only before dawn."""
+        from huxley_skill_reminders import skill as skill_module
+
+        now = [datetime(2026, 10, 14, 6, 24, tzinfo=UTC)]  # 01:24 in Bogota
+        monkeypatch.setattr(skill_module, "_utcnow", lambda: now[0])
+        skill, _, _ = await _make_skill(language="es", start_scheduler=False)
+        skill._tz = ZoneInfo("America/Bogota")
+        assert "habla de hoy, miércoles 14 de octubre, después de dormir" in skill.prompt_context()
+        now[0] = datetime(2026, 10, 14, 15, 0, tzinfo=UTC)  # 10:00 in Bogota
+        assert "madrugada" not in skill.prompt_context()
+
     async def test_add_says_the_day_back_in_the_users_words(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

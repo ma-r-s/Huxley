@@ -1436,6 +1436,15 @@ class TestTheShelf:
         assert "before answering" in tooltext.TEXT["en"]["book_opinion"]
         assert "avant de répondre" in tooltext.TEXT["fr"]["book_opinion"]
 
+    async def test_para_is_stop_never_play(self) -> None:
+        """Hearing bench, 2026-10-14: "para la música" with nothing on was
+        sent to play_music ("pon"). The words the model reads say stop."""
+        from huxley_skill_spotify import tooltext
+
+        for lang, stop in (("es", "'Para'"), ("en", "'Stop'"), ("fr", "'Arrête'")):
+            text = tooltext.TEXT[lang]["play_music"]
+            assert stop in text and "`music_control`" in text, lang
+
     # --- the review round (T1.45) ---
 
     async def test_a_title_with_a_theme_word_is_searched_not_redirected(
