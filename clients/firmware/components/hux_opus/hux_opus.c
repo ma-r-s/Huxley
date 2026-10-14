@@ -64,11 +64,36 @@ static _Atomic uint32_t s_rx_taken = 0;
  * ring_left_ms counts them, T1.44). */
 static _Atomic uint32_t s_rx_dropped_ms = 0;
 
+/* The decoder runs above the app, the WebSocket and the idle tasks (7):
+ * fed faster than it ever waits (audio dropped as fast as it is decoded,
+ * a barge-in hold on a flaky link), it would keep a core for good, and the
+ * task watchdog restarts the walkie once that core's idle task has missed
+ * 10 s (the field test's crash, 2026-10-14, F-0035). After 100 ms of work
+ * without waiting it gives the core up for a tick; playback needs ~20 %
+ * of one, so this never touches a normal stream. */
+#define DEC_MAX_RUN_US 100000
+static atomic_bool s_yield_on = true; /* console `opus yield off`: the bench repro */
+static _Atomic uint32_t s_yields = 0;
+
 static void decode_task(void *unused) {
     (void)unused;
     rx_item_t *it = &s_dec_item;
     uint32_t errors = 0;
+    int64_t run_since = esp_timer_get_time();
     for (;;) {
+        int64_t now = esp_timer_get_time();
+        if (uxQueueMessagesWaiting(s_rx_q) == 0) {
+            run_since = now; /* about to wait: the run ends here */
+        } else if (now - run_since > DEC_MAX_RUN_US && atomic_load(&s_yield_on)) {
+            uint32_t n = atomic_fetch_add(&s_yields, 1) + 1;
+            if (n == 1 || n % 100 == 0) {
+                ESP_LOGW(TAG, "opus.yield run_ms=%d waiting=%u count=%u: gave the core up a tick",
+                         (int)((now - run_since) / 1000), (unsigned)uxQueueMessagesWaiting(s_rx_q),
+                         (unsigned)n);
+            }
+            vTaskDelay(1);
+            run_since = esp_timer_get_time();
+        }
         if (xQueueReceive(s_rx_q, it, portMAX_DELAY) != pdTRUE) {
             continue;
         }
@@ -311,4 +336,10 @@ void hux_opus_rx_progress(uint32_t *done, uint32_t *pending) {
 uint32_t hux_opus_take_dec_us(void) {
     uint32_t n = atomic_exchange(&s_dec_n, 0), us = atomic_exchange(&s_dec_us, 0);
     return n ? us / n : 0;
+}
+
+void hux_opus_set_yield(bool on) {
+    atomic_store(&s_yield_on, on);
+    ESP_LOGW(TAG, "opus.yield_guard %s (yields so far %u)", on ? "on" : "off",
+             (unsigned)atomic_load(&s_yields));
 }
