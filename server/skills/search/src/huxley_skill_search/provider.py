@@ -21,9 +21,11 @@ deadline, and the order lives in one constant.
 from __future__ import annotations
 
 import asyncio
+import functools
 import math
 import time
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -51,7 +53,7 @@ class SearchAttempt:
     """One try against one backend, for the log."""
 
     backend: str
-    outcome: str  # "ok" | "empty" | "timeout" | "rate_limited" | "error"
+    outcome: str  # "ok" | "weak" | "empty" | "timeout" | "rate_limited" | "error"
     latency_ms: int
     count: int = 0
     error_class: str | None = None
@@ -153,12 +155,41 @@ DEFAULT_DEADLINE_S = 8.0
 DEFAULT_ATTEMPT_TIMEOUT_S = 3.0
 # News articles: one attempt, ddgs's own mix (Bing News answered from the
 # Pi when DuckDuckGo and Yahoo News didn't). It runs beside the web
-# search, so its budget is spent while the web search runs anyway.
+# search; the skill waits for it only briefly after the web search is
+# back (see skill._NEWS_GRACE_S).
 NEWS_BACKEND = "auto"
 NEWS_TIMEOUT_S = 3.0
 # Don't start a new attempt with less than this left: it would only add
 # a doomed request before the same failure message.
 MIN_ATTEMPT_S = 1.0
+# Video, social, logins and Google's own redirect pages: never fetched for
+# an excerpt and ranked last by the skill. A web response made mostly of
+# these is "weak": the next backend gets a turn and the hits are merged.
+LOW_VALUE_DOMAINS: tuple[str, ...] = (
+    "youtube.com",
+    "youtu.be",
+    "facebook.com",
+    "instagram.com",
+    "tiktok.com",
+    "x.com",
+    "twitter.com",
+    "pinterest.com",
+    "pinterest.es",
+    "linkedin.com",
+    "reddit.com",
+    "news.google.com",
+)
+# A response with fewer useful hits than this (or than its own size or
+# max_results, if smaller) is weak. Measured: Yandex answered "remedios para el dolor de
+# estomago" with two Pinterest pins, a TikTok and two unrelated pages.
+MIN_USEFUL_HITS = 3
+
+
+def is_low_value(host: str) -> bool:
+    host = host.lower()
+    return any(host == d or host.endswith("." + d) for d in LOW_VALUE_DOMAINS)
+
+
 # The skill's vocabulary to ddgs's ("on" | "moderate" | "off"). ddgs's
 # Brave engine reads anything but "on" and "moderate" as OFF, so passing
 # "strict" through turned filtering off there. (Most ddgs engines ignore
@@ -214,6 +245,26 @@ def _ddgs_news(
     )
 
 
+# ddgs calls run in their own small pool, not the loop's default one: an
+# attempt that timed out keeps its thread until ddgs gives up (with
+# backend "auto" that can be several engines, about 11 s in a simulation),
+# and the default pool is shared with the rest of the process.
+_POOL_WORKERS = 4
+_pool: ThreadPoolExecutor | None = None
+
+
+def _executor() -> ThreadPoolExecutor:
+    global _pool
+    if _pool is None:
+        _pool = ThreadPoolExecutor(max_workers=_POOL_WORKERS, thread_name_prefix="huxley-search")
+    return _pool
+
+
+async def _in_pool(fn: SyncSearchFn, *args: Any) -> list[dict[str, Any]]:
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_executor(), functools.partial(fn, *args))
+
+
 def _classify(exc: BaseException) -> str:
     """Map a backend exception to an attempt outcome.
 
@@ -261,8 +312,10 @@ class DdgsProvider:
     `asyncio.wait_for`. An attempt gets at most `attempt_timeout_s`; the
     whole search at most `deadline_s`. A failed or empty attempt hands
     the remaining time to the next backend. A timed-out thread can't be
-    killed, but ddgs's own client timeout (set to the attempt budget)
-    ends it shortly after.
+    killed: ddgs's client timeout (set to the attempt budget) bounds each
+    engine request, but backend "auto" may try several engines in turn,
+    so the thread can run on for seconds after the caller moved on. It
+    runs in this module's own small pool, never the loop's default one.
 
     `search_fn` and `clock` are injectable for tests.
     """
@@ -298,6 +351,8 @@ class DdgsProvider:
     ) -> SearchResponse:
         start = self._clock()
         attempts: list[SearchAttempt] = []
+        collected: list[SearchHit] = []  # hits from weak attempts
+        first_backend = ""
         safesearch = _DDGS_SAFESEARCH.get(safesearch, safesearch)
         for backend in self._backends:
             remaining = self._deadline_s - (self._clock() - start)
@@ -307,7 +362,7 @@ class DdgsProvider:
             t0 = self._clock()
             try:
                 raw = await asyncio.wait_for(
-                    asyncio.to_thread(
+                    _in_pool(
                         self._search_fn,
                         query,
                         region,
@@ -332,17 +387,48 @@ class DdgsProvider:
                 continue
             hits = _to_hits(raw)
             latency_ms = int((self._clock() - t0) * 1000)
-            if hits:
+            if not hits:
+                attempts.append(
+                    SearchAttempt(backend=backend, outcome="empty", latency_ms=latency_ms)
+                )
+                continue
+            useful = sum(1 for h in hits if not is_low_value(h.source))
+            if useful >= min(MIN_USEFUL_HITS, len(hits), max_results):
                 attempts.append(
                     SearchAttempt(
                         backend=backend, outcome="ok", latency_ms=latency_ms, count=len(hits)
                     )
                 )
-                return SearchResponse(
-                    hits=hits[:max_results], backend=backend, attempts=tuple(attempts)
+                return self._respond(collected + hits, max_results, backend, attempts)
+            # Mostly social/video: keep these, let the next backend add more.
+            attempts.append(
+                SearchAttempt(
+                    backend=backend, outcome="weak", latency_ms=latency_ms, count=len(hits)
                 )
-            attempts.append(SearchAttempt(backend=backend, outcome="empty", latency_ms=latency_ms))
+            )
+            collected.extend(hits)
+            first_backend = first_backend or backend
+        if collected:
+            return self._respond(collected, max_results, first_backend, attempts)
         return self._final(attempts)
+
+    @staticmethod
+    def _respond(
+        hits: list[SearchHit], max_results: int, backend: str, attempts: list[SearchAttempt]
+    ) -> SearchResponse:
+        """Merge hits from one or more attempts: no repeated URL, useful first."""
+        seen: set[str] = set()
+        unique: list[SearchHit] = []
+        for hit in hits:
+            if hit.url not in seen:
+                seen.add(hit.url)
+                unique.append(hit)
+        ordered = [h for h in unique if not is_low_value(h.source)] + [
+            h for h in unique if is_low_value(h.source)
+        ]
+        return SearchResponse(
+            hits=ordered[:max_results], backend=backend, attempts=tuple(attempts)
+        )
 
     async def news(
         self,
@@ -357,7 +443,7 @@ class DdgsProvider:
         safesearch = _DDGS_SAFESEARCH.get(safesearch, safesearch)
         try:
             raw = await asyncio.wait_for(
-                asyncio.to_thread(
+                _in_pool(
                     self._news_fn,
                     query,
                     region,

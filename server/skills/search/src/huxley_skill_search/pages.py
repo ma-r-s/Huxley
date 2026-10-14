@@ -23,6 +23,7 @@ read, not reproduce the article.
 from __future__ import annotations
 
 import json
+import math
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -94,10 +95,14 @@ _STOPWORDS = frozenset(
 )
 
 # Blocks that are site furniture even when they sit in the content area.
+# Phrases, not words: "no va a aceptar el resultado" or "inicia sesion el
+# nuevo Congreso" are news.
 _JUNK_BLOCK_RE = re.compile(
-    r"cookies?|acepto|aceptar|pol[ií]tica de (privacidad|tratamiento)|datos personales|"
-    r"suscr[ií]bete|newsletter|derechos reservados|all rights reserved|"
-    r"inicia sesi[oó]n|reg[ií]strate|"
+    r"(usamos|utilizamos|uso de|aceptar|acepto|aceptas|aceptar todas las) (las )?cookies|"
+    r"we use cookies|pol[ií]tica de (privacidad|cookies|tratamiento)|"
+    r"tratamiento de (mis |sus |tus )?datos personales|acepto el tratamiento|"
+    r"suscr[ií]bete (a|al|gratis|ahora)|newsletter|todos los derechos reservados|"
+    r"all rights reserved|inicia sesi[oó]n (para|con)|reg[ií]strate (para|gratis|aqu[ií])|"
     # Bot walls: a page that only says this has no content for us.
     r"verif\w* (your|tu) (browser|navegador)|not a (bot|robot)|captcha|"
     r"just a moment|checking your browser|enable javascript|activa javascript",
@@ -149,6 +154,8 @@ class HttpxPageFetcher:
             follow_redirects=True,
             headers=self._HEADERS,
             max_redirects=5,
+            # Runs for every hop, redirects included.
+            event_hooks={"request": [_refuse_private_host]},
         )
 
     async def fetch(self, url: str, *, timeout_s: float) -> str:
@@ -174,6 +181,9 @@ class HttpxPageFetcher:
             raise PageFetchError("timeout") from exc
         except httpx.HTTPError as exc:
             raise PageFetchError(f"network_error:{type(exc).__name__}") from exc
+        except (httpx.InvalidURL, UnicodeError, ValueError) as exc:
+            # A result URL httpx or IDNA can't take ("https://xn--.com/").
+            raise PageFetchError(f"bad_url:{type(exc).__name__}") from exc
         try:
             return body.decode(encoding, errors="replace")
         except LookupError:
@@ -181,6 +191,32 @@ class HttpxPageFetcher:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+async def _refuse_private_host(request: Any) -> None:
+    """Never fetch this machine or the local network, even via a redirect.
+
+    Page text goes to the model; a result (or a redirect from one) that
+    points at localhost or a private address would hand it whatever is
+    served there (the caregiver page runs on 127.0.0.1). Hostnames that
+    resolve to private addresses are not checked (that needs a DNS
+    lookup per hop); literal IPs and local names are.
+    """
+    host = (request.url.host or "").lower().strip("[]")
+    if _is_private_host(host):
+        raise PageFetchError("private_host")
+
+
+def _is_private_host(host: str) -> bool:
+    import ipaddress
+
+    if not host or host == "localhost" or host.endswith((".localhost", ".local", ".internal")):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return not ip.is_global
 
 
 _META_CHARSET_RE = re.compile(rb"<meta[^>]+charset=[\"']?([A-Za-z0-9_-]+)", re.IGNORECASE)
@@ -259,6 +295,7 @@ _WEEKDAYS = (
     ("sabado", "saturday", "samedi"),
     ("domingo", "sunday", "dimanche"),
 )
+_MORNING_LEAD = frozenset({"esta", "la", "por", "de"})
 _DAY_WORDS = {
     "hoy": 0,
     "today": 0,
@@ -282,11 +319,15 @@ def date_boost_terms(query: str, today: date) -> frozenset[str]:
     page decides which one matches.
     """
     found: set[str] = set()
-    for word in _WORD_RE.findall(fold(query)):
+    tokens = _WORD_RE.findall(fold(query))
+    for i, word in enumerate(tokens):
         offset = _DAY_WORDS.get(word)
-        if offset is not None:
-            day = date.fromordinal(today.toordinal() + offset)
-            found.update(stem(name) for name in _WEEKDAYS[day.weekday()])
+        if offset is None:
+            continue
+        if word == "manana" and i > 0 and tokens[i - 1] in _MORNING_LEAD:
+            offset = 0  # "esta mañana", "en la mañana": this morning, not tomorrow
+        day = date.fromordinal(today.toordinal() + offset)
+        found.update(stem(name) for name in _WEEKDAYS[day.weekday()])
     return frozenset(found)
 
 
@@ -394,7 +435,7 @@ def _ld_json_dates(root: HtmlElement) -> tuple[str | None, str | None]:
             continue
         try:
             data: Any = json.loads(script.text or "")
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             continue
         stack: list[Any] = [data]
         while stack:
@@ -452,6 +493,8 @@ def _strip_boilerplate(root: HtmlElement) -> None:
             continue
         if total and _content_chars(el) * 2 >= total:
             continue
+        if el.find(".//article") is not None or el.find(".//main") is not None:
+            continue  # a wrapper around the page's own content marker
         el.drop_tree()
 
 
@@ -529,27 +572,34 @@ def _trim(text: str, limit: int) -> str:
 
 
 def _select(blocks: list[str], query: str, max_chars: int, boost: frozenset[str]) -> str:
-    """Pick the lead, the blocks that share words with the query, then fill.
+    """Pick the lead, the blocks that best match the question, then fill.
 
-    Score = distinct query words in the block, plus (query words + 1) per
-    `boost` word, so the day the user means outweighs a block that only
-    repeats the question, plus 0.5 if it has a number (answers are often
-    figures). Highest scores go in first; any room left is
-    filled with the page's blocks from the top (an infobox row with the
-    age rarely repeats the question's words). The result is put back in
-    page order so it reads naturally.
+    Each matching word counts by how rare it is on this page (an IDF
+    weight: a word in every block, like "pico y placa" on a pico y placa
+    page, says little; a word in two blocks says a lot). `boost` words
+    (the weekday the user means) count the same way, so "Martes: 7 y 8"
+    wins on a page where every paragraph repeats the question, but a
+    page where "martes" is everywhere doesn't drown the answer. A number
+    adds 0.5 (answers are often figures). Highest scores go in first;
+    any room left is filled from the top of the page (an infobox row
+    with the age rarely repeats the question's words). The result is put
+    back in page order so it reads naturally.
     """
     if not blocks:
         return ""
-    terms = query_terms(query)
-    boost_weight = len(terms) + 1
+    wanted = query_terms(query) | boost
+    block_words = [words(block) & wanted for block in blocks]
+    count = len(blocks)
+    df = {w: sum(1 for bw in block_words if w in bw) for w in wanted}
+    weight = {w: math.log((count + 1) / (n + 0.5)) for w, n in df.items() if n}
     scored: list[tuple[float, int]] = []
-    for idx, block in enumerate(blocks):
-        block_words = words(block)
-        hits = len(terms & block_words) + boost_weight * len(boost & block_words)
-        if hits:
-            bonus = 0.5 if _DIGIT_RE.search(block) else 0.0
-            scored.append((hits + bonus, idx))
+    for idx, found in enumerate(block_words):
+        if not found:
+            continue
+        score = sum(weight.get(w, 0.0) for w in found)
+        if _DIGIT_RE.search(blocks[idx]):
+            score += 0.5
+        scored.append((score, idx))
 
     chosen: set[int] = set()
     budget = max_chars

@@ -545,3 +545,25 @@ class TestWeatherTomorrow:
         desc = next(t for t in skill.tools if t.name == "get_weather").description
         assert "mañana" in desc
         assert "rain_chance_pct" in desc
+
+
+class TestCriticRegressions:
+    async def test_related_headline_drops_repeated_outlet(self, tmp_path: Path) -> None:
+        desc = _cluster(
+            ("Urabá cuenta los daños", "Semana"),
+            ("Más de mil familias damnificadas | El Colombiano", "El Colombiano"),
+        )
+        data = await _news(tmp_path, _feed([("Urabá cuenta los daños - Semana", 1.0, desc)]), {})
+        assert data["items"][0]["related"] == ["Más de mil familias damnificadas (El Colombiano)"]
+
+    async def test_news_query_is_hashed_at_info(self, tmp_path: Path) -> None:
+        http = FakeHttpClient(
+            responses={"open-meteo.com": _open_meteo_response(), "news.google.com": _feed([])}
+        )
+        skill = NewsSkill(http=http)
+        ctx = _make_ctx(tmp_path)
+        await skill.setup(ctx)
+        await skill.handle("get_news", {"query": "qué pasó con mi vecino Pedro"})
+        await skill.handle("get_news", {"query": "qué pasó con mi vecino Pedro"})  # cache hit
+        for call in ctx.logger.ainfo.await_args_list:  # type: ignore[attr-defined]
+            assert "vecino" not in json.dumps(call.kwargs, ensure_ascii=False, default=str)

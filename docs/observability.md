@@ -348,9 +348,9 @@ The `search.*` namespace (T1.48) logs one line per step of a `search_the_web` ca
 
 | Event | Read it for |
 | --- | --- |
-| `search.attempt` | Which backend answered, and how each earlier one failed: `backend`, `outcome` (ok, empty, timeout, rate_limited, error), `latency_ms`, `error_class`. Three `empty` lines in a row means the engines are blocking the Pi, not that nothing exists. |
-| `search.news`, `search.headlines` | Whether fresh news existed: `count` returned, `kept` (fresh and on topic), `outcome`. |
-| `search.page` | Which pages gave the model text: `domain`, `rank`, `outcome` (ok, no_text, error, timeout), `reason` (`http_403`, ...), `chars`. |
+| `search.attempt` | Which backend answered, and how each earlier one failed: `backend`, `outcome` (ok, weak = mostly video/social links, empty, timeout, rate_limited, error), `latency_ms`, `error_class`. Three `empty` lines in a row means the engines are blocking the Pi, not that nothing exists. |
+| `search.news`, `search.headlines` | Whether fresh news existed: `count`, `kept` / `seen`, `outcome` (`late` = the news lane missed its grace; headlines `reason=bad_feed` = Google answered with something that isn't a feed). |
+| `search.page` | Which pages gave the model text: `domain`, `rank`, `outcome` (ok, no_text, error, timeout), `reason` (`http_403`, `private_host`, `bad_url:...`, `unexpected:...`), `chars`. |
 | `search.results` | The whole call: `latency_ms`, `backend`, `excerpts`, `headlines`, `news`, `output_chars`. |
 | `search.timeout` / `search.rate_limited` / `search.error` | A failure the user heard as `say_to_user`; `attempts` lists `backend:outcome:ms` for each try. |
 

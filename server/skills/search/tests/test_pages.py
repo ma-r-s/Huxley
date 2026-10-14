@@ -175,3 +175,103 @@ class TestDateBoost:
         assert "Martes: 7 y 8" in text
         without = extract_page(html, "pico y placa Villavicencio hoy", max_chars=400).text
         assert "Martes: 7 y 8" not in without
+
+
+class TestCriticFindings:
+    """Regressions for the T1.48 critic's findings."""
+
+    def test_weekday_everywhere_does_not_drown_the_answer(self) -> None:
+        from datetime import date
+
+        from huxley_skill_search.pages import date_boost_terms
+
+        filler = "".join(
+            f"<p>Este martes hubo movimiento en los mercados, punto {i}, con noticias "
+            "de varios sectores de la economía y del comercio exterior.</p>"
+            for i in range(5)
+        )
+        html = (
+            "<html><body><article>"
+            f"{filler}<p>El precio del dólar en Colombia cerró en 3.194 pesos.</p>"
+            "</article></body></html>"
+        )
+        query = "precio del dólar hoy Colombia"
+        boost = date_boost_terms(query, date(2026, 10, 13))
+        text = extract_page(html, query, max_chars=300, boost=boost).text
+        assert "3.194" in text
+
+    def test_this_morning_is_today_not_tomorrow(self) -> None:
+        from datetime import date
+
+        from huxley_skill_search.pages import date_boost_terms, stem
+
+        tuesday = date(2026, 10, 13)
+        assert date_boost_terms("qué pasó esta mañana", tuesday) == frozenset(
+            stem(n) for n in ("martes", "tuesday", "mardi")
+        )
+
+    def test_news_sentences_with_furniture_words_are_kept(self) -> None:
+        html = (
+            "<html><body><article>"
+            "<p>El candidato dijo que no va a aceptar el resultado de la consulta.</p>"
+            "<p>Este martes inicia sesión el nuevo Congreso en Bogotá.</p>"
+            "<p>Usamos cookies para mejorar tu experiencia.</p>"
+            "</article></body></html>"
+        )
+        text = extract_page(html, "Congreso resultado").text
+        assert "no va a aceptar el resultado" in text
+        assert "inicia sesión el nuevo Congreso" in text
+        assert "cookies" not in text
+
+    def test_wrapper_around_article_is_never_dropped(self) -> None:
+        html = (
+            "<html><body><div class='layout has-sidebar'><article>"
+            "<p>Millonarios ganó 2-0 a Once Caldas en El Campín este martes.</p>"
+            "</article></div>"
+            "<div class='comments'>"
+            + "<p>Comentario de un lector sobre otra cosa distinta.</p>" * 6
+            + "</div></body></html>"
+        )
+        assert "2-0" in extract_page(html, "Millonarios").text
+
+    def test_deep_ld_json_never_raises(self) -> None:
+        deep = "[" * 100_000 + "]" * 100_000
+        html = (
+            f'<html><head><script type="application/ld+json">{deep}</script></head>'
+            "<body><p>Texto suficiente para tener un bloque de contenido aquí.</p></body></html>"
+        )
+        assert extract_page(html, "texto").date is None
+
+
+class TestFetcherGuards:
+    async def test_bad_url_is_a_fetch_error(self) -> None:
+        import pytest
+
+        from huxley_skill_search.pages import HttpxPageFetcher, PageFetchError
+
+        fetcher = HttpxPageFetcher()
+        try:
+            with pytest.raises(PageFetchError) as info:
+                await fetcher.fetch("https://xn--.com/", timeout_s=1.0)
+            assert info.value.reason.startswith("bad_url")
+        finally:
+            await fetcher.aclose()
+
+    async def test_private_hosts_are_refused_before_connecting(self) -> None:
+        import pytest
+
+        from huxley_skill_search.pages import HttpxPageFetcher, PageFetchError
+
+        fetcher = HttpxPageFetcher()
+        try:
+            for url in (
+                "http://127.0.0.1:8780/",
+                "http://localhost/x",
+                "http://[::1]/",
+                "http://10.0.0.5/",
+            ):
+                with pytest.raises(PageFetchError) as info:
+                    await fetcher.fetch(url, timeout_s=1.0)
+                assert info.value.reason == "private_host"
+        finally:
+            await fetcher.aclose()

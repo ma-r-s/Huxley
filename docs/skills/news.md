@@ -136,9 +136,9 @@ el libro").
 | ------------------------- | ---------------------------- | ------ |
 | `news.setup_complete`     | At skill init                | `location`, `country`, `feed_language`, `ui_language`, `interests`, `local_query`, `chime` |
 | `news.reconfigure`        | On every session connect     | `ui_language`, `feed_language` |
-| `news.fetched`            | `get_news` fetched fresh     | `query`, `category`, `items`, `with_related` (items with related headlines), `oldest_age_h`, `latency_ms` |
+| `news.fetched`            | `get_news` fetched fresh     | `query_hash` (sha256[:8]; the query itself only at debug, `news.fetched_query`), `category`, `items`, `with_related` (items with related headlines), `oldest_age_h`, `latency_ms` |
 | `news.weather_fetched`    | `get_weather` fetched fresh  | (none) |
-| `news.cache_hit`          | TTL cache hit                | `key`, `items` |
+| `news.cache_hit`          | TTL cache hit                | `key` (`news:<query_hash>:<category>` or `weather`), `items` |
 | `news.fetch_failed`       | Upstream failed (warning)    | `url`, `reason` |
 | `news.start_sound_missing`| Chime configured, file absent | `role`, `path` |
 

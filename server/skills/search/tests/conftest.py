@@ -51,6 +51,8 @@ class FakeSearchProvider:
     # The news lane: articles returned by `news()` (never raises).
     news_hits: list[SearchHit] = field(default_factory=list)
     news_outcome: str | None = None  # override, e.g. "timeout"
+    news_delay: float = 0.0
+    search_delay: float = 0.0
     calls: list[dict[str, object]] = field(default_factory=list)
     news_calls: list[dict[str, object]] = field(default_factory=list)
 
@@ -70,6 +72,8 @@ class FakeSearchProvider:
                 "region": region,
             }
         )
+        if self.search_delay:
+            await asyncio.sleep(self.search_delay)
         if isinstance(self.raises, list) and self.raises:
             exc = self.raises.pop(0)
             raise exc
@@ -94,6 +98,8 @@ class FakeSearchProvider:
         region: str,
     ) -> SearchResponse:
         self.news_calls.append({"query": query, "region": region})
+        if self.news_delay:
+            await asyncio.sleep(self.news_delay)
         outcome = self.news_outcome or ("ok" if self.news_hits else "empty")
         hits = list(self.news_hits)[:max_results] if outcome == "ok" else []
         attempt = SearchAttempt(
@@ -112,6 +118,8 @@ class FakePageFetcher:
 
     pages: dict[str, str] = field(default_factory=dict)
     errors: dict[str, str] = field(default_factory=dict)
+    # Any exception, raised as is (to test the last-resort guards).
+    exceptions: dict[str, BaseException] = field(default_factory=dict)
     delays: dict[str, float] = field(default_factory=dict)
     requested: list[str] = field(default_factory=list)
 
@@ -123,6 +131,9 @@ class FakePageFetcher:
         for key, reason in self.errors.items():
             if key in url:
                 raise PageFetchError(reason)
+        for key, exc in self.exceptions.items():
+            if key in url:
+                raise exc
         for key, body in self.pages.items():
             if key in url:
                 return body

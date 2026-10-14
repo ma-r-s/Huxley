@@ -16,6 +16,7 @@ T1.48: headlines a voice model can tell.
 - Searches (`query`, local) add `when:3d` and keep items up to 72 h old; feeds keep `max_age_hours`.
 - Near-identical headlines from several outlets are kept once; " | Source" repeated in a title is trimmed.
 - Items are `{title, source, age_hours, related?}`: the old `summary` (every clustered headline run together) and `published_at`/`category` are gone. A top-stories payload went from about 6.9 KB to 3.8 KB.
+- `news.fetched` and `news.cache_hit` log a hash of the query at info (the text only at debug).
 
 ## 0.1.0 — 2026-05-01
 

@@ -74,26 +74,41 @@ def _news_query(query: str) -> str:
     return " ".join(kept)
 
 
-def parse_feed(body: str, query: str, *, now: datetime | None = None) -> list[Headline]:
+class FeedError(ValueError):
+    """The body isn't an RSS feed (a consent page, an error page)."""
+
+
+@dataclass(frozen=True, slots=True)
+class FeedResult:
+    headlines: list[Headline]
+    seen: int  # items in the feed, before any filter
+
+
+def parse_feed(body: str, query: str, *, now: datetime | None = None) -> FeedResult:
     """Recent headlines from a Google News RSS body that match `query`.
 
     A headline is kept when it shares at least two of the query's words
     (one, for a one-word query), is at most `MAX_AGE_HOURS` old, and
     isn't a near copy of one already kept (the same story from another
     outlet). Feed order is Google's relevance order and is preserved.
+
+    Raises:
+        FeedError: the body doesn't parse as XML, so "no match" and "no
+            feed" stay distinguishable in the log.
     """
     try:
         root = ET.fromstring(body)
-    except ET.ParseError:
-        return []
+    except ET.ParseError as exc:
+        raise FeedError("bad_feed") from exc
+    items = list(root.iter("item"))
     now = now or datetime.now(UTC)
     terms = query_terms(query)
     need = min(2, len(terms))
     if need == 0:
-        return []
+        return FeedResult(headlines=[], seen=len(items))
     kept: list[Headline] = []
     kept_words: list[set[str]] = []
-    for item in root.iter("item"):
+    for item in items:
         raw_title = (item.findtext("title") or "").strip()
         if not raw_title:
             continue
@@ -110,7 +125,7 @@ def parse_feed(body: str, query: str, *, now: datetime | None = None) -> list[He
         kept_words.append(title_words)
         if len(kept) >= MAX_HEADLINES:
             break
-    return kept
+    return FeedResult(headlines=kept, seen=len(items))
 
 
 def split_source(raw_title: str) -> tuple[str, str]:

@@ -261,3 +261,39 @@ async def test_strict_maps_to_ddgs_on() -> None:
     provider = DdgsProvider(backends=("a",), search_fn=script)
     await _search(provider, safesearch="strict")
     assert script.calls[0]["safesearch"] == "on"
+
+
+class TestWeakResponses:
+    @staticmethod
+    def _social(n: int) -> list[dict[str, Any]]:
+        return [
+            {"title": f"S{i}", "href": f"https://www.tiktok.com/v/{i}", "body": "video"}
+            for i in range(n)
+        ]
+
+    async def test_mostly_social_tries_the_next_backend_and_merges(self) -> None:
+        weak = [*self._social(3), *_rows(2)]  # 2 useful of 5
+        script = Script({"a": weak, "b": _rows(4)})
+        provider = DdgsProvider(backends=("a", "b"), search_fn=script)
+        response = await _search(provider)
+        assert [a.outcome for a in response.attempts] == ["weak", "ok"]
+        # Useful first, URLs not repeated (site0/site1 came from both).
+        sources = [h.source for h in response.hits]
+        assert sources[:4] == ["site0.co", "site1.co", "site2.co", "site3.co"]
+        assert len(response.hits) == 5
+        assert response.hits[-1].source == "tiktok.com"
+
+    async def test_weak_hits_are_kept_when_nothing_better_comes(self) -> None:
+        weak = [*self._social(4), *_rows(1)]
+        script = Script({"a": weak, "b": DDGSException("No results found.")})
+        provider = DdgsProvider(backends=("a", "b"), search_fn=script)
+        response = await _search(provider)
+        assert [a.outcome for a in response.attempts] == ["weak", "empty"]
+        assert response.backend == "a"
+        assert response.hits[0].source == "site0.co"
+
+    async def test_small_max_results_lowers_the_bar(self) -> None:
+        script = Script({"a": [*_rows(1), *self._social(1)], "b": _rows(3)})
+        provider = DdgsProvider(backends=("a", "b"), search_fn=script)
+        response = await _search(provider, max_results=1)
+        assert [a.outcome for a in response.attempts] == ["ok"]

@@ -373,8 +373,8 @@ def _related(description_html: str, title: str) -> tuple[str, ...]:
     out: list[str] = []
     seen: list[set[str]] = [own]
     for match in _RELATED_RE.finditer(description_html):
-        headline = _clean_html(match.group("title"))
         source = _clean_html(match.group("source"))
+        headline, _ = split_title(f"{_clean_html(match.group('title'))} - {source}")
         words = content_words(headline)
         if not headline or any(same_story(words, other) for other in seen):
             continue

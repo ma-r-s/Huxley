@@ -24,6 +24,7 @@ Configuration (persona's `skills.news` block):
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -56,6 +57,10 @@ _VALID_CATEGORIES = (
 
 def _now_seconds() -> float:
     return time.monotonic()
+
+
+def _query_hash(query: str) -> str:
+    return hashlib.sha256(query.encode("utf-8")).hexdigest()[:8]
 
 
 class NewsSkill:
@@ -408,7 +413,7 @@ class NewsSkill:
         if cached is not None:
             await self._logger.ainfo(
                 "news.cache_hit",
-                key=cache_key,
+                key=f"news:{_query_hash(query) if query else ''}:{category or ''}",
                 items=len(cached.get("items", [])),
             )
             return self._success_result(cached)
@@ -449,13 +454,17 @@ class NewsSkill:
         self._cache_set(cache_key, payload)
         await self._logger.ainfo(
             "news.fetched",
-            query=query,
+            # A news query can say something private ("que paso con mi
+            # vecino ..."): hash at info, full text at debug, like search.
+            query_hash=_query_hash(query) if query else None,
             category=category,
             items=len(items),
             with_related=sum(1 for item in items if item.related),
             oldest_age_h=round(max((item.age_hours(now) for item in items), default=0.0), 1),
             latency_ms=int((_now_seconds() - started) * 1000),
         )
+        if query:
+            await self._logger.adebug("news.fetched_query", query=query)
         return self._success_result(payload)
 
     async def _handle_get_weather(self) -> ToolResult:

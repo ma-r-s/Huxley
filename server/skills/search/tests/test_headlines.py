@@ -48,22 +48,22 @@ class TestParseFeed:
                 ("Shakira anuncia gira por Europa - Infobae", 2.0),  # unrelated
             ]
         )
-        found = parse_feed(body, "resultado Colombia femenina Venezuela", now=NOW)
+        found = parse_feed(body, "resultado Colombia femenina Venezuela", now=NOW).headlines
         assert [h.title for h in found] == ["Colombia femenina ganó 2-1 a Venezuela en Bogotá"]
         assert found[0].source == "El Tiempo"
         assert found[0].age_hours == 1.0
 
     def test_needs_two_query_words(self) -> None:
         body = rss([("Venezuela anuncia nuevas medidas económicas - BBC", 1.0)])
-        assert parse_feed(body, "Colombia femenina Venezuela", now=NOW) == []
+        assert parse_feed(body, "Colombia femenina Venezuela", now=NOW).headlines == []
 
     def test_one_word_query_needs_one(self) -> None:
         body = rss([("Millonarios recibe a Once Caldas - Win Sports", 1.0)])
-        assert len(parse_feed(body, "Millonarios", now=NOW)) == 1
+        assert len(parse_feed(body, "Millonarios", now=NOW).headlines) == 1
 
     def test_drops_stale(self) -> None:
         body = rss([("Temblor en Colombia sacude Bucaramanga - Semana", 100.0)])
-        assert parse_feed(body, "temblor Colombia", now=NOW) == []
+        assert parse_feed(body, "temblor Colombia", now=NOW).headlines == []
 
     def test_drops_near_copies_of_the_same_story(self) -> None:
         body = rss(
@@ -73,7 +73,7 @@ class TestParseFeed:
                 ("Evacúan edificios en Bucaramanga por el temblor en Colombia - Semana", 2.0),
             ]
         )
-        found = parse_feed(body, "temblor Colombia", now=NOW)
+        found = parse_feed(body, "temblor Colombia", now=NOW).headlines
         assert [h.source for h in found] == ["El Tiempo", "Semana"]
 
     def test_caps_count(self) -> None:
@@ -86,10 +86,21 @@ class TestParseFeed:
                 ("Millonarios estrena camiseta conmemorativa - D", 1.0),
             ]
         )
-        assert len(parse_feed(body, "Millonarios", now=NOW)) == MAX_HEADLINES
+        assert len(parse_feed(body, "Millonarios", now=NOW).headlines) == MAX_HEADLINES
 
-    def test_bad_xml_is_empty(self) -> None:
-        assert parse_feed("<rss><channel><item>", "x y", now=NOW) == []
+    def test_bad_xml_raises_feed_error(self) -> None:
+        import pytest
+
+        from huxley_skill_search.headlines import FeedError
+
+        with pytest.raises(FeedError):
+            parse_feed("<html>consent page", "x y", now=NOW)
+
+    def test_seen_counts_items_before_filtering(self) -> None:
+        body = rss([("Algo sin relación - A", 1.0), ("Otra cosa - B", 200.0)])
+        result = parse_feed(body, "Millonarios", now=NOW)
+        assert result.headlines == []
+        assert result.seen == 2
 
     def test_title_shape(self) -> None:
         assert split_source("Algo pasó | El Colombiano - El Colombiano") == (

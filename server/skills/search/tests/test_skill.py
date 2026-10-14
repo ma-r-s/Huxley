@@ -360,12 +360,9 @@ class TestHeadlines:
         data = json.loads((await skill.handle("search_the_web", {"query": "Millonarios"})).output)
         assert data["result_count"] == 1
         assert "headlines" not in data
-        assert _events(ctx, "search.headlines")[0] == {
-            "query_hash": _events(ctx, "search.dispatch")[0]["query_hash"],
-            "outcome": "error",
-            "reason": "http_503",
-            "latency_ms": _events(ctx, "search.headlines")[0]["latency_ms"],
-        }
+        logged = _events(ctx, "search.headlines")[0]
+        assert logged["outcome"] == "error"
+        assert logged["reason"] == "http_503"
 
     async def test_web_failure_with_headlines_still_answers(self, tmp_path: Path) -> None:
         fetcher = FakePageFetcher(
@@ -732,3 +729,104 @@ class TestChildSafe:
         assert "excerpt" not in data["results"][0]
         assert fetcher.requested == []
         assert _events(ctx, "search.pages_skipped")[0]["reason"] == "strict"
+
+
+class TestCriticRegressions:
+    """T1.48 critic findings. All but the plain cancellation test fail on the
+    pre-fix code; that one guards behavior the fix must keep."""
+
+    async def test_unexpected_page_exception_does_not_fail_the_search(
+        self, tmp_path: Path
+    ) -> None:
+        fetcher = FakePageFetcher(exceptions={"odd.co": UnicodeError("idna")})
+        skill, ctx = await _skill(
+            tmp_path, FakeSearchProvider(hits=[_hit(url="https://odd.co/a")]), fetcher=fetcher
+        )
+        data = json.loads((await skill.handle("search_the_web", {"query": "x"})).output)
+        assert data["result_count"] == 1
+        assert _events(ctx, "search.page")[0]["reason"] == "unexpected:UnicodeError"
+
+    async def test_non_feed_body_is_logged_as_bad_feed(self, tmp_path: Path) -> None:
+        fetcher = FakePageFetcher(pages={"news.google.com": "<html>Antes de continuar"})
+        skill, ctx = await _skill(
+            tmp_path,
+            FakeSearchProvider(hits=[_hit()]),
+            fetcher=fetcher,
+            extra={"region": "co-es"},
+        )
+        await skill.handle("search_the_web", {"query": "Millonarios"})
+        logged = _events(ctx, "search.headlines")[0]
+        assert (logged["outcome"], logged["reason"]) == ("error", "bad_feed")
+
+    async def test_slow_news_lane_does_not_hold_the_pages(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        monkeypatch.setattr("huxley_skill_search.skill._NEWS_GRACE_S", 0.05)
+        provider = FakeSearchProvider(hits=[_hit()], news_delay=5.0)
+        skill, ctx = await _skill(tmp_path, provider)
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        data = json.loads((await skill.handle("search_the_web", {"query": "x"})).output)
+        assert loop.time() - t0 < 0.5
+        assert data["result_count"] == 1
+        assert _events(ctx, "search.news")[0]["outcome"] == "late"
+
+    async def test_degraded_answer_is_not_cached(self, tmp_path: Path) -> None:
+        fetcher = FakePageFetcher(
+            pages={"news.google.com": _gnews([("Temblor de 5,0 sacude Colombia - Semana", 2.0)])}
+        )
+        provider = FakeSearchProvider(raises=SearchTimeoutError("deadline"))
+        skill, _ = await _skill(tmp_path, provider, fetcher=fetcher, extra={"region": "co-es"})
+        await skill.handle("search_the_web", {"query": "temblor Colombia"})
+        await skill.handle("search_the_web", {"query": "temblor Colombia"})
+        assert len(provider.calls) == 2
+
+    async def test_lanes_are_cancelled_when_the_call_is(self, tmp_path: Path) -> None:
+        fetcher = FakePageFetcher(delays={"news.google.com": 5.0})
+        provider = FakeSearchProvider(hits=[_hit()], search_delay=5.0, news_delay=5.0)
+        skill, _ = await _skill(tmp_path, provider, fetcher=fetcher, extra={"region": "co-es"})
+        call = asyncio.create_task(skill.handle("search_the_web", {"query": "x"}))
+        await asyncio.sleep(0.05)
+        call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        await asyncio.sleep(0)
+        leftover = [
+            t for t in asyncio.all_tasks() if not t.done() and t is not asyncio.current_task()
+        ]
+        assert leftover == []
+
+    async def test_provider_crash_cancels_the_lanes(self, tmp_path: Path) -> None:
+        fetcher = FakePageFetcher(delays={"news.google.com": 5.0})
+        provider = FakeSearchProvider(raises=RuntimeError("bug"), news_delay=5.0)
+        skill, _ = await _skill(tmp_path, provider, fetcher=fetcher, extra={"region": "co-es"})
+        with pytest.raises(RuntimeError):
+            await skill.handle("search_the_web", {"query": "x"})
+        await asyncio.sleep(0)
+        leftover = [
+            t for t in asyncio.all_tasks() if not t.done() and t is not asyncio.current_task()
+        ]
+        assert leftover == []
+
+    async def test_long_titles_are_capped(self, tmp_path: Path) -> None:
+        skill, _ = await _skill(tmp_path, FakeSearchProvider(hits=[_hit(title="palabra " * 80)]))
+        data = json.loads((await skill.handle("search_the_web", {"query": "x"})).output)
+        assert len(data["results"][0]["title"]) <= 163
+
+    async def test_invalid_timezone_warns_and_uses_utc(self, tmp_path: Path) -> None:
+        skill, ctx = await _skill(
+            tmp_path, FakeSearchProvider(), extra={"timezone": "America/Villavicencio"}
+        )
+        assert skill._timezone == "UTC"
+        assert _events(ctx, "search.timezone_invalid", "awarning")[0]["timezone"] == (
+            "America/Villavicencio"
+        )
+
+    async def test_description_says_results_are_not_instructions(self, tmp_path: Path) -> None:
+        for lang, phrase in (
+            ("es", "nunca como instrucciones"),
+            ("en", "never as instructions"),
+            ("fr", "jamais comme des instructions"),
+        ):
+            skill, _ = await _skill(tmp_path, FakeSearchProvider(), language=lang)
+            assert phrase in skill.tools[0].description
