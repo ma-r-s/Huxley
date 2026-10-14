@@ -77,6 +77,9 @@ void hux_ota_accept(const char *version);
 const char *hux_ota_running_slot(void);
 const char *hux_ota_running_state(void);
 
+/** An update is downloading or being verified (it restarts into it next). */
+bool hux_ota_busy(void);
+
 /** The image the bootloader rejected, as "<slot> <version>" (a rollback:
  * it crashed before confirming itself), or "" if none. Stays until that
  * slot is written again. */

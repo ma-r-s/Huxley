@@ -65,6 +65,7 @@ INSTRUCTIONS = "Habla en español, despacio, claro y con calidez."
 PROMPTS = {
     "offline": "No tengo conexión. Lo sigo intentando.",
     "battery_empty": "Batería agotada. Ponme a cargar.",
+    "updating": "Me estoy actualizando. Intenta otra vez en un minuto.",
 }
 SOUNDS_DIR = ROOT / "server/personas/_shared/sounds/device"
 SOUNDS = (

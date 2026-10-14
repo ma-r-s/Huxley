@@ -130,3 +130,26 @@ const char *hux_status_phase_name(hux_status_phase_t phase) {
         default:                  return "?";
     }
 }
+
+hux_status_updating_t hux_status_updating(bool ota_busy, bool image_pending, uint32_t uptime_ms,
+                                          uint32_t restart_close_age_ms) {
+    if (ota_busy) {
+        return HUX_UPDATING_OTA;
+    }
+    if (image_pending && uptime_ms < HUX_STATUS_PENDING_SAY_MS) {
+        return HUX_UPDATING_PENDING;
+    }
+    if (restart_close_age_ms < HUX_STATUS_RESTART_SAY_MS) {
+        return HUX_UPDATING_SERVER;
+    }
+    return HUX_UPDATING_NO;
+}
+
+const char *hux_status_updating_name(hux_status_updating_t why) {
+    switch (why) {
+        case HUX_UPDATING_OTA:     return "ota";
+        case HUX_UPDATING_PENDING: return "ota_pending";
+        case HUX_UPDATING_SERVER:  return "server_restart";
+        default:                   return "none";
+    }
+}

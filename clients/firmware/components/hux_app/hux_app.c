@@ -556,10 +556,32 @@ static void play_offline_cue(void) {
     hux_audio_tone(330, 220);
 }
 
+/* "Me estoy actualizando. Intenta otra vez en un minuto." (F-0037), or the
+ * falling pair of tones if it can't play. */
+static void play_updating_cue(void) {
+    if (hux_prompt_play(HUX_PROMPT_UPDATING)) {
+        return;
+    }
+    hux_audio_tone(440, 120);
+    hux_audio_tone(0, 60);
+    hux_audio_tone(330, 220);
+}
+
 static void enter_ptt(void) {
-    if (s_state != ST_READY) {
-        ESP_LOGW(TAG, "app.ptt.ignored_press state=%s evicted=%d client_running=%d cue=offline",
-                 state_name(s_state), s_evicted, hux_net_is_running());
+    /* An update makes the walkie deaf for a minute: say so, rather than "no
+     * connection", which sounds broken (Mario, 2026-10-14). While its own
+     * update downloads or waits for acceptance the press doesn't reach the
+     * server either: the restart would cut the answer. */
+    hux_status_updating_t upd =
+        hux_status_updating(hux_ota_busy(), strcmp(hux_ota_running_state(), "pending") == 0,
+                            (uint32_t)(esp_timer_get_time() / 1000), hux_net_restart_close_age_ms());
+    if (s_state != ST_READY || upd != HUX_UPDATING_NO) {
+        bool updating = upd != HUX_UPDATING_NO;
+        ESP_LOGW(TAG, "app.ptt.ignored_press state=%s evicted=%d client_running=%d cue=%s",
+                 state_name(s_state), s_evicted, hux_net_is_running(),
+                 updating ? "updating" : "offline");
+        ESP_LOGI(TAG, "press.offline_prompt which=%s why=%s", updating ? "updating" : "offline",
+                 hux_status_updating_name(upd));
         /* Stop whatever is still playing (the ring can hold a whole reply
          * from before the drop), then the cue: a clear drops queued tones,
          * and tones only play once the ring is empty. */
@@ -570,7 +592,11 @@ static void enter_ptt(void) {
         /* A barge-in hold from a press before the drop would drop the cue
          * too; no server audio can come now that would need it. */
         hux_audio_spk_unhold("offline_cue");
-        play_offline_cue();
+        if (updating) {
+            play_updating_cue();
+        } else {
+            play_offline_cue();
+        }
         if (s_evicted || !hux_net_is_running()) {
             /* The user wants the walkie back: take the server again (or
              * restart a client that ended and couldn't restart itself). */

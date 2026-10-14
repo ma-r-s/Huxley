@@ -73,6 +73,10 @@ const char *hux_ota_running_slot(void) {
     return run != NULL ? run->label : "?";
 }
 
+bool hux_ota_busy(void) {
+    return atomic_load(&s_busy);
+}
+
 const char *hux_ota_running_state(void) {
     esp_ota_img_states_t st;
     if (esp_ota_get_state_partition(esp_ota_get_running_partition(), &st) != ESP_OK) {

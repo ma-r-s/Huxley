@@ -21,6 +21,8 @@ extern const uint8_t connected_start[] asm("_binary_connected_hxp_start");
 extern const uint8_t connected_end[] asm("_binary_connected_hxp_end");
 extern const uint8_t lost_start[] asm("_binary_lost_hxp_start");
 extern const uint8_t lost_end[] asm("_binary_lost_hxp_end");
+extern const uint8_t updating_start[] asm("_binary_updating_hxp_start");
+extern const uint8_t updating_end[] asm("_binary_updating_hxp_end");
 
 static const struct {
     const char *name;
@@ -33,6 +35,7 @@ static const struct {
     [HUX_PROMPT_SEARCHING] = {"searching", searching_start, searching_end},
     [HUX_PROMPT_CONNECTED] = {"connected", connected_start, connected_end},
     [HUX_PROMPT_LOST] = {"lost", lost_start, lost_end},
+    [HUX_PROMPT_UPDATING] = {"updating", updating_start, updating_end},
 };
 
 static int packets_of(hux_prompt_t id) {

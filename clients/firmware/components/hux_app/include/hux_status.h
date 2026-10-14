@@ -78,6 +78,27 @@ void hux_status_init(hux_status_t *s, bool power_on, bool connected_owed);
 hux_status_sound_t hux_status_step(hux_status_t *s, uint32_t now_ms, bool connected, bool busy,
                                    bool night, hux_status_sound_t *held);
 
+/* -- A press with no answer coming because of an update (F-0037) ------- */
+
+#define HUX_STATUS_RESTART_SAY_MS (90u * 1000u)     /* after a server restart's close */
+#define HUX_STATUS_PENDING_SAY_MS (3u * 60u * 1000u) /* after booting a new image */
+
+typedef enum {
+    HUX_UPDATING_NO = 0,
+    HUX_UPDATING_OTA,     /* an update downloading or verifying: a restart is next */
+    HUX_UPDATING_PENDING, /* a new image booted, not yet accepted */
+    HUX_UPDATING_SERVER,  /* the server closed for a restart, not back yet */
+} hux_status_updating_t;
+
+/** Why a press now should say "Me estoy actualizando" rather than "No tengo
+ * conexion" (or reach the server): the update's own download, a new image
+ * still on probation (for 3 min after boot at most: past that it is no
+ * longer "a minute"), or the server's restart close in the last 90 s
+ * (`restart_close_age_ms` UINT32_MAX: none). */
+hux_status_updating_t hux_status_updating(bool ota_busy, bool image_pending, uint32_t uptime_ms,
+                                          uint32_t restart_close_age_ms);
+const char *hux_status_updating_name(hux_status_updating_t why);
+
 const char *hux_status_name(hux_status_sound_t sound);
 const char *hux_status_phase_name(hux_status_phase_t phase);
 

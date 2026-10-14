@@ -2,6 +2,8 @@
  * Host unit tests for `hux_status` (F-0033): when the walkie says its
  * connection state with sounds.
  */
+#include <string.h>
+
 #include "test_helpers.h"
 
 #include "hux_status.h"
@@ -267,6 +269,26 @@ static void test_software_restart_is_silent(void) {
     HX_ASSERT_EQ(p[HUX_STATUS_LOST], 1, "a later drop is announced as usual");
 }
 
+/* F-0037: which presses say "Me estoy actualizando" instead of "No tengo
+ * conexion". */
+static void test_updating_reasons(void) {
+    const uint32_t NONE = UINT32_MAX;
+    HX_ASSERT_EQ(hux_status_updating(false, false, 5000, NONE), HUX_UPDATING_NO, "nothing going on");
+    HX_ASSERT_EQ(hux_status_updating(true, false, 600000, NONE), HUX_UPDATING_OTA,
+                 "its own update downloading");
+    HX_ASSERT_EQ(hux_status_updating(false, true, 20000, NONE), HUX_UPDATING_PENDING,
+                 "a new image booted, not accepted yet");
+    HX_ASSERT_EQ(hux_status_updating(false, true, 3 * 60 * S, NONE), HUX_UPDATING_NO,
+                 "past 3 min it is no longer 'a minute'");
+    HX_ASSERT_EQ(hux_status_updating(false, false, 600000, 0), HUX_UPDATING_SERVER,
+                 "the server just closed for a restart");
+    HX_ASSERT_EQ(hux_status_updating(false, false, 600000, 89 * S), HUX_UPDATING_SERVER, "for 90 s");
+    HX_ASSERT_EQ(hux_status_updating(false, false, 600000, 90 * S), HUX_UPDATING_NO,
+                 "then back to 'no connection'");
+    HX_ASSERT_TRUE(strcmp(hux_status_updating_name(HUX_UPDATING_SERVER), "server_restart") == 0,
+                   "named in the log");
+}
+
 int main(void) {
     HX_RUN(test_power_on_startup_ticks_then_connected);
     HX_RUN(test_a_blip_is_silent);
@@ -284,5 +306,6 @@ int main(void) {
     HX_RUN(test_busy_at_night);
     HX_RUN(test_restart_keeps_an_owed_connected);
     HX_RUN(test_the_schedule_end_is_flagged_once);
+    HX_RUN(test_updating_reasons);
     HX_SUMMARY();
 }

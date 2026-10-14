@@ -69,7 +69,7 @@ static int shipped_packets(const char *name) {
 /* The files the firmware embeds: each one whole, and short enough to say
  * while the walkie waits (a bad render must fail here, not on the walkie). */
 static void test_shipped_prompts_parse(void) {
-    const char *names[] = {"offline", "battery_empty"};
+    const char *names[] = {"offline", "battery_empty", "updating"};
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         int packets = shipped_packets(names[i]);
         HX_ASSERT_TRUE(packets > 10 && packets * 60 <= 6000, names[i]);

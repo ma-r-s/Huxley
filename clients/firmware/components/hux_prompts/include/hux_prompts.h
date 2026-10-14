@@ -28,6 +28,7 @@ typedef enum {
     HUX_PROMPT_SEARCHING,     /* sound: a tick while it looks for the server */
     HUX_PROMPT_CONNECTED,     /* sound: back with the server */
     HUX_PROMPT_LOST,          /* sound: the server has been gone 20 s */
+    HUX_PROMPT_UPDATING,      /* "Me estoy actualizando. Intenta otra vez en un minuto." */
     HUX_PROMPT_COUNT,
 } hux_prompt_t;
 

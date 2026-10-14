@@ -103,6 +103,11 @@ void hux_net_server_keep(const char *uri, uint32_t revert_s);
 /** Forget the saved address and go back to the compiled one. */
 void hux_net_server_reset(void);
 
+/** How long ago the server closed the WebSocket for a restart (1012, or 1001
+ * with no reason, a deploy's shutdown), or UINT32_MAX if not since the last
+ * hello (F-0037: a press then says the walkie is updating). */
+uint32_t hux_net_restart_close_age_ms(void);
+
 /** The app's hello arrived: a pending `server_keep` is saved; a fallback
  * stops alternating. */
 void hux_net_hello_ok(void);

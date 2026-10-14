@@ -91,6 +91,11 @@ static _Atomic bool s_ws_alive = false;
 /* The last CLOSE frame the server sent (WS task): an eviction ("Replaced
  * by new client", 1001) is told apart from a restart or a ping timeout. */
 static bool s_close_was_eviction = false;
+/* When the server last closed for a restart (1012, or 1001 with no reason:
+ * the websockets library's close on shutdown; an eviction carries a
+ * reason): until the next hello a press says the walkie is updating
+ * (F-0037). 0: none since the last hello. */
+static _Atomic uint32_t s_restart_close_ms = 0;
 static char s_server_uri[128] = {0};
 /* Where a switch reverts to: the last address a hello proved (the saved
  * one, else the compiled one). */
@@ -1279,8 +1284,13 @@ static void note_close_frame(const esp_websocket_event_data_t *data) {
         memcpy(reason, data->data_ptr + 2, (size_t)n);
     }
     s_close_was_eviction = code == 1001 && strstr(reason, "Replaced") != NULL;
-    ESP_LOGW(TAG, "ws.rx.close code=%d reason=\"%s\" eviction=%d", code, reason,
-             s_close_was_eviction);
+    bool restart = code == 1012 || (code == 1001 && reason[0] == '\0');
+    if (restart) {
+        uint32_t now = now_ms();
+        atomic_store(&s_restart_close_ms, now == 0 ? 1 : now);
+    }
+    ESP_LOGW(TAG, "ws.rx.close code=%d reason=\"%s\" eviction=%d restart=%d", code, reason,
+             s_close_was_eviction, restart);
 }
 
 static void forward_ws_text(const esp_websocket_event_data_t *data) {
@@ -1769,7 +1779,13 @@ void hux_net_server_reset(void) {
     link_unlock();
 }
 
+uint32_t hux_net_restart_close_age_ms(void) {
+    uint32_t at = atomic_load(&s_restart_close_ms);
+    return at == 0 ? UINT32_MAX : now_ms() - at;
+}
+
 void hux_net_hello_ok(void) {
+    atomic_store(&s_restart_close_ms, 0); /* back: no longer "updating" */
     if (s_ws == NULL) {
         return;
     }

@@ -476,6 +476,19 @@ ticks log only the first and every tenth (`n=` counts them; the tick's own
 Console `status poweron` starts the sounds over as after a power on (the
 bench can't cycle the power; `battery park <mv> 1` tests a real boot as one).
 
+### A press during an update (F-0037)
+
+A press the walkie can't answer because of an update says so: "Me estoy
+actualizando. Intenta otra vez en un minuto." (`prompt updating`, 5 s, the
+persona's voice at -20 LUFS) instead of "No tengo conexión", which sounds
+broken. When: its own update downloading or verifying (the press doesn't
+reach the server: the restart would cut the answer), a new image booted
+and not yet accepted (for 3 min after boot at most), or the server's
+restart close in the last 90 s until the next hello (`1012`, or `1001`
+with no reason; `ws.rx.close code= reason= eviction= restart=`). Logs:
+`press.offline_prompt which=updating|offline why=ota|ota_pending|
+server_restart|none` next to `app.ptt.ignored_press ... cue=updating|offline`.
+
 ### Lights under the clear back (F-0034)
 
 The board's 7 WS2812B (GPIO38, RMT with DMA, one buffer for a whole frame so
@@ -712,7 +725,7 @@ takes commands typed on the USB port: `talk` / `release`, `say <n>` (a
 whole turn: clip n from flash replaces the mic; `tools/clips.py`),
 `selftest` (a tone on the DAC read back electrically on the ES7210's
 echo-reference channel), `tone`, `prompt <name>` (a sentence or sound stored on
-the walkie, `offline`, `battery_empty`, `startup`, `searching`,
+the walkie, `offline`, `battery_empty`, `updating`, `startup`, `searching`,
 `connected` or `lost`; `prompt.play name= ms= queued=`), `status poweron`
 (the connection sounds as after a power on, F-0033), `led bright <pct>` /
 `led demo rainbow|voice` / `led walk` (the lights, F-0034), `opus yield on|off` / `opus flood <s>` (the decoder's
