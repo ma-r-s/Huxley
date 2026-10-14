@@ -6190,3 +6190,14 @@ Behaviour on the walkie (sent to the firmware session; standard practice, Mario 
 **Dropped after checking**: the "an update reboots with chimes" edge doesn't exist: any software restart, an accepted update's included, plays no startup or connected sound and no rainbow (F-0033: only a real power on or a charge after the park; every flash on 2026-10-14 logged `power_on=0`, silent). I had assumed it without reading the firmware. And a separate alert for an update that never comes back: a failed update rolls back by itself and the walkie comes back on the old version, and one that strands it offline already raises the offline alert; nothing left for a new alert to catch.
 
 **DoD**: a second network added over `admin.sh` (on a spare board, or on his walkie in a bench window while he isn't using it), joined, and the walkie back on its old network when the second one's password is wrong; a network staged with `later` while the walkie stays on its current one; no password in the server log, bench.jsonl, firmware log, command lines or shell history (server half proven by test_pi_admin_script.py).
+
+## T1.53: His first session at the home (2026-10-14 14:30-14:38Z)
+
+**Status**: `queued` (2026-10-14; Mario: "check but don't change anything" while he uses it) · **Effort**: S-M
+
+**Validated** (production log, read only): Wi-Fi "Rafael" ch 12 at -46 dBm, 0 underruns, 0 disconnects, battery 98%; no warning or error lines. Worked: greeting, music, Caracol Radio, volume up (50 to 70), a Telegram call to Mario (connected in 7 s), the book categories, "Cien años de soledad" playing. Rough spots:
+1. **Moby Dick offered as "quedó a medias"**: my overnight hearing-bench run played it at 06:36Z, after the 06:21Z handover cleanup, leaving a progress row in his history. Every book list ends with "También quedó a medias Moby Dick". Fix: drop that row (backup first) when he isn't using it. Lesson: a cleanup is the last step; no bench run on his persona after it.
+2. **Names misheard**: "Quiero escuchar a Néstor" became `play_music query="Anet Solnet"` (played Ana Solarte); "el reporte Caracol" (most likely) became `play_music query="Reporta Coronel" kind=artist` (played Juan Carlos Coronel). The model guesses names from audio before the transcript lands. Search itself works again (the 08:13 block lifted).
+3. **Caracol took two asks**: the first turn paused, called `list_stations`, said "Vas a oír el reporte en Caracol Radio" and stopped without `play_station`.
+4. **Off-shelf book**: "Mi alma se la dejo al diablo" (Germán Castro Caycedo) isn't on the shelf; `play_book` offered "Mi vida y mi cárcel con Pablo Escobar" instead. "¿Qué libro me recomienda?" got the category list, not a recommendation.
+5. **"Suelto"**: he says "suelto" as he lets go of the lever (radio habit); the model asked what he meant to let go of.
