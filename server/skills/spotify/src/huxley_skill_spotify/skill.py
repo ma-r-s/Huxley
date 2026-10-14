@@ -722,11 +722,17 @@ class SpotifySkill:
                     chapter=str(args.get("chapter") or ""),
                 )
             case "find_books":
-                return await self._find_books(
+                found = await self._find_books(
                     str(args.get("query") or ""),
                     like=str(args.get("like") or ""),
                     more=bool(args.get("more")),
                     listened=bool(args.get("listened")),
+                )
+                # Choosing a book: what was playing stays paused at its place
+                # instead of coming back over the offer (2026-10-14: after
+                # each list the last book resumed, "¿Cuál pongo?" included).
+                return ToolResult(
+                    output=found.output, side_effect=found.side_effect or CancelMedia()
                 )
             case "book_opinion":
                 return await self._book_opinion(

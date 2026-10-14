@@ -241,6 +241,14 @@ search:
   book, books like it; with a new subject, a fresh offer for it;
 - `listened`: the books started here.
 
+Asking for books ends whatever was playing (`CancelMedia`): it stays
+paused at its place instead of coming back over the offer (2026-10-14:
+after each list the last book resumed, "¿Cuál pongo?" included); "sigue
+con el libro" continues it. A book in general ("pon un libro", "ponme
+algo para escuchar") is choosing, not continuing: the tool text sends it
+to `find_books` with no arguments, which names the kinds of book and the
+one in progress.
+
 The skill writes the offer itself in `then` ("De misterio tengo tres.
 Uno, X, de Y: <pitch>. ... ¿Cuál pongo, o busco otros?") and returns
 `books[{n, title, by, about}]` so "el segundo" or "el dos" plays the

@@ -1370,6 +1370,31 @@ class TestTheShelf:
         (invalid,) = _events(skill, "spotify.shelf_invalid")
         assert invalid["kept"] == 11
 
+    async def test_asking_for_books_keeps_what_played_paused(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        """2026-10-14: after every list of books the last book came back,
+        "¿Cuál pongo?" included. Choosing a book ends the held stream; the
+        book keeps its place for "sigue con el libro"."""
+        from huxley_sdk import CancelMedia
+
+        skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server)
+        for args in ({}, {"query": "misterio"}, {"more": True}, {"query": "dragones"}):
+            result = await skill.handle("find_books", args)
+            assert isinstance(result.side_effect, CancelMedia), args
+
+    async def test_any_book_is_choosing_not_continuing(self) -> None:
+        """ "Ponme un libro" resumed the last book instead of offering one."""
+        from huxley_skill_spotify import tooltext
+
+        for lang, words in (
+            ("es", "ponme un libro"),
+            ("en", "put on a book"),
+            ("fr", "mets un livre"),
+        ):
+            text = tooltext.TEXT[lang]["play_book"]
+            assert words in text and "`find_books`" in text, lang
+
     # --- the review round (T1.45) ---
 
     async def test_a_title_with_a_theme_word_is_searched_not_redirected(

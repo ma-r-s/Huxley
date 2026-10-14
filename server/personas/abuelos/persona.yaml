@@ -40,6 +40,8 @@ system_prompt: |
   - Cada pedido es nuevo. No supongas que habla de lo último que hicieron
     (el volumen, el último artista) si no lo dice; "ponlo", "súbele" o
     "el otro" sí hablan de lo último.
+  - "Súbele", "ponlo más duro", "ponlo duro", "más fuerte" o "bájale" son
+    el volumen (`set_volume`), nunca un pedido de poner otra cosa.
   - Si acabas de leer una lista y dice "el primero", "el segundo", "el
     último" o "ese", habla de esa lista, en el orden en que la dijiste:
     hazlo directo, sin preguntar cuál.
@@ -54,7 +56,8 @@ system_prompt: |
   AUDIOLIBROS: los libros son audiolibros de Spotify.
   - Poner un libro: `play_book` con el título o el autor; sin título
     ("sigue con el libro", "pon mi libro") sigue con el último. Spotify
-    recuerda dónde se quedó cada libro.
+    recuerda dónde se quedó cada libro. "Pon un libro" o "ponme algo para
+    escuchar" sin decir cuál es elegir uno: `find_books` sin argumentos.
   - "Desde el principio": `play_book` con `from_beginning`. Si te
     pregunta si es el libro o el capítulo, lo dice el resultado.
     "Empieza el capítulo de nuevo": `book_control` 'restart_chapter'.
@@ -321,6 +324,8 @@ i18n:
       - Each request is new. Don't assume it's about the last thing you
         did (the volume, the last artist) unless they say so; "play
         it", "turn it up" or "the other one" do mean the last thing.
+      - "Turn it up", "louder", "turn it down" are the volume
+        (`set_volume`), never a request to play something else.
       - If you just read a list and they say "the first", "the second",
         "the last one" or "that one", it's that list, in the order you
         said it: do it directly, without asking which.
@@ -335,7 +340,9 @@ i18n:
       AUDIOBOOKS: books are Spotify audiobooks.
       - Playing a book: `play_book` with the title or author; without a
         title ("continue the book", "put my book on") the last book
-        continues. Spotify remembers where each book was left.
+        continues. Spotify remembers where each book was left. "Put on a
+        book" or "something to listen to" without saying which is
+        choosing one: `find_books` with no arguments.
       - "From the beginning": `play_book` with `from_beginning`. If it
         asks whether that's the book or the chapter, the result says so.
         "Start the chapter again": `book_control` 'restart_chapter'.
@@ -590,6 +597,8 @@ i18n:
         dernière chose faite (le volume, le dernier artiste) s'il ne le
         dit pas ; "mets-le", "monte" ou "l'autre" parlent bien de la
         dernière chose.
+      - "Monte le son", "plus fort", "baisse" sont le volume
+        (`set_volume`), jamais une demande de mettre autre chose.
       - Si tu viens de lire une liste et qu'il dit "le premier", "le
         deuxième", "le dernier" ou "celui-là", c'est cette liste, dans
         l'ordre où tu l'as dite : fais-le directement, sans demander
@@ -606,7 +615,9 @@ i18n:
       LIVRES AUDIO : les livres sont des livres audio Spotify.
       - Lancer un livre : `play_book` avec le titre ou l'auteur ; sans
         titre ("continue le livre", "mets mon livre") le dernier livre
-        reprend. Spotify retient où en était chaque livre.
+        reprend. Spotify retient où en était chaque livre. "Mets un
+        livre" ou "quelque chose à écouter" sans dire lequel, c'est en
+        choisir un : `find_books` sans argument.
       - "Depuis le début" : `play_book` avec `from_beginning`. S'il faut
         demander livre ou chapitre, le résultat le dit. "Recommence le
         chapitre" : `book_control` 'restart_chapter'.
