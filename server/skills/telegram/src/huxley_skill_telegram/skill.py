@@ -814,7 +814,7 @@ class TelegramSkill:
         for name, phone in self._contacts.items():
             try:
                 if limited is None:
-                    uid = await self._transport.resolve_contact(phone)
+                    uid = await self._transport.resolve_contact(phone, name=name)
                 else:
                     # Rate limited: only what the cache already knows (no
                     # request), so a known caller is still recognised.
@@ -904,7 +904,7 @@ class TelegramSkill:
         self._active_contact_name = name
         try:
             await self._transport.connect()
-            user_id = await self._transport.resolve_contact(phone)
+            user_id = await self._transport.resolve_contact(phone, name=name)
             await self._transport.place_call(user_id)
         except TransportError as exc:
             self._active_contact_name = None
@@ -952,7 +952,7 @@ class TelegramSkill:
 
         try:
             await self._transport.connect()
-            user_id = await self._transport.resolve_contact(phone)
+            user_id = await self._transport.resolve_contact(phone, name=name)
             await self._transport.send_text(user_id, text)
         except TransportError as exc:
             await self._logger.aexception("telegram.send_failed", name=name)
@@ -1009,7 +1009,7 @@ class TelegramSkill:
         resolve_warning = False
         if self._inbound_enabled and self._transport is not None:
             try:
-                uid = await self._transport.resolve_contact(phone)
+                uid = await self._transport.resolve_contact(phone, name=name)
                 self._user_id_to_name[uid] = name
             except Exception:
                 resolve_warning = True

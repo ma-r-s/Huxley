@@ -77,7 +77,7 @@ class StubTransport:
     async def resolve_cached(self, identifier: str) -> int | None:
         return self.resolve_map.get(identifier)
 
-    async def resolve_contact(self, identifier: str) -> int:
+    async def resolve_contact(self, identifier: str, name: str | None = None) -> int:
         if identifier in self.raise_on_resolve_for:
             from huxley_skill_telegram.transport import TransportError
 
@@ -915,7 +915,7 @@ class TestInbound:
         tried: list[str] = []
 
         class LimitedStubTransport(StubTransport):
-            async def resolve_contact(self, identifier: str) -> int:
+            async def resolve_contact(self, identifier: str, name: str | None = None) -> int:
                 tried.append(identifier)
                 raise TransportRateLimitedError("wait", 2696)
 
@@ -936,7 +936,7 @@ class TestInbound:
         fail_count = 0
 
         class FailingStubTransport(StubTransport):
-            async def resolve_contact(self, identifier: str) -> int:
+            async def resolve_contact(self, identifier: str, name: str | None = None) -> int:
                 nonlocal fail_count
                 if identifier == "+573000000073":
                     fail_count += 1

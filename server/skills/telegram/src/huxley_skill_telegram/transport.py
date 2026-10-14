@@ -527,30 +527,73 @@ class TelegramTransport:
         user_id = getattr(peer, "user_id", None)
         return int(user_id) if user_id is not None else None
 
-    async def resolve_contact(self, identifier: str) -> int:
+    async def resolve_contact(self, identifier: str, name: str | None = None) -> int:
         """Return the Telegram `user_id` for a phone number OR @handle.
 
-        Precondition: the target must exist in the userbot's dialog
-        history (sent at least one message) or contacts list. Cold
-        lookups by phone fail with `PEER_ID_INVALID` on Telegram's
-        side -- see spike docs.
+        A phone number comes from pyrogram's peer cache when it knows it;
+        otherwise it is imported into the account's Telegram contacts
+        (`contacts.importContacts`, saved under `name`), the way the
+        Telegram app adds a contact. `get_users` would use
+        `contacts.ResolvePhone`, which Telegram rate-limits hard: a few
+        restarts on 2026-10-14 got FLOOD_WAIT 2696 s and grandpa couldn't
+        call a contact whose exact number the walkie had. An import saves
+        the person as his contact, so later starts find them in the cache.
+        People who hide their number from strangers aren't returned either
+        way; they appear once they write to him.
         """
         if self._app is None:
             msg = "resolve_contact() before connect()"
             raise TransportError(msg)
         from pyrogram.errors import FloodWait, RPCError  # type: ignore[attr-defined]
 
+        phone = re.sub(r"[+()\s-]", "", identifier)
+        if phone.isdigit():
+            cached = await self.resolve_cached(identifier)
+            if cached is not None:
+                return cached
+            return await self._import_contact(phone, name or phone)
         try:
             users = await self._app.get_users(identifier)  # type: ignore[attr-defined]
         except FloodWait as exc:
             wait_s = int(getattr(exc, "value", 0) or 0)
-            msg = f"Telegram asked to wait {wait_s} s before looking up numbers"
+            msg = f"Telegram asked to wait {wait_s} s before looking up {identifier!r}"
             raise TransportRateLimitedError(msg, wait_s) from exc
         except RPCError as exc:
             msg = f"Telegram couldn't resolve {identifier!r}: {exc}"
             raise TransportError(msg) from exc
         user = users[0] if isinstance(users, list) else users
         return int(user.id)
+
+    async def _import_contact(self, phone: str, name: str) -> int:
+        """Save `phone` in the account's Telegram contacts; its user_id."""
+        from pyrogram.errors import FloodWait, RPCError  # type: ignore[attr-defined]
+        from pyrogram.types import InputPhoneContact
+
+        if self._app is None:
+            msg = "resolve_contact() before connect()"
+            raise TransportError(msg)
+
+        first = " ".join(w.capitalize() for w in name.split()) or phone
+        try:
+            result = await self._app.import_contacts(  # type: ignore[attr-defined]
+                [InputPhoneContact(phone, first)]
+            )
+        except FloodWait as exc:
+            wait_s = int(getattr(exc, "value", 0) or 0)
+            msg = f"Telegram asked to wait {wait_s} s before adding contacts"
+            raise TransportRateLimitedError(msg, wait_s) from exc
+        except RPCError as exc:
+            msg = f"Telegram couldn't add +{phone}: {exc}"
+            raise TransportError(msg) from exc
+        users = list(getattr(result, "users", None) or [])
+        if not users:
+            await logger.ainfo("telegram.transport.contact_not_found", name=first)
+            msg = f"+{phone} isn't on Telegram, or only lets people it has saved find it"
+            raise TransportError(msg)
+        await logger.ainfo(
+            "telegram.transport.contact_imported", name=first, user_id=int(users[0].id)
+        )
+        return int(users[0].id)
 
     async def place_call(self, user_id: int) -> None:
         """Dial the peer. Returns when the call is connected on the WebRTC layer."""

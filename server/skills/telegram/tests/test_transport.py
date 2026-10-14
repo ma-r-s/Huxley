@@ -13,7 +13,7 @@ here.
 from __future__ import annotations
 
 import struct
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -497,3 +497,70 @@ class TestLoadContacts:
 
         t._app = SimpleNamespace(get_contacts=get_contacts)  # type: ignore[attr-defined]
         await t._load_contacts()  # type: ignore[attr-defined]
+
+
+class TestResolveByImport:
+    """A number not in the cache is imported into his Telegram contacts
+    (contacts.importContacts), never looked up with contacts.ResolvePhone:
+    on 2026-10-14 ResolvePhone was blocked for 45 min and grandpa couldn't
+    call a contact the walkie had the exact number for."""
+
+    def _transport(self, tmp_path: Path, *, cached: dict[str, int], imported: list[int]) -> Any:
+        from types import SimpleNamespace
+
+        t = TelegramTransport(api_id=12345678, api_hash="abcdef0123456789", session_dir=tmp_path)
+        calls: list[tuple[str, str]] = []
+
+        async def get_peer_by_phone_number(phone: str) -> SimpleNamespace:
+            if phone not in cached:
+                raise KeyError(phone)
+            return SimpleNamespace(user_id=cached[phone])
+
+        async def import_contacts(contacts: list[Any]) -> SimpleNamespace:
+            calls.extend((c.phone, c.first_name) for c in contacts)
+            return SimpleNamespace(users=[SimpleNamespace(id=i) for i in imported])
+
+        async def get_users(identifier: str) -> None:
+            raise AssertionError("ResolvePhone must not be used for a number")
+
+        t._app = SimpleNamespace(  # type: ignore[attr-defined]
+            storage=SimpleNamespace(get_peer_by_phone_number=get_peer_by_phone_number),
+            import_contacts=import_contacts,
+            get_users=get_users,
+        )
+        t.import_calls = calls  # type: ignore[attr-defined]
+        return t
+
+    @pytest.mark.asyncio
+    async def test_a_cached_number_needs_no_request(self, tmp_path: Path) -> None:
+        t = self._transport(tmp_path, cached={"573000000078": 222}, imported=[])
+        assert await t.resolve_contact("+57 300 000 0078", name="hija") == 222
+        assert t.import_calls == []
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_number_is_imported_under_its_name(self, tmp_path: Path) -> None:
+        t = self._transport(tmp_path, cached={}, imported=[777])
+        assert await t.resolve_contact("+573000000099", name="juan miguel") == 777
+        assert t.import_calls == [("+573000000099", "Juan Miguel")]
+
+    @pytest.mark.asyncio
+    async def test_not_on_telegram_says_so(self, tmp_path: Path) -> None:
+        t = self._transport(tmp_path, cached={}, imported=[])
+        with pytest.raises(TransportError, match="isn't on Telegram"):
+            await t.resolve_contact("+573000000099", name="nadie")
+
+    @pytest.mark.asyncio
+    async def test_a_flood_wait_on_import_is_a_rate_limit(self, tmp_path: Path) -> None:
+        from pyrogram.errors import FloodWait
+
+        from huxley_skill_telegram.transport import TransportRateLimitedError
+
+        t = self._transport(tmp_path, cached={}, imported=[])
+
+        async def import_contacts(contacts: list[Any]) -> object:
+            raise FloodWait(value=120)
+
+        t._app.import_contacts = import_contacts
+        with pytest.raises(TransportRateLimitedError) as caught:
+            await t.resolve_contact("+573000000099", name="x")
+        assert caught.value.wait_s == 120
