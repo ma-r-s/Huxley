@@ -13,7 +13,8 @@
     "historia y memorias",
     "poesía y teatro",
     "historias de terror",
-    "libros para reflexionar"
+    "libros para reflexionar",
+    "libros recientes"
   ],
   "books": [
     {
@@ -2046,6 +2047,251 @@
         "espiritualidad"
       ],
       "pitch": "Una gaviota que no se conforma con buscar comida dedica su vida a aprender a volar cada vez mejor.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "En agosto nos vemos",
+      "author": "Gabriel García Márquez",
+      "narrator": "Catalina Sandino Moreno, Rodrigo García Barcha, Cristobal Pera",
+      "uri": "spotify:show:29iGPvITaxdaELDDPnvhyh",
+      "language": "es",
+      "category": "libros recientes",
+      "tags": [
+        "amor",
+        "colombia"
+      ],
+      "pitch": "Cada agosto, Ana Magdalena Bach viaja a una isla del Caribe a visitar la tumba de su madre, y cada viaje la cambia.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El infinito en un junco",
+      "author": "Irene Vallejo",
+      "narrator": "Elena Silva",
+      "uri": "spotify:show:3u1llvgYZC1EokQH6ebE5x",
+      "language": "es",
+      "category": "libros recientes",
+      "tags": [
+        "antigüedad",
+        "viajes"
+      ],
+      "pitch": "La historia de los libros, desde los papiros del mundo antiguo hasta hoy, contada como una aventura.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Reina roja",
+      "author": "Juan Gómez-Jurado",
+      "narrator": "Nikki García",
+      "uri": "spotify:show:7rBgdCU1kCJDoqdZ7DW2ng",
+      "language": "es",
+      "category": "libros recientes",
+      "tags": [
+        "crimen",
+        "detectives",
+        "españa"
+      ],
+      "pitch": "Antonia Scott, una mujer brillante y solitaria, y un policía bonachón persiguen a un asesino en Madrid.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Volver la vista atrás",
+      "author": "Juan Gabriel Vásquez",
+      "narrator": "John Alex Toro",
+      "uri": "spotify:show:6xy6XmvnyrMFXm1RxBZvNo",
+      "language": "es",
+      "category": "libros recientes",
+      "tags": [
+        "biografía",
+        "familia",
+        "colombia"
+      ],
+      "pitch": "La vida del cineasta Sergio Cabrera y su familia, de la China de Mao a las guerrillas de Colombia.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La forma de las ruinas",
+      "author": "Juan Gabriel Vásquez",
+      "narrator": "Miguel Prada",
+      "uri": "spotify:show:4IdIC8k32TSNqTq0bUWjZP",
+      "language": "es",
+      "category": "libros recientes",
+      "tags": [
+        "política",
+        "colombia"
+      ],
+      "pitch": "Un escritor investiga las teorías sobre los asesinatos de Jorge Eliécer Gaitán y Rafael Uribe Uribe.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Los pacientes del doctor García",
+      "author": "Almudena Grandes",
+      "narrator": "Germán Gijón",
+      "uri": "spotify:show:06DkwO2mjlBSYgT4mlProg",
+      "language": "es",
+      "category": "libros recientes",
+      "tags": [
+        "guerra",
+        "españa"
+      ],
+      "pitch": "Un médico que salvó a un amigo en la guerra civil española termina metido en una red de espías.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Sira",
+      "author": "María Dueñas",
+      "narrator": "Neus Sendra",
+      "uri": "spotify:show:66Bbz71qe35L5HgGJ2jZIb",
+      "language": "es",
+      "category": "libros recientes",
+      "tags": [
+        "amor",
+        "guerra",
+        "inglaterra"
+      ],
+      "pitch": "Sira Quiroga, la costurera de El tiempo entre costuras, vuelve a trabajar como espía después de la guerra.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El italiano",
+      "author": "Arturo Pérez-Reverte",
+      "narrator": "Victor Clavijo",
+      "uri": "spotify:show:5Glb5BtHl497B4lYApuU9l",
+      "language": "es",
+      "category": "libros recientes",
+      "tags": [
+        "amor",
+        "guerra",
+        "mar"
+      ],
+      "pitch": "En la bahía de Algeciras, en la Segunda Guerra Mundial, una librera ayuda a unos buzos italianos que atacan barcos ingleses.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El viento conoce mi nombre",
+      "author": "Isabel Allende",
+      "narrator": "Noé Velásquez, María Fernanda Flamenco, Xavi Fernández, Jane Santos, Javier Lacroix, Mario Chévez, Ana Ruth Cierra, Mario Córdova, Cynthia de Pando, Evelyn Figueroa, Sara Gómez Alonso, Luis David García Márquez, Juan Carlos Gustems, Olga Hnidey, Mireia Magallón, Heriberto Márquez, Nuria Mediavilla, Lucy Méndez, Aleix Peña Miralles, Raúl Rodríguez, Eric Rodríguez Moya, Fabiola Stevenson, Rubén Trujillo (Trujo), Alejandro Vargas-Lugo, Isabel Allende",
+      "uri": "spotify:show:0q7P0FHbPYZyMmS9WjP1pW",
+      "language": "es",
+      "category": "libros recientes",
+      "tags": [
+        "infancia",
+        "guerra",
+        "estados unidos"
+      ],
+      "pitch": "Un niño judío huye de Viena en 1938, y décadas después una niña salvadoreña cruza sola la frontera de Estados Unidos.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Más allá del invierno",
+      "author": "Isabel Allende",
+      "narrator": "Camila Valenzuela",
+      "uri": "spotify:show:5YNd5TBpDkfC1b4andmO3l",
+      "language": "es",
+      "category": "libros recientes",
+      "tags": [
+        "amor",
+        "estados unidos"
+      ],
+      "pitch": "Una tormenta de nieve en Nueva York une a tres desconocidos con un secreto que esconder.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La sociedad de la nieve",
+      "author": "Pablo Vierci",
+      "narrator": "Henri Martínez",
+      "uri": "spotify:show:4FvM2Mje7P6rLenIGEvIdt",
+      "language": "es",
+      "category": "libros recientes",
+      "tags": [
+        "naturaleza",
+        "biografía"
+      ],
+      "pitch": "Los sobrevivientes del avión que cayó en los Andes en 1972 cuentan cómo resistieron setenta y dos días.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La paciente silenciosa",
+      "author": "Alex Michaelides",
+      "narrator": "Nikki García, Javier Portugués",
+      "uri": "spotify:show:7mu2cRg0gwh89ZArVt1ENr",
+      "language": "es",
+      "category": "libros recientes",
+      "tags": [
+        "crimen",
+        "inglaterra"
+      ],
+      "pitch": "Una pintora mata a su marido y no vuelve a hablar; un psicoterapeuta se empeña en descubrir por qué.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Terra Alta",
+      "author": "Javier Cercas",
+      "narrator": "Luis García Márquez",
+      "uri": "spotify:show:6nuN1RzlbvYyECzDFSbAED",
+      "language": "es",
+      "category": "libros recientes",
+      "tags": [
+        "crimen",
+        "detectives",
+        "españa"
+      ],
+      "pitch": "Un joven policía investiga el asesinato de unos empresarios en un pueblo de Cataluña.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Lecciones de química",
+      "author": "Bonnie Garmus",
+      "narrator": "Susana Ballesteros",
+      "uri": "spotify:show:7fTEFKs1YoDfuJ7acgUOKy",
+      "language": "es",
+      "category": "libros recientes",
+      "tags": [
+        "humor",
+        "estados unidos"
+      ],
+      "pitch": "En los años sesenta, una química brillante termina presentando un programa de cocina en la televisión.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Los nombres de Feliza",
+      "author": "Juan Gabriel Vásquez",
+      "narrator": "Juan Sebastián Aragón",
+      "uri": "spotify:show:0Zx316nS2tx2FLTnptJmix",
+      "language": "es",
+      "category": "libros recientes",
+      "tags": [
+        "biografía",
+        "colombia"
+      ],
+      "pitch": "La vida de la escultora colombiana Feliza Bursztyn, de Bogotá a París.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El problema de los tres cuerpos",
+      "author": "Liu Cixin",
+      "narrator": "Francesc Belda",
+      "uri": "spotify:show:6jiacoj9nJ11WaV48aA4Y7",
+      "language": "es",
+      "category": "libros recientes",
+      "tags": [
+        "ciencia ficción"
+      ],
+      "pitch": "Un mensaje enviado al espacio durante la Revolución Cultural china recibe respuesta de otro mundo.",
       "verified": "2026-10-14",
       "chapters_checked": false
     }

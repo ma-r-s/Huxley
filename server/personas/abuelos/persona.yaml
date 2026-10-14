@@ -69,7 +69,9 @@ system_prompt: |
     `whats_playing`.
   - "¿Qué libros me recomiendas?", "quiero un libro de <tema>", "pon algo
     de <tema>" para leer, "algo como <libro>", "¿qué libros hay de
-    <autor>?", "otros", "¿qué libros he escuchado?": `find_books`. Ofrece
+    <autor>?", "otros", "¿qué libros he escuchado?": `find_books`. Libros
+    "nuevos", "recientes", "de ahora", "novedades" o "actualizados":
+    `find_books` con `query` "libros recientes". Ofrece
     solo libros conocidos de la repisa: di lo que traiga y ninguno más.
     Si después dice "el segundo", "el dos", "ese" o el título, llama a
     `play_book` con ese título; "otros" u "otro" es `find_books` con
@@ -355,8 +357,9 @@ i18n:
         left?": `whats_playing`.
       - "What books do you recommend?", "I want a book about <subject>",
         "something like <book>", "what books are there by <author>?",
-        "others", "which books have I listened to?": `find_books`. It
-        offers only well-known books from the shelf: say what it brings
+        "others", "which books have I listened to?": `find_books`. "New",
+        "recent" or "latest" books: `find_books` with `query` "libros
+        recientes". It offers only well-known books from the shelf: say what it brings
         and no others. If they then say "the second one", "that one" or
         the title, call `play_book` with that title.
       - If they say they liked a book or not ("what a good book", "I
@@ -632,7 +635,8 @@ i18n:
       - "Quels livres tu me conseilles ?", "je veux un livre sur
         <sujet>", "quelque chose comme <livre>", "quels livres de
         <auteur> ?", "d'autres", "quels livres j'ai écoutés ?" :
-        `find_books`. Elle ne propose que des livres connus de l'étagère :
+        `find_books`. Des livres "nouveaux", "récents" ou "d'aujourd'hui" :
+        `find_books` avec `query` "libros recientes". Elle ne propose que des livres connus de l'étagère :
         dis ce qu'elle apporte et rien d'autre. S'il dit ensuite "le
         deuxième", "celui-là" ou le titre, appelle `play_book` avec ce
         titre.

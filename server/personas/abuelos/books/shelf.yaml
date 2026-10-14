@@ -52,6 +52,7 @@ categories:
   - poesía y teatro
   - historias de terror
   - libros para reflexionar
+  - libros recientes
 
 books:
   - title: "Cien años de soledad"
@@ -988,3 +989,103 @@ books:
     pitch: "Viktor Frankl cuenta su paso por los campos de concentración y cómo hallar sentido incluso en el sufrimiento."
     uri: spotify:show:2jwe2Fllpy8oNHYE1pbQsk
     narrator: "Isa Puchol"
+  - title: "En agosto nos vemos"
+    author: "Gabriel García Márquez"
+    category: libros recientes
+    tags: [amor, colombia]
+    pitch: "Cada agosto, Ana Magdalena Bach viaja a una isla del Caribe a visitar la tumba de su madre, y cada viaje la cambia."
+  - title: "Patria"
+    author: "Fernando Aramburu"
+    category: libros recientes
+    tags: [familia, política, españa]
+    pitch: "Dos familias de un pueblo vasco, amigas durante años, quedan separadas por un asesinato de ETA."
+  - title: "El infinito en un junco"
+    author: "Irene Vallejo"
+    category: libros recientes
+    tags: [antigüedad, viajes]
+    pitch: "La historia de los libros, desde los papiros del mundo antiguo hasta hoy, contada como una aventura."
+  - title: "Reina roja"
+    author: "Juan Gómez-Jurado"
+    category: libros recientes
+    tags: [crimen, detectives, españa]
+    pitch: "Antonia Scott, una mujer brillante y solitaria, y un policía bonachón persiguen a un asesino en Madrid."
+  - title: "El silencio de la ciudad blanca"
+    author: "Eva García Sáenz de Urturi"
+    category: libros recientes
+    tags: [crimen, detectives, españa]
+    pitch: "Un inspector de Vitoria persigue a un asesino que repite crímenes de veinte años atrás."
+  - title: "Volver la vista atrás"
+    author: "Juan Gabriel Vásquez"
+    category: libros recientes
+    tags: [biografía, familia, colombia]
+    pitch: "La vida del cineasta Sergio Cabrera y su familia, de la China de Mao a las guerrillas de Colombia."
+  - title: "La forma de las ruinas"
+    author: "Juan Gabriel Vásquez"
+    category: libros recientes
+    tags: [política, colombia]
+    pitch: "Un escritor investiga las teorías sobre los asesinatos de Jorge Eliécer Gaitán y Rafael Uribe Uribe."
+  - title: "Los pacientes del doctor García"
+    author: "Almudena Grandes"
+    category: libros recientes
+    tags: [guerra, españa]
+    pitch: "Un médico que salvó a un amigo en la guerra civil española termina metido en una red de espías."
+  - title: "Sira"
+    author: "María Dueñas"
+    category: libros recientes
+    tags: [amor, guerra, inglaterra]
+    pitch: "Sira Quiroga, la costurera de El tiempo entre costuras, vuelve a trabajar como espía después de la guerra."
+  - title: "El italiano"
+    author: "Arturo Pérez-Reverte"
+    category: libros recientes
+    tags: [amor, guerra, mar]
+    pitch: "En la bahía de Algeciras, en la Segunda Guerra Mundial, una librera ayuda a unos buzos italianos que atacan barcos ingleses."
+  - title: "El viento conoce mi nombre"
+    author: "Isabel Allende"
+    category: libros recientes
+    tags: [infancia, guerra, estados unidos]
+    pitch: "Un niño judío huye de Viena en 1938, y décadas después una niña salvadoreña cruza sola la frontera de Estados Unidos."
+  - title: "Más allá del invierno"
+    author: "Isabel Allende"
+    category: libros recientes
+    tags: [amor, estados unidos]
+    pitch: "Una tormenta de nieve en Nueva York une a tres desconocidos con un secreto que esconder."
+  - title: "La sociedad de la nieve"
+    author: "Pablo Vierci"
+    category: libros recientes
+    tags: [naturaleza, biografía]
+    pitch: "Los sobrevivientes del avión que cayó en los Andes en 1972 cuentan cómo resistieron setenta y dos días."
+  - title: "La chica salvaje"
+    author: "Delia Owens"
+    category: libros recientes
+    tags: [naturaleza, crimen, estados unidos]
+    pitch: "Una niña crece sola en los pantanos de Carolina del Norte, hasta que la acusan de un asesinato."
+  - title: "La paciente silenciosa"
+    author: "Alex Michaelides"
+    category: libros recientes
+    tags: [crimen, inglaterra]
+    pitch: "Una pintora mata a su marido y no vuelve a hablar; un psicoterapeuta se empeña en descubrir por qué."
+  - title: "La ridícula idea de no volver a verte"
+    author: "Rosa Montero"
+    category: libros recientes
+    tags: [biografía, francia]
+    pitch: "Rosa Montero cuenta la vida de Marie Curie mientras habla de su propio duelo."
+  - title: "Terra Alta"
+    author: "Javier Cercas"
+    category: libros recientes
+    tags: [crimen, detectives, españa]
+    pitch: "Un joven policía investiga el asesinato de unos empresarios en un pueblo de Cataluña."
+  - title: "Lecciones de química"
+    author: "Bonnie Garmus"
+    category: libros recientes
+    tags: [humor, estados unidos]
+    pitch: "En los años sesenta, una química brillante termina presentando un programa de cocina en la televisión."
+  - title: "Los nombres de Feliza"
+    author: "Juan Gabriel Vásquez"
+    category: libros recientes
+    tags: [biografía, colombia]
+    pitch: "La vida de la escultora colombiana Feliza Bursztyn, de Bogotá a París."
+  - title: "El problema de los tres cuerpos"
+    author: "Liu Cixin"
+    category: libros recientes
+    tags: [ciencia ficción]
+    pitch: "Un mensaje enviado al espacio durante la Revolución Cultural china recibe respuesta de otro mundo."
