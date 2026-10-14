@@ -777,6 +777,10 @@ class TestInbound:
         assert transport.accepted_calls == [111]
         assert len(turns) == 1
         assert "mario" in turns[0].lower()
+        # A fixed line and no tool: "Llamada de mario, contestando." once
+        # made the model call mario back while the caller waited in silence.
+        assert "«Te llama" in turns[0]
+        assert "No llames a ninguna herramienta" in turns[0]
         # Audio bridge started via start_input_claim.
         assert len(claims) == 1
         assert isinstance(claims[0], InputClaim)

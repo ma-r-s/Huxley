@@ -314,7 +314,15 @@ _STRINGS: dict[str, dict[str, str]] = {
             "máximo 4096). Acórtalo o divídelo en varios mensajes."
         ),
         "accept_failed": ("Intente contestar la llamada de {display} pero falló la conexión."),
-        "answering": "Llamada de {display}, contestando.",
+        # Said once the call is already answered; the audio connects only
+        # after it has played. "Llamada de mario, contestando." made the
+        # model call mario back ("already in a call") and apologise for
+        # 17 s while the caller heard silence and hung up (2026-10-14).
+        "answering": (
+            "[Aviso del sistema, no lo dijo el usuario: {display} está llamando "
+            "y la llamada ya quedó contestada.] Di en voz alta exactamente "
+            "«Te llama {display}.» No llames a ninguna herramienta."
+        ),
         "call_no_longer_available": (
             "La llamada de {name} ya no está disponible -- la persona "
             "colgó antes de que se contestara."
@@ -367,7 +375,11 @@ _STRINGS: dict[str, dict[str, str]] = {
             "4096). Shorten it or split it into several messages."
         ),
         "accept_failed": "I tried to answer the call from {display} but the connection failed.",
-        "answering": "Call from {display}, answering.",
+        "answering": (
+            "[System notice, not said by the user: {display} is calling and "
+            'the call is already answered.] Say out loud exactly "{display} '
+            "is calling.\" Don't call any tool."
+        ),
         "call_no_longer_available": (
             "The call from {name} is no longer available -- the person "
             "hung up before it could be answered."
@@ -424,7 +436,11 @@ _STRINGS: dict[str, dict[str, str]] = {
         "accept_failed": (
             "J'ai tenté de répondre à l'appel de {display} mais la connexion a échoué."
         ),
-        "answering": "Appel de {display}, je réponds.",
+        "answering": (
+            "[Avis du système, l'utilisateur ne l'a pas dit : {display} appelle "
+            "et l'appel est déjà décroché.] Dis à voix haute exactement "
+            "« {display} t'appelle. » N'appelle aucun outil."
+        ),
         "call_no_longer_available": (
             "L'appel de {name} n'est plus disponible -- la personne a "
             "raccroché avant qu'on ne réponde."
