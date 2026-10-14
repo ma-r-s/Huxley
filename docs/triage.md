@@ -5900,7 +5900,7 @@ Five findings, all fixed with a regression test that fails without the fix:
 - `test_turn_observers.py` (+5): no key untouched; keyed stream leveled with its preroll intact (also split across chunks); learned gain saved at stop; a resume keeps the leveler and logs `resume` then `cancelled`.
 - Radio and Spotify tests assert the keys. `test_firmware_contract.py` byte-pattern payloads now quiet PCM (the old patterns were full-scale noise the wire limiter rightly changes); `test_wait_cue.py` blip peak about -9 dBFS.
 - After the review round: `test_loudness.py` 32, `test_loudness_wiring.py` 25, observers +5.
-- Suites: runtime 1256, SDK 81, radio 19, Spotify 125, audiobooks 67, news 18, telegram 127, timers 35, reminders 99, search 34, stocks 40, system 20, watch 303 (on this branch), all green.
+- Suites (rebased on main 312e4182): runtime 1256, SDK 81, radio 19, Spotify 126, audiobooks 67, news 18, telegram 127, timers 35, reminders 99, search 34, stocks 40, system 20, watch 366, all green.
 
 ### Measured result (ffmpeg `ebur128`)
 
@@ -5919,7 +5919,7 @@ Five findings, all fixed with a regression test that fails without the fix:
 
 ### Ship (Gate 5)
 
-- Commits on `t147-loudness` (hashes below once committed). Merge, deploy and the restart are Mario's call.
+- Commits on `t147-loudness`, rebased on main 312e4182: 49e80f3f (framework), 3675d0b5 (radio, Spotify), e82ec363 (abuelos, this entry), a65ff2d8 (review round), plus this note. Not merged, pushed or deployed: merge, deploy and the restart are Mario's call.
 - On the walkie after deploy: Mario will likely turn the volume down (the voice is 7 dB louder). The firmware prompts are already at -20 (5f699660), so until this deploys they are the loud ones.
 
 **Follow-ups**: measure Telegram call audio from logs (only the wire limiter touches it; level it if it proves off); measure other OpenAI voices if a persona uses one (only coral is measured); `audio.level` lines will say what Spotify actually measures.
