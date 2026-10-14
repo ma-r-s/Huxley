@@ -23,6 +23,7 @@
 #include "hux_alert_logic.h"
 #include "hux_audio.h"
 #include "hux_battery.h"
+#include "hux_led.h"
 #include "hux_log.h"
 #include "hux_link.h"
 #include "hux_net.h"
@@ -188,6 +189,7 @@ static void mic_sink(const int16_t *pcm, size_t samples) {
     if (s_audio_q == NULL || samples != AUDIO_FRAME_SAMPLES) {
         return;
     }
+    uint64_t frame_sq = 0;
     for (size_t i = 0; i < samples; i++) {
         uint32_t a = (uint32_t)(pcm[i] < 0 ? -(int32_t)pcm[i] : pcm[i]);
         if (a > s_mic_peak) {
@@ -196,9 +198,11 @@ static void mic_sink(const int16_t *pcm, size_t samples) {
         if (a >= 32767) {
             s_mic_clipped++;
         }
-        s_mic_sumsq += (uint64_t)((int32_t)pcm[i] * (int32_t)pcm[i]);
+        frame_sq += (uint64_t)((int32_t)pcm[i] * (int32_t)pcm[i]);
     }
+    s_mic_sumsq += frame_sq;
     s_mic_samples += (uint32_t)samples;
+    hux_led_mic((uint32_t)(frame_sq / samples)); /* the light follows his voice (F-0034) */
     audio_frame_t frame;
     frame.kind = UPLINK_AUDIO;
     memcpy(frame.pcm, pcm, samples * sizeof(int16_t));
@@ -955,6 +959,9 @@ static void dispatch(hux_app_event_t *ev) {
             ESP_LOGI(TAG, "app.ptt.pressed");
             s_talk_down = true;
             enter_ptt();
+            /* After the press is handled, never before it: a flag and a
+             * wake for the light's own task (F-0034). */
+            hux_led_press(true, s_ptt_held);
             /* A fresh reading rides with the press, so "how much battery"
              * is answered from now (64 ms, on the battery task). */
             hux_battery_read_now();
@@ -964,6 +971,7 @@ static void dispatch(hux_app_event_t *ev) {
             ESP_LOGI(TAG, "app.ptt.released");
             s_talk_down = false;
             leave_ptt();
+            hux_led_press(false, false);
             break;
     }
 }
@@ -1041,7 +1049,11 @@ static void status_tick(void) {
          * audio discarded, over rather than under, the safe side.) */
         freeze_after_drop();
     }
+    uint32_t played_before = hux_audio_played_ms();
     bool ok = hux_prompt_play(status_prompt(sound));
+    if (ok && sound == HUX_STATUS_STARTUP) {
+        hux_led_boot(played_before); /* the light climbs with the chime (F-0034) */
+    }
     if (!ok || sound != HUX_STATUS_SEARCHING || status_log_tick()) {
         ESP_LOG_LEVEL(ok ? ESP_LOG_INFO : ESP_LOG_WARN, TAG,
                       "sound.status kind=%s played=%d n=%u app=%s", hux_status_name(sound), ok,

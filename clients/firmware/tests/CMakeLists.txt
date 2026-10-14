@@ -98,6 +98,12 @@ set(HUX_APP_DIR ${CMAKE_SOURCE_DIR}/../components/hux_app)
 add_library(hux_status STATIC ${HUX_APP_DIR}/hux_status.c)
 target_include_directories(hux_status PUBLIC ${HUX_APP_DIR}/include)
 
+# -- hux_led_anim (library under test): the light under the clear back.
+set(HUX_LED_DIR ${CMAKE_SOURCE_DIR}/../components/hux_led)
+add_library(hux_led_anim STATIC ${HUX_LED_DIR}/hux_led_anim.c)
+target_include_directories(hux_led_anim PUBLIC ${HUX_LED_DIR}/include)
+target_link_libraries(hux_led_anim PUBLIC m)
+
 # -- hux_debounce (library under test) ------------------------------
 # Pure C, the talk button's debounce; lives inside hux_button.
 set(HUX_BUTTON_DIR ${CMAKE_SOURCE_DIR}/../components/hux_button)
@@ -181,6 +187,11 @@ target_include_directories(test_hux_status PRIVATE ${CMAKE_SOURCE_DIR}/helpers)
 target_link_libraries(test_hux_status PRIVATE hux_status)
 add_test(NAME hux_status COMMAND test_hux_status)
 
+add_executable(test_hux_led_anim test_hux_led_anim.c)
+target_include_directories(test_hux_led_anim PRIVATE ${CMAKE_SOURCE_DIR}/helpers)
+target_link_libraries(test_hux_led_anim PRIVATE hux_led_anim)
+add_test(NAME hux_led_anim COMMAND test_hux_led_anim)
+
 # Convenience target: `cmake --build build --target check` runs every test.
 add_custom_target(check
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
@@ -188,4 +199,5 @@ add_custom_target(check
             test_hux_wifi_retry test_hux_link test_hux_blackbox test_hux_super_check
             test_hux_battery_level test_hux_prompt_parse test_hux_battery_cutoff
             test_hux_wifi_list test_hux_echo test_hux_alert_logic test_hux_status
+            test_hux_led_anim
 )

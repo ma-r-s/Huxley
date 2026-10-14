@@ -18,3 +18,6 @@ dependencies:
   # Opus for the WebSocket audio (F-0024), the codec component xiaozhi-esp32
   # (the most used open-source ESP32 voice assistant) uses on the S3.
   espressif/esp_audio_codec: "~2.5.0"
+  # The board's 7 WS2812B under the clear back (F-0034), on the RMT
+  # peripheral (otherwise unused).
+  espressif/led_strip: "~3.0.1"

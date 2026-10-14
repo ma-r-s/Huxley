@@ -476,6 +476,24 @@ ticks log only the first and every tenth (`n=` counts them; the tick's own
 Console `status poweron` starts the sounds over as after a power on (the
 bench can't cycle the power; `battery park <mv> 1` tests a real boot as one).
 
+### Lights under the clear back (F-0034)
+
+The board's 7 WS2812B (GPIO38, RMT with DMA) light only for people around
+the walkie: `Orbit` (warm white) when the startup sound reaches the
+speaker (the played-audio counter moves, plus the I2S queue's 60 ms;
+started anyway after 1 s), so it follows the sound's boot rule; while the
+lever is held `Voice` (white, the light climbs with the mic level: -50
+dBFS RMS is the bottom's faint glow only, -15 dBFS lights all the way up)
+or `Glow` for a press the walkie can't act on. The frames are Mario's
+mockup ported number for number (`hux_led_anim`, host-tested against it).
+Peak `led bright <pct>` (saved, 25 % by default), a third of it 22:00-07:00.
+Logs: `led.started gpio= dma= pct=`, `led.anim kind=boot mode=orbit
+wait_ms= heard= night= pct=` (heard=0: the sound never moved, started on
+the timeout), `led.anim kind=press mode=voice|glow night= pct= demo=`,
+`led.anim.end kind=press mode= ms= v_max_pct=` (the press's loudest level:
+tune the mic mapping from it). Console `led demo orbit|glow|voice` (voice:
+3 s of a made-up sentence) shows them without a press.
+
 ### Calls: latency and the walkie's own echo (F-0031)
 
 During a call (`input_mode skill_continuous`) the mic streams while the
@@ -676,7 +694,8 @@ whole turn: clip n from flash replaces the mic; `tools/clips.py`),
 echo-reference channel), `tone`, `prompt <name>` (a sentence or sound stored on
 the walkie, `offline`, `battery_empty`, `startup`, `searching`,
 `connected` or `lost`; `prompt.play name= ms= queued=`), `status poweron`
-(the connection sounds as after a power on, F-0033),
+(the connection sounds as after a power on, F-0033), `led bright <pct>` /
+`led demo orbit|glow|voice` (the lights, F-0034),
 `vol`, `pa off|on` (silent bench),
 `wifi off|on`, `wifistat` (the Wi-Fi driver's buffer and RX/TX
 counters; they reach the server too, under the `wifi` tag), `wifiscan`

@@ -29,6 +29,7 @@
 #include "hux_health.h"
 #include "hux_super.h"
 #include "hux_ota.h"
+#include "hux_led.h"
 #include "hux_park.h"
 #include "secrets.h"
 
@@ -209,6 +210,10 @@ void app_main(void) {
         s_device_info.power_on = true;
     }
     hux_app_set_device_info(&s_device_info);
+
+    /* The light under the clear back (F-0034): before the app task, which
+     * starts it with the startup sound. */
+    hux_led_start();
 
     /* App state machine next — net and button both post events into
      * it, so the queue must exist before they start. */
