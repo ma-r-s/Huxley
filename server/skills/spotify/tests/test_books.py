@@ -203,6 +203,8 @@ class TestAskingForABook:
 
         assert _out(result)["playing"] == "Cien años de soledad"
         assert skill._search.queries == [("cien años de soledad", "audiobook")]  # type: ignore[union-attr]
+        # A book keeps its narrator's level (T1.47).
+        assert result.side_effect.loudness_key == f"spotify:book:{BOOK.uri}"  # type: ignore[union-attr]
         await _take(result.side_effect, 2)  # type: ignore[arg-type]
         assert _plays(client)[0]["uri"] == BOOK_INFO.uri
         # Spotify's place is kept: no seek, no chapter moves.
@@ -990,3 +992,26 @@ def test_track_chapters_are_said_as_chapters() -> None:
     assert lines.chapter_name("en", "track 12") == "chapter 12"
     assert lines.chapter_name("es", "Capítulo 3") == "Capítulo 3"
     assert lines.chapter_name("es", "Créditos iniciales") == "Créditos iniciales"
+
+
+async def test_the_log_says_which_chapter_of_how_many(
+    tmp_path: Path, pcm_server: PcmServer
+) -> None:
+    """huxley-watch's phone app shows a book's progress from these (T1.46)."""
+    pcm_server.hold_open.set()
+    skill, client, _, _ = await _skill(tmp_path, pcm_server)
+    stream = (await skill.handle("play_book", {"title": "cien años de soledad"})).side_effect
+    run = stream.factory()  # type: ignore[union-attr]
+    chunks = 0
+    async for _ in run:
+        chunks += 1
+        if chunks == 3:
+            break
+    client.load(2, 60_000)  # the listener reached chapter 2
+    await run.aclose()
+    await _settle()
+    logged = {c.args[0]: c.kwargs for c in skill._log().ainfo.call_args_list}  # type: ignore[attr-defined]
+    started, ended = logged["spotify.play_started"], logged["spotify.stream_ended"]
+    assert (started["book"], started["chapters"]) == ("Cien años de soledad", 4)
+    assert started["chapter"] == CHAPTERS[started["chapter_index"]].name
+    assert (ended["chapter"], ended["chapter_index"], ended["chapters"]) == ("Capítulo 2", 2, 4)

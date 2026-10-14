@@ -91,6 +91,14 @@ identifies us cleanly so server admins aren't blocking us as anonymous bot
 traffic. Some radio servers (BBC most notoriously) refuse connections from
 default ffmpeg user-agents.
 
+Stations differ by 10 dB and more (Caracol -17, Blu -23 LUFS on one
+afternoon), so each stream opts in to the framework's leveler with
+`loudness_key="radio:<station id>"`: it plays near -20 LUFS, like the
+voice, and a station starts at the gain it last settled at. The chime is
+the stream's `preroll_ms` and plays as is. See
+[`sounds.md` "Loudness"](../sounds.md#loudness); `audio.level` log lines
+give each station's measured level.
+
 ## Storage
 
 Per-skill namespaced KV (`huxley_sdk.SkillStorage`):

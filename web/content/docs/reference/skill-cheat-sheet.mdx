@@ -111,7 +111,8 @@ AudioStream(
     completion_silence_ms: int = 0,                # silence before prompt
     content_type: ContentType = ContentType.NONMIXABLE,
     label: str | None = None,                      # shown in dev UI
-    preroll_ms: int = 0,
+    preroll_ms: int = 0,                           # earcon length, played as is
+    loudness_key: str | None = None,               # opt in to leveling (-20 LUFS)
     on_patience_expired: Callable[[], Awaitable[None]] | None = None,
     patience: timedelta | None = None,
 )

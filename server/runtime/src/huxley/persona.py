@@ -69,6 +69,21 @@ class RecordingConfig(BaseModel):
     enabled: bool = False
 
 
+class AudioConfig(BaseModel):
+    """The persona's `audio:` block (T1.47, docs/sounds.md "Loudness").
+
+    `voice_gain_db`: gain on the voice model's audio, with a limiter, so
+    the voice sits at the level everything else plays at. None (default):
+    the voice provider's calibration (`huxley.voice.openai_realtime.
+    OUTPUT_GAIN_DB`); set it when the persona's voice was measured to need
+    something else. 0 turns the stage off.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    voice_gain_db: float | None = Field(default=None, ge=-12.0, le=18.0)
+
+
 class PersonaSpec(BaseModel):
     """Parsed `persona.yaml`.
 
@@ -107,6 +122,9 @@ class PersonaSpec(BaseModel):
 
     # Opt-in audio recording (docs/personas/README.md "Recording").
     recording: RecordingConfig = Field(default_factory=RecordingConfig)
+
+    # Loudness of the voice (docs/personas/README.md "Audio").
+    audio: AudioConfig = Field(default_factory=AudioConfig)
 
     # A WAV (PCM16 mono 24 kHz, the wire format), path relative to the
     # persona directory (`load_persona` makes it absolute), played when

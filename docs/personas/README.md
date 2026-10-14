@@ -38,6 +38,7 @@ Run Huxley with `HUXLEY_PERSONA=my_assistant` (the directory name under `./perso
 | `skills`                 | yes      | Map of skill name → config dict. Skills named here are discovered via `huxley.skills` entry points; missing names fail fast at startup.                   |
 | `recording`              | no       | `{enabled: true}` records this persona's conversations (off by default). See [Recording](#recording).                                                      |
 | `unavailable_sound`      | no       | Path (relative to the persona directory) of a WAV said when the voice provider can't answer the user: out of credit, over a spend limit, or down for a minute. Without it, a double beep. See [Unavailable sound](#unavailable-sound). |
+| `audio`                  | no       | `{voice_gain_db: <dB>}`: gain on the voice model's audio so the voice plays at the level everything else does. Default: the provider's calibration (+7 for OpenAI Realtime). See [Audio](#audio).                     |
 
 ## Multilingual personas
 
@@ -139,7 +140,24 @@ What the user hears when the voice provider won't serve. Without it the device h
 - **After a press with no session**, once the outage is real: the session has been down for 60 s, or the provider refused the account (its connect failed with a no-credit or spend-limit code, or a turn was refused, and no answer has completed since). The press itself still gets the short double beep while the button is held; the clip plays at the release, since a walkie answers after release. A shorter gap (the planned session refresh, a network blip) gets only the beep.
 - **For a question the provider refused** (no credit, a spend limit), in place of the silence: the turn ends and the clip plays. A proactive turn (a reminder, a timer) refused this way says nothing (nobody asked, and it may be 3 a.m.); it goes back to the queue and is said once the provider answers again.
 
-The file must already be in the wire format, PCM16 mono 24 kHz WAV: nothing resamples it. It is read once when the persona starts; a missing or wrong-format file is logged (`app.unavailable_sound_invalid`) and the double beep plays instead, so the key can ship before the file. One clip, whatever the session language. Say it in the persona's voice and words, and say what the user can do (wait, or tell someone).
+The file must already be in the wire format, PCM16 mono 24 kHz WAV: nothing resamples it. It is read once when the persona starts; a missing or wrong-format file is logged (`app.unavailable_sound_invalid`) and the double beep plays instead, so the key can ship before the file. One clip, whatever the session language. Say it in the persona's voice and words, and say what the user can do (wait, or tell someone). It plays as is, so it must already sit at the voice's level, -20 LUFS ([Loudness](../sounds.md#loudness)): `scripts/render_persona_clip.py` levels what it renders, and `--level` re-levels a clip already committed.
+
+## Audio
+
+```yaml
+audio:
+  voice_gain_db: 7
+```
+
+Everything the client plays sits at one loudness, -20 LUFS, with chimes 3 dB under ([sounds.md "Loudness"](../sounds.md#loudness), T1.47). The voice model talks quieter than that (OpenAI Realtime about -27), so its audio gets a fixed gain, with a limiter so no peak goes over. `voice_gain_db` sets that gain:
+
+- **Unset** (the default): the voice provider's calibration, `huxley.voice.openai_realtime.OUTPUT_GAIN_DB`, +7 dB. It was measured on one voice (coral); a persona with another voice gets it too, which is the best guess until that voice is measured.
+- **A number** (-12 to 18): that gain instead. Set it when the persona's voice was measured to need something else: record a few answers (`recording`), measure the `model` files (`ffmpeg -i <file> -af ebur128 -f null -`), and set -20 minus the median.
+- **0**: no gain and no limiter; the model's audio goes out as it came.
+
+It applies to the model's audio only: earcons, clips, streams and calls have their own levels. `coord.audio_done` says how much of each answer the limiter cut ([Loudness events](../observability.md#loudness-events)); most of an answer cut means the gain is too high.
+
+`voice_gain_db` is the only key; anything else fails the load.
 
 ## Where personas live
 

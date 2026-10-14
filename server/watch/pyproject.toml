@@ -26,6 +26,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
+# The whole directory ships, src/huxley_watch/static/ too (the phone app's
+# HTML, manifest, worker and icons, read with importlib.resources).
 packages = ["src/huxley_watch"]
 
 [tool.pytest.ini_options]

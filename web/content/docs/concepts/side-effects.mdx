@@ -82,9 +82,12 @@ class AudioStream(SideEffect):
     content_type: ContentType = ContentType.NONMIXABLE
     label: str | None = None
     preroll_ms: int = 0
+    loudness_key: str | None = None
     on_patience_expired: Callable[[], Awaitable[None]] | None = None
     patience: timedelta | None = None
 ```
+
+Set `loudness_key` for content whose level you don't control (a radio station, a music service): the framework then keeps the stream near the common program level, -20 LUFS, with a slow gain and a peak limiter that add no latency. Streams sharing a key share what was learned, so use one key per source whose level differs (`"radio:<station>"`, `"spotify:music"`). The first `preroll_ms` of audio the stream yields (its start earcon) is played as is, so ship it at the cue level; the shared earcon palette already is.
 
 The crucial field is `factory` — a callable that **returns** an async iterator of PCM chunks. The skill doesn't invoke the factory; the framework does, at the terminal barrier (after the model finishes speaking).
 

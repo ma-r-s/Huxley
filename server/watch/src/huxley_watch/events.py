@@ -9,7 +9,9 @@ only, so a line being written is picked up next time instead of being
 skipped as malformed. A complete line that isn't JSON is skipped and
 counted, never fatal.
 
-Only the events the rules and the page use are kept, and the board's
+Only the events the rules, the page and the phone app use are kept (of
+the transcripts, only his: Huxley's answers are most of a day's text and
+the archive reads them from the day's file), and the board's
 own log lines (`client.huxley.firmware_log`, most of the volume) only for
 the last 13 hours and only their text (the gaps chart shows 12 hours, the
 audio rule looks at 3). That keeps a 40-day window to tens of MB (the Pi
@@ -34,6 +36,26 @@ FIRMWARE_LOG = "client.huxley.firmware_log"
 # (dev.py link's method), its health line (rssi) and boots.
 FIRMWARE_PREFIXES = ("spk.alive", "spk.underrun", "info ", "ws.rx.stats", "boot ", "battery.")
 FIRMWARE_KEEP = timedelta(hours=13)  # the gaps chart's 12 h (>= the rule's window)
+
+# A tool that couldn't do what he asked (talks.py's "tool error"): a skill
+# that raised (the coordinator's envelope), or a skill's own "couldn't".
+TOOL_FAILURES = {
+    "coord.tool_error": "failed",
+    "spotify.unavailable": "unavailable",
+    "spotify.book_not_found": "book not found",
+    "spotify.search_failed": "search failed",
+    "spotify.start_failed": "didn't start",
+    "spotify.start_refused": "refused",
+    "telegram.contact_not_found": "contact not found",
+    "telegram.send_contact_not_found": "contact not found",
+    "telegram.place_call_failed": "call failed",
+    "telegram.send_failed": "message failed",
+    "radio.unknown_station": "unknown station",
+    "radio.stream_error": "radio failed",
+    "audiobooks.stream_error": "book failed",
+    "news.fetch_failed": "news failed",
+    "search.error": "search failed",
+}
 
 KEEP_EVENTS = frozenset(
     {
@@ -91,6 +113,16 @@ KEEP_EVENTS = frozenset(
         # Telegram
         "telegram.credentials_missing",
         "telegram.transport.connected",
+        # the phone app (app.py, talks.py): what he said (his transcripts
+        # only, see LogReader), the tools that answered him and the ones
+        # that failed, and what the music and books were
+        "transcript",
+        "session.tx.commit",  # a press's audio sent: its words will come
+        "session.rx.tool_call",
+        *TOOL_FAILURES,
+        "spotify.track",
+        "spotify.book_requested",
+        "spotify.book_nav",
     }
 )
 # Fields never needed and sometimes large.
@@ -198,9 +230,21 @@ def to_event(obj: dict[str, Any], raw: str, keep: frozenset[str] = KEEP_EVENTS) 
     return Event(ts=ts, name=name, f=fields, key=hash(raw.strip()))
 
 
+def _huxley_said(event: Event) -> bool:
+    """Huxley's own transcripts: the archive reads them from the day's
+    file (daylog.py); the 40 days kept here need only his words, which are
+    short, and Huxley's answers are most of a day's text."""
+    return event.name == "transcript" and event.get("role") != "user"
+
+
 def make_events(lines: Iterable[str], keep: frozenset[str] = KEEP_EVENTS) -> list[Event]:
-    """Test and tooling helper: parse lines, keep the relevant ones, in order."""
-    out = [e for e in (parse_line(line, keep) for line in lines) if e is not None]
+    """Test and tooling helper: parse lines, keep the relevant ones, in order
+    (as the LogReader does with the default `keep`)."""
+    out = [
+        e
+        for e in (parse_line(line, keep) for line in lines)
+        if e is not None and not (keep is KEEP_EVENTS and _huxley_said(e))
+    ]
     out.sort(key=lambda e: e.ts)
     return out
 
@@ -297,7 +341,7 @@ class LogReader:
                     if obj.get("event") == FIRMWARE_LOG:
                         self._hear(obj)
                     event = to_event(obj, raw)
-                    if event is None:
+                    if event is None or _huxley_said(event):
                         continue
                     if event.ts < cutoff or (event.name == FIRMWARE_LOG and event.ts < fw_cutoff):
                         continue

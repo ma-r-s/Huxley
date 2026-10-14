@@ -34,7 +34,7 @@ Huxley/                              # repo root
 │   │   ├── system/                  #   huxley-skill-system (volume, time)
 │   │   ├── telegram/                #   huxley-skill-telegram (MTProto comms)
 │   │   └── timers/                  #   huxley-skill-timers (one-shot relative reminders)
-│   ├── watch/                       # huxley-watch: the caregiver's page + alerts (T1.42), its own process; reads logs + DB, never writes
+│   ├── watch/                       # huxley-watch: the caregiver's page + alerts (T1.42) + phone app /app/ (T1.46), its own process; reads logs + DB, never writes
 │   └── personas/                    # Persona configs + assets the runtime loads
 │       ├── _shared/                 #   Framework-shared assets (palette of all personas)
 │       │   └── sounds/              #     Earcons rendered by scripts/synth_sounds.py — book_start, book_end, news_start, radio_start, search_start

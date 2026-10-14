@@ -54,6 +54,83 @@ The synthesis pipeline in [`scripts/synth_sounds.py`](../scripts/synth_sounds.py
 
 ---
 
+## Loudness
+
+Everything the client plays sits at one level (T1.47), so the listener sets the volume once. Before this, the voice played at -27 LUFS and the chimes at -15 to -20: turned up for the voice, every chime jumped out.
+
+### The standard
+
+| What                                        | Target                              | Measured as                    | Set by                                                                                                  |
+| ------------------------------------------- | ----------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| The voice (model audio)                     | -20 LUFS                            | integrated                     | a fixed gain and a limiter, live (below)                                                                |
+| Content streams (radio, Spotify)            | -20 LUFS                            | integrated, kept by a leveler  | `StreamLeveler`, live, for streams with `AudioStream.loudness_key`                                     |
+| Spoken clips (`unavailable.wav`)            | -20 LUFS                            | integrated                     | [`scripts/render_persona_clip.py`](../scripts/render_persona_clip.py)                                   |
+| Earcons and tones                           | -19 LUFS momentary max (-23 integrated) | the loudest 400 ms         | [`scripts/synth_sounds.py`](../scripts/synth_sounds.py), `reconnect.no_signal_tone_pcm`                 |
+| The waiting blip (T1.41)                    | -26 LUFS momentary max              | the loudest 400 ms             | `turn/wait_cue.py` `BLIP_TARGET_LUFS`                                                                   |
+| The walkie's own prompts (firmware)         | -20 LUFS                            | integrated                     | `clients/firmware/tools/render_prompts.py` (firmware F-0027: -19.9 and -20.1 after Opus)               |
+| Peaks                                       | at most -1.5 dBFS true peak, decoded on the walkie | sample peak on the wire | `PeakLimiter`: -3.0 dBFS on the wire and the voice, -3.5 for streams                         |
+
+All of it is measured with ITU-R BS.1770 (K-weighting, 400 ms blocks, -70 LUFS absolute and -10 LU relative gates) by [`huxley.loudness`](../server/runtime/src/huxley/loudness.py), the one implementation the runtime, the scripts and the tests share. It reads within 0.2 LU of ffmpeg's `ebur128` on every test signal and every shipped sound.
+
+**Why cues are measured by their loudest moment.** A chime is heard at its strike. Its integrated value depends on how long its reverb tail is (a longer tail reads quieter, so normalizing it would make the strike louder), and a clip shorter than 400 ms has none. The loudest 400 ms has neither problem. At -19 it lands this palette at -22.4 to -23.8 LUFS integrated: 3 dB under the voice by the measure the problem was stated in. A clip under 400 ms is measured as if padded with silence to 400 ms.
+
+**Why the waiting blip is quieter.** It repeats every 1.5 s while the user waits, under everything else. -26 keeps the place T1.41 tuned it to (about 11 dB under the voice's loudest moments) now that the voice is 7 dB louder.
+
+**Why the wire ceiling is -3 dBFS, not -1.5.** The walkie gets Opus at 32 kbit/s, which adds peak of its own. Measured through the server's own encoder and decoder: speech limited at -3.0 decodes to at most -2.6 dBTP (limited at -2.0, to -1.65); dense radio and music gain up to 1.8 dB even unlimited (Caracol at -5.8 dBTP decodes to -4.6), so streams are limited at -3.5 and decode to at most -1.7.
+
+### The gain stages, and why each lives where it does
+
+1. **The voice: a fixed gain and a limiter**, in `TurnCoordinator.on_audio_delta`, on model audio only (not a `PlaySound`, not a stream, not the waiting cue). The model's level is steady (-24.8 to -28.4 LUFS over 14 answers, median -27.1), so a fixed gain calibrates it; nothing about the voice needs a leveler. The gain is the voice provider's calibration (`huxley.voice.openai_realtime.OUTPUT_GAIN_DB`, +7 dB, measured on coral with gpt-realtime-2.1-mini) unless the persona sets `audio.voice_gain_db` (0 turns the stage off). With +7, the same 14 answers measure -20.0 LUFS together; the limiter touches a few milliseconds per answer (5 dB at most, on the loudest). The limiter resets when a response's audio ends and at a response's first audio, so one answer's cut never carries into the next (a completion turn keeps the speaker flag through the hand-over, so the end is the reliable point). The recorder taps Opus packets as they're written to the socket, so its `model` files are what the walkie got: post-gain.
+2. **Content streams: a `StreamLeveler`**, in `ContentStreamObserver`, for streams whose skill sets `AudioStream.loudness_key`. In the framework, because every stream skill would otherwise re-implement the same thing (what a resume keeps, what a new stream re-learns, the log). Opt-in per stream, because only the skill knows whether its content's level is under its control (an audiobook file mastered by the skill author is; a radio station isn't). Before the duck envelope, so a duck is never measured, nor made up for. The first `preroll_ms` the stream ever yields (its start earcon, already at the cue level) passes as is.
+3. **The wire: one `PeakLimiter`** in `AudioServer.send_audio`, the ceiling for everything sent, whatever its source: a call's audio, a persona's own sound, a third-party skill's. Sources level themselves; this only catches what goes over (its cuts show as `limited_ms` on `server.tx.audio_stats`). An `audio_clear` and a new connection reset it, so a cut in progress never fades in the next sound.
+
+### The limiter
+
+`PeakLimiter` adds no latency: the chunk in hand is its own lookahead. Per 1 ms block it computes the gain that keeps the block's peak at the ceiling; the envelope at each block boundary is the lower of that block's and the next one's, so the linear ramp across a block never lets a sample over. After a cut it holds 15 ms, then releases over 150 ms (a release with no hold ripples at the voice's pitch period, heard as distortion). The one thing a chunk can't see is a peak in its own first millisecond while the previous chunk ended unlimited: that block ramps down rather than stepping (a step clicks), and the few samples it lets over are clamped. Nothing over the ceiling ever leaves it. With nothing over, it returns the chunk untouched (or just the gain applied).
+
+### The stream leveler
+
+Causal, no added latency, about 1.5 % of one Orange Pi core per stream (pure Python: the production box has no numpy).
+
+| Step                | Value                                                                                                   | Why                                                                                       |
+| ------------------- | ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Measure             | K-weighted energy per 100 ms; a 400 ms window                                                           | BS.1770's momentary loudness                                                              |
+| Silence gate        | a window under -45 LUFS changes nothing                                                                 | pauses, dropouts and Spotify's silent seeks never pump the gain up                        |
+| Relative gate       | a window 10 LU under the recent level (every window over the silence gate, averaged over 10 s) changes nothing | a quiet passage isn't ridden up; a lasting drop gets through in 5 to 15 s and is followed |
+| Program estimate    | seeded by the first window, a running mean for 30 s, then an exponential average (time constant 30 s) | long, so a song's quiet verse moves it about 2 dB at most, not 5 (critic, 10 s rejected)  |
+| Gain                | target minus estimate, within -20 and +6 dB                                                             | +6 is plenty (Blu, the quietest station, needs +3.3) and caps any pumping                 |
+| Speed               | at most 6 dB/s down, 2 dB/s up, ramped across each chunk                                                | a loud start comes down fast; nothing comes up fast                                       |
+| Start               | the gain the key last settled at; a key never heard starts at -6 dB                                     | most sources are louder than -20 (radio -14 to -23, music masters -8 to -14): a new one starts near the target or under it, and the loudest is down within a second or two |
+| Memory              | learned gains in the persona's settings (`audio.level_gain_db:<key>`), saved as each stream stops; only a gain that followed a measurement | a restart doesn't make every source start wrong |
+| Last                | the `PeakLimiter`, at -3.5 dBFS                                                                         | a boosted stream never clips                                                              |
+
+A press holds the stream (the pump stops; `factory()` runs again on resume): the leveler belongs to the stream, so the resume carries on with what it measured. A new stream for the same key re-learns its estimate but starts at the learned gain. Every pump start and stop, and every 30 s of audio, logs `audio.level` (see [`observability.md`](./observability.md#loudness-events)): over time that is the real level of each station and of Spotify.
+
+Keys used: radio `radio:<station id>`; Spotify `spotify:book:<uri>` for a book (a narrator's level holds across sessions), `spotify:music` for everything else. ffmpeg's `loudnorm` was rejected: in its dynamic mode it adds about 3 s of latency.
+
+### Before and after (ffmpeg `ebur128`, 2026-10-13)
+
+| Sound                 | Before: LUFS     | Before: true peak | After: LUFS                  | After: true peak |
+| --------------------- | ---------------- | ----------------- | ---------------------------- | ---------------- |
+| Voice (14 answers)    | -26.9 (-24.8 to -28.4) | -4.7        | -20.0                        | -2.6 (-2.4 decoded) |
+| `unavailable.wav`     | -23.0            | -5.9              | -20.2                        | -3.0             |
+| `book_end`            | -20.5            | -3.0              | -23.6 (M max -19.0)          | -6.1             |
+| `news_start`          | -19.1            | -2.3              | -22.7 (M max -19.0)          | -5.8             |
+| `search_start`        | -17.7            | +0.3 (clipped)    | -22.5 (M max -19.0)          | -4.4             |
+| `book_start`          | -16.8            | -3.0              | -23.8 (M max -19.0)          | -10.0            |
+| `radio_start`         | -15.2            | -2.1              | -22.6 (M max -19.0)          | -9.6             |
+| `persona_swap`        | -15.2            | -2.0              | -22.4 (M max -19.0)          | -9.1             |
+| no-signal tone        | M max -20.9      | -14.7             | M max -19.0                  | -12.9            |
+| waiting blip          | M max -32.9      | -16.0             | M max -26.0                  | -9.1             |
+| Radio: Blu            | -23.3            | -11.2             | -20.4 (last 15 s -19.9)      | -8.1             |
+| Radio: Caracol        | -17.4            | -5.8              | -20.1 (last 15 s -19.7)      | -8.2             |
+| Radio: La W           | -18.1            | -5.9              | -20.7 (last 15 s -20.7)      | -8.0             |
+| Radio: Javeriana      | -15.2            | -1.2              | -19.2 (last 15 s -18.6)      | -4.6             |
+
+Radio rows: 25 s of each station fetched on the production box, leveled offline in 100 ms chunks as the radio skill reads them, starting as a key never heard (-6 dB). A second play of the same key starts at the learned gain and measures -19.9, -20.0, -20.6 and -19.1. Javeriana got louder through the sample; the leveler follows it at its slow pace by design.
+
+---
+
 ## The shared earcon palette
 
 All earcons live at **`server/personas/_shared/sounds/`** as `<role>.wav` (PCM16 / 24 kHz / mono). The palette is shared across personas; any persona may override individual sounds by pointing its skill's `sounds_path` at a private directory and dropping its own `<role>.wav` files there.
@@ -70,7 +147,7 @@ Every WAV in the palette is **synthesized from scratch** by [`scripts/synth_soun
 | `radio_start`  | radio      | C6 → G6 → C7 ascending FM + Risset accent on C7 apex    | ~1.6 s   | 0.30       |
 | `search_start` | search     | E7 single FM pluck + Risset shimmer, drier "quick ping" | ~0.8 s   | 0.20       |
 
-All sounds normalize to a peak of **−3 dBFS** deterministically (no Limiter — pedalboard's Limiter has a hard clipper at 0 dBFS, so the chain ends with a manual peak normalize instead). Mean volumes land around −20 to −24 dBFS depending on duration and density.
+All sounds normalize to the cue level, **-19 LUFS momentary max** (about -23 LUFS integrated, 3 dB under the voice; see [Loudness](#loudness)), under a -1.5 dBFS true-peak ceiling, deterministically (no Limiter: pedalboard's Limiter has a hard clipper at 0 dBFS, so the chain ends with a manual loudness normalize instead). Until T1.47 they were peak-normalized to -3 dBFS, which left them -15 to -20 LUFS: louder than the voice by up to 12 dB.
 
 **Vocal-band note**: `book_end`, `news_start`, and `search_start` play immediately before LLM speech, so their named fundamentals sit above 1.5 kHz to clear the 200 Hz – 4 kHz vocal band. The Risset bell's canonical 0.56× partial sits below the named fundamental (e.g. 0.56 × G6 = 878 Hz), so absolute spectral energy in the vocal band isn't zero — but the chime's reverb tail decays well below threshold by the time the audiobooks skill's 500 ms trailing silence + the model's first-token latency elapse, so masking is mitigated in practice.
 
@@ -92,7 +169,7 @@ Pure Python. Three primitives layered through one shared post-processing chain.
 
 ### Post-processing chain
 
-`HighpassFilter(80 Hz)` → `Reverb(room_size, damping, wet/dry)` → `Compressor(−18 dB, 2.5:1)` → manual peak-normalize to −3 dBFS.
+`HighpassFilter(80 Hz)` → `Reverb(room_size, damping, wet/dry)` → `Compressor(−18 dB, 2.5:1)` → normalize to -19 LUFS momentary max, measured with `huxley.loudness` on the PCM16 that gets written (if a peak would then pass -1.5 dBTP or the wire limiter's -3 dBFS, the sound is scaled down to fit and the script says so).
 
 Notes on level: pedalboard's `Limiter` is documented as "two compressors and a hard clipper at 0 dB" — its `threshold_db` controls where compression starts, not where the ceiling sits. Using it as a brick-wall produces clipping artifacts. The pipeline drops the limiter and normalizes deterministically after the chain instead.
 
@@ -391,7 +468,7 @@ These are client changes only. They do not affect the server or the WebSocket pr
 ### Stage A — Synthesized earcon palette ✅
 
 - [x] [`scripts/synth_sounds.py`](../scripts/synth_sounds.py) renders the full palette from layered Risset additive bells + Chowning FM bells through a hall reverb chain.
-- [x] 5 earcons produced (book_start, book_end, news_start, radio_start, search_start) at PCM16 / 24 kHz / mono, peak −3 dBFS.
+- [x] 5 earcons produced (book_start, book_end, news_start, radio_start, search_start) at PCM16 / 24 kHz / mono, peak −3 dBFS (since T1.47: -19 LUFS momentary max, see [Loudness](#loudness)).
 - [x] Palette lives at `server/personas/_shared/sounds/`; Abuelo picks them up via `sounds_path: ../../_shared/sounds`.
 - [x] Synthesis is deterministic and original — no third-party audio, no licensing concerns. The script is committed alongside the WAVs so any sound is reproducible from source.
 - [x] Optional `synth` dependency group in `server/runtime/pyproject.toml` (`numpy`, `scipy`, `pedalboard`) — the runtime never imports them; the rendered WAVs are committed and shipped as-is.
@@ -448,9 +525,9 @@ afplay server/personas/_shared/sounds/book_start.wav
 ffprobe -v error -show_streams server/personas/_shared/sounds/book_start.wav 2>&1 | \
   grep -E "codec_name|sample_rate|channels|bits_per_sample"
 
-# Measure peak / mean volume — every chime normalizes to -3 dBFS peak.
-ffmpeg -hide_banner -i server/personas/_shared/sounds/book_start.wav \
-  -af volumedetect -f null - 2>&1 | grep -E "max_volume|mean_volume"
+# Measure loudness: every chime sits at -19 LUFS momentary max (M), true peak under -1.5.
+ffmpeg -hide_banner -nostats -i server/personas/_shared/sounds/book_start.wav \
+  -af ebur128=peak=true -f null - 2>&1 | tail -12
 ```
 
 ---

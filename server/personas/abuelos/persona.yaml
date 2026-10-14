@@ -233,6 +233,15 @@ recording:
 # the double beep (T1.43).
 unavailable_sound: sounds/unavailable.wav
 
+# Everything the walkie plays sits at one loudness (T1.47): the voice,
+# radio, Spotify and the clip above at -20 LUFS, chimes 3 dB under. The
+# voice model talks about 7 dB under that, so its audio gets this gain,
+# with a limiter. Measured on this persona's voice (coral) over 14 answers
+# as the walkie got them: -27.1 LUFS median. The same as the provider's
+# default today; pinned here because it was measured on this voice.
+audio:
+  voice_gain_db: 7
+
 constraints:
   - never_say_no
   - echo_short_input

@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 from huxley.focus.vocabulary import FocusState, MixingBehavior
+from huxley.loudness import StreamLeveler
 from huxley.turn.mic_router import MicAlreadyClaimedError
 from huxley.turn.speaking_state import SpeakingOwner
 from huxley_sdk import ClaimEndReason
@@ -29,6 +30,7 @@ from huxley_sdk import ClaimEndReason
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
 
+    from huxley.loudness import LevelMemory
     from huxley.turn.mic_router import MicClaimHandle, MicRouter
     from huxley.turn.speaking_state import SpeakingState
     from huxley_sdk import AudioStream, InputClaim
@@ -53,6 +55,13 @@ _RAMP_DURATION_S: float = 0.1
 # Clamp bounds for PCM16 scaled samples.
 _PCM16_MAX: int = 32767
 _PCM16_MIN: int = -32768
+
+# PCM16 24 kHz mono: bytes per millisecond (`AudioStream.preroll_ms`).
+_PCM_BYTES_PER_MS: int = 48
+
+# Saves of learned stream gains in flight (a reference, so they aren't
+# collected mid-write).
+_SAVES: set[asyncio.Task[None]] = set()
 
 
 class DialogObserver:
@@ -117,6 +126,14 @@ class ContentStreamObserver:
       already reached natural EOF before the NONE delivery, fire
       `on_natural_completion` (used by audiobook completion turns).
 
+    **Loudness** (T1.47): a stream with `loudness_key` gets a
+    `StreamLeveler`, applied before the duck envelope (so a duck is never
+    measured, nor made up for). The first `preroll_ms` of audio the
+    stream ever yields (its start earcon, already at the cue level) passes
+    as is. The leveler lives as long as the observer, so a resume carries
+    on with what it measured; `audio.level` lines log it at each pump's
+    start and stop and every 30 s of audio.
+
     The pump calls `on_eof` when it finishes naturally — the
     coordinator wires this to `focus_manager.release(channel,
     interface_name)` so a NONE delivery follows and the observer can
@@ -151,9 +168,16 @@ class ContentStreamObserver:
         on_natural_completion: Callable[[], Awaitable[None]] | None = None,
         on_resume: Callable[[], Awaitable[None]] | None = None,
         on_pause: Callable[[bool], Awaitable[None]] | None = None,
+        level_memory: LevelMemory | None = None,
     ) -> None:
         self._interface_name = interface_name
         self._stream = stream
+        self._level_memory = level_memory
+        self._leveler: StreamLeveler | None = None
+        self._preroll_left = 0
+        if stream.loudness_key and level_memory is not None:
+            self._leveler = StreamLeveler(stream.loudness_key, level_memory)
+            self._preroll_left = stream.preroll_ms * _PCM_BYTES_PER_MS
         self._send_audio = send_audio
         self._on_eof = on_eof
         self._on_natural_completion = on_natural_completion
@@ -437,11 +461,33 @@ class ContentStreamObserver:
         return True
 
     async def _pump(self) -> None:
+        leveler = self._leveler
+        stop = "cancelled"
+        if leveler is not None:
+            await logger.ainfo(
+                "audio.level",
+                interface=self._interface_name,
+                label=self._stream.label,
+                reason="resume" if leveler.audio_s else "start",
+                learned=leveler.learned,
+                **leveler.stats(),
+            )
         try:
             async for chunk in self._stream.factory():
+                if leveler is not None:
+                    chunk = self._level(leveler, chunk)
+                    if leveler.report_due():
+                        await logger.ainfo(
+                            "audio.level",
+                            interface=self._interface_name,
+                            label=self._stream.label,
+                            reason="periodic",
+                            **leveler.stats(),
+                        )
                 # Apply the gain envelope before forwarding. When no ramp
                 # is active and gain is 1.0, this is a no-op (fast path).
                 await self._send_audio(self._apply_gain(chunk))
+            stop = "eof"
             self._natural_eof = True
             self._finished = True
             if self._on_eof is not None:
@@ -449,11 +495,45 @@ class ContentStreamObserver:
         except asyncio.CancelledError:
             raise
         except Exception:
+            stop = "error"
             self._finished = True
             await logger.aexception(
                 "content_stream_pump_failed",
                 interface=self._interface_name,
             )
+        finally:
+            if leveler is not None:
+                self._level_stopped(leveler, stop)
+
+    def _level(self, leveler: StreamLeveler, chunk: bytes) -> bytes:
+        """Level `chunk`, past the stream's pre-roll."""
+        if self._preroll_left <= 0:
+            return leveler.process(chunk)
+        head = chunk[: self._preroll_left]
+        self._preroll_left -= len(head)
+        rest = chunk[len(head) :]
+        return head + leveler.process(rest) if rest else head
+
+    def _level_stopped(self, leveler: StreamLeveler, stop: str) -> None:
+        """Log where the leveler got to and save the key's gain. Runs in
+        the pump's cancel path (a press waits on it): log synchronously,
+        save in the background."""
+        logger.info(
+            "audio.level",
+            interface=self._interface_name,
+            label=self._stream.label,
+            reason=stop,
+            **leveler.stats(),
+        )
+        if self._level_memory is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # the loop is closing under a destroyed task: nothing to save with
+        task = loop.create_task(self._level_memory.save(leveler.key))
+        _SAVES.add(task)
+        task.add_done_callback(_SAVES.discard)
 
     def _is_pumping(self) -> bool:
         return self._task is not None and not self._task.done()

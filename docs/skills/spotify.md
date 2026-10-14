@@ -214,6 +214,13 @@ Spotify app ─┐                        ┌─ WebSocket (control, events) ─
   (Ducking would interleave music and speech; see T1.29.)
 - **Volume** stays with the client: every play pins Soloist at 100, so a
   Spotify app on a phone can't silently turn the device down.
+- **Loudness:** Soloist has no normalization option, and masters vary
+  by track and are loud, so streams opt in to the framework's leveler
+  (`loudness_key`: `spotify:book:<uri>` for a book, so a narrator's
+  level holds from one session to the next; `spotify:music` for the
+  rest). It plays near -20 LUFS, like the voice
+  ([`sounds.md` "Loudness"](../sounds.md#loudness)); `audio.level` log
+  lines say what Spotify actually measured.
 
 ## Failures (every one is spoken)
 
@@ -288,9 +295,12 @@ In short:
 context), `spotify.track`, `spotify.play_requested` (query, the kind asked and
 the kind matched, match, uri, `alternatives`), `spotify.play_last`
 (context and `restart` for a request with no query),
-`spotify.play_started` (`latency_ms`, context), `spotify.start_failed`,
+`spotify.play_started` (`latency_ms`, context; for a book `book`,
+`chapter`, `chapter_index` from 0 and `chapters`), `spotify.start_failed`,
 `spotify.stream_ended` (`reason`: cancelled, finished, takeover,
-paused_elsewhere, capture_closed, start_failed, player_offline),
+paused_elsewhere, capture_closed, start_failed, player_offline; for a book
+`audio_ms` and the chapter it ended on, as at the start),
+`spotify.book_nav` (the book and the chapter reached, as at the start),
 `spotify.capture_closed` (`chunks`), `spotify.soloist_error`,
 `spotify.search_failed`, `spotify.capture_failed`, `spotify.unavailable`,
 `spotify.control`, `spotify.previous`.

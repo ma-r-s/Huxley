@@ -1,22 +1,26 @@
 """A tiny read-only HTTP server for the page: `/`, `/status.json`, the
 archive's days (`/day/YYYY-MM-DD.json`) and its recordings
-(`/audio/<path under the recordings dir>`), nothing else. The standard
-library's threading server is enough for one reader on the tailnet; the
-page and status are the bytes the last cycle built, a day is built from
-that day's logs when asked (dayview.py), and a recording is streamed from
-disk (audio.py)."""
+(`/audio/<path under the recordings dir>`), and the phone app (T1.46):
+`/app.json` and `/app/` with its manifest, icons and service worker,
+nothing else. The standard library's threading server is enough for one
+reader on the tailnet; the page, status and app data are the bytes the
+last cycle built, a day is built from that day's logs when asked
+(dayview.py), and a recording is streamed from disk (audio.py)."""
 
 from __future__ import annotations
 
 import contextlib
+import functools
 import gzip
 import re
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib import resources
 from typing import TYPE_CHECKING, BinaryIO
 
 from huxley_watch import audio
+from huxley_watch.icons import sprite
 
 if TYPE_CHECKING:
     from io import BufferedIOBase
@@ -24,6 +28,30 @@ if TYPE_CHECKING:
     from huxley_watch.cycle import Watcher
 
 _DAY = re.compile(r"^/day/(\d{4}-\d{2}-\d{2})\.json$")
+# The phone app's files (static/, package data): path -> (file, type, cache).
+# Its HTML, manifest and worker are checked on every open (an update reaches
+# a home-screen app at once); the icons change only with a new install.
+_HTML = "text/html; charset=utf-8"
+APP_FILES = {
+    "/app/": ("app.html", _HTML, "no-cache"),
+    "/app/index.html": ("app.html", _HTML, "no-cache"),
+    "/app/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json", "no-cache"),
+    "/app/sw.js": ("sw.js", "text/javascript; charset=utf-8", "no-cache"),
+    "/app/icon-180.png": ("icon-180.png", "image/png", "max-age=604800"),
+    "/app/icon-192.png": ("icon-192.png", "image/png", "max-age=604800"),
+    "/app/icon-512.png": ("icon-512.png", "image/png", "max-age=604800"),
+}
+SPRITE_MARK = b"<!--SPRITE-->"
+
+
+@functools.cache
+def app_file(name: str) -> bytes:
+    """A file of the phone app, read once; the HTML gets the icon sprite
+    (the same symbols as the page, icons.py)."""
+    body = (resources.files("huxley_watch") / "static" / name).read_bytes()
+    if name == "app.html":
+        body = body.replace(SPRITE_MARK, sprite().encode("utf-8"))
+    return body
 
 
 def make_server(watcher: Watcher, host: str, port: int) -> ThreadingHTTPServer:
@@ -50,9 +78,25 @@ def make_server(watcher: Watcher, host: str, port: int) -> ThreadingHTTPServer:
         def _not_found(self) -> None:
             self._send(b"Not found", "text/plain; charset=utf-8", 404)
 
+        def _redirect(self, to: str) -> None:
+            self._headers("text/plain; charset=utf-8", 0, 301)
+            self.send_header("Location", to)
+            self.end_headers()
+
         def do_GET(self) -> None:
             path = self.path.split("?", 1)[0]
-            if path in ("/", "/index.html"):
+            if path == "/app.json":
+                self._send(watcher.current_app(), "application/json; charset=utf-8")
+            elif path == "/app":
+                self._redirect("/app/")
+            elif path in APP_FILES:
+                name, content_type, cache = APP_FILES[path]
+                shell = app_file(name)
+                self._headers(content_type, len(shell), cache=cache)
+                self.end_headers()
+                if self.command != "HEAD":
+                    self.wfile.write(shell)
+            elif path in ("/", "/index.html"):
                 page, _ = watcher.current()
                 self._send(page or b"Starting...", "text/html; charset=utf-8")
             elif path == "/status.json":

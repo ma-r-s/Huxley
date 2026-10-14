@@ -5,8 +5,10 @@ so they must exist before they're needed, recorded once in the persona's
 voice. Same recipe as the walkie's own prompts
 (clients/firmware/tools/render_prompts.py): OpenAI's speech model with the
 persona's `voice`, silence trimmed, then transcribed back: the clip must
-say the text, word for word, or nothing is written. Nothing is played on
-this Mac.
+say the text, word for word, or nothing is written. Leveled like the
+voice it stands in for (T1.47): -20 LUFS integrated, true peak at most
+-1.5 dBFS, sample peak under the wire limiter's ceiling (it is spoken, so
+it is program audio, not a cue). Nothing is played on this Mac.
 
 Output: server/personas/<persona>/sounds/<name>.wav, PCM16 mono 24 kHz
 (the wire format, played as is).
@@ -14,6 +16,8 @@ Output: server/personas/<persona>/sounds/<name>.wav, PCM16 mono 24 kHz
 Usage (needs HUXLEY_OPENAI_API_KEY, read from server/runtime/.env):
     uv run --package huxley python scripts/render_persona_clip.py abuelos unavailable
 To change what a persona says, edit CLIPS and render again; commit the WAV.
+To re-level the committed clip without rendering it again (no API key):
+    uv run --package huxley python scripts/render_persona_clip.py abuelos unavailable --level
 """
 
 from __future__ import annotations
@@ -28,6 +32,16 @@ import wave
 
 import yaml
 from openai import OpenAI
+
+from huxley.loudness import (
+    PROGRAM_TARGET_LUFS,
+    TRUE_PEAK_CEILING_DBFS,
+    WIRE_CEILING_DBFS,
+    integrated_lufs,
+    sample_peak_dbfs,
+    scale_pcm,
+    true_peak_dbfs,
+)
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 ENV = ROOT / "server/runtime/.env"
@@ -78,6 +92,38 @@ def to_wav(pcm: bytes) -> bytes:
     return buf.getvalue()
 
 
+def level(pcm: bytes) -> bytes:
+    """Scale to -20 LUFS integrated; less if a peak would go over a
+    ceiling (then say so). Never limited: the clip is played as is."""
+    gain = PROGRAM_TARGET_LUFS - integrated_lufs(pcm)
+    headroom = min(
+        TRUE_PEAK_CEILING_DBFS - true_peak_dbfs(pcm), WIRE_CEILING_DBFS - sample_peak_dbfs(pcm)
+    )
+    if gain > headroom:
+        print(f"peaks allow {headroom:+.1f} dB of the {gain:+.1f} dB the loudness target needs")
+        gain = headroom - 0.05
+    return scale_pcm(pcm, gain)
+
+
+def report(path: pathlib.Path, pcm: bytes) -> str:
+    return (
+        f"{path.relative_to(ROOT)}: {len(pcm) // 48} ms, {integrated_lufs(pcm):.1f} LUFS,"
+        f" true peak {true_peak_dbfs(pcm):+.1f} dBFS"
+    )
+
+
+def relevel(persona: str, name: str) -> None:
+    out = ROOT / f"server/personas/{persona}/sounds/{name}.wav"
+    with wave.open(str(out)) as w:
+        if (w.getnchannels(), w.getsampwidth(), w.getframerate()) != (1, 2, SAMPLE_RATE):
+            sys.exit(f"{out}: not PCM16 mono {SAMPLE_RATE} Hz")
+        pcm = w.readframes(w.getnframes())
+    print("before:", report(out, pcm))
+    pcm = level(pcm)
+    out.write_bytes(to_wav(pcm))
+    print("after: ", report(out, pcm))
+
+
 def words(text: str) -> list[str]:
     plain = unicodedata.normalize("NFKD", text.lower())
     plain = "".join(c for c in plain if not unicodedata.combining(c))
@@ -85,9 +131,15 @@ def words(text: str) -> list[str]:
 
 
 def main() -> None:
-    if len(sys.argv) != 3:
+    args = sys.argv[1:]
+    relevel_only = "--level" in args
+    args = [a for a in args if a != "--level"]
+    if len(args) != 2:
         sys.exit(__doc__)
-    persona, name = sys.argv[1], sys.argv[2]
+    persona, name = args
+    if relevel_only:
+        relevel(persona, name)
+        return
     if name not in CLIPS.get(persona, {}):
         sys.exit(f"no clip {name!r} for {persona!r}; known: {CLIPS}")
     text, instructions = CLIPS[persona][name]
@@ -101,7 +153,7 @@ def main() -> None:
         instructions=instructions,
         response_format="pcm",  # 24 kHz PCM16 mono
     ).content
-    pcm = trim(pcm)
+    pcm = level(trim(pcm))
     wav = to_wav(pcm)
     probe = io.BytesIO(wav)
     probe.name = f"{name}.wav"
@@ -113,8 +165,7 @@ def main() -> None:
     out = ROOT / f"server/personas/{persona}/sounds/{name}.wav"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(wav)
-    peak = max(abs(s) for s in memoryview(pcm).cast("h"))
-    print(f"{out.relative_to(ROOT)}: {len(pcm) // 48} ms, peak {peak} of 32767, heard {heard!r}")
+    print(f"{report(out, pcm)}, heard {heard!r}")
 
 
 if __name__ == "__main__":
