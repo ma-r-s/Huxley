@@ -49,6 +49,19 @@ CLIPS = [
     "No, pon Voyager de Daft Punk.",  # 17: a correction is a new search, not resume
     "Canción anterior.",  # 18: mid-song: back a song, not the same one again
 ]
+# The book shelf's flow (2026-10-14, bench.py books): a set of its own, the
+# storage partition can't hold both (`clips.py books`, then the main set
+# back with `clips.py`).
+BOOK_CLIPS = [
+    "¿Qué libros tienes?",  # 0
+    "Quiero un libro de misterio.",  # 1
+    "El dos.",  # 2
+    "Otros.",  # 3
+    "Ponme un libro.",  # 4
+    "Me gustó.",  # 5
+    "Ponlo duro.",  # 6
+    "Sigue con el libro.",  # 7: after an offer
+]
 TAIL_SILENCE_MS = 200
 
 
@@ -80,10 +93,11 @@ def render(text: str, tmp: pathlib.Path) -> bytes:
 
 
 def main() -> None:
+    clips = BOOK_CLIPS if sys.argv[1:2] == ["books"] else CLIPS
     out = pathlib.Path(__file__).resolve().parent.parent / "build" / "clips.bin"
     out.parent.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory() as d:
-        pcms = [render(t, pathlib.Path(d)) for t in CLIPS]
+        pcms = [render(t, pathlib.Path(d)) for t in clips]
     header = struct.pack("<4sHH", b"HXCL", 1, len(pcms))
     offset = len(header) + 8 * len(pcms)
     table, data = b"", b""
@@ -94,7 +108,7 @@ def main() -> None:
     if len(image) > STORAGE_BYTES:
         sys.exit(f"clips.bin is {len(image)} bytes, the storage partition holds {STORAGE_BYTES}")
     out.write_bytes(image)
-    for i, (text, pcm) in enumerate(zip(CLIPS, pcms)):
+    for i, (text, pcm) in enumerate(zip(clips, pcms)):
         print(f"  say {i}: {len(pcm) / 48000:4.1f} s  {text}")
     print(f"wrote {out} ({len(image)} bytes)")
     print(

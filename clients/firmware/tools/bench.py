@@ -81,6 +81,20 @@ HEARING = [
      r"\[server\] spotify\.previous .*rewound=True"),
     (15, "Para la musica", "music_control", r"pause|stop", None),
 ]
+# The book shelf's flow (2026-10-14, the server session's shelf), spoken by
+# the books clip set (`python3 tools/clips.py books`, then `dev.py clips`;
+# the main set back afterwards): the tool each request reaches, None where
+# the shelf's design decides (the row then only reports the call).
+BOOKS = [
+    (0, "Que libros tienes?", "find_books", None, None),
+    (1, "Quiero un libro de misterio", "find_books", r"(?i)misterio|mystery", None),
+    (2, "El dos", "play_book", None, None),
+    (3, "Otros", None, None, None),
+    (4, "Ponme un libro", "find_books", r"^\{\}$|args=\{\}|query': ''", None),
+    (7, "Sigue con el libro", None, None, None),
+    (5, "Me gusto", None, None, None),
+    (6, "Ponlo duro", "set_volume", None, None),
+]
 # Server events the Wi-Fi board sees as `[server] <event> k=v ...` lines.
 SERVER_EVENTS = {
     "client_connected",
@@ -731,12 +745,14 @@ def main() -> int:
                 f"{field('args', stop_call or '') if stop_call else 'no tool'}"
                 f"{', overruled' if overruled else ''})",
             )
-        elif step == "hearing":
-            # Yesterday's failed requests, spoken by the clips: each must
-            # call the right tool with the right arguments (the server log's
-            # session.rx.tool_call). Needs Spotify up; the amp stays as is.
+        elif step in ("hearing", "books"):
+            # Yesterday's failed requests (or the book shelf's flow), spoken
+            # by the clips: each must call the right tool with the right
+            # arguments (the server log's session.rx.tool_call); a row with
+            # no tool named only reports the call. The amp stays as is.
+            table = HEARING if step == "hearing" else BOOKS
             rows, fails_here = [], 0
-            for clip, said, tool, want, avoid, *extra in HEARING:
+            for clip, said, tool, want, avoid, *extra in table:
                 m2 = b.mark()
                 b.send(f"say {clip}")
                 call = b.expect(r"\[server\] session\.rx\.tool_call ", 25, m2)
@@ -744,7 +760,7 @@ def main() -> int:
                 args_txt = (call or "").split("args=", 1)[-1].split(" level=")[0] if call else ""
                 ok = bool(
                     call
-                    and name == tool
+                    and (tool is None or name == tool)
                     and (want is None or re.search(want, args_txt))
                     and (avoid is None or not re.search(avoid, args_txt))
                 )
@@ -759,7 +775,7 @@ def main() -> int:
                 time.sleep(7)  # its reply / the stream starting
             for r in rows:
                 print("          " + r)
-            result("hearing", fails_here == 0, f"{len(HEARING) - fails_here}/{len(HEARING)} right")
+            result(step, fails_here == 0, f"{len(table) - fails_here}/{len(table)} right")
         elif step == "health":
             b.send("info")
             heap = b.expect(r"info uptime_s=", 4, m)
