@@ -19,6 +19,7 @@ import structlog
 from huxley.focus.manager import FocusManager
 from huxley.loudness import (
     CUE_TARGET_LUFS,
+    PROGRAM_TARGET_LUFS,
     TRUE_PEAK_CEILING_DBFS,
     WIRE_CEILING_DBFS,
     db_to_gain,
@@ -28,7 +29,7 @@ from huxley.loudness import (
     sample_peak_dbfs,
     true_peak_dbfs,
 )
-from huxley.persona import PersonaSpec
+from huxley.persona import PersonaSpec, load_persona
 from huxley.reconnect import no_signal_tone_pcm
 from huxley.server.server import AudioServer, _ConnInfo
 from huxley.turn.coordinator import TurnCoordinator
@@ -232,6 +233,9 @@ class TestPersonaAudioBlock:
         with pytest.raises(ValueError):
             self._spec(tmp_path, voice_gain=3)
 
+    def test_abuelos_sets_it(self) -> None:
+        assert load_persona(PERSONAS / "abuelos").audio.voice_gain_db == pytest.approx(7.0)
+
 
 def _wav(path: Path) -> bytes:
     with wave.open(str(path)) as w:
@@ -246,6 +250,12 @@ class TestShippedSoundsAreAtTheirTargets:
     def test_earcon(self, path: Path) -> None:
         pcm = _wav(path)
         assert momentary_max_lufs(pcm) == pytest.approx(CUE_TARGET_LUFS, abs=0.5)
+        assert true_peak_dbfs(pcm) <= TRUE_PEAK_CEILING_DBFS
+        assert sample_peak_dbfs(pcm) <= WIRE_CEILING_DBFS
+
+    def test_unavailable_clip(self) -> None:
+        pcm = _wav(PERSONAS / "abuelos" / "sounds" / "unavailable.wav")
+        assert integrated_lufs(pcm) == pytest.approx(PROGRAM_TARGET_LUFS, abs=0.5)
         assert true_peak_dbfs(pcm) <= TRUE_PEAK_CEILING_DBFS
         assert sample_peak_dbfs(pcm) <= WIRE_CEILING_DBFS
 

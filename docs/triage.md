@@ -5830,3 +5830,84 @@ Branch `t144-inject-waits` (worktree), on base f0897867: 7d23267e (design), 36fd
 **Ship** (Gate 5): branch `t146-phone-app`, not merged or pushed. Before relying on it: merge, restart huxley-watch on the Pi, add `http://100.75.152.70:8780/app/` to the iPhone home screen.
 
 **Lessons**: the critic's best catch was in the words pairing: correct on a clean day (304 of 304), it shifts by one after a single press whose audio never left. Order-based joins need an explicit "this item exists" event (`session.tx.commit`) and a reset on every session boundary.
+
+---
+
+## T1.47: One loudness level for everything the walkie plays
+
+**Status**: `in_progress` (2026-10-13; built on branch `t147-loudness`, not merged or deployed; waiting on Mario's ear on the walkie) · **Effort**: M (runtime audio path, SDK field, two skills, assets)
+
+**Problem** (Mario, live): the chimes jump out, and he pushes the volume to max for the voice. Every source plays at its own level.
+
+**Why it matters**: grandpa can't see a volume control and shouldn't need one between a chime, the answer and the radio. A chime 10 dB over the voice startles; a voice 7 dB under everything else is the thing he strains to hear.
+
+### Validation (Gate 1)
+
+Measured 2026-10-13 with ffmpeg `ebur128` (integrated LUFS, true peak):
+
+- AI voice, 14 answers from the recorder's `*-model.ogg` (what the walkie got): -24.8 to -28.4, median -27.1; true peak -4.7 at most, about -9 typical.
+- Walkie firmware prompts about -26; `unavailable.wav` -23.0.
+- Chimes: `book_end` -20.5, `news_start` -19.1, `search_start` -17.7 (true peak +0.3: clips), `book_start` -16.8, `radio_start` -15.2, `persona_swap` -15.2. `no_signal_tone` momentary max -20.9.
+- Radio (25 s each, fetched on the Pi): Caracol -17.4 (-13.9 on an earlier day), Blu -23.3 (-19.4), La W -18.1, Javeriana -15.2.
+- Spotify: unmeasured; Soloist has no normalization option.
+
+### Design (Gate 2)
+
+One target, -20 LUFS integrated, for program audio; cues 3 dB under; peaks at most -1.5 dBTP decoded on the walkie. One pure-Python module, `server/runtime/src/huxley/loudness.py` (no numpy on the Pi; benchmarked there: K-weighting 8.4 ms per second of audio, gain plus limiter about 7 ms), shared by the runtime, the scripts and the tests. Full write-up: `docs/sounds.md` "Loudness".
+
+- **Measures**: BS.1770 at 24 kHz (libebur128's coefficient formulas). Program audio integrated. Cues by momentary max (loudest 400 ms) at -19: a chime is heard at its strike, its integrated value depends on its tail, and a clip under 400 ms has none; -19 lands the palette at -22.4 to -23.8 integrated. Reads within 0.2 LU of ffmpeg on every test signal and shipped sound.
+- **Voice**: fixed gain plus `PeakLimiter` in `TurnCoordinator.on_audio_delta`, model audio only. Gain = persona `audio.voice_gain_db`, else the provider's calibration `openai_realtime.OUTPUT_GAIN_DB` = +7 (measured). abuelos pins 7 (measured on its voice). The recorder taps the wire, so `model` files are post-gain.
+- **Streams**: SDK `AudioStream.loudness_key`; `ContentStreamObserver` runs a `StreamLeveler` before the duck envelope. The first `preroll_ms` the stream yields (its earcon) passes as is. Leveler: K-weighted 100 ms blocks, 400 ms window; silence gate -45 LUFS; relative gate -10 LU; program estimate seeded by the first window, running mean then exponential with a 30 s time constant; gain target minus estimate within -20/+6 dB, 6 dB/s down, 2 dB/s up; start at the key's learned gain (persisted in the persona's settings, `audio.level_gain_db:<key>`), else -6 dB; limiter last at -3.5 dBFS. Radio `radio:<id>`; Spotify `spotify:book:<uri>`, `spotify:music`.
+- **Wire**: one `PeakLimiter` in `AudioServer.send_audio` at -3.0 dBFS sample peak, the ceiling for whatever reaches it (call audio, persona or third-party sounds).
+- **Limiter**: no added latency; the chunk is its own lookahead (per 1 ms block, envelope at each boundary = min of this and the next block's need, so the ramp never lets a sample over); hold 15 ms, release 150 ms; a peak in a chunk's first millisecond ramps (no step) and the few samples over are clamped.
+- **Assets**: `synth_sounds.py` normalizes by momentary max with true-peak and wire ceilings (same waveforms, correlation 1.0, only the level changed); `no_signal_tone_pcm` amplitude 6000 to 7440; the waiting blip by loudness at -26 momentary max (keeps T1.41's place under a voice now 7 dB louder); `render_persona_clip.py` levels to -20 and gains `--level` to re-level a committed clip; `unavailable.wav` re-leveled to -20.2 (peaks allowed +2.9 of +3.0).
+- **Walkie firmware prompts** (owned by the firmware session, not touched): target -20 LUFS integrated, true peak at most -1.5 dBFS decoded, like `unavailable.wav`. Today about -26: they will sound 6 dB under the voice until re-rendered.
+
+### Critic notes (Gate 2, one fresh critic, blockers only)
+
+1. *Every stream starts too loud: unknown keys at 0 dB, learned gains lost on every deploy.* Fixed: unknown keys start at -6 dB (most sources are louder than -20), the gain comes down at 6 dB/s and goes up at 2, and learned gains persist in the persona's settings.
+2. *Pumping on music: tau 10 s, a gate release after 15 s, +10 dB of boost ride verses up.* Fixed: tau 30 s (a 20 s verse 6 dB down now moves the gain about 2 dB, not 5), gate release dropped, boost capped at +6. Not taken: tau 60 s or a reset at track change (track change is a skill concept; 30 s corrects a quieter track within a minute). Soloist has no normalization to use instead (checked before T1.47).
+3. *The limiter clicks: a gain step when a peak lands in a chunk's first millisecond; 50 ms release with no hold ripples.* Fixed: that block ramps, and the few samples over are clamped (no step, no added latency; the suggested 1 ms carry would need flushing on every `audio_clear` and response end); hold 15 ms, release 150 ms.
+4. *-2 dBFS is too tight for 32 kbit/s Opus.* Measured through the server's own encoder and decoder: speech limited at -2.0 decodes to -1.65 dBTP, at -3.0 to -2.6; heavily limited radio at -3.0 decodes to -1.25, at -3.5 to -1.69 (unlimited Caracol gains 1.2 dB). Wire and voice -3.0, streams -3.5.
+5. *The ceiling is a property of the wire, yet the design had limiters only at two sources: Telegram call audio and persona sounds bypass both.* Fixed: one limiter in `AudioServer.send_audio`; gains stay at the sources (a boosted source still needs its own limiter, or PCM16 overflows before the wire sees it).
+6. *The voice gain default must not be 0, and the calibration belongs to the provider.* Agreed: `OUTPUT_GAIN_DB` lives in the provider module, used unless the persona overrides; with 0 every other persona hears streams and cues over a voice at -27, the same bug. Not taken: a table keyed by model and voice (one measurement so far).
+- Minor, not taken: a separate field instead of reusing `preroll_ms` for the leveler bypass. The field already means "pre-roll before actual content"; documented that it plays as is, so it must ship at the cue level.
+
+### Definition of Done
+
+- Program audio measures -20 ±1 LUFS: the voice with its gain, `unavailable.wav`, each radio station after the leveler settles; cues at -19 ±0.5 momentary max; nothing over -1.5 dBTP.
+- The limiter never exceeds its ceiling; the leveler converges from 10 dB off either way, holds through silence and quiet passages, caps its boost.
+- The voice gain applies to model audio only, and only when configured; a stream is leveled only with a key, and its preroll is untouched.
+- `audio.level` logs each leveled stream at start, every 30 s and at stop; `coord.audio_done` and `server.tx.audio_stats` say what the limiters cut.
+- ruff, ruff format, mypy strict, runtime, SDK, radio, Spotify (and audiobooks, news, watch) suites green.
+- Mario's ear on the walkie: one volume for the chime, the answer and the radio.
+
+### Tests (Gate 3)
+
+- `test_loudness.py` (29): BS.1770 against ffmpeg on regenerated signals (sines at 100 Hz / 997 Hz / 5 kHz, seeded white and pink noise, within 0.2 LU), gating, momentary max of a short burst, true peak of an inter-sample over; limiter never over the ceiling (noise, a 150 Hz sine, impulses in chunks' first millisecond, three chunk sizes, fixed and ramped gains), hold and release back to the fast path, odd bytes; leveler converges from 10 dB under and over, cuts a loud source, holds through silence, ignores a quiet passage, caps boost, starts where the key left off, rises slowly, reports every 30 s.
+- `test_loudness_wiring.py` (19): voice gain off is bit-exact, on gains and limits model audio and logs its cuts, never touches a `PlaySound` or a stream; wire limiter passes quiet audio byte for byte and caps loud; persona `audio` block (default None, bounds, unknown key, abuelos pinned at 7); every shipped earcon at -19 ±0.5 momentary max under both ceilings, `unavailable.wav` at -20 ±0.5, the tone and the blip at their targets.
+- `test_turn_observers.py` (+5): no key untouched; keyed stream leveled with its preroll intact (also split across chunks); learned gain saved at stop; a resume keeps the leveler and logs `resume` then `cancelled`.
+- Radio and Spotify tests assert the keys. `test_firmware_contract.py` byte-pattern payloads now quiet PCM (the old patterns were full-scale noise the wire limiter rightly changes); `test_wait_cue.py` blip peak about -9 dBFS.
+- Suites: runtime 1247, SDK 81, radio 19, Spotify 125, audiobooks 67, news 18, watch 303, all green.
+
+### Measured result (ffmpeg `ebur128`)
+
+| Sound | Before | After |
+|---|---|---|
+| Voice, 14 answers together | -26.9 LUFS, TP -4.7 | -20.0 LUFS, TP -2.6 (-2.4 decoded from Opus) |
+| `unavailable.wav` | -23.0, TP -5.9 | -20.2, TP -3.0 |
+| Chimes (6) | -15.2 to -20.5, one clipping at +0.3 | M max -19.0 each, -22.4 to -23.8 integrated, TP -4.4 to -10.0 |
+| no-signal tone / waiting blip | M max -20.9 / -32.9 | M max -19.0 / -26.0 |
+| Radio, first play (Blu, Caracol, La W, Javeriana) | -23.3, -17.4, -18.1, -15.2 | -20.4, -20.1, -20.7, -19.2 (last 15 s: -19.9, -19.7, -20.7, -18.6) |
+| Radio, replay with the learned gain | | -19.9, -20.0, -20.6, -19.1 |
+
+### Docs touched (Gate 4)
+
+`docs/sounds.md` (new "Loudness": the standard, the stages and why each lives where, limiter, leveler, before and after; palette and pipeline level notes), `docs/observability.md` (`audio.*` namespace, "Loudness events", `model` files are post-gain), `docs/personas/README.md` (`audio` field and section; clips at -20), `docs/architecture.md` (one pipe, one loudness; code map), `docs/skills/README.md`, `docs/skills/radio.md`, `docs/skills/spotify.md`, `web/content/docs/concepts/side-effects.mdx` and `reference/skill-cheat-sheet.mdx` (`loudness_key`), `server/personas/abuelos/persona.yaml` (`audio.voice_gain_db: 7`). Not touched: `protocol.md` (no wire change), `server/sdk/CHANGELOG.md` (not kept since 0.1.1).
+
+### Ship (Gate 5)
+
+- Commits on `t147-loudness` (hashes below once committed). Merge, deploy and the restart are Mario's call.
+- On the walkie after deploy: Mario will likely turn the volume down (the voice is 7 dB louder); the firmware prompts will then sound 6 dB quiet until re-rendered at -20.
+
+**Follow-ups**: re-render the walkie firmware prompts at -20 LUFS (firmware session); measure Telegram call audio from logs (only the wire limiter touches it; level it if it proves off); measure other OpenAI voices if a persona uses one (only coral is measured); `audio.level` lines will say what Spotify actually measures.
