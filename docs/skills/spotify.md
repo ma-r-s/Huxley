@@ -211,8 +211,12 @@ full runs in three hours got the app blocked on `/audiobooks` for about
 19 hours (`Retry-After: 68658`; search stayed open): fix one book with
 `--only`. Only the build retries a 429 (3 times, honouring
 `Retry-After` up to 2 minutes); the live skill never waits on one.
-During such a block, books still play, but the skill can't read their
-chapters and treats them like music (`spotify.book_info_failed`).
+During such a block, books still play and their listening still counts
+(the month's seconds, played, the last book: the stream is a book by its
+`spotify:show:` link), but chapter commands, the end-of-book line and the
+place don't work (`spotify.book_info_failed`, then
+`spotify.book_without_chapters`; `stream_ended book_info=false`). Before
+2026-10-14 such a book was treated like music and not counted.
 
 **Loading.** The skill reads `shelf.json` again whenever its mtime or size
 changes (checked at each `find_books` / `play_book`). An invalid file
@@ -397,7 +401,9 @@ the kind matched, match, uri, `alternatives`), `spotify.play_last`
 `chapter`, `chapter_index` from 0 and `chapters`), `spotify.start_failed`,
 `spotify.stream_ended` (`reason`: cancelled, finished, takeover,
 paused_elsewhere, capture_closed, start_failed, player_offline; for a book
-`audio_ms` and the chapter it ended on, as at the start),
+`audio_ms`, the chapter it ended on, as at the start, and `book_info`:
+false when Spotify gave no chapters), `spotify.book_without_chapters`
+(uri, title: a book stream counted from its link),
 `spotify.book_nav` (the book and the chapter reached, as at the start),
 `spotify.capture_closed` (`chunks`), `spotify.soloist_error`,
 `spotify.search_failed`, `spotify.capture_failed`, `spotify.unavailable`,

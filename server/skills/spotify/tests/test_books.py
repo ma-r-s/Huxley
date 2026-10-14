@@ -166,6 +166,11 @@ async def _skill(
     return skill, client, recorded, skill._memory  # type: ignore[return-value]
 
 
+def _events_named(skill: SpotifySkill, name: str) -> list[dict[str, Any]]:
+    calls = [*skill._logger.ainfo.call_args_list, *skill._logger.awarning.call_args_list]  # type: ignore[union-attr]
+    return [c.kwargs for c in calls if c.args and c.args[0] == name]
+
+
 async def _settle() -> None:
     for _ in range(5):
         await asyncio.sleep(0)
@@ -977,6 +982,26 @@ class TestWhatsPlaying:
 
 
 class TestMusicAndBooksApart:
+    async def test_a_book_is_counted_when_spotify_wont_give_its_chapters(
+        self, tmp_path: Path, pcm_server: PcmServer, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """2026-10-14: Spotify answered 429 on /audiobooks for 19 hours; the
+        skill took the book for music and the month's listening stopped
+        moving on Mario's page."""
+        monkeypatch.setattr(skill_module, "PLAYED_AFTER_MS", 100)
+        pcm_server.hold_open.set()
+        skill, _, _, memory = await _skill(tmp_path, pcm_server)
+        skill._search.books.clear()  # type: ignore[union-attr]  # every lookup fails
+        result = await skill.handle("play_book", {"title": "cien años de soledad"})
+        await _take(result.side_effect, 3)  # type: ignore[arg-type]
+        await _settle()
+        assert await memory.played(BOOK.uri)
+        assert (await memory.last_book() or {}).get("uri") == BOOK.uri
+        assert await memory.seconds_this_month() > 0
+        (ended,) = _events_named(skill, "spotify.stream_ended")
+        assert ended["book"] == "Cien años de soledad" and ended["book_info"] is False
+        assert _events_named(skill, "spotify.book_without_chapters")
+
     async def test_pon_musica_after_a_book_plays_the_last_music(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:

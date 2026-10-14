@@ -2111,6 +2111,7 @@ class SpotifySkill:
         reason = "cancelled"
         writer: asyncio.StreamWriter | None = None
         book: BookInfo | None = None
+        ident: tuple[str, str, str | None] | None = None  # (uri, title, author) of a book
         nav: asyncio.Task[bool] | None = None
         book_start = start is not None and start.kind == "audiobook"
         counted = False
@@ -2182,7 +2183,11 @@ class SpotifySkill:
             self._streams += 1
             counted = True
             book = await self._loaded_book()
-            self._last_was_book = book is not None or book_start
+            # Which book this is, from its link when Spotify won't give the
+            # chapters (a 429 on /audiobooks blocked them for 19 hours on
+            # 2026-10-13, and the month's listening stopped being counted).
+            ident = await self._book_ident(book, start, client) if book_stream else None
+            self._last_was_book = ident is not None
             if start is not None and book is None and not book_start:
                 self._spawn(self._require_memory().set_last_music(start))
             if book is not None and goto is not None:
@@ -2320,12 +2325,12 @@ class SpotifySkill:
                     anchor = (now, at, audio_ms)
                 chunks += 1
                 audio_ms += CHUNK_MS
-                if book is not None and not marked and audio_ms >= PLAYED_AFTER_MS:
+                if ident is not None and not marked and audio_ms >= PLAYED_AFTER_MS:
                     marked = True
                     self._hours_ok_at = time.monotonic()
                     memory = self._require_memory()
-                    self._spawn(memory.mark_played(book.uri, book.title, book.author))
-                    self._spawn(memory.set_last_book(book.uri, book.title, book.author))
+                    self._spawn(memory.mark_played(*ident))
+                    self._spawn(memory.set_last_book(*ident))
                 yield chunk
             # The capture closed under us (the container's sound server is
             # down, or the container restarted). Behind Docker on a Mac the
@@ -2333,7 +2338,7 @@ class SpotifySkill:
             # at all is the offline case.
             reason = "capture_closed"
             await log.awarning("spotify.capture_closed", chunks=chunks)
-            if book is not None:
+            if ident is not None:
                 self._narrate("book_cut" if chunks else "book_offline")
             else:
                 self._narrate("interrupted" if chunks else "player_offline")
@@ -2372,6 +2377,7 @@ class SpotifySkill:
                             audio_ms=audio_ms,
                         )
                     self._spawn(self._write_place(book, place))
+            if ident is not None:
                 if audio_ms:
                     self._spawn(self._require_memory().add_seconds(audio_ms / 1000))
                 if reason == "cancelled":
@@ -2381,7 +2387,8 @@ class SpotifySkill:
                 reason=reason,
                 generation=generation,
                 played_ms=int((time.monotonic() - requested) * 1000),
-                book=book.title if book else None,
+                book=book.title if book else ident[1] if ident else None,
+                book_info=book is not None if ident else None,
                 audio_ms=audio_ms,
                 chapter=book.chapters[where].name if book and where is not None else None,
                 chapter_index=where,
@@ -2389,6 +2396,30 @@ class SpotifySkill:
             )
 
     # --- Helpers ---
+
+    async def _book_ident(
+        self, book: BookInfo | None, start: Match | None, client: SoloistClient
+    ) -> tuple[str, str, str | None] | None:
+        """(uri, title, author) of the book this stream plays: from its
+        chapters when Spotify gave them, else from the request or the last
+        book, so its listening is still counted and remembered."""
+        if book is not None:
+            return book.uri, book.title, book.author
+        uri = start.uri if start is not None else client.state.context_uri or ""
+        if not _is_book(uri):
+            return None
+        if start is not None:
+            ident = (uri, start.title, start.artist)
+        else:
+            last = await self._require_memory().last_book()
+            same = last is not None and last.get("uri") == uri
+            ident = (
+                uri,
+                str(last.get("title") or "") if same and last else "",
+                last.get("author") if same and last else None,
+            )
+        await self._log().awarning("spotify.book_without_chapters", uri=uri, title=ident[1])
+        return ident
 
     def _unavailable(self) -> str | None:
         state = self._require_client().state
