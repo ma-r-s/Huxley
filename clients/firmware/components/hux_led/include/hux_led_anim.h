@@ -18,12 +18,19 @@ extern "C" {
 #endif
 
 #define HUX_LED_COUNT    7
-#define HUX_LED_ORBIT_MS 1400u /* the boot animation's length */
+#define HUX_LED_ORBIT_HOLD_MS 150u
+#define HUX_LED_ORBIT_MS      (1400u + HUX_LED_ORBIT_HOLD_MS) /* the boot animation's length */
 
-/** Startup "Orbit": two arms climb from the bottom LED to the top pair
- * (460 ms, easing out), a flash on the top, a soft rest gone by 1.35 s.
- * `t_ms` from when the startup sound reaches the speaker. False (all 0)
- * once it is over. */
+/** Startup "Orbit": the bottom LED alone for 150 ms, then two arms climb
+ * to the top pair (460 ms, easing out), a flash and a soft rest on the
+ * upper LEDs, gone by 1.5 s. `t_ms` from when the startup sound reaches
+ * the speaker. False (all 0) once it is over.
+ *
+ * Mario's mockup, adjusted on the walkie (2026-10-14): through the case
+ * the side LEDs hide behind the battery holders, the mockup's bottom blip
+ * lasted under 0.1 s and its end glow lit the bottom again after the top,
+ * so it read "up, then down". The hold and the top-weighted end make it
+ * read as meant: down, then up. */
 bool hux_led_orbit(uint32_t t_ms, float b[HUX_LED_COUNT]);
 
 /** A press's light: `level` eases toward 1 while the lever is held (110 ms)
@@ -34,8 +41,9 @@ typedef struct {
 } hux_led_press_t;
 
 /** One frame of `dt_ms`. `held`: the lever is down. `voice_mode`: the press
- * was acted on, so the light follows `mic` (0..1, hux_led_mic_level);
- * otherwise "Glow", a steady soft light. False (all 0) once the light is
+ * was acted on, so all seven follow `mic` together (0..1,
+ * hux_led_mic_level): 15 % silent, full at the loudest; otherwise "Glow",
+ * a steady soft light (0.42) on all seven. False (all 0) once the light is
  * out: released and the level under 0.003 (never while held, even on a
  * first frame with no time gone). */
 bool hux_led_press_step(hux_led_press_t *p, float dt_ms, bool held, bool voice_mode, float mic,
@@ -109,10 +117,17 @@ extern const uint8_t HUX_LED_CHAIN_OF[HUX_LED_COUNT];
 /** Pixels by position to the order the chain takes them. */
 void hux_led_chain(const uint8_t pos[HUX_LED_COUNT][3], uint8_t chain[HUX_LED_COUNT][3]);
 
+/** The positions behind the battery holders (1, 2, 5, 6), seen only as
+ * spill through the case: their light is multiplied by a gain (console
+ * `led gain`, 3.0 by default) so a climb reads as evenly as the LEDs seen
+ * directly (0, 3, 4). */
+bool hux_led_hidden(int p);
+
 /** Brightness to pixels: each channel `colour` x b x `scale` (the peak:
- * 0.25 is a quarter of full), rounded, 0..255. */
+ * 0.25 is a quarter of full), x `hidden_gain` on the hidden positions,
+ * rounded and clipped to 0..255. */
 void hux_led_pixels(const float b[HUX_LED_COUNT], const uint8_t colour[3], float scale,
-                    uint8_t out[HUX_LED_COUNT][3]);
+                    float hidden_gain, uint8_t out[HUX_LED_COUNT][3]);
 
 #ifdef __cplusplus
 }

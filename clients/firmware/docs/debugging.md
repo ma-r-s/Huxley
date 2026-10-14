@@ -488,9 +488,12 @@ host-tested). `led walk` lights each position alone for 0.6 s, bottom
 first, to check it by eye (`led.anim kind=walk`). The lights: `Orbit` (warm white) when the startup sound reaches the
 speaker (the played-audio counter moves, plus the I2S queue's 60 ms;
 started anyway after 1 s), so it follows the sound's boot rule; while the
-lever is held `Voice` (white, the light climbs with the mic level: -50
-dBFS RMS is the bottom's faint glow only, -15 dBFS lights all the way up)
-or `Glow` for a press the walkie can't act on. The frames are Mario's
+lever is held `Voice` (white, all seven together, their intensity
+following the mic level: 15 % at -50 dBFS RMS and under, full at -15 dBFS)
+or `Glow` (steady, all seven) for a press the walkie can't act on. The four
+LEDs behind the battery holders get a gain (`led gain <x>`, saved, 3.0 by
+default; in `led.started hidden_gain=`) so the ring reads even through the
+case. The frames are Mario's
 mockup ported number for number (`hux_led_anim`, host-tested against it).
 Peak `led bright <pct>` (saved, 25 % by default), a third of it 22:00-07:00.
 Logs: `led.started gpio= dma= pct=`, `led.anim kind=boot mode=orbit

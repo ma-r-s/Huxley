@@ -1,8 +1,9 @@
 /**
  * Host unit tests for `hux_led_anim` (F-0034): the light is Mario's mockup,
- * number for number. The reference values below are the mockup's own JS
- * formulas evaluated in double precision (the generator is described in
- * the F-0034 triage entry).
+ * number for number, except Orbit's adjustment on the walkie (a 150 ms
+ * hold at the bottom, the end on the upper half; see hux_led_anim.h). The
+ * reference values below are those formulas evaluated in double precision
+ * (the generator is described in the F-0034 triage entry).
  */
 #include <math.h>
 
@@ -12,23 +13,24 @@
 
 static const struct { uint32_t t; float b[7]; } ORBIT_REF[] = {
     {0, {0.850000f, 0.003599f, 0.000000f, 0.000000f, 0.000000f, 0.000000f, 0.003599f}},
-    {40, {0.582911f, 0.733750f, 0.000517f, 0.000000f, 0.000000f, 0.000517f, 0.733750f}},
-    {100, {0.141552f, 0.590052f, 0.715348f, 0.000435f, 0.000435f, 0.715348f, 0.590052f}},
-    {230, {0.005380f, 0.085549f, 0.462146f, 0.848210f, 0.848210f, 0.462146f, 0.085549f}},
-    {400, {0.001176f, 0.029742f, 0.255516f, 0.745796f, 0.745796f, 0.255516f, 0.029742f}},
-    {460, {0.001142f, 0.029126f, 0.252331f, 0.742700f, 0.742700f, 0.252331f, 0.029126f}},
-    {471, {0.017809f, 0.045793f, 0.268998f, 0.776034f, 0.776034f, 0.268998f, 0.045793f}},
-    {500, {0.551142f, 0.579126f, 0.802331f, 1.000000f, 1.000000f, 0.802331f, 0.579126f}},
-    {520, {0.577891f, 0.605875f, 0.829080f, 1.000000f, 1.000000f, 0.829080f, 0.605875f}},
-    {521, {0.578115f, 0.578115f, 0.578115f, 1.000000f, 1.000000f, 0.578115f, 0.578115f}},
-    {700, {0.535906f, 0.535906f, 0.535906f, 0.846478f, 0.846478f, 0.535906f, 0.535906f}},
-    {1000, {0.217372f, 0.217372f, 0.217372f, 0.369410f, 0.369410f, 0.217372f, 0.217372f}},
-    {1349, {0.066234f, 0.066234f, 0.066234f, 0.132467f, 0.132467f, 0.066234f, 0.066234f}},
-    {1400, {0.058660f, 0.058660f, 0.058660f, 0.117319f, 0.117319f, 0.058660f, 0.058660f}},
+    {100, {0.850000f, 0.003599f, 0.000000f, 0.000000f, 0.000000f, 0.000000f, 0.003599f}},
+    {150, {0.850000f, 0.003599f, 0.000000f, 0.000000f, 0.000000f, 0.000000f, 0.003599f}},
+    {190, {0.582911f, 0.733750f, 0.000517f, 0.000000f, 0.000000f, 0.000517f, 0.733750f}},
+    {250, {0.141552f, 0.590052f, 0.715348f, 0.000435f, 0.000435f, 0.715348f, 0.590052f}},
+    {380, {0.005380f, 0.085549f, 0.462146f, 0.848210f, 0.848210f, 0.462146f, 0.085549f}},
+    {550, {0.001176f, 0.029742f, 0.255516f, 0.745796f, 0.745796f, 0.255516f, 0.029742f}},
+    {621, {0.001142f, 0.029126f, 0.268998f, 0.776034f, 0.776034f, 0.268998f, 0.029126f}},
+    {650, {0.001142f, 0.045793f, 0.785665f, 1.000000f, 1.000000f, 0.785665f, 0.045793f}},
+    {670, {0.001142f, 0.062460f, 0.795746f, 1.000000f, 1.000000f, 0.795746f, 0.062460f}},
+    {671, {0.000000f, 0.034167f, 0.543948f, 1.000000f, 1.000000f, 0.543948f, 0.034167f}},
+    {850, {0.000000f, 0.075111f, 0.460795f, 0.846478f, 0.846478f, 0.460795f, 0.075111f}},
+    {1150, {0.000000f, 0.021778f, 0.195594f, 0.369410f, 0.369410f, 0.195594f, 0.021778f}},
+    {1499, {0.000000f, 0.000000f, 0.066233f, 0.132467f, 0.132467f, 0.066233f, 0.000000f}},
+    {1550, {0.000000f, 0.000000f, 0.058660f, 0.117319f, 0.117319f, 0.058660f, 0.000000f}},
 };
-static const float VOICE_REF[7] = {0.487325f, 0.000000f, 0.000000f, 0.000000f, 0.000000f, 0.000000f, 0.000000f};
+static const float VOICE_REF[7] = {0.174426f, 0.174426f, 0.174426f, 0.174426f, 0.174426f, 0.174426f, 0.174426f};
 static const float GLOW_REF[7] = {0.321927f, 0.321927f, 0.321927f, 0.321927f, 0.321927f, 0.321927f, 0.321927f};
-static const float VOICE_HELD_REF[7] = {0.890091f, 0.655857f, 0.302351f, 0.000000f, 0.000000f, 0.302351f, 0.655857f};
+static const float VOICE_HELD_REF[7] = {0.612167f, 0.612167f, 0.612167f, 0.612167f, 0.612167f, 0.612167f, 0.612167f};
 static const float VOICE_OFF_REF[7] = {0.000000f, 0.000000f, 0.000000f, 0.000000f, 0.000000f, 0.000000f, 0.000000f};
 
 static bool near(float a, float b) {
@@ -94,10 +96,15 @@ static void test_voice_climbs_with_the_level(void) {
     hux_led_press_t p = {0};
     float b[HUX_LED_COUNT];
     frames(&p, 60, true, true, 0.0f, b);
-    HX_ASSERT_TRUE(b[0] > 0.24f && b[0] < 0.26f, "silent: the bottom glows faintly");
-    HX_ASSERT_TRUE(b[1] == 0.0f && b[3] == 0.0f, "nothing above");
+    for (int i = 0; i < HUX_LED_COUNT; i++) {
+        HX_ASSERT_TRUE(b[i] > 0.14f && b[i] < 0.16f, "silent: all seven faint, together");
+    }
+    frames(&p, 60, true, true, 0.5f, b);
+    HX_ASSERT_TRUE(b[0] > 0.56f && b[0] < 0.58f && b[3] == b[0], "half: all at 0.575");
     frames(&p, 60, true, true, 1.0f, b);
-    HX_ASSERT_TRUE(b[3] > 0.69f && b[0] > 0.94f, "loud: all the way up");
+    for (int i = 0; i < HUX_LED_COUNT; i++) {
+        HX_ASSERT_TRUE(b[i] > 0.99f, "loud: all seven full");
+    }
 }
 
 /* The board found this: a press from dark woke the task with no time gone,
@@ -135,13 +142,40 @@ static void test_pixels(void) {
     float b[HUX_LED_COUNT] = {1.0f, 0.5f, 0.0f, 1.0f, 1.0f, 0.0f, 0.5f};
     const uint8_t warm[3] = {255, 206, 158};
     uint8_t out[HUX_LED_COUNT][3];
-    hux_led_pixels(b, warm, 0.25f, out);
+    hux_led_pixels(b, warm, 0.25f, 1.0f, out);
     HX_ASSERT_EQ(out[0][0], 64, "b 1 at a quarter: 255 -> 64");
     HX_ASSERT_EQ(out[0][2], 40, "158 -> 40");
     HX_ASSERT_EQ(out[1][0], 32, "half of that");
     HX_ASSERT_EQ(out[2][1], 0, "dark is 0");
-    hux_led_pixels(b, warm, 0.25f / 3.0f, out);
+    hux_led_pixels(b, warm, 0.25f / 3.0f, 1.0f, out);
     HX_ASSERT_EQ(out[0][0], 21, "night: a third");
+    hux_led_pixels(b, warm, 0.25f, 3.0f, out);
+    HX_ASSERT_EQ(out[0][0], 64, "seen directly: no gain");
+    HX_ASSERT_EQ(out[1][0], 96, "behind a holder, b 0.5: x3");
+    hux_led_pixels(b, warm, 0.5f, 3.0f, out);
+    HX_ASSERT_EQ(out[1][0], 191, "x3 at half");
+    float full[7] = {1, 1, 1, 1, 1, 1, 1};
+    hux_led_pixels(full, warm, 0.5f, 3.0f, out);
+    HX_ASSERT_EQ(out[2][0], 255, "clipped at 255");
+    HX_ASSERT_TRUE(hux_led_hidden(1) && hux_led_hidden(2) && hux_led_hidden(5) && hux_led_hidden(6) &&
+                       !hux_led_hidden(0) && !hux_led_hidden(3) && !hux_led_hidden(4),
+                   "hidden: 1, 2, 5, 6");
+}
+
+/* On the walkie the mockup read "up, then down": the bottom blip was under
+ * 0.1 s and the end lit the bottom again after the top. Now: the bottom
+ * holds first, and the bottom is dark once the top lights. */
+static void test_orbit_reads_down_then_up(void) {
+    float b[HUX_LED_COUNT];
+    for (uint32_t t = 0; t <= 150; t += 10) {
+        hux_led_orbit(t, b);
+        HX_ASSERT_TRUE(b[0] > 0.8f && b[3] < 0.001f, "the bottom alone for 150 ms");
+    }
+    for (uint32_t t = 400; t <= HUX_LED_ORBIT_MS; t += 10) {
+        hux_led_orbit(t, b);
+        HX_ASSERT_TRUE(b[0] < 0.01f, "once the top is lit, the bottom stays dark");
+        HX_ASSERT_TRUE(b[3] >= b[2] && b[2] >= b[1], "the top is the brightest to the end");
+    }
 }
 
 /* -- The frame engine (what the LED task decides each frame) ---------- */
@@ -173,7 +207,7 @@ static void test_engine_boot_waits_for_the_sound(void) {
     while (hux_led_engine_active(&e) && t < 5000) {
         step(&e, &in, t += 16, bb, bp);
     }
-    HX_ASSERT_TRUE(!hux_led_engine_active(&e) && t <= 1108 + 1400 + 16, "over after 1.4 s: sleep");
+    HX_ASSERT_TRUE(!hux_led_engine_active(&e) && t <= 1108 + HUX_LED_ORBIT_MS + 16, "over at the end: sleep");
 }
 
 static void test_engine_boot_timeout_and_demo(void) {
@@ -221,12 +255,12 @@ static void test_engine_mic_staleness(void) {
         in.mic_at = t + 1; /* the mic task stored a frame a tick after this frame's clock */
         step(&e, &in, t, bb, bp);
     }
-    HX_ASSERT_TRUE(bp[3] > 0.6f, "a mic frame a tick ahead counts: lit to the top");
+    HX_ASSERT_TRUE(bp[3] > 0.95f, "a mic frame a tick ahead counts: full");
     in.mic_at = 1600;
     for (uint32_t t = 1600; t < 2400; t += 16) {
         step(&e, &in, t, bb, bp); /* no new frame: stale after 100 ms */
     }
-    HX_ASSERT_TRUE(bp[3] < 0.01f && bp[0] > 0.24f, "stale: down to the bottom's glow");
+    HX_ASSERT_TRUE(bp[3] > 0.14f && bp[3] < 0.16f, "stale: back down to the faint 15 %");
     HX_ASSERT_TRUE(e.v_max > 0.99f, "the loudest level is kept for the log");
 }
 
@@ -237,15 +271,13 @@ static void test_engine_demo_ends_and_is_cleared(void) {
     hux_led_engine_wake(&e, 0);
     HX_ASSERT_TRUE(step(&e, &in, 0, bb, bp) & HUX_LED_EV_PRESS, "a demo is a press");
     HX_ASSERT_TRUE(e.demo, "marked");
-    float low = 0.0f, top = 0.0f;
-    for (uint32_t t = 16; t < 3000; t += 16) {
+    float lo = 1.0f, hi = 0.0f;
+    for (uint32_t t = 400; t < 3000; t += 16) {
         step(&e, &in, t, bb, bp);
-        low = bp[1] > low ? bp[1] : low;
-        top = bp[3] > top ? bp[3] : top;
+        lo = bp[0] < lo ? bp[0] : lo;
+        hi = bp[0] > hi ? bp[0] : hi;
     }
-    /* The mockup's sentence over its first 3 s: the low pair full (0.70),
-     * the top barely (0.04). */
-    HX_ASSERT_TRUE(low > 0.69f && top > 0.03f && top < 0.06f, "the mockup's demo, as drawn");
+    HX_ASSERT_TRUE(hi > 0.6f && lo < 0.35f, "the made-up sentence swings the whole ring");
     HX_ASSERT_TRUE(step(&e, &in, 3000, bb, bp) & HUX_LED_EV_DEMO_OVER, "over: clear it");
 }
 
@@ -294,6 +326,7 @@ int main(void) {
     HX_RUN(test_glow_is_the_mockup);
     HX_RUN(test_mic_mapping);
     HX_RUN(test_pixels);
+    HX_RUN(test_orbit_reads_down_then_up);
     HX_RUN(test_engine_boot_waits_for_the_sound);
     HX_RUN(test_engine_boot_timeout_and_demo);
     HX_RUN(test_engine_press_from_dark);

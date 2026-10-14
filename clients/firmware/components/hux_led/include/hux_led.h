@@ -48,6 +48,11 @@ void hux_led_demo(const char *what);
 /** Console `led bright <pct>`: the peak, 1-100 % of full, saved in NVS. */
 void hux_led_set_bright(int pct);
 
+/** Console `led gain <x>` (1.0-10.0, in tenths here): the positions behind
+ * the battery holders x this, so they read as evenly as the ones seen
+ * directly (3.0 by default), saved in NVS. */
+void hux_led_set_gain(int tenths);
+
 #ifdef __cplusplus
 }
 #endif

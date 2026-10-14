@@ -30,6 +30,8 @@ static const char *TAG = "hux_led";
 #define DMA_SYMBOLS     256
 #define NVS_NS          "hux_led"
 #define NVS_KEY_BRIGHT  "pct"
+#define NVS_KEY_GAIN    "gain10"
+#define GAIN10_DEFAULT  30   /* x3.0 behind the holders */
 
 static const uint8_t WARM[3] = {255, 206, 158};  /* Orbit */
 static const uint8_t WHITE[3] = {236, 240, 255}; /* Voice, Glow */
@@ -37,6 +39,7 @@ static const uint8_t WHITE[3] = {236, 240, 255}; /* Voice, Glow */
 static led_strip_handle_t s_strip;
 static TaskHandle_t s_task;
 static _Atomic int s_bright = BRIGHT_DEFAULT;
+static _Atomic int s_gain10 = GAIN10_DEFAULT; /* the hidden positions' gain, x10 */
 static atomic_bool s_boot_req = false;
 static _Atomic uint32_t s_boot_p0 = 0;
 static atomic_bool s_boot_wait = true; /* false: a demo, no sound to wait for */
@@ -135,8 +138,9 @@ static void led_task(void *arg) {
         /* Both at once (a press during the boot light): the brighter of
          * the two, channel by channel, as the mockup combines them. */
         uint8_t px[HUX_LED_COUNT][3], pp[HUX_LED_COUNT][3];
-        hux_led_pixels(b_boot, WARM, boot_peak, px);
-        hux_led_pixels(b_press, WHITE, press_peak, pp);
+        float gain = (float)atomic_load(&s_gain10) / 10.0f;
+        hux_led_pixels(b_boot, WARM, boot_peak, gain, px);
+        hux_led_pixels(b_press, WHITE, press_peak, gain, pp);
         for (int i = 0; i < HUX_LED_COUNT; i++) {
             for (int c = 0; c < 3; c++) {
                 if (pp[i][c] > px[i][c]) {
@@ -166,6 +170,10 @@ void hux_led_start(void) {
         uint8_t pct = 0;
         if (nvs_get_u8(h, NVS_KEY_BRIGHT, &pct) == ESP_OK && pct >= 1 && pct <= 100) {
             atomic_store(&s_bright, pct);
+        }
+        uint8_t g10 = 0;
+        if (nvs_get_u8(h, NVS_KEY_GAIN, &g10) == ESP_OK && g10 >= 10 && g10 <= 100) {
+            atomic_store(&s_gain10, g10);
         }
         nvs_close(h);
     }
@@ -199,7 +207,9 @@ void hux_led_start(void) {
         s_task = NULL;
         return;
     }
-    ESP_LOGI(TAG, "led.started gpio=%d dma=%d pct=%d", LED_GPIO, dma, atomic_load(&s_bright));
+    int g10 = atomic_load(&s_gain10);
+    ESP_LOGI(TAG, "led.started gpio=%d dma=%d pct=%d hidden_gain=%d.%d", LED_GPIO, dma,
+             atomic_load(&s_bright), g10 / 10, g10 % 10);
 }
 
 static void boot_request(uint32_t p0, bool wait) {
@@ -263,4 +273,22 @@ void hux_led_set_bright(int pct) {
         nvs_close(h);
     }
     ESP_LOGI(TAG, "led.bright pct=%d saved=%s", pct, esp_err_to_name(err));
+}
+
+void hux_led_set_gain(int tenths) {
+    if (tenths < 10 || tenths > 100) {
+        ESP_LOGW(TAG, "led.gain refused tenths=%d (1.0-10.0)", tenths);
+        return;
+    }
+    atomic_store(&s_gain10, tenths);
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    if (err == ESP_OK) {
+        err = nvs_set_u8(h, NVS_KEY_GAIN, (uint8_t)tenths);
+        if (err == ESP_OK) {
+            err = nvs_commit(h);
+        }
+        nvs_close(h);
+    }
+    ESP_LOGI(TAG, "led.gain hidden=%d.%d saved=%s", tenths / 10, tenths % 10, esp_err_to_name(err));
 }

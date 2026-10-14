@@ -37,21 +37,24 @@ bool hux_led_orbit(uint32_t t_ms, float b[HUX_LED_COUNT]) {
         }
         return false;
     }
+    const float hold = (float)HUX_LED_ORBIT_HOLD_MS;
     float t = (float)t_ms;
-    float u = 1.0f - clamp01(t / 460.0f);
+    float u = 1.0f - clamp01((t - hold) / 460.0f);
     float head = 180.0f * (1.0f - u * u * u); /* bottom to top, easing out */
-    float flash = pulse(t, 470.0f, 30.0f, 420.0f);
-    float rest = 0.3f * after(t, 480.0f, 120.0f, 1350.0f);
+    float flash = pulse(t, 470.0f + hold, 30.0f, 420.0f);
+    float rest = 0.3f * after(t, 480.0f + hold, 120.0f, 1350.0f + hold);
     for (int i = 0; i < HUX_LED_COUNT; i++) {
         float ang = (float)i * 360.0f / HUX_LED_COUNT;
         float a = ang <= 180.0f ? ang : 360.0f - ang; /* each arm climbs its own side */
         float d = head - a;
         float arm = 0.0f;
-        if (t <= 520.0f) {
+        if (t <= 520.0f + hold) {
             float w = d >= 0.0f ? d / 70.0f : d / 22.0f;
             arm = expf(-(w * w));
         }
-        b[i] = clamp01(0.85f * arm + (LEVEL[i] == 3 ? flash : 0.5f * flash) + rest);
+        /* The end lights the upper half only: the top is the last thing lit. */
+        float fl = LEVEL[i] == 3 ? flash : LEVEL[i] == 2 ? 0.5f * flash : 0.0f;
+        b[i] = clamp01(0.85f * arm + fl + rest * (float)LEVEL[i] / 3.0f);
     }
     return true;
 }
@@ -68,14 +71,11 @@ bool hux_led_press_step(hux_led_press_t *p, float dt_ms, bool held, bool voice_m
         }
         return false;
     }
+    /* Mario, 2026-10-14: the whole ring at once, its intensity following
+     * the voice (Voice), or steady (Glow). */
+    float v = voice_mode ? p->level * (0.15f + 0.85f * clamp01(p->voice)) : 0.42f * p->level;
     for (int i = 0; i < HUX_LED_COUNT; i++) {
-        if (!voice_mode) {
-            b[i] = 0.42f * p->level; /* Glow */
-            continue;
-        }
-        static const float NEED[4] = {0.0f, 0.25f, 0.5f, 0.75f};
-        float lit = clamp01((p->voice - NEED[LEVEL[i]]) / 0.2f);
-        b[i] = p->level * clamp01((LEVEL[i] == 0 ? 0.25f : 0.0f) + 0.7f * lit);
+        b[i] = v;
     }
     return true;
 }
@@ -98,11 +98,16 @@ void hux_led_chain(const uint8_t pos[HUX_LED_COUNT][3], uint8_t chain[HUX_LED_CO
     }
 }
 
+bool hux_led_hidden(int p) {
+    return p == 1 || p == 2 || p == 5 || p == 6;
+}
+
 void hux_led_pixels(const float b[HUX_LED_COUNT], const uint8_t colour[3], float scale,
-                    uint8_t out[HUX_LED_COUNT][3]) {
+                    float hidden_gain, uint8_t out[HUX_LED_COUNT][3]) {
     for (int i = 0; i < HUX_LED_COUNT; i++) {
+        float gain = hux_led_hidden(i) ? hidden_gain : 1.0f;
         for (int c = 0; c < 3; c++) {
-            float v = (float)colour[c] * clamp01(b[i]) * scale + 0.5f;
+            float v = (float)colour[c] * clamp01(b[i]) * gain * scale + 0.5f;
             out[i][c] = (uint8_t)(v > 255.0f ? 255.0f : v);
         }
     }
