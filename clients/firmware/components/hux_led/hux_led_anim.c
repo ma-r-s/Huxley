@@ -88,6 +88,16 @@ float hux_led_mic_level(uint32_t mean_square) {
     return clamp01((dbfs + 50.0f) / 35.0f);
 }
 
+const uint8_t HUX_LED_CHAIN_OF[HUX_LED_COUNT] = {2, 1, 0, 6, 5, 4, 3};
+
+void hux_led_chain(const uint8_t pos[HUX_LED_COUNT][3], uint8_t chain[HUX_LED_COUNT][3]) {
+    for (int p = 0; p < HUX_LED_COUNT; p++) {
+        for (int c = 0; c < 3; c++) {
+            chain[HUX_LED_CHAIN_OF[p]][c] = pos[p][c];
+        }
+    }
+}
+
 void hux_led_pixels(const float b[HUX_LED_COUNT], const uint8_t colour[3], float scale,
                     uint8_t out[HUX_LED_COUNT][3]) {
     for (int i = 0; i < HUX_LED_COUNT; i++) {
@@ -112,7 +122,7 @@ void hux_led_engine_wake(hux_led_engine_t *e, uint32_t now) {
 }
 
 bool hux_led_engine_active(const hux_led_engine_t *e) {
-    return e->boot_waiting || e->boot_on || e->press_on;
+    return e->boot_waiting || e->boot_on || e->walk_on || e->press_on;
 }
 
 unsigned hux_led_engine_step(hux_led_engine_t *e, const hux_led_in_t *in,
@@ -148,10 +158,25 @@ unsigned hux_led_engine_step(hux_led_engine_t *e, const hux_led_in_t *in,
             ev |= HUX_LED_EV_BOOT;
         }
     }
+    if (in->walk_req) {
+        e->walk_on = true;
+        e->walk_start = now;
+        e->boot_waiting = false;
+        e->boot_on = false; /* the walk replaces Orbit */
+        ev |= HUX_LED_EV_WALK;
+    }
     if (e->boot_on) {
         int32_t t = (int32_t)(now - e->boot_start);
         if (t >= 0 && !hux_led_orbit((uint32_t)t, b_boot)) {
             e->boot_on = false;
+        }
+    }
+    if (e->walk_on) {
+        uint32_t p = (now - e->walk_start) / HUX_LED_WALK_STEP_MS;
+        if (p < HUX_LED_COUNT) {
+            b_boot[p] = 1.0f;
+        } else {
+            e->walk_on = false;
         }
     }
 

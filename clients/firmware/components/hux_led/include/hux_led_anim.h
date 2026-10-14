@@ -3,9 +3,10 @@
  * Pure, host-tested (tests/test_hux_led_anim.c): a port of Mario's mockup
  * ("Walkie lights" artifact), brightness b in 0..1 per LED.
  *
- * The ring: LED i at board angle i x 360/7 from board +x, which is device
- * down in the HX-1, so LED 0 is the bottom and the ring is mirror
- * symmetric: height steps bottom {0}, low {1,6}, mid {2,5}, top {3,4}.
+ * Everything here is in positions: position p at board angle p x 360/7
+ * from board +x, which is device down in the HX-1, so p 0 is the bottom and
+ * the ring is mirror symmetric: height steps bottom {0}, low {1,6}, mid
+ * {2,5}, top {3,4}. The data chain runs in another order (hux_led_chain).
  */
 #pragma once
 
@@ -59,6 +60,7 @@ typedef struct {
     uint32_t mic_ms;     /* the last mic frame's mean square */
     uint32_t mic_at;     /* when it came */
     uint32_t demo_until; /* a demo press until then; 0: none */
+    bool walk_req;       /* console `led walk`: each position alone, bottom first */
 } hux_led_in_t;
 
 enum {
@@ -66,10 +68,15 @@ enum {
     HUX_LED_EV_PRESS = 2,     /* a press light starts */
     HUX_LED_EV_PRESS_END = 4, /* it went out */
     HUX_LED_EV_DEMO_OVER = 8, /* clear demo_until (it would come round on a wrap) */
+    HUX_LED_EV_WALK = 16,     /* the walk starts: take the peak, log */
 };
+
+#define HUX_LED_WALK_STEP_MS 600u /* each position alone this long, p 0..6 */
 
 typedef struct {
     bool boot_waiting, boot_on, boot_heard;
+    bool walk_on;
+    uint32_t walk_start;
     uint32_t boot_since, boot_start, boot_p0, boot_wait_ms;
     hux_led_press_t press;
     bool press_on, was_held, voice_mode, demo;
@@ -80,8 +87,9 @@ typedef struct {
 /** After the task slept: the first frame moves a frame's worth, not 0. */
 void hux_led_engine_wake(hux_led_engine_t *e, uint32_t now);
 
-/** One frame: Orbit's and the press's brightness (both 0 when off) and
- * the events to act on (HUX_LED_EV_*). */
+/** One frame: the warm light's (Orbit, or the walk, which replaces it) and
+ * the press's brightness (0 when off), by position, and the events to act
+ * on (HUX_LED_EV_*). */
 unsigned hux_led_engine_step(hux_led_engine_t *e, const hux_led_in_t *in,
                              float b_boot[HUX_LED_COUNT], float b_press[HUX_LED_COUNT]);
 
@@ -91,6 +99,15 @@ bool hux_led_engine_active(const hux_led_engine_t *e);
 /** A mic frame's mean square (PCM16) to 0..1: -50 dBFS RMS and under is 0,
  * -15 dBFS and over is 1, linear in dB between. */
 float hux_led_mic_level(uint32_t mean_square);
+
+/** The WS2812B data chain doesn't follow the positions: GPIO38 feeds U9
+ * (at 102.9 deg, position 2) first, then clockwise U19, U14 (+x, the
+ * bottom), U13, U12, U11, U10 (schematic; angles from Waveshare's STEP).
+ * Chain index of position p: {2, 1, 0, 6, 5, 4, 3}. */
+extern const uint8_t HUX_LED_CHAIN_OF[HUX_LED_COUNT];
+
+/** Pixels by position to the order the chain takes them. */
+void hux_led_chain(const uint8_t pos[HUX_LED_COUNT][3], uint8_t chain[HUX_LED_COUNT][3]);
 
 /** Brightness to pixels: each channel `colour` x b x `scale` (the peak:
  * 0.25 is a quarter of full), rounded, 0..255. */

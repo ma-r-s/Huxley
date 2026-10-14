@@ -41,7 +41,8 @@ void hux_led_press(bool held, bool voice);
 void hux_led_mic(uint32_t mean_square);
 
 /** Console: `orbit`, `glow` or `voice` (3 s, a made-up sentence for the
- * level), to look at them without the startup sound or a real press. */
+ * level), to look at them without the startup sound or a real press; or
+ * `walk`: each position alone for 0.6 s, bottom first, to check the order. */
 void hux_led_demo(const char *what);
 
 /** Console `led bright <pct>`: the peak, 1-100 % of full, saved in NVS. */

@@ -480,7 +480,12 @@ bench can't cycle the power; `battery park <mv> 1` tests a real boot as one).
 
 The board's 7 WS2812B (GPIO38, RMT with DMA, one buffer for a whole frame so
 no refill interrupt can be late) light only for people around the walkie
-(cleared at every boot, before the battery park): `Orbit` (warm white) when the startup sound reaches the
+(cleared at every boot, before the battery park). The data chain doesn't
+follow the ring: GPIO38 feeds U9 at 102.9 deg first, then clockwise, so
+the bottom LED (U14, board +x) is the chain's third; the animations work
+in positions and `hux_led_chain` reorders them (`HUX_LED_CHAIN_OF`,
+host-tested). `led walk` lights each position alone for 0.6 s, bottom
+first, to check it by eye (`led.anim kind=walk`). The lights: `Orbit` (warm white) when the startup sound reaches the
 speaker (the played-audio counter moves, plus the I2S queue's 60 ms;
 started anyway after 1 s), so it follows the sound's boot rule; while the
 lever is held `Voice` (white, the light climbs with the mic level: -50
@@ -699,7 +704,7 @@ echo-reference channel), `tone`, `prompt <name>` (a sentence or sound stored on
 the walkie, `offline`, `battery_empty`, `startup`, `searching`,
 `connected` or `lost`; `prompt.play name= ms= queued=`), `status poweron`
 (the connection sounds as after a power on, F-0033), `led bright <pct>` /
-`led demo orbit|glow|voice` (the lights, F-0034),
+`led demo orbit|glow|voice` / `led walk` (the lights, F-0034),
 `vol`, `pa off|on` (silent bench),
 `wifi off|on`, `wifistat` (the Wi-Fi driver's buffer and RX/TX
 counters; they reach the server too, under the `wifi` tag), `wifiscan`

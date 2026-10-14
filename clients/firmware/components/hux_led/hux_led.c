@@ -45,6 +45,7 @@ static atomic_bool s_voice = false;
 static _Atomic uint32_t s_mic_ms = 0; /* mean square of the last mic frame */
 static _Atomic uint32_t s_mic_at = 0; /* when it came */
 static _Atomic uint32_t s_demo_until = 0;
+static atomic_bool s_walk_req = false;
 
 static uint32_t now_ms(void) {
     return (uint32_t)(esp_timer_get_time() / 1000);
@@ -63,9 +64,12 @@ static float peak_now(bool *night) {
     return *night ? scale / 3.0f : scale;
 }
 
+/* `px` by position; the strip takes them in its chain's order. */
 static bool show(uint8_t px[HUX_LED_COUNT][3]) {
+    uint8_t chain[HUX_LED_COUNT][3];
+    hux_led_chain(px, chain);
     for (int i = 0; i < HUX_LED_COUNT; i++) {
-        led_strip_set_pixel(s_strip, (uint32_t)i, px[i][0], px[i][1], px[i][2]);
+        led_strip_set_pixel(s_strip, (uint32_t)i, chain[i][0], chain[i][1], chain[i][2]);
     }
     return led_strip_refresh(s_strip) == ESP_OK;
 }
@@ -96,6 +100,7 @@ static void led_task(void *arg) {
             .mic_ms = atomic_load(&s_mic_ms),
             .mic_at = atomic_load(&s_mic_at),
             .demo_until = atomic_load(&s_demo_until),
+            .walk_req = atomic_exchange(&s_walk_req, false),
         };
         float b_boot[HUX_LED_COUNT], b_press[HUX_LED_COUNT];
         unsigned ev = hux_led_engine_step(&e, &in, b_boot, b_press);
@@ -104,6 +109,12 @@ static void led_task(void *arg) {
             boot_peak = peak_now(&night);
             ESP_LOGI(TAG, "led.anim kind=boot mode=orbit wait_ms=%u heard=%d night=%d pct=%d",
                      (unsigned)e.boot_wait_ms, e.boot_heard, night, atomic_load(&s_bright));
+        }
+        if (ev & HUX_LED_EV_WALK) {
+            bool night;
+            boot_peak = peak_now(&night);
+            ESP_LOGI(TAG, "led.anim kind=walk step_ms=%u night=%d pct=%d (positions 0-6, bottom first)",
+                     (unsigned)HUX_LED_WALK_STEP_MS, night, atomic_load(&s_bright));
         }
         if (ev & HUX_LED_EV_PRESS) {
             bool night;
@@ -220,9 +231,14 @@ void hux_led_demo(const char *what) {
         boot_request(0, false);
         return;
     }
+    if (strcmp(what, "walk") == 0) {
+        atomic_store(&s_walk_req, true);
+        wake();
+        return;
+    }
     bool voice = strcmp(what, "voice") == 0;
     if (!voice && strcmp(what, "glow") != 0) {
-        ESP_LOGW(TAG, "led.demo unknown=%s (orbit, glow, voice)", what);
+        ESP_LOGW(TAG, "led.demo unknown=%s (orbit, glow, voice, walk)", what);
         return;
     }
     atomic_store(&s_voice, voice);

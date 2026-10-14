@@ -149,7 +149,8 @@ static void test_pixels(void) {
 static unsigned step(hux_led_engine_t *e, hux_led_in_t *in, uint32_t now, float bb[7], float bp[7]) {
     in->now = now;
     unsigned ev = hux_led_engine_step(e, in, bb, bp);
-    in->boot_req = false; /* a request is taken once */
+    in->boot_req = false; /* requests are taken once, as the task's exchange does */
+    in->walk_req = false;
     return ev;
 }
 
@@ -248,6 +249,42 @@ static void test_engine_demo_ends_and_is_cleared(void) {
     HX_ASSERT_TRUE(step(&e, &in, 3000, bb, bp) & HUX_LED_EV_DEMO_OVER, "over: clear it");
 }
 
+/* The chain order, from the schematic and the STEP: GPIO38 -> U9 (102.9
+ * deg, position 2) -> U19 -> U14 (+x, the bottom) -> U13 -> U12 -> U11 ->
+ * U10. Mario saw Orbit "sideways" when position = chain index. */
+static void test_chain_order(void) {
+    HX_ASSERT_EQ(HUX_LED_CHAIN_OF[0], 2, "the bottom LED is the chain's third (U14)");
+    HX_ASSERT_TRUE(HUX_LED_CHAIN_OF[1] == 1 && HUX_LED_CHAIN_OF[6] == 3, "low pair (1, 3)");
+    HX_ASSERT_TRUE(HUX_LED_CHAIN_OF[2] == 0 && HUX_LED_CHAIN_OF[5] == 4, "mid pair (0, 4)");
+    HX_ASSERT_TRUE(HUX_LED_CHAIN_OF[3] == 6 && HUX_LED_CHAIN_OF[4] == 5, "top pair (6, 5)");
+    for (int c = 0; c < 7; c++) { /* chain index c at position (2 - c) mod 7 */
+        HX_ASSERT_EQ(HUX_LED_CHAIN_OF[(2 - c + 7) % 7], c, "clockwise from 102.9 deg");
+    }
+    uint8_t pos[7][3] = {{0}}, chain[7][3];
+    pos[0][0] = 99; /* only the bottom lit */
+    hux_led_chain(pos, chain);
+    HX_ASSERT_EQ(chain[2][0], 99, "the bottom drives chain index 2");
+    HX_ASSERT_EQ(chain[0][0], 0, "not index 0");
+}
+
+static void test_engine_walk(void) {
+    hux_led_engine_t e = {0};
+    hux_led_in_t in = {.walk_req = true};
+    float bb[7], bp[7];
+    hux_led_engine_wake(&e, 0);
+    HX_ASSERT_TRUE(step(&e, &in, 0, bb, bp) & HUX_LED_EV_WALK, "starts");
+    for (int p = 0; p < 7; p++) {
+        step(&e, &in, (uint32_t)p * 600u + 300u, bb, bp);
+        int lit = 0;
+        for (int i = 0; i < 7; i++) {
+            lit += bb[i] > 0.0f;
+        }
+        HX_ASSERT_TRUE(lit == 1 && bb[p] == 1.0f, "one position at a time, bottom first");
+    }
+    step(&e, &in, 4200, bb, bp);
+    HX_ASSERT_TRUE(!hux_led_engine_active(&e), "over after 4.2 s: sleep");
+}
+
 int main(void) {
     HX_RUN(test_orbit_is_the_mockup);
     HX_RUN(test_orbit_is_symmetric_and_ends);
@@ -262,5 +299,7 @@ int main(void) {
     HX_RUN(test_engine_press_from_dark);
     HX_RUN(test_engine_mic_staleness);
     HX_RUN(test_engine_demo_ends_and_is_cleared);
+    HX_RUN(test_chain_order);
+    HX_RUN(test_engine_walk);
     HX_SUMMARY();
 }

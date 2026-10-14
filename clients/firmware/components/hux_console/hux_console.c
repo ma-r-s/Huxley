@@ -152,6 +152,8 @@ static void run_line(char *line, bool usb) {
         hux_led_set_bright(atoi(argv[2])); /* the light's peak, % of full, saved (F-0034) */
     } else if (strcmp(cmd, "led") == 0 && argc > 2 && strcmp(argv[1], "demo") == 0) {
         hux_led_demo(argv[2]); /* orbit, glow, voice: look without a press */
+    } else if (strcmp(cmd, "led") == 0 && argc > 1 && strcmp(argv[1], "walk") == 0) {
+        hux_led_demo("walk"); /* each position alone, bottom first: the order */
     } else if (strcmp(cmd, "status") == 0 && argc > 1 && strcmp(argv[1], "poweron") == 0) {
         hux_app_status_power_on(); /* the connection sounds as after a power on (F-0033) */
     } else if (strcmp(cmd, "alert") == 0 && argc > 1 && strcmp(argv[1], "test") == 0) {

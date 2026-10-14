@@ -42,7 +42,7 @@ the TF slot, **+y** toward the mics and the pin header, **-y** toward USB-C,
 | TF card slot                       | +x edge, card flush near x = 28                                                                                             | STEP                              |
 | Mics (2)                           | Top face, centres (-17.28, 20.55) and (17.20, 20.52), 34.5 apart. No hole in the PCB under them, so top-ported              | STEP (port direction inferred)    |
 | Ceramic antenna                    | Top face, (-25.7, 8.3), at the -x edge. IPEX connector at (-21.2, 15.6)                                                     | STEP + SCH                        |
-| RGB LEDs (7 × WS2812B)             | Underside, on r = 22.0, every 51.43° starting at +x                                                                         | STEP                              |
+| RGB LEDs (7 × WS2812B)             | Underside, on r = 22.0, every 51.43° starting at +x. Data chain: U9 at 102.9° first, clockwise; U14 at +x is the third      | STEP, schematic                   |
 | Charge LED                         | Top face, (9.4, -26.0), next to USB-C                                                                                       | STEP                              |
 | BAT connector J1                   | Underside, centre (17.8, -6.0), 2-pin 1.25 mm, vertical                                                                     | STEP + SCH                        |
 | SPK connector                      | Underside, centre (17.8, +5.2), 2-pin 1.25 mm (GH1.25 per SCH), vertical                                                    | STEP + SCH                        |
