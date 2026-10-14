@@ -54,7 +54,7 @@ whichever is wrong in the same commit.
 | `hux_alert`             | The walkie's own phone alert over ntfy.sh when the server is unreachable (SNTP, RTC state) | Watches anything but its own link (huxley-watch does)            |
 | `hux_park`              | The low-battery cutoff's park: at boot, light sleep until a charger lifts the cell; the cutoff's say-arm-restart | Decides when the cell is spent (hux_battery_cutoff does)        |
 | `hux_prompts`           | Sentences and connection sounds stored in the firmware (Opus), played through the decoder when no server can speak | Decides when to say them (that's hux_app; the sounds' rules are `hux_status`, F-0033) |
-| `hux_led`               | The 7 WS2812B under the clear back (RMT): Rainbow at boot, Voice/Glow (the whole ring) while the lever is held (F-0034) | Waits on anything: setters are a flag and a wake |
+| `hux_led`               | The 7 WS2812B under the clear back (RMT): Rainbow at boot, Voice (the whole ring, following his voice) while the lever is held (F-0034) | Waits on anything: setters are a flag and a wake |
 
 **The dependency graph flows downward only.** `hux_app` requires
 `hux_proto`; `hux_net` requires `hux_app` + `hux_proto` + `hux_log`

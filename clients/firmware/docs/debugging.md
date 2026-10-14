@@ -489,8 +489,11 @@ first, to check it by eye (`led.anim kind=walk`). The lights: `Rainbow` (every L
 the startup sound reaches the speaker (the played-audio counter moves, plus the I2S queue's 60 ms;
 started anyway after 1 s), so it follows the sound's boot rule; while the
 lever is held `Voice` (white, all seven together, their intensity
-following the mic level: 15 % at -50 dBFS RMS and under, full at -15 dBFS)
-or `Glow` (steady, all seven) for a press the walkie can't act on. The four
+following the mic level: dark at -50 dBFS RMS and under, so silence stays
+dark, full at -15 dBFS); a press the walkie can't act on (offline) stays
+dark. Mario's rule (2026-10-14): light only at power on and while the lever
+is down and someone talks. The board's green charge LED next to USB-C is
+the charger chip's (ETA6098 STAT), not ours: it lights while charging. The four
 LEDs behind the battery holders get a gain (`led gain <x>`, saved, 3.0 by
 default; in `led.started hidden_gain=`) so the ring reads even through the
 case. The frames are Mario's
@@ -498,10 +501,10 @@ mockup ported number for number (`hux_led_anim`, host-tested against it).
 Peak `led bright <pct>` (saved, 25 % by default), a third of it 22:00-07:00.
 Logs: `led.started gpio= dma= pct= hidden_gain=`, `led.anim kind=boot mode=rainbow
 wait_ms= heard= night= pct=` (heard=0: the sound never moved, started on
-the timeout), `led.anim kind=press mode=voice|glow night= pct= demo=`,
+the timeout), `led.anim kind=press mode=voice|dark night= pct= demo=`,
 `led.anim.end kind=press mode= ms= v_max_pct=` (the press's loudest level:
 tune the mic mapping from it), `led.refresh_failed tries=` (a frame retried
-~0.5 s). Console `led demo rainbow|glow|voice` (voice: 3 s of the mockup's
+~0.5 s). Console `led demo rainbow|voice` (voice: 3 s of the mockup's
 made-up sentence) shows them without a press. The frame logic (`hux_led_engine_step`) is pure and
 host-tested; the task only reads its inputs and writes pixels.
 
@@ -712,7 +715,7 @@ echo-reference channel), `tone`, `prompt <name>` (a sentence or sound stored on
 the walkie, `offline`, `battery_empty`, `startup`, `searching`,
 `connected` or `lost`; `prompt.play name= ms= queued=`), `status poweron`
 (the connection sounds as after a power on, F-0033), `led bright <pct>` /
-`led demo rainbow|glow|voice` / `led walk` (the lights, F-0034), `opus yield on|off` / `opus flood <s>` (the decoder's
+`led demo rainbow|voice` / `led walk` (the lights, F-0034), `opus yield on|off` / `opus flood <s>` (the decoder's
 guard, which gives a core up after 100 ms of work without waiting,
 `opus.yield run_ms= waiting= count=`; and a silent flood to test it, amp
 off first, F-0035),

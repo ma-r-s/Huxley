@@ -33,7 +33,7 @@ static const char *TAG = "hux_led";
 #define NVS_KEY_GAIN    "gain10"
 #define GAIN10_DEFAULT  30   /* x3.0 behind the holders */
 
-static const float WHITE[3] = {236.0f / 255.0f, 240.0f / 255.0f, 1.0f}; /* Voice, Glow */
+static const float WHITE[3] = {236.0f / 255.0f, 240.0f / 255.0f, 1.0f}; /* Voice */
 
 static led_strip_handle_t s_strip;
 static TaskHandle_t s_task;
@@ -122,11 +122,11 @@ static void led_task(void *arg) {
             bool night;
             press_peak = peak_now(&night);
             ESP_LOGI(TAG, "led.anim kind=press mode=%s night=%d pct=%d demo=%d",
-                     e.voice_mode ? "voice" : "glow", night, atomic_load(&s_bright), e.demo);
+                     e.voice_mode ? "voice" : "dark", night, atomic_load(&s_bright), e.demo);
         }
         if (ev & HUX_LED_EV_PRESS_END) {
             ESP_LOGI(TAG, "led.anim.end kind=press mode=%s ms=%u v_max_pct=%d",
-                     e.voice_mode ? "voice" : "glow", (unsigned)(in.now - e.press_since),
+                     e.voice_mode ? "voice" : "dark", (unsigned)(in.now - e.press_since),
                      (int)(e.v_max * 100.0f + 0.5f));
         }
         if (ev & HUX_LED_EV_DEMO_OVER) {
@@ -252,8 +252,8 @@ void hux_led_demo(const char *what) {
         return;
     }
     bool voice = strcmp(what, "voice") == 0;
-    if (!voice && strcmp(what, "glow") != 0) {
-        ESP_LOGW(TAG, "led.demo unknown=%s (rainbow, glow, voice, walk)", what);
+    if (!voice) {
+        ESP_LOGW(TAG, "led.demo unknown=%s (rainbow, voice, walk)", what);
         return;
     }
     atomic_store(&s_voice, voice);

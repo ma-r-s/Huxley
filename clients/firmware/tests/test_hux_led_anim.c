@@ -21,9 +21,8 @@ static const struct { uint32_t t; float rgb[7][3]; } RAINBOW_REF[] = {
     {1599, {{0.000002f, 0.000001f, 0.000000f}, {0.000002f, 0.000002f, 0.000000f}, {0.000000f, 0.000002f, 0.000001f}, {0.000000f, 0.000002f, 0.000002f}, {0.000000f, 0.000001f, 0.000002f}, {0.000002f, 0.000000f, 0.000002f}, {0.000002f, 0.000000f, 0.000001f}}},
     {1600, {{0.000000f, 0.000000f, 0.000000f}, {0.000000f, 0.000000f, 0.000000f}, {0.000000f, 0.000000f, 0.000000f}, {0.000000f, 0.000000f, 0.000000f}, {0.000000f, 0.000000f, 0.000000f}, {0.000000f, 0.000000f, 0.000000f}, {0.000000f, 0.000000f, 0.000000f}}},
 };
-static const float VOICE_REF[7] = {0.174426f, 0.174426f, 0.174426f, 0.174426f, 0.174426f, 0.174426f, 0.174426f};
-static const float GLOW_REF[7] = {0.321927f, 0.321927f, 0.321927f, 0.321927f, 0.321927f, 0.321927f, 0.321927f};
-static const float VOICE_HELD_REF[7] = {0.612167f, 0.612167f, 0.612167f, 0.612167f, 0.612167f, 0.612167f, 0.612167f};
+static const float VOICE_REF[7] = {0.094375f, 0.094375f, 0.094375f, 0.094375f, 0.094375f, 0.094375f, 0.094375f};
+static const float VOICE_HELD_REF[7] = {0.554855f, 0.554855f, 0.554855f, 0.554855f, 0.554855f, 0.554855f, 0.554855f};
 static const float VOICE_OFF_REF[7] = {0.000000f, 0.000000f, 0.000000f, 0.000000f, 0.000000f, 0.000000f, 0.000000f};
 
 static bool near(float a, float b) {
@@ -94,10 +93,10 @@ static void test_voice_climbs_with_the_level(void) {
     float b[HUX_LED_COUNT];
     frames(&p, 60, true, true, 0.0f, b);
     for (int i = 0; i < HUX_LED_COUNT; i++) {
-        HX_ASSERT_TRUE(b[i] > 0.14f && b[i] < 0.16f, "silent: all seven faint, together");
+        HX_ASSERT_TRUE(b[i] == 0.0f, "lever down, silent: dark (Mario: only when someone talks)");
     }
     frames(&p, 60, true, true, 0.5f, b);
-    HX_ASSERT_TRUE(b[0] > 0.56f && b[0] < 0.58f && b[3] == b[0], "half: all at 0.575");
+    HX_ASSERT_TRUE(b[0] > 0.49f && b[0] < 0.51f && b[3] == b[0], "half: all at 0.5");
     frames(&p, 60, true, true, 1.0f, b);
     for (int i = 0; i < HUX_LED_COUNT; i++) {
         HX_ASSERT_TRUE(b[i] > 0.99f, "loud: all seven full");
@@ -109,17 +108,17 @@ static void test_voice_climbs_with_the_level(void) {
 static void test_a_press_from_dark_stays_on(void) {
     hux_led_press_t p = {0};
     float b[HUX_LED_COUNT];
-    HX_ASSERT_TRUE(hux_led_press_step(&p, 0.0f, true, false, 0.0f, b), "held, no time gone: on");
-    HX_ASSERT_TRUE(frames(&p, 5, true, false, 0.0f, b), "and stays on");
-    HX_ASSERT_TRUE(b[0] > 0.2f, "lit");
+    HX_ASSERT_TRUE(hux_led_press_step(&p, 0.0f, true, true, 1.0f, b), "held, no time gone: on");
+    HX_ASSERT_TRUE(frames(&p, 5, true, true, 1.0f, b), "and stays on");
+    HX_ASSERT_TRUE(b[0] > 0.2f, "lit once he talks");
 }
 
-static void test_glow_is_the_mockup(void) {
+static void test_offline_press_is_dark(void) {
     hux_led_press_t p = {0};
     float b[HUX_LED_COUNT];
-    frames(&p, 10, true, false, 1.0f, b);
+    HX_ASSERT_TRUE(frames(&p, 30, true, false, 1.0f, b), "a press the walkie can't act on: held");
     for (int i = 0; i < HUX_LED_COUNT; i++) {
-        HX_ASSERT_TRUE(near(b[i], GLOW_REF[i]), "glow matches the mockup, mic ignored");
+        HX_ASSERT_TRUE(b[i] == 0.0f, "but dark, whatever the mic hears");
     }
 }
 
@@ -216,15 +215,16 @@ static void test_engine_boot_timeout_and_demo(void) {
 
 static void test_engine_press_from_dark(void) {
     hux_led_engine_t e = {0};
-    hux_led_in_t in = {.held = true, .voice = false};
+    hux_led_in_t in = {.held = true, .voice = true, .mic_ms = 0x10000000u, .mic_at = 5000};
     float bb[7][3], bp[7];
     hux_led_engine_wake(&e, 5000);
     HX_ASSERT_EQ(step(&e, &in, 5000, bb, bp), (unsigned)HUX_LED_EV_PRESS, "starts");
-    HX_ASSERT_TRUE(bp[0] > 0.05f, "lit on the first frame (a frame's worth of rise)");
+    HX_ASSERT_TRUE(bp[0] > 0.01f, "lit on the first frame (a frame's worth of rise)");
     for (uint32_t t = 5016; t < 6000; t += 16) {
+        in.mic_at = t;
         step(&e, &in, t, bb, bp);
     }
-    HX_ASSERT_TRUE(near(bp[3], 0.42f), "Glow while held");
+    HX_ASSERT_TRUE(bp[3] > 0.95f, "full while held and loud");
     in.held = false;
     unsigned all = 0;
     uint32_t t = 6000;
@@ -250,7 +250,7 @@ static void test_engine_mic_staleness(void) {
     for (uint32_t t = 1600; t < 2400; t += 16) {
         step(&e, &in, t, bb, bp); /* no new frame: stale after 100 ms */
     }
-    HX_ASSERT_TRUE(bp[3] > 0.14f && bp[3] < 0.16f, "stale: back down to the faint 15 %");
+    HX_ASSERT_TRUE(bp[3] < 0.01f, "stale: back to dark");
     HX_ASSERT_TRUE(e.v_max > 0.99f, "the loudest level is kept for the log");
 }
 
@@ -313,7 +313,7 @@ int main(void) {
     HX_RUN(test_voice_is_the_mockup);
     HX_RUN(test_voice_climbs_with_the_level);
     HX_RUN(test_a_press_from_dark_stays_on);
-    HX_RUN(test_glow_is_the_mockup);
+    HX_RUN(test_offline_press_is_dark);
     HX_RUN(test_mic_mapping);
     HX_RUN(test_pixels);
     HX_RUN(test_engine_boot_waits_for_the_sound);

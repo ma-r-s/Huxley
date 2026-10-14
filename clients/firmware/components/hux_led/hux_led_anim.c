@@ -70,9 +70,12 @@ bool hux_led_press_step(hux_led_press_t *p, float dt_ms, bool held, bool voice_m
         }
         return false;
     }
-    /* Mario, 2026-10-14: the whole ring at once, its intensity following
-     * the voice (Voice), or steady (Glow). */
-    float v = voice_mode ? p->level * (0.15f + 0.85f * clamp01(p->voice)) : 0.42f * p->level;
+    /* Mario's rule (2026-10-14, at the home): the ring lights only while
+     * the lever is down and someone is talking. The whole ring at once,
+     * its intensity following the voice from dark (silence and the room
+     * stay under the mic mapping's -50 dBFS floor); a press the walkie
+     * can't act on (offline) stays dark. */
+    float v = voice_mode ? p->level * clamp01(p->voice) : 0.0f;
     for (int i = 0; i < HUX_LED_COUNT; i++) {
         b[i] = v;
     }

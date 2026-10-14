@@ -178,7 +178,7 @@ static void run_line(char *line, bool usb) {
     } else if (strcmp(cmd, "led") == 0 && argc > 2 && strcmp(argv[1], "bright") == 0) {
         hux_led_set_bright(atoi(argv[2])); /* the light's peak, % of full, saved (F-0034) */
     } else if (strcmp(cmd, "led") == 0 && argc > 2 && strcmp(argv[1], "demo") == 0) {
-        hux_led_demo(argv[2]); /* rainbow, glow, voice: look without a press */
+        hux_led_demo(argv[2]); /* rainbow, voice: look without a press */
     } else if (strcmp(cmd, "led") == 0 && argc > 2 && strcmp(argv[1], "gain") == 0) {
         /* The hidden LEDs' gain, e.g. `led gain 3.0`, saved (F-0034). */
         hux_led_set_gain((int)lroundf(strtof(argv[2], NULL) * 10.0f));
