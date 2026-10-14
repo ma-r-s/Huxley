@@ -48,7 +48,7 @@ static float db(float p) {
 
 static void test_far_end_alone_is_gated(void) {
     hux_echo_t e;
-    hux_echo_reset(&e, true);
+    hux_echo_reset(&e, true, 30);
     room_t rm = {0};
     int16_t ref[N], mic[N];
     float in_p = 0, out_p = 0;
@@ -68,7 +68,7 @@ static void test_far_end_alone_is_gated(void) {
 
 static void test_shadow_changes_nothing_and_measures(void) {
     hux_echo_t e;
-    hux_echo_reset(&e, false);
+    hux_echo_reset(&e, false, 30);
     room_t rm = {0};
     int16_t ref[N], mic[N], copy[N];
     bool same = true;
@@ -90,7 +90,7 @@ static void test_shadow_changes_nothing_and_measures(void) {
 
 static void test_near_end_alone_passes(void) {
     hux_echo_t e;
-    hux_echo_reset(&e, true);
+    hux_echo_reset(&e, true, 30);
     room_t rm = {0};
     int16_t ref[N], mic[N], near[N], copy[N];
     memset(ref, 0, sizeof(ref));
@@ -108,7 +108,7 @@ static void test_near_end_alone_passes(void) {
 
 static void test_a_hissing_line_doesnt_gate(void) {
     hux_echo_t e;
-    hux_echo_reset(&e, true);
+    hux_echo_reset(&e, true, 30);
     room_t rm = {0};
     int16_t ref[N], mic[N];
     for (int f = 0; f < 100; f++) {
@@ -128,7 +128,7 @@ static void test_a_hissing_line_doesnt_gate(void) {
 
 static void test_clips_counted(void) {
     hux_echo_t e;
-    hux_echo_reset(&e, false);
+    hux_echo_reset(&e, false, 30);
     int16_t ref[N], mic[N];
     for (size_t i = 0; i < N; i++) {
         ref[i] = (i % 2) ? 32767 : -32768;
@@ -142,7 +142,7 @@ static void test_clips_counted(void) {
 
 static void test_no_click(void) {
     hux_echo_t e;
-    hux_echo_reset(&e, true);
+    hux_echo_reset(&e, true, 30);
     int16_t ref[N], mic[N];
     for (size_t i = 0; i < N; i++) {
         mic[i] = 10000;
@@ -157,6 +157,37 @@ static void test_no_click(void) {
     HX_ASSERT_TRUE(maxstep < 300, "the gain ramps (2 ms), no step");
 }
 
+/* The first real call (2026-10-14): while the speaker played, the mic sat
+ * at -16 dBFS, the room's floor at -67. At the default 50 dB the echo
+ * lands at the floor; 30 dB left it 20 dB over it, heard by the caller. */
+static void test_default_depth_takes_the_echo_to_the_floor(void) {
+    hux_echo_t e;
+    hux_echo_reset(&e, true, HUX_ECHO_DEPTH_DB);
+    room_t rm = {0};
+    int16_t ref[N], mic[N];
+    float in_p = 0, out_p = 0;
+    for (int f = 0; f < 200; f++) {
+        bool talking = (f / 25) % 2 == 0;
+        burst(ref, N, 0.3f, talking);
+        room_frame(&rm, ref, NULL, 0.9f, mic); /* the echo near -16 dBFS, as measured */
+        float before = hux_echo_power(mic, N);
+        hux_echo_process(&e, mic, ref, N);
+        if (f >= 50 && talking) {
+            in_p += before;
+            out_p += hux_echo_power(mic, N);
+        }
+    }
+    float frames = 75.0f; /* talking frames from 50 on */
+    HX_ASSERT_TRUE(db(in_p / frames) > -18.0f && db(in_p / frames) < -14.0f, "the echo at -16 dBFS");
+    HX_ASSERT_TRUE(db(out_p) - db(in_p) < -45.0f, "down by 45 dB or more (50, less the onsets)");
+    HX_ASSERT_TRUE(db(out_p / frames) < -60.0f, "near the room's floor, not 20 dB over it");
+    hux_echo_t d;
+    hux_echo_reset(&d, true, 5);
+    HX_ASSERT_TRUE(d.suppress > 0.099f && d.suppress < 0.101f, "clamped to 20 dB");
+    hux_echo_reset(&d, true, 99);
+    HX_ASSERT_TRUE(d.suppress < 0.00032f, "clamped to 70 dB");
+}
+
 int main(void) {
     HX_RUN(test_far_end_alone_is_gated);
     HX_RUN(test_shadow_changes_nothing_and_measures);
@@ -164,5 +195,6 @@ int main(void) {
     HX_RUN(test_a_hissing_line_doesnt_gate);
     HX_RUN(test_clips_counted);
     HX_RUN(test_no_click);
+    HX_RUN(test_default_depth_takes_the_echo_to_the_floor);
     HX_SUMMARY();
 }

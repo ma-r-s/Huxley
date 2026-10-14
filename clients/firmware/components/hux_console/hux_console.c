@@ -138,6 +138,8 @@ static void run_line(char *line, bool usb) {
         } else {
             (void)hux_prompt_play((hux_prompt_t)id);
         }
+    } else if (strcmp(cmd, "echo") == 0 && argc > 2 && strcmp(argv[1], "depth") == 0) {
+        hux_audio_set_echo_depth(atoi(argv[2])); /* the gate in dB, saved (F-0031) */
     } else if (strcmp(cmd, "echo") == 0 && argc > 1) {
         /* A call's echo (F-0031): off, shadow (measure only), on (gate). */
         int mode = strcmp(argv[1], "off") == 0     ? HUX_ECHO_MODE_OFF

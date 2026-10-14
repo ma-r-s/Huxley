@@ -12,8 +12,6 @@
 /* The floor follows a fall at once (speech pauses between syllables) and a
  * rise slowly (2 dB a second: a long phrase never becomes the floor). */
 #define FLOOR_RISE     1.0093f
-/* Gated: -30 dB in amplitude. */
-#define SUPPRESS_GAIN  0.0316f
 /* Opening: halfway each frame (about 40 ms), across the frame; closing:
  * within 2 ms (no click, no onset leaking through a slow ramp). */
 #define OPEN_STEP      0.5f
@@ -22,10 +20,16 @@
  * almost nothing, so bass in the reference would read as a weak echo. */
 #define HP_A           0.9274f
 
-void hux_echo_reset(hux_echo_t *e, bool apply) {
+void hux_echo_reset(hux_echo_t *e, bool apply, int depth_db) {
     memset(e, 0, sizeof(*e));
     e->apply = apply;
     e->gain = 1.0f;
+    if (depth_db < HUX_ECHO_DEPTH_MIN_DB) {
+        depth_db = HUX_ECHO_DEPTH_MIN_DB;
+    } else if (depth_db > HUX_ECHO_DEPTH_MAX_DB) {
+        depth_db = HUX_ECHO_DEPTH_MAX_DB;
+    }
+    e->suppress = powf(10.0f, -(float)depth_db / 20.0f);
     e->ref_floor = 1.0f; /* falls to the real floor within frames */
 }
 
@@ -83,7 +87,7 @@ void hux_echo_process(hux_echo_t *e, int16_t *mic, const int16_t *ref, size_t n)
             e->hist[bin]++;
         }
     }
-    float target = active ? SUPPRESS_GAIN : 1.0f;
+    float target = active ? e->suppress : 1.0f;
     float from = e->gain;
     float to = target < from ? target : from + (target - from) * OPEN_STEP;
     if (e->apply) {

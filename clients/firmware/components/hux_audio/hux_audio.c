@@ -136,12 +136,15 @@ static bool pa_write(bool on) {
     return ok;
 }
 
-/* The call's echo mode and jitter buffer (F-0031), kept in NVS beside the
- * volume: `echo off|shadow|on` (shadow by default: the first real calls
- * measure), `calljb <ms>` (240 by default). */
-#define ECHO_NVS_KEY   "echo"
-#define CALLJB_NVS_KEY "calljb"
-static _Atomic int s_echo_mode = HUX_ECHO_MODE_SHADOW;
+/* The call's echo mode, gate depth and jitter buffer (F-0031), kept in NVS
+ * beside the volume: `echo off|shadow|on` (on by default since the first
+ * real call measured the echo 23 dB over the near end), `echo depth <dB>`
+ * (50 by default), `calljb <ms>` (240 by default). */
+#define ECHO_NVS_KEY       "echo"
+#define ECHO_DEPTH_NVS_KEY "echo_db"
+#define CALLJB_NVS_KEY     "calljb"
+static _Atomic int s_echo_mode = HUX_ECHO_MODE_ON;
+static _Atomic int s_echo_depth_db = HUX_ECHO_DEPTH_DB;
 static _Atomic int s_call_jb_ms = 240;
 
 static void call_settings_load(void) {
@@ -153,6 +156,11 @@ static void call_settings_load(void) {
     uint16_t jb = 0;
     if (nvs_get_u8(h, ECHO_NVS_KEY, &m) == ESP_OK && m <= HUX_ECHO_MODE_ON) {
         atomic_store(&s_echo_mode, (int)m);
+    }
+    uint8_t depth = 0;
+    if (nvs_get_u8(h, ECHO_DEPTH_NVS_KEY, &depth) == ESP_OK && depth >= HUX_ECHO_DEPTH_MIN_DB &&
+        depth <= HUX_ECHO_DEPTH_MAX_DB) {
+        atomic_store(&s_echo_depth_db, (int)depth);
     }
     if (nvs_get_u16(h, CALLJB_NVS_KEY, &jb) == ESP_OK && jb >= 100 && jb <= 1000) {
         atomic_store(&s_call_jb_ms, (int)jb);
@@ -1087,10 +1095,11 @@ static void echo_stats(void) {
     uint32_t rmin = atomic_exchange(&s_call_ring_min, UINT32_MAX);
     uint32_t rmax = atomic_exchange(&s_call_ring_max, 0);
     ESP_LOGI(TAG,
-             "audio.echo mode=%s frames=%u active=%u ratio_db_p10=%d p50=%d p90=%d "
+             "audio.echo mode=%s depth_db=%d frames=%u active=%u ratio_db_p10=%d p50=%d p90=%d "
              "ref_floor_db=%.0f mic_peak=%d ref_peak=%d mic_clips=%u ref_clips=%u vol=%d pa=%d "
              "ring_ms_min=%d max=%u trims=%u jb_ms=%d",
-             MODES[atomic_load(&s_echo_mode)], (unsigned)s_echo.frames, (unsigned)s_echo.active,
+             MODES[atomic_load(&s_echo_mode)], atomic_load(&s_echo_depth_db),
+             (unsigned)s_echo.frames, (unsigned)s_echo.active,
              hux_echo_percentile(&s_echo, 10), hux_echo_percentile(&s_echo, 50),
              hux_echo_percentile(&s_echo, 90), 10.0f * log10f(s_echo.ref_floor + 1e-12f),
              s_echo.mic_peak, s_echo.ref_peak, (unsigned)s_echo.mic_clips,
@@ -1167,7 +1176,8 @@ static void mic_task(void *unused) {
             bool call = atomic_load_explicit(&s_call, memory_order_relaxed) &&
                         mode != HUX_ECHO_MODE_OFF;
             if (call && !s_echo_on) {
-                hux_echo_reset(&s_echo, mode == HUX_ECHO_MODE_ON); /* each call afresh */
+                hux_echo_reset(&s_echo, mode == HUX_ECHO_MODE_ON,
+                               atomic_load(&s_echo_depth_db)); /* each call afresh */
                 s_echo_log_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
             }
             s_echo_on = call;
@@ -1461,8 +1471,9 @@ void hux_audio_set_call(bool on) {
     }
     /* The mic task resets the suppressor when it sees the call begin. */
     static const char *const MODES[] = {"off", "shadow", "on"};
-    ESP_LOGI(TAG, "audio.call %s rebuffer_ms=%d echo=%s", on ? "on" : "off",
-             on ? atomic_load(&s_call_jb_ms) : SPK_REBUFFER_MS, MODES[atomic_load(&s_echo_mode)]);
+    ESP_LOGI(TAG, "audio.call %s rebuffer_ms=%d echo=%s depth_db=%d", on ? "on" : "off",
+             on ? atomic_load(&s_call_jb_ms) : SPK_REBUFFER_MS, MODES[atomic_load(&s_echo_mode)],
+             atomic_load(&s_echo_depth_db));
 }
 
 void hux_audio_set_echo_mode(int mode) {
@@ -1471,6 +1482,16 @@ void hux_audio_set_echo_mode(int mode) {
     }
     atomic_store(&s_echo_mode, mode);
     call_setting_save(ECHO_NVS_KEY, mode, false);
+}
+
+void hux_audio_set_echo_depth(int db) {
+    if (db < HUX_ECHO_DEPTH_MIN_DB || db > HUX_ECHO_DEPTH_MAX_DB) {
+        ESP_LOGW(TAG, "audio.echo_depth refused db=%d (%d-%d)", db, HUX_ECHO_DEPTH_MIN_DB,
+                 HUX_ECHO_DEPTH_MAX_DB);
+        return;
+    }
+    atomic_store(&s_echo_depth_db, db); /* the next call (a call resets the suppressor) */
+    call_setting_save(ECHO_DEPTH_NVS_KEY, db, false);
 }
 
 void hux_audio_set_call_jb(int ms) {

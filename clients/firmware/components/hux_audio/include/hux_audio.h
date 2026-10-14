@@ -74,6 +74,9 @@ void hux_audio_set_call(bool on);
  * NVS; 240 by default). */
 enum { HUX_ECHO_MODE_OFF = 0, HUX_ECHO_MODE_SHADOW = 1, HUX_ECHO_MODE_ON = 2 };
 void hux_audio_set_echo_mode(int mode);
+/** Console `echo depth <dB>` (20-70, 50 by default): the gate, saved; the
+ * next call uses it (F-0031). */
+void hux_audio_set_echo_depth(int db);
 void hux_audio_set_call_jb(int ms);
 
 /** `true` if the mic is actively producing frames. */

@@ -508,15 +508,18 @@ host-tested; the task only reads its inputs and writes pixels.
 ### Calls: latency and the walkie's own echo (F-0031)
 
 During a call (`input_mode skill_continuous`) the mic streams while the
-speaker plays the far end. `audio.call on rebuffer_ms= echo=` at its
-start. The speaker's buffer is a call's: after a dropout it refills to
+speaker plays the far end. `audio.call on rebuffer_ms= echo= depth_db=`
+at its start. The speaker's buffer is a call's: after a dropout it refills to
 `calljb` (240 ms; streams keep 1 s), and above that + 160 ms (a stall's
 backlog arriving at once) it trims back, in a quiet chunk if one comes
 within 2 s (`spk.call_trim dropped_ms= ring_ms= quiet= waited_ms=`).
 The mic's echo: the ES7210's channel 0 is the speaker's own output,
-sampled with the mic. `echo off|shadow|on` (NVS; shadow by default:
-measure, change nothing; on: the mic -30 dB while the speaker is active).
-Every 5 s: `audio.echo mode= frames= active= ratio_db_p10= p50= p90=`
+sampled with the mic. `echo off|shadow|on` (NVS; on by default: the mic
+goes down by the depth while the speaker is active, half duplex; shadow:
+measure, change nothing), `echo depth <dB>` (NVS, 20-70, 50 by default:
+the first real call measured the echo 23 dB over the near end's voice,
+-16 dBFS against a -67 floor, so 30 dB left it audible). Every 5 s:
+`audio.echo mode= depth_db= frames= active= ratio_db_p10= p50= p90=`
 (mic over speaker power, 300 Hz up, while the speaker is active: the
 echo's strength; near-end speech raises the upper percentiles)
 `ref_floor_db= mic_peak= ref_peak= mic_clips= ref_clips= vol= pa=
