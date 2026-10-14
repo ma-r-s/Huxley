@@ -546,6 +546,44 @@ Studio projects (11 plates, 2.2 MB) and every STL with the fit coupon
 (4.1 MB), each zip with PRINT.txt; both were scanned for personal
 metadata before publishing (none: Bambu leaves Designer empty).
 
+**Talk lever: stays on, will not click, wobbles (2026-10-13)**: Mario,
+after assembling rev E: pressed, the switch clicked but often stayed on
+after release; cutting the spring shorter made it never click; he spent an
+hour and found no length that did both. And the lever slid along its pin and
+its blade caught on the channel going in, until he put a ring cut off a
+spring on the pin as a washer. Validated: a tact dome lets go well below its
+click (taken as 40 %), so the spring must push under the let-go at rest and
+over the click at the stop, inside the lever's 3.8 mm stroke (3.55 of
+spring). The 0.4 x 4 x 15 (0.59 N/mm) gains 2.1 N over that, and rev E rested
+it at 0.9 N, about where a dome lets go; each cut coil jumps the force ~0.8 N.
+Along the pin the lever had the channel's 0.25 mm each side over its whole
+18 mm width. Fix, the lever and plungers only (the printed clear top, base,
+faceplate and pin are unchanged, checked by their volume and bounds):
+- spring 0.5 x 5 x 15 from his SciWil kit (label photo IMG_2464), whole:
+  0.99 N/mm (6 active; 0.74 if 8), 0.5 N at rest, 4 N at the stop; 6 mm
+  springs do not fit the tub's 6.4 bore; a 2 mm seat in the lever, its rim
+  chamfered (a ramp from the front edge, first drawn, was on the edge that
+  goes in last, and from the back edge it would cut the stop's face);
+- plungers 4.5 / 4.75 / 5.0 / 5.25 (0.25 N steps) for a switch whose force
+  is not known (1.6 to 2.6 N) and a spring that may come long, on the
+  orange plate with the lever (`3_orange_lever_plungers`; plate 1 is now
+  `1_white_faceplate_bridge_pin`);
+- washers on the hub, 0.1 mm off the tooth and the seat wall, the blade
+  narrower each side above it, 0.15 growing to 0.6 at the top (the pin's
+  play lets it lean under a sideways push).
+Cold review: the ramp (fixed as above), the lean (taper), plunger steps
+smaller than the label's free-length tolerance (the 4.5 added), the washer
+test (now on the hub's own ring), stale text; tub, faceplate and pin
+verified unchanged to 0.000 mm3. Held at the stop the press is about 7 N
+at the thumb against rev E's 5.
+Tests: `test_hx1_tact_switch_clicks_and_lets_go` (for every switch force a
+plunger clicks with margin and lets go; a stiff switch still clicks with
+the spring a quarter softer) and `test_hx1_lever_is_centred_on_its_pin_by_its_washers`
+(fails on rev E's lever). The website's model and print files are
+regenerated. Lessons: a switch in series with a spring needs the let-go
+force in the budget, not only the click; and a part that slides on a pin
+wants its bearing faces near the pin, not across its whole width.
+
 **Decisions waiting on Mario**: (resolved: HX-1 is the build, speaker at the
 bottom is fine, holders whole, no glue but the tub's halves, plastic pivot, protected cells
 instead of a protection board, the ribbon and loose wires, the board's

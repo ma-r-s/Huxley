@@ -41,22 +41,61 @@ def test_speaker_gets_a_real_back_box(concept):
     assert concept.notes["back_volume_cc"] >= 40.0
 
 
-def test_hx1_tact_switch_clicks_before_the_stop():
-    """Spring in series: the lever compresses the spring until it reaches the
-    switch's actuation force. That must happen before the stop post, with
-    margin, for a nominal 12x12 switch; a stiff one (2.6 N) must still click
-    with the plunger printed 0.5 mm longer. Even the 1.0 mm longer plunger
-    must not press the switch with the lever at rest."""
+def test_hx1_tact_switch_clicks_and_lets_go():
+    """Spring in series: the lever compresses the spring until it pushes with
+    the switch's click force, before the stop and with margin; with the lever
+    at rest it must push less than the force at which the switch lets go, or
+    the switch stays on after release. Mario's rev E did one or the other
+    however he cut its spring (2026-10-13). The switch's force is not known,
+    so for every 12 x 12 force one printed plunger does both, the nominal one
+    for a nominal switch, and a stiff switch still clicks if the spring is a
+    quarter softer than computed (8 active coils, not 6). It never goes solid."""
     from huxcase import hardware as hw
     from huxcase.concepts import hx1
 
+    def works(force: float, longer: float, k: float = hw.SERIES_SPRING_K) -> bool:
+        preload = (hw.SERIES_SPRING_FREE - hx1.SPRING_REST + longer) * k
+        click = max(0.0, (force - preload) / k) + hw.TACT_TRAVEL
+        return preload < 0.8 * hw.TACT_RELEASE * force and click < hx1.STOP - 0.5
+
     assert hx1.click_travel() < hx1.STOP - 0.5
-    assert hx1.click_travel(force=2.6, longer=0.5) < hx1.STOP - 0.2
+    assert works(hw.TACT_FORCE, 0.0)
+    for force in hw.TACT_FORCE_RANGE:
+        assert any(works(force, v) for v in hx1.PLUNGER_VARIANTS), force
+    assert works(max(hw.TACT_FORCE_RANGE), max(hx1.PLUNGER_VARIANTS), 0.75 * hw.SERIES_SPRING_K)
+    solid = hw.SERIES_SPRING_COILS * hw.SERIES_SPRING_WIRE
     longest = max(hx1.PLUNGER_VARIANTS)
-    rest_force = (hw.SERIES_SPRING_FREE - hx1.SPRING_REST + longest) * hw.SERIES_SPRING_K
-    assert rest_force < 0.8 * hw.TACT_FORCE
-    solid = 10 * 0.4  # 10 coils of 0.4 mm wire
     assert solid + 1.0 < hx1.SPRING_REST - longest - hx1.STOP + hw.TACT_TRAVEL
+
+
+def test_hx1_lever_is_centred_on_its_pin_by_its_washers(hx1_concept):
+    """Mario's rev E lever slid along its pin and its blade scraped the channel
+    on the way in (2026-10-13; a ring cut from a spring, as a washer on the
+    pin, cured it). The hub's ends stand HUB_GAP off the faceplate's tooth and
+    the tub's seat wall, and the blade above the hub is BLADE_RELIEF narrower,
+    so along the pin a washer meets a wall before the blade can."""
+    from build123d import Cylinder, Pos, Rot
+    from huxcase.concepts import hx1
+    from huxcase.shapes import bbox_solid
+
+    c = hx1_concept
+    bar = next(p.shape for p in c.parts if p.name == "ptt_bar")
+    walls = [c.shells["tub"], c.shells["faceplate"]]
+    hub = bar & (
+        Pos(hx1.PIVOT_X, hx1.SWITCH_Y, hx1.PIVOT_Z) * Rot(90, 0, 0) * Cylinder(hx1.KNUCKLE_R, 30)
+    )
+
+    def overlap(shape, dy: float) -> float:
+        return sum(((Pos(0, dy, 0) * shape) & w).volume for w in walls)
+
+    for side in (-1, 1):
+        # Nothing of the lever touches before HUB_GAP; then the hub's end
+        # face meets a wall over a real ring (pushed 0.05 in: > 0.2 mm3).
+        assert overlap(bar, side * (hx1.HUB_GAP - 0.03)) < 1e-3, side
+        assert overlap(hub, side * (hx1.HUB_GAP + 0.05)) > 0.2, side
+    blade = bar & bbox_solid(20.0, 40.0, -20.0, 30.0, hx1.BLADE_Z0 + 0.5, hx1.BAR_Z1 + 1.0)
+    for side in (-1, 1):
+        assert overlap(blade, side * (hx1.CLEAR + hx1.BLADE_RELIEF - 0.03)) < 1e-3, side
 
 
 def test_hx1_rocker_sits_below_the_side_surface():

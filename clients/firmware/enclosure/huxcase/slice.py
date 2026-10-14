@@ -140,6 +140,9 @@ CLARITY_FILAMENT = {  # on the PETG preset
     # The P2S's own 0.8, not the preset's 0.3: PETG oozes, and 0.3 barely
     # pulls the melt back before each of the ~3000 travels.
     "filament_retraction_length": "0.8",  # preset 0.3
+    # Bambu counts a line's rounded ends (0.5 x 0.2 is 0.091 mm2, not 0.1), so
+    # this cap runs the infill at 27 mm/s and the 0.42 outer wall at 33
+    # (measured in the G-code, 2026-10-12).
     "filament_max_volumetric_speed": f"{0.5 * 0.2 * CLARITY_SPEED:g}",
 }
 # No variable layer heights (Mario asked, 2026-10-11): Bambu Studio's layer
@@ -182,26 +185,62 @@ class Plate:
     # STLs (of `stls`) assembled into one object, each part in its own
     # filament slot: a piece printed in two colours at once (the badge).
     parts: dict = field(default_factory=dict)
+    # Objects made here from several STLs of one colour, merged into one mesh
+    # (name -> ((stl, dx, dy, degrees about z), ...)), so by object a group of
+    # small pieces needs one toolhead clearance, not one each.
+    merge: dict = field(default_factory=dict)
+    # Each object's own settings over the plate's (STL or merged name -> {key:
+    # value}), written on the object in model_settings.
+    object_settings: dict = field(default_factory=dict)
+
+
+def _luminance(colour: str) -> float:
+    r, g, b = (int(colour[i : i + 2], 16) / 255 for i in (1, 3, 5))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _flush(colours: tuple[str, ...]) -> list[str]:
+    """Purge volumes (mm3) from each filament to each other, row = from: the
+    base 140, more going light after dark (black to orange about 480), a
+    little going dark. The presets carry a 4 x 4 matrix, and a plate with
+    another filament count fails to slice ("Flush volumes matrix do not match
+    to the correct size")."""
+    out = []
+    for a in colours:
+        for b in colours:
+            d = _luminance(b) - _luminance(a)
+            out.append("0" if a == b else str(round(140 + 800 * max(d, 0) + 60 * max(-d, 0))))
+    return out
 
 
 TOP, BASE = "hx1_10_tub_top", "hx1_03_tub_base"
 TEST_BASE, TEST_TOP = "hx1_11_test_base", "hx1_12_test_top"
 PLATES = [
     Plate(
-        "1_white_faceplate_bridge_pin_plunger",
+        "1_white_faceplate_bridge_pin",
         (
             "hx1_01_faceplate",
             "hx1_07_bridge",
             *["hx1_05_ptt_pin"] * 3,  # two spares: it is thin and lies on a narrow base
-            "hx1_06_plunger",
-            "hx1_08_plunger_long05",
-            "hx1_09_plunger_long10",
         ),
         {},
         (WHITE,),
     ),
     Plate("2_black_grille", ("hx1_02_grille_plug",), {}, (BLACK,)),
-    Plate("3_orange_lever", ("hx1_04_ptt_bar",), {}, (ORANGE,)),
+    # The lever and its plungers, all that the talk switch's fix changed
+    # (2026-10-13): one small plate, nothing else to reprint.
+    Plate(
+        "3_orange_lever_plungers",
+        (
+            "hx1_04_ptt_bar",
+            "hx1_06_plunger",
+            "hx1_08_plunger_short",
+            "hx1_09_plunger_long",
+            "hx1_18_plunger_shortest",
+        ),
+        {},
+        (ORANGE,),
+    ),
     # The tub, both halves, by object: the frosted top first (its first
     # layers come out clean, no grey left in the nozzle), then the base.
     # 94 mm apart in y (the top lies on its back, 68 mm deep): the toolhead
@@ -307,6 +346,57 @@ PLATES.append(
         parts={BADGE_BODY: 1, BADGE_LETTERS: 2},
     )
 )
+# A second case in one go (Mario, 2026-10-13), by object: the white faceplate
+# with the bridge and the pins, the new orange lever with its four plungers,
+# the black grille, then the red base, last as the only piece taller than the
+# gantry's 32.5 mm. One per corner, 80 mm or more apart (the toolhead's 72),
+# clear of the bed's excluded strip and corner. White goes in A1 (the clear
+# PETG out: the top is not on it). Only the base gets support and no brim
+# (its own settings): support under the faceplate would mark its face edge
+# and fill its counterbores. Order white, orange, black, red: one purge from
+# dark to light (black to red) instead of to white or orange.
+WHITE_SET, ORANGE_SET = "hx1_set_faceplate_bridge_pins", "hx1_set_lever_plungers"
+GRILLE = "hx1_02_grille_plug"
+PLATES.append(
+    Plate(
+        "13_case_by_object",
+        (WHITE_SET, ORANGE_SET, GRILLE, BASE),
+        {k: v for k, v in TREE_SUPPORTS.items() if k != "enable_support"}
+        | {
+            "print_sequence": "by object",
+            "enable_prime_tower": "0",
+            "flush_volumes_matrix": _flush((WHITE, BLACK, ORANGE, RED)),
+        },
+        (WHITE, BLACK, ORANGE, RED),
+        slots={WHITE_SET: 1, GRILLE: 2, ORANGE_SET: 3, BASE: 4},
+        place={
+            WHITE_SET: (66.0, 68.5),
+            ORANGE_SET: (38.0, 238.3),
+            GRILLE: (226.5, 24.3),
+            BASE: (218.0, 233.4),
+        },
+        merge={
+            WHITE_SET: (
+                ("hx1_01_faceplate", 0.0, 0.0, 0.0),
+                ("hx1_07_bridge", -7.0, -67.4, 0.0),
+                *[("hx1_05_ptt_pin", x, -67.4, 0.0) for x in (26.0, 31.0, 36.0)],
+            ),
+            ORANGE_SET: (
+                ("hx1_04_ptt_bar", 0.0, 0.0, 0.0),
+                *[
+                    (stl, x, -17.2, 0.0)
+                    for stl, x in (
+                        ("hx1_06_plunger", -13.5),
+                        ("hx1_08_plunger_short", -4.5),
+                        ("hx1_09_plunger_long", 4.5),
+                        ("hx1_18_plunger_shortest", 13.5),
+                    )
+                ],
+            ),
+        },
+        object_settings={BASE: {"enable_support": "1", "brim_type": "no_brim"}},
+    )
+)
 # Plates whose close fits no support may enter: STL, its printed piece.
 KEEP_OUT = {
     "4_tub_base_and_top": (TOP, "tub_top"),
@@ -345,25 +435,6 @@ def _resolve(kind: str, name: str) -> dict:
     out.update(d)
     out.pop("include", None)
     out["inherits"] = ""  # complete: nothing left to inherit
-    return out
-
-
-def _luminance(colour: str) -> float:
-    r, g, b = (int(colour[i : i + 2], 16) / 255 for i in (1, 3, 5))
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b
-
-
-def _flush(colours: tuple[str, ...]) -> list[str]:
-    """Purge volumes (mm3) from each filament to each other, row = from: the
-    base 140, more going light after dark (black to orange about 480), a
-    little going dark. The presets carry a 4 x 4 matrix, and a plate with
-    another filament count fails to slice ("Flush volumes matrix do not match
-    to the correct size")."""
-    out = []
-    for a in colours:
-        for b in colours:
-            d = _luminance(b) - _luminance(a)
-            out.append("0" if a == b else str(round(140 + 800 * max(d, 0) + 60 * max(-d, 0))))
     return out
 
 
@@ -456,7 +527,13 @@ def slice_plate(plate: Plate, print_dir: Path, out_dir: Path, proj_dir: Path) ->
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
         (work / "data").mkdir()
-        files = [str(print_dir / f"{s}.stl") for s in plate.stls if s not in plate.parts]
+        for name, pieces in plate.merge.items():
+            _merge(print_dir, pieces).export(work / f"{name}.stl")
+        files = [
+            str((work if s in plate.merge else print_dir) / f"{s}.stl")
+            for s in plate.stls
+            if s not in plate.parts
+        ]
         if plate.parts:
             # One object from the parts, made with the plate's own filaments
             # (a 3mf with another filament count crashes the next step).
@@ -520,10 +597,14 @@ def slice_plate(plate: Plate, print_dir: Path, out_dir: Path, proj_dir: Path) ->
             for oid, name, block in _objects(t):
                 ids[name] = oid
                 slot = plate.slots.get(name, 1)
-                t = t.replace(
-                    block,
-                    block.replace('key="extruder" value="1"', f'key="extruder" value="{slot}"'),
+                new = block.replace('key="extruder" value="1"', f'key="extruder" value="{slot}"')
+                own = "".join(
+                    f'\n    <metadata key="{k}" value="{v}"/>'
+                    for k, v in plate.object_settings.get(name, {}).items()
                 )
+                head = f'<metadata key="extruder" value="{slot}"/>'
+                t = t.replace(block, new.replace(head, head + own, 1))
+            assert set(plate.object_settings) <= set(ids), f"{plate.name}: {plate.object_settings}"
             return t
 
         def layout(t: str) -> str:
@@ -568,6 +649,25 @@ def slice_plate(plate: Plate, print_dir: Path, out_dir: Path, proj_dir: Path) ->
         )
         _no_warnings(out_dir)
         return out
+
+
+def _merge(print_dir: Path, pieces: tuple):
+    """One mesh from print-posed STLs, each turned about z and moved in the
+    bed plane, centred on the origin in x and y, on z = 0."""
+    import math
+
+    import trimesh
+
+    meshes = []
+    for stl, dx, dy, deg in pieces:
+        m = trimesh.load(print_dir / f"{stl}.stl")
+        m.apply_transform(trimesh.transformations.rotation_matrix(math.radians(deg), (0, 0, 1)))
+        m.apply_translation((dx, dy, 0.0))
+        meshes.append(m)
+    out = trimesh.util.concatenate(meshes)
+    lo, hi = out.bounds
+    out.apply_translation((-(lo[0] + hi[0]) / 2, -(lo[1] + hi[1]) / 2, -lo[2]))
+    return out
 
 
 def _rewrite(src: Path, dst: Path, edits: dict) -> None:

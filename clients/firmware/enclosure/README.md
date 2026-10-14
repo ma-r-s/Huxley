@@ -95,8 +95,8 @@ switch.
 | Holders (x2) | the side walls; sideways, at their full-height end caps: the bridge's tabs beside the + caps, floor lugs beside the - caps (crush-ribbed, so the holders' wall height does not matter); crush-ribbed pedestals and pads | the bridge: one M3 x 6 into an insert on the back wall; ribs on its front bar press both cells, and so the holders, onto the back wall |
 | Cells | the holders | the holders' springs, and the bridge's front bar in a drop |
 | 12 x 12 switch | cradle in the tub, legs in two slots | crush ribs; a latch finger snaps over its front face |
-| Plunger + spring | the tube | the spring's 1.5 mm preload between lever and plunger |
-| Lever | its printed pin | the pin sits in two blind seats (tub behind, faceplate tooth in front), captured when the case closes; 0.9 N of spring preload holds it against its stop |
+| Plunger + spring | the tube | the spring's 0.5 mm preload between lever and plunger |
+| Lever | its printed pin | the pin sits in two blind seats (tub behind, faceplate tooth in front), captured when the case closes; its hub's washers centre it on the pin; 0.5 N of spring preload holds it against its stop |
 | Power switch | its panel in a recess in the left side | its own snap ears |
 | Battery - lead | two clips on the back wall, beside the speaker post | their lips |
 | Joints (+ and -) | pockets on the back wall | pressed in between two shelves (in heat-shrink) |
@@ -158,27 +158,51 @@ follows.
 ## The talk switch: 12 x 12 tactile button + series spring
 
 Built only from Mario's parts drawer: his 12 x 12 mm tactile button (green
-cap not used) and the 0.4 x 4 x 15 mm spring from the SciWil kit.
+cap not used) and the 0.5 x 5 x 15 mm spring from the SciWil kit, used whole
+(rev E had the 0.4 x 4 x 15; see below why it changed, 2026-10-13).
 
 - The orange lever turns on a **printed Ø2.4 pin** (no screw, no metal pin).
   The pin goes through the lever's knuckle; its ends sit in a blind seat in
   the tub behind the channel and one in the faceplate's tooth in front of it,
   so closing the case captures it. To fit it: pin through the lever, slide
   the lever in from the front along its channel until the pin drops into the
-  rear seat. The spring sits in a counterbore in the lever.
+  rear seat. The spring sits in a 2 mm counterbore in the lever, its rim
+  chamfered 45 deg so the spring's end drops in.
+- **Washers on the hub**: the knuckle's two ends stand 0.1 mm off the
+  faceplate's tooth and the tub's seat wall (`hx1.HUB_GAP`), so the lever
+  stays centred on its pin, and the blade above the hub is narrower each
+  side, 0.15 mm growing to 0.6 at the top (`BLADE_RELIEF`, the pin's play
+  lets it lean a little under a sideways push), so it cannot touch the
+  channel's walls first.
+  Rev E had 0.25 mm each side the whole width: Mario's lever slid along its
+  pin and scraped on the way in until he put a ring cut off a spring on the
+  pin as a washer (2026-10-13). The channel in the printed top is unchanged.
 - Its top end presses a **spring in series** with the switch: lever ->
   spring -> printed plunger -> switch stem. The press feels progressive
   (spring-loaded) until the spring reaches the switch's actuation force, then
   the switch clicks. The click point does not depend on print accuracy.
-- 1.5 mm of spring preload (0.9 N) holds the lever firmly on its rest stop.
-  Nominal (2 N switch): click after ~2.1 mm at the switch axis (~1.3 mm under
-  the thumb dimple); a block on the backing stops the stroke at 3.8 mm.
-  Neither the spring nor the switch is measured, so the grey plate also
-  prints two longer plungers (+0.5 and +1.0 mm: 5.5 and 6.0 long against the
-  normal 5.0). Each adds preload and brings the click earlier: a stiff switch
-  (2.6 N) still clicks with the +0.5. Tests assert the click lands before the
-  stop, the spring never goes solid, and even the +1.0 does not press the
-  switch with the lever at rest.
+- A switch clicks at one force and lets go only well below it (taken as
+  40 % of the click, not measured). So at rest the spring must push less
+  than the let-go force, or the switch stays on after release, and at the
+  stop more than the click force. The lever's stroke is fixed at 3.8 mm by
+  a block on the backing in the printed top, so the spring's stiffness sets
+  how far apart those can be: the 0.4 x 4 x 15 (0.59 N/mm) gains 2.1 N over
+  the stroke, too little, which is why Mario's rev E lever either stayed on
+  or never clicked however he cut its spring (2026-10-13). The 0.5 x 5 x 15
+  (0.99 N/mm, 6 active coils; 0.74 if all 8 count) gains 3.5 N: 0.5 N at rest
+  (0.5 mm of preload, enough to hold the lever on its rest stop), 4 N at the
+  stop. Nominal (2 N switch): click after ~1.8 mm at the switch axis (~1.0 mm
+  under the thumb dimple).
+- The switch's force is not known (the listing does not say), so the PTT is
+  sized for the 1.6 to 2.6 N of 12 x 12 switches and the orange plate prints
+  four plungers: the normal 5.0 mm, 4.75 and 5.25, and a 4.5 for a spring
+  that came long (`PLUNGER_VARIANTS`), each step about 0.25 N at rest. Held
+  at the stop the press is firmer than rev E (about 7 N at the thumb dimple
+  against 5); the click itself takes what the switch takes (3.4 N at the
+  dimple for a 2 N switch). Tests assert that for every switch in the range
+  one of them clicks before the stop with margin and lets go at rest, that a
+  stiff switch still clicks with the spring a quarter softer than computed,
+  and that the spring never goes solid.
 - The switch slides into its cradle from the front (the stem through a slot
   in the tube) until a latch finger snaps over its front face. Solder the two
   wires to the leg pair that switches first (check with a multimeter); they
@@ -212,9 +236,11 @@ own "PETG Translucent" preset for the P2S, and what carries over to a
   the fine features still print.
 - Slow, and only as hot as the spool asks: 240 C, the top of the 230 to
   240 C on Mario's spool (ElitePETG Transparent), 245 C on the first layer
-  for the bed. About 25 mm/s (a cap on the frosted filament's flow,
-  2.5 mm3/s): the guide says 20, and makers' clear PETG reports run 20 to
-  30 mm/s. The guide's 270 C, flow 1.01 and fans off strung badly on the
+  for the bed. Slow: a cap on the frosted filament's flow, 2.5 mm3/s,
+  runs the infill (most of the time) at 27 mm/s and the outer wall at 33
+  (measured in the G-code: Bambu counts a line's rounded ends, so the cap
+  is not 25 as a square line would give). The guide says 20, and makers'
+  clear PETG reports run 20 to 30 mm/s. The guide's 270 C, flow 1.01 and fans off strung badly on the
   first clear top (2026-10-11, damp, the AMS at 48 % humidity, at 40 mm/s),
   so these went back toward the spool and Bambu's preset (2026-10-12): the
   aim is an even glow and a print that succeeds, not glass.
@@ -350,8 +376,10 @@ back, off again to open the case.
   lip presses its face by 0.1 mm; round the band the fit is nominal.
 - **The lever** sits in a U open to the back, 1.5 mm clear in front, so the
   case goes in front first and nothing of the bumper can drag on the lever
-  (it springs back on 0.9 N). It stands 1.5 mm proud of the thin side: a
-  table pushes it 1.3 mm at most at the switch, short of the 2.1 mm click.
+  (it springs back on 0.5 N). It stands 1.5 mm proud of the thin side: a
+  table pushes it 1.3 mm at most at the switch, short of the 1.8 mm click
+  (a soft 1.6 N switch clicks at 1.4: if lying on its right side ever starts
+  a talk, take the 4.75 plunger).
   In a side drop it swings in on its spring and the band takes the hit.
 - **The rocker** stays recessed in a straight window (hard to flip by
   accident: off means no charging). **USB-C** has a funnel along the
@@ -497,15 +525,16 @@ print. The same sliced are in `out/print/sliced/`.
 
 | Project | Filament | About |
 | --- | --- | --- |
-| `1_white_faceplate_bridge_pin_plunger` | white | 38 min (faceplate, bridge, 3 pins, 3 plungers) |
+| `1_white_faceplate_bridge_pin` | white | 36 min (faceplate, bridge, 3 pins) |
 | `2_black_grille` | black | 30 min |
-| `3_orange_lever` | orange | 6 min |
+| `3_orange_lever_plungers` | orange | 8 min (the lever, 4 plungers) |
 | `4_tub_base_and_top` | AMS: slot 1 clear PETG, slot 4 red PLA | 4 h 35 min; by object: the clear top, then the base |
 | `5_test_corner` | AMS: slot 1 clear PETG, slot 4 red PLA | 31 min; both halves' corner at the seam: print it first |
 | `7_tub_top_pla` | one PLA (red set) | 1 h (on its back); the top alone, standard settings, for a base already printed |
 | `8_tub_top_clear` | one PETG (clear) | 3 h 52 min (on its back); the top alone, clear, for a base already printed: dry the spool first |
 | `11_tub_base_red` | one PLA (red) | 34 min; the base alone, standing, for a top already printed |
 | `9_bumper_tpu` | TPU 95A (external spool) | 2 h 14 min; solid, no supports |
+| `13_case_by_object` | AMS: A1 white, A2 black, A3 orange, A4 red PLA | 1 h 51 min; a second case in one go, by object: the faceplate with the bridge and pins, the lever with its plungers, the grille, then the base (the only one taller than the gantry's 32.5 mm, so last); support on the base only (its own setting) |
 | `10_bumper_test_ring` | TPU 95A (external spool) | 37 min; the bumper's front 8 mm: does the outline fit, does the front lip seat |
 | `12_face_art` | AMS: black, orange, sky blue | 26 min, by object, 0.08 mm layers: the badge (black, then its raised letters in orange), the orange dots, the blue dots, the stencil in blue. Two filament changes, purged into the chute (by object, Bambu Studio has no prime tower). The small pieces sit 80 mm apart across the back and the stencil prints last at the front: Bambu keeps the toolhead's 72 mm round every object. Don't press Arrange |
 
@@ -573,9 +602,12 @@ Tub, lying on its back:
    then reached straight from the open front, about 20 mm in above the left
    holder: solder its two leads there (before the cells go in).
 5. Talk switch: slide it into the cradle until it clicks. From outside, drop
-   the normal plunger (5.0 mm, the shortest) into the tube, then the spring.
+   the normal plunger (5.0 mm, the second longest) into the tube, then the
+   0.5 x 5 x 15 spring, whole.
 6. Lever: push a pin through it, slide it in from the front along its
-   channel (press the spring's end down with a fingertip as it passes).
+   channel; press the spring's end in flush with a fingertip as the lever's
+   back edge passes, and it drops into its seat. No washer on the pin: the
+   hub's own keep the lever centred.
 7. Holders: slide each straight in, riding over the ribs on the floor lugs.
    Join the + leads with the rocker's input lead, the - leads with the
    battery - lead; put both joints in heat-shrink and press them into their
@@ -609,21 +641,21 @@ Close:
 15. Rocker OFF. Fold the ribbon into the channel, swing the faceplate onto
     the tub (the lever pin's front end goes into the tooth) and fit the four
     M3 x 8: two in the face at the top, two up through the floor, snug.
-16. Test: rocker ON, the lever clicks. If the click comes late or not at all
-    before the lever stops, swap in the 5.5 mm plunger (then the 6.0). If
-    the talk input reads pressed with the lever at rest, sand the plunger's
-    spring end down 0.5 mm. On USB-C the charge light comes on.
+16. Test: rocker ON, the lever clicks, and lets go when released. If the
+    talk input stays pressed after release, swap in the 4.75 mm plunger
+    (then the 4.5); if the click comes late or not at all before the lever
+    stops, the 5.25. Do not cut the spring. On USB-C the charge light comes on.
 
 ## Parts list
 
 Printed: faceplate, tub (base and top, glued), grille plug, lever, lever pin (three: two spares),
 the face art (badge, ten dots, the gluing stencil),
-plunger (three lengths), holder bridge (the build page lists each with its
+plunger (four lengths), holder bridge (the build page lists each with its
 volume).
 
 Bought, all from Mario's inventory (photos 2026-10-10): the board and its
 speaker; two protected 18650 cells in his two single holders; the 12 x 12
-tact switch; the SciWil 0.4 x 4 x 15 spring; the KCD1-101 rocker; the board's
+tact switch; the SciWil 0.5 x 5 x 15 spring; the KCD1-101 rocker; the board's
 own battery plug and lead; Kadrick button heads 4 x M3 x 8, 1 x M3 x 6,
 3 x M2 x 8 with flat washers; FFVRVSS 5 x M3 x 5 heat-set inserts; the
 rainbow ribbon from the crimp kit (six conductors).

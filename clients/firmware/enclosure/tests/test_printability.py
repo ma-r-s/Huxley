@@ -27,7 +27,8 @@ def test_every_piece_has_a_pose_and_is_one_solid(pieces):
 
 
 @pytest.mark.parametrize(
-    "piece", ["ptt_pin", "plunger", "plunger_long05", "plunger_long10", "bumper_ring"]
+    "piece",
+    ["ptt_pin", "plunger", "plunger_short", "plunger_long", "plunger_shortest", "bumper_ring"],
 )
 def test_small_parts_need_no_support(report, piece):
     assert report[piece] == []

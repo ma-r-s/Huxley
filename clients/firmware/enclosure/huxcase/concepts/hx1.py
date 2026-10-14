@@ -34,6 +34,7 @@ import math
 from build123d import (
     Axis,
     Box,
+    Cone,
     Cylinder,
     Location,
     Plane,
@@ -232,18 +233,43 @@ PRESS_DEG = math.degrees(math.atan(STOP / (TS_Z - PIVOT_Z)))
 BAR_T, BAR_W = 3.0, 18.0
 BAR_Z0, BAR_Z1 = PIVOT_Z - 7.0, 99.0  # tail below the pin is the rest stop
 CLEAR = fits.PIVOT  # the lever swings in its channel: printed against printed
+# Washers on the hub (Mario, 2026-10-13: the lever slid along its pin, its
+# blade scraped the channel on the way in, and a ring cut off a spring as a
+# washer on the pin cured it). The hub's two ends stand HUB_GAP off the tooth
+# and the tub's seat wall instead of CLEAR, so the lever stays centred on the
+# pin, and the blade above the hub is BLADE_RELIEF narrower each side, so it
+# cannot reach a wall before a washer does. The pin's play still lets the
+# lever lean a little under a sideways push, so the relief grows toward the
+# top: BLADE_RELIEF above the web to BLADE_RELIEF_TOP at the top end. The
+# channel is unchanged: it is cut from the lever as before (grow=CLEAR).
+HUB_GAP = 0.10
+BLADE_RELIEF, BLADE_RELIEF_TOP = 0.15, 0.6
+BLADE_Z0 = PIVOT_Z + 6.0  # the blade narrows above the web (to PIVOT_Z + 4)
 CHAN_Y0 = SWITCH_Y - BAR_W / 2 - CLEAR  # channel's front wall (the tooth's back face)
 PIN_Y0, PIN_Y1 = SWITCH_Y - BAR_W / 2 - 2.5, SWITCH_Y + BAR_W / 2 + 2.5  # 2.5 into each seat
 # Series spring between the lever's inner face and the plunger flange.
-# 1.5 mm of preload (0.9 N) holds the lever firmly on its rest stop: no rattle.
-SPRING_REST = hw.SERIES_SPRING_FREE - 1.5
-SPRING_CBORE = 1.0  # the spring's end sits in a counterbore in the lever (nothing sticks out)
+# 0.5 mm of preload (0.5 N) holds the lever on its rest stop (no rattle) and
+# sits under the let-go of even a soft switch (rev E had 0.9 N, about where
+# a dome lets go: Mario's lever stayed on).
+SPRING_REST = hw.SERIES_SPRING_FREE - 0.5
+# The spring's end sits in a 2 mm counterbore in the lever (the plunger and
+# the switch stay where the printed tub has them: FLANGE_X is unchanged),
+# its rim chamfered 45 deg so the end drops in. The lever slides on from the
+# front, so its back edge meets the spring first: press the end flush as it
+# passes. No ramp: from that edge it would cut the face that lands on the
+# stop (y >= SWITCH_Y + 5.6) and lengthen the stroke.
+SPRING_CBORE = 2.0
+SPRING_CHAMFER = 0.8
 FLANGE_X = X_OUT + SPRING_CBORE - SPRING_REST  # plunger flange face (spring seat)
 PLUNGER_TIP_X = FLANGE_X - 3.5  # plunger is a 3.5 mm piston, the length guides it
 PLUNGER_R = 3.0
-# Printed plungers, extra length (mm): the spring and switch are not measured, so
-# a longer one adds preload if the click comes late. Try 0.0 first.
-PLUNGER_VARIANTS = (0.0, 0.5, 1.0)
+# Printed plungers, extra length (mm): the switch's force is not known and the
+# spring's rate and free length are read off its label, not measured, so a
+# 0.25 mm step moves the rest force about 0.25 N. Try 0.0 first; if the
+# switch stays on after release take the shorter ones in turn, if the click
+# comes late the longer. The -0.5 is for a spring that came long (about no
+# force at rest).
+PLUNGER_VARIANTS = (0.0, -0.25, 0.25, -0.5)
 # Plunger tube, part of the tub. The tub prints upright, so the bore lies
 # horizontal and gets the horizontal-bore fit.
 TUBE_BORE = PLUNGER_R + fits.SLIDE_HBORE
@@ -282,7 +308,8 @@ def plunger_shape(longer: float = 0.0):
     end = FLANGE_X + longer
     p = _along_x(SWITCH_Y, TS_Z, PLUNGER_R, PLUNGER_TIP_X, end)
     p = chamfer(p.edges().group_by(Axis.X)[0], 0.4)
-    return p + _along_x(SWITCH_Y, TS_Z, 1.4, end - 0.01, end + 1.5)  # spring locator
+    locator = hw.SERIES_SPRING_D / 2 - hw.SERIES_SPRING_WIRE - 0.2  # inside the spring
+    return p + _along_x(SWITCH_Y, TS_Z, locator, end - 0.01, end + 1.5)
 
 
 def to_device(x: float, y: float) -> tuple[float, float]:
@@ -322,14 +349,36 @@ def _bar(grow: float = 0.0):
     )
     bar = slab + knuckle + web
     if g == 0:
+        hub_w = BAR_W + 2 * (CLEAR - HUB_GAP)
+        bar += Pos(PIVOT_X, SWITCH_Y, PIVOT_Z) * Rot(90, 0, 0) * Cylinder(KNUCKLE_R, hub_w)
+        z_top = BAR_Z1 + 1.0
+        top = BLADE_RELIEF + (BLADE_RELIEF_TOP - BLADE_RELIEF) * (z_top - BLADE_Z0) / (
+            BAR_Z1 - BLADE_Z0
+        )
+        for side in (-1, 1):
+            y_face = SWITCH_Y + side * BAR_W / 2
+            wedge = Polyline(
+                (y_face - side * BLADE_RELIEF, BLADE_Z0),
+                (y_face + side * 1.0, BLADE_Z0),
+                (y_face + side * 1.0, z_top),
+                (y_face - side * top, z_top),
+                close=True,
+            )
+            bar -= extrude(Plane.YZ.offset(X_OUT - 1.0) * make_face(wedge), amount=BAR_T + 2.0)
         # A dimple to find by touch (the outer face is the one printed on the bed).
         bar -= Pos(X_OUT + BAR_T, SWITCH_Y, 74.0) * Rot(0, 90, 0) * Cylinder(1.5, 1.2)
         # Spring seat: a counterbore, so nothing on the lever's inner face stops it
-        # sliding in from the front.
+        # sliding in from the front, its rim chamfered so the spring's end drops in.
+        seat_r = hw.SERIES_SPRING_D / 2 + 0.2
         bar -= (
             Pos(X_OUT + SPRING_CBORE / 2, SWITCH_Y, TS_Z)
             * Rot(0, 90, 0)
-            * Cylinder(hw.SERIES_SPRING_D / 2 + 0.2, SPRING_CBORE + 0.02)
+            * Cylinder(seat_r, SPRING_CBORE + 0.02)
+        )
+        bar -= (
+            Pos(X_OUT + SPRING_CHAMFER / 2 - 0.01, SWITCH_Y, TS_Z)
+            * Rot(0, 90, 0)
+            * Cone(seat_r + SPRING_CHAMFER + 0.01, seat_r, SPRING_CHAMFER + 0.02)
         )
     return bar
 

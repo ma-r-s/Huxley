@@ -311,7 +311,7 @@
   },
   "n030": {
    "kind": "metal",
-   "label": "Spring 0.4 \u00d7 4 \u00d7 15",
+   "label": "Spring 0.5 \u00d7 5 \u00d7 15",
    "explode": [
     0.03,
     0.018,
@@ -477,10 +477,10 @@
    104.0
   ],
   "size_with_lever_mm": 101.0,
-  "weight_g": 248,
+  "weight_g": 247,
   "back_volume_cc": 130.4,
   "cells": 2,
-  "printed_cc": 75.5
+  "printed_cc": 75.4
  },
  "lever": {
   "pivot": [
@@ -495,7 +495,7 @@
     0.0911,
     -0.0025
    ],
-   "length": 0.0139,
+   "length": 0.0149,
    "arm": 0.0411
   }
  },

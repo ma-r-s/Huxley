@@ -94,8 +94,8 @@ Calipers, Mario, 2026-10-10 (**MARIO**), or assumed generic (**ASSUMED**).
 | Part | Value | Source | Constant |
 |---|---|---|---|
 | 12 x 12 tactile switch | 7.3 base to stem top; stem a 3.8 mm square | **MARIO** | `TACT_*` |
-| | body 12 x 12 x 4.0, 4 legs, ~2 N / 0.25 mm actuation | **ASSUMED** | |
-| Series spring (SciWil) | 0.4 wire x 4 OD x 15 free, 10 coils, ~0.59 N/mm | **ASSUMED** (kit label) | `SERIES_SPRING_*` |
+| | body 12 x 12 x 4.0, 4 legs, 0.25 mm travel; force not known (the listing does not say): designed for 1.6 to 2.6 N, letting go at 40 % of the click | **ASSUMED** | `TACT_FORCE_RANGE`, `TACT_RELEASE` |
+| Series spring (SciWil) | 0.5 wire x 5 OD x 15 free, 8 coils, ~0.99 N/mm (6 active; 0.74 if 8) | **ASSUMED** (kit label, IMG_2464) | `SERIES_SPRING_*` |
 | Lever pin | printed Ø2.4 pin (since rev D, no screw) | design | `PIN_D` |
 | KCD1-101 rocker | 18.6 from the frame's underside to the tab tips | **MARIO** | `ROCKER_DEPTH` |
 | | body 18.9 x 11.8 under the frame; clip barbs ~3 mm under the frame | **MARIO** | `ROCKER_BODY`, `ROCKER_CATCH` |
@@ -153,7 +153,8 @@ Lever-pin block: the printed pin turns freely in the .20 hole, so horizontal
 slides are 0.20 (`fits.SLIDE_HBORE`).
 
 Nothing is left to measure. Settled on the bench instead: the click point
-(spare plungers 0.5 and 1.0 mm longer, README step 16) and a cell going into
+and the let-go (spare plungers 4.5, 4.75 and 5.25 mm against the normal 5.0,
+README step 16) and a cell going into
 its holder in the bay (README step 8). The holders' wall height no longer
 matters: since rev E they are stopped sideways at their end caps.
 

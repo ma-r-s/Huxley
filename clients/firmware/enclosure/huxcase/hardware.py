@@ -241,17 +241,13 @@ def place(parts: list[Part], loc: Location, prefix: str = "") -> list[Part]:
     return [Part(prefix + p.name, loc * p.shape, p.kind) for p in parts]
 
 
-# Spring drawing helper (the series spring's OD).
-SPRING_D = 4.0
-
-
 def spring(length: float) -> Part:
-    """Compression spring along +z from z = 0, drawn as a ribbed tube."""
+    """The series spring (SERIES_SPRING_D) along +z from z = 0, drawn as a ribbed tube."""
     coil = None
     turns = int(length / 0.9)
     for i in range(turns + 1):
         ring = Pos(0, 0, i * length / turns) * (
-            Cylinder(SPRING_D / 2, 0.4) - Cylinder(SPRING_D / 2 - 0.4, 1.0)
+            Cylinder(SERIES_SPRING_D / 2, 0.4) - Cylinder(SERIES_SPRING_D / 2 - 0.4, 1.0)
         )
         coil = ring if coil is None else coil + ring
     return Part("spring", coil, "metal")
@@ -277,10 +273,25 @@ def cable(points: list[tuple[float, float, float]], d: float = 1.4):
 # (generic). Actuation ~1.6-2.6 N, 0.25 mm.
 TACT_W, TACT_BODY, TACT_STEM_W, TACT_STEM_H = 12.0, 4.0, 3.8, 3.3
 TACT_TRAVEL, TACT_FORCE = 0.25, 2.0
+# Its force is not known (Mario, 2026-10-13: the listing does not say), so
+# the PTT is sized for the whole 1.6 to 2.6 N range of 12 x 12 switches. A
+# dome lets go only well below its click: taken as 40 % of it (not
+# measured). Mario's first lever stayed on after release, or never clicked,
+# however he cut the spring: the series spring must sit under the let-go at
+# rest and over the click at the stop (hx1.click_travel, test_fit).
+TACT_FORCE_RANGE = (1.6, 2.6)
+TACT_RELEASE = 0.4
 TACT_LEGS = 3.5
 
-# Series spring from the SciWil kit: 0.4 wire x 4 OD x 15 free, 10 coils.
-SERIES_SPRING_D, SERIES_SPRING_FREE, SERIES_SPRING_K = 4.0, 15.0, 0.59  # N/mm (304 SS, 8 active)
+# Series spring from the SciWil kit (its label, IMG_2464, re-read
+# 2026-10-13): 0.5 wire x 5 OD x 15 free, 8 coils, used whole. k = G d^4 /
+# (8 D^3 n), 304 at 69 GPa, 6 active coils: 0.99 N/mm (8 active would give
+# 0.74; the plunger lengths cover both). It replaced the 0.4 x 4 x 15
+# (0.59 N/mm): over the lever's 3.55 mm the 4 mm spring gains 2.1 N, too
+# little to sit under a switch's let-go at rest and over its click at the
+# stop; this one gains 3.5 N. 6 mm springs do not fit the tub's 6.4 bore.
+SERIES_SPRING_D, SERIES_SPRING_FREE, SERIES_SPRING_K = 5.0, 15.0, 0.99  # mm, mm, N/mm
+SERIES_SPRING_WIRE, SERIES_SPRING_COILS = 0.5, 8
 
 
 def tact_switch() -> list[Part]:

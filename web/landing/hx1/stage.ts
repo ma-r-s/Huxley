@@ -240,7 +240,7 @@ export async function createStage(
           o.castShadow = true;
           o.receiveShadow = info.kind !== "case_clear";
           const g = new THREE.Group();
-          if (info.label === "Spring 0.4 × 4 × 15") {
+          if (info.label === "Spring 0.5 × 5 × 15") {
             // Fixed at its inner end on the plunger's flange; it shortens
             // along X as the lever comes in.
             const sp = lever.spring;

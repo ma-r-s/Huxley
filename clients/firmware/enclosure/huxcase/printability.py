@@ -43,9 +43,10 @@ POSES = (
     Pose("ptt_pin", "lying flat", (0, 0, 0)),
     Pose("plunger", "standing on its tip", (0, -90, 0)),
     Pose("bridge", "front face down", (90, 0, 0)),
-    # Spare plungers, 0.5 and 1.0 mm longer (more preload, an earlier click).
-    Pose("plunger_long05", "standing on its tip", (0, -90, 0)),
-    Pose("plunger_long10", "standing on its tip", (0, -90, 0)),
+    # Spare plungers, 0.25 mm shorter and longer (hx1.PLUNGER_VARIANTS): less
+    # rest force if the switch stays on, more if the click comes late.
+    Pose("plunger_short", "standing on its tip", (0, -90, 0)),
+    Pose("plunger_long", "standing on its tip", (0, -90, 0)),
     # The tub's top, glued onto the base (hx1.LAP_H): on its back, the open
     # front up (hx1.TOP_PRINT_UP, the device's -y up).
     Pose("tub_top", "on its back, the open front up", (-90, 0, 0)),
@@ -65,6 +66,9 @@ POSES = (
     Pose("face_badge", "back down, the letters up", (-90, 0, 0)),
     Pose("face_dot", "dome up", (-90, 0, 0)),
     Pose("face_stencil", "front down, the lip up", (90, 0, 0)),
+    # The shortest plunger, 0.5 mm under the normal one, for a spring that came
+    # long (added last so the other STLs keep their numbers).
+    Pose("plunger_shortest", "standing on its tip", (0, -90, 0)),
 )
 
 
@@ -80,8 +84,9 @@ def printed_pieces(c=None) -> dict[str, object]:
     out = {name: by_name[name] for name in ("faceplate", "grille_plug", "ptt_bar", "ptt_pin")}
     out["plunger"] = by_name["plunger"]
     out["bridge"] = by_name["bridge"] + hx1.bridge_skin()  # the screw pokes through it
-    out["plunger_long05"] = hx1.plunger_shape(0.5)
-    out["plunger_long10"] = hx1.plunger_shape(1.0)
+    out["plunger_short"] = hx1.plunger_shape(-0.25)
+    out["plunger_long"] = hx1.plunger_shape(0.25)
+    out["plunger_shortest"] = hx1.plunger_shape(-0.5)
     out["tub_base"] = by_name["tub_grey"]
     out["tub_top"] = by_name["tub_frosted"]
     out["test_base"] = by_name["tub_grey"] & bbox_solid(*TEST_CORNER, *TEST_BASE_Z)
@@ -374,10 +379,11 @@ COLOUR = {
     "test_top": "clear PETG (clarity settings)",
     "ptt_bar": "orange",
     "ptt_pin": "white",
-    "plunger": "white",
+    "plunger": "orange",
     "bridge": "white",
-    "plunger_long05": "white",
-    "plunger_long10": "white",
+    "plunger_short": "orange",
+    "plunger_long": "orange",
+    "plunger_shortest": "orange",
     "bumper": "TPU, from the external spool",
     "bumper_ring": "TPU, from the external spool",
     "face_badge": "black, its raised letters orange (one object, two filaments)",
