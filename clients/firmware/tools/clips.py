@@ -67,6 +67,16 @@ BOOK_CLIPS = [
     "Quiero un libro de aventuras.",  # 11
     "El segundo.",  # 12: the ordinal as a word
 ]
+# A general smoke after persona edits (2026-10-14): `clips.py smoke`.
+SMOKE_CLIPS = [
+    "¿Qué hora es?",  # 0
+    "¿Va a llover hoy?",  # 1
+    "Dame las noticias.",  # 2
+    "Pon Blu Radio.",  # 3
+    "Para la radio.",  # 4
+    "¿Quién es el presidente de Colombia?",  # 5: search (DuckDuckGo)
+]
+CLIP_SETS = {"books": BOOK_CLIPS, "smoke": SMOKE_CLIPS}
 TAIL_SILENCE_MS = 200
 
 
@@ -98,7 +108,7 @@ def render(text: str, tmp: pathlib.Path) -> bytes:
 
 
 def main() -> None:
-    clips = BOOK_CLIPS if sys.argv[1:2] == ["books"] else CLIPS
+    clips = CLIP_SETS.get(sys.argv[1], CLIPS) if len(sys.argv) > 1 else CLIPS
     out = pathlib.Path(__file__).resolve().parent.parent / "build" / "clips.bin"
     out.parent.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory() as d:
