@@ -97,3 +97,94 @@ void hux_led_pixels(const float b[HUX_LED_COUNT], const uint8_t colour[3], float
         }
     }
 }
+
+/* -- The frame engine ------------------------------------------------- */
+
+/* The mockup's made-up sentence: syllables that drive the demo's level. */
+static float demo_syllables(uint32_t since) {
+    float s = (float)since;
+    float v = sinf(s / 95.0f) * sinf(s / 410.0f + 1.0f) * 0.9f + 0.15f * sinf(s / 37.0f);
+    return v > 0.0f ? v : 0.0f;
+}
+
+void hux_led_engine_wake(hux_led_engine_t *e, uint32_t now) {
+    e->prev = now - HUX_LED_FRAME_MS;
+}
+
+bool hux_led_engine_active(const hux_led_engine_t *e) {
+    return e->boot_waiting || e->boot_on || e->press_on;
+}
+
+unsigned hux_led_engine_step(hux_led_engine_t *e, const hux_led_in_t *in,
+                             float b_boot[HUX_LED_COUNT], float b_press[HUX_LED_COUNT]) {
+    unsigned ev = 0;
+    uint32_t now = in->now;
+    float dt = (float)(now - e->prev);
+    e->prev = now;
+    if (dt > 64.0f) {
+        dt = 64.0f; /* as the mockup: a late frame doesn't jump */
+    }
+    for (int i = 0; i < HUX_LED_COUNT; i++) {
+        b_boot[i] = 0.0f;
+        b_press[i] = 0.0f;
+    }
+
+    if (in->boot_req) {
+        e->boot_waiting = true;
+        e->boot_on = false;
+        e->boot_since = now;
+        e->boot_p0 = in->boot_p0;
+    }
+    if (e->boot_waiting) {
+        /* The sound left the ring when the played counter moved; it is
+         * heard once the I2S queue ahead of it has gone out. */
+        bool heard = in->boot_wait && in->played_ms != e->boot_p0;
+        if (!in->boot_wait || heard || now - e->boot_since >= HUX_LED_SOUND_WAIT_MS) {
+            e->boot_waiting = false;
+            e->boot_on = true;
+            e->boot_heard = heard;
+            e->boot_wait_ms = now - e->boot_since;
+            e->boot_start = now + (heard ? HUX_LED_SOUND_LAG_MS : 0);
+            ev |= HUX_LED_EV_BOOT;
+        }
+    }
+    if (e->boot_on) {
+        int32_t t = (int32_t)(now - e->boot_start);
+        if (t >= 0 && !hux_led_orbit((uint32_t)t, b_boot)) {
+            e->boot_on = false;
+        }
+    }
+
+    bool demo = in->demo_until != 0 && (int32_t)(in->demo_until - now) > 0;
+    if (in->demo_until != 0 && !demo) {
+        ev |= HUX_LED_EV_DEMO_OVER;
+    }
+    bool held = in->held || demo;
+    if (held && !e->was_held) {
+        e->press_on = true;
+        e->voice_mode = in->voice;
+        e->demo = demo;
+        e->press_since = now;
+        e->v_max = 0.0f;
+        ev |= HUX_LED_EV_PRESS;
+    }
+    e->was_held = held;
+    if (e->press_on) {
+        float mic = 0.0f;
+        int32_t age = (int32_t)(now - in->mic_at); /* the mic task may be a tick ahead */
+        if (e->demo) {
+            mic = demo_syllables(now - e->press_since);
+        } else if (age < (int32_t)HUX_LED_MIC_STALE_MS && age > -1000) {
+            mic = hux_led_mic_level(in->mic_ms);
+        }
+        if (held && mic > e->v_max) {
+            e->v_max = mic;
+        }
+        if (!hux_led_press_step(&e->press, dt, held, e->voice_mode, mic, b_press)) {
+            e->press_on = false;
+            e->press.voice = 0.0f;
+            ev |= HUX_LED_EV_PRESS_END;
+        }
+    }
+    return ev;
+}

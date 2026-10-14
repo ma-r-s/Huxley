@@ -144,6 +144,110 @@ static void test_pixels(void) {
     HX_ASSERT_EQ(out[0][0], 21, "night: a third");
 }
 
+/* -- The frame engine (what the LED task decides each frame) ---------- */
+
+static unsigned step(hux_led_engine_t *e, hux_led_in_t *in, uint32_t now, float bb[7], float bp[7]) {
+    in->now = now;
+    unsigned ev = hux_led_engine_step(e, in, bb, bp);
+    in->boot_req = false; /* a request is taken once */
+    return ev;
+}
+
+static void test_engine_boot_waits_for_the_sound(void) {
+    hux_led_engine_t e = {0};
+    hux_led_in_t in = {.played_ms = 500, .boot_req = true, .boot_p0 = 500, .boot_wait = true};
+    float bb[7], bp[7];
+    hux_led_engine_wake(&e, 1000);
+    HX_ASSERT_EQ(step(&e, &in, 1000, bb, bp), 0u, "the sound hasn't left the ring");
+    HX_ASSERT_TRUE(hux_led_engine_active(&e), "waiting keeps the task awake");
+    in.played_ms = 520; /* its first chunk went to the codec */
+    HX_ASSERT_EQ(step(&e, &in, 1048, bb, bp), (unsigned)HUX_LED_EV_BOOT, "Orbit starts");
+    HX_ASSERT_TRUE(e.boot_heard && e.boot_wait_ms == 48, "heard after 48 ms");
+    HX_ASSERT_TRUE(bb[0] == 0.0f, "dark for the I2S queue's 60 ms");
+    step(&e, &in, 1048 + 59, bb, bp);
+    HX_ASSERT_TRUE(bb[0] == 0.0f, "still dark at 59 ms");
+    step(&e, &in, 1048 + 60, bb, bp);
+    HX_ASSERT_TRUE(near(bb[0], ORBIT_REF[0].b[0]), "Orbit's t=0 when the sound is heard");
+    uint32_t t = 1108;
+    while (hux_led_engine_active(&e) && t < 5000) {
+        step(&e, &in, t += 16, bb, bp);
+    }
+    HX_ASSERT_TRUE(!hux_led_engine_active(&e) && t <= 1108 + 1400 + 16, "over after 1.4 s: sleep");
+}
+
+static void test_engine_boot_timeout_and_demo(void) {
+    hux_led_engine_t e = {0};
+    hux_led_in_t in = {.played_ms = 7, .boot_req = true, .boot_p0 = 7, .boot_wait = true};
+    float bb[7], bp[7];
+    hux_led_engine_wake(&e, 0);
+    step(&e, &in, 0, bb, bp);
+    HX_ASSERT_EQ(step(&e, &in, 999, bb, bp), 0u, "waits up to 1 s");
+    HX_ASSERT_EQ(step(&e, &in, 1000, bb, bp), (unsigned)HUX_LED_EV_BOOT, "then starts anyway");
+    HX_ASSERT_TRUE(!e.boot_heard && near(bb[0], ORBIT_REF[0].b[0]), "at once, no lag");
+    hux_led_engine_t d = {0};
+    hux_led_in_t dm = {.boot_req = true, .boot_wait = false};
+    HX_ASSERT_EQ(step(&d, &dm, 50, bb, bp), (unsigned)HUX_LED_EV_BOOT, "a demo starts at once");
+}
+
+static void test_engine_press_from_dark(void) {
+    hux_led_engine_t e = {0};
+    hux_led_in_t in = {.held = true, .voice = false};
+    float bb[7], bp[7];
+    hux_led_engine_wake(&e, 5000);
+    HX_ASSERT_EQ(step(&e, &in, 5000, bb, bp), (unsigned)HUX_LED_EV_PRESS, "starts");
+    HX_ASSERT_TRUE(bp[0] > 0.05f, "lit on the first frame (a frame's worth of rise)");
+    for (uint32_t t = 5016; t < 6000; t += 16) {
+        step(&e, &in, t, bb, bp);
+    }
+    HX_ASSERT_TRUE(near(bp[3], 0.42f), "Glow while held");
+    in.held = false;
+    unsigned all = 0;
+    uint32_t t = 6000;
+    while (hux_led_engine_active(&e) && t < 9000) {
+        all |= step(&e, &in, t += 16, bb, bp);
+    }
+    HX_ASSERT_TRUE(all & HUX_LED_EV_PRESS_END, "goes out after release");
+    HX_ASSERT_TRUE(!hux_led_engine_active(&e) && bp[0] == 0.0f, "dark: sleep");
+}
+
+static void test_engine_mic_staleness(void) {
+    hux_led_engine_t e = {0};
+    uint32_t loud = 0x10000000u; /* about -6 dBFS: level 1 */
+    hux_led_in_t in = {.held = true, .voice = true, .mic_ms = loud};
+    float bb[7], bp[7];
+    hux_led_engine_wake(&e, 1000);
+    for (uint32_t t = 1000; t < 1600; t += 16) {
+        in.mic_at = t + 1; /* the mic task stored a frame a tick after this frame's clock */
+        step(&e, &in, t, bb, bp);
+    }
+    HX_ASSERT_TRUE(bp[3] > 0.6f, "a mic frame a tick ahead counts: lit to the top");
+    in.mic_at = 1600;
+    for (uint32_t t = 1600; t < 2400; t += 16) {
+        step(&e, &in, t, bb, bp); /* no new frame: stale after 100 ms */
+    }
+    HX_ASSERT_TRUE(bp[3] < 0.01f && bp[0] > 0.24f, "stale: down to the bottom's glow");
+    HX_ASSERT_TRUE(e.v_max > 0.99f, "the loudest level is kept for the log");
+}
+
+static void test_engine_demo_ends_and_is_cleared(void) {
+    hux_led_engine_t e = {0};
+    hux_led_in_t in = {.voice = true, .demo_until = 3000};
+    float bb[7], bp[7];
+    hux_led_engine_wake(&e, 0);
+    HX_ASSERT_TRUE(step(&e, &in, 0, bb, bp) & HUX_LED_EV_PRESS, "a demo is a press");
+    HX_ASSERT_TRUE(e.demo, "marked");
+    float low = 0.0f, top = 0.0f;
+    for (uint32_t t = 16; t < 3000; t += 16) {
+        step(&e, &in, t, bb, bp);
+        low = bp[1] > low ? bp[1] : low;
+        top = bp[3] > top ? bp[3] : top;
+    }
+    /* The mockup's sentence over its first 3 s: the low pair full (0.70),
+     * the top barely (0.04). */
+    HX_ASSERT_TRUE(low > 0.69f && top > 0.03f && top < 0.06f, "the mockup's demo, as drawn");
+    HX_ASSERT_TRUE(step(&e, &in, 3000, bb, bp) & HUX_LED_EV_DEMO_OVER, "over: clear it");
+}
+
 int main(void) {
     HX_RUN(test_orbit_is_the_mockup);
     HX_RUN(test_orbit_is_symmetric_and_ends);
@@ -153,5 +257,10 @@ int main(void) {
     HX_RUN(test_glow_is_the_mockup);
     HX_RUN(test_mic_mapping);
     HX_RUN(test_pixels);
+    HX_RUN(test_engine_boot_waits_for_the_sound);
+    HX_RUN(test_engine_boot_timeout_and_demo);
+    HX_RUN(test_engine_press_from_dark);
+    HX_RUN(test_engine_mic_staleness);
+    HX_RUN(test_engine_demo_ends_and_is_cleared);
     HX_SUMMARY();
 }

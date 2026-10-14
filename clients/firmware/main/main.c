@@ -201,6 +201,13 @@ void app_main(void) {
      * `battery` probes whether the divider is wired at all. */
     hux_battery_init();
 
+    /* The light under the clear back (F-0034), before the park: its start
+     * clears the strip, which a restart mid-light (a crash, the cutoff
+     * with the lever held) would otherwise leave lit through hours of
+     * park; and before the app task, which lights it with the startup
+     * sound. */
+    hux_led_start();
+
     /* The low-battery cutoff (F-0030): a spent cell parks here, before
      * Wi-Fi, audio or the supervisor draw anything, until a charger lifts
      * it; returns at once otherwise. */
@@ -210,10 +217,6 @@ void app_main(void) {
         s_device_info.power_on = true;
     }
     hux_app_set_device_info(&s_device_info);
-
-    /* The light under the clear back (F-0034): before the app task, which
-     * starts it with the startup sound. */
-    hux_led_start();
 
     /* App state machine next — net and button both post events into
      * it, so the queue must exist before they start. */

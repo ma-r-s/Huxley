@@ -40,6 +40,54 @@ typedef struct {
 bool hux_led_press_step(hux_led_press_t *p, float dt_ms, bool held, bool voice_mode, float mic,
                         float b[HUX_LED_COUNT]);
 
+/* -- The frame engine: what the LED task decides each frame, pure ------- */
+
+#define HUX_LED_FRAME_MS      16u
+#define HUX_LED_SOUND_LAG_MS  60u   /* the I2S DMA queue ahead of a chunk: 6 x 10 ms */
+#define HUX_LED_SOUND_WAIT_MS 1000u /* the sound never moved: start anyway */
+#define HUX_LED_MIC_STALE_MS  100u  /* no mic frame this long: the level is 0 */
+
+/** What the task reads each frame (its atomics and clocks). */
+typedef struct {
+    uint32_t now;
+    uint32_t played_ms;  /* hux_audio_played_ms() */
+    bool boot_req;       /* a boot light was asked since the last frame */
+    uint32_t boot_p0;    /* played_ms from before the startup sound was queued */
+    bool boot_wait;      /* false: a demo, start at once */
+    bool held;           /* the lever is down */
+    bool voice;          /* the press was acted on (taken when it starts) */
+    uint32_t mic_ms;     /* the last mic frame's mean square */
+    uint32_t mic_at;     /* when it came */
+    uint32_t demo_until; /* a demo press until then; 0: none */
+} hux_led_in_t;
+
+enum {
+    HUX_LED_EV_BOOT = 1,      /* Orbit is starting: take the peak, log */
+    HUX_LED_EV_PRESS = 2,     /* a press light starts */
+    HUX_LED_EV_PRESS_END = 4, /* it went out */
+    HUX_LED_EV_DEMO_OVER = 8, /* clear demo_until (it would come round on a wrap) */
+};
+
+typedef struct {
+    bool boot_waiting, boot_on, boot_heard;
+    uint32_t boot_since, boot_start, boot_p0, boot_wait_ms;
+    hux_led_press_t press;
+    bool press_on, was_held, voice_mode, demo;
+    uint32_t press_since, prev;
+    float v_max; /* the press's loudest level, for tuning the mic mapping */
+} hux_led_engine_t;
+
+/** After the task slept: the first frame moves a frame's worth, not 0. */
+void hux_led_engine_wake(hux_led_engine_t *e, uint32_t now);
+
+/** One frame: Orbit's and the press's brightness (both 0 when off) and
+ * the events to act on (HUX_LED_EV_*). */
+unsigned hux_led_engine_step(hux_led_engine_t *e, const hux_led_in_t *in,
+                             float b_boot[HUX_LED_COUNT], float b_press[HUX_LED_COUNT]);
+
+/** Something shows or waits to: keep rendering frames; else sleep. */
+bool hux_led_engine_active(const hux_led_engine_t *e);
+
 /** A mic frame's mean square (PCM16) to 0..1: -50 dBFS RMS and under is 0,
  * -15 dBFS and over is 1, linear in dB between. */
 float hux_led_mic_level(uint32_t mean_square);

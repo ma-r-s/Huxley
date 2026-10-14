@@ -1,13 +1,14 @@
 #include "hux_led.h"
 
-#include <math.h>
 #include <stdatomic.h>
 #include <string.h>
 #include <time.h>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/task.h"
 #include "led_strip.h"
 #include "nvs.h"
@@ -19,14 +20,14 @@
 static const char *TAG = "hux_led";
 
 #define LED_GPIO        38   /* bsp_board.h LED_STRIP_GPIO_PIN */
-#define FRAME_MS        16
-#define SOUND_LAG_MS    60   /* the I2S DMA queue ahead of a chunk: 6 x 10 ms */
-#define SOUND_WAIT_MS   1000 /* the sound never moved: start anyway */
-#define MIC_STALE_MS    100  /* no frame this long: the mic stopped, level 0 */
 #define DEMO_MS         3000
 #define BRIGHT_DEFAULT  25
 #define TASK_PRIO       2    /* under everything that makes or moves sound */
-#define TASK_STACK      3072
+#define TASK_STACK      4096 /* PSRAM; logging with floats around (the critic's count: ~2.6 KB) */
+#define REFRESH_RETRIES 30   /* a failed refresh is tried again for ~0.5 s */
+/* With DMA, room for a whole frame (7 x 24 bits + the reset) in one buffer:
+ * no refill interrupt mid-frame for Wi-Fi's interrupts to delay. */
+#define DMA_SYMBOLS     256
 #define NVS_NS          "hux_led"
 #define NVS_KEY_BRIGHT  "pct"
 
@@ -62,113 +63,62 @@ static float peak_now(bool *night) {
     return *night ? scale / 3.0f : scale;
 }
 
-/* The mockup's made-up sentence: syllables that drive the demo's level. */
-static float demo_syllables(uint32_t since) {
-    float s = (float)since;
-    float v = sinf(s / 95.0f) * sinf(s / 410.0f + 1.0f) * 0.9f + 0.15f * sinf(s / 37.0f);
-    return v > 0.0f ? v : 0.0f;
-}
-
-static void show(uint8_t px[HUX_LED_COUNT][3]) {
+static bool show(uint8_t px[HUX_LED_COUNT][3]) {
     for (int i = 0; i < HUX_LED_COUNT; i++) {
         led_strip_set_pixel(s_strip, (uint32_t)i, px[i][0], px[i][1], px[i][2]);
     }
-    esp_err_t err = led_strip_refresh(s_strip);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "led.refresh_failed err=%s", esp_err_to_name(err));
-    }
+    return led_strip_refresh(s_strip) == ESP_OK;
 }
 
 static void led_task(void *arg) {
     (void)arg;
-    bool boot_waiting = false, boot_on = false;
-    uint32_t boot_since = 0, boot_start = 0, boot_p0 = 0;
+    hux_led_engine_t e;
+    memset(&e, 0, sizeof(e));
     float boot_peak = 0.0f, press_peak = 0.0f;
-    hux_led_press_t press = {0};
-    bool press_on = false, was_held = false, voice_mode = false;
-    uint32_t press_since = 0;
-    float v_max = 0.0f;
     uint8_t shown[HUX_LED_COUNT][3];
     memset(shown, 0, sizeof(shown));
-    uint32_t prev = now_ms();
+    int retries = 0;
     TickType_t wake_at = xTaskGetTickCount();
     for (;;) {
-        if (!boot_waiting && !boot_on && !press_on) {
+        if (!hux_led_engine_active(&e) && retries == 0) {
             ulTaskNotifyTake(pdTRUE, portMAX_DELAY); /* dark: sleep until asked */
-            prev = now_ms() - FRAME_MS; /* the first frame moves like any other */
+            hux_led_engine_wake(&e, now_ms());
             wake_at = xTaskGetTickCount();
         }
-        uint32_t now = now_ms();
-        float dt = (float)(now - prev);
-        prev = now;
-        if (dt > 64.0f) {
-            dt = 64.0f; /* as the mockup: a late frame doesn't jump */
+        hux_led_in_t in = {
+            .now = now_ms(),
+            .played_ms = hux_audio_played_ms(),
+            .boot_req = atomic_exchange(&s_boot_req, false),
+            .boot_p0 = atomic_load(&s_boot_p0),
+            .boot_wait = atomic_load(&s_boot_wait),
+            .held = atomic_load(&s_held),
+            .voice = atomic_load(&s_voice),
+            .mic_ms = atomic_load(&s_mic_ms),
+            .mic_at = atomic_load(&s_mic_at),
+            .demo_until = atomic_load(&s_demo_until),
+        };
+        float b_boot[HUX_LED_COUNT], b_press[HUX_LED_COUNT];
+        unsigned ev = hux_led_engine_step(&e, &in, b_boot, b_press);
+        if (ev & HUX_LED_EV_BOOT) {
+            bool night;
+            boot_peak = peak_now(&night);
+            ESP_LOGI(TAG, "led.anim kind=boot mode=orbit wait_ms=%u heard=%d night=%d pct=%d",
+                     (unsigned)e.boot_wait_ms, e.boot_heard, night, atomic_load(&s_bright));
         }
-
-        if (atomic_exchange(&s_boot_req, false)) {
-            boot_waiting = true;
-            boot_on = false;
-            boot_since = now;
-            boot_p0 = atomic_load(&s_boot_p0);
-        }
-        if (boot_waiting) {
-            bool wait = atomic_load(&s_boot_wait);
-            bool heard = wait && hux_audio_played_ms() > boot_p0;
-            if (!wait || heard || now - boot_since >= SOUND_WAIT_MS) {
-                bool night;
-                boot_peak = peak_now(&night);
-                boot_waiting = false;
-                boot_on = true;
-                boot_start = now + (heard ? SOUND_LAG_MS : 0);
-                ESP_LOGI(TAG, "led.anim kind=boot mode=orbit wait_ms=%u heard=%d night=%d pct=%d",
-                         (unsigned)(now - boot_since), heard, night, atomic_load(&s_bright));
-            }
-        }
-
-        uint32_t demo_until = atomic_load(&s_demo_until);
-        bool demo = demo_until != 0 && (int32_t)(demo_until - now) > 0;
-        if (demo_until != 0 && !demo) {
-            /* Over: cleared, or the deadline would come round again when
-             * the ms counter wraps (unless a new demo just replaced it). */
-            atomic_compare_exchange_strong(&s_demo_until, &demo_until, 0);
-        }
-        bool held = atomic_load(&s_held) || demo;
-        if (held && !was_held) {
+        if (ev & HUX_LED_EV_PRESS) {
             bool night;
             press_peak = peak_now(&night);
-            voice_mode = atomic_load(&s_voice);
-            press_on = true;
-            press_since = now;
-            v_max = 0.0f;
             ESP_LOGI(TAG, "led.anim kind=press mode=%s night=%d pct=%d demo=%d",
-                     voice_mode ? "voice" : "glow", night, atomic_load(&s_bright), demo);
+                     e.voice_mode ? "voice" : "glow", night, atomic_load(&s_bright), e.demo);
         }
-        was_held = held;
-
-        float b_boot[HUX_LED_COUNT] = {0}, b_press[HUX_LED_COUNT] = {0};
-        if (boot_on) {
-            int32_t t = (int32_t)(now - boot_start);
-            if (t >= 0 && !hux_led_orbit((uint32_t)t, b_boot)) {
-                boot_on = false;
-            }
+        if (ev & HUX_LED_EV_PRESS_END) {
+            ESP_LOGI(TAG, "led.anim.end kind=press mode=%s ms=%u v_max_pct=%d",
+                     e.voice_mode ? "voice" : "glow", (unsigned)(in.now - e.press_since),
+                     (int)(e.v_max * 100.0f + 0.5f));
         }
-        if (press_on) {
-            float mic = 0.0f;
-            if (demo) {
-                mic = demo_syllables(now - press_since);
-            } else if (now - atomic_load(&s_mic_at) < MIC_STALE_MS) {
-                mic = hux_led_mic_level(atomic_load(&s_mic_ms));
-            }
-            if (held && mic > v_max) {
-                v_max = mic;
-            }
-            if (!hux_led_press_step(&press, dt, held, voice_mode, mic, b_press)) {
-                press_on = false;
-                press.voice = 0.0f;
-                ESP_LOGI(TAG, "led.anim.end kind=press mode=%s ms=%u v_max_pct=%d",
-                         voice_mode ? "voice" : "glow", (unsigned)(now - press_since),
-                         (int)(v_max * 100.0f + 0.5f));
-            }
+        if (ev & HUX_LED_EV_DEMO_OVER) {
+            /* Unless a new demo just replaced it. */
+            atomic_compare_exchange_strong(&s_demo_until, &in.demo_until, 0);
         }
 
         /* Both at once (a press during the boot light): the brighter of
@@ -184,11 +134,17 @@ static void led_task(void *arg) {
             }
         }
         if (memcmp(px, shown, sizeof(px)) != 0) {
-            show(px);
-            memcpy(shown, px, sizeof(px));
+            if (show(px)) {
+                memcpy(shown, px, sizeof(px));
+                retries = 0;
+            } else if (++retries >= REFRESH_RETRIES) {
+                /* Logged once per run of failures; the next change tries again. */
+                ESP_LOGW(TAG, "led.refresh_failed tries=%d", retries);
+                retries = 0;
+            }
         }
-        if (boot_waiting || boot_on || press_on) {
-            vTaskDelayUntil(&wake_at, pdMS_TO_TICKS(FRAME_MS));
+        if (hux_led_engine_active(&e) || retries > 0) {
+            vTaskDelayUntil(&wake_at, pdMS_TO_TICKS(HUX_LED_FRAME_MS));
         }
     }
 }
@@ -213,18 +169,21 @@ void hux_led_start(void) {
     led_strip_rmt_config_t rmt = {
         .clk_src = RMT_CLK_SRC_DEFAULT,
         .resolution_hz = 10 * 1000 * 1000,
+        .mem_block_symbols = DMA_SYMBOLS,
         .flags.with_dma = true,
     };
     esp_err_t err = led_strip_new_rmt_device(&cfg, &rmt, &s_strip);
     bool dma = err == ESP_OK;
     if (!dma) {
         rmt.flags.with_dma = false;
+        rmt.mem_block_symbols = 0; /* the default block */
         err = led_strip_new_rmt_device(&cfg, &rmt, &s_strip);
     }
     if (err == ESP_OK) {
         err = led_strip_clear(s_strip);
     }
-    if (err != ESP_OK || xTaskCreate(led_task, "hux_led", TASK_STACK, NULL, TASK_PRIO, &s_task) != pdPASS) {
+    if (err != ESP_OK || xTaskCreateWithCaps(led_task, "hux_led", TASK_STACK, NULL, TASK_PRIO,
+                                             &s_task, MALLOC_CAP_SPIRAM) != pdPASS) {
         ESP_LOGE(TAG, "led.start_failed err=%s: the walkie runs dark", esp_err_to_name(err));
         s_task = NULL;
         return;
