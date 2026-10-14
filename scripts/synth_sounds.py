@@ -554,6 +554,100 @@ def search_start() -> F32:
 # ---------------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+# --- device status sounds ------------------------------------------------
+# Played by the walkie itself, with no server: power on, searching for a
+# connection, connected, connection lost. Same bell family and cue level as
+# the palette above; the firmware embeds them (rendered here, encoded and
+# embedded by the firmware's own tooling). The searching tick repeats, so
+# it sits 6 dB under the cue level.
+
+
+def device_startup() -> F32:
+    """Hello (~1.0 s): C6 -> E6 -> G6, a warm major arpeggio, short tail."""
+    arp = chord(
+        [
+            fm_bell(note("C6"), duration_s=0.55, mod_ratio=1.4, mod_index_peak=3.0),
+            fm_bell(note("E6"), duration_s=0.55, mod_ratio=1.4, mod_index_peak=3.0),
+            fm_bell(note("G6"), duration_s=0.6, mod_ratio=1.4, mod_index_peak=3.0),
+        ],
+        stagger_ms=90.0,
+    )
+    body = delayed(risset_bell(note("G6"), duration_s=0.6, brightness=0.8), ms=180.0)
+    return post(
+        mix((0.7, arp), (0.3, body)),
+        reverb_room=0.72,
+        reverb_damping=0.5,
+        reverb_wet=0.25,
+        reverb_dry=0.8,
+        pad_tail_s=0.4,
+    )
+
+
+def device_searching() -> F32:
+    """Still looking (~0.35 s): one soft, dry A6 tick; repeats while searching."""
+    tick = risset_bell(note("A6"), duration_s=0.22, brightness=0.6)
+    return post(
+        tick,
+        reverb_room=0.5,
+        reverb_damping=0.6,
+        reverb_wet=0.12,
+        reverb_dry=0.9,
+        target_lufs=CUE_TARGET_LUFS - 6.0,
+        pad_tail_s=0.12,
+    )
+
+
+def device_connected() -> F32:
+    """Ready (~1.3 s): C6 -> E6 -> G6 -> C7, brighter, with a bell on the top C."""
+    arp = chord(
+        [
+            fm_bell(note("C6"), duration_s=0.6, mod_ratio=1.4, mod_index_peak=3.5),
+            fm_bell(note("E6"), duration_s=0.6, mod_ratio=1.4, mod_index_peak=3.5),
+            fm_bell(note("G6"), duration_s=0.6, mod_ratio=1.4, mod_index_peak=3.5),
+            fm_bell(note("C7"), duration_s=0.8, mod_ratio=1.4, mod_index_peak=4.0),
+        ],
+        stagger_ms=70.0,
+    )
+    apex = delayed(risset_bell(note("C7"), duration_s=0.8, brightness=1.0), ms=210.0)
+    return post(
+        mix((0.65, arp), (0.4, apex)),
+        reverb_room=0.78,
+        reverb_damping=0.4,
+        reverb_wet=0.32,
+        reverb_dry=0.75,
+        pad_tail_s=0.6,
+    )
+
+
+def device_lost() -> F32:
+    """Gone (~1.0 s): G6 -> E6 -> C6 falling, darker and softer than the rest."""
+    arp = chord(
+        [
+            risset_bell(note("G6"), duration_s=0.5, brightness=0.6),
+            risset_bell(note("E6"), duration_s=0.5, brightness=0.55),
+            risset_bell(note("C6"), duration_s=0.7, brightness=0.5),
+        ],
+        stagger_ms=130.0,
+    )
+    return post(
+        arp,
+        reverb_room=0.75,
+        reverb_damping=0.55,
+        reverb_wet=0.28,
+        reverb_dry=0.78,
+        pad_tail_s=0.5,
+    )
+
+
+DEVICE_SOUNDS_DIR = REPO_ROOT / "server" / "personas" / "_shared" / "sounds" / "device"
+DEVICE_PALETTE: dict[str, Callable[[], F32]] = {
+    "startup": device_startup,
+    "searching": device_searching,
+    "connected": device_connected,
+    "lost": device_lost,
+}
+
+
 SHARED_SOUNDS_DIR = REPO_ROOT / "server" / "personas" / "_shared" / "sounds"
 
 PALETTE: dict[str, Callable[[], F32]] = {
@@ -581,6 +675,17 @@ def main() -> int:
             f"  true peak {true_peak_dbfs(pcm):+.1f} dBFS"
         )
     print(f"\nrendered {len(PALETTE)} earcons to {out_dir.relative_to(REPO_ROOT)}")
+    DEVICE_SOUNDS_DIR.mkdir(parents=True, exist_ok=True)
+    for name, fn in DEVICE_PALETTE.items():
+        audio = fn()
+        path = DEVICE_SOUNDS_DIR / f"{name}.wav"
+        write_wav(audio, path)
+        pcm = _pcm16(audio).tobytes()
+        print(
+            f"  device/{name:9s}  {len(audio) / SAMPLE_RATE:.2f}s"
+            f"  momentary max {momentary_max_lufs(pcm):.1f} LUFS"
+            f"  true peak {true_peak_dbfs(pcm):+.1f} dBFS"
+        )
     return 0
 
 
