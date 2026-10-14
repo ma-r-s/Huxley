@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import faulthandler
+import io
 import sys
 
 from dotenv import find_dotenv, load_dotenv
@@ -13,6 +16,12 @@ from huxley.persona import PersonaError
 
 def main() -> None:
     """Parse config, build the Runtime, run."""
+    # A crash in native code (the Telegram call library segfaulted placing
+    # a call on 2026-10-14: exit 139, nothing else in the journal) prints
+    # every thread's Python stack to stderr, which systemd keeps. A stderr
+    # with no file behind it (a captured test) has nowhere to write.
+    with contextlib.suppress(io.UnsupportedOperation, ValueError):
+        faulthandler.enable(all_threads=True)
     # Load .env into os.environ BEFORE constructing Settings. pydantic-settings
     # reads .env too, but only for fields declared on the model — skill
     # secrets like HUXLEY_TELEGRAM_API_ID aren't framework config and
