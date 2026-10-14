@@ -369,6 +369,11 @@ _NAME_FILLER = frozenset(
 )
 
 
+def _spoken_name(name: str) -> str:
+    """A contact key as a name is written: "juan miguel" -> "Juan Miguel"."""
+    return " ".join(w[:1].upper() + w[1:] for w in name.split())
+
+
 def _fold_name(text: str) -> str:
     import unicodedata
 
@@ -1238,7 +1243,10 @@ class TelegramSkill:
                 await self._transport.reject_call(user_id)
             return
 
-        display = name or self._t("unknown_caller")
+        # Capitalised for the line the model says: given "juan miguel" it
+        # refused ("No puedo decir ese nombre tal cual... Te llama la
+        # persona") while the caller waited 8 s in silence (2026-10-14).
+        display = _spoken_name(name) if name else self._t("unknown_caller")
         self._pending_incoming = user_id
 
         await self._logger.ainfo("telegram.inbound.ring", user_id=user_id, caller_name=display)
@@ -1466,7 +1474,7 @@ class TelegramSkill:
                 sender_display=message.sender_display,
             )
         else:
-            display = contact_name
+            display = _spoken_name(contact_name)
 
         await self._logger.ainfo(
             "telegram.inbound.message_buffered",

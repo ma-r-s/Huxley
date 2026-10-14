@@ -783,7 +783,7 @@ class TestInbound:
         assert "mario" in turns[0].lower()
         # A fixed line and no tool: "Llamada de mario, contestando." once
         # made the model call mario back while the caller waited in silence.
-        assert "«Te llama" in turns[0]
+        assert "«Te llama Mario.»" in turns[0]  # capitalised: "juan miguel" was refused
         assert "No llames a ninguna herramienta" in turns[0]
         # Audio bridge started via start_input_claim.
         assert len(claims) == 1
@@ -1260,7 +1260,7 @@ class TestInboundMessages:
         await asyncio.sleep(0.15)
 
         assert len(calls) == 1
-        assert "hija" in calls[0]["prompt"]
+        assert "Hija" in calls[0]["prompt"]
         assert "hola papa" in calls[0]["prompt"]
         # NORMAL priority (queues behind active calls), awaited until heard
         # with no expiry and no dedup key (T1.44: a later burst under the
@@ -1388,8 +1388,8 @@ class TestInboundMessages:
 
         assert len(calls) == 2
         prompts = sorted(c["prompt"] for c in calls)
-        assert any("hija" in p for p in prompts)
-        assert any("hijo" in p for p in prompts)
+        assert any("Hija" in p for p in prompts)
+        assert any("Hijo" in p for p in prompts)
 
     @pytest.mark.asyncio
     async def test_teardown_flushes_pending_burst(self, tmp_path: Path) -> None:
