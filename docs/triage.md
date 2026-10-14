@@ -6115,7 +6115,7 @@ Branch `t148-search-news` (worktree), on base 5f699660: 6e1469b5 (search), 816d9
 
 ## T1.49: The walkie says its connection state with sounds
 
-**Status**: `in_progress` (2026-10-13): sounds final and on main; the walkie side is the firmware session's F-0033 (build, silent bench test, offer the update) · **Effort**: S server side (assets only); the firmware side is F-0033
+**Status**: `in_progress` (2026-10-13): on the walkie since the night of 2026-10-13 (firmware 3c3ba563, with the startup light F-0034); left: the daytime board run with drops (blip, server drop, Wi-Fi drop, park) and Mario's ear · **Effort**: S server side (assets only); the firmware side is F-0033
 
 **Problem** (Mario, 2026-10-13): with no internet the walkie is silent until he presses, and then says it has no connection. "Just pressing and being told is not good enough." Grandpa can't see a light; he can't tell off from searching from ready.
 
@@ -6134,10 +6134,12 @@ Behaviour on the walkie (sent to the firmware session; standard practice, Mario 
 **Definition of Done**
 - `synth_sounds.py` renders the four device sounds; each at the cue level (searching 6 dB under), true peak under the ceiling, no clicks (spectrogram checked). Done.
 - `docs/sounds.md`: device sounds and the glass primitive documented. Done.
-- Firmware (F-0033): the four sounds embedded, the state machine above with unit tests, a silent bench run (no Mac speaker) that logs each `sound.status`, the update offered to the walkie in a bench window.
+- Firmware (F-0033): the four sounds embedded, the state machine above with unit tests and a critic round (a crash-looping server no longer ticks forever: an outage ends only after 2 min connected), flashed at Mario's request the same night (3c3ba563). Left: the board run with drops in a daytime idle window (at night the ticks, `lost` and `connected` are held by design).
 - Mario hears them on the walkie: power on, Wi-Fi off and on, server restart.
 
-**Commits**: e8117a96 (four device sounds), a4e1cffc (glass startup, docs, this entry).
+**Commits**: e8117a96 (four device sounds), a4e1cffc (glass startup, docs, this entry), 11d9ad4a (shipped set, T1.50 queued), 8af68aa4 (loudness test for the device sounds); firmware 3c3ba563 (F-0033).
+
+**Startup light** (F-0034, Mario's pick from a mockup of the back with the real LED positions, 2026-10-13): the 7-LED ring is mirror-symmetric left/right in HX-1 (LED 0 points down); "Orbit" in warm white at power on, two arms climbing from the bottom to the top pair as the chime ends; while the lever is held, white light that climbs with his voice (a steady glow when offline). Same boot rule as the sound; a third of the brightness at night. Firmware ea106a69 + dda50f32.
 
 ## T1.50: Redesign the sound palette (Wii-inspired, many takes per sound)
 
