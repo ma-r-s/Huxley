@@ -150,6 +150,14 @@ class TransportError(Exception):
     """Raised on any transport-level failure (auth, dial, send)."""
 
 
+class TransportRateLimitedError(TransportError):
+    """Telegram asked us to wait (FLOOD_WAIT) before repeating a request."""
+
+    def __init__(self, message: str, wait_s: int) -> None:
+        super().__init__(message)
+        self.wait_s = wait_s
+
+
 class TelegramTransport:
     """Owns one userbot client + one active p2p call.
 
@@ -254,6 +262,28 @@ class TelegramTransport:
         self._app = app
         self._call_py = call_py
         await logger.ainfo("telegram.transport.connected")
+        await self._load_contacts()
+
+    async def _load_contacts(self) -> None:
+        """Read the account's contact list once, so a number in it resolves
+        from pyrogram's peer cache (every invoke stores the users it gets)
+        instead of `contacts.ResolvePhone`. ResolvePhone fails for people
+        who only let their contacts find them by number, and Telegram
+        rate-limits it: a few restarts on 2026-10-14 got FLOOD_WAIT 2696 s.
+        The list is his phone's address book once the Telegram app on his
+        phone has synced it. Best effort: nothing here may stop a connect."""
+        if self._app is None:
+            return
+        try:
+            users = await self._app.get_contacts()  # type: ignore[attr-defined]
+        except Exception as exc:
+            await logger.awarning("telegram.transport.contacts_failed", error=str(exc)[:200])
+            return
+        await logger.ainfo(
+            "telegram.transport.contacts_loaded",
+            count=len(users),
+            with_phone=sum(1 for u in users if getattr(u, "phone_number", None)),
+        )
 
     def _build_clients(self) -> tuple[object, object]:
         """Construct one unstarted (pyrogram Client, PyTgCalls) pair with
@@ -493,10 +523,14 @@ class TelegramTransport:
         if self._app is None:
             msg = "resolve_contact() before connect()"
             raise TransportError(msg)
-        from pyrogram.errors import RPCError  # type: ignore[attr-defined]
+        from pyrogram.errors import FloodWait, RPCError  # type: ignore[attr-defined]
 
         try:
             users = await self._app.get_users(identifier)  # type: ignore[attr-defined]
+        except FloodWait as exc:
+            wait_s = int(getattr(exc, "value", 0) or 0)
+            msg = f"Telegram asked to wait {wait_s} s before looking up numbers"
+            raise TransportRateLimitedError(msg, wait_s) from exc
         except RPCError as exc:
             msg = f"Telegram couldn't resolve {identifier!r}: {exc}"
             raise TransportError(msg) from exc

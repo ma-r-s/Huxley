@@ -84,6 +84,7 @@ from huxley_skill_telegram.transport import (
     InboundMessage,
     TelegramTransport,
     TransportError,
+    TransportRateLimitedError,
     normalize_phone,
 )
 
@@ -808,11 +809,20 @@ class TelegramSkill:
         assert self._transport is not None
         assert self._logger is not None
         resolved = 0
-        for name, phone in self._contacts.items():
+        names = list(self._contacts)
+        for i, (name, phone) in enumerate(self._contacts.items()):
             try:
                 uid = await self._transport.resolve_contact(phone)
                 self._user_id_to_name[uid] = name
                 resolved += 1
+            except TransportRateLimitedError as exc:
+                # Every further lookup would only lengthen the wait.
+                await self._logger.awarning(
+                    "telegram.inbound.resolve_rate_limited",
+                    wait_s=exc.wait_s,
+                    skipped=names[i:],
+                )
+                break
             except Exception:
                 await self._logger.awarning(
                     "telegram.inbound.resolve_failed",

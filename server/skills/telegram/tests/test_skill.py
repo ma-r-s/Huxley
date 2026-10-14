@@ -903,6 +903,25 @@ class TestInbound:
         assert "falló" in turns[0].lower()  # error
 
     @pytest.mark.asyncio
+    async def test_reverse_map_stops_at_the_first_rate_limit(self, tmp_path: Path) -> None:
+        """Telegram's FLOOD_WAIT on a lookup: every further lookup would only
+        lengthen the wait (2696 s after a few restarts, 2026-10-14)."""
+        from huxley_skill_telegram.transport import TransportRateLimitedError
+
+        tried: list[str] = []
+
+        class LimitedStubTransport(StubTransport):
+            async def resolve_contact(self, identifier: str) -> int:
+                tried.append(identifier)
+                raise TransportRateLimitedError("wait", 2696)
+
+        skill = TelegramSkill(transport_factory=LimitedStubTransport)
+        ctx, _ = _build_ctx(self._inbound_config(), tmp_path)
+        await skill.setup(ctx)
+
+        assert len(tried) == 1
+
+    @pytest.mark.asyncio
     async def test_inbound_reverse_map_soft_fails_unresolvable(self, tmp_path: Path) -> None:
         from huxley_skill_telegram.transport import TransportError
 

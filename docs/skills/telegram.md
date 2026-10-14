@@ -135,6 +135,8 @@ The file is written atomically by the skill whenever `add_contact` or `remove_co
 
 **Telegram resolution caveat**: Telegram only lets the userbot resolve a phone to a `user_id` if that person has previously sent the userbot at least one message. Cold-adding a number will store the contact and allow outbound calls (resolution retried at call time), but inbound caller recognition won't work until they initiate contact first.
 
+**His Telegram contacts first** (2026-10-14): at connect the transport reads the account's contact list once (`get_contacts`, logged as `telegram.transport.contacts_loaded count= with_phone=`). Pyrogram stores every user an request returns, so a number in that list (his phone's address book, once the Telegram app on his phone has synced it) resolves from the cache with no `contacts.ResolvePhone`, even for people who only let their contacts find them by number. ResolvePhone is rate-limited: a few server restarts in one morning got `FLOOD_WAIT` 2696 s, since every restart re-tries each unresolved contact. The reverse map now stops at the first rate limit (`telegram.inbound.resolve_rate_limited wait_s= skipped=`) instead of lengthening the wait.
+
 ## Startup and the session lock
 
 Pyrogram keeps the session file (`<persona.data_dir>/huxley_userbot.session`, SQLite) write-locked for as long as a client runs: it only commits on stop. A second client on the same session fails to open it with `database is locked` until the first one stops.

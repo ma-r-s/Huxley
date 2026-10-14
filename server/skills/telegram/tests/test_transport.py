@@ -460,3 +460,40 @@ class TestT117DbLockRetry:
             await transport.connect()
         assert transport._app is None  # type: ignore[attr-defined]
         assert transport._call_py is None  # type: ignore[attr-defined]
+
+
+class TestLoadContacts:
+    """The account's contact list fills pyrogram's peer cache at connect,
+    so numbers in it never need contacts.ResolvePhone."""
+
+    @pytest.mark.asyncio
+    async def test_contacts_are_read_and_counted(self, tmp_path: Path) -> None:
+        from types import SimpleNamespace
+
+        t = TelegramTransport(api_id=12345678, api_hash="abcdef0123456789", session_dir=tmp_path)
+        calls: list[str] = []
+
+        async def get_contacts() -> list[SimpleNamespace]:
+            calls.append("get_contacts")
+            return [
+                SimpleNamespace(phone_number="573000000001"),
+                SimpleNamespace(phone_number=None),
+            ]
+
+        t._app = SimpleNamespace(get_contacts=get_contacts)  # type: ignore[attr-defined]
+        await t._load_contacts()  # type: ignore[attr-defined]
+        assert calls == ["get_contacts"]
+
+    @pytest.mark.asyncio
+    async def test_a_failed_read_does_not_stop_the_connect(self, tmp_path: Path) -> None:
+        from types import SimpleNamespace
+
+        from pyrogram.errors import RPCError
+
+        t = TelegramTransport(api_id=12345678, api_hash="abcdef0123456789", session_dir=tmp_path)
+
+        async def get_contacts() -> list[object]:
+            raise RPCError("boom")
+
+        t._app = SimpleNamespace(get_contacts=get_contacts)  # type: ignore[attr-defined]
+        await t._load_contacts()  # type: ignore[attr-defined]
