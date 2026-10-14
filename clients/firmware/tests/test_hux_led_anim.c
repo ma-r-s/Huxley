@@ -100,6 +100,16 @@ static void test_voice_climbs_with_the_level(void) {
     HX_ASSERT_TRUE(b[3] > 0.69f && b[0] > 0.94f, "loud: all the way up");
 }
 
+/* The board found this: a press from dark woke the task with no time gone,
+ * the level stayed 0 and the light ended before it began. */
+static void test_a_press_from_dark_stays_on(void) {
+    hux_led_press_t p = {0};
+    float b[HUX_LED_COUNT];
+    HX_ASSERT_TRUE(hux_led_press_step(&p, 0.0f, true, false, 0.0f, b), "held, no time gone: on");
+    HX_ASSERT_TRUE(frames(&p, 5, true, false, 0.0f, b), "and stays on");
+    HX_ASSERT_TRUE(b[0] > 0.2f, "lit");
+}
+
 static void test_glow_is_the_mockup(void) {
     hux_led_press_t p = {0};
     float b[HUX_LED_COUNT];
@@ -139,6 +149,7 @@ int main(void) {
     HX_RUN(test_orbit_is_symmetric_and_ends);
     HX_RUN(test_voice_is_the_mockup);
     HX_RUN(test_voice_climbs_with_the_level);
+    HX_RUN(test_a_press_from_dark_stays_on);
     HX_RUN(test_glow_is_the_mockup);
     HX_RUN(test_mic_mapping);
     HX_RUN(test_pixels);

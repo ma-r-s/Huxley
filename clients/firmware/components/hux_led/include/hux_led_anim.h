@@ -35,7 +35,8 @@ typedef struct {
 /** One frame of `dt_ms`. `held`: the lever is down. `voice_mode`: the press
  * was acted on, so the light follows `mic` (0..1, hux_led_mic_level);
  * otherwise "Glow", a steady soft light. False (all 0) once the light is
- * out (level under 0.003). */
+ * out: released and the level under 0.003 (never while held, even on a
+ * first frame with no time gone). */
 bool hux_led_press_step(hux_led_press_t *p, float dt_ms, bool held, bool voice_mode, float mic,
                         float b[HUX_LED_COUNT]);
 

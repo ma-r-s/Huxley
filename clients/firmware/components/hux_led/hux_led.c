@@ -95,7 +95,7 @@ static void led_task(void *arg) {
     for (;;) {
         if (!boot_waiting && !boot_on && !press_on) {
             ulTaskNotifyTake(pdTRUE, portMAX_DELAY); /* dark: sleep until asked */
-            prev = now_ms();
+            prev = now_ms() - FRAME_MS; /* the first frame moves like any other */
             wake_at = xTaskGetTickCount();
         }
         uint32_t now = now_ms();

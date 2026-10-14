@@ -62,7 +62,7 @@ bool hux_led_press_step(hux_led_press_t *p, float dt_ms, bool held, bool voice_m
     p->level += (target - p->level) * (1.0f - expf(-dt_ms / (held ? 110.0f : 240.0f)));
     float v_target = held && voice_mode ? mic : 0.0f;
     p->voice += (v_target - p->voice) * (1.0f - expf(-dt_ms / 70.0f));
-    if (p->level < 0.003f) {
+    if (!held && p->level < 0.003f) { /* out only after release: a first frame's dt is 0 */
         for (int i = 0; i < HUX_LED_COUNT; i++) {
             b[i] = 0.0f;
         }
