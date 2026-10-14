@@ -6164,3 +6164,28 @@ Behaviour on the walkie (sent to the firmware session; standard practice, Mario 
 **Docs**: `docs/skills/reminders.md`, persona.yaml (es/en/fr).
 
 **Lessons**: give a model the user's own wall clock, never UTC plus a timezone to convert; and make a tool say back what it understood in the user's terms.
+
+## T1.52: Close the gaps in running the walkie from afar
+
+**Status**: `queued` (2026-10-14, filed at the handover) · **Effort**: M (a firmware half, a server half, a page alert)
+
+**Problem** (Mario, at the handover: "do we have complete control and a really good system to make updates from afar for everything?"). Audit, 2026-10-14:
+
+| What | From afar today | Proof |
+|---|---|---|
+| Server code, persona wording, book shelf, the server's sounds (book, news, radio, search, persona swap) | yes: `scripts/pi/deploy.sh --when-idle` | used all night 2026-10-13/14 |
+| Firmware, including its six stored sounds (startup, searching, connected, lost, "No tengo conexión", battery empty) and the lights | yes: `scripts/pi/admin.sh firmware-offer`; the walkie pulls, self-tests, is accepted or rolls back by itself | through the tunnel 2026-10-12 22:13-22:23Z (three pulls, one rollback) |
+| Walkie settings (volume, echo depth, LED gain, battery cutoff) | yes: `admin.sh dev-cmd` | F-0030, F-0031 |
+| Logs, health, battery, alerts | yes: firmware log lines in the server log, the page and phone app, ntfy alerts | T1.42, T1.46 |
+| **Adding a Wi-Fi network** | **no**: `wifi addhex` and `wifi forget` are refused off USB (`console.wifi_addhex refused: USB console only`, hux_console.c) | read 2026-10-14 |
+| Telegram number | on site only (the login code goes to his phone) | scripts/pi/telegram-login.sh |
+
+**Why it matters**: the Wi-Fi row is the one way to lose the walkie for good from afar. A new router or a changed password at the home leaves it offline, and only someone on site with a laptop and USB can fix it. Two smaller edges: a firmware update reboots with the startup chime and the connected chime, unprompted, possibly next to him; and nothing alerts if an offered update never comes back or rolls back (remote-operation.md: "Not yet: the 24 h probation alerts").
+
+**Proposed** (design + critic before code):
+1. Firmware (firmware session): accept `wifi addhex` over the authenticated `dev.cmd` channel too, with the existing trial (no IP within 30 s and it goes back to the network it was on, hux_net.c `wifi_add_tick`) so a wrong password can't strand it; `forget` stays USB only. The line is already kept out of logs on both ends (the console's `secret` flag; the server logs the command word only).
+2. Server: a way to send it that keeps the password off command lines and out of shell history (admin.sh reads it from stdin), and the admin request's query string kept out of any access log.
+3. Firmware: a reboot after an accepted update plays no startup or connected chime (the rainbow can stay); offers go out at night by habit.
+4. huxley-watch: an alert when an offered version isn't accepted within 15 minutes, or the walkie rolls back.
+
+**DoD**: a second network added over `admin.sh` (on a spare board, or on his walkie in a bench window while he isn't using it), joined, and the walkie back on its old network when the second one's password is wrong; no password in the server log, bench.jsonl, firmware log or shell history; an OTA reboot is silent; a withheld accept raises the alert in a test.
