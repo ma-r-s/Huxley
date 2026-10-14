@@ -6148,3 +6148,15 @@ Behaviour on the walkie (sent to the firmware session; standard practice, Mario 
 **Problem** (Mario, 2026-10-13): hearing the glass startup made him want to rethink every sound. The all-glass v2 was too uniform: "they all sound too similar". He wants inspiration from the Wii's sounds, many proposals for each sound, and they may be richer and more complex than the minimal glass tones.
 
 **Approach**: per sound (the ten in `DEVICE_PALETTE` and `PALETTE`), several distinct takes that vary timbre, gesture and length, not just pitch; a listening sheet per round; keep the cue level, the vocal-band rule for cues before speech, and each sound telling its role apart by ear. The glass `startup` stays unless he says otherwise.
+
+## T1.51: Evening reminders landed a day late
+
+**Status**: `done` (2026-10-14, 79df13b9 and a339b303; deployed ae38c20) · **Effort**: S (one skill, persona wording)
+
+**Problem** (found overnight before the handover, in the log): Mario's test on Monday 2026-10-12 at 20:58 Bogota, "Recuérdame tomarme las pastillas a las 7 y media de la mañana", was scheduled for Wednesday the 14th at 07:30 instead of Tuesday the 13th (`add_reminder when_iso=2026-10-14T07:30:00-05:00`). The reminders skill's `prompt_context` gave the model only UTC ("Hora actual (UTC): 2026-10-13T01:58") and the timezone's name; after 19:00 in Bogota UTC's date is already tomorrow, and the model took it as today. Every evening request had this, medication reminders included. The stale test reminder itself would have spoken at 07:30 the morning of the handover (cancelled, with a database backup).
+
+**Fix**: `prompt_context` gives the user's local weekday, date, clock and UTC offset and what tomorrow is (es/en/fr); `add_reminder` returns `when`, the first fire in the user's words counted from now ("pasado mañana, miércoles 14 de octubre, a las 07:30"), and the persona confirms a new reminder with it, so a wrong day is heard and corrected. Tests reproduce the evening case (both fail on the old code). The time is still written once per voice session (rebuilt about every 50 minutes); `when` is computed at the call.
+
+**Docs**: `docs/skills/reminders.md`, persona.yaml (es/en/fr).
+
+**Lessons**: give a model the user's own wall clock, never UTC plus a timezone to convert; and make a tool say back what it understood in the user's terms.
