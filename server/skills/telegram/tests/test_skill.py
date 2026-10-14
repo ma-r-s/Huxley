@@ -681,13 +681,14 @@ class TestInbound:
 
         # No eager connect without inbound.
         assert captured[0].connected is False
-        # All five tools are always exposed; inbound config only affects
+        # All six tools are always exposed; inbound config only affects
         # whether the skill listens for INCOMING_CALL rings and inbound
         # MessageHandler events, not the tool surface.
         assert sorted(t.name for t in skill.tools) == [
             "add_contact",
             "call_contact",
             "list_contacts",
+            "my_phone_number",
             "remove_contact",
             "send_message",
         ]
@@ -989,6 +990,7 @@ class TestTools:
             "add_contact",
             "remove_contact",
             "list_contacts",
+            "my_phone_number",
         }
         # Tools that mention the contact list should show the empty sentinel.
         for name in ("call_contact", "send_message", "add_contact", "remove_contact"):
@@ -1036,6 +1038,7 @@ class TestTools:
                 "add_contact",
                 "call_contact",
                 "list_contacts",
+                "my_phone_number",
                 "remove_contact",
                 "send_message",
             ]
@@ -2017,3 +2020,72 @@ class TestWaitingForAListener:
         assert "hola" in prompts[0]
         assert "estás" in prompts[1]
         assert "llámame" in prompts[1]
+
+
+class TestMyPhoneNumber:
+    """He asks the walkie for his own number (Mario, 2026-10-14)."""
+
+    def _config(self, **extra: Any) -> dict[str, Any]:
+        return {
+            "api_id": 1,
+            "api_hash": "x",
+            "userbot_phone": "+573000000073",
+            "default_country_code": "+57",
+            "contacts": {"mario": "+573000000078"},
+            **extra,
+        }
+
+    @pytest.mark.asyncio
+    async def test_reads_his_number_digit_by_digit(self, tmp_path: Path) -> None:
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(self._config(), tmp_path)
+        await skill.setup(ctx)
+        result = await skill.handle("my_phone_number", {})
+        out = json.loads(result.output)
+        assert out["ok"] is True
+        assert (
+            "«Tu número es tres cero cero, cero cero cero, cero cero siete tres. ¿Te lo repito?»"
+            in out["then"]
+        )
+        assert "No llames a ninguna herramienta" in out["then"]
+
+    @pytest.mark.asyncio
+    async def test_no_number_saved_says_so(self, tmp_path: Path) -> None:
+        skill = TelegramSkill(transport_factory=StubTransport)
+        config = self._config()
+        del config["userbot_phone"]
+        ctx, _ = _build_ctx(config, tmp_path)
+        await skill.setup(ctx)
+        out = json.loads((await skill.handle("my_phone_number", {})).output)
+        assert out["ok"] is False
+
+    @pytest.mark.asyncio
+    async def test_the_tool_names_him_when_telegram_knows_his_name(self, tmp_path: Path) -> None:
+        class NamedStub(StubTransport):
+            self_name = "Rafael"
+
+        skill = TelegramSkill(transport_factory=NamedStub)
+        ctx, _ = _build_ctx(self._config(inbound={"enabled": True}), tmp_path)
+        await skill.setup(ctx)
+        (tool,) = [t for t in skill.tools if t.name == "my_phone_number"]
+        assert "«¿cuál es mi número?»" in tool.description
+        assert "el número de Rafael, que es él mismo" in tool.description
+
+
+@pytest.mark.parametrize(
+    ("phone", "cc", "lang", "spoken"),
+    [
+        ("+573000000073", "+57", "es", "tres cero cero, cero cero cero, cero cero siete tres"),
+        ("+573000000073", "+57", "en", "three zero zero, zero zero zero, zero zero seven three"),
+        (
+            "+15551234567",
+            "+57",
+            "es",
+            "uno cinco cinco, cinco uno dos, tres cuatro cinco, seis siete",
+        ),
+    ],
+)
+def test_spoken_number(phone: str, cc: str, lang: str, spoken: str) -> None:
+    from huxley_skill_telegram.skill import _spoken_number
+
+    assert _spoken_number(phone, cc, lang) == spoken

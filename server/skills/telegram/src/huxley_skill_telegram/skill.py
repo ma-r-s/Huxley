@@ -174,6 +174,10 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "Elimina un contacto de la lista de Telegram. Contactos actuales: {contacts}."
         ),
         "remove_name_param": "Nombre (en minúsculas) del contacto a eliminar.",
+        "my_number": (
+            "Lee en voz alta el número de teléfono del propio usuario (el de su Telegram). Úsala cuando pregunta «¿cuál es mi número?», «mi teléfono» o «dime mi número»{hint}."
+        ),
+        "my_number_name_hint": " o por el número de {name}, que es él mismo",
         "list_contacts": (
             "Lista todos los contactos de Telegram guardados. "
             "Úsalo cuando el usuario pregunte quiénes están en su lista o quiera ver sus contactos."
@@ -218,6 +222,10 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
         ),
         "remove_contact": "Remove a contact from the Telegram list. Current contacts: {contacts}.",
         "remove_name_param": "Name (lowercase) of the contact to remove.",
+        "my_number": (
+            'Reads out the user\'s own phone number (their Telegram number). Use it when they ask "what is my number?" or "my phone number"{hint}.'
+        ),
+        "my_number_name_hint": " or for the number of {name}, who is the user",
         "list_contacts": (
             "List all saved Telegram contacts. Use when the user asks who is in their contact list."
         ),
@@ -266,6 +274,10 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "Supprime un contact de la liste Telegram. Contacts actuels : {contacts}."
         ),
         "remove_name_param": "Nom (en minuscules) du contact à supprimer.",
+        "my_number": (
+            "Lit à voix haute le propre numéro de téléphone de l'utilisateur (celui de son Telegram). À utiliser quand il demande « quel est mon numéro ? » ou « mon téléphone »{hint}."
+        ),
+        "my_number_name_hint": " ou le numéro de {name}, qui est lui-même",
         "list_contacts": (
             "Liste tous les contacts Telegram enregistrés. À utiliser quand l'utilisateur "
             "demande qui est dans sa liste de contacts."
@@ -281,8 +293,36 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
 }
 
 
+# Digits read one by one, in groups (a 10-digit Colombian mobile reads
+# 3-3-4), so he can repeat or note his number.
+_DIGIT_WORDS: dict[str, tuple[str, ...]] = {
+    "es": ("cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve"),
+    "en": ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"),
+    "fr": ("zéro", "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf"),
+}
+
+
+def _spoken_number(phone: str, country_code: str | None, lang: str) -> str:
+    """'+573000000073' with country code '+57' -> 'tres cero cero, cero
+    cero cero, cero cero siete tres'. Another country keeps its code."""
+    digits = "".join(c for c in phone if c.isdigit())
+    cc = "".join(c for c in (country_code or "") if c.isdigit())
+    if cc and digits.startswith(cc) and len(digits) > len(cc) + 6:
+        digits = digits[len(cc) :]
+    if len(digits) == 10:
+        groups = [digits[:3], digits[3:6], digits[6:]]
+    else:
+        groups = [digits[i : i + 3] for i in range(0, len(digits), 3)]
+        if len(groups) > 1 and len(groups[-1]) == 1:
+            groups[-2:] = [groups[-2] + groups[-1]]
+    words = _DIGIT_WORDS.get(lang, _DIGIT_WORDS["en"])
+    return ", ".join(" ".join(words[int(d)] for d in g) for g in groups)
+
+
 _STRINGS: dict[str, dict[str, str]] = {
     "es": {
+        "my_number_is": "[Aviso del sistema: el usuario pidió su propio número.] Di en voz alta exactamente «Tu número es {digits}. ¿Te lo repito?» No llames a ninguna herramienta.",
+        "my_number_unknown": "No tengo guardado tu número de teléfono.",
         "unknown_caller": "número desconocido",
         "unknown_caller_article": "un número desconocido",
         "the_caller": "la persona",
@@ -345,6 +385,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         ),
     },
     "en": {
+        "my_number_is": '[System notice: the user asked for their own number.] Say out loud exactly "Your number is {digits}. Shall I repeat it?" Don\'t call any tool.',
+        "my_number_unknown": "I don't have your phone number saved.",
         "unknown_caller": "unknown number",
         "unknown_caller_article": "an unknown number",
         "the_caller": "the caller",
@@ -401,6 +443,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         ),
     },
     "fr": {
+        "my_number_is": "[Avis du système : l'utilisateur a demandé son propre numéro.] Dis à voix haute exactement « Ton numéro est {digits}. Je te le répète ? » N'appelle aucun outil.",
+        "my_number_unknown": "Je n'ai pas ton numéro de téléphone enregistré.",
         "unknown_caller": "numéro inconnu",
         "unknown_caller_article": "un numéro inconnu",
         "the_caller": "la personne",
@@ -505,6 +549,7 @@ class TelegramSkill:
         # bare digits are prefixed with just "+" (callers must supply the
         # country code explicitly).
         self._default_country_code: str | None = None
+        self._own_phone: str | None = None  # the account's number (userbot_phone)
         self._transport: TelegramTransport | None = None
         self._transport_factory = transport_factory or TelegramTransport
 
@@ -574,6 +619,9 @@ class TelegramSkill:
             if self._default_country_code
             else ""
         )
+        # His own Telegram name (the account's first name), so "el número
+        # de Rafael" reaches my_phone_number when he is Rafael.
+        own_name = getattr(self._transport, "self_name", None)
         return [
             ToolDefinition(
                 name="call_contact",
@@ -635,6 +683,13 @@ class TelegramSkill:
                 description=td["list_contacts"],
                 parameters={"type": "object", "properties": {}, "required": []},
             ),
+            ToolDefinition(
+                name="my_phone_number",
+                description=td["my_number"].format(
+                    hint=td["my_number_name_hint"].format(name=own_name) if own_name else ""
+                ),
+                parameters={"type": "object", "properties": {}, "required": []},
+            ),
         ]
 
     async def setup(self, ctx: SkillContext) -> None:
@@ -670,6 +725,9 @@ class TelegramSkill:
             or cfg.get("userbot_phone")
         )
         raw_contacts = cfg.get("contacts") or {}
+        self._own_phone = (
+            userbot_phone if isinstance(userbot_phone, str) and userbot_phone else None
+        )
 
         try:
             api_id = int(api_id_raw) if api_id_raw is not None else None
@@ -878,6 +936,8 @@ class TelegramSkill:
                 return await self._remove_contact(name_raw.lower().strip())
             case "list_contacts":
                 return self._list_contacts()
+            case "my_phone_number":
+                return await self._my_phone_number()
             case _:
                 await self._logger.awarning("telegram.unknown_tool", tool=tool_name)
                 return _error_result(f"Unknown tool: {tool_name}")
@@ -1466,6 +1526,23 @@ class TelegramSkill:
         """
         self._language = ctx.language or self._language
         await ctx.logger.ainfo("telegram.reconfigure", language=self._language)
+
+    async def _my_phone_number(self) -> ToolResult:
+        """His own number, read digit by digit (Mario, 2026-10-14: he wants
+        to ask the walkie for it)."""
+        assert self._logger is not None
+        if not self._own_phone:
+            await self._logger.ainfo("telegram.my_number", known=False)
+            return _error_result(self._t("my_number_unknown"))
+        spoken = _spoken_number(
+            self._own_phone, self._default_country_code, _telegram_lang_bucket(self._language)
+        )
+        await self._logger.ainfo("telegram.my_number", known=True)
+        return ToolResult(
+            output=json.dumps(
+                {"ok": True, "then": self._t("my_number_is", digits=spoken)}, ensure_ascii=False
+            )
+        )
 
     async def teardown(self) -> None:
         # Drain pending message bursts so a sender mid-typing at shutdown

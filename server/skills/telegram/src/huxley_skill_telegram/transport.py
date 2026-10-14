@@ -260,6 +260,7 @@ class TelegramTransport:
         self._inbound_queue: asyncio.Queue[bytes] | None = None
 
         self._ended = asyncio.Event()
+        self.self_name: str | None = None  # the account's first name, after connect
 
     async def connect(self) -> None:
         """Start pyrogram + PyTgCalls. Idempotent.
@@ -285,6 +286,21 @@ class TelegramTransport:
         self._call_py = call_py
         await logger.ainfo("telegram.transport.connected")
         await self._load_contacts()
+        await self._load_me()
+
+    async def _load_me(self) -> None:
+        """The account's own first name (his name on Telegram), so the
+        skill can tell "el número de Rafael" means his own. Best effort."""
+        if self._app is None:
+            return
+        try:
+            me = await self._app.get_me()  # type: ignore[attr-defined]
+        except Exception as exc:
+            await logger.awarning("telegram.transport.me_failed", error=str(exc)[:200])
+            return
+        name = str(getattr(me, "first_name", "") or "").strip()
+        self.self_name = name or None
+        await logger.ainfo("telegram.transport.me", name=self.self_name)
 
     async def _load_contacts(self) -> None:
         """Read the account's contact list once, so a number in it resolves
