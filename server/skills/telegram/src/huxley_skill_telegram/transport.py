@@ -512,6 +512,21 @@ class TelegramTransport:
         """
         return self._active_user_id is not None
 
+    async def resolve_cached(self, identifier: str) -> int | None:
+        """The user_id for a phone number pyrogram's peer cache already
+        holds, with no request to Telegram (allowed during a FLOOD_WAIT);
+        None when the cache doesn't have it. Same normalising as pyrogram's
+        resolve_peer."""
+        if self._app is None:
+            return None
+        phone = re.sub(r"[+()\s-]", "", identifier)
+        try:
+            peer = await self._app.storage.get_peer_by_phone_number(phone)  # type: ignore[attr-defined]
+        except KeyError:
+            return None
+        user_id = getattr(peer, "user_id", None)
+        return int(user_id) if user_id is not None else None
+
     async def resolve_contact(self, identifier: str) -> int:
         """Return the Telegram `user_id` for a phone number OR @handle.
 

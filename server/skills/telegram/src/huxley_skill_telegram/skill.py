@@ -809,20 +809,25 @@ class TelegramSkill:
         assert self._transport is not None
         assert self._logger is not None
         resolved = 0
-        names = list(self._contacts)
-        for i, (name, phone) in enumerate(self._contacts.items()):
+        limited: TransportRateLimitedError | None = None
+        skipped: list[str] = []
+        for name, phone in self._contacts.items():
             try:
-                uid = await self._transport.resolve_contact(phone)
+                if limited is None:
+                    uid = await self._transport.resolve_contact(phone)
+                else:
+                    # Rate limited: only what the cache already knows (no
+                    # request), so a known caller is still recognised.
+                    cached = await self._transport.resolve_cached(phone)
+                    if cached is None:
+                        skipped.append(name)
+                        continue
+                    uid = cached
                 self._user_id_to_name[uid] = name
                 resolved += 1
             except TransportRateLimitedError as exc:
-                # Every further lookup would only lengthen the wait.
-                await self._logger.awarning(
-                    "telegram.inbound.resolve_rate_limited",
-                    wait_s=exc.wait_s,
-                    skipped=names[i:],
-                )
-                break
+                limited = exc
+                skipped.append(name)
             except Exception:
                 await self._logger.awarning(
                     "telegram.inbound.resolve_failed",
@@ -830,6 +835,12 @@ class TelegramSkill:
                     phone=phone,
                     hint="contact won't be recognized on incoming calls",
                 )
+        if limited is not None:
+            await self._logger.awarning(
+                "telegram.inbound.resolve_rate_limited",
+                wait_s=limited.wait_s,
+                skipped=skipped,
+            )
         await self._logger.ainfo(
             "telegram.inbound.reverse_map_built",
             total=len(self._contacts),

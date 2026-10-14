@@ -74,6 +74,9 @@ class StubTransport:
     async def connect(self) -> None:
         self.connected = True
 
+    async def resolve_cached(self, identifier: str) -> int | None:
+        return self.resolve_map.get(identifier)
+
     async def resolve_contact(self, identifier: str) -> int:
         if identifier in self.raise_on_resolve_for:
             from huxley_skill_telegram.transport import TransportError
@@ -903,9 +906,10 @@ class TestInbound:
         assert "falló" in turns[0].lower()  # error
 
     @pytest.mark.asyncio
-    async def test_reverse_map_stops_at_the_first_rate_limit(self, tmp_path: Path) -> None:
-        """Telegram's FLOOD_WAIT on a lookup: every further lookup would only
-        lengthen the wait (2696 s after a few restarts, 2026-10-14)."""
+    async def test_a_rate_limit_still_recognises_cached_contacts(self, tmp_path: Path) -> None:
+        """FLOOD_WAIT on a lookup (2696 s after a few restarts, 2026-10-14):
+        no more lookups, but a contact the cache already knows (Mario) is
+        still recognised, or contacts_only would refuse his calls."""
         from huxley_skill_telegram.transport import TransportRateLimitedError
 
         tried: list[str] = []
@@ -915,11 +919,15 @@ class TestInbound:
                 tried.append(identifier)
                 raise TransportRateLimitedError("wait", 2696)
 
+            async def resolve_cached(self, identifier: str) -> int | None:
+                return {"+573000000078": 222}.get(identifier)
+
         skill = TelegramSkill(transport_factory=LimitedStubTransport)
         ctx, _ = _build_ctx(self._inbound_config(), tmp_path)
         await skill.setup(ctx)
 
-        assert len(tried) == 1
+        assert len(tried) == 1  # one lookup, then the cache only
+        assert skill._user_id_to_name == {222: "hija"}  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
     async def test_inbound_reverse_map_soft_fails_unresolvable(self, tmp_path: Path) -> None:
