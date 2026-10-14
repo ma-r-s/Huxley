@@ -564,3 +564,26 @@ class TestResolveByImport:
         with pytest.raises(TransportRateLimitedError) as caught:
             await t.resolve_contact("+573000000099", name="x")
         assert caught.value.wait_s == 120
+
+
+class TestConnectionStateLog:
+    """Each call connection state is logged before pytgcalls handles it."""
+
+    @pytest.mark.asyncio
+    async def test_states_are_logged_and_still_handled(self) -> None:
+        from types import SimpleNamespace
+
+        from huxley_skill_telegram.transport import _log_connection_changes
+
+        handled: list[tuple[int, str]] = []
+
+        async def original(chat_id: int, net_state: Any) -> None:
+            handled.append((chat_id, net_state.state))
+
+        call_py = SimpleNamespace(_handle_connection_changed=original)
+        _log_connection_changes(call_py)
+        assert call_py._handle_connection_changed is not original
+        await call_py._handle_connection_changed(
+            42, SimpleNamespace(state="TIMEOUT", kind="NORMAL")
+        )
+        assert handled == [(42, "TIMEOUT")]

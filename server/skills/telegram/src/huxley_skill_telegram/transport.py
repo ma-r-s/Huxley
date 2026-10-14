@@ -25,7 +25,7 @@ import struct
 import threading
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -156,6 +156,28 @@ class TransportRateLimitedError(TransportError):
     def __init__(self, message: str, wait_s: int) -> None:
         super().__init__(message)
         self.wait_s = wait_s
+
+
+def _log_connection_changes(call_py: Any) -> None:
+    """Log every call connection state, then let pytgcalls handle it.
+
+    pytgcalls handles connection changes privately (a failed or timed-out
+    audio link discards the call) and logs nothing: on 2026-10-14 a call to
+    Juan Miguel was answered, carried silence both ways, ended at 15.5 s,
+    and nothing said whether the audio link ever came up. pytgcalls looks
+    the handler up on the instance at each change, so wrapping it works."""
+    original = call_py._handle_connection_changed
+
+    async def logged(chat_id: int, net_state: Any) -> None:
+        await logger.ainfo(
+            "telegram.transport.connection_state",
+            chat_id=chat_id,
+            state=str(getattr(net_state, "state", net_state)),
+            kind=str(getattr(net_state, "kind", "")),
+        )
+        await original(chat_id, net_state)
+
+    call_py._handle_connection_changed = logged
 
 
 class TelegramTransport:
@@ -300,6 +322,7 @@ class TelegramTransport:
         )
         call_py = PyTgCalls(app)
         self._wire_handlers(call_py, app)
+        _log_connection_changes(call_py)
         return app, call_py
 
     async def _start_with_db_lock_retry(
