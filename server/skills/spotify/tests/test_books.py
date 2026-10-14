@@ -1020,6 +1020,22 @@ class TestMusicAndBooksApart:
         assert ended["book"] == "Cien años de soledad" and ended["book_info"] is False
         assert _events_named(skill, "spotify.book_without_chapters")
 
+    async def test_from_the_beginning_without_chapters_says_it_cant(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        """2026-10-14, Spotify's /audiobooks blocked: "desde el principio"
+        twice, "Listo, lo empiezo desde cero" twice, and the book went on
+        where he was both times."""
+        skill, client, _, _ = await _skill(tmp_path, pcm_server)
+        skill._search.books.clear()  # type: ignore[union-attr]  # every lookup fails
+        result = await skill.handle(
+            "play_book", {"title": "cien años de soledad", "from_beginning": True}
+        )
+        assert _out(result)["reason"] == "cant_restart"
+        assert "Ahora no puedo volver al principio del libro" in _out(result)["then"]
+        assert result.side_effect is None and _plays(client) == []
+        assert _events_named(skill, "spotify.restart_unavailable")
+
     async def test_a_resume_without_chapters_never_writes_an_empty_title(
         self, tmp_path: Path, pcm_server: PcmServer, monkeypatch: pytest.MonkeyPatch
     ) -> None:

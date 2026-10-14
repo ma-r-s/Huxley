@@ -1074,6 +1074,13 @@ class SpotifySkill:
                     await log.ainfo("spotify.book_confirm_asked", query=title, title=target.title)
                     return self._then("ask_which", title=target.title, author=target.artist or "?")
         info = await self._book_info(target.uri)
+        if from_beginning and info is None:
+            # No chapter list (Spotify's /audiobooks blocked): the stream
+            # can't find the first chapter and would resume where he was.
+            # He asked twice and was told "desde cero" both times
+            # (2026-10-14): say so instead; the paused book comes back.
+            await log.ainfo("spotify.restart_unavailable", title=target.title)
+            return self._then("cant_restart")
         if from_beginning:
             finished = await memory.finished(target.uri)
             place = await memory.place(target.uri)

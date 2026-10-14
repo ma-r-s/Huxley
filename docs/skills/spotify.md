@@ -90,7 +90,10 @@ author named, or one whose main words before the last heard one were never
 said ("Hechos de los Apóstoles" for "Los doce apóstoles" heard as "Los dos
 apos"; a title named by its opening words, "Cien años", is fine), is
 confirmed first (`ask_which`), since a wrong book costs listening hours. No title: the last book. "El segundo" after
-`find_books` is the second book read. `from_beginning` past the second
+`find_books` is the second book read. `from_beginning` with no chapter
+list (Spotify's `/audiobooks` blocked) says it can't go back to the start
+right now (`cant_restart`) and the book goes on, rather than resuming and
+claiming a restart. `from_beginning` past the second
 chapter asks book or chapter (`ask_whole_book`), keeps the place it
 leaves, and `book_control(go_back_to_saved_place)` undoes it; it is also
 how to erase a book's progress. A finished book asks before starting
