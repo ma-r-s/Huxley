@@ -89,9 +89,11 @@ TEXT: dict[str, dict[str, str]] = {
             "autores ni de qué trata un libro."
         ),
         "book_title": "Título y/o autor tal como los dijo el usuario. Vacío para seguir "
-        "con el último libro.",
+        "con el último libro."
+        " Un autor o título que conoces va con su ortografía real aunque se oiga distinto ('Castro Caycedo', no 'Castro Caicedo'): el buscador no corrige.",
         "book_author": "El autor, si lo dijo o si se acaba de hablar de él (por ejemplo, "
-        "después de buscar de quién es un libro). Así solo se buscan libros suyos.",
+        "después de buscar de quién es un libro). Así solo se buscan libros suyos."
+        " Un autor o título que conoces va con su ortografía real aunque se oiga distinto ('Castro Caycedo', no 'Castro Caicedo'): el buscador no corrige.",
         "book_from_beginning": (
             "true solo si pidió empezar el libro desde el principio ('desde el "
             "principio', 'desde el inicio', 'empiézalo de nuevo'). Si pide empezar "
@@ -128,6 +130,7 @@ TEXT: dict[str, dict[str, str]] = {
         "find_query": (
             "El tema, el tipo de libro, el autor o el título que dijo, con sus palabras y "
             "sin la frase entera. Vacío si no dijo ninguno."
+            " Un autor o título que conoces va con su ortografía real aunque se oiga distinto ('Castro Caycedo', no 'Castro Caicedo'): el buscador no corrige."
         ),
         "find_like": (
             "Si pidió libros como uno que nombró ('algo como <libro>'), el título o el "
@@ -215,9 +218,11 @@ TEXT: dict[str, dict[str, str]] = {
             "is about."
         ),
         "book_title": "Title and/or author as the user said them. Empty to continue the "
-        "last book.",
+        "last book."
+        " An author or title you know goes in its real spelling even if it sounds different ('Castro Caycedo', not 'Castro Caicedo'): the search doesn't correct it.",
         "book_author": "The author, if they said it or it was just talked about (for "
-        "example, after looking up who wrote a book). Then only their books are searched.",
+        "example, after looking up who wrote a book). Then only their books are searched."
+        " An author or title you know goes in its real spelling even if it sounds different ('Castro Caycedo', not 'Castro Caicedo'): the search doesn't correct it.",
         "book_from_beginning": (
             "true only if they asked to start the book from the beginning ('from the "
             "start', 'start it over'). To restart the chapter use `book_control` "
@@ -252,6 +257,7 @@ TEXT: dict[str, dict[str, str]] = {
         "find_query": (
             "The subject, kind of book, author or title they said, in their words, not "
             "the whole sentence. Empty if they named none."
+            " An author or title you know goes in its real spelling even if it sounds different ('Castro Caycedo', not 'Castro Caicedo'): the search doesn't correct it."
         ),
         "find_like": (
             "If they asked for books like one they named ('something like <book>'), that "
@@ -338,9 +344,11 @@ TEXT: dict[str, dict[str, str]] = {
             "brièvement 'je cherche'. Si le résultat contient `then`, fais exactement "
             "ce qu'il dit. N'invente jamais de titres, d'auteurs ni de résumés."
         ),
-        "book_title": "Titre et/ou auteur tels que dits. Vide pour reprendre le dernier livre.",
+        "book_title": "Titre et/ou auteur tels que dits. Vide pour reprendre le dernier livre."
+        " Un auteur ou un titre que tu connais s'écrit avec sa vraie orthographe même s'il sonne autrement ('Castro Caycedo', pas 'Castro Caicedo') : la recherche ne corrige pas.",
         "book_author": "L'auteur, s'il l'a dit ou si on vient d'en parler (par exemple après "
-        "avoir cherché qui a écrit un livre). Seuls ses livres sont alors cherchés.",
+        "avoir cherché qui a écrit un livre). Seuls ses livres sont alors cherchés."
+        " Un auteur ou un titre que tu connais s'écrit avec sa vraie orthographe même s'il sonne autrement ('Castro Caycedo', pas 'Castro Caicedo') : la recherche ne corrige pas.",
         "book_from_beginning": (
             "true seulement s'il demande le livre depuis le début ('depuis le "
             "début', 'recommence-le'). Pour recommencer le chapitre, utilise "
@@ -375,6 +383,7 @@ TEXT: dict[str, dict[str, str]] = {
         "find_query": (
             "Le sujet, le genre de livre, l'auteur ou le titre qu'il a dit, avec ses mots, "
             "pas toute la phrase. Vide s'il n'en a nommé aucun."
+            " Un auteur ou un titre que tu connais s'écrit avec sa vraie orthographe même s'il sonne autrement ('Castro Caycedo', pas 'Castro Caicedo') : la recherche ne corrige pas."
         ),
         "find_like": (
             "S'il demande des livres comme un livre qu'il a nommé ('quelque chose comme "
