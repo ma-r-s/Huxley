@@ -78,8 +78,9 @@ TEXT: dict[str, dict[str, str]] = {
             "libros y dice 'el segundo', 'el último' o 'ese', pasa el título de ese "
             "libro, contando en el orden en que los dijiste. Sin `title` ('sigue con "
             "el libro', 'pon mi libro', 'pon el libro') sigue con el último libro. "
-            "Un libro cualquiera ('pon un libro', 'ponme un libro', 'algo para "
-            "leer') no es seguir: usa `find_books` sin argumentos. Si pide un "
+            "'Otros', 'otro' o 'más' después de una oferta nunca es elegir: es "
+            "`find_books` con `more`. Un libro cualquiera ('pon un libro', 'ponme un "
+            "libro', 'algo para leer') no es seguir: usa `find_books` sin argumentos. Si pide un "
             "tipo de libro sin título ('un libro de <tema>'), usa `find_books`. "
             "ANTES de llamar di algo breve como 'a ver, lo busco'. Si el resultado "
             "trae `then`, haz exactamente lo que dice. Nunca inventes títulos, "
@@ -134,7 +135,9 @@ TEXT: dict[str, dict[str, str]] = {
             "Anota si al usuario le gustó o no un libro, para recomendarle mejor: 'me "
             "gustó', 'qué buen libro', 'me está gustando', 'no me gusta este libro', 'ese "
             "no me gustó'. Llámala cada vez que diga que un libro le gusta o no, aunque "
-            "no lo pida como orden. Sin `title`, el libro que está puesto o el último. "
+            "no lo pida como orden, y antes de contestar; un 'me gustó' o 'me encanta' "
+            "solo, con un libro puesto o recién terminado, habla de ese libro. Sin "
+            "`title`, el libro que está puesto o el último. "
             "Después di exactamente lo que diga `then`."
         ),
         "opinion_value": "'liked' si le gustó, 'disliked' si no.",
@@ -195,7 +198,9 @@ TEXT: dict[str, dict[str, str]] = {
             "as said) it plays that book; if they just heard a list of books and say "
             "'the second', 'the last one' or 'that one', pass that book's title, "
             "counting in the order you read them. Without `title` ('continue the "
-            "book', 'put my book on') the last book continues. Any book ('put on a "
+            "book', 'put my book on') the last book continues. 'Others', 'another' or "
+            "'more' after an offer is never a pick: it's "
+            "`find_books` with `more`. Any book ('put on a "
             "book', 'something to read') is not continuing: use `find_books` with "
             "no arguments. For a kind of book with "
             "no title ('a book about <subject>') use `find_books`. BEFORE calling, "
@@ -250,8 +255,10 @@ TEXT: dict[str, dict[str, str]] = {
             "Note whether the user liked a book, to recommend better: 'I liked it', 'what "
             "a good book', 'I'm enjoying it', 'I don't like this book', 'I didn't like "
             "that one'. Call it whenever they say they like a book or not, even if it "
-            "isn't phrased as a request. Without `title`, the book that is on or the last "
-            "one. Then say exactly what `then` says."
+            "isn't phrased as a request, and before answering; a bare 'I liked it' or "
+            "'I love it' while a book is on or just ended is about that book. Without "
+            "`title`, the book that is on or the last one. Then say exactly what `then` "
+            "says."
         ),
         "opinion_value": "'liked' if they liked it, 'disliked' if not.",
         "opinion_title": "The title if they mean another book; empty for the one that is on.",
@@ -312,7 +319,9 @@ TEXT: dict[str, dict[str, str]] = {
             "les deux, tels que dits) il lance ce livre ; s'il vient d'entendre une "
             "liste et dit 'le deuxième', 'le dernier' ou 'celui-là', passe le titre "
             "de ce livre, dans l'ordre où tu les as lus. Sans `title` ('continue le "
-            "livre', 'mets mon livre') le dernier livre reprend. Un livre quelconque "
+            "livre', 'mets mon livre') le dernier livre reprend. 'D'autres', 'un autre' "
+            "ou 'plus' après une offre n'est jamais un choix : "
+            "c'est `find_books` avec `more`. Un livre quelconque "
             "('mets un livre', 'quelque chose à lire') n'est pas reprendre : "
             "utilise `find_books` sans argument. Pour un genre de livre "
             "sans titre ('un livre sur <sujet>'), utilise `find_books`. AVANT l'appel, dis "
@@ -365,7 +374,9 @@ TEXT: dict[str, dict[str, str]] = {
             "Note si un livre a plu à l'utilisateur, pour mieux le conseiller : 'il m'a "
             "plu', 'quel bon livre', 'ça me plaît', 'ce livre ne me plaît pas', 'celui-là "
             "ne m'a pas plu'. Appelle-la chaque fois qu'il dit qu'un livre lui plaît ou "
-            "non, même sans le demander. Sans `title`, le livre en cours ou le dernier. "
+            "non, même sans le demander, et avant de répondre ; un 'il m'a plu' ou "
+            "'j'adore' tout court, avec un livre en cours ou juste fini, parle de ce "
+            "livre. Sans `title`, le livre en cours ou le dernier. "
             "Ensuite dis exactement ce que dit `then`."
         ),
         "opinion_value": "'liked' s'il a aimé, 'disliked' sinon.",

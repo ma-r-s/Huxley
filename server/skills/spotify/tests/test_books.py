@@ -1423,6 +1423,19 @@ class TestTheShelf:
             text = tooltext.TEXT[lang]["play_book"]
             assert words in text and "`find_books`" in text, lang
 
+    async def test_otros_after_an_offer_is_more_and_an_opinion_comes_first(self) -> None:
+        """Hearing bench, 2026-10-14: "otros" after an offer played the
+        second book, and a bare "me gustó" recorded nothing. The model's
+        obedience is checked on the bench; this pins the words it reads."""
+        from huxley_skill_spotify import tooltext
+
+        for lang, others in (("es", "'Otros'"), ("en", "'Others'"), ("fr", "'D'autres'")):
+            text = tooltext.TEXT[lang]["play_book"]
+            assert others in text and "`more`" in text, lang
+        assert "antes de contestar" in tooltext.TEXT["es"]["book_opinion"]
+        assert "before answering" in tooltext.TEXT["en"]["book_opinion"]
+        assert "avant de répondre" in tooltext.TEXT["fr"]["book_opinion"]
+
     # --- the review round (T1.45) ---
 
     async def test_a_title_with_a_theme_word_is_searched_not_redirected(
