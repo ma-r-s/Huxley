@@ -1202,6 +1202,11 @@ Next: rollback bookkeeping (the hello's `rollback` field), F-0023, the heap duri
 - **Board run** (2026-10-14 05:47-05:56Z, b24eb0e9, amp off, night: the held sounds log `held_night` at their moments): `status poweron` -> startup played (silent), Rainbow `heard=1`, `connected` held 2 s later; a 6 s Wi-Fi blip -> connected->dropped->connected in 12 s, no sound; a 1 min dead server -> `lost` at 20.9 s, a tick 3 s later, a press in the outage gave the offline sentence and Glow with no tick during it (busy deferred them: 9 ticks in 41 s), `connected` on return; a Wi-Fi drop 2.7 min later (a stable connection, so a new outage) -> `lost` at 20.9 s, ticks every 3 s, `connected`; `battery park 3500 1` -> parked ~1 min, booted as a power on (`power_on=1`): startup, Rainbow, a tick, `connected`; the LEDs cleared before the park (`led.started` ahead of `battery.parked`).
 - Pending: Mario hears them in daytime.
 
+### F-0038: The walkie retries a declined update by itself once idle · queued 2026-10-14
+
+**Problem** (986a52d9, 2026-10-14 18:05Z): an offer that finds the walkie in use is refused (`ota.status ... phase=failed error=busy`) and the server re-sends offers only at the next hello, so an update waits for a reconnect: hours if he listens to a book or the radio. Today a Mac-side loop re-offers at each idle moment (no press for 2 min, nothing playing).
+**Design (draft)**: on `error=busy` the walkie remembers the offered version, url and force flag (RAM: a restart drops it, the next hello re-offers) and pulls it once it has been idle N minutes (no press, nothing in the ring, no call), never 22:00-07:00 Bogota when the clock is known, at most a few tries; a withdrawal (or a new offer) replaces or drops it. Logged `ota.deferred version= why=busy` and `ota.retry version= idle_ms=`. No server change (the server session agrees).
+
 ### F-0037: A press during an update says it's updating · built 2026-10-14
 
 **Ask** (Mario, through the server session): "Can we add a message when the device is updating like 'Mario está actualizando el dispositivo, intenta luego' or something better". A press during an update played "No tengo conexión", which sounds like something broke.
