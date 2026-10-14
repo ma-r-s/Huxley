@@ -5886,7 +5886,7 @@ Misses on the new side: cinema (JavaScript listing pages), stomach ache (every b
 
 ### Ship (Gate 5)
 
-Branch `t148-search-news`, not merged, not pushed, not deployed.
+Branch `t148-search-news` (worktree), on base 5f699660: 6e1469b5 (search), 816d9e6c (news), f800de9e (persona, docs, eval), 012b745e (critic round). Not merged, not pushed, not deployed. Eval JSON (every tool output per question and round) was kept out of the repo.
 
 **For Mario to decide**: (1) safe search for Buddy (the kids persona): ddgs's working engines ignore it, so `strict` filters little; the skill now withholds page text for strict personas, but titles and snippets are unfiltered; a filtered provider would be a separate item. (2) Output per search roughly doubled (about 4.3 KB median), more input tokens per search on the Realtime bill; the caps hold it under 7.5 KB. (3) The urgent-symptom line in the persona ("pide ayuda ya", offer to call a contact) was added as standard practice; reword or drop it if it isn't how you want grandpa spoken to.
 
