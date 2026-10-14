@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "esp_log.h"
 #include "esp_attr.h"
@@ -19,6 +20,7 @@
 #include "esp_timer.h"
 #include "mbedtls/base64.h"
 
+#include "hux_alert_logic.h"
 #include "hux_audio.h"
 #include "hux_battery.h"
 #include "hux_log.h"
@@ -28,6 +30,7 @@
 #include "hux_ota.h"
 #include "hux_prompts.h"
 #include "hux_proto.h"
+#include "hux_status.h"
 
 static const char *TAG = "hux_app";
 
@@ -54,6 +57,7 @@ static app_state_t s_state = ST_BOOT;
  * = skill_continuous, e.g. a call). Server-authoritative: it re-sends
  * `input_mode` on every connect. */
 static bool s_ptt_held = false;          /* a press we acted on (sent ptt_start) */
+static bool s_talk_down = false;         /* the lever is held, acted on or not (F-0033) */
 static bool s_mic_continuous = false;    /* input_mode == skill_continuous */
 static hux_server_state_t s_server_state = HUX_SERVER_STATE_UNKNOWN;
 static bool s_model_speaking = false;      /* server's model_speaking */
@@ -523,6 +527,17 @@ static void send_blackbox(void) {
     cJSON_Delete(root);
 }
 
+/* A sound of the walkie's own while the link is down (the offline cue, a
+ * connection sound) isn't the server's audio: the next hello reports what
+ * the drop left playing up to here, fixed now. */
+static void freeze_after_drop(void) {
+    if (s_hellos > 0 && !s_after_drop_frozen) {
+        s_after_drop_frozen = true;
+        s_after_drop_played = hux_audio_played_ms() - s_played_at_drop;
+        s_after_drop_left = (uint32_t)(hux_audio_spk_ring_used() / 48);
+    }
+}
+
 /* The device can't reach the server (no Wi-Fi, no WebSocket, no hello
  * yet), so nobody else can tell the user: it says so itself, a sentence
  * stored on the walkie (F-0027), or if that can't play a short low falling
@@ -544,14 +559,9 @@ static void enter_ptt(void) {
         /* Stop whatever is still playing (the ring can hold a whole reply
          * from before the drop), then the cue: a clear drops queued tones,
          * and tones only play once the ring is empty. */
-        if (s_hellos > 0 && !s_after_drop_frozen) {
-            /* The press ends what the drop left playing: what was heard
-             * stops here, and what was queued is thrown away now. The
-             * next hello reports these, not the cue's own audio. */
-            s_after_drop_frozen = true;
-            s_after_drop_played = hux_audio_played_ms() - s_played_at_drop;
-            s_after_drop_left = (uint32_t)(hux_audio_spk_ring_used() / 48);
-        }
+        /* The press ends what the drop left playing: what was heard stops
+         * here, and what was queued is thrown away now. */
+        freeze_after_drop();
         hux_audio_spk_clear();
         /* A barge-in hold from a press before the drop would drop the cue
          * too; no server audio can come now that would need it. */
@@ -943,6 +953,7 @@ static void dispatch(hux_app_event_t *ev) {
 
         case HUX_APP_EV_BUTTON_K2_PRESSED:
             ESP_LOGI(TAG, "app.ptt.pressed");
+            s_talk_down = true;
             enter_ptt();
             /* A fresh reading rides with the press, so "how much battery"
              * is answered from now (64 ms, on the battery task). */
@@ -951,8 +962,90 @@ static void dispatch(hux_app_event_t *ev) {
 
         case HUX_APP_EV_BUTTON_K2_RELEASED:
             ESP_LOGI(TAG, "app.ptt.released");
+            s_talk_down = false;
             leave_ptt();
             break;
+    }
+}
+
+/* -- Connection sounds (F-0033) ---------------------------------------
+ * The walkie says its connection state on its own: hux_status decides
+ * when, this plays them through the decoder like the offline cue. */
+#define STATUS_QUIET_MS 800 /* the speaker silent this long: a gap to play in */
+
+static hux_status_t s_status;
+static atomic_bool s_status_power_on = false; /* console `status poweron` */
+/* A "connected" still owed survives a restart (the ladder's reboot an hour
+ * into an outage, a crash): kept in RTC memory, which a power cut clears. */
+#define STATUS_RTC_MAGIC 0x53544154u /* 'STAT' */
+RTC_NOINIT_ATTR static uint32_t s_status_rtc_magic;
+RTC_NOINIT_ATTR static uint32_t s_status_rtc_owed;
+
+/* Something is playing or about to (a reply, a tone, a stored sentence,
+ * a press, a call), or the decoder isn't up yet at boot. */
+static bool status_busy(void) {
+    return !hux_opus_ready() || s_talk_down || s_ptt_held || s_mic_continuous ||
+           s_model_speaking || hux_audio_spk_ring_used() > 0 || hux_opus_rx_waiting() > 0 ||
+           hux_audio_quiet_ms() < STATUS_QUIET_MS;
+}
+
+/* The searching tick repeats for minutes: its lines are thinned to the
+ * first, every tenth and the end, so an outage's log queue (256 lines,
+ * kept until the server is back) keeps room for the ladder's lines. */
+static bool status_log_tick(void) {
+    return s_status.ticks == 1 || s_status.ticks % 10 == 0;
+}
+
+static hux_prompt_t status_prompt(hux_status_sound_t sound) {
+    switch (sound) {
+        case HUX_STATUS_STARTUP:   return HUX_PROMPT_STARTUP;
+        case HUX_STATUS_SEARCHING: return HUX_PROMPT_SEARCHING;
+        case HUX_STATUS_CONNECTED: return HUX_PROMPT_CONNECTED;
+        default:                   return HUX_PROMPT_LOST;
+    }
+}
+
+static void status_tick(void) {
+    if (atomic_exchange(&s_status_power_on, false)) {
+        hux_status_init(&s_status, true, false);
+        ESP_LOGI(TAG, "sound.status.rehearse power_on=1");
+    }
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    /* Evicted: another client has the server on purpose; not an outage. */
+    bool connected = s_state == ST_READY || s_evicted;
+    bool night = hux_alert_quiet((int64_t)time(NULL));
+    hux_status_phase_t before = s_status.phase;
+    bool was_over = s_status.schedule_over;
+    hux_status_sound_t held;
+    hux_status_sound_t sound =
+        hux_status_step(&s_status, now, connected, status_busy(), night, &held);
+    s_status_rtc_owed = s_status.announce;
+    if (s_status.phase != before) {
+        ESP_LOGI(TAG, "sound.status.phase %s->%s app=%s outage=%d", hux_status_phase_name(before),
+                 hux_status_phase_name(s_status.phase), state_name(s_state), s_status.in_outage);
+    }
+    if (s_status.schedule_over && !was_over) {
+        ESP_LOGI(TAG, "sound.status.ticks_done n=%u", (unsigned)s_status.ticks);
+    }
+    if (held != HUX_STATUS_NONE && (held != HUX_STATUS_SEARCHING || status_log_tick())) {
+        ESP_LOGI(TAG, "sound.status kind=%s sound=%s n=%u",
+                 s_status.held_busy ? "let_go_busy" : "held_night", hux_status_name(held),
+                 (unsigned)s_status.ticks);
+    }
+    if (sound == HUX_STATUS_NONE) {
+        return;
+    }
+    if (s_state != ST_READY) {
+        /* Not the server's audio. (Its packets can still be queued when
+         * the link resets: hux_opus_rx_reset then counts them as server
+         * audio discarded, over rather than under, the safe side.) */
+        freeze_after_drop();
+    }
+    bool ok = hux_prompt_play(status_prompt(sound));
+    if (!ok || sound != HUX_STATUS_SEARCHING || status_log_tick()) {
+        ESP_LOG_LEVEL(ok ? ESP_LOG_INFO : ESP_LOG_WARN, TAG,
+                      "sound.status kind=%s played=%d n=%u app=%s", hux_status_name(sound), ok,
+                      (unsigned)s_status.ticks, state_name(s_state));
     }
 }
 
@@ -960,6 +1053,16 @@ static void app_task(void *unused) {
     (void)unused;
     ESP_LOGI(TAG, "app_task started");
     transition(ST_WAITING_WIFI);
+    /* Only a real power on (or a charge after the battery park) says so;
+     * an update's, a crash's or the ladder's restart comes back quietly,
+     * still owing a "connected" from before it (hux_status.h). */
+    bool owed = !s_device.power_on && s_status_rtc_magic == STATUS_RTC_MAGIC &&
+                s_status_rtc_owed != 0;
+    s_status_rtc_magic = STATUS_RTC_MAGIC;
+    hux_status_init(&s_status, s_device.power_on, owed);
+    s_status_rtc_owed = s_status.announce;
+    ESP_LOGI(TAG, "sound.status.init power_on=%d owed=%d reset=%s", s_device.power_on, owed,
+             s_device.reset ? s_device.reset : "?");
 
     hux_app_event_t ev;
     for (;;) {
@@ -967,8 +1070,13 @@ static void app_task(void *unused) {
         if (xQueueReceive(s_event_q, &ev, pdMS_TO_TICKS(1000)) == pdTRUE) {
             dispatch(&ev);
         }
+        status_tick();
         atomic_fetch_add(&s_app_beats, 1);
     }
+}
+
+void hux_app_status_power_on(void) {
+    atomic_store(&s_status_power_on, true);
 }
 
 void hux_app_start(void) {

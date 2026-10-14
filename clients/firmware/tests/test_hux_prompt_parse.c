@@ -52,24 +52,39 @@ static void test_magic_only_is_zero_packets(void) {
     HX_ASSERT_EQ(hux_prompt_count((const uint8_t *)"HXP1", 4), 0, "nothing to play");
 }
 
+static int shipped_packets(const char *name) {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s.hxp", HUX_PROMPTS_FILES, name);
+    FILE *f = fopen(path, "rb");
+    HX_ASSERT_TRUE(f != NULL, path);
+    if (f == NULL) {
+        return -1;
+    }
+    static uint8_t buf[64 * 1024];
+    size_t len = fread(buf, 1, sizeof(buf), f);
+    fclose(f);
+    return hux_prompt_count(buf, len);
+}
+
 /* The files the firmware embeds: each one whole, and short enough to say
  * while the walkie waits (a bad render must fail here, not on the walkie). */
 static void test_shipped_prompts_parse(void) {
     const char *names[] = {"offline", "battery_empty"};
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
-        char path[512];
-        snprintf(path, sizeof(path), "%s/%s.hxp", HUX_PROMPTS_FILES, names[i]);
-        FILE *f = fopen(path, "rb");
-        HX_ASSERT_TRUE(f != NULL, path);
-        if (f == NULL) {
-            continue;
-        }
-        static uint8_t buf[64 * 1024];
-        size_t len = fread(buf, 1, sizeof(buf), f);
-        fclose(f);
-        int packets = hux_prompt_count(buf, len);
+        int packets = shipped_packets(names[i]);
         HX_ASSERT_TRUE(packets > 10 && packets * 60 <= 6000, names[i]);
     }
+}
+
+/* The connection sounds (F-0033): whole, and short (a tick every 3 s must
+ * leave room to talk). */
+static void test_shipped_sounds_parse(void) {
+    const char *names[] = {"startup", "searching", "connected", "lost"};
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        int packets = shipped_packets(names[i]);
+        HX_ASSERT_TRUE(packets > 0 && packets * 60 <= 2000, names[i]);
+    }
+    HX_ASSERT_TRUE(shipped_packets("searching") * 60 <= 600, "the tick is short");
 }
 
 int main(void) {
@@ -77,5 +92,6 @@ int main(void) {
     HX_RUN(test_refuses_bad_files);
     HX_RUN(test_magic_only_is_zero_packets);
     HX_RUN(test_shipped_prompts_parse);
+    HX_RUN(test_shipped_sounds_parse);
     HX_SUMMARY();
 }

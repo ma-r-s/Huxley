@@ -436,9 +436,45 @@ silent; a failed send retried after 2 min, doubling to 30). Logs:
 `alert.started sntp= down_sent=` at boot, `alert.server_lost since=
 lost_s=`, `alert.held why=no_ip|quiet_hours|retry_wait`, `alert.sent
 kind=down|fixed|test status= err= heap_internal_min= largest= stack_free=`
-(warnings: in the black box), `alert.disabled why=no_topic|topic_invalid`
-without a usable `HUX_NTFY_TOPIC` (secrets.h). Console `alert test` sends
+(warnings: in the black box), `alert.disabled why=no_topic|topic_invalid sntp=`
+without a usable `HUX_NTFY_TOPIC` (secrets.h; the clock still syncs). Console `alert test` sends
 one test push end to end.
+
+### Connection sounds (F-0033)
+
+The walkie says its connection state itself with four sounds
+(`components/hux_prompts/prompts/{startup,searching,connected,lost}.hxp`,
+from `server/personas/_shared/sounds/device/`), decided by `hux_status`
+(pure, host-tested) and played by the app loop once a second at most.
+Power on: `startup`, then a `searching` tick every 3 s for 2 min, every
+30 s after, none after 17 min. `lost` only after 20 s without the server
+(a deploy's restart is a silent blip), then the ticks again from the
+start. `connected` after a power on or a `lost`, never after a blip. An
+outage ends only with a connection that lasts 2 min: a server in a crash
+loop (up seconds, down again) goes on quietly on the first schedule, one
+`lost` and one `connected` in all. A boot after the battery park counts as
+a power on; any other boot (an update, a crash, the ladder's hourly
+restart) comes back silent until a new drop, except a `connected` still
+owed from before it (kept in RTC memory). "Connected" means the server's
+hello arrived (or another client took the server on purpose: evicted is
+not an outage). Nothing plays over a reply, a tone, a sentence, a held
+lever (offline too), a call, or within 800 ms of the speaker's last
+sound; a `connected` still blocked 3 s after the connection is let go
+(the server is already talking). A clip enters the decoder whole: the
+WebSocket's packets wait for it (`hux_opus_clip_begin/end`). 22:00-07:00
+Bogota, once the clock is known (SNTP starts at boot even without an
+alert topic): `lost`, the ticks and `connected` are held silent;
+`startup` and a press's offline sentence still play. A sound while the
+link is down fixes the next hello's after-drop figures first, like a
+press (it isn't server audio).
+Logs: `sound.status.init power_on= owed= reset=` at boot,
+`sound.status.phase <from>-><to> app=<state> outage=`, `sound.status
+kind=startup|searching|connected|lost played= n= app=`, `sound.status
+kind=held_night|let_go_busy sound= n=`, `sound.status.ticks_done n=`. The
+ticks log only the first and every tenth (`n=` counts them; the tick's own
+`prompt.play` is at debug), so an outage's 256-line log queue keeps room.
+Console `status poweron` starts the sounds over as after a power on (the
+bench can't cycle the power; `battery park <mv> 1` tests a real boot as one).
 
 ### Calls: latency and the walkie's own echo (F-0031)
 
@@ -637,8 +673,10 @@ The serial console (`components/hux_console/include/hux_console.h`)
 takes commands typed on the USB port: `talk` / `release`, `say <n>` (a
 whole turn: clip n from flash replaces the mic; `tools/clips.py`),
 `selftest` (a tone on the DAC read back electrically on the ES7210's
-echo-reference channel), `tone`, `prompt <name>` (a sentence stored on
-the walkie, `offline` or `battery_empty`; `prompt.play name= ms= queued=`),
+echo-reference channel), `tone`, `prompt <name>` (a sentence or sound stored on
+the walkie, `offline`, `battery_empty`, `startup`, `searching`,
+`connected` or `lost`; `prompt.play name= ms= queued=`), `status poweron`
+(the connection sounds as after a power on, F-0033),
 `vol`, `pa off|on` (silent bench),
 `wifi off|on`, `wifistat` (the Wi-Fi driver's buffer and RX/TX
 counters; they reach the server too, under the `wifi` tag), `wifiscan`

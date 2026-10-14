@@ -14,6 +14,7 @@
 #include "hal/usb_serial_jtag_ll.h"
 
 #include "hux_alert.h"
+#include "hux_app.h"
 #include "hux_audio.h"
 #include "hux_battery.h"
 #include "hux_button.h"
@@ -146,6 +147,8 @@ static void run_line(char *line, bool usb) {
         } else {
             hux_audio_set_echo_mode(mode);
         }
+    } else if (strcmp(cmd, "status") == 0 && argc > 1 && strcmp(argv[1], "poweron") == 0) {
+        hux_app_status_power_on(); /* the connection sounds as after a power on (F-0033) */
     } else if (strcmp(cmd, "alert") == 0 && argc > 1 && strcmp(argv[1], "test") == 0) {
         hux_alert_test(); /* one push to Mario's phone, end to end (F-0032) */
     } else if (strcmp(cmd, "calljb") == 0 && argc > 1) {

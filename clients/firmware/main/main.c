@@ -109,6 +109,8 @@ static const char *reset_reason_str(esp_reset_reason_t r) {
     }
 }
 
+static hux_app_device_info_t s_device_info;
+
 static void log_boot_banner(void) {
     /* Advance the boot counter first so it appears in the banner. */
     if (s_boot_magic != HUX_BOOT_MAGIC) {
@@ -139,15 +141,16 @@ static void log_boot_banner(void) {
 
     /* If we rebooted from a crash, surface it once. The full backtrace
      * is in the coredump partition — see firmware/docs/debugging.md. */
-    /* Same identity for the server, sent on every connect (hux_app). */
-    hux_app_device_info_t info = {
+    /* Same identity for the server, sent on every connect (hux_app); handed
+     * over after the battery park, which can make this boot a power on. */
+    s_device_info = (hux_app_device_info_t){
         .version = desc->version,
         .reset = reset_reason_str(reason),
         .boot_counter = s_boot_counter,
+        .power_on = reason == ESP_RST_POWERON,
     };
-    snprintf(info.mac, sizeof(info.mac), "%02x:%02x:%02x:%02x:%02x:%02x",
+    snprintf(s_device_info.mac, sizeof(s_device_info.mac), "%02x:%02x:%02x:%02x:%02x:%02x",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    hux_app_set_device_info(&info);
 
     /* Not ESP_RST_WDT: tools/flash.sh ends every flash with esptool's
      * watchdog reset (F-0020); the watchdogs that catch a hang report
@@ -200,7 +203,12 @@ void app_main(void) {
     /* The low-battery cutoff (F-0030): a spent cell parks here, before
      * Wi-Fi, audio or the supervisor draw anything, until a charger lifts
      * it; returns at once otherwise. */
-    hux_park_at_boot();
+    if (hux_park_at_boot()) {
+        /* Parked until a charger lifted the cell: for the user, a power
+         * on (the connection sounds start over, F-0033). */
+        s_device_info.power_on = true;
+    }
+    hux_app_set_device_info(&s_device_info);
 
     /* App state machine next — net and button both post events into
      * it, so the queue must exist before they start. */

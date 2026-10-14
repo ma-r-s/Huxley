@@ -26,6 +26,11 @@ Every prompt is levelled to -20 LUFS integrated with its true peak at most
 and streams at -20, cues 3 dB under), by ffmpeg's two-pass loudnorm, and
 measured again after the Opus round trip.
 
+    uv run --package huxley python clients/firmware/tools/render_prompts.py --sounds
+        (the connection sounds, F-0033: server/personas/_shared/sounds/device/*.wav,
+        rendered elsewhere at their own cue level: encoded as they are, then
+        checked after the Opus round trip: level, peak, the 4.5-6.5 kHz band)
+
 Then build and flash; commit the .hxp files (the build needs no API key).
 To change what the walkie says, edit PROMPTS and the enum in
 components/hux_prompts/include/hux_prompts.h together.
@@ -61,6 +66,13 @@ PROMPTS = {
     "offline": "No tengo conexión. Lo sigo intentando.",
     "battery_empty": "Batería agotada. Ponme a cargar.",
 }
+SOUNDS_DIR = ROOT / "server/personas/_shared/sounds/device"
+SOUNDS = (
+    "startup",
+    "searching",
+    "connected",
+    "lost",
+)  # F-0033, the firmware enum's order after PROMPTS
 LOUDNESS_LUFS = -20.0  # T1.47: speech and streams
 TRUE_PEAK_DB = -1.5
 MAGIC = b"HXP1"
@@ -140,6 +152,45 @@ def loudness(pcm: bytes) -> tuple[float, float]:
     return lufs, peak
 
 
+def band_rms_db(pcm: bytes) -> float:
+    """RMS of the 4.5-6.5 kHz band (the startup's sparkle reaches 5.3 kHz)."""
+    run = ffmpeg(
+        ["-af", "highpass=f=4500,lowpass=f=6500,astats=metadata=0", "-f", "null", "-"], pcm
+    )
+    m = re.search(r"RMS level dB:\s+(-?[\d.inf]+)", run.stderr.decode())
+    return float(m.group(1)) if m else float("-inf")
+
+
+def peak_rms_db(pcm: bytes) -> tuple[float, float]:
+    run = ffmpeg(["-af", "astats=metadata=0", "-f", "null", "-"], pcm)
+    text = run.stderr.decode()
+    peak = float(re.search(r"Peak level dB:\s+(-?[\d.inf]+)", text).group(1))
+    rms = float(re.search(r"RMS level dB:\s+(-?[\d.inf]+)", text).group(1))
+    return peak, rms
+
+
+def sounds() -> None:
+    """The connection sounds as they are (their level is the cue standard's),
+    checked after the Opus round trip."""
+    for name in SOUNDS:
+        with wave.open(str(SOUNDS_DIR / f"{name}.wav"), "rb") as w:
+            if (w.getframerate(), w.getnchannels(), w.getsampwidth()) != (SAMPLE_RATE, 1, 2):
+                sys.exit(f"{name}.wav: not 24 kHz mono PCM16")
+            pcm = w.readframes(w.getnframes())
+        blob = pack(encode(pcm))
+        back = decoded(blob)[: len(pcm)]
+        p0, r0 = peak_rms_db(pcm)
+        p1, r1 = peak_rms_db(back)
+        b0, b1 = band_rms_db(pcm), band_rms_db(back)
+        print(
+            f"{name}: {len(pcm) // 48} ms, {len(blob)} bytes; peak {p0:.1f} -> {p1:.1f} dBFS, "
+            f"rms {r0:.1f} -> {r1:.1f}, 4.5-6.5 kHz {b0:.1f} -> {b1:.1f} dB"
+        )
+        if abs(r1 - r0) > 1.0 or p1 > -1.0 or (b0 > -60 and abs(b1 - b0) > 3.0):
+            sys.exit(f"{name}: the Opus round trip changed it too much")
+        (OUT / f"{name}.hxp").write_bytes(blob)
+
+
 def decoded(blob: bytes) -> bytes:
     dec = OpusDecoderStream()
     return b"".join(dec.decode(p) for p in unpack(blob))
@@ -217,6 +268,10 @@ def finish(client: OpenAI, name: str, text: str, pcm: bytes) -> None:
 
 def main() -> None:
     args = sys.argv[1:]
+    if "--sounds" in args:
+        OUT.mkdir(parents=True, exist_ok=True)
+        sounds()
+        return
     level_only = "--level-only" in args
     names = [a for a in args if a != "--level-only"] or list(PROMPTS)
     unknown = [n for n in names if n not in PROMPTS]

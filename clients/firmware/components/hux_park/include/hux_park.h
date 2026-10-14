@@ -15,14 +15,17 @@
  */
 #pragma once
 
+#include <stdbool.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /** From app_main, after hux_board_init and hux_battery_init and before
  * anything else starts: returns when the walkie may boot (at once if
- * nothing is armed and the cell is fine). */
-void hux_park_at_boot(void);
+ * nothing is armed and the cell is fine). True if it parked first: the
+ * user switches on a charged walkie, a power on for them (F-0033). */
+bool hux_park_at_boot(void);
 
 /** hux_battery's cutoff sink: says it, tells the server, arms the park and
  * restarts. Never returns. */

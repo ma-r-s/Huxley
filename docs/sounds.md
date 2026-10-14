@@ -154,7 +154,7 @@ All sounds normalize to the cue level, **-19 LUFS momentary max** (about -23 LUF
 
 ### Device sounds (T1.49)
 
-The walkie plays four sounds itself, with no server (it may have no connection at all): `startup` (power on), `searching` (a tick repeated while it looks for Wi-Fi and the server), `connected` and `lost`. They live at **`server/personas/_shared/sounds/device/`**, rendered by the same script (`DEVICE_PALETTE`), and the firmware's tooling encodes and embeds them; the server never sends them. Same cue level as the palette; `searching` sits 6 dB under because it repeats.
+The walkie plays four sounds itself, with no server (it may have no connection at all): `startup` (power on), `searching` (a tick repeated while it looks for Wi-Fi and the server), `connected` and `lost`. They live at **`server/personas/_shared/sounds/device/`**, rendered by the same script (`DEVICE_PALETTE`), and the firmware's tooling encodes and embeds them (`render_prompts.py --sounds`; when each plays: firmware F-0033, `clients/firmware/docs/debugging.md`); the server never sends them. Same cue level as the palette; `searching` sits 6 dB under because it repeats.
 
 `startup` is the first sound in the **glass** family: G6 → C7 → E7 glass tones 60 ms apart, a pure E8 sparkle on the top note, 12 % reverb. Mario picked it over warmer bell takes for being "extremely happy, minimalistic". The other three are bells, which he liked; an all-glass set sounded too uniform, and the palette's redesign is T1.50.
 

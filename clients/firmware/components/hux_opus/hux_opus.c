@@ -42,6 +42,10 @@ static hux_opus_marker_fn s_clear_sink;
 static hux_opus_marker_fn s_unhold_sink;
 static TaskHandle_t s_dec_task;
 static SemaphoreHandle_t s_ctl_lock; /* s_ctl_item: unhold/reset from any task */
+/* A stored clip's packets go in as one piece: the WebSocket task's packets
+ * and clears wait for it, so the two streams never alternate through one
+ * decoder state (F-0033's connected sound plays just as a book may resume). */
+static SemaphoreHandle_t s_clip_lock;
 static _Atomic uint32_t s_dec_errors;
 /* Up to 120 ms per packet (an Opus packet may hold several frames). */
 EXT_RAM_BSS_ATTR static int16_t s_dec_pcm[HUX_OPUS_SAMPLE_RATE / 1000 * 120];
@@ -137,8 +141,9 @@ bool hux_opus_init(hux_opus_pcm_sink_fn pcm_sink, hux_opus_marker_fn clear_sink,
               in_size == HUX_OPUS_FRAME_SAMPLES * 2 && out_size <= HUX_OPUS_MAX_PACKET;
     if (ok) {
         s_ctl_lock = xSemaphoreCreateMutex();
+        s_clip_lock = xSemaphoreCreateMutex();
         s_rx_q = xQueueCreateWithCaps(RX_QUEUE_DEPTH, sizeof(rx_item_t), MALLOC_CAP_SPIRAM);
-        ok = s_ctl_lock != NULL && s_rx_q != NULL &&
+        ok = s_ctl_lock != NULL && s_clip_lock != NULL && s_rx_q != NULL &&
              xTaskCreateWithCaps(decode_task, "hux_opus_dec", DEC_TASK_STACK, NULL, DEC_TASK_PRIO,
                                  &s_dec_task, MALLOC_CAP_SPIRAM) == pdPASS;
         if (!ok && s_rx_q != NULL) {
@@ -166,22 +171,34 @@ void hux_opus_rx_packet(const uint8_t *data, size_t len) {
         ESP_LOGW(TAG, "opus.rx_too_big len=%u", (unsigned)len);
         return;
     }
+    if (xSemaphoreTake(s_clip_lock, pdMS_TO_TICKS(RX_WAIT_MS)) != pdTRUE) {
+        ESP_LOGW(TAG, "opus.rx_dropped len=%u (a stored clip held the queue %d ms)", (unsigned)len,
+                 RX_WAIT_MS);
+        return;
+    }
     s_ws_item.kind = RX_PACKET;
     s_ws_item.len = (uint16_t)len;
     memcpy(s_ws_item.data, data, len);
     if (xQueueSend(s_rx_q, &s_ws_item, pdMS_TO_TICKS(RX_WAIT_MS)) != pdTRUE) {
         ESP_LOGW(TAG, "opus.rx_dropped len=%u (decoder stuck %d ms)", (unsigned)len, RX_WAIT_MS);
     }
+    xSemaphoreGive(s_clip_lock);
 }
 
 void hux_opus_rx_clear(void) {
     if (s_rx_q == NULL) {
         return;
     }
+    /* After a clip being queued, never inside it; dropped only if the lock
+     * itself is stuck (the clear's own wait is the same 5 s). */
+    bool locked = xSemaphoreTake(s_clip_lock, pdMS_TO_TICKS(RX_WAIT_MS)) == pdTRUE;
     s_ws_item.kind = RX_CLEAR;
     s_ws_item.len = 0;
     if (xQueueSend(s_rx_q, &s_ws_item, pdMS_TO_TICKS(RX_WAIT_MS)) != pdTRUE) {
         ESP_LOGE(TAG, "opus.clear_dropped (decoder stuck)");
+    }
+    if (locked) {
+        xSemaphoreGive(s_clip_lock);
     }
 }
 
@@ -212,6 +229,14 @@ static void send_ctl(rx_kind_t kind, bool to_front) {
 
 void hux_opus_rx_fresh(void) {
     send_ctl(RX_RESET, false);
+}
+
+bool hux_opus_clip_begin(void) {
+    return s_clip_lock != NULL && xSemaphoreTake(s_clip_lock, pdMS_TO_TICKS(RX_WAIT_MS)) == pdTRUE;
+}
+
+void hux_opus_clip_end(void) {
+    xSemaphoreGive(s_clip_lock);
 }
 
 bool hux_opus_play_packet(const uint8_t *data, size_t len) {

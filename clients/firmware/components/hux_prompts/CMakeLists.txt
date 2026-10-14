@@ -3,4 +3,6 @@ idf_component_register(
     INCLUDE_DIRS "include"
     PRIV_REQUIRES log hux_opus
     EMBED_FILES "prompts/offline.hxp" "prompts/battery_empty.hxp"
+                "prompts/startup.hxp" "prompts/searching.hxp" "prompts/connected.hxp"
+                "prompts/lost.hxp"
 )

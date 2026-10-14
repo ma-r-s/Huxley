@@ -215,6 +215,12 @@ void hux_alert_start(const char *topic, const char *click) {
         nvs_load(); /* a "needs you" sent before the power cut still wants its "fixed" */
     }
     s_rtc.s.retry_ms = 0; /* a fresh boot tries at once */
+    /* Wall-clock time for quiet hours and "since HH:MM"; it syncs once
+     * there's an IP (the logs gain nothing from it: they keep uptime).
+     * Started even with alerts off: the connection sounds' night needs it
+     * too (F-0033). */
+    esp_sntp_config_t sc = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    esp_err_t err = esp_netif_sntp_init(&sc);
     size_t len = topic != NULL ? strlen(topic) : 0;
     bool valid = len > 0 && len < TOPIC_MAX;
     for (size_t i = 0; valid && i < len; i++) {
@@ -224,15 +230,12 @@ void hux_alert_start(const char *topic, const char *click) {
     }
     if (!valid) {
         /* Never the topic itself: a URL that fails to parse would be logged whole. */
-        ESP_LOGW(TAG, "alert.disabled why=%s", len == 0 ? "no_topic" : "topic_invalid");
+        ESP_LOGW(TAG, "alert.disabled why=%s sntp=%s", len == 0 ? "no_topic" : "topic_invalid",
+                 esp_err_to_name(err));
         return;
     }
     strlcpy(s_topic, topic, sizeof(s_topic));
     strlcpy(s_click, click != NULL ? click : "", sizeof(s_click));
-    /* Wall-clock time for quiet hours and "since HH:MM"; it syncs once
-     * there's an IP (and the logs gain nothing from it: they keep uptime). */
-    esp_sntp_config_t sc = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
-    esp_err_t err = esp_netif_sntp_init(&sc);
     if (xTaskCreate(alert_task, "hux_alert", TASK_STACK, NULL, 2, &s_task) != pdPASS) {
         ESP_LOGE(TAG, "alert.task_create_failed");
         return;
