@@ -1007,6 +1007,11 @@ class SpotifySkill:
                     ensure_ascii=False,
                 )
             )
+        context = str(state.context_uri or "")
+        if book is None and context.startswith("spotify:show:"):
+            plain = await self._book_heard_plain(context, state.item)
+            if plain is not None:
+                return plain
         title, artists = describe_item(state.item)
         if not title:
             return ToolResult(
@@ -1027,6 +1032,27 @@ class SpotifySkill:
         line = _SAY_SONG[lang].format(title=title, by=artists or "?")
         payload["then"] = _THEN[lang].format(line=line)
         return ToolResult(output=json.dumps(payload, ensure_ascii=False))
+
+    async def _book_heard_plain(self, uri: str, item: dict[str, Any] | None) -> ToolResult | None:
+        """What book is on when Spotify won't give its chapter list: its
+        name from the shelf or from what he asked for, and the chapter the
+        player names. Without it he heard "Es Capítulo 1, de ?"
+        (2026-10-14, /audiobooks blocked)."""
+        label = self._label(uri, "", None)
+        title, author = label.title, label.author
+        if not title:
+            last = await self._require_memory().last_book()
+            if last is not None and last.get("uri") == uri:
+                title, author = str(last.get("title") or ""), last.get("author")
+        if not title:
+            return None
+        chapter, _ = describe_item(item)
+        then = lines.book_status_plain(self._lang(), title, author, chapter or "")
+        return ToolResult(
+            output=json.dumps(
+                {"ok": True, "book": title, "by": author, "then": then}, ensure_ascii=False
+            )
+        )
 
     # --- Books (T1.40) ---
 

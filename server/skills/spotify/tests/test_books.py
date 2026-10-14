@@ -1006,6 +1006,19 @@ class TestWhatsPlaying:
         assert "y 53 minutos para terminar el libro.»" in then
         assert result.side_effect is None
 
+    async def test_without_chapters_it_still_names_the_book(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        """2026-10-14, /audiobooks blocked: he heard "Es Capítulo 1, de ?"."""
+        skill, client, _, memory = await _skill(tmp_path, pcm_server)
+        skill._search.books.clear()  # type: ignore[union-attr]  # no chapter list
+        await memory.set_last_book(BOOK.uri, BOOK.title, BOOK.artist)
+        client.load(1, 60_000)
+        result = await skill.handle("whats_playing", {})
+        assert _said(result) == (
+            "Es Cien años de soledad, de Gabriel García Márquez. Va en Capítulo 1."
+        )
+
 
 class TestMusicAndBooksApart:
     async def test_a_book_is_counted_when_spotify_wont_give_its_chapters(

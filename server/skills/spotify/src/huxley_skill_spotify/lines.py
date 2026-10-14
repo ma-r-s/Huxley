@@ -152,6 +152,9 @@ _SAY: dict[str, dict[str, str]] = {
         "no_hours": "Este mes ya no quedan horas para escuchar libros. ¿Pongo la radio?",
         "status": "Es {title}, de {author}. Va en {chapter}: faltan {chapter_left} para "
         "terminar el capítulo y {book_left} para terminar el libro.",
+        "status_plain": "Es {title}{by}.{at}",
+        "status_by": ", de {author}",
+        "status_at": " Va en {chapter}.",
     },
     "en": {
         "book_not_found": "I didn't find that book on Spotify. Shall I look for another?",
@@ -177,6 +180,9 @@ _SAY: dict[str, dict[str, str]] = {
         "no_hours": "There are no book hours left this month. Shall I put the radio on?",
         "status": "It's {title}, by {author}. It's on {chapter}: {chapter_left} left in the "
         "chapter and {book_left} left in the book.",
+        "status_plain": "It's {title}{by}.{at}",
+        "status_by": ", by {author}",
+        "status_at": " It's on {chapter}.",
     },
     "fr": {
         "book_not_found": "Je n'ai pas trouvé ce livre sur Spotify. J'en cherche un autre ?",
@@ -204,6 +210,9 @@ _SAY: dict[str, dict[str, str]] = {
         "no_hours": "Il ne reste plus d'heures de livres ce mois-ci. Je mets la radio ?",
         "status": "C'est {title}, de {author}. On en est à {chapter} : il reste "
         "{chapter_left} pour finir le chapitre et {book_left} pour finir le livre.",
+        "status_plain": "C'est {title}{by}.{at}",
+        "status_by": ", de {author}",
+        "status_at": " On en est à {chapter}.",
     },
 }
 
@@ -241,6 +250,15 @@ def notice(lang: str, key: str, **fields: str) -> str:
 
 def line(lang: str, key: str, **fields: str) -> str:
     return _SAY[_lang(lang)][key].format(**fields)
+
+
+def book_status_plain(lang: str, title: str, author: str | None, chapter: str) -> str:
+    """The book on when its chapter list isn't known: "Es X, de Y. Va en
+    el capítulo 2." (author and chapter only when known)."""
+    words = _SAY[_lang(lang)]
+    by = words["status_by"].format(author=author) if author else ""
+    at = words["status_at"].format(chapter=chapter_name(lang, chapter)) if chapter else ""
+    return then(lang, "status_plain", title=title, by=by, at=at)
 
 
 def then(lang: str, key: str, **fields: str) -> str:
