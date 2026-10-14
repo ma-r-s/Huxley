@@ -353,6 +353,93 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+# Local dates in words, for the prompt and the add_reminder result: the
+# model was given only UTC and, after 19:00 in Bogota (already tomorrow in
+# UTC), scheduled "mañana a las 7:30" a day late (2026-10-12 20:58).
+_DAYS = {
+    "es": ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"),
+    "en": ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"),
+    "fr": ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"),
+}
+_MONTHS = {
+    "es": (
+        "enero",
+        "febrero",
+        "marzo",
+        "abril",
+        "mayo",
+        "junio",
+        "julio",
+        "agosto",
+        "septiembre",
+        "octubre",
+        "noviembre",
+        "diciembre",
+    ),
+    "en": (
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ),
+    "fr": (
+        "janvier",
+        "février",
+        "mars",
+        "avril",
+        "mai",
+        "juin",
+        "juillet",
+        "août",
+        "septembre",
+        "octobre",
+        "novembre",
+        "décembre",
+    ),
+}
+_RELATIVE = {
+    "es": ("hoy", "mañana", "pasado mañana"),
+    "en": ("today", "tomorrow", "the day after tomorrow"),
+    "fr": ("aujourd'hui", "demain", "après-demain"),
+}
+
+
+def _day_words(local: datetime, bucket: str) -> str:
+    """'martes 13 de octubre' / 'Tuesday 13 October' / 'mardi 13 octobre'."""
+    day, month = _DAYS[bucket][local.weekday()], _MONTHS[bucket][local.month - 1]
+    if bucket == "es":
+        return f"{day} {local.day} de {month}"
+    return f"{day} {local.day} {month}"
+
+
+def _utc_offset(local: datetime) -> str:
+    offset = local.utcoffset() or timedelta(0)
+    minutes = int(offset.total_seconds() // 60)
+    sign = "+" if minutes >= 0 else "-"
+    return f"UTC{sign}{abs(minutes) // 60:02d}:{abs(minutes) % 60:02d}"
+
+
+def _when_words(when: datetime, now: datetime, tz: ZoneInfo, bucket: str) -> str:
+    """When a reminder fires, in the user's time and words, counted from
+    now: 'mañana, martes 13 de octubre, a las 07:30'. The model reads it
+    back, so a wrong day is heard (and the user can correct it)."""
+    local, today = when.astimezone(tz), now.astimezone(tz).date()
+    days = (local.date() - today).days
+    words = _day_words(local, bucket)
+    if 0 <= days <= 2:
+        words = f"{_RELATIVE[bucket][days]}, {words}"
+    at = {"es": "a las", "en": "at", "fr": "à"}[bucket]
+    return f"{words}, {at} {local:%H:%M}"
+
+
 def _parse_iso(value: str) -> datetime:
     """Parse an ISO 8601 string and normalize to UTC.
 
@@ -1467,9 +1554,13 @@ class RemindersSkill:
                     "ok": True,
                     "id": new_id,
                     "scheduled_for": when.isoformat(),
+                    # In the user's time and words, to say back: a wrong day
+                    # is then heard ("pasado mañana" for "mañana").
+                    "when": _when_words(when, now, self._tz, _lang_bucket(self._language)),
                     "kind": kind,
                     "recurrence_rule": recurrence_rule,
-                }
+                },
+                ensure_ascii=False,
             )
         )
 
@@ -1641,21 +1732,29 @@ class RemindersSkill:
         # tick is missed by exactly that one tick, then surfaces.
         lines: list[str] = []
         bucket = _lang_bucket(self._language)
-        now_local = _utcnow()  # framework's clock; LLM does the offset math
+        # The user's own date and time, and what "tomorrow" is: given only
+        # UTC, the model took UTC's date as today in the evening.
+        now_local = _utcnow().astimezone(self._tz)
+        tomorrow = now_local + timedelta(days=1)
+        today_words, tomorrow_words = _day_words(now_local, bucket), _day_words(tomorrow, bucket)
+        clock, offset = f"{now_local:%H:%M}", _utc_offset(now_local)
         if bucket == "es":
             lines.append(
-                f"Hora actual (UTC): {now_local.isoformat(timespec='minutes')}. "
-                f"Zona horaria del usuario: {self._timezone_label}."
+                f"Hora actual del usuario ({self._timezone_label}): {today_words} de "
+                f"{now_local.year}, {clock} ({offset}). Mañana es {tomorrow_words}. "
+                f"Usa ese offset en `when_iso`."
             )
         elif bucket == "fr":
             lines.append(
-                f"Heure actuelle (UTC) : {now_local.isoformat(timespec='minutes')}. "
-                f"Fuseau horaire de l'utilisateur : {self._timezone_label}."
+                f"Heure actuelle de l'utilisateur ({self._timezone_label}) : {today_words} "
+                f"{now_local.year}, {clock} ({offset}). Demain, c'est {tomorrow_words}. "
+                f"Utilise ce décalage dans `when_iso`."
             )
         else:
             lines.append(
-                f"Current time (UTC): {now_local.isoformat(timespec='minutes')}. "
-                f"User timezone: {self._timezone_label}."
+                f"Current time for the user ({self._timezone_label}): {today_words} "
+                f"{now_local.year}, {clock} ({offset}). Tomorrow is {tomorrow_words}. "
+                f"Use that offset in `when_iso`."
             )
         if self._missed_cache:
             if bucket == "es":

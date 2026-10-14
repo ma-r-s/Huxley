@@ -17,7 +17,7 @@ The user speaks naturally; the persona's system prompt routes "recuérdame en 5 
 ## What it does
 
 1. User says **"recuérdame todos los días a las 8 que tome la pastilla del corazón"**.
-2. The LLM reads the current time + persona timezone from the skill's `prompt_context`, computes ISO 8601 with offset for the next 8am local, and calls `add_reminder(message="tomar la pastilla del corazón", when_iso="2026-04-30T08:00:00-05:00", kind="medication", recurrence_rule="FREQ=DAILY")`.
+2. The LLM reads the user's local date and time (weekday, date, clock, UTC offset) and what "tomorrow" is from the skill's `prompt_context` (since 2026-10-14: given only UTC, the model took UTC's date as today in the evening and scheduled "mañana a las 7:30" a day late), computes ISO 8601 with offset for the next 8am local, and calls `add_reminder(message="tomar la pastilla del corazón", when_iso="2026-04-30T08:00:00-05:00", kind="medication", recurrence_rule="FREQ=DAILY")`.
 3. The skill writes the reminder to `SkillStorage` keyed `reminder:<id>` and wakes its scheduler.
 4. The single supervised scheduler `background_task` sleeps until the soonest pending row's `next_fire_at`.
 5. At fire time, the scheduler commits the row as `fired` and narrates through `ctx.inject_turn_and_wait(prompt, priority=BLOCK_BEHIND_COMMS, dedup_key="reminder:<id>", expires_after=<late window left>)` in a task of its own. The framework waits for a client that can hear it (the walkie away, a server just started: T1.44), up to the reminder's late window counted from this fire's due time, and:
@@ -52,7 +52,7 @@ Required: `message: str`, `when_iso: str`. Optional: `kind: 'medication' | 'appo
   - `FREQ=DAILY;COUNT=7` — for 7 days, then stop
   - `FREQ=DAILY;UNTIL=20260601T000000Z` — until June 1, 2026
   - The LLM is taught these patterns in its tool description; invalid strings are caught at `add_reminder` time and rejected with a parse-error message.
-- Returns `{ok, id, scheduled_for, kind, recurrence_rule}`.
+- Returns `{ok, id, scheduled_for, when, kind, recurrence_rule}`; `when` is the first fire in the user's time and words, counted from now ("mañana, martes 13 de octubre, a las 07:30"), for the model to say back so a wrong day is heard.
 
 ### `list_reminders`
 

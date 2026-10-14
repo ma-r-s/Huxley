@@ -374,6 +374,51 @@ class TestPromptContext:
         assert "America/New_York" in ctx
         await skill.teardown()
 
+    async def test_the_users_date_and_tomorrow_in_the_evening(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """2026-10-12 20:58 in Bogota is already the 13th in UTC: given only
+        UTC, the model scheduled "mañana a las 7 y media" for the 14th."""
+        from huxley_skill_reminders import skill as skill_module
+
+        monkeypatch.setattr(
+            skill_module, "_utcnow", lambda: datetime(2026, 10, 13, 1, 58, tzinfo=UTC)
+        )
+        skill, _, _ = await _make_skill(language="es", start_scheduler=False)
+        skill._tz = ZoneInfo("America/Bogota")
+        ctx = skill.prompt_context()
+        assert "lunes 12 de octubre de 2026, 20:58 (UTC-05:00)" in ctx
+        assert "Mañana es martes 13 de octubre." in ctx
+
+    async def test_add_says_the_day_back_in_the_users_words(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from huxley_skill_reminders import skill as skill_module
+
+        monkeypatch.setattr(
+            skill_module, "_utcnow", lambda: datetime(2026, 10, 13, 1, 58, tzinfo=UTC)
+        )
+        skill, _, _ = await _make_skill(language="es", start_scheduler=False)
+        skill._tz = ZoneInfo("America/Bogota")
+        right = json.loads(
+            (
+                await skill.handle(
+                    "add_reminder",
+                    {"message": "tomar las pastillas", "when_iso": "2026-10-13T07:30:00-05:00"},
+                )
+            ).output
+        )
+        assert right["when"] == "mañana, martes 13 de octubre, a las 07:30"
+        wrong = json.loads(
+            (
+                await skill.handle(
+                    "add_reminder",
+                    {"message": "tomar las pastillas", "when_iso": "2026-10-14T07:30:00-05:00"},
+                )
+            ).output
+        )
+        assert wrong["when"] == "pasado mañana, miércoles 14 de octubre, a las 07:30"
+
     async def test_lists_missed_reminders(self) -> None:
         skill, _, storage = await _make_skill(start_scheduler=False)
         # Pre-populate a missed reminder.
