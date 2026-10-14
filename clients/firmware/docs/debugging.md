@@ -485,8 +485,8 @@ follow the ring: GPIO38 feeds U9 at 102.9 deg first, then clockwise, so
 the bottom LED (U14, board +x) is the chain's third; the animations work
 in positions and `hux_led_chain` reorders them (`HUX_LED_CHAIN_OF`,
 host-tested). `led walk` lights each position alone for 0.6 s, bottom
-first, to check it by eye (`led.anim kind=walk`). The lights: `Orbit` (warm white) when the startup sound reaches the
-speaker (the played-audio counter moves, plus the I2S queue's 60 ms;
+first, to check it by eye (`led.anim kind=walk`). The lights: `Rainbow` (every LED its own colour, turning round the ring, 1.6 s) when
+the startup sound reaches the speaker (the played-audio counter moves, plus the I2S queue's 60 ms;
 started anyway after 1 s), so it follows the sound's boot rule; while the
 lever is held `Voice` (white, all seven together, their intensity
 following the mic level: 15 % at -50 dBFS RMS and under, full at -15 dBFS)
