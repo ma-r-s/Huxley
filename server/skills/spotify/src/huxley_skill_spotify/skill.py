@@ -1430,10 +1430,15 @@ class SpotifySkill:
             label = self._book.title
         else:
             label = "Spotify"
+        # Loudness (T1.47): a book keeps its narrator's level from one
+        # session to the next; music masters vary by track, one key.
+        book_uri = start.uri if start is not None else context
+        loudness_key = f"spotify:book:{book_uri}" if is_book and book_uri else "spotify:music"
         return AudioStream(
             factory=factory,
             content_type=ContentType.NONMIXABLE,
             label=label,
+            loudness_key=loudness_key,
             preroll_ms=len(self._earcon) * 1000 // 48_000 if self._earcon and start else 0,
             patience=self._patience,
             on_patience_expired=on_patience_expired,

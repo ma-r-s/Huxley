@@ -203,6 +203,8 @@ class TestAskingForABook:
 
         assert _out(result)["playing"] == "Cien años de soledad"
         assert skill._search.queries == [("cien años de soledad", "audiobook")]  # type: ignore[union-attr]
+        # A book keeps its narrator's level (T1.47).
+        assert result.side_effect.loudness_key == f"spotify:book:{BOOK.uri}"  # type: ignore[union-attr]
         await _take(result.side_effect, 2)  # type: ignore[arg-type]
         assert _plays(client)[0]["uri"] == BOOK_INFO.uri
         # Spotify's place is kept: no seek, no chapter moves.

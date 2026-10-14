@@ -422,6 +422,7 @@ class RadioSkill:
             },
             factory=factory,
             label=station["name"],
+            loudness_key=f"radio:{target_id}",
         )
 
     async def _resume_radio(self) -> ToolResult:
@@ -502,6 +503,7 @@ class RadioSkill:
         payload: dict[str, Any],
         factory: Callable[[], AsyncIterator[bytes]],
         label: str | None = None,
+        loudness_key: str | None = None,
     ) -> ToolResult:
         chime = self._sounds.get(self._start_sound_role) if self._start_sound_role else None
         # AudioStream + PlaySound are mutually exclusive on a single
@@ -516,6 +518,8 @@ class RadioSkill:
                 factory=factory,
                 label=label,
                 preroll_ms=len(chime) * 1000 // 48000 if chime else 0,
+                # Stations differ by 10 dB and more (T1.47): each its own key.
+                loudness_key=loudness_key,
             ),
         )
 

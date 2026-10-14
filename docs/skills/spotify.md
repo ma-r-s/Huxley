@@ -214,6 +214,13 @@ Spotify app ─┐                        ┌─ WebSocket (control, events) ─
   (Ducking would interleave music and speech; see T1.29.)
 - **Volume** stays with the client: every play pins Soloist at 100, so a
   Spotify app on a phone can't silently turn the device down.
+- **Loudness:** Soloist has no normalization option, and masters vary
+  by track and are loud, so streams opt in to the framework's leveler
+  (`loudness_key`: `spotify:book:<uri>` for a book, so a narrator's
+  level holds from one session to the next; `spotify:music` for the
+  rest). It plays near -20 LUFS, like the voice
+  ([`sounds.md` "Loudness"](../sounds.md#loudness)); `audio.level` log
+  lines say what Spotify actually measured.
 
 ## Failures (every one is spoken)
 

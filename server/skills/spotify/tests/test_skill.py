@@ -128,6 +128,7 @@ class TestPlay:
         assert stream.patience is not None and stream.patience.total_seconds() == 30 * 60
         assert stream.preroll_ms == 100
         assert stream.on_patience_expired is not None
+        assert stream.loudness_key == "spotify:music"  # T1.47
 
         task, got = await _consume_until(stream, 3)
         await _cancel(task)
