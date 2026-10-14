@@ -135,6 +135,26 @@ cf dns records list -z ma-r-s.com
 ```
 
 
+## Telegram on another number
+
+The walkie's calls and messages go through one Telegram account (a
+userbot session in `data/huxley_userbot.session`). To move it to another
+number (grandpa's own, at the handover), from the Mac, in your own
+terminal, with that phone at hand:
+
+```bash
+scripts/pi/telegram-login.sh +573001234567
+```
+
+It stops the server, keeps the current login and Telegram secrets in
+`data/backup/telegram-<time>/`, signs in with the new number (type the code
+Telegram sends to that phone, and its two-step password if it has one),
+writes the number into the secrets and starts the server again; a failed
+sign-in puts the old login back. `--dry-run` only shows what it would do.
+Then end the walkie's session on the old account (Telegram > Settings >
+Devices), and have each contact send the new number one message: Telegram
+only lets the walkie recognise a caller who has written to it once.
+
 ## Outside check: removed (2026-10-14)
 
 A Cloudflare Worker, `huxley-walkie-deadman`, asked
