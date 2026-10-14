@@ -86,8 +86,10 @@ silent until the target chapter is on. Chapters are matched by their name
 
 **Requests.** `play_book(title)` searches books (reading guides dropped,
 the persona's language first); a title far from what was heard, with no
-author named, is confirmed first (`ask_which`), since a wrong book costs
-listening hours. No title: the last book. "El segundo" after
+author named, or one whose main words before the last heard one were never
+said ("Hechos de los Apóstoles" for "Los doce apóstoles" heard as "Los dos
+apos"; a title named by its opening words, "Cien años", is fine), is
+confirmed first (`ask_which`), since a wrong book costs listening hours. No title: the last book. "El segundo" after
 `find_books` is the second book read. `from_beginning` past the second
 chapter asks book or chapter (`ask_whole_book`), keeps the place it
 leaves, and `book_control(go_back_to_saved_place)` undoes it; it is also

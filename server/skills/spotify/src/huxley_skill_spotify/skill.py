@@ -54,6 +54,7 @@ import os
 import re
 import time
 from datetime import timedelta
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -129,6 +130,8 @@ PLACE_EVERY_S = 15.0
 DEFAULT_SLEEP_MINUTES = 60.0
 # A weak title match is confirmed before spending listening hours on it.
 WEAK_TITLE = 0.45
+# A title word counts as heard when a heard word is this close to it.
+UNHEARD_RATIO = 0.75
 # The last chapter stopping this close to its end is the end of the book.
 END_MARGIN_MS = 15_000
 # Checking a book before recommending it: Spotify stops a book it won't
@@ -373,13 +376,40 @@ _FILLER = frozenset(
 
 def _weak_match(spoken: str, book: Match) -> bool:
     """What was heard, minus the author's words, is far from the book's
-    title: confirm before spending listening hours on it. Only the author
-    ("el libro de García Márquez") is not weak: any of theirs will do."""
+    title, or leaves one of its main words unheard: confirm before
+    spending listening hours on it. Only the author ("el libro de García
+    Márquez") is not weak: any of theirs will do."""
     author = set(fold(book.artist or "").replace(",", " ").split())
     rest = [w for w in fold(spoken).split() if w not in author and w not in _FILLER]
     if not rest:
         return False
-    return title_score(" ".join(rest), fold(book.title)) < WEAK_TITLE
+    if title_score(" ".join(rest), fold(book.title)) < WEAK_TITLE:
+        return True
+    return bool(_unheard_words(rest, book.title))
+
+
+def _unheard_words(heard: list[str], title: str) -> list[str]:
+    """The main title's words (before a subtitle, 4 letters or more) that
+    nothing heard comes close to, before the last one that was heard: a
+    title named by its opening words ("Cien años") is fine, one whose
+    opening was never said is not. "Los doce apóstoles", heard as "Los dos
+    apos", matched "Hechos de los Apóstoles" at 0.6 and played without a
+    question (2026-10-14, his first morning): "hechos" was never said."""
+    main = re.split(r"[:(/|.\-]", title, maxsplit=1)[0]
+    words = [w for w in fold(main).split() if len(w) >= 4 and w not in _FILLER]
+
+    def close(word: str) -> bool:
+        return any(
+            SequenceMatcher(None, word, h).ratio() >= UNHEARD_RATIO
+            or (len(h) >= 4 and (word.startswith(h) or h.startswith(word)))
+            for h in heard
+        )
+
+    matched = [close(w) for w in words]
+    if not any(matched):
+        return words
+    last = max(i for i, m in enumerate(matched) if m)
+    return [w for w, m in zip(words[:last], matched[:last], strict=True) if not m]
 
 
 # The shelf's offers are read "Uno, ... Dos, ... Tres" (lines.py), so the

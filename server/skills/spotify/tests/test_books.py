@@ -22,7 +22,7 @@ from huxley_sdk import AudioStream
 from huxley_skill_spotify import skill as skill_module
 from huxley_skill_spotify.books import BookMemory, Place, capped_position
 from huxley_skill_spotify.search import BookInfo, Chapter, Match
-from huxley_skill_spotify.skill import SpotifySkill
+from huxley_skill_spotify.skill import SpotifySkill, _unheard_words
 
 from .conftest import FakeSearch, FakeSoloist, PcmServer, Recorded, make_ctx, write_shelf
 
@@ -55,6 +55,13 @@ CORONEL = Match(
     kind="audiobook",
     title="El coronel no tiene quien le escriba",
     artist="Gabriel García Márquez",
+    languages=("es",),
+)
+HECHOS = Match(
+    uri="spotify:show:hechos",
+    kind="audiobook",
+    title="HECHOS DE LOS APÓSTOLES",
+    artist="MENTES LIBRES",
     languages=("es",),
 )
 GUIDE = Match(
@@ -260,6 +267,17 @@ class TestAskingForABook:
         yes = await skill.handle("play_book", {"title": "Cien años de soledad"})
         assert isinstance(yes.side_effect, AudioStream)
         assert len(skill._search.queries) == 1  # type: ignore[union-attr]
+
+    async def test_a_main_word_never_heard_is_confirmed(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        # His first morning: "Los doce apóstoles", heard as "Los dos apos",
+        # played "Hechos de los Apóstoles" with no question (score 0.6).
+        skill, client, _, _ = await _skill(tmp_path, pcm_server, match=HECHOS)
+        asked = await skill.handle("play_book", {"title": "Los dos apos"})
+        assert _out(asked)["reason"] == "ask_which"
+        assert "¿Es HECHOS DE LOS APÓSTOLES, de MENTES LIBRES?" in _out(asked)["then"]
+        assert asked.side_effect is None and _plays(client) == []
 
     async def test_the_author_named_with_a_wrong_title_is_still_confirmed(
         self, tmp_path: Path, pcm_server: PcmServer
@@ -1632,3 +1650,20 @@ class TestTheBookSummary:
         assert summary is not None and set(summary) == SUMMARY_KEYS
         assert summary["position_ms"] == 90_000 and summary["chapter"] is None
         assert summary["source"] == "shelf" and summary["last_at"] > 0
+
+
+@pytest.mark.parametrize(
+    ("heard", "title", "unheard"),
+    [
+        (["dos", "apos"], "HECHOS DE LOS APÓSTOLES", ["hechos"]),
+        (["doce", "apostoles"], "Los doce apóstoles", []),
+        (["cien", "anos", "soledad"], "Cien años de soledad", []),
+        (["sapiens"], "Sapiens. De animales a dioses", []),  # the subtitle isn't asked for
+        (["cien", "anos"], "Cien años de soledad", []),  # named by its opening
+        (["piedra", "filosofal"], "Harry Potter y la piedra filosofal", ["harry", "potter"]),
+        (["principito"], "El principito", []),
+        (["casa", "grande"], "Cien años de soledad", ["cien", "anos", "soledad"]),
+    ],
+)
+def test_unheard_words(heard: list[str], title: str, unheard: list[str]) -> None:
+    assert _unheard_words(heard, title) == unheard
