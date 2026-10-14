@@ -146,10 +146,17 @@ Every WAV in the palette is **synthesized from scratch** by [`scripts/synth_soun
 | `news_start`   | news       | G6 + A6 + D7 sus2, brief alert                          | ~1.0 s   | 0.28       |
 | `radio_start`  | radio      | C6 → G6 → C7 ascending FM + Risset accent on C7 apex    | ~1.6 s   | 0.30       |
 | `search_start` | search     | E7 single FM pluck + Risset shimmer, drier "quick ping" | ~0.8 s   | 0.20       |
+| `persona_swap` | runtime    | F6 → C7 ascending fifth + Risset accent on C7           | ~0.9 s   | 0.22       |
 
 All sounds normalize to the cue level, **-19 LUFS momentary max** (about -23 LUFS integrated, 3 dB under the voice; see [Loudness](#loudness)), under a -1.5 dBFS true-peak ceiling, deterministically (no Limiter: pedalboard's Limiter has a hard clipper at 0 dBFS, so the chain ends with a manual loudness normalize instead). Until T1.47 they were peak-normalized to -3 dBFS, which left them -15 to -20 LUFS: louder than the voice by up to 12 dB.
 
 **Vocal-band note**: `book_end`, `news_start`, and `search_start` play immediately before LLM speech, so their named fundamentals sit above 1.5 kHz to clear the 200 Hz – 4 kHz vocal band. The Risset bell's canonical 0.56× partial sits below the named fundamental (e.g. 0.56 × G6 = 878 Hz), so absolute spectral energy in the vocal band isn't zero — but the chime's reverb tail decays well below threshold by the time the audiobooks skill's 500 ms trailing silence + the model's first-token latency elapse, so masking is mitigated in practice.
+
+### Device sounds (T1.49)
+
+The walkie plays four sounds itself, with no server (it may have no connection at all): `startup` (power on), `searching` (a tick repeated while it looks for Wi-Fi and the server), `connected` and `lost`. They live at **`server/personas/_shared/sounds/device/`**, rendered by the same script (`DEVICE_PALETTE`), and the firmware's tooling encodes and embeds them; the server never sends them. Same cue level as the palette; `searching` sits 6 dB under because it repeats.
+
+`startup` is the first sound in the **glass** family: G6 → C7 → E7 glass tones 60 ms apart, a pure E8 sparkle on the top note, 12 % reverb. Mario picked it over warmer bell takes for being "extremely happy, minimalistic". The other three are still bells, until he hears the glass versions.
 
 ## The synthesis pipeline
 
@@ -163,6 +170,7 @@ Pure Python. Three primitives layered through one shared post-processing chain.
 
 - **`risset_bell(freq, duration_s, brightness)`** — Jean-Claude Risset's 11-partial additive bell (1969). Inharmonic frequency multipliers (0.56, 0.92, 1.19, 1.70, 2.0, 2.74, 3.0, 3.76, 4.07) with paired detuned partials at 0.56 and 0.92 — the slow beating between the detuned pairs is the characteristic shimmer that gives bells their organic feel. Per-partial decay times decrease with frequency: high partials die first, leaving a warm low-mid hum. This is the **body** of every chime.
 - **`fm_bell(freq, duration_s, mod_ratio=1.4, mod_index_peak=6.0)`** — Chowning frequency modulation (1973). Carrier-modulator pair at non-integer ratio: 1:1.4 produces an inharmonic spectrum (bell, glass), 1:integer would produce a harmonic spectrum (organ, voice). The modulation index decays exponentially **faster** than the amplitude, so the bell brightens at strike and dulls as it rings — same dynamic an acoustic bell has. This is the **shimmer** layer.
+- **`glass(freq, duration_s, curve, partials, glide_from, glide_ms)`**: a near-pure sine with a faint 2nd and 3rd harmonic under one exponential decay, optional pitch glide, and a 30 ms release so a cut note doesn't click. The minimal, bright family (`startup`); `PURE_PARTIALS` gives a plain sine for sparkles.
 - **`adsr` / `exp_decay`** — curved (exponential) envelopes only. Linear envelopes sound robotic; the `1 − e⁻ᵏˣ` shape matches how acoustic instruments behave.
 - **`chord([voices], stagger_ms)`** — sums voices with optional inter-voice stagger (a 60–80 ms stagger reads as a single chime with subtle arpeggio rather than two crashes).
 - **`mix(*(gain, signal))`** — gain-mixes signals of different lengths (zero-pads the shorter), used to layer body + shimmer of different durations.
@@ -180,7 +188,7 @@ The reverb defaults (`room_size=0.85`, `damping=0.4`, `wet_level=0.30`, `dry_lev
 - **Pitch register**: chimes that play immediately before model voice (`book_end`, `news_start`, `search_start`) sit above 1.5 kHz so their partials don't mask the 200 Hz – 4 kHz vocal band. Welcome chimes (`book_start`, `radio_start`) play before content audio (book / radio stream), not before model voice, so they can occupy C6 (1047 Hz) and feel warmer.
 - **Voicings**: major intervals + sus chords only. No minor, no tritone, no semitone. The soft-Japanese / Wii / Totaka tradition is unambiguously pleasant.
 - **Envelopes**: 3–15 ms curved attack (instant attack = click; linear ramp = stock asset), exponential decay 200–800 ms, no sustain stage (bells don't sustain).
-- **Reverb is non-negotiable**: 25–35 % wet, hall character. Without it, even the cleanest synthesis sounds like Windows 95.
+- **Reverb**: bells get 25–35 % wet, hall character; without it they sound like Windows 95. The glass family is the exception: about 12 % wet in a small room, because its point is the clean, close tone.
 
 ### Adding a new earcon
 

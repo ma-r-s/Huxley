@@ -9,7 +9,9 @@ root::
 
 Aesthetic target: soft Japanese / Wii-bell / FM-synthesis tradition. Layered
 Risset additive bell + Chowning FM bell, curved exponential envelopes, hall
-reverb tail. See ``docs/sounds.md`` for the architecture and
+reverb tail. The device sounds start a second, glass family: near-pure
+sines, nearly dry, minimal and bright (``glass``). See ``docs/sounds.md`` for
+the architecture and
 ``docs/research/sonic-ux.md`` for the design constraints (especially the
 200 Hz - 4 kHz vocal-band masking rule that pushes our fundamentals into the
 shimmer register).
@@ -212,6 +214,44 @@ def fm_bell(
         amp_env[:attack_n] *= _exp_rise(attack_n)
     modulator = mod_index_peak * mod_env * np.sin(2.0 * np.pi * freq * mod_ratio * t)
     return amp_env * np.sin(2.0 * np.pi * freq * t + modulator)
+
+
+# ---------------------------------------------------------------------------
+# Glass tone: a near-pure sine with a faint 2nd and 3rd harmonic. Minimal and
+# bright where the bells above are warm and ornate; the device sounds use it
+# (Mario's pick, 2026-10-13: "extremely happy, minimalistic").
+# ---------------------------------------------------------------------------
+
+GLASS_PARTIALS: tuple[tuple[int, float], ...] = ((1, 1.0), (2, 0.18), (3, 0.05))
+PURE_PARTIALS: tuple[tuple[int, float], ...] = ((1, 1.0),)
+
+
+def glass(
+    freq: float,
+    duration_s: float,
+    attack_ms: float = 4.0,
+    curve: float = 6.0,
+    partials: tuple[tuple[int, float], ...] = GLASS_PARTIALS,
+    glide_from: float = 0.0,
+    glide_ms: float = 0.0,
+) -> F64:
+    """Glass tone: harmonic partials under one exponential decay. Optional
+    ``glide_from`` slides the pitch up (or down) to ``freq`` over ``glide_ms``.
+    A 30 ms release takes the tail to true zero, so a note cut before it
+    fades doesn't click."""
+    n = int(duration_s * SAMPLE_RATE)
+    f = np.full(n, freq, dtype=np.float64)
+    g = min(n, int(glide_ms / 1000.0 * SAMPLE_RATE))
+    if glide_from > 0 and g > 0:
+        f[:g] = np.geomspace(glide_from, freq, g)
+    phase = 2.0 * np.pi * np.cumsum(f) / SAMPLE_RATE
+    out = sum((amp * np.sin(k * phase) for k, amp in partials), np.zeros(n))
+    env = _exp_fall(n, curve=curve)
+    a = min(n, int(attack_ms / 1000.0 * SAMPLE_RATE))
+    env[:a] *= np.linspace(0.0, 1.0, a)
+    r = min(n, int(0.03 * SAMPLE_RATE))
+    env[n - r :] *= 0.5 * (1.0 + np.cos(np.linspace(0.0, np.pi, r)))
+    return out * env
 
 
 # ---------------------------------------------------------------------------
@@ -563,23 +603,21 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def device_startup() -> F32:
-    """Hello (~1.0 s): C6 -> E6 -> G6, a warm major arpeggio, short tail."""
-    arp = chord(
-        [
-            fm_bell(note("C6"), duration_s=0.55, mod_ratio=1.4, mod_index_peak=3.0),
-            fm_bell(note("E6"), duration_s=0.55, mod_ratio=1.4, mod_index_peak=3.0),
-            fm_bell(note("G6"), duration_s=0.6, mod_ratio=1.4, mod_index_peak=3.0),
-        ],
-        stagger_ms=90.0,
-    )
-    body = delayed(risset_bell(note("G6"), duration_s=0.6, brightness=0.8), ms=180.0)
+    """Hello (~0.9 s): G6 -> C7 -> E7 glass tones 60 ms apart, a pure E8
+    sparkle on the top note, almost dry. Mario's pick of three takes
+    (2026-10-13), after asking for "extremely happy, minimalistic"."""
     return post(
-        mix((0.7, arp), (0.3, body)),
-        reverb_room=0.72,
-        reverb_damping=0.5,
-        reverb_wet=0.25,
-        reverb_dry=0.8,
-        pad_tail_s=0.4,
+        mix(
+            (1.0, glass(note("G6"), 0.22, curve=7.0)),
+            (1.0, delayed(glass(note("C7"), 0.22, curve=7.0), 60.0)),
+            (1.0, delayed(glass(note("E7"), 0.5, curve=5.0), 120.0)),
+            (0.25, delayed(glass(note("E8"), 0.35, attack_ms=8.0, partials=PURE_PARTIALS), 135.0)),
+        ),
+        reverb_room=0.35,
+        reverb_damping=0.3,
+        reverb_wet=0.12,
+        reverb_dry=0.92,
+        pad_tail_s=0.25,
     )
 
 

@@ -6031,3 +6031,27 @@ Branch `t148-search-news` (worktree), on base 5f699660: 6e1469b5 (search), 816d9
 **For Mario to decide**: (1) safe search for Buddy (the kids persona): ddgs's working engines ignore it, so `strict` filters little; the skill now withholds page text for strict personas, but titles and snippets are unfiltered; a filtered provider would be a separate item. (2) Output per search roughly doubled (about 4.3 KB median), more input tokens per search on the Realtime bill; the caps hold it under 7.5 KB. (3) The urgent-symptom line in the persona ("pide ayuda ya", offer to call a contact) was added as standard practice; reword or drop it if it isn't how you want grandpa spoken to.
 
 **Lessons**: one eval run lied in both directions: engines answer differently each time, a loose regex ("8:30" matching "18:30") and leaky queries (the opponent's name, the pope's) inflated the first 13/15. Three rounds with fixed queries said 71% vs 40%. The critic paid for itself on the first finding: one malformed result URL would have turned every search for that query into "algo no fue bien".
+
+## T1.49: The walkie says its connection state with sounds
+
+**Status**: `in_progress` (2026-10-13): device sounds rendered on branch `device-status-sounds` (worktree); startup picked by Mario; the rest of the palette redrawn in the same style, waiting on his ear; firmware behaviour handed to the firmware session as F-0033 · **Effort**: S server side (assets only); the firmware side is F-0033
+
+**Problem** (Mario, 2026-10-13): with no internet the walkie is silent until he presses, and then says it has no connection. "Just pressing and being told is not good enough." Grandpa can't see a light; he can't tell off from searching from ready.
+
+**Design.** Four sounds the walkie plays itself (no server when offline), rendered by `scripts/synth_sounds.py` into `server/personas/_shared/sounds/device/` and embedded by the firmware's tooling, at the cue level (-19 LUFS momentary max, T1.47):
+
+- `startup`: power on. G6 C7 E7 glass tones 60 ms apart with a pure E8 sparkle, almost dry. Mario turned down the first bell arpeggio and asked for "something out of Black Mirror, extremely happy, minimalistic"; of three takes he picked this one ("B is especially good").
+- `searching`: one short tick, repeated while it looks for Wi-Fi and the server, 6 dB under the cue level because it repeats.
+- `connected`: a brighter rise once the server answers.
+- `lost`: a falling, softer phrase when the connection drops.
+- Pressing while searching gets the existing "no tengo conexión" prompt; otherwise no speech.
+
+Mario liked the first bell takes of searching, connected and lost, then asked to rethink every sound in the startup's style. Palette v2 (pure glass tones, one short gesture each so they stay distinct by ear) is drafted for all ten: the four device sounds plus `book_start` (a slow fifth up), `book_end` (the same fifth down), `news_start` (two identical blips), `radio_start` (one tone gliding up a fourth), `search_start` (two tiny rising pips), `persona_swap` (a quick up-down flip). All fundamentals sit at or above G6 (1568 Hz), clear of the vocal band.
+
+**Definition of Done**
+- Mario picks per sound: v2 or the current one.
+- `synth_sounds.py` renders the picks; every file at the cue level (searching 6 dB under), true peak under the ceiling, no clicks (spectrogram checked).
+- `docs/sounds.md`: device sounds and the glass family documented.
+- Firmware session told the final device files (F-0033); runtime earcons deployed to the Pi when idle.
+
+**Commits**: 
