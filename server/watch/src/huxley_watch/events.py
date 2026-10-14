@@ -117,6 +117,7 @@ KEEP_EVENTS = frozenset(
         # only, see LogReader), the tools that answered him and the ones
         # that failed, and what the music and books were
         "transcript",
+        "session.tx.commit",  # a press's audio sent: its words will come
         "session.rx.tool_call",
         *TOOL_FAILURES,
         "spotify.track",

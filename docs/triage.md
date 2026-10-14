@@ -5785,7 +5785,7 @@ Branch `t144-inject-waits` (worktree), on base f0897867: 7d23267e (design), 36fd
 
 ## T1.46: A phone app of how grandpa uses the walkie
 
-**Status**: `in_progress` (2026-10-13, branch `t146-phone-app`) · **Owner**: this session · **Effort**: M
+**Status**: `in_progress` (2026-10-13: built and through a critic round on branch `t146-phone-app`, not merged; next: Mario adds it to his home screen and looks, then merge and deploy) · **Owner**: this session · **Effort**: M
 
 **Problem** (Mario): he wants to understand how his grandfather uses the walkie, from his iPhone: when he last used it, how much against his usual, who he talks to, what he enjoys, where he struggles. The caregiver's page (`/`, T1.42) is a reliability dashboard: dense, about the device and the server, and it can't tell "quiet" from "unwell", or a bad answer from a good one.
 
@@ -5805,4 +5805,28 @@ Branch `t144-inject-waits` (worktree), on base f0897867: 7d23267e (design), 36fd
 - Looked at: screenshots at 393x852, light and dark, real logs and a 20-day fixture; no horizontal scroll at 375 px.
 - A fresh critic on the finished code; its findings fixed or answered here.
 
-**Built** (2026-10-13): `3bb433ee` the Spotify skill logs `chapter_index` and `chapters` at a start, a move and an end (`book` on `spotify.book_nav`); the app itself on this branch (see Ship).
+**Built** (2026-10-13): `3bb433ee` the Spotify skill logs `chapter_index` and `chapters` at a start, a move and an end (`book` on `spotify.book_nav`); `b929968f` the app (`app.py`, `talks.py`, `static/`, routes, the LogReader keeping his transcripts, tool calls and failures, `spotify.track`, the book lines).
+
+**Critic notes** (one fresh agent on the finished code, 2026-10-13; every finding taken, with a test that fails without the fix):
+1. "Asked again" fired on empty-query pairs: 9 of 13 real verdicts were `get_current_time` asked twice. Now a missing query on either side is never a repeat; `query_of` reads only text arguments (a volume level or an id is not a query).
+2. "Corrected" was too loose ("no tienes otros?", "otra vez", "otro libro" counted) and fired around skips. Now only a leading "no," (or "no!", "no.", a bare "no") or "esa no"/"ese no", and never when either request is a skip or a volume change.
+3. Struggles quoted hallucinations as his words. Now `said` is null for a garbled transcript and the detail says `transcribed as "..."`; "last used" shows "not heard" instead (`heard: false`).
+4. An empty transcript with an answer within 20 s was "not heard": the model hears the audio, not the transcript, so it heard him. No longer a struggle.
+5. The words pairing could shift (A/B/C): a committed press whose audio was never sent, or one whose session died, waited for words that never came and took the next press's. Now a press waits only after `session.tx.commit`, and `session_connected` / `app.reconnect_succeeded` / `huxley_starting` empty the queue. Regression tests for both shifts.
+6. A 5-second call read "talked". Now under 20 s is "called", and the length shows (to the second).
+7. Today's partial bar sat inside the usual band as if comparable. Now it says "so far" and the band is drawn only behind whole days.
+8. "Used today" didn't say when the walkie had been away. Now "walkie offline N% of the day so far" from 5 %.
+9. The share online counted from the daytime start even on the day the logs begin, so that day read "walkie offline". Now it counts from where the logs begin, and Trends marks that day "logs begin".
+10. A reminder speaking after his press counted as his answer. Now only `coord.audio_start owner=user`.
+11. The service worker cached `/app.json` whole, his words included. Now its offline copy has `last_used.said` and each struggle's `said` and `detail` taken out.
+12. Nits: the Talks battery mark reads `battery_low_pct` from the JSON (was 20 hard-coded); the README's first-use wording now matches the code (qualifying days only).
+
+**Tests** (Gate 3): `test_talks.py` 27 (each rule and exclusion, the pairing and both shifts, injected audio), `test_app.py` 27 (learning before 14 days and a range after, by time of day, offline and partial days, bench, people talked/called, favourites, chapter progress, first use, struggles and day counts, staleness, the log summary), `test_app_web.py` 9 (routes, types and caches, redirect, 404s, manifest, self-contained page, no-store days, the worker's stripped copy, a failed build costs only the app); spotify `test_books.py` +1. Mutation checks: each rule's guard removed turns a named test red. Totals: watch 366, spotify 126; ruff, ruff format, mypy --strict clean.
+
+**Docs touched** (Gate 4): `server/watch/README.md` (The phone app: tabs, honesty rules, the schema, the home screen, privacy; the log's `watch.app_json_built`), `docs/observability.md` (what the app reads), `docs/skills/spotify.md` (the chapter fields), `CLAUDE.md` (layout line).
+
+**Looked at**: screenshots at 393x852 light and dark on the real 2026-10-12 logs (learning state, 87 of 309 struggles on Mario's test day) and on a 20-day synthetic fixture (range state); no element past the edge at 320 and 375 px. Fixed from the screenshots: a long struggle list (now newest 6, "show all"), the day view's back button scrolling away (now in the header), a whole minute of highlighted rows (now the half minute from the press), "1.2 h-1.7 h" (now "1.2-1.7 h").
+
+**Ship** (Gate 5): branch `t146-phone-app`, not merged or pushed. Before relying on it: merge, restart huxley-watch on the Pi, add `http://100.75.152.70:8780/app/` to the iPhone home screen.
+
+**Lessons**: the critic's best catch was in the words pairing: correct on a clean day (304 of 304), it shifts by one after a single press whose audio never left. Order-based joins need an explicit "this item exists" event (`session.tx.commit`) and a reset on every session boundary.

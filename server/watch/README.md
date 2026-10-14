@@ -211,29 +211,36 @@ Three tabs, one scrolling screen each:
   and what he asked (his words, else the tool and its query, or "not
   heard": a hallucinated transcript is never shown as his words); **used
   today** against his usual range by this time of day, a band and a mark,
-  never red; **people**: each person's last call ("talked 2 d ago");
+  never red, and "walkie offline N% of the day so far" once that is 5 % or
+  more of today's daytime; **people**: each person's last call, its time
+  and length ("talked 2 d ago", or "called" when it lasted under 20 s: it
+  didn't connect);
   **enjoying now** (or last played): the track and artist, the station, or
   the book with its chapter ("ch. 5 of 19"); a device row (walkie online
   or offline since, battery) that opens `/`. While the walkie is offline,
   "walkie offline since HH:MM" sits under "last used".
 - **Trends**: minutes used each of the last 7 days; a day the walkie was
   mostly offline in the daytime is hatched and labelled "walkie offline",
-  never drawn as a short bar; days before the logs, "no logs". His usual
-  day as a band once there is one. **Favourites, 30 days**: the artist
-  (minutes of his tracks, from `spotify.track`), the book (with its
-  chapter) and the station. **Usually first uses it at**: the median first
-  press, once 5 days have one.
+  never drawn as a short bar; the day the logs begin, "logs begin"; days
+  before, "no logs". Today's bar says "so far". His usual day as a band
+  behind the whole days, never behind today's. **Favourites, 30 days**:
+  the artist (minutes of his tracks, from `spotify.track`), the book (with
+  its chapter) and the station. **Usually first uses it at**: the median
+  first press over the days his usual is read from (the last 28 with full
+  logs and the walkie mostly online), once 5 of them have a press.
 - **Talks**: **struggles today**, "3 of 41" requests, newest first: what he
   said, the reasons, a tap to that moment in the day's words.
   **Conversations by day**, today first, with the requests and struggles,
-  "walkie offline", "logs begin" and a low battery marked; a tap opens the
+  "walkie offline", "logs begin" and a battery under `battery_low_pct`
+  marked; a tap opens the
   day's words from `/day/YYYY-MM-DD.json` (the archive's list, without the
   recordings' players).
 
 **Honesty rules** (the design critic's, binding):
 
 - **Little data**: his usual needs 14 days with the walkie mostly online
-  (half the daytime, 07:00-22:00, bench windows left out) and full logs,
+  (half the daytime, 07:00-22:00, measured from where the logs begin,
+  bench windows left out) and full logs,
   from the last 28. Until then "Learning his routine, day N of 14", never a
   range or a percentage. The range is the middle half (25th to 75th
   percentile) of those days' minutes by this time of day.
@@ -252,35 +259,46 @@ Three tabs, one scrolling screen each:
     `audiobooks.stream_error`, `news.fetch_failed`, `search.error`), within
     60 s of the release and before his next press;
   - **not heard**: a silent press, a commit that came back empty
-    (`input_audio_buffer_commit_empty`), or his words empty or one of
-    Whisper's hallucinations ("Subtitulos ... Amara.org", "Gracias por ver
-    el video");
-  - **no answer**: no model audio (`coord.audio_start`), tool call, stream
-    or call within 20 s of the release (a new press first counts);
-  - **corrected**: his next request begins with "no", or says "esa no",
-    "ese no", "eso no", "no es esa", "otra", "otro", "equivoca...", within
-    60 s of this one's last answer;
+    (`input_audio_buffer_commit_empty`), his words one of Whisper's
+    hallucinations ("Subtitulos ... Amara.org", "Gracias por ver el
+    video": shown as "transcribed as ...", never quoted as his words), or
+    his words empty with nothing answering within 20 s (the model hears
+    the audio, not the transcript: an answer means it heard him);
+  - **no answer**: no model audio for his turn (`coord.audio_start
+    owner=user`: an injected reminder speaking is not his answer), tool
+    call, stream or call within 20 s of the release (a new press first
+    counts);
+  - **corrected**: his next request begins with "no," ("no!", "no.", a
+    bare "no"), or says "esa no" or "ese no", within 60 s of this one's
+    last answer ("no tienes otros?", "otra vez" or "otro libro" are asking
+    for more, not saying it was wrong);
   - **asked again**: his next request calls the same tool with a similar
-    query (the same words, one inside the other, or 75 % alike) within 90 s.
+    non-empty query (the same words, one inside the other, or 75 % alike)
+    within 90 s; with no query on either side (the time, the battery) it is
+    two questions, not a repeat.
 
   Skipping songs (`music_control` next or previous) and `set_volume` repeat
-  by design: never "asked again", and never "corrected" after them. His
-  words: transcripts carry no turn, so each of his goes to the oldest press
-  still waiting for words (each committed press is one input item,
-  transcribed in order); on the 2026-10-12 logs this paired 304 of 304
-  presses (1.2 s after the release at the median, 19.3 s at most). Every
-  press counts in that pairing, the bench's and other clients' too; only
-  the walkie's outside bench windows are his. The corrections are words,
-  not meaning: "no, gracias" to an offer, or "otro" for another joke,
-  count too.
+  by design: never "asked again", and no correction is read before or
+  after one. His words: transcripts carry no turn, so each of his goes to
+  the oldest press still waiting for words; a press waits only once its
+  audio was sent (`session.tx.commit`: one input item, transcribed in
+  order), and the queue empties when the session or the process starts
+  again (`session_connected`, `app.reconnect_succeeded`, `huxley_starting`),
+  so a press whose words will never come can't take the next one's. On the
+  2026-10-12 logs this paired 304 of 304 presses (1.2 s after the release
+  at the median, 19.3 s at most). Every press counts in that pairing, the
+  bench's and other clients' too; only the walkie's outside bench windows
+  are his. The corrections are words, not meaning: "no, gracias" to an
+  offer counts too.
 - **Timezone**: his (the persona's). When the phone's own zone differs, the
   header says whose ("Bogota time").
 - **Privacy**: a day's words are fetched each time (`cache: no-store`; the
   server says `no-store`) and dropped when the day is closed; recordings
   are left to `/` (their players cache the audio). A service worker is
   registered only in a secure context (iOS runs none over plain http on
-  the tailnet, and the app needs none); it keeps the app shell and the
-  last `/app.json`, never `/day/` or `/audio/`.
+  the tailnet, and the app needs none); it keeps the app shell and a copy
+  of the last `/app.json` with his words taken out (`last_used.said`, each
+  struggle's `said` and `detail`), never `/day/` or `/audio/`.
 
 `/app.json`, `schema: 1`, is `app.AppStatus` (TypedDicts in `app.py`, every
 field commented there), built each cycle from the page's own inputs and
@@ -291,11 +309,11 @@ segments (no second reader of the logs; `talks.py` for the requests):
 - `today`: `date`; `last_used` (`at`, `clock`, `said`, `heard`, `tool`, `query`) or
   null; `used` (`minutes`, `state` "learning" or "range", `days`, `needed`,
   `learning_day`, `by`, `lo`, `mid`, `hi`, `position` below / within /
-  above); `people` (`name`, `last_at`, `clock`, `days_ago`, `minutes`,
-  `calls_30d`); `enjoying` (`kind`, `title`, `by`, `chapter`,
+  above, `offline_pct`); `people` (`name`, `last_at`, `clock`, `days_ago`,
+  `minutes`, `talked`, `calls_30d`); `enjoying` (`kind`, `title`, `by`, `chapter`,
   `chapter_index` from 1, `chapters`, `playing`, `since`, `until`, `at`)
   or null; `device` (`online`, `since`, `battery_pct`, `battery_at`,
-  `battery_stale`, `battery_low`);
+  `battery_stale`, `battery_low`, `battery_low_pct`);
 - `trends`: `days` (7, oldest first: `date`, `label`, `today`, `logs` full
   / partial / none, `minutes`, `online_share`, `offline`, `battery_min`,
   `requests`, `struggles`); `usual_day` (`lo`, `mid`, `hi`, `days`) or
@@ -303,7 +321,8 @@ segments (no second reader of the logs; `talks.py` for the requests):
   `minutes`, the book's chapter fields); `first_use` (`clock` or null,
   `days`, `needed`);
 - `talks`: `requests_today`; `struggles` (today's, oldest first: `at`, `t`
-  minutes since his midnight, `said`, `tool`, `query`, `reasons`, `detail`);
+  minutes since his midnight, `said` (null for a hallucination), `tool`,
+  `query`, `reasons`, `detail`);
   `days` (as `trends.days`, today first, back to the logs' first day, 40 at
   most).
 

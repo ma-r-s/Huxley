@@ -14,7 +14,7 @@ import pytest
 
 from huxley_watch.web import APP_FILES, app_file, make_server, serve_in_background
 
-from .logs import ago, flat, press, ptt_stop, transcript, walkie_session
+from .logs import ago, commit, flat, press, ptt_stop, transcript, walkie_session
 from .test_alerts import FakeSender
 from .test_cycle import setup, watcher
 
@@ -46,6 +46,7 @@ def now_log() -> list[str]:
             walkie_session(ago(minutes=20), ago(seconds=10), "w1"),
             press(t),
             ptt_stop(t + timedelta(seconds=2)),
+            commit(t + timedelta(seconds=2.001)),
             transcript(t + timedelta(seconds=3), "user", "¿Qué hora es?"),
         )
     )
@@ -169,8 +170,13 @@ def test_the_page_never_keeps_a_days_words() -> None:
     assert "isSecureContext" in page
     worker = app_file("sw.js").decode()
     code = re.sub(r"/\*.*?\*/|//[^\n]*", "", worker, flags=re.S)  # the comments name them
-    assert "day" not in code and "audio" not in code
+    assert "/day" not in code and "audio" not in code
     assert "respondWith" in code and "APP_JSON" in code
+    # The offline copy of /app.json is kept without his words.
+    assert "fresh(event.request, DATA, APP_JSON, wordless)" in code
+    body = code[code.index("async function wordless") : code.index("async function fresh")]
+    for strip in ("data.today.last_used.said = null", "s.said = null", 's.detail = ""'):
+        assert strip in body, strip
 
 
 def test_a_failed_app_build_costs_only_the_app(tmp_path: Path, monkeypatch: Any) -> None:

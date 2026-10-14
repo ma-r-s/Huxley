@@ -7,26 +7,38 @@ A request is a press on the walkie that reached the model
 he pressed and nothing was heard). A tap too short to commit is not one.
 
 His words: transcripts carry no turn, so each `transcript role=user` goes
-to the oldest committed press still waiting for one (each committed press
-is one input item, transcribed in order). On the 2026-10-12 logs this
-paired 304 of 304 presses, 1.2 s after the release at the median, 5.5 s
-at p99 and 19.3 s at most; a press waits 60 s. Every press counts in the
-pairing, bench and other clients' too, so one never takes another's words;
-only the walkie's, outside bench windows, are his.
+to the oldest press still waiting for one. A press waits only once its
+audio was sent (`session.tx.commit`: one input item, transcribed in
+order), and the queue empties when the session or the process starts
+again (`session_connected`, `app.reconnect_succeeded`, `huxley_starting`):
+those items' words never come, and a press left waiting would take the
+next one's. On the 2026-10-12 logs this paired 304 of 304 presses, 1.2 s
+after the release at the median, 5.5 s at p99 and 19.3 s at most; a press
+waits 60 s. Every press counts in the pairing, bench and other clients'
+too, so one never takes another's words; only the walkie's, outside bench
+windows, are his.
 
 A request is a struggle when any of these happens:
 
 - tool error: a tool raised (`coord.tool_error`) or a skill said it couldn't
   (events.TOOL_FAILURES), within 60 s of the release and before the next press;
-- not heard: a silent press, a commit that came back empty, or his
-  transcript empty or a known Whisper hallucination ("Subtitulos ... Amara.org");
-- no answer: no model audio, tool call, stream or call within 20 s of the
-  release (a new press first counts: that turn will never answer);
-- corrected: his next request begins with "no", or says "esa no", "otra"...,
-  within 60 s of this one's last answer;
-- asked again: his next request calls the same tool with a similar query
-  within 90 s. Skipping tracks (`music_control` next or previous) and
-  `set_volume` repeat by design and never count, here or as a correction.
+- not heard: a silent press, a commit that came back empty, his transcript a
+  known Whisper hallucination ("Subtitulos ... Amara.org"), or his
+  transcript empty with nothing answering within 20 s (the model hears the
+  audio, not the transcript: an answer means it heard him);
+- no answer: no model audio for his turn (`coord.audio_start owner=user`;
+  an injected reminder's is not his answer), tool call, stream or call
+  within 20 s of the release (a new press first counts: that turn will
+  never answer);
+- corrected: his next request begins with "no," (or "no!", "no.", a bare
+  "no"), or says "esa no" or "ese no", within 60 s of this one's last
+  answer;
+- asked again: his next request calls the same tool with a similar,
+  non-empty query within 90 s (two "what time is it" are two questions).
+
+Skipping tracks (`music_control` next or previous) and `set_volume` repeat
+by design: never "asked again", and no correction is read before or after
+one.
 """
 
 from __future__ import annotations
@@ -56,6 +68,9 @@ ANSWERS = frozenset(
     }
 )
 TRANSCRIPT_WAIT = timedelta(seconds=60)  # his words arrive this soon after the release
+COMMIT_WAIT = timedelta(seconds=5)  # the audio is sent right after the release
+# A new session or process: the input items still awaiting their words are gone.
+FRESH = frozenset({"huxley_starting", "session_connected", "app.reconnect_succeeded"})
 ANSWER_WINDOW = timedelta(seconds=60)  # what comes later belongs to something else
 NO_ANSWER = timedelta(seconds=20)
 CORRECTION_WINDOW = timedelta(seconds=60)
@@ -76,9 +91,8 @@ _GARBLED = (
     "suscribete",
     "thanks for watching",
 )
-_CORRECTION = re.compile(
-    r"^no\b|\b(esa|ese|eso) no\b|\bno (es|era) (esa|ese|eso|asi)\b|\b(otra|otro)\b|\bequivoca"
-)
+_LEADING_NO = re.compile(r"^[\s\W]*no\s*(?:[,.!;:]|$)")  # "No, ...", "No!" (after any opening mark), "no"
+_THAT_NOT = re.compile(r"\b(esa|ese) no\b")
 _QUERY_KEYS = ("query", "title", "station", "name", "book_id", "action")
 
 
@@ -134,14 +148,15 @@ def words(text: str) -> str:
 
 
 def query_of(args: Any) -> str:
-    """A tool's main argument ('Adele', 'blu', 'pause'), else all of them."""
+    """A tool's main text argument ('Adele', 'blu', 'pause'), else all its
+    text arguments; numbers and flags are not a query ('' for a volume)."""
     if isinstance(args, dict):
+        texts = {k: v.strip() for k, v in args.items() if isinstance(v, str) and v.strip()}
         for key in _QUERY_KEYS:
-            value = args.get(key)
-            if value not in (None, "", [], {}):
-                return str(value)
-        return " ".join(str(v) for _, v in sorted(args.items()) if v not in (None, "", [], {}))
-    return str(args or "")
+            if key in texts:
+                return texts[key]
+        return " ".join(v for _, v in sorted(texts.items()))
+    return args.strip() if isinstance(args, str) else ""
 
 
 def garbled(text: str) -> bool:
@@ -155,7 +170,10 @@ def garbled(text: str) -> bool:
 
 
 def correction(text: str) -> bool:
-    return bool(_CORRECTION.search(words(text)))
+    """'No, esa no', 'No!', 'esa no me gusta'; not 'no tienes otros?',
+    'otra vez' or 'otro libro' (asking more is not saying it was wrong)."""
+    folded = fold(text).strip()
+    return bool(_LEADING_NO.match(folded) or _THAT_NOT.search(words(text)))
 
 
 def by_design(tool: ToolUse) -> bool:
@@ -167,14 +185,15 @@ def by_design(tool: ToolUse) -> bool:
 
 
 def similar(a: ToolUse, b: ToolUse) -> bool:
+    """The same tool asked the same thing. With no query on either side
+    (the time, the battery, the news) there is nothing to compare: asking
+    the time twice is two questions."""
     if a.name != b.name:
         return False
     qa, qb = words(a.query), words(b.query)
-    if qa == qb:
-        return True
-    if qa and qb and (qa in qb or qb in qa):
-        return True
-    return SequenceMatcher(None, qa, qb).ratio() >= SIMILAR
+    if not qa or not qb:
+        return False
+    return qa == qb or qa in qb or qb in qa or SequenceMatcher(None, qa, qb).ratio() >= SIMILAR
 
 
 def _failure(e: Event) -> str:
@@ -190,7 +209,8 @@ def requests(events: Sequence[Event]) -> list[Request]:
     """Every request in the events, any client, oldest first."""
     out: list[Request] = []
     press: tuple[datetime, str | None] | None = None
-    waiting: list[Request] = []  # committed, no transcript yet
+    sending: list[Request] = []  # committed, audio not sent yet
+    waiting: list[Request] = []  # audio sent, no transcript yet
 
     def open_request(ts: datetime) -> Request | None:
         """The latest request, if `ts` is still its turn."""
@@ -203,9 +223,11 @@ def requests(events: Sequence[Event]) -> list[Request]:
 
     for e in events:
         name = e.name
-        if name == "huxley_starting":
-            press = None
-            waiting.clear()  # a new process: the old one's words never come
+        if name in FRESH:
+            if name == "huxley_starting":
+                press = None
+            sending.clear()
+            waiting.clear()
         elif name == "coord.ptt_start":
             if out and out[-1].next_start is None:
                 out[-1].next_start = e.ts
@@ -216,8 +238,12 @@ def requests(events: Sequence[Event]) -> list[Request]:
                 r = Request(press[0], e.ts, press[1], committed, heard=committed)
                 out.append(r)
                 if committed:
-                    waiting.append(r)
+                    sending.append(r)
             press = None
+        elif name == "session.tx.commit":
+            sending[:] = [r for r in sending if e.ts - r.stop <= COMMIT_WAIT]
+            if sending and sending[0].stop <= e.ts:
+                waiting.append(sending.pop(0))
         elif name == "session.rx.error" and e.get("code") == COMMIT_EMPTY:
             for r in reversed(waiting):
                 if timedelta(0) <= e.ts - r.stop <= COMMIT_EMPTY_WINDOW:
@@ -237,6 +263,8 @@ def requests(events: Sequence[Event]) -> list[Request]:
             if name in TOOL_FAILURES:
                 turn.failures.append(_failure(e))
                 continue
+            if name == "coord.audio_start" and e.get("owner", "user") != "user":
+                continue  # an injected turn speaking (a reminder): not his answer
             turn.answered = turn.answered or e.ts
             turn.responded = e.ts
             if name == "session.rx.tool_call" and e.get("name"):
@@ -259,13 +287,17 @@ def judge(found: Sequence[Request], now: datetime) -> list[Verdict]:
         reasons: list[tuple[str, str]] = []
         if r.failures:
             reasons.append(("tool_error", r.failures[0]))
+        answered_soon = r.answered is not None and r.answered - r.stop <= NO_ANSWER
         if not r.heard:
             reasons.append(("not_heard", "silent" if not r.committed else "nothing heard"))
         elif r.said is not None and garbled(r.said):
-            reasons.append(("not_heard", r.said or "empty"))
+            if words(r.said):  # a hallucination: never his words
+                reasons.append(("not_heard", f'transcribed as "{r.said}"'))
+            elif not answered_soon:  # an answer means the model heard him
+                reasons.append(("not_heard", "empty"))
         if r.committed and r.heard:
             closed = r.next_start is not None or now - r.stop >= NO_ANSWER
-            if closed and (r.answered is None or r.answered - r.stop > NO_ANSWER):
+            if closed and not answered_soon:
                 reasons.append(("no_answer", ""))
         own = [t for t in r.tools if not by_design(t)]
         skip_only = bool(r.tools) and not own
@@ -274,6 +306,7 @@ def judge(found: Sequence[Request], now: datetime) -> list[Verdict]:
             nxt is not None
             and anchor is not None
             and not skip_only
+            and not any(by_design(t) for t in nxt.tools)
             and nxt.said
             and timedelta(0) <= nxt.start - anchor <= CORRECTION_WINDOW
             and correction(nxt.said)

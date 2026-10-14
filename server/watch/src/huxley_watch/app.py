@@ -46,6 +46,8 @@ TREND_DAYS = 7
 FAVOURITE_DAYS = 30
 TALK_DAYS = 40  # the conversations list goes back this far (the logs read)
 PLAYING_SLACK = timedelta(seconds=5)  # a segment ending this close to now is still playing
+TALKED = timedelta(seconds=20)  # a call this long was a talk; shorter, a call that didn't connect
+OFFLINE_SHOWN = 5  # % of today's daytime offline before the "used today" card says so
 MEDIA = ("music", "book", "radio")
 
 Span = tuple[datetime, datetime]
@@ -74,6 +76,7 @@ class Used(TypedDict):
     hi: float | None
     mid: float | None
     position: Literal["below", "within", "above"] | None
+    offline_pct: int | None  # of today's daytime so far, once OFFLINE_SHOWN or more
 
 
 class Person(TypedDict):
@@ -82,6 +85,7 @@ class Person(TypedDict):
     clock: str  # his time
     days_ago: int  # calendar days, his time (0: today)
     minutes: float  # the last call's length
+    talked: bool  # it lasted TALKED or more ("talked"); else "called"
     calls_30d: int
 
 
@@ -105,6 +109,7 @@ class Device(TypedDict):
     battery_at: str | None
     battery_stale: bool
     battery_low: bool
+    battery_low_pct: float  # the watcher's threshold (thresholds.battery_low_pct)
 
 
 class Day(TypedDict):
@@ -218,9 +223,12 @@ def used_seconds(segments: Sequence[Segment], lo: datetime, hi: datetime) -> flo
 
 
 def online_share(i: Inputs, d: date) -> float | None:
-    """How much of the day's daytime (so far) the walkie was connected,
-    bench windows left out of both sides. None before the daytime starts."""
+    """How much of the day's daytime (so far, and since the logs begin) the
+    walkie was connected, bench windows left out of both sides. None before
+    the daytime starts or the logs do."""
     lo = datetime.combine(d, i.th.day_start, i.tz)
+    if i.logs_from is not None:
+        lo = max(lo, i.logs_from)
     hi = min(datetime.combine(d, i.th.day_end, i.tz), i.now)
     if hi <= lo:
         return None
@@ -301,12 +309,15 @@ def _qualifying(days: Sequence[tuple[Day, list[talks.Verdict]]]) -> list[Day]:
     ]
 
 
-def _used(i: Inputs, segments: Sequence[Segment], qualifying: Sequence[Day]) -> Used:
+def _used(i: Inputs, segments: Sequence[Segment], qualifying: Sequence[Day], today: Day) -> Used:
     local_now = i.now.astimezone(i.tz)
     today_lo = _midnight(local_now.date(), i)
     minutes = round(used_seconds(segments, today_lo, i.now) / 60, 1)
     n = len(qualifying)
     by = local_now.strftime("%H:%M")
+    share = today["online_share"]
+    away = round((1 - share) * 100) if share is not None else None
+    offline_pct = away if away is not None and away >= OFFLINE_SHOWN else None
     if n < USUAL_DAYS:
         return {
             "minutes": minutes,
@@ -319,6 +330,7 @@ def _used(i: Inputs, segments: Sequence[Segment], qualifying: Sequence[Day]) -> 
             "hi": None,
             "mid": None,
             "position": None,
+            "offline_pct": offline_pct,
         }
     values = []
     for d in qualifying:
@@ -342,6 +354,7 @@ def _used(i: Inputs, segments: Sequence[Segment], qualifying: Sequence[Day]) -> 
         "hi": q3,
         "mid": q2,
         "position": position,
+        "offline_pct": offline_pct,
     }
 
 
@@ -384,7 +397,8 @@ def _people(i: Inputs, segments: Sequence[Segment]) -> list[Person]:
             "last_at": start.isoformat(),
             "clock": _clock(start, i),
             "days_ago": (today - start.astimezone(i.tz).date()).days,
-            "minutes": round(seconds / 60, 1),
+            "minutes": round(seconds / 60, 2),  # a 9 s call stays 9 s
+            "talked": seconds >= TALKED.total_seconds(),
             "calls_30d": recent.get(name, 0),
         }
         for name, (start, seconds) in last.items()
@@ -562,6 +576,7 @@ def _device(i: Inputs) -> Device:
         "battery_at": _clock(b.at, i) if b.at else None,
         "battery_stale": b.at is not None and i.now - b.at > timedelta(minutes=30),
         "battery_low": b.pct is not None and b.pct < i.th.battery_low_pct,
+        "battery_low_pct": i.th.battery_low_pct,
     }
 
 
@@ -577,7 +592,7 @@ def _struggles(i: Inputs, verdicts: Sequence[talks.Verdict]) -> list[Struggle]:
             {
                 "at": r.start.astimezone(i.tz).strftime("%H:%M"),
                 "t": round((r.start - midnight).total_seconds() / 60, 2),
-                "said": r.said or None,
+                "said": r.said if r.said and not talks.garbled(r.said) else None,
                 "tool": tool.name if tool else None,
                 "query": tool.query or None if tool else None,
                 "reasons": list(v.reasons),
@@ -619,7 +634,7 @@ def build(i: Inputs, segments: Sequence[Segment], *, interval_s: float) -> AppSt
         "today": {
             "date": local_now.date().isoformat(),
             "last_used": _last_used(i, mine),
-            "used": _used(i, segments, qualifying),
+            "used": _used(i, segments, qualifying, days[-1][0]),
             "people": _people(i, segments),
             "enjoying": _enjoying(i, segments, tracks, chapters),
             "device": _device(i),

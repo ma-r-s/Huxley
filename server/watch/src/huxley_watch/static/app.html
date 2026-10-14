@@ -54,7 +54,7 @@ main{max-width:600px;margin:0 auto;padding:4px calc(16px + env(safe-area-inset-r
 .fig{font-variant-numeric:tabular-nums;color:var(--ink2);white-space:nowrap}
 .said{color:var(--ink);overflow-wrap:anywhere;min-width:0}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
-.chip{font-size:13px;padding:4px 10px;border-radius:999px;background:color-mix(in srgb,var(--ink) 7%,transparent);color:var(--ink2);white-space:nowrap;display:inline-flex;gap:6px;align-items:center}
+.chip{font-size:13px;padding:4px 10px;border-radius:999px;background:color-mix(in srgb,var(--ink) 7%,transparent);color:var(--ink2);display:inline-flex;gap:6px;align-items:center;max-width:100%}
 .hatch,.chip.off{background:repeating-linear-gradient(45deg,color-mix(in srgb,var(--mute) 30%,transparent) 0 3px,transparent 3px 7px);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--mute) 45%,transparent)}
 .range{position:relative;height:28px;margin:16px 0 4px;border-radius:8px;background:var(--grid)}
 .range .usual{position:absolute;top:0;bottom:0;background:var(--usual);border-radius:8px;display:block}
@@ -88,12 +88,13 @@ b.sw.usual{background:var(--usual)}b.sw.mk{width:4px;background:var(--ink)}
 .device .batt.low{color:var(--ink);font-weight:650}
 .device>.ico:last-child{color:var(--mute)}
 .chart{position:relative;height:180px;margin-top:22px}
-.chart .band{position:absolute;left:0;right:0;background:var(--usual);opacity:.8;border-radius:4px}
+.chart .cband{position:absolute;left:-3px;right:-3px;background:var(--usual);display:block}
 .chart .cols{position:absolute;inset:0;display:flex;gap:6px;align-items:flex-end}
 .chart .col{flex:1;min-width:0;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;position:relative}
-.chart .bar{width:72%;max-width:40px;border-radius:5px 5px 2px 2px;background:var(--ink2);min-height:2px}
+.chart .bar{position:relative;width:72%;max-width:40px;border-radius:5px 5px 2px 2px;background:var(--ink2);min-height:2px}
 .chart .col.today .bar{background:var(--ink)}
-.chart .v{font-size:11px;color:var(--ink2);margin-bottom:4px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.chart .v{position:relative;font-size:11px;color:var(--ink2);margin-bottom:4px;white-space:nowrap;font-variant-numeric:tabular-nums;text-align:center;line-height:1.15}
+.chart .v small{display:block;font-size:10px;color:var(--mute)}
 .chart .off,.chart .nolog{width:86%;height:100%;border-radius:6px;display:flex;align-items:center;justify-content:center}
 .chart .off span,.chart .nolog span{writing-mode:vertical-rl;transform:rotate(180deg);font-size:12px;color:var(--ink2);white-space:nowrap}
 .chart .nolog{border:1.5px dashed var(--grid)}.chart .nolog span{color:var(--mute)}
@@ -199,7 +200,12 @@ function ago(iso) {
   const h = m / 60;
   return h < 36 ? `${Math.round(h)} h ago` : `${Math.round(h / 24)} d ago`;
 }
-function talked(n) { return n === 0 ? "talked today" : n === 1 ? "talked yesterday" : `talked ${n} d ago`; }
+function talked(p) {
+  // Under 20 s is a call that didn't connect: "called", not "talked".
+  const verb = p.talked ? "talked" : "called", n = p.days_ago;
+  return n === 0 ? `${verb} today` : n === 1 ? `${verb} yesterday` : `${verb} ${n} d ago`;
+}
+function length(m) { return m < 1 ? `${Math.round(m * 60)} s` : mins(m); }
 function dayName(d) {
   if (d.today) return "Today";
   const t = data && data.today.date;
@@ -236,6 +242,7 @@ function today(d) {
   h += `</section>`;
 
   h += `<section class="card"><div class="row"><div class="lab">Used today</div><div class="val">${mins(u.minutes)}</div></div>`;
+  if (u.offline_pct != null) h += `<div class="chips"><span class="chip off">walkie offline ${u.offline_pct}% of the day so far</span></div>`;
   if (u.state === "range") {
     const max = Math.max(u.hi * 1.6, u.minutes * 1.15, 10);
     const p = v => (Math.min(v, max) / max * 100).toFixed(1);
@@ -252,7 +259,7 @@ function today(d) {
   h += `<section class="card"><div class="lab">People</div>`;
   if (!t.people.length) h += `<div class="sub mute">no calls yet</div>`;
   for (const p of t.people) {
-    h += `<div class="person"><span class="ini">${esc(p.name.charAt(0))}</span><span class="name">${esc(p.name)}</span><span class="when">${talked(p.days_ago)}<small>${esc(p.clock)}</small></span></div>`;
+    h += `<div class="person"><span class="ini">${esc(p.name.charAt(0))}</span><span class="name">${esc(p.name)}</span><span class="when">${talked(p)}<small>${esc(p.clock)} &middot; ${length(p.minutes)}</small></span></div>`;
   }
   h += `</section>`;
 
@@ -277,20 +284,25 @@ function today(d) {
 /* --- Trends --- */
 function trends(d) {
   const tr = d.trends, days = tr.days, usual = tr.usual_day, fav = tr.favourites, fu = tr.first_use;
-  const top = Math.max(30, usual ? usual.hi * 1.15 : 0, ...days.filter(x => !x.offline).map(x => x.minutes * 1.15));
+  // Only whole days with the walkie on are bars; the band (his usual day)
+  // sits behind those, never behind today's bar, which is not over yet.
+  const drawn = days.filter(x => x.logs === "full" && !x.offline);
+  const top = Math.max(30, usual ? usual.hi * 1.15 : 0, ...drawn.map(x => x.minutes * 1.15));
   const y = v => Math.min(100, v / top * 100).toFixed(1);
+  const band = usual ? `<i class="cband" style="bottom:${y(usual.lo)}%;height:${(y(usual.hi) - y(usual.lo)).toFixed(1)}%"></i>` : "";
   let cols = "", xl = "";
   for (const x of days) {
     let body;
     if (x.logs === "none") body = `<div class="nolog"><span>no logs</span></div>`;
+    else if (x.logs === "partial") body = `<div class="nolog"><span>logs begin</span></div>`;
     else if (x.offline) body = `<div class="off hatch"><span>walkie offline</span></div>`;
-    else body = `<span class="v">${mins(x.minutes)}</span><i class="bar" style="height:${y(x.minutes)}%"></i>`;
+    else if (x.today) body = `<span class="v">${mins(x.minutes)}<small>so far</small></span><i class="bar" style="height:${y(x.minutes)}%"></i>`;
+    else body = `${band}<span class="v">${mins(x.minutes)}</span><i class="bar" style="height:${y(x.minutes)}%"></i>`;
     cols += `<div class="col${x.today ? " today" : ""}">${body}</div>`;
     const [wd, dn] = x.label.split(" ");
     xl += `<div>${x.today ? "Today" : esc(wd)}<small>${esc(dn)}</small></div>`;
   }
-  const band = usual ? `<i class="band" style="bottom:${y(usual.lo)}%;height:${(y(usual.hi) - y(usual.lo)).toFixed(1)}%"></i>` : "";
-  let h = `<section class="card"><div class="lab">Used, last 7 days</div><div class="chart">${band}<div class="cols">${cols}</div></div><div class="xl">${xl}</div>`;
+  let h = `<section class="card"><div class="lab">Used, last 7 days</div><div class="chart"><div class="cols">${cols}</div></div><div class="xl">${xl}</div>`;
   const u = d.today.used;
   h += usual
     ? `<div class="legend"><span><b class="sw usual"></b>his usual day: ${span(usual.lo, usual.hi)}</span></div>`
@@ -334,7 +346,7 @@ function talks(d) {
   for (const x of tk.days) {
     const tags = (x.offline ? `<i class="tag hatch">walkie offline</i>` : "")
       + (x.logs === "partial" ? `<i class="tag">logs begin</i>` : "")
-      + (x.battery_min != null && x.battery_min < 20 ? `<i class="tag">battery ${x.battery_min}%</i>` : "");
+      + (x.battery_min != null && x.battery_min < d.today.device.battery_low_pct ? `<i class="tag">battery ${x.battery_min}%</i>` : "");
     const str = x.struggles ? `<small>${x.struggles} struggle${x.struggles === 1 ? "" : "s"}</small>` : "";
     h += `<a class="dayrow" href="#talks/${esc(x.date)}"><span class="dl">${esc(dayName(x))}</span><span class="tags">${tags}</span><span class="cnt"><b>${x.requests}</b>${str}</span>${ic("next")}</a>`;
   }

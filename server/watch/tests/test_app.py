@@ -18,6 +18,7 @@ from .logs import (
     bench,
     claim_ended,
     claim_started,
+    commit,
     connected,
     device,
     disconnected,
@@ -82,6 +83,7 @@ def ask(
     out = [
         press(at, conn),
         ptt_stop(stop, conn),
+        commit(stop + timedelta(milliseconds=1), conn),
         transcript(stop + timedelta(seconds=1), "user", said),
         audio_start(stop + timedelta(seconds=2)),
         speaking(stop + timedelta(seconds=5), False),
@@ -224,6 +226,22 @@ def test_his_usual_is_by_this_time_of_day() -> None:
     assert used["position"] == "within"
 
 
+def test_a_call_under_20_s_is_called_not_talked() -> None:
+    """A call that rang out or dropped at once is not a conversation."""
+    lines = [
+        *online_day(TODAY, "w1"),
+        claim_started(at(TODAY, 9), "ana"),
+        claim_ended(at(TODAY, 9) + timedelta(seconds=19)),
+        claim_started(at(TODAY, 10), "mario"),
+        claim_ended(at(TODAY, 10) + timedelta(seconds=20)),
+    ]
+    people = build(lines)["today"]["people"]
+    assert [(p["name"], p["talked"], p["minutes"]) for p in people] == [
+        ("Mario", True, 0.33),
+        ("Ana", False, 0.32),
+    ]
+
+
 def test_people_last_call_each() -> None:
     yesterday = TODAY - timedelta(days=1)
     lines = [
@@ -341,6 +359,17 @@ def test_a_book_from_before_the_chapter_index_shows_its_chapter_name() -> None:
     assert (en["chapter"], en["chapter_index"], en["chapters"]) == ("Créditos iniciales", None, 19)
 
 
+def test_used_today_says_how_much_of_the_day_the_walkie_was_offline() -> None:
+    """Quiet is not unwell: offline 07:00-11:00 of 07:00-15:00 is half."""
+    logs = starting(at(TODAY, 0, 5))  # the logs begin before the daytime
+    status = build([logs, *online_day(TODAY, "w1", time(11), time(22))])
+    assert status["today"]["used"]["offline_pct"] == 50
+    assert build([logs, *online_day(TODAY, "w1")])["today"]["used"]["offline_pct"] is None
+    # a few minutes away is not worth saying (under 5 %)
+    late = build([logs, *online_day(TODAY, "w1", time(7, 20))])
+    assert late["today"]["used"]["offline_pct"] is None
+
+
 def test_device_state_rides_along() -> None:
     lines = [
         *online_day(TODAY, "w1", time(7), time(13)),
@@ -375,6 +404,15 @@ def test_days_before_the_logs_say_no_logs() -> None:
     days = build(lines)["trends"]["days"]
     assert [d["logs"] for d in days] == ["none"] * 5 + ["partial", "full"]
     assert not any(d["offline"] for d in days[:5])
+
+
+def test_online_share_counts_from_where_the_logs_begin() -> None:
+    """Logs that begin at 13:00 on a day the walkie was on from then: not
+    an offline day, and Trends says the logs begin there."""
+    d = TODAY - timedelta(days=1)
+    lines = [*online_day(d, "x", time(13), time(22)), *online_day(TODAY, "w1")]
+    day = build(lines)["trends"]["days"][-2]
+    assert (day["logs"], day["online_share"], day["offline"]) == ("partial", 1.0, False)
 
 
 def test_a_bench_window_is_not_the_walkie_offline() -> None:
@@ -474,9 +512,13 @@ def test_struggles_today_and_conversations_by_day() -> None:
     talks = build(lines)["talks"]
     assert talks["requests_today"] == 4
     assert [(s["at"], s["reasons"], s["said"]) for s in talks["struggles"]] == [
-        ("10:00", ["not_heard"], "Subtítulos por la comunidad de Amara.org"),
+        ("10:00", ["not_heard"], None),  # a hallucination is never quoted as his words
         ("11:00", ["corrected"], "pon a Juanes"),
     ]
+    assert (
+        talks["struggles"][0]["detail"]
+        == 'transcribed as "Subtítulos por la comunidad de Amara.org"'
+    )
     assert talks["struggles"][1]["t"] == 660.0  # minutes since his midnight: the day view's row
     assert talks["struggles"][1]["detail"] == "no, esa no"
     assert [(d["date"], d["requests"], d["struggles"], d["logs"]) for d in talks["days"]] == [
@@ -520,7 +562,7 @@ def test_mark_stale() -> None:
 
 
 def test_summary_for_the_log_line() -> None:
-    lines = [*online_day(TODAY, "w1"), *ask(at(TODAY, 9), "", "w1")]
+    lines = [*online_day(TODAY, "w1"), *ask(at(TODAY, 9), "Gracias por ver el video", "w1")]
     assert app.summary(build(lines)) == {
         "requests_today": 1,
         "struggles_today": 1,
