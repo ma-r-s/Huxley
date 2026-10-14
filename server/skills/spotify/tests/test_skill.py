@@ -656,6 +656,7 @@ class TestSetup:
             "play_book",
             "book_control",
             "find_books",
+            "book_opinion",
         ]
         assert "nunca inventes" in skill.tools[0].description
 

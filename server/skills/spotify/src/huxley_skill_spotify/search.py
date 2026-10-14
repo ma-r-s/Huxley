@@ -11,6 +11,7 @@ can't play.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 import unicodedata
@@ -33,7 +34,12 @@ KINDS = ("any", "track", "artist", "album", "playlist", "audiobook")
 
 
 class SearchError(Exception):
-    """Spotify's Web API couldn't answer (network, credentials, quota)."""
+    """Spotify's Web API couldn't answer (network, credentials, quota).
+    `status` is the HTTP status when Spotify answered with one."""
+
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 @dataclass(frozen=True)
@@ -50,9 +56,12 @@ class Match:
     kind: str
     title: str
     artist: str | None
-    # Books only: the edition's languages and Spotify's description.
+    # Books only: the edition's languages, Spotify's description, who
+    # reads it and Spotify's edition note ("Unabridged", "Abridged").
     languages: tuple[str, ...] = ()
     about: str = ""
+    narrators: tuple[str, ...] = ()
+    edition: str = ""
 
 
 @dataclass(frozen=True)
@@ -85,6 +94,10 @@ def _fold(text: str) -> str:
     """Case- and accent-insensitive form for comparing names."""
     decomposed = unicodedata.normalize("NFKD", text.casefold())
     return "".join(c for c in decomposed if not unicodedata.combining(c)).strip()
+
+
+def _names(people: Any) -> tuple[str, ...]:
+    return tuple(str(p["name"]) for p in people or () if isinstance(p, dict) and p.get("name"))
 
 
 def _artists(entry: dict[str, Any]) -> str | None:
@@ -182,6 +195,8 @@ class SpotifySearch:
         *,
         market: str | None = None,
         http: httpx.AsyncClient | None = None,
+        retry_after_max_s: float | None = None,
+        retries: int = 1,
     ) -> None:
         self._client_id = client_id
         self._client_secret = client_secret
@@ -192,6 +207,12 @@ class SpotifySearch:
         self._token: str | None = None
         self._token_expires = 0.0
         self._books: dict[str, BookInfo] = {}
+        # A 429 is retried `retries` times after Spotify's Retry-After,
+        # capped at this; None never retries: a live turn must not sleep
+        # (the shelf build passes a cap and more retries, T1.45 critic: a
+        # second full run in 20 minutes was told to wait over 30 s).
+        self._retry_after_max_s = retry_after_max_s
+        self._retries = retries
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -263,9 +284,31 @@ class SpotifySearch:
                         artist=str(by) if by else None,
                         languages=tuple(str(x) for x in entry.get("languages") or ()),
                         about=str(entry.get("description") or "") if kind == "audiobook" else "",
+                        narrators=_names(entry.get("narrators")) if kind == "audiobook" else (),
+                        edition=str(entry.get("edition") or "") if kind == "audiobook" else "",
                     )
                 )
         return matches
+
+    async def audiobooks(self, query: str, *, limit: int = 10) -> list[Match]:
+        """Every audiobook a search returns, editions of one book included
+        (`candidates` folds same title and author into one)."""
+        data = await self._search(query, "audiobook", limit=limit)
+        return self._all(data, "audiobooks", "audiobook")
+
+    async def audiobook(self, uri: str) -> tuple[Match, int]:
+        """One audiobook by its URI, as a search result would describe it
+        (languages, narrators, edition, synopsis), and how many chapters
+        Spotify lists: one request (the answer carries the first page of
+        chapters and their total). The shelf build's only call to
+        `/audiobooks`: paging every chapter of 134 books, run after run,
+        got the app blocked there for about 19 hours (2026-10-13)."""
+        data = await self._get(AUDIOBOOK_URL.format(id=uri.rsplit(":", 1)[-1]), {})
+        found = self._all({"audiobooks": {"items": [data]}}, "audiobooks", "audiobook")
+        if not found:
+            raise SearchError(f"no audiobook {uri}")
+        page = data.get("chapters") or {}
+        return found[0], int(page.get("total") or len(page.get("items") or []))
 
     async def book(self, uri: str) -> BookInfo:
         """A book's title, author, description and every chapter, cached:
@@ -312,24 +355,46 @@ class SpotifySearch:
         params = dict(params)
         if self._market:
             params["market"] = self._market
-        for attempt in range(2):
-            token = await self._access_token(force=attempt > 0)
+        renewed = False
+        limited = 0
+        while True:
+            token = await self._access_token(force=renewed)
             try:
                 response = await self._http.get(
                     url, params=params, headers={"Authorization": f"Bearer {token}"}
                 )
             except httpx.HTTPError as exc:
                 raise SearchError(f"request failed: {type(exc).__name__}") from exc
-            if response.status_code == 401 and attempt == 0:
+            if response.status_code == 401 and not renewed:
+                renewed = True
                 continue  # token revoked or expired early: renew once
+            if (
+                response.status_code == 429
+                and limited < self._retries
+                and self._retry_after_max_s is not None
+            ):
+                limited += 1  # rate limited: wait as asked (capped)
+                await asyncio.sleep(self._retry_after(response))
+                continue
+            if response.status_code == 401:
+                raise SearchError("search unauthorized after token renewal")
             if response.status_code != 200:
-                raise SearchError(f"{url.rsplit('/', 1)[-1]} answered {response.status_code}")
+                raise SearchError(
+                    f"{url.rsplit('/', 1)[-1]} answered {response.status_code}",
+                    status=response.status_code,
+                )
             try:
                 result: dict[str, Any] = response.json()
             except ValueError as exc:
                 raise SearchError("search answered non-JSON") from exc
             return result
-        raise SearchError("search unauthorized after token renewal")
+
+    def _retry_after(self, response: httpx.Response) -> float:
+        try:
+            wait = float(response.headers.get("Retry-After") or 1)
+        except ValueError:
+            wait = 1.0
+        return max(0.0, min(wait, self._retry_after_max_s or 0.0))
 
     async def _access_token(self, *, force: bool = False) -> str:
         if not force and self._token and time.monotonic() < self._token_expires:

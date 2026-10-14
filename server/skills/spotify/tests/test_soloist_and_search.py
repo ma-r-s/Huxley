@@ -377,6 +377,32 @@ class TestSearch:
         with pytest.raises(SearchError, match="429"):
             await search.find("x", "track")
 
+    async def test_the_build_client_waits_out_three_rate_limits(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        """The shelf build (T1.45) retries a 429 up to `retries` times; a
+        second full run in 20 minutes was told to wait (2026-10-13)."""
+        _token(httpx_mock)
+        for _ in range(3):
+            httpx_mock.add_response(method="GET", status_code=429, headers={"Retry-After": "0"})
+        httpx_mock.add_response(method="GET", json={"tracks": {"items": []}})
+        search = SpotifySearch(
+            "id", "secret", http=httpx.AsyncClient(), retry_after_max_s=0.0, retries=3
+        )
+        assert await search.find("x", "track") is None
+
+    async def test_the_build_client_gives_up_after_its_retries(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        _token(httpx_mock)
+        for _ in range(4):
+            httpx_mock.add_response(method="GET", status_code=429, headers={"Retry-After": "0"})
+        search = SpotifySearch(
+            "id", "secret", http=httpx.AsyncClient(), retry_after_max_s=0.0, retries=3
+        )
+        with pytest.raises(SearchError, match="429"):
+            await search.find("x", "track")
+
     def test_search_url_is_the_web_api(self) -> None:
         assert SEARCH_URL == "https://api.spotify.com/v1/search"
 

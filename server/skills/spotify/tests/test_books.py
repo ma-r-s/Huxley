@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import time
 from typing import TYPE_CHECKING, Any
@@ -19,11 +20,11 @@ import pytest
 
 from huxley_sdk import AudioStream
 from huxley_skill_spotify import skill as skill_module
-from huxley_skill_spotify.books import Place, Shelf, capped_position
+from huxley_skill_spotify.books import BookMemory, Place, capped_position
 from huxley_skill_spotify.search import BookInfo, Chapter, Match
 from huxley_skill_spotify.skill import SpotifySkill
 
-from .conftest import FakeSearch, FakeSoloist, PcmServer, Recorded, make_ctx
+from .conftest import FakeSearch, FakeSoloist, PcmServer, Recorded, make_ctx, write_shelf
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -62,6 +63,15 @@ GUIDE = Match(
     title="Cien años de soledad (Guía de lectura): Resumen y análisis",
     artist="ResumenExpress",
     languages=("es",),
+)
+# Spotify marks a shortened reading in its edition note only.
+ABRIDGED = Match(
+    uri="spotify:show:corto",
+    kind="audiobook",
+    title="Cien años de soledad",
+    artist="Gabriel García Márquez",
+    languages=("es",),
+    edition="Abridged edition",
 )
 SONG = Match(uri="spotify:track:sinti", kind="track", title="Sin Ti", artist="Los Panchos")
 
@@ -146,14 +156,14 @@ async def _skill(
     others: list[Match] | None = None,
     client: FakeSoloist | None = None,
     config: dict[str, Any] | None = None,
-) -> tuple[SpotifySkill, BookSoloist, Recorded, Shelf]:
+) -> tuple[SpotifySkill, BookSoloist, Recorded, BookMemory]:
     client = client or BookSoloist()
     recorded = Recorded()
     search = FakeSearch(match, others, books={BOOK_INFO.uri: BOOK_INFO})
     skill = SpotifySkill(client=client, search=search)  # type: ignore[arg-type]
     await skill.setup(make_ctx(tmp_path, recorded, config={"pcm": pcm.address, **(config or {})}))
-    assert skill._shelf is not None
-    return skill, client, recorded, skill._shelf  # type: ignore[return-value]
+    assert skill._memory is not None
+    return skill, client, recorded, skill._memory  # type: ignore[return-value]
 
 
 async def _settle() -> None:
@@ -217,6 +227,14 @@ class TestAskingForABook:
         result = await skill.handle("play_book", {"title": "cien años de soledad"})
         assert _out(result)["playing"] == "Cien años de soledad"
 
+    async def test_an_abridged_edition_is_never_picked(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, client, _, _ = await _skill(tmp_path, pcm_server, match=ABRIDGED, others=[BOOK])
+        result = await skill.handle("play_book", {"title": "cien años de soledad"})
+        await _take(result.side_effect, 2)  # type: ignore[arg-type]
+        assert _plays(client)[0]["uri"] == BOOK.uri
+
     async def test_only_guides_is_not_found(self, tmp_path: Path, pcm_server: PcmServer) -> None:
         skill, _, _, _ = await _skill(tmp_path, pcm_server, match=GUIDE)
         result = await skill.handle("play_book", {"title": "cien años de soledad"})
@@ -257,12 +275,12 @@ class TestAskingForABook:
     async def test_no_title_continues_the_last_book(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
-        skill, _, _, shelf = await _skill(tmp_path, pcm_server)
+        skill, _, _, memory = await _skill(tmp_path, pcm_server)
         none_yet = await skill.handle("play_book", {})
         assert _out(none_yet)["reason"] == "nothing_started"
         assert "ningún libro empezado" in _out(none_yet)["then"]
 
-        await shelf.set_last_book(BOOK.uri, BOOK.title, BOOK.artist)
+        await memory.set_last_book(BOOK.uri, BOOK.title, BOOK.artist)
         result = await skill.handle("play_book", {})
         assert _out(result)["playing"] == "Cien años de soledad"
         assert skill._search.queries == []  # type: ignore[union-attr]
@@ -280,8 +298,8 @@ class TestRecommendations:
     async def test_a_search_reads_three_numbered_with_length_and_about(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
-        skill, _, _, shelf = await _skill(tmp_path, pcm_server, others=[GUIDE, CORONEL])
-        await shelf.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
+        skill, _, _, memory = await _skill(tmp_path, pcm_server, others=[GUIDE, CORONEL])
+        await memory.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
         result = await skill.handle("find_books", {"query": "garcía márquez"})
 
         books = _out(result)["books"]
@@ -322,48 +340,50 @@ class TestRecommendations:
         """Mario: a recommendation must be something he can play. Unknown
         books are tried for a moment; what Spotify refuses is left out and
         remembered; what was loaded is put back, paused."""
-        skill, client, _, shelf = await _skill(tmp_path, pcm_server, others=[CORONEL, PEDRO])
+        skill, client, _, memory = await _skill(tmp_path, pcm_server, others=[CORONEL, PEDRO])
         client.refused = {CORONEL.uri}
         client.load(1, 60_000)  # the book he paused to ask
         result = await skill.handle("find_books", {"query": "novela latinoamericana"})
 
         assert [b["title"] for b in _out(result)["books"]] == [BOOK.title, PEDRO.title]
-        assert await shelf.unavailable(CORONEL.uri)
-        assert await shelf.playable(PEDRO.uri)
+        assert await memory.unavailable(CORONEL.uri)
+        assert await memory.playable(PEDRO.uri)
         assert [c.get("uri") for c in _plays(client)][-1] == BOOK_INFO.uri  # put back
         assert client.commands()[-1] == "pause"
 
     async def test_a_known_book_refused_too_means_no_hours_not_unavailable(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
-        skill, client, _, shelf = await _skill(tmp_path, pcm_server, match=CORONEL)
-        await shelf.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
+        skill, client, _, memory = await _skill(tmp_path, pcm_server, match=CORONEL)
+        await memory.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
         client.refused = {CORONEL.uri, BOOK.uri}  # every book: the hours ran out
         result = await skill.handle("find_books", {"query": "coronel"})
 
         assert _out(result)["reason"] == "no_hours"
         assert "«Este mes ya no quedan horas para escuchar libros." in _out(result)["then"]
-        assert not await shelf.unavailable(CORONEL.uri)  # not filed as unavailable
+        assert not await memory.unavailable(CORONEL.uri)  # not filed as unavailable
 
     async def test_no_extra_check_when_another_book_just_played(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
         """A refusal needs the "known book" check only when nothing in the
         round played: that check cost Mario 1.6 s per search."""
-        skill, client, _, shelf = await _skill(tmp_path, pcm_server, match=CORONEL, others=[PEDRO])
-        await shelf.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
+        skill, client, _, memory = await _skill(
+            tmp_path, pcm_server, match=CORONEL, others=[PEDRO]
+        )
+        await memory.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
         client.refused = {CORONEL.uri}
         await skill.handle("find_books", {"query": "novela"})
         tried = [c["uri"] for c in client.sent if c["command"] == "play" and "uri" in c]
         assert BOOK_INFO.uri not in tried[:-1]  # only the put-back, if anything
-        assert await shelf.unavailable(CORONEL.uri)
+        assert await memory.unavailable(CORONEL.uri)
 
     async def test_books_already_known_are_not_tried_again(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
-        skill, client, _, shelf = await _skill(tmp_path, pcm_server, others=[CORONEL])
-        await shelf.mark_ok(BOOK.uri, BOOK.title, BOOK.artist)
-        await shelf.mark_unavailable(CORONEL.uri)
+        skill, client, _, memory = await _skill(tmp_path, pcm_server, others=[CORONEL])
+        await memory.mark_ok(BOOK.uri, BOOK.title, BOOK.artist)
+        await memory.mark_unavailable(CORONEL.uri)
         result = await skill.handle("find_books", {"query": "garcía márquez"})
         assert [b["title"] for b in _out(result)["books"]] == [BOOK.title]
         assert _plays(client) == []  # nothing tried, nothing to put back
@@ -378,7 +398,7 @@ class TestRecommendations:
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
         pcm_server.hold_open.set()
-        skill, client, _, shelf = await _skill(tmp_path, pcm_server, match=CORONEL)
+        skill, client, _, memory = await _skill(tmp_path, pcm_server, match=CORONEL)
         client.refused = {CORONEL.uri}
         stream = (
             await skill.handle("play_book", {"title": "el coronel no tiene quien le escriba"})
@@ -386,17 +406,17 @@ class TestRecommendations:
         async for _ in stream.factory():  # type: ignore[union-attr]
             pass
         await _settle()
-        assert await shelf.unavailable(CORONEL.uri)
+        assert await memory.unavailable(CORONEL.uri)
 
     async def test_no_query_lists_books_listened_to_here(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
-        skill, _, _, shelf = await _skill(tmp_path, pcm_server)
+        skill, _, _, memory = await _skill(tmp_path, pcm_server)
         none = await skill.handle("find_books", {})
         assert _out(none)["reason"] == "books_none"
         assert "¿De qué autor o de qué tema busco?" in _out(none)["then"]
 
-        await shelf.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
+        await memory.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
         listed = await skill.handle("find_books", {})
         assert [b["title"] for b in _out(listed)["books"]] == [BOOK.title]
         # Not "the books available": Mario heard it that way (2026-10-12).
@@ -409,9 +429,9 @@ class TestRefusals:
         self, tmp_path: Path, pcm: PcmServer, **kwargs: Any
     ) -> tuple[Recorded, FakeSoloist]:
         pcm.hold_open.set()
-        skill, client, recorded, shelf = await _skill(tmp_path, pcm, **kwargs)
+        skill, client, recorded, memory = await _skill(tmp_path, pcm, **kwargs)
         if kwargs.get("config", {}).get("played_before"):
-            await shelf.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
+            await memory.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
         result = await skill.handle("play_book", {"title": "cien años de soledad"})
         async for _ in result.side_effect.factory():  # type: ignore[union-attr]
             client.state.status = "idle"  # Spotify stops it at once
@@ -443,16 +463,16 @@ class TestRefusals:
         books played fine. A book that played lately means the hours are
         there: it's this book."""
         pcm_server.hold_open.set()
-        skill, client, recorded, shelf = await _skill(tmp_path, pcm_server)
-        await shelf.mark_ok(BOOK.uri, BOOK.title, BOOK.artist)  # the check's "ok"
+        skill, client, recorded, memory = await _skill(tmp_path, pcm_server)
+        await memory.mark_ok(BOOK.uri, BOOK.title, BOOK.artist)  # the check's "ok"
         skill._hours_ok_at = time.monotonic()  # another book played a moment ago
         result = await skill.handle("play_book", {"title": "cien años de soledad"})
         async for _ in result.side_effect.factory():  # type: ignore[union-attr]
             client.state.status = "idle"
         await _settle()
         assert [key for _, key in recorded.injected] == ["spotify:book_unavailable"]
-        assert await shelf.unavailable(BOOK.uri)
-        assert not await shelf.playable(BOOK.uri)  # the wrong "ok" is gone
+        assert await memory.unavailable(BOOK.uri)
+        assert not await memory.playable(BOOK.uri)  # the wrong "ok" is gone
 
     async def test_a_known_book_refused_is_explained_by_another_that_plays(
         self, tmp_path: Path, pcm_server: PcmServer
@@ -460,9 +480,9 @@ class TestRefusals:
         """No recent play to go by: after the stream ends, a book known to
         play is tried. It plays, so the hours are there: this book isn't."""
         pcm_server.hold_open.set()
-        skill, client, recorded, shelf = await _skill(tmp_path, pcm_server)
-        await shelf.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
-        await shelf.mark_played(PEDRO.uri, PEDRO.title, PEDRO.artist)  # the control
+        skill, client, recorded, memory = await _skill(tmp_path, pcm_server)
+        await memory.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
+        await memory.mark_played(PEDRO.uri, PEDRO.title, PEDRO.artist)  # the control
         result = await skill.handle("play_book", {"title": "cien años de soledad"})
         async for _ in result.side_effect.factory():  # type: ignore[union-attr]
             client.state.status = "idle"
@@ -471,15 +491,15 @@ class TestRefusals:
         assert [key for _, key in recorded.injected] == ["spotify:book_unavailable"]
         assert PEDRO.uri in [c.get("uri") for c in _plays(client)]
         assert client.commands()[-1] == "pause"  # the control is not left playing
-        assert await shelf.unavailable(BOOK.uri)
+        assert await memory.unavailable(BOOK.uri)
 
     async def test_a_known_book_refused_and_the_control_too_is_the_hours(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
         pcm_server.hold_open.set()
-        skill, client, recorded, shelf = await _skill(tmp_path, pcm_server)
-        await shelf.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
-        await shelf.mark_played(PEDRO.uri, PEDRO.title, PEDRO.artist)
+        skill, client, recorded, memory = await _skill(tmp_path, pcm_server)
+        await memory.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
+        await memory.mark_played(PEDRO.uri, PEDRO.title, PEDRO.artist)
         client.refused = {PEDRO.uri}
         result = await skill.handle("play_book", {"title": "cien años de soledad"})
         async for _ in result.side_effect.factory():  # type: ignore[union-attr]
@@ -487,7 +507,7 @@ class TestRefusals:
         await _settle()
         await asyncio.sleep(0.3)
         assert [key for _, key in recorded.injected] == ["spotify:book_no_hours"]
-        assert not await shelf.unavailable(BOOK.uri)
+        assert not await memory.unavailable(BOOK.uri)
 
     async def test_a_check_is_not_fooled_by_the_first_playing(
         self, tmp_path: Path, pcm_server: PcmServer, monkeypatch: pytest.MonkeyPatch
@@ -495,21 +515,21 @@ class TestRefusals:
         """Spotify says "playing" before it decides; a refusal can come a
         moment later. Only a book still playing at the end is offered."""
         monkeypatch.setattr(skill_module, "PROBE_OK_S", 0.6)
-        skill, client, _, shelf = await _skill(tmp_path, pcm_server, match=CORONEL)
+        skill, client, _, memory = await _skill(tmp_path, pcm_server, match=CORONEL)
         client.refused = {CORONEL.uri}
         client.refuse_after = 0.45  # past the old early "ok" and its 0.35 s confirm
         result = await skill.handle("find_books", {"query": "coronel"})
         assert _out(result)["reason"] == "none_available"
-        assert not await shelf.playable(CORONEL.uri)
+        assert not await memory.playable(CORONEL.uri)
 
     async def test_the_configured_budget_spent_means_the_hours_ran_out(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
         pcm_server.hold_open.set()
-        skill, client, recorded, shelf = await _skill(
+        skill, client, recorded, memory = await _skill(
             tmp_path, pcm_server, config={"book_hours_per_month": 10}
         )
-        await shelf.add_seconds(10 * 3600)
+        await memory.add_seconds(10 * 3600)
         result = await skill.handle("play_book", {"title": "cien años de soledad"})
         async for _ in result.side_effect.factory():  # type: ignore[union-attr]
             client.state.status = "idle"
@@ -523,7 +543,7 @@ class TestWhenABookStops:
     ) -> None:
         monkeypatch.setattr(skill_module, "REFUSED_S", 0.0)
         pcm_server.hold_open.set()
-        skill, client, recorded, shelf = await _skill(tmp_path, pcm_server)
+        skill, client, recorded, memory = await _skill(tmp_path, pcm_server)
         client.resume, client.resume_position = 3, 2_000_000 - 5_000  # its last seconds
         result = await skill.handle("play_book", {"title": "cien años de soledad"})
         async for _ in result.side_effect.factory():  # type: ignore[union-attr]
@@ -532,7 +552,7 @@ class TestWhenABookStops:
 
         assert [key for _, key in recorded.injected] == ["spotify:book_finished"]
         assert "«Se terminó Cien años de soledad. ¿Busco otro libro?»" in recorded.injected[0][0]
-        assert await shelf.finished(BOOK.uri)
+        assert await memory.finished(BOOK.uri)
         again = await skill.handle("play_book", {"title": "cien años de soledad"})
         assert _out(again)["reason"] == "finished_replay"
         assert "¿Lo pongo desde el principio?" in _out(again)["then"]
@@ -542,14 +562,14 @@ class TestWhenABookStops:
     ) -> None:
         monkeypatch.setattr(skill_module, "REFUSED_S", 0.0)
         pcm_server.hold_open.set()
-        skill, client, recorded, shelf = await _skill(tmp_path, pcm_server)
+        skill, client, recorded, memory = await _skill(tmp_path, pcm_server)
         client.resume, client.resume_position = 3, 120_000  # 2 min into 33
         result = await skill.handle("play_book", {"title": "cien años de soledad"})
         async for _ in result.side_effect.factory():  # type: ignore[union-attr]
             client.state.status = "idle"
         await _settle()
         assert [key for _, key in recorded.injected] == ["spotify:book_cut"]
-        assert not await shelf.finished(BOOK.uri)
+        assert not await memory.finished(BOOK.uri)
 
     async def test_hours_running_out_on_a_resume_is_said_as_hours(
         self, tmp_path: Path, pcm_server: PcmServer
@@ -557,8 +577,8 @@ class TestWhenABookStops:
         """Not only a fresh start: the press's resume, "sigue" or a chapter
         move can be the play Spotify refuses (critic round 2, B1)."""
         pcm_server.hold_open.set()
-        skill, client, recorded, shelf = await _skill(tmp_path, pcm_server)
-        await shelf.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
+        skill, client, recorded, memory = await _skill(tmp_path, pcm_server)
+        await memory.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
         client.load(2, 600_000)
         result = await skill.handle("music_control", {"action": "resume"})
         async for _ in result.side_effect.factory():  # type: ignore[union-attr]
@@ -813,9 +833,9 @@ class TestAPlaceNeverRunsAhead:
 
     async def _listen_then_go(
         self, tmp_path: Path, pcm_server: PcmServer, *, ran_ahead_ms: int
-    ) -> tuple[BookSoloist, Shelf]:
+    ) -> tuple[BookSoloist, BookMemory]:
         pcm_server.hold_open.set()
-        skill, client, _, shelf = await _skill(tmp_path, pcm_server)
+        skill, client, _, memory = await _skill(tmp_path, pcm_server)
         stream = (await skill.handle("play_book", {"title": "cien años de soledad"})).side_effect
         run = stream.factory()  # type: ignore[union-attr]
         chunks = 0
@@ -828,13 +848,13 @@ class TestAPlaceNeverRunsAhead:
         client.state.position_ms += ran_ahead_ms
         await run.aclose()  # the server finally notices: the stream is cancelled
         await _settle()
-        return client, shelf
+        return client, memory
 
     async def test_a_listener_gone_long_ago_keeps_the_place_heard(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
-        client, shelf = await self._listen_then_go(tmp_path, pcm_server, ran_ahead_ms=900_000)
-        place = await shelf.place(BOOK.uri)
+        client, memory = await self._listen_then_go(tmp_path, pcm_server, ran_ahead_ms=900_000)
+        place = await memory.place(BOOK.uri)
         assert place is not None and place.chapter_uri == CHAPTERS[1].uri
         # 60 s in, at most 300 ms sent, then 10 s back: not 16 min on.
         assert 50_000 <= place.position_ms <= 50_300
@@ -846,8 +866,8 @@ class TestAPlaceNeverRunsAhead:
     async def test_an_ordinary_stop_keeps_soloists_place(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
-        client, shelf = await self._listen_then_go(tmp_path, pcm_server, ran_ahead_ms=1_000)
-        place = await shelf.place(BOOK.uri)
+        client, memory = await self._listen_then_go(tmp_path, pcm_server, ran_ahead_ms=1_000)
+        place = await memory.place(BOOK.uri)
         assert place is not None and place.position_ms == 61_000
         assert "seek" not in client.commands()
 
@@ -889,21 +909,21 @@ class TestFromTheBeginning:
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
         pcm_server.hold_open.set()
-        skill, client, _, shelf = await _skill(tmp_path, pcm_server)
-        await shelf.set_place(BOOK.uri, Place(CHAPTERS[1].uri, 60_000))
+        skill, client, _, memory = await _skill(tmp_path, pcm_server)
+        await memory.set_place(BOOK.uri, Place(CHAPTERS[1].uri, 60_000))
         result = await skill.handle(
             "play_book", {"title": "cien años de soledad", "from_beginning": True}
         )
         await _take(result.side_effect, 2)  # type: ignore[arg-type]
         assert client.index == 0 and client.state.position_ms == 0
-        assert await shelf.saved_place(BOOK.uri) == Place(CHAPTERS[1].uri, 60_000)
+        assert await memory.saved_place(BOOK.uri) == Place(CHAPTERS[1].uri, 60_000)
 
     async def test_deep_in_the_book_it_asks_book_or_chapter_and_can_undo(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
         pcm_server.hold_open.set()
-        skill, client, _, shelf = await _skill(tmp_path, pcm_server)
-        await shelf.set_place(BOOK.uri, Place(CHAPTERS[3].uri, 300_000))
+        skill, client, _, memory = await _skill(tmp_path, pcm_server)
+        await memory.set_place(BOOK.uri, Place(CHAPTERS[3].uri, 300_000))
         asked = await skill.handle(
             "play_book", {"title": "cien años de soledad", "from_beginning": True}
         )
@@ -929,17 +949,17 @@ class TestStartingOverAFinishedBook:
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
         pcm_server.hold_open.set()
-        skill, client, _, shelf = await _skill(tmp_path, pcm_server)
-        await shelf.mark_finished(BOOK.uri)
-        await shelf.set_place(BOOK.uri, Place(CHAPTERS[3].uri, 1_990_000))
+        skill, client, _, memory = await _skill(tmp_path, pcm_server)
+        await memory.mark_finished(BOOK.uri)
+        await memory.set_place(BOOK.uri, Place(CHAPTERS[3].uri, 1_990_000))
         client.resume, client.resume_position = 3, 1_990_000
         result = await skill.handle(
             "play_book", {"title": "cien años de soledad", "from_beginning": True}
         )
         await _take(result.side_effect, 2)  # type: ignore[arg-type]
         assert client.index == 0
-        assert not await shelf.finished(BOOK.uri)
-        assert await shelf.saved_place(BOOK.uri) is None  # nothing worth undoing to
+        assert not await memory.finished(BOOK.uri)
+        assert await memory.saved_place(BOOK.uri) is None  # nothing worth undoing to
 
 
 class TestWhatsPlaying:
@@ -961,10 +981,10 @@ class TestMusicAndBooksApart:
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
         pcm_server.hold_open.set()
-        skill, client, _, shelf = await _skill(tmp_path, pcm_server, match=SONG)
+        skill, client, _, memory = await _skill(tmp_path, pcm_server, match=SONG)
         song = await skill.handle("play_music", {"query": "sin ti"})
         await _take(song.side_effect, 2)  # type: ignore[arg-type]
-        assert (await shelf.last_music() or {}).get("uri") == SONG.uri
+        assert (await memory.last_music() or {}).get("uri") == SONG.uri
 
         client.load(1, 60_000)  # then a book played
         again = await skill.handle("play_music", {})
@@ -976,12 +996,12 @@ class TestMusicAndBooksApart:
     ) -> None:
         monkeypatch.setattr(skill_module, "PLAYED_AFTER_MS", 100)
         pcm_server.hold_open.set()
-        skill, _, _, shelf = await _skill(tmp_path, pcm_server)
+        skill, _, _, memory = await _skill(tmp_path, pcm_server)
         result = await skill.handle("play_book", {"title": "cien años de soledad"})
         await _take(result.side_effect, 3)  # type: ignore[arg-type]
-        assert await shelf.played(BOOK.uri)
-        assert (await shelf.last_book() or {}).get("uri") == BOOK.uri
-        assert await shelf.seconds_this_month() > 0
+        assert await memory.played(BOOK.uri)
+        assert (await memory.last_book() or {}).get("uri") == BOOK.uri
+        assert await memory.seconds_this_month() > 0
 
 
 def test_track_chapters_are_said_as_chapters() -> None:
@@ -1015,3 +1035,383 @@ async def test_the_log_says_which_chapter_of_how_many(
     assert (started["book"], started["chapters"]) == ("Cien años de soledad", 4)
     assert started["chapter"] == CHAPTERS[started["chapter_index"]].name
     assert (ended["chapter"], ended["chapter_index"], ended["chapters"]) == ("Capítulo 2", 2, 4)
+
+
+# --- The shelf (T1.45) ---
+
+SABUESO = "spotify:show:sabueso"
+ORIENT = "spotify:show:orient"
+DIEZ = "spotify:show:diez"
+ESCARLATA = "spotify:show:escarlata"
+MISTERIO = [SABUESO, ORIENT, DIEZ, ESCARLATA]
+SUMMARY_KEYS = {
+    "uri",
+    "title",
+    "author",
+    "chapters",
+    "chapter",
+    "position_ms",
+    "last_at",
+    "finished",
+    "opinion",
+    "source",
+}
+
+
+async def _shelf_skill(
+    tmp_path: Path,
+    pcm: PcmServer,
+    *,
+    match: Match | None = BOOK,
+    others: list[Match] | None = None,
+    known: list[str] | None = None,
+) -> tuple[SpotifySkill, BookSoloist, Recorded, BookMemory]:
+    """A skill with the test shelf; `known` books are already known to
+    play (no check before offering them)."""
+    path = write_shelf(tmp_path / "shelf.json")
+    skill, client, recorded, memory = await _skill(
+        tmp_path, pcm, match=match, others=others, config={"book_shelf": str(path)}
+    )
+    for uri in MISTERIO if known is None else known:
+        await memory.mark_ok(uri, "", None)
+    return skill, client, recorded, memory
+
+
+def _events(skill: SpotifySkill, name: str) -> list[dict[str, Any]]:
+    calls = [*skill._logger.ainfo.call_args_list, *skill._logger.awarning.call_args_list]  # type: ignore[union-attr]
+    return [c.kwargs for c in calls if c.args and c.args[0] == name]
+
+
+def _said(result: Any) -> str:
+    """The exact line inside a `then`."""
+    then = _out(result)["then"]
+    return then[then.index("«") + 1 : then.index("»")]
+
+
+class TestTheShelf:
+    async def test_no_subject_names_the_kinds_of_book_without_searching(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server)
+        result = await skill.handle("find_books", {})
+        assert _said(result) == (
+            "Tengo libros de misterio y suspenso, novela latinoamericana, cuentos e historia "
+            "y memorias. ¿De cuál busco?"
+        )
+        assert skill._search.queries == []  # type: ignore[union-attr]
+        more = await skill.handle("find_books", {"more": True})
+        assert _said(more) == "También tengo libros de aventuras. ¿De cuál busco?"
+
+    async def test_his_book_in_progress_is_offered_with_the_kinds(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, _, _, memory = await _shelf_skill(tmp_path, pcm_server)
+        await memory.set_last_book(PEDRO.uri, PEDRO.title, PEDRO.artist)
+        result = await skill.handle("find_books", {})
+        assert "También quedó a medias Pedro Páramo." in _said(result)
+        assert _out(await skill.handle("play_book", {"title": "ese"}))["playing"] == "Pedro Páramo"
+
+    async def test_a_theme_offers_three_from_the_shelf_in_the_skills_words(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, client, _, _ = await _shelf_skill(tmp_path, pcm_server)
+        result = await skill.handle("find_books", {"query": "algo de misterio"})
+        assert _said(result) == (
+            "De misterio y suspenso tengo tres. Uno, El sabueso de los Baskerville, de Arthur "
+            "Conan Doyle: Sherlock Holmes y un perro que aterra a una familia. Dos, Asesinato "
+            "en el Orient Express, de Agatha Christie: Un crimen en un tren detenido por la "
+            "nieve. Tres, Diez negritos, de Agatha Christie: Diez invitados en una isla, y uno "
+            "a uno van muriendo. ¿Cuál pongo, o busco otros?"
+        )
+        assert [b["n"] for b in _out(result)["books"]] == [1, 2, 3]
+        assert skill._search.queries == []  # type: ignore[union-attr]
+        assert _plays(client) == []  # all known to play: nothing checked
+        (browse,) = _events(skill, "spotify.shelf_browse")
+        assert browse["mode"] == "category" and browse["offset"] == 0
+
+    async def test_el_segundo_plays_the_second_book_offered(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server)
+        await skill.handle("find_books", {"query": "misterio"})
+        result = await skill.handle("play_book", {"title": "el segundo"})
+        assert _out(result)["playing"] == "Asesinato en el Orient Express"
+        assert (_events(skill, "spotify.book_requested")[0]["source"]) == "list"
+
+    async def test_otros_then_none_left(self, tmp_path: Path, pcm_server: PcmServer) -> None:
+        skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server)
+        await skill.handle("find_books", {"query": "misterio"})
+        more = await skill.handle("find_books", {"more": True})
+        assert _said(more) == (
+            "Tengo uno más de misterio y suspenso. Estudio en escarlata, de Arthur Conan "
+            "Doyle: De qué trata Estudio en escarlata. ¿Lo pongo, o busco otros?"
+        )
+        done = await skill.handle("find_books", {"more": True})
+        assert _said(done).startswith("Ya no tengo más de misterio y suspenso. También tengo")
+        assert skill._search.queries == []  # type: ignore[union-attr]
+
+    async def test_a_book_spotify_refuses_is_left_out_and_remembered(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, client, _, memory = await _shelf_skill(tmp_path, pcm_server, known=[])
+        client.refused = {ORIENT}
+        result = await skill.handle("find_books", {"query": "misterio"})
+        assert [b["title"] for b in _out(result)["books"]] == [
+            "El sabueso de los Baskerville",
+            "Diez negritos",
+            "Estudio en escarlata",
+        ]
+        assert await memory.unavailable(ORIENT)
+        again = await skill.handle("find_books", {"query": "misterio"})
+        assert ORIENT not in [b["title"] for b in _out(again)["books"]]
+
+    async def test_nothing_fits_names_the_kinds_of_book(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server)
+        result = await skill.handle("find_books", {"query": "dragones"})
+        assert _said(result) == (
+            "En la repisa no tengo libros de eso. Tengo libros de misterio y suspenso, novela "
+            "latinoamericana, cuentos e historia y memorias. ¿De cuál busco?"
+        )
+        assert _events(skill, "spotify.shelf_nothing")[0]["reason"] == "no_match"
+
+    async def test_an_author_not_on_the_shelf_gets_only_their_own_books(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        allende = Match(
+            uri="spotify:show:espiritus",
+            kind="audiobook",
+            title="La casa de los espíritus",
+            artist="Isabel Allende",
+            languages=("es",),
+            about="Author(s): Isabel Allende\nNarrator(s): X\n\nLa saga de los Trueba. Y más.",
+        )
+        other = Match(
+            uri="spotify:show:otro",
+            kind="audiobook",
+            title="Mujeres del alma mía",
+            artist="Otra Persona",
+            languages=("es",),
+        )
+        skill, _, _, _ = await _shelf_skill(
+            tmp_path, pcm_server, match=other, others=[allende], known=[allende.uri]
+        )
+        result = await skill.handle("find_books", {"query": "isabel allende"})
+        assert _said(result) == (
+            "De Isabel Allende encontré uno. La casa de los espíritus, de Isabel Allende: La "
+            "saga de los Trueba. ¿Lo pongo, o busco otros?"
+        )
+
+    async def test_a_shelf_title_plays_the_curated_edition_without_asking(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server)
+        result = await skill.handle("play_book", {"title": "el coronel no tiene quien le escriba"})
+        assert _out(result)["playing"] == "El coronel no tiene quien le escriba"
+        assert isinstance(result.side_effect, AudioStream)
+        assert skill._search.queries == []  # type: ignore[union-attr]
+        (requested,) = _events(skill, "spotify.book_requested")
+        assert requested["source"] == "shelf" and requested["uri"] == "spotify:show:coronel"
+
+    async def test_his_own_edition_of_a_shelf_book_continues_and_isnt_offered(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, _, _, memory = await _shelf_skill(tmp_path, pcm_server)
+        await memory.mark_played(
+            "spotify:show:cien-otra",
+            "Cien años de soledad (Edición conmemorativa)",
+            "Gabriel García Márquez",
+        )
+        result = await skill.handle("play_book", {"title": "cien años de soledad"})
+        assert _events(skill, "spotify.book_requested")[0]["uri"] == "spotify:show:cien-otra"
+        await memory.mark_ok("spotify:show:coronel", "", None)
+        await memory.mark_ok(PEDRO.uri, "", None)
+        offer = await skill.handle("find_books", {"query": "novela latinoamericana"})
+        assert "Cien años de soledad" not in [b["title"] for b in _out(offer)["books"]]
+        assert result.side_effect is not None
+
+    async def test_a_theme_asked_to_play_is_offered_from_the_shelf(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server)
+        result = await skill.handle("play_book", {"title": "algo de misterio"})
+        assert result.side_effect is None
+        assert _said(result).startswith("De misterio y suspenso tengo tres.")
+        assert skill._search.queries == []  # type: ignore[union-attr]
+        assert _events(skill, "spotify.book_redirected") == [{"query": "algo de misterio"}]
+
+    async def test_a_garbled_title_is_still_searched_and_confirmed(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        """T1.45 critic: only a shelf category or tag is sent to the shelf;
+        a title it doesn't know still gets the search and "¿es ...?"."""
+        skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server)
+        result = await skill.handle("play_book", {"title": "la casa grande"})
+        assert _out(result)["reason"] == "ask_which"
+        assert skill._search.queries == [("la casa grande", "audiobook")]  # type: ignore[union-attr]
+
+    async def test_like_a_shelf_book(self, tmp_path: Path, pcm_server: PcmServer) -> None:
+        skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server)
+        result = await skill.handle("find_books", {"like": "el sabueso de los baskerville"})
+        titles = [b["title"] for b in _out(result)["books"]]
+        assert titles[0] == "Estudio en escarlata"  # same author, category, tags
+        assert "El sabueso de los Baskerville" not in titles
+        assert _said(result).startswith("Parecidos a El sabueso de los Baskerville tengo")
+        (browse,) = _events(skill, "spotify.shelf_browse")
+        assert browse["like_source"] == "shelf"
+
+    async def test_like_a_book_not_on_the_shelf_looks_it_up_once(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        poirot = Match(
+            uri="spotify:show:poirot",
+            kind="audiobook",
+            title="Muerte en el Nilo",
+            artist="Agatha Christie",
+            languages=("es",),
+            about="Hércules Poirot investiga un crimen a bordo de un barco.",
+        )
+        skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server, match=poirot)
+        result = await skill.handle("find_books", {"like": "muerte en el nilo"})
+        titles = [b["title"] for b in _out(result)["books"]]
+        assert titles[:2] == ["Asesinato en el Orient Express", "Diez negritos"]
+        assert skill._search.queries == [("muerte en el nilo", "audiobook")]  # type: ignore[union-attr]
+
+    async def test_opinions_move_the_offers(self, tmp_path: Path, pcm_server: PcmServer) -> None:
+        skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server)
+        await skill.handle("find_books", {"query": "misterio"})
+        liked = await skill.handle("book_opinion", {"opinion": "liked", "title": "el tercero"})
+        assert _said(liked) == "Anotado que Diez negritos gustó. Buscaré más libros así."
+        disliked = await skill.handle(
+            "book_opinion", {"opinion": "disliked", "title": "El sabueso de los Baskerville"}
+        )
+        assert _said(disliked) == (
+            "Anotado que El sabueso de los Baskerville no gustó; no lo vuelvo a ofrecer."
+        )
+        again = await skill.handle("find_books", {"query": "misterio"})
+        titles = [b["title"] for b in _out(again)["books"]]
+        # Christie (liked) first; the disliked book gone; its author last.
+        assert titles == [
+            "Asesinato en el Orient Express",
+            "Diez negritos",
+            "Estudio en escarlata",
+        ]
+        assert _events(skill, "spotify.book_opinion")[0]["opinion"] == "liked"
+
+    async def test_an_opinion_with_no_title_is_the_book_on(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, client, _, memory = await _shelf_skill(tmp_path, pcm_server)
+        none = await skill.handle("book_opinion", {"opinion": "liked"})
+        assert _said(none) == "No sé de qué libro. ¿Cuál fue?"
+        client.load(1, 60_000)
+        result = await skill.handle("book_opinion", {"opinion": "liked"})
+        assert _said(result) == "Anotado que Cien años de soledad gustó. Buscaré más libros así."
+        summary = await memory.summary(BOOK.uri)
+        assert summary is not None and summary["opinion"] == "liked"
+        assert summary["source"] == "shelf" and summary["last_at"] == 0.0  # never heard here
+
+    async def test_listened_lists_the_books_started_here(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, _, _, memory = await _shelf_skill(tmp_path, pcm_server)
+        await memory.mark_played(BOOK.uri, BOOK.title, BOOK.artist)
+        result = await skill.handle("find_books", {"listened": True})
+        assert [b["title"] for b in _out(result)["books"]] == [BOOK.title]
+
+    async def test_a_missing_shelf_turns_offers_back_to_open_search(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, _, _, _ = await _skill(
+            tmp_path, pcm_server, config={"book_shelf": str(tmp_path / "none.json")}
+        )
+        assert _events(skill, "spotify.shelf_missing")
+        await skill.handle("find_books", {"query": "garcía márquez"})
+        assert skill._search.queries == [("garcía márquez", "audiobook")]  # type: ignore[union-attr]
+
+    async def test_a_broken_shelf_keeps_the_last_good_one(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server)
+        path = tmp_path / "shelf.json"
+        path.write_text("{ broken", encoding="utf-8")
+        later = time.time() + 5
+        import os
+
+        os.utime(path, (later, later))
+        result = await skill.handle("find_books", {"query": "misterio"})
+        assert len(_out(result)["books"]) == 3
+        (invalid,) = _events(skill, "spotify.shelf_invalid")
+        assert invalid["kept"] == 11
+
+
+class TestTheBookSummary:
+    """The page's contract (T1.45): `book:summary:<id>` in the skill's
+    storage, so `spotify:book:summary:<id>` in the database, JSON text."""
+
+    async def test_a_place_writes_the_summary_in_the_page_format(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        pcm_server.hold_open.set()
+        skill, _, _, memory = await _shelf_skill(tmp_path, pcm_server)
+        before = time.time()
+        result = await skill.handle("play_book", {"title": "cien años de soledad"})
+        await _take(result.side_effect, 2)  # type: ignore[arg-type]
+        await _settle()
+        raw = await skill._ctx.storage.get_setting("book:summary:cien")  # type: ignore[union-attr]
+        assert raw is not None
+        summary = json.loads(raw)
+        assert set(summary) == SUMMARY_KEYS
+        assert summary["uri"] == "spotify:show:cien"
+        assert summary["title"] == "Cien años de soledad"
+        assert summary["author"] == "Gabriel García Márquez"
+        assert summary["chapters"] == 4 and summary["chapter"] == 1
+        assert isinstance(summary["position_ms"], int) and summary["position_ms"] >= 60_000
+        assert isinstance(summary["last_at"], float) and summary["last_at"] >= before
+        assert summary["finished"] is False and summary["opinion"] is None
+        assert summary["source"] == "shelf"
+        assert await memory.summary(BOOK.uri) == summary
+
+    async def test_the_end_and_a_place_landing_together_both_stay(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        """At a book's end `mark_finished` and the stream's last place are
+        spawned together: neither may overwrite the other."""
+        skill, _, _, memory = await _shelf_skill(tmp_path, pcm_server)
+        label = skill._label(BOOK.uri, BOOK.title, BOOK.artist)
+        await asyncio.gather(
+            memory.set_place(
+                BOOK.uri, Place(CHAPTERS[3].uri, 1_990_000), label, chapter=3, chapters=4
+            ),
+            memory.mark_finished(BOOK.uri, label),
+        )
+        summary = await memory.summary(BOOK.uri)
+        assert summary is not None
+        assert summary["finished"] is True and summary["chapter"] == 3
+        assert await memory.ended(BOOK.uri)
+        # A start from the beginning clears "finished", not "ended".
+        await memory.clear_finished(BOOK.uri, label)
+        assert (await memory.summary(BOOK.uri) or {})["finished"] is False
+        assert await memory.ended(BOOK.uri)
+
+    async def test_books_heard_before_get_a_summary_at_setup(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        from huxley_sdk.testing import _NoopSkillStorage
+
+        storage = _NoopSkillStorage()
+        earlier = BookMemory(storage)
+        await earlier.mark_played(PEDRO.uri, PEDRO.title, PEDRO.artist)
+        await earlier.set_place(PEDRO.uri, Place("spotify:episode:p3", 90_000))
+        path = write_shelf(tmp_path / "shelf.json")
+        recorded = Recorded()
+        skill = SpotifySkill(client=BookSoloist(), search=FakeSearch(None))  # type: ignore[arg-type]
+        ctx = make_ctx(
+            tmp_path, recorded, config={"pcm": pcm_server.address, "book_shelf": str(path)}
+        )
+        await skill.setup(dataclasses.replace(ctx, storage=storage))
+        summary = await BookMemory(storage).summary(PEDRO.uri)
+        assert summary is not None and set(summary) == SUMMARY_KEYS
+        assert summary["position_ms"] == 90_000 and summary["chapter"] is None
+        assert summary["source"] == "shelf" and summary["last_at"] > 0

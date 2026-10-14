@@ -17,8 +17,11 @@ Tools:
   left). An info tool: the model speaks the answer, and what was playing
   comes back after it like after any turn.
 - `play_book(title?, from_beginning?, confirmed?)`, `book_control(action)`
-  (back, forward, restart_chapter, go_to_chapter, go_back_to_saved_place)
-  and `find_books(query?)`: audiobooks (T1.40, `books.py`).
+  (back, forward, restart_chapter, go_to_chapter, go_back_to_saved_place),
+  `find_books(query?, like?, more?, listened?)` and
+  `book_opinion(opinion, title?)`: audiobooks (T1.40, `books.py`). Offers
+  come only from the persona's curated shelf (T1.45, `shelf.py`); open
+  search plays a book or an author named, never a theme.
 
 A press pauses the music (the framework holds the stream: the factory's
 `finally` queues a Soloist pause without awaiting it) and resumes it
@@ -34,6 +37,9 @@ Config (persona's `skills.spotify` block), all optional:
 - `start_sound` / `sounds_path`: earcon before the music (like radio).
 - `patience_minutes` (default 30): how long music paused by a reminder
   or call waits to come back.
+- `book_shelf` (default `../books/shelf.json`, relative to the persona
+  data dir like `sounds_path`): the built shelf; missing turns offers back
+  into T1.40's open search.
 
 Secrets (`<persona data>/secrets/spotify/values.json`): `client_id`,
 `client_secret` of a Spotify Web API app, for search.
@@ -44,6 +50,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
+import re
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -59,10 +67,14 @@ from huxley_sdk import (
 )
 from huxley_sdk.audio import load_pcm_palette
 from huxley_skill_spotify import lines
+from huxley_skill_spotify import shelf as shelves
 from huxley_skill_spotify.books import (
+    OPINIONS,
     PLAYED_AFTER_MS,
+    BookMemory,
+    Label,
+    Listener,
     Place,
-    Shelf,
     capped_position,
     find_chapter,
     fold,
@@ -80,6 +92,7 @@ from huxley_skill_spotify.search import (
     SpotifySearch,
     title_score,
 )
+from huxley_skill_spotify.shelf import Shelf, ShelfBook, ShelfFile
 from huxley_skill_spotify.soloist import (
     PlayerState,
     SoloistClient,
@@ -97,6 +110,11 @@ if TYPE_CHECKING:
 
 DEFAULT_WS = "ws://127.0.0.1:9090"
 DEFAULT_PCM = "127.0.0.1:4712"
+# The persona's shelf, relative to its data dir (T1.45).
+DEFAULT_SHELF = "../books/shelf.json"
+# Offers per answer, and categories named per answer.
+OFFER_COUNT = 3
+CATEGORY_COUNT = 4
 # How long to wait for Soloist to report "playing" after a play command.
 START_TIMEOUT_S = 10.0
 # PCM16 mono 24 kHz: how much sound one captured chunk carries.
@@ -409,6 +427,17 @@ def _first_sentence(text: str, limit: int = 200) -> str:
     return text[:limit].rsplit(" ", 1)[0] if len(text) > limit else text
 
 
+_CREDIT_LINE = re.compile(
+    r"^\s*(author|narrator|autor|narrador|auteur)[^:\n]{0,8}:.*$", re.I | re.M
+)
+
+
+def _blurb(about: str) -> str:
+    """Spotify's synopsis without its "Author(s): ... Narrator(s): ..."
+    lines."""
+    return _CREDIT_LINE.sub("", about).strip()
+
+
 # whats_playing's instruction: one thing only, say this exact line. Asking
 # for "say it, then call music_control(resume)" in the same reply got the
 # resume without the line 1 time in 3 (live, 2026-10-10). The framework
@@ -443,9 +472,12 @@ class SpotifySkill:
         self._search = search
         # The book Soloist has loaded, with its chapters (T1.40).
         self._book: BookInfo | None = None
-        self._shelf: Shelf | None = None
+        self._memory: BookMemory | None = None
         # The last list of books read out, for "el segundo".
         self._last_list: list[Match] = []
+        # The shelf file (T1.45) and the last browse, for "otros".
+        self._shelf_file: ShelfFile | None = None
+        self._browse: dict[str, Any] | None = None
         # When a book stream last ended on a press: a resume backs up by a
         # tenth of the pause.
         self._paused_at: float | None = None
@@ -489,7 +521,16 @@ class SpotifySkill:
             raise ValueError(f"spotify skill: `pcm` must be host:port, got {pcm!r}")
         self._pcm_host, self._pcm_port = host, int(port)
         self._patience = timedelta(minutes=float(cfg.get("patience_minutes", 30)))
-        self._shelf = Shelf(ctx.storage)
+        self._memory = BookMemory(ctx.storage)
+        raw_shelf = Path(str(cfg.get("book_shelf", DEFAULT_SHELF)))
+        self._shelf_file = ShelfFile(
+            raw_shelf
+            if raw_shelf.is_absolute()
+            # normpath: "data/../books" must not need data/ to exist.
+            else Path(os.path.normpath(ctx.persona_data_dir / raw_shelf))
+        )
+        await self._current_shelf()
+        await self._backfill_summaries()
         self._sleep_s = float(cfg.get("book_sleep_minutes", DEFAULT_SLEEP_MINUTES)) * 60
         hours = cfg.get("book_hours_per_month")
         self._hours_per_month = float(hours) if hours else None
@@ -619,8 +660,29 @@ class SpotifySkill:
                 description=t["find_books"],
                 parameters={
                     "type": "object",
-                    "properties": {"query": {"type": "string", "description": t["find_query"]}},
+                    "properties": {
+                        "query": {"type": "string", "description": t["find_query"]},
+                        "like": {"type": "string", "description": t["find_like"]},
+                        "more": {"type": "boolean", "description": t["find_more"]},
+                        "listened": {"type": "boolean", "description": t["find_listened"]},
+                    },
                     "required": [],
+                },
+            ),
+            ToolDefinition(
+                name="book_opinion",
+                description=t["book_opinion"],
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "opinion": {
+                            "type": "string",
+                            "enum": list(OPINIONS),
+                            "description": t["opinion_value"],
+                        },
+                        "title": {"type": "string", "description": t["opinion_title"]},
+                    },
+                    "required": ["opinion"],
                 },
             ),
         ]
@@ -648,7 +710,16 @@ class SpotifySkill:
                     chapter=str(args.get("chapter") or ""),
                 )
             case "find_books":
-                return await self._find_books(str(args.get("query") or ""))
+                return await self._find_books(
+                    str(args.get("query") or ""),
+                    like=str(args.get("like") or ""),
+                    more=bool(args.get("more")),
+                    listened=bool(args.get("listened")),
+                )
+            case "book_opinion":
+                return await self._book_opinion(
+                    str(args.get("opinion") or ""), str(args.get("title") or "")
+                )
             case _:
                 return ToolResult(output=json.dumps({"error": f"unknown_tool:{tool_name}"}))
 
@@ -708,7 +779,7 @@ class SpotifySkill:
         state = self._require_client().state
         context = state.context_uri
         if context and _is_book(context):
-            last = await self._require_shelf().last_music()
+            last = await self._require_memory().last_music()
             if last is None:
                 return await self._fail("nothing_to_resume")
             again = Match(
@@ -866,10 +937,10 @@ class SpotifySkill:
         blocked = self._unavailable()
         if blocked:
             return self._then(blocked)
-        shelf = self._require_shelf()
+        memory = self._require_memory()
         log = self._log()
         if not title.strip():
-            last = await shelf.last_book()
+            last = await memory.last_book()
             if last is None:
                 return self._then("nothing_started")
             target = Match(
@@ -878,11 +949,31 @@ class SpotifySkill:
                 title=str(last.get("title") or ""),
                 artist=last.get("author"),
             )
+            source = "last"
         else:
             from_list = self._from_last_list(title)
+            shelf = await self._current_shelf() if from_list is None else None
+            on_shelf = shelves.match_title(shelf, title) if shelf is not None else None
             if from_list is not None:
-                target = from_list
+                target, source = from_list, "list"
+            elif on_shelf is not None:
+                # The curated edition, no "es ...?" question: or his own edition of
+                # it if he started one, so it continues (T1.45 critic).
+                target = await self._edition_heard(on_shelf) or Match(
+                    uri=on_shelf.uri,
+                    kind="audiobook",
+                    title=on_shelf.title,
+                    artist=on_shelf.author,
+                    about=on_shelf.pitch,
+                )
+                source = "shelf"
+            elif shelf is not None and shelves.is_theme(shelf, title):
+                # "Pon algo de misterio": a kind of book, not a title.
+                # Search would answer with a guide or an obscure book.
+                await log.ainfo("spotify.book_redirected", query=title)
+                return await self._browse_query(shelf, title, more=False)
             else:
+                source = "search"
                 if self._search is None:
                     return self._then("search_not_configured")
                 try:
@@ -891,7 +982,7 @@ class SpotifySkill:
                     await log.awarning("spotify.search_failed", query=title, error=str(exc))
                     return self._then("search_failed")
                 ordered = order_books(found, self._lang())
-                if not ordered or is_guide(ordered[0].title):
+                if not ordered or is_guide(ordered[0].title, edition=ordered[0].edition):
                     await log.ainfo("spotify.book_not_found", query=title)
                     return self._then("book_not_found")
                 target = ordered[0]
@@ -903,21 +994,24 @@ class SpotifySkill:
                     return self._then("ask_which", title=target.title, author=target.artist or "?")
         info = await self._book_info(target.uri)
         if from_beginning:
-            finished = await shelf.finished(target.uri)
-            place = await shelf.place(target.uri)
+            finished = await memory.finished(target.uri)
+            place = await memory.place(target.uri)
             where = info.index_of(place.chapter_uri) if info and place else None
             if where is not None and where >= 2 and not (confirmed or finished):
                 return self._then("ask_whole_book")
             # Keep the place it leaves, unless that is the start already: a
             # second "desde el principio" must not overwrite the real place.
             if place is not None and not finished and (where or place.position_ms > 60_000):
-                await shelf.save_place(target.uri, place)
-            await shelf.clear_finished(target.uri)
-        elif await shelf.finished(target.uri):
+                await memory.save_place(target.uri, place)
+            await memory.clear_finished(
+                target.uri, self._label(target.uri, target.title, target.artist)
+            )
+        elif await memory.finished(target.uri):
             return self._then("finished_replay")
         await log.ainfo(
             "spotify.book_requested",
             query=title,
+            source=source,
             title=target.title,
             author=target.artist,
             uri=target.uri,
@@ -954,7 +1048,7 @@ class SpotifySkill:
                 return self._then("no_such_chapter", chapter=chapter)
             return self._moving(book, target, 0)
         if action == "go_back_to_saved_place":
-            saved = await self._require_shelf().saved_place(book.uri)
+            saved = await self._require_memory().saved_place(book.uri)
             target = book.index_of(saved.chapter_uri) if saved else None
             if saved is None or target is None:
                 return self._then("no_saved_place")
@@ -973,11 +1067,503 @@ class SpotifySkill:
             side_effect=self._stream(before=(("seek", {"position_ms": to}),)),
         )
 
-    async def _find_books(self, query: str) -> ToolResult:
-        shelf = self._require_shelf()
+    async def _find_books(
+        self, query: str, *, like: str = "", more: bool = False, listened: bool = False
+    ) -> ToolResult:
+        shelf = await self._current_shelf()
+        if listened or shelf is None:
+            return await self._find_books_open("" if listened else query or like)
+        if more and self._browse is not None:
+            query, like = self._browse["query"], self._browse["like"]
+        else:
+            more = False
+        if like.strip():
+            return await self._browse_like(shelf, like, more=more)
+        if query.strip():
+            return await self._browse_query(shelf, query, more=more)
+        return await self._browse_categories(shelf, more=more)
+
+    # --- The shelf (T1.45) ---
+
+    async def _current_shelf(self) -> Shelf | None:
+        """The shelf, read again if its file changed (logged)."""
+        if self._shelf_file is None:
+            return None
+        change = self._shelf_file.refresh()
+        if change is not None:
+            log = self._log()
+            current = self._shelf_file.shelf
+            path = str(self._shelf_file.path)
+            if change.event == "loaded" and current is not None:
+                await log.ainfo(
+                    "spotify.shelf_loaded",
+                    path=path,
+                    books=len(current.books),
+                    categories=len(current.categories),
+                    skipped=current.skipped,
+                )
+            elif change.event == "invalid":
+                await log.awarning(
+                    "spotify.shelf_invalid",
+                    path=path,
+                    error=change.error,
+                    kept=len(current.books) if current else 0,
+                )
+            else:
+                await log.ainfo("spotify.shelf_missing", path=path)
+        return self._shelf_file.shelf
+
+    def _label(self, uri: str, title: str, author: str | None) -> Label:
+        """A book's name for its summary: the shelf's, when it's there."""
+        shelf = self._shelf_file.shelf if self._shelf_file else None
+        book = shelf.by_uri(uri) if shelf else None
+        if book is not None:
+            return Label(book.title, book.author, "shelf")
+        return Label(title, author, "search")
+
+    async def _backfill_summaries(self) -> None:
+        """Books heard before summaries existed get one now (place only;
+        the chapter fills in on the next play)."""
+        memory = self._require_memory()
+        for row in await memory.played_books(limit=1_000):
+            uri = str(row["uri"])
+            if await memory.summary(uri) is not None:
+                continue
+            place = await memory.place(uri)
+            await memory.update_summary(
+                uri,
+                self._label(uri, str(row.get("title") or ""), row.get("author")),
+                position_ms=place.position_ms if place else None,
+            )
+
+    def _available_categories(self, shelf: Shelf, listener: Listener) -> list[str]:
+        return [
+            c
+            for c in shelf.categories
+            if any(b.category == c and shelves.excluded(b, listener) is None for b in shelf.books)
+        ]
+
+    async def _browse_categories(self, shelf: Shelf, *, more: bool) -> ToolResult:
+        """No subject: the kinds of book that still have something for
+        him, and his book in progress."""
+        memory = self._require_memory()
+        lang = self._lang()
+        listener = await memory.listener()
+        available = self._available_categories(shelf, listener)
+        offset = 0
+        if more and self._browse is not None and self._browse["mode"] == "categories":
+            offset = self._browse["offset"] + CATEGORY_COUNT
+            if offset >= len(available):
+                offset = 0
+        else:
+            more = False
+        named = available[offset : offset + CATEGORY_COUNT]
+        if not named:
+            await self._log().ainfo("spotify.shelf_nothing", reason="nothing_left", query="")
+            return self._then("books_none")
+        listing = shelves.spoken_list(named, lang)
+        last = None if more else await memory.last_book()
+        if last is not None and not await memory.finished(str(last["uri"])):
+            title = str(last.get("title") or "")
+            line = lines.shelf_line(lang, "categories_started", categories=listing, title=title)
+            self._last_list = [
+                Match(
+                    uri=str(last["uri"]), kind="audiobook", title=title, artist=last.get("author")
+                )
+            ]
+        else:
+            key = "categories_more" if more else "categories"
+            line = lines.shelf_line(lang, key, categories=listing)
+        self._browse = {"mode": "categories", "query": "", "like": "", "offset": offset}
+        await self._log().ainfo(
+            "spotify.shelf_browse",
+            mode="categories",
+            query="",
+            like="",
+            like_source=None,
+            excluded=None,
+            offered=named,
+            offset=offset,
+        )
+        return ToolResult(
+            output=json.dumps(
+                {"ok": True, "categories": named, "then": lines.say(lang, line)},
+                ensure_ascii=False,
+            )
+        )
+
+    async def _browse_query(self, shelf: Shelf, query: str, *, more: bool) -> ToolResult:
+        """A subject: a title on the shelf, a category, a tag, a shelf
+        author; or a book or author named that isn't on it (open search,
+        only results that are that book or by that author)."""
+        book = shelves.match_title(shelf, query)
+        if book is not None and not more:
+            return await self._offer(shelf, mode="title", query=query, topic="", books=[book])
+        category = shelves.match_category(shelf, query)
+        if category is not None:
+            books = [b for b in shelf.books if b.category == category]
+            return await self._offer(
+                shelf, mode="category", query=query, topic=category, books=books, more=more
+            )
+        tag = shelves.match_tag(shelf, query)
+        if tag is not None:
+            books = [b for b in shelf.books if tag in b.tags]
+            return await self._offer(
+                shelf, mode="tag", query=query, topic=tag, books=books, more=more
+            )
+        author = shelves.match_author(shelf, query)
+        if author is not None:
+            books = [b for b in shelf.books if shelves.same_author(b.author, author)]
+            return await self._offer(
+                shelf, mode="author", query=query, topic=author, books=books, more=more
+            )
+        return await self._offer_named(shelf, query, more=more)
+
+    async def _browse_like(self, shelf: Shelf, like: str, *, more: bool) -> ToolResult:
+        """Books like one he names: shared category, tags and author. A
+        book not on the shelf is looked up once for its author and the
+        words of its synopsis."""
+        book = shelves.match_title(shelf, like)
+        source: str
+        if book is not None:
+            source, topic = "shelf", book.title
+            bonus = shelves.similar(
+                shelf, author=book.author, category=book.category, tags=book.tags, besides=book.uri
+            )
+        elif (author := shelves.match_author(shelf, like)) is not None:
+            first = next(b for b in shelf.books if shelves.same_author(b.author, author))
+            source, topic = "shelf_author", author
+            bonus = shelves.similar(shelf, author=author, category=first.category, tags=())
+        else:
+            found = await self._look_up(like)
+            if found is None:
+                await self._log().ainfo("spotify.shelf_nothing", reason="like_unknown", query=like)
+                return await self._nothing(shelf)
+            source, topic = "search", re.split(r"[(:\[]", found.title)[0].strip()
+            bonus = {
+                uri: points
+                for uri, points in shelves.similar(
+                    shelf,
+                    author=found.artist or "",
+                    category=None,
+                    tags=(),
+                    words=shelves.synopsis_words(found.about),
+                ).items()
+                if not shelves.same_book(
+                    found.title,
+                    found.artist or "",
+                    *self._title_author(shelf.by_uri(uri)),
+                )
+            }
+        books = [b for b in shelf.books if b.uri in bonus]
+        return await self._offer(
+            shelf,
+            mode="like",
+            query="",
+            like=like,
+            like_source=source,
+            topic=topic,
+            books=books,
+            bonus=bonus,
+            more=more,
+        )
+
+    @staticmethod
+    def _title_author(book: ShelfBook | None) -> tuple[str, str]:
+        return (book.title, book.author) if book else ("", "")
+
+    async def _look_up(self, spoken: str) -> Match | None:
+        """One search for a book named: the first that isn't a guide."""
+        if self._search is None:
+            return None
+        try:
+            found = await self._search.candidates(spoken, "audiobook", limit=3)
+        except SearchError as exc:
+            await self._log().awarning("spotify.search_failed", query=spoken, error=str(exc))
+            return None
+        return next((m for m in found if not is_guide(m.title, m.about, m.edition)), None)
+
+    async def _offer(
+        self,
+        shelf: Shelf,
+        *,
+        mode: str,
+        query: str,
+        topic: str,
+        books: list[ShelfBook],
+        like: str = "",
+        like_source: str | None = None,
+        bonus: dict[str, int] | None = None,
+        more: bool = False,
+    ) -> ToolResult:
+        """Rank, drop what he's heard or refused, check what plays, offer
+        three in the skill's own words."""
+        memory = self._require_memory()
+        log = self._log()
+        listener = await memory.listener()
+        if mode == "title":
+            ranked, excluded = books, 0  # he named it: offered even if started
+        else:
+            ranked, excluded = shelves.rank(books, listener, shelf, bonus=bonus)
+        already: list[str] = list(self._browse["offered"]) if more and self._browse else []
+        ranked = [b for b in ranked if b.uri not in already]
+        if not ranked:
+            await log.ainfo(
+                "spotify.shelf_nothing",
+                reason="no_more" if more else "all_excluded",
+                query=query or like,
+                excluded=excluded,
+            )
+            return await self._nothing(shelf, topic=topic if more else "")
+        blocked = self._unavailable()
+        if blocked:
+            return self._then(blocked)
+        candidates = [
+            Match(
+                uri=b.uri,
+                kind="audiobook",
+                title=b.title,
+                artist=b.author,
+                languages=(b.language,),
+                about=b.pitch,
+            )
+            for b in ranked
+        ]
+        offered, hours_out = await self._playable_only(candidates, OFFER_COUNT)
+        if hours_out:
+            return self._then("no_hours")
+        if not offered:
+            await log.ainfo("spotify.shelf_nothing", reason="none_playable", query=query or like)
+            return self._then("none_available")
+        return await self._said_offer(
+            mode=mode,
+            query=query,
+            like=like,
+            like_source=like_source,
+            topic=topic,
+            offered=offered,
+            excluded=excluded,
+            offset=len(already),
+            already=already,
+        )
+
+    async def _said_offer(
+        self,
+        *,
+        mode: str,
+        query: str,
+        like: str,
+        like_source: str | None,
+        topic: str,
+        offered: list[Match],
+        excluded: int,
+        offset: int,
+        already: list[str],
+    ) -> ToolResult:
+        lang = self._lang()
+        more = bool(already)
+        if mode == "title" or (mode == "search" and not topic):
+            head = ""
+        elif mode == "search":
+            head = "head_found"
+        elif mode == "like":
+            head = "head_more_like" if more else "head_like"
+        else:
+            head = "head_more" if more else "head"
+        line = lines.offer(
+            lang, head, topic, [(m.title, m.artist or "?", m.about) for m in offered]
+        )
+        await self._require_memory().mark_offered([m.uri for m in offered])
+        self._last_list = offered
+        self._browse = {
+            "mode": mode,
+            "query": query,
+            "like": like,
+            "offset": offset,
+            "offered": [*already, *(m.uri for m in offered)],
+        }
+        await self._log().ainfo(
+            "spotify.shelf_browse",
+            mode=mode,
+            query=query,
+            like=like,
+            like_source=like_source,
+            excluded=excluded,
+            offered=[m.title for m in offered],
+            offset=offset,
+        )
+        return ToolResult(
+            output=json.dumps(
+                {
+                    "ok": True,
+                    "books": [
+                        {"n": i + 1, "title": m.title, "by": m.artist, "about": m.about}
+                        for i, m in enumerate(offered)
+                    ],
+                    "then": lines.say(lang, line),
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    async def _offer_named(self, shelf: Shelf, query: str, *, more: bool) -> ToolResult:
+        """Not on the shelf: open search, keeping only the book named or
+        books by the author named. A theme never gets here (it would have
+        matched the shelf) and gets nothing from search."""
+        log = self._log()
+        if self._search is None or more:
+            await log.ainfo("spotify.shelf_nothing", reason="no_match", query=query)
+            return await self._nothing(shelf)
+        blocked = self._unavailable()
+        if blocked:
+            return self._then(blocked)
+        try:
+            found = await self._search.candidates(query, "audiobook", limit=8)
+        except SearchError as exc:
+            await log.awarning("spotify.search_failed", query=query, error=str(exc))
+            return self._then("search_failed")
+        books = [
+            m
+            for m in order_books(found, self._lang())
+            if not is_guide(m.title, m.about, m.edition)
+        ]
+        titled = [m for m in books if shelves.title_matches(query, m.title, m.artist or "")]
+        by_author = [m for m in books if shelves.author_named(query, m.artist or "")]
+        named = titled[:1] or by_author
+        if not named:
+            await log.ainfo("spotify.shelf_nothing", reason="no_match", query=query)
+            return await self._nothing(shelf)
+        offered, hours_out = await self._playable_only(named, 1 if titled else OFFER_COUNT)
+        if hours_out:
+            return self._then("no_hours")
+        if not offered:
+            return self._then("none_available")
+        offered = [
+            Match(
+                uri=m.uri,
+                kind=m.kind,
+                title=m.title,
+                artist=m.artist,
+                languages=m.languages,
+                about=_first_sentence(_blurb(m.about)),
+            )
+            for m in offered
+        ]
+        topic = "" if titled else (offered[0].artist or query).split(",")[0].strip()
+        return await self._said_offer(
+            mode="search",
+            query=query,
+            like="",
+            like_source=None,
+            topic=topic,
+            offered=offered,
+            excluded=0,
+            offset=0,
+            already=[],
+        )
+
+    async def _nothing(self, shelf: Shelf, *, topic: str = "") -> ToolResult:
+        """Nothing fits: say what kinds of book there are."""
+        lang = self._lang()
+        listener = await self._require_memory().listener()
+        named = self._available_categories(shelf, listener)[:CATEGORY_COUNT]
+        listing = shelves.spoken_list(named or list(shelf.categories[:CATEGORY_COUNT]), lang)
+        if topic:
+            line = lines.shelf_line(lang, "no_more", topic=topic, categories=listing)
+        else:
+            line = lines.shelf_line(lang, "nothing", categories=listing)
+        self._browse = None
+        return ToolResult(
+            output=json.dumps(
+                {"ok": False, "reason": "shelf_nothing", "then": lines.say(lang, line)},
+                ensure_ascii=False,
+            )
+        )
+
+    async def _edition_heard(self, book: ShelfBook) -> Match | None:
+        """His own edition of a shelf book, if he already started one: he
+        continues it instead of starting the shelf's from zero."""
+        for row in await self._require_memory().played_books(limit=1_000):
+            if row["uri"] == book.uri or shelves.same_book(
+                book.title, book.author, str(row.get("title") or ""), str(row.get("author") or "")
+            ):
+                return Match(
+                    uri=str(row["uri"]),
+                    kind="audiobook",
+                    title=str(row.get("title") or book.title),
+                    artist=row.get("author") or book.author,
+                )
+        return None
+
+    async def _book_opinion(self, opinion: str, title: str) -> ToolResult:
+        """'Me gustó', 'no me gustó': kept per book, it moves the offers."""
+        if opinion not in OPINIONS:
+            return ToolResult(output=json.dumps({"ok": False, "error": f"unknown:{opinion}"}))
+        lang = self._lang()
+        target: tuple[str, str, str | None] | None = None
+        how = ""
+        if title.strip():
+            picked = self._from_last_list(title)
+            shelf = await self._current_shelf()
+            book = shelves.match_title(shelf, title) if shelf and picked is None else None
+            if picked is not None:
+                target, how = (picked.uri, picked.title, picked.artist), "list"
+            elif book is not None:
+                heard = await self._edition_heard(book)
+                uri = heard.uri if heard else book.uri
+                target, how = (uri, book.title, book.author), "shelf"
+            else:
+                for row in await self._require_memory().played_books(limit=1_000):
+                    row_title = str(row.get("title") or "")
+                    if title_score(fold(title), fold(row_title)) >= 0.6:
+                        target, how = (str(row["uri"]), row_title, row.get("author")), "played"
+                        break
+        else:
+            loaded = await self._loaded_book()
+            if loaded is not None:
+                target, how = (loaded.uri, loaded.title, loaded.author), "current"
+            elif (last := await self._require_memory().last_book()) is not None:
+                target = (str(last["uri"]), str(last.get("title") or ""), last.get("author"))
+                how = "last"
+        if target is None:
+            await self._log().ainfo(
+                "spotify.book_opinion", title=title, opinion=opinion, source=None
+            )
+            return ToolResult(
+                output=json.dumps(
+                    {
+                        "ok": False,
+                        "reason": "which_book",
+                        "then": lines.say(lang, lines.shelf_line(lang, "opinion_which")),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        uri, name, author = target
+        label = self._label(uri, name, author)
+        await self._require_memory().set_opinion(uri, opinion, label)
+        await self._log().ainfo(
+            "spotify.book_opinion", title=label.title, opinion=opinion, source=how, uri=uri
+        )
+        return ToolResult(
+            output=json.dumps(
+                {
+                    "ok": True,
+                    "book": label.title,
+                    "opinion": opinion,
+                    "then": lines.say(lang, lines.shelf_line(lang, opinion, title=label.title)),
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    async def _find_books_open(self, query: str) -> ToolResult:
+        """T1.40's recommendations, for a persona without a shelf: the
+        books started here, or an open search, each book checked."""
+        memory = self._require_memory()
         lang = self._lang()
         if not query.strip():
-            rows = await shelf.played_books(3)
+            rows = await memory.played_books(3)
             if not rows:
                 return self._then("books_none")
             books = [
@@ -1005,7 +1591,9 @@ class SpotifySkill:
             except SearchError as exc:
                 await self._log().awarning("spotify.search_failed", query=query, error=str(exc))
                 return self._then("search_failed")
-            candidates = [m for m in order_books(found, lang) if not is_guide(m.title)]
+            candidates = [
+                m for m in order_books(found, lang) if not is_guide(m.title, edition=m.edition)
+            ]
             if not candidates:
                 await self._log().ainfo("spotify.book_not_found", query=query)
                 return self._then("book_not_found")
@@ -1023,7 +1611,7 @@ class SpotifySkill:
                     "n": i + 1,
                     "title": m.title,
                     "by": m.artist,
-                    "listened_here": await shelf.played(m.uri),
+                    "listened_here": await memory.played(m.uri),
                 }
                 if isinstance(info, BookInfo) and info.chapters:
                     total = sum(c.duration_ms for c in info.chapters)
@@ -1079,7 +1667,7 @@ class SpotifySkill:
             return Match(uri=context, kind="audiobook", title=title, artist=None)
         if not self._last_was_book:
             return None
-        last = await self._require_shelf().last_book()
+        last = await self._require_memory().last_book()
         if last is None:
             return None
         return Match(
@@ -1128,13 +1716,13 @@ class SpotifySkill:
         not offered: the same to the listener, Mario 2026-10-12). None: a
         book known to play here was refused, and only trying another one
         tells the book from the hours (`_explain_refusal`)."""
-        shelf = self._require_shelf()
+        memory = self._require_memory()
         budget = self._hours_per_month
-        if budget is not None and await shelf.seconds_this_month() >= budget * 3600 - 600:
+        if budget is not None and await memory.seconds_this_month() >= budget * 3600 - 600:
             return "book_no_hours"
-        if not self._hours_recently_ok() and await shelf.playable(uri):
+        if not self._hours_recently_ok() and await memory.playable(uri):
             return None
-        await shelf.mark_unavailable(uri)
+        await memory.mark_unavailable(uri)
         return "book_unavailable"
 
     async def _explain_refusal(self, uri: str) -> None:
@@ -1148,9 +1736,9 @@ class SpotifySkill:
             if self._streams == 0:
                 break
             await asyncio.sleep(0.05)
-        shelf = self._require_shelf()
+        memory = self._require_memory()
         client = self._require_client()
-        control = await shelf.any_playable(besides=uri)
+        control = await memory.any_playable(besides=uri)
         result = None
         if control is not None and self._streams == 0 and self._unavailable() is None:
             result = await self._probe(control)
@@ -1162,9 +1750,9 @@ class SpotifySkill:
         elif result == "no":
             cause = "book_no_hours"
         else:
-            cause = "book_no_hours" if await shelf.played(uri) else "book_unavailable"
+            cause = "book_no_hours" if await memory.played(uri) else "book_unavailable"
         if cause == "book_unavailable":
-            await shelf.mark_unavailable(uri)
+            await memory.mark_unavailable(uri)
         await self._log().ainfo(
             "spotify.refusal_explained",
             uri=uri,
@@ -1176,12 +1764,12 @@ class SpotifySkill:
 
     async def _playable_only(self, candidates: list[Match], want: int) -> tuple[list[Match], bool]:
         """The first `want` candidates Spotify will play here: known ones
-        from the shelf, the rest tried for a moment with nothing reaching a
+        from memory, the rest tried for a moment with nothing reaching a
         speaker (Soloist's sink has no reader between streams), then
         whatever was loaded is put back. (books, hours_ran_out). A refusal
         while a book known to play is refused too means no hours, not that
         every candidate is unavailable."""
-        shelf = self._require_shelf()
+        memory = self._require_memory()
         client = self._require_client()
         log = self._log()
         # Never while a stream plays: the check would take the player. In a
@@ -1195,9 +1783,9 @@ class SpotifySkill:
             for match in candidates:
                 if len(kept) == want:
                     break
-                if await shelf.unavailable(match.uri):
+                if await memory.unavailable(match.uri):
                     continue  # first: a book refused lately, even one that played once
-                if await shelf.playable(match.uri):
+                if await memory.playable(match.uri):
                     kept.append(match)
                     continue
                 if not can_check or tried >= MAX_PROBES:
@@ -1206,14 +1794,14 @@ class SpotifySkill:
                 result = await self._probe(match.uri)
                 if result == "ok":
                     self._hours_ok_at = time.monotonic()
-                    await shelf.mark_ok(match.uri, match.title, match.artist)
+                    await memory.mark_ok(match.uri, match.title, match.artist)
                     kept.append(match)
                 elif result == "no":
                     refused.append(match)
             if refused and not self._hours_recently_ok():
                 # Nothing played this round or lately: is it the books, or
                 # the month's hours? Try one book known to play.
-                control = await shelf.any_playable(besides=refused[0].uri)
+                control = await memory.any_playable(besides=refused[0].uri)
                 if control is not None:
                     tried += 1
                     if await self._probe(control) == "no":
@@ -1221,7 +1809,7 @@ class SpotifySkill:
                         return [], True
                     self._hours_ok_at = time.monotonic()
             for match in refused:
-                await shelf.mark_unavailable(match.uri)
+                await memory.mark_unavailable(match.uri)
         finally:
             if tried:
                 await self._put_back(*before)
@@ -1293,7 +1881,11 @@ class SpotifySkill:
             or position >= book.chapters[last].duration_ms - END_MARGIN_MS
         )
         if index is not None and index == last and (left or near_end):
-            self._spawn(self._require_shelf().mark_finished(book.uri))
+            self._spawn(
+                self._require_memory().mark_finished(
+                    book.uri, self._label(book.uri, book.title, book.author)
+                )
+            )
             await self._log().ainfo("spotify.book_finished", title=book.title, left=left)
             if left:
                 # Spotify went on to something else by itself.
@@ -1354,6 +1946,16 @@ class SpotifySkill:
             chapters=len(book.chapters),
         )
         return True
+
+    async def _write_place(self, book: BookInfo, place: Place) -> None:
+        """The book's place, and its summary for the page."""
+        await self._require_memory().set_place(
+            book.uri,
+            place,
+            self._label(book.uri, book.title, book.author),
+            chapter=book.index_of(place.chapter_uri),
+            chapters=len(book.chapters),
+        )
 
     def _resume_rewind(self) -> list[_Command]:
         """A resumed book backs up 2 s plus a tenth of the pause, at most
@@ -1533,7 +2135,7 @@ class SpotifySkill:
             book = await self._loaded_book()
             self._last_was_book = book is not None or book_start
             if start is not None and book is None and not book_start:
-                self._spawn(self._require_shelf().set_last_music(start))
+                self._spawn(self._require_memory().set_last_music(start))
             if book is not None and goto is not None:
                 nav = asyncio.create_task(self._go_to(client, generation, book, *goto))
             seek_sent_at: float | None = None
@@ -1649,7 +2251,7 @@ class SpotifySkill:
                     if time.monotonic() - place_at >= PLACE_EVERY_S:
                         place_at = time.monotonic()
                         if (found := self._place_now(book, sent_until())) is not None:
-                            self._spawn(self._require_shelf().set_place(book.uri, found[0]))
+                            self._spawn(self._write_place(book, found[0]))
                 if state.status == "paused":
                     # Paused from a Spotify app: let the speaker go.
                     paused_since = paused_since or time.monotonic()
@@ -1672,9 +2274,9 @@ class SpotifySkill:
                 if book is not None and not marked and audio_ms >= PLAYED_AFTER_MS:
                     marked = True
                     self._hours_ok_at = time.monotonic()
-                    shelf = self._require_shelf()
-                    self._spawn(shelf.mark_played(book.uri, book.title, book.author))
-                    self._spawn(shelf.set_last_book(book.uri, book.title, book.author))
+                    memory = self._require_memory()
+                    self._spawn(memory.mark_played(book.uri, book.title, book.author))
+                    self._spawn(memory.set_last_book(book.uri, book.title, book.author))
                 yield chunk
             # The capture closed under us (the container's sound server is
             # down, or the container restarted). Behind Docker on a Mac the
@@ -1720,9 +2322,9 @@ class SpotifySkill:
                             kept_ms=place.position_ms,
                             audio_ms=audio_ms,
                         )
-                    self._spawn(self._require_shelf().set_place(book.uri, place))
+                    self._spawn(self._write_place(book, place))
                 if audio_ms:
-                    self._spawn(self._require_shelf().add_seconds(audio_ms / 1000))
+                    self._spawn(self._require_memory().add_seconds(audio_ms / 1000))
                 if reason == "cancelled":
                     self._paused_at = time.monotonic()
             await log.ainfo(
@@ -1800,9 +2402,9 @@ class SpotifySkill:
                 return code
         return "en"
 
-    def _require_shelf(self) -> Shelf:
-        assert self._shelf is not None, "setup() not called"
-        return self._shelf
+    def _require_memory(self) -> BookMemory:
+        assert self._memory is not None, "setup() not called"
+        return self._memory
 
     def _require_client(self) -> SoloistClient:
         assert self._client is not None, "setup() not called"

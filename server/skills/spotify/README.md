@@ -7,7 +7,10 @@ server; the skill controls it over its local WebSocket and streams its
 audio to the client like the radio skill does.
 
 Tools: `play_music(query, kind?)`, `music_control(action)`,
-`whats_playing()`. Full guide (setup, pairing, failure table):
+`whats_playing()`; audiobooks: `play_book`, `book_control`,
+`find_books` (offers from the persona's curated shelf, built with the
+`huxley-spotify-shelf` script) and `book_opinion`. Full guide (setup,
+pairing, the shelf, failure table):
 [`docs/skills/spotify.md`](../../../docs/skills/spotify.md).
 
 Needs: a Premium account, a Soloist API key and a Web API app (client id

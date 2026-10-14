@@ -5783,6 +5783,72 @@ Branch `t144-inject-waits` (worktree), on base f0897867: 7d23267e (design), 36fd
 
 **Lessons**: both critics earned their keep. The first turned "a pong timeout is delivered" and a cached presence flag around before any code; the second found four bugs in code that passed 940 tests, three of them in the gaps between awaits. The repo's medication retries had never fired at runtime: nothing tested the scheduler past the first fire.
 
+## T1.45: A book recommender that only offers well-known books
+
+**Status**: `in_progress` (2026-10-13): code, docs and the page/app views built on branches `t145-shelf` and `t145-page-books`; `shelf.json` waits for Spotify's `/audiobooks` block to lift (about 17:30 Bogota, 2026-10-14), then the merge, the deploy and Mario's walkie smoke · **Effort**: M (one skill, a build script, the persona, the page card; no framework change)
+
+**Problem** (Mario, 2026-10-13): make book search work as a recommender for his grandfather, never offering obscure or invented books; a list of well-known books to pick from; a books section on the page (recommended, in progress, read). His calls: never mention length; treat AI-voiced editions like human ones; pick the books with the API and judgement ("no idea on his favorites").
+
+**Why it matters**: a blind listener can't browse a catalogue. A recommendation he can't place (a self-help title, "Parte 1" of a dramatized fantasy) wastes a turn and some of the month's listening hours, and he won't ask twice.
+
+### Validation (Gate 1)
+
+- Spotify's Web API gives a development-mode app no recommendations, browse, charts or bulk lookups (cut February 2026). Audiobook search works in market CO with authors, narrators, languages and a synopsis; there is no field for AI narration.
+- Production, 2026-10-13: "algo bueno para recomendar en audiolibro" offered El mito de Sísifo, La montaña eres tú (self-help) and "Alas de sangre (Versión dramatizada): Parte 1"; "La guía de la galaxia" brought "PLEYADIANOS LOS HIJOS DE LAS ESTRELLAS" as the third. Theme searches return reading guides ("Fiche de lecture", "Lektürehilfe", "Resumen y análisis").
+
+### Design (Gate 2)
+
+Planned by a planning agent, built by a builder agent; a user interrupt stopped the builder at 18:02 with the work uncommitted, and Claude finished it in the main session (suite fixes, critic check, merge with main, docs, the real build).
+
+- **Shelf files** (repo-tracked: famous books, not personal data): `server/personas/abuelos/books/shelf.yaml`, the curated source (134 books, 11 spoken categories, tags, a one-sentence pitch each, pinned URIs, preferred narrators; chosen by a curator agent with search-only API checks); `shelf.json`, written only by the build, read only by the skill. Config `book_shelf` (default `../books/shelf.json`, relative to the persona data dir).
+- **Build** `huxley-spotify-shelf <persona_dir> [--write] [--only TITLE]` (`shelf_build.py`): per book, search "title author" then the title; keep an edition only if the title is close (0.75; subtitle, edition note and ". " subtitle dropped; digits count), an author surname matches, the language is the persona's, it isn't a guide or abridgement (title, synopsis phrases, or Spotify's "Abridged edition" note), and it lists chapters (else the next edition; a pinned one must); a pinned URI wins, then the narrator, the score, Spotify's order; OK / CHECK / REJECT per book, exit 1 on a reject, atomic 0644 write, nothing written when nothing passed. Requests rationed: one `/audiobooks` lookup per edition, none for one the previous shelf.json has; a run stopped by a 429 writes what it checked. Retries 429 three times honouring Retry-After up to 2 minutes (build only).
+- **Skill** (`shelf.py` pure functions; `books.Shelf` renamed `BookMemory`): reload on mtime/size; an invalid file keeps the last good shelf, a missing one falls back to T1.40's open search. `find_books(query?, like?, more?, listened?)` browses categories (plus the book in progress), a title, category, tag or author, "algo como", "otros", and what he listened to; the skill words the offer in `then`. `play_book`: a shelf title plays the checked edition without `ask_which` (or his own edition if he started one); a theme goes to the shelf. `book_opinion(liked|disliked, title?)`.
+- **Memory**: `book:ended`, `book:opinion`, `book:offered`; abandoned = started, never finished, not the last book, unheard 21 days. Ranking excludes finished, disliked, refused, started; liked author +2, finished author +1, liked category +1, disliked author -3; ties to the least recently offered.
+- **The page contract**: `book:summary:<id>` (DB key `spotify:book:summary:<id>`, JSON text: uri, title, author, chapters, chapter, position_ms, last_at, finished, opinion, source) written on every place, end and opinion, serialized, backfilled at setup. The page's Books card (24c673d4) reads it with `shelf.json`.
+
+### Critic notes (Gate 2)
+
+One fresh critic on the plan, 2026-10-13 (seven blockers). How each landed:
+
+1. **First offers wait on probes** (a book's playability can't be known from the Web API; the critic estimated 10 s typical, 34 s worst). Measured instead of guessed, production logs 2026-10-13: one probe about 2 s; a `find_books` with three unknown books 6.1-6.2 s from the tool call to the answer (the T1.41 waiting sound plays); 0 refusals in about 20 probes; known books skip it. Kept: probe at offer time, remembered per book. Not built: an idle-time warmer (Soloist commands while nobody listens, against a 6 s cost that shrinks as books become known). Revisit if the logs show offers over 8 s.
+2. **Persona dir with a symlinked `data/`**: the path is relative to the data dir with `normpath` (`../books/shelf.json`), absolute paths accepted; `data/` is a real directory on the Pi and the Mac.
+3. **The theme guard broke garbled titles** ("Sidarta"): redirect only when the words match a shelf category or tag and no shelf title or author; anything else keeps search and `ask_which`.
+4. **Edition identity**: another edition of a book in memory (same author, close title) counts as that book for exclusions and opinions, and a shelf title continues his own edition.
+5. **Regressions for authors and titles off the shelf**: a book or author not on the shelf is searched, keeping only that book or that author's books (still probed); "¿de qué trata <título>?" matches shelf titles and offers that book with its pitch.
+6. **Summary write race** (a place and a book's end land together): `update_summary` merges only the fields it's given, under a lock; finished survives; title and chapters carried by a `Label`.
+7. **429 retry in the shared client**: the live skill never retries (a turn would stall); only the build's client honours `Retry-After` (3 retries, up to 2 minutes each), with a pause between books, and a stopped run keeps what it checked. The critic's warning came true anyway (see Build result). Study-guide filtering on the synopsis uses phrases only a guide uses; a pinned URI overrides a synopsis flag.
+
+### Definition of Done
+
+- Spotify suite green, ruff, ruff format, mypy clean; runtime suite still green.
+- The real build run on the Pi (search only), `shelf.json` committed.
+- Docs: `docs/skills/spotify.md`, `docs/personas/abuelos.md`, persona.yaml (es/en/fr), `docs/decisions.md`, the skill README, this entry.
+- Merged with the page's Books card; deployed when idle; Mario's walkie smoke: "¿qué libros me recomiendas?", "quiero un libro de misterio", "otros", "el segundo", "pon algo de aventuras", "algo como Cien años de soledad", "me gustó".
+
+### Build result (Gate 3)
+
+Run on the Pi, search only (the branch's files copied to `/tmp`, nothing of the running server touched), 2026-10-13:
+
+- **Run 1** (builder's code plus the "1984" and "Sapiens." fixes): 134 books, 131 OK, 2 CHECK, 1 REJECT, 133 written. The CHECKs were narrator spellings ("Voz artificial" vs Spotify's "AI Voice", "Varios narradores" vs "Various Narrators": fixed in shelf.yaml); the REJECT was El juego del ángel, whose pinned edition lists no chapters (unpinned; the build now takes the next edition that lists chapters). The alternatives printed 14 editions Spotify marks "Abridged edition", which the title check couldn't see: the guide check now reads Spotify's edition note, in the build and in the live skill.
+- **Run 2**: the edition-note rule rejected three pinned editions as abridged (1984, El tiempo entre costuras, Doña Bárbara: unpinned so the build picks a full one); stopped at about book 130 by a 429 its 30 s cap couldn't wait out, and wrote nothing (the old rule).
+- **Run 3**: blocked from the first book. `/v1/audiobooks/{id}` and its chapters answer `429 Retry-After: 68658` (about 19 hours); `/v1/search` answers 200. Cause: the curator's probes plus four full runs in three hours, each paging every chapter of every chosen edition. The live skill shares the app, so until the block lifts books play but are treated like music (no chapter commands, no end-of-book line; `spotify.book_info_failed`); grandpa doesn't have the walkie yet. Fixed in the build: one `/audiobooks` request per edition, none for an edition the previous shelf.json has, a stopped run keeps what it checked, 3 retries up to 2 minutes.
+
+`shelf.json` is not built yet: one run after the block lifts (about 17:30 Bogota, 2026-10-14), then the deploy.
+
+### Tests (Gate 3)
+
+Spotify suite 220 passed, 1 skipped (main: 126). `test_shelf.py` (40: validation, reload and keeping the last good file, matching titles with digits and subtitles, categories, tags, authors, themes, ranking with exclusions, edition equivalence and boosts, paging, Spanish lists with "e" before an "i" sound); `test_shelf_build.py` (29: guides, Lektürehilfe, Fiche de lecture, abridged by title and by Spotify's edition note, wrong author, wrong language, a guide synopsis, far titles, "1984" and "Sapiens." from the real build, pinned editions kept, looked up, rejected or gone, an edition without chapters giving way to the next, a pinned one without chapters rejected, one lookup per edition and none for one already verified, a rate limit mid-run keeping what was checked, a network error before anything and nothing-passed writing nothing, `--only` keeps the rest, dry run, 0644 output that loads in the skill, setup errors); `test_books.py` (browsing never searches, "otros", nothing fits, refused shelf books skipped, a shelf title plays the curated edition or his own, a theme redirected, opinions move the ranking, a missing shelf falls back, the summary key and its exact fields, the backfill, an abridged edition never picked); `test_soloist_and_search.py` (the build client waits out three 429s and gives up after; the live client never retries). The abridged rule was broken on purpose to see its two tests fail.
+
+### Docs touched (Gate 4)
+
+`docs/skills/spotify.md` (the shelf section, find_books, offers and measured probes, config, logs), `docs/personas/abuelos.md`, `server/personas/abuelos/persona.yaml` (es/en/fr book bullets, `book_opinion`), `docs/decisions.md` (ADR: recommendations only from the shelf), `server/skills/spotify/README.md` (the book tools were never listed), this entry.
+
+### Ship (Gate 5)
+
+Branch `t145-shelf` (worktree) on main 8af68aa4: the skill, the build, the shelf source, the persona and the docs (this commit); `shelf.json` after the block lifts. Branch `t145-page-books`: 24c673d4 (the page's Books card), 92f1de4b (merge of main), 21e932da (the phone app's Books tab). Not merged, not deployed.
+
+**Lessons**: a background agent stopped by an interrupt sends no notice; check agents after any interrupt. Spotify rations `/audiobooks` for a development-mode app far below what a "verify everything" build spends: measure the request count of a batch job before running it twice.
+
 ## T1.46: A phone app of how grandpa uses the walkie
 
 **Status**: `in_progress` (2026-10-13: built and through a critic round on branch `t146-phone-app`, not merged; next: Mario adds it to his home screen and looks, then merge and deploy) · **Owner**: this session · **Effort**: M

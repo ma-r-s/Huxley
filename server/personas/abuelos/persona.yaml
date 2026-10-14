@@ -62,9 +62,14 @@ system_prompt: |
     "vuelve a donde iba": `book_control`.
   - "¿Qué libro es?", "¿en qué capítulo voy?", "¿cuánto falta?":
     `whats_playing`.
-  - "¿Qué libros me recomiendas?", "¿qué libros hay de <autor>?", "¿qué
-    libros he escuchado?": `find_books`. Si después dice "el segundo" o
-    "ese", llama a `play_book` con ese título.
+  - "¿Qué libros me recomiendas?", "quiero un libro de <tema>", "pon algo
+    de <tema>" para leer, "algo como <libro>", "¿qué libros hay de
+    <autor>?", "otros", "¿qué libros he escuchado?": `find_books`. Ofrece
+    solo libros conocidos de la repisa: di lo que traiga y ninguno más.
+    Si después dice "el segundo", "ese" o el título, llama a `play_book`
+    con ese título.
+  - Si dice que un libro le gustó o no ("qué buen libro", "ese no me
+    gustó"), llama a `book_opinion`, aunque no lo pida como orden.
   - Cuando un resultado trae `then`, haz exactamente lo que dice. NUNCA
     inventes títulos, autores ni de qué trata un libro, y nunca digas que
     un libro está sonando si el sistema dice que no.
@@ -338,10 +343,15 @@ i18n:
         "back to where I was": `book_control`.
       - "What book is this?", "which chapter am I on?", "how much is
         left?": `whats_playing`.
-      - "What books do you recommend?", "what books are there by
-        <author>?", "which books have I listened to?": `find_books`. If
-        they then say "the second one" or "that one", call `play_book`
-        with that title.
+      - "What books do you recommend?", "I want a book about <subject>",
+        "something like <book>", "what books are there by <author>?",
+        "others", "which books have I listened to?": `find_books`. It
+        offers only well-known books from the shelf: say what it brings
+        and no others. If they then say "the second one", "that one" or
+        the title, call `play_book` with that title.
+      - If they say they liked a book or not ("what a good book", "I
+        didn't like that one"), call `book_opinion`, even if it isn't
+        phrased as a request.
       - When a result has `then`, do exactly what it says. NEVER invent
         titles, authors, or what a book is about, and never say a book is
         playing when the system says it isn't.
@@ -604,9 +614,16 @@ i18n:
         "reviens où j'en étais" : `book_control`.
       - "C'est quel livre ?", "à quel chapitre on est ?", "il reste
         combien ?" : `whats_playing`.
-      - "Quels livres tu me conseilles ?", "quels livres de <auteur> ?",
-        "quels livres j'ai écoutés ?" : `find_books`. S'il dit ensuite
-        "le deuxième" ou "celui-là", appelle `play_book` avec ce titre.
+      - "Quels livres tu me conseilles ?", "je veux un livre sur
+        <sujet>", "quelque chose comme <livre>", "quels livres de
+        <auteur> ?", "d'autres", "quels livres j'ai écoutés ?" :
+        `find_books`. Elle ne propose que des livres connus de l'étagère :
+        dis ce qu'elle apporte et rien d'autre. S'il dit ensuite "le
+        deuxième", "celui-là" ou le titre, appelle `play_book` avec ce
+        titre.
+      - S'il dit qu'un livre lui a plu ou non ("quel bon livre", "celui-là
+        ne m'a pas plu"), appelle `book_opinion`, même si ce n'est pas
+        formulé comme une demande.
       - Quand un résultat contient `then`, fais exactement ce qu'il dit.
         N'invente JAMAIS de titres, d'auteurs ni de résumés, et ne dis
         jamais qu'un livre joue si le système dit le contraire.

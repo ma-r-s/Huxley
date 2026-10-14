@@ -7,6 +7,10 @@ Books (T1.40): pause, resume, next and previous stay in `music_control`
 and act on whatever is loaded (chapters when it's a book). A second set of
 the same controls made the model pick the wrong one (T1.34, T1.37). The
 book tools only do what music has no word for.
+
+The shelf (T1.45): `find_books` offers only the persona's curated books and
+the skill words the offer itself; the tool text says when to call it and
+never names a kind of book, so the model has nothing to guess from.
 """
 
 from __future__ import annotations
@@ -15,7 +19,8 @@ TEXT: dict[str, dict[str, str]] = {
     "es": {
         "play_music": (
             "Pone música de Spotify: una canción, un artista, un álbum o una lista. "
-            "Para libros usa `play_book`. "
+            "Para un libro con título usa `play_book`; para pedir un tipo de libro, "
+            "`find_books`. "
             "ANTES de llamar di algo breve como 'a ver, la busco'. Los nombres pueden "
             "estar en inglés o en cualquier idioma: pásalos tal como los oíste, sin "
             "traducirlos ni cambiarlos por otro parecido. Si dudas del nombre, llama "
@@ -73,6 +78,7 @@ TEXT: dict[str, dict[str, str]] = {
             "libros y dice 'el segundo', 'el último' o 'ese', pasa el título de ese "
             "libro, contando en el orden en que los dijiste. Sin `title` ('sigue con "
             "el libro', 'pon mi libro', 'pon el libro') sigue con el último libro. "
+            "Si pide un tipo de libro sin título ('un libro de <tema>'), usa `find_books`. "
             "ANTES de llamar di algo breve como 'a ver, lo busco'. Si el resultado "
             "trae `then`, haz exactamente lo que dice. Nunca inventes títulos, "
             "autores ni de qué trata un libro."
@@ -103,29 +109,40 @@ TEXT: dict[str, dict[str, str]] = {
         "control_chapter": "Para 'go_to_chapter': el número o el nombre del capítulo, "
         "tal como lo dijo.",
         "find_books": (
-            "Busca audiolibros en Spotify para recomendar o elegir: '¿qué libros "
-            "tienes?', '¿qué libros hay?', '¿qué me recomiendas para leer?', '¿qué "
-            "libros hay de <autor>?', '¿qué libros he escuchado?', '¿qué libros he estado "
-            "escuchando?', '¿de qué trata?'. "
-            "Solo devuelve libros que se pueden escuchar aquí. Llama UNA vez por pedido. "
-            "Sin `query` da solo los libros ya empezados aquí: úsalo si pregunta qué "
-            "ha escuchado; si pide qué hay o qué le recomiendas sin decir autor ni "
-            "tema, sin `query` también, y luego pregunta qué le gusta. Después haz "
-            "exactamente lo que diga `then`."
+            "Ofrece audiolibros de la repisa: libros conocidos que se pueden escuchar "
+            "aquí. Úsala para '¿qué libros tienes?', '¿qué me recomiendas?', 'quiero un "
+            "libro de <tema>', 'pon algo de <tema>' para leer, 'algo como <libro>', '¿qué "
+            "libros hay de <autor>?', '¿de qué trata <título>?', 'otros', '¿qué libros he "
+            "escuchado?'. Sin argumentos dice qué tipos de libro hay. Llama UNA vez por "
+            "pedido y después di exactamente lo que diga `then`; nunca agregues libros "
+            "que no traiga el resultado. Si luego elige uno ('el segundo', 'ese' o su "
+            "título), llama a `play_book` con ese título."
         ),
         "find_query": (
-            "Un autor, un tema o un título, en pocas palabras. Si el pedido es general "
-            "('algo bueno', 'autores importantes', 'recomiéndame algo'), NO pases la "
-            "frase: pasa un tema o género concreto ('novela clásica', 'literatura "
-            "latinoamericana', 'cuentos', 'historia') o un autor conocido. Si nombró "
-            "libros que le gustan ('como El extranjero'), pasa el autor de uno de ellos. "
-            "Vacío para los libros ya empezados."
+            "El tema, el tipo de libro, el autor o el título que dijo, con sus palabras y "
+            "sin la frase entera. Vacío si no dijo ninguno."
         ),
+        "find_like": (
+            "Si pidió libros como uno que nombró ('algo como <libro>'), el título o el "
+            "autor de ese libro."
+        ),
+        "find_more": "true si pide otros o más de lo mismo ('otros', '¿qué más tienes?').",
+        "find_listened": "true si pregunta qué libros ha escuchado o empezado.",
+        "book_opinion": (
+            "Anota si al usuario le gustó o no un libro, para recomendarle mejor: 'me "
+            "gustó', 'qué buen libro', 'me está gustando', 'no me gusta este libro', 'ese "
+            "no me gustó'. Llámala cada vez que diga que un libro le gusta o no, aunque "
+            "no lo pida como orden. Sin `title`, el libro que está puesto o el último. "
+            "Después di exactamente lo que diga `then`."
+        ),
+        "opinion_value": "'liked' si le gustó, 'disliked' si no.",
+        "opinion_title": "El título si habla de otro libro; vacío para el que está puesto.",
     },
     "en": {
         "play_music": (
             "Play music from Spotify: a song, an artist, an album or a playlist. "
-            "For books use `play_book`. "
+            "For a book by title use `play_book`; to ask for a kind of book, "
+            "`find_books`. "
             "BEFORE calling, briefly say something like 'let me find it'. Names may "
             "be in any language: pass them as you heard them, without translating "
             "them or swapping in a similar name. If you're unsure of the name, call "
@@ -176,7 +193,8 @@ TEXT: dict[str, dict[str, str]] = {
             "as said) it plays that book; if they just heard a list of books and say "
             "'the second', 'the last one' or 'that one', pass that book's title, "
             "counting in the order you read them. Without `title` ('continue the "
-            "book', 'put my book on') the last book continues. BEFORE calling, "
+            "book', 'put my book on') the last book continues. For a kind of book with "
+            "no title ('a book about <subject>') use `find_books`. BEFORE calling, "
             "briefly say something like 'let me find it'. If the result has `then`, "
             "do exactly what it says. Never invent titles, authors or what a book "
             "is about."
@@ -205,29 +223,40 @@ TEXT: dict[str, dict[str, str]] = {
         "control_seconds": "Seconds for 'back' or 'forward' (default 30).",
         "control_chapter": "For 'go_to_chapter': the chapter's number or name, as said.",
         "find_books": (
-            "Look for Spotify audiobooks to recommend or choose from: 'what books do "
-            "you have?', 'what books are there?', 'what do you recommend to read?', "
-            "'what books are there by <author>?', 'which books have I listened to?', 'what "
-            "books have I been listening to?', "
-            "'what is it about?'. It only returns books that can be listened to here. "
-            "Call it ONCE per request. Without `query` it gives only the books already "
-            "started here: use that for what they've listened to, or when they ask "
-            "what there is with no author or subject, then ask what they like. Then do "
-            "exactly what `then` says."
+            "Offer audiobooks from the shelf: well-known books that can be listened to "
+            "here. Use it for 'what books do you have?', 'what do you recommend?', 'I "
+            "want a book about <subject>', 'something like <book>', 'what books are there "
+            "by <author>?', 'what is <title> about?', 'others', 'which books have I "
+            "listened to?'. Without arguments it says what kinds of book there are. Call "
+            "it ONCE per request, then say exactly what `then` says; never add books the "
+            "result didn't bring. If they then pick one ('the second', 'that one' or its "
+            "title), call `play_book` with that title."
         ),
         "find_query": (
-            "An author, a subject or a title, in a few words. For a general request "
-            "('something good', 'important authors', 'recommend me something'), do NOT "
-            "pass the sentence: pass a concrete subject or genre ('classic novel', "
-            "'short stories', 'history') or a well-known author. If they named books "
-            "they like ('like The Stranger'), pass the author of one of them. Empty for "
-            "books already started."
+            "The subject, kind of book, author or title they said, in their words, not "
+            "the whole sentence. Empty if they named none."
         ),
+        "find_like": (
+            "If they asked for books like one they named ('something like <book>'), that "
+            "book's title or author."
+        ),
+        "find_more": "true if they ask for others or more of the same ('others', 'what else?').",
+        "find_listened": "true if they ask which books they have listened to or started.",
+        "book_opinion": (
+            "Note whether the user liked a book, to recommend better: 'I liked it', 'what "
+            "a good book', 'I'm enjoying it', 'I don't like this book', 'I didn't like "
+            "that one'. Call it whenever they say they like a book or not, even if it "
+            "isn't phrased as a request. Without `title`, the book that is on or the last "
+            "one. Then say exactly what `then` says."
+        ),
+        "opinion_value": "'liked' if they liked it, 'disliked' if not.",
+        "opinion_title": "The title if they mean another book; empty for the one that is on.",
     },
     "fr": {
         "play_music": (
             "Joue de la musique Spotify : une chanson, un artiste, un album ou une "
-            "playlist. Pour les livres, utilise `play_book`. AVANT l'appel, dis "
+            "playlist. Pour un livre par son titre, utilise `play_book` ; pour un genre "
+            "de livre, `find_books`. AVANT l'appel, dis "
             "brièvement 'je cherche'. Les noms peuvent "
             "être en anglais ou en toute autre langue : passe-les tels que tu les as "
             "entendus, sans les traduire ni les remplacer par un nom proche. Si tu "
@@ -279,7 +308,8 @@ TEXT: dict[str, dict[str, str]] = {
             "les deux, tels que dits) il lance ce livre ; s'il vient d'entendre une "
             "liste et dit 'le deuxième', 'le dernier' ou 'celui-là', passe le titre "
             "de ce livre, dans l'ordre où tu les as lus. Sans `title` ('continue le "
-            "livre', 'mets mon livre') le dernier livre reprend. AVANT l'appel, dis "
+            "livre', 'mets mon livre') le dernier livre reprend. Pour un genre de livre "
+            "sans titre ('un livre sur <sujet>'), utilise `find_books`. AVANT l'appel, dis "
             "brièvement 'je cherche'. Si le résultat contient `then`, fais exactement "
             "ce qu'il dit. N'invente jamais de titres, d'auteurs ni de résumés."
         ),
@@ -306,22 +336,33 @@ TEXT: dict[str, dict[str, str]] = {
         "control_seconds": "Secondes pour 'back' ou 'forward' (30 par défaut).",
         "control_chapter": "Pour 'go_to_chapter' : le numéro ou le nom du chapitre, tel que dit.",
         "find_books": (
-            "Cherche des livres audio Spotify à recommander ou à choisir : 'quels "
-            "livres tu as ?', 'quels livres tu me conseilles ?', 'quels livres de "
-            "<auteur> ?', 'quels livres j'ai écoutés ?', 'quels livres j'écoute ces jours-ci "
-            "?', 'de quoi ça parle ?'. Ne "
-            "donne que des livres qu'on peut écouter ici. Appelle-la UNE fois par "
-            "demande. Sans `query`, donne seulement les livres déjà commencés ici ; "
-            "aussi s'il demande ce qu'il y a sans auteur ni sujet, puis demande ce "
-            "qu'il aime. Ensuite fais exactement ce que dit `then`."
+            "Propose des livres audio de l'étagère : des livres connus qu'on peut écouter "
+            "ici. Utilise-la pour 'quels livres tu as ?', 'qu'est-ce que tu me "
+            "conseilles ?', 'je veux un livre sur <sujet>', 'quelque chose comme <livre>', "
+            "'quels livres de <auteur> ?', 'de quoi parle <titre> ?', 'd'autres', 'quels "
+            "livres j'ai écoutés ?'. Sans argument, elle dit quels genres de livres il y "
+            "a. Appelle-la UNE fois par demande, puis dis exactement ce que dit `then` ; "
+            "n'ajoute jamais de livres absents du résultat. S'il en choisit un ('le "
+            "deuxième', 'celui-là' ou son titre), appelle `play_book` avec ce titre."
         ),
         "find_query": (
-            "Un auteur, un sujet ou un titre, en quelques mots. Pour une demande "
-            "générale ('quelque chose de bien', 'de grands auteurs'), NE passe PAS la "
-            "phrase : passe un sujet ou un genre précis ('roman classique', "
-            "'nouvelles', 'histoire') ou un auteur connu. S'il a nommé des livres qu'il "
-            "aime ('comme L'Étranger'), passe l'auteur de l'un d'eux. Vide pour les "
-            "livres déjà commencés."
+            "Le sujet, le genre de livre, l'auteur ou le titre qu'il a dit, avec ses mots, "
+            "pas toute la phrase. Vide s'il n'en a nommé aucun."
         ),
+        "find_like": (
+            "S'il demande des livres comme un livre qu'il a nommé ('quelque chose comme "
+            "<livre>'), le titre ou l'auteur de ce livre."
+        ),
+        "find_more": "true s'il demande d'autres livres ou plus du même ('d'autres', 'quoi d'autre ?').",
+        "find_listened": "true s'il demande quels livres il a écoutés ou commencés.",
+        "book_opinion": (
+            "Note si un livre a plu à l'utilisateur, pour mieux le conseiller : 'il m'a "
+            "plu', 'quel bon livre', 'ça me plaît', 'ce livre ne me plaît pas', 'celui-là "
+            "ne m'a pas plu'. Appelle-la chaque fois qu'il dit qu'un livre lui plaît ou "
+            "non, même sans le demander. Sans `title`, le livre en cours ou le dernier. "
+            "Ensuite dis exactement ce que dit `then`."
+        ),
+        "opinion_value": "'liked' s'il a aimé, 'disliked' sinon.",
+        "opinion_title": "Le titre s'il parle d'un autre livre ; vide pour celui en cours.",
     },
 }

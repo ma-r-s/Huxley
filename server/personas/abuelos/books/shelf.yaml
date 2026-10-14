@@ -1,0 +1,990 @@
+# Curated audiobook shelf for the audiobooks skill (Spanish).
+# Every uri pins a Spotify edition verified for market CO: Spanish, the real book.
+# Categories are listed in the order they are offered aloud.
+
+tags_vocabulary:
+  - amor
+  - familia
+  - infancia
+  - juventud
+  - guerra
+  - política
+  - justicia
+  - pobreza
+  - crimen
+  - detectives
+  - venganza
+  - humor
+  - viajes
+  - mar
+  - campo
+  - naturaleza
+  - animales
+  - espiritualidad
+  - filosofía
+  - realismo mágico
+  - fantástico
+  - ciencia ficción
+  - edad media
+  - antigüedad
+  - biografía
+  - periodismo
+  - colombia
+  - méxico
+  - argentina
+  - chile
+  - perú
+  - españa
+  - francia
+  - inglaterra
+  - rusia
+  - estados unidos
+
+categories:
+  - novela latinoamericana
+  - clásicos en español
+  - clásicos universales
+  - novela histórica
+  - misterio y suspenso
+  - aventuras
+  - cuentos
+  - historia y memorias
+  - poesía y teatro
+  - historias de terror
+  - libros para reflexionar
+
+books:
+  - title: "Cien años de soledad"
+    author: "Gabriel García Márquez"
+    category: novela latinoamericana
+    tags: [familia, realismo mágico, colombia]
+    pitch: "La historia de varias generaciones de la familia Buendía en el pueblo de Macondo."
+    uri: spotify:show:1oVPQwdET6CETd7KFZAghH
+    narrator: "Juan Pablo Raba"
+  - title: "El amor en los tiempos del cólera"
+    author: "Gabriel García Márquez"
+    category: novela latinoamericana
+    tags: [amor, colombia]
+    pitch: "Florentino Ariza espera durante medio siglo el amor de Fermina Daza, en una ciudad del Caribe."
+    uri: spotify:show:29zqqzIgpt2F1VV9662hfs
+    narrator: "Diego Trujillo"
+  - title: "Crónica de una muerte anunciada"
+    author: "Gabriel García Márquez"
+    category: novela latinoamericana
+    tags: [crimen, colombia]
+    pitch: "La reconstrucción de un crimen que todo un pueblo sabía que iba a ocurrir."
+    uri: spotify:show:6J3tUXzXzooQA2P2cfGnqx
+    narrator: "Diego Trujillo"
+  - title: "El coronel no tiene quien le escriba"
+    author: "Gabriel García Márquez"
+    category: novela latinoamericana
+    tags: [pobreza, colombia]
+    pitch: "Un viejo coronel espera cada viernes la carta de su pensión, mientras cuida un gallo de pelea."
+    uri: spotify:show:5fLcaJdlJBc7sJD4yAq61Z
+    narrator: "Diego Trujillo"
+  - title: "Del amor y otros demonios"
+    author: "Gabriel García Márquez"
+    category: novela latinoamericana
+    tags: [amor, colombia]
+    pitch: "En la Cartagena colonial, una niña mordida por un perro es encerrada en un convento por creerla poseída."
+    uri: spotify:show:5oerVueN3Fp3oHkqmzLkvp
+    narrator: "Carlos Manuel Vesga"
+  - title: "La casa de los espíritus"
+    author: "Isabel Allende"
+    category: novela latinoamericana
+    tags: [familia, realismo mágico, política, chile]
+    pitch: "La saga de la familia Trueba durante varias generaciones, entre el amor, la política y lo sobrenatural."
+    uri: spotify:show:5HcFXSDAa7zOjjMnx2WkI3
+    narrator: "Javiera Gazitua"
+  - title: "Eva Luna"
+    author: "Isabel Allende"
+    category: novela latinoamericana
+    tags: [amor, política]
+    pitch: "Una huérfana con el don de contar historias se abre camino en un país sudamericano agitado."
+    uri: spotify:show:6PqHYKxUZk8nsmwWtO79l8
+    narrator: "Juanita Devis"
+  - title: "De amor y de sombra"
+    author: "Isabel Allende"
+    category: novela latinoamericana
+    tags: [amor, política, chile]
+    pitch: "Una periodista y un fotógrafo se enamoran mientras investigan un crimen ocultado por la dictadura."
+    uri: spotify:show:0lVtIc5Ct3nkb7rGJeC0fk
+    narrator: "María Ignacia Hojas"
+  - title: "La ciudad y los perros"
+    author: "Mario Vargas Llosa"
+    category: novela latinoamericana
+    tags: [juventud, perú]
+    pitch: "La vida de un grupo de cadetes en un colegio militar de Lima, marcada por la disciplina y la violencia."
+    uri: spotify:show:0NAgslsHA3M1Nw0eN8Ia41
+    narrator: "Óscar Meza"
+  - title: "La tía Julia y el escribidor"
+    author: "Mario Vargas Llosa"
+    category: novela latinoamericana
+    tags: [amor, humor, perú]
+    pitch: "Un joven aspirante a escritor se enamora de su tía política, mientras un autor de radionovelas cautiva a Lima."
+    uri: spotify:show:1E7yHUQk4Ki0GVws9hxzmX
+    narrator: "Augusto Varillas"
+  - title: "Pantaleón y las visitadoras"
+    author: "Mario Vargas Llosa"
+    category: novela latinoamericana
+    tags: [humor, perú]
+    pitch: "Un capitán muy disciplinado recibe la misión secreta de llevar visitadoras a los cuarteles de la selva."
+    uri: spotify:show:0ZJA3EYRILwIx4XjiKNwsi
+    narrator: "Alberto Herrera Jefferson"
+  - title: "Pedro Páramo"
+    author: "Juan Rulfo"
+    category: novela latinoamericana
+    tags: [familia, fantástico, méxico]
+    pitch: "Juan Preciado llega a Comala buscando a su padre, Pedro Páramo, y encuentra un pueblo de murmullos."
+    uri: spotify:show:5HaQ7q7VHLapywkFHzkbCC
+    narrator: "Mauricio Carrera"
+  - title: "Rayuela"
+    author: "Julio Cortázar"
+    category: novela latinoamericana
+    tags: [amor, filosofía, argentina]
+    pitch: "Horacio Oliveira busca sentido a su vida entre París y Buenos Aires, junto a la Maga y sus amigos."
+    uri: spotify:show:2VRsr57ljuUMELTfzMrCW1
+    narrator: "Leandro Schnitman"
+  - title: "Como agua para chocolate"
+    author: "Laura Esquivel"
+    category: novela latinoamericana
+    tags: [amor, familia, realismo mágico, méxico]
+    pitch: "Tita, obligada a no casarse para cuidar de su madre, vuelca sus sentimientos en las recetas de su cocina."
+    uri: spotify:show:0c3EIhIC8DoU8Xxo5A1byz
+    narrator: "Yareli Arizmendi"
+  - title: "La muerte de Artemio Cruz"
+    author: "Carlos Fuentes"
+    category: novela latinoamericana
+    tags: [política, méxico]
+    pitch: "En su lecho de muerte, un poderoso hombre de negocios recuerda su vida desde la Revolución mexicana."
+    uri: spotify:show:014N8GfVT8sp3iT6i6I8g7
+    narrator: "Noé Velázquez"
+  - title: "El túnel"
+    author: "Ernesto Sabato"
+    category: novela latinoamericana
+    tags: [crimen, amor, argentina]
+    pitch: "Desde la cárcel, el pintor Juan Pablo Castel cuenta cómo llegó a matar a la mujer que amaba."
+    uri: spotify:show:6xoOclbo45tXq3iWyI7K1c
+    narrator: "Leandro Dugatkin"
+  - title: "La tregua"
+    author: "Mario Benedetti"
+    category: novela latinoamericana
+    tags: [amor, familia]
+    pitch: "Un oficinista viudo, a punto de jubilarse, lleva un diario de su vida gris hasta que llega un amor inesperado."
+    uri: spotify:show:67Z1VaT5xuhY0QWHxuOOZk
+    narrator: "Ernesto Alterio"
+  - title: "El ruido de las cosas al caer"
+    author: "Juan Gabriel Vásquez"
+    category: novela latinoamericana
+    tags: [crimen, colombia]
+    pitch: "Un profesor de Bogotá indaga en el pasado de un amigo asesinado, y con él en los años del narcotráfico."
+    uri: spotify:show:55wXh65jfrjWoVZxWSN1PM
+    narrator: "John Alex Toro"
+  - title: "Delirio"
+    author: "Laura Restrepo"
+    category: novela latinoamericana
+    tags: [amor, familia, colombia]
+    pitch: "Un hombre vuelve de un corto viaje, encuentra a su esposa enloquecida y busca entender qué ocurrió."
+    uri: spotify:show:1aD6e5XzLWh5Xe5rio4FBh
+    narrator: "Diana Angel"
+  - title: "María"
+    author: "Jorge Isaacs"
+    category: clásicos en español
+    tags: [amor, campo, colombia]
+    pitch: "Efraín vuelve a la hacienda familiar en el Valle del Cauca y vive un amor juvenil con su prima María."
+    uri: spotify:show:0PAlwxYNpKm2R41tHejGDj
+    narrator: "Jorge Javier Salas"
+  - title: "La vorágine"
+    author: "José Eustasio Rivera"
+    category: clásicos en español
+    tags: [naturaleza, amor, colombia]
+    pitch: "Arturo Cova huye con su amada hacia los llanos y la selva, donde conoce la explotación de los caucheros."
+    uri: spotify:show:0YPj7a50SwxsNDonlucJLA
+    narrator: "Max Garzón"
+  - title: "Doña Bárbara"
+    author: "Rómulo Gallegos"
+    category: clásicos en español
+    tags: [campo, justicia]
+    pitch: "Un joven abogado vuelve al llano venezolano a reclamar sus tierras, en manos de una mujer temida."
+    narrator: "Eduardo Serrano"
+  - title: "Don Quijote de la Mancha"
+    author: "Miguel de Cervantes"
+    category: clásicos en español
+    tags: [humor, viajes, españa]
+    pitch: "Un hidalgo enloquecido por los libros de caballería sale a los caminos con Sancho Panza a deshacer entuertos."
+    uri: spotify:show:0AlWkk7IODnp5hPla7BXk6
+    narrator: "Carlos Ramos"
+  - title: "Novelas ejemplares"
+    author: "Miguel de Cervantes"
+    category: clásicos en español
+    tags: [amor, humor, españa]
+    pitch: "Novelas breves de Cervantes con historias de amor, engaños y pícaros en la España de su tiempo."
+    uri: spotify:show:6qFG0eHGtmQ0aUzYrn9Jyf
+    narrator: "Arturo Querejeta"
+  - title: "Lazarillo de Tormes"
+    author: "Anónimo"
+    category: clásicos en español
+    tags: [pobreza, humor, españa]
+    pitch: "Un muchacho pobre cuenta sus desventuras al servicio de varios amos, entre ellos un ciego y un clérigo."
+    uri: spotify:show:2EQGy7njtgDmBMvpU4CDx6
+    narrator: "Pere Arquillué"
+  - title: "Los santos inocentes"
+    author: "Miguel Delibes"
+    category: clásicos en español
+    tags: [campo, pobreza, españa]
+    pitch: "Una humilde familia de campesinos sirve en un cortijo de Extremadura bajo el dominio de un señorito."
+    uri: spotify:show:3TagHvzF5UjZIDFMlt8cmC
+    narrator: "Jordi Llovet"
+  - title: "El camino"
+    author: "Miguel Delibes"
+    category: clásicos en español
+    tags: [infancia, campo, españa]
+    pitch: "La noche antes de irse a estudiar a la ciudad, un niño recuerda su vida y sus amigos en la aldea."
+    uri: spotify:show:6gve8ur334w8ceC0t962OA
+    narrator: "Jordi Boixaderas"
+  - title: "Cinco horas con Mario"
+    author: "Miguel Delibes"
+    category: clásicos en español
+    tags: [familia, españa]
+    pitch: "Una mujer vela el cuerpo de su marido durante la noche y repasa en voz alta su vida juntos."
+    uri: spotify:show:5RV506Eap0zr1Jpckur7lA
+    narrator: "Mercè Montalá"
+  - title: "La familia de Pascual Duarte"
+    author: "Camilo José Cela"
+    category: clásicos en español
+    tags: [crimen, campo, españa]
+    pitch: "Un campesino extremeño condenado a muerte cuenta la vida violenta que lo llevó a la cárcel."
+    uri: spotify:show:197dAgk3grL8JP0MjCRq9z
+    narrator: "Eugenio Barona"
+  - title: "La colmena"
+    author: "Camilo José Cela"
+    category: clásicos en español
+    tags: [pobreza, españa]
+    pitch: "Decenas de vecinos del Madrid pobre de la posguerra se cruzan en un café y en las calles de la ciudad."
+    uri: spotify:show:70wDyhIH47BhqA8u4KbO10
+    narrator: "Victor Clavijo"
+  - title: "Platero y yo"
+    author: "Juan Ramón Jiménez"
+    category: clásicos en español
+    tags: [animales, campo, españa]
+    pitch: "Un poeta conversa con su burrito Platero mientras recorre los paisajes y las gentes de su pueblo andaluz."
+    uri: spotify:show:4VrfAHXTjUtCWyGXNT9DXq
+    narrator: "Donelle Stuhlhofer"
+  - title: "Marianela"
+    author: "Benito Pérez Galdós"
+    category: clásicos en español
+    tags: [amor, pobreza, españa]
+    pitch: "Una muchacha humilde sirve de lazarillo a un joven ciego en un pueblo minero del norte de España."
+    uri: spotify:show:4BgClfAFuJcgT2J42EnH0v
+    narrator: "Esperanza de la Encarnación"
+  - title: "San Manuel Bueno, mártir"
+    author: "Miguel de Unamuno"
+    category: clásicos en español
+    tags: [espiritualidad, españa]
+    pitch: "La vida de un párroco muy querido en una aldea junto a un lago, contada por una mujer que lo conoció."
+    uri: spotify:show:70fF34pKq0XVf3m7afa7Vf
+    narrator: "Artur Mas"
+  - title: "Niebla"
+    author: "Miguel de Unamuno"
+    category: clásicos en español
+    tags: [amor, filosofía, españa]
+    pitch: "Augusto Pérez, un joven rico y sin rumbo, se enamora de una pianista en una novela que juega con la ficción."
+    uri: spotify:show:4nTqUNngDd7IVbT8yk8rNX
+    narrator: "Jesús Manuel Rois Frey"
+  - title: "Sin noticias de Gurb"
+    author: "Eduardo Mendoza"
+    category: clásicos en español
+    tags: [humor, ciencia ficción, españa]
+    pitch: "Un extraterrestre busca a su compañero Gurb, perdido en Barcelona, y anota en un diario todo lo que ve."
+    uri: spotify:show:3p5Chtcro48v9pi0QKPTK6
+    narrator: "Jordi Brau"
+  - title: "Los miserables"
+    author: "Víctor Hugo"
+    category: clásicos universales
+    tags: [justicia, pobreza, francia]
+    pitch: "Jean Valjean, un expresidiario, intenta rehacer su vida mientras un inspector lo persigue sin descanso."
+    uri: spotify:show:0mK7V42AnhTn0JP0oethA7
+    narrator: "Germán Gijón"
+  - title: "Orgullo y prejuicio"
+    author: "Jane Austen"
+    category: clásicos universales
+    tags: [amor, familia, inglaterra]
+    pitch: "Elizabeth Bennet y el orgulloso señor Darcy chocan una y otra vez en la Inglaterra rural."
+    uri: spotify:show:25sosBmrj36qrvJlD41ylb
+    narrator: "Benjamín Figueres"
+  - title: "Cumbres borrascosas"
+    author: "Emily Brontë"
+    category: clásicos universales
+    tags: [amor, venganza, inglaterra]
+    pitch: "En los páramos de Yorkshire, un huérfano adoptado y la hija de la familia viven un amor feroz."
+    uri: spotify:show:5VB7p6jzFFjLXvHR3cOWzQ
+    narrator: "Mónica Dávila Lozano"
+  - title: "Jane Eyre"
+    author: "Charlotte Brontë"
+    category: clásicos universales
+    tags: [amor, inglaterra]
+    pitch: "Una huérfana de carácter firme se convierte en institutriz en la mansión del misterioso señor Rochester."
+    uri: spotify:show:62XMDuvADHLTQgRy0ikTi5
+    narrator: "Silvia Rico"
+  - title: "Crimen y castigo"
+    author: "Fiódor Dostoievski"
+    category: clásicos universales
+    tags: [crimen, filosofía, rusia]
+    pitch: "Un estudiante pobre de San Petersburgo comete un crimen y vive atormentado por la culpa."
+    uri: spotify:show:3rVRx7Cbr0mvEJn19XdTqT
+    narrator: "Luis David García Márquez"
+  - title: "Los hermanos Karamázov"
+    author: "Fiódor Dostoievski"
+    category: clásicos universales
+    tags: [familia, espiritualidad, rusia]
+    pitch: "Un padre despótico y sus hijos, muy distintos entre sí, en un drama de pasiones, fe y culpa."
+    uri: spotify:show:1suJSyuff2lW1rt54BbZrB
+    narrator: "Luis David García Márquez"
+  - title: "Ana Karenina"
+    author: "León Tolstói"
+    category: clásicos universales
+    tags: [amor, familia, rusia]
+    pitch: "Una mujer de la alta sociedad rusa lo arriesga todo por un amor fuera de su matrimonio."
+    uri: spotify:show:2EPd7Mgpnu2HloaQ0kJTEw
+    narrator: "Lina Franco"
+  - title: "Guerra y paz"
+    author: "León Tolstói"
+    category: clásicos universales
+    tags: [guerra, familia, rusia]
+    pitch: "Varias familias de la nobleza rusa viven la invasión de Napoleón entre bailes, amores y batallas."
+    uri: spotify:show:0AKYfcnHvvr8QZfRn4eSiv
+    narrator: "Germán Gijón"
+  - title: "Madame Bovary"
+    author: "Gustave Flaubert"
+    category: clásicos universales
+    tags: [amor, francia]
+    pitch: "Emma, casada con un médico de provincia, sueña con una vida de pasión y lujo que no tiene."
+    uri: spotify:show:5hHOYrM8kuZKHhjf0PIeub
+    narrator: "Elisabet Egea"
+  - title: "El viejo y el mar"
+    author: "Ernest Hemingway"
+    category: clásicos universales
+    tags: [mar, naturaleza]
+    pitch: "Un viejo pescador cubano sale solo mar adentro y lucha durante días con un pez enorme."
+    uri: spotify:show:2fdUbLvb7NsZowzq3XlYW4
+    narrator: "Alexis Valdés"
+  - title: "1984"
+    author: "George Orwell"
+    category: clásicos universales
+    tags: [política, ciencia ficción]
+    pitch: "En un Estado que lo vigila todo, un funcionario empieza a dudar del Partido y del Gran Hermano."
+    narrator: "Antonio Delli"
+  - title: "Rebelión en la granja"
+    author: "George Orwell"
+    category: clásicos universales
+    tags: [animales, política]
+    pitch: "Los animales de una granja se rebelan contra su dueño para gobernarse solos, en una fábula sobre el poder."
+    uri: spotify:show:0wahQJv30SMydDAJTxhVXP
+    narrator: "Juan Antonio Bernal"
+  - title: "Un mundo feliz"
+    author: "Aldous Huxley"
+    category: clásicos universales
+    tags: [ciencia ficción, política]
+    pitch: "En un futuro donde la felicidad está fabricada y controlada, algunos empiezan a echar de menos la libertad."
+    uri: spotify:show:7kIwTjQF3ogkw6JRm91cpn
+    narrator: "Remigia de la Rosa"
+  - title: "El gran Gatsby"
+    author: "F. Scott Fitzgerald"
+    category: clásicos universales
+    tags: [amor, estados unidos]
+    pitch: "Cerca de Nueva York, un millonario misterioso da fiestas espléndidas para reencontrar a un antiguo amor."
+    uri: spotify:show:6On2u8YsDoYzYJh5MNZ7h9
+    narrator: "Miguel Coll"
+  - title: "Matar a un ruiseñor"
+    author: "Harper Lee"
+    category: clásicos universales
+    tags: [justicia, infancia, estados unidos]
+    pitch: "En un pueblo de Alabama, una niña ve a su padre, abogado, defender a un hombre negro acusado de un crimen."
+    uri: spotify:show:64UjOFyHJE1fzRc8csz0JY
+    narrator: "Sheila Blanco"
+  - title: "La metamorfosis"
+    author: "Franz Kafka"
+    category: clásicos universales
+    tags: [fantástico, familia]
+    pitch: "Gregorio Samsa despierta una mañana convertido en un insecto enorme, y su familia no sabe qué hacer con él."
+    uri: spotify:show:2QMiq89LeR7JhTuOFNugpS
+    narrator: "®bseal voice"
+  - title: "Mujercitas"
+    author: "Louisa May Alcott"
+    category: clásicos universales
+    tags: [familia, juventud, estados unidos]
+    pitch: "Cuatro hermanas crecen juntas en Estados Unidos mientras su padre está lejos, en la guerra."
+    uri: spotify:show:5JFmywBVD8AjGU3Tjz14A8
+    narrator: "Paola Navalón"
+  - title: "Oliver Twist"
+    author: "Charles Dickens"
+    category: clásicos universales
+    tags: [infancia, pobreza, inglaterra]
+    pitch: "Un niño huérfano escapa a Londres y cae en manos de una banda de ladrones."
+    uri: spotify:show:3dpGd1bp9e87CT2lGeurEu
+    narrator: "Raquel Romero"
+  - title: "Canción de Navidad"
+    author: "Charles Dickens"
+    category: clásicos universales
+    tags: [fantástico, inglaterra]
+    pitch: "En Nochebuena, el avaro Scrooge recibe la visita de varios fantasmas que le muestran su vida."
+    uri: spotify:show:5BfOtEuXesrGBZJOYTvAwn
+    narrator: "Jordi Boixaderas"
+  - title: "Grandes esperanzas"
+    author: "Charles Dickens"
+    category: clásicos universales
+    tags: [juventud, inglaterra]
+    pitch: "Pip, un niño huérfano, recibe de un benefactor desconocido la oportunidad de convertirse en caballero."
+    uri: spotify:show:4qwLU4hDktmO5t0FgucuFA
+    narrator: "Ignacio Casas"
+  - title: "La Odisea"
+    author: "Homero"
+    category: clásicos universales
+    tags: [antigüedad, viajes, mar]
+    pitch: "Tras la guerra de Troya, Ulises lucha durante años por volver a casa, junto a su esposa y su hijo."
+    uri: spotify:show:3vPDloTiayCOxvcZ26Mf3d
+    narrator: "Carmenza Gómez"
+  - title: "La Ilíada"
+    author: "Homero"
+    category: clásicos universales
+    tags: [antigüedad, guerra]
+    pitch: "La guerra de Troya y la cólera de Aquiles, entre héroes, reyes y dioses."
+    uri: spotify:show:0dZFO5a45vIqG30IWHM8dB
+    narrator: "Clara Sofia Arrieta"
+  - title: "El general en su laberinto"
+    author: "Gabriel García Márquez"
+    category: novela histórica
+    tags: [biografía, política, colombia]
+    pitch: "El último viaje de Simón Bolívar por el río Magdalena, enfermo y alejado del poder."
+    uri: spotify:show:0XMG0f5LasIlYJkrd12ZCN
+    narrator: "Carlos Manuel Vesga"
+  - title: "Hija de la fortuna"
+    author: "Isabel Allende"
+    category: novela histórica
+    tags: [amor, viajes, chile, estados unidos]
+    pitch: "Una joven chilena viaja a California durante la fiebre del oro para buscar a su amante."
+    uri: spotify:show:0E1hIukjtzcQ4F3kYHLgeg
+    narrator: "Camila Valenzuela"
+  - title: "Retrato en sepia"
+    author: "Isabel Allende"
+    category: novela histórica
+    tags: [familia, chile]
+    pitch: "En el Chile del siglo XIX, Aurora del Valle busca recuperar los recuerdos borrados de su infancia."
+    uri: spotify:show:7jaWRChgW1fyF9ENgfz9rU
+    narrator: "Javiera Gazitua"
+  - title: "Largo pétalo de mar"
+    author: "Isabel Allende"
+    category: novela histórica
+    tags: [guerra, viajes, españa, chile]
+    pitch: "Un joven médico huye de la Guerra Civil española y llega a Chile en el barco Winnipeg con otros exiliados."
+    uri: spotify:show:55rbZUBCVifY4JMocFp3lT
+    narrator: "Jordi Boixaderas"
+  - title: "Violeta"
+    author: "Isabel Allende"
+    category: novela histórica
+    tags: [familia, amor]
+    pitch: "La vida de una mujer sudamericana a lo largo de un siglo, desde una pandemia hasta la siguiente."
+    uri: spotify:show:2RUjTxRtTSzy53PSzNR285
+    narrator: "Javiera Gazitua"
+  - title: "La fiesta del Chivo"
+    author: "Mario Vargas Llosa"
+    category: novela histórica
+    tags: [política, crimen]
+    pitch: "La dictadura de Trujillo en República Dominicana, vista por el dictador, sus conspiradores y una víctima."
+    uri: spotify:show:4fItq4NI0p3DOcnjv0zdam
+    narrator: "Jane Santos"
+  - title: "Soldados de Salamina"
+    author: "Javier Cercas"
+    category: novela histórica
+    tags: [guerra, periodismo, españa]
+    pitch: "Un periodista investiga cómo un escritor franquista sobrevivió a un fusilamiento al final de la Guerra Civil."
+    uri: spotify:show:59llD9oeOJELwxbGjJyH7Y
+    narrator: "Sergio Zamora"
+  - title: "La catedral del mar"
+    author: "Ildefonso Falcones"
+    category: novela histórica
+    tags: [edad media, españa]
+    pitch: "En la Barcelona del siglo XIV, un hijo de siervos busca la libertad mientras se levanta una gran iglesia."
+    uri: spotify:show:6XEFX1f3JybHCB3137X6uy
+    narrator: "Raúl Llorens"
+  - title: "El tiempo entre costuras"
+    author: "María Dueñas"
+    category: novela histórica
+    tags: [amor, guerra, españa]
+    pitch: "Una joven modista deja Madrid antes de la Guerra Civil y rehace su vida en el Marruecos español."
+    narrator: "Neus Sendra"
+  - title: "Trafalgar"
+    author: "Benito Pérez Galdós"
+    category: novela histórica
+    tags: [guerra, mar, españa]
+    pitch: "Un muchacho de Cádiz vive desde un barco español la gran batalla naval de Trafalgar."
+    uri: spotify:show:09I8NoMB3krzeXBT4tqlcx
+    narrator: "Rafael Baena Zapatero"
+  - title: "La ciudad de los prodigios"
+    author: "Eduardo Mendoza"
+    category: novela histórica
+    tags: [crimen, españa]
+    pitch: "Un muchacho pobre llega a Barcelona y asciende hasta lo más alto mientras la ciudad se transforma."
+    uri: spotify:show:4k4hZ8SB5eViza7eCYTVAg
+    narrator: "Juan Magraner"
+  - title: "Memorias de Adriano"
+    author: "Marguerite Yourcenar"
+    category: novela histórica
+    tags: [antigüedad, biografía, filosofía]
+    pitch: "El emperador romano Adriano, al final de su vida, repasa su historia en una larga carta a su sucesor."
+    uri: spotify:show:0CQSYV2qxdDH1BWrJOuZgF
+    narrator: "Alejandro Graue"
+  - title: "Los pilares de la Tierra"
+    author: "Ken Follett"
+    category: novela histórica
+    tags: [edad media, inglaterra]
+    pitch: "La construcción de una catedral en la Inglaterra medieval, entre guerras, ambiciones y amores."
+    uri: spotify:show:2x33yhBbcP6P6rTI4LmZRf
+    narrator: "Jordi Boixaderas"
+  - title: "La pregunta de sus ojos"
+    author: "Eduardo Sacheri"
+    category: misterio y suspenso
+    tags: [crimen, justicia, argentina]
+    pitch: "Un empleado judicial jubilado revive un caso que nunca olvidó, el de la película El secreto de sus ojos."
+    uri: spotify:show:0ihAhkzri5ozdfeMsTdUve
+    narrator: "Gustavo Bonfigli"
+  - title: "La sombra del viento"
+    author: "Carlos Ruiz Zafón"
+    category: misterio y suspenso
+    tags: [juventud, españa]
+    pitch: "En la Barcelona de posguerra, un muchacho halla un libro olvidado y se obsesiona con el misterio de su autor."
+    uri: spotify:show:5f4G1uKa08cVE6sAgZuDbA
+    narrator: "Jordi Boixaderas"
+  - title: "El juego del ángel"
+    author: "Carlos Ruiz Zafón"
+    category: misterio y suspenso
+    tags: [amor, españa]
+    pitch: "En la Barcelona de los años veinte, un joven escritor recibe de un misterioso editor una oferta inquietante."
+    narrator: "Jordi Boixaderas"
+  - title: "El prisionero del cielo"
+    author: "Carlos Ruiz Zafón"
+    category: misterio y suspenso
+    tags: [guerra, españa]
+    pitch: "Daniel Sempere y su amigo Fermín se enfrentan a un secreto enterrado desde los años de la guerra."
+    uri: spotify:show:4Xsn73Kho7Yv3j2UWKWBSr
+    narrator: "Jordi Boixaderas"
+  - title: "El laberinto de los espíritus"
+    author: "Carlos Ruiz Zafón"
+    category: misterio y suspenso
+    tags: [familia, españa]
+    pitch: "En la Barcelona de los años cincuenta, Daniel Sempere quiere saber la verdad sobre la muerte de su madre."
+    uri: spotify:show:3Z8gujKNVRHAndZlGOjfz0
+    narrator: "Jordi Boixaderas"
+  - title: "La tabla de Flandes"
+    author: "Arturo Pérez-Reverte"
+    category: misterio y suspenso
+    tags: [crimen, españa]
+    pitch: "Una restauradora halla en un cuadro antiguo una pista sobre un viejo crimen, oculta en una partida de ajedrez."
+    uri: spotify:show:2oIiKhGtP9nH8ldkL3vf7D
+    narrator: "Raúl Llorens"
+  - title: "El club Dumas"
+    author: "Arturo Pérez-Reverte"
+    category: misterio y suspenso
+    tags: [crimen, viajes]
+    pitch: "Un cazador de libros raros investiga un manuscrito de Dumas y un antiguo libro sobre el diablo."
+    uri: spotify:show:6luhbPQegofQJinoWKcjE1
+    narrator: "Juan Carlos Gustems"
+  - title: "La reina del sur"
+    author: "Arturo Pérez-Reverte"
+    category: misterio y suspenso
+    tags: [crimen, méxico, españa]
+    pitch: "Tras la muerte de su novio, una joven de Sinaloa huye a España y se adentra en el mundo del narcotráfico."
+    uri: spotify:show:1Sl6ZHLh2aQDZ0qNHbOeds
+    narrator: "Rogelio Ramos"
+  - title: "El nombre de la rosa"
+    author: "Umberto Eco"
+    category: misterio y suspenso
+    tags: [edad media, crimen, detectives]
+    pitch: "En una abadía medieval, fray Guillermo de Baskerville y su joven ayudante investigan unas muertes extrañas."
+    uri: spotify:show:58a53PtRFF73BZGkwiYPVq
+    narrator: "Juan Carlos Gustems"
+  - title: "El perfume"
+    author: "Patrick Süskind"
+    category: misterio y suspenso
+    tags: [crimen, francia]
+    pitch: "Un hombre de olfato prodigioso se obsesiona con crear el perfume perfecto, en la Francia del siglo XVIII."
+    uri: spotify:show:1oGdHsE8P0i8awap35pLeP
+    narrator: "Luis Posada"
+  - title: "Asesinato en el Orient Express"
+    author: "Agatha Christie"
+    category: misterio y suspenso
+    tags: [detectives, viajes]
+    pitch: "El detective Hércules Poirot investiga un asesinato en un tren detenido por la nieve en plena noche."
+    uri: spotify:show:3tFjGP7hadLUHGWFdh5qM8
+    narrator: "Juan Miguel Díez"
+  - title: "Y no quedó ninguno"
+    author: "Agatha Christie"
+    category: misterio y suspenso
+    tags: [crimen, inglaterra]
+    pitch: "Diez desconocidos son invitados a una isla aislada, donde empiezan a morir uno tras otro."
+    uri: spotify:show:54v2uKzkUEhd1TuCUeDqN1
+    narrator: "Marcel Navarro"
+  - title: "Muerte en el Nilo"
+    author: "Agatha Christie"
+    category: misterio y suspenso
+    tags: [detectives, viajes]
+    pitch: "Durante un crucero por el Nilo, Hércules Poirot investiga un crimen entre los pasajeros."
+    uri: spotify:show:6jZ3ePFdOnFepyTnVJonsx
+    narrator: "Juan Miguel Díez"
+  - title: "El asesinato de Roger Ackroyd"
+    author: "Agatha Christie"
+    category: misterio y suspenso
+    tags: [detectives, inglaterra]
+    pitch: "En un tranquilo pueblo inglés, Hércules Poirot investiga la muerte de un hombre rico que sabía demasiado."
+    uri: spotify:show:0P7WNGfxGhpV0efP7mx3mM
+    narrator: "Juan Miguel Díez"
+  - title: "El sabueso de los Baskerville"
+    author: "Arthur Conan Doyle"
+    category: misterio y suspenso
+    tags: [detectives, inglaterra]
+    pitch: "Sherlock Holmes y el doctor Watson investigan una vieja maldición que persigue a una familia en los páramos."
+    uri: spotify:show:414xpDml7NUbr9xFhqY7gP
+    narrator: "AI Voice"
+  - title: "Estudio en escarlata"
+    author: "Arthur Conan Doyle"
+    category: misterio y suspenso
+    tags: [detectives, inglaterra]
+    pitch: "Primer caso de Sherlock Holmes y el doctor Watson, un crimen en Londres con una palabra escrita en sangre."
+    uri: spotify:show:3PitLsL7LTTnKKQKc8wflc
+    narrator: "Jesús Manuel Rois Frey"
+  - title: "Las aventuras de Sherlock Holmes"
+    author: "Arthur Conan Doyle"
+    category: misterio y suspenso
+    tags: [detectives, inglaterra]
+    pitch: "Doce casos breves del detective Sherlock Holmes, contados por su amigo el doctor Watson."
+    uri: spotify:show:3Qrv7kBXD3b8GSMgCNQfjF
+    narrator: "José Angel Peña"
+  - title: "La verdad sobre el caso Harry Quebert"
+    author: "Joël Dicker"
+    category: misterio y suspenso
+    tags: [crimen, estados unidos]
+    pitch: "Un escritor investiga el caso de su maestro, acusado de la muerte de una muchacha desaparecida hace décadas."
+    uri: spotify:show:1YOkrBTiqCDH4q3uQTIRN4
+    narrator: "José Posada"
+  - title: "El capitán Alatriste"
+    author: "Arturo Pérez-Reverte"
+    category: aventuras
+    tags: [política, españa]
+    pitch: "En el Madrid del siglo XVII, un soldado veterano acepta un encargo peligroso como espadachín a sueldo."
+    uri: spotify:show:0USb0Z7kjLChPga6OEofRO
+    narrator: "Raúl Llorens"
+  - title: "El conde de Montecristo"
+    author: "Alejandro Dumas"
+    category: aventuras
+    tags: [venganza, justicia, francia]
+    pitch: "Encarcelado injustamente, Edmundo Dantès escapa años después decidido a vengarse de quienes lo traicionaron."
+    uri: spotify:show:0KPdL4oq6vyr3n5jiyR3dM
+    narrator: "David Serrano"
+  - title: "Los tres mosqueteros"
+    author: "Alejandro Dumas"
+    category: aventuras
+    tags: [política, francia]
+    pitch: "El joven D'Artagnan llega a París para ser mosquetero del rey y se une a Athos, Porthos y Aramis."
+    uri: spotify:show:0N6alkm5Xse83VtVOLxmuh
+    narrator: "Voz digital Marcus Holloway"
+  - title: "Moby Dick"
+    author: "Herman Melville"
+    category: aventuras
+    tags: [mar, venganza]
+    pitch: "El capitán Ahab persigue por todos los mares a la gran ballena blanca que le arrancó una pierna."
+    uri: spotify:show:0INbNBRUbGTVkN5i1MD30E
+    narrator: "Germán Gijón"
+  - title: "La isla del tesoro"
+    author: "Robert Louis Stevenson"
+    category: aventuras
+    tags: [mar, juventud]
+    pitch: "Jim Hawkins, un muchacho de una posada, se embarca en busca de un tesoro escondido, entre piratas."
+    uri: spotify:show:2tYtg38o7VrXgeJfwCT1fW
+    narrator: "Lorenzo Silva"
+  - title: "Robinson Crusoe"
+    author: "Daniel Defoe"
+    category: aventuras
+    tags: [mar, naturaleza]
+    pitch: "Un náufrago sobrevive durante años solo en una isla desierta gracias a su ingenio."
+    uri: spotify:show:2Idqkva7efAYbqwa8cQiGm
+    narrator: "David Carrillo"
+  - title: "Veinte mil leguas de viaje submarino"
+    author: "Julio Verne"
+    category: aventuras
+    tags: [mar, ciencia ficción, viajes]
+    pitch: "Un científico y sus compañeros recorren los océanos a bordo del Nautilus, el submarino del capitán Nemo."
+    uri: spotify:show:0BsEIJJimwRYH3c7AQ6JYN
+    narrator: "Juan Carlos Albarracín"
+  - title: "La vuelta al mundo en ochenta días"
+    author: "Julio Verne"
+    category: aventuras
+    tags: [viajes, humor]
+    pitch: "Phileas Fogg apuesta a que puede dar la vuelta al mundo en ochenta días, junto a su criado Passepartout."
+    uri: spotify:show:0S96JrfcWQDTIGPEymO1pC
+    narrator: "Carlos Lorenzo"
+  - title: "Viaje al centro de la Tierra"
+    author: "Julio Verne"
+    category: aventuras
+    tags: [viajes, ciencia ficción]
+    pitch: "Un profesor, su sobrino y un guía islandés descienden por un volcán hacia las profundidades de la Tierra."
+    uri: spotify:show:3XokeBonBGFU6fHmKf5Vx8
+    narrator: "Horacio Lanci"
+  - title: "Miguel Strogoff"
+    author: "Julio Verne"
+    category: aventuras
+    tags: [viajes, guerra, rusia]
+    pitch: "Un correo del zar debe cruzar Siberia en plena invasión tártara para llevar un mensaje vital."
+    uri: spotify:show:62s7XRxL9DUmrREJZlCSqt
+    narrator: "Oscar Chamorro"
+  - title: "Doce cuentos peregrinos"
+    author: "Gabriel García Márquez"
+    category: cuentos
+    tags: [realismo mágico, viajes]
+    pitch: "Doce cuentos de latinoamericanos que viven en ciudades de Europa, entre lo cotidiano y lo extraordinario."
+    uri: spotify:show:7wa3pKnMGnGobg6gAfsrf5
+    narrator: "Carlos Manuel Vesga"
+  - title: "El llano en llamas"
+    author: "Juan Rulfo"
+    category: cuentos
+    tags: [campo, pobreza, méxico]
+    pitch: "Cuentos del campo mexicano, de gente pobre, violencia y tierras secas en los años de la Revolución."
+    uri: spotify:show:49QbfunIWQAXTTtdVYd7tl
+    narrator: "Mauricio Carrera"
+  - title: "Bestiario"
+    author: "Julio Cortázar"
+    category: cuentos
+    tags: [fantástico, animales, argentina]
+    pitch: "Ocho cuentos en los que lo cotidiano se vuelve extraño, con animales reales e imaginarios."
+    uri: spotify:show:4xbRGIbghTnHgjuBqcDQhW
+    narrator: "Leandro Schnitman"
+  - title: "Ficciones"
+    author: "Jorge Luis Borges"
+    category: cuentos
+    tags: [fantástico, filosofía, argentina]
+    pitch: "Cuentos de Borges sobre laberintos, bibliotecas infinitas, espejos y mundos imaginarios."
+    uri: spotify:show:5il8wh2CjEkIf126gHpIOo
+    narrator: "Gerardo Prat"
+  - title: "El Aleph"
+    author: "Jorge Luis Borges"
+    category: cuentos
+    tags: [fantástico, filosofía, argentina]
+    pitch: "Cuentos de Borges sobre el infinito, la inmortalidad y el destino, entre lo fantástico y lo policial."
+    uri: spotify:show:78YnwEFjVn37otIloyX16d
+    narrator: "Gerardo Prat"
+  - title: "Cuentos de la selva"
+    author: "Horacio Quiroga"
+    category: cuentos
+    tags: [animales, naturaleza, infancia]
+    pitch: "Cuentos de animales de la selva, como flamencos, tortugas y coatíes, pensados para los niños."
+    uri: spotify:show:22DtQSPTA9MDNLm653v6Vu
+    narrator: "Varios narradores"
+  - title: "Cuentos de amor, de locura y de muerte"
+    author: "Horacio Quiroga"
+    category: cuentos
+    tags: [amor, naturaleza]
+    pitch: "Cuentos de Quiroga sobre la pasión, la locura y la muerte, muchos de ellos ambientados en la selva."
+    uri: spotify:show:1cHEUP2JFjUft6OJJcurIo
+    narrator: "Martín de Renzo"
+  - title: "Las mil y una noches"
+    author: "Anónimo"
+    category: cuentos
+    tags: [fantástico, amor]
+    pitch: "Primer tomo de los cuentos que Sherezade narra cada noche al sultán para salvar su vida."
+    uri: spotify:show:0EwJcGA69EXEVub8JDbcuK
+    narrator: "Oscar Chamorro"
+  - title: "Fábulas de Esopo"
+    author: "Esopo"
+    category: cuentos
+    tags: [animales, antigüedad]
+    pitch: "Breves fábulas de animales que dejan, cada una, una enseñanza para la vida."
+    uri: spotify:show:7GZ5mc7rgJwLxPF16yemcW
+    narrator: "Luis Ignacio González"
+  - title: "Relato de un náufrago"
+    author: "Gabriel García Márquez"
+    category: historia y memorias
+    tags: [mar, periodismo, colombia]
+    pitch: "Un marinero colombiano cuenta los diez días que pasó a la deriva en una balsa, sin comer ni beber."
+    uri: spotify:show:0gPz8BRW5bfr8VhSyUlYwi
+    narrator: "Carlos Manuel Vesga"
+  - title: "Noticia de un secuestro"
+    author: "Gabriel García Márquez"
+    category: historia y memorias
+    tags: [periodismo, crimen, colombia]
+    pitch: "La crónica real de varios secuestros ordenados por los narcotraficantes en la Colombia de los noventa."
+    uri: spotify:show:5anBomw941SJfVZAAyBk5g
+    narrator: "Carlos Manuel Vesga"
+  - title: "El olvido que seremos"
+    author: "Héctor Abad Faciolince"
+    category: historia y memorias
+    tags: [familia, biografía, colombia]
+    pitch: "Héctor Abad Faciolince recuerda a su padre, un médico de Medellín que luchó por los derechos humanos."
+    uri: spotify:show:36SttrzGxlXEu7ydjgpYlV
+    narrator: "Héctor Abad Faciolince"
+  - title: "Vivir para contarla"
+    author: "Gabriel García Márquez"
+    category: historia y memorias
+    tags: [biografía, colombia]
+    pitch: "Las memorias de García Márquez sobre su infancia y juventud, de donde nacieron muchas de sus historias."
+    uri: spotify:show:16eI0xCR9tNjY3lCTo1ia6
+    narrator: "Ramsés Ramos"
+  - title: "Paula"
+    author: "Isabel Allende"
+    category: historia y memorias
+    tags: [familia, biografía, chile]
+    pitch: "Isabel Allende escribe para su hija, enferma en un hospital, la historia de su familia y de su propia vida."
+    uri: spotify:show:7xisVqxHXLBe6II70Ks391
+    narrator: "Javiera Gazitua"
+  - title: "El diario de Ana Frank"
+    author: "Ana Frank"
+    category: historia y memorias
+    tags: [guerra, juventud, biografía]
+    pitch: "El diario de una muchacha judía que vivió escondida con su familia en Ámsterdam durante la ocupación nazi."
+    uri: spotify:show:7EiYD9h4N85yrSwUhc1siD
+    narrator: "Various Narrators"
+  - title: "Sapiens"
+    author: "Yuval Noah Harari"
+    category: historia y memorias
+    tags: [antigüedad, filosofía]
+    pitch: "Una breve historia de la humanidad, desde los primeros seres humanos hasta el mundo de hoy."
+    uri: spotify:show:5rQVkU6rkSlCnNXOnXIWca
+    narrator: "Carlos Manuel Vesga"
+  - title: "Momentos estelares de la humanidad"
+    author: "Stefan Zweig"
+    category: historia y memorias
+    tags: [biografía, guerra]
+    pitch: "Relatos de Stefan Zweig sobre momentos decisivos que cambiaron el rumbo de la historia."
+    uri: spotify:show:6GtSylow5vKYAXiMspiEfu
+    narrator: "Audiolibros Jorge Estupiñán"
+  - title: "El mundo de ayer"
+    author: "Stefan Zweig"
+    category: historia y memorias
+    tags: [biografía, guerra]
+    pitch: "Stefan Zweig recuerda la Europa de su juventud, antes de que las dos guerras mundiales la destruyeran."
+    uri: spotify:show:0HEinPjtmCFrcNnQ5gzEur
+    narrator: "Carles Sianes"
+  - title: "Steve Jobs"
+    author: "Walter Isaacson"
+    category: historia y memorias
+    tags: [biografía, estados unidos]
+    pitch: "La vida del fundador de Apple, contada a partir de decenas de entrevistas con él y con quienes lo conocieron."
+    uri: spotify:show:6OozgYWhI9stG2kqCMFKkY
+    narrator: "Roberto Medina"
+  - title: "El largo camino hacia la libertad"
+    author: "Nelson Mandela"
+    category: historia y memorias
+    tags: [biografía, política, justicia]
+    pitch: "Nelson Mandela cuenta su vida, desde su infancia en una aldea hasta su lucha contra el apartheid."
+    uri: spotify:show:6zXcI2ojDUU6yvNTD9Ayqw
+    narrator: "Victor Sabi"
+  - title: "Bolívar"
+    author: "Marie Arana"
+    category: historia y memorias
+    tags: [biografía, guerra, política]
+    pitch: "La vida de Simón Bolívar, el Libertador, desde su juventud en Caracas hasta sus campañas por América."
+    uri: spotify:show:7d0vrjfU0J7cKk9rB08jaf
+    narrator: "Malena Rospigliosi Bonilla"
+  - title: "Rimas y leyendas"
+    author: "Gustavo Adolfo Bécquer"
+    category: poesía y teatro
+    tags: [amor, fantástico, españa]
+    pitch: "Poemas breves sobre el amor y la nostalgia, junto a leyendas misteriosas de la vieja España."
+    uri: spotify:show:253OrbTlSBGulSpkX76ipL
+    narrator: "Íñigo Álvarez de Lara"
+  - title: "Romancero gitano"
+    author: "Federico García Lorca"
+    category: poesía y teatro
+    tags: [amor, españa]
+    pitch: "Romances de Lorca sobre el mundo gitano de Andalucía, la luna, la noche y la muerte."
+    uri: spotify:show:26WLqgndr3FTS5124M1r2Q
+    narrator: "Margarita Xirgu"
+  - title: "Bodas de sangre"
+    author: "Federico García Lorca"
+    category: poesía y teatro
+    tags: [amor, familia, campo, españa]
+    pitch: "Una boda en el campo andaluz despierta un viejo amor y las pasiones de dos familias enfrentadas."
+    uri: spotify:show:1HXTsFY7W6PSc6pjiU6wzI
+    narrator: "Varios narradores"
+  - title: "Campos de Castilla"
+    author: "Antonio Machado"
+    category: poesía y teatro
+    tags: [naturaleza, españa]
+    pitch: "Poemas sobre los paisajes y las gentes de Castilla, y sobre la memoria y la pérdida."
+    uri: spotify:show:3mkqBm0tpNMNom2ZDyh2FN
+    narrator: "Rafael Baena Zapatero"
+  - title: "Veinte poemas de amor y una canción desesperada"
+    author: "Pablo Neruda"
+    category: poesía y teatro
+    tags: [amor, chile]
+    pitch: "Poemas de amor juvenil, a la vez apasionados y melancólicos."
+    uri: spotify:show:2Bp2z2OBE750k4Fg2ZBGpO
+    narrator: "Julio César Luna"
+  - title: "Aura"
+    author: "Carlos Fuentes"
+    category: historias de terror
+    tags: [fantástico, amor, méxico]
+    pitch: "Un joven historiador acepta un empleo en una vieja casona de Ciudad de México, junto a una viuda y su sobrina."
+    uri: spotify:show:4xn1eUnf4CO7IyQJTbVRZQ
+    narrator: "Carlos Fuentes"
+  - title: "El retrato de Dorian Gray"
+    author: "Oscar Wilde"
+    category: historias de terror
+    tags: [fantástico, filosofía, inglaterra]
+    pitch: "Un joven muy bello se mantiene sin envejecer mientras su retrato carga con el paso del tiempo y sus culpas."
+    uri: spotify:show:1LBK57zLi3rTJ5kW3kHITE
+    narrator: "Enric Puig"
+  - title: "Frankenstein"
+    author: "Mary Shelley"
+    category: historias de terror
+    tags: [ciencia ficción, venganza]
+    pitch: "Un joven científico da vida a una criatura hecha con partes de cadáveres y debe enfrentar las consecuencias."
+    uri: spotify:show:4pYN9tmhyyvE3hy2MWZDLb
+    narrator: "Juan Carlos Albarracín"
+  - title: "Drácula"
+    author: "Bram Stoker"
+    category: historias de terror
+    tags: [fantástico, viajes, inglaterra]
+    pitch: "Un abogado inglés viaja a Transilvania para cerrar un negocio con un misterioso conde."
+    uri: spotify:show:2dwdDjJxJN0WqEAyjMKKsl
+    narrator: "Juan Magraner"
+  - title: "El extraño caso del doctor Jekyll y el señor Hyde"
+    author: "Robert Louis Stevenson"
+    category: historias de terror
+    tags: [crimen, fantástico, inglaterra]
+    pitch: "En el Londres brumoso, un abogado investiga qué une al respetable doctor Jekyll con el siniestro señor Hyde."
+    uri: spotify:show:35SwSg9zpbHa9bGx9x346n
+    narrator: "Octavi Pujades"
+  - title: "El principito"
+    author: "Antoine de Saint-Exupéry"
+    category: libros para reflexionar
+    tags: [filosofía, fantástico]
+    pitch: "Un piloto perdido en el desierto conoce a un pequeño príncipe venido de otro planeta."
+    uri: spotify:show:5OWk1CLBQH3f8nvlEoJdT3
+    narrator: "Máximo Bonella"
+  - title: "El alquimista"
+    author: "Paulo Coelho"
+    category: libros para reflexionar
+    tags: [viajes, espiritualidad]
+    pitch: "Un joven pastor andaluz viaja hasta Egipto en busca de un tesoro con el que ha soñado."
+    uri: spotify:show:1kFcp4W0TsZZCkP5ODMuDn
+    narrator: "Tomás Leighton"
+  - title: "Siddhartha"
+    author: "Hermann Hesse"
+    category: libros para reflexionar
+    tags: [espiritualidad, filosofía, viajes]
+    pitch: "Un joven de la India antigua deja su hogar para buscar la sabiduría por distintos caminos."
+    uri: spotify:show:0977vYklBQExCa3kfZhfgW
+    narrator: "Horacio Mancilla"
+  - title: "Juan Salvador Gaviota"
+    author: "Richard Bach"
+    category: libros para reflexionar
+    tags: [animales, espiritualidad]
+    pitch: "Una gaviota que no se conforma con buscar comida dedica su vida a aprender a volar cada vez mejor."
+    uri: spotify:show:42fg8L0sseYHHPeUgcrFNc
+    narrator: "Rafael Pacheco"
+  - title: "El hombre en busca de sentido"
+    author: "Viktor Frankl"
+    category: libros para reflexionar
+    tags: [guerra, filosofía, biografía]
+    pitch: "Viktor Frankl cuenta su paso por los campos de concentración y cómo hallar sentido incluso en el sufrimiento."
+    uri: spotify:show:2jwe2Fllpy8oNHYE1pbQsk
+    narrator: "Isa Puchol"

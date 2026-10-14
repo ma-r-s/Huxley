@@ -156,3 +156,123 @@ def make_ctx(
         return MagicMock()
 
     return dataclasses.replace(base, inject_turn=inject_turn, background_task=background_task)
+
+
+# A small shelf (T1.45), shaped like server/personas/abuelos/books/shelf.json.
+SHELF_CATEGORIES = [
+    "misterio y suspenso",
+    "novela latinoamericana",
+    "cuentos",
+    "historia y memorias",
+    "aventuras",
+]
+
+
+def shelf_book(
+    title: str, author: str, uri: str, category: str, tags: list[str], pitch: str = ""
+) -> dict[str, Any]:
+    return {
+        "title": title,
+        "author": author,
+        "narrator": "Alguien",
+        "uri": uri,
+        "language": "es",
+        "category": category,
+        "tags": tags,
+        "pitch": pitch or f"De qué trata {title}.",
+        "verified": "2026-10-13",
+    }
+
+
+SHELF_BOOKS = [
+    shelf_book(
+        "Cien años de soledad",
+        "Gabriel García Márquez",
+        "spotify:show:cien",
+        "novela latinoamericana",
+        ["familia", "colombia"],
+        "La historia de los Buendía en Macondo.",
+    ),
+    shelf_book(
+        "El coronel no tiene quien le escriba",
+        "Gabriel García Márquez",
+        "spotify:show:coronel",
+        "novela latinoamericana",
+        ["colombia"],
+    ),
+    shelf_book(
+        "Pedro Páramo", "Juan Rulfo", "spotify:show:pedro", "novela latinoamericana", ["méxico"]
+    ),
+    shelf_book(
+        "El sabueso de los Baskerville",
+        "Arthur Conan Doyle",
+        "spotify:show:sabueso",
+        "misterio y suspenso",
+        ["detectives", "inglaterra"],
+        "Sherlock Holmes y un perro que aterra a una familia.",
+    ),
+    shelf_book(
+        "Asesinato en el Orient Express",
+        "Agatha Christie",
+        "spotify:show:orient",
+        "misterio y suspenso",
+        ["detectives", "crimen", "viajes"],
+        "Un crimen en un tren detenido por la nieve.",
+    ),
+    shelf_book(
+        "Diez negritos",
+        "Agatha Christie",
+        "spotify:show:diez",
+        "misterio y suspenso",
+        ["crimen"],
+        "Diez invitados en una isla, y uno a uno van muriendo.",
+    ),
+    shelf_book(
+        "Estudio en escarlata",
+        "Arthur Conan Doyle",
+        "spotify:show:escarlata",
+        "misterio y suspenso",
+        ["detectives", "inglaterra"],
+    ),
+    shelf_book(
+        "Ficciones", "Jorge Luis Borges", "spotify:show:ficciones", "cuentos", ["fantástico"]
+    ),
+    shelf_book(
+        "Cuentos de la selva",
+        "Horacio Quiroga",
+        "spotify:show:selva",
+        "cuentos",
+        ["animales", "naturaleza"],
+    ),
+    shelf_book(
+        "Relato de un náufrago",
+        "Gabriel García Márquez",
+        "spotify:show:naufrago",
+        "historia y memorias",
+        ["mar", "periodismo", "colombia"],
+    ),
+    shelf_book(
+        "La vuelta al mundo en ochenta días",
+        "Julio Verne",
+        "spotify:show:vuelta",
+        "aventuras",
+        ["viajes"],
+    ),
+]
+
+
+def shelf_data(books: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "built": "2026-10-13",
+        "market": "CO",
+        "categories": SHELF_CATEGORIES,
+        "books": SHELF_BOOKS if books is None else books,
+    }
+
+
+def write_shelf(path: Path, books: list[dict[str, Any]] | None = None) -> Path:
+    import json
+
+    path.write_text(json.dumps(shelf_data(books), ensure_ascii=False), encoding="utf-8")
+    return path

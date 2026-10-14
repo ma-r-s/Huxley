@@ -64,7 +64,7 @@ started device turns `is_active` only a moment after playback starts. So
 a start counts only when the new context is playing, and a takeover only
 when the device was active and then wasn't.
 
-## Audiobooks (T1.39, T1.40)
+## Audiobooks (T1.39, T1.40, T1.45)
 
 Built for the least technical listener: every request a person makes of a
 book, and every way a book stops, answered in exact words (a stated fact
@@ -95,9 +95,11 @@ how to erase a book's progress. A finished book asks before starting
 over. `music_control` next / previous move chapters (the ends are said);
 `book_control` back / forward seek inside the chapter (30 s by default),
 `restart_chapter`, `go_to_chapter`. `whats_playing` says the book, the
-chapter and what's left of each. `find_books(query)` reads at most three,
-numbered, with length and a sentence about each; with no query, the books
-listened to here. A resumed book backs up 2 s plus a tenth of the pause
+chapter and what's left of each. `find_books` offers books from the
+curated shelf (see [The shelf](#the-shelf-t145)); a title said that is on
+the shelf plays its checked edition without `ask_which`, and a kind of
+book said to `play_book` ("pon algo de misterio") goes to the shelf
+instead of search. A resumed book backs up 2 s plus a tenth of the pause
 (at most 20 s) so it doesn't start mid-word. "Pon música" after a book
 plays the last music, not the book (kept apart in storage).
 
@@ -123,7 +125,7 @@ refused, and the walkie said the month's hours were gone while three
 other books played.) A refused book is remembered for 30 days and its
 check's "ok" dropped, so it isn't offered again.
 
-**Recommendations only offer books that play.** `find_books` tries each
+**Offers only include books that play.** `find_books` tries each
 unknown candidate for a moment (up to 4; Spotify stops one it won't play
 within 0.3-1.2 s: refused is "playing", the first chapter, "buffering",
 idle; a check says "ok" only for a book still playing at the end of
@@ -136,12 +138,11 @@ music restarts its album or list). If a candidate is refused and a book
 known to play is refused too, the month's hours ran out (`no_hours`), and
 nothing is filed as unavailable; that extra check runs only when nothing
 in the round (or in the last 30 min) played. It never checks while a
-stream plays. Without a query it gives the books already started here,
-said as such (not "what there is"), and asks what the listener likes.
-The model is told to call it once per request and, when books are named
-as examples, to search their author.
-Vague requests ("autores importantes") are searched as a concrete topic
-or author (tool text), never the whole sentence.
+stream plays. Measured in production (2026-10-13): one check about 2 s,
+a first offer of three unchecked books about 6 s (the waiting sound plays
+meanwhile); 0 refusals in about 20 checks. A persona without a shelf
+keeps T1.40's open search: with no query, the books started here; with
+one, a search.
 
 **Seeks go after "play".** A seek sent before "play" lands after Soloist
 has played about a second from its buffer (Mario heard the old spot, a
@@ -168,6 +169,96 @@ answering, a chapter that can't be reached and a long call each have a
 line. Falling asleep: with no press for `book_sleep_minutes` (60), the
 book pauses at the next chapter boundary, without a word. Reading speed
 can't change (Soloist has no command for it).
+
+## The shelf (T1.45)
+
+Spotify's Web API gives an app like ours no recommendations, browse or
+charts (cut in February 2026 for development-mode apps), and its search
+answers a theme with study guides and obscure titles. So the skill
+**only ever offers books from a curated shelf** of well-known books
+([ADR 2026-10-13](../decisions.md#2026-10-13-book-recommendations-come-only-from-a-curated-shelf-t145));
+search still plays a book or an author asked for by name.
+
+**Files.** `server/personas/abuelos/books/shelf.yaml` is the source,
+edited by hand: `categories` (spoken, in offer order) and `books`, each
+with `title`, `author`, `category`, `tags`, `pitch` (one spoken sentence;
+never the length), and optionally a pinned `uri` and the preferred
+`narrator`. `shelf.json` next to it is written only by the build and read
+only by the skill. Both are in the repo (famous books, not personal
+data), deployed with the code. AI-voiced editions are treated like
+human-narrated ones (Mario's call; Spotify has no field for it anyway).
+
+**Build.** `huxley-spotify-shelf <persona_dir> [--write] [--only TITLE]`
+(`shelf_build.py`) checks every book against Spotify in the persona's
+`market`, with the Web API app in `data/secrets/spotify/values.json`, so
+it runs where the secrets are (the Pi). It searches "title author", then
+the title alone, and keeps an edition only if the title is close (0.75,
+subtitle and edition note dropped, digits count: "1984"), an author's
+surname matches, it is in the persona's language, it isn't a reading
+guide or an abridgement (title, study-guide phrases at the start of the
+synopsis, or Spotify's "Abridged edition" note), and Spotify lists its
+chapters (the first edition that does; a pinned one must). A pinned `uri`
+wins, then the preferred narrator, then the title score, then Spotify's
+order; the other editions are printed. One line per book: `OK`, `CHECK`
+(kept, look at the reason: no pinned uri yet, another narrator) or
+`REJECT` (left out, why). Exit 1 on any reject, 2 when Spotify can't be
+reached; the write is atomic; `--only` re-checks some titles and keeps
+the rest. **Requests are rationed**: one `/audiobooks` request per
+edition, none for an edition the previous `shelf.json` already has for
+that book, and a run stopped by Spotify's limit writes what it checked
+(the rest as before), so running again continues. On 2026-10-13 four
+full runs in three hours got the app blocked on `/audiobooks` for about
+19 hours (`Retry-After: 68658`; search stayed open): fix one book with
+`--only`. Only the build retries a 429 (3 times, honouring
+`Retry-After` up to 2 minutes); the live skill never waits on one.
+During such a block, books still play, but the skill can't read their
+chapters and treats them like music (`spotify.book_info_failed`).
+
+**Loading.** The skill reads `shelf.json` again whenever its mtime or size
+changes (checked at each `find_books` / `play_book`). An invalid file
+keeps the last good shelf; a missing one turns offers back into open
+search.
+
+**`find_books(query?, like?, more?, listened?)`** never offers from open
+search:
+
+- no arguments: up to four categories that still have books for him,
+  plus his book in progress ("También quedó a medias ...");
+- `query`: a shelf title, else a category, else a tag, else a shelf
+  author, best three; a book or author named that isn't on the shelf
+  searches Spotify, keeping only that book or books by that author;
+- `like`: books sharing category, tags and author with one he names; a
+  book not on the shelf is looked up once for its author and synopsis
+  words;
+- `more`: the next three of the last offer ("otros");
+- `listened`: the books started here.
+
+The skill writes the offer itself in `then` ("De misterio tengo tres.
+Uno, X, de Y: <pitch>. ... ¿Cuál pongo, o busco otros?") and returns
+`books[{n, title, by, about}]` so "el segundo" plays the second. Nothing
+fits: "En la repisa no tengo libros de eso. Tengo libros de <categorías>."
+
+**Ranking.** Never offered: finished (at any time, kept as
+`book:ended:<id>`), disliked, refused here, started (in progress, or
+abandoned: not heard for 21 days, never finished, not the last book). Another
+edition of a book in memory counts as that book (same author, close
+title), and `play_book` of a shelf title continues his own edition if he
+started one. Then liked author +2, finished author +1, liked category +1,
+disliked author -3; ties go to the book offered least recently
+(`book:offered:<id>`), then shelf order.
+
+**`book_opinion(opinion, title?)`**: "me gustó", "no me gustó este libro"
+(liked / disliked; no title: the book on, or the last). Kept as
+`book:opinion:<id>`; the skill says "Anotado que <título> gustó...".
+
+**The page's view of each book.** Whenever a book's place, finished state
+or opinion changes, the skill writes `book:summary:<id>` (`<id>` is the
+last part of the `spotify:show:` URI), so huxley-watch reads the settings
+key `spotify:book:summary:<id>`, whose value is JSON text:
+`{uri, title, author, chapters, chapter (0-based), position_ms,
+last_at (epoch s), finished, opinion ("liked" | "disliked" | null),
+source ("shelf" | "search")}`. Writes are serialized (a place and a book's
+end land together) and books heard before T1.45 get one at setup.
 
 ## How it works
 
@@ -259,6 +350,7 @@ Persona's `skills.spotify` block (all optional):
 | `patience_minutes` | `30`                  | How long paused music waits to come back               |
 | `book_sleep_minutes` | `60`                | No press this long: a book pauses at the next chapter (0: off) |
 | `book_hours_per_month` | (none)            | The device account's audiobook hours, if known: a refusal near it is "hours" |
+| `book_shelf`       | `../books/shelf.json` | The built shelf, relative to the persona data dir (absolute allowed); missing: open search |
 
 Secrets, in `<persona data>/secrets/spotify/values.json` (gitignored):
 `client_id`, `client_secret` (Web API app, for search) and
@@ -303,7 +395,15 @@ paused_elsewhere, capture_closed, start_failed, player_offline; for a book
 `spotify.book_nav` (the book and the chapter reached, as at the start),
 `spotify.capture_closed` (`chunks`), `spotify.soloist_error`,
 `spotify.search_failed`, `spotify.capture_failed`, `spotify.unavailable`,
-`spotify.control`, `spotify.previous`.
+`spotify.control`, `spotify.previous`, `spotify.book_requested` (`source`:
+list, shelf, search or last), `spotify.book_probe`, `spotify.books_checked`.
+The shelf: `spotify.shelf_loaded` (path, books, categories, skipped),
+`spotify.shelf_invalid` (error, kept), `spotify.shelf_missing`,
+`spotify.shelf_browse` (mode, query, like, like_source, excluded,
+offered, offset), `spotify.shelf_nothing` (reason: nothing_left,
+all_excluded, no_more, none_playable, no_match, like_unknown),
+`spotify.book_redirected` (query), `spotify.book_opinion` (title,
+opinion, source).
 
 The Soloist build's expiry is logged by the container at start ("client
 expires in N days"); an expired build exits with code 10, which the skill
