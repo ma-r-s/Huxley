@@ -688,7 +688,7 @@ class TestInbound:
             "add_contact",
             "call_contact",
             "list_contacts",
-            "my_phone_number",
+            "phone_number",
             "remove_contact",
             "send_message",
         ]
@@ -990,7 +990,7 @@ class TestTools:
             "add_contact",
             "remove_contact",
             "list_contacts",
-            "my_phone_number",
+            "phone_number",
         }
         # Tools that mention the contact list should show the empty sentinel.
         for name in ("call_contact", "send_message", "add_contact", "remove_contact"):
@@ -1038,7 +1038,7 @@ class TestTools:
                 "add_contact",
                 "call_contact",
                 "list_contacts",
-                "my_phone_number",
+                "phone_number",
                 "remove_contact",
                 "send_message",
             ]
@@ -2022,8 +2022,10 @@ class TestWaitingForAListener:
         assert "llámame" in prompts[1]
 
 
-class TestMyPhoneNumber:
-    """He asks the walkie for his own number (Mario, 2026-10-14)."""
+class TestPhoneNumber:
+    """He asks the walkie for a number: his own or a contact's (Mario,
+    2026-10-14). Asked as "el número de Don Rafael Ruiz", a my-number-only
+    tool was passed over for list_contacts; the name decides now."""
 
     def _config(self, **extra: Any) -> dict[str, Any]:
         return {
@@ -2035,13 +2037,22 @@ class TestMyPhoneNumber:
             **extra,
         }
 
-    @pytest.mark.asyncio
-    async def test_reads_his_number_digit_by_digit(self, tmp_path: Path) -> None:
-        skill = TelegramSkill(transport_factory=StubTransport)
-        ctx, _ = _build_ctx(self._config(), tmp_path)
+    async def _skill(self, tmp_path: Path, config: dict[str, Any] | None = None) -> TelegramSkill:
+        class NamedStub(StubTransport):
+            self_name = "Rafael Ruiz"
+
+        skill = TelegramSkill(transport_factory=NamedStub)
+        ctx, _ = _build_ctx(config or self._config(inbound={"enabled": True}), tmp_path)
         await skill.setup(ctx)
-        result = await skill.handle("my_phone_number", {})
-        out = json.loads(result.output)
+        return skill
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "asked", ["", "mi número", "Don Rafael Ruiz", "rafael", "el número de Rafael"]
+    )
+    async def test_his_own_number_however_he_asks(self, tmp_path: Path, asked: str) -> None:
+        skill = await self._skill(tmp_path)
+        out = json.loads((await skill.handle("phone_number", {"name": asked})).output)
         assert out["ok"] is True
         assert (
             "«Tu número es tres cero cero, cero cero cero, cero cero siete tres. ¿Te lo repito?»"
@@ -2050,26 +2061,35 @@ class TestMyPhoneNumber:
         assert "No llames a ninguna herramienta" in out["then"]
 
     @pytest.mark.asyncio
+    async def test_a_contacts_number(self, tmp_path: Path) -> None:
+        skill = await self._skill(tmp_path)
+        out = json.loads((await skill.handle("phone_number", {"name": "Mario"})).output)
+        assert (
+            "«El número de Mario es tres cero cero, cero cero cero, cero cero siete ocho."
+            in out["then"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_name_lists_who_it_has(self, tmp_path: Path) -> None:
+        skill = await self._skill(tmp_path)
+        out = json.loads((await skill.handle("phone_number", {"name": "Pedro"})).output)
+        assert out["ok"] is False
+        assert "mario" in out["error"]
+
+    @pytest.mark.asyncio
     async def test_no_number_saved_says_so(self, tmp_path: Path) -> None:
-        skill = TelegramSkill(transport_factory=StubTransport)
-        config = self._config()
+        config = self._config(inbound={"enabled": True})
         del config["userbot_phone"]
-        ctx, _ = _build_ctx(config, tmp_path)
-        await skill.setup(ctx)
-        out = json.loads((await skill.handle("my_phone_number", {})).output)
+        skill = await self._skill(tmp_path, config)
+        out = json.loads((await skill.handle("phone_number", {})).output)
         assert out["ok"] is False
 
     @pytest.mark.asyncio
-    async def test_the_tool_names_him_when_telegram_knows_his_name(self, tmp_path: Path) -> None:
-        class NamedStub(StubTransport):
-            self_name = "Rafael"
-
-        skill = TelegramSkill(transport_factory=NamedStub)
-        ctx, _ = _build_ctx(self._config(inbound={"enabled": True}), tmp_path)
-        await skill.setup(ctx)
-        (tool,) = [t for t in skill.tools if t.name == "my_phone_number"]
+    async def test_the_tool_names_him(self, tmp_path: Path) -> None:
+        skill = await self._skill(tmp_path)
+        (tool,) = [t for t in skill.tools if t.name == "phone_number"]
+        assert "«el número de Rafael Ruiz»" in tool.description
         assert "«¿cuál es mi número?»" in tool.description
-        assert "el número de Rafael, que es él mismo" in tool.description
 
 
 @pytest.mark.parametrize(

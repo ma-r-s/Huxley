@@ -298,8 +298,9 @@ class TelegramTransport:
         except Exception as exc:
             await logger.awarning("telegram.transport.me_failed", error=str(exc)[:200])
             return
-        name = str(getattr(me, "first_name", "") or "").strip()
-        self.self_name = name or None
+        first = str(getattr(me, "first_name", "") or "").strip()
+        last = str(getattr(me, "last_name", "") or "").strip()
+        self.self_name = " ".join(x for x in (first, last) if x) or None
         await logger.ainfo("telegram.transport.me", name=self.self_name)
 
     async def _load_contacts(self) -> None:
