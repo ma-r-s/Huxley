@@ -61,6 +61,9 @@ BOOK_CLIPS = [
     "Me gustó.",  # 5
     "Ponlo duro.",  # 6
     "Sigue con el libro.",  # 7: after an offer
+    "Recuérdame tomar agua mañana a las ocho.",  # 8: a reminder, said back as a day
+    "Cancela ese recordatorio.",  # 9
+    "Para la música.",  # 10: stop what the rows started
 ]
 TAIL_SILENCE_MS = 200
 
