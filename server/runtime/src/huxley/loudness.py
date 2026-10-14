@@ -67,9 +67,12 @@ _SWAP = sys.byteorder != "little"  # the wire is PCM16 little-endian
 
 def lufs(mean_square: float) -> float:
     """Loudness of a K-weighted mean square in PCM16 units squared."""
-    if mean_square <= 0.0:
+    # Checked after the division: a near-silent window (1e-320) divides to
+    # exactly 0.0 and log10 raised, stopping a song mid-play (2026-10-14).
+    ratio = mean_square / _FULL_SCALE_SQ
+    if not ratio > 0.0:
         return -math.inf
-    return -0.691 + 10.0 * math.log10(mean_square / _FULL_SCALE_SQ)
+    return -0.691 + 10.0 * math.log10(ratio)
 
 
 def db_to_gain(db: float) -> float:
