@@ -867,14 +867,21 @@ class TurnCoordinator:
 
     async def on_audio_done(self) -> None:
         """OpenAI finished emitting audio for the current response."""
+        voice = self._voice_limiter_done()
         if self.response_cancelled or not self._speaking_state.is_speaking:
             return
         await self._speaking_state.force_release()
+        await self._log.ainfo("coord.audio_done", **voice)
+
+    def _voice_limiter_done(self) -> dict[str, float]:
+        """A response's audio ended: its voice-limiter cuts for the log,
+        and a clean limiter for the next one (whoever holds the speaker
+        flag then: a completion turn keeps it through the hand-over)."""
         if self._voice_limiter is None:
-            await self._log.ainfo("coord.audio_done")
-            return
+            return {}
         limited_ms, cut_db = self._voice_limiter.take_stats()
-        await self._log.ainfo("coord.audio_done", voice_limited_ms=limited_ms, voice_cut_db=cut_db)
+        self._voice_limiter.reset()
+        return {"voice_limited_ms": limited_ms, "voice_cut_db": cut_db}
 
     async def on_tool_call(self, call_id: str, name: str, args: dict[str, Any]) -> None:
         """Model called a tool — dispatch, send output back, latch the result.

@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock
 import pytest
 import structlog
 
+from huxley.config import Settings
 from huxley.focus.manager import FocusManager
 from huxley.loudness import (
     CUE_TARGET_LUFS,
@@ -31,15 +32,19 @@ from huxley.loudness import (
 )
 from huxley.persona import PersonaSpec, load_persona
 from huxley.reconnect import no_signal_tone_pcm
+from huxley.runtime import Runtime
 from huxley.server.server import AudioServer, _ConnInfo
 from huxley.turn.coordinator import TurnCoordinator
+from huxley.turn.speaking_state import SpeakingOwner
 from huxley.turn.wait_cue import BLIP_TARGET_LUFS, render_blip
 from huxley.voice.openai_realtime import OUTPUT_GAIN_DB
 from huxley.voice.stub import StubVoiceProvider
 from huxley_sdk import AudioStream, PlaySound, ToolResult
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable, Coroutine
+
+    from huxley.app import Application
 
 REPO = Path(__file__).resolve().parents[4]
 PERSONAS = REPO / "server" / "personas"
@@ -120,6 +125,22 @@ class TestVoiceGain:
         done = next(e for e in logs if e["event"] == "coord.audio_done")
         assert done["voice_limited_ms"] > 0
         assert done["voice_cut_db"] > 0
+
+    async def test_each_response_starts_with_a_clean_limiter(
+        self, focus_manager: FocusManager
+    ) -> None:
+        # A completion turn keeps the speaker flag through the hand-over:
+        # the cut from the last response must not carry into the next.
+        coord, send_audio = _coordinator(focus_manager, voice_gain_db=6.0)
+        await _commit(coord)
+        await coord.on_audio_delta(_tone(30000))
+        await coord.on_audio_done()
+        await coord._speaking_state.acquire(SpeakingOwner.FACTORY)
+        quiet = _tone(3000)
+        await coord.on_audio_delta(quiet)
+        g = db_to_gain(6.0)
+        expected = [int(x * g) for x in pcm_samples(quiet)]
+        assert list(pcm_samples(send_audio.await_args_list[-1].args[0])) == expected
 
     async def test_a_skill_sound_is_not_gained(self, focus_manager: FocusManager) -> None:
         chime = _tone(3000)
@@ -206,6 +227,15 @@ class TestWireLimiter:
         await srv.send_audio(_tone(32000), stats=False)
         assert _peak(_received(ws)) <= CEILING
 
+    async def test_a_clear_ends_the_cut(self) -> None:
+        srv, ws = _server()
+        await srv.send_audio(_tone(32000))
+        await srv.send_audio_clear()
+        ws.sent.clear()
+        quiet = _tone(10000)
+        await srv.send_audio(quiet)
+        assert _received(ws) == quiet
+
 
 class TestPersonaAudioBlock:
     def _spec(self, tmp_path: Path, **audio: Any) -> PersonaSpec:
@@ -264,3 +294,82 @@ class TestShippedSoundsAreAtTheirTargets:
 
     def test_waiting_blip(self) -> None:
         assert momentary_max_lufs(render_blip()) == pytest.approx(BLIP_TARGET_LUFS, abs=0.5)
+
+
+_APP_PERSONA_YAML = """\
+version: 1
+name: p
+voice: coral
+language_code: es
+transcription_language: es
+timezone: America/Bogota
+system_prompt: |
+  Test persona with no skills.
+constraints: []
+skills: {}
+"""
+
+
+@pytest.fixture
+async def start_app(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[Callable[[str], Coroutine[Any, Any, Application]]]:
+    """Start persona `p` (IDLE, no session) with extra YAML; shut down after."""
+    persona_dir = tmp_path / "personas" / "p"
+    (persona_dir / "data").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    started: list[Application] = []
+
+    async def _start(extra: str) -> Application:
+        (persona_dir / "persona.yaml").write_text(_APP_PERSONA_YAML + extra, encoding="utf-8")
+        runtime = Runtime(Settings(openai_api_key="test-key"))
+        await runtime._switch_to_persona("p", auto_connect=False)
+        assert runtime.current_app is not None
+        started.append(runtime.current_app)
+        return runtime.current_app
+
+    yield _start
+    for application in started:
+        await application.shutdown()
+
+
+class TestApplication:
+    async def test_the_provider_calibration_by_default(
+        self, start_app: Callable[[str], Coroutine[Any, Any, Application]]
+    ) -> None:
+        with structlog.testing.capture_logs() as logs:
+            application = await start_app("")
+        assert application.coordinator._voice_limiter is not None
+        assert application.coordinator._voice_gain == pytest.approx(db_to_gain(OUTPUT_GAIN_DB))
+        setup = next(e for e in logs if e["event"] == "audio.gain_setup")
+        assert setup["voice_gain_db"] == OUTPUT_GAIN_DB
+        assert setup["voice_gain_from"] == "provider"
+
+    async def test_the_persona_turns_it_off(
+        self, start_app: Callable[[str], Coroutine[Any, Any, Application]]
+    ) -> None:
+        application = await start_app("audio:\n  voice_gain_db: 0\n")
+        assert application.coordinator._voice_limiter is None
+
+    async def test_learned_stream_gains_survive_a_restart(
+        self, start_app: Callable[[str], Coroutine[Any, Any, Application]]
+    ) -> None:
+        first = await start_app("")
+        first._level_memory.set("radio:x", -3.5)
+        await first._level_memory.save("radio:x")
+        await first.shutdown()
+        with structlog.testing.capture_logs() as logs:
+            second = await start_app("")
+        assert second._level_memory.get("radio:x") == pytest.approx(-3.5)
+        setup = next(e for e in logs if e["event"] == "audio.gain_setup")
+        assert setup["stream_keys"] == 1
+
+    async def test_a_save_after_shutdown_is_harmless(
+        self, start_app: Callable[[str], Coroutine[Any, Any, Application]]
+    ) -> None:
+        application = await start_app("")
+        await application.shutdown()
+        application._level_memory.set("radio:x", -1.0)
+        with structlog.testing.capture_logs() as logs:
+            await application._level_memory.save("radio:x")
+        assert any(e["event"] == "audio.level_save_failed" for e in logs)

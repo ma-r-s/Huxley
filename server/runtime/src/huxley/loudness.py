@@ -302,7 +302,7 @@ class PeakLimiter:
 
     def take_stats(self) -> tuple[int, float]:
         """(ms limited, deepest cut in dB) since the last call; resets them."""
-        stats = (self.limited_blocks, round(-gain_to_db(self.min_gain), 1))
+        stats = (self.limited_blocks, round(max(0.0, -gain_to_db(self.min_gain)), 1))
         self.limited_blocks = 0
         self.min_gain = 1.0
         return stats
@@ -350,7 +350,7 @@ class PeakLimiter:
                 left -= 1
             else:
                 level = min(target, level + (1.0 - level) * self._release)
-                if level > _RELEASED:
+                if level > _RELEASED and target >= 1.0:
                     level = 1.0
             env.append(level)
             if need[b] < 1.0:
@@ -420,15 +420,22 @@ _LEVEL_BLOCK = SAMPLE_RATE // 10  # 100 ms
 _LEVEL_BLOCK_S = 0.1
 SILENCE_GATE_LUFS = -45.0
 RELATIVE_GATE_LU = 10.0
+# The relative gate's reference: every window over the silence gate,
+# averaged with this time constant. Shorter than the program's, so a
+# lasting drop (talk after a loud ad, a quiet album after a loud one)
+# gets through it in 5 to 15 s and is followed; a quiet passage shorter
+# than that is not ridden up. (Against the program estimate itself the
+# gate could never open: a drop of over 10 LU locked the gain quiet.)
+GATE_TAU_S = 10.0
 PROGRAM_TAU_S = 30.0
 MAX_CUT_DB = -20.0
 MAX_BOOST_DB = 6.0
 DOWN_DB_PER_S = 6.0
 UP_DB_PER_S = 2.0
-# A key never heard: start quieter than most sources need (they are louder
-# than -20: radio -14 to -23, music masters -8 to -14), so the first
-# moments are never the loud ones; the gain then comes up slowly or down
-# quickly to what the stream measures.
+# A key never heard: most sources are louder than -20 (radio -14 to -23,
+# music masters -8 to -14), so -6 starts a new one near the target or
+# under it; the gain then comes down quickly, or up slowly, to what the
+# stream measures.
 UNKNOWN_START_GAIN_DB = -6.0
 REPORT_EVERY_S = 30.0
 
@@ -438,11 +445,13 @@ class StreamLeveler:
     added latency.
 
     Per 100 ms block, the K-weighted energy of the input. A 400 ms window
-    under `SILENCE_GATE_LUFS` (silence, a pause) or `RELATIVE_GATE_LU`
-    under the program estimate (a quiet passage) changes nothing. The
-    others feed the program estimate: the first window seeds it, then a
-    running mean for `PROGRAM_TAU_S`, then an exponential average with
-    that time constant (long, so a song's quiet verse isn't ridden up). The
+    under `SILENCE_GATE_LUFS` (silence, a pause) changes nothing; one
+    `RELATIVE_GATE_LU` under the recent level (every window over the
+    silence gate, averaged over `GATE_TAU_S`) is a quiet passage and
+    changes nothing either. The others feed the program estimate: the
+    first window seeds it, then a running mean for `PROGRAM_TAU_S`, then
+    an exponential average with that time constant (long, so a song's
+    quiet verse isn't ridden up). The
     gain heads for target minus estimate, within [`MAX_CUT_DB`,
     `MAX_BOOST_DB`], at most `DOWN_DB_PER_S` down and `UP_DB_PER_S` up,
     ramped across each chunk. A `PeakLimiter` comes last.
@@ -473,6 +482,8 @@ class StreamLeveler:
         self._short: deque[float] = deque(maxlen=30)  # 3 s, for the log
         self._program: float | None = None
         self._accepted = 0
+        self._gate_ref: float | None = None
+        self._audible = 0
         self._limiter = PeakLimiter(ceiling_dbfs)
         self.audio_s = 0.0
         self._reported_at = 0.0
@@ -504,7 +515,9 @@ class StreamLeveler:
         else:
             g1 = min(desired, g0 + UP_DB_PER_S * dt)
         self.gain_db = g1
-        self._memory.set(self.key, g1)
+        if self._program is not None:
+            # Only a gain that followed a measurement is worth starting from.
+            self._memory.set(self.key, g1)
         self.audio_s += dt
         return self._limiter.process(pcm, db_to_gain(g0), db_to_gain(g1))
 
@@ -557,7 +570,13 @@ class StreamLeveler:
         loudness = lufs(window)
         if loudness < SILENCE_GATE_LUFS:
             return
-        if self._program is not None and loudness < lufs(self._program) - RELATIVE_GATE_LU:
+        self._audible += 1
+        if self._gate_ref is None:
+            self._gate_ref = window
+        else:
+            beta = max(1.0 / self._audible, _LEVEL_BLOCK_S / GATE_TAU_S)
+            self._gate_ref += beta * (window - self._gate_ref)
+        if loudness < lufs(self._gate_ref) - RELATIVE_GATE_LU:
             return
         self._accepted += 1
         if self._program is None:

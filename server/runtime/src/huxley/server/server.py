@@ -1399,6 +1399,8 @@ class AudioServer:
             except OpusUnavailableError as exc:
                 opus_error = str(exc)
         self._conn = conn
+        # A new listener starts with no cut in progress (T1.47).
+        self._limiter.reset()
         if self._recorder is not None:
             self._recorder.connection_opened(conn_id, conn.audio_format)
         structlog.contextvars.bind_contextvars(conn_id=conn_id)
@@ -2517,6 +2519,8 @@ class AudioServer:
         cut-off audio follows the clear and the next sound starts from a
         fresh encoder.
         """
+        # What was being cut is gone: the next sound starts unlimited (T1.47).
+        self._limiter.reset()
         conn = self._conn
         dropped_packets = dropped_pcm = 0
         if self._recorder is not None:

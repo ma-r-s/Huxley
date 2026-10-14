@@ -527,7 +527,11 @@ class ContentStreamObserver:
         )
         if self._level_memory is None:
             return
-        task = asyncio.get_running_loop().create_task(self._level_memory.save(leveler.key))
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # the loop is closing under a destroyed task: nothing to save with
+        task = loop.create_task(self._level_memory.save(leveler.key))
         _SAVES.add(task)
         task.add_done_callback(_SAVES.discard)
 

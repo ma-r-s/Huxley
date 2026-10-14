@@ -157,6 +157,16 @@ class TestPeakLimiter:
                     out = limiter.process(chunk, db_to_gain(gain_db))
                     assert _peak(out) <= limiter.ceiling
 
+    def test_a_release_near_unity_never_lets_a_peak_over(self) -> None:
+        # Peaks a hair over the ceiling (0.03 %) while the envelope releases
+        # toward unity: snapping the release to 1.0 must not skip them.
+        limiter = PeakLimiter()
+        limiter.process(_sine(997.0, -1.0, 0.1))
+        just_over = limiter.ceiling * 1.0003
+        quiet = _pcm([(just_over if i % 24 == 12 else 100.0) for i in range(CHUNK // 2)])
+        for _ in range(40):
+            assert _peak(limiter.process(quiet)) <= limiter.ceiling
+
     def test_ramped_gain_never_exceeds_the_ceiling(self) -> None:
         limiter = PeakLimiter(STREAM_CEILING_DBFS)
         g = 1.0
@@ -238,6 +248,16 @@ class TestStreamLeveler:
         _run(leveler, _at(_pink(seed=5, seconds=10.0), -30.0))
         assert leveler.gain_db == pytest.approx(before, abs=0.2)
 
+    def test_a_lasting_drop_is_followed(self) -> None:
+        # 12 LU down for good (talk after a loud ad): past the relative
+        # gate, which must not lock the gain where the loud part left it.
+        leveler = StreamLeveler("k", LevelMemory())
+        _run(leveler, _at(_pink(seconds=5.0), -9.0))
+        assert leveler.gain_db == pytest.approx(-11.0, abs=0.5)
+        out = _run(leveler, _at(_pink(seed=7, seconds=60.0), -21.0))
+        assert leveler.gain_db > -2.5
+        assert integrated_lufs(out[-10 * 2 * RATE :]) > -23.5
+
     def test_boost_is_capped(self) -> None:
         leveler = StreamLeveler("k", LevelMemory())
         _run(leveler, _at(_pink(seconds=15.0), -35.0))
@@ -251,6 +271,14 @@ class TestStreamLeveler:
         assert second.learned
         assert second.gain_db == pytest.approx(first.gain_db)
         assert StreamLeveler("radio:y", memory).gain_db == UNKNOWN_START_GAIN_DB
+
+    def test_nothing_is_learned_before_a_measurement(self) -> None:
+        memory = LevelMemory()
+        leveler = StreamLeveler("k", memory)
+        _run(leveler, _pink(seconds=0.3))  # under one 400 ms window
+        assert memory.get("k") is None
+        _run(StreamLeveler("q", memory), bytes(2 * RATE * 2))  # silence measures nothing
+        assert memory.get("q") is None
 
     def test_gain_moves_slowly_up(self) -> None:
         leveler = StreamLeveler("k", LevelMemory())

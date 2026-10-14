@@ -708,7 +708,8 @@ class TestContentStreamObserverLeveling:
             await obs.release_hold("turn")
             await asyncio.sleep(0.01)
             await obs.hold("turn")
-        reasons = [e["reason"] for e in logs if e["event"] == "audio.level"]
-        assert reasons == ["resume", "cancelled"]
+        level = [e for e in logs if e["event"] == "audio.level"]
+        assert [e["reason"] for e in level] == ["resume", "cancelled"]
+        # The resume carries on from where the pause left the gain.
         assert gain is not None
-        assert memory.get("k") is not None
+        assert level[0]["gain_db"] == pytest.approx(gain, abs=0.05)

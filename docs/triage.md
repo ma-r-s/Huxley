@@ -5861,7 +5861,7 @@ One target, -20 LUFS integrated, for program audio; cues 3 dB under; peaks at mo
 - **Wire**: one `PeakLimiter` in `AudioServer.send_audio` at -3.0 dBFS sample peak, the ceiling for whatever reaches it (call audio, persona or third-party sounds).
 - **Limiter**: no added latency; the chunk is its own lookahead (per 1 ms block, envelope at each boundary = min of this and the next block's need, so the ramp never lets a sample over); hold 15 ms, release 150 ms; a peak in a chunk's first millisecond ramps (no step) and the few samples over are clamped.
 - **Assets**: `synth_sounds.py` normalizes by momentary max with true-peak and wire ceilings (same waveforms, correlation 1.0, only the level changed); `no_signal_tone_pcm` amplitude 6000 to 7440; the waiting blip by loudness at -26 momentary max (keeps T1.41's place under a voice now 7 dB louder); `render_persona_clip.py` levels to -20 and gains `--level` to re-level a committed clip; `unavailable.wav` re-leveled to -20.2 (peaks allowed +2.9 of +3.0).
-- **Walkie firmware prompts** (owned by the firmware session, not touched): target -20 LUFS integrated, true peak at most -1.5 dBFS decoded, like `unavailable.wav`. Today about -26: they will sound 6 dB under the voice until re-rendered.
+- **Walkie firmware prompts** (owned by the firmware session, not touched here): target -20 LUFS integrated, true peak at most -1.5 dBFS decoded, like `unavailable.wav`. Done there in parallel (5f699660, firmware F-0027): after the Opus round trip `offline` -19.9 LUFS, `battery_empty` -20.1 (were -26.6 and -26.1), flashed to go with this branch's +7 dB voice.
 
 ### Critic notes (Gate 2, one fresh critic, blockers only)
 
@@ -5872,6 +5872,17 @@ One target, -20 LUFS integrated, for program audio; cues 3 dB under; peaks at mo
 5. *The ceiling is a property of the wire, yet the design had limiters only at two sources: Telegram call audio and persona sounds bypass both.* Fixed: one limiter in `AudioServer.send_audio`; gains stay at the sources (a boosted source still needs its own limiter, or PCM16 overflows before the wire sees it).
 6. *The voice gain default must not be 0, and the calibration belongs to the provider.* Agreed: `OUTPUT_GAIN_DB` lives in the provider module, used unless the persona overrides; with 0 every other persona hears streams and cues over a voice at -27, the same bug. Not taken: a table keyed by model and voice (one measurement so far).
 - Minor, not taken: a separate field instead of reusing `preroll_ms` for the leveler bypass. The field already means "pre-roll before actual content"; documented that it plays as is, so it must ship at the cue level.
+
+### Post-build review (one fresh reviewer, after the three commits)
+
+Five findings, all fixed with a regression test that fails without the fix:
+
+1. *The leveler locked quiet after a lasting drop of over 10 LU*: the relative gate compared each window with the program estimate, which the gated windows could then never bring down (5 s at -9 then 40 s at -21 sat at -31.8, and saved that gain). Now the gate's reference is every window over the silence gate, averaged over 10 s (BS.1770 likewise gates against the absolutely gated level): a lasting drop gets through in 5 to 15 s and is followed. Recovery from such a drop takes about a minute (the estimate averages energy, so it comes down slower than it goes up: a 12 LU drop is within 1.5 LU after 90 s). A dB-domain estimate recovers in 30 s but plays every stream about 0.5 dB loud; kept energy, the measure the standard is defined in, and the asymmetry errs quiet.
+2. *The release snap let samples over the ceiling* (by up to 0.007 dB when a block needed between 0.999 and 1): it snaps only when nothing in the block needs a cut.
+3. *The wire limiter was never reset*: a loud unleveled source cut at a press would fade the next reply in. Reset on `audio_clear` and on each new connection.
+4. *The voice limiter reset only when the speaker flag was down*, which a completion turn keeps through the hand-over. It now also resets when a response's audio ends (`on_audio_done`, cancelled or not).
+5. *`_level_stopped` called `get_running_loop()` in the pump's `finally`*, which raises if the loop is closing: guarded.
+- Also: a key's gain is learned only once a window was measured (a stream stopped in its first 400 ms used to save -6 dB as "learned"); the resume test now checks the gain carries over; the blip is rendered once (cached).
 
 ### Definition of Done
 
@@ -5888,7 +5899,8 @@ One target, -20 LUFS integrated, for program audio; cues 3 dB under; peaks at mo
 - `test_loudness_wiring.py` (19): voice gain off is bit-exact, on gains and limits model audio and logs its cuts, never touches a `PlaySound` or a stream; wire limiter passes quiet audio byte for byte and caps loud; persona `audio` block (default None, bounds, unknown key, abuelos pinned at 7); every shipped earcon at -19 ±0.5 momentary max under both ceilings, `unavailable.wav` at -20 ±0.5, the tone and the blip at their targets.
 - `test_turn_observers.py` (+5): no key untouched; keyed stream leveled with its preroll intact (also split across chunks); learned gain saved at stop; a resume keeps the leveler and logs `resume` then `cancelled`.
 - Radio and Spotify tests assert the keys. `test_firmware_contract.py` byte-pattern payloads now quiet PCM (the old patterns were full-scale noise the wire limiter rightly changes); `test_wait_cue.py` blip peak about -9 dBFS.
-- Suites: runtime 1247, SDK 81, radio 19, Spotify 125, audiobooks 67, news 18, watch 303, all green.
+- After the review round: `test_loudness.py` 32, `test_loudness_wiring.py` 25, observers +5.
+- Suites: runtime 1256, SDK 81, radio 19, Spotify 125, audiobooks 67, news 18, telegram 127, timers 35, reminders 99, search 34, stocks 40, system 20, watch 303 (on this branch), all green.
 
 ### Measured result (ffmpeg `ebur128`)
 
@@ -5908,6 +5920,6 @@ One target, -20 LUFS integrated, for program audio; cues 3 dB under; peaks at mo
 ### Ship (Gate 5)
 
 - Commits on `t147-loudness` (hashes below once committed). Merge, deploy and the restart are Mario's call.
-- On the walkie after deploy: Mario will likely turn the volume down (the voice is 7 dB louder); the firmware prompts will then sound 6 dB quiet until re-rendered at -20.
+- On the walkie after deploy: Mario will likely turn the volume down (the voice is 7 dB louder). The firmware prompts are already at -20 (5f699660), so until this deploys they are the loud ones.
 
-**Follow-ups**: re-render the walkie firmware prompts at -20 LUFS (firmware session); measure Telegram call audio from logs (only the wire limiter touches it; level it if it proves off); measure other OpenAI voices if a persona uses one (only coral is measured); `audio.level` lines will say what Spotify actually measures.
+**Follow-ups**: measure Telegram call audio from logs (only the wire limiter touches it; level it if it proves off); measure other OpenAI voices if a persona uses one (only coral is measured); `audio.level` lines will say what Spotify actually measures.

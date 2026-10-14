@@ -18,6 +18,7 @@ just doesn't send another.
 from __future__ import annotations
 
 import asyncio
+import functools
 import math
 import struct
 import time
@@ -54,11 +55,13 @@ BLIP_MS = 120
 BLIP_TARGET_LUFS = -26.0
 
 
+@functools.cache
 def render_blip(hz: float = 587.33, target_lufs: float = BLIP_TARGET_LUFS) -> bytes:
     """A soft struck note (D5 with two quiet partials, a 4 ms attack and a
     fast decay), PCM16 mono 24 kHz, `BLIP_MS` long, at `target_lufs`
     momentary max. A small speaker plays it; it is clearly not speech and
-    not the offline cue's pitch."""
+    not the offline cue's pitch. Cached: every coordinator plays the same
+    one."""
     n = _SAMPLE_RATE * BLIP_MS // 1000
     attack = _SAMPLE_RATE * 4 // 1000
     partials = ((1.0, 1.0), (2.0, 0.25), (3.0, 0.08))
