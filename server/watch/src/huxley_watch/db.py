@@ -8,7 +8,9 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from huxley_watch.bookshelf import SUMMARY_PREFIX, parse_summary
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -19,6 +21,8 @@ if TYPE_CHECKING:
 class DbRead:
     book_seconds: float | None  # None: unknown (see problem) or nothing yet
     problem: str | None = None  # why it couldn't be read; None if fine
+    # The Spotify skill's per-book summaries (T1.45), the readable ones.
+    book_summaries: tuple[dict[str, Any], ...] = ()
 
 
 def book_seconds_key(now: datetime) -> str:
@@ -39,13 +43,17 @@ def read_db(path: Path, now: datetime, timeout_s: float = 2.0) -> DbRead:
         row = conn.execute(
             "SELECT value FROM settings WHERE key = ?", (book_seconds_key(now),)
         ).fetchone()
+        rows = conn.execute(
+            "SELECT value FROM settings WHERE key LIKE ?", (SUMMARY_PREFIX + "%",)
+        ).fetchall()
     except sqlite3.Error as exc:
         return DbRead(None, f"can't read {path}: {exc}")
     finally:
         conn.close()
+    summaries = tuple(s for s in (parse_summary(r[0]) for r in rows) if s is not None)
     if row is None:
-        return DbRead(0.0)
+        return DbRead(0.0, book_summaries=summaries)
     try:
-        return DbRead(float(row[0]))
+        return DbRead(float(row[0]), book_summaries=summaries)
     except (TypeError, ValueError):
-        return DbRead(None, f"unexpected book seconds value {row[0]!r}")
+        return DbRead(None, f"unexpected book seconds value {row[0]!r}", summaries)

@@ -570,4 +570,59 @@ def test_summary_for_the_log_line() -> None:
         "usual_days": 0,
         "people": 0,
         "talk_days": 1,
+        "books_reading": 0,
     }
+
+
+def test_books_are_the_page_cards_view() -> None:
+    """His books (T1.45) in the app: the same sorting as the page's card
+    (views.bookshelf), so the two never disagree."""
+    from huxley_watch.bookshelf import Shelf
+
+    def summary(uri: str, title: str, days_ago: float, **kw: Any) -> dict[str, Any]:
+        return {
+            "uri": uri,
+            "title": title,
+            "author": "Autor",
+            "chapters": 20,
+            "chapter": 4,
+            "position_ms": 1000,
+            "last_at": (NOW - timedelta(days=days_ago)).timestamp(),
+            "finished": kw.get("finished", False),
+            "opinion": kw.get("opinion"),
+            "source": "shelf",
+        }
+
+    shelf = Shelf(
+        ("novela", "misterio"),
+        (
+            {"title": "Cien años de soledad", "uri": "spotify:show:a", "category": "novela"},
+            {"title": "María", "uri": "spotify:show:b", "category": "novela"},
+            {"title": "Muerte en el Nilo", "uri": "spotify:show:c", "category": "misterio"},
+        ),
+    )
+    i = inputs(
+        [],
+        now=NOW,
+        book_summaries=(
+            summary("spotify:show:a", "Cien años de soledad", 1),
+            summary("spotify:show:x", "Un libro viejo", 40),
+            summary("spotify:show:c", "Muerte en el Nilo", 9, finished=True, opinion="liked"),
+        ),
+        shelf=shelf,
+    )
+    books = app.build(i, [], interval_s=300)["books"]
+    assert [(r["title"], r["chapter"], r["pct"]) for r in books["reading"]] == [
+        ("Cien años de soledad", 5, 20)
+    ]
+    assert [(r["title"], r["liked"]) for r in books["finished"]] == [("Muerte en el Nilo", True)]
+    assert [r["title"] for r in books["dropped"]] == ["Un libro viejo"]
+    assert books["shelf"] is not None
+    assert (books["shelf"]["total"], books["shelf"]["left"]) == (3, 1)
+    assert [c["name"] for c in books["shelf"]["categories"]] == ["novela", "misterio"]
+    assert books["shelf"]["categories"][0]["left"] == [{"title": "María", "author": ""}]
+
+
+def test_no_shelf_and_no_books_yet() -> None:
+    books = build([])["books"]
+    assert books == {"reading": [], "finished": [], "dropped": [], "shelf": None}

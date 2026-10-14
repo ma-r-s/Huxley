@@ -32,6 +32,7 @@ from huxley_watch.alerts import (
     save_state,
 )
 from huxley_watch.bench import Bench, BenchReader
+from huxley_watch.bookshelf import SHELF_FILE, read_shelf
 from huxley_watch.config import Config, ConfigError, in_range, load_config
 from huxley_watch.dayview import Archive
 from huxley_watch.db import DbRead, read_db
@@ -242,6 +243,8 @@ class Watcher:
             logs_problem=logs_problem,
             book_seconds=db.book_seconds,
             book_hours_per_month=cfg.book_hours_per_month,
+            book_summaries=db.book_summaries,
+            shelf=self._fenced("shelf", lambda: read_shelf(cfg.persona_dir / SHELF_FILE), None),
             book_renews_day=cfg.book_renews_day,
             book_since=cfg.book_since,
             balance_usd=cfg.balance_usd,
