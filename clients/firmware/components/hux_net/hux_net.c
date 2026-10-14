@@ -422,6 +422,8 @@ static _Atomic uint32_t s_noip_ms = 0;
 static uint32_t s_rotate_ms = 0;
 /* The last hello (an add's "server reached" must come after its IP). */
 static _Atomic uint32_t s_hello_ms = 0;
+/* F-0032: the last time the server was steadily up (2 min on one connection), or boot. */
+static _Atomic uint32_t s_stable_ms = 0;
 /* Saved entries an update has since compiled in: kept in NVS untouched (a
  * rollback to an older image still finds them), not joined twice. */
 static wifi_saved_t s_shadow[HUX_WIFI_SAVED_MAX];
@@ -612,17 +614,37 @@ static bool wifi_join_locked(int idx, const char *why) {
     return ok;
 }
 
+/* A blocking scan (~2 s). The driver refuses one while a connect is under
+ * way (ESP_ERR_WIFI_STATE), and a disconnect only asks it to stop: wait
+ * and ask again, up to 3 s (F-0027: the field test, 2026-10-14). */
+static esp_err_t scan_start_waiting(bool stop_connecting) {
+    wifi_scan_config_t sc = {.show_hidden = true};
+    esp_err_t err = ESP_FAIL;
+    for (int attempt = 1; attempt <= 10; attempt++) {
+        err = esp_wifi_scan_start(&sc, true);
+        if (err != ESP_ERR_WIFI_STATE) {
+            break;
+        }
+        ESP_LOGW(TAG, "wifi.scan busy attempt=%d: a connect is winding down", attempt);
+        if (stop_connecting) {
+            esp_wifi_disconnect();
+        }
+        vTaskDelay(pdMS_TO_TICKS(300));
+    }
+    return err;
+}
+
 /* What is heard from here (blocking, ~2 s). A connect in progress makes a
  * scan fail, so without an IP the attempt is stopped first; the caller
  * then joins or connects again. The caller holds the link lock. */
 static int wifi_scan_locked(hux_wifi_heard_t *heard, int cap) {
     atomic_store(&s_wifi_hold, true);
     esp_timer_stop(s_wifi_retry_timer);
-    if (!atomic_load(&s_have_ip)) {
+    bool no_ip = !atomic_load(&s_have_ip);
+    if (no_ip) {
         esp_wifi_disconnect();
     }
-    wifi_scan_config_t sc = {.show_hidden = true};
-    esp_err_t err = esp_wifi_scan_start(&sc, true);
+    esp_err_t err = scan_start_waiting(no_ip);
     int nh = 0;
     if (err == ESP_OK) {
         uint16_t found = 0;
@@ -966,8 +988,7 @@ void hux_net_wifi_scan(void) {
     if (!had_ip) {
         esp_wifi_disconnect(); /* a connect in progress makes a scan fail */
     }
-    wifi_scan_config_t sc = {.show_hidden = true};
-    esp_err_t err = esp_wifi_scan_start(&sc, true);
+    esp_err_t err = scan_start_waiting(!had_ip);
     atomic_store(&s_wifi_hold, false);
     if (!had_ip) {
         esp_wifi_connect();
@@ -1099,6 +1120,18 @@ bool hux_net_wifi_forget(const char *ssid) {
         wifi_choose_locked(false, "forgot_active");
     }
     link_unlock();
+    return ok;
+}
+
+bool hux_net_wifi_join(const char *ssid) {
+    link_lock();
+    int i = wifi_find(ssid);
+    bool ok = i >= 0 && !atomic_load(&s_add_on) && wifi_join_locked(i, "bench");
+    link_unlock();
+    if (!ok) {
+        ESP_LOGW(TAG, "wifi.join refused ssid=\"%s\" why=%s", ssid,
+                 i < 0 ? "not_known" : "busy_or_config");
+    }
     return ok;
 }
 
@@ -1547,6 +1580,7 @@ void hux_net_start(const hux_net_config_t *cfg) {
         esp_timer_start_once(s_server_revert, (uint64_t)SERVER_FALLBACK_S * 1000000);
     }
     atomic_store(&s_lost_ms, now_ms()); /* no server yet: the ladder's clock runs */
+    atomic_store(&s_stable_ms, now_ms()); /* F-0032's clock, from boot */
     if (xTaskCreate(ladder_task, "hux_ladder", 4096, NULL, 3, &s_ladder_task) != pdPASS) {
         ESP_LOGE(TAG, "ladder.task_create_failed: no escalation this boot");
     }
@@ -1955,6 +1989,31 @@ bool hux_net_send_text(const char *data, size_t len) {
         return false;
     }
     return true;
+}
+
+bool hux_net_have_ip(void) {
+    return atomic_load(&s_have_ip);
+}
+
+/* F-0032: the server counts as reachable only after 2 min on one connection
+ * (a server that connects and crashes over and over still counts as lost),
+ * counted from the last time it was. Paused on purpose (an eviction) or
+ * switched for a test: not lost. */
+#define STABLE_UP_MS (2u * 60u * 1000u)
+
+uint32_t hux_net_server_lost_ms(void) {
+    uint32_t now = now_ms();
+    if (atomic_load(&s_paused) || atomic_load(&s_srv_mode) == SRV_TEMP) {
+        atomic_store(&s_stable_ms, now);
+        return 0;
+    }
+    uint32_t hello = atomic_load(&s_hello_ms);
+    if (atomic_load(&s_server_up) && hello != 0 && now - hello >= STABLE_UP_MS) {
+        atomic_store(&s_stable_ms, now);
+        return 0;
+    }
+    uint32_t ms = now - atomic_load(&s_stable_ms);
+    return ms > 0 ? ms : 1;
 }
 
 uint32_t hux_net_rx_audio_ms(void) {

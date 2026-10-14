@@ -18,7 +18,8 @@ def test_blip_is_whole_opus_frames_soft_and_clickless() -> None:
     assert len(blip) % OPUS_FRAME_BYTES == 0  # no partial frame left behind
     samples = struct.unpack(f"<{len(blip) // 2}h", blip)
     peak = max(abs(s) for s in samples)
-    assert 32767 * 10 ** (-17 / 20) < peak <= 32767 * 10 ** (-15 / 20)  # about -16 dBFS
+    # About -9 dBFS: -26 LUFS momentary max (T1.47), 7 dB under a chime.
+    assert 32767 * 10 ** (-10 / 20) < peak <= 32767 * 10 ** (-8 / 20)
     assert abs(samples[0]) < 100 and samples[-1] == 0  # no click at either end
 
 

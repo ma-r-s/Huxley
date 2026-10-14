@@ -49,6 +49,12 @@ if TYPE_CHECKING:
 logger = structlog.get_logger()
 
 REALTIME_API_URL = "wss://api.openai.com/v1/realtime"
+# Gain that brings the model's audio to the common program level, -20
+# LUFS (T1.47, docs/sounds.md "Loudness"): its output sits about 7 dB
+# under. Measured 2026-10-13 on 14 answers as the walkie got them
+# (gpt-realtime-2.1-mini, voice coral): -24.8 to -28.4 LUFS, median -27.1.
+# A persona overrides it with `audio.voice_gain_db`.
+OUTPUT_GAIN_DB = 7.0
 
 # Two causes look identical on the wire. T1.25: the model had been shut
 # down for months while this hint still blamed billing.

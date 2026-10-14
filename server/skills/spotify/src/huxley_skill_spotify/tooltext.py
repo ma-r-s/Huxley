@@ -34,6 +34,8 @@ TEXT: dict[str, dict[str, str]] = {
             "de la canción aunque suene rara o mal dicha (un título en inglés dicho "
             "en español: 'boya' por 'Voyager'): ponla tal como sonó junto al artista, "
             "nunca la quites para buscar solo al artista; Spotify la encuentra así. "
+            "Escríbela como sonó en español, letra por letra, sin cambiarla por otra "
+            "palabra ni 'corregirla'. "
             "Vacío si no dijo qué música."
         ),
         "play_kind": (
@@ -50,7 +52,8 @@ TEXT: dict[str, dict[str, str]] = {
             "música o el libro; 'ponlo' si lo último que sonaba era de Spotify), "
             "'next' solo si pide OTRA canción u otro capítulo (siguiente, otra, "
             "cambia la canción, pasa, el siguiente capítulo), 'previous' (la anterior, "
-            "el capítulo anterior). 'Sigue' es seguir con la misma: 'resume', no 'next'. "
+            "la canción anterior, la de antes, atrás una canción, el capítulo anterior; "
+            "volver a la canción anterior es 'previous', nunca 'resume'). 'Sigue' es seguir con la misma: 'resume', no 'next'. "
             "Un 'no, ...' que corrige lo que acabas de poner pide OTRA cosa: búscala "
             "con `play_music`, nunca 'resume'."
         ),
@@ -140,6 +143,8 @@ TEXT: dict[str, dict[str, str]] = {
             "Any word besides the artist is the song's name even if it sounds odd or "
             "garbled (an English title said with another accent): keep it as it "
             "sounded, next to the artist; never drop it to search the artist alone. "
+            "Spell it the way it sounded, letter by letter, never swapping it for "
+            "another word or 'correcting' it. "
             "Spotify finds it that way. Empty if they didn't say which music."
         ),
         "play_kind": (
@@ -152,7 +157,8 @@ TEXT: dict[str, dict[str, str]] = {
             "(pause, stop, quiet), 'resume' (continue, keep going, play again; "
             "'play it' if Spotify was the last thing playing), 'next' only for "
             "ANOTHER song or the next chapter (next, another one, skip), 'previous' "
-            "(the previous one, the previous chapter). "
+            "(the previous one, the previous song, go back a song, the previous chapter; "
+            "going back to the previous song is 'previous', never 'resume'). "
             "'Keep going' means the same song: 'resume', not 'next'. A 'no, ...' "
             "correcting what you just played asks for something ELSE: search with "
             "`play_music`, never 'resume'."
@@ -241,6 +247,8 @@ TEXT: dict[str, dict[str, str]] = {
             "chanson même s'il sonne bizarre ou mal dit (un titre anglais prononcé "
             "à la française) : garde-le tel qu'il a sonné, à côté de l'artiste ; ne "
             "l'enlève jamais pour chercher l'artiste seul. Spotify le trouve ainsi. "
+            "Écris-le comme il a sonné, lettre par lettre, sans le remplacer par un "
+            "autre mot ni le 'corriger'. "
             "Vide s'il n'a pas dit quelle musique."
         ),
         "play_kind": (
@@ -252,7 +260,8 @@ TEXT: dict[str, dict[str, str]] = {
             "Contrôle ce que joue Spotify, musique ou livre. action : 'pause', "
             "'resume' (reprends, continue, remets-la), 'next' seulement pour UNE "
             "AUTRE chanson ou le chapitre suivant (suivante, une autre, change), "
-            "'previous' (précédente, le chapitre précédent). "
+            "'previous' (précédente, la chanson d'avant, le chapitre précédent ; revenir à "
+            "la chanson précédente, c'est 'previous', jamais 'resume'). "
             "'Continue' veut dire la même chanson : 'resume', pas 'next'. Un 'non, ...' "
             "qui corrige ce que tu viens de mettre demande AUTRE chose : cherche avec "
             "`play_music`, jamais 'resume'."

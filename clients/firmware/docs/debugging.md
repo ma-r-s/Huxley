@@ -411,7 +411,10 @@ why=lengths|busy|known|full|bad_hex`. Then it checks
 https://walkie.ma-r-s.com from the laptop and restarts the walkie to see
 it come back by itself. `wifi list` (also `tools/wifi.py list`) shows the
 networks, which is good and active, and the MAC; `wifi forget <name
-hex>`. Adding and forgetting work only on the USB console: through the
+hex>`. Bench: `wifi join <name hex>` joins a known network now, heard or
+not: on one it can't hear, the field case in reverse, it should find
+another within about 2 min (`wifi.choose why=no_ip`); a scan the radio
+refuses while a connect winds down is retried (`wifi.scan busy attempt=`). Adding and forgetting work only on the USB console: through the
 developer door or the server they're refused (`console.wifi_addhex
 refused`). Console lines are up to 255 bytes; a longer one is refused
 whole (`console.line_too_long`), never cut, and so is a cut `dev.cmd`
@@ -419,6 +422,22 @@ whole (`console.line_too_long`), never cut, and so is a cut `dev.cmd`
 developer door log `<redacted>` for `wifi addhex`. NVS is only a bridge:
 the first update after the visit compiles the place's network in
 (`HUX_WIFI3_*`), since NVS is erased if it ever runs out of pages.
+
+### The walkie's own phone alert (F-0032)
+
+With an IP but no server for 11 min (counted from the last time it was
+up 2 min on one connection, so a flapping server counts; a test switch,
+`server <uri>`, never does), the walkie pushes "Walkie: needs you" to
+Mario's phone through ntfy.sh, and "Walkie: fixed" once it's back (only
+after a down went out; never repeated, the state in RTC memory and NVS;
+a down 22:00-07:00 Bogota is held until 07:00, a fixed goes at once,
+silent; a failed send retried after 2 min, doubling to 30). Logs:
+`alert.started sntp= down_sent=` at boot, `alert.server_lost since=
+lost_s=`, `alert.held why=no_ip|quiet_hours|retry_wait`, `alert.sent
+kind=down|fixed|test status= err= heap_internal_min= largest= stack_free=`
+(warnings: in the black box), `alert.disabled why=no_topic|topic_invalid`
+without a usable `HUX_NTFY_TOPIC` (secrets.h). Console `alert test` sends
+one test push end to end.
 
 ### Calls: latency and the walkie's own echo (F-0031)
 

@@ -238,8 +238,17 @@ class AudioStream(SideEffect):
     # Duration in ms of any pre-roll audio (earcons, intros) that the stream
     # factory yields before actual content. The client hides the waveform
     # visualizer for this many ms after stream_started so the earcon doesn't
-    # appear in the graph.
+    # appear in the graph. With `loudness_key` set, the first `preroll_ms`
+    # the stream ever yields is played as is: ship it already at the cue
+    # level (the shared earcon palette is).
     preroll_ms: int = 0
+    # Opt in to loudness leveling: the framework keeps the stream near the
+    # common program level (docs/sounds.md "Loudness") with a slow gain
+    # and a peak limiter, no added latency. Streams sharing a key share
+    # what was learned, so a source starts at the gain it last settled at:
+    # one key per source whose level differs (a station, a book, "music"
+    # for a service). None (default): played as the factory yields it.
+    loudness_key: str | None = None
     # Fires when the stream's Activity is evicted via patience expiry
     # (e.g. a very long COMMS claim parked this stream in BACKGROUND
     # and the patience window elapsed before the claim ended). Skills

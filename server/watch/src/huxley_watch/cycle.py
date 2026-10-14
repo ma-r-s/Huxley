@@ -20,6 +20,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from huxley_watch import app
 from huxley_watch.activity import presses, segments
 from huxley_watch.alerts import (
     AlertState,
@@ -45,6 +46,7 @@ from huxley_watch.views import build, fallback_status, mark_stale
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from huxley_watch.activity import Segment
     from huxley_watch.rules import Inputs, Item
     from huxley_watch.wlog import WatchLog
 
@@ -99,6 +101,8 @@ class Watcher:
         self.items: list[Item] = []
         self.html = b""
         self.json = b"{}"
+        self.app: app.AppStatus | None = None
+        self.app_json = b'{"schema": 1, "starting": true}'
         self.lock = threading.Lock()
         self.archive = Archive(log)
         self._notes_logged: set[tuple[str, str]] = set()
@@ -279,12 +283,14 @@ class Watcher:
                 self.log.warning("watch.ping_failed", host=host, error=error)
 
         days = self._fenced("archive", lambda: self.archive.bounds(cfg, now), None)
+        w = inputs.walkie
+        segs: list[Segment] | None = None
         try:
-            w = inputs.walkie
+            segs = segments(result.events, now, bench, w.conns, w.spans)
             status = build(
                 inputs,
                 items,
-                segments(result.events, now, bench, w.conns, w.spans),
+                segs,
                 presses(result.events, bench, w.conns),
                 alerts_channel=self.sender.channel,
                 interval_s=cfg.interval_s,
@@ -296,8 +302,10 @@ class Watcher:
             status = fallback_status(items, now, cfg.timezone, cfg.interval_s, type(exc).__name__)
             page = render_fallback(status).encode("utf-8")
         body = json.dumps(status, ensure_ascii=False, indent=1).encode("utf-8")
+        phone, phone_body = self._app(inputs, segs, now)
         with self.lock:
             self.status, self.items, self.html, self.json = status, items, page, body
+            self.app, self.app_json = phone, phone_body
         self._write_files(page, body)
 
         self.log.info(
@@ -318,6 +326,51 @@ class Watcher:
             duration_ms=round((time.monotonic() - started) * 1000),
         )
         return status
+
+    def _app(
+        self, inputs: Inputs, segs: list[Segment] | None, now: datetime
+    ) -> tuple[app.AppStatus | None, bytes]:
+        """The phone app's data (/app.json), from the same inputs and
+        segments as the page. A failure costs only the app: it gets the
+        error's type, the page and the alerts are already built."""
+        started = time.monotonic()
+        try:
+            if segs is None:
+                raise ValueError("segments")
+            phone = app.build(inputs, segs, interval_s=self.cfg.interval_s)
+        except Exception as exc:
+            frame = traceback.extract_tb(exc.__traceback__)[-1]
+            self.log.error(
+                "watch.step_failed",
+                step="app",
+                error=type(exc).__name__,
+                at=f"{Path(frame.filename).name}:{frame.lineno}",
+            )
+            failed = {
+                "schema": app.SCHEMA,
+                "error": type(exc).__name__,
+                "checked_at": now.isoformat(),
+            }
+            return None, json.dumps(failed).encode("utf-8")
+        body = json.dumps(phone, ensure_ascii=False).encode("utf-8")
+        self.log.debug(
+            "watch.app_json_built",
+            **app.summary(phone),
+            bytes=len(body),
+            duration_ms=round((time.monotonic() - started) * 1000),
+        )
+        return phone, body
+
+    def current_app(self, now: datetime | None = None) -> bytes:
+        """/app.json: flagged stale when the last cycle is too old."""
+        with self.lock:
+            phone, body = self.app, self.app_json
+        if phone is None:
+            return body
+        flagged = app.mark_stale(phone, now or datetime.now(UTC))
+        if flagged is phone:
+            return body
+        return json.dumps(flagged, ensure_ascii=False).encode("utf-8")
 
     def day(self, which: str, now: datetime | None = None) -> bytes | None:
         """The archive's day as JSON (web.py's /day/YYYY-MM-DD.json); None

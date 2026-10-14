@@ -67,6 +67,7 @@ import websockets
 import websockets.http11
 from websockets.asyncio.server import ServerConnection, serve
 
+from huxley.loudness import PeakLimiter
 from huxley.server.auth import (
     MIN_TOKEN_CHARS,
     HeaderLookup,
@@ -726,6 +727,10 @@ class AudioServer:
         self._no_client_drop_sends = 0
         self._no_client_drop_bytes = 0
         self._no_client_drop_logged_s = float("-inf")
+        # The ceiling for everything sent, whatever its source (T1.47): a
+        # call's audio, a skill's or a persona's own sound. Sources level
+        # themselves; this only catches what goes over.
+        self._limiter = PeakLimiter()
         self._firmware: FirmwareService | None = (
             FirmwareService(firmware_dir, device_token, link=self, admin_token=admin_token)
             if firmware_dir is not None
@@ -1394,6 +1399,8 @@ class AudioServer:
             except OpusUnavailableError as exc:
                 opus_error = str(exc)
         self._conn = conn
+        # A new listener starts with no cut in progress (T1.47).
+        self._limiter.reset()
         if self._recorder is not None:
             self._recorder.connection_opened(conn_id, conn.audio_format)
         structlog.contextvars.bind_contextvars(conn_id=conn_id)
@@ -1936,6 +1943,7 @@ class AudioServer:
         if conn is None or conn.ws is None:
             await self._audio_dropped_no_client(len(pcm))
             return
+        pcm = self._limiter.process(pcm)
         if conn.opus_tx is not None:
             if conn.hello_sent:
                 await self._send_audio_opus(conn, conn.opus_tx, pcm, stats=stats)
@@ -2161,6 +2169,9 @@ class AudioServer:
         window = now - conn.tx_audio_window_start_ms
         if window < _TX_STATS_WINDOW_MS:
             return
+        # The wire limiter's cuts since the last line, only when it cut.
+        limited_ms, cut_db = self._limiter.take_stats()
+        limited = {"limited_ms": limited_ms, "cut_db": cut_db} if limited_ms else {}
         await logger.ainfo(
             "server.tx.audio_stats",
             window_ms=window,
@@ -2172,6 +2183,7 @@ class AudioServer:
             max_send_wait_ms=round(conn.tx_audio_max_wait_ms),
             write_buffer=conn.ws.transport.get_write_buffer_size(),
             sock_unsent=_sock_unsent(conn.ws),
+            **limited,
         )
         conn.tx_audio_window_start_ms = now
         conn.tx_audio_pcm_bytes = conn.tx_audio_wire_bytes = conn.tx_audio_sends = 0
@@ -2507,6 +2519,8 @@ class AudioServer:
         cut-off audio follows the clear and the next sound starts from a
         fresh encoder.
         """
+        # What was being cut is gone: the next sound starts unlimited (T1.47).
+        self._limiter.reset()
         conn = self._conn
         dropped_packets = dropped_pcm = 0
         if self._recorder is not None:

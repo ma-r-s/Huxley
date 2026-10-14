@@ -236,6 +236,11 @@ def ptt_stop(
     )
 
 
+def commit(ts: datetime, conn: str = "w1") -> str:
+    """The press's audio sent to the model (right after a committed release)."""
+    return line("session.tx.commit", ts, conn_id=conn)
+
+
 def speaking(ts: datetime, value: bool, conn: str | None = None) -> str:
     """The speaker-owned flag: the model's (no conn_id) or a stream's or
     call's pump (with one)."""

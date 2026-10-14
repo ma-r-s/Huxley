@@ -1346,7 +1346,13 @@ class SpotifySkill:
         await client.wait_until(
             lambda s: s.position_ms is not None and abs(s.position_ms - position) < 3_000, 2.0
         )
-        await self._log().ainfo("spotify.book_nav", chapter=book.chapters[target].name)
+        await self._log().ainfo(
+            "spotify.book_nav",
+            book=book.title,
+            chapter=book.chapters[target].name,
+            chapter_index=target,
+            chapters=len(book.chapters),
+        )
         return True
 
     def _resume_rewind(self) -> list[_Command]:
@@ -1424,10 +1430,15 @@ class SpotifySkill:
             label = self._book.title
         else:
             label = "Spotify"
+        # Loudness (T1.47): a book keeps its narrator's level from one
+        # session to the next; music masters vary by track, one key.
+        book_uri = start.uri if start is not None else context
+        loudness_key = f"spotify:book:{book_uri}" if is_book and book_uri else "spotify:music"
         return AudioStream(
             factory=factory,
             content_type=ContentType.NONMIXABLE,
             label=label,
+            loudness_key=loudness_key,
             preroll_ms=len(self._earcon) * 1000 // 48_000 if self._earcon and start else 0,
             patience=self._patience,
             on_patience_expired=on_patience_expired,
@@ -1530,15 +1541,19 @@ class SpotifySkill:
                 client.send("seek", generation=generation, position_ms=seek_to)
                 seek_sent_at = time.monotonic()
             chapter = item_uri(client.state.item)
+            chapter_at = book.index_of(chapter) if book else None
             await log.ainfo(
                 "spotify.play_started",
                 latency_ms=int((time.monotonic() - requested) * 1000),
                 resumed=start is None,
                 context=state.context_uri,
                 book=book.title if book else None,
-                chapter=book.chapters[i].name
-                if book and (i := book.index_of(chapter)) is not None
+                chapter=book.chapters[chapter_at].name
+                if book and chapter_at is not None
                 else None,
+                # The book's progress for huxley-watch's phone app (T1.46).
+                chapter_index=chapter_at,
+                chapters=len(book.chapters) if book else None,
                 goto=goto,
             )
             started_at = time.monotonic()
@@ -1685,10 +1700,12 @@ class SpotifySkill:
             # when the music moved, was paused elsewhere, or ended.
             if reason not in _NO_PAUSE:
                 client.send("pause", generation=generation)
+            where: int | None = None  # the book's chapter at the end (T1.46)
             if book is not None:
                 # Scheduled, not awaited: this is the cancel path.
                 found = None if mid_move else self._place_now(book, sent_until())
                 if found is not None:
+                    where = book.index_of(found[0].chapter_uri)
                     place, ahead = found
                     if ahead and reason not in _NO_PAUSE:
                         # Soloist played on with nobody listening (the walkie
@@ -1715,6 +1732,9 @@ class SpotifySkill:
                 played_ms=int((time.monotonic() - requested) * 1000),
                 book=book.title if book else None,
                 audio_ms=audio_ms,
+                chapter=book.chapters[where].name if book and where is not None else None,
+                chapter_index=where,
+                chapters=len(book.chapters) if book else None,
             )
 
     # --- Helpers ---

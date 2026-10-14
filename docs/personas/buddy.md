@@ -23,7 +23,7 @@ Buddy is a kids-first persona — enthusiastic, patient, and age-appropriate. It
 - **child_safe constraint** — filters adult content at the prompt level.
 - **never_say_no constraint** — always offers an alternative; kids shouldn't get stuck.
 - **echo_short_input constraint**: repeats back short utterances for confirmation before acting, unless they are a clear command or the answer to its own question.
-- **search safesearch: strict** — the strictest DuckDuckGo filter.
+- **search safesearch: strict**: the strictest safe-search setting, and no page excerpts. Most ddgs engines ignore it (see [search.md](../skills/search.md#honest-limitations)), so results are not reliably filtered.
 - **No reminders** — kids don't usually set their own scheduled reminders; add it for a parent-managed use case.
 
 ## Constraint note

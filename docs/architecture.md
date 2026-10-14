@@ -61,6 +61,8 @@ There is **one** audio channel out to the client (`server.send_audio`). Both LLM
 
 See [decision 2026-04-13 — Audiobook audio streams through the WebSocket](./decisions.md#2026-04-13--audiobook-audio-streams-through-the-websocket-not-local-playback) and [`turns.md`](./turns.md).
 
+Everything on that pipe sits at one loudness (T1.47, [sounds.md "Loudness"](./sounds.md#loudness)). Each source levels itself: the coordinator gives model audio a fixed gain with a limiter, the content observer levels streams that opt in (`AudioStream.loudness_key`), and assets are rendered at their level. `send_audio` itself carries a peak limiter, the one ceiling for whatever reaches it. All of it is `huxley/loudness.py`.
+
 That edge is also where recording happens, for a persona that opts in (`recording:`). `AudioServer` hands its recorder each Opus packet as it writes it to the socket and each mic packet as it arrives, plus the control frames it sends (`model_speaking`, `stream_started`/`_ended`, `claim_started`/`_ended`, `audio_clear`, `ptt_start`/`_stop`). A writer thread turns that into Ogg Opus files for voices and `recorder.segment` log lines for everything (see [Recordings](./observability.md#recordings)). The coordinator knows nothing about it; the event loop only enqueues. The recorder is the persona's (its `Application` starts and stops it), but the runtime hands it to the shared server only when that persona becomes current (`AudioServer.set_recorder`), so during a swap neither persona's audio is recorded into the other's folder.
 
 ### Persona is config, not code
@@ -402,6 +404,7 @@ Dependencies flow **downward**. `huxley_sdk/types.py` is the universal leaf — 
 | Restart lock (one server/port)    | `server/runtime/src/huxley/instance_lock.py`                     |
 | Per-persona orchestrator          | `server/runtime/src/huxley/app.py`                               |
 | WebSocket audio server            | `server/runtime/src/huxley/server/server.py`                     |
+| Loudness: measure, limit, level   | `server/runtime/src/huxley/loudness.py`                          |
 | Recorder (segments, writer thread) | `server/runtime/src/huxley/server/recorder.py`                  |
 | Ogg Opus muxer                    | `server/runtime/src/huxley/server/ogg_opus.py`                   |
 | State machine + transitions       | `server/runtime/src/huxley/state/machine.py`                     |

@@ -59,6 +59,11 @@ bool hux_net_wifi_forget(const char *ssid);
  * the MAC address. */
 void hux_net_wifi_list(void);
 
+/** Bench (`wifi join <ssid hex>`): join a known network now, heard or not.
+ * On one it can't hear, no IP for 2 min makes it look for another (the
+ * field case, F-0027). */
+bool hux_net_wifi_join(const char *ssid);
+
 /** Set the station's channel width (20 or 40 MHz) and rejoin the AP so
  *  it applies. Not kept across restarts. */
 esp_err_t hux_net_set_bandwidth(int mhz);
@@ -208,6 +213,12 @@ void hux_net_set_audio_sink(hux_net_audio_sink_fn sink);
 /** Milliseconds of server audio received since boot (Opus packets, 60 ms
  * each): the hello's received_ms_last_conn (T1.44). */
 uint32_t hux_net_rx_audio_ms(void);
+
+/** The walkie has an IP now (F-0032: it can reach the internet at all). */
+bool hux_net_have_ip(void);
+/** How long the server has been unreachable, ms; 0 while it's up or the
+ * walkie is paused on purpose (an eviction). */
+uint32_t hux_net_server_lost_ms(void);
 
 /**
  * Called for every inbound `audio_clear` ("drop any queued audio": the

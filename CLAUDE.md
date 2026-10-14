@@ -28,13 +28,13 @@ Huxley/                              # repo root
 │   │   ├── news/                    #   huxley-skill-news (Open-Meteo + Google News RSS)
 │   │   ├── radio/                   #   huxley-skill-radio (HTTP/Icecast via ffmpeg)
 │   │   ├── spotify/                 #   huxley-skill-spotify (Spotify Soloist; dev/ runs it in Docker on a Mac)
-│   │   ├── search/                  #   huxley-skill-search (DuckDuckGo via ddgs, no API key)
+│   │   ├── search/                  #   huxley-skill-search (ddgs: Yandex, Yahoo, then mixed; page excerpts; no API key)
 │   │   ├── reminders/               #   huxley-skill-reminders (scheduled reminders, persistent, retry escalation)
 │   │   ├── stocks/                  #   huxley-skill-stocks (Alpha Vantage; reference third-party-shape skill)
 │   │   ├── system/                  #   huxley-skill-system (volume, time)
 │   │   ├── telegram/                #   huxley-skill-telegram (MTProto comms)
 │   │   └── timers/                  #   huxley-skill-timers (one-shot relative reminders)
-│   ├── watch/                       # huxley-watch: the caregiver's page + alerts (T1.42), its own process; reads logs + DB, never writes
+│   ├── watch/                       # huxley-watch: the caregiver's page + alerts (T1.42) + phone app /app/ (T1.46), its own process; reads logs + DB, never writes
 │   └── personas/                    # Persona configs + assets the runtime loads
 │       ├── _shared/                 #   Framework-shared assets (palette of all personas)
 │       │   └── sounds/              #     Earcons rendered by scripts/synth_sounds.py — book_start, book_end, news_start, radio_start, search_start

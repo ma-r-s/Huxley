@@ -6,8 +6,8 @@ News headlines + weather for [Huxley](https://github.com/ma-r-s/Huxley). Google 
 
 ## What it does
 
-- **`get_news`** — "what's the news" — fetches Google News RSS for the persona's country, filters by configured `interests`, returns up to `max_items` headlines with timestamps.
-- **`get_weather`** — "what's the weather" — Open-Meteo forecast for the persona's lat/lon. No API key.
+- **`get_news`**: "what's the news". Google News RSS for the persona's country (top stories, a topic, a search, or `local`: a search for `local_query`), copies of the same story dropped, up to `max_items` headlines with their age and up to two related headlines each.
+- **`get_weather`**: "what's the weather". Open-Meteo, now plus today and tomorrow with rain chance, for the persona's lat/lon. No API key.
 
 Both tools cache for `cache_ttl_seconds` (default 300s) so repeated requests within a turn don't re-fetch.
 
@@ -24,7 +24,8 @@ skills:
     units: "metric" # or "imperial"
     interests: ["economía", "tecnología"]
     max_items: 5
-    max_age_hours: 24
+    max_age_hours: 24 # feeds; searches and local look back 72 h
+    local_query: 'Villavicencio OR "del Meta"' # category local (default: location)
     cache_ttl_seconds: 300
     start_sound: news_start # opt-in chime; persona-shared earcon palette
     sounds_path: "sounds"
@@ -45,7 +46,7 @@ uv run ruff check server/skills/news
 uv run mypy server/skills/news/src
 ```
 
-Tests use `pytest-httpx` to mock both upstreams; no network in CI.
+Tests use a dict-backed `FakeHttpClient` for both upstreams; no network in CI.
 
 ## License
 

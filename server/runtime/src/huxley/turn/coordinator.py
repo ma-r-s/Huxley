@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 import structlog
 
 from huxley.focus.vocabulary import Activity, Channel
+from huxley.loudness import LevelMemory, PeakLimiter, db_to_gain
 from huxley.reconnect import no_signal_tone_pcm
 from huxley_sdk import (
     DEFAULT_INJECT_EXPIRY,
@@ -252,6 +253,8 @@ class TurnCoordinator:
         confirm_client_received: Callable[[int, float], Awaitable[bool]] | None = None,
         client_present: bool = True,
         unavailable_sound: bytes | None = None,
+        voice_gain_db: float = 0.0,
+        level_memory: LevelMemory | None = None,
     ) -> None:
         # Client-facing outputs (to the WebSocket audio server).
         self._send_audio = send_audio
@@ -266,6 +269,13 @@ class TurnCoordinator:
         self._wait_cue = WaitCue(
             send_cue_audio or send_audio, lambda: max(0.0, self._client_playhead_remaining_s())
         )
+        # Loudness (T1.47). Model audio gets a fixed gain and a limiter
+        # (0 dB: none, bit-exact); content streams that opt in
+        # (`AudioStream.loudness_key`) a leveler, whose learned gains live
+        # in `level_memory`.
+        self._voice_gain = db_to_gain(voice_gain_db)
+        self._voice_limiter = PeakLimiter() if voice_gain_db else None
+        self._level_memory = level_memory if level_memory is not None else LevelMemory()
 
         async def _noop_volume(_level: int) -> None:
             pass
@@ -836,6 +846,12 @@ class TurnCoordinator:
                 state=self.current_turn.state.value if self.current_turn else None,
                 owner=owner.value,
             )
+            if self._voice_limiter is not None:
+                # A response starts clean: no cut left over from a cut-off one.
+                self._voice_limiter.reset()
+                self._voice_limiter.take_stats()
+        if self._voice_limiter is not None:
+            pcm = self._voice_limiter.process(pcm, self._voice_gain)
         said = self._inflight
         if said is not None and said.plays_at is None:
             # Where this turn's first audio lands on the client: behind
@@ -851,10 +867,21 @@ class TurnCoordinator:
 
     async def on_audio_done(self) -> None:
         """OpenAI finished emitting audio for the current response."""
+        voice = self._voice_limiter_done()
         if self.response_cancelled or not self._speaking_state.is_speaking:
             return
         await self._speaking_state.force_release()
-        await self._log.ainfo("coord.audio_done")
+        await self._log.ainfo("coord.audio_done", **voice)
+
+    def _voice_limiter_done(self) -> dict[str, float]:
+        """A response's audio ended: its voice-limiter cuts for the log,
+        and a clean limiter for the next one (whoever holds the speaker
+        flag then: a completion turn keeps it through the hand-over)."""
+        if self._voice_limiter is None:
+            return {}
+        limited_ms, cut_db = self._voice_limiter.take_stats()
+        self._voice_limiter.reset()
+        return {"voice_limited_ms": limited_ms, "voice_cut_db": cut_db}
 
     async def on_tool_call(self, call_id: str, name: str, args: dict[str, Any]) -> None:
         """Model called a tool — dispatch, send output back, latch the result.
@@ -1550,6 +1577,7 @@ class TurnCoordinator:
             on_eof=_on_eof,
             on_resume=_on_resume,
             on_pause=_on_pause,
+            level_memory=self._level_memory,
         )
         # Set the local cache BEFORE acquire — the actor may deliver
         # FOREGROUND before wait_drained returns if the mailbox is busy,

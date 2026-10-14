@@ -145,6 +145,8 @@ class TestPlayStation:
         data = json.loads(result.output)
         assert data["station_id"] == "beta"
         assert isinstance(result.side_effect, AudioStream)
+        # Each station is leveled on its own (T1.47).
+        assert result.side_effect.loudness_key == "radio:beta"
         await _drain(result.side_effect.factory)
         assert player.urls_streamed == ["https://example.com/beta"]
 

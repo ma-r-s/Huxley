@@ -14,7 +14,7 @@ Chief is an executive assistant persona — direct, reliable, and efficient. It 
 | ----------- | --------------------------------- |
 | `system`    | Current time, volume control      |
 | `news`      | Daily briefings (3 headlines max) |
-| `search`    | Web fact-lookup via DuckDuckGo    |
+| `search`    | Web fact-lookup (ddgs metasearch) |
 | `timers`    | Short relative countdowns         |
 | `reminders` | Scheduled recurring reminders     |
 

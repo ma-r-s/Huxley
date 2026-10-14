@@ -73,6 +73,7 @@ ToolResult(
 - **`output`** is JSON text sent back to the LLM as the function-call output. The LLM narrates it to the user.
 - **`side_effect`** _(optional)_ is a `SideEffect` the framework runs around the model's response. Skills with no side effect leave it `None`. Available kinds:
   - `AudioStream(factory, on_complete_prompt?, completion_silence_ms?, content_type?)` — long-running PCM stream (audiobook playback). Factory fires at the turn's terminal barrier. `content_type` defaults to `ContentType.NONMIXABLE` (spoken-word — an injected turn hard-cancels the stream). Set to `ContentType.MIXABLE` for music / ambience so the framework ducks it under an injected turn instead of cutting it. Today all shipped content is NONMIXABLE; MIXABLE is wired end-to-end and ready for the first music skill.
+    Set `loudness_key` (one key per source: `"radio:<station>"`) for content whose level you don't control: the framework levels it to -20 LUFS with no added latency, past the first `preroll_ms` (your earcon, played as is). See [`../sounds.md`](../sounds.md#loudness).
   - `PlaySound(pcm)` — short one-shot chime that plays just before the model's response audio (used by info tools that want a sonic intro — e.g. news chime). See [`docs/sounds.md`](../sounds.md).
   - `CancelMedia()` — stop the running media task immediately and for good (pause/stop tools). A press only pauses the stream and the framework resumes it after the turn, so a stop tool must return this even though the stream is already silent.
   - `SetVolume(level)` — forward a volume change to the client.
@@ -629,7 +630,7 @@ Skill-specific docs:
 - [`news.md`](news.md) — Open-Meteo weather + Google News RSS summarization.
 - [`radio.md`](radio.md) — HTTP/Icecast streams via ffmpeg.
 - [`spotify.md`](spotify.md) — Spotify through Spotify Soloist, streamed like radio.
-- [`search.md`](search.md) — open-web search via DuckDuckGo (no API key); for current/live info the LLM doesn't already know.
+- [`search.md`](search.md): open-web search (ddgs metasearch, Google News headlines, page excerpts; no API key) for anything that may have changed since the model's training.
 - [`timers.md`](timers.md) — one-shot relative reminders ("recuérdame en 5 minutos") via proactive speech, persisted across restart.
 - [`reminders.md`](reminders.md) — scheduled reminders for specific times ("recuérdame mañana a las 8") with kind-aware retry escalation, daily/weekly recurrence, and missed-reminder catch-up.
 

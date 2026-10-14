@@ -8,13 +8,15 @@ Tools:
 - `get_news(query?, category?)` — single polymorphic news tool. No args
   returns the country's curated top stories + weather; `query` is search,
   `category` filters by topic.
-- `get_weather(when?)` — weather only, separate because users ask for
-  weather more often than for news.
+- `get_weather()`: weather only (now, today, tomorrow), separate
+  because users ask for weather more often than for news.
 
 Configuration (persona's `skills.news` block):
 - Required: `location`, `latitude`, `longitude`, `country_code`, `language_code`
 - Optional: `units` (metric|imperial, default metric), `max_items` (default 8),
   `max_age_hours` (default 24), `interests` (list of strings, hint for LLM),
+  `local_query` (Google News search text for `category: local`, default
+  the `location`; e.g. `Villavicencio OR "del Meta"`),
   `start_sound` (key into sound palette, e.g. "news_start" — omit for no chime),
   `sounds_path` (relative to persona data_dir, default "sounds"),
   `cache_ttl_seconds` (default 300).
@@ -22,6 +24,7 @@ Configuration (persona's `skills.news` block):
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -54,6 +57,10 @@ _VALID_CATEGORIES = (
 
 def _now_seconds() -> float:
     return time.monotonic()
+
+
+def _query_hash(query: str) -> str:
+    return hashlib.sha256(query.encode("utf-8")).hexdigest()[:8]
 
 
 class NewsSkill:
@@ -95,6 +102,7 @@ class NewsSkill:
         self._max_items: int = 8
         self._max_age_hours: int = 24
         self._interests: list[str] = []
+        self._local_query: str = ""
         self._start_sound_role: str | None = None
         self._sounds: dict[str, bytes] = {}
         # In-memory TTL cache: {cache_key: (epoch_seconds, json_payload)}.
@@ -133,8 +141,11 @@ class NewsSkill:
                     "Sin argumentos: devuelve las noticias destacadas del país. "
                     "Con `query`: busca noticias sobre ese tema. "
                     "Con `category`: filtra por tema "
-                    "(local, national, world, sports, tech, business, science, "
-                    "entertainment, health). "
+                    f"(local = noticias de {loc} y su región; national, world, "
+                    "sports, tech, business, science, entertainment, health). "
+                    "Cada noticia trae `age_hours` y a veces `related`: titulares "
+                    "de otros medios sobre la misma historia, útiles para "
+                    "explicarla. "
                     f"Intereses configurados de este usuario: {interests}."
                 ),
                 parameters={
@@ -161,8 +172,10 @@ class NewsSkill:
             ToolDefinition(
                 name="get_weather",
                 description=(
-                    f"Obtiene el clima actual y el pronóstico de hoy para {loc}. "
-                    "Úsala cuando el usuario pregunte específicamente por el clima."
+                    f"Obtiene el clima actual y el pronóstico de hoy y de mañana "
+                    f"para {loc} (máxima, mínima, estado y `rain_chance_pct`, la "
+                    "probabilidad de lluvia). Úsala cuando el usuario pregunte "
+                    "por el clima de aquí, también el de mañana."
                 ),
                 parameters={"type": "object", "properties": {}},
             ),
@@ -182,8 +195,11 @@ class NewsSkill:
                     "Sans arguments : renvoie les titres du pays. "
                     "Avec `query` : recherche les actualités sur ce sujet. "
                     "Avec `category` : filtre par thème "
-                    "(local, national, world, sports, tech, business, science, "
-                    "entertainment, health). "
+                    f"(local = actualités de {loc} et sa région ; national, world, "
+                    "sports, tech, business, science, entertainment, health). "
+                    "Chaque actualité a `age_hours` et parfois `related` : les "
+                    "titres d'autres médias sur la même histoire, utiles pour "
+                    "l'expliquer. "
                     f"Centres d'intérêt configurés pour cet utilisateur : {interests}."
                 ),
                 parameters={
@@ -210,8 +226,10 @@ class NewsSkill:
             ToolDefinition(
                 name="get_weather",
                 description=(
-                    f"Récupère la météo actuelle et les prévisions du jour pour {loc}. "
-                    "À utiliser quand l'utilisateur demande spécifiquement la météo."
+                    f"Récupère la météo actuelle et les prévisions d'aujourd'hui et "
+                    f"de demain pour {loc} (max, min, état et `rain_chance_pct`, la "
+                    "probabilité de pluie). À utiliser quand l'utilisateur demande "
+                    "la météo d'ici, y compris celle de demain."
                 ),
                 parameters={"type": "object", "properties": {}},
             ),
@@ -231,8 +249,10 @@ class NewsSkill:
                     "No args: returns the country's top stories + weather. "
                     "With `query`: search news for that text. "
                     "With `category`: filter by topic "
-                    "(local, national, world, sports, tech, business, science, "
-                    "entertainment, health). "
+                    f"(local = news from {loc} and its region; national, world, "
+                    "sports, tech, business, science, entertainment, health). "
+                    "Each item has `age_hours` and sometimes `related`: other "
+                    "outlets' headlines on the same story, useful to explain it. "
                     f"User interests configured for this persona: {interests}."
                 ),
                 parameters={
@@ -258,8 +278,9 @@ class NewsSkill:
             ToolDefinition(
                 name="get_weather",
                 description=(
-                    f"Get current weather and today's forecast for {loc}. "
-                    "Use when the user asks specifically about the weather."
+                    f"Get current weather and the forecast for today and tomorrow "
+                    f"for {loc} (high, low, condition and `rain_chance_pct`). Use "
+                    "when the user asks about the weather here, tomorrow's too."
                 ),
                 parameters={"type": "object", "properties": {}},
             ),
@@ -289,6 +310,7 @@ class NewsSkill:
         self._max_age_hours = int(cfg.get("max_age_hours", 24))
         self._interests = list(cfg.get("interests", []) or [])
         self._cache_ttl_seconds = int(cfg.get("cache_ttl_seconds", 300))
+        self._local_query = str(cfg.get("local_query") or self._location_name)
 
         # Sound palette — only loaded if persona configured a start_sound role.
         # Missing role / missing file = no chime, no error (persona is opting out).
@@ -321,6 +343,7 @@ class NewsSkill:
             http=self._http,
             country_code=country_code,
             language_code=self._feed_language_code,
+            local_query=self._local_query,
         )
 
         # Initial UI language from the setup-time context. The framework
@@ -336,6 +359,7 @@ class NewsSkill:
             feed_language=self._feed_language_code,
             ui_language=self._ui_language_code,
             interests=self._interests,
+            local_query=self._local_query,
             chime=self._start_sound_role if self._sounds else None,
         )
 
@@ -389,11 +413,12 @@ class NewsSkill:
         if cached is not None:
             await self._logger.ainfo(
                 "news.cache_hit",
-                key=cache_key,
+                key=f"news:{_query_hash(query) if query else ''}:{category or ''}",
                 items=len(cached.get("items", [])),
             )
             return self._success_result(cached)
 
+        started = _now_seconds()
         try:
             weather_data = await self._weather.fetch()
             items = await self._news.fetch(
@@ -429,10 +454,17 @@ class NewsSkill:
         self._cache_set(cache_key, payload)
         await self._logger.ainfo(
             "news.fetched",
-            query=query,
+            # A news query can say something private ("que paso con mi
+            # vecino ..."): hash at info, full text at debug, like search.
+            query_hash=_query_hash(query) if query else None,
             category=category,
             items=len(items),
+            with_related=sum(1 for item in items if item.related),
+            oldest_age_h=round(max((item.age_hours(now) for item in items), default=0.0), 1),
+            latency_ms=int((_now_seconds() - started) * 1000),
         )
+        if query:
+            await self._logger.adebug("news.fetched_query", query=query)
         return self._success_result(payload)
 
     async def _handle_get_weather(self) -> ToolResult:

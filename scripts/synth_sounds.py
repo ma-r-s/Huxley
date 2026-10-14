@@ -9,10 +9,17 @@ root::
 
 Aesthetic target: soft Japanese / Wii-bell / FM-synthesis tradition. Layered
 Risset additive bell + Chowning FM bell, curved exponential envelopes, hall
-reverb tail. See ``docs/sounds.md`` for the architecture and
+reverb tail. The device sounds start a second, glass family: near-pure
+sines, nearly dry, minimal and bright (``glass``). See ``docs/sounds.md`` for
+the architecture and
 ``docs/research/sonic-ux.md`` for the design constraints (especially the
 200 Hz - 4 kHz vocal-band masking rule that pushes our fundamentals into the
 shimmer register).
+
+Level (T1.47): every earcon is normalized by loudness, not peak, to the
+cue level (``huxley.loudness.CUE_TARGET_LUFS``, -19 LUFS momentary max,
+about 3 dB under the voice), under a -1.5 dBFS true-peak ceiling. See
+``docs/sounds.md`` "Loudness".
 
 Determinism: pure functions of (numpy, scipy, pedalboard) versions. No RNG
 in the synthesis path. Same versions == byte-identical output. Versions are
@@ -37,6 +44,15 @@ from pedalboard import (
 )
 from scipy.io import wavfile
 
+from huxley.loudness import (
+    CUE_TARGET_LUFS,
+    TRUE_PEAK_CEILING_DBFS,
+    WIRE_CEILING_DBFS,
+    momentary_max_lufs,
+    sample_peak_dbfs,
+    true_peak_dbfs,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -47,7 +63,6 @@ F64 = NDArray[np.float64]
 # ln(10^(60/20)) — the exponential coefficient that takes a unit-amplitude
 # signal to -60 dB over the time constant. Used for "decay to silence" envelopes.
 _MINUS_60DB_NEPERS: float = 60.0 / 20.0 * math.log(10.0)  # ~6.9078
-DEFAULT_PEAK_DBFS: float = -3.0  # final peak target for every rendered earcon
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +217,44 @@ def fm_bell(
 
 
 # ---------------------------------------------------------------------------
+# Glass tone: a near-pure sine with a faint 2nd and 3rd harmonic. Minimal and
+# bright where the bells above are warm and ornate; the device sounds use it
+# (Mario's pick, 2026-10-13: "extremely happy, minimalistic").
+# ---------------------------------------------------------------------------
+
+GLASS_PARTIALS: tuple[tuple[int, float], ...] = ((1, 1.0), (2, 0.18), (3, 0.05))
+PURE_PARTIALS: tuple[tuple[int, float], ...] = ((1, 1.0),)
+
+
+def glass(
+    freq: float,
+    duration_s: float,
+    attack_ms: float = 4.0,
+    curve: float = 6.0,
+    partials: tuple[tuple[int, float], ...] = GLASS_PARTIALS,
+    glide_from: float = 0.0,
+    glide_ms: float = 0.0,
+) -> F64:
+    """Glass tone: harmonic partials under one exponential decay. Optional
+    ``glide_from`` slides the pitch up (or down) to ``freq`` over ``glide_ms``.
+    A 30 ms release takes the tail to true zero, so a note cut before it
+    fades doesn't click."""
+    n = int(duration_s * SAMPLE_RATE)
+    f = np.full(n, freq, dtype=np.float64)
+    g = min(n, int(glide_ms / 1000.0 * SAMPLE_RATE))
+    if glide_from > 0 and g > 0:
+        f[:g] = np.geomspace(glide_from, freq, g)
+    phase = 2.0 * np.pi * np.cumsum(f) / SAMPLE_RATE
+    out = sum((amp * np.sin(k * phase) for k, amp in partials), np.zeros(n))
+    env = _exp_fall(n, curve=curve)
+    a = min(n, int(attack_ms / 1000.0 * SAMPLE_RATE))
+    env[:a] *= np.linspace(0.0, 1.0, a)
+    r = min(n, int(0.03 * SAMPLE_RATE))
+    env[n - r :] *= 0.5 * (1.0 + np.cos(np.linspace(0.0, np.pi, r)))
+    return out * env
+
+
+# ---------------------------------------------------------------------------
 # Composition helpers
 # ---------------------------------------------------------------------------
 
@@ -213,8 +266,8 @@ def chord(voices: list[F64], stagger_ms: float = 0.0) -> F64:
     stagger doesn't silently rebalance per-voice loudness — peak-normalize
     would make a staggered chord 2x louder per-voice than an unstaggered one
     (because non-coincident voices never sum to a peak the normalizer would
-    have to bring down). The downstream ``post()`` peak-normalizes to the
-    final dBFS target, so absolute level here is decorative.
+    have to bring down). The downstream ``post()`` normalizes to the
+    final loudness target, so absolute level here is decorative.
     """
     stagger = int(stagger_ms / 1000.0 * SAMPLE_RATE)
     total = max(len(v) + stagger * i for i, v in enumerate(voices))
@@ -257,7 +310,7 @@ def fade_out(audio: F64, ms: float = 15.0) -> F64:
 
 
 # ---------------------------------------------------------------------------
-# Post-processing: hall reverb + soft compression + limiter.
+# Post-processing: hall reverb + soft compression, then loudness normalize.
 # Pedalboard's Reverb is a Freeverb derivative — tasteful, not Lexicon-class
 # but in the right tier for under-2s earcons. HighpassFilter at 80 Hz strips
 # any sub-rumble that would muddy small speakers.
@@ -270,7 +323,7 @@ def post(
     reverb_damping: float = 0.4,
     reverb_wet: float = 0.30,
     reverb_dry: float = 0.75,
-    peak_dbfs: float = DEFAULT_PEAK_DBFS,
+    target_lufs: float = CUE_TARGET_LUFS,
     pad_tail_s: float = 0.6,
 ) -> F32:
     """Apply effects chain and return float32 mono ready for WAV write.
@@ -281,8 +334,8 @@ def post(
     Note on level control: pedalboard's ``Limiter`` is a soft-knee limiter
     backed by a hard clipper at 0 dBFS — its ``threshold_db`` controls where
     compression starts, not where the ceiling sits. To avoid surprise
-    clipping we drop the limiter and normalize the chain output to
-    ``peak_dbfs`` deterministically. Same end result, no clipper artifacts.
+    clipping we drop the limiter and set the level deterministically after
+    the chain instead: ``normalize`` to ``target_lufs`` (T1.47).
     """
     pad_n = int(pad_tail_s * SAMPLE_RATE)
     # Pre-attenuate to leave headroom for reverb buildup. The Reverb plugin
@@ -313,20 +366,38 @@ def post(
     if len(above) > 0:
         end = min(len(wet), above[-1] + int(0.08 * SAMPLE_RATE))
         wet = wet[:end]
-    # Deterministic peak normalize to peak_dbfs, then fade trailing edge.
-    peak = float(np.max(np.abs(wet)))
-    if peak > 0:
-        target_linear = 10.0 ** (peak_dbfs / 20.0)
-        wet = wet * (target_linear / peak)
-    return fade_out(wet.astype(np.float64), ms=15.0).astype(np.float32)
+    faded = fade_out(wet.astype(np.float64), ms=15.0)
+    return normalize(faded, target_lufs).astype(np.float32)
+
+
+def _pcm16(audio: NDArray[np.floating]) -> NDArray[np.int16]:
+    """Float audio as the PCM16 `write_wav` writes."""
+    return (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
+
+
+def normalize(audio: F64, target_lufs: float) -> F64:
+    """Scale to `target_lufs` momentary max (the loudest 400 ms), measured
+    on the PCM16 that gets written, with `huxley.loudness` (the measure
+    the runtime and the tests use). If that would put the true peak over
+    `TRUE_PEAK_CEILING_DBFS` or the sample peak over the wire limiter's
+    ceiling, scale down to fit instead and say so: the sound is quieter
+    than the target, never clipped or limited on the wire."""
+    measured = momentary_max_lufs(_pcm16(audio).tobytes())
+    out = audio * 10.0 ** ((target_lufs - measured) / 20.0)
+    pcm = _pcm16(out).tobytes()
+    over = max(
+        true_peak_dbfs(pcm) - TRUE_PEAK_CEILING_DBFS, sample_peak_dbfs(pcm) - WIRE_CEILING_DBFS
+    )
+    if over > 0:
+        print(f"  warning: {over:.1f} dB under the target to stay under the peak ceilings")
+        out = out * 10.0 ** (-(over + 0.05) / 20.0)
+    return out
 
 
 def write_wav(audio: F32, path: Path) -> None:
     """Quantize float audio to PCM16 and write a 24 kHz mono WAV."""
-    clipped = np.clip(audio, -1.0, 1.0)
-    pcm16 = (clipped * 32767.0).astype(np.int16)
     path.parent.mkdir(parents=True, exist_ok=True)
-    wavfile.write(str(path), SAMPLE_RATE, pcm16)
+    wavfile.write(str(path), SAMPLE_RATE, _pcm16(audio))
 
 
 # ---------------------------------------------------------------------------
@@ -523,6 +594,98 @@ def search_start() -> F32:
 # ---------------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+# --- device status sounds ------------------------------------------------
+# Played by the walkie itself, with no server: power on, searching for a
+# connection, connected, connection lost. Same bell family and cue level as
+# the palette above; the firmware embeds them (rendered here, encoded and
+# embedded by the firmware's own tooling). The searching tick repeats, so
+# it sits 6 dB under the cue level.
+
+
+def device_startup() -> F32:
+    """Hello (~0.9 s): G6 -> C7 -> E7 glass tones 60 ms apart, a pure E8
+    sparkle on the top note, almost dry. Mario's pick of three takes
+    (2026-10-13), after asking for "extremely happy, minimalistic"."""
+    return post(
+        mix(
+            (1.0, glass(note("G6"), 0.22, curve=7.0)),
+            (1.0, delayed(glass(note("C7"), 0.22, curve=7.0), 60.0)),
+            (1.0, delayed(glass(note("E7"), 0.5, curve=5.0), 120.0)),
+            (0.25, delayed(glass(note("E8"), 0.35, attack_ms=8.0, partials=PURE_PARTIALS), 135.0)),
+        ),
+        reverb_room=0.35,
+        reverb_damping=0.3,
+        reverb_wet=0.12,
+        reverb_dry=0.92,
+        pad_tail_s=0.25,
+    )
+
+
+def device_searching() -> F32:
+    """Still looking (~0.35 s): one soft, dry A6 tick; repeats while searching."""
+    tick = risset_bell(note("A6"), duration_s=0.22, brightness=0.6)
+    return post(
+        tick,
+        reverb_room=0.5,
+        reverb_damping=0.6,
+        reverb_wet=0.12,
+        reverb_dry=0.9,
+        target_lufs=CUE_TARGET_LUFS - 6.0,
+        pad_tail_s=0.12,
+    )
+
+
+def device_connected() -> F32:
+    """Ready (~1.3 s): C6 -> E6 -> G6 -> C7, brighter, with a bell on the top C."""
+    arp = chord(
+        [
+            fm_bell(note("C6"), duration_s=0.6, mod_ratio=1.4, mod_index_peak=3.5),
+            fm_bell(note("E6"), duration_s=0.6, mod_ratio=1.4, mod_index_peak=3.5),
+            fm_bell(note("G6"), duration_s=0.6, mod_ratio=1.4, mod_index_peak=3.5),
+            fm_bell(note("C7"), duration_s=0.8, mod_ratio=1.4, mod_index_peak=4.0),
+        ],
+        stagger_ms=70.0,
+    )
+    apex = delayed(risset_bell(note("C7"), duration_s=0.8, brightness=1.0), ms=210.0)
+    return post(
+        mix((0.65, arp), (0.4, apex)),
+        reverb_room=0.78,
+        reverb_damping=0.4,
+        reverb_wet=0.32,
+        reverb_dry=0.75,
+        pad_tail_s=0.6,
+    )
+
+
+def device_lost() -> F32:
+    """Gone (~1.0 s): G6 -> E6 -> C6 falling, darker and softer than the rest."""
+    arp = chord(
+        [
+            risset_bell(note("G6"), duration_s=0.5, brightness=0.6),
+            risset_bell(note("E6"), duration_s=0.5, brightness=0.55),
+            risset_bell(note("C6"), duration_s=0.7, brightness=0.5),
+        ],
+        stagger_ms=130.0,
+    )
+    return post(
+        arp,
+        reverb_room=0.75,
+        reverb_damping=0.55,
+        reverb_wet=0.28,
+        reverb_dry=0.78,
+        pad_tail_s=0.5,
+    )
+
+
+DEVICE_SOUNDS_DIR = REPO_ROOT / "server" / "personas" / "_shared" / "sounds" / "device"
+DEVICE_PALETTE: dict[str, Callable[[], F32]] = {
+    "startup": device_startup,
+    "searching": device_searching,
+    "connected": device_connected,
+    "lost": device_lost,
+}
+
+
 SHARED_SOUNDS_DIR = REPO_ROOT / "server" / "personas" / "_shared" / "sounds"
 
 PALETTE: dict[str, Callable[[], F32]] = {
@@ -543,10 +706,24 @@ def main() -> int:
         path = out_dir / f"{name}.wav"
         write_wav(audio, path)
         dur = len(audio) / SAMPLE_RATE
-        peak = float(np.max(np.abs(audio)))
-        peak_db = 20.0 * np.log10(max(peak, 1e-9))
-        print(f"  {name:14s}  {path.relative_to(REPO_ROOT)}  {dur:.2f}s  peak={peak_db:+.1f}dB")
+        pcm = _pcm16(audio).tobytes()
+        print(
+            f"  {name:14s}  {path.relative_to(REPO_ROOT)}  {dur:.2f}s"
+            f"  momentary max {momentary_max_lufs(pcm):.1f} LUFS"
+            f"  true peak {true_peak_dbfs(pcm):+.1f} dBFS"
+        )
     print(f"\nrendered {len(PALETTE)} earcons to {out_dir.relative_to(REPO_ROOT)}")
+    DEVICE_SOUNDS_DIR.mkdir(parents=True, exist_ok=True)
+    for name, fn in DEVICE_PALETTE.items():
+        audio = fn()
+        path = DEVICE_SOUNDS_DIR / f"{name}.wav"
+        write_wav(audio, path)
+        pcm = _pcm16(audio).tobytes()
+        print(
+            f"  device/{name:9s}  {len(audio) / SAMPLE_RATE:.2f}s"
+            f"  momentary max {momentary_max_lufs(pcm):.1f} LUFS"
+            f"  true peak {true_peak_dbfs(pcm):+.1f} dBFS"
+        )
     return 0
 
 

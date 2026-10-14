@@ -95,9 +95,12 @@ def no_signal_tone_pcm(
     beep_ms: int = 120,
     gap_ms: int = 90,
     beeps: int = 2,
-    amplitude: int = 6_000,
+    amplitude: int = 7_440,
 ) -> bytes:
     """Synthesize a short "no signal" double-beep as PCM16 mono.
+
+    `amplitude` puts it at the cue level, -19 LUFS momentary max
+    (`huxley.loudness.CUE_TARGET_LUFS`, T1.47; was 6000, -20.9).
 
     Framework-level default so the retry loop has an audible cue without
     any persona asset wiring. Personas can supply their own message later

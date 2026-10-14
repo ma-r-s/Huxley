@@ -15,6 +15,7 @@
 #include "esp_system.h"
 #include "nvs_flash.h"
 
+#include "hux_alert.h"
 #include "hux_app.h"
 #include "hux_audio.h"
 #include "hux_battery.h"
@@ -266,8 +267,19 @@ void app_main(void) {
     hux_ota_set_status_sink(hux_app_firmware_status);
     hux_ota_set_selftest(update_selftest);
 
-    /* The battery level once a minute, to the server through the app
-     * (F-0025); without the solder blob it says not_wired once. */
+    /* The walkie's own phone alert when the server is unreachable (F-0032):
+     * the topic is a secret, compiled in from the gitignored secrets.h. */
+#ifdef HUX_NTFY_TOPIC
+#ifndef HUX_ALERT_CLICK
+#define HUX_ALERT_CLICK ""
+#endif
+    hux_alert_start(HUX_NTFY_TOPIC, HUX_ALERT_CLICK);
+#else
+    hux_alert_start(NULL, NULL);
+#endif
+
+    /* The battery level, to the server through the app (F-0025); without
+     * the solder blob it says not_wired once. The cutoff parks (F-0030). */
     hux_battery_set_cutoff_sink(hux_park_cutoff);
     hux_battery_start(hux_app_report_battery);
 
