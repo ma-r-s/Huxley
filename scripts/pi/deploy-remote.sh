@@ -26,6 +26,14 @@ busy() {
   if [ "$(grep -hE '"server.tx.stream_(started|ended)"' "$logs/huxley.log" 2>/dev/null | tail -1 | grep -c started)" = 1 ]; then
     echo "a stream is playing"; return 0
   fi
+  # Something already said to be said, waiting for him to hear it (a timer
+  # or reminder that fired while the walkie was off): a restart drops it.
+  # 2026-10-14 a fired pasta timer was lost to a deploy this way.
+  queued=$(curl -s --max-time 3 "http://127.0.0.1:${HUXLEY_SERVER_PORT:-8765}/health" \
+    | sed -n 's/.*"injects_waiting": \([0-9]*\).*/\1/p')
+  if [ -n "$queued" ] && [ "$queued" -gt 0 ]; then
+    echo "$queued announcement(s) waiting for him to hear"; return 0
+  fi
   return 1
 }
 supersede() {
