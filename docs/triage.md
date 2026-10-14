@@ -6034,7 +6034,7 @@ Branch `t148-search-news` (worktree), on base 5f699660: 6e1469b5 (search), 816d9
 
 ## T1.49: The walkie says its connection state with sounds
 
-**Status**: `in_progress` (2026-10-13): device sounds rendered on branch `device-status-sounds` (worktree); startup picked by Mario; the rest of the palette redrawn in the same style, waiting on his ear; firmware behaviour handed to the firmware session as F-0033 · **Effort**: S server side (assets only); the firmware side is F-0033
+**Status**: `in_progress` (2026-10-13): sounds final and on main; the walkie side is the firmware session's F-0033 (build, silent bench test, offer the update) · **Effort**: S server side (assets only); the firmware side is F-0033
 
 **Problem** (Mario, 2026-10-13): with no internet the walkie is silent until he presses, and then says it has no connection. "Just pressing and being told is not good enough." Grandpa can't see a light; he can't tell off from searching from ready.
 
@@ -6046,12 +6046,22 @@ Branch `t148-search-news` (worktree), on base 5f699660: 6e1469b5 (search), 816d9
 - `lost`: a falling, softer phrase when the connection drops.
 - Pressing while searching gets the existing "no tengo conexión" prompt; otherwise no speech.
 
-Mario liked the first bell takes of searching, connected and lost, then asked to rethink every sound in the startup's style. Palette v2 (pure glass tones, one short gesture each so they stay distinct by ear) is drafted for all ten: the four device sounds plus `book_start` (a slow fifth up), `book_end` (the same fifth down), `news_start` (two identical blips), `radio_start` (one tone gliding up a fourth), `search_start` (two tiny rising pips), `persona_swap` (a quick up-down flip). All fundamentals sit at or above G6 (1568 Hz), clear of the vocal band.
+Behaviour on the walkie (sent to the firmware session; standard practice, Mario didn't object): startup at power on, then searching; the tick every ~3 s for 2 min, then every 30 s, stopping after about 17 min in all (battery, no beeping all night); `connected` on the first connection after power on and after a `lost`, never for a silent blip; `lost` only after 20 s unreachable (deploys and restarts take 3 to 20 s), then the searching schedule from its start; 22:00-07:00 the tick, `lost` and `connected` stay silent unless he presses or powers it on; logs `sound.status kind=...`. Shares the "server unreachable" state with F-0032's phone alert.
+
+**Palette v2, dropped.** After the startup, Mario asked to rethink every sound in its style. A pure-glass v2 of all ten (device sounds plus the content cues) was rendered; his verdict: "you overdid it, now they all sound too similar". He chose to ship the approved set first (glass startup, bell searching/connected/lost, content cues unchanged) and redesign later: T1.50.
 
 **Definition of Done**
-- Mario picks per sound: v2 or the current one.
-- `synth_sounds.py` renders the picks; every file at the cue level (searching 6 dB under), true peak under the ceiling, no clicks (spectrogram checked).
-- `docs/sounds.md`: device sounds and the glass family documented.
-- Firmware session told the final device files (F-0033); runtime earcons deployed to the Pi when idle.
+- `synth_sounds.py` renders the four device sounds; each at the cue level (searching 6 dB under), true peak under the ceiling, no clicks (spectrogram checked). Done.
+- `docs/sounds.md`: device sounds and the glass primitive documented. Done.
+- Firmware (F-0033): the four sounds embedded, the state machine above with unit tests, a silent bench run (no Mac speaker) that logs each `sound.status`, the update offered to the walkie in a bench window.
+- Mario hears them on the walkie: power on, Wi-Fi off and on, server restart.
 
-**Commits**: 
+**Commits**: e8117a96 (four device sounds), a4e1cffc (glass startup, docs, this entry).
+
+## T1.50: Redesign the sound palette (Wii-inspired, many takes per sound)
+
+**Status**: `queued` (2026-10-13, after T1.49 ships) · **Effort**: M (synth work plus Mario's listening rounds)
+
+**Problem** (Mario, 2026-10-13): hearing the glass startup made him want to rethink every sound. The all-glass v2 was too uniform: "they all sound too similar". He wants inspiration from the Wii's sounds, many proposals for each sound, and they may be richer and more complex than the minimal glass tones.
+
+**Approach**: per sound (the ten in `DEVICE_PALETTE` and `PALETTE`), several distinct takes that vary timbre, gesture and length, not just pitch; a listening sheet per round; keep the cue level, the vocal-band rule for cues before speech, and each sound telling its role apart by ear. The glass `startup` stays unless he says otherwise.
