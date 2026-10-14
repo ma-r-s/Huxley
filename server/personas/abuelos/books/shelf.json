@@ -1,0 +1,1539 @@
+{
+  "version": 1,
+  "built": "2026-10-14",
+  "market": "CO",
+  "categories": [
+    "novela latinoamericana",
+    "clásicos en español",
+    "clásicos universales",
+    "novela histórica",
+    "misterio y suspenso",
+    "aventuras",
+    "cuentos",
+    "historia y memorias",
+    "poesía y teatro",
+    "historias de terror",
+    "libros para reflexionar"
+  ],
+  "books": [
+    {
+      "title": "Cien años de soledad",
+      "author": "Gabriel García Márquez",
+      "narrator": "Juan Pablo Raba",
+      "uri": "spotify:show:1oVPQwdET6CETd7KFZAghH",
+      "language": "es",
+      "category": "novela latinoamericana",
+      "tags": [
+        "familia",
+        "realismo mágico",
+        "colombia"
+      ],
+      "pitch": "La historia de varias generaciones de la familia Buendía en el pueblo de Macondo.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El amor en los tiempos del cólera",
+      "author": "Gabriel García Márquez",
+      "narrator": "Diego Trujillo",
+      "uri": "spotify:show:29zqqzIgpt2F1VV9662hfs",
+      "language": "es",
+      "category": "novela latinoamericana",
+      "tags": [
+        "amor",
+        "colombia"
+      ],
+      "pitch": "Florentino Ariza espera durante medio siglo el amor de Fermina Daza, en una ciudad del Caribe.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Crónica de una muerte anunciada",
+      "author": "Gabriel García Márquez",
+      "narrator": "Diego Trujillo",
+      "uri": "spotify:show:6J3tUXzXzooQA2P2cfGnqx",
+      "language": "es",
+      "category": "novela latinoamericana",
+      "tags": [
+        "crimen",
+        "colombia"
+      ],
+      "pitch": "La reconstrucción de un crimen que todo un pueblo sabía que iba a ocurrir.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El coronel no tiene quien le escriba",
+      "author": "Gabriel García Márquez",
+      "narrator": "Diego Trujillo",
+      "uri": "spotify:show:5fLcaJdlJBc7sJD4yAq61Z",
+      "language": "es",
+      "category": "novela latinoamericana",
+      "tags": [
+        "pobreza",
+        "colombia"
+      ],
+      "pitch": "Un viejo coronel espera cada viernes la carta de su pensión, mientras cuida un gallo de pelea.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Del amor y otros demonios",
+      "author": "Gabriel García Márquez",
+      "narrator": "Carlos Manuel Vesga",
+      "uri": "spotify:show:5oerVueN3Fp3oHkqmzLkvp",
+      "language": "es",
+      "category": "novela latinoamericana",
+      "tags": [
+        "amor",
+        "colombia"
+      ],
+      "pitch": "En la Cartagena colonial, una niña mordida por un perro es encerrada en un convento por creerla poseída.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La casa de los espíritus",
+      "author": "Isabel Allende",
+      "narrator": "Javiera Gazitua, Senén Arancibia",
+      "uri": "spotify:show:5HcFXSDAa7zOjjMnx2WkI3",
+      "language": "es",
+      "category": "novela latinoamericana",
+      "tags": [
+        "familia",
+        "realismo mágico",
+        "política",
+        "chile"
+      ],
+      "pitch": "La saga de la familia Trueba durante varias generaciones, entre el amor, la política y lo sobrenatural.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Eva Luna",
+      "author": "Isabel Allende",
+      "narrator": "Juanita Devis",
+      "uri": "spotify:show:6PqHYKxUZk8nsmwWtO79l8",
+      "language": "es",
+      "category": "novela latinoamericana",
+      "tags": [
+        "amor",
+        "política"
+      ],
+      "pitch": "Una huérfana con el don de contar historias se abre camino en un país sudamericano agitado.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "De amor y de sombra",
+      "author": "Isabel Allende",
+      "narrator": "María Ignacia Hojas",
+      "uri": "spotify:show:0lVtIc5Ct3nkb7rGJeC0fk",
+      "language": "es",
+      "category": "novela latinoamericana",
+      "tags": [
+        "amor",
+        "política",
+        "chile"
+      ],
+      "pitch": "Una periodista y un fotógrafo se enamoran mientras investigan un crimen ocultado por la dictadura.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La ciudad y los perros",
+      "author": "Mario Vargas Llosa",
+      "narrator": "Óscar Meza, Raúl Alfonso Saco, Sebastián Alvizuri",
+      "uri": "spotify:show:0NAgslsHA3M1Nw0eN8Ia41",
+      "language": "es",
+      "category": "novela latinoamericana",
+      "tags": [
+        "juventud",
+        "perú"
+      ],
+      "pitch": "La vida de un grupo de cadetes en un colegio militar de Lima, marcada por la disciplina y la violencia.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La tía Julia y el escribidor",
+      "author": "Mario Vargas Llosa",
+      "narrator": "Augusto Varillas, Alberto Herrera Jefferson",
+      "uri": "spotify:show:1E7yHUQk4Ki0GVws9hxzmX",
+      "language": "es",
+      "category": "novela latinoamericana",
+      "tags": [
+        "amor",
+        "humor",
+        "perú"
+      ],
+      "pitch": "Un joven aspirante a escritor se enamora de su tía política, mientras un autor de radionovelas cautiva a Lima.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Pantaleón y las visitadoras",
+      "author": "Mario Vargas Llosa",
+      "narrator": "Alberto Herrera Jefferson, Fernando Solís, Óscar Meza, Julio García, Lenny Luna, Carla Gamerro, Johan Gamarra",
+      "uri": "spotify:show:0ZJA3EYRILwIx4XjiKNwsi",
+      "language": "es",
+      "category": "novela latinoamericana",
+      "tags": [
+        "humor",
+        "perú"
+      ],
+      "pitch": "Un capitán muy disciplinado recibe la misión secreta de llevar visitadoras a los cuarteles de la selva.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Pedro Páramo",
+      "author": "Juan Rulfo",
+      "narrator": "Mauricio Carrera",
+      "uri": "spotify:show:5HaQ7q7VHLapywkFHzkbCC",
+      "language": "es",
+      "category": "novela latinoamericana",
+      "tags": [
+        "familia",
+        "fantástico",
+        "méxico"
+      ],
+      "pitch": "Juan Preciado llega a Comala buscando a su padre, Pedro Páramo, y encuentra un pueblo de murmullos.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Rayuela",
+      "author": "Julio Cortázar",
+      "narrator": "Leandro Schnitman",
+      "uri": "spotify:show:2VRsr57ljuUMELTfzMrCW1",
+      "language": "es",
+      "category": "novela latinoamericana",
+      "tags": [
+        "amor",
+        "filosofía",
+        "argentina"
+      ],
+      "pitch": "Horacio Oliveira busca sentido a su vida entre París y Buenos Aires, junto a la Maga y sus amigos.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Como agua para chocolate",
+      "author": "Laura Esquivel",
+      "narrator": "Yareli Arizmendi",
+      "uri": "spotify:show:0c3EIhIC8DoU8Xxo5A1byz",
+      "language": "es",
+      "category": "novela latinoamericana",
+      "tags": [
+        "amor",
+        "familia",
+        "realismo mágico",
+        "méxico"
+      ],
+      "pitch": "Tita, obligada a no casarse para cuidar de su madre, vuelca sus sentimientos en las recetas de su cocina.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La muerte de Artemio Cruz",
+      "author": "Carlos Fuentes",
+      "narrator": "Noé Velázquez",
+      "uri": "spotify:show:014N8GfVT8sp3iT6i6I8g7",
+      "language": "es",
+      "category": "novela latinoamericana",
+      "tags": [
+        "política",
+        "méxico"
+      ],
+      "pitch": "En su lecho de muerte, un poderoso hombre de negocios recuerda su vida desde la Revolución mexicana.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El túnel",
+      "author": "Ernesto Sabato",
+      "narrator": "Leandro Dugatkin",
+      "uri": "spotify:show:6xoOclbo45tXq3iWyI7K1c",
+      "language": "es",
+      "category": "novela latinoamericana",
+      "tags": [
+        "crimen",
+        "amor",
+        "argentina"
+      ],
+      "pitch": "Desde la cárcel, el pintor Juan Pablo Castel cuenta cómo llegó a matar a la mujer que amaba.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La tregua",
+      "author": "Mario Benedetti",
+      "narrator": "Ernesto Alterio",
+      "uri": "spotify:show:67Z1VaT5xuhY0QWHxuOOZk",
+      "language": "es",
+      "category": "novela latinoamericana",
+      "tags": [
+        "amor",
+        "familia"
+      ],
+      "pitch": "Un oficinista viudo, a punto de jubilarse, lleva un diario de su vida gris hasta que llega un amor inesperado.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El ruido de las cosas al caer",
+      "author": "Juan Gabriel Vásquez",
+      "narrator": "John Alex Toro",
+      "uri": "spotify:show:55wXh65jfrjWoVZxWSN1PM",
+      "language": "es",
+      "category": "novela latinoamericana",
+      "tags": [
+        "crimen",
+        "colombia"
+      ],
+      "pitch": "Un profesor de Bogotá indaga en el pasado de un amigo asesinado, y con él en los años del narcotráfico.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Delirio",
+      "author": "Laura Restrepo",
+      "narrator": "Diana Angel",
+      "uri": "spotify:show:1aD6e5XzLWh5Xe5rio4FBh",
+      "language": "es",
+      "category": "novela latinoamericana",
+      "tags": [
+        "amor",
+        "familia",
+        "colombia"
+      ],
+      "pitch": "Un hombre vuelve de un corto viaje, encuentra a su esposa enloquecida y busca entender qué ocurrió.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "María",
+      "author": "Jorge Isaacs",
+      "narrator": "Jorge Javier Salas",
+      "uri": "spotify:show:0PAlwxYNpKm2R41tHejGDj",
+      "language": "es",
+      "category": "clásicos en español",
+      "tags": [
+        "amor",
+        "campo",
+        "colombia"
+      ],
+      "pitch": "Efraín vuelve a la hacienda familiar en el Valle del Cauca y vive un amor juvenil con su prima María.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La vorágine",
+      "author": "José Eustasio Rivera",
+      "narrator": "Max Garzón",
+      "uri": "spotify:show:0YPj7a50SwxsNDonlucJLA",
+      "language": "es",
+      "category": "clásicos en español",
+      "tags": [
+        "naturaleza",
+        "amor",
+        "colombia"
+      ],
+      "pitch": "Arturo Cova huye con su amada hacia los llanos y la selva, donde conoce la explotación de los caucheros.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Don Quijote de la Mancha",
+      "author": "Miguel de Cervantes",
+      "narrator": "Carlos Ramos",
+      "uri": "spotify:show:0AlWkk7IODnp5hPla7BXk6",
+      "language": "es",
+      "category": "clásicos en español",
+      "tags": [
+        "humor",
+        "viajes",
+        "españa"
+      ],
+      "pitch": "Un hidalgo enloquecido por los libros de caballería sale a los caminos con Sancho Panza a deshacer entuertos.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Novelas ejemplares",
+      "author": "Miguel de Cervantes",
+      "narrator": "Arturo Querejeta, Eugenio Barona, Paula Iwasaki, Rebeca Hernando",
+      "uri": "spotify:show:6qFG0eHGtmQ0aUzYrn9Jyf",
+      "language": "es",
+      "category": "clásicos en español",
+      "tags": [
+        "amor",
+        "humor",
+        "españa"
+      ],
+      "pitch": "Novelas breves de Cervantes con historias de amor, engaños y pícaros en la España de su tiempo.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Lazarillo de Tormes",
+      "author": "Anónimo",
+      "narrator": "Pere Arquillué",
+      "uri": "spotify:show:2EQGy7njtgDmBMvpU4CDx6",
+      "language": "es",
+      "category": "clásicos en español",
+      "tags": [
+        "pobreza",
+        "humor",
+        "españa"
+      ],
+      "pitch": "Un muchacho pobre cuenta sus desventuras al servicio de varios amos, entre ellos un ciego y un clérigo.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Los santos inocentes",
+      "author": "Miguel Delibes",
+      "narrator": "Jordi Llovet",
+      "uri": "spotify:show:3TagHvzF5UjZIDFMlt8cmC",
+      "language": "es",
+      "category": "clásicos en español",
+      "tags": [
+        "campo",
+        "pobreza",
+        "españa"
+      ],
+      "pitch": "Una humilde familia de campesinos sirve en un cortijo de Extremadura bajo el dominio de un señorito.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El camino",
+      "author": "Miguel Delibes",
+      "narrator": "Jordi Boixaderas, Marisa Sotelo",
+      "uri": "spotify:show:6gve8ur334w8ceC0t962OA",
+      "language": "es",
+      "category": "clásicos en español",
+      "tags": [
+        "infancia",
+        "campo",
+        "españa"
+      ],
+      "pitch": "La noche antes de irse a estudiar a la ciudad, un niño recuerda su vida y sus amigos en la aldea.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Cinco horas con Mario",
+      "author": "Miguel Delibes",
+      "narrator": "Mercè Montalá, Juan Carlos Gustems",
+      "uri": "spotify:show:5RV506Eap0zr1Jpckur7lA",
+      "language": "es",
+      "category": "clásicos en español",
+      "tags": [
+        "familia",
+        "españa"
+      ],
+      "pitch": "Una mujer vela el cuerpo de su marido durante la noche y repasa en voz alta su vida juntos.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La familia de Pascual Duarte",
+      "author": "Camilo José Cela",
+      "narrator": "Eugenio Barona",
+      "uri": "spotify:show:197dAgk3grL8JP0MjCRq9z",
+      "language": "es",
+      "category": "clásicos en español",
+      "tags": [
+        "crimen",
+        "campo",
+        "españa"
+      ],
+      "pitch": "Un campesino extremeño condenado a muerte cuenta la vida violenta que lo llevó a la cárcel.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La colmena",
+      "author": "Camilo José Cela",
+      "narrator": "Victor Clavijo",
+      "uri": "spotify:show:70wDyhIH47BhqA8u4KbO10",
+      "language": "es",
+      "category": "clásicos en español",
+      "tags": [
+        "pobreza",
+        "españa"
+      ],
+      "pitch": "Decenas de vecinos del Madrid pobre de la posguerra se cruzan en un café y en las calles de la ciudad.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Platero y yo",
+      "author": "Juan Ramón Jiménez",
+      "narrator": "Donelle Stuhlhofer, Javier Martínez",
+      "uri": "spotify:show:4VrfAHXTjUtCWyGXNT9DXq",
+      "language": "es",
+      "category": "clásicos en español",
+      "tags": [
+        "animales",
+        "campo",
+        "españa"
+      ],
+      "pitch": "Un poeta conversa con su burrito Platero mientras recorre los paisajes y las gentes de su pueblo andaluz.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Marianela",
+      "author": "Benito Pérez Galdós",
+      "narrator": "Esperanza de la Encarnación",
+      "uri": "spotify:show:4BgClfAFuJcgT2J42EnH0v",
+      "language": "es",
+      "category": "clásicos en español",
+      "tags": [
+        "amor",
+        "pobreza",
+        "españa"
+      ],
+      "pitch": "Una muchacha humilde sirve de lazarillo a un joven ciego en un pueblo minero del norte de España.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "San Manuel Bueno, mártir",
+      "author": "Miguel de Unamuno",
+      "narrator": "Artur Mas",
+      "uri": "spotify:show:70fF34pKq0XVf3m7afa7Vf",
+      "language": "es",
+      "category": "clásicos en español",
+      "tags": [
+        "espiritualidad",
+        "españa"
+      ],
+      "pitch": "La vida de un párroco muy querido en una aldea junto a un lago, contada por una mujer que lo conoció.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Niebla",
+      "author": "Miguel de Unamuno",
+      "narrator": "Jesús Manuel Rois Frey",
+      "uri": "spotify:show:4nTqUNngDd7IVbT8yk8rNX",
+      "language": "es",
+      "category": "clásicos en español",
+      "tags": [
+        "amor",
+        "filosofía",
+        "españa"
+      ],
+      "pitch": "Augusto Pérez, un joven rico y sin rumbo, se enamora de una pianista en una novela que juega con la ficción.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Sin noticias de Gurb",
+      "author": "Eduardo Mendoza",
+      "narrator": "Jordi Brau",
+      "uri": "spotify:show:3p5Chtcro48v9pi0QKPTK6",
+      "language": "es",
+      "category": "clásicos en español",
+      "tags": [
+        "humor",
+        "ciencia ficción",
+        "españa"
+      ],
+      "pitch": "Un extraterrestre busca a su compañero Gurb, perdido en Barcelona, y anota en un diario todo lo que ve.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Los miserables",
+      "author": "Víctor Hugo",
+      "narrator": "Germán Gijón",
+      "uri": "spotify:show:0mK7V42AnhTn0JP0oethA7",
+      "language": "es",
+      "category": "clásicos universales",
+      "tags": [
+        "justicia",
+        "pobreza",
+        "francia"
+      ],
+      "pitch": "Jean Valjean, un expresidiario, intenta rehacer su vida mientras un inspector lo persigue sin descanso.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Orgullo y prejuicio",
+      "author": "Jane Austen",
+      "narrator": "Benjamín Figueres",
+      "uri": "spotify:show:25sosBmrj36qrvJlD41ylb",
+      "language": "es",
+      "category": "clásicos universales",
+      "tags": [
+        "amor",
+        "familia",
+        "inglaterra"
+      ],
+      "pitch": "Elizabeth Bennet y el orgulloso señor Darcy chocan una y otra vez en la Inglaterra rural.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Cumbres borrascosas",
+      "author": "Emily Brontë",
+      "narrator": "Mónica Dávila Lozano",
+      "uri": "spotify:show:5VB7p6jzFFjLXvHR3cOWzQ",
+      "language": "es",
+      "category": "clásicos universales",
+      "tags": [
+        "amor",
+        "venganza",
+        "inglaterra"
+      ],
+      "pitch": "En los páramos de Yorkshire, un huérfano adoptado y la hija de la familia viven un amor feroz.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Jane Eyre",
+      "author": "Charlotte Brontë",
+      "narrator": "Silvia Rico",
+      "uri": "spotify:show:62XMDuvADHLTQgRy0ikTi5",
+      "language": "es",
+      "category": "clásicos universales",
+      "tags": [
+        "amor",
+        "inglaterra"
+      ],
+      "pitch": "Una huérfana de carácter firme se convierte en institutriz en la mansión del misterioso señor Rochester.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Crimen y castigo",
+      "author": "Fiódor Dostoievski",
+      "narrator": "Luis David García Márquez",
+      "uri": "spotify:show:3rVRx7Cbr0mvEJn19XdTqT",
+      "language": "es",
+      "category": "clásicos universales",
+      "tags": [
+        "crimen",
+        "filosofía",
+        "rusia"
+      ],
+      "pitch": "Un estudiante pobre de San Petersburgo comete un crimen y vive atormentado por la culpa.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Los hermanos Karamázov",
+      "author": "Fiódor Dostoievski",
+      "narrator": "Luis David García Márquez",
+      "uri": "spotify:show:1suJSyuff2lW1rt54BbZrB",
+      "language": "es",
+      "category": "clásicos universales",
+      "tags": [
+        "familia",
+        "espiritualidad",
+        "rusia"
+      ],
+      "pitch": "Un padre despótico y sus hijos, muy distintos entre sí, en un drama de pasiones, fe y culpa.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Ana Karenina",
+      "author": "León Tolstói",
+      "narrator": "Lina Franco",
+      "uri": "spotify:show:2EPd7Mgpnu2HloaQ0kJTEw",
+      "language": "es",
+      "category": "clásicos universales",
+      "tags": [
+        "amor",
+        "familia",
+        "rusia"
+      ],
+      "pitch": "Una mujer de la alta sociedad rusa lo arriesga todo por un amor fuera de su matrimonio.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Guerra y paz",
+      "author": "León Tolstói",
+      "narrator": "Germán Gijón",
+      "uri": "spotify:show:0AKYfcnHvvr8QZfRn4eSiv",
+      "language": "es",
+      "category": "clásicos universales",
+      "tags": [
+        "guerra",
+        "familia",
+        "rusia"
+      ],
+      "pitch": "Varias familias de la nobleza rusa viven la invasión de Napoleón entre bailes, amores y batallas.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Madame Bovary",
+      "author": "Gustave Flaubert",
+      "narrator": "Elisabet Egea",
+      "uri": "spotify:show:5hHOYrM8kuZKHhjf0PIeub",
+      "language": "es",
+      "category": "clásicos universales",
+      "tags": [
+        "amor",
+        "francia"
+      ],
+      "pitch": "Emma, casada con un médico de provincia, sueña con una vida de pasión y lujo que no tiene.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El viejo y el mar",
+      "author": "Ernest Hemingway",
+      "narrator": "Alexis Valdés",
+      "uri": "spotify:show:2fdUbLvb7NsZowzq3XlYW4",
+      "language": "es",
+      "category": "clásicos universales",
+      "tags": [
+        "mar",
+        "naturaleza"
+      ],
+      "pitch": "Un viejo pescador cubano sale solo mar adentro y lucha durante días con un pez enorme.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "1984",
+      "author": "George Orwell",
+      "narrator": "Irene Montalà, Olivia de Miguel",
+      "uri": "spotify:show:1jxKahBsb1xSUMCUv8oBPH",
+      "language": "es",
+      "category": "clásicos universales",
+      "tags": [
+        "política",
+        "ciencia ficción"
+      ],
+      "pitch": "En un Estado que lo vigila todo, un funcionario empieza a dudar del Partido y del Gran Hermano.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Rebelión en la granja",
+      "author": "George Orwell",
+      "narrator": "Juan Antonio Bernal",
+      "uri": "spotify:show:0wahQJv30SMydDAJTxhVXP",
+      "language": "es",
+      "category": "clásicos universales",
+      "tags": [
+        "animales",
+        "política"
+      ],
+      "pitch": "Los animales de una granja se rebelan contra su dueño para gobernarse solos, en una fábula sobre el poder.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Un mundo feliz",
+      "author": "Aldous Huxley",
+      "narrator": "Remigia de la Rosa",
+      "uri": "spotify:show:7kIwTjQF3ogkw6JRm91cpn",
+      "language": "es",
+      "category": "clásicos universales",
+      "tags": [
+        "ciencia ficción",
+        "política"
+      ],
+      "pitch": "En un futuro donde la felicidad está fabricada y controlada, algunos empiezan a echar de menos la libertad.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El gran Gatsby",
+      "author": "F. Scott Fitzgerald",
+      "narrator": "Miguel Coll",
+      "uri": "spotify:show:6On2u8YsDoYzYJh5MNZ7h9",
+      "language": "es",
+      "category": "clásicos universales",
+      "tags": [
+        "amor",
+        "estados unidos"
+      ],
+      "pitch": "Cerca de Nueva York, un millonario misterioso da fiestas espléndidas para reencontrar a un antiguo amor.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Matar a un ruiseñor",
+      "author": "Harper Lee",
+      "narrator": "Sheila Blanco",
+      "uri": "spotify:show:64UjOFyHJE1fzRc8csz0JY",
+      "language": "es",
+      "category": "clásicos universales",
+      "tags": [
+        "justicia",
+        "infancia",
+        "estados unidos"
+      ],
+      "pitch": "En un pueblo de Alabama, una niña ve a su padre, abogado, defender a un hombre negro acusado de un crimen.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La metamorfosis",
+      "author": "Franz Kafka",
+      "narrator": "®bseal voice",
+      "uri": "spotify:show:2QMiq89LeR7JhTuOFNugpS",
+      "language": "es",
+      "category": "clásicos universales",
+      "tags": [
+        "fantástico",
+        "familia"
+      ],
+      "pitch": "Gregorio Samsa despierta una mañana convertido en un insecto enorme, y su familia no sabe qué hacer con él.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Mujercitas",
+      "author": "Louisa May Alcott",
+      "narrator": "Paola Navalón",
+      "uri": "spotify:show:5JFmywBVD8AjGU3Tjz14A8",
+      "language": "es",
+      "category": "clásicos universales",
+      "tags": [
+        "familia",
+        "juventud",
+        "estados unidos"
+      ],
+      "pitch": "Cuatro hermanas crecen juntas en Estados Unidos mientras su padre está lejos, en la guerra.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Oliver Twist",
+      "author": "Charles Dickens",
+      "narrator": "Raquel Romero",
+      "uri": "spotify:show:3dpGd1bp9e87CT2lGeurEu",
+      "language": "es",
+      "category": "clásicos universales",
+      "tags": [
+        "infancia",
+        "pobreza",
+        "inglaterra"
+      ],
+      "pitch": "Un niño huérfano escapa a Londres y cae en manos de una banda de ladrones.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Canción de Navidad",
+      "author": "Charles Dickens",
+      "narrator": "Jordi Boixaderas",
+      "uri": "spotify:show:5BfOtEuXesrGBZJOYTvAwn",
+      "language": "es",
+      "category": "clásicos universales",
+      "tags": [
+        "fantástico",
+        "inglaterra"
+      ],
+      "pitch": "En Nochebuena, el avaro Scrooge recibe la visita de varios fantasmas que le muestran su vida.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Grandes esperanzas",
+      "author": "Charles Dickens",
+      "narrator": "Ignacio Casas",
+      "uri": "spotify:show:4qwLU4hDktmO5t0FgucuFA",
+      "language": "es",
+      "category": "clásicos universales",
+      "tags": [
+        "juventud",
+        "inglaterra"
+      ],
+      "pitch": "Pip, un niño huérfano, recibe de un benefactor desconocido la oportunidad de convertirse en caballero.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La Odisea",
+      "author": "Homero",
+      "narrator": "Carmenza Gómez",
+      "uri": "spotify:show:3vPDloTiayCOxvcZ26Mf3d",
+      "language": "es",
+      "category": "clásicos universales",
+      "tags": [
+        "antigüedad",
+        "viajes",
+        "mar"
+      ],
+      "pitch": "Tras la guerra de Troya, Ulises lucha durante años por volver a casa, junto a su esposa y su hijo.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La Ilíada",
+      "author": "Homero",
+      "narrator": "Clara Sofia Arrieta",
+      "uri": "spotify:show:0dZFO5a45vIqG30IWHM8dB",
+      "language": "es",
+      "category": "clásicos universales",
+      "tags": [
+        "antigüedad",
+        "guerra"
+      ],
+      "pitch": "La guerra de Troya y la cólera de Aquiles, entre héroes, reyes y dioses.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El general en su laberinto",
+      "author": "Gabriel García Márquez",
+      "narrator": "Carlos Manuel Vesga",
+      "uri": "spotify:show:0XMG0f5LasIlYJkrd12ZCN",
+      "language": "es",
+      "category": "novela histórica",
+      "tags": [
+        "biografía",
+        "política",
+        "colombia"
+      ],
+      "pitch": "El último viaje de Simón Bolívar por el río Magdalena, enfermo y alejado del poder.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Hija de la fortuna",
+      "author": "Isabel Allende",
+      "narrator": "Camila Valenzuela",
+      "uri": "spotify:show:0E1hIukjtzcQ4F3kYHLgeg",
+      "language": "es",
+      "category": "novela histórica",
+      "tags": [
+        "amor",
+        "viajes",
+        "chile",
+        "estados unidos"
+      ],
+      "pitch": "Una joven chilena viaja a California durante la fiebre del oro para buscar a su amante.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Retrato en sepia",
+      "author": "Isabel Allende",
+      "narrator": "Javiera Gazitua",
+      "uri": "spotify:show:7jaWRChgW1fyF9ENgfz9rU",
+      "language": "es",
+      "category": "novela histórica",
+      "tags": [
+        "familia",
+        "chile"
+      ],
+      "pitch": "En el Chile del siglo XIX, Aurora del Valle busca recuperar los recuerdos borrados de su infancia.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Largo pétalo de mar",
+      "author": "Isabel Allende",
+      "narrator": "Jordi Boixaderas",
+      "uri": "spotify:show:55rbZUBCVifY4JMocFp3lT",
+      "language": "es",
+      "category": "novela histórica",
+      "tags": [
+        "guerra",
+        "viajes",
+        "españa",
+        "chile"
+      ],
+      "pitch": "Un joven médico huye de la Guerra Civil española y llega a Chile en el barco Winnipeg con otros exiliados.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Violeta",
+      "author": "Isabel Allende",
+      "narrator": "Javiera Gazitua",
+      "uri": "spotify:show:2RUjTxRtTSzy53PSzNR285",
+      "language": "es",
+      "category": "novela histórica",
+      "tags": [
+        "familia",
+        "amor"
+      ],
+      "pitch": "La vida de una mujer sudamericana a lo largo de un siglo, desde una pandemia hasta la siguiente.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La fiesta del Chivo",
+      "author": "Mario Vargas Llosa",
+      "narrator": "Jane Santos, Quirogas García, Jean-Marc Berne",
+      "uri": "spotify:show:4fItq4NI0p3DOcnjv0zdam",
+      "language": "es",
+      "category": "novela histórica",
+      "tags": [
+        "política",
+        "crimen"
+      ],
+      "pitch": "La dictadura de Trujillo en República Dominicana, vista por el dictador, sus conspiradores y una víctima.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Soldados de Salamina",
+      "author": "Javier Cercas",
+      "narrator": "Sergio Zamora, Javier Cercas",
+      "uri": "spotify:show:59llD9oeOJELwxbGjJyH7Y",
+      "language": "es",
+      "category": "novela histórica",
+      "tags": [
+        "guerra",
+        "periodismo",
+        "españa"
+      ],
+      "pitch": "Un periodista investiga cómo un escritor franquista sobrevivió a un fusilamiento al final de la Guerra Civil.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La catedral del mar",
+      "author": "Ildefonso Falcones",
+      "narrator": "Raúl Llorens, Ildefonso Falcones",
+      "uri": "spotify:show:6XEFX1f3JybHCB3137X6uy",
+      "language": "es",
+      "category": "novela histórica",
+      "tags": [
+        "edad media",
+        "españa"
+      ],
+      "pitch": "En la Barcelona del siglo XIV, un hijo de siervos busca la libertad mientras se levanta una gran iglesia.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Trafalgar",
+      "author": "Benito Pérez Galdós",
+      "narrator": "Rafael Baena Zapatero",
+      "uri": "spotify:show:09I8NoMB3krzeXBT4tqlcx",
+      "language": "es",
+      "category": "novela histórica",
+      "tags": [
+        "guerra",
+        "mar",
+        "españa"
+      ],
+      "pitch": "Un muchacho de Cádiz vive desde un barco español la gran batalla naval de Trafalgar.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La ciudad de los prodigios",
+      "author": "Eduardo Mendoza",
+      "narrator": "Juan Magraner",
+      "uri": "spotify:show:4k4hZ8SB5eViza7eCYTVAg",
+      "language": "es",
+      "category": "novela histórica",
+      "tags": [
+        "crimen",
+        "españa"
+      ],
+      "pitch": "Un muchacho pobre llega a Barcelona y asciende hasta lo más alto mientras la ciudad se transforma.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Memorias de Adriano",
+      "author": "Marguerite Yourcenar",
+      "narrator": "Alejandro Graue",
+      "uri": "spotify:show:0CQSYV2qxdDH1BWrJOuZgF",
+      "language": "es",
+      "category": "novela histórica",
+      "tags": [
+        "antigüedad",
+        "biografía",
+        "filosofía"
+      ],
+      "pitch": "El emperador romano Adriano, al final de su vida, repasa su historia en una larga carta a su sucesor.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Los pilares de la Tierra",
+      "author": "Ken Follett",
+      "narrator": "Jordi Boixaderas",
+      "uri": "spotify:show:2x33yhBbcP6P6rTI4LmZRf",
+      "language": "es",
+      "category": "novela histórica",
+      "tags": [
+        "edad media",
+        "inglaterra"
+      ],
+      "pitch": "La construcción de una catedral en la Inglaterra medieval, entre guerras, ambiciones y amores.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La pregunta de sus ojos",
+      "author": "Eduardo Sacheri",
+      "narrator": "Gustavo Bonfigli",
+      "uri": "spotify:show:0ihAhkzri5ozdfeMsTdUve",
+      "language": "es",
+      "category": "misterio y suspenso",
+      "tags": [
+        "crimen",
+        "justicia",
+        "argentina"
+      ],
+      "pitch": "Un empleado judicial jubilado revive un caso que nunca olvidó, el de la película El secreto de sus ojos.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La sombra del viento",
+      "author": "Carlos Ruiz Zafón",
+      "narrator": "Jordi Boixaderas",
+      "uri": "spotify:show:5f4G1uKa08cVE6sAgZuDbA",
+      "language": "es",
+      "category": "misterio y suspenso",
+      "tags": [
+        "juventud",
+        "españa"
+      ],
+      "pitch": "En la Barcelona de posguerra, un muchacho halla un libro olvidado y se obsesiona con el misterio de su autor.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El juego del ángel",
+      "author": "Carlos Ruiz Zafón",
+      "narrator": "Jordi Boixaderas",
+      "uri": "spotify:show:0xqjL5Y1vZrtq8DJzWbAGp",
+      "language": "es",
+      "category": "misterio y suspenso",
+      "tags": [
+        "amor",
+        "españa"
+      ],
+      "pitch": "En la Barcelona de los años veinte, un joven escritor recibe de un misterioso editor una oferta inquietante.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El prisionero del cielo",
+      "author": "Carlos Ruiz Zafón",
+      "narrator": "Jordi Boixaderas",
+      "uri": "spotify:show:4Xsn73Kho7Yv3j2UWKWBSr",
+      "language": "es",
+      "category": "misterio y suspenso",
+      "tags": [
+        "guerra",
+        "españa"
+      ],
+      "pitch": "Daniel Sempere y su amigo Fermín se enfrentan a un secreto enterrado desde los años de la guerra.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El laberinto de los espíritus",
+      "author": "Carlos Ruiz Zafón",
+      "narrator": "Jordi Boixaderas",
+      "uri": "spotify:show:3Z8gujKNVRHAndZlGOjfz0",
+      "language": "es",
+      "category": "misterio y suspenso",
+      "tags": [
+        "familia",
+        "españa"
+      ],
+      "pitch": "En la Barcelona de los años cincuenta, Daniel Sempere quiere saber la verdad sobre la muerte de su madre.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La tabla de Flandes",
+      "author": "Arturo Pérez-Reverte",
+      "narrator": "Raúl Llorens",
+      "uri": "spotify:show:2oIiKhGtP9nH8ldkL3vf7D",
+      "language": "es",
+      "category": "misterio y suspenso",
+      "tags": [
+        "crimen",
+        "españa"
+      ],
+      "pitch": "Una restauradora halla en un cuadro antiguo una pista sobre un viejo crimen, oculta en una partida de ajedrez.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El club Dumas",
+      "author": "Arturo Pérez-Reverte",
+      "narrator": "Juan Carlos Gustems",
+      "uri": "spotify:show:6luhbPQegofQJinoWKcjE1",
+      "language": "es",
+      "category": "misterio y suspenso",
+      "tags": [
+        "crimen",
+        "viajes"
+      ],
+      "pitch": "Un cazador de libros raros investiga un manuscrito de Dumas y un antiguo libro sobre el diablo.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La reina del sur",
+      "author": "Arturo Pérez-Reverte",
+      "narrator": "Rogelio Ramos",
+      "uri": "spotify:show:1Sl6ZHLh2aQDZ0qNHbOeds",
+      "language": "es",
+      "category": "misterio y suspenso",
+      "tags": [
+        "crimen",
+        "méxico",
+        "españa"
+      ],
+      "pitch": "Tras la muerte de su novio, una joven de Sinaloa huye a España y se adentra en el mundo del narcotráfico.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El nombre de la rosa",
+      "author": "Umberto Eco",
+      "narrator": "Juan Carlos Gustems",
+      "uri": "spotify:show:58a53PtRFF73BZGkwiYPVq",
+      "language": "es",
+      "category": "misterio y suspenso",
+      "tags": [
+        "edad media",
+        "crimen",
+        "detectives"
+      ],
+      "pitch": "En una abadía medieval, fray Guillermo de Baskerville y su joven ayudante investigan unas muertes extrañas.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El perfume",
+      "author": "Patrick Süskind",
+      "narrator": "Luis Posada",
+      "uri": "spotify:show:1oGdHsE8P0i8awap35pLeP",
+      "language": "es",
+      "category": "misterio y suspenso",
+      "tags": [
+        "crimen",
+        "francia"
+      ],
+      "pitch": "Un hombre de olfato prodigioso se obsesiona con crear el perfume perfecto, en la Francia del siglo XVIII.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Asesinato en el Orient Express",
+      "author": "Agatha Christie",
+      "narrator": "Juan Miguel Díez",
+      "uri": "spotify:show:3tFjGP7hadLUHGWFdh5qM8",
+      "language": "es",
+      "category": "misterio y suspenso",
+      "tags": [
+        "detectives",
+        "viajes"
+      ],
+      "pitch": "El detective Hércules Poirot investiga un asesinato en un tren detenido por la nieve en plena noche.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Y no quedó ninguno",
+      "author": "Agatha Christie",
+      "narrator": "Marcel Navarro",
+      "uri": "spotify:show:54v2uKzkUEhd1TuCUeDqN1",
+      "language": "es",
+      "category": "misterio y suspenso",
+      "tags": [
+        "crimen",
+        "inglaterra"
+      ],
+      "pitch": "Diez desconocidos son invitados a una isla aislada, donde empiezan a morir uno tras otro.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Muerte en el Nilo",
+      "author": "Agatha Christie",
+      "narrator": "Juan Miguel Díez",
+      "uri": "spotify:show:6jZ3ePFdOnFepyTnVJonsx",
+      "language": "es",
+      "category": "misterio y suspenso",
+      "tags": [
+        "detectives",
+        "viajes"
+      ],
+      "pitch": "Durante un crucero por el Nilo, Hércules Poirot investiga un crimen entre los pasajeros.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El asesinato de Roger Ackroyd",
+      "author": "Agatha Christie",
+      "narrator": "Juan Miguel Díez",
+      "uri": "spotify:show:0P7WNGfxGhpV0efP7mx3mM",
+      "language": "es",
+      "category": "misterio y suspenso",
+      "tags": [
+        "detectives",
+        "inglaterra"
+      ],
+      "pitch": "En un tranquilo pueblo inglés, Hércules Poirot investiga la muerte de un hombre rico que sabía demasiado.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El sabueso de los Baskerville",
+      "author": "Arthur Conan Doyle",
+      "narrator": "AI Voice",
+      "uri": "spotify:show:414xpDml7NUbr9xFhqY7gP",
+      "language": "es",
+      "category": "misterio y suspenso",
+      "tags": [
+        "detectives",
+        "inglaterra"
+      ],
+      "pitch": "Sherlock Holmes y el doctor Watson investigan una vieja maldición que persigue a una familia en los páramos.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Estudio en escarlata",
+      "author": "Arthur Conan Doyle",
+      "narrator": "Jesús Manuel Rois Frey",
+      "uri": "spotify:show:3PitLsL7LTTnKKQKc8wflc",
+      "language": "es",
+      "category": "misterio y suspenso",
+      "tags": [
+        "detectives",
+        "inglaterra"
+      ],
+      "pitch": "Primer caso de Sherlock Holmes y el doctor Watson, un crimen en Londres con una palabra escrita en sangre.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Las aventuras de Sherlock Holmes",
+      "author": "Arthur Conan Doyle",
+      "narrator": "José Angel Peña",
+      "uri": "spotify:show:3Qrv7kBXD3b8GSMgCNQfjF",
+      "language": "es",
+      "category": "misterio y suspenso",
+      "tags": [
+        "detectives",
+        "inglaterra"
+      ],
+      "pitch": "Doce casos breves del detective Sherlock Holmes, contados por su amigo el doctor Watson.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La verdad sobre el caso Harry Quebert",
+      "author": "Joël Dicker",
+      "narrator": "José Posada",
+      "uri": "spotify:show:1YOkrBTiqCDH4q3uQTIRN4",
+      "language": "es",
+      "category": "misterio y suspenso",
+      "tags": [
+        "crimen",
+        "estados unidos"
+      ],
+      "pitch": "Un escritor investiga el caso de su maestro, acusado de la muerte de una muchacha desaparecida hace décadas.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El capitán Alatriste",
+      "author": "Arturo Pérez-Reverte",
+      "narrator": "Raúl Llorens",
+      "uri": "spotify:show:0USb0Z7kjLChPga6OEofRO",
+      "language": "es",
+      "category": "aventuras",
+      "tags": [
+        "política",
+        "españa"
+      ],
+      "pitch": "En el Madrid del siglo XVII, un soldado veterano acepta un encargo peligroso como espadachín a sueldo.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El conde de Montecristo",
+      "author": "Alejandro Dumas",
+      "narrator": "David Serrano",
+      "uri": "spotify:show:0KPdL4oq6vyr3n5jiyR3dM",
+      "language": "es",
+      "category": "aventuras",
+      "tags": [
+        "venganza",
+        "justicia",
+        "francia"
+      ],
+      "pitch": "Encarcelado injustamente, Edmundo Dantès escapa años después decidido a vengarse de quienes lo traicionaron.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Los tres mosqueteros",
+      "author": "Alejandro Dumas",
+      "narrator": "Voz digital Marcus Holloway",
+      "uri": "spotify:show:0N6alkm5Xse83VtVOLxmuh",
+      "language": "es",
+      "category": "aventuras",
+      "tags": [
+        "política",
+        "francia"
+      ],
+      "pitch": "El joven D'Artagnan llega a París para ser mosquetero del rey y se une a Athos, Porthos y Aramis.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Moby Dick",
+      "author": "Herman Melville",
+      "narrator": "Germán Gijón",
+      "uri": "spotify:show:0INbNBRUbGTVkN5i1MD30E",
+      "language": "es",
+      "category": "aventuras",
+      "tags": [
+        "mar",
+        "venganza"
+      ],
+      "pitch": "El capitán Ahab persigue por todos los mares a la gran ballena blanca que le arrancó una pierna.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La isla del tesoro",
+      "author": "Robert Louis Stevenson",
+      "narrator": "Lorenzo Silva",
+      "uri": "spotify:show:2tYtg38o7VrXgeJfwCT1fW",
+      "language": "es",
+      "category": "aventuras",
+      "tags": [
+        "mar",
+        "juventud"
+      ],
+      "pitch": "Jim Hawkins, un muchacho de una posada, se embarca en busca de un tesoro escondido, entre piratas.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Robinson Crusoe",
+      "author": "Daniel Defoe",
+      "narrator": "David Carrillo",
+      "uri": "spotify:show:2Idqkva7efAYbqwa8cQiGm",
+      "language": "es",
+      "category": "aventuras",
+      "tags": [
+        "mar",
+        "naturaleza"
+      ],
+      "pitch": "Un náufrago sobrevive durante años solo en una isla desierta gracias a su ingenio.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Veinte mil leguas de viaje submarino",
+      "author": "Julio Verne",
+      "narrator": "Juan Carlos Albarracín",
+      "uri": "spotify:show:0BsEIJJimwRYH3c7AQ6JYN",
+      "language": "es",
+      "category": "aventuras",
+      "tags": [
+        "mar",
+        "ciencia ficción",
+        "viajes"
+      ],
+      "pitch": "Un científico y sus compañeros recorren los océanos a bordo del Nautilus, el submarino del capitán Nemo.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "La vuelta al mundo en ochenta días",
+      "author": "Julio Verne",
+      "narrator": "Carlos Lorenzo",
+      "uri": "spotify:show:0S96JrfcWQDTIGPEymO1pC",
+      "language": "es",
+      "category": "aventuras",
+      "tags": [
+        "viajes",
+        "humor"
+      ],
+      "pitch": "Phileas Fogg apuesta a que puede dar la vuelta al mundo en ochenta días, junto a su criado Passepartout.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Viaje al centro de la Tierra",
+      "author": "Julio Verne",
+      "narrator": "Horacio Lanci",
+      "uri": "spotify:show:3XokeBonBGFU6fHmKf5Vx8",
+      "language": "es",
+      "category": "aventuras",
+      "tags": [
+        "viajes",
+        "ciencia ficción"
+      ],
+      "pitch": "Un profesor, su sobrino y un guía islandés descienden por un volcán hacia las profundidades de la Tierra.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Miguel Strogoff",
+      "author": "Julio Verne",
+      "narrator": "Oscar Chamorro",
+      "uri": "spotify:show:62s7XRxL9DUmrREJZlCSqt",
+      "language": "es",
+      "category": "aventuras",
+      "tags": [
+        "viajes",
+        "guerra",
+        "rusia"
+      ],
+      "pitch": "Un correo del zar debe cruzar Siberia en plena invasión tártara para llevar un mensaje vital.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Doce cuentos peregrinos",
+      "author": "Gabriel García Márquez",
+      "narrator": "Carlos Manuel Vesga",
+      "uri": "spotify:show:7wa3pKnMGnGobg6gAfsrf5",
+      "language": "es",
+      "category": "cuentos",
+      "tags": [
+        "realismo mágico",
+        "viajes"
+      ],
+      "pitch": "Doce cuentos de latinoamericanos que viven en ciudades de Europa, entre lo cotidiano y lo extraordinario.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El llano en llamas",
+      "author": "Juan Rulfo",
+      "narrator": "Mauricio Carrera",
+      "uri": "spotify:show:49QbfunIWQAXTTtdVYd7tl",
+      "language": "es",
+      "category": "cuentos",
+      "tags": [
+        "campo",
+        "pobreza",
+        "méxico"
+      ],
+      "pitch": "Cuentos del campo mexicano, de gente pobre, violencia y tierras secas en los años de la Revolución.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    }
+  ]
+}
