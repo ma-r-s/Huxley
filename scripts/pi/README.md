@@ -135,62 +135,14 @@ cf dns records list -z ma-r-s.com
 ```
 
 
-## Outside check: huxley-walkie-deadman (Cloudflare Worker)
+## Outside check: removed (2026-10-14)
 
-The Pi can't report its own death, so a Cloudflare Worker (free plan,
-created 2026-10-13, source in [`deadman-worker/`](./deadman-worker/)) asks
-from outside every 5 minutes: `GET https://walkie.ma-r-s.com/`, 10 s
-timeout. Healthy only on **401** (the server wants a device token); 530 is
-the Pi or the tunnel connector down, 502 the connector up but the server
-down, and any other status or a fetch error fails too. After 2 failed
-checks in a row (about 10 minutes) it sends one "Walkie: needs you" push to
-huxley-watch's ntfy topic, and one "Walkie: fixed" push when the server
-answers again (nothing if it recovered before a push went out). Quiet
-22:00 to 07:00 Bogota: a down push waits for the first check after 07:00;
-the fixed push is never held. A push that fails is retried at the next
-check. Cron only, no public URL.
-
-**Pushes don't get through yet (2026-10-13).** ntfy.sh counts anonymous
-publishers by IP, and a Worker publishes from Cloudflare's shared egress
-addresses, whose daily quota other users have already spent: the
-production rehearsal got `ntfy 429 42908 limit reached: daily message
-quota reached` on every try (from the Mac the same code delivers). A free
-ntfy.sh account would not help: ntfy counts per account only for paid
-tiers. Until Mario picks a channel (a paid ntfy tier, or another service),
-the Worker keeps checking and recording state, retries the push every 5
-minutes during an outage, and the refusal shows as `push_error` in its log.
-
-- State: one JSON value under the key `state` in the KV namespace
-  `huxley-deadman` (`c022afaaf2d34fde88429e76257a3738`): `down_since`,
-  `fails`, `notified_down`, `up_since` (only while a fixed push is
-  pending), `last_check`, `last_result`. Written once per check (288 a day,
-  the free plan allows 1000), before the push, plus once more when a push
-  fails. Read it from the Mac:
-  `cf kv keys get state --namespace-id c022afaaf2d34fde88429e76257a3738 --text`.
-- Logs: one `deadman.check` line per run in Workers Logs (dashboard,
-  Workers > huxley-walkie-deadman > Logs).
-- Test: `cd scripts/pi/deadman-worker && bun install && bun test` (the
-  state machine), then `bun selftest.js` (real fetches and real pushes to
-  a fresh throwaway ntfy topic, read back and compared).
-- Redeploy: `cd scripts/pi/deadman-worker && bun install && cf deploy`
-  (config in `cloudflare.config.ts`). wrangler is pinned to 4.118.0
-  because `cf` 0.6.0 expects that version's build output; a newer `cf`
-  needs a newer wrangler and a newer config shape.
-- The topic is the Worker secret `NTFY_TOPIC`, never in the repo. It is
-  declared in `cloudflare.config.ts` because a deploy drops any secret the
-  config doesn't name (a first deploy from scratch therefore fails until the
-  secret is set: deploy once without the declaration, set it, add it back). Set or
-  rotate it by piping it (cf reads a piped secret from stdin; `--text`
-  would put it on a command line):
-
-  ```bash
-  ssh mario@100.75.152.70 "sed -n 's/^ntfy_topic = \"\(.*\)\"/\1/p' ~/.config/huxley-watch/secrets.toml" \
-    | cf workers secrets update NTFY_TOPIC --worker huxley-walkie-deadman --type secret_text
-  ```
-
-- Rehearse the alert path in production: set `NTFY_TOPIC` to a throwaway
-  topic, add `CHECK_URL: { type: "text", value: "https://walkie.ma-r-s.com/health" }`
-  (404 at the edge) to `env` in `cloudflare.config.ts` and deploy; two
-  crons later the down push should land in the throwaway topic (read it
-  with `curl -s "https://ntfy.sh/<topic>/json?poll=1&since=all"`). Remove
-  it, deploy, wait for one healthy check, then pipe the real topic back.
+A Cloudflare Worker, `huxley-walkie-deadman`, asked
+`https://walkie.ma-r-s.com/` every 5 minutes from outside and was to push
+"Walkie: needs you" to ntfy when the Pi stopped answering (T1.43). Its
+pushes never got through (ntfy.sh refuses anonymous pushes from
+Cloudflare's shared addresses), the walkie's own alert replaced it (F-0032:
+the walkie tells Mario's phone itself when it can't reach the server), and
+its unauthenticated probes filled `server.auth.refused` (about 290 a day),
+a warning meant for real intruders. Deleted with its KV namespace at
+Mario's OK, 2026-10-14. The source is in git history (41b7fb96).

@@ -402,10 +402,9 @@ opens once more (W7, all of it); push after a private-data scan.
 
 Frozen and dropped (2026-10-12): the UPS (frozen: money), the healthchecks.io
 dead-man check (frozen: the Pi dies with the power, which Mario knows;
-replaced 2026-10-13 by an outside check that needs nothing from the Pi, the
-`huxley-walkie-deadman` Worker in [`scripts/pi/README.md`](../scripts/pi/README.md#outside-check-huxley-walkie-deadman-cloudflare-worker);
-its pushes don't get through yet: ntfy.sh refuses anonymous pushes from
-Cloudflare's shared addresses),
+replaced 2026-10-13 by an outside Cloudflare Worker whose pushes never got
+through, then by the walkie's own alert, F-0032; the Worker was deleted
+2026-10-14, see [`scripts/pi/README.md`](../scripts/pi/README.md#outside-check-removed-2026-10-14)),
 the Telegram bot (dropped: alerts live on the page, which Mario checks).
 
 Defaults until Mario says otherwise: alerts through a Telegram bot; dev on
