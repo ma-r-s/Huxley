@@ -411,7 +411,10 @@ why=lengths|busy|known|full|bad_hex`. Then it checks
 https://walkie.ma-r-s.com from the laptop and restarts the walkie to see
 it come back by itself. `wifi list` (also `tools/wifi.py list`) shows the
 networks, which is good and active, and the MAC; `wifi forget <name
-hex>`. Adding and forgetting work only on the USB console: through the
+hex>`. Bench: `wifi join <name hex>` joins a known network now, heard or
+not: on one it can't hear, the field case in reverse, it should find
+another within about 2 min (`wifi.choose why=no_ip`); a scan the radio
+refuses while a connect winds down is retried (`wifi.scan busy attempt=`). Adding and forgetting work only on the USB console: through the
 developer door or the server they're refused (`console.wifi_addhex
 refused`). Console lines are up to 255 bytes; a longer one is refused
 whole (`console.line_too_long`), never cut, and so is a cut `dev.cmd`

@@ -614,17 +614,37 @@ static bool wifi_join_locked(int idx, const char *why) {
     return ok;
 }
 
+/* A blocking scan (~2 s). The driver refuses one while a connect is under
+ * way (ESP_ERR_WIFI_STATE), and a disconnect only asks it to stop: wait
+ * and ask again, up to 3 s (F-0027: the field test, 2026-10-14). */
+static esp_err_t scan_start_waiting(bool stop_connecting) {
+    wifi_scan_config_t sc = {.show_hidden = true};
+    esp_err_t err = ESP_FAIL;
+    for (int attempt = 1; attempt <= 10; attempt++) {
+        err = esp_wifi_scan_start(&sc, true);
+        if (err != ESP_ERR_WIFI_STATE) {
+            break;
+        }
+        ESP_LOGW(TAG, "wifi.scan busy attempt=%d: a connect is winding down", attempt);
+        if (stop_connecting) {
+            esp_wifi_disconnect();
+        }
+        vTaskDelay(pdMS_TO_TICKS(300));
+    }
+    return err;
+}
+
 /* What is heard from here (blocking, ~2 s). A connect in progress makes a
  * scan fail, so without an IP the attempt is stopped first; the caller
  * then joins or connects again. The caller holds the link lock. */
 static int wifi_scan_locked(hux_wifi_heard_t *heard, int cap) {
     atomic_store(&s_wifi_hold, true);
     esp_timer_stop(s_wifi_retry_timer);
-    if (!atomic_load(&s_have_ip)) {
+    bool no_ip = !atomic_load(&s_have_ip);
+    if (no_ip) {
         esp_wifi_disconnect();
     }
-    wifi_scan_config_t sc = {.show_hidden = true};
-    esp_err_t err = esp_wifi_scan_start(&sc, true);
+    esp_err_t err = scan_start_waiting(no_ip);
     int nh = 0;
     if (err == ESP_OK) {
         uint16_t found = 0;
@@ -968,8 +988,7 @@ void hux_net_wifi_scan(void) {
     if (!had_ip) {
         esp_wifi_disconnect(); /* a connect in progress makes a scan fail */
     }
-    wifi_scan_config_t sc = {.show_hidden = true};
-    esp_err_t err = esp_wifi_scan_start(&sc, true);
+    esp_err_t err = scan_start_waiting(!had_ip);
     atomic_store(&s_wifi_hold, false);
     if (!had_ip) {
         esp_wifi_connect();
@@ -1101,6 +1120,18 @@ bool hux_net_wifi_forget(const char *ssid) {
         wifi_choose_locked(false, "forgot_active");
     }
     link_unlock();
+    return ok;
+}
+
+bool hux_net_wifi_join(const char *ssid) {
+    link_lock();
+    int i = wifi_find(ssid);
+    bool ok = i >= 0 && !atomic_load(&s_add_on) && wifi_join_locked(i, "bench");
+    link_unlock();
+    if (!ok) {
+        ESP_LOGW(TAG, "wifi.join refused ssid=\"%s\" why=%s", ssid,
+                 i < 0 ? "not_known" : "busy_or_config");
+    }
     return ok;
 }
 

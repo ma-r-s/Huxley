@@ -59,6 +59,11 @@ bool hux_net_wifi_forget(const char *ssid);
  * the MAC address. */
 void hux_net_wifi_list(void);
 
+/** Bench (`wifi join <ssid hex>`): join a known network now, heard or not.
+ * On one it can't hear, no IP for 2 min makes it look for another (the
+ * field case, F-0027). */
+bool hux_net_wifi_join(const char *ssid);
+
 /** Set the station's channel width (20 or 40 MHz) and rejoin the AP so
  *  it applies. Not kept across restarts. */
 esp_err_t hux_net_set_bandwidth(int mhz);

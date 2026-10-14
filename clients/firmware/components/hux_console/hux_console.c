@@ -197,6 +197,13 @@ static void run_line(char *line, bool usb) {
         } else {
             (void)hux_net_wifi_forget(ssid);
         }
+    } else if (strcmp(cmd, "wifi") == 0 && argc > 2 && strcmp(argv[1], "join") == 0) {
+        char ssid[33]; /* bench: a known network now, heard or not (F-0027) */
+        if (hux_hex_decode(argv[2], ssid, sizeof(ssid)) < 0) {
+            ESP_LOGW(TAG, "wifi.join refused why=bad_hex");
+        } else {
+            (void)hux_net_wifi_join(ssid);
+        }
     } else if (strcmp(cmd, "wifi") == 0 && argc > 1 && strcmp(argv[1], "list") == 0) {
         hux_net_wifi_list();
     } else if (strcmp(cmd, "wifi") == 0 && argc > 1 && strcmp(argv[1], "on") == 0) {
@@ -270,7 +277,7 @@ static void run_line(char *line, bool usb) {
         ESP_LOGI(TAG, "console.quiet left_s=%u", (unsigned)hux_audio_quiet_left_s());
     } else {
         ESP_LOGW(TAG, "console.unknown %s (talk, release, say N, tone [hz] [ms], vol N, pa on|off, "
-                      "selftest [hz], wifi off [s]|on|list|addhex <ssid> <pw>|forget <ssid>, wifistat, wifiscan, wifibw 20|40, info, "
+                      "selftest [hz], wifi off [s]|on|list|join <ssid>|addhex <ssid> <pw>|forget <ssid>, wifistat, wifiscan, wifibw 20|40, info, "
                       "server [<uri> [min] | keep <uri> [min] | reset], quiet [s], battery [cal <mv> | cutoff on|off | park <mv> <min>], echo off|shadow|on, calljb <ms>, alert test, super, "
                       "hang app|spk, coredump erase, reboot, "
                       "ota <url> [force] | confirm | rollback)",

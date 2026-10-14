@@ -184,12 +184,13 @@ static void alert_task(void *arg) {
         uint32_t up = uptime_ms();
         hux_alert_action_t what = hux_alert_step(&s_rtc.s, (int64_t)tv.tv_sec, up,
                                                  hux_net_have_ip(), lost == 0, lost);
-        if (!noticed && s_rtc.s.down_since != 0 && !s_rtc.s.down_sent) {
+        if (!noticed && s_rtc.s.down_since != 0 && !s_rtc.s.down_sent &&
+            lost >= 3u * 60u * 1000u) { /* not the first 2 min of a new connection */
             char since[6];
             hux_alert_hhmm(s_rtc.s.down_since, since);
             ESP_LOGW(TAG, "alert.server_lost since=%s lost_s=%u", since, (unsigned)(lost / 1000));
         }
-        noticed = s_rtc.s.down_since != 0;
+        noticed = s_rtc.s.down_since != 0 && (noticed || lost >= 3u * 60u * 1000u);
         const char *why = held_why((int64_t)tv.tv_sec, lost, up);
         if (why != held) {
             if (why != NULL) {
