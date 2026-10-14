@@ -516,10 +516,13 @@ within 2 s (`spk.call_trim dropped_ms= ring_ms= quiet= waited_ms=`).
 The mic's echo: the ES7210's channel 0 is the speaker's own output,
 sampled with the mic. `echo off|shadow|on` (NVS; on by default: the mic
 goes down by the depth while the speaker is active, half duplex; shadow:
-measure, change nothing), `echo depth <dB>` (NVS, 20-70, 50 by default:
+measure, change nothing), bench `call on|off` (call mode with the mic read for the gate only, no
+uplink: measure the gate on the speaker), `echo depth <dB>` (NVS, 20-70, 50 by default:
 the first real call measured the echo 23 dB over the near end's voice,
 -16 dBFS against a -67 floor, so 30 dB left it audible). Every 5 s:
-`audio.echo mode= depth_db= frames= active= ratio_db_p10= p50= p90=`
+`audio.echo mode= depth_db= frames= active= spk_ms= release_ms_last= max=
+ratio_db_p10= p50= p90=` (`spk_ms`: the speaker's audio in the window;
+`release`: from its last active frame to the mic open again)
 (mic over speaker power, 300 Hz up, while the speaker is active: the
 echo's strength; near-end speech raises the upper percentiles)
 `ref_floor_db= mic_peak= ref_peak= mic_clips= ref_clips= vol= pa=

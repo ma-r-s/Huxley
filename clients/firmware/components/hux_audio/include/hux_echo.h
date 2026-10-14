@@ -44,6 +44,12 @@ typedef struct {
     uint32_t frames, active, mic_clips, ref_clips; /* active: gated (or would be) */
     int16_t mic_peak, ref_peak;
     uint16_t hist[HUX_ECHO_BINS]; /* mic/ref power in dB, active frames */
+    /* Release: from the speaker's last active frame to the mic open again
+     * (gain over 0.9), in frames; the last one and the longest since the
+     * last take. */
+    uint32_t since_active;  /* frames since the reference was last active */
+    bool closed;            /* the gate closed since the mic was last open */
+    uint32_t release_last, release_max;
 } hux_echo_t;
 
 /** `depth_db`: how far the mic goes down while the speaker plays (clamped

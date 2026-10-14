@@ -353,6 +353,9 @@ static int16_t s_ref_buf[FRAME_SAMPLES];
 static hux_echo_t s_echo;
 static uint32_t s_echo_log_ms = 0;
 static bool s_echo_on = false; /* the mic task's view of s_call */
+/* Bench `call on` (F-0031): the mic read and the gate run as in a call, but
+ * nothing reaches the sink (no uplink): the gate measured on the speaker. */
+static atomic_bool s_bench_capture = false;
 
 static esp_err_t i2s_bring_up(void) {
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_PORT, I2S_ROLE_MASTER);
@@ -1094,12 +1097,19 @@ static void echo_stats(void) {
     static const char *const MODES[] = {"off", "shadow", "on"};
     uint32_t rmin = atomic_exchange(&s_call_ring_min, UINT32_MAX);
     uint32_t rmax = atomic_exchange(&s_call_ring_max, 0);
+    /* The speaker's audio (not tones) played in the window, next to the
+     * frames gated: their ratio is the share of it the far end can't hear. */
+    static uint32_t played_at = 0;
+    uint32_t played = hux_audio_played_ms();
+    uint32_t spk_ms = played - played_at;
+    played_at = played;
     ESP_LOGI(TAG,
-             "audio.echo mode=%s depth_db=%d frames=%u active=%u ratio_db_p10=%d p50=%d p90=%d "
-             "ref_floor_db=%.0f mic_peak=%d ref_peak=%d mic_clips=%u ref_clips=%u vol=%d pa=%d "
-             "ring_ms_min=%d max=%u trims=%u jb_ms=%d",
+             "audio.echo mode=%s depth_db=%d frames=%u active=%u spk_ms=%u release_ms_last=%u "
+             "max=%u ratio_db_p10=%d p50=%d p90=%d ref_floor_db=%.0f mic_peak=%d ref_peak=%d "
+             "mic_clips=%u ref_clips=%u vol=%d pa=%d ring_ms_min=%d max=%u trims=%u jb_ms=%d",
              MODES[atomic_load(&s_echo_mode)], atomic_load(&s_echo_depth_db),
-             (unsigned)s_echo.frames, (unsigned)s_echo.active,
+             (unsigned)s_echo.frames, (unsigned)s_echo.active, (unsigned)spk_ms,
+             (unsigned)(s_echo.release_last * 20), (unsigned)(s_echo.release_max * 20),
              hux_echo_percentile(&s_echo, 10), hux_echo_percentile(&s_echo, 50),
              hux_echo_percentile(&s_echo, 90), 10.0f * log10f(s_echo.ref_floor + 1e-12f),
              s_echo.mic_peak, s_echo.ref_peak, (unsigned)s_echo.mic_clips,
@@ -1139,7 +1149,8 @@ static void mic_task(void *unused) {
                 run_selftest((float)st_hz);
             }
         }
-        if (!atomic_load_explicit(&s_mic_running, memory_order_acquire)) {
+        bool running = atomic_load_explicit(&s_mic_running, memory_order_acquire);
+        if (!running && !atomic_load(&s_bench_capture)) {
             atomic_store_explicit(&s_mic_parked, true, memory_order_release);
             injecting = false;
             /* Idle — park for a frame period, not forever, so
@@ -1193,7 +1204,7 @@ static void mic_task(void *unused) {
 
         hux_audio_mic_frame_fn sink =
             atomic_load_explicit(&s_mic_sink, memory_order_acquire);
-        if (sink != NULL) {
+        if (sink != NULL && running) { /* a bench capture goes nowhere */
             sink(s_mono_buf, FRAME_SAMPLES);
         }
     }
@@ -1482,6 +1493,12 @@ void hux_audio_set_echo_mode(int mode) {
     }
     atomic_store(&s_echo_mode, mode);
     call_setting_save(ECHO_NVS_KEY, mode, false);
+}
+
+void hux_audio_bench_call(bool on) {
+    atomic_store(&s_bench_capture, on);
+    hux_audio_set_call(on);
+    ESP_LOGW(TAG, "audio.bench_call %s: the mic read for the gate only, no uplink", on ? "on" : "off");
 }
 
 void hux_audio_set_echo_depth(int db) {

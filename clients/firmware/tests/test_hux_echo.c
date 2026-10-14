@@ -181,6 +181,11 @@ static void test_default_depth_takes_the_echo_to_the_floor(void) {
     HX_ASSERT_TRUE(db(in_p / frames) > -18.0f && db(in_p / frames) < -14.0f, "the echo at -16 dBFS");
     HX_ASSERT_TRUE(db(out_p) - db(in_p) < -45.0f, "down by 45 dB or more (50, less the onsets)");
     HX_ASSERT_TRUE(db(out_p / frames) < -60.0f, "near the room's floor, not 20 dB over it");
+    /* After the floor is learned (the max also holds the first bursts):
+     * the hold falls from the burst to the -70 dBFS threshold (~55 dB at
+     * 4 dB a frame) and the gain ramps open: a speakerphone's 300-400 ms. */
+    HX_ASSERT_TRUE(e.release_last > 0 && e.release_last * 20 <= 400,
+                   "the mic opens again within 400 ms of the speaker stopping");
     hux_echo_t d;
     hux_echo_reset(&d, true, 5);
     HX_ASSERT_TRUE(d.suppress > 0.099f && d.suppress < 0.101f, "clamped to 20 dB");
