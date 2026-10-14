@@ -402,18 +402,35 @@ def _weak_match(spoken: str, book: Match) -> bool:
     return bool(_unheard_words(rest, book.title))
 
 
-def _title_unheard(spoken: str, book: Match) -> bool:
-    """What he said besides the author's name shares no main word with
-    the book's title: search's best guess, not the book he asked for. "Mi
-    alma se la dejo al diablo" (not on Spotify CO) was asked back as "¿Es
-    La melancolía de los feos, de Mario Mendoza?" (2026-10-14)."""
+def _title_said(spoken: str, book: Match) -> list[str]:
+    """What he said that could be title words: 4 letters or more, minus
+    the book's author and the words around a request ("libros de",
+    "una novela de")."""
     author = set(fold(book.artist or "").replace(",", " ").split())
-    rest = [w for w in fold(spoken).split() if w not in author and w not in _FILLER]
-    if not rest:
-        return False
-    main = re.split(r"[:(/|.\-]", book.title, maxsplit=1)[0]
-    words = [w for w in fold(main).split() if len(w) >= 4 and w not in _FILLER]
-    return bool(words) and _unheard_words(rest, book.title) == words
+    return [
+        w
+        for w in fold(spoken).split()
+        if len(w) >= 4 and w not in author and w not in _SUBJECT_FILLER
+    ]
+
+
+def _title_unheard(spoken: str, book: Match) -> bool:
+    """Nothing he said beyond the author's name is close to any word of
+    the book's whole title (a series or "Dr." before it included): search's
+    best guess, not the book he asked for. "Mi alma se la dejo al diablo"
+    (not on Spotify CO) was asked back as "¿Es La melancolía de los feos,
+    de Mario Mendoza?" (2026-10-14)."""
+    said = _title_said(spoken, book)
+    words = [w for w in fold(book.title).replace("-", " ").split() if len(w) >= 4]
+    return bool(said) and bool(words) and not any(_close(w, said) for w in words)
+
+
+def _close(word: str, heard: list[str]) -> bool:
+    return any(
+        SequenceMatcher(None, word, h).ratio() >= UNHEARD_RATIO
+        or (len(h) >= 4 and (word.startswith(h) or h.startswith(word)))
+        for h in heard
+    )
 
 
 def _unheard_words(heard: list[str], title: str) -> list[str]:
@@ -426,14 +443,7 @@ def _unheard_words(heard: list[str], title: str) -> list[str]:
     main = re.split(r"[:(/|.\-]", title, maxsplit=1)[0]
     words = [w for w in fold(main).split() if len(w) >= 4 and w not in _FILLER]
 
-    def close(word: str) -> bool:
-        return any(
-            SequenceMatcher(None, word, h).ratio() >= UNHEARD_RATIO
-            or (len(h) >= 4 and (word.startswith(h) or h.startswith(word)))
-            for h in heard
-        )
-
-    matched = [close(w) for w in words]
+    matched = [_close(w, heard) for w in words]
     if not any(matched):
         return words
     last = max(i for i, m in enumerate(matched) if m)
@@ -449,7 +459,9 @@ _MORE_WORDS = frozenset(
 )
 # Words around a subject that don't change it ("títulos de Julio Verne").
 _SUBJECT_FILLER = _FILLER | frozenset(
-    {"libros", "titulo", "titulos", "obras", "algo", "dime", "busca", "buscame", "busqueme"}
+    {"libros", "titulo", "titulos", "obra", "obras", "novela", "novelas", "algo", "dime"}
+    | {"busca", "buscame", "busqueme", "cualquier", "cualquiera", "alguno", "some", "any"}
+    | {"novel", "novels", "something", "roman", "romans"}
     | {"oir", "pongame", "books", "title", "titles", "livres", "titre", "titres", "quelque"}
 )
 
@@ -459,7 +471,8 @@ def _subject_words(query: str) -> list[str]:
 
 
 def _asks_more(query: str) -> bool:
-    return any(w in _MORE_WORDS for w in fold(query).split())
+    words = fold(query).split()
+    return "vez" not in words and any(w in _MORE_WORDS for w in words)
 
 
 # The shelf's offers are read "Uno, ... Dos, ... Tres" (lines.py), so the
@@ -1157,25 +1170,10 @@ class SpotifySkill:
                     await log.ainfo("spotify.book_not_found", query=title)
                     return self._then("book_not_found")
                 target = ordered[0]
-                if _title_unheard(title, target) and (
-                    author.strip() or _same_author(title, target.artist)
-                ):
-                    # His author, another of their books: say so, offer it.
-                    self._last_list = [target]
-                    await log.ainfo(
-                        "spotify.book_not_found",
-                        query=query,
-                        reason="other_by_author",
-                        offered=target.title,
-                    )
-                    return self._then(
-                        "book_other_by",
-                        author=(target.artist or author).split(",")[0].strip(),
-                        other=_short_title(target.title),
-                    )
                 if _title_unheard(title, target):
                     # Search's best guess shares nothing with what he
-                    # said: a closer book further down, or not found.
+                    # said: a closer book further down; else not found, or
+                    # with his author named, another of their books.
                     closer = next(
                         (
                             m
@@ -1185,7 +1183,9 @@ class SpotifySkill:
                         ),
                         None,
                     )
-                    if closer is None:
+                    if closer is not None:
+                        target = closer
+                    elif not author.strip() and not _same_author(title, target.artist):
                         await log.ainfo(
                             "spotify.book_not_found",
                             query=query,
@@ -1193,7 +1193,23 @@ class SpotifySkill:
                             top=target.title,
                         )
                         return self._then("book_not_found_title", title=title)
-                    target = closer
+                    elif len(_title_said(title, target)) >= 2 and (
+                        author.strip() or shelves.author_named(title, target.artist or "")
+                    ):
+                        # A title of theirs he named (not just their name,
+                        # "Julio Verne" for Jules): say so, offer this one.
+                        self._last_list = [target]
+                        await log.ainfo(
+                            "spotify.book_not_found",
+                            query=query,
+                            reason="other_by_author",
+                            offered=target.title,
+                        )
+                        return self._then(
+                            "book_other_by",
+                            author=(target.artist or author).split(",")[0].strip(),
+                            other=_short_title(target.title),
+                        )
                 if _weak_match(title, target):
                     # A wrong book costs listening hours: ask first. "Sí"
                     # comes back as this title, found in the list.

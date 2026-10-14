@@ -349,6 +349,57 @@ class TestAskingForABook:
             "top": "La melancolía de los feos",
         }
 
+    @pytest.mark.parametrize(
+        ("said", "title", "artist"),
+        [
+            # Critic round: a series or "Dr." before the title.
+            (
+                "Doctor Jekyll y Mister Hyde",
+                "El extraño caso del Dr. Jekyll y Mr. Hyde",
+                "R. L. Stevenson",
+            ),
+            (
+                "El guardián invisible",
+                "Trilogía del Baztán 1. El guardián invisible",
+                "Dolores Redondo",
+            ),
+            (
+                "El signo de los cuatro de Conan Doyle",
+                "Sherlock Holmes - El signo de los cuatro",
+                "Arthur Conan Doyle",
+            ),
+            # Only the author, with the words around a request.
+            ("libros de García Márquez", "Cien años de soledad", "Gabriel García Márquez"),
+            ("una novela de García Márquez", "Cien años de soledad", "Gabriel García Márquez"),
+            ("Julio Verne", "Viaje al centro de la Tierra", "Jules Verne"),
+        ],
+    )
+    async def test_his_words_in_the_title_or_his_author_are_never_not_found(
+        self, tmp_path: Path, pcm_server: PcmServer, said: str, title: str, artist: str
+    ) -> None:
+        found = Match(uri="spotify:show:it", kind="audiobook", title=title, artist=artist)
+        skill, _, _, _ = await _skill(tmp_path, pcm_server, match=found)
+        result = await skill.handle("play_book", {"title": said})
+        if result.side_effect is None:
+            assert _out(result)["reason"] == "ask_which"
+
+    async def test_his_authors_title_further_down_is_taken(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        cronica = Match(
+            uri="spotify:show:cronica",
+            kind="audiobook",
+            title="Crónica de una muerte anunciada",
+            artist="Gabriel García Márquez",
+            languages=("es",),
+        )
+        skill, _, _, _ = await _skill(tmp_path, pcm_server, others=[cronica])
+        result = await skill.handle(
+            "play_book", {"title": "Crónica de una muerte anunciada", "author": "García Márquez"}
+        )
+        assert isinstance(result.side_effect, AudioStream)
+        assert _events_named(skill, "spotify.book_requested")[-1]["uri"] == cronica.uri
+
     async def test_a_closer_book_further_down_is_taken(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
@@ -1369,6 +1420,12 @@ class TestTheShelf:
         ]
         done = await skill.handle("find_books", {"query": "misterio adicionales"})
         assert _said(done) == "Ya no tengo más de misterio y suspenso. ¿Te recomiendo otros?"
+
+    async def test_otra_vez_is_not_more(self, tmp_path: Path, pcm_server: PcmServer) -> None:
+        skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server)
+        await skill.handle("find_books", {"query": "misterio"})
+        await skill.handle("find_books", {"query": "otra vez misterio"})
+        assert _events(skill, "spotify.shelf_more_inferred") == []
 
     async def test_otros_of_another_subject_is_a_new_offer(
         self, tmp_path: Path, pcm_server: PcmServer
