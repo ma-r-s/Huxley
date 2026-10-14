@@ -989,6 +989,21 @@ void hux_net_wifi_scan(void) {
         esp_wifi_disconnect(); /* a connect in progress makes a scan fail */
     }
     esp_err_t err = scan_start_waiting(!had_ip);
+    /* The results first: a connect scans for its network itself and
+     * replaces the list, so reading after it found nothing (the retirement
+     * home, 2026-10-14: `found=0` twice while the ladder's scan heard 12). */
+    uint16_t found = 0, n = 0;
+    wifi_ap_record_t *aps = NULL;
+    if (err == ESP_OK) {
+        esp_wifi_scan_get_ap_num(&found);
+        n = found < WIFI_SCAN_MAX_APS ? found : WIFI_SCAN_MAX_APS;
+        aps = calloc(n > 0 ? n : 1, sizeof(*aps));
+        if (aps != NULL) {
+            esp_wifi_scan_get_ap_records(&n, aps); /* frees the driver's whole list */
+        } else {
+            esp_wifi_clear_ap_list();
+        }
+    }
     atomic_store(&s_wifi_hold, false);
     if (!had_ip) {
         esp_wifi_connect();
@@ -998,16 +1013,10 @@ void hux_net_wifi_scan(void) {
         ESP_LOGW(TAG, "wifi.scan failed err=%s", esp_err_to_name(err));
         return;
     }
-    uint16_t found = 0;
-    esp_wifi_scan_get_ap_num(&found);
-    uint16_t n = found < WIFI_SCAN_MAX_APS ? found : WIFI_SCAN_MAX_APS;
-    wifi_ap_record_t *aps = calloc(n > 0 ? n : 1, sizeof(*aps));
     if (aps == NULL) {
-        esp_wifi_clear_ap_list();
         ESP_LOGW(TAG, "wifi.scan failed err=no_mem found=%u", (unsigned)found);
         return;
     }
-    esp_wifi_scan_get_ap_records(&n, aps); /* frees the driver's whole list */
     ESP_LOGI(TAG, "wifi.scan found=%u shown=%u", (unsigned)found, (unsigned)n);
     for (uint16_t i = 0; i < n; i++) {
         const wifi_ap_record_t *a = &aps[i];
