@@ -1445,6 +1445,39 @@ class TestTheShelf:
             text = tooltext.TEXT[lang]["play_music"]
             assert stop in text and "`music_control`" in text, lang
 
+    @pytest.mark.parametrize(
+        ("said", "picked"),
+        [
+            ("Los tres mosqueteros", "Los tres mosqueteros"),  # a title, not "the third"
+            ("los tres mosqueteros de Dumas", "Los tres mosqueteros"),
+            ("el segundo", "Los tres mosqueteros"),
+            ("el dos", "Los tres mosqueteros"),
+            ("el 2", "Los tres mosqueteros"),
+            ("el tres", "Moby Dick"),
+            ("el tercer libro", "Moby Dick"),
+            ("el último", "Moby Dick"),
+            ("Moby Dick", "Moby Dick"),
+            ("uno", "El conde de Montecristo"),
+        ],
+    )
+    async def test_a_pick_from_the_offer(
+        self, tmp_path: Path, pcm_server: PcmServer, said: str, picked: str
+    ) -> None:
+        """Hearing bench, 2026-10-14: "el segundo" -> play_book("Los tres
+        mosqueteros") played Moby Dick: the number word "tres" in the title
+        was read as "the third"."""
+        skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server)
+        skill._last_list = [
+            Match(uri=f"spotify:show:{n}", kind="audiobook", title=t, artist=a)
+            for n, t, a in (
+                ("monte", "El conde de Montecristo", "Alejandro Dumas"),
+                ("mosq", "Los tres mosqueteros", "Alejandro Dumas"),
+                ("moby", "Moby Dick", "Herman Melville"),
+            )
+        ]
+        found = skill._from_last_list(said)
+        assert found is not None and found.title == picked
+
     # --- the review round (T1.45) ---
 
     async def test_a_title_with_a_theme_word_is_searched_not_redirected(

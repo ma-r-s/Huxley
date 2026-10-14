@@ -415,11 +415,31 @@ _LAST = frozenset({"ultimo", "ultima", "last", "dernier", "derniere"})
 _THAT = frozenset({"ese", "esa", "eso", "este", "esta", "that", "this", "celui-la", "celle-la"})
 
 
+# Words around an ordinal that don't name anything: "el segundo libro",
+# "pon el dos", "número tres".
+_ORDINAL_FILLER = frozenset(
+    {"el", "la", "los", "las", "lo", "numero", "libro", "pon", "ponme", "quiero", "de"}
+    | {"the", "number", "book", "play", "le", "numero", "livre", "mets"}
+)
+
+
 def _ordinal(spoken: str, count: int) -> int | None:
-    """'el segundo' -> 1, 'el último' -> count - 1, 'ese' with one item -> 0."""
-    words = fold(spoken).replace("-", " ").split()
-    if not words or len(words) > 3:
+    """'el segundo' -> 1, 'el último' -> count - 1, 'ese' with one item -> 0.
+    Only when the ordinal is all that was said (fillers aside): "Los tres
+    mosqueteros" is a title, not the third book (2026-10-14, the hearing
+    bench: "el segundo" -> play_book("Los tres mosqueteros") played the
+    third offer, Moby Dick)."""
+    words = [w for w in fold(spoken).replace("-", " ").split() if w not in _ORDINAL_FILLER]
+    if len(words) != 1:
         return None
+    word = words[0]
+    if word in _ORDINALS and _ORDINALS[word] < count:
+        return _ORDINALS[word]
+    if word in _LAST:
+        return count - 1
+    if count == 1 and word in _THAT:
+        return 0
+    return None
     for word in words:
         if word in _ORDINALS and _ORDINALS[word] < count:
             return _ORDINALS[word]
@@ -1750,12 +1770,17 @@ class SpotifySkill:
         if not self._last_list:
             return None
         spoken = spoken.strip()
+        # A title on the list first: it may hold a number word ("Los tres
+        # mosqueteros"), which must not read as "the third".
+        best = max(self._last_list, key=lambda m: title_score(fold(spoken), fold(m.title)))
+        if title_score(fold(spoken), fold(best.title)) >= 0.8:
+            return best
         pick = _ordinal(spoken, len(self._last_list))
         if pick is not None:
             return self._last_list[pick]
-        if spoken.isdigit() and 1 <= int(spoken) <= len(self._last_list):
-            return self._last_list[int(spoken) - 1]
-        best = max(self._last_list, key=lambda m: title_score(fold(spoken), fold(m.title)))
+        digits = "".join(w for w in fold(spoken).split() if w.isdigit())
+        if digits.isdigit() and 1 <= int(digits) <= len(self._last_list):
+            return self._last_list[int(digits) - 1]  # "el 2", as transcribed
         return best if title_score(fold(spoken), fold(best.title)) >= 0.6 else None
 
     async def _book_info(self, uri: str) -> BookInfo | None:
