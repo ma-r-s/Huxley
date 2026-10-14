@@ -1097,18 +1097,25 @@ static void echo_stats(void) {
     static const char *const MODES[] = {"off", "shadow", "on"};
     uint32_t rmin = atomic_exchange(&s_call_ring_min, UINT32_MAX);
     uint32_t rmax = atomic_exchange(&s_call_ring_max, 0);
+    /* The speaker's audio (not tones) played in the window, next to the
+     * frames gated: their ratio is the share of it the far end can't hear. */
+    static uint32_t played_at = 0;
+    uint32_t played = hux_audio_played_ms();
+    uint32_t spk_ms = played - played_at;
+    played_at = played;
     ESP_LOGI(TAG,
-             "audio.echo mode=%s depth_db=%d frames=%u active=%u ratio_db_p10=%d p50=%d p90=%d "
-             "ref_floor_db=%.0f mic_peak=%d ref_peak=%d mic_clips=%u ref_clips=%u vol=%d pa=%d "
-             "ring_ms_min=%d max=%u trims=%u jb_ms=%d release_ms_last=%u max=%u",
+             "audio.echo mode=%s depth_db=%d frames=%u active=%u spk_ms=%u release_ms_last=%u "
+             "max=%u ratio_db_p10=%d p50=%d p90=%d ref_floor_db=%.0f mic_peak=%d ref_peak=%d "
+             "mic_clips=%u ref_clips=%u vol=%d pa=%d ring_ms_min=%d max=%u trims=%u jb_ms=%d",
              MODES[atomic_load(&s_echo_mode)], atomic_load(&s_echo_depth_db),
-             (unsigned)s_echo.frames, (unsigned)s_echo.active,
+             (unsigned)s_echo.frames, (unsigned)s_echo.active, (unsigned)spk_ms,
+             (unsigned)(s_echo.release_last * 20), (unsigned)(s_echo.release_max * 20),
              hux_echo_percentile(&s_echo, 10), hux_echo_percentile(&s_echo, 50),
              hux_echo_percentile(&s_echo, 90), 10.0f * log10f(s_echo.ref_floor + 1e-12f),
              s_echo.mic_peak, s_echo.ref_peak, (unsigned)s_echo.mic_clips,
              (unsigned)s_echo.ref_clips, atomic_load(&s_volume), atomic_load(&s_pa_on),
              rmin == UINT32_MAX ? -1 : (int)rmin, (unsigned)rmax,
-             (unsigned)atomic_exchange(&s_call_trims, 0), atomic_load(&s_call_jb_ms), (unsigned)(s_echo.release_last * 20), (unsigned)(s_echo.release_max * 20));
+             (unsigned)atomic_exchange(&s_call_trims, 0), atomic_load(&s_call_jb_ms));
     hux_echo_take_stats(&s_echo);
 }
 

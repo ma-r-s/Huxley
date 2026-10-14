@@ -3,9 +3,13 @@
 #include <math.h>
 #include <string.h>
 
-/* The speaker counts as active above -50 dBFS (power 1e-5) and 10 dB over
- * its own channel's floor (a hissing line must not gate the mic all call). */
-#define REF_ACTIVE     1e-5f
+/* The speaker counts as active above -70 dBFS (power 1e-7) and 10 dB over
+ * its own channel's floor (a hissing line must not gate the mic all call).
+ * Measured on the walkie (2026-10-14, volume 50): the mic hears the speaker
+ * 14-20 dB above the reference channel and the reference's floor is -85;
+ * at the old -50 the quiet parts of speech and a chime's tail went through
+ * (40 % of a sentence gated), reaching the mic near -30 dBFS. */
+#define REF_ACTIVE     1e-7f
 #define REF_OVER_FLOOR 10.0f
 /* The held power falls 60 dB in 300 ms (the room's tail): x 0.4 a frame. */
 #define REF_DECAY      0.4f
