@@ -80,6 +80,10 @@ void hux_opus_clip_end(void);
  * queued. */
 bool hux_opus_play_packet(const uint8_t *data, size_t len);
 
+/** Bench (console `opus yield on|off`): the decoder's guard that gives the
+ * core up after 100 ms of work without waiting (F-0035). On by default. */
+void hux_opus_set_yield(bool on);
+
 /** Packets waiting to be decoded, decode errors so far, the decoder
  * task's smallest free stack (bytes). For the stats lines. */
 uint32_t hux_opus_rx_waiting(void);

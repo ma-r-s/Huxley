@@ -17,6 +17,7 @@
 #include "hux_alert.h"
 #include "hux_app.h"
 #include "hux_led.h"
+#include "hux_opus.h"
 #include "hux_audio.h"
 #include "hux_battery.h"
 #include "hux_button.h"
@@ -151,6 +152,25 @@ static void run_line(char *line, bool usb) {
         } else {
             hux_audio_set_echo_mode(mode);
         }
+    } else if (strcmp(cmd, "opus") == 0 && argc > 2 && strcmp(argv[1], "yield") == 0) {
+        hux_opus_set_yield(strcmp(argv[2], "on") == 0); /* the bench repro only (F-0035) */
+    } else if (strcmp(cmd, "opus") == 0 && argc > 2 && strcmp(argv[1], "flood") == 0) {
+        /* Bench (F-0035): the decoder fed with nothing ever waiting: the
+         * speaker held (its audio dropped as decoded) and a stored
+         * sentence queued again and again for N s. Amp off first. */
+        int s = atoi(argv[2]);
+        s = s < 1 ? 1 : s > 30 ? 30 : s;
+        int64_t until = esp_timer_get_time() + (int64_t)s * 1000000;
+        int clips = 0;
+        ESP_LOGW(TAG, "console.opus_flood s=%d start", s);
+        while (esp_timer_get_time() < until) {
+            hux_audio_spk_hold();
+            if (hux_prompt_play(HUX_PROMPT_OFFLINE)) {
+                clips++;
+            }
+        }
+        hux_audio_spk_unhold("opus_flood");
+        ESP_LOGW(TAG, "console.opus_flood s=%d done clips=%d", s, clips);
     } else if (strcmp(cmd, "led") == 0 && argc > 2 && strcmp(argv[1], "bright") == 0) {
         hux_led_set_bright(atoi(argv[2])); /* the light's peak, % of full, saved (F-0034) */
     } else if (strcmp(cmd, "led") == 0 && argc > 2 && strcmp(argv[1], "demo") == 0) {
