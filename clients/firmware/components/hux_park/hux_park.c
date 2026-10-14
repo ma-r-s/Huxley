@@ -200,7 +200,7 @@ static const char *resume_why(int mv, bool cal) {
     return cal ? "unreadable" : "calibration";
 }
 
-void hux_park_at_boot(void) {
+bool hux_park_at_boot(void) {
     if (s_park.magic != PARK_MAGIC) {
         memset(&s_park, 0, sizeof(s_park)); /* a power cut, or another layout */
         s_park.magic = PARK_MAGIC;
@@ -216,10 +216,10 @@ void hux_park_at_boot(void) {
                      update_pending() ? "update_pending" : "switched_off");
         }
         s_park.armed = 0;
-        return;
+        return false;
     }
     if (!hux_cutoff_park_at_boot(armed, mv, cal_ok())) {
-        return;
+        return false;
     }
     if (!armed) {
         arm(mv, "boot"); /* a resting boot under 3.45 V (the rocker after a cutoff) */
@@ -239,11 +239,11 @@ void hux_park_at_boot(void) {
         }
         if (hux_cutoff_resume(mv, cal)) {
             resume(mv, resume_why(mv, cal));
-            return;
+            return true;
         }
         if (s_park.test_mv != 0 && s_park.wakes >= s_park.test_wakes) {
             resume(mv, "test_over");
-            return;
+            return true;
         }
         bool held = lever_held();
         if (held && s_park.seen_release) {
@@ -265,7 +265,7 @@ void hux_park_at_boot(void) {
                 ESP_LOGW(TAG, "battery.park_escape held_s=%d mv=%d: booting anyway",
                          (int)((now - s_park.press_since_us) / 1000000), mv);
                 resume(mv, "escape");
-                return;
+                return true;
             }
             vTaskDelay(pdMS_TO_TICKS(100)); /* awake while held: at most 10 s */
             continue;

@@ -1,6 +1,7 @@
 #include "hux_console.h"
 
 #include <stdio.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -14,6 +15,8 @@
 #include "hal/usb_serial_jtag_ll.h"
 
 #include "hux_alert.h"
+#include "hux_app.h"
+#include "hux_led.h"
 #include "hux_audio.h"
 #include "hux_battery.h"
 #include "hux_button.h"
@@ -146,6 +149,17 @@ static void run_line(char *line, bool usb) {
         } else {
             hux_audio_set_echo_mode(mode);
         }
+    } else if (strcmp(cmd, "led") == 0 && argc > 2 && strcmp(argv[1], "bright") == 0) {
+        hux_led_set_bright(atoi(argv[2])); /* the light's peak, % of full, saved (F-0034) */
+    } else if (strcmp(cmd, "led") == 0 && argc > 2 && strcmp(argv[1], "demo") == 0) {
+        hux_led_demo(argv[2]); /* rainbow, glow, voice: look without a press */
+    } else if (strcmp(cmd, "led") == 0 && argc > 2 && strcmp(argv[1], "gain") == 0) {
+        /* The hidden LEDs' gain, e.g. `led gain 3.0`, saved (F-0034). */
+        hux_led_set_gain((int)lroundf(strtof(argv[2], NULL) * 10.0f));
+    } else if (strcmp(cmd, "led") == 0 && argc > 1 && strcmp(argv[1], "walk") == 0) {
+        hux_led_demo("walk"); /* each position alone, bottom first: the order */
+    } else if (strcmp(cmd, "status") == 0 && argc > 1 && strcmp(argv[1], "poweron") == 0) {
+        hux_app_status_power_on(); /* the connection sounds as after a power on (F-0033) */
     } else if (strcmp(cmd, "alert") == 0 && argc > 1 && strcmp(argv[1], "test") == 0) {
         hux_alert_test(); /* one push to Mario's phone, end to end (F-0032) */
     } else if (strcmp(cmd, "calljb") == 0 && argc > 1) {

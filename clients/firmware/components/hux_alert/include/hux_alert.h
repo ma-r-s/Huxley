@@ -12,8 +12,9 @@
 extern "C" {
 #endif
 
-/** Start the clock sync (SNTP) and the alert task. `topic` NULL or empty:
- * alerts off (logged once). `click`: the URL a tap on the alert opens. */
+/** Start the clock sync (SNTP, always: the connection sounds' night needs
+ * it too) and the alert task. `topic` NULL or empty: alerts off (logged
+ * once). `click`: the URL a tap on the alert opens. */
 void hux_alert_start(const char *topic, const char *click);
 
 /** Console `alert test`: one low-priority push now, end to end. */

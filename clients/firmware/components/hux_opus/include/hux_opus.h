@@ -67,9 +67,17 @@ void hux_opus_rx_fresh(void);
  * undecoded, since boot. */
 uint32_t hux_opus_rx_dropped_ms(void);
 
-/** Any task: one packet of a clip stored on the walkie (hux_prompts),
- * decoded in order after what is queued. Waits up to 5 s for room; false
- * if the decoder isn't running or the packet couldn't be queued. */
+/** Any task: around a stored clip's packets (hux_prompts), so no received
+ * packet or clear lands between them. Begin waits up to 5 s; false if the
+ * decoder isn't running or the lock didn't come. End only after a true
+ * begin. */
+bool hux_opus_clip_begin(void);
+void hux_opus_clip_end(void);
+
+/** Any task, between clip_begin and clip_end: one packet of a clip stored
+ * on the walkie, decoded in order after what is queued. Waits up to 5 s
+ * for room; false if the decoder isn't running or the packet couldn't be
+ * queued. */
 bool hux_opus_play_packet(const uint8_t *data, size_t len);
 
 /** Packets waiting to be decoded, decode errors so far, the decoder

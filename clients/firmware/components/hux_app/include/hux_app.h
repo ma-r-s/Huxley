@@ -73,6 +73,7 @@ typedef struct {
     const char *reset;
     char mac[18];
     uint32_t boot_counter;
+    bool power_on; /* a real power on, or a charge after the battery park (F-0033) */
 } hux_app_device_info_t;
 
 /** Set once at boot, before Wi-Fi starts. */
@@ -93,4 +94,8 @@ void hux_app_firmware_status(const char *version, const char *phase, const char 
 /** Send a battery reading to the server (`client_event system.battery
  * {mv, pct}`, F-0025): hux_battery's sink. Any task. */
 void hux_app_report_battery(int cell_mv, int pct);
+
+/** Bench (console `status poweron`): the connection sounds start over as
+ * after a power on, which can't be done from afar (F-0033). Any task. */
+void hux_app_status_power_on(void);
 void hux_app_uplink_progress(uint32_t *done, uint32_t *pending);

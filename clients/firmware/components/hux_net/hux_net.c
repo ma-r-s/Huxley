@@ -1385,9 +1385,16 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
         case WEBSOCKET_EVENT_DATA:
             forward_ws_text(ev);
             break;
-        case WEBSOCKET_EVENT_ERROR:
-            if (ev != NULL && ev->error_handle.esp_tls_last_esp_err != 0) {
-                health_count(s_h_tls, (int)ev->error_handle.esp_tls_last_esp_err);
+        case WEBSOCKET_EVENT_ERROR: {
+            /* The library fills the TLS and socket fields only for a
+             * transport error; for any other type they are its stack's
+             * leftovers (the event struct isn't zeroed), so read them only
+             * then. */
+            bool transport =
+                ev != NULL && ev->error_handle.error_type == WEBSOCKET_ERROR_TYPE_TCP_TRANSPORT;
+            unsigned tls_err = transport ? (unsigned)ev->error_handle.esp_tls_last_esp_err : 0;
+            if (tls_err != 0) {
+                health_count(s_h_tls, (int)tls_err);
             }
             if (link_loud(atomic_load(&s_ws_attempts) + 1)) {
                 /* Why, not only that: a home's filter, a tunnel down (an
@@ -1395,13 +1402,13 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
                 ESP_LOGE(TAG, "ws.error attempt=%u type=%d tls_err=0x%x tls_stack=0x%x sock_errno=%d "
                               "http_status=%d",
                          (unsigned)(atomic_load(&s_ws_attempts) + 1),
-                         ev != NULL ? (int)ev->error_handle.error_type : -1,
-                         ev != NULL ? (unsigned)ev->error_handle.esp_tls_last_esp_err : 0,
-                         ev != NULL ? (unsigned)ev->error_handle.esp_tls_stack_err : 0,
-                         ev != NULL ? ev->error_handle.esp_transport_sock_errno : 0,
+                         ev != NULL ? (int)ev->error_handle.error_type : -1, tls_err,
+                         transport ? (unsigned)ev->error_handle.esp_tls_stack_err : 0,
+                         transport ? ev->error_handle.esp_transport_sock_errno : 0,
                          ev != NULL ? ev->error_handle.esp_ws_handshake_status_code : 0);
             }
             break;
+        }
         case WEBSOCKET_EVENT_CLOSED:
             /* The server closed it with a CLOSE frame (eviction, shutdown, a
              * missed keepalive ping). The library reconnects by itself

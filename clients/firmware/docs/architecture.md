@@ -50,10 +50,11 @@ whichever is wrong in the same commit.
 | `hux_console`           | Bench commands on the USB serial console (talk, say, selftest, info…)    | Anything the product needs: it is a test seam                 |
 | `hux_ota`               | Updates over Wi-Fi into the other slot; keeps it on `ota confirm` (30 s+) | Decides when to update (a developer asks)                     |
 | `hux_dev`               | Developer door over Wi-Fi: `/info`, `/cmd` (console lines), `/coredump`  | Answers without the token                                     |
-| `hux_opus`              | Opus (esp_audio_codec): mic encoder, speaker decoder task + ordered queue | Decides the format (the server's hello does)                  |
+| `hux_opus`              | Opus (esp_audio_codec): mic encoder, speaker decoder task + ordered queue (a stored clip goes in whole) | Decides the format (the server's hello does)                  |
 | `hux_alert`             | The walkie's own phone alert over ntfy.sh when the server is unreachable (SNTP, RTC state) | Watches anything but its own link (huxley-watch does)            |
 | `hux_park`              | The low-battery cutoff's park: at boot, light sleep until a charger lifts the cell; the cutoff's say-arm-restart | Decides when the cell is spent (hux_battery_cutoff does)        |
-| `hux_prompts`           | Sentences stored in the firmware (Opus), said through the decoder when no server can speak | Decides when to say them (that's hux_app)                     |
+| `hux_prompts`           | Sentences and connection sounds stored in the firmware (Opus), played through the decoder when no server can speak | Decides when to say them (that's hux_app; the sounds' rules are `hux_status`, F-0033) |
+| `hux_led`               | The 7 WS2812B under the clear back (RMT): Rainbow at boot, Voice/Glow (the whole ring) while the lever is held (F-0034) | Waits on anything: setters are a flag and a wake |
 
 **The dependency graph flows downward only.** `hux_app` requires
 `hux_proto`; `hux_net` requires `hux_app` + `hux_proto` + `hux_log`
@@ -77,6 +78,7 @@ FreeRTOS tasks, in priority order (higher = more important):
 | `hux_audio_tx`             | `hux_app_start`      | 6    | 40 KB (PSRAM) | The uplink lane, in order: `ptt_start`, mic audio (60 ms Opus packets, or 20 ms base64 PCM to an older server), `ptt_stop` (10 s queue) |
 | `hux_opus_dec`             | `hux_opus_init`      | 7    | 24 KB (PSRAM) | Decodes received Opus packets into the speaker ring; runs queued `audio_clear` in order |
 | `hux_super`                | `hux_super_start`    | 10   | 3 KB  | The supervisor: feeds the task watchdog only while every part keeps working (F-0027) |
+| `hux_led`                  | `hux_led_start`      | 2    | 4 KB (PSRAM) | The light's frames (16 ms) while one shows; asleep while dark (F-0034) |
 | `hux_ladder`               | `hux_net_start`      | 3    | 4 KB  | Without the server: WS restart at 2 min, Wi-Fi at 10, reboot at 60; flags a silent WS (F-0027) |
 | `hux_health`               | `hux_health_start`   | 2    | 4 KB  | The minute line, `device.health` (F-0027) |
 | `hux_bat`                  | `hux_battery_start`  | 2    | 4 KB  | The battery level once a minute, `system.battery` (F-0025) |
