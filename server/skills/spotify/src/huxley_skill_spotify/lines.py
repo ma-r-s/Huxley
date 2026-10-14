@@ -130,6 +130,7 @@ _SPOKEN: dict[str, dict[str, tuple[str, str]]] = {
 _SAY: dict[str, dict[str, str]] = {
     "es": {
         "book_not_found": "No encontré ese libro en Spotify. ¿Busco otro?",
+        "book_not_found_by": "No encontré {title}, de {author}, en Spotify. ¿Busco otro?",
         "first_chapter": "Ya es el primer capítulo.",
         "last_chapter": "Ya es el último capítulo.",
         "no_book": "No hay ningún libro puesto. ¿Qué libro busco?",
@@ -154,6 +155,7 @@ _SAY: dict[str, dict[str, str]] = {
     },
     "en": {
         "book_not_found": "I didn't find that book on Spotify. Shall I look for another?",
+        "book_not_found_by": "I didn't find {title}, by {author}, on Spotify. Shall I look for another?",
         "first_chapter": "This is already the first chapter.",
         "last_chapter": "This is already the last chapter.",
         "no_book": "No book is on. Which book shall I look for?",
@@ -178,6 +180,7 @@ _SAY: dict[str, dict[str, str]] = {
     },
     "fr": {
         "book_not_found": "Je n'ai pas trouvé ce livre sur Spotify. J'en cherche un autre ?",
+        "book_not_found_by": "Je n'ai pas trouvé {title}, de {author}, sur Spotify. J'en cherche un autre ?",
         "first_chapter": "C'est déjà le premier chapitre.",
         "last_chapter": "C'est déjà le dernier chapitre.",
         "no_book": "Aucun livre n'est lancé. Quel livre je cherche ?",

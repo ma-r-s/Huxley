@@ -90,6 +90,8 @@ TEXT: dict[str, dict[str, str]] = {
         ),
         "book_title": "Título y/o autor tal como los dijo el usuario. Vacío para seguir "
         "con el último libro.",
+        "book_author": "El autor, si lo dijo o si se acaba de hablar de él (por ejemplo, "
+        "después de buscar de quién es un libro). Así solo se buscan libros suyos.",
         "book_from_beginning": (
             "true solo si pidió empezar el libro desde el principio ('desde el "
             "principio', 'desde el inicio', 'empiézalo de nuevo'). Si pide empezar "
@@ -214,6 +216,8 @@ TEXT: dict[str, dict[str, str]] = {
         ),
         "book_title": "Title and/or author as the user said them. Empty to continue the "
         "last book.",
+        "book_author": "The author, if they said it or it was just talked about (for "
+        "example, after looking up who wrote a book). Then only their books are searched.",
         "book_from_beginning": (
             "true only if they asked to start the book from the beginning ('from the "
             "start', 'start it over'). To restart the chapter use `book_control` "
@@ -335,6 +339,8 @@ TEXT: dict[str, dict[str, str]] = {
             "ce qu'il dit. N'invente jamais de titres, d'auteurs ni de résumés."
         ),
         "book_title": "Titre et/ou auteur tels que dits. Vide pour reprendre le dernier livre.",
+        "book_author": "L'auteur, s'il l'a dit ou si on vient d'en parler (par exemple après "
+        "avoir cherché qui a écrit un livre). Seuls ses livres sont alors cherchés.",
         "book_from_beginning": (
             "true seulement s'il demande le livre depuis le début ('depuis le "
             "début', 'recommence-le'). Pour recommencer le chapitre, utilise "

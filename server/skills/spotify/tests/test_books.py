@@ -1718,3 +1718,47 @@ class TestTheBookSummary:
 )
 def test_unheard_words(heard: list[str], title: str, unheard: list[str]) -> None:
     assert _unheard_words(heard, title) == unheard
+
+
+class TestAuthorNamed:
+    """He named the author, or they had just looked it up (2026-10-14: "El
+    divino" of Gardeazábal, not on Spotify CO, was offered as "El Amor
+    Divino Revelado: Descubre el Arte..." by someone else)."""
+
+    async def test_no_book_by_that_author_says_so(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, client, _, _ = await _skill(tmp_path, pcm_server)  # search finds García Márquez
+        result = await skill.handle(
+            "play_book", {"title": "El divino", "author": "Gustavo Álvarez Gardeazábal"}
+        )
+        assert _out(result)["reason"] == "book_not_found_by"
+        assert _said(result) == (
+            "No encontré El divino, de Gustavo Álvarez Gardeazábal, en Spotify. ¿Busco otro?"
+        )
+        assert result.side_effect is None and _plays(client) == []
+        assert skill._search.queries[-1][0] == "El divino Gustavo Álvarez Gardeazábal"  # type: ignore[union-attr]
+
+    async def test_a_book_by_that_author_plays(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, _, _, _ = await _skill(tmp_path, pcm_server)
+        result = await skill.handle(
+            "play_book", {"title": "Cien años de soledad", "author": "García Márquez"}
+        )
+        assert isinstance(result.side_effect, AudioStream)
+
+
+def test_same_author_and_short_title() -> None:
+    from huxley_skill_spotify.skill import _same_author, _short_title
+
+    assert _same_author("Gardeazábal", "Gustavo Álvarez Gardeazábal")
+    assert _same_author("García Márquez", "Gabriel García Márquez")
+    assert not _same_author("Gardeazábal", "Yeismar González")
+    assert (
+        _short_title(
+            "El Amor Divino Revelado: Descubre el Arte de Amar a Dios y Transforma tu Vida."
+        )
+        == "El Amor Divino Revelado"
+    )
+    assert _short_title("Cien años de soledad") == "Cien años de soledad"

@@ -372,6 +372,22 @@ _FILLER = frozenset(
 )
 
 
+def _same_author(said: str, artist: str | None) -> bool:
+    """The author he named wrote this: a surname of his said in theirs
+    ("Gardeazábal", "García Márquez", "Isabel Allende")."""
+    said_words = {w for w in fold(said).replace(",", " ").split() if len(w) >= 4}
+    by = {w for w in fold(artist or "").replace(",", " ").split() if len(w) >= 4}
+    return bool(said_words & by)
+
+
+def _short_title(title: str) -> str:
+    """A title without its subtitle, for a question he can follow: "El
+    Amor Divino Revelado: Descubre el Arte de..." -> "El Amor Divino
+    Revelado"."""
+    head = re.split(r"[:(]", title, maxsplit=1)[0].strip(" .,-")
+    return head or title
+
+
 def _weak_match(spoken: str, book: Match) -> bool:
     """What was heard, minus the author's words, is far from the book's
     title, or leaves one of its main words unheard: confirm before
@@ -701,6 +717,7 @@ class SpotifySkill:
                     "type": "object",
                     "properties": {
                         "title": {"type": "string", "description": t["book_title"]},
+                        "author": {"type": "string", "description": t["book_author"]},
                         "from_beginning": {
                             "type": "boolean",
                             "description": t["book_from_beginning"],
@@ -774,6 +791,7 @@ class SpotifySkill:
                     str(args.get("title") or ""),
                     from_beginning=bool(args.get("from_beginning")),
                     confirmed=bool(args.get("confirmed")),
+                    author=str(args.get("author") or ""),
                 )
             case "book_control":
                 return await self._book_control(
@@ -1012,7 +1030,9 @@ class SpotifySkill:
 
     # --- Books (T1.40) ---
 
-    async def _play_book(self, title: str, *, from_beginning: bool, confirmed: bool) -> ToolResult:
+    async def _play_book(
+        self, title: str, *, from_beginning: bool, confirmed: bool, author: str = ""
+    ) -> ToolResult:
         blocked = self._unavailable()
         if blocked:
             return self._then(blocked)
@@ -1055,12 +1075,22 @@ class SpotifySkill:
                 source = "search"
                 if self._search is None:
                     return self._then("search_not_configured")
+                query = f"{title} {author}".strip() if author.strip() else title
                 try:
-                    found = await self._search.candidates(title, "audiobook", limit=5)
+                    found = await self._search.candidates(query, "audiobook", limit=5)
                 except SearchError as exc:
-                    await log.awarning("spotify.search_failed", query=title, error=str(exc))
+                    await log.awarning("spotify.search_failed", query=query, error=str(exc))
                     return self._then("search_failed")
                 ordered = order_books(found, self._lang())
+                if author.strip():
+                    # His author named (or just talked about): only that
+                    # author's books. "El divino" of Gardeazábal, not on
+                    # Spotify CO, was offered as "El Amor Divino Revelado"
+                    # by someone else (2026-10-14).
+                    ordered = [m for m in ordered if _same_author(author, m.artist)]
+                    if not ordered or is_guide(ordered[0].title, edition=ordered[0].edition):
+                        await log.ainfo("spotify.book_not_found", query=query, author=author)
+                        return self._then("book_not_found_by", title=title, author=author)
                 if not ordered or is_guide(ordered[0].title, edition=ordered[0].edition):
                     await log.ainfo("spotify.book_not_found", query=title)
                     return self._then("book_not_found")
@@ -1070,7 +1100,9 @@ class SpotifySkill:
                     # comes back as this title, found in the list.
                     self._last_list = [target]
                     await log.ainfo("spotify.book_confirm_asked", query=title, title=target.title)
-                    return self._then("ask_which", title=target.title, author=target.artist or "?")
+                    return self._then(
+                        "ask_which", title=_short_title(target.title), author=target.artist or "?"
+                    )
         info = await self._book_info(target.uri)
         if from_beginning and info is None:
             # No chapter list (Spotify's /audiobooks blocked): the stream
