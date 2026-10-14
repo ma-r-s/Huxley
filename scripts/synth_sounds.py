@@ -14,6 +14,11 @@ reverb tail. See ``docs/sounds.md`` for the architecture and
 200 Hz - 4 kHz vocal-band masking rule that pushes our fundamentals into the
 shimmer register).
 
+Level (T1.47): every earcon is normalized by loudness, not peak, to the
+cue level (``huxley.loudness.CUE_TARGET_LUFS``, -19 LUFS momentary max,
+about 3 dB under the voice), under a -1.5 dBFS true-peak ceiling. See
+``docs/sounds.md`` "Loudness".
+
 Determinism: pure functions of (numpy, scipy, pedalboard) versions. No RNG
 in the synthesis path. Same versions == byte-identical output. Versions are
 pinned via ``uv.lock``.
@@ -37,6 +42,15 @@ from pedalboard import (
 )
 from scipy.io import wavfile
 
+from huxley.loudness import (
+    CUE_TARGET_LUFS,
+    TRUE_PEAK_CEILING_DBFS,
+    WIRE_CEILING_DBFS,
+    momentary_max_lufs,
+    sample_peak_dbfs,
+    true_peak_dbfs,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -47,7 +61,6 @@ F64 = NDArray[np.float64]
 # ln(10^(60/20)) — the exponential coefficient that takes a unit-amplitude
 # signal to -60 dB over the time constant. Used for "decay to silence" envelopes.
 _MINUS_60DB_NEPERS: float = 60.0 / 20.0 * math.log(10.0)  # ~6.9078
-DEFAULT_PEAK_DBFS: float = -3.0  # final peak target for every rendered earcon
 
 
 # ---------------------------------------------------------------------------
@@ -213,8 +226,8 @@ def chord(voices: list[F64], stagger_ms: float = 0.0) -> F64:
     stagger doesn't silently rebalance per-voice loudness — peak-normalize
     would make a staggered chord 2x louder per-voice than an unstaggered one
     (because non-coincident voices never sum to a peak the normalizer would
-    have to bring down). The downstream ``post()`` peak-normalizes to the
-    final dBFS target, so absolute level here is decorative.
+    have to bring down). The downstream ``post()`` normalizes to the
+    final loudness target, so absolute level here is decorative.
     """
     stagger = int(stagger_ms / 1000.0 * SAMPLE_RATE)
     total = max(len(v) + stagger * i for i, v in enumerate(voices))
@@ -257,7 +270,7 @@ def fade_out(audio: F64, ms: float = 15.0) -> F64:
 
 
 # ---------------------------------------------------------------------------
-# Post-processing: hall reverb + soft compression + limiter.
+# Post-processing: hall reverb + soft compression, then loudness normalize.
 # Pedalboard's Reverb is a Freeverb derivative — tasteful, not Lexicon-class
 # but in the right tier for under-2s earcons. HighpassFilter at 80 Hz strips
 # any sub-rumble that would muddy small speakers.
@@ -270,7 +283,7 @@ def post(
     reverb_damping: float = 0.4,
     reverb_wet: float = 0.30,
     reverb_dry: float = 0.75,
-    peak_dbfs: float = DEFAULT_PEAK_DBFS,
+    target_lufs: float = CUE_TARGET_LUFS,
     pad_tail_s: float = 0.6,
 ) -> F32:
     """Apply effects chain and return float32 mono ready for WAV write.
@@ -281,8 +294,8 @@ def post(
     Note on level control: pedalboard's ``Limiter`` is a soft-knee limiter
     backed by a hard clipper at 0 dBFS — its ``threshold_db`` controls where
     compression starts, not where the ceiling sits. To avoid surprise
-    clipping we drop the limiter and normalize the chain output to
-    ``peak_dbfs`` deterministically. Same end result, no clipper artifacts.
+    clipping we drop the limiter and set the level deterministically after
+    the chain instead: ``normalize`` to ``target_lufs`` (T1.47).
     """
     pad_n = int(pad_tail_s * SAMPLE_RATE)
     # Pre-attenuate to leave headroom for reverb buildup. The Reverb plugin
@@ -313,20 +326,38 @@ def post(
     if len(above) > 0:
         end = min(len(wet), above[-1] + int(0.08 * SAMPLE_RATE))
         wet = wet[:end]
-    # Deterministic peak normalize to peak_dbfs, then fade trailing edge.
-    peak = float(np.max(np.abs(wet)))
-    if peak > 0:
-        target_linear = 10.0 ** (peak_dbfs / 20.0)
-        wet = wet * (target_linear / peak)
-    return fade_out(wet.astype(np.float64), ms=15.0).astype(np.float32)
+    faded = fade_out(wet.astype(np.float64), ms=15.0)
+    return normalize(faded, target_lufs).astype(np.float32)
+
+
+def _pcm16(audio: NDArray[np.floating]) -> NDArray[np.int16]:
+    """Float audio as the PCM16 `write_wav` writes."""
+    return (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
+
+
+def normalize(audio: F64, target_lufs: float) -> F64:
+    """Scale to `target_lufs` momentary max (the loudest 400 ms), measured
+    on the PCM16 that gets written, with `huxley.loudness` (the measure
+    the runtime and the tests use). If that would put the true peak over
+    `TRUE_PEAK_CEILING_DBFS` or the sample peak over the wire limiter's
+    ceiling, scale down to fit instead and say so: the sound is quieter
+    than the target, never clipped or limited on the wire."""
+    measured = momentary_max_lufs(_pcm16(audio).tobytes())
+    out = audio * 10.0 ** ((target_lufs - measured) / 20.0)
+    pcm = _pcm16(out).tobytes()
+    over = max(
+        true_peak_dbfs(pcm) - TRUE_PEAK_CEILING_DBFS, sample_peak_dbfs(pcm) - WIRE_CEILING_DBFS
+    )
+    if over > 0:
+        print(f"  warning: {over:.1f} dB under the target to stay under the peak ceilings")
+        out = out * 10.0 ** (-(over + 0.05) / 20.0)
+    return out
 
 
 def write_wav(audio: F32, path: Path) -> None:
     """Quantize float audio to PCM16 and write a 24 kHz mono WAV."""
-    clipped = np.clip(audio, -1.0, 1.0)
-    pcm16 = (clipped * 32767.0).astype(np.int16)
     path.parent.mkdir(parents=True, exist_ok=True)
-    wavfile.write(str(path), SAMPLE_RATE, pcm16)
+    wavfile.write(str(path), SAMPLE_RATE, _pcm16(audio))
 
 
 # ---------------------------------------------------------------------------
@@ -543,9 +574,12 @@ def main() -> int:
         path = out_dir / f"{name}.wav"
         write_wav(audio, path)
         dur = len(audio) / SAMPLE_RATE
-        peak = float(np.max(np.abs(audio)))
-        peak_db = 20.0 * np.log10(max(peak, 1e-9))
-        print(f"  {name:14s}  {path.relative_to(REPO_ROOT)}  {dur:.2f}s  peak={peak_db:+.1f}dB")
+        pcm = _pcm16(audio).tobytes()
+        print(
+            f"  {name:14s}  {path.relative_to(REPO_ROOT)}  {dur:.2f}s"
+            f"  momentary max {momentary_max_lufs(pcm):.1f} LUFS"
+            f"  true peak {true_peak_dbfs(pcm):+.1f} dBFS"
+        )
     print(f"\nrendered {len(PALETTE)} earcons to {out_dir.relative_to(REPO_ROOT)}")
     return 0
 

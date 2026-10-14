@@ -16,8 +16,16 @@ from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
 import pytest
+from structlog.testing import capture_logs
 
 from huxley.focus.vocabulary import FocusState, MixingBehavior
+from huxley.loudness import (
+    STREAM_CEILING_DBFS,
+    UNKNOWN_START_GAIN_DB,
+    LevelMemory,
+    db_to_gain,
+    pcm_samples,
+)
 from huxley.turn.observers import ContentStreamObserver, DialogObserver
 from huxley_sdk import AudioStream
 
@@ -83,6 +91,11 @@ def _make_finite_audio_stream(chunks: list[bytes]) -> AudioStream:
         return _finite_stream(list(chunks))
 
     return AudioStream(factory=factory)
+
+
+def _peak(pcm: bytes) -> int:
+    s = pcm_samples(pcm)
+    return max(max(s), -min(s))
 
 
 def _make_infinite_audio_stream() -> AudioStream:
@@ -584,3 +597,118 @@ class TestContentStreamObserverHolds:
         await obs.on_focus_changed(FocusState.NONE, MixingBehavior.MUST_STOP)
         assert not obs.is_live
         assert await obs.release_hold("turn") is False
+
+
+# --- Loudness leveling (T1.47) ---
+
+
+def _loud_chunk(amplitude: int = 16000, samples: int = 2400) -> bytes:
+    """100 ms of a 997 Hz square-ish tone: well over the -20 LUFS target."""
+    return struct.pack(
+        f"<{samples}h", *((amplitude if (i // 12) % 2 else -amplitude) for i in range(samples))
+    )
+
+
+class TestContentStreamObserverLeveling:
+    async def _play(self, stream: AudioStream, memory: LevelMemory | None) -> list[bytes]:
+        sent: list[bytes] = []
+
+        async def send(chunk: bytes) -> None:
+            sent.append(chunk)
+
+        obs = ContentStreamObserver(
+            interface_name="i", stream=stream, send_audio=send, level_memory=memory
+        )
+        await obs.on_focus_changed(FocusState.FOREGROUND, MixingBehavior.PRIMARY)
+        await _wait_task_done(obs.task)
+        return sent
+
+    async def test_without_a_key_the_stream_is_untouched(self) -> None:
+        chunks = [_loud_chunk() for _ in range(5)]
+        sent = await self._play(_make_finite_audio_stream(chunks), LevelMemory())
+        assert sent == chunks
+
+    async def test_a_keyed_stream_is_leveled_and_its_preroll_is_not(self) -> None:
+        earcon = _loud_chunk(amplitude=9000, samples=4800)  # 200 ms
+        content = [_loud_chunk() for _ in range(40)]
+
+        def factory() -> AsyncIterator[bytes]:
+            return _finite_stream([earcon, *content])
+
+        memory = LevelMemory()
+        stream = AudioStream(factory=factory, preroll_ms=200, loudness_key="radio:x")
+        with capture_logs() as logs:
+            sent = await self._play(stream, memory)
+        assert sent[0] == earcon
+        assert all(a != b for a, b in zip(sent[1:], content, strict=True))
+        assert max(_peak(c) for c in sent[1:]) <= int(32767 * db_to_gain(STREAM_CEILING_DBFS))
+        # Started below, then cut further toward -20 for a source this loud.
+        learned = memory.get("radio:x")
+        assert learned is not None
+        assert learned < UNKNOWN_START_GAIN_DB
+        level = [e for e in logs if e["event"] == "audio.level"]
+        assert [e["reason"] for e in level] == ["start", "eof"]
+        assert level[0]["key"] == "radio:x"
+        assert level[0]["learned"] is False
+        assert level[-1]["program_lufs"] is not None
+
+    async def test_preroll_split_across_chunks(self) -> None:
+        # A 150 ms preroll inside the first 100 ms chunk and half the next.
+        chunks = [_loud_chunk(), _loud_chunk(), _loud_chunk()]
+
+        def factory() -> AsyncIterator[bytes]:
+            return _finite_stream(list(chunks))
+
+        stream = AudioStream(factory=factory, preroll_ms=150, loudness_key="k")
+        sent = await self._play(stream, LevelMemory())
+        assert sent[0] == chunks[0]
+        assert sent[1][:2400] == chunks[1][:2400]
+        assert sent[1][2400:] != chunks[1][2400:]
+
+    async def test_the_learned_gain_is_saved_when_the_pump_stops(self) -> None:
+        saved: list[tuple[str, float]] = []
+
+        async def save(key: str, gain: float) -> None:
+            saved.append((key, gain))
+
+        memory = LevelMemory(save=save)
+        chunks = [_loud_chunk() for _ in range(10)]
+
+        def factory() -> AsyncIterator[bytes]:
+            return _finite_stream(list(chunks))
+
+        await self._play(AudioStream(factory=factory, loudness_key="k"), memory)
+        await asyncio.sleep(0.01)
+        assert saved == [("k", memory.get("k"))]
+
+    async def test_a_resume_keeps_the_leveler(self) -> None:
+        memory = LevelMemory()
+        sent: list[bytes] = []
+        enough = asyncio.Event()
+
+        async def send(chunk: bytes) -> None:
+            sent.append(chunk)
+            if len(sent) >= 30:
+                enough.set()
+
+        async def endless() -> AsyncIterator[bytes]:
+            while True:
+                yield _loud_chunk()
+                await asyncio.sleep(0)
+
+        stream = AudioStream(factory=endless, loudness_key="k")
+        obs = ContentStreamObserver(
+            interface_name="i", stream=stream, send_audio=send, level_memory=memory
+        )
+        await obs.on_focus_changed(FocusState.FOREGROUND, MixingBehavior.PRIMARY)
+        await asyncio.wait_for(enough.wait(), timeout=2.0)
+        await obs.hold("turn")
+        gain = memory.get("k")
+        with capture_logs() as logs:
+            await obs.release_hold("turn")
+            await asyncio.sleep(0.01)
+            await obs.hold("turn")
+        reasons = [e["reason"] for e in logs if e["event"] == "audio.level"]
+        assert reasons == ["resume", "cancelled"]
+        assert gain is not None
+        assert memory.get("k") is not None

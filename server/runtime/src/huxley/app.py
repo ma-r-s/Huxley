@@ -31,6 +31,7 @@ from huxley.background import TaskSupervisor
 from huxley.cost import CostTracker
 from huxley.focus.manager import FocusManager
 from huxley.loader import discover_skills
+from huxley.loudness import LevelMemory
 from huxley.reconnect import no_signal_tone_pcm, run_reconnect_loop
 from huxley.server.recorder import Recorder
 from huxley.state.machine import StateMachine
@@ -40,7 +41,7 @@ from huxley.storage.secrets import JsonFileSecrets
 from huxley.storage.skill import NamespacedSkillStorage
 from huxley.turn import TurnCoordinator, turn_waits_forbidden
 from huxley.voice.openai_protocol import find_refusal_code
-from huxley.voice.openai_realtime import OpenAIRealtimeProvider
+from huxley.voice.openai_realtime import OUTPUT_GAIN_DB, OpenAIRealtimeProvider
 from huxley.voice.provider import VoiceProviderCallbacks
 from huxley_sdk import AppState, InvalidTransitionError, SkillContext, SkillRegistry
 
@@ -55,6 +56,10 @@ if TYPE_CHECKING:
     from huxley_sdk import BackgroundTaskHandle, PermanentFailure
 
 logger = structlog.get_logger()
+
+# Settings keys under which a content stream's learned gain is kept, one
+# per `AudioStream.loudness_key` (T1.47).
+_LEVEL_GAIN_PREFIX = "audio.level_gain_db:"
 
 
 # Generic status strings surfaced to the client while the session is
@@ -280,6 +285,14 @@ class Application:
             send_dev_event=self.server.send_dev_event,
         )
 
+        # Loudness (T1.47): the voice's gain (the persona's, else the
+        # provider's calibration) and the streams' learned gains (loaded in
+        # `start`, saved as each stream stops).
+        persona_gain = persona.audio.voice_gain_db
+        self._voice_gain_db = OUTPUT_GAIN_DB if persona_gain is None else persona_gain
+        self._voice_gain_source = "provider" if persona_gain is None else "persona"
+        self._level_memory = LevelMemory(save=self._save_level_gain)
+
         self.coordinator = TurnCoordinator(
             send_audio=self.server.send_audio,
             send_audio_clear=self.server.send_audio_clear,
@@ -303,6 +316,8 @@ class Application:
             listener_epoch=lambda: self.server.listener_epoch,
             confirm_client_received=self.server.client_received_all,
             unavailable_sound=self._unavailable_sound,
+            voice_gain_db=self._voice_gain_db,
+            level_memory=self._level_memory,
         )
 
         # `_shutting_down` gates auto-reconnect inside `_on_session_end`
@@ -346,6 +361,26 @@ class Application:
         from outside the class would be encapsulation-broken.
         """
         return self._active_language
+
+    async def _load_level_gains(self) -> None:
+        """The voice's gain, and the gain each stream source last settled
+        at (T1.47), so a station starts where it left off after a restart."""
+        gains: list[tuple[str, float]] = []
+        for key, value in await self.storage.list_settings(_LEVEL_GAIN_PREFIX):
+            try:
+                gains.append((key.removeprefix(_LEVEL_GAIN_PREFIX), float(value)))
+            except ValueError:
+                continue
+        self._level_memory.load(gains)
+        await logger.ainfo(
+            "audio.gain_setup",
+            voice_gain_db=self._voice_gain_db,
+            voice_gain_from=self._voice_gain_source,
+            stream_keys=len(gains),
+        )
+
+    async def _save_level_gain(self, key: str, gain_db: float) -> None:
+        await self.storage.set_setting(f"{_LEVEL_GAIN_PREFIX}{key}", f"{gain_db:.2f}")
 
     async def _check_skill_schema_versions(self) -> None:
         """Log warnings on declared-vs-stored mismatch. **Read-only.**
@@ -511,6 +546,7 @@ class Application:
             await logger.aexception("storage_snapshot_failed")
 
         await self.storage.init()
+        await self._load_level_gains()
         # Spawn the FocusManager's actor task now that a loop is running.
         # Safe to do before any skill needs it — observers acquire/release
         # through the mailbox, so events are serialized from the first call.

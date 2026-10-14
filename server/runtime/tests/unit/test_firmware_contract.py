@@ -313,7 +313,7 @@ async def test_server_frames_match_what_the_firmware_parses() -> None:
         raw, _ = await _recv_until(ws, "audio_clear")
         assert _type_within_probe(raw), raw
 
-        pcm = bytes(range(256)) * 40
+        pcm = _pattern_pcm(256 * 40)
         await srv.send_audio(pcm)
         raw, audio = await _recv_until(ws, "audio")
         assert _type_within_probe(raw), raw[:120]
@@ -335,11 +335,18 @@ _needs_opus = pytest.mark.skipif(
 _AUDIO_PARAMS = {"format": "opus", "sample_rate": 24000, "channels": 1, "frame_duration": 60}
 
 
-def _sine_pcm(ms: int) -> bytes:
+def _sine_pcm(ms: int, hz: float = 440.0) -> bytes:
     n = 24 * ms
     return struct.pack(
-        f"<{n}h", *(int(8000 * math.sin(2 * math.pi * 440 * i / 24000)) for i in range(n))
+        f"<{n}h", *(int(8000 * math.sin(2 * math.pi * hz * i / 24000)) for i in range(n))
     )
+
+
+def _pattern_pcm(n_bytes: int) -> bytes:
+    """A byte pattern that is also quiet PCM16 (high bytes under 0x40):
+    the server's wire limiter (T1.47) passes it untouched, so what arrives
+    is byte for byte what was sent."""
+    return bytes((i * 7) % 256 if i % 2 == 0 else (i // 2) % 64 for i in range(n_bytes))
 
 
 @pytest.mark.asyncio
@@ -451,7 +458,7 @@ async def test_opus_requested_but_unavailable_falls_back_to_pcm(
     ):
         hello = await _recv_hello(ws)
         assert "audio_params" not in hello
-        pcm = bytes(range(256)) * 10
+        pcm = _pattern_pcm(256 * 10)
         await srv.send_audio(pcm)
         _, audio = await _recv_until(ws, "audio")
         assert base64.b64decode(audio["data"]) == pcm
@@ -524,7 +531,7 @@ async def test_opus_order_and_clear_under_real_flow_control(
         connect(url + "?audio=opus") as ws,
     ):
         await _recv_hello(ws)
-        a, b = _sine_pcm(180), _sine_pcm(120)[::-1]
+        a, b = _sine_pcm(180), _sine_pcm(120, hz=660.0)
         stuck.arm()
         task_a = asyncio.create_task(srv.send_audio(a))
         await asyncio.wait_for(stuck.stuck.wait(), timeout=1.0)

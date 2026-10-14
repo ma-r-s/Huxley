@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from huxley.loudness import db_to_gain, momentary_max_lufs
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
@@ -44,10 +46,19 @@ _SAMPLE_RATE = 24_000
 BLIP_MS = 120
 
 
-def render_blip(hz: float = 587.33, peak_dbfs: float = -16.0) -> bytes:
+# The blip's loudness, its loudest 400 ms (T1.47): 7 dB under the one-off
+# cues (`huxley.loudness.CUE_TARGET_LUFS`, -19), about 12 dB under the
+# voice's loudest moments. It repeats while the user waits, so it sits
+# under everything else; this keeps the place T1.41 tuned it to (peak -16
+# dBFS under a voice then at -27 LUFS) now that the voice plays at -20.
+BLIP_TARGET_LUFS = -26.0
+
+
+def render_blip(hz: float = 587.33, target_lufs: float = BLIP_TARGET_LUFS) -> bytes:
     """A soft struck note (D5 with two quiet partials, a 4 ms attack and a
-    fast decay), PCM16 mono 24 kHz, `BLIP_MS` long. A small speaker plays
-    it; it is clearly not speech and not the offline cue's pitch."""
+    fast decay), PCM16 mono 24 kHz, `BLIP_MS` long, at `target_lufs`
+    momentary max. A small speaker plays it; it is clearly not speech and
+    not the offline cue's pitch."""
     n = _SAMPLE_RATE * BLIP_MS // 1000
     attack = _SAMPLE_RATE * 4 // 1000
     partials = ((1.0, 1.0), (2.0, 0.25), (3.0, 0.08))
@@ -59,7 +70,8 @@ def render_blip(hz: float = 587.33, peak_dbfs: float = -16.0) -> bytes:
         tone = sum(a * math.sin(2 * math.pi * hz * k * t) for k, a in partials) / norm
         raw.append(env * tone)
     raw[-1] = 0.0
-    scale = 32767 * 10 ** (peak_dbfs / 20) / max(abs(x) for x in raw)
+    unit = struct.pack(f"<{n}h", *(int(x * 16384) for x in raw))
+    scale = 16384 * db_to_gain(target_lufs - momentary_max_lufs(unit))
     return struct.pack(f"<{n}h", *(int(x * scale) for x in raw))
 
 
