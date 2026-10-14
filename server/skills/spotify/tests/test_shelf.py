@@ -209,6 +209,32 @@ class TestRanking:
         top = shelves.rank(everything, liked, SHELF)[0][0]
         assert top.category == "misterio y suspenso"
 
+    def test_each_book_is_compared_with_memory_once_per_ranking(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Ranking the whole shelf recomputed every book's other editions
+        for every book: 1.6-2.4 s on a Mac with 10-20 books remembered
+        (T1.45 review). Counted, not timed: at most one title comparison
+        per shelf book and remembered book."""
+        calls = 0
+        real = shelves.closeness
+
+        def counted(heard: str, title: str) -> float:
+            nonlocal calls
+            calls += 1
+            return real(heard, title)
+
+        monkeypatch.setattr(shelves, "closeness", counted)
+        authors = [b.author for b in SHELF.books]
+        listener = Listener(
+            started={f"m{i}": time.time() for i in range(20)},
+            opinions={"m0": "liked", "m1": "disliked"},
+            titles={f"m{i}": f"Un libro {i}" for i in range(20)},
+            authors={f"m{i}": authors[i % len(authors)] for i in range(20)},
+        )
+        shelves.rank(list(SHELF.books), listener, SHELF)
+        assert 0 < calls <= len(SHELF.books) * 20
+
     def test_ties_go_to_the_book_offered_least_recently(self) -> None:
         now = time.time()
         listener = Listener(offered={"sabueso": now - 10, "orient": now - 5})

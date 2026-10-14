@@ -173,6 +173,31 @@ class TestChoosingTheEdition:
         assert code == 0 and "-> spotify:show:lleno" in said.splitlines()[0]
         assert "spotify:show:vacio" not in said  # not offered as an alternative either
 
+    async def test_an_edition_spotify_wont_describe_gives_way_to_the_next(
+        self, tmp_path: Path
+    ) -> None:
+        """A 404 on one edition's lookup used to stop every run at that
+        book (T1.45 review)."""
+        plan = _plan(tmp_path, [_entry("El extranjero"), _entry("La peste")])
+        gone, kept = _book("gone", "El extranjero"), _book("bien", "El extranjero")
+        search = FakeSearch(
+            {
+                "El extranjero Albert Camus": [gone, kept],
+                "La peste Albert Camus": [_book("peste", "La peste")],
+            }
+        )
+        real = search.audiobook
+
+        async def lookup(uri: str) -> tuple[Match, int]:
+            if uri == gone.uri:
+                raise SearchError(f"{uri} answered 404", status=404)
+            return await real(uri)
+
+        search.audiobook = lookup  # type: ignore[method-assign]
+        code, said = await _run(plan, search)
+        assert code == 0 and "-> spotify:show:bien" in said
+        assert "La peste / Albert Camus -> spotify:show:peste" in said
+
     async def test_a_pinned_edition_without_chapters_is_rejected(self, tmp_path: Path) -> None:
         pinned = _book("vacio", "El extranjero")
         plan = _plan(tmp_path, [_entry("El extranjero", uri=pinned.uri)])
@@ -347,6 +372,29 @@ class TestWriting:
         assert code == 2 and "network error after 1 books, 1 not checked" in said
         built = parse_shelf(json.loads(plan.shelf_json.read_text(encoding="utf-8")))
         assert [b.uri for b in built.books] == ["spotify:show:ext"]
+
+    async def test_a_book_not_rechecked_takes_its_new_pitch_from_the_yaml(
+        self, tmp_path: Path
+    ) -> None:
+        plan = _plan(tmp_path, [_entry("El extranjero"), _entry("La peste")])
+        search = FakeSearch(
+            {
+                "El extranjero Albert Camus": [_book("ext", "El extranjero")],
+                "La peste Albert Camus": [_book("peste", "La peste")],
+            }
+        )
+        assert (await _run(plan, search))[0] == 0
+        _plan(
+            tmp_path,
+            [
+                _entry("El extranjero"),
+                _entry("La peste", pitch="Una ciudad cerrada por la peste."),
+            ],
+        )
+        assert (await _run(plan, FakeSearch(search.results), only="extranjero"))[0] == 0
+        built = parse_shelf(json.loads(plan.shelf_json.read_text(encoding="utf-8")))
+        peste = built.by_uri("spotify:show:peste")
+        assert peste is not None and peste.pitch == "Una ciudad cerrada por la peste."
 
     async def test_a_dry_run_writes_nothing(self, tmp_path: Path) -> None:
         plan = _plan(tmp_path, [_entry("El extranjero")])

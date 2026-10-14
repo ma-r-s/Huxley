@@ -382,7 +382,19 @@ def _weak_match(spoken: str, book: Match) -> bool:
     return title_score(" ".join(rest), fold(book.title)) < WEAK_TITLE
 
 
+# The shelf's offers are read "Uno, ... Dos, ... Tres" (lines.py), so the
+# numbers pick too ("el dos"; T1.45 review). Not "un": it's an article.
 _ORDINALS = {
+    "uno": 0,
+    "una": 0,
+    "one": 0,
+    "une": 0,
+    "dos": 1,
+    "two": 1,
+    "deux": 1,
+    "tres": 2,
+    "three": 2,
+    "trois": 2,
     "primero": 0,
     "primer": 0,
     "primera": 0,
@@ -1073,8 +1085,26 @@ class SpotifySkill:
         shelf = await self._current_shelf()
         if listened or shelf is None:
             return await self._find_books_open("" if listened else query or like)
-        if more and self._browse is not None:
-            query, like = self._browse["query"], self._browse["like"]
+        last = self._browse
+        if more and last is not None:
+            changed = (query.strip() and fold(query) != fold(last["query"])) or (
+                like.strip() and fold(like) != fold(last["like"])
+            )
+            if changed:
+                # A new subject with "more": a fresh offer, not the old one.
+                await self._log().ainfo(
+                    "spotify.shelf_more_new_subject",
+                    query=query,
+                    like=like,
+                    last_query=last["query"],
+                    last_like=last["like"],
+                )
+                more = False
+            elif last["mode"] in ("title", "search") and self._last_list:
+                # "otros" after one book was offered: books like it.
+                return await self._browse_like(shelf, self._last_list[0].title, more=False)
+            else:
+                query, like = last["query"], last["like"]
         else:
             more = False
         if like.strip():
@@ -1137,10 +1167,11 @@ class SpotifySkill:
             )
 
     def _available_categories(self, shelf: Shelf, listener: Listener) -> list[str]:
+        judge = shelves.Judge(shelf, listener)
         return [
             c
             for c in shelf.categories
-            if any(b.category == c and shelves.excluded(b, listener) is None for b in shelf.books)
+            if any(b.category == c and judge.excluded(b) is None for b in shelf.books)
         ]
 
     async def _browse_categories(self, shelf: Shelf, *, more: bool) -> ToolResult:
@@ -1199,13 +1230,16 @@ class SpotifySkill:
         book = shelves.match_title(shelf, query)
         if book is not None and not more:
             return await self._offer(shelf, mode="title", query=query, topic="", books=[book])
-        category = shelves.match_category(shelf, query)
+        # A kind of book only when every word is one: "Breve historia del
+        # tiempo" is a title, not the history category (T1.45 review).
+        theme = shelves.only_theme(shelf, query)
+        category = shelves.match_category(shelf, query) if theme else None
         if category is not None:
             books = [b for b in shelf.books if b.category == category]
             return await self._offer(
                 shelf, mode="category", query=query, topic=category, books=books, more=more
             )
-        tag = shelves.match_tag(shelf, query)
+        tag = shelves.match_tag(shelf, query) if theme else None
         if tag is not None:
             books = [b for b in shelf.books if tag in b.tags]
             return await self._offer(
@@ -1308,27 +1342,30 @@ class SpotifySkill:
         already: list[str] = list(self._browse["offered"]) if more and self._browse else []
         ranked = [b for b in ranked if b.uri not in already]
         if not ranked:
+            reason = "no_more" if more else "like_nothing" if not books else "all_excluded"
             await log.ainfo(
-                "spotify.shelf_nothing",
-                reason="no_more" if more else "all_excluded",
-                query=query or like,
-                excluded=excluded,
+                "spotify.shelf_nothing", reason=reason, query=query or like, excluded=excluded
             )
             return await self._nothing(shelf, topic=topic if more else "")
         blocked = self._unavailable()
         if blocked:
+            await log.ainfo("spotify.shelf_blocked", reason=blocked, query=query or like)
             return self._then(blocked)
-        candidates = [
-            Match(
-                uri=b.uri,
-                kind="audiobook",
-                title=b.title,
-                artist=b.author,
-                languages=(b.language,),
-                about=b.pitch,
+        candidates = []
+        for b in ranked:
+            # A book he named: his own edition if he started one, so "ponlo"
+            # continues it (T1.45 review).
+            heard = await self._edition_heard(b) if mode == "title" else None
+            candidates.append(
+                Match(
+                    uri=heard.uri if heard else b.uri,
+                    kind="audiobook",
+                    title=b.title,
+                    artist=b.author,
+                    languages=(b.language,),
+                    about=b.pitch,
+                )
             )
-            for b in ranked
-        ]
         offered, hours_out = await self._playable_only(candidates, OFFER_COUNT)
         if hours_out:
             return self._then("no_hours")
@@ -1416,6 +1453,7 @@ class SpotifySkill:
             return await self._nothing(shelf)
         blocked = self._unavailable()
         if blocked:
+            await log.ainfo("spotify.shelf_blocked", reason=blocked, query=query)
             return self._then(blocked)
         try:
             found = await self._search.candidates(query, "audiobook", limit=8)
@@ -1428,15 +1466,26 @@ class SpotifySkill:
             if not is_guide(m.title, m.about, m.edition)
         ]
         titled = [m for m in books if shelves.title_matches(query, m.title, m.artist or "")]
-        by_author = [m for m in books if shelves.author_named(query, m.artist or "")]
-        named = titled[:1] or by_author
+        # An author's books follow the shelf's rules: never one he finished,
+        # didn't like, left or Spotify refused (T1.45 review). A book he
+        # names is offered whatever its state, as on the shelf.
+        judge = shelves.Judge(shelf, await self._require_memory().listener())
+        by_author = [
+            m
+            for m in books
+            if shelves.author_named(query, m.artist or "")
+            and judge.excluded_ids(judge.ids_for(m.title, m.artist or "", m.uri)) is None
+        ]
+        named = titled or by_author
         if not named:
             await log.ainfo("spotify.shelf_nothing", reason="no_match", query=query)
             return await self._nothing(shelf)
+        # Every edition of a title named gets its chance; one is offered.
         offered, hours_out = await self._playable_only(named, 1 if titled else OFFER_COUNT)
         if hours_out:
             return self._then("no_hours")
         if not offered:
+            await log.ainfo("spotify.shelf_nothing", reason="none_playable", query=query)
             return self._then("none_available")
         offered = [
             Match(

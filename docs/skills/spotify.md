@@ -224,18 +224,24 @@ search:
 
 - no arguments: up to four categories that still have books for him,
   plus his book in progress ("También quedó a medias ...");
-- `query`: a shelf title, else a category, else a tag, else a shelf
-  author, best three; a book or author named that isn't on the shelf
-  searches Spotify, keeping only that book or books by that author;
+- `query`: a shelf title; else, when every word names a kind of book on
+  the shelf, a category or tag ("Breve historia del tiempo" is a title,
+  not the history category); else a shelf author; best three. A book or
+  author named that isn't on the shelf searches Spotify, keeping only
+  that book (every edition gets its chance) or books by that author, never
+  one he finished, didn't like, left or that was refused;
 - `like`: books sharing category, tags and author with one he names; a
   book not on the shelf is looked up once for its author and synopsis
   words;
-- `more`: the next three of the last offer ("otros");
+- `more`: the next three of the last offer ("otros"); after a single
+  book, books like it; with a new subject, a fresh offer for it;
 - `listened`: the books started here.
 
 The skill writes the offer itself in `then` ("De misterio tengo tres.
 Uno, X, de Y: <pitch>. ... ¿Cuál pongo, o busco otros?") and returns
-`books[{n, title, by, about}]` so "el segundo" plays the second. Nothing
+`books[{n, title, by, about}]` so "el segundo" or "el dos" plays the
+second; a book he named and already started is offered in his own
+edition, so "ponlo" continues it. Nothing
 fits: "En la repisa no tengo libros de eso. Tengo libros de <categorías>."
 
 **Ranking.** Never offered: finished (at any time, kept as
@@ -401,9 +407,12 @@ The shelf: `spotify.shelf_loaded` (path, books, categories, skipped),
 `spotify.shelf_invalid` (error, kept), `spotify.shelf_missing`,
 `spotify.shelf_browse` (mode, query, like, like_source, excluded,
 offered, offset), `spotify.shelf_nothing` (reason: nothing_left,
-all_excluded, no_more, none_playable, no_match, like_unknown),
+all_excluded, like_nothing, no_more, none_playable, no_match,
+like_unknown),
 `spotify.book_redirected` (query), `spotify.book_opinion` (title,
-opinion, source).
+opinion, source), `spotify.shelf_blocked` (reason: Spotify unavailable
+before an offer), `spotify.shelf_more_new_subject` (query, like, the last
+ones).
 
 The Soloist build's expiry is logged by the container at start ("client
 expires in N days"); an expired build exits with code 10, which the skill

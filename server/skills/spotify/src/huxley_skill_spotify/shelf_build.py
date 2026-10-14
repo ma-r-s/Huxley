@@ -259,7 +259,12 @@ async def verify(
     empty: list[str] = []
     for match in ranked[:1] if pinned is not None else ranked:
         if match.uri not in chapters:
-            _, chapters[match.uri] = await search.audiobook(match.uri)
+            try:
+                _, chapters[match.uri] = await search.audiobook(match.uri)
+            except SearchError as exc:
+                if exc.status == 429 or (exc.status or 0) >= 500 or _unreachable(exc):
+                    raise
+                chapters[match.uri] = 0  # this edition answers 4xx: try the next one
         if chapters[match.uri]:
             chosen = match
             break
@@ -274,6 +279,12 @@ async def verify(
             note or f"narrator is {', '.join(chosen.narrators) or 'unknown'}, not {entry.narrator}"
         )
     return Verdict(entry, "CHECK" if note else "OK", note, chosen, alternatives)
+
+
+def _unreachable(exc: SearchError) -> bool:
+    """No answer from Spotify at all (as opposed to an answer about this
+    edition): a request that failed, or a token that didn't come."""
+    return exc.status is None and not str(exc).startswith("no audiobook")
 
 
 def shelf_entry(verdict: Verdict, language: str, today: str) -> dict[str, Any]:
@@ -343,7 +354,22 @@ def merged_books(
         if verdict is None:
             kept = before.get((fold(entry.title), fold(entry.author)))
             if kept is not None:
-                books.append(kept)
+                # Not checked this run: the edition as before, everything
+                # else from shelf.yaml (a new pitch, tags or category is
+                # never lost; T1.45 review).
+                books.append(
+                    {
+                        "title": entry.title,
+                        "author": entry.author,
+                        "narrator": kept.get("narrator") or entry.narrator,
+                        "uri": kept.get("uri"),
+                        "language": kept.get("language") or language,
+                        "category": entry.category,
+                        "tags": list(entry.tags),
+                        "pitch": entry.pitch,
+                        "verified": kept.get("verified"),
+                    }
+                )
         elif verdict.status != "REJECT":
             books.append(shelf_entry(verdict, language, today))
     return books

@@ -1345,6 +1345,90 @@ class TestTheShelf:
         (invalid,) = _events(skill, "spotify.shelf_invalid")
         assert invalid["kept"] == 11
 
+    # --- the review round (T1.45) ---
+
+    async def test_a_title_with_a_theme_word_is_searched_not_redirected(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        """ "Las aventuras de Tom Sawyer" contains the adventures category's
+        word; it is a title, so it is searched (it used to loop on an offer
+        of adventure books)."""
+        skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server)
+        result = await skill.handle("play_book", {"title": "las aventuras de tom sawyer"})
+        assert skill._search.queries == [("las aventuras de tom sawyer", "audiobook")]  # type: ignore[union-attr]
+        assert _events(skill, "spotify.book_redirected") == []
+        assert _out(result)["reason"] == "ask_which"  # the fake search knows another book
+        found = await skill.handle("find_books", {"query": "breve historia del tiempo"})
+        assert not _said(found).startswith("De historia y memorias")
+
+    async def test_a_book_he_named_is_offered_in_his_own_edition(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, _, _, memory = await _shelf_skill(tmp_path, pcm_server)
+        await memory.mark_played(
+            "spotify:show:cien-otra", "Cien años de soledad", "Gabriel García Márquez"
+        )
+        await skill.handle("find_books", {"query": "cien años de soledad"})
+        await skill.handle("play_book", {"title": "ese"})
+        assert _events(skill, "spotify.book_requested")[0]["uri"] == "spotify:show:cien-otra"
+
+    async def test_el_dos_picks_the_second_as_the_offer_numbers_them(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server)
+        await skill.handle("find_books", {"query": "misterio"})
+        result = await skill.handle("play_book", {"title": "el dos"})
+        assert _out(result)["playing"] == "Asesinato en el Orient Express"
+
+    async def test_otros_after_one_book_offers_books_like_it(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, _, _, _ = await _shelf_skill(
+            tmp_path,
+            pcm_server,
+            known=["spotify:show:pedro", "spotify:show:cien", "spotify:show:coronel"],
+        )
+        one = await skill.handle("find_books", {"query": "pedro páramo"})
+        assert _said(one).endswith("¿Lo pongo, o busco otros?")
+        more = await skill.handle("find_books", {"more": True})
+        assert _said(more).startswith("Parecidos a Pedro Páramo tengo")
+
+    async def test_an_off_shelf_authors_finished_book_isnt_offered_again(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        paula = Match(
+            uri="spotify:show:paula",
+            kind="audiobook",
+            title="Paula",
+            artist="Isabel Allende",
+            languages=("es",),
+        )
+        casa = Match(
+            uri="spotify:show:espiritus",
+            kind="audiobook",
+            title="La casa de los espíritus",
+            artist="Isabel Allende",
+            languages=("es",),
+        )
+        skill, _, _, memory = await _shelf_skill(
+            tmp_path, pcm_server, match=paula, others=[casa], known=[paula.uri, casa.uri]
+        )
+        await memory.mark_played(paula.uri, paula.title, paula.artist)
+        await memory.mark_finished(paula.uri)
+        result = await skill.handle("find_books", {"query": "isabel allende"})
+        assert [b["title"] for b in _out(result)["books"]] == ["La casa de los espíritus"]
+
+    async def test_more_with_a_new_subject_starts_a_fresh_offer(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, _, _, _ = await _shelf_skill(
+            tmp_path, pcm_server, known=["spotify:show:ficciones", "spotify:show:selva"]
+        )
+        await skill.handle("find_books", {"query": "misterio"})
+        result = await skill.handle("find_books", {"query": "cuentos", "more": True})
+        assert _said(result).startswith("De cuentos tengo dos.")
+        assert _events(skill, "spotify.shelf_more_new_subject")[0]["query"] == "cuentos"
+
 
 class TestTheBookSummary:
     """The page's contract (T1.45): `book:summary:<id>` in the skill's

@@ -5818,6 +5818,21 @@ One fresh critic on the plan, 2026-10-13 (seven blockers). How each landed:
 6. **Summary write race** (a place and a book's end land together): `update_summary` merges only the fields it's given, under a lock; finished survives; title and chapters carried by a `Label`.
 7. **429 retry in the shared client**: the live skill never retries (a turn would stall); only the build's client honours `Retry-After` (3 retries, up to 2 minutes each), with a pause between books, and a stopped run keeps what it checked. The critic's warning came true anyway (see Build result). Study-guide filtering on the synopsis uses phrases only a guide uses; a pinned URI overrides a synopsis flag.
 
+### Code review (Gate 3)
+
+One fresh reviewer on the finished code, 2026-10-13 (the plan critic never saw code). One blocker, six should-fix, three minor; every repro failed on the code, every one fixed with a test (the theme and author ones broken on purpose to see their tests fail):
+
+1. **Blocker: titles with a theme word went to the shelf** ("Las aventuras de Tom Sawyer", "Breve historia del tiempo", "El misterio del tren azul" answered with adventure, history or mystery offers, again on every retry): a category or tag only when every word said names a kind of book on the shelf.
+2. A named book offered alone started the shelf's edition over his own: the offer carries his edition.
+3. "El dos" (the offer says "Uno, Dos, Tres") went to open search: the numbers pick.
+4. "Otros" after a single-book offer hit "no tengo libros de eso": books like that one.
+5. An off-shelf author brought back books he finished or didn't like, and only one edition of a named title was tried: the shelf's exclusions apply (same editions logic), every edition gets its chance.
+6. `more` with a new subject repeated the old offer: a fresh offer, logged (`shelf_more_new_subject`).
+7. Ranking recomputed every book's editions per book (1.6-2.4 s on a Mac for the whole shelf with 10-20 books remembered, growing as he listens): a `Judge` per offer finds each book's editions once; a test counts the comparisons.
+8. One edition answering 404 stopped every build at that book: that edition counts as having no chapters, the next one is tried.
+9. Books not re-checked kept stale yaml fields: rebuilt from shelf.yaml, only the edition, narrator and date kept.
+10. Missing log lines: `shelf_blocked`, `none_playable` for off-shelf searches, `like_nothing`.
+
 ### Definition of Done
 
 - Spotify suite green, ruff, ruff format, mypy clean; runtime suite still green.
@@ -5837,7 +5852,7 @@ Run on the Pi, search only (the branch's files copied to `/tmp`, nothing of the 
 
 ### Tests (Gate 3)
 
-Spotify suite 220 passed, 1 skipped (main: 126). `test_shelf.py` (40: validation, reload and keeping the last good file, matching titles with digits and subtitles, categories, tags, authors, themes, ranking with exclusions, edition equivalence and boosts, paging, Spanish lists with "e" before an "i" sound); `test_shelf_build.py` (29: guides, Lektürehilfe, Fiche de lecture, abridged by title and by Spotify's edition note, wrong author, wrong language, a guide synopsis, far titles, "1984" and "Sapiens." from the real build, pinned editions kept, looked up, rejected or gone, an edition without chapters giving way to the next, a pinned one without chapters rejected, one lookup per edition and none for one already verified, a rate limit mid-run keeping what was checked, a network error before anything and nothing-passed writing nothing, `--only` keeps the rest, dry run, 0644 output that loads in the skill, setup errors); `test_books.py` (browsing never searches, "otros", nothing fits, refused shelf books skipped, a shelf title plays the curated edition or his own, a theme redirected, opinions move the ranking, a missing shelf falls back, the summary key and its exact fields, the backfill, an abridged edition never picked); `test_soloist_and_search.py` (the build client waits out three 429s and gives up after; the live client never retries). The abridged rule was broken on purpose to see its two tests fail.
+Spotify suite 229 passed, 1 skipped (main: 126), the review round's 9 included. `test_shelf.py` (40: validation, reload and keeping the last good file, matching titles with digits and subtitles, categories, tags, authors, themes, ranking with exclusions, edition equivalence and boosts, paging, Spanish lists with "e" before an "i" sound); `test_shelf_build.py` (29: guides, Lektürehilfe, Fiche de lecture, abridged by title and by Spotify's edition note, wrong author, wrong language, a guide synopsis, far titles, "1984" and "Sapiens." from the real build, pinned editions kept, looked up, rejected or gone, an edition without chapters giving way to the next, a pinned one without chapters rejected, one lookup per edition and none for one already verified, a rate limit mid-run keeping what was checked, a network error before anything and nothing-passed writing nothing, `--only` keeps the rest, dry run, 0644 output that loads in the skill, setup errors); `test_books.py` (browsing never searches, "otros", nothing fits, refused shelf books skipped, a shelf title plays the curated edition or his own, a theme redirected, opinions move the ranking, a missing shelf falls back, the summary key and its exact fields, the backfill, an abridged edition never picked); `test_soloist_and_search.py` (the build client waits out three 429s and gives up after; the live client never retries). The abridged rule was broken on purpose to see its two tests fail.
 
 ### Docs touched (Gate 4)
 

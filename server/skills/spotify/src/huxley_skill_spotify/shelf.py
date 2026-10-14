@@ -324,41 +324,92 @@ def same_book(title_a: str, author_a: str, title_b: str, author_b: str) -> bool:
     )
 
 
-def equivalents(book: ShelfBook, listener: Listener) -> set[str]:
-    """The ids in memory that are this book: its own, and other editions."""
-    found = {book.book_id}
-    for book_id, title in listener.titles.items():
-        author = listener.authors.get(book_id, "")
-        if book_id != book.book_id and same_book(book.title, book.author, title, author):
-            found.add(book_id)
-    return found
+class Judge:
+    """Exclusions and scores for one look at the listener's memory. Each
+    book's other editions are found once: recomputing them per call made
+    ranking the whole shelf take 1.6-2.4 s on a Mac with 10-20 books
+    remembered, and it grows as he listens (T1.45 review)."""
+
+    def __init__(self, shelf: Shelf, listener: Listener) -> None:
+        self.shelf = shelf
+        self.listener = listener
+        self._names = {i: _author_sets(a) for i, a in listener.authors.items()}
+        self._cores = {i: core_title(t) for i, t in listener.titles.items()}
+        self._eq: dict[str, frozenset[str]] = {}
+        opinions = listener.opinions
+        self._liked = {i for i, o in opinions.items() if o == "liked"}
+        self._disliked = {i for i, o in opinions.items() if o == "disliked"}
+        self._liked_categories = {
+            b.category for b in shelf.books if self.equivalents(b) & self._liked
+        }
+
+    def _same_book_as(self, title: str, author: str, book_id: str) -> bool:
+        names = _author_sets(author)
+        theirs = self._names.get(book_id, [])
+        if not any(a <= b or b <= a for a in names for b in theirs):
+            return False
+        return closeness(core_title(title), self._cores.get(book_id, "")) >= TITLE_MATCH
+
+    def ids_for(self, title: str, author: str, uri: str) -> frozenset[str]:
+        """The ids in memory that are this book: its own, and other
+        editions (same author, close title; the shelf's edition may not
+        be the one he already played, T1.45 critic)."""
+        own = uri.rsplit(":", 1)[-1]
+        return frozenset(
+            {own} | {i for i in self._cores if i != own and self._same_book_as(title, author, i)}
+        )
+
+    def equivalents(self, book: ShelfBook) -> frozenset[str]:
+        found = self._eq.get(book.uri)
+        if found is None:
+            found = self._eq[book.uri] = self.ids_for(book.title, book.author, book.uri)
+        return found
+
+    def excluded_ids(self, ids: frozenset[str]) -> str | None:
+        for book_id in sorted(ids):
+            why = self.listener.excluded(book_id)
+            if why is not None:
+                return why
+        return None
+
+    def excluded(self, book: ShelfBook) -> str | None:
+        """Why a shelf book is never offered (any edition of it counts)."""
+        return self.excluded_ids(self.equivalents(book))
+
+    def _by(self, author: str, ids: set[str] | frozenset[str]) -> bool:
+        names = _author_sets(author)
+        return any(a <= b or b <= a for i in ids for a in names for b in self._names.get(i, []))
+
+    def score(self, book: ShelfBook) -> int:
+        """Liked author +2, finished author +1, liked category +1,
+        disliked author -3."""
+        total = 0
+        if self._by(book.author, self._liked):
+            total += 2
+        if self._by(book.author, self.listener.ended):
+            total += 1
+        if book.category in self._liked_categories:
+            total += 1
+        if self._by(book.author, self._disliked):
+            total -= 3
+        return total
+
+
+def _author_sets(author: str) -> list[frozenset[str]]:
+    return [frozenset(n) for n in _author_names(author)]
+
+
+def equivalents(book: ShelfBook, listener: Listener) -> frozenset[str]:
+    return Judge(Shelf((book.category,), (book,)), listener).equivalents(book)
 
 
 def excluded(book: ShelfBook, listener: Listener) -> str | None:
     """Why a shelf book is never offered (any edition of it counts)."""
-    for book_id in sorted(equivalents(book, listener)):
-        why = listener.excluded(book_id)
-        if why is not None:
-            return why
-    return None
+    return Judge(Shelf((book.category,), (book,)), listener).excluded(book)
 
 
 def score(book: ShelfBook, listener: Listener, shelf: Shelf) -> int:
-    """Liked author +2, finished author +1, liked category +1, disliked
-    author -3."""
-    total = 0
-    liked = [i for i, o in listener.opinions.items() if o == "liked"]
-    disliked = [i for i, o in listener.opinions.items() if o == "disliked"]
-    if any(same_author(book.author, listener.authors.get(i, "")) for i in liked):
-        total += 2
-    if any(same_author(book.author, listener.authors.get(i, "")) for i in listener.ended):
-        total += 1
-    liked_categories = {b.category for b in shelf.books if equivalents(b, listener) & set(liked)}
-    if book.category in liked_categories:
-        total += 1
-    if any(same_author(book.author, listener.authors.get(i, "")) for i in disliked):
-        total -= 3
-    return total
+    return Judge(shelf, listener).score(book)
 
 
 def rank(
@@ -367,15 +418,18 @@ def rank(
     shelf: Shelf,
     *,
     bonus: dict[str, int] | None = None,
+    judge: Judge | None = None,
 ) -> tuple[list[ShelfBook], int]:
     """(books to offer, best first; how many were excluded). Ties go to
     the book offered least recently, then shelf order."""
+    judge = judge or Judge(shelf, listener)
     order = {b.uri: i for i, b in enumerate(shelf.books)}
-    kept = [b for b in books if excluded(b, listener) is None]
+    kept = [b for b in books if judge.excluded(b) is None]
     extra = bonus or {}
+    scores = {b.uri: judge.score(b) + extra.get(b.uri, 0) for b in kept}
     kept.sort(
         key=lambda b: (
-            -(score(b, listener, shelf) + extra.get(b.uri, 0)),
+            -scores[b.uri],
             listener.offered.get(b.book_id, 0.0),
             order.get(b.uri, 0),
         )
@@ -477,10 +531,32 @@ def match_title(shelf: Shelf, said: str) -> ShelfBook | None:
     return best[1] if best is not None and best[0] >= TITLE_MATCH else None
 
 
+def theme_words(shelf: Shelf) -> frozenset[str]:
+    """Every word of the shelf's categories and tags."""
+    words: set[str] = set()
+    for category in shelf.categories:
+        words |= _content(category)
+    for book in shelf.books:
+        for tag in book.tags:
+            words |= _content(tag)
+    return frozenset(words)
+
+
+def only_theme(shelf: Shelf, said: str) -> bool:
+    """Every word said (beyond request words) names a kind of book on the
+    shelf: "algo de misterio", "novela histórica de amor". A title that
+    contains one ("Las aventuras de Tom Sawyer", "Breve historia del
+    tiempo") is not a theme (T1.45 review)."""
+    words = _content(said)
+    return bool(words) and words <= theme_words(shelf)
+
+
 def is_theme(shelf: Shelf, said: str) -> bool:
     """What was said is a kind of book on the shelf, not a title or an
     author: "pon algo de misterio" (play_book sends it to the shelf)."""
     if match_title(shelf, said) is not None or match_author(shelf, said) is not None:
+        return False
+    if not only_theme(shelf, said):
         return False
     return match_category(shelf, said) is not None or match_tag(shelf, said) is not None
 
